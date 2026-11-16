@@ -103,13 +103,28 @@ struct RecordedSegment {
     std::int64_t timeline = 0;
 };
 
+// A writer-thread failure, consumed by the model before recording stops.
+struct RecordingError {
+    model::Id track;
+    std::filesystem::path file;
+    Error error;
+};
+
+// Punch placement in recording sample-rate frames, independent of later transport.
+struct RecordedPunch {
+    bool enabled = false;
+    std::int64_t start = 0, end = 0;
+    bool operator==(const RecordedPunch&) const = default;
+};
+
 struct RecordedTake {
     model::Id track;
     std::filesystem::path file;
     // Optional known digest (e.g. a recovered take). stopRecording leaves it
     // empty: EngineApp hashes closed audio files in a background job.
     std::string hash;
-    std::int64_t startSample = 0;  // timeline sample of the file's first frame (may be < 0)
+    std::filesystem::path journal;  // owned audio placement journal, retired after save
+    std::int64_t startSample = 0;   // timeline sample of the file's first frame (may be < 0)
     std::int64_t frames = 0;
     // The runs, in file order; the first is {0, startSample}. More than one:
     // loop passes (`loop` is the loop they were recorded in), or runs split
@@ -120,10 +135,12 @@ struct RecordedTake {
     } loop;
     std::uint64_t overflowFrames = 0;  // input lost because the disk fell behind
     std::string error;                 // first file/sidecar error of this target, if any
+    std::optional<Error> failure;      // structured first error, including stop/close failures
     std::vector<Error> warnings;       // e.g. recording.loop_runs_full; retained passes are usable
     double sampleRate = 0;             // of the file and of startSample (the engine's rate)
     // MIDI (ADR-0016): no file; `frames` is the length recorded, `segments`
     // the runs, the events in time order.
+    std::optional<RecordedPunch> punch = {};  // authoritative when present
     bool isMidi = false;
     std::vector<RecordedMidiEvent> midi;
 };
@@ -627,9 +644,11 @@ class Engine {
     void setRecordingMasters(std::vector<RecordingMaster> masters) {
         recordingMasters_ = std::move(masters);
     }
-    Status startRecording(std::vector<RecordTarget> targets);
+    Status startRecording(std::vector<RecordTarget> targets, RecordedPunch punch = {});
+    Status setRecordingPunch(RecordedPunch punch);  // model thread only, never the callback
     // Also retrieves takes finalized by stop(), once, after the device stopped.
     Result<std::vector<RecordedTake>> stopRecording();
+    std::vector<RecordingError> takeRecordingErrors();
     bool recording() const { return recorderOwned_ != nullptr; }
     // Tests: while held, the renderer renders nothing. Wait for its
     // acknowledgement before driving a manual backend into an underrun.
@@ -704,6 +723,7 @@ class Engine {
 
   private:
     friend struct EngineTestAccess;  // defined by the tests alone
+    friend struct RecordingErrorTestAccess;
     void cycle(const float* const* in, float* const* out, std::uint32_t frames) SUPPLE_RT;
     // cycle() after its bookkeeping: count-in, then the transport's work.
     void cycleTransport(const float* const* in, float* const* out, std::uint32_t frames) SUPPLE_RT;

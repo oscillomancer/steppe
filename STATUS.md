@@ -280,7 +280,12 @@ instructions are in `docs/guides/installing.md`.
   time onto a lane of their own (ADR-0057): the take is bit-identical to
   `render.mix` of that master in every executor; a master's items play after
   its fader, beside the live mix, with a lane mute, and are silent in the
-  punch range while it records.
+  punch range while it records. WAV recovery repairs both container byte counts
+  even when a damaged length still rounds down to the correct frame count.
+  Simultaneous recording targets reserve case-folded names before opening files.
+  Audio write errors retain the complete physical prefix and wake the model
+  immediately; the GUI status line identifies the failure while healthy targets
+  continue (ADR-0082). Recording file operations stay on the writer thread.
 - **Editing**: items, takes, comping lanes, fades and crossfades with shapes,
   cursor splitting from the item right-click menu (shared with S) and an audio-only prior
   zero-crossing split (100 ms search, louder stereo channel, cursor fallback;
@@ -534,7 +539,11 @@ instructions are in `docs/guides/installing.md`.
   pointer when off. Projects and renders default to
   `~/Documents/<slug>-media` (the render folder is choosable), each project
   in a folder of its own with its own media; imports are copied into the
-  project by default, and Save as into another folder copies the media. FX
+  project by default, and Save as into another folder copies the media. Media
+  staging names are short and exclusively reserved; valid destination filenames
+  need no spare bytes for a temporary suffix, and a reserved staging entry
+  cannot alias the final payload name. Save As retains media with
+  temporary-looking suffixes, including files used only by saved branches. FX
   chain presets, track templates (a strip and its chains) and project
   templates (with a copy of their audio) are saved, loaded and deleted in
   the app. Tracks duplicate from either right-click menu with their chains,
@@ -1201,6 +1210,24 @@ Engine and hosting:
   malformed UTF-8 parameter input is refused. Native verification is pending.
 
 Session and editing:
+- Audio recording recovery has durability limits: the writer flushes to the OS
+  each drain and syncs data/header at the shared five-second journal cadence,
+  off RT. Copied/moved media and POSIX directories are checkpointed before the
+  project, and originals stay until its checkpoint succeeds. Windows uses
+  unprivileged file flushes and write-through media publication, with no claimed
+  POSIX-style parent/ancestor namespace durability after a power cut (ADR-0082).
+  Native macOS/Windows validation of these changes remains pending.
+- Audio loop/seek recovery uses an append-only placement journal, sharing MIDI
+  validation and checkpoints (ADR-0082). Recovery keeps physical tails but places
+  only trusted progress and its punch; final sidecars retain both after save/autosave
+  retirement. Initial loop-range changes remain unsupported as for MIDI.
+  Native macOS/Windows journal validation remains pending.
+- Streaming audio recording reserves JUNK/ds64 space and promotes to RF64 in
+  place at the 32-bit size limit (ADR-0082). Old 44-byte recordings and new
+  RIFF/RF64 files remain repairable, including bytewise-torn promotion tags;
+  decode/import accept RF64. Promotion is
+  covered locally using an injected limit and sparse files; native macOS/Windows
+  validation remains pending.
 - Consolidation's shared engine/model code has local Linux coverage; native
   macOS/Windows validation remains pending before merge.
 - Project files accept `record.mode: output`, but output capture is not

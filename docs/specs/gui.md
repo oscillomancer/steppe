@@ -55,6 +55,9 @@ CLAP main-thread callbacks and hosts plugin GUIs. Consequences:
   does not poll a remote editor or its bridge descriptors. Playback frames
   run at 16 ms; transport counters refresh at 250 ms only while playing or
   recording, with stopped state/xrun/error changes refreshed on notifications.
+  A `record.error` notification immediately shows the failed file and reason
+  in the persistent status line, stating that written audio is kept; healthy
+  recording targets and playback continue (ADR-0082).
   Visible moving/decaying meters have a 33 ms frame deadline, including their
   1.5 s peak hold; at rest the feed arms/rechecks one audio activity wake at
   its -60 dB display floor. Clip latches alone do not animate. Idle with no

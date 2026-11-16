@@ -185,11 +185,23 @@ folder: stop recording first, and its files move or are copied then.
 Saving in place works while recording. Quitting, or starting
 another project, without saving deletes that folder after the app has asked.
 
+If an audio recording cannot be written, the status line shows the failed
+file and error immediately. That target keeps every complete sample frame
+written so far and stops writing; other armed targets and playback continue.
+Stop and save the retained takes, then check free space and storage before
+starting another recording.
+
 An unsaved project is autosaved into that folder every minute while it
 changes, like a saved one. If Steppe stops without you saving or discarding
 (a crash, a power cut), the folder stays, with its autosaves and recordings.
-MIDI recordings are kept as they are played, so a crash loses at most the
-last moment of a take (a power cut, at most the last five seconds).
+Audio and MIDI recordings are kept as they are played. With storage keeping
+up, a program crash loses about the writer's last pass; a power cut retains
+the last completed file checkpoint, at most about five seconds behind. Storage
+failures are shown immediately for audio, with the written prefix kept.
+On Windows file data is flushed without elevation, but a power cut can still
+lose newly created file or folder names; the file checkpoint does not promise
+that stronger namespace guarantee. A failed save that reports the project may
+already exist keeps both original and copied media; check storage before retrying.
 The next time Steppe starts without a project to open, it lists what was left
 behind: each with its name, when it was last autosaved, how many tracks and
 recordings it has, and its size. **Recover** opens it (after asking about any
@@ -972,6 +984,25 @@ In input record mode, an armed channel whose input is a rack Out records stereo 
 input FX, before its own items, inserts and fader. It uses ordinary audio
 takes, loop/punch recording and recovery. Disable the live rack feed when
 auditioning the recorded item to avoid doubling it.
+
+Recorded filenames use sanitized track names and take numbers. Tracks named
+`Vocal` and `vocal` receive distinct take names when recorded together, including
+on case-insensitive filesystems.
+
+Audio takes begin as ordinary WAV files and become RF64 automatically above the
+32-bit size limit, without interrupting recording. Steppe can import and recover
+both formats, including recordings made with the older WAV header layout.
+
+Audio takes keep an append-only placement journal beside each WAV. After a
+crash, Project recovery restores loop passes and seeks through the last complete
+checkpoint; extra audio bytes are kept without guessing their placement. Stop
+keeps a final placement sidecar, and the next successful save/autosave retires
+the journal. The loop range at recording start is used for recovery; changing
+it during the take has the same limitation as MIDI recording. Punch changes
+continue to apply at stop; crash recovery restores the punch from the last
+complete recording checkpoint, independently of the current transport punch.
+During recording the punch must contain at least one sample and fit the
+recording clock; a refused change leaves the range unchanged.
 
 Output recording is not supported yet. If a loaded project has an armed track
 in output record mode, recording fails before creating any files. Switch that

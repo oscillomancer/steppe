@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include "supple/engine/app.h"
+#include "file_platform.h"
 #include "media_files.h"
 #include "module_library.h"
 #include "rack_runtime.h"
@@ -21,6 +22,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <fstream>
+#include <iterator>
 #include <numbers>
 #include <set>
 #include <string_view>
@@ -633,9 +635,10 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
     scratch_.clear();
     reportedFailures_.clear();
     recordingFiles_.clear();
+    recordingErrorsReported_.clear();
     // Not saved: a saved project's journals stay, offered on its next open;
     // an unsaved one's went with its folder above (ADR-0078, ADR-0080).
-    midiJournalsPending_.clear();
+    recordingJournalsPending_.clear();
     unpublishedCopies_.clear();
     endMasterRecording();
     autoWrite_.clear();
@@ -742,6 +745,8 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
     for (const auto& e : head().fx) running.push_back(e.id);
     captureFxStates(running, warnings);
     SUPPLE_TRY(model::checkInvariants(head()));
+    SUPPLE_TRY(checkpointRecordingJournals());
+    const bool relocated = !projectPath_.empty() || !options_.scratchDir.empty();
     const bool fromScratch = projectPath_.empty() && !options_.scratchDir.empty();
     if (fromScratch && engine_ && engine_->recording())
         return Error("project.recording", "a recording is running", {},
@@ -806,7 +811,17 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
             branchesBackupFor_.clear();
         }
         SUPPLE_TRY(publishRecoveryKeeps(path, warnings));
-        return writeFileAtomic(path, model::serializeProjectFile(*versions_, history, through));
+        auto written =
+            writeFileAtomic(path, model::serializeProjectFile(*versions_, history, through));
+        if (!written && written.error().code != "file.sync_published") return written;
+        auto confirmed = written ? syncFile(path) : written;
+        if (confirmed) confirmed = syncParentDirectories(path);
+        if (!confirmed)
+            return Status{
+                Error("project.sync", confirmed.error().message, path.string(),
+                      "the project may already exist; originals and copied media are kept; "
+                      "check storage before retrying the save")};
+        return okStatus();
     };
     const fs::path media = path.parent_path() / head().project->mediaDir;
     const fs::path oldMedia = mediaDir();
@@ -869,17 +884,17 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
     // folder (whose old copy stays the old project's, as its WAVs do). A
     // file the copy found already there is not this save's: it stays.
     std::vector<fs::path> retire;
-    for (const fs::path& journal : midiJournalsPending_) {
+    for (const fs::path& journal : recordingJournalsPending_) {
         const fs::path rel = journal.lexically_relative(oldMedia);
-        if (sameMedia || rel.empty() || *rel.begin() == "..") {
+        if (!relocated || sameMedia || rel.empty() || *rel.begin() == "..") {
             retire.push_back(journal);
             continue;
         }
         const fs::path moved = media / rel;
         if (fromScratch || holds(createdMedia, moved)) retire.push_back(moved);
     }
-    midiJournalsPending_ = std::move(retire);
-    dropSavedMidiJournals();
+    recordingJournalsPending_ = std::move(retire);
+    dropSavedRecordingJournals();
     if (fromScratch) releaseScratch();  // its media moved; its autosaves are older than the file
     autosaveMarked_ = true;             // the file itself is the newest copy
     autosaveMs_ = serviceClockMs();
@@ -1245,6 +1260,32 @@ void EngineApp::stopJobs() {
 
 // --- real-time engine -----------------------------------------------------------------------
 
+namespace {
+Result<RecordedPunch> punchFrames(const TransportRange& punch, double rate) {
+    const long double start =
+        static_cast<long double>(punch.start) * static_cast<long double>(rate);
+    const long double end = static_cast<long double>(punch.end) * static_cast<long double>(rate);
+    if (!std::isfinite(start) || !std::isfinite(end) || start < 0 || end < 0 ||
+        start >= static_cast<long double>(detail::kRecordingClockLimit) + .5L ||
+        end >= static_cast<long double>(detail::kRecordingClockLimit) + .5L)
+        return Error("record.punch", "the punch is outside the recording clock range", "/punch",
+                     "clear the punch or use a nonnegative range within 2^48 recording frames");
+    RecordedPunch frames{punch.enabled, static_cast<std::int64_t>(std::llround(start)),
+                         static_cast<std::int64_t>(std::llround(end))};
+    SUPPLE_TRY(detail::validateRecordingPunch(frames));
+    return frames;
+}
+}  // namespace
+Status EngineApp::setPunch(const TransportRange& punch) {
+    if (engine_ && engine_->recording()) {
+        auto frames = punchFrames(punch, engine_->config().sampleRate);
+        if (!frames) return std::move(frames).error();
+        SUPPLE_TRY(engine_->setRecordingPunch(*frames));
+    }
+    punch_ = punch;
+    return okStatus();
+}
+
 Status EngineApp::setAudioThreadLimit(unsigned limit) {
     if (limit > 64)
         return Error("engine.audio_threads", "audio processing thread limit is out of range",
@@ -1450,6 +1491,23 @@ constexpr std::uint64_t kRestartGiveUpMs = 30'000;
 constexpr std::uint64_t kTouchReleaseMs = 500;
 }  // namespace
 
+void EngineApp::emitRecordingError(const RecordingError& failure) {
+    if (!recordingErrorsReported_.insert(failure.file).second) return;
+    const auto& error = failure.error;
+    auto event = json::Value::object();
+    event["track"] = failure.track.str();
+    event["file"] = failure.file.string();
+    event["error"] = error.toString();
+    event["code"] = error.code;
+    event["message"] = error.message;
+    event["path"] = error.path.empty() ? "/recording/" + failure.track.str() : error.path;
+    event["hint"] =
+        error.hint.empty()
+            ? "save the retained audio; check free space and storage before recording again"
+            : error.hint;
+    emit("record.error", std::move(event));
+}
+
 void EngineApp::tick() {
     mainWake_.drain();  // re-arm before inspecting producer queues
     std::erase_if(jobs_,
@@ -1472,6 +1530,7 @@ void EngineApp::tick() {
     }
     if (engine_) {
         engine_->service();
+        for (const auto& error : engine_->takeRecordingErrors()) emitRecordingError(error);
         serviceSync();                  // what the sync master did, to the transport (ADR-0071)
         if (!txn_) updateWriteHolds();  // a touch hold's release time passed
         consumePluginOutputs();
@@ -1824,12 +1883,14 @@ void EngineApp::autosave() {
         next = *autosavedThrough_ + 1;
     }
     const fs::path file = dir / ("autosave-" + std::to_string(next) + ".json");
-    if (auto st = writeFileAtomic(file, model::serializeProjectFile(*versions_)); !st) {
+    auto st = checkpointRecordingJournals();
+    if (st) st = writeFileAtomic(file, model::serializeProjectFile(*versions_));
+    if (!st) {
         emit("engine.error", json::Value(st.error().toString()));
         autosaveMs_ = serviceClockMs();  // try again after an interval, not every tick
         return;
     }
-    dropSavedMidiJournals();
+    dropSavedRecordingJournals();
     existing.push_back({next, file});
     std::sort(existing.begin(), existing.end(),
               [](const auto& a, const auto& b) { return a.first < b.first; });
@@ -1843,12 +1904,44 @@ void EngineApp::autosave() {
     autosaveMarked_ = true;
 }
 
-void EngineApp::dropSavedMidiJournals() {
-    for (const fs::path& journal : midiJournalsPending_) {
-        std::error_code ec;
-        fs::remove(journal, ec);  // a failure leaves it recoverable: offered again, never lost
+namespace {
+fs::path audioJournalWave(const fs::path& journal) {
+    auto stem = journal.filename().string();
+    stem.resize(stem.size() - std::string_view(".audio.jsonl").size());
+    return journal.parent_path() / (stem + ".wav");
+}
+}  // namespace
+Status EngineApp::checkpointRecordingJournals() {
+    for (const auto& journal : recordingJournalsPending_) {
+        if (!detail::isAudioJournal(journal)) continue;
+        const auto wav = audioJournalWave(journal);
+        // A prior writer sync may have failed; never retire its recovery
+        // metadata on the strength of a durable project but volatile audio.
+        SUPPLE_TRY(syncFile(wav));
+        SUPPLE_TRY(syncParentDirectories(wav));
     }
-    midiJournalsPending_.clear();
+    return okStatus();
+}
+void EngineApp::dropSavedRecordingJournals() {
+    std::vector<fs::path> kept;
+    for (const fs::path& journal : recordingJournalsPending_) {
+        if (detail::isAudioJournal(journal)) {
+            const auto wav = audioJournalWave(journal);
+            auto side = detail::readSidecar(wav, wav.parent_path());
+            // Metadata failure leaves the journal, including across retry.
+            if (!side || !side->frames) {
+                const auto inspected = audio::inspectWavStream(wav);
+                if (!inspected || inspected->fileFrames != 0) {
+                    kept.push_back(journal);
+                    continue;
+                }
+            }
+        }
+        std::error_code ec;
+        fs::remove(journal, ec);
+        if (ec) kept.push_back(journal);
+    }
+    recordingJournalsPending_ = std::move(kept);
 }
 
 void EngineApp::restartFx(model::Id fx) {
@@ -1959,6 +2052,7 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
         SUPPLE_TRY(model::validateRecordingPlayrate(s));  // before creating a record folder/file
         const fs::path dir = recordDir();
         std::vector<RecordTarget> targets;
+        std::set<std::string> reservedStems;
         for (const auto& e : s.tracks) {
             const model::Track& tr = *e.value;
             if (tr.record.armed && tr.record.mode == model::RecordMode::Output)
@@ -1994,17 +2088,19 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
             auto freeName = [&](const char* extension) {
                 for (int n = 1;; ++n) {
                     const std::string stem = base + "-" + std::to_string(n);
+                    auto folded = stem;
+                    for (char& c : folded)
+                        if (c >= 'A' && c <= 'Z') c = char(c - 'A' + 'a');
                     const fs::path file = dir / (stem + extension);
-                    const bool taken =
-                        std::any_of(targets.begin(), targets.end(),
-                                    [&](const RecordTarget& o) {
-                                        return !o.file.empty() &&
-                                               o.file.parent_path() / o.file.stem().stem() ==
-                                                   dir / stem;
-                                    }) ||
-                        occupied(dir / (stem + ".wav")) || occupied(dir / (stem + ".rec.json")) ||
-                        occupied(dir / (stem + ".midi.jsonl"));
-                    if (!taken) return file;
+                    const bool taken = reservedStems.contains(folded) ||
+                                       occupied(dir / (stem + ".wav")) ||
+                                       occupied(dir / (stem + ".rec.json")) ||
+                                       occupied(dir / (stem + ".midi.jsonl")) ||
+                                       occupied(dir / (stem + ".audio.jsonl"));
+                    if (!taken) {
+                        reservedStems.insert(std::move(folded));
+                        return file;
+                    }
                 }
             };
             if (routed || midi) {  // MIDI (ADR-0016): events; a journal for recovery (ADR-0080)
@@ -2028,6 +2124,8 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
             t.file = freeName(".wav");
             targets.push_back(std::move(t));
         }
+        auto recordPunch = punchFrames(punch_, engine_->config().sampleRate);
+        if (!recordPunch) return std::move(recordPunch).error();
         std::vector<fs::path> files;  // WAVs and MIDI journals: not leftovers while recording
         for (const RecordTarget& t : targets)
             if (!t.file.empty()) files.push_back(t.file);
@@ -2041,11 +2139,12 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
             recordingMasters_ = true;
             headChanged();
         }
-        if (auto started = engine_->startRecording(std::move(targets)); !started) {
+        if (auto started = engine_->startRecording(std::move(targets), *recordPunch); !started) {
             endMasterRecording();
             return std::move(started).error();
         }
         recordingFiles_ = std::move(files);
+        recordingErrorsReported_.clear();
         playStart_ = engine_->transport().seconds;
         startPlaying(metronome_.countInBars);
     } else if (action == "play") {
@@ -2424,6 +2523,12 @@ Status recordingBounds(const model::Session& s, const detail::RecordingInfo& sid
         return Error("record.sidecar", "recording positions exceed the finite timeline range",
                      std::move(path), "restore valid recording positions or skip this file");
     };
+    if (side.punch) {
+        const auto& punch = *side.punch;
+        if (punch.start < 0 || punch.end < 0 || punch.start > detail::kRecordingClockLimit ||
+            punch.end > detail::kRecordingClockLimit || (punch.enabled && punch.end <= punch.start))
+            return invalid("/punch");
+    }
     if (!std::isfinite(side.sampleRate) || side.sampleRate < 8000 || side.sampleRate > 384000 ||
         (fileRate > 0 && side.sampleRate != fileRate) || frames > INT64_MAX)
         return invalid("/sample_rate");
@@ -2590,24 +2695,54 @@ Result<std::vector<RecordedInfo>> EngineApp::commitTakes(const std::vector<Recor
         const double rate = r.sampleRate == 0 ? initial.project->sampleRate : r.sampleRate;
         detail::RecordingInfo side{r.track,    r.startSample, rate,
                                    r.segments, r.loop.start,  r.loop.end};
+        side.punch = r.punch;
         SUPPLE_TRY(recordingBounds(initial, side, static_cast<std::uint64_t>(r.frames)));
     }
     auto txnId = beginTransaction({cmd::Origin::Type::Internal, "engine", ""}, label);
     if (!txnId) return std::move(txnId).error();
-    auto placed = placeTakes(takes, punch_, &pendingHashes);
-    if (!placed) return std::move(placed).error();
-    std::vector<RecordedInfo> out = std::move(*placed);
-    // Logged as record.commit, so a merge replays it on another branch: the
-    // takes came from the device, not from a command.
+    std::vector<RecordedInfo> out;
+    // One undo step, with contiguous groups retaining each recording's punch.
+    // record.commit already has a top-level punch: no argument/schema change.
     const fs::path media =
         projectDir().empty() ? fs::path() : projectDir() / head().project->mediaDir;
-    record_.invocations.push_back(
-        {"record.commit", detail::recordCommitArgs(takes, punch_, media)});
+    auto punchFor = [&](const RecordedTake& take) {
+        if (!take.punch) return punch_;
+        const auto& p = *take.punch;
+        const double rate = take.sampleRate > 0 ? take.sampleRate : initial.project->sampleRate;
+        return TransportRange{p.enabled, static_cast<double>(p.start) / rate,
+                              static_cast<double>(p.end) / rate};
+    };
+    for (std::size_t first = 0; first < takes.size();) {
+        const auto punch = punchFor(takes[first]);
+        auto last = first + 1;
+        while (last < takes.size()) {
+            const auto other = punchFor(takes[last]);
+            if (other.enabled != punch.enabled || other.start != punch.start ||
+                other.end != punch.end)
+                break;
+            ++last;
+        }
+        const std::vector<RecordedTake> group(takes.begin() + static_cast<std::ptrdiff_t>(first),
+                                              takes.begin() + static_cast<std::ptrdiff_t>(last));
+        auto placed = placeTakes(group, punch, &pendingHashes);
+        if (!placed) return std::move(placed).error();
+        out.insert(out.end(), std::make_move_iterator(placed->begin()),
+                   std::make_move_iterator(placed->end()));
+        record_.invocations.push_back(
+            {"record.commit", detail::recordCommitArgs(group, punch, media)});
+        first = last;
+    }
+    if (takes.empty())
+        record_.invocations.push_back(
+            {"record.commit", detail::recordCommitArgs(takes, punch_, media)});
     SUPPLE_TRY(commitTransaction(*txnId));
-    // The MIDI takes are in the project now; their journals go once a saved
-    // file or autosave holds them (ADR-0080).
+    // The takes are in the project now; owned journals go once a saved
+    // file or autosave holds them (ADR-0080/0082).
     for (const RecordedTake& r : takes)
-        if (r.isMidi && !r.file.empty()) midiJournalsPending_.push_back(r.file);
+        if (r.isMidi && !r.file.empty())
+            recordingJournalsPending_.push_back(r.file);
+        else if (!r.isMidi && !r.journal.empty())
+            recordingJournalsPending_.push_back(r.journal);
     for (auto& [source, pendingTake] : pendingHashes) {
         // Open only; all reads happen on the worker. The handle survives a
         // first save moving the scratch file before the job gets to run.
@@ -2681,13 +2816,9 @@ Result<std::vector<RecordedInfo>> EngineApp::placeTakes(
                 ev["file"] = r.file.string();
                 emit("record.warning", std::move(ev));
             }
-        if (live && !r.error.empty()) {
-            json::Value ev = json::Value::object();
-            ev["track"] = r.track.str();
-            ev["file"] = r.file.string();
-            ev["error"] = r.error;
-            emit("record.error", std::move(ev));
-        }
+        if (live && !r.error.empty())
+            emitRecordingError(
+                {r.track, r.file, r.failure.value_or(Error("record.write", r.error))});
         const double rate = r.sampleRate > 0 ? r.sampleRate : s.project->sampleRate;
         if (r.frames <= 0 || !s.tracks.find(r.track)) continue;
         // The runs on the timeline (ADR-0015): one per loop pass, or one.
@@ -2828,6 +2959,8 @@ void EngineApp::finalizeRecordingHash(Id source, model::MediaSource expected, Re
         detail::RecordingInfo side{take.track,    take.startSample, take.sampleRate,
                                    take.segments, take.loop.start,  take.loop.end,
                                    hash};
+        side.frames = take.frames;
+        side.punch = take.punch;
         Status finalized;
         {
             std::lock_guard lock(recordingFinalizeMutex_);
@@ -3056,6 +3189,13 @@ std::int64_t leftoverRecordings(const fs::path& folder, const fs::path& rec,
         }
         if (f.extension() != ".wav" || !it->is_regular_file(ec)) continue;
         if (used.count(("rec" / f.filename()).generic_string())) continue;
+        const auto journal = detail::audioJournalPath(f);
+        if (fs::symlink_status(journal, ec).type() != fs::file_type::not_found) {
+            auto side = detail::readAudioJournal(f, rec);
+            auto wav = audio::inspectWavStream(f);
+            if (side && side->frames && *side->frames > 0 && wav && wav->fileFrames > 0) ++n;
+            continue;
+        }
         std::error_code sideError;  // a sidecar recovery would read: regular, inside
         if (detail::recoveryFileInside(rec, f) &&
             detail::recoveryFileInside(rec, detail::sidecarPath(f)) &&
@@ -3106,6 +3246,7 @@ RecordingCheck checkRecording(const model::Session& s, const fs::path& rec, cons
         RecordedTake take = detail::placeMidi(*capture);
         out.side = detail::RecordingInfo{take.track,    take.startSample, take.sampleRate,
                                          take.segments, take.loop.start,  take.loop.end};
+        out.side->punch = take.punch;
         if (take.midi.empty() || take.frames <= 0) return out;  // nothing was played
         if (auto valid = recordingBounds(s, *out.side, static_cast<std::uint64_t>(take.frames));
             !valid) {
@@ -3118,11 +3259,14 @@ RecordingCheck checkRecording(const model::Session& s, const fs::path& rec, cons
     }
     // The sidecar is opened only inside the WAV's own folder (itself inside
     // `root`): a link to placement metadata elsewhere is not followed.
-    auto side = detail::readSidecar(f, rec);  // none: not a recording, or capture never began
+    const auto journal = detail::audioJournalPath(f);
+    const bool journalPresent = fs::symlink_status(journal, ec).type() != fs::file_type::not_found;
+    auto side = journalPresent ? detail::readAudioJournal(f, rec) : detail::readSidecar(f, rec);
+    // A journal is authoritative while present: never flatten an unreadable one.
     if (!side) {
-        if (fs::exists(detail::sidecarPath(f), ec)) {
+        if (journalPresent || fs::exists(detail::sidecarPath(f), ec)) {
             Error e = std::move(side).error();
-            e.code = "record.sidecar";
+            e.code = journalPresent ? "record.journal" : "record.sidecar";
             if (e.path.empty()) e.path = "/";
             if (e.hint.empty()) e.hint = "restore a valid recording sidecar or skip this file";
             out.problem = std::move(e);
@@ -3138,6 +3282,8 @@ RecordingCheck checkRecording(const model::Session& s, const fs::path& rec, cons
         out.problem = std::move(e);
         return out;
     }
+    if (side->frames)
+        wav->fileFrames = std::min(wav->fileFrames, static_cast<std::uint64_t>(*side->frames));
     if (wav->fileFrames == 0) return out;
     if (auto valid = recordingBounds(s, *side, wav->fileFrames, wav->sampleRate); !valid) {
         out.problem = valid.error();
@@ -3736,6 +3882,9 @@ Status EngineApp::moveScratchMedia(const fs::path& dest, const std::function<Sta
         const auto staged = stage / rel;
         fs::create_directories(staged.parent_path(), ec);
         if (!ec) fs::copy_file(from / rel, staged, fs::copy_options::none, ec);
+#if defined(_WIN32)
+        if (!ec) fs::permissions(staged, fs::perms::owner_write, fs::perm_options::add, ec);
+#endif
         if (ec)
             return Error("project.media_move", ec.message(), (from / rel).string(),
                          "save to a writable project directory with sufficient space and keep all "
@@ -3745,18 +3894,27 @@ Status EngineApp::moveScratchMedia(const fs::path& dest, const std::function<Sta
             return Error("project.media_move", "staged media verification failed", rel.string(),
                          "keep source media unchanged during the save and save into a directory "
                          "with reliable writable storage");
+        SUPPLE_TRY(syncFile(staged));
     }
     for (const auto& rel : files) {
         const auto target = dest / rel;
         fs::create_directories(target.parent_path(), ec);
-        if (!ec) fs::create_hard_link(stage / rel, target, ec);
+        if (!ec && detail::files::publishNew(stage / rel, target) != 0)
+            ec = std::error_code(errno, std::generic_category());
         if (ec)
             return Error("project.media_move", ec.message(), target.string(),
                          "save to a writable project directory with sufficient space and keep all "
                          "scratch media readable during the save");
         placed.push_back(target);
+        SUPPLE_TRY(syncParentDirectories(target));
     }
-    SUPPLE_TRY(publish());
+    auto saved = publish();
+    if (!saved) {
+        // Publication may already have replaced the file. Keep its audio
+        // as well as the originals; rollback must never strand that project.
+        if (saved.error().code == "project.sync") published = true;
+        return saved;
+    }
     published = true;
     std::vector<fs::path> emptyDirs;
     for (const auto& rel : files) {
@@ -3819,7 +3977,7 @@ std::vector<RecoverableInfo> EngineApp::recoverable(std::vector<RecordingWarning
         }
     });
     for (const fs::path& f : recordingFiles_) used.insert(comparable(f));
-    for (const fs::path& f : midiJournalsPending_) used.insert(comparable(f));
+    for (const fs::path& f : recordingJournalsPending_) used.insert(comparable(f));
     std::vector<fs::path> files;
     for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator();
          it.increment(ec))
@@ -3923,6 +4081,7 @@ Result<std::vector<RecordedInfo>> EngineApp::recover(const std::vector<std::stri
                     e.voice = it->second;
                 }
         }
+        t.punch = side->punch.value_or(RecordedPunch{});
         t.track = track.value_or(side->track);
         if (!s.tracks.find(t.track))
             return Error("recover.no_track",
@@ -3933,6 +4092,7 @@ Result<std::vector<RecordedInfo>> EngineApp::recover(const std::vector<std::stri
             return Error("track.strip_type", "recover recordings onto a channel or master",
                          "/track", "choose a child channel of the buss instead");
         if (!check.midi) {
+            t.frames = static_cast<std::int64_t>(check.wav->fileFrames);
             t.startSample = side->startSample;
             t.sampleRate = side->sampleRate;
             t.segments = side->segments;  // loop passes, when the recording ended normally
@@ -3958,7 +4118,21 @@ Result<std::vector<RecordedInfo>> EngineApp::recover(const std::vector<std::stri
             it = takes.erase(it);
             continue;
         }
-        t.frames = static_cast<std::int64_t>(*frames);
+        t.frames = std::min(t.frames, static_cast<std::int64_t>(*frames));
+        const auto journal = detail::audioJournalPath(t.file);
+        std::error_code ec;
+        if (fs::is_regular_file(fs::symlink_status(journal, ec))) t.journal = journal;
+        // Keep trusted placement after the next save retires the journal.
+        detail::RecordingInfo side{t.track,    t.startSample, t.sampleRate,
+                                   t.segments, t.loop.start,  t.loop.end};
+        side.frames = t.frames;
+        side.punch = t.punch;
+        auto metadata = detail::writeSidecar(t.file, side);
+        if (!metadata) {
+            warn(metadata.error(), t.file.lexically_relative(mediaDir()), t.track.str());
+            it = takes.erase(it);
+            continue;
+        }
         ++it;
     }
     return commitTakes(takes, "recover");

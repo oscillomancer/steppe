@@ -209,6 +209,31 @@ struct App {
     }
 };
 
+TEST_CASE("recording writer errors stay visible while healthy targets continue") {
+    App a;
+    REQUIRE(a.ok);
+    peaks::PeakService peaks(peaks::defaultCacheDir(gui::test::slug()),
+                             [](std::function<void()> f) { f(); });
+    gui::MeterFeed meters;
+    gui::Shell shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters);
+    a.root->setContent(shell.build(*a.root, *a.actions));
+    auto payload = json::Value::object();
+    payload["file"] = "media/rec/Vocal-1.wav";
+    payload["error"] = "file.write: short write";
+    payload["message"] = "short write";
+    shell.recordingError(payload);
+    shell.sync();
+    a.root->frame(false);
+    const auto* status = a.root->find("status");
+    REQUIRE(status);
+    CHECK(status->valueText().find("Recording failed") != std::string::npos);
+    CHECK(status->valueText().find("short write") != std::string::npos);
+    CHECK(status->valueText().find("Vocal-1.wav") != std::string::npos);
+    CHECK(status->valueText().find("kept") != std::string::npos);
+    a.snapshot("recording-write-error.png");
+    a.root->setContent(std::make_unique<ui::Node>("detached"));
+}
+
 struct RateApp : App {
     std::unique_ptr<gui::TransportBar> bar;
     std::vector<std::string> errors;

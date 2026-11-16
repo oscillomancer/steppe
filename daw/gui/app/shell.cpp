@@ -30,6 +30,16 @@
 #include "transport_bar.h"
 
 namespace supple::gui {
+void Shell::recordingError(const json::Value& payload) {
+    const auto* message = payload.find("message");
+    if (!message || !message->isString()) message = payload.find("error");
+    const auto* file = payload.find("file");
+    setStatus("Recording failed: " +
+              (message && message->isString() ? message->asString() : "storage error") +
+              "; written audio kept" +
+              (file && file->isString() ? " (" + file->asString() + ")" : ""));
+}
+
 void Shell::setStatus(const std::string& text) {
     editStatus_ = text;
     if (counts_) counts_->setText(text);

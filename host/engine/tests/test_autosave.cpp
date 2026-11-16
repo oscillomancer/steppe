@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include <doctest/doctest.h>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -139,6 +140,122 @@ bool hasWarning(const std::vector<schema::Warning>& warnings, std::string_view c
 }
 
 }  // namespace
+
+TEST_CASE("first save checkpoints media before publication and keeps originals on uncertain sync") {
+    Project p;
+    auto created = EngineApp::create({.workdir = p.root, .scratchDir = p.root / "scratch"});
+    REQUIRE(created);
+    p.app = std::move(*created);
+    p.app->setCopyImportedMedia(true);
+    audio::AudioData wave;
+    wave.sampleRate = 48000;
+    wave.channels = {{.25f, -.25f}};
+    const auto external = p.root / "take.wav";
+    REQUIRE(audio::writeWav(external, wave));
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *p.app);
+    auto args = json::Value::object();
+    auto track = bus.execute({"track.add", args, {cmd::Origin::Type::Test, "sync", ""}});
+    REQUIRE(track);
+    args["track"] = track->find("track")->asString();
+    args["audio_file"] = external.string();
+    REQUIRE(bus.execute({"item.add", args, {cmd::Origin::Type::Test, "sync", ""}}));
+    const auto original = p.app->mediaDir() / "take.wav";
+    REQUIRE(fs::exists(original));
+    const auto project = p.root / "saved" / "project.json";
+    fs::create_directory(project.parent_path());
+    const auto media = project.parent_path() / "media";
+    const auto realMedia = fs::weakly_canonical(media);
+    bool failPublished = false;
+    SUBCASE("successful checkpoint") {}
+    SUBCASE("a failed post-publication checkpoint retains both copies") { failPublished = true; }
+    bool data = false, directory = false;
+    struct ResetHook {
+        ~ResetHook() {
+            setFileSyncHookForTesting({});
+            setDurabilityHookForTesting({});
+        }
+    } reset;
+    auto checkpoint = [&](const fs::path& path) {
+        if (path != original && path.extension() == ".wav" && fs::is_regular_file(path))
+            data = true;
+        if (path == realMedia) directory = true;
+        if (path == project) {
+            CHECK(data);
+            CHECK(directory);
+            CHECK(fs::exists(original));
+            if (fs::exists(project) && failPublished) return false;
+        }
+        return true;
+    };
+    setFileSyncHookForTesting(checkpoint);
+    setDurabilityHookForTesting([&](const fs::path& path, bool) { return checkpoint(path); });
+    const auto saved = p.app->save(project);
+    if (failPublished) {
+        REQUIRE_FALSE(saved);
+        CHECK(saved.error().code == "project.sync");
+        CHECK(fs::exists(original));
+    } else {
+        REQUIRE(saved);
+        CHECK_FALSE(fs::exists(original));
+    }
+    CHECK(fs::exists(project));
+    REQUIRE(fs::exists(media / "take.wav"));
+    CHECK(sha256File(media / "take.wav").value() == sha256File(external).value());
+}
+
+TEST_CASE("save as preserves audio referenced only by a saved branch regardless of filename") {
+    Project p;
+    std::string name;
+    SUBCASE("ordinary media") { name = "take.wav"; }
+    SUBCASE("a user filename resembling a staging marker") { name = "take.copy-tmp"; }
+    fs::create_directories(p.root / "source");
+    fs::create_directories(p.root / "first");
+    fs::create_directories(p.root / "second");
+    const auto original = p.root / "source" / name;
+    audio::WavStreamWriter writer;
+    REQUIRE(writer.open(original, 48000, 1));
+    const std::vector<float> samples(128, .25f);
+    REQUIRE(writer.append(samples.data(), samples.size()));
+    REQUIRE(writer.close());
+    REQUIRE(p.app->save(p.root / "first" / "project.json"));
+    p.app->setCopyImportedMedia(true);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *p.app);
+    auto call = [&](std::string command, json::Value args) {
+        auto result = bus.execute(
+            {command, std::move(args), {cmd::Origin::Type::Test, "media-branches", ""}});
+        REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+        return *result;
+    };
+    auto args = json::Value::object();
+    const auto track = call("track.add", args)["track"].asString();
+    args["track"] = track;
+    args["audio_file"] = original.string();
+    call("item.add", args);
+    args = json::Value::object();
+    args["name"] = "kept";
+    args["switch"] = false;
+    call("branch.create", args);
+    args = json::Value::object();
+    call("history.undo", args);
+    REQUIRE(p.app->head().items.empty());
+    REQUIRE(p.app->head().media.empty());
+    REQUIRE(p.app->save(p.root / "first" / "project.json"));
+    REQUIRE(p.app->save(p.root / "second" / "project.json"));
+    CHECK(fs::exists(p.root / "first" / "media" / name));
+    REQUIRE(fs::exists(p.root / "second" / "media" / name));
+    REQUIRE(p.app->open(p.root / "second" / "project.json"));
+    REQUIRE(p.app->switchBranch("kept"));
+    REQUIRE(p.app->head().items.size() == 1);
+    REQUIRE(p.app->head().media.size() == 1);
+    CHECK(p.app->head().media.begin()->value->path == name);
+    const auto kept = sha256File(p.root / "second" / "media" / name);
+    REQUIRE(kept);
+    CHECK(*kept == sha256File(original).value());
+}
 
 TEST_CASE("a saved project is main's head and brings back its branches and current branch") {
     Project p;
@@ -2420,4 +2537,37 @@ TEST_CASE("a save as through a link and .. does not take another folder's journa
     if (fs::exists(theirs)) CHECK(sha256File(theirs).value() == *before);
     CHECK(fs::exists(made));  // the failed attempt's copy, in a folder no file uses
     CHECK(fs::exists(old));   // the first project's journal stays its own
+}
+
+TEST_CASE("an unsaved audio journal recovers loops without a sidecar or autosave") {
+    Unsaved u;
+    const std::string left = "20261114-090000-82";
+    const auto wave = u.folder(left) / "media" / "rec" / "Audio-1.wav";
+    fs::create_directories(wave.parent_path());
+    audio::WavStreamWriter writer;
+    REQUIRE(writer.open(wave, 48000, 1));
+    std::array<float, 160> data{};
+    REQUIRE(writer.append(data.data(), data.size()));
+    REQUIRE(writer.close());
+    const auto journal = detail::audioJournalPath(wave);
+    REQUIRE(writeFileAtomic(
+        journal,
+        R"({"schema":"supple.audio-recording/1.0","track":"tr_9","sample_rate":48000,"start_sample":48000,"latency":0,"channels":1,"loop":[48000,48064]})"
+        "\n"
+        "{\"run\":[64,48000]}\n{\"captured\":128,\"frames\":128}\n"));
+    auto app = u.run("20261114-100000-1");
+    auto sessions = app->recoverableSessions();
+    REQUIRE(sessions.size() == 1);
+    CHECK(sessions[0].recordings == 1);
+    auto recovered = app->recoverSession(left);
+    REQUIRE_MESSAGE(recovered, (recovered ? "" : recovered.error().toString()));
+    REQUIRE(recovered->recovered.size() == 1);
+    CHECK(recovered->recovered[0].takes.size() == 2);
+    CHECK(app->head().media.begin()->value->frames == 128);
+    REQUIRE(app->save(u.root / "saved" / "song.json"));
+    CHECK_FALSE(fs::exists(app->recordDir() / "Audio-1.audio.jsonl"));
+    CHECK(audio::inspectWavStream(app->recordDir() / "Audio-1.wav")->fileFrames == 160);
+    REQUIRE(app->open(u.root / "saved" / "song.json"));
+    CHECK(app->head().media.begin()->value->frames == 128);
+    CHECK(app->head().takes.size() == 2);
 }

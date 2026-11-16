@@ -96,3 +96,4 @@ current state.
 | [0078](0078-unsaved-recovery.md) | Unsaved projects autosave and come back after a crash | Accepted |
 | [0079](0079-registry-index-exposure.md) | Exposure metadata in the registry index | Accepted |
 | [0080](0080-midi-recording-recovery.md) | MIDI takes survive a crash through a journal | Accepted |
+| [0082](0082-audio-media-durability.md) | Audio takes and published media survive a crash | Accepted |

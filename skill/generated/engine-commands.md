@@ -18335,6 +18335,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 ### Errors
 
 - `transport.range`: not one start and one end, end not after start, or clear with a range Hint: e.g. start_bar 5, end_bar 9
+- `record.punch`: the active recording cannot represent this punch Hint: clear the punch or use a range within 2^48 recording frames
 
 ### Examples
 
