@@ -1042,6 +1042,27 @@ Library boundaries:
 - The control client bounds connecting and sending, as well as the
   response, by its timeout through nonblocking sockets; that path is tested
   on Linux, and native macOS/Windows CI has not run on it.
+- Control admission is bounded per live peer, not across retained work from
+  disconnected peers. Reconnect churn can accumulate posted frames while the
+  model is busy. Subscriptions also have no retained count/byte cap; aggregate
+  budgets, fairness and accepted-request lifetime need a policy decision.
+- RPC/MCP limit raw frames to 16 MiB and parsing depth to 256; there is no
+  parsed-value budget. Wide JSON can exhaust a constrained process's memory.
+  An RPC fallback error with a very large string ID can itself exceed the wire
+  bound; an ID headroom or connection-close policy is still needed.
+- In-process MCP writes stdout synchronously on the model thread, so a client
+  that stops reading can stall model service. Socket clients have separate I/O;
+  the standalone proxy isolates this stdout stall from its engine process.
+- Proxy retry eligibility currently relies on error-code strings, without local
+  transport provenance. A peer returning a structured `rpc.write`/`rpc.connect`
+  command error can trigger replay even though the request was delivered.
+- Socket product-directory permission setup follows symlinks on POSIX; directory
+  trust/link policy remains unresolved. Windows AF_UNIX uses inherited directory
+  ACLs (ADR-0035), not a named-pipe DACL. Endpoint lock acquisition can still wait
+  on another holder, independently of the nonblocking collision probe.
+- Optional schema decoders accept null as absence while exporting the inner
+  schema without null. The command mutation oracle documents this compatibility
+  exception; changing exported nullability needs a separate contract decision.
 
 Engine and hosting:
 - Sync (ADR-0070, ADR-0071, ADR-0073): sync input, LTC output and MIDI
