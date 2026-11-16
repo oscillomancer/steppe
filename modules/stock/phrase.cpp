@@ -341,7 +341,7 @@ struct Phrase : Module {
             started = true;
             startOver();
         }
-        const Transport t = transport();
+        const Transport t = gridTransport();
         const bool internal = !clock.connected();
         if (internal && t.playing && !wasPlaying) startOver();
         if (internal && !t.playing) open = false;

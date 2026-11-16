@@ -141,7 +141,7 @@ struct Layers : Module {
         on_3.setChannels(1);
         on_4.setChannels(1);
         count.setChannels(1);
-        const Transport t = transport();
+        const Transport t = gridTransport();
         const bool internal = !bar.connected();
         const double barBeats = t.timeSigNumerator * 4.0 / max(1, t.timeSigDenominator);
         const double beatBeats = 4.0 / max(1, t.timeSigDenominator);

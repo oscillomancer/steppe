@@ -169,7 +169,7 @@ struct Canon : Module {
         }
         all.setChannels(n + 1);
         all_gates.setChannels(n + 1);
-        const Transport t = transport();
+        const Transport t = gridTransport();
         const bool internal = !clock.connected();
         if (internal && t.playing && !wasPlaying) forget();
         wasPlaying = t.playing;

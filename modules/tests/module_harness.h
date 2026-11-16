@@ -270,12 +270,19 @@ class ModuleHarness {
         for (const InputState& in : inputs_) width = std::max(width, in.channels);
         for (const ParamState& p : params_) width = std::max(width, p.modChannels);
         record_.channels = width;
+        // As the rack gives them: transport() at the call's start,
+        // gridTransport() at its grid interval's start with the offset.
         record_.transport = transport_;
-        record_.transport.offset = phase();
-        if (transport_.playing)
+        record_.gridTransport = transport_;
+        record_.gridTransport.offset = phase();
+        if (transport_.playing) {
+            const double perFrame = transport_.tempo / 60.0 / record_.sampleRate;
             record_.transport.beats =
-                transport_.beats + static_cast<double>(start_ + frame_ - phase() - anchor_) *
-                                       transport_.tempo / 60.0 / record_.sampleRate;
+                transport_.beats + static_cast<double>(start_ + frame_ - anchor_) * perFrame;
+            record_.gridTransport.beats =
+                transport_.beats +
+                static_cast<double>(start_ + frame_ - phase() - anchor_) * perFrame;
+        }
         if (changed) call(code_.update(), kBudget);
         for (InputState& in : inputs_) {
             ss::Input& port = inputPort(*in.model);

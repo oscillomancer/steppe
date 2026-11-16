@@ -126,7 +126,7 @@ struct Arp : Module {
         out.setChannels(1);
         outGate.setChannels(1);
         const int n = min(16, max(pitch.channels(), gate.channels()));
-        const Transport t = transport();
+        const Transport t = gridTransport();
         const bool internal = !clock.connected();
         const double perFrame = t.tempo / 15.0 / sampleRate();
         const bool holding = latch.on();

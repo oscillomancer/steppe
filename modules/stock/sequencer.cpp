@@ -363,7 +363,7 @@ struct Sequencer : Module {
     void advance(int sixteenth, bool internal) {
         if (clocked && !internal) period = max(1, sinceClock);
         if (internal)
-            period = max(1, roundToInt(sampleRate() * 15.0 / max(1.0, transport().tempo)));
+            period = max(1, roundToInt(sampleRate() * 15.0 / max(1.0, gridTransport().tempo)));
         clocked = true;
         sinceClock = 0;
         if (armed) {
@@ -393,7 +393,7 @@ struct Sequencer : Module {
     }
 
     void process(int frames) {
-        const Transport t = transport();
+        const Transport t = gridTransport();
         const bool internal = !clock.connected();
         const double sixteenthsPerFrame = t.tempo / 15.0 / sampleRate();
         gate.setChannels(1);

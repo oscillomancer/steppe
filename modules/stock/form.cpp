@@ -235,7 +235,7 @@ struct Form : Module {
             started = true;
             startOver();
         }
-        const Transport t = transport();
+        const Transport t = gridTransport();
         const bool internal = !bar.connected();
         const double barBeats = t.timeSigNumerator * 4.0 / max(1, t.timeSigDenominator);
         const double beatsPerFrame = t.tempo / 60.0 / sampleRate();

@@ -243,7 +243,7 @@ struct LSystem : Module {
         symbol.setChannels(1);
         start.setChannels(1);
         grow();
-        const Transport t = transport();
+        const Transport t = gridTransport();
         const bool internal = !clock.connected();
         if (internal && t.playing && !wasPlaying) at = -1;
         wasPlaying = t.playing;

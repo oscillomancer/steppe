@@ -219,7 +219,9 @@ cable buffers, binds ports and parameters, and calls the modules' hooks.
   its own, and song positions from `Transport::offset` (rack.md §4.2).
   Review round 15 found Delay's wander, and a sweep nine more stock
   modules, depending on it; the runtime now hands every call of an
-  interval the interval's transport plus its offset.
+  interval the interval's transport plus its offset, as `gridTransport()`
+  (review round 19: `transport()` keeps its meaning, the call's start, so
+  module source written for it is unchanged).
 - **Real time.** `process` and everything the runtime does there follow
   ADR-0032's rules; schedules, buffers and instances are made on the main
   thread. Each module runs under the script budget; one that spends it is

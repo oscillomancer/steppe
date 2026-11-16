@@ -152,7 +152,7 @@ struct Delay : Module {
         sendL.setChannels(1);
         sendR.setChannels(1);
         const double sr = sampleRate();
-        const Transport t = transport();
+        const Transport t = gridTransport();
         double target = time.value() * 0.001 * sr;
         if (sync.index() > 0) target = beatsOf(sync.index()) * 60.0 / max(t.tempo, 1.0) * sr;
         const double most = kMaxSeconds * sr;

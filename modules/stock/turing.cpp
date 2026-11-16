@@ -107,7 +107,7 @@ struct Turing : Module {
         bit_2.setChannels(1);
         bit_4.setChannels(1);
         bit_8.setChannels(1);
-        const Transport t = transport();
+        const Transport t = gridTransport();
         const bool internal = !clock.connected();
         if (internal && t.playing && !wasPlaying) startOver();
         wasPlaying = t.playing;

@@ -616,7 +616,7 @@ void Transport::prepare(Instance& instance) {
 
 void Transport::process(const HostContext& ctx) SUPPLE_RT {
     Instance& in = *ctx.instance;
-    const script::Transport& t = ctx.transport;
+    const script::Transport& t = ctx.grid;
     const int division =
         std::clamp(in.paramMember(0).index(), 0, static_cast<int>(std::size(kDivisions)) - 1);
     const double step = kDivisions[division].beats;

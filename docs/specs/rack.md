@@ -222,7 +222,8 @@ see each element as an ordinary declaration.
 | `sampleRate()` | |
 | `maxBlockSize()` | 32: the rack's grid |
 | `channels()` | The widest connected input or modulating cable, at least 1 |
-| `transport()` | `Transport` (playing, tempo, beats, barStart, time signature) read at the start of the block's grid interval, and `offset`, the frames from there to the block's first frame: frame i is at `beats + (offset + i) * tempo / 60 / sampleRate()` |
+| `transport()` | `Transport` (playing, tempo, beats, barStart, time signature) read at the block's start (`offset` 0): frame i is near `beats + i * tempo / 60 / sampleRate()`, which can differ in the last bits however host blocks split the grid |
+| `gridTransport()` | The same read at the start of the block's grid interval, and `offset`, the frames from there to the block's first frame: frame i is at `beats + (offset + i) * tempo / 60 / sampleRate()` exactly, however host blocks split the grid (§4.2) |
 | `seed()` | An `int` from the project's seed and the module's id: the same every render |
 | `trace(...)` | As a plugin's |
 
@@ -452,13 +453,17 @@ from before this cadence, even on the grid:
 - Reverb: damping comes back at the frame Freeze ends (the rest of that
   call ran undamped), and the tail differs from there.
 
-Song positions are exact too: every call of a grid interval gets the
-transport read at the interval's start (`Clock::transport(position -
-phase)`) with
-`Transport::offset` set to the phase (plus the frame, for a feedback
-group's per-frame calls), and modules compute frame i's position as
-`beats + (offset + i) * perFrame`, the same expression for a frame whatever
-call it falls in. Without playrate the engine's clock reads the time of a
+Song positions are exact too: every call of a grid interval gets, as
+`gridTransport()`, the transport read at the interval's start
+(`Clock::transport(position - phase)`) with `Transport::offset` set to the
+phase (plus the frame, for a feedback group's per-frame calls), and stock
+modules compute frame i's position as `beats + (offset + i) * perFrame`,
+the same expression for a frame whatever call it falls in. `transport()`
+keeps its meaning, the transport at the call's start (a feedback group's
+per-frame calls all see their fragment's start), so a project's or the
+library's module source computing `beats + i * perFrame` from it plays as
+it did, its positions differing in the last bits between renders that
+split the grid differently. Without playrate the engine's clock reads the time of a
 timeline sample as `(origin + sample) / rate`, so an offline render that
 starts at a seek and the real-time plan agree on it to the bit.
 `rack-stock.tests` checks every stock module with split calls against whole

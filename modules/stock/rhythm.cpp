@@ -293,7 +293,7 @@ struct Rhythm : Module {
         hat.setChannels(1);
         perc.setChannels(1);
         accent.setChannels(1);
-        const Transport t = transport();
+        const Transport t = gridTransport();
         const bool internal = !clock.connected();
         const double perFrame = t.tempo / 15.0 / sampleRate();
         for (int i = 0; i < frames; ++i) {

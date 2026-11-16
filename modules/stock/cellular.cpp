@@ -159,7 +159,7 @@ struct Cellular : Module {
         for (int k = 0; k < 4; ++k) tap[k].setChannels(1);
         value.setChannels(1);
         alive.setChannels(1);
-        const Transport t = transport();
+        const Transport t = gridTransport();
         const bool internal = !clock.connected();
         if (internal && t.playing && !wasPlaying) startOver();
         wasPlaying = t.playing;

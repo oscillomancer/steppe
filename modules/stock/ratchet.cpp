@@ -88,7 +88,7 @@ struct Ratchet : Module {
         const int n = max(1, channels());
         out.setChannels(n);
         level.setChannels(n);
-        const Transport t = transport();
+        const Transport t = gridTransport();
         // Until two gates have come, a sixteenth at the song's tempo.
         const int guess = max(2, roundToInt(sampleRate() * 15.0 / max(1.0, t.tempo)));
         for (int i = 0; i < frames; ++i) {

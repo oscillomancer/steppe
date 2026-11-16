@@ -401,8 +401,12 @@ instructions are in `docs/guides/installing.md`.
   buffers and delay lines `prepare()` leaves all zero, which are held once
   (so a delay's 10 s lines are). No stock module's sound depends on where
   host blocks split the grid, which a seek off it does, song positions
-  included (`Transport::offset`; checked for every stock module, and in
-  both executors after seeks off the grid). Getting there changed the
+  included (`gridTransport()` and `Transport::offset`; checked for every
+  stock module, and in both executors after seeks off the grid). A module's
+  `transport()` keeps its meaning, the call's start, so a project's or the
+  library's module source computing positions from it plays as it did,
+  positions differing in the last bits between renders that split the
+  grid differently. Getting there changed the
   sound of some saved patches, on the grid too, since projects play the
   current stock modules: in a feedback group, Harmonic, Resonator, Delay,
   VCO with drift, and modulated Drum and Sequencer do their control-rate

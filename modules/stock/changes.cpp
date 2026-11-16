@@ -287,7 +287,7 @@ struct Changes : Module {
         root.setChannels(1);
         degree.setChannels(1);
         next.setChannels(1);
-        const Transport t = transport();
+        const Transport t = gridTransport();
         const bool internal = !clock.connected();
         if (internal && t.playing && !wasPlaying) {
             startOver();
