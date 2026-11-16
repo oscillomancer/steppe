@@ -716,11 +716,12 @@ namespace {
 // autosave-<n>.json's n (defined with the autosave code below).
 std::optional<std::uint64_t> autosaveIndex(std::string_view name);
 
-// Whether two spellings name one file: the same path once `.` and `..` are
-// resolved, or (through links, or a case-insensitive file system) the same
-// file on disk.
+// Whether two spellings name one file, as the file system says: through
+// `.`, links or a case-insensitive file system. Spelling alone decides
+// nothing: a/link/../b is not a/b when link points into another folder.
+// A path where no file is names the same file as no other path:
+// equivalent() is then false, or reports an error, which is taken as no.
 bool sameFile(const fs::path& a, const fs::path& b) {
-    if (a.lexically_normal() == b.lexically_normal()) return true;
     std::error_code ec;
     return fs::equivalent(a, b, ec) && !ec;
 }
