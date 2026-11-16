@@ -44,8 +44,8 @@ inline std::pair<double, double> panSides(double p, const model::PanLaw& law) SU
     // sin of both halves, so a hard pan's far side is exactly zero.
     const double sl = std::sin((1 - p) * quarter), sr = std::sin((1 + p) * quarter);
     // Balance: the near side at unity, the far side cos(|p|·π/2), exactly 0 at the edge.
-    const double far = std::fabs(p) >= 1 ? 0.0 : std::cos(p * 2 * quarter);
-    const double bl = p <= 0 ? 1 : far, br = p >= 0 ? 1 : far;
+    const double farSide = std::fabs(p) >= 1 ? 0.0 : std::cos(p * 2 * quarter);
+    const double bl = p <= 0 ? 1 : farSide, br = p >= 0 ? 1 : farSide;
     const double k = panLawExponent(law.db);
     double l, r;
     if (k == 0) {

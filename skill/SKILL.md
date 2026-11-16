@@ -11,6 +11,18 @@ the DAW: dedicated command tools plus `describe` / `exec` / `query` for the rest
 Humans use the same commands through the GUI. Session edits enter the undo
 history; queries and rendering alone do not.
 
+## Tools: core set + describe/exec/query
+
+The engine lists 37 common command tools plus `describe`, `exec` and `query` by
+default. A proxy to the GUI also lists its existing `gui_selection` tool. `describe {}` lists every command as compact rows grouped by namespace;
+`describe {"command": "fx.patch.list"}` gives arguments, result schema, errors
+and examples. Call the rest with
+`exec {"command": "fx.patch.list", "args": {"fx": "fx_2"}}`, or use `query`
+with the same arguments for read-only commands. Dedicated tools omit result
+schemas; use `describe` when you need one. Clients that defer tool loading can
+start `steppe-mcp --tools all` or `steppe-engine --mcp --tools all` to list every
+non-Internal command as a dedicated tool. The sandbox's dedicated set is unchanged.
+
 Guides use dotted registry names (`render.mix`) and dedicated MCP tool names
 (`render_mix`). For any registered command, use
 `exec {"command": "render.mix", "args": {"analyze": "summary"}}`. Only names
@@ -78,9 +90,9 @@ tool (or as `args` through `exec`).
 | Saturation and distortion, from subtle colour to folding, crushing and tuned feedback (Teasel) | `guides/drive.md` |
 | Onset punch, softer attacks, shorter or longer decays (Gorse, the transient shaper) | `guides/transient.md` |
 | Writing a Lua script (loops, conditionals, subscriptions, one transaction) | `guides/lua.md`, `generated/engine.lua` |
-| Writing a plugin of your own: an effect or an instrument as a DSP script (`dsp_write`, then `fx_add`) | `guides/dsp-workflow.md`, `guides/dsp-language.md`, `generated/dsp-examples.md` |
+| Writing a plugin of your own: an effect or an instrument as a DSP script (`exec {"command": "dsp.write"}`, then `fx_add`) | `guides/dsp-workflow.md`, `guides/dsp-language.md`, `generated/dsp-examples.md` |
 | Modular racks: modules and cables on a channel, generative patches, a plug-in in a rack, a rack as an effect, rack presets | `guides/rack.md`, `generated/rack-modules.md` |
-| Writing a rack module of your own (`module_write`, then `rack_patch`) | `guides/modules.md` |
+| Writing a rack module of your own (`exec {"command": "module.write"}`, then `exec {"command": "rack.patch"}`) | `guides/modules.md` |
 | Exact command arguments and results | `generated/sandbox-commands.md` (sandbox), `generated/engine-commands.md` (DAW), or the `describe` tool |
 | A stock plugin's parameters and patch format | its guide, and `plugin_describe` (sandbox) or `fx_describe` (DAW) for every field, unit and range |
 | Echoes: in time or free, ping-pong, groove, tape and analog, pitch-shifted, reversed or smeared, ducked or frozen (Bracken) | `guides/delay.md` |

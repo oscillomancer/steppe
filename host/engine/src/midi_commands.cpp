@@ -561,7 +561,7 @@ void registerMidiCommands(cmd::Registry& registry) {
         Command<ItemArgs, json::Value> c;
         c.name = "midi.notes";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "List a MIDI item's notes and CC points (beats from the item's start).";
         c.description =
             "Notes are in a fixed order (by start, then pitch); midi.edit refers to them by their "
@@ -590,7 +590,7 @@ void registerMidiCommands(cmd::Registry& registry) {
         Command<EditArgs, json::Value> c;
         c.name = "midi.edit";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary =
             "Edit a MIDI item's notes and CCs: add, remove, move, resize, velocity, quantize.";
         c.description =

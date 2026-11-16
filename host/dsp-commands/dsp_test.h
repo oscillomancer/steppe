@@ -593,7 +593,8 @@ inline std::string fixed(double v, int digits = 1) {
 }  // namespace test
 
 template <class Host>
-void registerDspTest(cmd::Registry& registry, const std::string& exampleEffect) {
+void registerDspTest(cmd::Registry& registry, const std::string& exampleEffect,
+                     cmd::Exposure exposure = cmd::Exposure::McpTool) {
     using namespace test;
     using cmd::Command;
     using cmd::Context;
@@ -601,7 +602,7 @@ void registerDspTest(cmd::Registry& registry, const std::string& exampleEffect) 
     Command<TestArgs, TestResult> c;
     c.name = "dsp.test";
     c.kind = Kind::Action;
-    c.exposure = cmd::Exposure::McpTool;
+    c.exposure = exposure;
     c.summary = "Play test signals or notes through a plugin and measure it: levels, THD, pitch.";
     c.description =
         "Give plugin (an id: a script's, or any effect's or instrument's) or script (a name in "

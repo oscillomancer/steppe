@@ -1,0 +1,6 @@
+{"schema":"supple.plan-soak/1","seed":"20261114","anticipative":false}
+{"phase":"edits","command":"track.set","args":{"track":"tr_1","name":"Transient"}}
+{"phase":"checkpoint","index":1,"start_frame":24000,"frames":1024}
+{"phase":"edits","command":"track.set","args":{"track":"tr_1","name":"Restored"}}
+{"phase":"checkpoint","index":2,"start_frame":48000,"frames":1024}
+{"phase":"checkpoint","index":3,"start_frame":72000,"frames":1024}

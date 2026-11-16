@@ -424,7 +424,8 @@ Result:
             "name": "registry.list",
             "version": 1,
             "kind": "query",
-            "summary": "List available commands."
+            "summary": "List available commands.",
+            "exposure": "mcp-exec"
           }
         ]
       },
@@ -488,7 +489,8 @@ Result:
       "name": "registry.list",
       "version": 1,
       "kind": "query",
-      "summary": "List available commands."
+      "summary": "List available commands.",
+      "exposure": "mcp-exec"
     }
   ]
 }

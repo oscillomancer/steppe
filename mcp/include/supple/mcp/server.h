@@ -14,6 +14,8 @@
 #include <vector>
 
 namespace supple::mcp {
+enum class ToolSet { Core, All };
+
 // Service on the serving thread, between requests or bytes of partial frames.
 // The native reader waits for async sources/deadlines; legacy callers use an interval.
 struct Tick {
@@ -34,21 +36,29 @@ struct Tick {
 // executes on the caller's model thread; the proxy forwards through rpc::Client.
 class Server {
   public:
-    Server(const cmd::Registry& registry, cmd::Dispatcher& dispatcher);
+    Server(const cmd::Registry& registry, cmd::Dispatcher& dispatcher,
+           ToolSet tools = ToolSet::Core);
     // A proxy to an app's control socket. `reconnect` (optional) connects the
     // client again after the app restarted; a call whose request never reached
     // the app (it was gone) reconnects once and is sent again.
     using Reconnect = std::function<Status(const cmd::Origin&)>;
-    static Result<std::unique_ptr<Server>> proxy(rpc::Client& client, Reconnect reconnect = {});
+    static Result<std::unique_ptr<Server>> proxy(rpc::Client& client, Reconnect reconnect = {},
+                                                 ToolSet tools = ToolSet::Core);
     Status serve(std::istream& input, std::ostream& output, Tick tick = {});
     // As above, reading requests from `fd` so it can be polled with the tick's
     // deadline (a negative fd reads blocking).
     Status serve(int fd, std::ostream& output, Tick tick = {});
     std::optional<json::Value> handle(const json::Value& request);
+    // Embedders drain pending notifications after handle(); serve() does this
+    // automatically, before writing that request's response.
+    json::Value takeNotifications();
 
   private:
-    Server(rpc::Client& client, Reconnect reconnect);
+    Server(rpc::Client& client, Reconnect reconnect, ToolSet tools);
+    Status prepareProxy();
+    Status refreshCatalogue();
     Result<json::Value> call(std::string_view name, const json::Value& args);
+    Result<json::Value> callTool(std::string_view name, const json::Value& args);
     json::Value tools() const;
     std::function<Result<json::Value>(std::string_view, const json::Value&, const cmd::Origin&)>
         invoke_;
@@ -57,6 +67,10 @@ class Server {
     std::map<std::string, cmd::Kind> kinds_;
     rpc::Client* proxyClient_ = nullptr;
     Reconnect reconnect_;
+    ToolSet toolSet_ = ToolSet::Core;
+    std::uint64_t catalogueGeneration_ = 0;
+    json::Value index_;
+    bool toolsChanged_ = false;
     bool queryTool_ = false;
     bool initialized_ = false;
     cmd::Origin origin_{cmd::Origin::Type::Mcp, {}, {}};

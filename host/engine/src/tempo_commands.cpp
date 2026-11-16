@@ -87,7 +87,7 @@ void registerTempoCommands(cmd::Registry& registry) {
         Command<TimesigSetArgs, Empty> c;
         c.name = "timesig.set";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Set the meter from a bar on, e.g. {\"bar\": 9, \"meter\": \"3/4\"}.";
         c.tags = {"tempo"};
         c.args = schema::object<TimesigSetArgs>("timesig_set_args")
@@ -122,7 +122,7 @@ void registerTempoCommands(cmd::Registry& registry) {
         Command<TimesigRemoveArgs, Empty> c;
         c.name = "timesig.remove";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Remove the meter change at a bar: the meter before it continues.";
         c.description = "Bar 1's meter cannot be removed (change it with timesig.set).";
         c.tags = {"tempo"};

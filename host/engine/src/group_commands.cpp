@@ -110,7 +110,7 @@ void common(cmd::Command<A, R>& c, std::string name, std::string summary) {
     c.name = std::move(name);
     c.summary = std::move(summary);
     c.kind = cmd::Kind::Edit;
-    c.exposure = cmd::Exposure::McpTool;
+    c.exposure = cmd::Exposure::McpExec;
     c.tags = {"group", "mixer"};
     c.errors = {{"group.unknown", "no such group", "use group.list"},
                 {"group.member", "invalid track membership", "use each existing track once"},

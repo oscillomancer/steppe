@@ -86,7 +86,7 @@ void registerRulerCommands(cmd::Registry& registry) {
             Command<RulerArgs, IdResult> c;
             c.name = stem + ".add";
             c.kind = Kind::Edit;
-            c.exposure = cmd::Exposure::McpTool;
+            c.exposure = cmd::Exposure::McpExec;
             c.summary = Region ? "Add a named region in beats." : "Add a named marker in beats.";
             c.tags = {"ruler"};
             c.args = rulerArgsSchema<RulerArgs, Region, false>((stem + "_add_args").c_str());
@@ -119,7 +119,7 @@ void registerRulerCommands(cmd::Registry& registry) {
             Command<RulerSetArgs, Empty> c;
             c.name = stem + ".set";
             c.kind = Kind::Edit;
-            c.exposure = cmd::Exposure::McpTool;
+            c.exposure = cmd::Exposure::McpExec;
             c.summary = "Edit a ruler's position, name, or color.";
             c.tags = {"ruler"};
             c.args = rulerArgsSchema<RulerSetArgs, Region, true>((stem + "_set_args").c_str());
@@ -152,7 +152,7 @@ void registerRulerCommands(cmd::Registry& registry) {
             Command<RulerRef, Empty> c;
             c.name = stem + ".remove";
             c.kind = Kind::Edit;
-            c.exposure = cmd::Exposure::McpTool;
+            c.exposure = cmd::Exposure::McpExec;
             c.summary = "Remove a ruler.";
             c.tags = {"ruler"};
             c.args = schema::object<RulerRef>("ruler_ref")
@@ -174,7 +174,7 @@ void registerRulerCommands(cmd::Registry& registry) {
             Command<cmd::NoArgs, RulerList> c;
             c.name = stem + ".list";
             c.kind = Kind::Query;
-            c.exposure = cmd::Exposure::McpTool;
+            c.exposure = cmd::Exposure::McpExec;
             c.summary = "List rulers in this project.";
             c.tags = {"ruler"};
             c.args = schema::object<cmd::NoArgs>("no_args").build();
@@ -209,7 +209,7 @@ void registerRulerCommands(cmd::Registry& registry) {
         Command<TimeArgs, TimeResult> c;
         c.name = "time.convert";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Convert a seconds, beat, or bar position to all three time domains.";
         c.tags = {"time"};
         c.args = schema::object<TimeArgs>("time_convert_args")

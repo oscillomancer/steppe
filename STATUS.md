@@ -147,7 +147,8 @@ instructions are in `docs/guides/installing.md`.
   versions with stable ids, per-branch undo, branches with object-level diff
   and merge by replay (field-level conflicts, id remapping), A/B renders of
   two branches, a command log with origins, a history budget that squashes
-  the oldest steps. Undo to an FX's initial unsaved settings restores its factory
+  the oldest steps. Incremental unique-payload accounting measures only new or
+  changed snapshots; ordinary commits and size queries reuse retained totals. Undo to an FX's initial unsaved settings restores its factory
   state while retaining the previous processing instance until plan retirement.
   Project format `supple.project/2.15` with migration from
   1.x, autosave (unsaved projects too, recovered from File > Recover unsaved
@@ -170,7 +171,7 @@ instructions are in `docs/guides/installing.md`.
   freeze. Cache preparation currently uses MediaCache; a prepared-source service
   can replace that localized path. Seek/loop/random-plugin and external plugin
   asset limits are documented in the engine spec and manual.
-- **Command bus** (`specs/command-bus.md`, ADR-0007): about 120 typed
+- **Command bus** (`specs/command-bus.md`, ADR-0007): typed
   commands with JSON Schema, units, examples run as tests and structured
   errors. Context and decoder warnings reach successful replies in `warnings`,
   preserving command diagnostics consistently over sockets, MCP and Lua
@@ -181,6 +182,19 @@ instructions are in `docs/guides/installing.md`.
   (ADR-0006). Lua structured-error expansion has the same value/text budget
   as returned values, including repeated references to shared details.
   The skill's command reference is generated and drift-tested.
+  The engine MCP default is 37 common tools plus describe/exec/query, with a
+  60,000-byte tools/list budget. Other commands remain discoverable in the compact
+  namespace index and callable through exec/query; --tools all exposes every
+  non-Internal command. Dedicated tools omit output schemas; describe retains them
+  (ADR-0077). Registry index rows include exposure (ADR-0079); proxy startup
+  fetches one index plus descriptions only for the chosen dedicated set.
+  Named describe calls fetch contracts on demand, and exec dispatches without
+  schema prefetch. Reconnects refresh the index before cached query admission;
+  changed catalogues replace selected definitions and notify MCP clients.
+  Edits with lost replies are never retried automatically. The proxy requires
+  the updated index from the running app.
+  Sandbox exposures are unchanged. Native macOS/Windows CI for these catalogue,
+  protocol and proxy changes is pending before merge.
 - **Engine** (`specs/engine.md`): deterministic offline renders with
   real-time output bit-identical to them; anticipative rendering for
   non-live tracks (ADR-0012) and a live region for monitored tracks
@@ -241,6 +255,25 @@ instructions are in `docs/guides/installing.md`.
   drags sent once per frame rather than per pointer motion;
   every node, plug-ins and bridged plug-ins included, runs with FTZ/DAZ in
   every executor, and owned audio threads prefault their stacks (ADR-0025).
+  A seeded plan-swap soak drives real command edits during dummy-backend
+  playback in both executors, with output, reclamation, save/reopen render
+  equivalence and undo-content checks. The short `rt` case and opt-in long
+  runs share a JSONL replay path (`tests/fuzz/README.md`); native macOS/Windows
+  validation of this harness is pending. Intermediate 1024-frame locate windows
+  compare the running engine's paced output with private offline renders after
+  every settled edit, cycling through beats 0–3; journals retain exact windows
+  for replay. The comparison covers intermediate project states after a locate,
+  not the uninterrupted pre-locate swap crossfade. Readiness and sample counts
+  decide correctness; a watchdog abort is separately labelled and exits 124.
+  Rack modules restart at locates, so the retained-pool VCA-level reproducers
+  in `tests/fuzz/plan-soak-corpus/` now pass.
+  `track.move` accepts reorders under a non-root buss and moves between
+  sibling folders, and refuses destinations in the moved track's own subtree.
+  Its portable command regression covers undo and cycle rollback; the
+  two-move soak replay is in the fuzzing guide. Soak reclamation checkpoints
+  observe executor adoption before collection and require a stable generation;
+  a manual-callback regression covers acknowledgement arriving after an earlier
+  collection, which previously caused a false retained-plan failure.
 - **Strips and routing** (ADR-0019 to ADR-0022): typed channel, buss and
   master strips with Console 9 summing (switchable, level-matched; unity
   staging, so a hop costs nothing, ADR-0066); pan modes (pan, dual pan, pan
@@ -269,7 +302,12 @@ instructions are in `docs/guides/installing.md`.
   time onto a lane of their own (ADR-0057): the take is bit-identical to
   `render.mix` of that master in every executor; a master's items play after
   its fader, beside the live mix, with a lane mute, and are silent in the
-  punch range while it records.
+  punch range while it records. WAV recovery repairs both container byte counts
+  even when a damaged length still rounds down to the correct frame count.
+  Simultaneous recording targets reserve case-folded names before opening files.
+  Audio write errors retain the complete physical prefix and wake the model
+  immediately; the GUI status line identifies the failure while healthy targets
+  continue (ADR-0082). Recording file operations stay on the writer thread.
 - **Editing**: items, takes, comping lanes, fades and crossfades with shapes,
   cursor splitting from the item right-click menu (shared with S) and an audio-only prior
   zero-crossing split (100 ms search, louder stereo channel, cursor fallback;
@@ -466,6 +504,8 @@ instructions are in `docs/guides/installing.md`.
   including stopped monitoring changes; bindings, DSP and deferred Notes
   resets wait for the preceding executor's joined release without blocking
   the callback. Native macOS/Windows validation is pending for this handoff.
+  The manual-backend monitor-off regression waits for plan adoption before
+  counting its 64-block silence bound, independent of renderer scheduling.
   Sends into rack In ports preserve the tap at the route's level and pan,
   without a Console 9 encode, with the console enabled or disabled.
   Rack audio and Note Out routes now participate in read-ahead PDC, including
@@ -521,7 +561,11 @@ instructions are in `docs/guides/installing.md`.
   pointer when off. Projects and renders default to
   `~/Documents/<slug>-media` (the render folder is choosable), each project
   in a folder of its own with its own media; imports are copied into the
-  project by default, and Save as into another folder copies the media. FX
+  project by default, and Save as into another folder copies the media. Media
+  staging names are short and exclusively reserved; valid destination filenames
+  need no spare bytes for a temporary suffix, and a reserved staging entry
+  cannot alias the final payload name. Save As retains media with
+  temporary-looking suffixes, including files used only by saved branches. FX
   chain presets, track templates (a strip and its chains) and project
   templates (with a copy of their audio) are saved, loaded and deleted in
   the app. Tracks duplicate from either right-click menu with their chains,
@@ -1194,6 +1238,24 @@ Engine and hosting:
   malformed UTF-8 parameter input is refused. Native verification is pending.
 
 Session and editing:
+- Audio recording recovery has durability limits: the writer flushes to the OS
+  each drain and syncs data/header at the shared five-second journal cadence,
+  off RT. Copied/moved media and POSIX directories are checkpointed before the
+  project, and originals stay until its checkpoint succeeds. Windows uses
+  unprivileged file flushes and write-through media publication, with no claimed
+  POSIX-style parent/ancestor namespace durability after a power cut (ADR-0082).
+  Native macOS/Windows validation of these changes remains pending.
+- Audio loop/seek recovery uses an append-only placement journal, sharing MIDI
+  validation and checkpoints (ADR-0082). Recovery keeps physical tails but places
+  only trusted progress and its punch; final sidecars retain both after save/autosave
+  retirement. Initial loop-range changes remain unsupported as for MIDI.
+  Native macOS/Windows journal validation remains pending.
+- Streaming audio recording reserves JUNK/ds64 space and promotes to RF64 in
+  place at the 32-bit size limit (ADR-0082). Old 44-byte recordings and new
+  RIFF/RF64 files remain repairable, including bytewise-torn promotion tags;
+  decode/import accept RF64. Promotion is
+  covered locally using an injected limit and sparse files; native macOS/Windows
+  validation remains pending.
 - Consolidation's shared engine/model code has local Linux coverage; native
   macOS/Windows validation remains pending before merge.
 - Project files accept `record.mode: output`, but output capture is not
@@ -1271,8 +1333,8 @@ Session and editing:
   armed master or items on a master do not open in builds before schema 2.5.
   Linux is tested locally; native macOS/Windows CI has not run on it yet.
 - `fx.copy` does not copy envelopes or key routes; take FX cannot be keyed.
-- The history budget's size estimate walks shared payloads per version, and
-  squashed steps keep large invocation arguments.
+- Squashed history steps keep large invocation arguments; actual squashing
+  and graph edits may still traverse retained history.
 - Saved branches (ADR-0076): main's undo history and redo steps are kept only
   with `project.save {history: true}`, which the GUI does not offer yet. A
   command whose arguments change incompatibly makes a merge of an older

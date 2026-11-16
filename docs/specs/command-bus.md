@@ -1,7 +1,7 @@
 # Spec: command bus, control protocol and MCP adapter
 
 **Status:** Implemented. Interface changes go through an ADR.
-**Decision record:** ADR-0007, ADR-0063.
+**Decision record:** ADR-0007, ADR-0063, ADR-0077, ADR-0079.
 **Libraries:** `libs/command-bus` (`supple::cmd`), `libs/control-protocol`
 (`supple::rpc`), `mcp/` (`supple::mcp`). All run on the model thread only
 (transports marshal requests onto it). Depend on core-json and core-schema.
@@ -101,8 +101,13 @@ struct CommandInfo {
 ```
 
 The library registers its own meta commands: `registry.list` (filter by
-tag/kind/text; returns name, version, kind, summary) and `registry.describe`
+tag/kind/text; returns name, version, kind, summary, exposure) and `registry.describe`
 (one command: full schemas, errors, examples). Both `Query`, `McpExec`.
+
+Each `registry.list` row identifies one registered command version. `exposure`
+is `mcp-tool`, `mcp-exec` or `internal`, matching that version's declaration.
+Filters retain all five fields. This additive protocol-1 extension (ADR-0079)
+lets consumers select tool definitions without fetching every full description.
 
 ### 1.4 Dispatch
 
@@ -161,7 +166,7 @@ non-object results, a warning-bearing reply is
 replies retain their original shape. Failed invocations use the existing
 structured Error contract, without a success warning payload.
 
-The registry's result JSON Schema and MCP output schemas include optional
+The registry's result JSON Schema includes optional
 warning metadata: `warnings: {type: "array", items: {type: "object"}}`,
 without repeating the entry fields or their description per command. Legacy
 non-object command warnings retain mixed item schemas. The shared entry
@@ -235,7 +240,8 @@ Registered by the library, `Kind::Edit`, `McpTool`.
 Generators (each a function in the library, deterministic output, committed
 results checked by a drift test):
 
-- `mcpToolList(registry)` — MCP tool definitions (§4.2).
+- `mcpToolList(registry, bool allTools = false)` — dedicated MCP definitions (§4.2);
+  false selects McpTool, true selects every non-Internal command.
 - `markdownReference(registry)` → `skill/generated/*-commands.md`: per command,
   heading, summary, description, an args table (field, type, unit, range,
   default, description), result shape, errors with hints, examples as JSON.
@@ -323,6 +329,14 @@ transaction-safe inside a batch), `rpc.*` (§3), `mcp.*` (§4).
   frames messages; requests are posted to the model thread's queue and
   answered in order per connection.
 
+The synchronous `rpc::Client::connectionGeneration()` returns zero when it is
+disconnected, including when a nonblocking probe observes a closed peer. A live
+connection has a generation incremented after every successful `rpc.hello`
+connection handshake, including automatic reconnects. Closing the client does
+not reset the counter. Observation consumes no data and sends no requests;
+ordinary `call` retains its existing no-replay transport contract. This lets
+adapters refresh peer metadata before relying on cached admission decisions.
+
 ---
 
 ## 4. MCP adapter (`mcp/`)
@@ -330,8 +344,8 @@ transaction-safe inside a batch), `rpc.*` (§3), `mcp.*` (§4).
 - **Protocol:** MCP over stdio (JSON-RPC 2.0, newline-delimited), protocol
   version negotiation per the MCP spec: support `2025-06-18` and newer
   revisions that are backward compatible; reply with the client's requested
-  version if supported, else the newest supported. Capabilities: `tools`
-  (no `listChanged`). `ping` supported. `logging`/`resources`
+  version if supported, else the newest supported. Capabilities: `tools`; the proxy declares
+  `tools.listChanged: true`. `ping` supported. `logging`/`resources`
   later.
 - **Envelopes:** validate JSON-RPC fields before suppressing replies to valid
   notifications. Malformed objects without `id` receive Invalid Request
@@ -339,7 +353,7 @@ transaction-safe inside a batch), `rpc.*` (§3), `mcp.*` (§4).
   array. Array params in requests to this adapter return Invalid params
   (`-32602`).
 - **Deployments:** in-process (`McpServer` wraps a `Dispatcher` directly —
-  the sandbox CLI `--mcp` mode) and proxy (`<slug>-mcp` forwarding to a
+  the sandbox or engine CLI `--mcp` mode) and proxy (`<slug>-mcp` forwarding to a
   control-protocol socket).
 
 ### 4.1 Tool naming
@@ -352,15 +366,68 @@ version). Generic tools: `describe` (→ `registry.describe`/`registry.list`),
 
 ### 4.2 Tool definitions
 
-For every `McpTool` command: `name`, `title` (summary), `description`
-(summary + description + a one-line pointer to errors/examples via
-`describe`), `inputSchema` (args JSON Schema, with `x-unit` hints folded into
-field descriptions like "(Hz; accepts \"1.2 kHz\")" because clients ignore
-unknown keywords), `outputSchema` (result JSON Schema, only when it is an
-object schema: MCP requires `type: "object"`, and clients such as the Python
-SDK refuse the whole tool list otherwise), `annotations`
-(`readOnlyHint` for Query, `destructiveHint: false` for Edit — undoable —
-and `idempotentHint` where true).
+Both `<slug>-mcp` and `<slug>-engine --mcp` accept `--tools core|all`,
+defaulting to `core`; invalid or missing values fail with usage (exit 2).
+Core lists only `McpTool` commands; `all` lists every non-Internal command,
+including existing `McpExec` commands. Both use the latest command version.
+The sandbox exposure declarations and the GUI's additional `gui.selection`
+context query are unchanged.
+
+The proxy makes one `registry.list` request, selects the latest version of
+each command, then fetches exactly one `registry.describe` per dedicated tool
+selected by the chosen mode. Its startup command-request count is therefore
+`1 + dedicated tools` (excluding RPC handshakes). Internal commands are never
+hydrated at startup. Kind metadata from the full index supports `query` for
+commands outside the dedicated set. A named `describe` fetches its full contract
+on demand; `exec` forwards directly to the dispatcher for validation and
+execution without a schema-prefetch request. The compact MCP describe index
+continues to contain only name, kind and summary.
+
+The proxy requires a valid exposure on each latest index row. Missing or
+unknown values fail startup with `mcp.registry` at `/commands` and a hint to
+update the running application and proxy to matching versions, rather than
+silently fetching every description. Older proxies can ignore the added field.
+
+The engine core is exactly these 37 commands, plus `describe`, `exec`, `query`:
+
+```
+project.get project.open project.save session.describe
+track.add track.set track.list track.remove
+item.add item.set item.remove midi.write midi.get
+fx.add fx.describe fx.patch.get fx.patch.merge fx.remove plugin.list
+route.add env.add env.points.set tempo.set
+transport.play transport.stop transport.seek
+render.mix analyze.track analyze.render analyze.compare
+branch.create branch.switch branch.diff branch.merge history.undo batch engine.start
+```
+
+All other formerly dedicated engine commands use `McpExec`. Every command
+remains callable via `exec`, read-only commands via `query`, and discoverable
+via `describe`. The complete core `tools/list` JSON-RPC frame (UTF-8, including
+newline) must be at most 60,000 bytes; tests pin both this budget and the set.
+
+Each dedicated definition contains `name`, `title` (summary), `description`
+(command description, falling back to summary if empty, followed by
+"See describe for errors and examples."), `inputSchema` (args JSON Schema,
+with `x-unit` hints folded into field descriptions because clients ignore
+unknown keywords), and `annotations` (`readOnlyHint` for Query,
+`destructiveHint: false` for Edit — undoable — and `idempotentHint` where true).
+Dedicated definitions omit `outputSchema` in both modes and deployments;
+`describe` still exposes the complete result schema, and results still carry
+structured content. MCP 2025-06-18 Tools / Output Schema makes the schema
+optional and Structured Content permits JSON-object results independently:
+<https://modelcontextprotocol.io/specification/2025-06-18/server/tools>.
+
+`describe {}` returns `{columns: ["name", "kind", "summary"], namespaces:
+{<namespace>: [[<name>, <kind>, <summary>], ...]}}`. Namespace is the first
+name segment; standalone `batch` has its own group. Rows retain the registry's
+name/version order and include every registered command; summaries are at most
+80 characters. The full engine index targets less than 25,000 UTF-8 bytes.
+Existing `tag`, `kind`, and `text` filters apply before grouping (`text`
+searches names and summaries). `describe {command: <name>}` is unchanged:
+full args/result schemas, errors, examples and command metadata. The underlying
+`registry.list` contract is unchanged. Initialize instructions explain the
+common tools, describe/exec/query workflow and argument-free index.
 
 ### 4.3 Calls and results
 
@@ -374,6 +441,31 @@ when the result is an object (MCP structured content is an object) and
 "code at path: message\nHint: hint" plus details>}]`, `structuredContent` =
 the Error JSON. Protocol-level problems (unknown tool) are JSON-RPC errors
 per MCP.
+
+The proxy checks its RPC connection generation before consulting cached tool
+names or query kinds. A disconnected peer is detected with a nonblocking,
+non-consuming socket probe; explicit and automatic reconnects both change the
+generation. After reconnect it fetches `registry.list` once. An identical index
+retains the existing definitions without a notification or description requests.
+A changed index stages fresh kinds, dedicated-tool mappings and descriptions
+for the selected mode, then replaces them together. Failed or interrupted
+refreshes leave catalogue admission invalid until a later refresh succeeds.
+
+After initialization, a successful changed-index refresh queues
+`notifications/tools/list_changed` (JSON-RPC 2.0, no id) on the existing MCP
+stream. `serve` drains and flushes notifications before the triggering request's
+response; embedders using `handle` must drain `takeNotifications()` after each
+call. Multiple pending changes may coalesce into one notification. In-process
+catalogues are fixed and omit the `listChanged` capability. MCP Tools /
+[List Changed Notification](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#list-changed-notification)
+says servers advertising that capability SHOULD notify when their tools change.
+
+A failed invocation known not to have been sent (`rpc.write` or `rpc.connect`)
+may be retried once, after refreshing the catalogue and rerouting the original
+tool call through current query admission and tool lookup. A sent but unanswered
+invocation (`rpc.read`, timeout or interruption) is never automatically replayed,
+including edits whose committed result was lost. A read failure may reconnect
+and refresh metadata for subsequent calls while returning the original error.
 
 The standalone MCP proxy gives its RPC client twice the command bus's maximum
 job-wait duration (currently 60 seconds versus 30). Dispatch and response delivery

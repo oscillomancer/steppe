@@ -66,6 +66,10 @@ class Client {
                    bool mcp = false);
     // Disconnects and forgets the endpoint; later calls fail with rpc.connect.
     void close();
+    // Observe the current connection without consuming data or sending requests.
+    // Returns zero if disconnected (including an observed peer close), otherwise
+    // a generation that increases after each successful connection handshake.
+    std::uint64_t connectionGeneration();
     // How long connect() or a call may take in all -- connecting (a call's
     // reconnect included), the handshake, sending the request and waiting
     // for the response -- clamped to [1 ms, 24 h]; 30 s by default. A peer
@@ -83,6 +87,7 @@ class Client {
                                  Deadline deadline);
     std::intptr_t fd_ = -1;
     std::uint64_t nextId_ = 1;
+    std::uint64_t connectionGeneration_ = 0;
     std::string input_;
     std::filesystem::path path_;
     std::optional<json::Value> hello_;  // set while an endpoint is remembered

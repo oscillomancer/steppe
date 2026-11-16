@@ -677,7 +677,7 @@ class EngineApp : public cmd::Host {
     // versioned; the loop reaches the engine (now, and whenever it starts),
     // the punch range trims takes when a recording is committed.
     void setLoop(const TransportRange& loop);
-    void setPunch(const TransportRange& punch) { punch_ = punch; }
+    Status setPunch(const TransportRange& punch);
     const TransportRange& loop() const { return loop_; }
     const MetronomeSettings& metronome() const { return metronome_; }
     void setMetronome(const MetronomeSettings& m);  // reaches the engine now and on every start
@@ -1009,10 +1009,13 @@ class EngineApp : public cmd::Host {
     double syncSeekSeconds_ = 0.05;  // how long a seek takes to be heard (measured)
     std::vector<std::string> syncWarnings_;
     std::vector<std::filesystem::path> recordingFiles_;  // while recording
-    // MIDI journals (ADR-0080) of takes committed in this project and not
+    std::set<std::filesystem::path> recordingErrorsReported_;
+    void emitRecordingError(const RecordingError& error);
+    // Audio/MIDI journals (ADR-0080/0082) of takes committed in this project and not
     // yet in a saved file or autosave: not leftovers; deleted once one is.
-    std::vector<std::filesystem::path> midiJournalsPending_;
-    void dropSavedMidiJournals();
+    std::vector<std::filesystem::path> recordingJournalsPending_;
+    void dropSavedRecordingJournals();
+    Status checkpointRecordingJournals();
     // What a save as copied into another media folder before its file failed
     // to publish: a retry finds these already there, yet they are still this
     // project's copies (its journals among them retire once a save holds them).

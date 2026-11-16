@@ -437,7 +437,7 @@ struct Gain : Effect {
 }  // namespace detail
 
 template <class Host>
-void registerDspCommands(cmd::Registry& registry) {
+void registerDspCommands(cmd::Registry& registry, cmd::Exposure exposure = cmd::Exposure::McpTool) {
     using namespace detail;
     using cmd::Command;
     using cmd::Context;
@@ -453,7 +453,7 @@ void registerDspCommands(cmd::Registry& registry) {
         Command<WriteArgs, WriteResult> c;
         c.name = "dsp.write";
         c.kind = Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = exposure;
         c.summary = "Save a DSP script to the library and compile it, with diagnostics.";
         c.description =
             "Writes <library>/<name>/<name>.cpp (replacing it), compiles it and returns the "
@@ -488,7 +488,7 @@ void registerDspCommands(cmd::Registry& registry) {
         Command<EditArgs, WriteResult> c;
         c.name = "dsp.edit";
         c.kind = Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = exposure;
         c.summary = "Change part of a library script by replacing text; compile it, as dsp.write.";
         c.description =
             "For a change to part of a script, instead of sending all of it to dsp.write. Each "
@@ -535,7 +535,7 @@ void registerDspCommands(cmd::Registry& registry) {
         Command<CheckArgs, Compiled> c;
         c.name = "dsp.check";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = exposure;
         c.summary = "Compile a DSP script without saving it; return its diagnostics.";
         c.description =
             "Give source (a whole script) or name (one in the library). ok is true when it "
@@ -572,7 +572,7 @@ void registerDspCommands(cmd::Registry& registry) {
         Command<NameArgs, GetResult> c;
         c.name = "dsp.get";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = exposure;
         c.summary = "Read a DSP script from the library.";
         c.tags = {"dsp"};
         c.args = schema::object<NameArgs>("dsp_get_args")
@@ -597,7 +597,7 @@ void registerDspCommands(cmd::Registry& registry) {
         Command<ListArgs, ListResult> c;
         c.name = "dsp.list";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = exposure;
         c.summary = "List the DSP scripts in the library, compiled, with their plugin ids.";
         c.tags = {"dsp"};
         c.args = schema::object<ListArgs>("dsp_list_args").build();

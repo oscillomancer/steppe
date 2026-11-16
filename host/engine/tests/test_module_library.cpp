@@ -2077,11 +2077,16 @@ TEST_CASE("rack inputs: Notes hears a separate monitored MIDI channel in both ex
                 CHECK(f.app->engine()->processErrors() == 0);
                 REQUIRE(std::abs(backend.capture().channels[0][90 * 37 - 1]) > .01f);
                 f.run("track.set", R"({"track":"tr_2","monitor":"off"})");
+                // Manual callbacks can outrun the renderer. awaitRendered()
+                // returns immediately while stopped and does not acknowledge
+                // this edit's plan; start the settling budget after it is queued.
+                REQUIRE(f.app->engine()->awaitPlan());
                 for (int i = 0; i < 64; ++i) {
                     if (anticipative) REQUIRE(f.app->engine()->awaitRendered(37));
                     backend.run(1);
                 }
                 CHECK(backend.capture().channels[0][154 * 37 - 1] == 0);
+                CHECK(f.app->engine()->processErrors() == 0);
                 f.run("transport.stop");
                 if (recording) {
                     REQUIRE(f.app->head().items.size() == 1);

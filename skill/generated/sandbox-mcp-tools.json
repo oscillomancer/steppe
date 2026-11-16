@@ -2,7 +2,7 @@
   {
     "name": "analyze",
     "title": "Analyze a render or audio file: loudness, spectrum, pitch, envelope, stereo.",
-    "description": "Analyze a render or audio file: loudness, spectrum, pitch, envelope, stereo. source: rd_<n> or a file path. Report supple.analysis-report/1.0: loudness (LUFS, LRA, true peak), spectral (centroid, rolloff, flatness, tilt, named band levels relative to the total), harmonic (f0, note, harmonics in dB relative to the fundamental), envelope (attack, decay to -20 dB, release after note-off, onsets), stereo (width, correlation). note_off_s defaults to the end of a render's input. Envelope values (attack, decay, release) describe single notes: render one note to measure them. See describe for errors and examples.",
+    "description": "source: rd_<n> or a file path. Report supple.analysis-report/1.0: loudness (LUFS, LRA, true peak), spectral (centroid, rolloff, flatness, tilt, named band levels relative to the total), harmonic (f0, note, harmonics in dB relative to the fundamental), envelope (attack, decay to -20 dB, release after note-off, onsets), stereo (width, correlation). note_off_s defaults to the end of a render's input. Envelope values (attack, decay, release) describe single notes: render one note to measure them. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "analyze_args",
@@ -27,24 +27,6 @@
       "required": ["source"],
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "title": "analysis",
-      "properties": {
-        "report": {},
-        "summary": {
-          "type": "string"
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["report", "summary"],
-      "additionalProperties": false
-    },
     "annotations": {
       "readOnlyHint": true,
       "destructiveHint": false,
@@ -54,7 +36,7 @@
   {
     "name": "batch",
     "title": "Run commands atomically.",
-    "description": "Run commands atomically. Run commands atomically. See describe for errors and examples.",
+    "description": "Run commands atomically. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -85,17 +67,6 @@
       "required": ["steps"],
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "properties": {
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      }
-    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": false,
@@ -105,7 +76,7 @@
   {
     "name": "compare",
     "title": "Compare two renders or files: notable descriptor changes and timbre distance.",
-    "description": "Compare two renders or files: notable descriptor changes and timbre distance. Notable changes use fixed thresholds (loudness 1 LU, centroid 10 %, band levels 1.5 dB, harmonics 3 dB, f0 10 cents, ...). ltas_rms_db is the RMS difference of the 1/3-octave spectra after removing the level offset: a pure gain change reads 0. loss is the score the optimizer minimizes and the evaluation scorer judges: the test is loudness-matched to the reference, both are analyzed at their note-off times (note_off_s reports them), and loss.total is the number to get down. A render's note-off is its own input end; give reference_note_off_s / test_note_off_s for files, and one unknown side borrows the other's (note_off_assumed). See describe for errors and examples.",
+    "description": "Notable changes use fixed thresholds (loudness 1 LU, centroid 10 %, band levels 1.5 dB, harmonics 3 dB, f0 10 cents, ...). ltas_rms_db is the RMS difference of the 1/3-octave spectra after removing the level offset: a pure gain change reads 0. loss is the score the optimizer minimizes and the evaluation scorer judges: the test is loudness-matched to the reference, both are analyzed at their note-off times (note_off_s reports them), and loss.total is the number to get down. A render's note-off is its own input end; give reference_note_off_s / test_note_off_s for files, and one unknown side borrows the other's (note_off_assumed). See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "compare_args",
@@ -136,30 +107,6 @@
       "required": ["reference", "test"],
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "title": "comparison",
-      "properties": {
-        "notable": {},
-        "ltas_rms_db": {
-          "type": "number"
-        },
-        "summary": {
-          "type": "string"
-        },
-        "loss": {
-          "description": "The score the optimizer minimizes: total, per-term contributions, and the note-off_s used per side."
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["notable", "ltas_rms_db", "summary", "loss"],
-      "additionalProperties": false
-    },
     "annotations": {
       "readOnlyHint": true,
       "destructiveHint": false,
@@ -169,7 +116,7 @@
   {
     "name": "dsp_check",
     "title": "Compile a DSP script without saving it; return its diagnostics.",
-    "description": "Compile a DSP script without saving it; return its diagnostics. Give source (a whole script) or name (one in the library). ok is true when it compiles; plugin then lists its id, name and parameters as the patch shows them. See describe for errors and examples.",
+    "description": "Give source (a whole script) or name (one in the library). ok is true when it compiles; plugin then lists its id, name and parameters as the patch shows them. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "dsp_check_args",
@@ -185,144 +132,6 @@
       },
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "title": "dsp_check_result",
-      "properties": {
-        "ok": {
-          "type": "boolean"
-        },
-        "diagnostics": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "title": "dsp_diagnostic",
-            "properties": {
-              "severity": {
-                "type": "string",
-                "description": "error or warning"
-              },
-              "code": {
-                "type": "string",
-                "description": "script.<area>.<what>"
-              },
-              "message": {
-                "type": "string"
-              },
-              "hint": {
-                "type": "string",
-                "description": "what to write instead"
-              },
-              "line": {
-                "type": "integer"
-              },
-              "column": {
-                "type": "integer"
-              }
-            },
-            "required": ["severity", "code", "message", "hint", "line", "column"],
-            "additionalProperties": false
-          }
-        },
-        "plugin": {
-          "type": "object",
-          "title": "dsp_plugin",
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "name": {
-              "type": "string"
-            },
-            "kind": {
-              "type": "string",
-              "description": "effect (audio in, audio out) or instrument (notes in)"
-            },
-            "params": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "title": "dsp_param",
-                "properties": {
-                  "key": {
-                    "type": "string",
-                    "description": "the patch key"
-                  },
-                  "name": {
-                    "type": "string"
-                  },
-                  "kind": {
-                    "type": "string",
-                    "description": "continuous, integer, choice or toggle"
-                  },
-                  "unit": {
-                    "type": "string",
-                    "description": "dB, Hz, ms, % ..."
-                  },
-                  "min": {
-                    "type": "number"
-                  },
-                  "max": {
-                    "type": "number"
-                  },
-                  "default": {
-                    "type": "number"
-                  },
-                  "choices": {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    }
-                  },
-                  "meter": {
-                    "type": "boolean",
-                    "description": "an output the plugin reports"
-                  }
-                },
-                "required": ["key", "name", "kind", "min", "max", "default", "choices", "meter"],
-                "additionalProperties": false
-              }
-            },
-            "files": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "title": "dsp_file",
-                "properties": {
-                  "key": {
-                    "type": "string",
-                    "description": "the patch's properties key"
-                  },
-                  "name": {
-                    "type": "string"
-                  },
-                  "kind": {
-                    "type": "string",
-                    "description": "audio (a sample) or impulse (a Convolver's response)"
-                  },
-                  "description": {
-                    "type": "string"
-                  }
-                },
-                "required": ["key", "name", "kind"],
-                "additionalProperties": false
-              },
-              "description": "the script's files (AudioFile, Convolver), when it has any: give each an absolute path in a patch, {\"properties\": {\"<key>\": \"/path.wav\"}}"
-            }
-          },
-          "required": ["id", "name", "kind", "params"],
-          "additionalProperties": false
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["ok", "diagnostics"],
-      "additionalProperties": false
-    },
     "annotations": {
       "readOnlyHint": true,
       "destructiveHint": false,
@@ -332,7 +141,7 @@
   {
     "name": "dsp_edit",
     "title": "Change part of a library script by replacing text; compile it, as dsp.write.",
-    "description": "Change part of a library script by replacing text; compile it, as dsp.write. For a change to part of a script, instead of sending all of it to dsp.write. Each edit replaces old, which must be in the script exactly once, with new (empty deletes it). The edits apply in order, each to the script as the ones before left it, and all or none: when one fails, nothing is saved and the error says where old and the script part. Then as dsp.write: it saves the script, compiles it and returns the diagnostics; instances playing it follow within half a second. See describe for errors and examples.",
+    "description": "For a change to part of a script, instead of sending all of it to dsp.write. Each edit replaces old, which must be in the script exactly once, with new (empty deletes it). The edits apply in order, each to the script as the ones before left it, and all or none: when one fails, nothing is saved and the error says where old and the script part. Then as dsp.write: it saves the script, compiles it and returns the diagnostics; instances playing it follow within half a second. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "dsp_edit_args",
@@ -367,155 +176,6 @@
       "required": ["name", "edits"],
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "title": "dsp_write_result",
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "path": {
-          "type": "string"
-        },
-        "ok": {
-          "type": "boolean",
-          "description": "it compiled"
-        },
-        "diagnostics": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "title": "dsp_diagnostic",
-            "properties": {
-              "severity": {
-                "type": "string",
-                "description": "error or warning"
-              },
-              "code": {
-                "type": "string",
-                "description": "script.<area>.<what>"
-              },
-              "message": {
-                "type": "string"
-              },
-              "hint": {
-                "type": "string",
-                "description": "what to write instead"
-              },
-              "line": {
-                "type": "integer"
-              },
-              "column": {
-                "type": "integer"
-              }
-            },
-            "required": ["severity", "code", "message", "hint", "line", "column"],
-            "additionalProperties": false
-          }
-        },
-        "plugin": {
-          "type": "object",
-          "title": "dsp_plugin",
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "name": {
-              "type": "string"
-            },
-            "kind": {
-              "type": "string",
-              "description": "effect (audio in, audio out) or instrument (notes in)"
-            },
-            "params": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "title": "dsp_param",
-                "properties": {
-                  "key": {
-                    "type": "string",
-                    "description": "the patch key"
-                  },
-                  "name": {
-                    "type": "string"
-                  },
-                  "kind": {
-                    "type": "string",
-                    "description": "continuous, integer, choice or toggle"
-                  },
-                  "unit": {
-                    "type": "string",
-                    "description": "dB, Hz, ms, % ..."
-                  },
-                  "min": {
-                    "type": "number"
-                  },
-                  "max": {
-                    "type": "number"
-                  },
-                  "default": {
-                    "type": "number"
-                  },
-                  "choices": {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    }
-                  },
-                  "meter": {
-                    "type": "boolean",
-                    "description": "an output the plugin reports"
-                  }
-                },
-                "required": ["key", "name", "kind", "min", "max", "default", "choices", "meter"],
-                "additionalProperties": false
-              }
-            },
-            "files": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "title": "dsp_file",
-                "properties": {
-                  "key": {
-                    "type": "string",
-                    "description": "the patch's properties key"
-                  },
-                  "name": {
-                    "type": "string"
-                  },
-                  "kind": {
-                    "type": "string",
-                    "description": "audio (a sample) or impulse (a Convolver's response)"
-                  },
-                  "description": {
-                    "type": "string"
-                  }
-                },
-                "required": ["key", "name", "kind"],
-                "additionalProperties": false
-              },
-              "description": "the script's files (AudioFile, Convolver), when it has any: give each an absolute path in a patch, {\"properties\": {\"<key>\": \"/path.wav\"}}"
-            }
-          },
-          "required": ["id", "name", "kind", "params"],
-          "additionalProperties": false
-        },
-        "listed": {
-          "type": "boolean",
-          "description": "plugin.list shows it (the script player is on the plugin path)"
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["name", "path", "ok", "diagnostics", "listed"],
-      "additionalProperties": false
-    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": true,
@@ -525,7 +185,7 @@
   {
     "name": "dsp_export",
     "title": "Export a DSP script as a plugin for other DAWs: a CLAP file, or C++ source.",
-    "description": "Export a DSP script as a plugin for other DAWs: a CLAP file, or C++ source. format clap (the default): copies the platform's script player and embeds the script in its trailer (Linux/Windows) or bundle resource (macOS, re-signed ad hoc with the system codesign tool). The copy is a plugin of its own, under the script's id and name, that plays this version of the script in any CLAP host (it reads no library), written to <folder>/<plugin name>.clap (default: the script's folder, under export/) with the licenses to ship beside it (notices). It runs on this platform, as fast as the player it copies (a debug build's is slow). format source: a C++ project of the plugin template that builds the same plugin (same id, parameters and state) as CLAP and VST3, plus AU on macOS, with the script compiled as C++, written to the empty <folder> (default: the script's folder, under export/<script>-source); its README says how to build it, and license (MIT unless GPL-3.0-or-later) is the license of its own files. Export again after changing the script; an export does not follow the library. See describe for errors and examples.",
+    "description": "format clap (the default): copies the platform's script player and embeds the script in its trailer (Linux/Windows) or bundle resource (macOS, re-signed ad hoc with the system codesign tool). The copy is a plugin of its own, under the script's id and name, that plays this version of the script in any CLAP host (it reads no library), written to <folder>/<plugin name>.clap (default: the script's folder, under export/) with the licenses to ship beside it (notices). It runs on this platform, as fast as the player it copies (a debug build's is slow). format source: a C++ project of the plugin template that builds the same plugin (same id, parameters and state) as CLAP and VST3, plus AU on macOS, with the script compiled as C++, written to the empty <folder> (default: the script's folder, under export/<script>-source); its README says how to build it, and license (MIT unless GPL-3.0-or-later) is the license of its own files. Export again after changing the script; an export does not follow the library. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "dsp_export_args",
@@ -554,46 +214,6 @@
       "required": ["script"],
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "title": "dsp_export_result",
-      "properties": {
-        "path": {
-          "type": "string",
-          "description": "the plugin file, or the project's folder"
-        },
-        "id": {
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        },
-        "format": {
-          "type": "string",
-          "description": "clap or source"
-        },
-        "player": {
-          "type": "string",
-          "description": "clap: the script player it was copied from"
-        },
-        "bytes": {
-          "type": "integer",
-          "minimum": 0.0
-        },
-        "notices": {
-          "type": "string",
-          "description": "clap: the licenses to ship with the plugin"
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["path", "id", "name", "format"],
-      "additionalProperties": false
-    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": true,
@@ -603,7 +223,7 @@
   {
     "name": "dsp_get",
     "title": "Read a DSP script from the library.",
-    "description": "Read a DSP script from the library.  See describe for errors and examples.",
+    "description": "Read a DSP script from the library. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "dsp_get_args",
@@ -616,29 +236,6 @@
       "required": ["name"],
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "title": "dsp_get_result",
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "path": {
-          "type": "string"
-        },
-        "source": {
-          "type": "string"
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["name", "path", "source"],
-      "additionalProperties": false
-    },
     "annotations": {
       "readOnlyHint": true,
       "destructiveHint": false,
@@ -648,60 +245,11 @@
   {
     "name": "dsp_list",
     "title": "List the DSP scripts in the library, compiled, with their plugin ids.",
-    "description": "List the DSP scripts in the library, compiled, with their plugin ids.  See describe for errors and examples.",
+    "description": "List the DSP scripts in the library, compiled, with their plugin ids. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "dsp_list_args",
       "properties": {},
-      "additionalProperties": false
-    },
-    "outputSchema": {
-      "type": "object",
-      "title": "dsp_list_result",
-      "properties": {
-        "library": {
-          "type": "string"
-        },
-        "scripts": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "title": "dsp_list_entry",
-            "properties": {
-              "name": {
-                "type": "string"
-              },
-              "path": {
-                "type": "string"
-              },
-              "ok": {
-                "type": "boolean",
-                "description": "it compiles"
-              },
-              "errors": {
-                "type": "integer",
-                "minimum": 0.0
-              },
-              "id": {
-                "type": "string",
-                "description": "its plugin's id"
-              },
-              "plugin_name": {
-                "type": "string"
-              }
-            },
-            "required": ["name", "path", "ok", "errors"],
-            "additionalProperties": false
-          }
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["library", "scripts"],
       "additionalProperties": false
     },
     "annotations": {
@@ -713,7 +261,7 @@
   {
     "name": "dsp_preview",
     "title": "Draw a plugin's editor to a PNG, after a test signal plays through it.",
-    "description": "Draw a plugin's editor to a PNG, after a test signal plays through it. Give plugin (an id) or script (a name in the library). A fresh instance, set by patch (a merge patch) when given, plays signal -- an effect: sine (the default, at frequency_hz), sweep, impulse, noise or silence, peaking at level_db, for seconds, or file (the default with audio_file), the file played whole as dsp.test plays it; an instrument: notes (the default), note or silence, for seconds -- while its editor watches, so meters and the script's draw() show what played. Then the editor is drawn without a window, scale times its design size, and saved as a PNG (path; width and height in pixels): read the file to see it. A script with neither editor() nor draw() shows the automatic editor. pointer, if given, acts on the editor first, in its design units (the picture's pixels at scale 1): move (a hover; a drag after a press), press, release, click, double_click, drag (from x, y to to_x, to_y) and wheel (steps notches, up positive), with shift, ctrl or alt held; edits is a merge patch of what they changed, as a user's edits would. problems says what went wrong in the editor's code (a loop stopped by its budget, an index out of range), with the line. Headless pictures use EGL on Linux, Metal on macOS and WGL on Windows; an unavailable renderer returns dsp.no_picture. See describe for errors and examples.",
+    "description": "Give plugin (an id) or script (a name in the library). A fresh instance, set by patch (a merge patch) when given, plays signal -- an effect: sine (the default, at frequency_hz), sweep, impulse, noise or silence, peaking at level_db, for seconds, or file (the default with audio_file), the file played whole as dsp.test plays it; an instrument: notes (the default), note or silence, for seconds -- while its editor watches, so meters and the script's draw() show what played. Then the editor is drawn without a window, scale times its design size, and saved as a PNG (path; width and height in pixels): read the file to see it. A script with neither editor() nor draw() shows the automatic editor. pointer, if given, acts on the editor first, in its design units (the picture's pixels at scale 1): move (a hover; a drag after a press), press, release, click, double_click, drag (from x, y to to_x, to_y) and wheel (steps notches, up positive), with shift, ctrl or alt held; edits is a merge patch of what they changed, as a user's edits would. problems says what went wrong in the editor's code (a loop stopped by its budget, an index out of range), with the line. Headless pictures use EGL on Linux, Metal on macOS and WGL on Windows; an unavailable renderer returns dsp.no_picture. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "dsp_preview_args",
@@ -843,50 +391,6 @@
       },
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "title": "dsp_preview_result",
-      "properties": {
-        "plugin": {
-          "type": "string"
-        },
-        "path": {
-          "type": "string",
-          "description": "the PNG"
-        },
-        "width": {
-          "type": "integer",
-          "description": "pixels"
-        },
-        "height": {
-          "type": "integer",
-          "description": "pixels"
-        },
-        "edits": {
-          "description": "what pointer changed, as a merge patch"
-        },
-        "problems": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "log": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["plugin", "path", "width", "height", "edits", "problems", "log"],
-      "additionalProperties": false
-    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": true,
@@ -896,7 +400,7 @@
   {
     "name": "dsp_test",
     "title": "Play test signals or notes through a plugin and measure it: levels, THD, pitch.",
-    "description": "Play test signals or notes through a plugin and measure it: levels, THD, pitch. Give plugin (an id: a script's, or any effect's or instrument's) or script (a name in the library). A fresh instance, set by patch (a merge patch) when given, plays each signal. An effect: sine (frequency_hz; gain_db and thd_percent), sweep (20 Hz to 20 kHz), impulse (response_db at octave centres), pink noise and silence, each peaking at level_db; and file, audio_file played as it is (resampled to the render's rate, mono on both channels, at most 60 s), the only signal when signals is not given. An instrument, at velocity 0.8: notes (a note, then a chord), note (A4; pitch_hz, the pitch heard), and silence (no notes); release_ms is how long the sound lasts after the last release. Each reports peak and RMS in dBFS, DC, samples beyond 0 dBFS and denormals; problems says in words what looks wrong (clipping, DC, sound from silence, no output, a note out of tune, sound that never dies away, non-finite samples the framework silenced, a script stopped by its loop budget or indexing outside an array). cpu_percent is measured, so it varies between runs. save: true keeps each output as a WAV (path) for analyze and compare. automation is a list of {param, at_s, value}: semantic patch keys and physical values, as discrete sample-accurate changes applied to every signal (no implicit ramps). automation.max_step is the largest adjacent-sample change in full-scale amplitude; baseline_max_step uses the same render without automation; excess_step is their positive difference. A step above both four times baseline and 0.05 suggests clicks or zipper noise: a screening heuristic, not proof of an artifact or of inaudibility. sidechain supplies a timed key; its middle half is measured against a connected silent key with identical automation: gain_change_db is negative for ducking, null if either output is below -120 dBFS. Slow attack may not settle in that window. Each pass has a fresh instance and initial patch. THD and impulse response are omitted during automation or a non-silent key; gain_db then describes the changing render, not static gain. notes supplies an instrument's sequence ({key, velocity, start_s, length_s}), replacing the notes signal; defaults become notes and silence. Do not combine it with the A4 note signal or select only silence. release_ms starts at its last note-off. Times round to samples at the render rate; spans must fit within seconds. sample_rate renders at that rate instead of the session's (sandbox) or the project's (DAW); latency is in samples at the rate used, which sample_rate in the result reports. meters gives a semantic plugin's read-only parameters (its meters and readouts) by patch key in physical units, as they stood when the signal ended (the tail after it does not move them). traces gives what a script's trace(name, value) calls recorded over the signal, in trace_points intervals of trace_interval_s: for each name, the last value in each interval and the lowest and highest, null where none was given. See describe for errors and examples.",
+    "description": "Give plugin (an id: a script's, or any effect's or instrument's) or script (a name in the library). A fresh instance, set by patch (a merge patch) when given, plays each signal. An effect: sine (frequency_hz; gain_db and thd_percent), sweep (20 Hz to 20 kHz), impulse (response_db at octave centres), pink noise and silence, each peaking at level_db; and file, audio_file played as it is (resampled to the render's rate, mono on both channels, at most 60 s), the only signal when signals is not given. An instrument, at velocity 0.8: notes (a note, then a chord), note (A4; pitch_hz, the pitch heard), and silence (no notes); release_ms is how long the sound lasts after the last release. Each reports peak and RMS in dBFS, DC, samples beyond 0 dBFS and denormals; problems says in words what looks wrong (clipping, DC, sound from silence, no output, a note out of tune, sound that never dies away, non-finite samples the framework silenced, a script stopped by its loop budget or indexing outside an array). cpu_percent is measured, so it varies between runs. save: true keeps each output as a WAV (path) for analyze and compare. automation is a list of {param, at_s, value}: semantic patch keys and physical values, as discrete sample-accurate changes applied to every signal (no implicit ramps). automation.max_step is the largest adjacent-sample change in full-scale amplitude; baseline_max_step uses the same render without automation; excess_step is their positive difference. A step above both four times baseline and 0.05 suggests clicks or zipper noise: a screening heuristic, not proof of an artifact or of inaudibility. sidechain supplies a timed key; its middle half is measured against a connected silent key with identical automation: gain_change_db is negative for ducking, null if either output is below -120 dBFS. Slow attack may not settle in that window. Each pass has a fresh instance and initial patch. THD and impulse response are omitted during automation or a non-silent key; gain_db then describes the changing render, not static gain. notes supplies an instrument's sequence ({key, velocity, start_s, length_s}), replacing the notes signal; defaults become notes and silence. Do not combine it with the A4 note signal or select only silence. release_ms starts at its last note-off. Times round to samples at the render rate; spans must fit within seconds. sample_rate renders at that rate instead of the session's (sandbox) or the project's (DAW); latency is in samples at the rate used, which sample_rate in the result reports. meters gives a semantic plugin's read-only parameters (its meters and readouts) by patch key in physical units, as they stood when the signal ended (the tail after it does not move them). traces gives what a script's trace(name, value) calls recorded over the signal, in trace_points intervals of trace_interval_s: for each name, the last value in each interval and the lowest and highest, null where none was given. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "dsp_test_args",
@@ -1109,193 +613,6 @@
       },
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "title": "dsp_test_result",
-      "properties": {
-        "plugin": {
-          "type": "string"
-        },
-        "sample_rate": {
-          "anyOf": [
-            {
-              "type": "number"
-            },
-            {
-              "type": "string",
-              "pattern": "^\\s*[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?:\\s*(?:[hH][zZ]|[kK][hH][zZ]|[kK]))?\\s*$"
-            }
-          ],
-          "x-unit": "Hz",
-          "x-unit-strings": true,
-          "description": "the rate rendered at Quantity strings are range-checked by the server."
-        },
-        "latency": {
-          "type": "integer",
-          "description": "samples"
-        },
-        "signals": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "title": "dsp_signal_result",
-            "properties": {
-              "signal": {
-                "type": "string"
-              },
-              "peak_dbfs": {
-                "type": "number"
-              },
-              "rms_dbfs": {
-                "type": "number"
-              },
-              "dc": {
-                "type": "number"
-              },
-              "clipped": {
-                "type": "integer",
-                "minimum": 0.0
-              },
-              "denormals": {
-                "type": "integer",
-                "minimum": 0.0
-              },
-              "gain_db": {
-                "type": "number",
-                "description": "sine: the fundamental out against in"
-              },
-              "thd_percent": {
-                "type": "number"
-              },
-              "response_db": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "title": "dsp_response_point",
-                  "properties": {
-                    "hz": {
-                      "type": "number"
-                    },
-                    "db": {
-                      "type": "number"
-                    }
-                  },
-                  "required": ["hz", "db"],
-                  "additionalProperties": false
-                }
-              },
-              "pitch_hz": {
-                "type": "number",
-                "description": "note: the pitch heard (A4 is 440 Hz)"
-              },
-              "release_ms": {
-                "type": "number",
-                "description": "an instrument's: sound after the last release"
-              },
-              "path": {
-                "type": "string"
-              },
-              "automation": {
-                "type": "object",
-                "title": "dsp_automation_result",
-                "properties": {
-                  "max_step": {
-                    "type": "number"
-                  },
-                  "baseline_max_step": {
-                    "type": "number"
-                  },
-                  "excess_step": {
-                    "type": "number"
-                  }
-                },
-                "required": ["max_step", "baseline_max_step", "excess_step"],
-                "additionalProperties": false
-              },
-              "sidechain": {
-                "type": "object",
-                "title": "dsp_sidechain_result",
-                "properties": {
-                  "rms_dbfs": {
-                    "type": "number"
-                  },
-                  "reference_rms_dbfs": {
-                    "type": "number"
-                  },
-                  "gain_change_db": {
-                    "type": ["number", "null"]
-                  }
-                },
-                "required": ["rms_dbfs", "reference_rms_dbfs", "gain_change_db"],
-                "additionalProperties": false
-              },
-              "meters": {
-                "description": "read-only parameters (meters) by patch key, physical, as of the signal's end"
-              },
-              "trace_interval_s": {
-                "type": "number",
-                "description": "each trace interval's length"
-              },
-              "traces": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "title": "dsp_trace_result",
-                  "properties": {
-                    "name": {
-                      "type": "string"
-                    },
-                    "last": {
-                      "description": "each interval's last value, or null"
-                    },
-                    "low": {
-                      "description": "each interval's lowest"
-                    },
-                    "high": {
-                      "description": "each interval's highest"
-                    },
-                    "non_finite": {
-                      "type": "integer",
-                      "minimum": 0.0,
-                      "description": "NaN or infinity given, not kept"
-                    }
-                  },
-                  "required": ["name", "last", "low", "high", "non_finite"],
-                  "additionalProperties": false
-                },
-                "description": "what trace() recorded, by name"
-              }
-            },
-            "required": ["signal", "peak_dbfs", "rms_dbfs", "dc", "clipped", "denormals"],
-            "additionalProperties": false
-          }
-        },
-        "cpu_percent": {
-          "type": "number",
-          "description": "of real time, measured"
-        },
-        "problems": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "log": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["plugin", "sample_rate", "latency", "signals", "cpu_percent", "problems", "log"],
-      "additionalProperties": false
-    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": true,
@@ -1305,7 +622,7 @@
   {
     "name": "dsp_write",
     "title": "Save a DSP script to the library and compile it, with diagnostics.",
-    "description": "Save a DSP script to the library and compile it, with diagnostics. Writes <library>/<name>/<name>.cpp (replacing it), compiles it and returns the compiler's diagnostics, each with a hint. A script that compiles becomes a plugin of the script player under the id its Info gives: plugin.list shows it (listed) and fx.add loads it. Instances already playing it pick up the change within half a second, crossfaded; one that fails to compile leaves them playing the old code. Language: the dsp-language guide. See describe for errors and examples.",
+    "description": "Writes <library>/<name>/<name>.cpp (replacing it), compiles it and returns the compiler's diagnostics, each with a hint. A script that compiles becomes a plugin of the script player under the id its Info gives: plugin.list shows it (listed) and fx.add loads it. Instances already playing it pick up the change within half a second, crossfaded; one that fails to compile leaves them playing the old code. Language: the dsp-language guide. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "dsp_write_args",
@@ -1324,155 +641,6 @@
       "required": ["name", "source"],
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "title": "dsp_write_result",
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "path": {
-          "type": "string"
-        },
-        "ok": {
-          "type": "boolean",
-          "description": "it compiled"
-        },
-        "diagnostics": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "title": "dsp_diagnostic",
-            "properties": {
-              "severity": {
-                "type": "string",
-                "description": "error or warning"
-              },
-              "code": {
-                "type": "string",
-                "description": "script.<area>.<what>"
-              },
-              "message": {
-                "type": "string"
-              },
-              "hint": {
-                "type": "string",
-                "description": "what to write instead"
-              },
-              "line": {
-                "type": "integer"
-              },
-              "column": {
-                "type": "integer"
-              }
-            },
-            "required": ["severity", "code", "message", "hint", "line", "column"],
-            "additionalProperties": false
-          }
-        },
-        "plugin": {
-          "type": "object",
-          "title": "dsp_plugin",
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "name": {
-              "type": "string"
-            },
-            "kind": {
-              "type": "string",
-              "description": "effect (audio in, audio out) or instrument (notes in)"
-            },
-            "params": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "title": "dsp_param",
-                "properties": {
-                  "key": {
-                    "type": "string",
-                    "description": "the patch key"
-                  },
-                  "name": {
-                    "type": "string"
-                  },
-                  "kind": {
-                    "type": "string",
-                    "description": "continuous, integer, choice or toggle"
-                  },
-                  "unit": {
-                    "type": "string",
-                    "description": "dB, Hz, ms, % ..."
-                  },
-                  "min": {
-                    "type": "number"
-                  },
-                  "max": {
-                    "type": "number"
-                  },
-                  "default": {
-                    "type": "number"
-                  },
-                  "choices": {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    }
-                  },
-                  "meter": {
-                    "type": "boolean",
-                    "description": "an output the plugin reports"
-                  }
-                },
-                "required": ["key", "name", "kind", "min", "max", "default", "choices", "meter"],
-                "additionalProperties": false
-              }
-            },
-            "files": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "title": "dsp_file",
-                "properties": {
-                  "key": {
-                    "type": "string",
-                    "description": "the patch's properties key"
-                  },
-                  "name": {
-                    "type": "string"
-                  },
-                  "kind": {
-                    "type": "string",
-                    "description": "audio (a sample) or impulse (a Convolver's response)"
-                  },
-                  "description": {
-                    "type": "string"
-                  }
-                },
-                "required": ["key", "name", "kind"],
-                "additionalProperties": false
-              },
-              "description": "the script's files (AudioFile, Convolver), when it has any: give each an absolute path in a patch, {\"properties\": {\"<key>\": \"/path.wav\"}}"
-            }
-          },
-          "required": ["id", "name", "kind", "params"],
-          "additionalProperties": false
-        },
-        "listed": {
-          "type": "boolean",
-          "description": "plugin.list shows it (the script player is on the plugin path)"
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["name", "path", "ok", "diagnostics", "listed"],
-      "additionalProperties": false
-    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": true,
@@ -1482,7 +650,7 @@
   {
     "name": "masking",
     "title": "Estimate where one sound masks another (critical bands).",
-    "description": "Estimate where one sound masks another (critical bands). masker (e.g. the kick) and maskee (e.g. the bass): renders or files at the same sample rate. Per Bark band: % of the maskee's active frames masked and by how much; the three worst bands. An estimate for corrective mixing, not a psychoacoustic model of record. See describe for errors and examples.",
+    "description": "masker (e.g. the kick) and maskee (e.g. the bass): renders or files at the same sample rate. Per Bark band: % of the maskee's active frames masked and by how much; the three worst bands. An estimate for corrective mixing, not a psychoacoustic model of record. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "masking_args",
@@ -1501,21 +669,6 @@
       "required": ["masker", "maskee"],
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "title": "masking",
-      "properties": {
-        "result": {},
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["result"],
-      "additionalProperties": false
-    },
     "annotations": {
       "readOnlyHint": true,
       "destructiveHint": false,
@@ -1525,7 +678,7 @@
   {
     "name": "optimize_start",
     "title": "Tune continuous parameters toward a reference sound or a profile (a job).",
-    "description": "Tune continuous parameters toward a reference sound or a profile (a job). You choose the structure (patch) and which knobs matter; CMA-ES tunes the numbers. params: \"auto\" (continuous parameters of the modules present, max 32) or keys, optionally {key, min, max} to narrow the search. \"auto\" searches around each parameter's current value (±2 octaves for frequency, time and pitch-interval quantities, ±25 % of the range otherwise): name keys with min/max when the answer may be far from the current patch. target: {\"reference\": rd_<n> or file} and/or {\"profile\": supple.analysis-profile document}; a reference target starts from a smaller initial step than a profile, because the patch is already close. phrase: notation rendered per candidate (default \"1: C3:w\"; use the reference's phrase when matching a reference). Returns a job: poll job.wait; the result has the best loss per term, the failed-candidate count, changes, a merge patch ({\"params\": {...}}) for patch.merge, and the best candidate's render. See describe for errors and examples.",
+    "description": "You choose the structure (patch) and which knobs matter; CMA-ES tunes the numbers. params: \"auto\" (continuous parameters of the modules present, max 32) or keys, optionally {key, min, max} to narrow the search. \"auto\" searches around each parameter's current value (±2 octaves for frequency, time and pitch-interval quantities, ±25 % of the range otherwise): name keys with min/max when the answer may be far from the current patch. target: {\"reference\": rd_<n> or file} and/or {\"profile\": supple.analysis-profile document}; a reference target starts from a smaller initial step than a profile, because the patch is already close. phrase: notation rendered per candidate (default \"1: C3:w\"; use the reference's phrase when matching a reference). Returns a job: poll job.wait; the result has the best loss per term, the failed-candidate count, changes, a merge patch ({\"params\": {...}}) for patch.merge, and the best candidate's render. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "optimize_args",
@@ -1574,35 +727,6 @@
       "required": ["instance", "target"],
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "title": "optimize_started",
-      "properties": {
-        "job": {
-          "type": "string"
-        },
-        "status": {
-          "type": "string"
-        },
-        "params": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "render": {
-          "type": "string"
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["job", "status", "params", "render"],
-      "additionalProperties": false
-    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": true,
@@ -1612,7 +736,7 @@
   {
     "name": "param_get",
     "title": "Read parameter values (physical value and display text).",
-    "description": "Read parameter values (physical value and display text). keys: semantic keys (e.g. \"filter.cutoff\"); omit for all. Third-party plugins: CLAP ids or names; values are CLAP values. See describe for errors and examples.",
+    "description": "keys: semantic keys (e.g. \"filter.cutoff\"); omit for all. Third-party plugins: CLAP ids or names; values are CLAP values. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "param_get_args",
@@ -1632,21 +756,6 @@
       "required": ["instance"],
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "title": "param_values",
-      "properties": {
-        "values": {},
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["values"],
-      "additionalProperties": false
-    },
     "annotations": {
       "readOnlyHint": true,
       "destructiveHint": false,
@@ -1656,7 +765,7 @@
   {
     "name": "param_set",
     "title": "Set parameters in physical units; returns the values as applied.",
-    "description": "Set parameters in physical units; returns the values as applied. values: {key: number | \"unit string\" | enum key | bool}, e.g. {\"filter.cutoff\": \"1.2 kHz\", \"filter.mode\": \"lowpass\"}. All values are validated first; nothing changes if any is invalid. Third-party plugins: CLAP id or name keys with CLAP values or {\"text\": \"...\"}. A value that does not apply with the new values says \"active\": false (plugin.describe detail full says what makes it apply). Use patch.merge to change several sections at once. See describe for errors and examples.",
+    "description": "values: {key: number | \"unit string\" | enum key | bool}, e.g. {\"filter.cutoff\": \"1.2 kHz\", \"filter.mode\": \"lowpass\"}. All values are validated first; nothing changes if any is invalid. Third-party plugins: CLAP id or name keys with CLAP values or {\"text\": \"...\"}. A value that does not apply with the new values says \"active\": false (plugin.describe detail full says what makes it apply). Use patch.merge to change several sections at once. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "param_set_args",
@@ -1673,21 +782,6 @@
       "required": ["instance", "values"],
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "title": "param_values",
-      "properties": {
-        "values": {},
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["values"],
-      "additionalProperties": false
-    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": false,
@@ -1697,7 +791,7 @@
   {
     "name": "patch_get",
     "title": "Get an instance's patch document (changed values or all).",
-    "description": "Get an instance's patch document (changed values or all). detail changed (default): only values that differ from the defaults, still a complete patch. detail full: every value. Semantic plugins only. See describe for errors and examples.",
+    "description": "detail changed (default): only values that differ from the defaults, still a complete patch. detail full: every value. Semantic plugins only. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "patch_get_args",
@@ -1716,21 +810,6 @@
       "required": ["instance"],
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "title": "patch",
-      "properties": {
-        "patch": {},
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["patch"],
-      "additionalProperties": false
-    },
     "annotations": {
       "readOnlyHint": true,
       "destructiveHint": false,
@@ -1740,7 +819,7 @@
   {
     "name": "patch_merge",
     "title": "Merge a partial patch (RFC 7396) into an instance.",
-    "description": "Merge a partial patch (RFC 7396) into an instance. patch: only the values to change, e.g. {\"params\": {\"filter.cutoff\": \"800 Hz\"}}; null removes a value (back to its default). Returns the effective change (a minimal merge patch; {} if nothing changed) and a description of the new sound. inactive names the params it set that do not apply with the new values: they are kept, and heard once what their active_when names allows it (plugin.describe detail full). See describe for errors and examples.",
+    "description": "patch: only the values to change, e.g. {\"params\": {\"filter.cutoff\": \"800 Hz\"}}; null removes a value (back to its default). Returns the effective change (a minimal merge patch; {} if nothing changed) and a description of the new sound. inactive names the params it set that do not apply with the new values: they are kept, and heard once what their active_when names allows it (plugin.describe detail full). See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "patch_merge_args",
@@ -1755,31 +834,6 @@
       "required": ["instance", "patch"],
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "title": "patch_merge",
-      "properties": {
-        "changed": {},
-        "description": {
-          "type": "string"
-        },
-        "inactive": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Params set that do not apply now"
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["changed", "description"],
-      "additionalProperties": false
-    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": false,
@@ -1789,7 +843,7 @@
   {
     "name": "patch_set",
     "title": "Replace an instance's whole patch; returns a description of the result.",
-    "description": "Replace an instance's whole patch; returns a description of the result. patch: a complete patch document (see plugin.describe detail full for its schema); missing values take their defaults. Validated fully before anything changes. For partial edits use patch.merge. See describe for errors and examples.",
+    "description": "patch: a complete patch document (see plugin.describe detail full for its schema); missing values take their defaults. Validated fully before anything changes. For partial edits use patch.merge. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "patch_set_args",
@@ -1804,23 +858,6 @@
       "required": ["instance", "patch"],
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "title": "description",
-      "properties": {
-        "description": {
-          "type": "string"
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["description"],
-      "additionalProperties": false
-    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": false,
@@ -1830,7 +867,7 @@
   {
     "name": "plugin_describe",
     "title": "Describe an instance: parameters, patch format, and current problems.",
-    "description": "Describe an instance: parameters, patch format, and current problems. detail summary: parameters grouped as compact 'key = value (range)' lines plus a prose description of the current sound. detail full: every parameter's schema entry with current value and text, and the patch JSON Schema. inactive lists the parameters that do not apply with the current values (summary leaves them out): their entries carry \"active\": false, and active_when says what makes them apply (another parameter's values), or their module is not in the patch (add it with patch.merge). Semantic plugins are programmed with param.set (physical units) or patch.merge. See describe for errors and examples.",
+    "description": "detail summary: parameters grouped as compact 'key = value (range)' lines plus a prose description of the current sound. detail full: every parameter's schema entry with current value and text, and the patch JSON Schema. inactive lists the parameters that do not apply with the current values (summary leaves them out): their entries carry \"active\": false, and active_when says what makes them apply (another parameter's values), or their module is not in the patch (add it with patch.merge). Semantic plugins are programmed with param.set (physical units) or patch.merge. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "plugin_describe_args",
@@ -1849,51 +886,6 @@
       "required": ["instance"],
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "title": "plugin_description",
-      "properties": {
-        "plugin": {
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        },
-        "params": {},
-        "patch_type": {
-          "type": "string"
-        },
-        "patch_schema": {},
-        "description": {
-          "type": "string"
-        },
-        "docs": {
-          "type": "string"
-        },
-        "status_available": {
-          "type": "boolean",
-          "description": "The instance supplied its current problems"
-        },
-        "problems": {
-          "description": "Current plugin problems: code, message, scope, line when known, hint, silent; scope host when unreadable"
-        },
-        "inactive": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Parameters that do not apply now"
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["plugin", "name", "params", "description", "status_available"],
-      "additionalProperties": false
-    },
     "annotations": {
       "readOnlyHint": true,
       "destructiveHint": false,
@@ -1903,7 +895,7 @@
   {
     "name": "plugin_list",
     "title": "List the CLAP plugins the sandbox can load.",
-    "description": "List the CLAP plugins the sandbox can load. Scans the plugin path once (rescan: true to scan again). filter matches the id or name, case-insensitively. Load one with plugin.load. See describe for errors and examples.",
+    "description": "Scans the plugin path once (rescan: true to scan again). filter matches the id or name, case-insensitively. Load one with plugin.load. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "plugin_list_args",
@@ -1919,150 +911,6 @@
       },
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "title": "plugin_list",
-      "properties": {
-        "plugins": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "title": "plugin",
-            "properties": {
-              "id": {
-                "type": "string"
-              },
-              "name": {
-                "type": "string"
-              },
-              "vendor": {
-                "type": "string"
-              },
-              "instrument": {
-                "type": "boolean"
-              },
-              "semantic": {
-                "type": "boolean"
-              },
-              "features": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "path": {
-                "type": "string"
-              },
-              "version": {
-                "type": "string"
-              },
-              "shadowed": {
-                "type": "boolean",
-                "description": "Not loadable by id: an earlier location on the plugin path has the same id (load it by path)"
-              }
-            },
-            "required": [
-              "id",
-              "name",
-              "vendor",
-              "instrument",
-              "semantic",
-              "features",
-              "path",
-              "version"
-            ],
-            "additionalProperties": false
-          }
-        },
-        "scan": {
-          "type": "object",
-          "title": "scan_report",
-          "properties": {
-            "failures": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "title": "scan_failure",
-                "properties": {
-                  "module": {
-                    "type": "string"
-                  },
-                  "reason": {
-                    "type": "object",
-                    "title": "scan_reason",
-                    "properties": {
-                      "code": {
-                        "type": "string"
-                      },
-                      "message": {
-                        "type": "string"
-                      },
-                      "path": {
-                        "type": "string"
-                      },
-                      "hint": {
-                        "type": "string"
-                      },
-                      "details": {
-                        "type": "array",
-                        "items": {}
-                      }
-                    },
-                    "required": ["code", "message", "path", "hint"],
-                    "additionalProperties": false
-                  },
-                  "cached": {
-                    "type": "boolean"
-                  }
-                },
-                "required": ["module", "reason", "cached"],
-                "additionalProperties": false
-              }
-            },
-            "warnings": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "title": "scan_reason",
-                "properties": {
-                  "code": {
-                    "type": "string"
-                  },
-                  "message": {
-                    "type": "string"
-                  },
-                  "path": {
-                    "type": "string"
-                  },
-                  "hint": {
-                    "type": "string"
-                  },
-                  "details": {
-                    "type": "array",
-                    "items": {}
-                  }
-                },
-                "required": ["code", "message", "path", "hint"],
-                "additionalProperties": false
-              }
-            },
-            "cached_modules": {
-              "type": "integer"
-            }
-          },
-          "required": ["failures", "warnings", "cached_modules"],
-          "additionalProperties": false
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["plugins", "scan"],
-      "additionalProperties": false
-    },
     "annotations": {
       "readOnlyHint": true,
       "destructiveHint": false,
@@ -2072,7 +920,7 @@
   {
     "name": "plugin_load",
     "title": "Load a plugin into the chain and return its instance id.",
-    "description": "Load a plugin into the chain and return its instance id. plugin is an id from plugin.list or a .clap path. An instrument goes first in the chain, anything else last, unless position says otherwise (instruments must stay first). Then describe it with plugin.describe. See describe for errors and examples.",
+    "description": "plugin is an id from plugin.list or a .clap path. An instrument goes first in the chain, anything else last, unless position says otherwise (instruments must stay first). Then describe it with plugin.describe. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "plugin_load_args",
@@ -2091,35 +939,6 @@
       "required": ["plugin"],
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "title": "plugin_load",
-      "properties": {
-        "instance": {
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        },
-        "semantic": {
-          "type": "boolean"
-        },
-        "chain": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["instance", "name", "semantic", "chain"],
-      "additionalProperties": false
-    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": false,
@@ -2129,7 +948,7 @@
   {
     "name": "plugin_remove",
     "title": "Remove a plugin instance from the chain.",
-    "description": "Remove a plugin instance from the chain. Unloads the instance; its id is not reused. See describe for errors and examples.",
+    "description": "Unloads the instance; its id is not reused. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "instance_args",
@@ -2143,26 +962,6 @@
       "required": ["instance"],
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "title": "chain",
-      "properties": {
-        "chain": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["chain"],
-      "additionalProperties": false
-    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": false,
@@ -2172,7 +971,7 @@
   {
     "name": "preset_list",
     "title": "List user presets, or a plugin's read-only factory patches.",
-    "description": "List user presets, or a plugin's read-only factory patches. source: user (default) lists saved presets. source: factory requires plugin and lists its immutable factory patches in declaration order. See describe for errors and examples.",
+    "description": "source: user (default) lists saved presets. source: factory requires plugin and lists its immutable factory patches in declaration order. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "preset_list_args",
@@ -2188,46 +987,6 @@
       },
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "title": "preset_list",
-      "properties": {
-        "presets": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "title": "preset",
-            "properties": {
-              "plugin": {
-                "type": "string"
-              },
-              "name": {
-                "type": "string"
-              },
-              "tags": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "read_only": {
-                "type": "boolean"
-              }
-            },
-            "required": ["plugin", "name", "tags"],
-            "additionalProperties": false
-          }
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["presets"],
-      "additionalProperties": false
-    },
     "annotations": {
       "readOnlyHint": true,
       "destructiveHint": false,
@@ -2237,7 +996,7 @@
   {
     "name": "preset_load",
     "title": "Load a named preset into an instance.",
-    "description": "Load a named preset into an instance. The preset must belong to the instance's plugin (see preset.list). source: factory applies a read-only factory patch; user (default) loads a saved preset. See describe for errors and examples.",
+    "description": "The preset must belong to the instance's plugin (see preset.list). source: factory applies a read-only factory patch; user (default) loads a saved preset. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "preset_load_args",
@@ -2260,23 +1019,6 @@
       "required": ["instance", "name"],
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "title": "description",
-      "properties": {
-        "description": {
-          "type": "string"
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["description"],
-      "additionalProperties": false
-    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": false,
@@ -2286,7 +1028,7 @@
   {
     "name": "preset_save",
     "title": "Save an instance's current settings as a named preset.",
-    "description": "Save an instance's current settings as a named preset. Stores the patch (semantic plugins) or the plugin state. Overwrites a preset of the same name for the same plugin. Names: 1-64 of A-Z a-z 0-9 space _ . + -. See describe for errors and examples.",
+    "description": "Stores the patch (semantic plugins) or the plugin state. Overwrites a preset of the same name for the same plugin. Names: 1-64 of A-Z a-z 0-9 space _ . + -. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "preset_save_args",
@@ -2313,23 +1055,6 @@
       "required": ["instance", "name"],
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "title": "path",
-      "properties": {
-        "path": {
-          "type": "string"
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["path"],
-      "additionalProperties": false
-    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": true,
@@ -2339,7 +1064,7 @@
   {
     "name": "profile_evaluate",
     "title": "Score a render against a target descriptor profile.",
-    "description": "Score a render against a target descriptor profile. profile: {\"schema\": \"supple.analysis-profile/1.0\", \"targets\": {\"<report key>\": {\"target\": x, \"tolerance\": t, \"weight\"?: w} | {\"min\"?: a, \"max\"?: b}}, \"ltas\"?: [31 relative dB]}. Keys are dotted report paths such as spectral.centroid_hz.median or harmonic.harmonics_db.3. Returns per-target pass and normalized distance, and a weighted loss (0 = on target). See describe for errors and examples.",
+    "description": "profile: {\"schema\": \"supple.analysis-profile/1.0\", \"targets\": {\"<report key>\": {\"target\": x, \"tolerance\": t, \"weight\"?: w} | {\"min\"?: a, \"max\"?: b}}, \"ltas\"?: [31 relative dB]}. Keys are dotted report paths such as spectral.centroid_hz.median or harmonic.harmonics_db.3. Returns per-target pass and normalized distance, and a weighted loss (0 = on target). See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "profile_args",
@@ -2354,21 +1079,6 @@
       "required": ["source", "profile"],
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "title": "profile_result",
-      "properties": {
-        "result": {},
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["result"],
-      "additionalProperties": false
-    },
     "annotations": {
       "readOnlyHint": true,
       "destructiveHint": false,
@@ -2378,7 +1088,7 @@
   {
     "name": "render",
     "title": "Render notes, a MIDI file or an audio file through the chain to a WAV.",
-    "description": "Render notes, a MIDI file or an audio file through the chain to a WAV. notation: a phrase in the notation (see the notation guide), e.g. \"voice lead; 1: C4:q E4:q G4:h | C5:w\". midi_file / audio_file: paths (audio at the session rate). bars/seconds override the length; the tail after it is rendered until silence (tail_s caps it). Returns the render id for analyze/compare and the WAV path. See describe for errors and examples.",
+    "description": "notation: a phrase in the notation (see the notation guide), e.g. \"voice lead; 1: C4:q E4:q G4:h | C5:w\". midi_file / audio_file: paths (audio at the session rate). bars/seconds override the length; the tail after it is rendered until silence (tail_s caps it). Returns the render id for analyze/compare and the WAV path. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "render_args",
@@ -2437,63 +1147,6 @@
       },
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "title": "render_result",
-      "properties": {
-        "render": {
-          "type": "string"
-        },
-        "path": {
-          "type": "string"
-        },
-        "seconds": {
-          "type": "number"
-        },
-        "peak_dbfs": {
-          "type": "number"
-        },
-        "tail_s": {
-          "type": "number"
-        },
-        "tail_capped": {
-          "type": "boolean"
-        },
-        "latency_samples": {
-          "type": "integer"
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "object"
-              }
-            ]
-          }
-        },
-        "log": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "analysis": {}
-      },
-      "required": [
-        "render",
-        "path",
-        "seconds",
-        "peak_dbfs",
-        "tail_s",
-        "tail_capped",
-        "latency_samples"
-      ],
-      "additionalProperties": false
-    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": true,
@@ -2503,29 +1156,11 @@
   {
     "name": "session_get",
     "title": "Show the session: settings, chain, instances and renders.",
-    "description": "Show the session: settings, chain, instances and renders.  See describe for errors and examples.",
+    "description": "Show the session: settings, chain, instances and renders. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "no_args",
       "properties": {},
-      "additionalProperties": false
-    },
-    "outputSchema": {
-      "type": "object",
-      "title": "session",
-      "properties": {
-        "settings": {},
-        "chain": {},
-        "instances": {},
-        "renders": {},
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["settings", "chain", "instances", "renders"],
       "additionalProperties": false
     },
     "annotations": {
@@ -2537,24 +1172,11 @@
   {
     "name": "session_reset",
     "title": "Unload every plugin, delete renders and restore default settings.",
-    "description": "Unload every plugin, delete renders and restore default settings. Not undoable. Saved presets are kept. See describe for errors and examples.",
+    "description": "Not undoable. Saved presets are kept. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "no_args",
       "properties": {},
-      "additionalProperties": false
-    },
-    "outputSchema": {
-      "type": "object",
-      "title": "empty",
-      "properties": {
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
       "additionalProperties": false
     },
     "annotations": {
@@ -2566,7 +1188,7 @@
   {
     "name": "session_set",
     "title": "Change session settings (rate, block size, tempo, meter, tail limit).",
-    "description": "Change session settings (rate, block size, tempo, meter, tail limit). Only the given fields change. A rate or block size change reactivates plugins at the next render. See describe for errors and examples.",
+    "description": "Only the given fields change. A rate or block size change reactivates plugins at the next render. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "session_set_args",
@@ -2618,21 +1240,6 @@
           "maximum": 60.0
         }
       },
-      "additionalProperties": false
-    },
-    "outputSchema": {
-      "type": "object",
-      "title": "settings",
-      "properties": {
-        "settings": {},
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["settings"],
       "additionalProperties": false
     },
     "annotations": {

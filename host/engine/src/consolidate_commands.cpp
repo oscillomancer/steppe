@@ -320,7 +320,7 @@ void registerConsolidateCommands(cmd::Registry& registry) {
     cmd::Command<Args, json::Value> command;
     command.name = "item.consolidate";
     command.kind = cmd::Kind::Action;
-    command.exposure = cmd::Exposure::McpTool;
+    command.exposure = cmd::Exposure::McpExec;
     command.summary = "Consolidate selected audio and MIDI per track in a background job.";
     command.description =
         "Partitions by track and active source kind. Audio bakes active takes, item controls, "

@@ -214,7 +214,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
         Command<EngineDevicesArgs, EngineDevicesResult> c;
         c.name = "engine.devices";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "List native audio device names, host APIs, rates and channel capacities.";
         c.description =
             "Enumerates PortAudio devices on macOS/Windows without opening a stream. "
@@ -374,7 +374,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
         Command<NoArgs, Empty> c;
         c.name = "engine.stop";
         c.kind = Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Stop real-time playback and release the audio device.";
         c.tags = {"engine"};
         c.args = schema::object<NoArgs>("no_args").build();
@@ -390,7 +390,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
         Command<NoArgs, json::Value> c;
         c.name = "engine.inputs";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "The device's audio inputs, MIDI devices and the outputs masters play to.";
         c.description =
             "audio: one entry per input channel (channel, the 1-based number track.set "
@@ -451,7 +451,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
         Command<NoArgs, EngineStatus> c;
         c.name = "engine.status";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Real-time engine state: backend, rate, block, device period, latency, xruns.";
         c.description =
             "preparing_audio: source preparation is pending; the previous ready plan stays "

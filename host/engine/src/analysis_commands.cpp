@@ -195,7 +195,7 @@ void registerEngineAnalysisCommands(cmd::Registry& registry) {
         Command<MaskingArgs, json::Value> c;
         c.name = "analyze.masking";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Estimate masking between two tracks over the same range.";
         c.tags = {"analysis"};
         c.args =

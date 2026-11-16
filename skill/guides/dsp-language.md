@@ -216,7 +216,7 @@ passed.
 
 **Tracing.** `trace("name", value)` in `prepare()`, `update()`, `process()`
 or a voice hook records a value at the block's start, `trace("name", value,
-i)` at its frame `i`, for whoever is debugging: `dsp_test` returns each
+i)` at its frame `i`, for whoever is debugging: `exec {"command": "dsp.test"}` returns each
 name's last, lowest and highest values over the signal (`traces`), and says
 when one was NaN. The name is a string literal of up to 47 characters, at
 most 16 names a plugin. While nothing traces, a call costs a check, so a
@@ -682,7 +682,7 @@ stopped and silent (`script.runtime.memory`) until it is prepared again; a
 saved revision that asks for more is not loaded, and the previous version
 keeps playing.
 
-These guards are the player's. A source export (`dsp_export` with
+These guards are the player's. A source export (`exec {"command": "dsp.export"}` with
 `format: "source"`) is ordinary C++: invalid indices follow the same spare
 rules and are reported without a line, but there is no budget, so a loop that never ends
 hangs the plugin. Test a script in the player before exporting its source.

@@ -106,7 +106,7 @@ inline std::vector<clap_supple_pointer_input_t> pointerInput(
 }  // namespace preview
 
 template <class Host>
-void registerDspPreview(cmd::Registry& registry) {
+void registerDspPreview(cmd::Registry& registry, cmd::Exposure exposure = cmd::Exposure::McpTool) {
     using namespace test;
     using namespace preview;
     using cmd::Command;
@@ -115,7 +115,7 @@ void registerDspPreview(cmd::Registry& registry) {
     Command<PreviewArgs, PreviewResult> c;
     c.name = "dsp.preview";
     c.kind = Kind::Action;
-    c.exposure = cmd::Exposure::McpTool;
+    c.exposure = exposure;
     c.summary = "Draw a plugin's editor to a PNG, after a test signal plays through it.";
     c.description =
         "Give plugin (an id) or script (a name in the library). A fresh instance, set by patch (a "

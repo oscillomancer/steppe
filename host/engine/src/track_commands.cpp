@@ -111,13 +111,13 @@ struct TrackMoveArgs {
 // Is `track` a descendant of `ancestor` in the folder nesting (children lists)?
 // Moving a track under one of its own descendants would make the tree cyclic.
 bool nestedUnder(const model::Session& s, Id ancestor, Id track) {
-    std::vector<Id> stack{track};
+    std::vector<Id> stack{ancestor};
     std::set<Id> seen;
     while (!stack.empty()) {
         const Id cur = stack.back();
         stack.pop_back();
         if (!seen.insert(cur).second) continue;
-        if (cur == ancestor) return true;
+        if (cur == track) return true;
         const model::Track* found = s.tracks.find(cur);
         if (!found) continue;
         for (Id child : found->children) stack.push_back(child);
@@ -941,7 +941,7 @@ void registerTrackCommands(cmd::Registry& registry) {
         Command<TrackMoveArgs, Empty> c;
         c.name = "track.move";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Move a track under another track or reorder it among its siblings.";
         c.description =
             "parent defaults to the track's current parent (a pure reorder); index defaults to "

@@ -22,11 +22,12 @@ struct WarpHost {
     std::unique_ptr<EngineApp> app;
     cmd::Registry registry;
     std::unique_ptr<cmd::Dispatcher> bus;
-    WarpHost(std::function<void()> finished = {}) {
+    WarpHost(std::function<void()> finished = {}, std::function<void()> started = {}) {
         std::filesystem::create_directories(root / "plugins");
         AppOptions options;
         options.workdir = root;
         options.jobFinishedHook = std::move(finished);
+        options.jobStartedHook = std::move(started);
         options.pluginPath = {root / "plugins"};
         auto created = EngineApp::create(options);
         REQUIRE(created);
@@ -338,22 +339,56 @@ TEST_CASE("audio quantization swings beat targets and preserves failed edits") {
 
 TEST_CASE("hit detection job completes only after its one result edit commits") {
     std::mutex mutex;
-    std::condition_variable done;
-    bool finished = false;
-    WarpHost h([&] {
-        {
+    std::condition_variable wake;
+    bool entered = false, released = false, finished = false;
+    WarpHost h(
+        [&] {
             std::lock_guard lock(mutex);
             finished = true;
+            wake.notify_all();
+        },
+        [&] {
+            std::unique_lock lock(mutex);
+            entered = true;
+            wake.notify_all();
+            wake.wait(lock, [&] { return released; });
+        });
+    // Do not strand the worker if a REQUIRE unwinds before release.
+    struct Release {
+        std::mutex& mutex;
+        std::condition_variable& wake;
+        bool& released;
+        ~Release() {
+            std::lock_guard lock(mutex);
+            released = true;
+            wake.notify_all();
         }
-        done.notify_one();
-    });
+    } release{mutex, wake, released};
     const auto version = h.app->head().version;
+    const auto original = model::serializeProject(h.app->head());
     auto job = h.run("take.hits.detect", R"({"takes":["tk_1"]})");
     {
         std::unique_lock lock(mutex);
-        done.wait(lock, [&] { return finished; });
+        wake.wait(lock, [&] { return entered; });
     }
+    // execute() flushes posted work before returning. Hold the worker until
+    // that flush has passed, instead of assuming analysis will take longer.
     CHECK_FALSE(h.app->head().takes.find({model::Kind::Take, 1})->transients);
+    CHECK(h.app->head().version == version);
+    {
+        std::unique_lock lock(mutex);
+        released = true;
+        wake.notify_all();
+        wake.wait(lock, [&] { return finished; });
+    }
+    // Analysis has finished and posted its result, but model publication and
+    // job completion must still wait for the one result edit to commit.
+    CHECK_FALSE(h.app->head().takes.find({model::Kind::Take, 1})->transients);
+    CHECK(h.app->head().version == version);
+    const auto id = job.find("job")->asString();
+    auto pending = h.bus->jobs().status(id);  // read without another automatic flush
+    REQUIRE(pending);
+    CHECK(pending->find("status")->asString() == "running");
     h.bus->flushJobEvents();
     REQUIRE(h.app->head().takes.find({model::Kind::Take, 1})->transients);
     auto status = h.bus->execute({"job.get", job, {cmd::Origin::Type::Test, "warp", {}}});
@@ -364,6 +399,7 @@ TEST_CASE("hit detection job completes only after its one result edit commits") 
     CHECK(committed->parents == std::vector<std::uint64_t>{version});
     REQUIRE(h.app->undo());
     CHECK_FALSE(h.app->head().takes.find({model::Kind::Take, 1})->transients);
+    CHECK(model::serializeProject(h.app->head()) == original);
 }
 
 TEST_CASE("audio hit detection finds bass and plucked harmonic attacks") {

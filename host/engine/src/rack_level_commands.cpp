@@ -11,7 +11,7 @@ void registerRackLevelCommands(cmd::Registry& registry) {
     cmd::Command<Args, json::Value> c;
     c.name = "rack.levels";
     c.kind = cmd::Kind::Query;
-    c.exposure = cmd::Exposure::McpTool;
+    c.exposure = cmd::Exposure::McpExec;
     c.tags = {"rack", "modular"};
     c.summary = "Read every module output's linear peak, without subscribing to telemetry.";
     c.description =

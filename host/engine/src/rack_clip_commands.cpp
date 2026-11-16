@@ -30,7 +30,7 @@ void common(cmd::Command<A, json::Value>& c, std::string name, cmd::Kind kind,
     c.name = std::move(name);
     c.kind = kind;
     c.summary = std::move(summary);
-    c.exposure = cmd::Exposure::McpTool;
+    c.exposure = cmd::Exposure::McpExec;
     c.tags = {"rack", "modular"};
     c.result = schema::any();
 }

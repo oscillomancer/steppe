@@ -14,7 +14,7 @@ void registerHealCommands(cmd::Registry& registry) {
     cmd::Command<Args, json::Value> c;
     c.name = "item.heal";
     c.kind = cmd::Kind::Edit;
-    c.exposure = cmd::Exposure::McpTool;
+    c.exposure = cmd::Exposure::McpExec;
     c.summary = "Heal compatible consecutive audio pieces without rendering.";
     c.description =
         "One chain per track, complete linked/warp selection, matching stored audio/take/FX "

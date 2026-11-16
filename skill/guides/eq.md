@@ -60,7 +60,7 @@ Mono the low end and open the top of the sides, leaving the centre alone:
 Make a whole curve subtler or stronger without touching its bands:
 `{"params":{"scale":50}}` halves every gain (cuts and notches are unchanged).
 
-Factory patches (`fx_patch_list`, `fx_patch_set`): Flat, Clean Up, Vocal
+Factory patches (`exec {"command": "fx.patch.list"}`, `exec {"command": "fx.patch.set"}`): Flat, Clean Up, Vocal
 Polish, De-Ess, Air and Weight, Mono Bass, Telephone.
 
 Limits. Latency is zero and the phase is the analog prototypes' (minimum

@@ -160,6 +160,8 @@ class VersionStore {
     // version addressable even after its branch/redo tail is discarded.
     std::shared_ptr<const Session> pin(std::uint64_t id) const;
     std::uint64_t retainedBytes() const;  // estimate of unique retained objects/payloads
+    // Cumulative snapshot measurements, for deterministic work diagnostics.
+    std::uint64_t accountingVisits() const { return accountingVisits_; }
     bool historyTruncated() const;
     void enforceBudget();  // model thread; leases and branch/merge boundaries survive
     void collectUnused();  // reclaim unreachable versions without active leases
@@ -178,6 +180,7 @@ class VersionStore {
                        const ArgSchemas& schemas, std::uint64_t timeMs = 0);
 
   private:
+    friend struct VersionStoreAccountingTest;
     VersionStore() = default;  // restore() fills it
     struct Branch {
         std::uint64_t head = 0, base = 0;
@@ -198,6 +201,13 @@ class VersionStore {
     std::map<std::string, Branch, std::less<>> branches_;
     std::string current_ = "main";
     std::uint64_t next_ = 1;
+    mutable std::uint64_t accountingVisits_ = 0;
+    struct RetainedSize;
+    RetainedSize& retainedSize() const;
+    void account(const Version& version);
+    void unaccount(std::uint64_t id);
+    mutable std::shared_ptr<RetainedSize> retainedSize_;
+    bool collectionNeeded_ = false;
 };
 
 // Rewrites every JSON string equal to a remapped ID (used for replayed

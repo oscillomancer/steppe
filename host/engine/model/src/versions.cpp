@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <optional>
 #include <set>
+#include <unordered_map>
 
 namespace supple::model {
 
@@ -407,13 +408,16 @@ bool VersionStore::updateMediaHash(Id id, const MediaSource& expected, std::stri
     auto updatedMedia = std::make_shared<MediaSource>(expected);
     updatedMedia->hash = hash;
     bool updated = false;
+    (void)retainedSize();
     for (auto& [versionId, version] : versions_) {
         const auto* entry = version.session->media.entry(id);
         if (!entry || !matches(entry->value.get())) continue;
         if (version.session.use_count() > 1) metadataLeases_[versionId].push_back(version.session);
         auto session = std::make_shared<Session>(*version.session);
         session->media = session->media.with(id, entry->rev, updatedMedia);
+        unaccount(versionId);
         version.session = std::move(session);
+        account(version);
         updated = true;
     }
     for (auto& [name, branchState] : branches_) branchState.view.reset();
@@ -467,7 +471,29 @@ void VersionStore::collectUnused() {
         if (const auto* found = version(id))
             pending.insert(pending.end(), found->parents.begin(), found->parents.end());
     }
-    std::erase_if(versions_, [&](const auto& entry) { return !reachable.count(entry.first); });
+    (void)retainedSize();
+    std::erase_if(versions_, [&](const auto& entry) {
+        if (reachable.count(entry.first)) return false;
+        unaccount(entry.first);
+        return true;
+    });
+    // Only a leased unreachable tail can become garbage without a graph edit.
+    // Reachability from branch refs ignores leases for this check.
+    pending.clear();
+    for (const auto& [name, branch] : branches_) {
+        pending.push_back(branch.head);
+        pending.push_back(branch.base);
+        pending.insert(pending.end(), branch.redo.begin(), branch.redo.end());
+    }
+    reachable.clear();
+    while (!pending.empty()) {
+        const auto id = pending.back();
+        pending.pop_back();
+        if (!reachable.insert(id).second) continue;
+        const auto& v = versions_.at(id);
+        pending.insert(pending.end(), v.parents.begin(), v.parents.end());
+    }
+    collectionNeeded_ = reachable.size() != versions_.size();
 }
 
 namespace {
@@ -511,12 +537,15 @@ std::uint64_t objectBytes(const Project& v) {
     return sizeof(v) + v.name.size() + v.title.size() + v.author.size() + v.notes.size() +
            v.mediaDir.size() + v.masters.size() * sizeof(Id) + jsonBytes(v.render);
 }
+}  // namespace
+
 // Pointer identity counts persistent containers and immutable payloads once.
 // No MIDI events/blob bytes are traversed or serialized to estimate them.
-struct RetainedSize {
-    std::map<const void*, std::pair<std::size_t, std::uint64_t>> payloads;
-    std::map<std::uint64_t, std::vector<const void*>> byVersion;
-    std::map<const void*, std::vector<std::pair<const void*, std::uint64_t>>> containers;
+struct VersionStore::RetainedSize {
+    std::unordered_map<const void*, std::pair<std::size_t, std::uint64_t>> payloads;
+    std::unordered_map<std::uint64_t, std::vector<const void*>> byVersion;
+    std::unordered_map<std::uint64_t, std::uint64_t> metadataBytes;
+    std::unordered_map<const void*, std::vector<std::pair<const void*, std::uint64_t>>> containers;
     std::uint64_t bytes = 0;
     void add(std::uint64_t id, const void* key, std::uint64_t size) {
         auto& [count, stored] = payloads[key];
@@ -527,6 +556,11 @@ struct RetainedSize {
         byVersion[id].push_back(key);
     }
     template <class T>
+    std::uint64_t measured(const std::shared_ptr<const T>& object) const {
+        const auto cached = payloads.find(object.get());
+        return cached == payloads.end() ? objectBytes(*object) : cached->second.second;
+    }
+    template <class T>
     void map(std::uint64_t id, const IdMap<T>& objects) {
         if (objects.empty()) return;
         const void* storage = &*objects.begin();
@@ -534,7 +568,7 @@ struct RetainedSize {
         auto [cached, fresh] = containers.try_emplace(storage);
         if (fresh)
             for (const auto& e : objects)
-                cached->second.emplace_back(e.value.get(), objectBytes(*e.value));
+                cached->second.emplace_back(e.value.get(), measured(e.value));
         for (const auto& [key, bytesHeld] : cached->second) add(id, key, bytesHeld);
     }
     void add(const Version& v) {
@@ -550,8 +584,9 @@ struct RetainedSize {
             for (const auto& field : fields) metadata += sizeof(field) + field.size();
         }
         metadata += v.mergeRemap.size() * sizeof(std::pair<const Id, Id>);
-        add(v.id, &v, metadata);
-        add(v.id, s.project.get(), objectBytes(*s.project));
+        metadataBytes.emplace(v.id, metadata);
+        bytes += metadata;
+        add(v.id, s.project.get(), measured(s.project));
         map(v.id, s.tempo);
         map(v.id, s.meters);
         map(v.id, s.tracks);
@@ -573,19 +608,41 @@ struct RetainedSize {
             add(v.id, blob.get(), sizeof(Blob) + blob->data.size());
     }
     void drop(std::uint64_t id) {
+        bytes -= metadataBytes.at(id);
+        metadataBytes.erase(id);
         for (const void* key : byVersion.at(id)) {
             auto& [count, size] = payloads.at(key);
-            if (--count == 0) bytes -= size;
+            if (--count == 0) {
+                bytes -= size;
+                payloads.erase(key);
+                containers.erase(key);  // storage may be reused after its last owner leaves
+            }
         }
         byVersion.erase(id);
     }
 };
-}  // namespace
 
+VersionStore::RetainedSize& VersionStore::retainedSize() const {
+    // Payload identities survive store copies/moves; version metadata uses
+    // IDs rather than map-node addresses. Mutations detach a copied cache.
+    if (retainedSize_ && retainedSize_.use_count() != 1)
+        retainedSize_ = std::make_shared<RetainedSize>(*retainedSize_);
+    if (!retainedSize_) {
+        retainedSize_ = std::make_shared<RetainedSize>();
+        for (const auto& [id, v] : versions_) {
+            ++accountingVisits_;
+            retainedSize_->add(v);
+        }
+    }
+    return *retainedSize_;
+}
+void VersionStore::account(const Version& version) {
+    ++accountingVisits_;
+    retainedSize().add(version);
+}
+void VersionStore::unaccount(std::uint64_t id) { retainedSize().drop(id); }
 std::uint64_t VersionStore::retainedBytes() const {
-    RetainedSize size;
-    for (const auto& [id, v] : versions_) size.add(v);
-    return size.bytes;
+    return retainedSize_ ? retainedSize_->bytes : retainedSize().bytes;
 }
 
 bool VersionStore::historyTruncated() const {
@@ -658,12 +715,14 @@ void squashSteps(std::map<std::uint64_t, Version>& versions,
 }  // namespace
 
 void VersionStore::enforceBudget() {
-    collectUnused();
-    RetainedSize size;
-    for (const auto& [id, v] : versions_) size.add(v);
+    if (collectionNeeded_) collectUnused();
+    auto& size = retainedSize();
     const auto budget =
         versions_.at(branches_.at(current_).head).session->project->historyBudgetBytes;
     if (size.bytes <= budget) return;
+    for (auto& [id, leases] : metadataLeases_)
+        std::erase_if(leases, [](const auto& lease) { return lease.expired(); });
+    std::erase_if(metadataLeases_, [](const auto& entry) { return entry.second.empty(); });
     std::set<std::uint64_t> protectedIds;
     for (const auto& [name, b] : branches_) {
         protectedIds.insert(b.head);
@@ -679,7 +738,7 @@ void VersionStore::enforceBudget() {
     // redo steps and leases remain exact.
     squashSteps(
         versions_, protectedIds, leased, [&] { return size.bytes > budget; },
-        [&](std::uint64_t id) { size.drop(id); }, [&](const Version& v) { size.add(v); });
+        [&](std::uint64_t id) { size.drop(id); }, [&](const Version& v) { account(v); });
 }
 
 Result<std::uint64_t> VersionStore::commit(Session session, TxnRecord txn,
@@ -713,6 +772,7 @@ Result<std::uint64_t> VersionStore::commit(Session session, TxnRecord txn,
             }
         }
     if (media) session.media = media->build();
+    (void)retainedSize();
     Version v;
     v.id = next_++;
     v.txn = std::move(txn);
@@ -736,6 +796,7 @@ Result<std::uint64_t> VersionStore::commit(Session session, TxnRecord txn,
                                   b.redo.empty() && head.txn.coalesceKey == v.txn.coalesceKey &&
                                   !referencedElsewhere(b.head);
     if (coalesceWithHead) {
+        collectionNeeded_ = true;
         // Replace the head: same parent, combined changes and invocations.
         v.parents = head.parents;
         v.changes = coalesce(head.changes, changes);
@@ -751,9 +812,11 @@ Result<std::uint64_t> VersionStore::commit(Session session, TxnRecord txn,
         v.changes = std::move(changes);
         v.created = std::move(created);
         b.head = v.id;
+        collectionNeeded_ |= !b.redo.empty();
         b.redo.clear();
         versions_.emplace(v.id, std::move(v));
     }
+    account(versions_.at(b.head));
     enforceBudget();
     return b.head;
 }
@@ -852,6 +915,7 @@ Status VersionStore::deleteBranch(std::string_view name) {
     auto b = find(name);
     if (!b) return std::move(b).error();
     branches_.erase(branches_.find(name));
+    collectionNeeded_ = true;
     enforceBudget();
     return okStatus();
 }
@@ -926,6 +990,7 @@ MergeOutcome VersionStore::merge(std::string_view from, std::string_view into,
         dst.redo.clear();
         out.head = dst.head;
         out.fastForward = true;
+        collectionNeeded_ = true;
         enforceBudget();
         return out;
     }
@@ -1118,9 +1183,11 @@ MergeOutcome VersionStore::merge(std::string_view from, std::string_view into,
     // Success: the last step also records the source head as a parent, so a
     // later merge of the same branch finds nothing new.
     staged.back().parents.push_back(src->head);
+    (void)retainedSize();
     for (auto& nv : staged) {
         const std::uint64_t id = nv.id;
         versions_.emplace(id, std::move(nv));
+        account(versions_.at(id));
     }
     next_ = nextId;
     dst.head = parent;
@@ -1130,6 +1197,7 @@ MergeOutcome VersionStore::merge(std::string_view from, std::string_view into,
     out.head = dst.head;
     dst.view.reset();
     state.reset();
+    collectionNeeded_ = true;
     enforceBudget();
     return out;
 }

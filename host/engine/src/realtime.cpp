@@ -2155,7 +2155,12 @@ Engine::Pulled Engine::pullAhead(float* const* out, std::uint32_t frames) SUPPLE
 
 // --- recording (ADR-0014) --------------------------------------------------------------------
 
-Status Engine::startRecording(std::vector<RecordTarget> targets) {
+Status Engine::setRecordingPunch(RecordedPunch punch) {
+    SUPPLE_TRY(detail::validateRecordingPunch(punch));
+    return recorderOwned_ ? recorderOwned_->setPunch(punch) : okStatus();
+}
+
+Status Engine::startRecording(std::vector<RecordTarget> targets, RecordedPunch punch) {
     if (!backend_)
         return Error("engine.stopped", "start the engine first", {},
                      "call engine.start with a valid backend before loading or recording");
@@ -2163,6 +2168,7 @@ Status Engine::startRecording(std::vector<RecordTarget> targets) {
         return Error("record.running", "already recording", {},
                      "stop the current recording with transport.stop before starting another");
     if (latest_) SUPPLE_TRY(model::validateRecordingPlayrate(*latest_));
+    SUPPLE_TRY(detail::validateRecordingPunch(punch));
     // While slaved the chase rate stays close to 1 and is not part of the
     // project: recording goes ahead (ADR-0071). Only the saved rate counts.
     const auto* slaved = latestPlan_.load(std::memory_order_acquire);
@@ -2242,7 +2248,9 @@ Status Engine::startRecording(std::vector<RecordTarget> targets) {
     const BackendStatus b = backend_->status();
     const std::int64_t latency =
         static_cast<std::int64_t>(outputLatency()) + b.outputLatency + b.inputLatency;
-    auto rec = std::make_unique<detail::Recorder>(std::move(targets), config_.sampleRate, latency);
+    auto rec =
+        std::make_unique<detail::Recorder>(std::move(targets), config_.sampleRate, latency, punch);
+    rec->setMainThreadWake(mainWake_);
     rec->setDriftTolerant(slaved && slaved->syncRate);
     rec->setLoop(readLoop());  // for the MIDI journals (ADR-0080)
     SUPPLE_TRY(rec->open());
@@ -2275,6 +2283,10 @@ Result<std::vector<RecordedTake>> Engine::stopRecording() {
     recorderOwned_.reset();
     for (auto& take : takes) stoppedTakes_.push_back(std::move(take));
     return std::exchange(stoppedTakes_, {});
+}
+
+std::vector<RecordingError> Engine::takeRecordingErrors() {
+    return recorderOwned_ ? recorderOwned_->takeErrors() : std::vector<RecordingError>{};
 }
 
 std::uint64_t Engine::relocate(std::uint64_t previous) {

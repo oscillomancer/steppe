@@ -315,7 +315,7 @@ void registerFor(cmd::Registry& registry, model::Kind kind) {
         Command<LearnArgs, LearnSetResult> c;
         c.name = prefix + ".learn.set";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = route ? "Let a MIDI controller move a send's level, pan, mute or tap."
                     : vca ? "Let a MIDI controller move a VCA's fader, mute or solo."
                           : "Let a MIDI controller move a track's fader, pan, mute, solo or arm.";
@@ -389,7 +389,7 @@ void registerFor(cmd::Registry& registry, model::Kind kind) {
         Command<LearnRef, Empty> c;
         c.name = prefix + ".learn.remove";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Remove a " + noun + " control's MIDI controller binding.";
         c.tags = {prefix, "midi"};
         c.args = schema::object<LearnRef>(prefix + "_learn_remove_args")
@@ -421,7 +421,7 @@ void registerFor(cmd::Registry& registry, model::Kind kind) {
         Command<LearnListArgs, LearnList> c;
         c.name = prefix + ".learn.list";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "List the MIDI controller bindings of " + noun + " controls.";
         c.description =
             "Every " + noun + "'s, or one's (" + key + "). control names the message in words.";

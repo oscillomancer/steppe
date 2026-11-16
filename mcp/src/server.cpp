@@ -75,8 +75,9 @@ json::Value toolFromInfo(const json::Value& info) {
     auto name = stringField(info, "name");
     std::replace(name.begin(), name.end(), '.', '_');
     auto title = stringField(info, "summary");
-    auto description =
-        title + " " + stringField(info, "description") + " See describe for errors and examples.";
+    auto description = stringField(info, "description");
+    if (description.empty()) description = title;
+    description += " See describe for errors and examples.";
     auto* args = info.find("args");
     auto input = args ? *args : objectSchema({});
     if (auto* props = input.find("properties"); props && props->isObject())
@@ -87,9 +88,8 @@ json::Value toolFromInfo(const json::Value& info) {
             field.value["description"] = prior + (prior.empty() ? "" : " ") + "(" +
                                          unit->asString() + "; accepts quantity strings)";
         }
-    auto* result = info.find("result");
     auto value = tool(std::move(name), std::move(title), std::move(description), std::move(input),
-                      result ? *result : typeSchema("object"));
+                      json::Value::object());
     auto kind = stringField(info, "kind");
     value["annotations"] = json::Value::object();
     value["annotations"]["readOnlyHint"] = kind == "query";
@@ -101,16 +101,17 @@ json::Value toolFromInfo(const json::Value& info) {
 }
 }  // namespace
 
-Server::Server(const cmd::Registry& registry, cmd::Dispatcher& dispatcher) {
+Server::Server(const cmd::Registry& registry, cmd::Dispatcher& dispatcher, ToolSet tools) {
     invoke_ = [&dispatcher](std::string_view name, const json::Value& args,
                             const cmd::Origin& origin) {
         return dispatcher.execute({std::string(name), args, origin});
     };
-    dedicated_ = cmd::mcpToolList(registry);
+    dedicated_ = cmd::mcpToolList(registry, tools == ToolSet::All);
     for (auto* info : registry.all()) {
         if (registry.find(info->name) != info) continue;
         kinds_[info->name] = info->kind;
-        if (info->exposure == cmd::Exposure::McpTool) {
+        if (info->exposure != cmd::Exposure::Internal &&
+            (tools == ToolSet::All || info->exposure == cmd::Exposure::McpTool)) {
             std::string toolName = info->name;
             std::replace(toolName.begin(), toolName.end(), '.', '_');
             commands_[toolName] = info->name;
@@ -118,60 +119,107 @@ Server::Server(const cmd::Registry& registry, cmd::Dispatcher& dispatcher) {
     }
     queryTool_ = registry.find("session.describe") != nullptr;
 }
-Server::Server(rpc::Client& client, Reconnect reconnect)
-    : proxyClient_(&client), reconnect_(std::move(reconnect)) {
-    invoke_ = [this, &client](std::string_view name, const json::Value& args,
-                              const cmd::Origin& origin) {
-        auto result = client.call(name, args);
-        if (result || !reconnect_) return result;
-        // The app went away. Not sent (write failed, or no connection): connect
-        // and send it once more. Sent but unanswered: reconnect for the next
-        // call, but do not repeat a command that may have run.
-        const std::string& code = result.error().code;
-        const bool unsent = code == "rpc.write" || code == "rpc.connect";
-        if (!unsent && code != "rpc.read") return result;
-        if (!reconnect_(origin)) return result;
-        return unsent ? client.call(name, args) : result;
+Server::Server(rpc::Client& client, Reconnect reconnect, ToolSet tools)
+    : proxyClient_(&client), reconnect_(std::move(reconnect)), toolSet_(tools) {
+    invoke_ = [&client](std::string_view name, const json::Value& args, const cmd::Origin&) {
+        return client.call(name, args);
     };
 }
-Result<std::unique_ptr<Server>> Server::proxy(rpc::Client& client, Reconnect reconnect) {
-    auto server = std::unique_ptr<Server>(new Server(client, std::move(reconnect)));
-    auto listed = client.call("registry.list");
+Result<std::unique_ptr<Server>> Server::proxy(rpc::Client& client, Reconnect reconnect,
+                                              ToolSet tools) {
+    auto server = std::unique_ptr<Server>(new Server(client, std::move(reconnect), tools));
+    auto ready = server->refreshCatalogue();
+    if (!ready) return ready.error();
+    return server;
+}
+Status Server::prepareProxy() {
+    if (!proxyClient_) return {};
+    auto generation = proxyClient_->connectionGeneration();
+    if (!generation && reconnect_) {
+        SUPPLE_TRY(reconnect_(origin_));
+        generation = proxyClient_->connectionGeneration();
+    }
+    if (generation && generation == catalogueGeneration_) return {};
+    return refreshCatalogue();
+}
+Status Server::refreshCatalogue() {
+    catalogueGeneration_ = 0;  // failed refreshes must never admit calls with stale kinds
+    auto listed = proxyClient_->call("registry.list");
     if (!listed) return listed.error();
     auto* commands = listed->find("commands");
     if (!commands || !commands->isArray())
         return Error("mcp.registry", "remote registry.list returned no commands");
-    std::map<std::string, int> latest;
+    const auto generation = proxyClient_->connectionGeneration();
+    if (!generation)
+        return Error("mcp.registry", "connection closed while reading the command catalogue",
+                     "/commands", "retry after the application has restarted");
+    if (*listed == index_) {
+        catalogueGeneration_ = generation;
+        return {};
+    }
+    json::Value dedicated = json::Value::array();
+    std::map<std::string, std::string> commandsByTool;
+    std::map<std::string, cmd::Kind> kinds;
+    std::map<std::string, const json::Value*> latest;
     for (const auto& item : commands->asArray()) {
         auto name = stringField(item, "name");
         auto* version = item.find("version");
-        if (version && version->isInt())
-            latest[name] = std::max(latest[name], static_cast<int>(version->asInt()));
+        if (!version || !version->isInt()) continue;
+        auto prior = latest.find(name);
+        if (prior == latest.end() || version->asInt() > prior->second->find("version")->asInt())
+            latest[name] = &item;
     }
-    for (const auto& [name, version] : latest) {
+    for (const auto& [name, info] : latest) {
+        auto exposure = stringField(*info, "exposure");
+        if (exposure != "mcp-tool" && exposure != "mcp-exec" && exposure != "internal")
+            return Error("mcp.registry", "remote registry.list has no valid command exposure",
+                         "/commands",
+                         "update the running application and proxy to matching versions");
+        auto kind = stringField(*info, "kind");
+        kinds[name] = kind == "query"  ? cmd::Kind::Query
+                      : kind == "edit" ? cmd::Kind::Edit
+                                       : cmd::Kind::Action;
+        if (exposure == "internal" || (toolSet_ == ToolSet::Core && exposure != "mcp-tool"))
+            continue;
         json::Value args = json::Value::object();
-        args["command"] = name + "@" + std::to_string(version);
-        auto described = client.call("registry.describe", args);
+        args["command"] = name + "@" + std::to_string(info->find("version")->asInt());
+        auto described = proxyClient_->call("registry.describe", args);
         if (!described) return described.error();
-        auto kind = stringField(*described, "kind");
-        server->kinds_[name] = kind == "query"  ? cmd::Kind::Query
-                               : kind == "edit" ? cmd::Kind::Edit
-                                                : cmd::Kind::Action;
-        if (stringField(*described, "exposure") == "mcp-tool") {
-            auto definition = toolFromInfo(*described);
-            auto toolName = stringField(definition, "name");
-            server->commands_[toolName] = name;
-            server->dedicated_.push_back(std::move(definition));
-        }
+        auto definition = toolFromInfo(*described);
+        auto toolName = stringField(definition, "name");
+        commandsByTool[toolName] = name;
+        dedicated.push_back(std::move(definition));
     }
-    server->queryTool_ = latest.contains("session.describe");
-    return server;
+    if (proxyClient_->connectionGeneration() != generation)
+        return Error("mcp.registry", "connection changed while reading the command catalogue",
+                     "/commands", "retry after the application has restarted");
+    const bool notify = initialized_ && !index_.isNull();
+    index_ = std::move(*listed);
+    dedicated_ = std::move(dedicated);
+    commands_.swap(commandsByTool);
+    kinds_.swap(kinds);
+    queryTool_ = latest.contains("session.describe");
+    catalogueGeneration_ = generation;
+    if (notify) toolsChanged_ = true;
+    return {};
+}
+json::Value Server::takeNotifications() {
+    auto notifications = json::Value::array();
+    if (toolsChanged_) {
+        auto changed = json::Value::object();
+        changed["jsonrpc"] = "2.0";
+        changed["method"] = "notifications/tools/list_changed";
+        notifications.push_back(std::move(changed));
+        toolsChanged_ = false;
+    }
+    return notifications;
 }
 json::Value Server::tools() const {
     auto out = dedicated_;
     auto string = typeSchema("string"), object = typeSchema("object");
     out.push_back(tool(
-        "describe", "Describe commands", "Search or describe registered commands.",
+        "describe", "Describe commands",
+        "List all commands grouped by namespace, filter by tag/kind/text, or describe one command.",
         objectSchema({{"command", string}, {"tag", string}, {"kind", string}, {"text", string}})));
     auto execInput = objectSchema({{"command", string}, {"args", object}, {"batch", object}});
     out.push_back(tool("exec", "Execute a command", "Run one command or an atomic batch.",
@@ -182,6 +230,19 @@ json::Value Server::tools() const {
     return out;
 }
 Result<json::Value> Server::call(std::string_view name, const json::Value& args) {
+    SUPPLE_TRY(prepareProxy());
+    auto result = callTool(name, args);
+    if (result || !proxyClient_) return result;
+    const auto& code = result.error().code;
+    const bool unsent = code == "rpc.write" || code == "rpc.connect";
+    if (!unsent && code != "rpc.read") return result;
+    // Refresh for the next call even when this one was sent but unanswered.
+    // Only a request known not to have been sent may run again; reroute it
+    // through fresh query admission and dedicated-tool lookup before retrying.
+    const auto ready = prepareProxy();
+    return ready && unsent ? callTool(name, args) : result;
+}
+Result<json::Value> Server::callTool(std::string_view name, const json::Value& args) {
     if (name == "describe") {
         auto command = stringField(args, "command");
         if (!command.empty()) {
@@ -189,7 +250,25 @@ Result<json::Value> Server::call(std::string_view name, const json::Value& args)
             params["command"] = command;
             return invoke_("registry.describe", params, origin_);
         }
-        return invoke_("registry.list", args, origin_);
+        auto listed = invoke_("registry.list", args, origin_);
+        if (!listed) return listed.error();
+        json::Value index = json::Value::object();
+        index["namespaces"] = json::Value::object();
+        if (auto* commands = listed->find("commands"); commands && commands->isArray())
+            for (const auto& item : commands->asArray()) {
+                auto commandName = stringField(item, "name");
+                auto ns = commandName.substr(0, commandName.find('.'));
+                auto& group = index["namespaces"][ns];
+                if (!group.isArray()) group = json::Value::array();
+                // Rows: name, kind, summary. Keep the complete index inexpensive to read.
+                json::Value row = json::Value::array();
+                row.push_back(commandName);
+                row.push_back(stringField(item, "kind"));
+                row.push_back(stringField(item, "summary"));
+                group.push_back(std::move(row));
+            }
+        index["columns"] = json::parse(R"(["name","kind","summary"])").value();
+        return index;
     }
     if (name == "exec") {
         if (auto* batch = args.find("batch")) return invoke_("batch", *batch, origin_);
@@ -200,7 +279,7 @@ Result<json::Value> Server::call(std::string_view name, const json::Value& args)
         auto* params = args.find("args");
         return invoke_(command, params ? *params : json::Value::object(), origin_);
     }
-    if (name == "query") {
+    if (name == "query" && queryTool_) {
         auto command = stringField(args, "command");
         auto it = kinds_.find(command);
         if (it == kinds_.end() || it->second != cmd::Kind::Query)
@@ -238,6 +317,8 @@ std::optional<json::Value> Server::handle(const json::Value& request) {
         auto versionName = requested->asString();
         if (versionName != "2025-06-18" && versionName != "2025-11-25") versionName = "2025-11-25";
         if (proxyClient_) {
+            auto ready = prepareProxy();
+            if (!ready) return error(*id, -32000, ready.error().toString());
             json::Value hello = json::Value::object();
             hello["client"] = origin_.client.empty() ? "mcp-client" : origin_.client;
             hello["agent"] = origin_.agent;
@@ -251,10 +332,14 @@ std::optional<json::Value> Server::handle(const json::Value& request) {
         result["protocolVersion"] = versionName;
         result["capabilities"] = json::Value::object();
         result["capabilities"]["tools"] = json::Value::object();
+        if (proxyClient_) result["capabilities"]["tools"]["listChanged"] = true;
         result["serverInfo"] = json::Value::object();
         result["serverInfo"]["name"] = std::string(product::kSlug);
         result["serverInfo"]["version"] = std::string(product::kVersion);
         result["instructions"] =
+            "Dedicated tools cover common commands (or all public commands with --tools all). "
+            "Use describe to discover other commands, then exec or query to call them. "
+            "Calling describe with no arguments lists all commands. "
             "Successful command results may include warnings: command warnings followed by "
             "bus diagnostics {code: string, message: string, path: string}. Paths are retained "
             "as emitted. Non-object results with bus warnings become {result: value, warnings: "
@@ -264,6 +349,8 @@ std::optional<json::Value> Server::handle(const json::Value& request) {
     if (!initialized_) return error(*id, -32000, "Initialize first");
     if (name == "ping") return response(*id, json::Value::object());
     if (name == "tools/list") {
+        auto ready = prepareProxy();
+        if (!ready) return error(*id, -32000, ready.error().toString());
         json::Value result = json::Value::object();
         result["tools"] = tools();
         return response(*id, std::move(result));
@@ -273,10 +360,8 @@ std::optional<json::Value> Server::handle(const json::Value& request) {
         auto* arguments = args.find("arguments");
         if (toolName.empty() || (arguments && !arguments->isObject()))
             return error(*id, -32602, "tools/call needs name and object arguments");
-        if (toolName != "describe" && toolName != "exec" && !(toolName == "query" && queryTool_) &&
-            !commands_.contains(toolName))
-            return error(*id, -32601, "Unknown tool");
         auto result = call(toolName, arguments ? *arguments : json::Value::object());
+        if (!result && result.error().code == "mcp.tool") return error(*id, -32601, "Unknown tool");
         json::Value output = json::Value::object();
         output["content"] = json::Value::array();
         json::Value text = json::Value::object();
@@ -485,6 +570,11 @@ Status pump(Server& server, Byter& byter, std::ostream& output, const Tick& tick
         auto parsed = json::parse(frame);
         auto reply = parsed ? server.handle(*parsed)
                             : std::optional<json::Value>(error(nullptr, -32700, "Parse error"));
+        const auto notifications = server.takeNotifications();
+        for (const auto& notification : notifications.asArray())
+            output << json::writeCompact(notification) << '\n';
+        if (notifications.size() != 0) output.flush();
+        if (!output) return Error("mcp.write", "failed to write stdio notification");
         if (reply) {
             output << json::writeCompact(*reply) << '\n';
             output.flush();

@@ -79,6 +79,15 @@ if(SUPPLE_BUILD_TESTS AND NOT SUPPLE_PLATFORM_LINUX)
                              SUPPLE_RACK_GUIDE="${PROJECT_SOURCE_DIR}/skill/guides/rack.md")
 endif()
 
+if(SUPPLE_BUILD_TESTS)
+  # A fresh process fixes the media staging serial at zero for each collision.
+  foreach(mode import folder import-case folder-case)
+    add_test(NAME engine.media-staging.${mode}
+      COMMAND engine.tests --no-skip "--test-case=media staging collision: ${mode}")
+    set_tests_properties(engine.media-staging.${mode} PROPERTIES LABELS "engine;rt" TIMEOUT 60)
+  endforeach()
+endif()
+
 if(SUPPLE_PLATFORM_LINUX)
 # Capacity benchmark (engine.md §7 B1), with a command-built shared session.
 add_executable(engine-bench bench/engine_bench.cpp bench/session.cpp)
@@ -144,6 +153,19 @@ if(SUPPLE_BUILD_TESTS)
               $<TARGET_FILE:${PRODUCT_SLUG}-engine> ${CMAKE_BINARY_DIR}/plugins/clap/Marram.clap)
     set_tests_properties(engine.mcp-arrangement PROPERTIES LABELS "engine;slow")
   endif()
+endif()
+
+if(SUPPLE_BUILD_TESTS)
+  # Kept separate so long seeded runs build without unrelated test fixtures.
+  add_executable(engine-plan-soak.tests tests/test_plan_soak.cpp)
+  target_link_libraries(engine-plan-soak.tests PRIVATE supple::engine supple::doctest-main)
+  target_include_directories(engine-plan-soak.tests PRIVATE src)
+  target_compile_definitions(engine-plan-soak.tests PRIVATE FIXTURE_CLAP_PATH="$<TARGET_FILE:clap-host-fixtures>")
+  add_dependencies(engine-plan-soak.tests clap-host-fixtures)
+  supple_target_defaults(engine-plan-soak.tests)
+  add_test(NAME engine-plan-soak.tests COMMAND engine-plan-soak.tests)
+  set_tests_properties(engine-plan-soak.tests PROPERTIES LABELS "engine;rt"
+    ENVIRONMENT "RTSAN_OPTIONS=halt_on_error=1;UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1")
 endif()
 
 if(SUPPLE_BUILD_TESTS)

@@ -273,7 +273,7 @@ void registerTakeCommands(cmd::Registry& registry) {
         Command<TakeAddArgs, IdResult> c;
         c.name = "take.add";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Add a take to an item, optionally copied from another take of that item.";
         c.tags = {"take"};
         c.args = schema::object<TakeAddArgs>("take_add_args")
@@ -322,7 +322,7 @@ void registerTakeCommands(cmd::Registry& registry) {
         Command<TakeActivateArgs, Empty> c;
         c.name = "take.activate";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Choose the take heard from an item.";
         c.description =
             "take (its id) or index (0-based in the item's take order — the same position "
@@ -370,7 +370,7 @@ void registerTakeCommands(cmd::Registry& registry) {
         Command<TakeSetArgs, Empty> c;
         c.name = "take.set";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Set take gain, pan, channel mode, name, source offset, or playrate and pitch.";
         c.tags = {"take"};
         c.args =
@@ -458,7 +458,7 @@ void registerTakeCommands(cmd::Registry& registry) {
         Command<ItemQuery, TakeList> c;
         c.name = "take.list";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "List the takes of an item and identify its active take.";
         c.tags = {"take"};
         c.args = schema::object<ItemQuery>("take_list_args")
@@ -517,7 +517,7 @@ void registerTakeCommands(cmd::Registry& registry) {
         Command<TakeRef, TakeRemoveResult> c;
         c.name = "take.remove";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Delete a take from its item (the item goes with its last take).";
         c.description =
             "The take's FX, envelopes and unshared MIDI go with it. When it was the heard take, "
@@ -557,7 +557,7 @@ void registerTakeCommands(cmd::Registry& registry) {
         Command<TakeExtractArgs, ItemResult> c;
         c.name = "take.extract";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Take a take out of its item into an item of its own on any channel.";
         c.description =
             "The new item copies the old one's length, fades, gain and timebase and starts at "
@@ -605,7 +605,7 @@ void registerTakeCommands(cmd::Registry& registry) {
         Command<ExplodeArgs, ExplodeResult> c;
         c.name = "item.explode-takes";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Spread an item's takes onto new tracks, or one after another on its track.";
         c.description =
             "In recording order. mode tracks: the first take stays on the item's track and each "
@@ -682,7 +682,7 @@ void registerTakeCommands(cmd::Registry& registry) {
         Command<ApplyFxArgs, ApplyFxResult> c;
         c.name = "item.apply-fx";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Render an item through its take and track FX into a new audio take.";
         c.description =
             "Renders the heard take alone (other items on the track silent) through its take FX "
