@@ -579,12 +579,18 @@ an informational Linux-reference diff; DSP values are deterministic per platform
   requests, 32 MiB of posted request frames and 32 MiB of unsent output;
   the I/O thread removes `POLLIN` while full. Events retain the existing
   drop-and-notify behavior.
-- Socket startup serializes the stale-path connect check and bind with an
-  instance lock file. A connected address reports `rpc.address_in_use`; only
-  refused or missing sockets are stale. The connect probe is nonblocking on
-  every platform; a full backlog, pending connect or failed probe setup means
-  occupied, never stale. Failed bind never unlinks the path,
-  and shutdown checks the socket's device and inode before unlinking.
+- A server owns its socket through an exclusive lock on `<socket>.lock`, taken
+  without waiting before startup inspects the path and held until the server
+  has stopped and removed its socket; the OS releases it if the process dies.
+  A lock held elsewhere reports `rpc.address_in_use`, whatever the socket
+  answers. With the lock in hand, a connected address also reports
+  `rpc.address_in_use`; only refused or missing sockets are stale. The connect
+  probe is nonblocking on every platform; a pending connect or failed probe
+  setup means occupied, never stale, and so does a full backlog on Linux and
+  Windows. macOS refuses a connect to a full backlog as it does a dead socket,
+  so there a listener that does not hold the lock is protected only while its
+  backlog has room. Failed bind never unlinks the path, and shutdown checks
+  the socket's device and inode before unlinking.
 - MCP stdio framing retains no more than 16 MiB of one line. It discards the
   rest of an oversized frame through newline (or EOF) and returns `-32600`.
   RPC distinguishes invalid top-level JSON values (`-32600`, null id) from

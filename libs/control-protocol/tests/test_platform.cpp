@@ -4,6 +4,8 @@
 #include <supple/rpc/model_loop.h>
 #include <array>
 #include <cstring>
+#include <memory>
+#include "../src/endpoint_platform.h"
 #include "../src/socket_platform.h"
 #include "protocol_fixture.h"
 
@@ -105,7 +107,10 @@ TEST_CASE("malformed request ids are never echoed into portable RPC error envelo
     CHECK(host.count == 0);
 }
 
-TEST_CASE("portable startup refuses an occupied socket even with an undrained backlog") {
+namespace {
+// A listener that never accepts stands at the endpoint, its backlog full.
+// `owned` makes it hold the endpoint lock, as a live server does.
+void refusesOccupiedEndpoint(bool owned) {
     auto commands = registry();
     Host host;
     cmd::Dispatcher bus(commands, host);
@@ -139,6 +144,13 @@ TEST_CASE("portable startup refuses an occupied socket even with an undrained ba
     const auto name = rpc::net::pathName(path);
     REQUIRE(name.size() < sizeof(address.sun_path));
     std::memcpy(address.sun_path, name.c_str(), name.size() + 1);
+    auto lockPath = path;
+    lockPath += ".lock";
+    std::unique_ptr<rpc::net::EndpointLock> owner;
+    if (owned) {
+        owner = std::make_unique<rpc::net::EndpointLock>(lockPath);
+        REQUIRE(owner->valid());
+    }
     const auto listener = sockets.add();
     REQUIRE(rpc::net::bind(listener, address) == 0);
     REQUIRE(rpc::net::listen(listener) == 0);
@@ -161,7 +173,24 @@ TEST_CASE("portable startup refuses an occupied socket even with an undrained ba
     for (const auto& entry : std::filesystem::directory_iterator(dir))
         listed = listed || entry.path().filename() == path.filename();
     CHECK(listed);
+    // The refused start left the owner's lock alone: a second try is refused too.
+    if (owned) CHECK(rpc::net::EndpointLock(lockPath).heldElsewhere());
 }
+}  // namespace
+
+TEST_CASE("portable startup refuses an endpoint whose owner holds its lock, backlog full") {
+    refusesOccupiedEndpoint(true);
+}
+
+// Without the lock only the connect probe can tell a live listener from a dead
+// socket file. macOS refuses a connect to a full backlog exactly as it refuses a
+// dead socket, so there the probe cannot hold this; the lock above is what
+// protects a live server on every platform.
+#if !defined(__APPLE__)
+TEST_CASE("portable startup refuses an occupied socket even with an undrained backlog") {
+    refusesOccupiedEndpoint(false);
+}
+#endif
 
 TEST_CASE("model loop portable waitable snapshots respect model-thread cancellation") {
     rpc::ModelLoop loop;
@@ -231,6 +260,10 @@ TEST_CASE("portable AF_UNIX transport dispatches and protects a live endpoint") 
     auto refused = competing.start(path);
     REQUIRE_FALSE(refused);
     CHECK(refused.error().code == "rpc.address_in_use");
+    // A running server holds its endpoint lock, and the refused start left it alone.
+    auto lockPath = path;
+    lockPath += ".lock";
+    CHECK(rpc::net::EndpointLock(lockPath).heldElsewhere());
     rpc::Client client;
     auto absent = client.callWithDelivery("counter.add", parse(R"({"value":7})"));
     REQUIRE_FALSE(absent.result);
@@ -258,6 +291,7 @@ TEST_CASE("portable AF_UNIX transport dispatches and protects a live endpoint") 
     client.close();
     server.stop();
     CHECK_FALSE(std::filesystem::exists(path));
+    CHECK(rpc::net::EndpointLock(lockPath).valid());  // released once stopped
     std::filesystem::remove_all(dir);
 }
 TEST_CASE("portable AF_UNIX startup refuses paths beyond the platform limit") {

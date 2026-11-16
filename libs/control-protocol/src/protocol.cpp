@@ -148,6 +148,7 @@ struct Server::Impl : std::enable_shared_from_this<Impl> {
     std::filesystem::path socket;
     net::Socket listener = net::invalid;
     net::Identity socketIdentity;
+    std::unique_ptr<net::EndpointLock> ownership;  // held from start() until stop()
     std::thread acceptThread;
     std::mutex peersMutex;
     std::vector<std::shared_ptr<Peer>> peers;
@@ -534,11 +535,15 @@ struct Server::Impl : std::enable_shared_from_this<Impl> {
             return Error("rpc.path", std::strerror(errno), net::pathName(path.parent_path()),
                          "Use a private runtime directory owned by your user; remove any symlink "
                          "or reparse point.");
-        // Serialize stale-path inspection and bind across competing processes.
+        // The lock serializes stale-path inspection and bind across competing
+        // processes, and stays held until stop(): a holder owns the endpoint.
         auto lockPath = path;
         lockPath += ".lock";
-        net::EndpointLock lock(lockPath);
-        if (!lock.valid()) return Error("rpc.path", std::strerror(errno), lockPath.string());
+        auto lock = std::make_unique<net::EndpointLock>(lockPath);
+        if (lock->heldElsewhere())
+            return Error("rpc.address_in_use", "socket address is in use", net::pathName(path),
+                         "choose another instance or socket path");
+        if (!lock->valid()) return Error("rpc.path", std::strerror(errno), lockPath.string());
         net::Identity existing{};
         if (net::identity(path, existing)) {
             auto probe = net::open();
@@ -603,6 +608,7 @@ struct Server::Impl : std::enable_shared_from_this<Impl> {
             return Error("rpc.path", message, pathString);
         }
         socket = path;
+        ownership = std::move(lock);
         running = true;
         acceptThread = std::thread([self = shared_from_this()] { self->acceptLoop(); });
         return {};
@@ -624,6 +630,7 @@ struct Server::Impl : std::enable_shared_from_this<Impl> {
             if (peer->thread.joinable()) peer->thread.join();
         net::Identity current{};
         if (net::identity(socket, current) && current == socketIdentity) net::remove(socket);
+        ownership.reset();  // after the path is gone, so a successor never sees it stale
     }
     void publish(std::string_view topic, const json::Value& payload) {
         auto sequence = ++topicSequence[std::string(topic)];

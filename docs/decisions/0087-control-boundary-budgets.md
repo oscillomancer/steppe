@@ -42,8 +42,11 @@ D2, D6. Specs and STATUS describe the implemented stage in each commit.
 - **D6:** Refuse linked or foreign-owned product runtime directories. POSIX opens
   without following links, verifies ownership and changes mode through the owned
   handle. Windows refuses reparse points and retains inherited ACLs from ADR-0035.
-  Errors name the path and give corrective instructions. EndpointLock may still
-  wait indefinitely; this is distinct from the nonblocking collision probe.
+  Errors name the path and give corrective instructions. A server holds its
+  endpoint lock from startup until it has stopped, and takes it without waiting:
+  a lock held elsewhere is `rpc.address_in_use`. The lock, not the connect
+  probe, proves a live owner, because macOS refuses a connect to a full backlog
+  exactly as it refuses a dead socket.
 
 ## Consequences
 
