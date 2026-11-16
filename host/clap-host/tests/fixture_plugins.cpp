@@ -1492,7 +1492,30 @@ const clap_plugin_t* make(const clap_host_t* host, const clap_plugin_descriptor_
 // note. A MIDI 1.0 note in comes out a fifth up as MIDI. Key 120 emits a burst
 // of every kind, out of time order (see noteEchoStress); key 121 emits 300
 // CC 1 events, one per frame from the note's time (wrapping); key 119 takes
-// 30 ms over its block (a block that misses a live deadline, ADR-0088).
+// 30 ms over its block (a block that misses a live deadline, ADR-0088), or,
+// when SUPPLE_TEST_ECHO_GATE names a file of three atomic words (POSIX),
+// sets word 0, spins until the test sets word 1 and sets word 2: a block
+// that is late for exactly as long as the test wants, with no system call.
+
+std::atomic<unsigned>* echoGate() {
+#if defined(_WIN32)
+    return nullptr;
+#else
+    // Mapped once, on the main thread (the plug-in's creation), never freed.
+    static std::atomic<unsigned>* const gate = []() -> std::atomic<unsigned>* {
+        const char* file = std::getenv("SUPPLE_TEST_ECHO_GATE");
+        if (!file) return nullptr;
+        const int fd = ::open(file, O_RDWR);
+        if (fd < 0) return nullptr;
+        void* words = ::mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        ::close(fd);
+        return words == MAP_FAILED ? nullptr : static_cast<std::atomic<unsigned>*>(words);
+    }();
+    return gate;
+#endif
+}
+// Set when a note echo is made (main thread), read by its process.
+std::atomic<std::atomic<unsigned>*> gEchoGate{nullptr};
 
 const clap_plugin_descriptor_t* noteEchoDescriptor() {
     static const char* features[] = {CLAP_PLUGIN_FEATURE_NOTE_EFFECT, nullptr};
@@ -1621,7 +1644,14 @@ clap_process_status CLAP_ABI noteEchoProcess(const clap_plugin_t*, const clap_pr
                              static_cast<uint8_t>(k & 0x7f));
                 continue;
             }
-            if (on && n->key == 119) {  // spin on the clock: no system call
+            if (on && n->key == 119) {  // spin: no system call
+                if (auto* gate = gEchoGate.load(std::memory_order_acquire)) {
+                    gate[0].store(1, std::memory_order_release);
+                    while (!gate[1].load(std::memory_order_acquire)) {
+                    }
+                    gate[2].store(1, std::memory_order_release);
+                    continue;
+                }
                 const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(30);
                 while (std::chrono::steady_clock::now() < until) {
                 }
@@ -1815,9 +1845,11 @@ const clap_plugin_t* CLAP_ABI factoryCreate(const clap_plugin_factory_t*, const 
         const_cast<clap_plugin_t*>(p)->stop_processing = edgeStop;
         return p;
     }
-    if (!std::strcmp(id, noteEchoDescriptor()->id))
+    if (!std::strcmp(id, noteEchoDescriptor()->id)) {
+        gEchoGate.store(echoGate(), std::memory_order_release);
         return make<NoteEcho>(host, noteEchoDescriptor(), noteEchoActivate, noteEchoProcess,
                               noteEchoExt);
+    }
     if (!std::strcmp(id, noteGenDescriptor()->id)) {
         const clap_plugin_t* p =
             make<NoteGen>(host, noteGenDescriptor(), noteGenActivate, noteGenProcess, noteGenExt);

@@ -5712,10 +5712,47 @@ TEST_CASE("MIDI bus: plug-in note output nulls offline in both executors and all
 TEST_CASE("a bridged note plug-in's lost block ends the notes its output held" *
           doctest::description("rt")) {
     // ADR-0088. The echo plays key 60 as 67 (with CC 74) to a hardware MIDI
-    // send. Key 119, at 60's end, makes the echo's block take 30 ms: over the
-    // 10 ms live deadline, so that block, which held the echo's 67 off, is
-    // lost. The host must end 67 and reset the controllers itself.
+    // send. Key 119, at 60's end, makes the echo's block wait on a gate in
+    // shared memory that the test opens only after the run: that block, which
+    // held the echo's 67 off, is lost however loaded the machine is, and the
+    // 1 s deadline keeps every healthy block on time. The host must end 67
+    // and reset the controllers itself. (Round 22: a 30 ms spin against a
+    // 10 ms deadline let a loaded machine skip the check.)
+#if defined(_WIN32)
+    MESSAGE("POSIX only: the echo's gate is a shared mapping (see STATUS)");
+#else
     host::setBridgeExecutable(BRIDGE_PATH);
+    const std::filesystem::path file =
+        std::filesystem::temp_directory_path() / ("supple-echo-gate-" + std::to_string(::getpid()));
+    const int fd = ::open(file.c_str(), O_CREAT | O_TRUNC | O_RDWR, 0600);
+    REQUIRE(fd >= 0);
+    REQUIRE(::ftruncate(fd, 4096) == 0);
+    void* words = ::mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    ::close(fd);
+    REQUIRE(words != MAP_FAILED);
+    auto* gate = static_cast<std::atomic<unsigned>*>(words);
+    for (int i = 0; i < 3; ++i) new (gate + i) std::atomic<unsigned>(0);
+    // Only a guard against a bridge that died: the gate orders the test.
+    auto reached = [&](int word) {
+        const auto giveUp = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        while (!gate[word].load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < giveUp)
+            std::this_thread::yield();
+        return gate[word].load(std::memory_order_acquire) != 0;
+    };
+    // Opens the gate and removes the file however the test ends (after the
+    // engine, declared later, has stopped).
+    struct Release {
+        std::atomic<unsigned>* words;
+        std::filesystem::path path;
+        ~Release() {
+            words[1].store(1, std::memory_order_release);
+            ::munmap(words, 4096);
+            std::error_code ec;
+            std::filesystem::remove(path, ec);
+        }
+    } release{gate, file};
+    ::setenv("SUPPLE_TEST_ECHO_GATE", file.c_str(), 1);
     model::EditTxn t(model::Session::create({.console9 = false}), 1);
     model::Track tr;
     tr.parent = kMaster;
@@ -5751,7 +5788,8 @@ TEST_CASE("a bridged note plug-in's lost block ends the notes its output held" *
     auto pool = makePool();
     MediaCache media;
     DummyBackend backend({.midiOutputPorts = {"Synth"}});
-    Engine engine(pool, media, {.anticipative = false, .workers = 0, .liveBridgeDeadlineMs = 10.0});
+    Engine engine(pool, media,
+                  {.anticipative = false, .workers = 0, .liveBridgeDeadlineMs = 1000.0});
     REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128, .midiOutputs = true}));
     auto port = json::Value::object();
     port["offset_ms"] = 0.0;
@@ -5760,16 +5798,15 @@ TEST_CASE("a bridged note plug-in's lost block ends the notes its output held" *
     engine.setMidiPreferences({}, {{"Synth", port}});
     REQUIRE(engine.load(*session));
     engine.play();
-    backend.run(180);  // to 0.48 s: key 60 (the echo's 67) is held
-    if (engine.bridgeLateCycles() != 0) {
-        // A healthy block missed 10 ms here: what follows would not test the
-        // lost block alone. Not a failure of the change.
-        MESSAGE("skipped: the machine made a healthy bridged block late");
-        engine.stop();
-        return;
-    }
-    backend.run(200);  // past key 119's slow block and its answer
+    ::unsetenv("SUPPLE_TEST_ECHO_GATE");      // the bridge has it
+    backend.run(180);                         // to 0.48 s: key 60 (the echo's 67) is held
+    REQUIRE(engine.bridgeLateCycles() == 0);  // the healthy baseline
+    backend.run(200);                         // through key 119's gated block, lost at its deadline
+    CHECK(reached(0));
     CHECK(engine.bridgeLateCycles() >= 1);
+    gate[1].store(1, std::memory_order_release);  // the echo answers
+    CHECK(reached(2));
+    backend.run(8);
     // Before stop, which ends held notes on the port anyway.
     std::vector<DummyBackend::CapturedMidi> heard(backend.midiCapture().begin(),
                                                   backend.midiCapture().end());
@@ -5792,4 +5829,5 @@ TEST_CASE("a bridged note plug-in's lost block ends the notes its output held" *
     CHECK(std::count_if(heard.begin(), heard.end(), [&](const auto& m) {
               return is(m, 0x80, 67) || (is(m, 0x90, 67) && m.event.bytes[2] == 0);
           }) == 1);
+#endif
 }
