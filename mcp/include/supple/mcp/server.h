@@ -44,10 +44,14 @@ class Server {
     using Reconnect = std::function<Status(const cmd::Origin&)>;
     static Result<std::unique_ptr<Server>> proxy(rpc::Client& client, Reconnect reconnect = {},
                                                  ToolSet tools = ToolSet::Core);
+    // Synchronous test/embedding overloads. Production stdio uses two fds.
     Status serve(std::istream& input, std::ostream& output, Tick tick = {});
     // As above, reading requests from `fd` so it can be polled with the tick's
     // deadline (a negative fd reads blocking).
     Status serve(int fd, std::ostream& output, Tick tick = {});
+    // Exclusive pipe/file transport. A joined writer reserves at most 64 MiB;
+    // backpressure pauses input while model service continues. EOF drains.
+    Status serve(int inputFd, int outputFd, Tick tick = {});
     // Own the request so parsed transports can move params without a deep copy.
     std::optional<json::Value> handle(json::Value request);
     // Embedders drain pending notifications after handle(); serve() does this

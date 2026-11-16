@@ -745,3 +745,40 @@ with its bounded ID and a retry-later hint. A bounded, serialized I/O preflight
 extracts the ID without model dispatch. Existing per-peer16 limits remain; no
 additional fairness scheme is added. Each peer admits at most64 subscriptions;
 excess returns rpc.subscriptions with an unsubscribe hint.
+
+### FD-backed output (ADR-0087 D2)
+
+Production engine, sandbox and proxy stdio use `serve(inputFd, outputFd, Tick)`.
+A joined native writer owns a noninheritable output duplicate. The single producer
+reserves one complete packet's worst-case capacity before dispatch: queued plus
+in-flight serialized bytes (notifications followed by reply, including newlines)
+never exceed64 MiB. This conservative full-packet reservation pauses even buffered
+stdin admission while output is pending; it does not wait for a consumer or take
+a writer-held mutex in enqueue. Packet ownership uses an atomic SPSC publication
+and native wakes; storage is freed before capacity returns.
+
+During backpressure/drain the serving thread waits on writer progress plus Tick
+watches/deadlines, excluding stdin, and continues model service. Windows pauses
+new input reads; one already-buffered/in-flight64 KiB read-ahead may remain.
+POSIX duplicates share status flags: this API requires exclusive transport use,
+adds nonblocking output and restores its original nonblocking bit after join.
+The writer blocks SIGPIPE only on its owned POSIX thread; Windows abort teardown
+retries CancelSynchronousIo across the entry race, retaining handles through join.
+Invalid descriptors and read/write/wait failures return actionable structured
+transport errors. Pending delivery may be incomplete after an I/O error; an edit
+may already have executed and is never replayed on that basis.
+
+Normal EOF drains all replies while servicing Tick, then joins. A consumer that
+keeps stdout open but never reads can delay lossless completion indefinitely;
+there is no finite drain timeout or silent reply drop. Engine capture finalization
+follows serve's return, so it is likewise deferred by an undrained connection.
+The current API has no owner-triggered abort token; error teardown cancels/joins.
+Arbitrary device/filesystem cancellation latency and Windows console input retain
+their existing platform limits. No audio-thread work or system configuration changes.
+
+Bounded/counting serialization precedes wire allocation. A single oversized or
+over-deep reply becomes an explicit mcp.response_too_large error retaining its
+bounded ID; final fallback packet bounds are checked. Tool result text/structured
+content are both charged, without charging a fictitious additional escaping layer.
+The `serve(istream, ostream, Tick)` and `serve(inputFd, ostream, Tick)` overloads
+remain synchronous for tests/embedding only; they are not production stdio.

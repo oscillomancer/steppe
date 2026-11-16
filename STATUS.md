@@ -187,6 +187,10 @@ instructions are in `docs/guides/installing.md`.
   Control admission globally bounds posted work to1,024 requests/64 MiB, including
   disconnected owners; excess gets rpc.busy and admitted edits still run. Each
   peer permits64 subscriptions and retains its16-request limit (ADR-0087).
+  Production fd-backed MCP uses a joined writer with a64 MiB packet reservation;
+  input admission pauses under backpressure while ticks/watches keep model service
+  alive. Enqueue publishes through atomic ownership, never a writer-held lock.
+  Oversized replies produce explicit bounded errors rather than being dropped.
   RPC/MCP untrusted frames are limited to 1,000,000 parsed values before
   construction, in addition to byte/depth limits; params move into dispatch.
   Trusted file parsing is unchanged (ADR-0087).
@@ -1054,9 +1058,11 @@ Library boundaries:
 - The control client bounds connecting and sending, as well as the
   response, by its timeout through nonblocking sockets; that path is tested
   on Linux, and native macOS/Windows CI has not run on it.
-- In-process MCP writes stdout synchronously on the model thread, so a client
-  that stops reading can stall model service. Socket clients have separate I/O;
-  the standalone proxy isolates this stdout stall from its engine process.
+- Lossless MCP EOF drain awaits consumer progress; a reader retaining an open
+  pipe without draining can defer serve return and capture finalization, while
+  model service continues. There is no owner abort token or finite lossless drain
+  deadline; error teardown joins/cancels native workers. Stream embedding APIs
+  stay synchronous; arbitrary device/filesystem cancellation remains platform-limited.
 - Socket product-directory permission setup follows symlinks on POSIX; directory
   trust/link policy remains unresolved. Windows AF_UNIX uses inherited directory
   ACLs (ADR-0035), not a named-pipe DACL. Endpoint lock acquisition can still wait
