@@ -1176,3 +1176,12 @@ not put them early; nothing is sent during a count-in, and an output on
 the device Steppe follows (Transport sync) does not get its own clock
 back. `midi.outputs.get` and `engine.status` show what each output sends
 and how many messages went out.
+
+### Local crash reports (staged, ADR-0083)
+
+Crash diagnostics are being added separately from autosave and recording recovery.
+Reports remain on this machine under the app’s local data folder/diagnostics,
+limited to 20 reports or 50 MB, oldest removed. They exclude your project, audio,
+MIDI and command arguments. Steppe never uploads them; your OS crash reporting
+continues under your own OS settings. Safe-load and next-start notices arrive in
+a later topic; the current delivery scope is listed in STATUS.md.

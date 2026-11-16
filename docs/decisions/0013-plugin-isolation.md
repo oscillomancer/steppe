@@ -237,3 +237,6 @@ same thread replaces `lastScanReport()`. Sandbox `Session::pluginScanReport()`
 retains its catalogue report. EngineApp also retains its catalogue report. Engine `plugin.list`/`plugin.scan`
 and sandbox `plugin.list` expose it as the `scan` result object, including for
 an empty available catalogue.
+
+*Amended 2026-11-15:* [ADR-0083](0083-local-crash-reports.md) adds external local crash diagnostics.
+Existing bridge deadlines, notification framing and recovery ownership remain authoritative.

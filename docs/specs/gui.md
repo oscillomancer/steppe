@@ -2208,3 +2208,10 @@ commits; this workflow has two undo steps. Explicit detection is still available
 for inspecting candidates first. Changing the target items/takes while analysis
 runs cancels the follow-up edit. There is no new panel or editing mode. The existing
 status line displays detection, preparation and command errors.
+
+## Crash reports and safe startup (ADR-0083; staged)
+
+Before loading an explicit project or any suspect binary, later startup UI will
+show a local-report notice and temporary dedicated-bridge/disabled/normal choice,
+remembered only on opt-in. Then offer existing recovery independently. No upload
+or global OS-reporting changes. See diagnostics.md and STATUS for delivery scope.

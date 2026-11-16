@@ -372,3 +372,7 @@ The UI's primary modifier maps to Command on macOS.
 Native editor embedding uses typed X11/NSView/HWND parents (ADR-0040); Cocoa
 bridges own floating windows, while local and Windows bridge editors embed.
 The shared GUI watcher services native app/model and plugin waitables.
+
+Local crash diagnostics follow ADR-0083 and `docs/specs/diagnostics.md`: an external
+supervisor precedes frontend startup, terminal work is bounded and separate from
+recovery. Delivery is staged; STATUS states the implemented boundary.

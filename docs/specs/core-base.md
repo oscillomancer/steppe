@@ -179,3 +179,9 @@ It is an ordering reference, never an embedded parent pointer. `nativeWindowKind
 platform's embedded API; consumers validate kind, lifetime and thread affinity.
 
 Unavailable is tag0 (the bridge wire's none); its spelling avoids Xlib's None macro.
+
+## Local diagnostic data root (ADR-0083)
+
+`paths::localData()` returns the uncreated non-roaming data root: Linux
+XDG_DATA_HOME or HOME/.local/share; macOS HOME/Library/Application Support; Windows
+LOCALAPPDATA. Empty means unavailable. No roaming or temporary fallback.

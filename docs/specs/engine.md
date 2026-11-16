@@ -3254,3 +3254,9 @@ stages reserves what it did before. A stage with note ports and no audio
 ports (`midiOnly`) runs with no audio buffers; the audio passes it through
 its compensation delay, and it is never oversampled. Bus notes keep the
 chain's input time; post-FX taps add `latChain`.
+
+## Local crash diagnostics (ADR-0083)
+
+The frontend supervisor and terminal handoff contract is in `diagnostics.md`.
+A terminal audio fault never returns to DSP, saves or destroys engine state.
+Normal RT rules stay absolute; diagnostics-only hangs never kill the engine.

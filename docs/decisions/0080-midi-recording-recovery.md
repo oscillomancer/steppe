@@ -136,3 +136,6 @@ new project or by opening another, loses its folder as ADR-0078 decides,
 after the app has asked, and its journals with it, as its WAVs and
 autosaves go. ADR-0078 wins: discarding an untitled project discards all of
 it.
+
+*Amended 2026-11-15:* [ADR-0083](0083-local-crash-reports.md) adds external local crash diagnostics.
+Existing bridge deadlines, notification framing and recovery ownership remain authoritative.
