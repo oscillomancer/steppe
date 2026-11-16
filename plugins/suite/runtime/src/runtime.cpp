@@ -320,8 +320,18 @@ std::atomic<std::size_t> gBufferAllocations{0};
 template <class T>
 T* allocateBuffer(int size) {
     if (size <= 0) return nullptr;
+    const std::size_t bytes = static_cast<std::size_t>(size) * sizeof(T);
     auto* items = static_cast<T*>(std::calloc(static_cast<std::size_t>(size), sizeof(T)));
-    if (items) gBufferAllocations.fetch_add(1, std::memory_order_relaxed);
+    if (!items) return nullptr;
+    // calloc's zeros may be fresh pages nothing has written yet, which the
+    // first touch faults in. That touch must not be the audio thread's: write
+    // each page here (prepare(), or a copy that allocates). volatile, since a
+    // store of the zero calloc promised is otherwise dropped. 4 KiB is the
+    // smallest page on every platform.
+    auto* touch = reinterpret_cast<volatile unsigned char*>(items);
+    for (std::size_t i = 0; i < bytes; i += 4096) touch[i] = 0;
+    touch[bytes - 1] = 0;
+    gBufferAllocations.fetch_add(1, std::memory_order_relaxed);
     return items;
 }
 

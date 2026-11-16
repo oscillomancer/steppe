@@ -6,13 +6,23 @@
 #include <doctest/doctest.h>
 #include <clocale>
 #include <cstdlib>
+#if defined(_WIN32)
+#define NOMINMAX
+#include <psapi.h>
+#include <windows.h>
+#else
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 
 #include <array>
 #include <bit>
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <limits>
 #include <sstream>
+#include <vector>
 
 #include "runner.h"
 #include "supple/script_module.h"
@@ -194,6 +204,60 @@ TEST_CASE("compiled buffers release their allocations and copies own independent
             CHECK(D::bufferAllocations() == baseline);
         }
     }
+}
+
+namespace {
+// How many of the pages under [data, data + bytes) are in memory: pages
+// nothing has touched yet are not, and the first touch faults.
+std::size_t residentPages(const void* data, std::size_t bytes, std::size_t& pages) {
+#if defined(_WIN32)
+    SYSTEM_INFO info;
+    GetSystemInfo(&info);
+    const std::size_t page = info.dwPageSize;
+#else
+    const auto page = static_cast<std::size_t>(sysconf(_SC_PAGESIZE));
+#endif
+    const auto first = reinterpret_cast<std::uintptr_t>(data) / page * page;
+    const auto last = (reinterpret_cast<std::uintptr_t>(data) + bytes + page - 1) / page * page;
+    pages = (last - first) / page;
+    std::size_t resident = 0;
+#if defined(_WIN32)
+    std::vector<PSAPI_WORKING_SET_EX_INFORMATION> query(pages);
+    for (std::size_t i = 0; i < pages; ++i)
+        query[i].VirtualAddress = reinterpret_cast<void*>(first + i * page);
+    REQUIRE(QueryWorkingSetEx(GetCurrentProcess(), query.data(),
+                              static_cast<DWORD>(query.size() * sizeof(query[0]))));
+    for (const auto& q : query) resident += q.VirtualAttributes.Valid ? 1 : 0;
+#else
+#if defined(__APPLE__)
+    std::vector<char> in(pages);
+#else
+    std::vector<unsigned char> in(pages);
+#endif
+    REQUIRE(mincore(reinterpret_cast<void*>(first), last - first, in.data()) == 0);
+    for (auto v : in) resident += (v & 1) ? 1 : 0;
+#endif
+    return resident;
+}
+}  // namespace
+
+TEST_CASE(
+    "a buffer's storage is in memory when prepare() returns, so the audio thread never "
+    "touches a page first") {
+    // Large enough that the allocator maps fresh pages for it, which a zeroing
+    // allocation would leave untouched.
+    constexpr int kSize = 4 << 20;
+    script::Buffer<float> grown;
+    grown.resize(kSize);
+    REQUIRE(grown.size() == kSize);
+    std::size_t pages = 0;
+    CHECK(residentPages(grown.begin(), kSize * sizeof(float), pages) == pages);
+    // A copy into a buffer of another size allocates too.
+    script::Buffer<float> copy;
+    copy = grown;
+    REQUIRE(copy.size() == kSize);
+    CHECK(residentPages(copy.begin(), kSize * sizeof(float), pages) == pages);
+    for (float x : copy) REQUIRE(x == 0.0f);
 }
 
 TEST_CASE("factory patches are constant checked declarations with physical values") {
