@@ -210,7 +210,7 @@ instructions are in `docs/guides/installing.md`.
   in-process output in both executors (tested with device MIDI, effects, note output and
   input FX); a late block is silent and counted in `bridge_late` and
   `xruns`, its output is lost, so the notes a note plug-in's output held end
-  and the controllers it moved are reset (ADR-0087), blocks skipped while
+  and the controllers it moved are reset (ADR-0088), blocks skipped while
   it is outstanding lose their audio but pass
   their events and lifecycle commands on when it answers (bounded: beyond
   512 events notes go behind a reset and each parameter keeps its latest

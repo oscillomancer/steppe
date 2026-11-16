@@ -554,7 +554,7 @@ struct Stage {
     std::vector<BusVoice> busHeld;
     // For each of its first 8 output ports, the channels (a bit each) its MIDI
     // output has moved a controller, pitch bend or pressure on since it last
-    // reset them: what a block whose output is lost resets (ADR-0087).
+    // reset them: what a block whose output is lost resets (ADR-0088).
     std::array<std::uint16_t, 8> busControllers{};
     host::Instance* instance = nullptr;  // null: placeholder (pass-through)
     Id fx;

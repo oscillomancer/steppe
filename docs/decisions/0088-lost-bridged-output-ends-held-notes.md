@@ -1,4 +1,4 @@
-# ADR-0087: A bridged block's lost output ends the notes it held
+# ADR-0088: A bridged block's lost output ends the notes it held
 
 **Status:** Accepted, 2026-11-16. Amends [ADR-0081](0081-live-bridged-plugins.md)
 §4 (a late block is silent; its events are carried) for the plug-in's

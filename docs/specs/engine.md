@@ -1265,7 +1265,7 @@ instance).
   that block's own: no note off, pedal or parameter change is lost. The
   block's own output is lost (`OutputEvents::lost`, also for a failed
   bridge), so the chain's MIDI bus ends what it held and resets the
-  controllers it moved (ADR-0087, below). At most
+  controllers it moved (ADR-0088, below). At most
   `RemoteInstance::kMaxCarried` (512) are carried; beyond that, or when they
   and the next block's would not fit the arena's 2048, the notes and MIDI are
   dropped, each parameter keeps its latest value, and, if anything but
@@ -3514,7 +3514,7 @@ MIDI passes. It also records, per output port below 8, the channels the
 stage's MIDI moved a controller (not a channel mode message), pitch bend or
 pressure on; Reset All Controllers clears one. A block whose output is lost
 (`OutputEvents::lost`: a late or skipped bridged block, or a failed bridge,
-ADR-0087) ends every held voice at frame 0 and sends Reset All Controllers
+ADR-0088) ends every held voice at frame 0 and sends Reset All Controllers
 on each recorded channel, as the stage's output; `carryBus` keeps the
 record with the held notes. Replace makes that the bus; merge interleaves it after the
 bus's own events at each frame. `finishMidiBus` writes `midiPostFx`: first

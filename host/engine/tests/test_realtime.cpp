@@ -5711,7 +5711,7 @@ TEST_CASE("MIDI bus: plug-in note output nulls offline in both executors and all
 
 TEST_CASE("a bridged note plug-in's lost block ends the notes its output held" *
           doctest::description("rt")) {
-    // ADR-0087. The echo plays key 60 as 67 (with CC 74) to a hardware MIDI
+    // ADR-0088. The echo plays key 60 as 67 (with CC 74) to a hardware MIDI
     // send. Key 119, at 60's end, makes the echo's block take 30 ms: over the
     // 10 ms live deadline, so that block, which held the echo's 67 off, is
     // lost. The host must end 67 and reset the controllers itself.

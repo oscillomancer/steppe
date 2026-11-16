@@ -1492,7 +1492,7 @@ const clap_plugin_t* make(const clap_host_t* host, const clap_plugin_descriptor_
 // note. A MIDI 1.0 note in comes out a fifth up as MIDI. Key 120 emits a burst
 // of every kind, out of time order (see noteEchoStress); key 121 emits 300
 // CC 1 events, one per frame from the note's time (wrapping); key 119 takes
-// 30 ms over its block (a block that misses a live deadline, ADR-0087).
+// 30 ms over its block (a block that misses a live deadline, ADR-0088).
 
 const clap_plugin_descriptor_t* noteEchoDescriptor() {
     static const char* features[] = {CLAP_PLUGIN_FEATURE_NOTE_EFFECT, nullptr};

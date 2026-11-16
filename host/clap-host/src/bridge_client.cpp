@@ -1267,7 +1267,7 @@ bool RemoteInstance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT
         for (std::uint32_t c = 0; b.auxOutputs && c < b.auxOutputChannels; ++c)
             std::fill_n(b.auxOutputs[c], b.frames, 0.0f);
     };
-    // Its output never arrives (ADR-0087): the engine ends what it held.
+    // Its output never arrives (ADR-0088): the engine ends what it held.
     auto lose = [&] {
         silence();
         if (out) out->lost = true;

@@ -227,7 +227,7 @@ struct OutputEvent {
 // `lost`: the block's output never arrived and never will (a bridged block
 // that missed its live deadline or was skipped behind one, or a failed
 // bridge): process() returned silence and no events, whatever the plug-in
-// made of it (ADR-0087).
+// made of it (ADR-0088).
 struct OutputEvents {
     std::span<OutputEvent> storage;
     std::size_t count = 0;

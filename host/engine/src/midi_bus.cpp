@@ -208,7 +208,7 @@ void stageMidiBus(Node& node, Stage& st) SUPPLE_RT {
                        st.busBase + static_cast<std::int32_t>(free - st.busHeld.begin()),
                        velocity));
     };
-    // ADR-0087: a block whose output never arrived (a late or skipped bridged
+    // ADR-0088: a block whose output never arrived (a late or skipped bridged
     // block, or a failed bridge) lost whatever ends the plug-in sent. What its
     // output holds ends now, at the block's start, and each channel it moved
     // a controller on is reset, so nothing downstream stays held; the plug-in's
@@ -263,7 +263,7 @@ void stageMidiBus(Node& node, Stage& st) SUPPLE_RT {
                     }
                     if (status == 0xb0 && (o.midi[1] == 120 || o.midi[1] == 123))
                         endMatching(host::Event::Kind::NoteOff, o.time, o.port, channel, -1, -1);
-                    // The controllers a lost block resets (ADR-0087): any
+                    // The controllers a lost block resets (ADR-0088): any
                     // controller (bar the channel mode messages), pitch bend
                     // and pressure set one; resetting them all clears it.
                     if (o.port >= 0 &&
