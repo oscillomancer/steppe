@@ -333,6 +333,8 @@ q = nil
 ---@field warnings (string|table)[]
 ---@field memory_lock table
 ---@field cpu_idle_latency table
+---@field thp_opt_out table
+---@field audio_page_faults table
 ---@field meter_drops table
 ---@field failed_fx string[]
 ---@field bridge_threads_refused string[]
@@ -377,6 +379,8 @@ q = nil
 ---@field warnings (string|table)[]
 ---@field memory_lock table
 ---@field cpu_idle_latency table
+---@field thp_opt_out table
+---@field audio_page_faults table
 ---@field meter_drops table
 ---@field failed_fx string[]
 ---@field bridge_threads_refused string[]

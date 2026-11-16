@@ -626,6 +626,8 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
         engine_->stop();
         engine_.reset();
         protections_->stop();
+        processFaultBase_.reset();
+        faultWatch_.clear();
         backend_ = nullptr;
     }
     if (versions_ && projectPath_.empty()) clearScratch();
@@ -1327,7 +1329,25 @@ Status EngineApp::startEngine(Backend& backend, const BackendConfig& config,
     }
     loadedHead_ = versions_->head();
     protections_->start();
+    startFaultWatch();
     return {};
+}
+
+void EngineApp::startFaultWatch() {
+    faultWatch_.clear();
+    processFaultBase_ = processPageFaults();
+    watchFaults();
+}
+
+void EngineApp::watchFaults() {
+    if (!engine_ || !processFaultBase_) return;
+    for (const auto thread : engine_->deadlineThreads()) {
+        const std::int64_t id = kernelThreadId(thread);
+        if (id == 0 || std::any_of(faultWatch_.begin(), faultWatch_.end(),
+                                   [&](const FaultWatch& w) { return w.id == id; }))
+            continue;
+        if (const auto now = threadPageFaults(id)) faultWatch_.push_back({id, *now, *now});
+    }
 }
 
 Status EngineApp::startEngine(std::string_view backend, std::uint32_t block, bool anticipative,
@@ -1426,6 +1446,8 @@ void EngineApp::haltEngine() {
         pool_->prune(head());  // nothing processes now: replaced instances can go
     }
     protections_->stop();
+    processFaultBase_.reset();
+    faultWatch_.clear();
     if (backend_) backend_->setMainThreadWake(nullptr);
     backend_ = nullptr;
     ownedBackend_.reset();
@@ -1474,6 +1496,7 @@ void EngineApp::tick() {
     }
     if (engine_) {
         engine_->service();
+        watchFaults();                  // a callback thread seen for the first time
         serviceSync();                  // what the sync master did, to the transport (ADR-0071)
         if (!txn_) updateWriteHolds();  // a touch hold's release time passed
         consumePluginOutputs();
@@ -1917,6 +1940,30 @@ EngineStatus EngineApp::engineStatus() {
     st.preparationError = preparationError_;
     st.memoryLock = protections_->memoryLock();
     st.cpuIdleLatency = protections_->cpuIdleLatency();
+    st.thpOptOut = protections_->thpOptOut();
+    if (processFaultBase_) {
+        watchFaults();
+        auto& faults = st.audioPageFaults;
+#if defined(__linux__)
+        faults.scope = "audio_threads";
+        for (FaultWatch& w : faultWatch_) {
+            if (const auto now = threadPageFaults(w.id)) w.last = *now;  // else: it has gone
+            faults.minor += w.last.minor - w.base.minor;
+            *faults.major += w.last.major - w.base.major;
+        }
+        faults.threads = static_cast<std::int64_t>(faultWatch_.size());
+#else
+        faults.scope = "process";
+        const PageFaults now = processPageFaults();
+        faults.minor = now.minor - processFaultBase_->minor;
+        if (now.major < 0)
+            faults.major.reset();
+        else
+            faults.major = now.major - processFaultBase_->major;
+#endif
+    }
+    if (st.thpOptOut.error)
+        st.warnings.push_back(st.thpOptOut.error->message + "; " + st.thpOptOut.error->hint);
     if (st.cpuIdleLatency.error)
         st.warnings.push_back(st.cpuIdleLatency.error->message + "; " +
                               st.cpuIdleLatency.error->hint);

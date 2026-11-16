@@ -1893,6 +1893,52 @@ with the real device, plus repeated sparse/dense 64/128-frame sessions,
 actual granted period, callback tails/xruns and power/thermal/fan behavior.
 No latency benefit is claimed without those measurements.
 
+### Audio-thread page faults (2026-11-15, ADR-0084)
+
+A page fault on a deadline thread (the callback, a live helper) is cheap
+until it has to wait for the process's address-space lock, which has no
+priority inheritance. Three rules keep the audio threads from faulting where
+the app can prevent it:
+
+- **Transparent huge pages (Linux).** While the engine runs, the process is
+  out of THP: `prctl(PR_SET_THP_DISABLE, 1, PR_THP_DISABLE_EXCEPT_ADVISED)`,
+  so regions a plug-in advised with `MADV_HUGEPAGE` keep huge pages, or on
+  kernels before 6.18 (which refuse the flag with EINVAL)
+  `prctl(PR_SET_THP_DISABLE, 1)`, and none do. This is a per-process setting
+  that changes no system setting; children inherit it, and every bridge
+  process sets it at its own start too, since a bridge may start before the
+  engine. Without it, with `transparent_hugepage=always`, khugepaged
+  collapses the heap's small pages into huge ones every scan (10 s by
+  default); an audio thread touching a range being collapsed faults and
+  waits for khugepaged, a nice-19 kernel thread that a loaded machine starves
+  of CPU, to finish. Memory locking does not prevent this: the kernel
+  collapses locked pages too. Applied after the backend start with the other
+  controls, released at stop (`prctl(PR_SET_THP_DISABLE, 0)`); a refusal is
+  reported and the engine runs regardless. `engine.status.thp_opt_out` is
+  `{active, advised_only, error?}` (code `engine.thp_opt_out`, path
+  `/thp_opt_out`); never active on macOS or Windows, which collapse no pages
+  under a running process.
+- **Memory is touched when it is prepared.** Storage the audio path will use
+  is written when it is allocated, off the audio thread, so its first touch
+  is not a callback's. Engine buffers are value-initialised containers. The
+  script runtime's `Buffer` allocates with `calloc` and then writes one byte
+  per 4 KiB, since a large `calloc` returns fresh pages it does not write.
+- **Locking stays optional** (Memory locking above): it keeps pages from
+  reclaim and, where the kernel's `compact_unevictable_allowed` is 0, from
+  compaction, but it prefaults nothing.
+
+`engine.status.audio_page_faults` counts the faults since the engine
+started: `{scope, minor, major, threads}`. On Linux, `scope` is
+`audio_threads`: the callback thread's and the live helpers', each counted
+from when the main thread first sees it (the helpers at start, the callback
+within a tick of its first cycle; the cycle records `pthread_self()`, which
+makes no system call). The kernel thread id comes from the thread's CPU clock
+id and the counts from `/proc/self/task/<tid>/stat`. On macOS (`getrusage`)
+and Windows (`GetProcessMemoryInfo`, which does not separate minor from major,
+so `major` is null) neither keeps a count per thread, and `scope` is
+`process`. `none` while stopped. The bench reports the same count over its
+measured interval, and each thread's on Linux (`tools/bench/README.md`).
+
 ### Headless platform mechanisms (2026-10-14, ADR-0035)
 
 `EngineApp::serviceWaitable()` borrows its relay's typed source; `serviceFd()`

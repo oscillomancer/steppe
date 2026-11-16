@@ -25,6 +25,7 @@
 #include <pthread.h>
 #include <sched.h>
 #include <signal.h>
+#include <sys/prctl.h>
 #include <unistd.h>
 #endif
 
@@ -958,6 +959,13 @@ int main(int argc, char** argv) {
 #endif
 #if !defined(_WIN32)
     ::signal(SIGPIPE, SIG_IGN);
+#if defined(__linux__)
+    // As the engine keeps the host (ADR-0084): out of transparent huge pages
+    // but where a plug-in advised them (Linux 6.18), or out entirely. A bridge
+    // started before the engine did inherits nothing. Best effort.
+    if (::prctl(PR_SET_THP_DISABLE, 1UL, 1UL << 1, 0UL, 0UL) != 0)
+        (void)::prctl(PR_SET_THP_DISABLE, 1UL, 0UL, 0UL, 0UL);
+#endif
     if (argc == 3 && std::string_view(argv[1]) == "--scan") {
         // Keep plugin printf/cout (including background threads and unload
         // destructors) away from the protocol stream. Only our saved fd writes it.

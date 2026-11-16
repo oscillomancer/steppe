@@ -19,6 +19,7 @@ class RuntimeProtection {
     Status setMemoryLock(bool requested, bool running);
     Status setPreventDeepIdle(bool requested, bool running);
     const RuntimeProtectionStatus& cpuIdleLatency() const { return latency_; }
+    const ThpOptOutStatus& thpOptOut() const { return thp_; }
     void start();
     void stop();
     const RuntimeProtectionStatus& memoryLock() const { return memory_; }
@@ -28,9 +29,12 @@ class RuntimeProtection {
     Status releaseMemory();
     Status applyLatency();
     Status releaseLatency();
+    void applyThp();
+    void releaseThp();
     std::shared_ptr<RuntimeProtectionOps> ops_;
     RuntimeProtectionStatus memory_;
     RuntimeProtectionStatus latency_;
+    ThpOptOutStatus thp_;
     int latencyFd_ = -1;
 };
 

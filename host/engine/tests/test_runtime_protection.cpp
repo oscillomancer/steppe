@@ -7,6 +7,7 @@
 #include <cstring>
 #include <filesystem>
 #include <utility>
+#include <vector>
 #include "fake_jack.h"
 #include "supple/base/files.h"
 #include "supple/engine/jack.h"
@@ -39,9 +40,59 @@ struct MemoryOps {
             limit->rlim_cur = 4096;
             return 0;
         };
+        ops->thpDisable = [this](unsigned long disable, unsigned long f) {
+            thpCalls.emplace_back(disable, f);
+            const int e = disable && f ? thpFlagsError : disable ? thpError : 0;
+            errno = e;
+            return e ? -1 : 0;
+        };
     }
+    std::vector<std::pair<unsigned long, unsigned long>> thpCalls;
+    int thpFlagsError = 0, thpError = 0;
 };
 }  // namespace
+
+TEST_CASE("the process stays out of transparent huge pages while the engine runs") {
+    using Call = std::pair<unsigned long, unsigned long>;
+    SUBCASE("advised regions keep them where the kernel takes the flag") {
+        MemoryOps fake;
+        detail::RuntimeProtection controls(fake.ops);
+        CHECK_FALSE(controls.thpOptOut().active);
+        controls.start();
+        CHECK(fake.thpCalls == std::vector<Call>{{1, 2}});  // PR_THP_DISABLE_EXCEPT_ADVISED
+        CHECK(controls.thpOptOut().active);
+        CHECK(controls.thpOptOut().advisedOnly);
+        controls.start();  // once
+        CHECK(fake.thpCalls.size() == 1);
+        controls.stop();
+        CHECK(fake.thpCalls.back() == Call{0, 0});
+        CHECK_FALSE(controls.thpOptOut().active);
+        CHECK_FALSE(controls.thpOptOut().advisedOnly);
+    }
+    SUBCASE("an older kernel refuses the flag: none keep them") {
+        MemoryOps fake;
+        fake.thpFlagsError = EINVAL;
+        detail::RuntimeProtection controls(fake.ops);
+        controls.start();
+        CHECK(fake.thpCalls == std::vector<Call>{{1, 2}, {1, 0}});
+        CHECK(controls.thpOptOut().active);
+        CHECK_FALSE(controls.thpOptOut().advisedOnly);
+        CHECK_FALSE(controls.thpOptOut().error);
+    }
+    SUBCASE("a refusal is reported, and the engine runs regardless") {
+        MemoryOps fake;
+        fake.thpFlagsError = EINVAL;
+        fake.thpError = EPERM;
+        detail::RuntimeProtection controls(fake.ops);
+        controls.start();
+        CHECK_FALSE(controls.thpOptOut().active);
+        REQUIRE(controls.thpOptOut().error);
+        CHECK(controls.thpOptOut().error->code == "engine.thp_opt_out");
+        CHECK(controls.thpOptOut().error->errnoValue == EPERM);
+        controls.stop();
+        CHECK(fake.thpCalls.back() == Call{1, 0});  // nothing to undo
+    }
+}
 
 TEST_CASE("memory lock ownership, flags, pending intent and repeated lifecycle") {
     MemoryOps fake;
@@ -132,9 +183,11 @@ TEST_CASE(
         CHECK(fake.locks == 0);
         CHECK_FALSE(app->startEngine(backend, {.blockSize = 0}));
         CHECK(fake.locks == 0);
+        CHECK_FALSE(app->engineStatus().thpOptOut.active);
         REQUIRE(app->startEngine(backend, {}, {.anticipative = false, .workers = 0}));
         CHECK(fake.locks == 1);
         CHECK(app->engineStatus().memoryLock.active);
+        CHECK(app->engineStatus().thpOptOut.active);
         REQUIRE(app->transport("stop"));
         CHECK(fake.unlocks == 0);  // transport stop still processes monitored inputs
         REQUIRE(app->newProject({.console9 = false}));
@@ -142,6 +195,7 @@ TEST_CASE(
         CHECK(fake.locks == 2);
         app->stopEngine();
         CHECK_FALSE(app->engineStatus().memoryLock.active);
+        CHECK_FALSE(app->engineStatus().thpOptOut.active);
         CHECK(app->engineStatus().memoryLock.requested);
         CHECK(fake.unlocks == 2);
         fake.lockError = ENOMEM;

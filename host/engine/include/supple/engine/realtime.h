@@ -665,6 +665,10 @@ class Engine {
     bool awaitRendererHeld(double timeoutSeconds = 10.0);
     const EngineOptions& options() const { return options_; }
     unsigned liveHelpers() const;  // main thread: enabled capacity, 0 when serial
+    // Main thread: the threads that work to the device's deadline, the
+    // callback's (once it has run, Linux only) and the live helpers'. For
+    // counting their page faults (engine.md §2.2).
+    std::vector<std::thread::native_handle_type> deadlineThreads();
     // The background threads' real-time priority (ADR-0026): below the
     // kernel's threaded interrupts (50) and the audio threads rtkit grants
     // other applications (up to 20). Any real-time level outruns normal
@@ -1055,6 +1059,8 @@ class Engine {
     std::vector<RecordingMaster> recordingMasters_;  // main thread (ADR-0057)
     std::atomic<detail::Recorder*> recorder_{nullptr};
     std::atomic<std::uint64_t> cycleSeq_{0};
+    // The thread the last cycle ran on (Linux), for deadlineThreads().
+    std::atomic<std::thread::native_handle_type> callbackThread_{};
 };
 
 }  // namespace supple::engine

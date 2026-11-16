@@ -211,6 +211,12 @@ instructions are in `docs/guides/installing.md`.
   actionable OS failures (bridges excluded; cleanup also drops plug-in locks);
   a separate default-off 20 µs CPU idle-latency request with close-based
   cleanup and permission diagnostics (real-device validation is user-only);
+  on Linux the process, and each bridge, kept out of transparent huge pages
+  while the engine runs, so khugepaged collapsing the heap cannot stall an
+  audio thread (ADR-0084; regions a plug-in advised keep them on kernels from
+  6.18), and the audio threads' page faults counted in
+  `engine.status.audio_page_faults` (per thread on Linux, the whole process's
+  on macOS and Windows); script buffers are in memory when prepare() returns;
   audio threads named by role (`audio-render`, `audio-bg-N` and others);
   the renderer, background helpers and bridge audio threads at SCHED_FIFO 10
   below a real-time callback when permitted, with a warning and normal

@@ -258,6 +258,14 @@ std::uint64_t Engine::midiPortDropped(bool output, std::size_t port) const {
 
 unsigned Engine::liveHelpers() const { return liveWorkers_ ? liveWorkers_->helpers() : 0; }
 
+std::vector<std::thread::native_handle_type> Engine::deadlineThreads() {
+    std::vector<std::thread::native_handle_type> out;
+    if (liveWorkers_) out = liveWorkers_->handles();
+    const auto callback = callbackThread_.load(std::memory_order_relaxed);
+    if (callback != std::thread::native_handle_type{}) out.insert(out.begin(), callback);
+    return out;
+}
+
 Status Engine::start(Backend& backend, const BackendConfig& config) {
     if (backend_)
         return Error("engine.running", "the engine is already running", {},
@@ -1439,6 +1447,13 @@ void Engine::cycle(const float* const* in, float* const* out, std::uint32_t fram
                 e.notifyMain();
         }
     } inCycle(*this, out, frames);
+#if defined(__linux__)
+    // The thread the device calls on, so its page faults can be counted
+    // (deadlineThreads()). pthread_self() only reads thread-local storage.
+    if (const auto self = currentThreadHandle();
+        callbackThread_.load(std::memory_order_relaxed) != self)
+        callbackThread_.store(self, std::memory_order_relaxed);
+#endif
     // ADR-0081: bridged calls on this thread, and on the live helpers serving
     // this cycle, wait no later than the cycle's start plus its period or
     // 2 ms, whichever is larger. A cycle with a late call ran past its period.

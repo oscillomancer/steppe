@@ -56,6 +56,14 @@ restarts the running engine at once.
   rates. ASIO uses one device for input and output, and its driver may round
   the buffer size.
 
+On Linux, while the engine runs, Steppe keeps its own memory out of
+transparent huge pages, except where a plug-in asks for them. With the
+system set to `always`, the kernel otherwise merges memory in the
+background, and audio can stop for a fraction of a second while it does. This
+applies to Steppe and its plug-in bridges only: it changes no system setting,
+and ends when Steppe stops the engine. macOS and Windows do not merge memory
+this way, and nothing changes there.
+
 If the device is missing or busy when Steppe starts, the app still opens. The
 Audio device dialog then opens and says why. Choose another device, or
 **Restart audio** once the device is ready. The dialog's status lines show

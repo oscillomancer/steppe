@@ -30,6 +30,7 @@
 #include <utility>
 #include <vector>
 #include "supple/base/stop.h"
+#include "supple/base/thread.h"
 
 #include "supple/cmd/bus.h"
 #include "supple/engine/midi_control.h"
@@ -203,6 +204,17 @@ struct EngineStatus {
     std::vector<std::string> warnings;
     RuntimeProtectionStatus memoryLock;
     RuntimeProtectionStatus cpuIdleLatency;
+    ThpOptOutStatus thpOptOut;
+    // Page faults since the engine started (engine.md §2.2): on Linux the
+    // callback's and the live helpers' ("audio_threads"), elsewhere the whole
+    // process's ("process"); "none" while stopped. `major` is unset where the
+    // platform does not tell minor and major apart (Windows).
+    struct AudioPageFaults {
+        std::string scope = "none";
+        std::int64_t minor = 0;
+        std::optional<std::int64_t> major = 0;
+        std::int64_t threads = 0;  // the threads counted, for audio_threads
+    } audioPageFaults;
     MeterDrops meterDrops;              // meter entries dropped by a full ring
     std::vector<std::string> failedFx;  // isolated instances whose bridge crashed or hung
     // Isolated instances whose bridge audio thread was refused its scheduling
@@ -813,6 +825,16 @@ class EngineApp : public cmd::Host {
     model::Monitor defaultMonitor_ = model::Monitor::On;
     unsigned audioThreadLimit_ = 0;
     std::unique_ptr<detail::RuntimeProtection> protections_;
+    // Page faults of the engine's deadline threads, from when each was first
+    // seen (Linux), or of the process from the engine's start.
+    struct FaultWatch {
+        std::int64_t id = 0;
+        PageFaults base, last;
+    };
+    std::vector<FaultWatch> faultWatch_;
+    std::optional<PageFaults> processFaultBase_;
+    void startFaultWatch();
+    void watchFaults();  // main thread: notes threads not yet seen
     void finalizeRecordingHash(model::Id source, model::MediaSource expected, RecordedTake take,
                                std::string hash, std::string branch, std::uint64_t generation);
     void startPlaying(int countInBars);  // engine play(), after a count-in when > 0

@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #if defined(__linux__)
 #include <sys/mman.h>
+#include <sys/prctl.h>
 #include <unistd.h>
 #endif
 #include <utility>
@@ -22,7 +23,10 @@ RuntimeProtectionOps::RuntimeProtectionOps()
       openLatency([](const char* path, int flags) { return ::open(path, flags); }),
       writeLatency(
           [](int fd, const void* bytes, std::size_t size) { return ::write(fd, bytes, size); }),
-      closeLatency([](int fd) { return ::close(fd); }) {}
+      closeLatency([](int fd) { return ::close(fd); }),
+      thpDisable([](unsigned long disable, unsigned long flags) {
+          return ::prctl(PR_SET_THP_DISABLE, disable, flags, 0UL, 0UL);
+      }) {}
 #else
 RuntimeProtectionOps::RuntimeProtectionOps()
     : lockMemory([](int) {
@@ -42,7 +46,11 @@ RuntimeProtectionOps::RuntimeProtectionOps()
           errno = ENOTSUP;
           return -1;
       }),
-      closeLatency([](int) { return 0; }) {}
+      closeLatency([](int) { return 0; }),
+      thpDisable([](unsigned long, unsigned long) {
+          errno = ENOTSUP;
+          return -1;
+      }) {}
 #endif
 
 namespace detail {
@@ -188,7 +196,47 @@ Status RuntimeProtection::releaseLatency() {
     return {};
 }
 
+void RuntimeProtection::applyThp() {
+#if defined(__linux__)
+    // Linux 6.18's PR_THP_DISABLE_EXCEPT_ADVISED, for older headers.
+    constexpr unsigned long kThpExceptAdvised = 1UL << 1;
+    if (thp_.active) return;
+    // Advised regions keep huge pages where the kernel can say so; an older
+    // kernel refuses the flag (EINVAL), and then no region does.
+    bool advisedOnly = true;
+    int result = ops_->thpDisable(1, kThpExceptAdvised);
+    if (result != 0 && errno == EINVAL) {
+        advisedOnly = false;
+        result = ops_->thpDisable(1, 0);
+    }
+    if (result == 0) {
+        thp_.active = true;
+        thp_.advisedOnly = advisedOnly;
+        thp_.error.reset();
+        return;
+    }
+    const int value = errno;
+    thp_.error = RuntimeProtectionError{
+        "engine.thp_opt_out",
+        std::string("prctl(PR_SET_THP_DISABLE): ") + std::strerror(value) + " (errno " +
+            std::to_string(value) + ")",
+        "/thp_opt_out",
+        "the kernel refused to keep the process out of transparent huge pages; audio threads "
+        "may stall while khugepaged collapses memory (set transparent_hugepage to madvise or "
+        "never to avoid it)",
+        value};
+#endif
+}
+
+void RuntimeProtection::releaseThp() {
+    if (!thp_.active) return;
+    (void)ops_->thpDisable(0, 0);
+    thp_.active = false;
+    thp_.advisedOnly = false;
+}
+
 void RuntimeProtection::start() {
+    applyThp();
     if (memory_.requested) (void)applyMemory();
     if (latency_.requested) (void)applyLatency();
 }
@@ -196,6 +244,7 @@ void RuntimeProtection::start() {
 void RuntimeProtection::stop() {
     (void)releaseLatency();
     (void)releaseMemory();
+    releaseThp();
 }
 
 }  // namespace detail

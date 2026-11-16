@@ -31,6 +31,12 @@ class LiveWorkers {
     LiveWorkers& operator=(const LiveWorkers&) = delete;
 
     unsigned helpers() const { return static_cast<unsigned>(threads_.size()); }
+    // Main thread: the helpers' native handles.
+    std::vector<std::thread::native_handle_type> handles() {
+        std::vector<std::thread::native_handle_type> out;
+        for (auto& t : threads_) out.push_back(t.native_handle());
+        return out;
+    }
     // Main thread, before publication: CPU capacity and backend RT scheduling.
     static unsigned maxHelpers();
     Status configure(Backend& backend);

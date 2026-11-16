@@ -36,18 +36,40 @@ schema::Schema<MeterDrops> meterDropsSchema() {
         .build();
 }
 
+schema::Schema<RuntimeProtectionError> runtimeProtectionErrorSchema() {
+    return schema::object<RuntimeProtectionError>("runtime_protection_error")
+        .field("code", &RuntimeProtectionError::code, schema::string())
+        .field("message", &RuntimeProtectionError::message, schema::string())
+        .field("path", &RuntimeProtectionError::path, schema::string())
+        .field("hint", &RuntimeProtectionError::hint, schema::string())
+        .field("errno", &RuntimeProtectionError::errnoValue, schema::integer())
+        .build();
+}
+
 schema::Schema<RuntimeProtectionStatus> runtimeProtectionSchema() {
-    auto error = schema::object<RuntimeProtectionError>("runtime_protection_error")
-                     .field("code", &RuntimeProtectionError::code, schema::string())
-                     .field("message", &RuntimeProtectionError::message, schema::string())
-                     .field("path", &RuntimeProtectionError::path, schema::string())
-                     .field("hint", &RuntimeProtectionError::hint, schema::string())
-                     .field("errno", &RuntimeProtectionError::errnoValue, schema::integer())
-                     .build();
     return schema::object<RuntimeProtectionStatus>("runtime_protection_status")
         .field("requested", &RuntimeProtectionStatus::requested, schema::boolean())
         .field("active", &RuntimeProtectionStatus::active, schema::boolean())
-        .field("error", &RuntimeProtectionStatus::error, error)
+        .field("error", &RuntimeProtectionStatus::error, runtimeProtectionErrorSchema())
+        .build();
+}
+
+schema::Schema<ThpOptOutStatus> thpOptOutSchema() {
+    return schema::object<ThpOptOutStatus>("thp_opt_out_status")
+        .field("active", &ThpOptOutStatus::active, schema::boolean())
+        .field("advised_only", &ThpOptOutStatus::advisedOnly, schema::boolean())
+        .field("error", &ThpOptOutStatus::error, runtimeProtectionErrorSchema())
+        .build();
+}
+
+schema::Schema<EngineStatus::AudioPageFaults> audioPageFaultsSchema() {
+    return schema::object<EngineStatus::AudioPageFaults>("audio_page_faults")
+        .field("scope", &EngineStatus::AudioPageFaults::scope,
+               schema::string().pattern("^(audio_threads|process|none)$",
+                                        "audio_threads, process or none"))
+        .field("minor", &EngineStatus::AudioPageFaults::minor, schema::integer())
+        .field("major", &EngineStatus::AudioPageFaults::major, schema::integer())
+        .field("threads", &EngineStatus::AudioPageFaults::threads, schema::integer())
         .build();
 }
 
@@ -160,6 +182,8 @@ schema::Schema<EngineStatus> engineStatusSchema() {
         .field("warnings", &EngineStatus::warnings, schema::arrayOf(schema::string()))
         .field("memory_lock", &EngineStatus::memoryLock, runtimeProtectionSchema())
         .field("cpu_idle_latency", &EngineStatus::cpuIdleLatency, runtimeProtectionSchema())
+        .field("thp_opt_out", &EngineStatus::thpOptOut, thpOptOutSchema())
+        .field("audio_page_faults", &EngineStatus::audioPageFaults, audioPageFaultsSchema())
         .field("meter_drops", &EngineStatus::meterDrops, meterDropsSchema())
         .field("failed_fx", &EngineStatus::failedFx, schema::arrayOf(schema::string()))
         .field("bridge_threads_refused", &EngineStatus::bridgeThreadsRefused,
@@ -253,7 +277,9 @@ void registerDeviceCommands(cmd::Registry& registry) {
             "live helpers join each callback with no added latency. memory_lock reports the "
             "default-off host-process memory policy: requested, active, and a structured OS "
             "error on failure. cpu_idle_latency reports the default-off 20 microsecond PM QoS "
-            "request, released on engine stop. A protection failure does not prevent audio "
+            "request, released on engine stop. thp_opt_out: on Linux the process is kept out of "
+            "transparent huge pages while the engine runs (advised_only: regions a plug-in "
+            "advised keep them). A protection failure does not prevent audio "
             "startup. MIDI output refusals are in midi_output_warnings; midi_output_latency "
             "reports signed audio-minus-MIDI frames per output. MIDI inputs that refuse to open "
             "are skipped: midi_warnings reports each "
@@ -301,6 +327,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
                      "warnings": [],
                      "memory_lock": {"requested": false, "active": false},
                      "cpu_idle_latency": {"requested": false, "active": false},
+                     "thp_opt_out": "<any>", "audio_page_faults": "<any>",
                      "meter_drops": {"renderer": 0, "callback": 0}, "failed_fx": [],
                      "bridge_threads_refused": [],
                      "dropped": 0, "voice_dropped": 0, "failed_errors": [], "sync": "<any>"})"),
@@ -441,6 +468,11 @@ void registerDeviceCommands(cmd::Registry& registry) {
             "corrective hint, including while stopped. Bridges are excluded. cpu_idle_latency "
             "reports the owned 20 microsecond request with the same status/error fields; it "
             "affects system idle while held and leaves CPU frequency policy unchanged. "
+            "thp_opt_out: active, advised_only and an optional error, Linux only (khugepaged "
+            "collapsing memory would stall audio threads). audio_page_faults: page faults since "
+            "the engine started; scope audio_threads counts the callback's and live helpers' "
+            "(Linux), process the whole process's (macOS, Windows, where major is null), none "
+            "while stopped. "
             "live_helpers is the enabled live helper capacity. scheduling: each thread class's "
             "policy (none, normal, fifo, rr, high) and priority as applied at start: the device "
             "callback, live helpers, renderer and background helpers (real-time below a "
@@ -478,6 +510,8 @@ void registerDeviceCommands(cmd::Registry& registry) {
                      "warnings": [],
                      "memory_lock": {"requested": false, "active": false},
                      "cpu_idle_latency": {"requested": false, "active": false},
+                     "thp_opt_out": {"active": false, "advised_only": false},
+                     "audio_page_faults": {"scope": "none", "minor": 0, "major": 0, "threads": 0},
                      "meter_drops": {"renderer": 0, "callback": 0}, "failed_fx": [],
                      "bridge_threads_refused": [],
                      "dropped": 0, "voice_dropped": 0, "failed_errors": [], "sync": "<any>"})"),

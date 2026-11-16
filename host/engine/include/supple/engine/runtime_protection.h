@@ -43,6 +43,18 @@ struct RuntimeProtectionStatus {
     std::optional<RuntimeProtectionError> error;
 };
 
+// While the engine runs on Linux, the process is kept out of transparent huge
+// pages (ADR-0084): khugepaged collapsing its heap stalls an audio thread that
+// touches the range, behind a low-priority kernel thread holding the process's
+// address-space lock. `advisedOnly`: regions a plug-in advised (MADV_HUGEPAGE)
+// keep huge pages, on kernels from 6.18; otherwise none do. Never active on
+// macOS or Windows, which have no such collapse.
+struct ThpOptOutStatus {
+    bool active = false;
+    bool advisedOnly = false;
+    std::optional<RuntimeProtectionError> error;
+};
+
 // Default operations call libc. Tests replace these before creating EngineApp.
 struct RuntimeProtectionOps {
     RuntimeProtectionOps();
@@ -52,6 +64,8 @@ struct RuntimeProtectionOps {
     std::function<int(const char*, int)> openLatency;
     std::function<ProtectionWriteSize(int, const void*, std::size_t)> writeLatency;
     std::function<int(int)> closeLatency;
+    // prctl(PR_SET_THP_DISABLE, disable, flags, 0, 0) on Linux.
+    std::function<int(unsigned long disable, unsigned long flags)> thpDisable;
 };
 
 }  // namespace supple::engine
