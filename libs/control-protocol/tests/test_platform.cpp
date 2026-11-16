@@ -155,7 +155,12 @@ TEST_CASE("portable startup refuses an occupied socket even with an undrained ba
     const auto result = server.start(path);
     REQUIRE_FALSE(result);
     CHECK(result.error().code == "rpc.address_in_use");
-    CHECK(std::filesystem::exists(path));
+    // The name must survive the refusal. Windows cannot stat a socket file
+    // (std::filesystem::exists throws on it), so look for the directory entry.
+    bool listed = false;
+    for (const auto& entry : std::filesystem::directory_iterator(dir))
+        listed = listed || entry.path().filename() == path.filename();
+    CHECK(listed);
 }
 
 TEST_CASE("model loop portable waitable snapshots respect model-thread cancellation") {
