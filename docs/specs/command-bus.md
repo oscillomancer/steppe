@@ -775,7 +775,9 @@ watches/deadlines, excluding stdin, and continues model service. Windows pauses
 new input reads; one already-buffered/in-flight64 KiB read-ahead may remain.
 POSIX duplicates share status flags: this API requires exclusive transport use,
 adds nonblocking output and restores its original nonblocking bit after join.
-The writer blocks SIGPIPE only on its owned POSIX thread; Windows abort teardown
+The writer blocks SIGPIPE only on its owned POSIX thread; on macOS, which
+raises SIGPIPE for the whole process, it also opts the output descriptor out
+(`F_SETNOSIGPIPE`) and restores that setting after join. Windows abort teardown
 retries CancelSynchronousIo across the entry race, retaining handles through join.
 Invalid descriptors and read/write/wait failures return actionable structured
 transport errors. Pending delivery may be incomplete after an I/O error; an edit
