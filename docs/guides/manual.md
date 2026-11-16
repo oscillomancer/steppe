@@ -1242,3 +1242,8 @@ closing stdin. Output backpressure pauses new commands while model service
 continues. EOF drains replies before finishing capture/shutdown; an open consumer
 that stops reading can defer that completion. Oversized replies return an explicit
 error. If a reply is lost, inspect state before repeating an edit: it may have run.
+
+If control-socket startup reports `rpc.path` for the product runtime directory,
+choose a writable private directory owned by your user and remove any symlink
+or Windows directory junction at that product directory. Steppe refuses these
+aliases rather than changing their targets' permissions.

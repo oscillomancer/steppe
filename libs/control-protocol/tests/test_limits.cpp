@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
+#include <supple/product.h>
 #include <cstring>
 #include "../src/socket_platform.h"
+#if defined(_WIN32)
+#include <windows.h>
+#include <winioctl.h>
+#endif
 #include "protocol_fixture.h"
 
 namespace {
@@ -191,5 +196,93 @@ TEST_CASE("subscription cap refuses the 65th and recovers after unsubscribe") {
     REQUIRE(client.call("rpc.unsubscribe", parse(R"({"subscription":"sub_1"})")));
     REQUIRE(client.call("rpc.subscribe", args));
     client.close();
+    server.stop();
+}
+
+namespace {
+#if defined(_WIN32)
+// An ordinary directory junction avoids changing Developer Mode or requiring
+// symbolic-link elevation. Mount-point layout is MS-FSCC 2.1.2.5.
+bool directoryAlias(const std::filesystem::path& link, const std::filesystem::path& target) {
+    std::filesystem::create_directory(link);
+    const auto print = std::filesystem::canonical(target).native();
+    const auto substitute = std::wstring(L"\\??\\") + print;
+    struct Header {
+        DWORD tag;
+        WORD bytes, reserved, substituteOffset, substituteBytes, printOffset, printBytes;
+    } header{IO_REPARSE_TAG_MOUNT_POINT,
+             static_cast<WORD>(8 + (substitute.size() + print.size() + 2) * sizeof(wchar_t)),
+             0,
+             0,
+             static_cast<WORD>(substitute.size() * sizeof(wchar_t)),
+             static_cast<WORD>((substitute.size() + 1) * sizeof(wchar_t)),
+             static_cast<WORD>(print.size() * sizeof(wchar_t))};
+    static_assert(sizeof(Header) == 16);
+    std::vector<std::byte> buffer(sizeof(Header) +
+                                  (substitute.size() + print.size() + 2) * sizeof(wchar_t));
+    std::memcpy(buffer.data(), &header, sizeof(header));
+    std::memcpy(buffer.data() + sizeof(header), substitute.c_str(),
+                (substitute.size() + 1) * sizeof(wchar_t));
+    std::memcpy(buffer.data() + sizeof(header) + (substitute.size() + 1) * sizeof(wchar_t),
+                print.c_str(), (print.size() + 1) * sizeof(wchar_t));
+    const auto handle = CreateFileW(
+        link.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) return false;
+    DWORD returned = 0;
+    const bool ok =
+        DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, buffer.data(),
+                        static_cast<DWORD>(buffer.size()), nullptr, 0, &returned, nullptr) != 0;
+    CloseHandle(handle);
+    return ok;
+}
+#else
+bool directoryAlias(const std::filesystem::path& link, const std::filesystem::path& target) {
+    std::error_code error;
+    std::filesystem::create_directory_symlink(target, link, error);
+    return !error;
+}
+#endif
+}  // namespace
+
+TEST_CASE("product runtime directory refuses aliases without mutating their targets") {
+    Directory dir;
+    const auto target = dir.path / "target";
+    const auto productDirectory = dir.path / std::string(product::kSlug);
+    std::filesystem::create_directory(target);
+#if !defined(_WIN32)
+    std::filesystem::permissions(
+        target, std::filesystem::perms::owner_all | std::filesystem::perms::group_read |
+                    std::filesystem::perms::group_exec | std::filesystem::perms::others_read |
+                    std::filesystem::perms::others_exec);
+#endif
+    const auto before = std::filesystem::status(target).permissions();
+    REQUIRE(directoryAlias(productDirectory, target));
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    rpc::Server server(commands, bus, [](auto) {});
+    const auto result = server.start(productDirectory / "endpoint.sock");
+    REQUIRE_FALSE(result);
+    CHECK(result.error().code == "rpc.path");
+    CHECK(result.error().path.find(std::string(product::kSlug)) != std::string::npos);
+    CHECK_FALSE(result.error().hint.empty());
+    CHECK(std::filesystem::status(target).permissions() == before);
+    CHECK_FALSE(std::filesystem::exists(target / "endpoint.sock"));
+    CHECK_FALSE(std::filesystem::exists(target / "endpoint.sock.lock"));
+}
+
+TEST_CASE("owned product runtime directory is accepted with private native permissions") {
+    Directory dir;
+    const auto productDirectory = dir.path / std::string(product::kSlug);
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    rpc::Server server(commands, bus, [](auto) {});
+    REQUIRE(server.start(productDirectory / "endpoint.sock"));
+#if !defined(_WIN32)
+    CHECK((std::filesystem::status(productDirectory).permissions() & std::filesystem::perms::all) ==
+          std::filesystem::perms::owner_all);
+#endif
     server.stop();
 }

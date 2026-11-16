@@ -1063,10 +1063,12 @@ Library boundaries:
   model service continues. There is no owner abort token or finite lossless drain
   deadline; error teardown joins/cancels native workers. Stream embedding APIs
   stay synchronous; arbitrary device/filesystem cancellation remains platform-limited.
-- Socket product-directory permission setup follows symlinks on POSIX; directory
-  trust/link policy remains unresolved. Windows AF_UNIX uses inherited directory
-  ACLs (ADR-0035), not a named-pipe DACL. Endpoint lock acquisition can still wait
-  on another holder, independently of the nonblocking collision probe.
+- Socket startup refuses a linked or foreign-owned product runtime directory on
+  POSIX (no-follow open, owner check, handle-based 0700); Windows refuses reparse
+  points and keeps inherited directory ACLs (ADR-0035), not a named-pipe DACL.
+  Ancestors and arbitrary explicit socket parents retain their native policy.
+  Endpoint lock acquisition can still wait on another holder without a deadline,
+  independently of the nonblocking collision probe. Native macOS/Windows CI is due.
 
 Engine and hosting:
 - Sync (ADR-0070, ADR-0071, ADR-0073): sync input, LTC output and MIDI

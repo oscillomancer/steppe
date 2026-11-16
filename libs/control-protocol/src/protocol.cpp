@@ -526,10 +526,14 @@ struct Server::Impl : std::enable_shared_from_this<Impl> {
         auto path = std::filesystem::absolute(requested, ec);
         if (ec) return Error("rpc.path", ec.message(), requested.string());
         std::filesystem::create_directories(path.parent_path(), ec);
-        if (ec) return Error("rpc.path", ec.message(), path.string());
+        if (ec)
+            return Error("rpc.path", ec.message(), net::pathName(path.parent_path()),
+                         "Choose a writable private runtime directory owned by your user.");
         if (path.parent_path().filename() == product::kSlug &&
             net::privatePermissions(path.parent_path(), true) != 0)
-            return Error("rpc.path", std::strerror(errno), path.parent_path().string());
+            return Error("rpc.path", std::strerror(errno), net::pathName(path.parent_path()),
+                         "Use a private runtime directory owned by your user; remove any symlink "
+                         "or reparse point.");
         // Serialize stale-path inspection and bind across competing processes.
         auto lockPath = path;
         lockPath += ".lock";
