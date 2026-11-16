@@ -13,6 +13,7 @@
 #include <supple/engine/realtime.h>
 
 #include <clap/ext/params.h>
+#include "bridge_patience.h"
 #include "plan.h"
 #include "rack_runtime.h"
 #include "supple/model/groups.h"
@@ -1368,7 +1369,9 @@ TEST_CASE("racks: feed-forward latency aligns independent Outs with reference im
             auto livePool = makePool();
             MediaCache liveMedia;
             DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 12288});
-            Engine engine(livePool, liveMedia, {.anticipative = anticipative, .workers = workers});
+            Engine engine(
+                livePool, liveMedia,
+                engine::test::patient({.anticipative = anticipative, .workers = workers}));
             REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 37}));
             REQUIRE(engine.load(s));
             engine.play();
@@ -1376,6 +1379,7 @@ TEST_CASE("racks: feed-forward latency aligns independent Outs with reference im
                 if (anticipative) REQUIRE(engine.awaitRendered(37));
                 backend.run(1);
             }
+            CHECK(engine.bridgeLateCycles() == 0);
             engine.stop();
             CHECK(engine.processErrors() == 0);
             const auto latency = engine.outputLatency();
@@ -1570,7 +1574,8 @@ TEST_CASE(
         // Room for every cycle below, the restart's longest wait included.
         DummyBackend backend(
             {.mode = DummyBackend::Mode::Manual, .captureFrames = (20 + 40 + 160 + 180) * 128});
-        Engine engine(pool, media, {.anticipative = anticipative, .workers = 2});
+        Engine engine(pool, media,
+                      engine::test::patient({.anticipative = anticipative, .workers = 2}));
         REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
         REQUIRE(engine.load(state));
         REQUIRE(engine.awaitPlan());
@@ -1607,6 +1612,7 @@ TEST_CASE(
         for (int i = 0; i < 180; ++i) run();
         CHECK(engine.planGeneration() == settled);
         CHECK(engine.processErrors() == 0);
+        CHECK(engine.bridgeLateCycles() == 0);
         engine.stop();
         const auto& audio = backend.capture();
         const auto end = static_cast<std::size_t>(backend.cycles() * 128);

@@ -3,6 +3,7 @@
 #include <doctest/doctest.h>
 #include <chrono>
 #include <cmath>
+#include "bridge_patience.h"
 #include "supple/audio/audio_file.h"
 #include "supple/engine/app.h"
 #include "supple/model/groups.h"
@@ -263,7 +264,8 @@ TEST_CASE(
                     MediaCache media;
                     DummyBackend backend(
                         {.mode = DummyBackend::Mode::Manual, .captureFrames = 16384});
-                    Engine engine(livePool, media, {.anticipative = ahead, .workers = 1});
+                    Engine engine(livePool, media,
+                                  engine::test::patient({.anticipative = ahead, .workers = 1}));
                     REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
                     REQUIRE(engine.load(s));
                     engine.play();
@@ -271,6 +273,7 @@ TEST_CASE(
                         if (ahead) REQUIRE(engine.awaitRendered((backend.cycles() + 1) * 128));
                         backend.run(1);
                     }
+                    CHECK(engine.bridgeLateCycles() == 0);
                     engine.stop();
                     for (std::size_t c = 0; c < 2; ++c)
                         CHECK(std::equal(

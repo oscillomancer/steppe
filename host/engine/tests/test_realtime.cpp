@@ -35,6 +35,7 @@
 #include <supple/engine/realtime.h>
 #include <supple/host/clap_host.h>
 
+#include "bridge_patience.h"
 #include "fake_jack.h"
 #include "live_workers.h"
 #include "meters.h"
@@ -144,12 +145,7 @@ struct RecorderTestAccess {
 }  // namespace supple::engine::detail
 
 namespace {
-// A bridge deadline no healthy plug-in misses, however loaded the machine
-// (ADR-0081): bridged output compared bit for bit must not hit a late block.
-EngineOptions patient(EngineOptions options) {
-    options.liveBridgeDeadlineMs = 60'000;
-    return options;
-}
+using supple::engine::test::patient;
 template <class Predicate>
 bool waitForRecorder(Predicate predicate) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -392,6 +388,7 @@ TEST_CASE("pan modes and laws: real-time output equals the offline render (ADR-0
                 runAhead(engine, backend, (48000 * 2 + 4096) / 96, 96);
             else
                 backend.run((48000 * 2 + 4096) / 96);
+            CHECK(engine.bridgeLateCycles() == 0);
             engine.stop();
             CHECK(engine.processErrors() == 0);
             const auto& cap = backend.capture();
@@ -3693,8 +3690,13 @@ TEST_CASE("a hung bridged plug-in on a live track fails within the bound; the re
     const auto failed = pool.failedErrors();
     CHECK(
         std::any_of(failed.begin(), failed.end(), [&](const auto& f) { return f.first == crash; }));
-    // Late until it failed: at least 50 ms of cycles, and not all of them.
-    CHECK(late >= 50 * 48000 / 1000 / kBlock);
+    // Late until it failed, 50 ms after its first late cycle by the clock. How
+    // many cycles that is depends on the machine (a slow one runs fewer, each
+    // longer than its period), so only what the deadline guarantees is
+    // checked: each late cycle waited at least its period, so no more than
+    // 50 ms of periods, and the two cycles at its ends, were late.
+    CHECK(late >= 1);
+    CHECK(late <= 50 * 48000 / 1000 / kBlock + 2);
     CHECK(late < static_cast<std::uint64_t>(kCycles));
     // The other track played on exactly as with the hung one muted (after
     // the first block, which the hung track also played).
@@ -4601,6 +4603,7 @@ TEST_CASE("input FX process the armed input: monitored and recorded, aligned wit
             else
                 backend.run(100);
             auto takes = engine.stopRecording();
+            CHECK(engine.bridgeLateCycles() == 0);
             engine.stop();
             REQUIRE(takes);
             REQUIRE(takes->size() == 2);
@@ -5485,6 +5488,7 @@ TEST_CASE("MIDI sends: timeline chains null offline in both executors and all is
                 runAhead(engine, backend, 100096 / 96, 96);
             else
                 backend.run(100096 / 96);
+            CHECK(engine.bridgeLateCycles() == 0);
             engine.stop();
             CHECK(engine.processErrors() == 0);
             for (int channel = 0; channel < 2; ++channel)
@@ -5694,6 +5698,7 @@ TEST_CASE("MIDI bus: plug-in note output nulls offline in both executors and all
                     runAhead(engine, backend, 100096 / 96, 96);
                 else
                     backend.run(100096 / 96);
+                CHECK(engine.bridgeLateCycles() == 0);
                 engine.stop();
                 CHECK(engine.processErrors() == 0);
                 for (int c = 0; c < 2; ++c)
