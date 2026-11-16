@@ -1393,6 +1393,10 @@ reports (20/50 MB), bounded terminal handoff, no new dependency/upload, one-time
 opt-in-remembered safe loading and diagnostics-only hangs. The development frontend entrypoints now act as launchers for a separately
 supervised worker, with private run markers, expected-return/exit classification,
 metadata-only reports, bounded retention and collector-loss fixtures. Terminal
-context, traces, inventory, bridge correlation, restart UI/hangs and release
-package verification are not implemented at this stage. Native macOS/Windows CI and
+signal/SEH/terminate capsules and cold thread-stack registration now exist, with
+metadata-only sanitizer/fail-fast fallbacks. macOS leaves Mach handling untouched
+and uses signal/exit-only capture; signed-native Mach forwarding/liveness is not
+proven. Traces, inventory, other owned-thread registration, bridge correlation,
+restart UI/hangs and release package verification remain later topics. Delivery
+stops after topic 3 for review. Native macOS/Windows CI and
 signed Mach capability/collector-loss tests are due before merge/release.

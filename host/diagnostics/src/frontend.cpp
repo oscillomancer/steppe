@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
+#include "supple/diagnostics/frontend.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include "native.h"
 #include "storage.h"
 #include "supple/base/paths.h"
-#include "supple/diagnostics/frontend.h"
 #include "supple/product.h"
+#include "terminal.h"
 namespace supple::diagnostics {
 namespace detail {
 bool valid(const Packet& p) {
@@ -38,9 +39,11 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
         argv[argc] = nullptr;
         const auto marker = storage && native.trusted ? createMarker(options.directory, boot)
                                                       : Result<std::intptr_t>(std::intptr_t{-1});
+        const bool terminal = native.trusted && installTerminal(native, boot);
         Packet ready = boot;
         ready.kind = Message::Ready;
         ready.pid = pid();
+        ready.cause = terminal ? 1U : 0U;
         ready.code = marker && *marker >= 0 ? 0U : 1U;
         if (ready.code) std::fputs("local diagnostic marker unavailable\n", stderr);
         (void)publish(native, ready);
@@ -93,8 +96,7 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
         if (!storage ||
             !publishReport(options.directory, boot, hasTerminal ? &terminal : nullptr, code, fatal))
             std::fputs(
-                "the app closed unexpectedly; local report publication or "
-                "retention failed\n",
+                "the app closed unexpectedly; local report publication or retention failed\n",
                 stderr);
         else if (ownsMarker)
             removeMarker(options.directory, boot);

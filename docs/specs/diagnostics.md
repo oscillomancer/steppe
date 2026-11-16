@@ -43,7 +43,7 @@ only after a terminal event or unexpected worker exit; ordinary acknowledged
 returns remove the marker. An active run is not an abandoned incident.
 
 Report schema `supple.crash-report/1.0`: `incident`, `build` (version/commit/dirty),
-`platform`, `architecture`, `role`, `kind`, `code`, `complete`, `unavailable`,
+`platform`, `architecture`, `role`, `kind`, `code`, `native_fatal_status`, `complete`, `unavailable`,
 `threads`, `plugins`, `commands`, `dropped`. Strict size/type/enum validation and
 bounded allowlisted formatting apply. Phase-2 reports are honest exit summaries;
 phase 3 can attest terminal context but persists no raw address/register bytes.
@@ -62,7 +62,8 @@ the same unprivileged limitations as ordinary project publication.
 ## Terminal behavior
 
 POSIX SEGV/BUS/ILL/FPE/ABRT and Windows unhandled SEH use a fixed reserved capsule.
-Terminate records an enum then aborts, without inspecting the exception. Owned
+Terminate records an enum and enters the native fatal path (POSIX abort,
+Windows fast fail), without inspecting the exception. Owned
 threads reserve alternate/guaranteed stack while cold. POSIX handler operations
 are restricted to the async-signal-safe native list. No allocation, file work,
 formatting, unwinding, engine cleanup, GUI or plug-in calls. A native terminal-only
@@ -87,3 +88,41 @@ selection precedes project instantiation; one-time bridged/disabled choices pers
 only on opt-in. Existing recovery remains a separate explicit offer. Hangs use
 5 s challenges/30 s suspicion, injected-clock tests, never automatic termination.
 No network client, symbol download, global OS policy or new dependency.
+
+## Topic-3 implemented boundary
+
+Native fatal signals and Windows last-chance SEH use one preallocated terminal
+capsule, a verified lock-free reentry claim and a native handoff. Acknowledgement
+wait is at most one second; the worker is never suspended and never waits for
+file writing/symbolication. `registerCurrentThread()` reserves a guarded alternate
+stack (POSIX) or a stack guarantee (Windows), while cold; main registers before
+frontend code. Other owned-thread integration belongs to topic 5; unregistered
+foreign/driver threads have best-effort context and no stack-exhaustion promise.
+No callback hook, TLS registration or sanitizer suppression is added. Sanitized
+builds retain their handlers and emit exit-only summaries.
+
+Existing non-default fatal handlers/SEH filters are preserved. After capture,
+POSIX restores/re-raises the fatal default and Windows continues OS exception
+search. Terminate records only an enum before POSIX abort or Windows fast fail. Aborts, asserts, teardown
+faults, registered worker faults and collector loss are isolated fixtures. Raw
+PC/frame values remain only in private IPC; the staged report records availability
+and cause, without claiming a backtrace. Fail-fast and forced exits can lack a
+capsule.
+
+**macOS uses signal/exit fallback, not external Mach capture.** Its Mach chain is
+untouched. Public posix_spawnattr_setexceptionports_np can bootstrap a later
+receiver, but safe prior-handler forwarding, enhanced Mach restrictions and a
+bounded outstanding-reply/collector-failure protocol need signed native proof.
+Mach-only events without BSD signal delivery remain metadata-only. See ADR-0083.
+This is an explicit delivery limit, not a claim of complete Mach coverage.
+
+A captured terminal capsule sets kind `crash`. Without one, kind remains
+`unexpected_exit`, even when the OS status is fatal; `native_fatal_status`
+records that status independently. An exit code cannot establish a cause.
+
+Windows GUI console attachment happens in the launcher entry before spawning;
+redirected handles retain the original frontend rules. After spawn, only the
+supervisor ignores Ctrl-C, so the worker retains its inherited policy and the
+supervisor can propagate the worker's actual exit. Windows terminate sends its
+minimal capsule then uses the native fast-fail intrinsic, without CRT formatting
+or allocator dependence. Native Windows verification remains required.

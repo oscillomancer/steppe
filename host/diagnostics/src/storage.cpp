@@ -137,10 +137,15 @@ std::string reportStem(const fs::path& path) {
 bool reportShape(const json::Value& value) {
     if (!value.isObject()) return false;
     for (const auto& field : value.asObject()) {
-        const std::string_view allowed[]{
-            "schema",  "incident", "role",     "build",    "platform",         "architecture",
-            "kind",    "code",     "cause",    "complete", "terminal_context", "unavailable",
-            "threads", "plugins",  "commands", "dropped"};
+        const std::string_view allowed[]{"schema",      "incident",
+                                         "role",        "build",
+                                         "platform",    "architecture",
+                                         "kind",        "code",
+                                         "cause",       "native_fatal_status",
+                                         "complete",    "terminal_context",
+                                         "unavailable", "threads",
+                                         "plugins",     "commands",
+                                         "dropped"};
         if (std::find(std::begin(allowed), std::end(allowed), field.key) == std::end(allowed))
             return false;
     }
@@ -154,7 +159,7 @@ bool reportShape(const json::Value& value) {
         const auto* v = value.find(key);
         if (!v || !v->isInt()) return false;
     }
-    for (const auto* key : {"complete", "terminal_context"}) {
+    for (const auto* key : {"complete", "terminal_context", "native_fatal_status"}) {
         const auto* v = value.find(key);
         if (!v || !v->isBool()) return false;
     }
@@ -235,7 +240,8 @@ Status publishReport(const fs::path& root, const Packet& boot, const Packet* ter
                      bool fatal) {
     auto v = base(boot);
     v["schema"] = "supple.crash-report/1.0";
-    v["kind"] = terminal || fatal ? "crash" : "unexpected_exit";
+    v["kind"] = terminal ? "crash" : "unexpected_exit";
+    v["native_fatal_status"] = fatal;
     v["code"] = terminal ? static_cast<long long>(terminal->code) : code;
     v["cause"] = terminal ? static_cast<long long>(terminal->cause) : 0;
     v["complete"] = false;
@@ -249,8 +255,7 @@ Status publishReport(const fs::path& root, const Packet& boot, const Packet* ter
     v["plugins"] = json::Value::array();
     v["commands"] = json::Value::array();
     v["dropped"] = 0;
-    // Deliberately never serialize pc/frame, args, paths, exception or console
-    // text.
+    // Deliberately never serialize pc/frame, args, paths, exception or console text.
     const auto text = json::writeCanonical(v) + "\n";
     if (text.size() > 4 * 1024 * 1024) return failure();
     SUPPLE_TRY(privatePublish(root / (std::string(boot.incident.data(), 32) + ".json"), text));

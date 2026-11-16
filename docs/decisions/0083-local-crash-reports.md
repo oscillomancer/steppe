@@ -115,3 +115,11 @@ Mach/SEH behavior. Metadata-only fallbacks are useful and must be tested too.
 In-process report formatting violates terminal safety. Ordinary minidumps retain
 private memory. Crashpad/libunwind add dependencies and maintenance without solving
 privacy by default. Automatic restart/disable or upload is outside the decision.
+
+*Implementation note, 2026-11-15, topic 3:* macOS ships the approved signal/exit
+fallback, leaving the Mach exception chain untouched. The public spawn exception
+port bootstrap is a candidate, but bounded outstanding-reply cancellation and
+signed/hardened forwarding are not proven. Mach-only events without a BSD signal
+therefore have exit metadata only. No task_for_pid grant, special entitlement,
+private API or suspended-process design is introduced. Native feasibility remains
+a gate before any later Mach receiver replaces this fallback.

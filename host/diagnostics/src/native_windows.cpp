@@ -149,6 +149,9 @@ Result<Native> launch(int, char**, const Packet& boot) {
         return failure();
     }
     n.process = resource(process.hProcess);
+    // The worker inherited the original console policy. Both receive Ctrl-C;
+    // keep the supervisor alive to propagate its eventual exit status.
+    (void)SetConsoleCtrlHandler(nullptr, TRUE);
 
     CloseHandle(process.hThread);
     // No kill-on-close Job: collector loss must leave the healthy app alive.

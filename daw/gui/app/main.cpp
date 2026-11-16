@@ -255,17 +255,6 @@ double percentile(std::vector<double> v, double p) {
 }  // namespace
 
 int frontendMain(int argc, char** argv) {
-#if defined(_WIN32)
-    // Preserve redirected handles from CTest/pipes. Only reopen streams with
-    // no inherited handle when launched from a terminal without redirection.
-    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
-        FILE* stream = nullptr;
-        if (_fileno(stdout) < 0 && GetFileType(GetStdHandle(STD_OUTPUT_HANDLE)) == FILE_TYPE_CHAR)
-            (void)freopen_s(&stream, "CONOUT$", "w", stdout);
-        if (_fileno(stderr) < 0 && GetFileType(GetStdHandle(STD_ERROR_HANDLE)) == FILE_TYPE_CHAR)
-            (void)freopen_s(&stream, "CONOUT$", "w", stderr);
-    }
-#endif
     Options o;
     if (!parse(argc, argv, o)) return usage();
 
@@ -1390,6 +1379,17 @@ int frontendMain(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
+#if defined(_WIN32)
+    // Preserve redirected handles from CTest/pipes. Only reopen streams with
+    // no inherited handle when launched from a terminal without redirection.
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        FILE* stream = nullptr;
+        if (_fileno(stdout) < 0 && GetFileType(GetStdHandle(STD_OUTPUT_HANDLE)) == FILE_TYPE_CHAR)
+            (void)freopen_s(&stream, "CONOUT$", "w", stdout);
+        if (_fileno(stderr) < 0 && GetFileType(GetStdHandle(STD_ERROR_HANDLE)) == FILE_TYPE_CHAR)
+            (void)freopen_s(&stream, "CONOUT$", "w", stderr);
+    }
+#endif
     return supple::diagnostics::runFrontend(argc, argv, supple::diagnostics::Role::Gui,
                                             frontendMain);
 }
