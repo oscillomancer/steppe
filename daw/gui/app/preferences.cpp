@@ -451,7 +451,11 @@ void PreferencesDialog::refresh() {
     if (latency_) latency_->setText(prefs_.preventDeepIdle ? "On" : "Off");
     if (imports_) imports_->setText(prefs_.copyImports ? "On" : "Off");
     if (isolation_) isolation_->setText(isolationLabel(prefs_.pluginIsolation));
-    protectionNote(latencyNote_, app_.cpuIdleLatencyStatus(), "Requested: 20 µs");
+    // Held without the option while a bridged plug-in plays live (ADR-0086).
+    const auto& latency = app_.cpuIdleLatencyStatus();
+    protectionNote(
+        latencyNote_, latency,
+        latency.requested ? "Requested: 20 µs" : "Held while a bridged plug-in plays live: 20 µs");
     if (memory_) memory_->setText(prefs_.lockMemory ? "On" : "Off");
     protectionNote(memoryNote_, app_.memoryLockStatus(), "Locked");
     if (threads_) threads_->setText(threadLabel(prefs_.audioThreads));

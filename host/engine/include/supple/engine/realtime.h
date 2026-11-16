@@ -691,6 +691,10 @@ class Engine {
     std::int64_t playedStream(std::uint64_t epoch) const;
     std::optional<RackLatencyInfo> rackLatencies(model::Id rack, std::uint64_t version) const;
     std::uint64_t planGeneration() const { return publishedGen_; }  // main thread
+    // Main thread (ADR-0086): the last plan load() published has the device
+    // callback process a bridged plug-in (one on a live node, or any with
+    // the in-callback executor). False when stopped.
+    bool bridgedLive() const { return bridgedLive_; }
     std::uint64_t pluginOutputDrops() const { return outputDrops_.load() + idleOutputDrops_; }
 
     std::uint32_t outputLatency() const;
@@ -909,6 +913,7 @@ class Engine {
     // Plans carry a generation; the audio thread stores it here after adopt()
     // has stopped the instances the plan dropped. service() prunes only then.
     std::uint64_t publishedGen_ = 0;
+    bool bridgedLive_ = false;  // main thread (bridgedLive())
     std::atomic<std::uint64_t> stoppedGen_{0};
     std::shared_ptr<const model::Session> latest_;
     bool prunePending_ = false;

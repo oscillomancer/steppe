@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include <doctest/doctest.h>
 #include <supple/engine/offline.h>
+#include <supple/engine/realtime.h>
 #include <algorithm>
 #include <array>
 
@@ -197,5 +198,76 @@ TEST_CASE("inherit resolves third-party plug-ins to the default isolation, stock
             REQUIRE(p->isolationFallbacks().size() == 1);
             CHECK(p->isolationFallbacks().front() == inheritId);
         }
+    }
+}
+
+TEST_CASE("the engine says when the callback processes a bridged plug-in") {
+    // ADR-0086: the idle-latency request follows this. The in-callback
+    // executor processes every node; with the renderer, the callback has only
+    // the live (monitored) ones.
+    host::setBridgeExecutable(BRIDGE_PATH);
+    auto session = [](model::Isolation isolation, bool monitored) {
+        model::EditTxn edit(model::Session::create({.console9 = false}), 1);
+        model::Track track;
+        track.name = "Bridged";
+        track.parent = model::kMaster;
+        const auto trackId = edit.create(track);
+        edit.modify<model::Track>(model::kMaster,
+                                  [&](auto& master) { master.children.push_back(trackId); });
+        model::FxInstance fx;
+        fx.plugin.id = "com.suppleaudio.test.gain";
+        fx.isolation = isolation;
+        const auto fxId = edit.create(fx);
+        edit.modify<model::Track>(trackId, [&](auto& item) { item.chain.push_back(fxId); });
+        if (monitored) {
+            model::Route r;
+            r.from.hwChannels = std::vector<int>{1, 2};
+            r.to.track = trackId;
+            const auto in = edit.create(r);
+            edit.modify<model::Track>(trackId, [&](model::Track& x) {
+                x.record.input = in;
+                x.record.monitor = model::Monitor::On;
+                x.record.armed = true;
+            });
+        }
+        return edit.commit().value();
+    };
+    struct Case {
+        model::Isolation isolation;
+        bool anticipative, monitored, live;
+    };
+    for (const Case c : {Case{model::Isolation::SharedBridge, false, false, true},
+                         Case{model::Isolation::SharedBridge, true, false, false},
+                         Case{model::Isolation::SharedBridge, true, true, true},
+                         Case{model::Isolation::Dedicated, true, true, true},
+                         Case{model::Isolation::InProcess, false, false, false},
+                         Case{model::Isolation::InProcess, true, true, false}}) {
+        CAPTURE(static_cast<int>(c.isolation));
+        CAPTURE(c.anticipative);
+        CAPTURE(c.monitored);
+        InstancePool pool([](const model::PluginRef& ref) -> Result<host::PluginInfo> {
+            const std::filesystem::path fixture = FIXTURE_CLAP_PATH;
+            host::ScanOptions options;
+            options.forceInProcess = true;
+            auto plugins = host::scan(std::span(&fixture, 1), options);
+            if (!plugins) return plugins.error();
+            for (const auto& plugin : *plugins)
+                if (plugin.id == ref.id) return plugin;
+            return Error("engine.plugin_missing", "bridge fixture not found");
+        });
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        Engine engine(pool, media, {.anticipative = c.anticipative, .workers = 0});
+        CHECK_FALSE(engine.bridgedLive());
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128, .inputs = 2}));
+        REQUIRE(engine.load(session(c.isolation, c.monitored)));
+        CHECK(engine.bridgedLive() == c.live);
+        // The same session without the plug-in's bridge: never.
+        REQUIRE(engine.load(session(model::Isolation::InProcess, c.monitored)));
+        CHECK_FALSE(engine.bridgedLive());
+        REQUIRE(engine.load(session(c.isolation, c.monitored)));
+        CHECK(engine.bridgedLive() == c.live);
+        engine.stop();
+        CHECK_FALSE(engine.bridgedLive());
     }
 }

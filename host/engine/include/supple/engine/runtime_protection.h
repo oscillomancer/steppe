@@ -40,6 +40,10 @@ struct RuntimeProtectionError {
 struct RuntimeProtectionStatus {
     bool requested = false;
     bool active = false;
+    // The CPU idle-latency request only (ADR-0086): a bridged plug-in plays
+    // live, so the request is held without being asked for. Linux only;
+    // macOS and Windows have no per-process request of this kind.
+    bool automatic = false;
     std::optional<RuntimeProtectionError> error;
 };
 

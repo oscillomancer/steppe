@@ -1887,13 +1887,29 @@ on EINTR: the descriptor is already released and may have been reused.
 CLOEXEC excludes child bridge/scanner processes from retaining the fd.
 
 `engine.start`/`engine.status` add `cpu_idle_latency` with the same typed
-`{requested, active, error?}` structure as memory_lock. Failures use
+`{requested, active, error?}` structure as memory_lock, plus `automatic`
+(below). Failures use
 `engine.cpu_idle_latency`, path `/prevent_deep_idle`, with numeric errno and
 a corrective hint. EACCES/EPERM explain that the account needs membership
 in a group with device write access (commonly audio; policy varies);
 ENOENT/ENODEV report that the device is unavailable. Acquisition failure
 keeps intent enabled and audio usable; close failure records an error with
 active=false because the descriptor has been released.
+
+**Automatic hold (2026-11-16, ADR-0086).** On Linux the request is also held,
+without the option, while the device callback processes a bridged plug-in:
+`Engine::bridgedLive()` (main thread) is true when the last published plan's
+callback instances (its `liveInstances` with the renderer, all of
+`instances` with the in-callback executor) include an isolated one, and
+false when stopped. `EngineApp::tick` passes it to
+`RuntimeProtection::setBridgedLive`, which acts on a change only, so a
+refused request is not retried every tick. The request is held while the
+option or the automatic state wants it, and released when neither does or
+the engine stops. Status gains `automatic`. An automatic failure keeps its
+error, with a hint that does not mention an option, but adds no engine
+warning; it is cleared when the automatic state ends and the option is off.
+On macOS and Windows `setBridgedLive` does nothing: they have no
+per-process request (ADR-0086).
 
 Tests inject open/write/close operations for all lifecycle and error paths.
 The real libc write/close path is exercised against a temporary file through

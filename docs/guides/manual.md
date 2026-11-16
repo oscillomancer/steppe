@@ -861,6 +861,20 @@ own process. Those rows say "(default)". The choice applies as plugins
 load (adding one, opening a project, restarting one); Steppe's own plugins
 always run in the app.
 
+On Linux, while a plugin in a bridge process plays live, for example on a
+monitored track, Steppe keeps the CPUs out of deep idle, as **Edit > Preferences… > Keep CPUs out of deep idle** does whenever
+the engine runs. A bridged plugin waits for its bridge to wake, and a CPU in
+deep idle wakes late. This is a request Steppe's process holds, not a system
+setting: it ends when no bridged plugin plays live, when the engine stops or
+when Steppe quits, and nothing changes after. While held, the computer may
+use more power and run warmer. Many systems let only administrators make the
+request; the preference's note then says it was refused, audio plays
+without it, and the preference's caution line says how to allow it. With the
+preference on, the request is held whenever the engine runs. macOS and
+Windows have no such per-process request (Windows' power plan is
+system-wide, and Steppe leaves it alone); there Steppe's audio threads and
+its bridges' ask for the system's audio class instead, as they always have.
+
 ## Agents (MCP)
 
 Steppe is built to be driven by an AI agent as well as by hand. `steppe-mcp`

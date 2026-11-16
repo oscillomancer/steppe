@@ -130,7 +130,20 @@ Status RuntimeProtection::releaseMemory() {
 
 Status RuntimeProtection::setPreventDeepIdle(bool requested, bool running) {
     latency_.requested = requested;
-    if (!requested) {
+    return updateLatency(running);
+}
+
+Status RuntimeProtection::setBridgedLive(bool live, bool running) {
+#if !defined(__linux__)
+    live = false;  // no per-process idle-latency request to hold (ADR-0086)
+#endif
+    if (live == latency_.automatic) return {};
+    latency_.automatic = live;
+    return updateLatency(running);
+}
+
+Status RuntimeProtection::updateLatency(bool running) {
+    if (!latency_.requested && !latency_.automatic) {
         if (latencyFd_ >= 0) return releaseLatency();
         latency_.error.reset();
         return {};
@@ -169,13 +182,25 @@ Status RuntimeProtection::applyLatency() {
         // Linux closes even on EINTR, so retrying could close a reused fd.
         (void)ops_->closeLatency(fd);
     }
-    std::string hint = "disable the CPU idle option, or retry after resolving the device error";
+    // Held for a live bridged plug-in without the option (ADR-0086): no
+    // option to disable, and audio plays without it.
+    const bool automatic = !latency_.requested;
+    std::string hint = automatic ? "the request is made only while a bridged plug-in plays live, "
+                                   "and audio plays without it; retry after resolving the device "
+                                   "error, or run the plug-in in process"
+                                 : "disable the CPU idle option, or retry after resolving the "
+                                   "device error";
     if (value == EACCES || value == EPERM)
-        hint =
-            "the account needs membership in a group with write access to the device "
-            "(commonly audio); ask an administrator or disable the option";
+        hint = automatic ? "the account needs membership in a group with write access to the "
+                           "device (commonly audio) for it to be held while a bridged plug-in "
+                           "plays live; audio plays without it"
+                         : "the account needs membership in a group with write access to the "
+                           "device (commonly audio); ask an administrator or disable the option";
     else if (value == ENOENT || value == ENODEV)
-        hint = "the CPU latency device is unavailable; disable the option on this system";
+        hint = automatic ? "the CPU latency device is unavailable on this system; audio plays "
+                           "without the request"
+                         : "the CPU latency device is unavailable; disable the option on this "
+                           "system";
     if (value == ENOTSUP)
         hint = "the process CPU idle-latency request is Linux-only; disable the option";
     return failure(latency_, value, "engine.cpu_idle_latency", operation, "/prevent_deep_idle",
@@ -238,10 +263,12 @@ void RuntimeProtection::releaseThp() {
 void RuntimeProtection::start() {
     applyThp();
     if (memory_.requested) (void)applyMemory();
-    if (latency_.requested) (void)applyLatency();
+    if (latency_.requested || latency_.automatic) (void)applyLatency();
 }
 
 void RuntimeProtection::stop() {
+    latency_.automatic = false;  // no engine, no live plug-in (ADR-0086)
+    if (!latency_.requested) latency_.error.reset();
     (void)releaseLatency();
     (void)releaseMemory();
     releaseThp();

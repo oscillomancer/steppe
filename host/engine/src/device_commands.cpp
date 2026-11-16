@@ -54,6 +54,16 @@ schema::Schema<RuntimeProtectionStatus> runtimeProtectionSchema() {
         .build();
 }
 
+// memory_lock's fields, and whether a live bridged plug-in holds it (ADR-0086).
+schema::Schema<RuntimeProtectionStatus> cpuIdleLatencySchema() {
+    return schema::object<RuntimeProtectionStatus>("cpu_idle_latency_status")
+        .field("requested", &RuntimeProtectionStatus::requested, schema::boolean())
+        .field("active", &RuntimeProtectionStatus::active, schema::boolean())
+        .field("automatic", &RuntimeProtectionStatus::automatic, schema::boolean())
+        .field("error", &RuntimeProtectionStatus::error, runtimeProtectionErrorSchema())
+        .build();
+}
+
 schema::Schema<ThpOptOutStatus> thpOptOutSchema() {
     return schema::object<ThpOptOutStatus>("thp_opt_out_status")
         .field("active", &ThpOptOutStatus::active, schema::boolean())
@@ -181,7 +191,7 @@ schema::Schema<EngineStatus> engineStatusSchema() {
         .field("workgroup", &EngineStatus::workgroup, engineWorkgroupSchema())
         .field("warnings", &EngineStatus::warnings, schema::arrayOf(schema::string()))
         .field("memory_lock", &EngineStatus::memoryLock, runtimeProtectionSchema())
-        .field("cpu_idle_latency", &EngineStatus::cpuIdleLatency, runtimeProtectionSchema())
+        .field("cpu_idle_latency", &EngineStatus::cpuIdleLatency, cpuIdleLatencySchema())
         .field("thp_opt_out", &EngineStatus::thpOptOut, thpOptOutSchema())
         .field("audio_page_faults", &EngineStatus::audioPageFaults, audioPageFaultsSchema())
         .field("meter_drops", &EngineStatus::meterDrops, meterDropsSchema())
@@ -276,8 +286,10 @@ void registerDeviceCommands(cmd::Registry& registry) {
             "follows the app's Audio processing threads preference (Automatic by default); "
             "live helpers join each callback with no added latency. memory_lock reports the "
             "default-off host-process memory policy: requested, active, and a structured OS "
-            "error on failure. cpu_idle_latency reports the default-off 20 microsecond PM QoS "
-            "request, released on engine stop. thp_opt_out: on Linux the process is kept out of "
+            "error on failure. cpu_idle_latency reports the 20 microsecond PM QoS request: "
+            "requested by the default-off option, or automatic, held on Linux while a bridged "
+            "plug-in plays live; released on engine stop. thp_opt_out: on Linux the process is "
+            "kept out of "
             "transparent huge pages while the engine runs (advised_only: regions a plug-in "
             "advised keep them). A protection failure does not prevent audio "
             "startup. MIDI output refusals are in midi_output_warnings; midi_output_latency "
@@ -326,7 +338,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
                                    "message": "", "hint": ""},
                      "warnings": [],
                      "memory_lock": {"requested": false, "active": false},
-                     "cpu_idle_latency": {"requested": false, "active": false},
+                     "cpu_idle_latency": {"requested": false, "active": false, "automatic": false},
                      "thp_opt_out": "<any>", "audio_page_faults": "<any>",
                      "meter_drops": {"renderer": 0, "callback": 0}, "failed_fx": [],
                      "bridge_threads_refused": [],
@@ -466,8 +478,10 @@ void registerDeviceCommands(cmd::Registry& registry) {
             "never audio. dropped/voice_dropped count lost plug-in output/voice records. "
             "memory_lock reports requested/active and an optional OS error with errno and a "
             "corrective hint, including while stopped. Bridges are excluded. cpu_idle_latency "
-            "reports the owned 20 microsecond request with the same status/error fields; it "
-            "affects system idle while held and leaves CPU frequency policy unchanged. "
+            "reports the owned 20 microsecond request with the same status/error fields, and "
+            "automatic: held without the option because a bridged plug-in plays live (Linux; "
+            "an automatic failure is no warning). It affects system idle while held and leaves "
+            "CPU frequency policy unchanged. "
             "thp_opt_out: active, advised_only and an optional error, Linux only (khugepaged "
             "collapsing memory would stall audio threads). audio_page_faults: page faults since "
             "the engine started; scope audio_threads counts the callback's and live helpers' "
@@ -509,7 +523,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
                                    "message": "", "hint": ""},
                      "warnings": [],
                      "memory_lock": {"requested": false, "active": false},
-                     "cpu_idle_latency": {"requested": false, "active": false},
+                     "cpu_idle_latency": {"requested": false, "active": false, "automatic": false},
                      "thp_opt_out": {"active": false, "advised_only": false},
                      "audio_page_faults": {"scope": "none", "minor": 0, "major": 0, "threads": 0},
                      "meter_drops": {"renderer": 0, "callback": 0}, "failed_fx": [],

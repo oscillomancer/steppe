@@ -1496,7 +1496,10 @@ void EngineApp::tick() {
     }
     if (engine_) {
         engine_->service();
-        watchFaults();                  // a callback thread seen for the first time
+        watchFaults();  // a callback thread seen for the first time
+        // ADR-0086: the idle-latency request is held while a bridged plug-in
+        // plays live (acts on a change only).
+        (void)protections_->setBridgedLive(backend_ && engine_->bridgedLive(), backend_ != nullptr);
         serviceSync();                  // what the sync master did, to the transport (ADR-0071)
         if (!txn_) updateWriteHolds();  // a touch hold's release time passed
         consumePluginOutputs();
@@ -1967,7 +1970,9 @@ EngineStatus EngineApp::engineStatus() {
     }
     if (st.thpOptOut.error)
         st.warnings.push_back(st.thpOptOut.error->message + "; " + st.thpOptOut.error->hint);
-    if (st.cpuIdleLatency.error)
+    // An automatic hold that failed is no warning: audio plays without it, and
+    // on many systems only root may make the request (ADR-0086).
+    if (st.cpuIdleLatency.error && st.cpuIdleLatency.requested)
         st.warnings.push_back(st.cpuIdleLatency.error->message + "; " +
                               st.cpuIdleLatency.error->hint);
     if (st.memoryLock.error)

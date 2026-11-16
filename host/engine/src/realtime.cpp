@@ -555,6 +555,7 @@ void Engine::stop() {
     while (ratePlanRequests_.pop(discarded)) {
     }
     latestPlan_.store(nullptr);
+    bridgedLive_ = false;
     for (const auto& plan : plans_)
         for (auto* instance : plan->instances) instance->setAudioWake(nullptr);
     ratePreparedTail_ = nullptr;
@@ -827,6 +828,13 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
     holdsPending_ = false;
     staleCurves_.clear();
     latestPlan_.store(plan.get(), std::memory_order_release);
+    // The callback's instances: the live nodes', or all of them without the
+    // renderer (ADR-0086).
+    {
+        const auto& callback = options_.anticipative ? plan->liveInstances : plan->instances;
+        bridgedLive_ = std::any_of(callback.begin(), callback.end(),
+                                   [](const host::Instance* in) { return in->isolated(); });
+    }
     if (recoverySeek)
         writeTransport([&] {
             seekSample_.store(time::samplesAt(*recoverySeek, config_.sampleRate),

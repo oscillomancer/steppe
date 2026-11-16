@@ -18,6 +18,9 @@ class RuntimeProtection {
     RuntimeProtection& operator=(const RuntimeProtection&) = delete;
     Status setMemoryLock(bool requested, bool running);
     Status setPreventDeepIdle(bool requested, bool running);
+    // ADR-0086: whether a bridged plug-in plays live; while one does, the
+    // idle-latency request is held as if asked for. Acts on a change only.
+    Status setBridgedLive(bool live, bool running);
     const RuntimeProtectionStatus& cpuIdleLatency() const { return latency_; }
     const ThpOptOutStatus& thpOptOut() const { return thp_; }
     void start();
@@ -27,6 +30,7 @@ class RuntimeProtection {
   private:
     Status applyMemory();
     Status releaseMemory();
+    Status updateLatency(bool running);
     Status applyLatency();
     Status releaseLatency();
     void applyThp();

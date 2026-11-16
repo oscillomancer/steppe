@@ -1941,7 +1941,9 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   file. Missing fields (including in 1.0/1.1 files) mean false; invalid
   types report `preferences.prevent_deep_idle` at `/prevent_deep_idle` with
   "use true or false". It uses the same save/intent/effective-state pattern
-  as memory locking. The active note says "Requested: 20 µs"; failures show
+  as memory locking. The active note says "Requested: 20 µs", or "Held while a
+  bridged plug-in plays live: 20 µs" when the request is held without the
+  option (ADR-0086, Linux); failures show
   errno and a corrective hint; Off has no status note. This row uses the same
   label/button columns as the others. Its single small caution line says the
   request affects system idle while the engine runs and may increase power,
