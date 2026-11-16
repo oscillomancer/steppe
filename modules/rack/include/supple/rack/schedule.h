@@ -37,6 +37,13 @@ class ParamCurve {
 class Clock {
   public:
     virtual script::Transport transport(std::int64_t position) SUPPLE_RT = 0;
+    // The transport at a call's start as a module's transport() reads it,
+    // computed as it always was, so saved module source plays to the bit as
+    // before (transport() may round differently in the last bit from
+    // gridTransport() at the same position).
+    virtual script::Transport callTransport(std::int64_t position) SUPPLE_RT {
+        return transport(position);
+    }
 
   protected:
     ~Clock() = default;

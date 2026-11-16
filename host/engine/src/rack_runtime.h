@@ -226,6 +226,7 @@ struct RackClock final : rack::Clock {
     const Plan* plan = nullptr;
     const struct RackNode* rack = nullptr;
     script::Transport transport(std::int64_t position) SUPPLE_RT override;
+    script::Transport callTransport(std::int64_t position) SUPPLE_RT override;
 };
 
 struct NotesOutBinding {

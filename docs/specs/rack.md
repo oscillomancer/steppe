@@ -463,9 +463,13 @@ keeps its meaning, the transport at the call's start (a feedback group's
 per-frame calls all see their fragment's start), so a project's or the
 library's module source computing `beats + i * perFrame` from it plays as
 it did, its positions differing in the last bits between renders that
-split the grid differently. Without playrate the engine's clock reads the time of a
-timeline sample as `(origin + sample) / rate`, so an offline render that
-starts at a seek and the real-time plan agree on it to the bit.
+split the grid differently. It is also computed as it always was
+(`Clock::callTransport`: the plan's start plus the samples since), so the
+same source in the same render gives the same bits as before review round
+20. For `gridTransport()`, without playrate, the engine's clock reads the
+time of a timeline sample as `(origin + sample) / rate`, so an offline
+render that starts at a seek and the real-time plan agree on it to the
+bit; `transport()` at a nonzero start can differ from it in the last bit.
 `rack-stock.tests` checks every stock module with split calls against whole
 ones, from the timeline's start and off the grid, with the song playing and
 clocked modules following it. A first

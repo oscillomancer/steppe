@@ -403,9 +403,9 @@ instructions are in `docs/guides/installing.md`.
   host blocks split the grid, which a seek off it does, song positions
   included (`gridTransport()` and `Transport::offset`; checked for every
   stock module, and in both executors after seeks off the grid). A module's
-  `transport()` keeps its meaning, the call's start, so a project's or the
-  library's module source computing positions from it plays as it did,
-  positions differing in the last bits between renders that split the
+  `transport()` keeps its meaning, the call's start, and its arithmetic, so a
+  project's or the library's module source computing positions from it plays
+  as it did, to the bit, positions differing in the last bits between renders that split the
   grid differently. Getting there changed the
   sound of some saved patches, on the grid too, since projects play the
   current stock modules: in a feedback group, Harmonic, Resonator, Delay,
