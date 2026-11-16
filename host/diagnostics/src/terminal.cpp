@@ -24,7 +24,12 @@
 #if defined(__linux__)
 #include <sys/syscall.h>
 #endif
+#if defined(__APPLE__)
+// <ucontext.h> is refused without _XOPEN_SOURCE; the struct definitions come from here.
+#include <sys/ucontext.h>
+#else
 #include <ucontext.h>
+#endif
 #include <unistd.h>
 #if defined(__APPLE__) && defined(__aarch64__)
 #include <mach/arm/thread_status.h>
@@ -91,11 +96,11 @@ void handoff(Packet packet) noexcept {
 [[noreturn]] void reraise(int signal) {
     struct sigaction action{};
     action.sa_handler = SIG_DFL;
-    ::sigemptyset(&action.sa_mask);
+    (void)sigemptyset(&action.sa_mask);
     (void)::sigaction(signal, &action, nullptr);
     sigset_t one;
-    ::sigemptyset(&one);
-    ::sigaddset(&one, signal);
+    (void)sigemptyset(&one);
+    (void)sigaddset(&one, signal);
     (void)::sigprocmask(SIG_UNBLOCK, &one, nullptr);
     (void)::raise(signal);
     ::_exit(128 + signal);  // only if the native fatal re-raise could not complete
@@ -225,7 +230,7 @@ bool installTerminal(Native native, const Packet& boot) {
         if (::sigaction(signal, nullptr, &prior) != 0 || prior.sa_handler != SIG_DFL) continue;
         action.sa_sigaction = fatalSignal;
         action.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESETHAND;
-        ::sigemptyset(&action.sa_mask);
+        (void)sigemptyset(&action.sa_mask);
         installed |= ::sigaction(signal, &action, nullptr) == 0;
     }
 #endif

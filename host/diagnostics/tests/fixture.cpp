@@ -104,13 +104,23 @@ void writeExpected(const char* path) {
 }
 #endif
 #if defined(_WIN32)
+// An earlier handler that deals with the exception, so it never reaches the
+// last-chance filter. A vectored handler, not __try: clang-cl rejects the
+// language extension under -Werror.
+std::atomic<bool> expectFault{false};
+LONG CALLBACK priorHandler(EXCEPTION_POINTERS* info) {
+    if (expectFault.load() && info->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION)
+        return EXCEPTION_CONTINUE_EXECUTION;
+    return EXCEPTION_CONTINUE_SEARCH;
+}
 int handledFault() {
-    __try {
-        RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, 0, nullptr);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
-    }
-    return 9;
+    void* const handle = AddVectoredExceptionHandler(1, priorHandler);
+    if (!handle) return 9;
+    expectFault = true;
+    RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, 0, nullptr);  // continuable
+    expectFault = false;
+    RemoveVectoredExceptionHandler(handle);
+    return 0;
 }
 #else
 volatile sig_atomic_t handled = 0;

@@ -136,7 +136,7 @@ Result<Native> launch(int argc, char** argv, const Packet& boot) {
     supervisedPid = child;
     struct sigaction forward{};
     forward.sa_handler = forwardSignal;
-    ::sigemptyset(&forward.sa_mask);
+    (void)sigemptyset(&forward.sa_mask);
     (void)::sigaction(SIGINT, &forward, nullptr);
     (void)::sigaction(SIGTERM, &forward, nullptr);
     Native native{pair[0], child};
