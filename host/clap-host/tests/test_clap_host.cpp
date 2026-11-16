@@ -2198,6 +2198,34 @@ TEST_CASE("remote initial snapshots retain idle outputs and state before subscri
     (*instance)->closeEditor();
 }
 
+TEST_CASE("opening instances on a shared bridge costs requests linear in their number") {
+    // Item D (review round 25): each new or subscribing instance made the next
+    // pass pull every instance, so opening N cost about N^2 requests.
+    setBridgeExecutable(BRIDGE_PATH);
+    auto requestsFor = [](int n) {
+        MainThreadWake wake;
+        auto process = createBridgeProcess();
+        REQUIRE(process);
+        const auto info = find("com.suppleaudio.test.gain");
+        const auto before = bridgeRequests();
+        std::vector<std::unique_ptr<Instance>> all;
+        for (int i = 0; i < n; ++i) {
+            auto made = Instance::create(info, {}, true, *process);
+            REQUIRE(made);
+            (*made)->setMainThreadWake(wake);
+            (*made)->serviceMainThread();  // as a load services each new instance
+            (void)(*made)->takeIdleOutputs();
+            all.push_back(std::move(*made));
+        }
+        return bridgeRequests() - before;
+    };
+    const auto small = requestsFor(4);
+    const auto large = requestsFor(16);
+    CAPTURE(small);
+    CAPTURE(large);
+    CHECK(large <= small * 4 + 4);  // 4x the instances, about 4x the requests
+}
+
 TEST_CASE("a bridge-side publication pulls the instance that published, not its whole bridge") {
     // Item D: the bridge announced new captures without naming an instance,
     // so each announcement pulled every instance sharing the bridge. The ACK

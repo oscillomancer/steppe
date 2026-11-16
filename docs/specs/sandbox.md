@@ -301,9 +301,10 @@ it does not consume the snapshots. The parent's parked process watcher drains
 the outward fd, publishes a pending delivery and calls subscribed app relays'
 notify(). Before pulling snapshots, parent main ACKs the drained delivery and
 refreshes the members the ACK names. A delivery with no ACK (a failure or the
-child's death), the first pass, a new member or subscription, and a reply that
-cannot be read refresh every registered member, including retired/editor
-instances. A member's own state-changing request refreshes only that member; a consumer pulls its own
+child's death), the first pass, and a reply that cannot be read refresh every
+registered member, including retired/editor instances. A new member, a
+member's wake subscription and its own state-changing request refresh only
+that member; a consumer pulls its own
 snapshot on call when unsubscribed and the pass did not include it. Results
 remain in proxy caches until the existing per-instance consumers drain them.
 A publication during/after ACK or during those pulls creates another event.

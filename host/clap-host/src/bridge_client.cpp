@@ -183,8 +183,8 @@ void BridgeProcess::subscribe(RemoteInstance& instance, MainThreadWake& wake) {
     if (instance.wake_ && --subscribers_[instance.wake_] == 0) subscribers_.erase(instance.wake_);
     instance.wake_ = &wake;
     ++subscribers_[&wake];
-    refreshNeeded_ = true;
-    wake.notify();  // retained pre-subscription work and already-failed processes
+    queueRefresh(&instance);  // its own snapshot: the others' are unaffected
+    wake.notify();            // retained pre-subscription work and already-failed processes
 }
 
 void BridgeProcess::unsubscribe(RemoteInstance& instance) {
@@ -325,7 +325,7 @@ Result<std::unique_ptr<RemoteInstance>> RemoteInstance::spawn(
         return Error("host.layout", "bridge layout exceeds 16 channels", {},
                      "select a layout with at most 16 main and key channels");
     self->process_->members_.push_back(self.get());
-    self->process_->refreshNeeded_ = true;
+    self->process_->queueRefresh(self.get());  // item D: not every member's
     return self;
 }
 
