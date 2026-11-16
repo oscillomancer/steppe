@@ -241,14 +241,14 @@ void BridgeProcess::watch() {
     }
 }
 
-bool BridgeProcess::refresh() {
+bool BridgeProcess::refresh(const RemoteInstance* self) {
     const auto delivery = delivery_.load(std::memory_order_acquire);
     const bool all = refreshNeeded_ || delivery != servedDelivery_;
     if (!all && refreshOnly_.empty()) return false;
     const auto only = std::exchange(refreshOnly_, {});
     if (!all) {
         for (auto* member : only) member->pullSnapshot();
-        return true;
+        return std::find(only.begin(), only.end(), self) != only.end();
     }
     refreshNeeded_ = false;
     servedDelivery_ = delivery;  // a delivery during pulls needs another pass
@@ -839,7 +839,7 @@ void RemoteInstance::pullSnapshot() {
 }
 
 bool RemoteInstance::service(Instance::Notifications& notes, std::vector<std::string>& log) {
-    if (!process_->refresh() && !wake_) pendingWork_ |= pullService();
+    if (!process_->refresh(this) && !wake_) pendingWork_ |= pullService();
     auto pending = std::exchange(pendingNotes_, {});
     if (!mergeNotifications(notes, pending)) {
         notes.restartError =
@@ -853,7 +853,7 @@ bool RemoteInstance::service(Instance::Notifications& notes, std::vector<std::st
 }
 
 Instance::IdleOutputs RemoteInstance::takeIdleOutputs() {
-    if (!process_->refresh() && !wake_) mergeIdleOutputs(pendingIdle_, pullIdleOutputs());
+    if (!process_->refresh(this) && !wake_) mergeIdleOutputs(pendingIdle_, pullIdleOutputs());
     return std::exchange(pendingIdle_, {});
 }
 
@@ -863,7 +863,8 @@ Instance::EditorRequests RemoteInstance::editorRequests() {
         q.closed = true;
         return q;
     }
-    if (!process_->refresh() && !wake_) mergeEditorRequests(pendingEditor_, pullEditorRequests());
+    if (!process_->refresh(this) && !wake_)
+        mergeEditorRequests(pendingEditor_, pullEditorRequests());
     return std::exchange(pendingEditor_, {});
 }
 

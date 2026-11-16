@@ -56,7 +56,10 @@ class BridgeProcess {
     void notifySubscribers();
     void subscribe(RemoteInstance& instance, MainThreadWake& wake);
     void unsubscribe(RemoteInstance& instance);
-    bool refresh();  // main only: ACK before snapshotting every registered member
+    // Main only: ACK, then snapshot the members that need it (every member for
+    // a pending whole-bridge refresh or a delivery). True when `self` was
+    // among them, so its consumer need not pull it again (round 25).
+    bool refresh(const RemoteInstance* self);
     MainThreadWake watcherWake_;
     WakeEvent notification_;
     bool notificationsReady_ = false;

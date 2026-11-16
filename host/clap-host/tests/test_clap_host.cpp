@@ -52,6 +52,7 @@ struct BridgeTestAccess {
         instance->process_->members_.push_back(instance.get());
         return instance;
     }
+    static void setId(RemoteInstance& i, std::uint32_t id) { i.instanceId_ = id; }
     static void deliver(BridgeProcess& process) {
         process.ackPending_.store(true, std::memory_order_release);
         process.delivery_.fetch_add(1, std::memory_order_release);
@@ -2783,4 +2784,62 @@ TEST_CASE("the live class's period is the device's whatever rate a plug-in runs 
     // Without a device period: the command's block at the activation rate.
     CHECK(bridge::liveClassPeriodNs(0, 256, 96000) == doctest::Approx(2666666.67));
     CHECK(bridge::liveClassPeriodNs(0, 256, 0) == 0.0);
+}
+
+// Round 25 (review-builds/round25/probe_nowake.patch).
+// A shared bridge with two unsubscribed members (no wake: offline-render pools and
+// tests). Member B's state changed in the bridge after its initial snapshot. Member A
+// then makes a state-changing request. B's own service() must still pull B on demand.
+TEST_CASE("an unsubscribed bridged instance still pulls itself after another member's request") {
+    int sockets[2];
+    REQUIRE(::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets) == 0);
+    auto process = BridgeTestAccess::adopt(sockets[0], -1);
+    std::atomic<unsigned> serviceOfB{0}, calls{0};
+    struct Peer {
+        int socket;
+        std::thread thread;
+        ~Peer() {
+            ::shutdown(socket, SHUT_RDWR);
+            thread.join();
+            ::close(socket);
+        }
+    } peer{sockets[1], std::thread([&] {
+               std::uint32_t op = 0, id = 0;
+               std::vector<std::uint8_t> payload;
+               while (bridge::recvFrame(sockets[1], op, id, payload)) {
+                   ++calls;
+                   bridge::Writer reply;
+                   switch (static_cast<bridge::Op>(op)) {
+                       case bridge::Op::Service:
+                           reply.bytes.resize(35);
+                           // B (id 2): latencyChanged from its second snapshot on.
+                           if (id == 2 && ++serviceOfB >= 2) reply.bytes[3] = 1;
+                           break;
+                       case bridge::Op::TakeIdleOutputs:
+                           reply.bytes.resize(12);
+                           break;
+                       case bridge::Op::EditorRequests:
+                           reply.bytes.resize(29);
+                           break;
+                       default:
+                           break;
+                   }
+                   if (!bridge::sendFrame(sockets[1], 0, id, reply.bytes)) break;
+                   if (static_cast<bridge::Op>(op) == bridge::Op::Destroy) break;
+               }
+           })};
+    auto a = BridgeTestAccess::controlPlane(process);
+    auto b = BridgeTestAccess::controlPlane(process);
+    BridgeTestAccess::setId(*b, 2);
+    Instance::Notifications notes;
+    std::vector<std::string> log;
+    a->service(notes, log);  // initial snapshot of both members
+    REQUIRE(serviceOfB.load() == 1);
+    notes = {};
+    REQUIRE(a->setParam(0, 0.5));  // A's own state-changing request
+    const auto before = calls.load();
+    b->service(notes, log);  // B, unsubscribed, polls on demand
+    CAPTURE(calls.load() - before);
+    CHECK(serviceOfB.load() == 2);  // B was asked for its state
+    CHECK(notes.latencyChanged);    // and B's change reached its caller
 }
