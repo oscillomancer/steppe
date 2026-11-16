@@ -81,8 +81,11 @@ elsewhere. `threadPageFaults(tid)` reads `minflt`/`majflt` from
 thread's becomes only once the kernel releases it, possibly after its join
 returns, and which a later thread may then reuse; and always on
 macOS and Windows, which keep no per-thread count). `processPageFaults()` is
-the process's: `getrusage` on Linux and macOS, `GetProcessMemoryInfo` on
-Windows with `major` -1, since it does not separate them. None of these but
+the process's: `getrusage` on Linux; on macOS the task's event counts
+(`TASK_EVENTS_INFO`: every fault, less page-ins as `minor`, page-ins as
+`major`), since `getrusage` there counts only page reclaims and misses
+fresh pages' zero-fill faults; `GetProcessMemoryInfo` on Windows with
+`major` -1, since it does not separate them. None of these but
 the first may run on an audio path.
 
 ## Directory roots

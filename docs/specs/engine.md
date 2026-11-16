@@ -2113,8 +2113,8 @@ started: `{scope, minor, major, threads}`. On Linux, `scope` is
 from when the main thread first sees it (the helpers at start, the callback
 within a tick of its first cycle; the cycle records `pthread_self()`, which
 makes no system call). The kernel thread id comes from the thread's CPU clock
-id and the counts from `/proc/self/task/<tid>/stat`. On macOS (`getrusage`)
-and Windows (`GetProcessMemoryInfo`, which does not separate minor from major,
+id and the counts from `/proc/self/task/<tid>/stat`. On macOS (`task_info` event counts:
+`getrusage` there misses fresh pages' zero-fill faults) and Windows (`GetProcessMemoryInfo`, which does not separate minor from major,
 so `major` is omitted) neither keeps a count per thread, and `scope` is
 `process`. `none` while stopped. The bench reports the same count over its
 measured interval, and each thread's on Linux (`tools/bench/README.md`).

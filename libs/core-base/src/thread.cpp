@@ -19,6 +19,9 @@
 #include <sys/resource.h>
 #include <time.h>
 #endif
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#endif
 
 #include <algorithm>
 #include <bit>
@@ -239,6 +242,18 @@ PageFaults processPageFaults() {
     PROCESS_MEMORY_COUNTERS counters{};
     if (!GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters))) return {0, -1};
     return {static_cast<std::int64_t>(counters.PageFaultCount), -1};
+#elif defined(__APPLE__)
+    // getrusage's ru_minflt there counts page reclaims only, not the
+    // zero-fill faults of fresh pages; the task's event counts have every
+    // fault and the page-ins (32-bit counters, which wrap after 2^31).
+    task_events_info_data_t events{};
+    mach_msg_type_number_t count = TASK_EVENTS_INFO_COUNT;
+    if (::task_info(::mach_task_self(), TASK_EVENTS_INFO, reinterpret_cast<task_info_t>(&events),
+                    &count) != KERN_SUCCESS)
+        return {};
+    const auto pageins = static_cast<std::int64_t>(static_cast<std::uint32_t>(events.pageins));
+    const auto faults = static_cast<std::int64_t>(static_cast<std::uint32_t>(events.faults));
+    return {std::max<std::int64_t>(faults - pageins, 0), pageins};
 #else
     rusage usage{};
     if (::getrusage(RUSAGE_SELF, &usage) != 0) return {};

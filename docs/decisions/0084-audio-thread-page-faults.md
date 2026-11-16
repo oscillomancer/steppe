@@ -74,7 +74,10 @@ memory after `resize()`, so the callback's first writes, or a restart's
   memory compressor can compress pages left idle, and the first touch of
   fresh memory faults there too; point 2 covers the latter. It keeps no
   per-thread fault count, so `audio_page_faults` is the process's
-  (`getrusage`). There is no process-wide `mlockall`.
+  (`getrusage`; review correction 2026-11-16: the task's
+  `TASK_EVENTS_INFO` counts instead, since `getrusage` there counts only page
+  reclaims and native CI saw touched fresh pages not counted). There is no
+  process-wide `mlockall`.
 - **Windows** has no transparent huge pages: large pages are explicit,
   privileged and never pageable. Working-set trimming can make idle pages
   soft-fault back. `GetProcessMemoryInfo` counts the process's faults without
