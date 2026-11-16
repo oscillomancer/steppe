@@ -5,6 +5,7 @@
 #pragma once
 
 #include "supple/base/result.h"
+#include "supple/host/clap_host.h"
 #include "thread_startup.h"
 #include "workers.h"
 
@@ -17,7 +18,8 @@ class LiveWorkers {
     using Fn = Workers::Fn;
     // Test seams: Join precedes the claim; Claimed precedes the open check;
     // Entered/Leave surround job access. Published/JoinWait run on the caller.
-    // Park: a helper is about to wait within a job (setParkAfter).
+    // Park: a helper is about to wait within a job, which it does only while
+    // one of the job's bridged calls blocks (ADR-0085).
     enum class Event { Join, Claimed, Entered, Leave, Missed, Idle, Published, JoinWait, Park };
     struct Hooks {
         void (*event)(void*, Event) = nullptr;
@@ -43,11 +45,6 @@ class LiveWorkers {
     ThreadPolicy policy();  // main thread: the first helper's (None without helpers)
     // One callback at a time. No helper can access this job after return.
     void run(TaskGraph& graph, Fn fn, void* context) SUPPLE_RT;
-    // Experimental (item D): a helper idle this long within a job parks
-    // until a task is ready or the job completes, instead of spinning, so
-    // waits on bridged plug-ins leave CPUs to the bridge. 0 (the default):
-    // helpers spin. Main thread, before the first job.
-    void setParkAfter(std::int64_t nanoseconds) { parkAfterNs_ = nanoseconds; }
 
   private:
     void shutDown();
@@ -55,7 +52,9 @@ class LiveWorkers {
     // `self`: the helper's index, or -1 for the callback (which never parks).
     void help(TaskGraph& graph, Fn fn, void* context, int self) SUPPLE_RT;
     void park(TaskGraph& graph, int self) SUPPLE_RT;
+    // Wakes up to `count` parked helpers, or all of them.
     void unpark(int count, bool all) SUPPLE_RT;
+    static void bridgeWaitEnded(void* self) SUPPLE_RT;
     void event(Event e) {
         if (hooks_.event) hooks_.event(hooks_.context, e);
     }
@@ -78,7 +77,9 @@ class LiveWorkers {
     // The callback's bridge deadline for this job (ADR-0081), which helpers
     // take for their bridged calls; 0 for none.
     std::int64_t deadline_ = 0;
-    std::int64_t parkAfterNs_ = 0;
+    // The job's threads' blocking bridged waits (ADR-0085), set on each of
+    // them for the job; helpers park only while one blocks.
+    host::LiveBridgeWaiters waiters_{.ended = &LiveWorkers::bridgeWaitEnded, .context = this};
     std::atomic<std::uint64_t> parked_{0};  // a bit per parked helper
 };
 

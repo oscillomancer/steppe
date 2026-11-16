@@ -492,7 +492,16 @@ retain the job; an old wake may harmlessly claim the next open job.
 
 The callback helps execute ready nodes and spins on atomics (CPU relax only)
 while work or claimed departures remain. Helpers spin only within that job and
-park between segments, with no post-cycle spin. Participation uses the chain
+park between segments, with no post-cycle spin. The one exception
+(ADR-0085): while a bridged call of the job blocks past its spin under the
+live deadline (`host::LiveBridgeBlocked`, counted in the pool's
+`host::LiveBridgeWaiters`, which `run` sets on the callback and each helper),
+an idle helper parks on its own futex word, after setting its parked bit and
+a fence, and only if the count is still nonzero. The call's end (decrement,
+fence, read the bits) wakes every parked helper; a push wakes as many as it
+pushed, best effort. No helper is parked past its job, since the job's last
+node ends after its waits. In-process jobs never park: the count is read
+once per idle spin and the parked bits once per push, relaxed. Participation uses the chain
 cover, configured capacity and usable CPUs minus one; a chain runs directly
 without queue/wake traffic. The callback joins a helper preempted after claiming,
 including after completing DSP. No helper touches the job after its departure

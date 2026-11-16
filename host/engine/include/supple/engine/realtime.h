@@ -486,10 +486,6 @@ struct EngineOptions {
     // this, whichever is larger. Tests raise it so that a loaded machine
     // never makes a healthy bridged plug-in late.
     double liveBridgeDeadlineMs = 2.0;
-    // Experimental (item D, off by default): a live helper idle this many
-    // microseconds within a callback's job parks until a task is ready or
-    // the job ends, instead of spinning. 0: helpers spin.
-    double liveHelperParkUs = 0.0;
     // The renderer's and background pool's scheduling (engine.md §2.2,
     // ADR-0026). Auto: real-time below a real-time callback, else normal. The
     // others force it for benchmarks and tests (still below a real-time

@@ -859,7 +859,8 @@ Instance::EditorRequests RemoteInstance::editorRequests() {
 // --- data plane (audio thread) ----------------------------------------------------------
 
 namespace {
-thread_local std::int64_t tLiveDeadline = 0;  // ADR-0081; 0: none
+thread_local std::int64_t tLiveDeadline = 0;             // ADR-0081; 0: none
+thread_local LiveBridgeWaiters* tLiveWaiters = nullptr;  // ADR-0085
 std::atomic<std::uint64_t> gLateCalls{0};
 
 // Bridged calls' timing (BridgeTiming), live and background apart.
@@ -902,6 +903,23 @@ LiveBridgeDeadline::LiveBridgeDeadline(std::int64_t steadyNs) SUPPLE_RT : previo
 }
 std::int64_t currentLiveBridgeDeadline() SUPPLE_RT { return tLiveDeadline; }
 LiveBridgeDeadline::~LiveBridgeDeadline() SUPPLE_RT { tLiveDeadline = previous_; }
+LiveBridgeWaitScope::LiveBridgeWaitScope(LiveBridgeWaiters* waiters) SUPPLE_RT
+    : previous_(tLiveWaiters) {
+    tLiveWaiters = waiters;
+}
+LiveBridgeWaitScope::~LiveBridgeWaitScope() SUPPLE_RT { tLiveWaiters = previous_; }
+LiveBridgeBlocked::LiveBridgeBlocked() SUPPLE_RT : waiters_(tLiveWaiters) {
+    if (waiters_) waiters_->blocked.fetch_add(1, std::memory_order_seq_cst);
+}
+LiveBridgeBlocked::~LiveBridgeBlocked() SUPPLE_RT {
+    if (!waiters_) return;
+    // The decrement, then a fence, then ended() reads who parked: a helper
+    // sets its parked bit, fences and reads `blocked` before it waits, so
+    // either it sees this wait over or ended() sees it parked.
+    waiters_->blocked.fetch_sub(1, std::memory_order_seq_cst);
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    if (waiters_->ended) waiters_->ended(waiters_->context);
+}
 std::int64_t steadyNanoseconds() SUPPLE_RT {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
                std::chrono::steady_clock::now().time_since_epoch())
@@ -918,6 +936,8 @@ bool RemoteInstance::answered(std::uint32_t req, Cmd cmd) SUPPLE_RT {
         // The callback's wait (ADR-0081): timed waits on the done word up to
         // the cycle's deadline, and nothing else. Only the wait itself is
         // sanctioned, so RealtimeSanitizer checks the rest of this path.
+        // While it blocks, its pool's idle helpers park (ADR-0085).
+        const LiveBridgeBlocked blocked;
         for (;;) {
             const std::uint32_t seen = hdr_->done.load(std::memory_order_acquire);
             if (seen == req) return true;

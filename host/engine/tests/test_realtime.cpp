@@ -3466,9 +3466,7 @@ TEST_CASE("live bridged effects play in the callback as in-process ones do") {
     };
     for (const EngineOptions& options :
          {patient(kInCallback), patient({.anticipative = false, .workers = 2}),
-          patient({.workers = 0}), patient({.workers = 2}),
-          // Item D's experiment: helpers park while the bridge answers.
-          patient({.anticipative = false, .workers = 2, .liveHelperParkUs = 1.0})}) {
+          patient({.workers = 0}), patient({.workers = 2})}) {
         auto run = [&](model::Isolation isolation, Id& fxId, InstancePool& pool,
                        std::uint64_t& late) {
             MediaCache media;

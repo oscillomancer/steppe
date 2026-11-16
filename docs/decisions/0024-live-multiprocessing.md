@@ -12,6 +12,10 @@ the live helpers' scheduling here is unchanged.
 the callback process bridged plug-ins on live nodes, with one bounded wait
 per cycle; it states the exception to the callback's no-wait rule.
 
+**Amendment, 2026-11-16:** [ADR-0085](0085-live-helpers-park-while-bridged.md)
+lets idle helpers park within a job while one of its bridged calls blocks
+(§3); in-process jobs are unchanged.
+
 **Review correction, 2026-10-08:** the lifetime protocol below joins actual
 claims, replacing pre-enrollment of every notified helper. A helper that has
 not entered must not extend the cycle merely to observe that it has ended.

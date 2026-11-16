@@ -286,6 +286,40 @@ class LiveBridgeDeadline {
   private:
     std::int64_t previous_;
 };
+// ADR-0085: a live pool's view of its threads' bridged waits. While one is
+// set on the calling thread (LiveBridgeWaitScope), a bridged call under a
+// live deadline that has not been answered within its spin, and so blocks,
+// counts itself in `blocked` for as long as it blocks, then calls
+// ended(context). The pool's idle helpers park only while `blocked` is
+// nonzero, and ended() wakes them.
+struct LiveBridgeWaiters {
+    std::atomic<std::uint32_t> blocked{0};
+    void (*ended)(void* context) = nullptr;  // real-time; may be null
+    void* context = nullptr;
+};
+class LiveBridgeWaitScope {
+  public:
+    explicit LiveBridgeWaitScope(LiveBridgeWaiters* waiters) SUPPLE_RT;
+    ~LiveBridgeWaitScope() SUPPLE_RT;
+    LiveBridgeWaitScope(const LiveBridgeWaitScope&) = delete;
+    LiveBridgeWaitScope& operator=(const LiveBridgeWaitScope&) = delete;
+
+  private:
+    LiveBridgeWaiters* previous_;
+};
+// One blocking wait, as a bridged live call counts it: in the calling
+// thread's waiters (if any) from construction, out at destruction, which
+// then calls their ended(). seq_cst, with a fence before ended().
+class LiveBridgeBlocked {
+  public:
+    LiveBridgeBlocked() SUPPLE_RT;
+    ~LiveBridgeBlocked() SUPPLE_RT;
+    LiveBridgeBlocked(const LiveBridgeBlocked&) = delete;
+    LiveBridgeBlocked& operator=(const LiveBridgeBlocked&) = delete;
+
+  private:
+    LiveBridgeWaiters* waiters_;
+};
 std::int64_t steadyNanoseconds() SUPPLE_RT;
 // The calling thread's live deadline, 0 for none.
 std::int64_t currentLiveBridgeDeadline() SUPPLE_RT;

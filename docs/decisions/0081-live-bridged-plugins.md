@@ -1,6 +1,8 @@
 # ADR-0081: Bridged plug-ins run on live nodes, with a bounded wait
 
 **Status:** Accepted, 2026-11-14. Implementation follows in separate commits.
+Amended 2026-11-16 by [ADR-0085](0085-live-helpers-park-while-bridged.md):
+the job's idle live helpers park while a bridged call blocks.
 Amends [ADR-0013](0013-plugin-isolation.md) §5 (synchronous bridge calls
 never run in the device callback) and the callback rules of
 [ADR-0024](0024-live-multiprocessing.md) and

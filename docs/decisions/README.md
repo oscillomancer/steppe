@@ -96,3 +96,4 @@ current state.
 | [0080](0080-midi-recording-recovery.md) | MIDI takes survive a crash through a journal | Accepted |
 | [0081](0081-live-bridged-plugins.md) | Bridged plug-ins run on live nodes, with a bounded wait | Accepted |
 | [0084](0084-audio-thread-page-faults.md) | Audio threads take no page faults the app can prevent | Accepted |
+| [0085](0085-live-helpers-park-while-bridged.md) | Live helpers park while a bridged call blocks | Accepted |

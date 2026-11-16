@@ -191,8 +191,9 @@ instructions are in `docs/guides/installing.md`.
   notes. Known limits: the first change since audio started that turns a
   playrate on while playing restarts the strips it moves into the live
   region, so a held note cuts. Bridged plug-ins play on live strips too, in
-  the callback under a bounded wait (ADR-0081), with their in-process output
-  in both executors (tested with device MIDI, effects, note output and
+  the callback under a bounded wait (ADR-0081; while a bridged call blocks,
+  the job's idle live helpers park instead of spinning, ADR-0085), with their
+  in-process output in both executors (tested with device MIDI, effects, note output and
   input FX); a late block is silent and counted in `bridge_late` and
   `xruns`, blocks skipped while it is outstanding lose their audio but pass
   their events and lifecycle commands on when it answers (bounded: beyond
