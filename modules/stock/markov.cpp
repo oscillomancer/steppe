@@ -299,7 +299,7 @@ struct Markov : Module {
         pitch.setChannels(1);
         gate.setChannels(1);
         odds.setChannels(1);
-        const Transport t = transport();
+        const Transport t = gridTransport();
         const bool internal = !clock.connected();
         if (internal && t.playing && !wasPlaying) startOver();
         wasPlaying = t.playing;
@@ -316,7 +316,7 @@ struct Markov : Module {
             if (internal) {
                 bool high = false;
                 if (t.playing) {
-                    const double e = t.beats * 2.0 + i * perFrame + 1e-7;
+                    const double e = t.beats * 2.0 + (t.offset + i) * perFrame + 1e-7;
                     high = e - floor(e) < 0.5;
                 }
                 rose = high && !clockHigh;

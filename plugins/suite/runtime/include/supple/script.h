@@ -794,13 +794,20 @@ class Channel {
     double* spare_ = nullptr;
 };
 
-// The host's transport at the start of the block.
+// The host's transport, read `offset` frames before the block's first frame,
+// so frame i of the block is at song position
+// `beats + (offset + i) * tempo / 60 / sampleRate`. A plugin's, and a
+// module's transport(), are read at the block's start (offset 0). A module's
+// gridTransport() is read at the start of the rack's 32-frame grid interval,
+// offset being how far into it the block starts: computed from it, a frame's
+// position is the same however host blocks split the grid (rack.md §4.2).
 struct Transport {
     bool playing = false;
     double tempo = 120.0;  // beats per minute (120 when the host sent none)
-    double beats = 0.0;    // song position in quarter notes
+    double beats = 0.0;    // song position in quarter notes, `offset` frames ago
     double barStart = 0.0;
     int timeSigNumerator = 4, timeSigDenominator = 4;
+    int offset = 0;  // frames from where it was read to the block's start
 };
 
 // One block of audio, processed in place: io[channel][frame]. For an effect
@@ -1186,8 +1193,15 @@ using Outputs = detail::Members<Output, PortSpec, N>;
 // widest connected input or modulating cable, at least 1.
 class Module : public Plugin {
   public:
-    // The host's transport at the block's start.
+    // The host's transport at the block's start (offset 0). How host blocks
+    // split the rack's grid moves where that is, so a position computed
+    // from it can differ in the last bits between renders.
     Transport transport() const;
+    // The host's transport at the start of the rack's grid interval this
+    // block falls in, with `offset` how far into it the block starts: frame
+    // i is at beats + (offset + i) * tempo / 60 / sampleRate() exactly,
+    // however host blocks split the grid. Use it for song positions.
+    Transport gridTransport() const;
     // A seed from the project's seed and the module's id: the same in every
     // render, different for each module (Random::seed(seed())).
     int seed() const;

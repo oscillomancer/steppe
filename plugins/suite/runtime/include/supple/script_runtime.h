@@ -256,9 +256,10 @@ struct Instance {
     // While a host traces the plugin, where trace() records.
     std::atomic<TraceLog*> trace{nullptr};
     // A module's (ADR-0062): the transport at the block's start, which
-    // Module::transport() gives, and its seed (Module::seed()). For a module
-    // `channels` is its polyphony this block, which the rack sets.
-    Transport transport;
+    // Module::transport() gives, the one at its grid interval's start, which
+    // Module::gridTransport() gives, and its seed (Module::seed()). For a
+    // module `channels` is its polyphony this block, which the rack sets.
+    Transport transport, gridTransport;
     int seed = 0;
 
     static void bind(Plugin& plugin, Instance* instance) { plugin.instance_ = instance; }

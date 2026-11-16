@@ -811,6 +811,58 @@ TEST_CASE("racks: a warm modulated feedback delay seeks and loops as offline" *
             }
 }
 
+// A module following the song reads its position from the transport at the
+// start of the rack's grid interval plus the call's offset into it
+// (Transport::offset), so after a seek off the grid, where device blocks
+// split intervals elsewhere than the offline render does, its ramps and
+// gates land on the same frames to the bit, in both executors.
+TEST_CASE("racks: a song-following module seeks off the grid as offline" *
+          doctest::description("rt")) {
+    for (const bool anticipative : {false, true})
+        for (const std::int64_t seek : {std::int64_t{0}, std::int64_t{3217}, std::int64_t{70001}}) {
+            INFO("anticipative " << anticipative << ", seek " << seek);
+            model::Project project;
+            project.console9 = false;
+            project.seed = 31337;
+            model::EditTxn t(model::Session::create(project), 1);
+            const Id channel = addChannel(t);
+            const Id rack = t.create(model::Rack{channel, ""});
+            const Id poly =
+                addModule(t, rack, "com.suppleaudio.rack.polyrhythm",
+                          json::parse(R"({"span": 0, "count_1": 7, "count_2": 5})").value());
+            const Id out = addModule(t, rack, "com.suppleaudio.rack.out");
+            cable(t, poly, "ramp_1", out, "l");
+            cable(t, poly, "ramp_2", out, "r");
+            listen(t, out, channel);
+            const auto scene = commit(t);
+            InstancePool offlinePool = makePool();
+            const auto reference = renderOffline(scene, offlinePool,
+                                                 {.startSeconds = double(seek) / 48000,
+                                                  .endSeconds = double(seek + 8192) / 48000,
+                                                  .threads = 1});
+            REQUIRE(reference);
+            InstancePool pool = makePool();
+            MediaCache media;
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 20000});
+            Engine engine(pool, media, {.anticipative = anticipative, .workers = 0});
+            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+            REQUIRE(engine.load(scene));
+            engine.play();
+            runCycles(engine, backend, anticipative, 32, 128);
+            engine.seek(double(seek) / 48000);
+            runCycles(engine, backend, anticipative, 64, 128);
+            engine.stop();
+            CHECK(engine.processErrors() == 0);
+            for (std::size_t ch = 0; ch < 2; ++ch) {
+                double peak = 0;
+                for (float x : reference->audio.channels[ch]) peak = std::max(peak, double(x));
+                CHECK(peak > 0.5);  // the ramps play
+                CHECK(worstFrom(backend.capture().channels[ch], 32 * 128,
+                                reference->audio.channels[ch]) == 0.0);
+            }
+        }
+}
+
 // A loop going round keeps the history (ADR-0015): modules and feedback
 // samples run on, as one continuous offline render does.
 TEST_CASE("racks: a loop wrap keeps a feedback rack's history" * doctest::description("rt")) {

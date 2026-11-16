@@ -212,6 +212,16 @@ cable buffers, binds ports and parameters, and calls the modules' hooks.
   on that grid, so a rack renders the same in real time, in either
   executor and offline, even if a module is not itself block-size
   invariant: determinism is the runtime's, not each author's.
+  **2026-11-15 note:** only on the grid. A host block that ends off it (a
+  seek off the grid does this) splits a grid interval into two calls, and
+  real time and offline split differently, so a module must not depend on
+  where calls fall: per-frame state, control-rate work on a frame count of
+  its own, and song positions from `Transport::offset` (rack.md §4.2).
+  Review round 15 found Delay's wander, and a sweep nine more stock
+  modules, depending on it; the runtime now hands every call of an
+  interval the interval's transport plus its offset, as `gridTransport()`
+  (review round 19: `transport()` keeps its meaning, the call's start, so
+  module source written for it is unchanged).
 - **Real time.** `process` and everything the runtime does there follow
   ADR-0032's rules; schedules, buffers and instances are made on the main
   thread. Each module runs under the script budget; one that spends it is

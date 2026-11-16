@@ -341,7 +341,7 @@ struct Phrase : Module {
             started = true;
             startOver();
         }
-        const Transport t = transport();
+        const Transport t = gridTransport();
         const bool internal = !clock.connected();
         if (internal && t.playing && !wasPlaying) startOver();
         if (internal && !t.playing) open = false;
@@ -354,7 +354,8 @@ struct Phrase : Module {
             if (internal) {
                 if (t.playing) {
                     // The song's sixteenths: the form lines up with its bars.
-                    const int song = floorToInt((t.beats + i * beatsPerFrame) * 4.0 + 1e-9);
+                    const int song =
+                        floorToInt((t.beats + (t.offset + i) * beatsPerFrame) * 4.0 + 1e-9);
                     if (song != lastSong) {
                         if (lastSong < 0 || song != lastSong + 1) pos = wrap(song - 1, total);
                         lastSong = song;

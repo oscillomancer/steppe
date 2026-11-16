@@ -293,7 +293,7 @@ struct Rhythm : Module {
         hat.setChannels(1);
         perc.setChannels(1);
         accent.setChannels(1);
-        const Transport t = transport();
+        const Transport t = gridTransport();
         const bool internal = !clock.connected();
         const double perFrame = t.tempo / 15.0 / sampleRate();
         for (int i = 0; i < frames; ++i) {
@@ -309,7 +309,8 @@ struct Rhythm : Module {
             if (internal) {
                 if (t.playing) {
                     // Sixteenths from the bar's start: the groove's first is its downbeat.
-                    const double position = (t.beats - t.barStart) * 4.0 + i * perFrame + 1e-7;
+                    const double position =
+                        (t.beats - t.barStart) * 4.0 + (t.offset + i) * perFrame + 1e-7;
                     sixteenth = floorToInt(position);
                     high = position - sixteenth < 0.5;
                 }

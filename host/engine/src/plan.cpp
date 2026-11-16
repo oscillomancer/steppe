@@ -1741,27 +1741,32 @@ Status prepare(Plan& p, const Session& s) {
     return okStatus();
 }
 
-host::Transport transportAt(const Plan& p, std::int64_t sample, const LoopRange* loop,
-                            bool live) SUPPLE_RT {
+host::Transport transportAtSeconds(const Plan& p, double seconds) SUPPLE_RT {
     host::Transport t;
-    const double seconds = p.rateSeconds(sample, live);
     const double beat = p.timeMap->beatAt(seconds);
     const auto bb = p.timeMap->barBeat(beat);
     const auto meter = p.timeMap->meterAt(bb.bar);
     t.playing = true;
     t.tempo = p.timeMap->bpmAt(beat);
-    if (p.rateEnabled) {
-        const auto control = sample - static_cast<std::int64_t>(
-                                          static_cast<std::uint64_t>(sample - p.rateOrigin) & 63);
-        const auto controlBeat = p.timeMap->beatAt(p.rateSeconds(control, live));
-        t.tempo = p.timeMap->bpmAt(controlBeat) * p.timelines[live ? 1 : 0]->rate(control);
-    }
     t.beat = beat;
     t.barStartBeat = p.timeMap->beatOfBar(bb.bar);
     t.bar = bb.bar == std::numeric_limits<int>::min() ? bb.bar : bb.bar - 1;
     t.numerator = static_cast<std::uint16_t>(meter.numerator);
     t.denominator = static_cast<std::uint16_t>(meter.denominator);
     t.seconds = seconds;
+    return t;
+}
+
+host::Transport transportAt(const Plan& p, std::int64_t sample, const LoopRange* loop,
+                            bool live) SUPPLE_RT {
+    const double seconds = p.rateSeconds(sample, live);
+    host::Transport t = transportAtSeconds(p, seconds);
+    if (p.rateEnabled) {
+        const auto control = sample - static_cast<std::int64_t>(
+                                          static_cast<std::uint64_t>(sample - p.rateOrigin) & 63);
+        const auto controlBeat = p.timeMap->beatAt(p.rateSeconds(control, live));
+        t.tempo = p.timeMap->bpmAt(controlBeat) * p.timelines[live ? 1 : 0]->rate(control);
+    }
     if (loop && loop->active()) {
         t.loopActive = true;
         t.loopStartSeconds = p.startSeconds + static_cast<double>(loop->start) / p.rate;

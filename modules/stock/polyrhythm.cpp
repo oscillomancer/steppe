@@ -112,13 +112,13 @@ struct Polyrhythm : Module {
         }
         any.setChannels(1);
         hits.setChannels(1);
-        const Transport t = transport();
+        const Transport t = gridTransport();
         if (t.playing && !wasPlaying) origin = 0.0;
         wasPlaying = t.playing;
         const double beatsPerFrame = t.tempo / 60.0 / sampleRate();
         const double length = max(0.25, spanBeats(t));
         for (int i = 0; i < frames; ++i) {
-            const double songAt = t.beats + i * beatsPerFrame;
+            const double songAt = t.beats + (t.offset + i) * beatsPerFrame;
             const bool resetNow = resetEdge.rose(reset[0][i]);
             if (resetNow) {
                 origin = songAt;

@@ -133,7 +133,7 @@ struct Dust : Module {
         trigger.setChannels(n);
         velocity.setChannels(n);
         value.setChannels(n);
-        const Transport t = transport();
+        const Transport t = gridTransport();
         const double dt = 1.0 / sampleRate();
         const double beatsPerFrame = t.tempo / 60.0 / sampleRate();
         const double cells = t.playing ? perBeat() : 0.0;
@@ -148,7 +148,8 @@ struct Dust : Module {
             const double jump = 0.9 * clamp(cluster.at(i), 0.0, 1.0) / tau;
             const double spread = clamp(vary.at(i), 0.0, 1.0);
             const int cell =
-                cells > 0.0 ? floorToInt((t.beats + i * beatsPerFrame) * cells + 1e-9) : -1;
+                cells > 0.0 ? floorToInt((t.beats + (t.offset + i) * beatsPerFrame) * cells + 1e-9)
+                            : -1;
             // All eight streams run whatever Voices, so each one's events stay
             // the same as streams are added.
             for (int c = 0; c < 8; ++c) {

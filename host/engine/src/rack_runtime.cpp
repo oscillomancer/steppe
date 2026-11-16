@@ -325,7 +325,12 @@ double RackCurve::at(std::int64_t position) SUPPLE_RT {
 
 script::Transport RackClock::transport(std::int64_t position) SUPPLE_RT {
     const std::int64_t sample = rack->playing ? position - rack->origin : rack->stoppedAt;
-    const host::Transport t = transportAt(*plan, sample, nullptr, rack->live);
+    // Without playrate, the time of a timeline sample, computed alike whatever
+    // the plan's start: an offline render from a seek and the real-time plan
+    // then agree on every frame's song position to the bit.
+    const host::Transport t =
+        plan->rateEnabled ? transportAt(*plan, sample, nullptr, rack->live)
+                          : transportAtSeconds(*plan, double(rack->origin + sample) / plan->rate);
     script::Transport out;
     out.playing = rack->playing;
     out.tempo = t.tempo;

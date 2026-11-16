@@ -124,7 +124,7 @@ struct Glitch : Module {
     // A new step: perhaps a glitch, and which.
     void begin(double span) {
         const double sr = sampleRate();
-        const double beat = 60.0 / max(transport().tempo, 1.0) * sr;
+        const double beat = 60.0 / max(gridTransport().tempo, 1.0) * sr;
         before = now;
         join = 0.0;
         const Step fresh;
@@ -151,7 +151,7 @@ struct Glitch : Module {
 
     void process(int frames) {
         const double sr = sampleRate();
-        const Transport tr = transport();
+        const Transport tr = gridTransport();
         const double perSample = max(tr.tempo, 1.0) / 60.0 / sr;
         const double stepBeats = grid.index() == 4 ? 4.0 : 0.25 * exp2(grid.index());
         const double gridSpan = stepBeats / perSample;
@@ -182,7 +182,8 @@ struct Glitch : Module {
                 }
                 if (clockPeriod > 0.0) span = clockPeriod;
             } else {
-                const double beats = tr.playing ? tr.beats + i * perSample : freeBeats;
+                const double beats =
+                    tr.playing ? tr.beats + (tr.offset + i) * perSample : freeBeats;
                 const int index = floorToInt(beats / stepBeats + 1e-9);
                 if (index != lastIndex) starts = true;
                 lastIndex = index;

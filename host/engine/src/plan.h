@@ -1183,5 +1183,8 @@ void writeOutputs(const Plan& p, float* const* out, std::uint32_t width, std::ui
 // `loop`: the executor's transport loop, for plugins that follow it.
 host::Transport transportAt(const Plan& p, std::int64_t sample, const LoopRange* loop = nullptr,
                             bool live = false) SUPPLE_RT;
+// The song at a time on the timeline, in seconds: tempo, beat, bar and meter
+// from the tempo map (transportAt without playrate or loop).
+host::Transport transportAtSeconds(const Plan& p, double seconds) SUPPLE_RT;
 
 }  // namespace supple::engine::detail

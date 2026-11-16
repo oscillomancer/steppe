@@ -38,6 +38,7 @@ struct HostContext {
     int offset = 0;               // of this block in the host's block
     std::int64_t position = 0;    // its first frame's timeline position
     script::Transport transport;  // at its start
+    script::Transport grid;       // at its grid interval's start, with offset into it
     int channels = 1;             // the module's (its widest input or cable)
 };
 
