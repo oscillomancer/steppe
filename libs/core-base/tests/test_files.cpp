@@ -95,6 +95,7 @@ TEST_CASE("files: parent checkpoints resolve symlinks before dot segments") {
     std::ofstream(file) << "payload";
     if (!fs::exists(root / "real" / "data.bin")) {
         // Windows removes ".." from a path before it follows the link, so the alias cannot arise.
+        REQUIRE(fs::exists(root / "data.bin"));
         MESSAGE("the platform resolves dot segments before symlinks");
         return;
     }
