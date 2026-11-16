@@ -18,6 +18,7 @@
 //   <slug>-engine play FILE [--bar N] [--seconds S] [--block N] [--backend jack|portaudio|dummy]
 //       Play a project through the audio device (to its end, or for S
 //       seconds; Ctrl-C stops), then print engine.status.
+#include "supple/diagnostics/frontend.h"
 #if defined(_WIN32)
 #include <fcntl.h>
 #include <io.h>
@@ -230,7 +231,7 @@ int play(cmd::Registry& registry, const std::vector<std::string>& args) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int frontendMain(int argc, char** argv) {
 #if defined(_WIN32)
     _setmode(_fileno(stdin), _O_BINARY);
     _setmode(_fileno(stdout), _O_BINARY);
@@ -471,4 +472,9 @@ int main(int argc, char** argv) {
     }
     print(*result);
     return 0;
+}
+
+int main(int argc, char** argv) {
+    return supple::diagnostics::runFrontend(argc, argv, supple::diagnostics::Role::Engine,
+                                            frontendMain);
 }

@@ -226,3 +226,5 @@ endif()
 
 # Imported SDL targets are directory-scoped; stage runtime artifacts here.
 include(${PROJECT_SOURCE_DIR}/cmake/Install.cmake)
+
+target_link_libraries(${PRODUCT_SLUG} PRIVATE supple::diagnostics)

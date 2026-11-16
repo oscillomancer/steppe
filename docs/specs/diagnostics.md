@@ -13,7 +13,10 @@ No crash path attempts a save or normal teardown. No automatic upload exists.
 frontend initialization. GUI and headless are separate sessions. The public
 executable launches itself as a worker using a private inherited native channel;
 bootstrap version/magic and kernel endpoint ownership are checked before an
-internal worker flag is accepted. Hidden bootstrap arguments are removed before
+internal worker flag is accepted. When kernel credential inspection is denied,
+the owner-checked inherited socket is used only for ready/return acknowledgement;
+no worker marker or terminal handler is enabled. Invalid/unavailable bootstrap
+degrades to ordinary frontend operation without diagnostic privileges. Hidden bootstrap arguments are removed before
 ordinary parsing. User arguments/stdio and handled return status survive. Unused
 supervisor stdio handles are closed after spawn so a dead worker closes its pipe.
 Supervision failure degrades diagnostics without killing a healthy worker.

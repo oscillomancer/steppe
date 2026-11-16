@@ -3,6 +3,7 @@
 #include <supple/base/paths.h>
 #include <supple/model/groups.h>
 #include "audio_edit.h"
+#include "supple/diagnostics/frontend.h"
 // <slug>: the DAW with a window (docs/specs/gui.md). The UI thread is the
 // model thread: it pumps the command bus's loop (socket requests, the service
 // tick) between SDL events, and draws only when something changed.
@@ -253,7 +254,7 @@ double percentile(std::vector<double> v, double p) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int frontendMain(int argc, char** argv) {
 #if defined(_WIN32)
     // Preserve redirected handles from CTest/pipes. Only reopen streams with
     // no inherited handle when launched from a terminal without redirection.
@@ -1386,4 +1387,9 @@ int main(int argc, char** argv) {
             peaks.stats().built, peaks.stats().loaded, (*window)->renderer().c_str());
     }
     return serviceFailed ? 1 : 0;
+}
+
+int main(int argc, char** argv) {
+    return supple::diagnostics::runFrontend(argc, argv, supple::diagnostics::Role::Gui,
+                                            frontendMain);
 }

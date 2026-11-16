@@ -199,3 +199,5 @@ add_executable(engine-playrate-project-bench bench/playrate_project_bench.cpp)
 target_include_directories(engine-playrate-project-bench PRIVATE src)
 target_link_libraries(engine-playrate-project-bench PRIVATE supple::engine)
 supple_target_defaults(engine-playrate-project-bench)
+
+target_link_libraries(${PRODUCT_SLUG}-engine PRIVATE supple::diagnostics)
