@@ -64,7 +64,9 @@ TEST_CASE("files: durable checkpoints flush streams and report path barrier fail
     const auto failed = syncFile(file);
     REQUIRE_FALSE(failed);
     CHECK(failed.error().code == "file.sync");
-    setDurabilityHookForTesting([&](const fs::path& path, bool) { return path != dir; });
+    // The checkpoint names the resolved directory; the temp folder is often reached through a link.
+    const auto resolvedDir = fs::canonical(dir);
+    setDurabilityHookForTesting([&](const fs::path& path, bool) { return path != resolvedDir; });
     const auto failedDirectory = syncParentDirectories(file);
     REQUIRE_FALSE(failedDirectory);
     CHECK(failedDirectory.error().code == "file.sync_directory");
@@ -91,7 +93,11 @@ TEST_CASE("files: parent checkpoints resolve symlinks before dot segments") {
     }
     const auto file = root / "alias" / ".." / "data.bin";
     std::ofstream(file) << "payload";
-    REQUIRE(fs::exists(root / "real" / "data.bin"));
+    if (!fs::exists(root / "real" / "data.bin")) {
+        // Windows removes ".." from a path before it follows the link, so the alias cannot arise.
+        MESSAGE("the platform resolves dot segments before symlinks");
+        return;
+    }
     std::vector<fs::path> directories;
     setDurabilityHookForTesting([&](const fs::path& path, bool directory) {
         if (directory) directories.push_back(path);
