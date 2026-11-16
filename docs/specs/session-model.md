@@ -871,7 +871,15 @@ persisted estimated history byte budget (default 1 GiB, positive integer).
 Above it, oldest eligible linear steps on each branch combine into one
 `earlier history` step; intermediate snapshots are released and undo/redo crosses
 the combined step as one operation. Shared MIDI/blob/object/collection payloads
-are counted once. Leases, branch bases/heads, redo targets and fork/merge
+are counted once. A model-thread reference-counted size index is updated only
+for added/replaced/removed snapshots (including metadata completion and
+squashing); queries reuse its total. Ordinary append commits do not remeasure
+retained versions or retrace unchanged reachability. New snapshot/container
+contents still cost their own size; graph edits, leased unreachable tails and
+actual budget squashing may traverse history. Counts, oldest-first retention,
+leases and fork/merge protection are identical to a full recount.
+`VersionStore::accountingVisits()` reports cumulative snapshot measurements for
+deterministic work diagnostics, not a time or memory limit. Leases, branch bases/heads, redo targets and fork/merge
 boundaries survive; required data/replay logs may exceed the budget.
 `history.list` reports `truncated`, `retained_bytes`, `budget_bytes`, and
 `squashed_steps` per entry. Project files keep undo history only with

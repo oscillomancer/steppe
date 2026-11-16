@@ -27,6 +27,20 @@
 using namespace supple;
 using namespace supple::model;
 
+namespace supple::model {
+struct VersionStoreAccountingTest {
+    static std::uint64_t recount(const VersionStore& store) {
+        VersionStore copy = store;
+        copy.retainedSize_.reset();
+        return copy.retainedBytes();
+    }
+    static void reset(VersionStore& store) {
+        store.retainedSize_.reset();
+        store.collectionNeeded_ = true;
+    }
+};
+}  // namespace supple::model
+
 namespace {
 
 // A toy command language for the replayer: track.add {name}, track.set
@@ -743,6 +757,7 @@ TEST_CASE("media hash completion preserves snapshots, revisions, caches and open
     const auto next = vs.nextVersion();
     const auto history = vs.history().size();
     const std::string hash = "sha256:" + std::string(64, 'a');
+    CHECK(vs.retainedBytes() == VersionStoreAccountingTest::recount(vs));
     CHECK(vs.updateMediaHash(source, media, hash, "main"));
     CHECK(vs.nextVersion() == next);
     CHECK(vs.history().size() == history);
@@ -767,6 +782,7 @@ TEST_CASE("media hash completion preserves snapshots, revisions, caches and open
     REQUIRE(vs.undo());
     CHECK(vs.head()->media.find(source)->hash == hash);
     REQUIRE(vs.undo());  // remove the record step
+    CHECK(vs.retainedBytes() == VersionStoreAccountingTest::recount(vs));
     CHECK_FALSE(vs.updateMediaHash(source, media, hash, "main"));
     // An import can have already populated the head while the recording job
     // was pending. Its older stored version still needs the same completion.
@@ -1173,4 +1189,80 @@ TEST_CASE("a project file carries the autosave number it holds, beside its branc
             return w.code == "project.autosaved_through";
         }));
     }
+}
+
+TEST_CASE("history accounting measures only the new snapshot on an ordinary commit") {
+    VersionStore store(Session::create());
+    run(store, {inv("track.add", R"({"name":"A"})")});
+    // Warm any lazy cache; measure work, never elapsed time.
+    (void)store.retainedBytes();
+    const auto start = store.accountingVisits();
+    for (unsigned i = 0; i < 128; ++i) {
+        auto args = json::Value::object();
+        args["track"] = "tr_1";
+        args["volume_db"] = -static_cast<double>(i % 64);
+        run(store, {{"track.set", std::move(args)}});
+        (void)store.retainedBytes();
+        store.enforceBudget();
+    }
+    CHECK(store.accountingVisits() - start == 128);
+}
+
+TEST_CASE("incremental history bytes and retention match a full recount across mutations") {
+    VersionStore fast(Session::create()), slow(Session::create());
+    auto check = [&] {
+        CHECK(fast.retainedBytes() == VersionStoreAccountingTest::recount(fast));
+        CHECK(slow.retainedBytes() == fast.retainedBytes());
+        CHECK(serializeProjectFile(fast, true) == serializeProjectFile(slow, true));
+    };
+    auto edit = [&](std::vector<Invocation> commands, const std::string& key = "") {
+        VersionStoreAccountingTest::reset(slow);
+        run(fast, commands, key);
+        run(slow, commands, key);
+        check();
+    };
+    edit({inv("track.add", R"({"name":"A"})")});
+    for (int i = 0; i < 80; ++i) {
+        if (i == 4) {
+            REQUIRE(fast.createBranch("keep", "main"));
+            REQUIRE(slow.createBranch("keep", "main"));
+        }
+        if (i > 0 && i < 30 && i % 11 == 0) {
+            REQUIRE(fast.undo());
+            REQUIRE(slow.undo());
+        }
+        auto args = json::Value::object();
+        args["track"] = "tr_1";
+        args["name"] = "change " + std::to_string(i);
+        edit({{"track.set", std::move(args)}}, i % 4 ? "gesture" : "");
+        if (i == 20) {
+            REQUIRE(fast.deleteBranch("keep"));
+            REQUIRE(slow.deleteBranch("keep"));
+            check();
+        }
+        if (i == 30 || i == 60) {
+            for (auto* store : {&fast, &slow}) {
+                EditTxn txn(*store->head(), store->nextVersion());
+                auto project = txn.project();
+                project.historyBudgetBytes = i == 30 ? 24000 : 1;
+                txn.setProject(std::move(project));
+                auto changes = txn.changes();
+                auto result = txn.commit();
+                REQUIRE(result);
+                REQUIRE(store->commit(std::move(*result), {"budget", "test", {}, {}},
+                                      std::move(changes), {}));
+            }
+            check();
+        }
+    }
+    // Copy survives destruction of its source, then coalesces and drops nodes.
+    VersionStore copy = [&] {
+        VersionStore temporary = fast;
+        return temporary;
+    }();
+    const auto bytes = fast.retainedBytes();
+    CHECK(copy.retainedBytes() == bytes);
+    run(copy, {inv("track.set", R"({"track":"tr_1","name":"copy only"})")}, "gesture");
+    CHECK(copy.retainedBytes() == VersionStoreAccountingTest::recount(copy));
+    CHECK(fast.retainedBytes() == bytes);
 }

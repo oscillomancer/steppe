@@ -145,3 +145,8 @@ addressable and exact; their required snapshots and retained replay logs may
 exceed the budget. No payload is discarded from a live session. The bound is an
 estimate of model/history data, not a process RSS or media-cache limit. Releasing
 a lease allows later budget enforcement to squash formerly protected steps.
+
+*Clarified 2026-11-15:* retained-byte estimates are maintained incrementally by
+shared identity, with the same counts and oldest-first retention decisions.
+Ordinary append commits do not remeasure earlier snapshots. Session-model §6.2
+describes the size index and its deterministic work counter.
