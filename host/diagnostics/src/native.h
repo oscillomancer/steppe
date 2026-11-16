@@ -13,7 +13,10 @@ struct Packet {
     std::uint32_t magic = 0x43525348, version = 1;
     Message kind = Message::Boot;
     std::uint32_t role = 0, code = 0, cause = 0;
-    std::uint64_t pid = 0, pc = 0, frame = 0;
+    // Terminal packets also carry the faulting thread's id and stack pointer. They are
+    // private to the channel; the collector reads memory with them and the report
+    // never records them.
+    std::uint64_t pid = 0, pc = 0, frame = 0, tid = 0, sp = 0;
     std::array<char, 33> incident{};
 };
 static_assert(sizeof(Packet) <= 128);

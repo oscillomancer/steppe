@@ -2,9 +2,11 @@
 
 ## Delivery boundary
 
-The approved nine-topic sequence stops after terminal context (topic 3) for review.
-Until later topics land, inventory/backtraces, bridge correlation, restart UI,
-hang diagnostics and final release packaging are contracts, not working features.
+The approved nine-topic sequence is delivered in steps with a review stop after each.
+Topic 4 (thread traces) has landed for Linux only; Windows, macOS in-process capture and
+the offline resolver follow. Until later topics land, engine inventory, bridge
+correlation, restart UI, hang diagnostics and final release packaging are contracts,
+not working features.
 No crash path attempts a save or normal teardown. No automatic upload exists.
 
 ## Frontend/bootstrap contract
@@ -49,7 +51,7 @@ returns remove the marker. An active run is not an abandoned incident.
 
 Report schema `supple.crash-report/1.0`: `incident`, `build` (version/commit/dirty),
 `platform`, `architecture`, `role`, `kind`, `code`, `native_fatal_status`, `complete`, `unavailable`,
-`threads`, `plugins`, `commands`, `dropped`. Strict size/type/enum validation and
+`modules`, `threads`, `plugins`, `commands`, `dropped`. Strict size/type/enum validation and
 bounded allowlisted formatting apply. Phase-2 reports are honest exit summaries;
 phase 3 can attest terminal context but persists no raw address/register bytes.
 Thread frames added in topic 4 require executable module identity plus relative
@@ -97,6 +99,49 @@ Do not override sanitizer-owned terminal diagnostics.
 Sources: [POSIX signal safety](https://man7.org/linux/man-pages/man7/signal-safety.7.html),
 [Microsoft last-chance filter](https://learn.microsoft.com/en-us/windows/win32/api/errhandlingapi/nf-errhandlingapi-setunhandledexceptionfilter),
 [Apple Mach IPC restrictions](https://developer.apple.com/documentation/xcode/conforming-to-mach-ipc-security-restrictions).
+
+## Thread traces (topic 4)
+
+`modules` lists the executable images seen in traces: `{format: elf|macho|pe, id}`, `id`
+the lowercase-hex build ID (ELF note, Mach-O UUID or CodeView GUID+age) or null when the
+image has none. Names and paths are never recorded; a local resolver maps an id to a name
+and symbols. `threads` has at most 128 entries, in order: the faulting thread (`fault`),
+the main thread (`main`), then the rest by thread id. Each is `{ordinal, role, state,
+frames, stop | reason}`; `ordinal` is its index, never an OS thread id. `state` is
+`walked` with `stop` (`end`, `depth`, `unreadable`, `not_executable`, `bad_frame_pointer`,
+`cycle`, `deadline`), or `unavailable` with `reason` (`ptrace_denied`, `thread_exited`,
+`deadline`, `registers_unreadable`, `maps_unreadable`, `unsupported`, `not_collected`) and
+no frames. A frame is `{module, offset, return}`: `module` an index into `modules`,
+`offset` the lowercase `0x` hex address minus the module's load bias (the link-time
+address a symbolizer expects), `return` false only for a thread's stopped pc (symbolize
+return addresses at offset-1). Executable memory with no file (JIT) is `{module: null,
+return}` with no offset. At most 128 frames per thread; `dropped` counts threads omitted
+beyond 128. Retention validates all of this strictly: a report with any other shape is
+preserved, never authority to delete.
+
+Walking follows the frame-pointer chain `{previous fp, return address}` (x86-64 and arm64)
+from the registers of the stopped thread. Every return address must lie in an executable
+mapping; frame pointers must be 8-aligned, at or above the stack pointer for the first
+frame, strictly increasing and less than 1 GiB apart; arm64 return addresses lose their
+pointer-authentication bits. The first violation ends the walk with its `stop` reason.
+Only the 16-byte frame records are read, never other stack words. A function without a
+frame (optimized foreign code, a libc wrapper at a system call) leaves its own caller's
+frame missing, and a JIT or hostile chain can end a walk early: that is the best-effort
+limit for third-party code, stated in `unavailable` whenever a trace exists.
+
+Linux collection runs in the supervisor inside the worker's terminal hold. The bound does
+not grow: the collector has a 600 ms budget against the worker's one-second wait, and on
+expiry the remaining threads are `unavailable` with reason `deadline`. The supervisor is
+the worker's parent, so Yama's default `ptrace_scope` 1 permits it to trace as an
+ancestor; no sysctl, capability or `PR_SET_PTRACER_ANY` is used or needed. Scope 2 and
+3, a non-dumpable worker, an existing tracer or a seccomp filter refuse, and each thread
+then reports its reason. The collector stops one thread at a time with `PTRACE_SEIZE` and
+`PTRACE_INTERRUPT`, reads registers, walks, and detaches it (passing back any pending
+signal) before the next; the faulting thread is not stopped, since it is parked in its
+handler. Nothing is left stopped when the acknowledgement is sent. Module identity is
+read from the ELF headers in the target's memory through `process_vm_readv`, so a deleted
+or replaced file cannot mislead it. Formatting, JSON and file work happen after the
+acknowledgement.
 
 ## Frame pointers
 

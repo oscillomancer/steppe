@@ -9,6 +9,7 @@
 #include "supple/base/paths.h"
 #include "supple/product.h"
 #include "terminal.h"
+#include "trace.h"
 namespace supple::diagnostics {
 namespace detail {
 bool valid(const Packet& p) {
@@ -76,6 +77,7 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
     bool hasTerminal = false, markerUnavailable = false, ownsMarker = false;
     std::optional<std::uint32_t> expected;
     Packet packet, terminal;
+    TraceSnapshot trace;
     while (receive(native, packet)) {
         if (packet.incident != boot.incident || packet.role != boot.role) break;
         if (packet.kind == Message::Ready) {
@@ -86,6 +88,10 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
         if (packet.kind == Message::Terminal) {
             terminal = packet;
             hasTerminal = true;
+            // Read the other threads inside the worker's terminal hold: the collector
+            // has its own deadline, below the hold, and releases every thread it
+            // stopped before the acknowledgement. Formatting and file work come after.
+            trace = collectProcessTrace(native, packet);
             acknowledge(native);
         }
     }
@@ -94,8 +100,8 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
     close(native);
     if (markerUnavailable) std::fputs("diagnostic coverage was partial\n", stderr);
     if (hasTerminal || fatal || !expected) {
-        if (!storage ||
-            !publishReport(options.directory, boot, hasTerminal ? &terminal : nullptr, code, fatal))
+        if (!storage || !publishReport(options.directory, boot, hasTerminal ? &terminal : nullptr,
+                                       code, fatal, hasTerminal ? &trace : nullptr))
             std::fputs(
                 "the app closed unexpectedly; local report publication or retention failed\n",
                 stderr);

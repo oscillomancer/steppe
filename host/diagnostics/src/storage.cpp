@@ -146,9 +146,9 @@ bool reportShape(const json::Value& value) {
                                          "kind",        "code",
                                          "cause",       "native_fatal_status",
                                          "complete",    "terminal_context",
-                                         "unavailable", "threads",
-                                         "plugins",     "commands",
-                                         "dropped"};
+                                         "unavailable", "modules",
+                                         "threads",     "plugins",
+                                         "commands",    "dropped"};
         if (std::find(std::begin(allowed), std::end(allowed), field.key) == std::end(allowed))
             return false;
     }
@@ -180,12 +180,15 @@ bool reportShape(const json::Value& value) {
         if (!v || !v->isBool()) return false;
     }
     if (value.find("complete")->asBool()) return false;
-    // This stage emits no inventory or traces. Until their nested schemas land,
-    // nonempty arrays cannot be validated and must not authorize deletion.
-    for (const auto* key : {"threads", "plugins", "commands"}) {
+    // Thread traces have a validated nested schema. Inventory and command arrays
+    // have none yet, so nonempty ones cannot be validated and must not authorize
+    // deletion.
+    for (const auto* key : {"plugins", "commands"}) {
         const auto* v = value.find(key);
         if (!v || !v->isArray() || v->size() != 0) return false;
     }
+    const auto* threads = value.find("threads");
+    if (!threads || !traceShape(value.find("modules"), *threads)) return false;
     const auto* unavailable = value.find("unavailable");
     if (!unavailable || !unavailable->isArray() || unavailable->size() == 0 ||
         unavailable->size() > 128)
@@ -261,7 +264,7 @@ void removeMarker(const fs::path& root, const Packet& boot) {
     fs::remove(root / (std::string(boot.incident.data(), 32) + ".run"), ec);
 }
 Status publishReport(const fs::path& root, const Packet& boot, const Packet* terminal, int code,
-                     bool fatal) {
+                     bool fatal, const TraceSnapshot* trace) {
     auto v = base(boot);
     v["schema"] = "supple.crash-report/1.0";
     v["kind"] = terminal ? "crash" : "unexpected_exit";
@@ -272,14 +275,21 @@ Status publishReport(const fs::path& root, const Packet& boot, const Packet* ter
     v["terminal_context"] = terminal && terminal->pc != 0;
     v["unavailable"] = json::Value::array();
     v["unavailable"].asArray().push_back(
-        "thread traces and engine inventory are not implemented in this stage");
+        "engine inventory and execution breadcrumbs are not implemented in this stage");
     if (!terminal)
         v["unavailable"].asArray().push_back("no terminal capsule; cause may be unknown");
-    v["threads"] = json::Value::array();
+    if (trace) {
+        for (auto& limit : traceLimits(*trace)) v["unavailable"].asArray().push_back(limit);
+        v["modules"] = modulesJson(*trace);
+        v["threads"] = threadsJson(*trace);
+    } else {
+        v["threads"] = json::Value::array();
+    }
     v["plugins"] = json::Value::array();
     v["commands"] = json::Value::array();
-    v["dropped"] = 0;
-    // Deliberately never serialize pc/frame, args, paths, exception or console text.
+    v["dropped"] = trace ? static_cast<long long>(trace->dropped) : 0LL;
+    // Deliberately never serialize pc/frame/sp, thread or process ids, paths, args,
+    // exception or console text. Frames are module identity plus relative offsets.
     const auto text = json::writeCanonical(v) + "\n";
     if (text.size() > 4 * 1024 * 1024) return failure();
     SUPPLE_TRY(privatePublish(root / (std::string(boot.incident.data(), 32) + ".json"), text));

@@ -21,6 +21,9 @@
 #else
 #include <signal.h>
 #include <sys/mman.h>
+#if defined(__linux__)
+#include <sys/syscall.h>
+#endif
 #include <ucontext.h>
 #include <unistd.h>
 #if defined(__APPLE__) && defined(__aarch64__)
@@ -47,7 +50,7 @@ std::atomic<unsigned> claimed{0};
 std::atomic<bool> active{false};
 static_assert(std::atomic<bool>::is_always_lock_free);
 // One terminal producer wins. No pointer/model lookup, TLS, allocation or
-// formatting. Raw PC/frame stay solely in the private native channel.
+// formatting. Raw PC/frame/SP and the thread id stay solely in the private native channel.
 void handoff(Packet packet) noexcept {
     packet.kind = Message::Terminal;
     if (detail::publish(endpoint, packet)) detail::awaitAcknowledgement(endpoint);
@@ -57,6 +60,7 @@ void handoff(Packet packet) noexcept {
     if (claimed.exchange(1, std::memory_order_relaxed)) return EXCEPTION_CONTINUE_SEARCH;
     Packet packet = initial;
     packet.cause = 2;
+    packet.tid = GetCurrentThreadId();
     if (exception && exception->ExceptionRecord) {
         packet.code = exception->ExceptionRecord->ExceptionCode;
         packet.pc = reinterpret_cast<std::uintptr_t>(exception->ExceptionRecord->ExceptionAddress);
@@ -64,8 +68,10 @@ void handoff(Packet packet) noexcept {
     if (exception && exception->ContextRecord) {
 #if defined(_M_X64) || defined(__x86_64__)
         packet.frame = exception->ContextRecord->Rbp;
+        packet.sp = exception->ContextRecord->Rsp;
 #elif defined(_M_ARM64)
         packet.frame = exception->ContextRecord->Fp;
+        packet.sp = exception->ContextRecord->Sp;
 #endif
     }
     handoff(packet);
@@ -99,24 +105,31 @@ void handoff(Packet packet) noexcept {
     Packet packet = initial;
     packet.cause = 1;
     packet.code = static_cast<unsigned>(signal);
+#if defined(__linux__)
+    packet.tid = static_cast<std::uint64_t>(::syscall(SYS_gettid));  // async-signal-safe
+#endif
     const auto* state = static_cast<const ucontext_t*>(context);
     if (state) {
 #if defined(__APPLE__) && defined(__aarch64__)
         if (state->uc_mcontext) {
             packet.pc = arm_thread_state64_get_pc(state->uc_mcontext->__ss);
             packet.frame = arm_thread_state64_get_fp(state->uc_mcontext->__ss);
+            packet.sp = arm_thread_state64_get_sp(state->uc_mcontext->__ss);
         }
 #elif defined(__APPLE__) && defined(__x86_64__)
         if (state->uc_mcontext) {
             packet.pc = state->uc_mcontext->__ss.__rip;
             packet.frame = state->uc_mcontext->__ss.__rbp;
+            packet.sp = state->uc_mcontext->__ss.__rsp;
         }
 #elif defined(__x86_64__)
         packet.pc = static_cast<std::uint64_t>(state->uc_mcontext.gregs[REG_RIP]);
         packet.frame = static_cast<std::uint64_t>(state->uc_mcontext.gregs[REG_RBP]);
+        packet.sp = static_cast<std::uint64_t>(state->uc_mcontext.gregs[REG_RSP]);
 #elif defined(__aarch64__)
         packet.pc = state->uc_mcontext.pc;
         packet.frame = state->uc_mcontext.regs[29];
+        packet.sp = state->uc_mcontext.sp;
 #endif
     }
     handoff(packet);

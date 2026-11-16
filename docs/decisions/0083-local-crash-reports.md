@@ -134,3 +134,20 @@ The previous handler retains its behavior, including a deliberate exit status.
 Terminate capsules use code 0 because the chained handler chooses the exit path;
 no exception text is inspected. Re-entry terminates without chaining again.
 Sanitizers retain ownership and are not wrapped.
+
+*Maintainer decisions, 2026-11-16, topic 4 (thread traces):* (1) External thread reads
+happen inside the existing terminal hold; the bound does not grow, and an expired budget
+gives a partial report with a stated reason, never a longer hold. (2) macOS captures in
+process in the terminal handler (the approved terminal-only exception): the faulting
+thread's frame-pointer chain from the signal context, then best effort the other threads
+of the own task through `task_threads`/`thread_get_state` on `mach_task_self`, reading
+memory only through a fault-proof `mach_vm_read_overwrite` of the own task, into the
+preallocated capsule, with fixed caps and no allocation, locks or stdio; a failing Mach
+call marks that thread unavailable. No task port of another process, entitlement or
+privilege is used; this refines the topic-3 macOS signal/exit fallback once implemented.
+(3) First-party code on Linux and macOS, and the stock plug-ins through the parent's
+compiler flags, keep frame pointers; third-party frames stay best effort and validated.
+On Linux the supervisor traces the worker as its ancestor under Yama; nothing
+system-wide changes. (4) Symbolication needs function names only, no DWARF line
+information, in a separate offline resolver with a strictly bounded reader. (5) The
+release-symbol archive waits for topic 9. See `docs/specs/diagnostics.md`.

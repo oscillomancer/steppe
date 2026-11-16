@@ -19,6 +19,13 @@
 #include <sys/resource.h>
 #include <unistd.h>
 #include <csignal>
+#if defined(__linux__)
+#include <link.h>
+#include <sys/prctl.h>
+#include <chrono>
+#include <cstring>
+#include <fstream>
+#endif
 #endif
 namespace {
 std::atomic<std::uintptr_t> badAddress{0};
@@ -35,6 +42,67 @@ std::atomic<unsigned> depth{0};
     const unsigned next = depth.fetch_add(1);
     return next < 1000000 ? exhaustStack() + static_cast<unsigned>(data[0]) : 0;
 }
+#if defined(__linux__)
+// Trace fixtures. Each marked function sits on its own page so a return address
+// maps to exactly one of them, whatever the optimization level.
+std::atomic<unsigned> parked{0};
+std::atomic<bool> neverReleased{false};
+[[gnu::noinline, gnu::aligned(4096)]] void parkInner() {
+    while (!neverReleased.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+}
+[[gnu::noinline, gnu::aligned(4096)]] void parkOuter() {
+    parked.fetch_add(1);
+    parkInner();
+    asm volatile("" ::: "memory");
+}
+[[gnu::noinline, gnu::aligned(4096)]] void faultMiddle() {
+    actualFault();
+    asm volatile("" ::: "memory");
+}
+[[gnu::noinline, gnu::aligned(4096)]] void faultOuter() {
+    faultMiddle();
+    asm volatile("" ::: "memory");
+}
+// The executable's load bias and GNU build ID, found by reading its own program
+// headers, independently of the collector's parser.
+int imageInfo(dl_phdr_info* info, std::size_t, void* out) {
+    auto* result = static_cast<std::pair<std::uintptr_t, std::string>*>(out);
+    result->first = info->dlpi_addr;
+    for (int i = 0; i < info->dlpi_phnum; ++i) {
+        const auto& ph = info->dlpi_phdr[i];
+        if (ph.p_type != PT_NOTE) continue;
+        const auto* at = reinterpret_cast<const unsigned char*>(info->dlpi_addr + ph.p_vaddr);
+        std::size_t pos = 0;
+        while (pos + 12 <= ph.p_filesz) {
+            std::uint32_t namesz, descsz, kind;
+            std::memcpy(&namesz, at + pos, 4);
+            std::memcpy(&descsz, at + pos + 4, 4);
+            std::memcpy(&kind, at + pos + 8, 4);
+            const std::size_t desc = pos + 12 + ((namesz + 3) & ~3U);
+            if (kind == 3) {
+                for (std::uint32_t b = 0; b < descsz; ++b) {
+                    result->second += "0123456789abcdef"[at[desc + b] >> 4];
+                    result->second += "0123456789abcdef"[at[desc + b] & 15];
+                }
+                return 1;
+            }
+            pos = desc + ((descsz + 3) & ~3U);
+        }
+    }
+    return 1;  // the first object is the executable
+}
+void writeExpected(const char* path) {
+    std::pair<std::uintptr_t, std::string> image;
+    dl_iterate_phdr(imageInfo, &image);
+    auto offset = [&](auto function) {
+        return reinterpret_cast<std::uintptr_t>(function) - image.first;
+    };
+    std::ofstream out(path);
+    out << "{\"build_id\":\"" << image.second << "\",\"parkOuter\":" << offset(&parkOuter)
+        << ",\"faultMiddle\":" << offset(&faultMiddle) << ",\"faultOuter\":" << offset(&faultOuter)
+        << ",\"pid\":" << ::getpid() << "}\n";
+}
+#endif
 #if defined(_WIN32)
 int handledFault() {
     __try {
@@ -88,6 +156,24 @@ int body(int argc, char** argv) {
         });
         worker.join();
     }
+#if defined(__linux__)
+    if (mode == "trace" || mode == "trace-nondumpable") {
+        if (argc != 4) return 4;
+        writeExpected(argv[3]);
+        std::thread first([] { parkOuter(); });
+        std::thread second([] { parkOuter(); });
+        std::thread faulting([nondumpable = mode == "trace-nondumpable"] {
+            (void)supple::diagnostics::registerCurrentThread();
+            while (parked.load() != 3) supple::rt::relax();  // two threads plus main
+            if (nondumpable) (void)::prctl(PR_SET_DUMPABLE, 0);
+            faultOuter();
+        });
+        parkOuter();  // the main thread parks too; the fault ends the process
+        faulting.join();
+        first.join();
+        second.join();
+    }
+#endif
     if (mode == "stack") return static_cast<int>(exhaustStack());
     if (mode == "concurrent") {
         std::atomic<unsigned> ready{0};

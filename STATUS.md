@@ -1482,7 +1482,15 @@ its distinct cause before chaining the previously installed handler, preserving
 its message/exit behavior; this sole foreign-call exception does not apply to
 signal/SEH handlers, and sanitizer hooks remain untouched. macOS leaves Mach handling untouched
 and uses signal/exit-only capture; signed-native Mach forwarding/liveness is not
-proven. Traces, inventory, other owned-thread registration, bridge correlation,
-restart UI/hangs and release package verification remain later topics. Delivery
-stops after topic 3 for review. Native macOS/Windows CI and
+proven. First-party Linux and macOS code, and the stock plug-ins, keep frame pointers in
+every preset. On Linux the supervisor now records thread traces inside the terminal
+hold (600 ms budget under the worker's one-second wait): module build IDs plus
+module-relative offsets for the faulting, main and other threads (at most 128 threads and
+128 frames), with a reason for any thread it could not read (Yama scope 2+, a
+non-dumpable worker or a deadline). Foreign frames are best effort and frames of
+frameless code can be missing. Windows collection, macOS in-process capture and the
+offline symbol resolver are the remaining steps of topic 4 and are not delivered;
+Windows and macOS reports list their fault thread as unavailable (`unsupported`).
+Inventory, other owned-thread registration, bridge correlation, restart UI/hangs and
+release package verification remain later topics. Native macOS/Windows CI and
 signed Mach capability/collector-loss tests are due before merge/release.
