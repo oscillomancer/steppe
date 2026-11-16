@@ -5,6 +5,7 @@
 
 #include "bridge_child.h"
 
+#include <algorithm>
 #include <atomic>
 #include <map>
 #include <memory>
@@ -57,8 +58,8 @@ class BridgeProcess {
     void subscribe(RemoteInstance& instance, MainThreadWake& wake);
     void unsubscribe(RemoteInstance& instance);
     // Main only: ACK, then snapshot the members that need it (every member for
-    // a pending whole-bridge refresh or a delivery). True when `self` was
-    // among them, so its consumer need not pull it again (round 25).
+    // a pending whole-bridge refresh or an unnamed delivery). True when `self`
+    // was among them, so its consumer need not pull it again (round 25).
     bool refresh(const RemoteInstance* self);
     MainThreadWake watcherWake_;
     WakeEvent notification_;
@@ -71,6 +72,10 @@ class BridgeProcess {
     // Members whose own request changed them: only these are pulled (item D:
     // pulling every member made one FX's edit cost the bridge's size).
     std::vector<RemoteInstance*> refreshOnly_;
+    void queueRefresh(RemoteInstance* member) {
+        if (std::find(refreshOnly_.begin(), refreshOnly_.end(), member) == refreshOnly_.end())
+            refreshOnly_.push_back(member);
+    }
     std::vector<RemoteInstance*> members_;  // main only, includes retired instances
     std::mutex subscribersMutex_;
     std::map<MainThreadWake*, std::size_t> subscribers_;

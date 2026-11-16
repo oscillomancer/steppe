@@ -184,6 +184,8 @@ struct BridgeInstance {
     Instance::EditorSize floatingSize;
     std::optional<Instance::EditorFrame> reportedFrame;  // the last one sent to the DAW
 #endif
+    std::uint32_t id = 0;
+    bool published = false;  // listed in Bridge::published, for the next ACK
     Instance::Notifications notes;
     Instance::IdleOutputs idle;
     Instance::EditorRequests editor;
@@ -445,8 +447,13 @@ struct Bridge {
     ~Bridge() {
         if (outward != noResource) closeResource(outward);
     }
+    // The instances with captures since the last ACK, which the ACK names so
+    // the parent pulls only those (item D: it pulled every instance).
+    std::vector<std::uint32_t> published;
     void collect(BridgeInstance& slot) {
-        if (slot.collect()) notifications.publish();
+        if (!slot.collect()) return;
+        notifications.publish();
+        if (!std::exchange(slot.published, true)) published.push_back(slot.id);
     }
     bool announce() {
         if (outward < 0 || !notifications.announce()) return true;
@@ -526,7 +533,15 @@ struct Bridge {
                                   "/instance",
                                   "subscribe first, then acknowledge with instance 0"));
             notifications.acknowledge();
-            return reply(Writer{});
+            Writer w;
+            w.u32(static_cast<std::uint32_t>(published.size()));
+            for (const std::uint32_t id : published) {
+                w.u32(id);
+                if (const auto it = instances.find(id); it != instances.end())
+                    it->second->published = false;
+            }
+            published.clear();
+            return reply(w);
         }
         if (outward < 0) {
             if (fd >= 0) closeResource(fd);
@@ -554,6 +569,7 @@ struct Bridge {
             slot->instance->setMainThreadWake(wake);
             slot->wake = &wake;
             const std::uint32_t newId = nextId++;
+            slot->id = newId;
             Writer w;
             w.u32(newId);
             w.u32(slot->instance->audioInputChannels());

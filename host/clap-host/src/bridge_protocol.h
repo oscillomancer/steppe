@@ -60,10 +60,12 @@ inline constexpr std::uint32_t kMagic = 0x31474253;  // "SBG1"
 // on macOS (ADR-0081 §5).
 // 24/25: that period is a duration (ns), not device frames, which the bridge
 // read at an oversampled plug-in's rate.
+// 25/26: the AckNotifications reply names the instances with new captures,
+// so the parent pulls only those.
 #if defined(_WIN32)
-inline constexpr std::uint32_t kVersion = 25;  // Windows runs one ahead: native control handles
+inline constexpr std::uint32_t kVersion = 26;  // Windows runs one ahead: native control handles
 #else
-inline constexpr std::uint32_t kVersion = 24;
+inline constexpr std::uint32_t kVersion = 25;
 #endif
 inline constexpr int kControlFd = 3;  // the bridge's end of the socketpair
 inline constexpr std::uint32_t kMaxChannels = 16;
@@ -118,7 +120,7 @@ enum class Op : std::uint32_t {
     EditorRequests,   // → u8 resize, u8 closed, u32 width, u32 height, u8 show, u8 hide, frame
     TakeIdleOutputs,  // → u64 dropped, u32 count, [OutputEvent]
     SubscribeNotifications,  // process id 0: u32 version (+ eventfd) → u32 version
-    AckNotifications,        // process id 0: no payload → ok
+    AckNotifications,        // process id 0: no payload → u32 count, [u32 instance]
     PluginStatus,            // no payload → JSON text (null if unsupported)
     FactoryPatches,          // no payload → canonical patch array JSON text
     EditorScale,             // f64 scale → the size for the window (as EditorOpen)

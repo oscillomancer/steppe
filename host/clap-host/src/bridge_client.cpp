@@ -243,19 +243,37 @@ void BridgeProcess::watch() {
 
 bool BridgeProcess::refresh(const RemoteInstance* self) {
     const auto delivery = delivery_.load(std::memory_order_acquire);
-    const bool all = refreshNeeded_ || delivery != servedDelivery_;
-    if (!all && refreshOnly_.empty()) return false;
-    const auto only = std::exchange(refreshOnly_, {});
-    if (!all) {
-        for (auto* member : only) member->pullSnapshot();
-        return std::find(only.begin(), only.end(), self) != only.end();
+    const bool delivered = delivery != servedDelivery_;
+    if (!refreshNeeded_ && !delivered && refreshOnly_.empty()) return false;
+    auto only = std::exchange(refreshOnly_, {});
+    bool all = std::exchange(refreshNeeded_, false);
+    if (delivered) {
+        servedDelivery_ = delivery;  // a delivery during pulls needs another pass
+        // The ACK names the instances with new captures: only those are
+        // pulled. A delivery with no ACK (a failure or death) names none.
+        bool named = false;
+        if (ackPending_.exchange(false, std::memory_order_acq_rel) && !failed()) {
+            if (auto reply = call(Op::AckNotifications, 0, Writer{})) {
+                Reader r(reply->data(), reply->size());
+                const std::uint32_t count = r.u32();
+                for (std::uint32_t i = 0; i < count && r.ok(); ++i) {
+                    const std::uint32_t id = r.u32();
+                    for (auto* member : members_)
+                        if (member->instanceId_ == id) only.push_back(member);
+                }
+                named = r.done();
+            }
+        }
+        all = all || !named;
     }
-    refreshNeeded_ = false;
-    servedDelivery_ = delivery;  // a delivery during pulls needs another pass
-    if (ackPending_.exchange(false, std::memory_order_acq_rel) && !failed())
-        (void)call(Op::AckNotifications, 0, Writer{});
-    for (auto* member : members_) member->pullSnapshot();
-    return true;
+    if (all) {
+        for (auto* member : members_) member->pullSnapshot();
+        return true;
+    }
+    std::sort(only.begin(), only.end());
+    only.erase(std::unique(only.begin(), only.end()), only.end());
+    for (auto* member : only) member->pullSnapshot();
+    return std::find(only.begin(), only.end(), self) != only.end();
 }
 
 Result<std::shared_ptr<BridgeProcess>> createBridgeProcess() { return BridgeProcess::spawn(); }
@@ -479,9 +497,7 @@ Result<std::vector<std::uint8_t>> RemoteInstance::call(Op op, const Writer& w, R
         case Op::EditorResize:
         case Op::EditorScale:
         case Op::EditorClose:
-            if (std::find(process_->refreshOnly_.begin(), process_->refreshOnly_.end(), this) ==
-                process_->refreshOnly_.end())
-                process_->refreshOnly_.push_back(this);
+            process_->queueRefresh(this);
             break;
         default:
             break;

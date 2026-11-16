@@ -1466,9 +1466,9 @@ TEST_CASE("bridge protocol v6 retains nested structured error details") {
     REQUIRE(decoded.details[0].details.size() == 1);
     CHECK(decoded.details[0].details[0].code == "leaf");
 #if defined(_WIN32)
-    CHECK(bridge::kVersion == 25);
+    CHECK(bridge::kVersion == 26);
 #else
-    CHECK(bridge::kVersion == 24);
+    CHECK(bridge::kVersion == 25);
 #endif
 }
 
@@ -2087,8 +2087,12 @@ TEST_CASE("remote subscribed snapshot consumers skip IPC on unrelated app wakes"
                            case bridge::Op::EditorRequests:
                                reply.bytes.resize(29);  // no GUI requests and no window frame
                                break;
+                           case bridge::Op::AckNotifications:
+                               reply.u32(1);  // the instance with new captures
+                               reply.u32(1);
+                               break;
                            default:
-                               break;  // ACK, SetParam and Destroy have empty success replies
+                               break;  // SetParam and Destroy have empty success replies
                        }
                        if (!bridge::sendFrame(sockets[1], 0, id, reply.bytes)) break;
                        if (static_cast<bridge::Op>(op) == bridge::Op::Destroy) break;
@@ -2192,6 +2196,48 @@ TEST_CASE("remote initial snapshots retain idle outputs and state before subscri
     CHECK(editor.resize);
     CHECK(editor.width == 320);
     (*instance)->closeEditor();
+}
+
+TEST_CASE("a bridge-side publication pulls the instance that published, not its whole bridge") {
+    // Item D: the bridge announced new captures without naming an instance,
+    // so each announcement pulled every instance sharing the bridge. The ACK
+    // now names them. Counted, not timed.
+    setBridgeExecutable(BRIDGE_PATH);
+    auto requestsFor = [](int quiet) {
+        MainThreadWake wake;
+        auto process = createBridgeProcess();
+        REQUIRE(process);
+        const auto info = find("com.suppleaudio.test.edge");
+        std::vector<std::unique_ptr<Instance>> all;
+        for (int i = 0; i <= quiet; ++i) {
+            auto made = Instance::create(info, {}, true, *process);
+            REQUIRE(made);
+            (*made)->setMainThreadWake(wake);
+            all.push_back(std::move(*made));
+        }
+        drainWake(wake);
+        for (auto& instance : all) {
+            instance->serviceMainThread();
+            (void)instance->takeNotifications();
+        }
+        Instance& timed = *all.back();
+        const auto before = bridgeRequests();
+        // Its bridge-side timer marks the state dirty: a publication that no
+        // request of the parent's made, announced to the parent.
+        REQUIRE(timed.loadState(std::array<std::uint8_t, 4>{47, 0, 0, 0}));
+        bool dirty = false;
+        while (!dirty) {
+            drainWake(wake);
+            timed.serviceMainThread();
+            dirty = timed.takeNotifications().stateDirty;
+        }
+        return bridgeRequests() - before;
+    };
+    const auto small = requestsFor(2);
+    const auto large = requestsFor(10);
+    CAPTURE(small);
+    CAPTURE(large);
+    CHECK(large <= small + 6);  // a pull of every instance is 3 requests each
 }
 
 TEST_CASE("parent failure wake works for an alive bridge and subscriber teardown") {
