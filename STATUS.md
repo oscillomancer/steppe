@@ -1398,7 +1398,10 @@ including nonempty inventories/traces whose nested schemas are not implemented.
 Concurrent pruners tolerate another pruner removing a report during metadata scan
 or deletion, while preserving genuine storage failures. Terminal
 signal/SEH/terminate capsules and cold thread-stack registration now exist, with
-metadata-only sanitizer/fail-fast fallbacks. macOS leaves Mach handling untouched
+metadata-only sanitizer/fail-fast fallbacks. The ordinary terminate hook publishes
+its distinct cause before chaining the previously installed handler, preserving
+its message/exit behavior; this sole foreign-call exception does not apply to
+signal/SEH handlers, and sanitizer hooks remain untouched. macOS leaves Mach handling untouched
 and uses signal/exit-only capture; signed-native Mach forwarding/liveness is not
 proven. Traces, inventory, other owned-thread registration, bridge correlation,
 restart UI/hangs and release package verification remain later topics. Delivery

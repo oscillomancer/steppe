@@ -123,3 +123,14 @@ signed/hardened forwarding are not proven. Mach-only events without a BSD signal
 therefore have exit metadata only. No task_for_pid grant, special entitlement,
 private API or suspended-process design is introduced. Native feasibility remains
 a gate before any later Mach receiver replaces this fallback.
+
+*Maintainer clarification, 2026-11-16, round-22 finding 2:* the terminate hook
+wraps and chains the handler returned by `std::set_terminate` at installation.
+It publishes the distinct terminate cause before invoking that handler (abort if
+null, or if it returns). This runs as ordinary terminate code, not in a signal
+handler; calling the previous handler, which would have run anyway, is the one
+sanctioned foreign call in this context. Signal/SEH handlers never call it.
+The previous handler retains its behavior, including a deliberate exit status.
+Terminate capsules use code 0 because the chained handler chooses the exit path;
+no exception text is inspected. Re-entry terminates without chaining again.
+Sanitizers retain ownership and are not wrapped.

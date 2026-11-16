@@ -42,15 +42,14 @@ using namespace detail;
 static_assert(std::atomic<unsigned>::is_always_lock_free);
 Native endpoint;
 Packet initial;
-std::atomic<unsigned> claimed{0}, reason{0};
+std::atomic<unsigned> claimed{0};
+[[maybe_unused]] std::terminate_handler priorTerminate = nullptr;
 std::atomic<bool> active{false};
 static_assert(std::atomic<bool>::is_always_lock_free);
 // One terminal producer wins. No pointer/model lookup, TLS, allocation or
 // formatting. Raw PC/frame stay solely in the private native channel.
 void handoff(Packet packet) noexcept {
     packet.kind = Message::Terminal;
-    const unsigned cause = reason.load(std::memory_order_relaxed);
-    if (cause) packet.cause = cause;
     if (detail::publish(endpoint, packet)) detail::awaitAcknowledgement(endpoint);
 }
 #if defined(_WIN32)
@@ -83,8 +82,20 @@ void handoff(Packet packet) noexcept {
     // CRT abort remains fatal and retains the user's OS reporting policy.
 }
 #else
+[[noreturn]] void reraise(int signal) {
+    struct sigaction action{};
+    action.sa_handler = SIG_DFL;
+    ::sigemptyset(&action.sa_mask);
+    (void)::sigaction(signal, &action, nullptr);
+    sigset_t one;
+    ::sigemptyset(&one);
+    ::sigaddset(&one, signal);
+    (void)::sigprocmask(SIG_UNBLOCK, &one, nullptr);
+    (void)::raise(signal);
+    ::_exit(128 + signal);  // only if the native fatal re-raise could not complete
+}
 [[maybe_unused]] void fatalSignal(int signal, siginfo_t*, void* context) {
-    if (claimed.exchange(1, std::memory_order_relaxed)) ::_exit(128 + signal);
+    if (claimed.exchange(1, std::memory_order_relaxed)) reraise(signal);
     Packet packet = initial;
     packet.cause = 1;
     packet.code = static_cast<unsigned>(signal);
@@ -109,16 +120,7 @@ void handoff(Packet packet) noexcept {
 #endif
     }
     handoff(packet);
-    struct sigaction action{};
-    action.sa_handler = SIG_DFL;
-    ::sigemptyset(&action.sa_mask);
-    (void)::sigaction(signal, &action, nullptr);
-    sigset_t one;
-    ::sigemptyset(&one);
-    ::sigaddset(&one, signal);
-    (void)::sigprocmask(SIG_UNBLOCK, &one, nullptr);
-    (void)::raise(signal);
-    ::_exit(128 + signal);  // only if the native fatal re-raise could not complete
+    reraise(signal);
 }
 struct SignalStack {
     void* memory = nullptr;
@@ -157,19 +159,15 @@ struct SignalStack {
 };
 #endif
 [[maybe_unused, noreturn]] void terminate() noexcept {
-    reason.store(3, std::memory_order_relaxed);
-#if defined(_WIN32)
-    if (!claimed.exchange(1, std::memory_order_relaxed)) {
-        Packet packet = initial;
-        packet.cause = 3;
-        packet.code = 0xc0000409U;
-        handoff(packet);
-    }
-    // No CRT formatting or heap dependency in a damaged terminate context.
-    __fastfail(FAST_FAIL_FATAL_APP_EXIT);
-#else
-    std::abort();  // POSIX async-signal-safe; no exception object/message inspection
-#endif
+    if (claimed.exchange(1, std::memory_order_relaxed)) std::abort();
+    Packet packet = initial;
+    packet.cause = 3;
+    packet.code = 0;  // The previous handler chooses the actual exit path/status.
+    handoff(packet);
+    // Ordinary terminate context only: the prior handler would have run anyway.
+    // This is the sole sanctioned foreign call, never made by signal/SEH hooks.
+    if (priorTerminate) priorTerminate();
+    std::abort();  // Null/returning handlers must still terminate the process.
 }
 }  // namespace
 bool registerCurrentThread() noexcept {
@@ -218,7 +216,7 @@ bool installTerminal(Native native, const Packet& boot) {
         installed |= ::sigaction(signal, &action, nullptr) == 0;
     }
 #endif
-    if (installed) std::set_terminate(terminate);
+    if (installed) priorTerminate = std::set_terminate(terminate);
     active.store(installed, std::memory_order_release);
     return installed;
 #endif

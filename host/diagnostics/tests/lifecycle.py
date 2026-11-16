@@ -33,6 +33,15 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
             if sanitized: assert report["cause"]==0,(mode,report)
             assert "private-project-sentinel" not in raw
             assert str(root) not in raw
+    root=base/"prior-terminate"/"app"/"diagnostics"
+    prior=subprocess.run([binary,str(root),"prior-terminate"],capture_output=True,timeout=30)
+    assert prior.returncode==44,prior
+    assert b"prior terminate handler" in prior.stderr,prior
+    prior_reports=list(root.glob("*.json"))
+    assert len(prior_reports)==1
+    prior_report=json.loads(prior_reports[0].read_text())
+    assert prior_report["cause"]==(0 if sanitized else 3),prior_report
+    if not sanitized: assert prior_report["kind"]=="crash",prior_report
     if os.name != "nt":
         # The worker exits while its fork helper retains the channel. The
         # supervisor must finish before we release that helper. Timeout only

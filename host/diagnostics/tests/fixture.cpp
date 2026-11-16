@@ -48,6 +48,10 @@ int handledFault() {
 volatile sig_atomic_t handled = 0;
 void priorSignal(int) { handled = 1; }
 #endif
+void priorTerminate() {
+    std::fputs("prior terminate handler\n", stderr);
+    std::_Exit(44);
+}
 int body(int argc, char** argv) {
     if (argc < 3) return 2;
     const std::string mode = argv[2];
@@ -73,6 +77,9 @@ int body(int argc, char** argv) {
 #endif
     if (mode == "abort") std::abort();
     if (mode == "terminate") std::terminate();
+    if (mode == "prior-terminate") {
+        std::terminate();
+    }
     if (mode == "fault") actualFault();
     if (mode == "thread-fault") {
         std::thread worker([] {
@@ -165,6 +172,7 @@ int main(int argc, char** argv) {
 #if !defined(_WIN32)
     if (std::string_view(argv[2]) == "handled") std::signal(SIGSEGV, priorSignal);
 #endif
+    if (std::string_view(argv[2]) == "prior-terminate") std::set_terminate(priorTerminate);
     return supple::diagnostics::runFrontend(argc, argv, supple::diagnostics::Role::Fixture, body,
                                             {std::filesystem::path(argv[1])});
 }

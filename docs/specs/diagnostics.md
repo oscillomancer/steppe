@@ -73,8 +73,12 @@ the same unprivileged limitations as ordinary project publication.
 ## Terminal behavior
 
 POSIX SEGV/BUS/ILL/FPE/ABRT and Windows unhandled SEH use a fixed reserved capsule.
-Terminate records an enum and enters the native fatal path (POSIX abort,
-Windows fast fail), without inspecting the exception. Owned
+Terminate publishes its distinct cause before chaining the handler returned by
+`std::set_terminate` at installation (abort if null or if it returns), without
+inspecting the exception. This is ordinary terminate code, not signal context:
+the previous handler would have run anyway and is the sole sanctioned foreign
+call there. Signal/SEH handlers never invoke it. The capsule code is 0 because
+the chained handler chooses the exit path; its exit status is preserved. Owned
 threads reserve alternate/guaranteed stack while cold. POSIX handler operations
 are restricted to the async-signal-safe native list. No allocation, file work,
 formatting, unwinding, engine cleanup, GUI or plug-in calls. A native terminal-only
@@ -114,7 +118,9 @@ builds retain their handlers and emit exit-only summaries.
 
 Existing non-default fatal handlers/SEH filters are preserved. After capture,
 POSIX restores/re-raises the fatal default and Windows continues OS exception
-search. Terminate records only an enum before POSIX abort or Windows fast fail. Aborts, asserts, teardown
+search. Terminate records only an enum, then chains the previously installed handler;
+its deliberate message/exit behavior survives. A subsequent native fatal signal
+restores/re-raises the default without overwriting the terminate capsule. Aborts, asserts, teardown
 faults, registered worker faults and collector loss are isolated fixtures. Raw
 PC/frame values remain only in private IPC; the staged report records availability
 and cause, without claiming a backtrace. Fail-fast and forced exits can lack a
@@ -138,5 +144,7 @@ Windows GUI console attachment happens in the launcher entry before spawning;
 redirected handles retain the original frontend rules. After spawn, only the
 supervisor ignores Ctrl-C, so the worker retains its inherited policy and the
 supervisor can propagate the worker's actual exit. Windows terminate sends its
-minimal capsule then uses the native fast-fail intrinsic, without CRT formatting
-or allocator dependence. Native Windows verification remains required.
+minimal capsule before chaining the previous runtime/user handler, just as POSIX
+does. Product capture performs no CRT formatting or allocation; the explicitly
+sanctioned prior handler retains its own behavior. Native Windows verification
+remains required.
