@@ -2394,6 +2394,16 @@ TEST_CASE("a save as through a link and .. does not take another folder's journa
     REQUIRE_FALSE(failed);
     const auto made = first.parent_path() / "media/rec" / old.filename();
     REQUIRE(fs::exists(made));
+#if defined(_WIN32)
+    // Windows removes `..` by spelling before it follows any link (Win32
+    // path normalization), so there base/link/../dest is base/dest: one
+    // folder, not two, and the save went where Windows says the path points.
+    // A retry under another spelling of one folder is the previous test's.
+    CHECK(fs::exists(p.root / "base/dest/media/rec" / old.filename()));
+    CHECK_FALSE(fs::exists(p.root / "elsewhere/dest"));
+    MESSAGE("skipped: `..` after a link is removed by spelling here, so the paths are one folder");
+    return;
+#endif
     REQUIRE(fs::exists(p.root / "elsewhere/dest/media/rec" / old.filename()));
 
     const auto retry = p.root / "base/dest/song.json";
