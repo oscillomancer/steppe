@@ -299,7 +299,7 @@ struct Markov : Module {
         pitch.setChannels(1);
         gate.setChannels(1);
         odds.setChannels(1);
-        const Transport t = transport();
+        const Transport t = gridTransport();
         const bool internal = !clock.connected();
         if (internal && t.playing && !wasPlaying) startOver();
         wasPlaying = t.playing;

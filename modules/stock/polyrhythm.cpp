@@ -112,7 +112,7 @@ struct Polyrhythm : Module {
         }
         any.setChannels(1);
         hits.setChannels(1);
-        const Transport t = transport();
+        const Transport t = gridTransport();
         if (t.playing && !wasPlaying) origin = 0.0;
         wasPlaying = t.playing;
         const double beatsPerFrame = t.tempo / 60.0 / sampleRate();

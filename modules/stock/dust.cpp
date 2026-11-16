@@ -133,7 +133,7 @@ struct Dust : Module {
         trigger.setChannels(n);
         velocity.setChannels(n);
         value.setChannels(n);
-        const Transport t = transport();
+        const Transport t = gridTransport();
         const double dt = 1.0 / sampleRate();
         const double beatsPerFrame = t.tempo / 60.0 / sampleRate();
         const double cells = t.playing ? perBeat() : 0.0;

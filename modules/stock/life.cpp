@@ -197,7 +197,7 @@ struct Life : Module {
         count.setChannels(1);
         alive.setChannels(1);
         gen.setChannels(1);
-        const Transport t = transport();
+        const Transport t = gridTransport();
         const bool internal = !clock.connected();
         if (internal && t.playing && !wasPlaying) startOver();
         wasPlaying = t.playing;

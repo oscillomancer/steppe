@@ -154,7 +154,7 @@ struct Groove : Module {
         out.setChannels(n);
         velocity.setChannels(n);
         weight.setChannels(1);
-        const Transport t = transport();
+        const Transport t = gridTransport();
         const bool internal = !clock.connected();
         const double rate = sampleRate();
         const double beatsPerFrame = t.tempo / 60.0 / rate;

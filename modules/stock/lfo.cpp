@@ -202,7 +202,7 @@ struct Lfo : Module {
         out.setChannels(n);
         phase.setChannels(n);
         trigger.setChannels(n);
-        const Transport t = transport();
+        const Transport t = gridTransport();
         const double beatStep = t.tempo / 60.0 / sampleRate();
         const bool unipolar = polarity.index() == 1;
         const bool driven = drive.connected();
