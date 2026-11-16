@@ -182,6 +182,9 @@ instructions are in `docs/guides/installing.md`.
   (ADR-0006). Lua structured-error expansion has the same value/text budget
   as returned values, including repeated references to shared details.
   The skill's command reference is generated and drift-tested.
+  Fixed-seed schema mutations exercise every engine/sandbox command's argument
+  decoder and rejected dispatches, checking structured errors and unchanged state;
+  engine coverage includes recording in both executors and interleaved saves.
   The engine MCP default is 37 common tools plus describe/exec/query, with a
   60,000-byte tools/list budget. Other commands remain discoverable in the compact
   namespace index and callable through exec/query; --tools all exposes every

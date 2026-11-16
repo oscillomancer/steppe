@@ -1,5 +1,35 @@
 # Project and history fuzzing
 
+## Registered command input boundaries
+
+`engine-command-inputs.tests` and the `registered sandbox argument mutations`
+case in `sandbox.tests` use fixed seed `201423361`. They derive mutations from
+every registered argument schema, including optional fields, nested objects,
+array elements, unions, references, required members and numeric bounds. Failed
+cases print the seed, command/version, case number, target pointer and complete
+JSON arguments. No timing threshold decides correctness.
+
+Every decoder-rejected input also goes through the real dispatcher: errors must
+be structured and project bytes/version (or sandbox session state) must stay
+unchanged. The engine repeats the corpus stopped and while recording with each
+executor, interleaving manual dummy blocks and project saves. These are portable
+ordinary CI tests, including sanitizer presets; no real device is opened.
+
+An independent conservative oracle rejects obvious type/range/required-member
+contract violations even if a decoder starts accepting them. It does not enforce
+unknown schema keywords or unit-string patterns. Existing optional decoders
+accept null as absent without advertising null in their exported inner schema;
+null still goes through each decoder but is exempt from this partial oracle.
+Schema-accepted mutations are counted and never blindly executed: arbitrary
+plug-in JSON and device/file/script actions need domain fixtures. This is a
+schema boundary regression test, not exhaustive semantic command fuzzing.
+
+```sh
+cmake --build --preset dev --target engine-command-inputs.tests sandbox.tests -j3
+ctest --preset dev -R '^engine-command-inputs.tests$' --output-on-failure
+build/dev/host/sandbox/sandbox.tests '-tc=registered sandbox argument mutations*'
+```
+
 Configure the fuzz targets with Clang and run them against their seed corpora.
 The fuzz tree instruments every library for coverage (`fuzzer-no-link` in the
 global compile flags), not only the harness executables: `project.fuzz` and

@@ -475,6 +475,14 @@ contract remain unchanged.
 
 ### 4.4 Tests
 
+Fixed-seed schema-derived argument mutations cover all registered engine and
+sandbox commands, including nested/optional fields and numeric limits. Rejected
+inputs pass through dispatch, must retain structured errors, and must leave
+project/session state unchanged. The engine repeats this while recording in both
+executors with manual dummy blocks and interleaved saves. Schema-accepted actions
+are counted rather than executed without domain fixtures; see `tests/fuzz/README.md`
+for the conservative contract oracle and replay output.
+
 A scripted MCP client (C++ test or Python tooling in `tests/integration/`)
 runs initialize → tools/list → a sequence of calls against the sandbox, and
 checks results; its transcript (requests/responses, pretty-printed) is
