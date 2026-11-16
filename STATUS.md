@@ -147,7 +147,8 @@ instructions are in `docs/guides/installing.md`.
   versions with stable ids, per-branch undo, branches with object-level diff
   and merge by replay (field-level conflicts, id remapping), A/B renders of
   two branches, a command log with origins, a history budget that squashes
-  the oldest steps. Undo to an FX's initial unsaved settings restores its factory
+  the oldest steps. Incremental unique-payload accounting measures only new or
+  changed snapshots; ordinary commits and size queries reuse retained totals. Undo to an FX's initial unsaved settings restores its factory
   state while retaining the previous processing instance until plan retirement.
   Project format `supple.project/2.15` with migration from
   1.x, autosave (unsaved projects too, recovered from File > Recover unsaved
@@ -1266,8 +1267,8 @@ Session and editing:
   armed master or items on a master do not open in builds before schema 2.5.
   Linux is tested locally; native macOS/Windows CI has not run on it yet.
 - `fx.copy` does not copy envelopes or key routes; take FX cannot be keyed.
-- The history budget's size estimate walks shared payloads per version, and
-  squashed steps keep large invocation arguments.
+- Squashed history steps keep large invocation arguments; actual squashing
+  and graph edits may still traverse retained history.
 - Saved branches (ADR-0076): main's undo history and redo steps are kept only
   with `project.save {history: true}`, which the GUI does not offer yet. A
   command whose arguments change incompatibly makes a merge of an older
