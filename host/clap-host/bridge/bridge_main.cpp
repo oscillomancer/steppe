@@ -9,8 +9,7 @@
 #include <fcntl.h>
 #include <io.h>
 #include <windows.h>
-// After windows.h, which declares its types; a separate block keeps
-// clang-format from sorting it back above.
+// After windows.h, whose types it uses (tools/ci/windows_includes.py).
 #include <avrt.h>
 #elif defined(__APPLE__)
 #include <fcntl.h>

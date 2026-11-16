@@ -9,8 +9,10 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <psapi.h>
 #include <windows.h>
+
+// After windows.h, whose types it uses (tools/ci/windows_includes.py).
+#include <psapi.h>
 #else
 #include <pthread.h>
 #include <sched.h>

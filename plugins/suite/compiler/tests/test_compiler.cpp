@@ -7,9 +7,13 @@
 #include <clocale>
 #include <cstdlib>
 #if defined(_WIN32)
+#ifndef NOMINMAX
 #define NOMINMAX
-#include <psapi.h>
+#endif
 #include <windows.h>
+
+// After windows.h, whose types it uses (tools/ci/windows_includes.py).
+#include <psapi.h>
 #else
 #include <sys/mman.h>
 #include <unistd.h>

@@ -175,7 +175,10 @@ TEST_CASE("page faults are counted for a thread on Linux and for the process eve
         for (std::size_t i = 0; i < kPages * kStride; i += kStride) bytes[i] = 1;
     };
     const supple::PageFaults before = supple::processPageFaults();
-    std::int64_t seen = 0, own = 0;
+    std::int64_t seen = 0;
+#if defined(__linux__)
+    std::int64_t own = 0;
+#endif
     std::optional<supple::PageFaults> first, last;
     std::thread worker([&] {
 #if defined(__linux__)
