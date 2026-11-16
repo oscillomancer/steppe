@@ -4120,6 +4120,9 @@ TEST_CASE("plugin outputs retain FX epoch timeline flags addresses and counted o
     auto first = engine.takePluginOutputs();
     REQUIRE(first.events.size() == 256);
     CHECK(first.dropped == 900 - 256);
+    // The drop names its FX, once, for a recovery of that FX alone.
+    CHECK(first.droppedFx == std::vector<model::Id>{fx});
+    CHECK_FALSE(first.droppedAll);
     CHECK(first.events[0].fx == fx);
     CHECK(first.events[0].planGeneration == EngineTestAccess::latestPlan(engine).generation);
     CHECK(first.events[0].epoch == EngineTestAccess::epoch(engine));
@@ -4139,7 +4142,11 @@ TEST_CASE("plugin outputs retain FX epoch timeline flags addresses and counted o
     CHECK(overflow.events.size() == 4096);
     CHECK(overflow.dropped == first.dropped + 20 * 900 - 4096);
     CHECK(engine.pluginOutputDrops() == overflow.dropped);
-    CHECK(engine.takePluginOutputs().events.empty());
+    CHECK(overflow.droppedFx == std::vector<model::Id>{fx});
+    const auto quiet = engine.takePluginOutputs();
+    CHECK(quiet.events.empty());
+    CHECK(quiet.droppedFx.empty());  // nothing dropped since
+    CHECK_FALSE(quiet.droppedAll);
     engine.stop();
 }
 

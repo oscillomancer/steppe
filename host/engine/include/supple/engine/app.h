@@ -952,6 +952,9 @@ class EngineApp : public cmd::Host {
     std::uint64_t outputGeneration_ = 0, outputEpoch_ = 0;
     std::uint64_t outputDrops_ = 0, voiceDrops_ = 0, consumerDrops_ = 0;
     bool outputOverflow_ = false;
+    // Whose outputs were dropped since the last recovery (all: unknown).
+    std::vector<model::Id> overflowFx_;
+    bool overflowAll_ = false;
     static json::Value pluginErrorJson(const Error& error);
     std::vector<model::Id> pendingDirtyStates_;
     std::vector<host::Instance*> serviceInstances() const;

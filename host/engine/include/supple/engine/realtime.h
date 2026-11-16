@@ -525,6 +525,10 @@ struct PluginOutputs {
     std::vector<PluginOutput> events;
     std::uint64_t dropped = 0;       // cumulative since this Engine was constructed
     std::uint64_t voiceDropped = 0;  // voice tracking capacity, same lifetime
+    // The FX whose outputs were dropped since the last take (each once), or
+    // droppedAll when more did than are tracked: only these need recovery.
+    std::vector<model::Id> droppedFx;
+    bool droppedAll = false;
 };
 
 // Prepared main-thread rack timing, without instantiating plug-ins for queries.
@@ -891,6 +895,13 @@ class Engine {
     std::unique_ptr<OutputQueue> rendererOutputs_, callbackOutputs_;
     std::vector<PluginOutput> idleOutputs_;  // bounded main-thread queue
     std::atomic<std::uint64_t> outputDrops_{0}, voiceDrops_{0};
+    // FX whose plug-in outputs were dropped, written on the audio thread:
+    // slots hold (kind + 1) << 32 | n; more than fit set droppedFxAll_.
+    static constexpr std::size_t kDroppedFx = 512;
+    std::array<std::atomic<std::uint64_t>, kDroppedFx> droppedFx_{};
+    std::atomic<std::uint32_t> droppedFxCount_{0};
+    std::atomic<bool> droppedFxAll_{false};
+    void noteDroppedFx(model::Id fx) SUPPLE_RT;
     std::uint64_t idleOutputDrops_ = 0;
     bool notificationReload_ = false;
     MidiPortPreferences midiInputsPreferences_, midiOutputsPreferences_;

@@ -209,6 +209,7 @@ void EngineApp::consumePluginOutputs() {
             if (auto* instance = pool_->find(fx.id)) {
                 auto idle = instance->takeIdleOutputs();
                 taken.dropped += idle.dropped;
+                if (idle.dropped != 0) taken.droppedFx.push_back(fx.id);
                 for (const auto& event : idle.events) {
                     PluginOutput output;
                     output.fx = fx.id;
@@ -242,6 +243,11 @@ void EngineApp::consumePluginOutputs() {
     }
     bool overflow =
         outputOverflow_ || taken.dropped != outputDrops_ || taken.voiceDropped != voiceDrops_;
+    // Voice tracking names no FX; the engine's table may have overflowed.
+    overflowAll_ = overflowAll_ || taken.droppedAll || taken.voiceDropped != voiceDrops_;
+    for (const auto& fx : taken.droppedFx)
+        if (std::find(overflowFx_.begin(), overflowFx_.end(), fx) == overflowFx_.end())
+            overflowFx_.push_back(fx);
     outputDrops_ = taken.dropped;
     voiceDrops_ = taken.voiceDropped;
     if (engine_ && loadedHead_ && loadedHead_->version != head().version) {
@@ -259,6 +265,8 @@ void EngineApp::consumePluginOutputs() {
         if (pendingOutputs_.size() == kPendingOutputs) {
             ++consumerDrops_;
             overflow = true;
+            if (std::find(overflowFx_.begin(), overflowFx_.end(), output.fx) == overflowFx_.end())
+                overflowFx_.push_back(output.fx);
         } else
             pendingOutputs_.push_back(output);
     }
@@ -282,10 +290,18 @@ void EngineApp::consumePluginOutputs() {
         });
         // Read current values rather than guessing missing events or points.
         const auto session = head();
+        // Only the FX whose outputs were dropped, and only their writable
+        // parameters: read-only outputs (meters) never enter the model.
+        const auto dropped = [&](model::Id id) {
+            return overflowAll_ ||
+                   std::find(overflowFx_.begin(), overflowFx_.end(), id) != overflowFx_.end();
+        };
         for (const auto& fx : session.fx) {
+            if (!dropped(fx.id)) continue;
             auto* instance = pool_->find(fx.id);
             if (!instance || instance->failed()) continue;
             for (const auto& param : instance->params()) {
+                if (param.flags & CLAP_PARAM_IS_READONLY) continue;
                 auto value = instance->paramValue(param.id);
                 if (!value) continue;
                 PluginOutput output;
@@ -303,6 +319,8 @@ void EngineApp::consumePluginOutputs() {
                 commit({fx.id, param.id}, recovered);
             }
         }
+        overflowFx_.clear();
+        overflowAll_ = false;
         return;
     }
     for (auto it = pendingOutputs_.begin(); it != pendingOutputs_.end();) {

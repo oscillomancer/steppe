@@ -3220,6 +3220,45 @@ TEST_CASE("a semantic plug-in's output equal to its patch value is not an edit")
     app->stopEngine();
 }
 
+TEST_CASE("an output overflow recovers only the FX whose outputs were dropped") {
+    // Item D: an overflow re-read every parameter of every FX, so at 96
+    // bridged tracks one FX's dropped meters cost a read of all of them. The
+    // gain's value is set host-side (no output, no edit): only a recovery
+    // that reads the gain, which dropped nothing, would commit it.
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    REQUIRE(bus.execute({"track.add", j(R"({"name":"Gain"})"), kTest}));
+    REQUIRE(bus.execute({"fx.add", j(R"({"track":"tr_1","plugin":"Test Gain"})"), kTest}));
+    REQUIRE(bus.execute({"track.add", j(R"({"name":"Edge"})"), kTest}));
+    REQUIRE(bus.execute(
+        {"fx.add", j(R"({"track":"tr_2","plugin":"com.suppleaudio.test.edge"})"), kTest}));
+    const auto gainFx = *model::Id::parse("fx_1");
+    const auto edgeFx = *model::Id::parse("fx_2");
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(
+        app->startEngine(backend, {.sampleRate = 48000, .blockSize = 64}, {.anticipative = false}));
+    auto* gain = app->instanceOf(gainFx);
+    REQUIRE(gain);
+    REQUIRE_FALSE(gain->params().empty());
+    const auto gainParam = gain->params().front().id;
+    const auto before = *app->head().fx.find(gainFx);
+    REQUIRE(gain->setParam(gainParam, gain->params().front().min));
+    REQUIRE(app->instanceOf(edgeFx)->loadState(std::array<std::uint8_t, 4>{13, 0, 0, 0}));
+    REQUIRE(app->transport("play"));
+    for (int i = 0; i < 4; ++i) {
+        backend.run(2);  // the edge emits 900 outputs a block: most are dropped
+        app->tick();
+    }
+    app->takeEvents();
+    const auto& after = *app->head().fx.find(gainFx);
+    CHECK(after.params == before.params);
+    CHECK(after.patch == before.patch);
+    app->stopEngine();
+}
+
 TEST_CASE("app rejects plug-in outputs from a replaced plan and a removed FX") {
     Root root;
     auto app = makeApp(root.path);

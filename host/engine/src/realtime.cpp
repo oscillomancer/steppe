@@ -1196,9 +1196,11 @@ void Engine::service() {
         auto drainIdle = [&](host::Instance& instance, model::Id fx, std::uint64_t generation) {
             auto idle = instance.takeIdleOutputs();
             idleOutputDrops_ += idle.dropped;
+            if (idle.dropped != 0) noteDroppedFx(fx);
             for (const auto& event : idle.events) {
                 if (idleOutputs_.size() == 4096) {
                     ++idleOutputDrops_;
+                    noteDroppedFx(fx);
                     continue;
                 }
                 PluginOutput output;
@@ -1285,7 +1287,34 @@ PluginOutputs Engine::takePluginOutputs() {
     }
     out.dropped = pluginOutputDrops();
     out.voiceDropped = voiceDrops_.load();
+    // A slot not yet written (a drop racing this take) or a full table: all.
+    const auto count = droppedFxCount_.exchange(0, std::memory_order_acq_rel);
+    out.droppedAll = droppedFxAll_.exchange(false, std::memory_order_acq_rel) || count > kDroppedFx;
+    for (std::uint32_t i = 0; i < std::min<std::uint32_t>(count, kDroppedFx); ++i) {
+        const auto v = droppedFx_[i].exchange(0, std::memory_order_acq_rel);
+        if (v == 0) {
+            out.droppedAll = true;
+            continue;
+        }
+        const model::Id id{static_cast<model::Kind>((v >> 32) - 1),
+                           static_cast<std::uint32_t>(v & 0xffffffffu)};
+        if (std::find(out.droppedFx.begin(), out.droppedFx.end(), id) == out.droppedFx.end())
+            out.droppedFx.push_back(id);
+    }
     return out;
+}
+
+void Engine::noteDroppedFx(model::Id fx) SUPPLE_RT {
+    const std::uint64_t v = (static_cast<std::uint64_t>(fx.kind) + 1) << 32 | fx.n;
+    const auto known = std::min<std::uint32_t>(droppedFxCount_.load(std::memory_order_acquire),
+                                               static_cast<std::uint32_t>(kDroppedFx));
+    for (std::uint32_t i = 0; i < known; ++i)
+        if (droppedFx_[i].load(std::memory_order_relaxed) == v) return;
+    const auto slot = droppedFxCount_.fetch_add(1, std::memory_order_acq_rel);
+    if (slot < kDroppedFx)
+        droppedFx_[slot].store(v, std::memory_order_release);
+    else
+        droppedFxAll_.store(true, std::memory_order_release);
 }
 
 void Engine::publishPluginOutputs(detail::Plan& p, bool renderer, std::uint64_t epoch,
@@ -1304,6 +1333,7 @@ void Engine::publishPluginOutputs(detail::Plan& p, bool renderer, std::uint64_t 
             voiceDrops_.fetch_add(st.voiceDropped, std::memory_order_relaxed);
             st.voiceDropped = 0;
             outputDrops_.fetch_add(st.outEvents.dropped, std::memory_order_relaxed);
+            if (st.outEvents.dropped != 0) noteDroppedFx(st.fx);
             for (std::size_t i = 0; i < st.outEvents.count; ++i) {
                 const auto& event = st.outEvents.storage[i];
                 // Voice ends and note/MIDI output stay on the audio path;
@@ -1320,7 +1350,10 @@ void Engine::publishPluginOutputs(detail::Plan& p, bool renderer, std::uint64_t 
                 output.streamSample = stream + event.time;
                 output.event = event;
                 output.anticipative = renderer;
-                if (!queue.push(output)) outputDrops_.fetch_add(1, std::memory_order_relaxed);
+                if (!queue.push(output)) {
+                    outputDrops_.fetch_add(1, std::memory_order_relaxed);
+                    noteDroppedFx(st.fx);
+                }
             }
         });
     }

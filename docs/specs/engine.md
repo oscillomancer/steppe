@@ -1914,7 +1914,11 @@ The app-side consumer belongs in `EngineApp::tick()` after engine main servicing
    points without executing a setter during output consumption. The consumer
    bounds pending records (8192), gestures (128) and recording points per gesture
    (4096); overflow discards missing recording intervals and resynchronizes
-   current values. Status exposes `dropped`, `voice_dropped`, and
+   current values: the writable parameters of the FX whose outputs were
+   dropped (all FX when the engine's 512-entry table of them overflows or a
+   voice drop names none; read-only outputs never enter the model), and a
+   semantic FX's resynchronized value is an edit only when its patch changes.
+   Status exposes `dropped`, `voice_dropped`, and
    `failed_errors` alongside legacy `failed_fx` IDs. Failure entries and
    `fx.failed` retain `reason` and add structured `error` details.
    Known limit: a plain plug-in's state is one opaque blob, so when two of its
