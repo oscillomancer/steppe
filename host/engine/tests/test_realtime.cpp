@@ -5841,3 +5841,57 @@ TEST_CASE("a bridged note plug-in's lost block ends the notes its output held" *
           }) == 1);
 #endif
 }
+
+namespace {
+// N tracks, each a shared-bridge Test Gain; `edited`'s gain is -6, others 0.
+model::Session sharedGains(int n, int edited) {
+    model::EditTxn t(model::Session::create({.console9 = false}), 1);
+    for (int i = 0; i < n; ++i) {
+        model::Track tr;
+        tr.parent = kMaster;
+        const Id track = t.create(tr);
+        t.modify<model::Track>(kMaster, [&](model::Track& m) { m.children.push_back(track); });
+        model::FxInstance gain;
+        gain.plugin.id = "com.suppleaudio.test.gain";
+        gain.isolation = model::Isolation::SharedBridge;
+        gain.patch =
+            json::parse(
+                std::string(R"({"schema": "supple.test-gain-patch/1.0", "params": {"gain": )") +
+                (i == edited ? "-6" : "0") + "}}")
+                .value();
+        const Id fx = t.create(gain);
+        t.modify<model::Track>(track, [&](model::Track& x) { x.chain.push_back(fx); });
+    }
+    return t.commit().value();
+}
+}  // namespace
+
+TEST_CASE("one bridged FX's patch edit costs bridge requests independent of its bridge's size") {
+    // Item D: an FX patch edit's reload cost grew about quadratically with
+    // the instances sharing a bridge. Counted, not timed.
+    host::setBridgeExecutable(BRIDGE_PATH);
+    auto requestsFor = [](int n) {
+        auto pool = makePool();
+        MainThreadWake wake;  // as the app has: service() then polls nothing
+        pool.setMainThreadWake(wake);
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        Engine engine(pool, media, {.anticipative = false, .workers = 0});
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 64}));
+        REQUIRE(engine.load(sharedGains(n, -1)));
+        backend.run(2);
+        for (int i = 0; i < 3; ++i) engine.service();
+        const auto before = host::bridgeRequests();
+        REQUIRE(engine.load(sharedGains(n, 0)));
+        backend.run(2);
+        for (int i = 0; i < 3; ++i) engine.service();
+        const auto used = host::bridgeRequests() - before;
+        engine.stop();
+        return used;
+    };
+    const auto small = requestsFor(4);
+    const auto large = requestsFor(16);
+    CAPTURE(small);
+    CAPTURE(large);
+    CHECK(large <= small + 4);  // not 4x as many instances, 4x (or 16x) the requests
+}

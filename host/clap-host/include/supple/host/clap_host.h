@@ -368,6 +368,9 @@ struct BridgeTiming {
 };
 BridgeTiming bridgeTiming();
 void resetBridgeTiming();
+// Main-thread requests to plug-in bridges (one round trip each) since start:
+// a count, for tests that bound how many an operation makes.
+std::uint64_t bridgeRequests();
 // The live calls and settles so far and their summed waits, for a cycle to
 // compare.
 struct BridgeWaits {

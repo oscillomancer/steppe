@@ -23,6 +23,7 @@ namespace supple::host {
 using namespace bridge;
 
 namespace {
+std::atomic<std::uint64_t> gRequests{0};  // bridgeRequests()
 
 std::mutex gBridgeMutex;
 std::filesystem::path gBridgeExecutable;
@@ -242,7 +243,13 @@ void BridgeProcess::watch() {
 
 bool BridgeProcess::refresh() {
     const auto delivery = delivery_.load(std::memory_order_acquire);
-    if (!refreshNeeded_ && delivery == servedDelivery_) return false;
+    const bool all = refreshNeeded_ || delivery != servedDelivery_;
+    if (!all && refreshOnly_.empty()) return false;
+    const auto only = std::exchange(refreshOnly_, {});
+    if (!all) {
+        for (auto* member : only) member->pullSnapshot();
+        return true;
+    }
     refreshNeeded_ = false;
     servedDelivery_ = delivery;  // a delivery during pulls needs another pass
     if (ackPending_.exchange(false, std::memory_order_acq_rel) && !failed())
@@ -308,6 +315,7 @@ RemoteInstance::~RemoteInstance() {
     if (process_) {
         process_->unsubscribe(*this);
         std::erase(process_->members_, this);
+        std::erase(process_->refreshOnly_, this);
     }
     if (process_ && instanceId_ && !failed()) (void)call(Op::Destroy, Writer{}, -1, 2000);
     unmap();
@@ -397,6 +405,7 @@ std::string RemoteInstance::failure() const { return process_->failure(); }
 Result<std::vector<std::uint8_t>> BridgeProcess::call(Op op, std::uint32_t instance,
                                                       const Writer& w, Resource fd, int timeoutMs) {
     std::lock_guard lock(requests_);
+    gRequests.fetch_add(1, std::memory_order_relaxed);
     if (failed()) {
         reap();
         return Error("host.bridge_failed", failure(), {}, "fx.restart re-creates it");
@@ -470,7 +479,9 @@ Result<std::vector<std::uint8_t>> RemoteInstance::call(Op op, const Writer& w, R
         case Op::EditorResize:
         case Op::EditorScale:
         case Op::EditorClose:
-            process_->refreshNeeded_ = true;
+            if (std::find(process_->refreshOnly_.begin(), process_->refreshOnly_.end(), this) ==
+                process_->refreshOnly_.end())
+                process_->refreshOnly_.push_back(this);
             break;
         default:
             break;
@@ -1224,6 +1235,8 @@ BridgeTiming bridgeTiming() {
     }
     return out;
 }
+
+std::uint64_t bridgeRequests() { return gRequests.load(std::memory_order_relaxed); }
 
 void resetBridgeTiming() {
     for (TimingCounters& t : gTiming) {

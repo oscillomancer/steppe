@@ -64,7 +64,10 @@ class BridgeProcess {
     std::atomic<bool> watcherQuit_{false}, ackPending_{false};
     std::atomic<std::uint64_t> delivery_{0};
     std::uint64_t servedDelivery_ = 0;
-    bool refreshNeeded_ = true;
+    bool refreshNeeded_ = true;  // every member: a delivery names none
+    // Members whose own request changed them: only these are pulled (item D:
+    // pulling every member made one FX's edit cost the bridge's size).
+    std::vector<RemoteInstance*> refreshOnly_;
     std::vector<RemoteInstance*> members_;  // main only, includes retired instances
     std::mutex subscribersMutex_;
     std::map<MainThreadWake*, std::size_t> subscribers_;
