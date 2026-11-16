@@ -98,6 +98,16 @@ Sources: [POSIX signal safety](https://man7.org/linux/man-pages/man7/signal-safe
 [Microsoft last-chance filter](https://learn.microsoft.com/en-us/windows/win32/api/errhandlingapi/nf-errhandlingapi-setunhandledexceptionfilter),
 [Apple Mach IPC restrictions](https://developer.apple.com/documentation/xcode/conforming-to-mach-ipc-security-restrictions).
 
+## Frame pointers
+
+The topic-4 walkers follow frame-pointer chains, so first-party code on Linux and
+macOS is built with `-fno-omit-frame-pointer` and, where the compiler accepts it,
+`-mno-omit-leaf-frame-pointer`, in every preset (`cmake/Defaults.cmake`). The stock
+plug-ins receive the same flags through the parent build's `CMAKE_<LANG>_FLAGS`;
+no template file changes. Third-party and foreign plug-in frames are whatever their
+builders produced: walked best effort and validated, never assumed. Windows uses the
+OS unwinder and takes no flag.
+
 ## Later integration contracts
 
 Register inventory/command names off RT; preallocated lock-free execution tokens
