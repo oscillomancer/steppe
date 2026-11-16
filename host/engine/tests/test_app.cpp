@@ -3179,6 +3179,47 @@ TEST_CASE("app converts semantic output values to physical patches without sette
     }
 }
 
+TEST_CASE("a semantic plug-in's output equal to its patch value is not an edit") {
+    // A semantic FX keeps its values in its patch, not in raw params: an
+    // output reporting the value the patch already holds (as the overflow
+    // recovery re-reads every parameter) must not commit. It did, for each
+    // parameter, because raw params gained the id (item D, 96 bridged tracks).
+    struct Control {
+        void (*edit)(const clap_plugin_t*, double, std::uint32_t);
+        std::uint32_t (*deliveries)(const clap_plugin_t*);
+    };
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    REQUIRE(bus.execute({"track.add", j(R"({"name":"Gain"})"), kTest}));
+    REQUIRE(bus.execute({"fx.add", j(R"({"track":"tr_1","plugin":"Test Gain"})"), kTest}));
+    REQUIRE(bus.execute(
+        {"fx.patch.merge", j(R"({"fx":"fx_1","patch":{"params":{"gain":-12}}})"), kTest}));
+    const auto fx = *model::Id::parse("fx_1");
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(
+        app->startEngine(backend, {.sampleRate = 48000, .blockSize = 64}, {.anticipative = false}));
+    backend.run(1);
+    app->tick();
+    auto* instance = app->instanceOf(fx);
+    const auto* plugin = instance->raw();
+    const auto* control =
+        static_cast<const Control*>(plugin->get_extension(plugin, "supple.test.gain-control"));
+    REQUIRE(control);
+    const auto history = app->versions().history().size();
+    control->edit(plugin, -12, host::OutputEvent::IsLive | host::OutputEvent::DontRecord);
+    backend.run(1);
+    app->tick();
+    for (const auto& [topic, payload] : app->takeEvents())
+        if (topic == "engine.error") MESSAGE(json::writeCompact(payload));
+    CHECK(app->head().fx.find(fx)->patch->find("params")->find("gain")->asDouble() ==
+          doctest::Approx(-12));
+    CHECK(app->versions().history().size() == history);
+    app->stopEngine();
+}
+
 TEST_CASE("app rejects plug-in outputs from a replaced plan and a removed FX") {
     Root root;
     auto app = makeApp(root.path);

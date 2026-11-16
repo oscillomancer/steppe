@@ -103,7 +103,11 @@ Status EngineApp::commitOutputGesture(const OutputKey& key, const OutputGesture&
             params::toJson(semantic->spec, params::fromClap(semantic->spec, *value));
     }
     const auto before = head();
-    bool changed = fx->params != next.params || fx->patch != next.patch;
+    // A semantic FX's values live in its patch: raw params gain this id
+    // whatever its value, so they alone would make every repeated value an
+    // edit (each parameter, at each overflow recovery).
+    bool changed =
+        semantic ? fx->patch != next.patch : fx->params != next.params || fx->patch != next.patch;
     const bool records =
         std::any_of(before.envelopes.begin(), before.envelopes.end(), [&](const auto& env) {
             const auto& e = *env.value;
