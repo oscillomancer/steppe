@@ -112,6 +112,36 @@ struct Server::Impl : std::enable_shared_from_this<Impl> {
         std::uint64_t nextSubscription = 1;
         std::uint64_t dropped = 0;
     };
+    struct Budget {
+        std::mutex mutex;
+        std::size_t requests = 0, bytes = 0;
+    };
+    struct Admission {
+        std::shared_ptr<Budget> budget;
+        std::shared_ptr<Peer> peer;
+        std::string frame;
+        bool globalReleased = false, peerReleased = false;
+        Admission(std::shared_ptr<Budget> b, std::shared_ptr<Peer> p, std::string f)
+            : budget(std::move(b)), peer(std::move(p)), frame(std::move(f)) {}
+        void begin() {
+            if (globalReleased) return;
+            std::lock_guard lock(budget->mutex);
+            --budget->requests;
+            budget->bytes -= frame.size();
+            globalReleased = true;
+        }
+        void finish() {
+            if (peerReleased) return;
+            std::lock_guard lock(peer->outputMutex);
+            --peer->pendingRequests;
+            peer->pendingBytes -= frame.size();
+            peerReleased = true;
+        }
+        ~Admission() {
+            begin();
+            finish();
+        }
+    };
     const cmd::Registry& registry;
     cmd::Dispatcher& dispatcher;
     Post post;
@@ -123,9 +153,42 @@ struct Server::Impl : std::enable_shared_from_this<Impl> {
     std::vector<std::shared_ptr<Peer>> peers;
     std::map<std::string, std::uint64_t> topicSequence;
     std::atomic<bool> running = false;
+    std::shared_ptr<Budget> budget = std::make_shared<Budget>();
+    std::mutex rejectionMutex;  // bound concurrent DOM expansion of rejected frames
     Impl(const cmd::Registry& r, cmd::Dispatcher& d, Post p)
         : registry(r), dispatcher(d), post(std::move(p)) {}
     ~Impl() { stop(); }
+
+    std::shared_ptr<Admission> admit(const std::shared_ptr<Peer>& peer, std::string& frame) {
+        std::lock_guard lock(budget->mutex);
+        if (budget->requests >= 1024 || frame.size() > 64 * 1024 * 1024 - budget->bytes) return {};
+        auto admission = std::make_shared<Admission>(budget, peer, std::move(frame));
+        ++budget->requests;
+        budget->bytes += admission->frame.size();
+        return admission;
+    }
+    void rejectBusy(const std::shared_ptr<Peer>& peer, const std::string& frame) {
+        // No model work is queued. Serialize this bounded preflight so rejected
+        // clients cannot expand a DOM concurrently on every I/O thread.
+        std::lock_guard lock(rejectionMutex);
+        auto parsed =
+            json::parse(frame, {.maxBytes = kMaxMessageBytes, .maxValues = kMaxFrameValues});
+        const auto* id = parsed ? parsed->find("id") : nullptr;
+        if (parsed && parsed->isObject() && !id) {
+            std::fprintf(stderr, "rpc: rejected client notification\n");
+            return;
+        }
+        if (id && validId(*id) && !requestIdFits(*id)) {
+            enqueue(peer, rpcError(nullptr, -32600, "Invalid Request",
+                                   Error("rpc.id_size", "request ID exceeds 1024 serialized bytes",
+                                         "/id", "use a shorter request ID")));
+            return;
+        }
+        enqueue(peer, rpcError(id && requestIdFits(*id) ? *id : json::Value(nullptr), -32000,
+                               "Server busy",
+                               Error("rpc.busy", "global pending request budget exhausted", "",
+                                     "retry later after outstanding requests complete")));
+    }
 
     void enqueue(const std::shared_ptr<Peer>& peer, json::Value value, bool event = false) {
         std::string message = line(value);
@@ -258,6 +321,14 @@ struct Server::Impl : std::enable_shared_from_this<Impl> {
                                              "/params/topics")));
                 return;
             }
+            if (peer->subscriptions.size() >= 64) {
+                enqueue(peer,
+                        rpcError(idValue, -32000, "Subscription limit",
+                                 Error("rpc.subscriptions", "at most 64 subscriptions per peer",
+                                       "/params/topics",
+                                       "unsubscribe an existing subscription before retrying")));
+                return;
+            }
             Subscription sub;
             sub.id = "sub_" + std::to_string(peer->nextSubscription++);
             for (const auto& topic : topics->asArray()) {
@@ -335,12 +406,22 @@ struct Server::Impl : std::enable_shared_from_this<Impl> {
                     peer->closeAfterWrite = true;
                     break;
                 }
+                auto admission = admit(peer, frame);
+                if (!admission) {
+                    {
+                        std::lock_guard lock(peer->outputMutex);
+                        --peer->pendingRequests;
+                        peer->pendingBytes -= frame.size();
+                    }
+                    rejectBusy(peer, frame);
+                    continue;
+                }
                 auto weak = weak_from_this();
-                post([weak, peer, size = frame.size(), frame = std::move(frame)] {
-                    if (auto self = weak.lock(); self && self->running) self->process(peer, frame);
-                    std::lock_guard lock(peer->outputMutex);
-                    --peer->pendingRequests;
-                    peer->pendingBytes -= size;
+                post([weak, admission] {
+                    admission->begin();
+                    if (auto self = weak.lock(); self && self->running)
+                        self->process(admission->peer, admission->frame);
+                    admission->finish();
                 });
             }
             short events = 0;

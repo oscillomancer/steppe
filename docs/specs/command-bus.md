@@ -732,3 +732,16 @@ and depth limits remain. Trusted files keep the parser's unlimited value default
 MCP handle takes ownership of its request; transports move parsed requests/params
 rather than deep-copying them. Embedders passing lvalues retain ordinary copy
 semantics. No bad_alloc catch is introduced.
+
+### Global admission (ADR-0087 D1)
+
+A server admits at most1,024 posted-but-unexecuted requests and64 MiB of frame
+bytes globally, including disconnected peers. Credits return when execution
+begins or the last unexecuted closure is destroyed; per-peer credits also return
+on destruction. Closure copies share frame/credit ownership. Admitted work still
+runs after disconnect; stop/destruction retains its existing lifecycle rules.
+Excess work is not posted or executed: a live peer receives structured rpc.busy
+with its bounded ID and a retry-later hint. A bounded, serialized I/O preflight
+extracts the ID without model dispatch. Existing per-peer16 limits remain; no
+additional fairness scheme is added. Each peer admits at most64 subscriptions;
+excess returns rpc.subscriptions with an unsubscribe hint.

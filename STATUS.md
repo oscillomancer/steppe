@@ -184,6 +184,9 @@ instructions are in `docs/guides/installing.md`.
   Optional null is accepted as omission for caller leniency; exported argument
   schemas deliberately remain narrower on this point (ADR-0087).
   The skill's command reference is generated and drift-tested.
+  Control admission globally bounds posted work to1,024 requests/64 MiB, including
+  disconnected owners; excess gets rpc.busy and admitted edits still run. Each
+  peer permits64 subscriptions and retains its16-request limit (ADR-0087).
   RPC/MCP untrusted frames are limited to 1,000,000 parsed values before
   construction, in addition to byte/depth limits; params move into dispatch.
   Trusted file parsing is unchanged (ADR-0087).
@@ -1051,10 +1054,6 @@ Library boundaries:
 - The control client bounds connecting and sending, as well as the
   response, by its timeout through nonblocking sockets; that path is tested
   on Linux, and native macOS/Windows CI has not run on it.
-- Control admission is bounded per live peer, not across retained work from
-  disconnected peers. Reconnect churn can accumulate posted frames while the
-  model is busy. Subscriptions also have no retained count/byte cap; aggregate
-  budgets, fairness and accepted-request lifetime need a policy decision.
 - In-process MCP writes stdout synchronously on the model thread, so a client
   that stops reading can stall model service. Socket clients have separate I/O;
   the standalone proxy isolates this stdout stall from its engine process.
