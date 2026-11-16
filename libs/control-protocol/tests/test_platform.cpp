@@ -198,7 +198,14 @@ TEST_CASE("portable AF_UNIX transport dispatches and protects a live endpoint") 
     REQUIRE_FALSE(refused);
     CHECK(refused.error().code == "rpc.address_in_use");
     rpc::Client client;
+    auto absent = client.callWithDelivery("counter.add", parse(R"({"value":7})"));
+    REQUIRE_FALSE(absent.result);
+    CHECK(absent.delivery == rpc::Delivery::Unsent);
     REQUIRE(client.connect(path, "portable-test"));
+    auto remoteError = client.callWithDelivery("counter.fail", parse(R"({"value":0})"));
+    REQUIRE_FALSE(remoteError.result);
+    CHECK(remoteError.delivery == rpc::Delivery::Sent);
+    CHECK(remoteError.result.error().code == "test.located");
     auto result = client.call("counter.add", parse(R"({"value":7})"));
     REQUIRE(result);
     CHECK((*result)["count"].asInt() == 7);

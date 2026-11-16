@@ -666,23 +666,28 @@ void Client::setTimeout(std::chrono::milliseconds timeout) {
                           std::chrono::milliseconds(std::chrono::hours(24)));
 }
 Result<json::Value> Client::call(std::string_view method, const json::Value& params) {
+    return callWithDelivery(method, params).result;
+}
+CallResult Client::callWithDelivery(std::string_view method, const json::Value& params) {
     const auto deadline = std::chrono::steady_clock::now() + timeout_;
     if (fd_ == -1) {
         if (!hello_)
-            return Error("rpc.connect", "client is not connected", "", "call connect() first");
+            return {Error("rpc.connect", "client is not connected", "", "call connect() first"),
+                    Delivery::Unsent};
         if (auto reopened = open(deadline); !reopened) {
             Error error("rpc.connect", "could not reconnect: " + reopened.error().message,
                         path_.string(), "start the app, then retry the call");
             error.details.push_back(reopened.error());
-            return error;
+            return {std::move(error), Delivery::Unsent};
         }
     }
-    auto result = exchange(method, params, deadline);
+    auto delivery = Delivery::Unsent;
+    auto result = exchange(method, params, deadline, &delivery);
     if (result && method == "rpc.hello") hello_ = params;
-    return result;
+    return {std::move(result), delivery};
 }
 Result<json::Value> Client::exchange(std::string_view method, const json::Value& params,
-                                     Deadline deadline) {
+                                     Deadline deadline, Delivery* delivery) {
     // Any transport failure leaves the stream in an unknown state (a partial
     // request, or a response still on its way): close it.
     auto fail = [this](Error error) -> Result<json::Value> {
@@ -721,6 +726,7 @@ Result<json::Value> Client::exchange(std::string_view method, const json::Value&
         if (n <= 0) return fail(Error("rpc.write", std::strerror(errno)));
         sent += static_cast<std::size_t>(n);
     }
+    if (delivery) *delivery = Delivery::Sent;
     std::size_t scanned = 0;  // input_ before this offset holds no newline
     while (true) {
         auto newline = input_.find('\n', scanned);

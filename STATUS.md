@@ -202,6 +202,8 @@ instructions are in `docs/guides/installing.md`.
   Named describe calls fetch contracts on demand, and exec dispatches without
   schema prefetch. Reconnects refresh the index before cached query admission;
   changed catalogues replace selected definitions and notify MCP clients.
+  RPC call results carry explicit local Unsent/Sent delivery provenance; only
+  proved-unsent calls may retry. Remote error codes never authorize replay.
   Edits with lost replies are never retried automatically. The proxy requires
   the updated index from the running app.
   Sandbox exposures are unchanged. Native macOS/Windows CI for these catalogue,
@@ -1053,9 +1055,6 @@ Library boundaries:
 - In-process MCP writes stdout synchronously on the model thread, so a client
   that stops reading can stall model service. Socket clients have separate I/O;
   the standalone proxy isolates this stdout stall from its engine process.
-- Proxy retry eligibility currently relies on error-code strings, without local
-  transport provenance. A peer returning a structured `rpc.write`/`rpc.connect`
-  command error can trigger replay even though the request was delivered.
 - Socket product-directory permission setup follows symlinks on POSIX; directory
   trust/link policy remains unresolved. Windows AF_UNIX uses inherited directory
   ACLs (ADR-0035), not a named-pipe DACL. Endpoint lock acquisition can still wait

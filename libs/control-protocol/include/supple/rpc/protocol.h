@@ -22,6 +22,12 @@ json::Value errorJson(const Error& error);
 Error errorFromJson(const json::Value& value);
 std::filesystem::path socketPath(std::string_view instance);
 
+enum class Delivery { Unsent, Sent };
+struct CallResult {
+    Result<json::Value> result;
+    Delivery delivery;
+};
+
 // The I/O thread owns sockets and framing. `post` schedules every request on
 // the caller's model thread; the caller must drain that queue until stop().
 class Server {
@@ -78,13 +84,17 @@ class Client {
     void setTimeout(std::chrono::milliseconds timeout);
     Result<json::Value> call(std::string_view method,
                              const json::Value& params = json::Value::object());
+    // Local provenance of this command, independent of a reconnect handshake or
+    // remote error codes. Sent means a complete frame may have executed.
+    CallResult callWithDelivery(std::string_view method,
+                                const json::Value& params = json::Value::object());
 
   private:
     using Deadline = std::chrono::steady_clock::time_point;
     Status open(Deadline deadline);
     void drop();
     Result<json::Value> exchange(std::string_view method, const json::Value& params,
-                                 Deadline deadline);
+                                 Deadline deadline, Delivery* delivery = nullptr);
     std::intptr_t fd_ = -1;
     std::uint64_t nextId_ = 1;
     std::uint64_t connectionGeneration_ = 0;

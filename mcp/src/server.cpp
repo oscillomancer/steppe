@@ -153,8 +153,10 @@ Server::Server(const cmd::Registry& registry, cmd::Dispatcher& dispatcher, ToolS
 }
 Server::Server(rpc::Client& client, Reconnect reconnect, ToolSet tools)
     : proxyClient_(&client), reconnect_(std::move(reconnect)), toolSet_(tools) {
-    invoke_ = [&client](std::string_view name, const json::Value& args, const cmd::Origin&) {
-        return client.call(name, args);
+    invoke_ = [this, &client](std::string_view name, const json::Value& args, const cmd::Origin&) {
+        auto call = client.callWithDelivery(name, args);
+        delivery_ = call.delivery;
+        return std::move(call.result);
     };
 }
 Result<std::unique_ptr<Server>> Server::proxy(rpc::Client& client, Reconnect reconnect,
@@ -261,11 +263,11 @@ json::Value Server::tools() const {
 }
 Result<json::Value> Server::call(std::string_view name, const json::Value& args) {
     SUPPLE_TRY(prepareProxy());
+    delivery_ = rpc::Delivery::Sent;  // local validation is never permission to retry
     auto result = callTool(name, args);
     if (result || !proxyClient_) return result;
-    const auto& code = result.error().code;
-    const bool unsent = code == "rpc.write" || code == "rpc.connect";
-    if (!unsent && code != "rpc.read") return result;
+    const bool unsent = delivery_ == rpc::Delivery::Unsent;
+    if (!unsent && proxyClient_->connectionGeneration()) return result;
     // Refresh for the next call even when this one was sent but unanswered.
     // Only a request known not to have been sent may run again; reroute it
     // through fresh query admission and dedicated-tool lookup before retrying.

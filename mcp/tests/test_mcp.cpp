@@ -658,6 +658,49 @@ TEST_CASE("an edit whose reply is lost is not resent after catalogue refresh") {
     second.stop();
 }
 
+TEST_CASE("remote transport-looking command errors never authorize edit replay") {
+    for (const auto* code : {"rpc.write", "rpc.connect", "rpc.read", "rpc.timeout"}) {
+        auto commands = registry();
+        std::atomic<int> invoked{0};
+        cmd::Command<cmd::NoArgs, Count> command;
+        command.name = "counter.remote-error";
+        command.kind = cmd::Kind::Edit;
+        command.exposure = cmd::Exposure::McpTool;
+        command.summary = "Return a remote command error.";
+        command.args = schema::object<cmd::NoArgs>("none").build();
+        command.result = schema::object<Count>("count")
+                             .field("count", &Count::count, schema::integerOf<int>())
+                             .build();
+        command.examples = {{"Fail", parse("{}"), parse("{}"), "empty"}};
+        command.run = [&](const cmd::NoArgs&, cmd::Context&) -> Result<Count> {
+            ++invoked;
+            return Error(code, "remote command failure", "/value", "check before retrying");
+        };
+        commands.add(std::move(command));
+        Host host;
+        cmd::Dispatcher bus(commands, host);
+        ModelQueue model;
+        const auto path = std::filesystem::temp_directory_path() /
+                          ("mcp-delivery-" + std::to_string(::getpid()) + ".sock");
+        rpc::Server remote(commands, bus, [&](auto task) { model.post(std::move(task)); });
+        REQUIRE(remote.start(path));
+        rpc::Client client;
+        REQUIRE(client.connect(path, "delivery"));
+        auto proxy = mcp::Server::proxy(client);
+        REQUIRE(proxy);
+        request(
+            **proxy,
+            R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}})");
+        const auto reply = request(
+            **proxy,
+            R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"counter_remote-error"}})");
+        CHECK(reply.find("result")->find("structuredContent")->find("code")->asString() == code);
+        CHECK(invoked == 1);
+        client.close();
+        remote.stop();
+    }
+}
+
 TEST_CASE("proxy startup fetches only selected tools and resolves other commands on demand") {
     auto commands = registry();
     cmd::Command<Args, Count> adjust;

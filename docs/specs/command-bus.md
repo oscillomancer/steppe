@@ -472,11 +472,11 @@ catalogues are fixed and omit the `listChanged` capability. MCP Tools /
 [List Changed Notification](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#list-changed-notification)
 says servers advertising that capability SHOULD notify when their tools change.
 
-A failed invocation known not to have been sent (`rpc.write` or `rpc.connect`)
+A failed invocation proved unsent by local RPC delivery provenance
 may be retried once, after refreshing the catalogue and rerouting the original
 tool call through current query admission and tool lookup. A sent but unanswered
 invocation (`rpc.read`, timeout or interruption) is never automatically replayed,
-including edits whose committed result was lost. A read failure may reconnect
+including edits whose committed result was lost. A sent transport failure may reconnect
 and refresh metadata for subsequent calls while returning the original error.
 
 The standalone MCP proxy gives its RPC client twice the command bus's maximum
@@ -693,3 +693,13 @@ a console read during reader teardown, so shutdown can await a keypress. Pipe-ba
 MCP clients are the tested transport contract. Windows signal teardown clears the
 borrowed wake handle and joins lock-free handler claims before the event can close;
 Linux retains its existing signal/descriptor lifecycle.
+
+### Explicit local delivery (2026-11-16, ADR-0087 D4)
+
+`rpc::Client::callWithDelivery` returns `{result, delivery}`; `Delivery::Unsent`
+means no complete newline-terminated command frame was transmitted, and
+`Delivery::Sent` means it may have executed. A reconnect handshake has separate
+delivery state. The existing `call` API returns just `result` and never retries.
+Remote structured errors preserve their code/path/hint and carry Sent provenance.
+The proxy retries once only on Unsent, after refreshing/rerouting; error-code
+strings never authorize replay. Local adapter validation does not authorize retry.

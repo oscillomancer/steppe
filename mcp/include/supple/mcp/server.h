@@ -66,6 +66,7 @@ class Server {
     std::map<std::string, std::string> commands_;
     std::map<std::string, cmd::Kind> kinds_;
     rpc::Client* proxyClient_ = nullptr;
+    rpc::Delivery delivery_ = rpc::Delivery::Sent;
     Reconnect reconnect_;
     ToolSet toolSet_ = ToolSet::Core;
     std::uint64_t catalogueGeneration_ = 0;
