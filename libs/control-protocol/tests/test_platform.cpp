@@ -72,6 +72,28 @@ TEST_CASE("malformed request ids are never echoed into portable RPC error envelo
     }
     const auto reply = exchange(R"({"jsonrpc":"1.0","method":"rpc.hello","id":"valid-id"})");
     CHECK(*reply.find("id") == "valid-id");
+    for (const auto& [id, fits] :
+         std::vector<std::pair<std::string, bool>>{{std::string(1022, 'i'), true},
+                                                   {std::string(1023, 'i'), false},
+                                                   {std::string(511, '\n'), true},
+                                                   {std::string(512, '\n'), false},
+                                                   {std::string(170, '\0'), true},
+                                                   {std::string(171, '\0'), false},
+                                                   {std::string(65536, 'i'), false}}) {
+        auto frame = parse(
+            R"({"jsonrpc":"2.0","method":"rpc.hello","params":{"client":"id-limit","protocol":1}})");
+        frame["id"] = id;
+        const auto result = exchange(json::writeCompact(frame));
+        if (fits) {
+            CHECK(*result.find("id") == id);
+            CHECK(result.find("result"));
+        } else {
+            CHECK(result.find("id")->isNull());
+            REQUIRE(result.find("error"));
+            CHECK(result.find("error")->find("data")->find("code")->asString() == "rpc.id_size");
+            CHECK(json::writeCompact(result).size() < 1024);
+        }
+    }
     server.stop();
     CHECK(host.count == 0);
 }

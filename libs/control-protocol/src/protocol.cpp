@@ -43,6 +43,11 @@ bool validId(const json::Value& id) { return id.isString() || id.isInt() || id.i
 std::string line(const json::Value& value) { return json::writeCompact(value) + "\n"; }
 }  // namespace
 
+bool requestIdFits(const json::Value& id) {
+    if (!validId(id)) return false;
+    if (id.isString() && id.asString().size() > kMaxRequestIdBytes - 2) return false;
+    return json::writeCompact(id).size() <= kMaxRequestIdBytes;
+}
 json::Value errorJson(const Error& error) {
     json::Value out = json::Value::object();
     out["code"] = error.code;
@@ -142,6 +147,11 @@ struct Server::Impl : std::enable_shared_from_this<Impl> {
                 id ? *id : json::Value(nullptr), -32000, "Response too large",
                 Error("rpc.response_too_large", "outbound queue is full", "", "narrow the query")));
         }
+        // Recheck the final fallback too, not just the original response.
+        if (!event && message.size() > kMaxMessageBytes)
+            message = line(rpcError(nullptr, -32600, "Invalid Request",
+                                    Error("rpc.id_size", "request ID exceeds 1024 serialized bytes",
+                                          "/id", "use a shorter request ID")));
         peer->outputBytes += message.size();
         peer->output.push_back(std::move(message));
     }
@@ -177,6 +187,12 @@ struct Server::Impl : std::enable_shared_from_this<Impl> {
             return;
         }
         auto* id = request.find("id");
+        if (id && validId(*id) && !requestIdFits(*id)) {
+            enqueue(peer, rpcError(nullptr, -32600, "Invalid Request",
+                                   Error("rpc.id_size", "request ID exceeds 1024 serialized bytes",
+                                         "/id", "use a shorter request ID")));
+            return;
+        }
         json::Value idValue = id && validId(*id) ? *id : json::Value(nullptr);
         // Notifications are ignored and recorded without a response.
         if (!id) {

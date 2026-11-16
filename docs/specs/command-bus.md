@@ -703,3 +703,11 @@ delivery state. The existing `call` API returns just `result` and never retries.
 Remote structured errors preserve their code/path/hint and carry Sent provenance.
 The proxy retries once only on Unsent, after refreshing/rerouting; error-code
 strings never authorize replay. Local adapter validation does not authorize retry.
+
+### Request ID budget (ADR-0087 D5)
+
+RPC and MCP request IDs must fit in 1,024 bytes of compact serialized JSON,
+including quotes and escape expansion. Longer IDs receive -32600 with id:null
+and structured rpc.id_size at /id, before handshake/dispatch or identity changes.
+IDs are never truncated. RPC rechecks final fallback frame bounds; with a bounded
+ID even its response-too-large/queue-full errors fit the 16 MiB wire limit.

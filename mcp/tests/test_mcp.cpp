@@ -952,6 +952,32 @@ TEST_CASE("malformed request ids are never echoed into MCP error envelopes") {
     CHECK(host.count == 0);
 }
 
+TEST_CASE("MCP request ids have a serialized byte budget") {
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    mcp::Server server(commands, bus);
+    for (const auto& [id, fits] :
+         std::vector<std::pair<std::string, bool>>{{std::string(1022, 'i'), true},
+                                                   {std::string(1023, 'i'), false},
+                                                   {std::string(511, '\n'), true},
+                                                   {std::string(512, '\n'), false},
+                                                   {std::string(170, '\0'), true},
+                                                   {std::string(171, '\0'), false}}) {
+        auto input = parse(R"({"jsonrpc":"2.0","method":"ping"})");
+        input["id"] = id;
+        const auto result = server.handle(input);
+        REQUIRE(result);
+        if (fits)
+            CHECK(*result->find("id") == id);
+        else {
+            CHECK(result->find("id")->isNull());
+            REQUIRE(result->find("error")->find("data"));
+            CHECK(result->find("error")->find("data")->find("code")->asString() == "rpc.id_size");
+        }
+    }
+}
+
 TEST_CASE("generic MCP argument envelopes are validated before executing edits") {
     auto commands = registry();
     Host host;

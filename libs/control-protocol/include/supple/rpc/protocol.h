@@ -13,6 +13,9 @@
 
 namespace supple::rpc {
 inline constexpr std::size_t kMaxMessageBytes = 16 * 1024 * 1024;
+inline constexpr std::size_t kMaxRequestIdBytes = 1024;
+// Valid ID type and at most kMaxRequestIdBytes of compact serialized JSON.
+bool requestIdFits(const json::Value& id);
 using Post = std::function<void(std::function<void()>)>;
 
 // Structured errors on the wire: code, message, path, hint, the optional text

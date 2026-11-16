@@ -333,6 +333,13 @@ std::optional<json::Value> Server::handle(const json::Value& request) {
     auto* method = request.find("method");
     auto* params = request.find("params");
     const bool validId = id && (id->isString() || id->isInt() || id->isNull());
+    if (validId && !rpc::requestIdFits(*id)) {
+        auto reply = error(nullptr, -32600, "Request ID exceeds 1024 serialized bytes");
+        reply["error"]["data"] =
+            rpc::errorJson(Error("rpc.id_size", "request ID exceeds 1024 serialized bytes", "/id",
+                                 "use a shorter request ID"));
+        return reply;
+    }
     if (!version || !version->isString() || version->asString() != "2.0" || !method ||
         !method->isString() || (id && !validId) ||
         (params && !(params->isObject() || params->isArray())))

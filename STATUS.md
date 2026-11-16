@@ -186,7 +186,9 @@ instructions are in `docs/guides/installing.md`.
   decoder and rejected dispatches, checking structured errors and unchanged state;
   engine coverage includes recording in both executors and interleaved saves.
   RPC and MCP reject invalid request IDs using a null response ID, keeping error
-  envelopes valid while preserving valid IDs for other envelope errors.
+  envelopes valid while preserving valid IDs for other envelope errors. IDs
+  are limited to 1,024 serialized bytes, including escapes; longer IDs receive
+  a structured null-ID error before dispatch, and final fallback bounds are checked.
   Generic MCP describe/exec/query arguments are checked against their advertised
   envelope before dispatch, including batch siblings, so malformed wrappers cannot edit.
   Socket collision probes are nonblocking and conservatively refuse a busy or
@@ -1050,8 +1052,6 @@ Library boundaries:
   budgets, fairness and accepted-request lifetime need a policy decision.
 - RPC/MCP limit raw frames to 16 MiB and parsing depth to 256; there is no
   parsed-value budget. Wide JSON can exhaust a constrained process's memory.
-  An RPC fallback error with a very large string ID can itself exceed the wire
-  bound; an ID headroom or connection-close policy is still needed.
 - In-process MCP writes stdout synchronously on the model thread, so a client
   that stops reading can stall model service. Socket clients have separate I/O;
   the standalone proxy isolates this stdout stall from its engine process.
