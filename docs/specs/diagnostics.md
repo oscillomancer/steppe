@@ -67,7 +67,12 @@ Malformed/link/foreign entries are neither followed
 nor treated as authority to delete another file. Run markers/locks and recovery
 are not report-retention inputs. Concurrent pruning tolerates entries disappearing
 at metadata reads or removal; only not-found errors are benign, while genuine
-metadata/removal errors still fail storage. Namespace power-cut durability on Windows has
+metadata/removal errors still fail storage. On Windows a report another pruner has
+condemned but whose deleting handle is still open fails to open with
+`ERROR_ACCESS_DENIED`, the code a real refusal also gives, so that code counts as
+already removed only when the NT status of the same call (`RtlGetLastNtStatus`) is
+`STATUS_DELETE_PENDING`; any other status, or no status, stays an error. POSIX needs no
+such case: unlink is immediate and a lost race is `ENOENT`. Namespace power-cut durability on Windows has
 the same unprivileged limitations as ordinary project publication.
 
 ## Terminal behavior

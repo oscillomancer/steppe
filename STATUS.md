@@ -1396,7 +1396,9 @@ metadata-only reports, bounded retention and collector-loss fixtures. Retention
 validates current report enums/scalar bounds and preserves malformed entries,
 including nonempty inventories/traces whose nested schemas are not implemented.
 Concurrent pruners tolerate another pruner removing a report during metadata scan
-or deletion, while preserving genuine storage failures. Terminal
+or deletion (on Windows including a deletion still pending behind the other pruner's
+open handle, told apart from a real access refusal by its NT status), while
+preserving genuine storage failures. Terminal
 signal/SEH/terminate capsules and cold thread-stack registration now exist, with
 metadata-only sanitizer/fail-fast fallbacks. The ordinary terminate hook publishes
 its distinct cause before chaining the previously installed handler, preserving

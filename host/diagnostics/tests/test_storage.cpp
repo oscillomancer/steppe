@@ -6,6 +6,15 @@
 #include <barrier>
 #include <functional>
 #include <thread>
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 #include "../src/private_files.h"
 #include "../src/storage.h"
 #include "supple/base/files.h"
@@ -295,6 +304,64 @@ TEST_CASE("diagnostic removal is idempotent but preserves genuine refusal") {
     CHECK(fs::exists(alias));
     CHECK_FALSE(privateRemove(root.path));
 }
+
+TEST_CASE("removal failure classification separates delete-pending from refusal") {
+    constexpr std::uint32_t notFound = 2, pathNotFound = 3, denied = 5, sharing = 32;
+    constexpr std::uint32_t deletePending = 0xC0000056u;  // STATUS_DELETE_PENDING
+    constexpr std::uint32_t cannotDelete = 0xC0000121u;   // STATUS_CANNOT_DELETE
+    constexpr std::uint32_t accessDenied = 0xC0000022u;   // STATUS_ACCESS_DENIED
+    // Absent files are removed whatever the status says.
+    CHECK(removalTargetGone(notFound, std::nullopt));
+    CHECK(removalTargetGone(pathNotFound, std::nullopt));
+    CHECK(removalTargetGone(notFound, accessDenied));
+    // A delete-pending file is another remover's work in progress.
+    CHECK(removalTargetGone(denied, deletePending));
+    // Real refusals and unknown statuses stay errors.
+    CHECK_FALSE(removalTargetGone(denied, accessDenied));
+    CHECK_FALSE(removalTargetGone(denied, cannotDelete));
+    CHECK_FALSE(removalTargetGone(denied, 0));
+    CHECK_FALSE(removalTargetGone(denied, std::nullopt));
+    CHECK_FALSE(removalTargetGone(sharing, deletePending));
+    CHECK_FALSE(removalTargetGone(0, deletePending));
+}
+
+#if defined(_WIN32)
+TEST_CASE("windows removal tolerates a pending deletion but not a refusal") {
+    Root root;
+    const auto file = root.path / "pending.json";
+    REQUIRE(privatePublish(file, "{}"));
+    // Another pruner has condemned the report and still holds its handle: every open
+    // of the name now fails with ERROR_ACCESS_DENIED until that handle closes.
+    HANDLE condemning = CreateFileW(file.c_str(), DELETE | READ_CONTROL | FILE_READ_ATTRIBUTES,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                    OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    REQUIRE(condemning != INVALID_HANDLE_VALUE);
+    FILE_DISPOSITION_INFO disposition{TRUE};
+    REQUIRE(SetFileInformationByHandle(condemning, FileDispositionInfo, &disposition,
+                                       sizeof(disposition)));
+    HANDLE probe =
+        CreateFileW(file.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_DELETE,
+                    nullptr, OPEN_EXISTING, 0, nullptr);
+    const DWORD probeError = GetLastError();
+    CHECK(probe == INVALID_HANDLE_VALUE);  // the precondition: the name is delete-pending
+    CHECK(probeError == ERROR_ACCESS_DENIED);
+    if (probe != INVALID_HANDLE_VALUE) CloseHandle(probe);
+    CHECK(privateRemove(file));
+    CHECK(privateRemove(file));
+    CloseHandle(condemning);
+    CHECK_FALSE(fs::exists(file));
+    CHECK(privateRemove(file));
+
+    // A genuine refusal reports the same Win32 error with a different NT status.
+    const auto readonly = root.path / "readonly.json";
+    REQUIRE(privatePublish(readonly, "{}"));
+    REQUIRE(SetFileAttributesW(readonly.c_str(), FILE_ATTRIBUTE_READONLY));
+    CHECK_FALSE(privateRemove(readonly));
+    CHECK(fs::exists(readonly));
+    REQUIRE(SetFileAttributesW(readonly.c_str(), FILE_ATTRIBUTE_NORMAL));
+    CHECK(privateRemove(readonly));
+}
+#endif
 
 TEST_CASE("diagnostic pruning preserves genuine metadata errors") {
     Root root;

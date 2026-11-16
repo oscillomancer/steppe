@@ -203,11 +203,28 @@ Result<std::string> privateRead(const fs::path& path) {
     return text;
 #endif
 }
+bool removalTargetGone(std::uint32_t win32Error, std::optional<std::uint32_t> ntStatus) {
+    constexpr std::uint32_t kFileNotFound = 2, kPathNotFound = 3, kAccessDenied = 5;
+    constexpr std::uint32_t kDeletePending = 0xC0000056u;  // STATUS_DELETE_PENDING
+    if (win32Error == kFileNotFound || win32Error == kPathNotFound) return true;
+    return win32Error == kAccessDenied && ntStatus && *ntStatus == kDeletePending;
+}
 bool privateRemove(const fs::path& path) {
 #if defined(_WIN32)
+    // ntdll's RtlGetLastNtStatus returns the NT status behind GetLastError(); both are
+    // per-thread values the failed call just set. Resolve it first: later calls may
+    // overwrite either value.
+    using LastNtStatus = LONG(NTAPI*)();
+    static const LastNtStatus lastNtStatus = [] {
+        const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+        const auto proc = ntdll ? GetProcAddress(ntdll, "RtlGetLastNtStatus") : nullptr;
+        return reinterpret_cast<LastNtStatus>(reinterpret_cast<void*>(proc));
+    }();
     auto missing = [] {
-        const auto error = GetLastError();
-        return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
+        const DWORD error = GetLastError();
+        std::optional<std::uint32_t> status;
+        if (lastNtStatus) status = static_cast<std::uint32_t>(lastNtStatus());
+        return removalTargetGone(error, status);
     };
     HANDLE file = CreateFileW(path.c_str(), DELETE | READ_CONTROL | FILE_READ_ATTRIBUTES,
                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
