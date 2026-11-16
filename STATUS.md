@@ -181,6 +181,8 @@ instructions are in `docs/guides/installing.md`.
   (in process or as a proxy to the running app); Lua scripts on the bus
   (ADR-0006). Lua structured-error expansion has the same value/text budget
   as returned values, including repeated references to shared details.
+  Optional null is accepted as omission for caller leniency; exported argument
+  schemas deliberately remain narrower on this point (ADR-0087).
   The skill's command reference is generated and drift-tested.
   Fixed-seed schema mutations exercise every engine/sandbox command's argument
   decoder and rejected dispatches, checking structured errors and unchanged state;
@@ -1059,9 +1061,6 @@ Library boundaries:
   trust/link policy remains unresolved. Windows AF_UNIX uses inherited directory
   ACLs (ADR-0035), not a named-pipe DACL. Endpoint lock acquisition can still wait
   on another holder, independently of the nonblocking collision probe.
-- Optional schema decoders accept null as absence while exporting the inner
-  schema without null. The command mutation oracle documents this compatibility
-  exception; changing exported nullability needs a separate contract decision.
 
 Engine and hosting:
 - Sync (ADR-0070, ADR-0071, ADR-0073): sync input, LTC output and MIDI

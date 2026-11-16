@@ -711,3 +711,13 @@ including quotes and escape expansion. Longer IDs receive -32600 with id:null
 and structured rpc.id_size at /id, before handshake/dispatch or identity changes.
 IDs are never truncated. RPC rechecks final fallback frame bounds; with a bounded
 ID even its response-too-large/queue-full errors fit the 16 MiB wire limit.
+
+### Optional null leniency (ADR-0087 D7)
+
+Exported argument schemas deliberately describe a narrower client subset for
+optional members: callers should omit an optional value rather than send null.
+The decoder nevertheless accepts null as omitted, for LLM caller leniency.
+This does not admit other wrong types or bypass numeric constraints on present
+values. Exported schemas and tool-list byte budgets remain unchanged. The
+schema-driven corpus keeps probing null and exempts it only in its conservative
+exported-contract oracle.
