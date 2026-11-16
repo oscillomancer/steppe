@@ -1012,7 +1012,7 @@ TEST_CASE("a plugin found in two places resolves to the first on the search path
     host::orderCatalogue(*list);
     std::optional<std::size_t> at;
     for (std::size_t i = 0; i < list->size(); ++i)
-        if (!at && (*list)[i].path.parent_path() == first) at = i;
+        if (!at && fs::canonical((*list)[i].path.parent_path()) == fs::canonical(first)) at = i;
     REQUIRE(at);
     const std::string id = (*list)[*at].id;
     std::size_t firstOfId = list->size();
@@ -1021,10 +1021,11 @@ TEST_CASE("a plugin found in two places resolves to the first on the search path
             firstOfId = i;
             break;
         }
-    CHECK((*list)[firstOfId].path.parent_path() == first);  // what a lookup by id takes
+    CHECK(fs::canonical((*list)[firstOfId].path.parent_path()) ==
+          fs::canonical(first));  // what a lookup by id takes
     CHECK_FALSE(host::shadowed(*list, firstOfId));
     REQUIRE(firstOfId + 1 < list->size());
-    CHECK((*list)[firstOfId + 1].path.parent_path() == second);
+    CHECK(fs::canonical((*list)[firstOfId + 1].path.parent_path()) == fs::canonical(second));
     CHECK(host::shadowed(*list, firstOfId + 1));
     fs::remove_all(base);
 }

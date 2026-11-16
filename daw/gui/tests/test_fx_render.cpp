@@ -943,7 +943,7 @@ TEST_CASE("the plugin browser names the plugin's file and marks a shadowed copy"
     CHECK(browser.detail().find("shadowed") != std::string::npos);
     // The copy the loader would use is the one earlier on the search path.
     list->select(*shadowedRow == 0 ? 1 : 0, true);
-    CHECK(browser.detail().find(dup.string()) != std::string::npos);
+    CHECK(browser.detail().find(std::filesystem::canonical(dup).string()) != std::string::npos);
     browser.close();
 }
 
