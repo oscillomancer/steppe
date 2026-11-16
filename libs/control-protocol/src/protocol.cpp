@@ -177,7 +177,7 @@ struct Server::Impl : std::enable_shared_from_this<Impl> {
             return;
         }
         auto* id = request.find("id");
-        json::Value idValue = id ? *id : json::Value(nullptr);
+        json::Value idValue = id && validId(*id) ? *id : json::Value(nullptr);
         // Notifications are ignored and recorded without a response.
         if (!id) {
             std::fprintf(stderr, "rpc: rejected client notification\n");

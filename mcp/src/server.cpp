@@ -298,10 +298,11 @@ std::optional<json::Value> Server::handle(const json::Value& request) {
     auto* version = request.find("jsonrpc");
     auto* method = request.find("method");
     auto* params = request.find("params");
+    const bool validId = id && (id->isString() || id->isInt() || id->isNull());
     if (!version || !version->isString() || version->asString() != "2.0" || !method ||
-        !method->isString() || (id && !(id->isString() || id->isInt() || id->isNull())) ||
+        !method->isString() || (id && !validId) ||
         (params && !(params->isObject() || params->isArray())))
-        return error(id ? *id : json::Value(nullptr), -32600, "Invalid Request");
+        return error(validId ? *id : json::Value(nullptr), -32600, "Invalid Request");
     if (!id) return std::nullopt;
     if (params && !params->isObject()) return error(*id, -32602, "Invalid params");
     auto args = params ? *params : json::Value::object();

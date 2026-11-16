@@ -3,7 +3,78 @@
 #include <supple/base/waitable.h>
 #include <supple/rpc/model_loop.h>
 #include <array>
+#include <cstring>
+#include "../src/socket_platform.h"
 #include "protocol_fixture.h"
+
+TEST_CASE("malformed request ids are never echoed into portable RPC error envelopes") {
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    ModelQueue queue;
+    rpc::Server server(commands, bus, [&](auto task) { queue.post(std::move(task)); });
+    std::filesystem::path dir;
+    for (std::uint64_t suffix = 0;; ++suffix) {
+        dir = std::filesystem::temp_directory_path() / ("rpc-boundary-" + std::to_string(suffix));
+        std::error_code error;
+        if (std::filesystem::create_directory(dir, error)) break;
+        REQUIRE((!error || error == std::errc::file_exists));
+    }
+    struct Cleanup {
+        std::filesystem::path dir;
+        ~Cleanup() { std::filesystem::remove_all(dir); }
+    } cleanup{dir};
+    const auto path = dir / "endpoint.sock";
+    REQUIRE(server.start(path));
+    struct Socket {
+        rpc::net::Socket fd = rpc::net::open();
+        ~Socket() {
+            if (fd != rpc::net::invalid) rpc::net::close(fd);
+        }
+    } socket;
+    REQUIRE(socket.fd != rpc::net::invalid);
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    const auto name = rpc::net::pathName(path);
+    REQUIRE(name.size() < sizeof(address.sun_path));
+    std::memcpy(address.sun_path, name.c_str(), name.size() + 1);
+    REQUIRE(rpc::net::connect(socket.fd, address) == 0);
+    auto exchange = [&](const std::string& frame) {
+        const auto line = frame + '\n';
+        std::size_t sent = 0;
+        while (sent < line.size()) {
+            auto n = rpc::net::send(socket.fd, line.data() + sent, line.size() - sent);
+            REQUIRE(n > 0);
+            sent += static_cast<std::size_t>(n);
+        }
+        std::string response;
+        while (response.find('\n') == std::string::npos) {
+            rpc::net::PollFd item{socket.fd, POLLIN, 0};
+            REQUIRE_MESSAGE(rpc::net::poll(&item, 1, kGuardMs) > 0,
+                            "WATCHDOG ABORT waiting for RPC reply");
+            char bytes[4096];
+            const auto n = rpc::net::recv(socket.fd, bytes, sizeof(bytes));
+            REQUIRE(n > 0);
+            response.append(bytes, static_cast<std::size_t>(n));
+        }
+        return parse(response);
+    };
+    for (const auto* id : {"true", "[]", "{}", "1.5"}) {
+        const auto reply =
+            exchange(std::string(R"({"jsonrpc":"2.0","method":"rpc.hello","id":)") + id + "}");
+        CHECK(reply.find("id")->isNull());
+        CHECK(reply.find("error")->find("code")->asInt() == -32600);
+        const auto* detail = reply.find("error")->find("data");
+        for (const char* key : {"code", "message", "path", "hint"}) {
+            REQUIRE(detail->find(key));
+            CHECK(detail->find(key)->isString());
+        }
+    }
+    const auto reply = exchange(R"({"jsonrpc":"1.0","method":"rpc.hello","id":"valid-id"})");
+    CHECK(*reply.find("id") == "valid-id");
+    server.stop();
+    CHECK(host.count == 0);
+}
 
 TEST_CASE("model loop portable waitable snapshots respect model-thread cancellation") {
     rpc::ModelLoop loop;

@@ -315,6 +315,8 @@ transaction-safe inside a batch), `rpc.*` (§3), `mcp.*` (§4).
 - **Errors:** `-32700` parse error, `-32600` invalid request, `-32601`
   method not found, `-32602` invalid params, `-32000` command error. `data`
   is always the `supple::Error` JSON (code, message, path, hint, details).
+  Invalid request ID types receive `id: null`, never the invalid value; a valid
+  ID is preserved when another envelope field is invalid. MCP follows the same rule.
 - **Handshake:** `rpc.hello {"client": "...", "agent": "...", "protocol": 1}`
   → `{"server": "<slug>", "product": "<name>", "version": "...",
   "protocol": 1, "commands": N}`; required before other methods. Sets the

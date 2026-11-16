@@ -185,6 +185,8 @@ instructions are in `docs/guides/installing.md`.
   Fixed-seed schema mutations exercise every engine/sandbox command's argument
   decoder and rejected dispatches, checking structured errors and unchanged state;
   engine coverage includes recording in both executors and interleaved saves.
+  RPC and MCP reject invalid request IDs using a null response ID, keeping error
+  envelopes valid while preserving valid IDs for other envelope errors.
   The engine MCP default is 37 common tools plus describe/exec/query, with a
   60,000-byte tools/list budget. Other commands remain discoverable in the compact
   namespace index and callable through exec/query; --tools all exposes every

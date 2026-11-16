@@ -891,6 +891,24 @@ TEST_CASE("R16 malformed envelopes without ids return Invalid Request") {
     CHECK_FALSE(server.handle(parse(R"({"jsonrpc":"2.0","method":"notifications/initialized"})")));
 }
 
+TEST_CASE("malformed request ids are never echoed into MCP error envelopes") {
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher dispatcher(commands, host);
+    mcp::Server server(commands, dispatcher);
+    for (const auto* id : {"true", "[]", "{}", "1.5"}) {
+        auto request = parse(std::string(R"({"jsonrpc":"2.0","method":"ping","id":)") + id + "}");
+        const auto reply = server.handle(request);
+        REQUIRE(reply);
+        CHECK(reply->find("id")->isNull());
+        CHECK(reply->find("error")->find("code")->asInt() == -32600);
+    }
+    const auto reply = server.handle(parse(R"({"jsonrpc":"1.0","method":"ping","id":"valid-id"})"));
+    REQUIRE(reply);
+    CHECK(*reply->find("id") == "valid-id");
+    CHECK(host.count == 0);
+}
+
 TEST_CASE("stdio service fds run while an incomplete request waits without a periodic tick") {
     auto r = registry();
     Host host;
