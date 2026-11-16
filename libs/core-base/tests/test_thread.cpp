@@ -200,7 +200,9 @@ TEST_CASE("page faults are counted for a thread on Linux and for the process eve
     REQUIRE(first);
     REQUIRE(last);
     CHECK(last->minor >= first->minor + static_cast<std::int64_t>(kPages / 2));
-    CHECK_FALSE(supple::threadPageFaults(own));  // gone
+    // No such thread (above any pid_max). A joined thread's id may still read
+    // until the kernel releases it, so that is not checked.
+    CHECK_FALSE(supple::threadPageFaults(std::int64_t{1} << 40));
 #else
     CHECK(seen == 0);
     CHECK(outside == 0);

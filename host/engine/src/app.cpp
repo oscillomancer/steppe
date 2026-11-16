@@ -1947,7 +1947,10 @@ EngineStatus EngineApp::engineStatus() {
 #if defined(__linux__)
         faults.scope = "audio_threads";
         for (FaultWatch& w : faultWatch_) {
-            if (const auto now = threadPageFaults(w.id)) w.last = *now;  // else: it has gone
+            // Gone keeps its last count; an id reused by a later thread, whose
+            // count starts again, is not taken for it.
+            if (const auto now = threadPageFaults(w.id); now && now->minor >= w.last.minor)
+                w.last = *now;
             faults.minor += w.last.minor - w.base.minor;
             *faults.major += w.last.major - w.base.major;
         }

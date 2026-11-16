@@ -77,7 +77,9 @@ pseudo handle), so an audio path may record it. `kernelThreadId(handle)` is
 a live thread's tid on Linux, decoded from its CPU clock id
 (`pthread_getcpuclockid`; glibc and musl encode `(~tid << 3) | 6`), and 0
 elsewhere. `threadPageFaults(tid)` reads `minflt`/`majflt` from
-`/proc/self/task/<tid>/stat` (nullopt once the thread has gone, and always on
+`/proc/self/task/<tid>/stat` (nullopt for an id no thread has, which an ended
+thread's becomes only once the kernel releases it, possibly after its join
+returns, and which a later thread may then reuse; and always on
 macOS and Windows, which keep no per-thread count). `processPageFaults()` is
 the process's: `getrusage` on Linux and macOS, `GetProcessMemoryInfo` on
 Windows with `major` -1, since it does not separate them. None of these but

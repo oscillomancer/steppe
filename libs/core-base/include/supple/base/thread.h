@@ -56,8 +56,9 @@ std::thread::native_handle_type currentThreadHandle();
 // Linux: the kernel's id of a live thread (its tid); 0 elsewhere.
 std::int64_t kernelThreadId(std::thread::native_handle_type thread);
 // Linux: the faults the thread with that kernel id took since it started;
-// nullopt once it has gone, and on macOS and Windows, which keep no count
-// per thread.
+// nullopt for an id no thread has, and on macOS and Windows, which keep no
+// count per thread. A thread that has ended reads until the kernel releases
+// it, which can be after a join returns, and its id can then be reused.
 std::optional<PageFaults> threadPageFaults(std::int64_t kernelId);
 // The whole process's since it started.
 PageFaults processPageFaults();
