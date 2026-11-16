@@ -108,3 +108,8 @@ engine/device backends, GUI/agent and plugin wrappers remain Linux-only. The
 Windows POSIX audio-file gate is unchanged. Linux target/test coverage is retained.
 
 **2026-10-16 note:** The Windows minimum is now Windows 10 1903 (ADR-0044).
+
+**2026-11-16 note:** [ADR-0087](0087-control-boundary-budgets.md) adds local
+control/MCP budgets, explicit request delivery provenance, fd-backed output
+supervision and runtime-directory validation. Its staged implementation retains
+Windows inherited ACLs and the existing audio-thread rules.

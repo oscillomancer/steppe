@@ -3,6 +3,7 @@
 #include <doctest/doctest.h>
 #include <supple/mcp/server.h>
 #include <supple/product.h>
+#include "../src/wire_size.h"
 #if defined(_WIN32)
 #include <fcntl.h>
 #include <io.h>
@@ -658,6 +659,49 @@ TEST_CASE("an edit whose reply is lost is not resent after catalogue refresh") {
     second.stop();
 }
 
+TEST_CASE("remote transport-looking command errors never authorize edit replay") {
+    for (const auto* code : {"rpc.write", "rpc.connect", "rpc.read", "rpc.timeout"}) {
+        auto commands = registry();
+        std::atomic<int> invoked{0};
+        cmd::Command<cmd::NoArgs, Count> command;
+        command.name = "counter.remote-error";
+        command.kind = cmd::Kind::Edit;
+        command.exposure = cmd::Exposure::McpTool;
+        command.summary = "Return a remote command error.";
+        command.args = schema::object<cmd::NoArgs>("none").build();
+        command.result = schema::object<Count>("count")
+                             .field("count", &Count::count, schema::integerOf<int>())
+                             .build();
+        command.examples = {{"Fail", parse("{}"), parse("{}"), "empty"}};
+        command.run = [&](const cmd::NoArgs&, cmd::Context&) -> Result<Count> {
+            ++invoked;
+            return Error(code, "remote command failure", "/value", "check before retrying");
+        };
+        commands.add(std::move(command));
+        Host host;
+        cmd::Dispatcher bus(commands, host);
+        ModelQueue model;
+        const auto path = std::filesystem::temp_directory_path() /
+                          ("mcp-delivery-" + std::to_string(::getpid()) + ".sock");
+        rpc::Server remote(commands, bus, [&](auto task) { model.post(std::move(task)); });
+        REQUIRE(remote.start(path));
+        rpc::Client client;
+        REQUIRE(client.connect(path, "delivery"));
+        auto proxy = mcp::Server::proxy(client);
+        REQUIRE(proxy);
+        request(
+            **proxy,
+            R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}})");
+        const auto reply = request(
+            **proxy,
+            R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"counter_remote-error"}})");
+        CHECK(reply.find("result")->find("structuredContent")->find("code")->asString() == code);
+        CHECK(invoked == 1);
+        client.close();
+        remote.stop();
+    }
+}
+
 TEST_CASE("proxy startup fetches only selected tools and resolves other commands on demand") {
     auto commands = registry();
     cmd::Command<Args, Count> adjust;
@@ -891,6 +935,151 @@ TEST_CASE("R16 malformed envelopes without ids return Invalid Request") {
     CHECK_FALSE(server.handle(parse(R"({"jsonrpc":"2.0","method":"notifications/initialized"})")));
 }
 
+TEST_CASE("malformed request ids are never echoed into MCP error envelopes") {
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher dispatcher(commands, host);
+    mcp::Server server(commands, dispatcher);
+    for (const auto* id : {"true", "[]", "{}", "1.5"}) {
+        auto request = parse(std::string(R"({"jsonrpc":"2.0","method":"ping","id":)") + id + "}");
+        const auto reply = server.handle(request);
+        REQUIRE(reply);
+        CHECK(reply->find("id")->isNull());
+        CHECK(reply->find("error")->find("code")->asInt() == -32600);
+    }
+    const auto reply = server.handle(parse(R"({"jsonrpc":"1.0","method":"ping","id":"valid-id"})"));
+    REQUIRE(reply);
+    CHECK(*reply->find("id") == "valid-id");
+    CHECK(host.count == 0);
+}
+
+TEST_CASE("MCP request ids have a serialized byte budget") {
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    mcp::Server server(commands, bus);
+    for (const auto& [id, fits] :
+         std::vector<std::pair<std::string, bool>>{{std::string(1022, 'i'), true},
+                                                   {std::string(1023, 'i'), false},
+                                                   {std::string(511, '\n'), true},
+                                                   {std::string(512, '\n'), false},
+                                                   {std::string(170, '\0'), true},
+                                                   {std::string(171, '\0'), false}}) {
+        auto input = parse(R"({"jsonrpc":"2.0","method":"ping"})");
+        input["id"] = id;
+        const auto result = server.handle(input);
+        REQUIRE(result);
+        if (fits)
+            CHECK(*result->find("id") == id);
+        else {
+            CHECK(result->find("id")->isNull());
+            REQUIRE(result->find("error")->find("data"));
+            CHECK(result->find("error")->find("data")->find("code")->asString() == "rpc.id_size");
+        }
+    }
+}
+
+TEST_CASE("MCP refuses wide frames at its value budget and resumes at the next frame") {
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    mcp::Server server(commands, bus);
+    std::string wide = R"({"jsonrpc":"2.0","id":2,"method":"ping","params":{"values":[)";
+    for (int i = 0; i < 1000000; ++i) wide += i ? ",0" : "0";
+    wide += "]}}\n";
+    std::istringstream input(
+        std::string(
+            R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}})") +
+        "\n" + wide + R"({"jsonrpc":"2.0","id":3,"method":"ping"})" + "\n");
+    std::ostringstream output;
+    REQUIRE(server.serve(input, output));
+    std::istringstream replies(output.str());
+    std::string line;
+    REQUIRE(std::getline(replies, line));
+    REQUIRE(std::getline(replies, line));
+    const auto refused = parse(line);
+    REQUIRE(refused.find("error"));
+    REQUIRE(refused.find("error")->find("data"));
+    CHECK(refused.find("error")->find("data")->find("code")->asString() ==
+          "json.parse.too_many_values");
+    CHECK(refused.find("id")->isNull());
+    REQUIRE(std::getline(replies, line));
+    CHECK(*parse(line).find("id") == 3);
+}
+
+TEST_CASE("generic MCP argument envelopes are validated before executing edits") {
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    mcp::Server server(commands, bus);
+    request(
+        server,
+        R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}})");
+    auto call = [&](std::string_view name, const json::Value& args) -> Result<json::Value> {
+        auto input = parse(R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{}})");
+        input["params"]["name"] = name;
+        input["params"]["arguments"] = args;
+        const auto reply = server.handle(input);
+        REQUIRE(reply);
+        const auto* result = reply->find("result");
+        REQUIRE(result);
+        const auto* structured = result->find("structuredContent");
+        REQUIRE(structured);
+        if (const auto* failed = result->find("isError"); failed && failed->asBool())
+            return rpc::errorFromJson(*structured);
+        return *structured;
+    };
+    for (
+        const auto* args :
+        {R"({"command":"counter.add","args":{"value":1},"typo":true})",
+         R"({"command":false,"args":false,"batch":{"steps":[{"command":"counter.add","args":{"value":1}}]}})",
+         R"({"batch":{"steps":[]},"args":[]})", R"({"batch":{"steps":[]},"command":null})"}) {
+        auto result = call("exec", parse(args));
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == "mcp.arguments");
+        CHECK(result.error().path.starts_with("/arguments/"));
+        CHECK_FALSE(result.error().message.empty());
+        CHECK_FALSE(result.error().hint.empty());
+        CHECK(host.count == 0);
+    }
+    for (const auto* args :
+         {R"({"command":"counter.add","tag":false})", R"({"command":"counter.add","unknown":0})"}) {
+        const auto result = call("describe", parse(args));
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == "mcp.arguments");
+    }
+    REQUIRE(call("exec", parse(R"({"command":"counter.add","args":{"value":2}})")));
+    REQUIRE(call("exec",
+                 parse(R"({"batch":{"steps":[{"command":"counter.add","args":{"value":3}}]}})")));
+    CHECK(host.count == 5);
+}
+
+TEST_CASE("malformed initialize identity cannot replace the accepted audit identity") {
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    mcp::Server server(commands, bus);
+    const auto initial = parse(R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+        "protocolVersion":"2025-11-25","clientInfo":{"name":"accepted"},"_meta":{"agent":"original"}}})");
+    REQUIRE(server.handle(initial)->find("result"));
+    for (const auto* params : {R"({"clientInfo":false})", R"({"clientInfo":{"name":3}})",
+                               R"({"clientInfo":{"version":false}})", R"({"_meta":[]})",
+                               R"({"_meta":{"agent":null}})"}) {
+        auto input = initial;
+        const auto patch = parse(params);
+        for (const auto& field : patch.asObject()) input["params"][field.key] = field.value;
+        const auto reply = server.handle(input);
+        REQUIRE(reply);
+        REQUIRE(reply->find("error"));
+        CHECK(reply->find("error")->find("code")->asInt() == -32602);
+        request(
+            server,
+            R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"counter_history"}})");
+        CHECK(host.last.client == "accepted");
+        CHECK(host.last.agent == "original");
+    }
+}
+
 TEST_CASE("stdio service fds run while an incomplete request waits without a periodic tick") {
     auto r = registry();
     Host host;
@@ -979,4 +1168,224 @@ TEST_CASE("stdio service is fair during a long request already buffered by the r
     CHECK(calls == 1);
     CHECK(output.str().find("protocolVersion") != std::string::npos);
     ::fclose(input);
+}
+
+TEST_CASE("fd output backpressure preserves service, admission order and EOF replies") {
+    bool eventService = false, deadlineService = false;
+    SUBCASE("periodic service") {}
+    SUBCASE("native service wake") { eventService = true; }
+    SUBCASE("absolute service deadline") { deadlineService = true; }
+    WakeEvent serviceWake;
+    auto commands = registry();
+    std::atomic<int> invoked{0};
+    cmd::Command<cmd::NoArgs, json::Value> large;
+    large.name = "counter.large";
+    large.kind = cmd::Kind::Query;
+    large.exposure = cmd::Exposure::Internal;
+    large.summary = "Return a large test packet.";
+    large.args = schema::object<cmd::NoArgs>("none").build();
+    large.result = schema::any();
+    large.run = [&](const cmd::NoArgs&, cmd::Context&) -> Result<json::Value> {
+        if (++invoked == 1) serviceWake.notify();
+        auto value = json::Value::object();
+        value["data"] = std::string(1024 * 1024, 'x');
+        return value;
+    };
+    commands.add(std::move(large));
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    mcp::Server server(commands, bus);
+    request(
+        server,
+        R"({"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25"}})");
+    int input[2], output[2];
+    REQUIRE(makePipe(input) == 0);
+    REQUIRE(makePipe(output) == 0);
+    const std::string frames =
+        R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"exec","arguments":{"command":"counter.large"}}})"
+        "\n"
+        R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"exec","arguments":{"command":"counter.large"}}})"
+        "\n";
+    REQUIRE(writePipe(input[1], frames.data(), frames.size()) ==
+            static_cast<std::ptrdiff_t>(frames.size()));
+    closePipe(input[1]);
+    std::promise<void> serviced;
+    auto ready = serviced.get_future();
+    bool signaled = false;
+    mcp::Tick tick;
+    tick.fn = [&] {
+        if (invoked.load() == 1 && !signaled) {
+            signaled = true;
+            serviced.set_value();
+        }
+    };
+    if (eventService)
+        tick.watches = [&] {
+            return std::vector<mcp::Tick::Watch>{
+                {serviceWake.waitable(), kWaitRead, [&](short) { serviceWake.drain(); }}};
+        };
+    if (deadlineService)
+        tick.deadline = [&]() -> std::optional<std::chrono::steady_clock::time_point> {
+            if (invoked.load() == 1 && !signaled) return std::chrono::steady_clock::time_point{};
+            return std::nullopt;
+        };
+    Status status;
+    std::thread serving([&] {
+        status = server.serve(input[0], output[1], tick);
+        closePipe(output[1]);
+    });
+    // The first packet is much larger than a pipe's capacity. Without a reader,
+    // native writer progress cannot complete it. Service must still acknowledge.
+    if (ready.wait_for(std::chrono::seconds(60)) != std::future_status::ready) {
+        std::fprintf(stderr, "WATCHDOG ABORT fd output service\n");
+        std::_Exit(124);
+    }
+    CHECK(invoked.load() == 1);  // buffered second command has not been admitted
+    std::string wire;
+    char bytes[65536];
+    for (;;) {
+#if defined(_WIN32)
+        const auto count = _read(output[0], bytes, sizeof(bytes));
+#else
+        const auto count = ::read(output[0], bytes, sizeof(bytes));
+#endif
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) break;
+        wire.append(bytes, static_cast<std::size_t>(count));
+    }
+    serving.join();
+    REQUIRE(status);
+    CHECK(invoked.load() == 2);
+    std::istringstream replies(wire);
+    std::string line;
+    for (int id : {1, 2}) {
+        REQUIRE(std::getline(replies, line));
+        const auto value = parse(line);
+        CHECK(*value.find("id") == id);
+        CHECK_FALSE(value.find("result")->find("isError"));
+    }
+    CHECK_FALSE(std::getline(replies, line));
+    closePipe(input[0]);
+    closePipe(output[0]);
+}
+
+TEST_CASE("fd output closed consumer reports failure and joins instead of SIGPIPE") {
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    mcp::Server server(commands, bus);
+    int input[2], output[2];
+    REQUIRE(makePipe(input) == 0);
+    REQUIRE(makePipe(output) == 0);
+    const std::string frame =
+        R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}})"
+        "\n";
+    REQUIRE(writePipe(input[1], frame.data(), frame.size()) ==
+            static_cast<std::ptrdiff_t>(frame.size()));
+    closePipe(input[1]);
+    closePipe(output[0]);
+    const auto status = server.serve(input[0], output[1]);
+    REQUIRE_FALSE(status);
+    CHECK(status.error().code == "mcp.write");
+    closePipe(input[0]);
+    closePipe(output[1]);
+}
+
+TEST_CASE("an oversized tool reply becomes an explicit bounded error") {
+    auto commands = registry();
+    cmd::Command<cmd::NoArgs, json::Value> huge;
+    huge.name = "counter.huge";
+    huge.kind = cmd::Kind::Query;
+    huge.exposure = cmd::Exposure::Internal;
+    huge.summary = "Return an oversized result.";
+    huge.args = schema::object<cmd::NoArgs>("none").build();
+    huge.result = schema::any();
+    huge.run = [](const cmd::NoArgs&, cmd::Context&) -> Result<json::Value> {
+        auto value = json::Value::object();
+        value["data"] = std::string(40 * 1024 * 1024, 'x');
+        return value;
+    };
+    commands.add(std::move(huge));
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    mcp::Server server(commands, bus);
+    request(
+        server,
+        R"({"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25"}})");
+    const auto reply = request(
+        server,
+        R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"exec","arguments":{"command":"counter.huge"}}})");
+    CHECK(*reply.find("result")->find("structuredContent")->find("code") ==
+          "mcp.response_too_large");
+    CHECK(json::writeCompact(reply).size() < 4096);
+}
+
+TEST_CASE("final packet accounting does not charge another escaping layer") {
+    auto commands = registry();
+    cmd::Command<cmd::NoArgs, json::Value> quoted;
+    quoted.name = "counter.quoted";
+    quoted.kind = cmd::Kind::Query;
+    quoted.exposure = cmd::Exposure::Internal;
+    quoted.summary = "Return quote-heavy data.";
+    quoted.args = schema::object<cmd::NoArgs>("none").build();
+    quoted.result = schema::any();
+    quoted.run = [](const cmd::NoArgs&, cmd::Context&) -> Result<json::Value> {
+        auto value = json::Value::object();
+        value["s"] = std::string(6 * 1024 * 1024, '"');
+        return value;
+    };
+    commands.add(std::move(quoted));
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    mcp::Server server(commands, bus);
+    std::istringstream input(
+        R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}})"
+        "\n"
+        R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"exec","arguments":{"command":"counter.quoted"}}})"
+        "\n");
+    std::ostringstream output;
+    REQUIRE(server.serve(input, output));
+    std::istringstream frames(output.str());
+    std::string line;
+    REQUIRE(std::getline(frames, line));
+    REQUIRE(std::getline(frames, line));
+    CHECK(line.size() > 32 * 1024 * 1024);
+    CHECK(line.size() < 64 * 1024 * 1024);
+    const auto reply = parse(line);
+    CHECK_FALSE(reply.find("result")->find("isError"));
+}
+
+TEST_CASE("fd output invalid setup and repeated empty sessions cleanly join") {
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    mcp::Server server(commands, bus);
+    for (int i = 0; i < 32; ++i) {
+        int input[2], output[2];
+        REQUIRE(makePipe(input) == 0);
+        REQUIRE(makePipe(output) == 0);
+        closePipe(input[1]);
+        REQUIRE(server.serve(input[0], output[1]));
+        closePipe(output[1]);
+        closePipe(output[0]);
+        const auto closedOutput = server.serve(input[0], output[1]);
+        REQUIRE_FALSE(closedOutput);
+        CHECK(closedOutput.error().code == "mcp.write");
+        closePipe(input[0]);
+        const auto closedInput = server.serve(input[0], -1);
+        REQUIRE_FALSE(closedInput);
+        CHECK(closedInput.error().code == "mcp.read");
+    }
+}
+
+TEST_CASE("wire size counter matches compact escaping") {
+    for (const auto& value : std::vector<json::Value>{
+             json::Value("quote\"\\\n\t"), json::Value(std::string("\0", 1)), json::Value("é"),
+             json::Value(std::string("\x80", 1)), *json::parse(R"({"a":[null,1.25,true,"b"]})")}) {
+        mcp::detail::WireSize size;
+        REQUIRE(size.value(value));
+        const auto wire = json::writeCompact(value);
+        CHECK(size.plain == wire.size());
+        CHECK(size.quoted == json::writeCompact(json::Value(wire)).size() - 2);
+    }
 }

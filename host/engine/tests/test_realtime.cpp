@@ -124,8 +124,11 @@ struct RecorderTestAccess {
     static bool failHeader(Recorder& recorder, std::size_t index) {
         const auto& file = recorder.tracks_[index]->target.file;
         std::error_code ec;
+        const auto target = std::filesystem::canonical(file, ec);
+        if (ec) return false;
         for (const auto& entry : std::filesystem::directory_iterator("/proc/self/fd")) {
-            if (std::filesystem::read_symlink(entry.path(), ec) != file || ec) continue;
+            const auto opened = std::filesystem::canonical(entry.path(), ec);
+            if (ec || opened != target) continue;
             const int descriptor = std::stoi(entry.path().filename().string());
             const int readOnly = ::open(file.c_str(), O_RDONLY);
             if (readOnly < 0) return false;

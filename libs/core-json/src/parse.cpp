@@ -56,6 +56,7 @@ class Parser {
     std::string_view text_;
     const ParseOptions& options_;
     std::size_t pos_ = 0;
+    std::size_t values_ = 0;
     char peek() const { return pos_ < text_.size() ? text_[pos_] : '\0'; }
     void skip() {
         while (peek() == ' ' || peek() == '\t' || peek() == '\r' || peek() == '\n') ++pos_;
@@ -221,6 +222,10 @@ class Parser {
             return fail("too_deep", "JSON nesting is too deep", "reduce nesting depth");
         if (pos_ == text_.size())
             return fail("unexpected_end", "expected a JSON value", "add a value");
+        if (options_.maxValues && values_ >= options_.maxValues)
+            return fail("too_many_values", "JSON value budget exceeded",
+                        "reduce the number of values in the frame");
+        ++values_;  // before constructing the next string, container or primitive
         char c = peek();
         if (c == '"') {
             auto s = string();

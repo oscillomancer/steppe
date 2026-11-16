@@ -10,6 +10,20 @@
 #include <type_traits>
 #include <vector>
 using namespace supple::json;
+
+TEST_CASE("parser value budget counts containers and values before construction") {
+    for (const char* text : {"[1,2,3]", R"({"x":[1,2]})"}) {
+        REQUIRE(parse(text, {.maxValues = 4}));
+        const auto limited = parse(text, {.maxValues = 3});
+        REQUIRE_FALSE(limited);
+        CHECK(limited.error().code == "json.parse.too_many_values");
+        CHECK_FALSE(limited.error().hint.empty());
+        REQUIRE(parse(text));  // trusted default is unchanged
+    }
+    REQUIRE(parse("{}", {.maxValues = 1}));
+    REQUIRE(parse("[]", {.maxValues = 1}));
+    CHECK_FALSE(parse("[{}]", {.maxValues = 1}));
+}
 TEST_CASE("parse and canonical output") {
     auto v = parse("{\"schema\":\"supple.test/1.0\",\"values\":[1,2.0,\"é\"]}");
     REQUIRE(v);

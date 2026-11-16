@@ -43,6 +43,11 @@ bool validId(const json::Value& id) { return id.isString() || id.isInt() || id.i
 std::string line(const json::Value& value) { return json::writeCompact(value) + "\n"; }
 }  // namespace
 
+bool requestIdFits(const json::Value& id) {
+    if (!validId(id)) return false;
+    if (id.isString() && id.asString().size() > kMaxRequestIdBytes - 2) return false;
+    return json::writeCompact(id).size() <= kMaxRequestIdBytes;
+}
 json::Value errorJson(const Error& error) {
     json::Value out = json::Value::object();
     out["code"] = error.code;
@@ -107,6 +112,36 @@ struct Server::Impl : std::enable_shared_from_this<Impl> {
         std::uint64_t nextSubscription = 1;
         std::uint64_t dropped = 0;
     };
+    struct Budget {
+        std::mutex mutex;
+        std::size_t requests = 0, bytes = 0;
+    };
+    struct Admission {
+        std::shared_ptr<Budget> budget;
+        std::shared_ptr<Peer> peer;
+        std::string frame;
+        bool globalReleased = false, peerReleased = false;
+        Admission(std::shared_ptr<Budget> b, std::shared_ptr<Peer> p, std::string f)
+            : budget(std::move(b)), peer(std::move(p)), frame(std::move(f)) {}
+        void begin() {
+            if (globalReleased) return;
+            std::lock_guard lock(budget->mutex);
+            --budget->requests;
+            budget->bytes -= frame.size();
+            globalReleased = true;
+        }
+        void finish() {
+            if (peerReleased) return;
+            std::lock_guard lock(peer->outputMutex);
+            --peer->pendingRequests;
+            peer->pendingBytes -= frame.size();
+            peerReleased = true;
+        }
+        ~Admission() {
+            begin();
+            finish();
+        }
+    };
     const cmd::Registry& registry;
     cmd::Dispatcher& dispatcher;
     Post post;
@@ -118,9 +153,42 @@ struct Server::Impl : std::enable_shared_from_this<Impl> {
     std::vector<std::shared_ptr<Peer>> peers;
     std::map<std::string, std::uint64_t> topicSequence;
     std::atomic<bool> running = false;
+    std::shared_ptr<Budget> budget = std::make_shared<Budget>();
+    std::mutex rejectionMutex;  // bound concurrent DOM expansion of rejected frames
     Impl(const cmd::Registry& r, cmd::Dispatcher& d, Post p)
         : registry(r), dispatcher(d), post(std::move(p)) {}
     ~Impl() { stop(); }
+
+    std::shared_ptr<Admission> admit(const std::shared_ptr<Peer>& peer, std::string& frame) {
+        std::lock_guard lock(budget->mutex);
+        if (budget->requests >= 1024 || frame.size() > 64 * 1024 * 1024 - budget->bytes) return {};
+        auto admission = std::make_shared<Admission>(budget, peer, std::move(frame));
+        ++budget->requests;
+        budget->bytes += admission->frame.size();
+        return admission;
+    }
+    void rejectBusy(const std::shared_ptr<Peer>& peer, const std::string& frame) {
+        // No model work is queued. Serialize this bounded preflight so rejected
+        // clients cannot expand a DOM concurrently on every I/O thread.
+        std::lock_guard lock(rejectionMutex);
+        auto parsed =
+            json::parse(frame, {.maxBytes = kMaxMessageBytes, .maxValues = kMaxFrameValues});
+        const auto* id = parsed ? parsed->find("id") : nullptr;
+        if (parsed && parsed->isObject() && !id) {
+            std::fprintf(stderr, "rpc: rejected client notification\n");
+            return;
+        }
+        if (id && validId(*id) && !requestIdFits(*id)) {
+            enqueue(peer, rpcError(nullptr, -32600, "Invalid Request",
+                                   Error("rpc.id_size", "request ID exceeds 1024 serialized bytes",
+                                         "/id", "use a shorter request ID")));
+            return;
+        }
+        enqueue(peer, rpcError(id && requestIdFits(*id) ? *id : json::Value(nullptr), -32000,
+                               "Server busy",
+                               Error("rpc.busy", "global pending request budget exhausted", "",
+                                     "retry later after outstanding requests complete")));
+    }
 
     void enqueue(const std::shared_ptr<Peer>& peer, json::Value value, bool event = false) {
         std::string message = line(value);
@@ -142,6 +210,11 @@ struct Server::Impl : std::enable_shared_from_this<Impl> {
                 id ? *id : json::Value(nullptr), -32000, "Response too large",
                 Error("rpc.response_too_large", "outbound queue is full", "", "narrow the query")));
         }
+        // Recheck the final fallback too, not just the original response.
+        if (!event && message.size() > kMaxMessageBytes)
+            message = line(rpcError(nullptr, -32600, "Invalid Request",
+                                    Error("rpc.id_size", "request ID exceeds 1024 serialized bytes",
+                                          "/id", "use a shorter request ID")));
         peer->outputBytes += message.size();
         peer->output.push_back(std::move(message));
     }
@@ -159,12 +232,13 @@ struct Server::Impl : std::enable_shared_from_this<Impl> {
         peer->output.push_back(std::move(message));
     }
     void process(const std::shared_ptr<Peer>& peer, const std::string& frame) {
-        auto parsed = json::parse(frame);
+        auto parsed =
+            json::parse(frame, {.maxBytes = kMaxMessageBytes, .maxValues = kMaxFrameValues});
         if (!parsed) {
             enqueue(peer, rpcError(nullptr, -32700, "Parse error", parsed.error()));
             return;
         }
-        const auto& request = *parsed;
+        auto& request = *parsed;
         if (request.isArray()) {
             enqueue(peer, rpcError(nullptr, -32600, "Invalid Request",
                                    Error("rpc.batch", "JSON-RPC arrays are unsupported", "",
@@ -177,7 +251,13 @@ struct Server::Impl : std::enable_shared_from_this<Impl> {
             return;
         }
         auto* id = request.find("id");
-        json::Value idValue = id ? *id : json::Value(nullptr);
+        if (id && validId(*id) && !requestIdFits(*id)) {
+            enqueue(peer, rpcError(nullptr, -32600, "Invalid Request",
+                                   Error("rpc.id_size", "request ID exceeds 1024 serialized bytes",
+                                         "/id", "use a shorter request ID")));
+            return;
+        }
+        json::Value idValue = id && validId(*id) ? *id : json::Value(nullptr);
         // Notifications are ignored and recorded without a response.
         if (!id) {
             std::fprintf(stderr, "rpc: rejected client notification\n");
@@ -200,7 +280,7 @@ struct Server::Impl : std::enable_shared_from_this<Impl> {
             return;
         }
         const auto& name = method->asString();
-        json::Value args = params ? *params : json::Value::object();
+        json::Value args = params ? std::move(request["params"]) : json::Value::object();
         if (name == "rpc.hello") {
             auto* client = args.find("client");
             auto* protocol = args.find("protocol");
@@ -239,6 +319,14 @@ struct Server::Impl : std::enable_shared_from_this<Impl> {
                 enqueue(peer, rpcError(idValue, -32602, "Invalid params",
                                        Error("rpc.subscribe", "topics must be an array",
                                              "/params/topics")));
+                return;
+            }
+            if (peer->subscriptions.size() >= 64) {
+                enqueue(peer,
+                        rpcError(idValue, -32000, "Subscription limit",
+                                 Error("rpc.subscriptions", "at most 64 subscriptions per peer",
+                                       "/params/topics",
+                                       "unsubscribe an existing subscription before retrying")));
                 return;
             }
             Subscription sub;
@@ -318,12 +406,22 @@ struct Server::Impl : std::enable_shared_from_this<Impl> {
                     peer->closeAfterWrite = true;
                     break;
                 }
+                auto admission = admit(peer, frame);
+                if (!admission) {
+                    {
+                        std::lock_guard lock(peer->outputMutex);
+                        --peer->pendingRequests;
+                        peer->pendingBytes -= frame.size();
+                    }
+                    rejectBusy(peer, frame);
+                    continue;
+                }
                 auto weak = weak_from_this();
-                post([weak, peer, size = frame.size(), frame = std::move(frame)] {
-                    if (auto self = weak.lock(); self && self->running) self->process(peer, frame);
-                    std::lock_guard lock(peer->outputMutex);
-                    --peer->pendingRequests;
-                    peer->pendingBytes -= size;
+                post([weak, admission] {
+                    admission->begin();
+                    if (auto self = weak.lock(); self && self->running)
+                        self->process(admission->peer, admission->frame);
+                    admission->finish();
                 });
             }
             short events = 0;
@@ -428,10 +526,14 @@ struct Server::Impl : std::enable_shared_from_this<Impl> {
         auto path = std::filesystem::absolute(requested, ec);
         if (ec) return Error("rpc.path", ec.message(), requested.string());
         std::filesystem::create_directories(path.parent_path(), ec);
-        if (ec) return Error("rpc.path", ec.message(), path.string());
+        if (ec)
+            return Error("rpc.path", ec.message(), net::pathName(path.parent_path()),
+                         "Choose a writable private runtime directory owned by your user.");
         if (path.parent_path().filename() == product::kSlug &&
             net::privatePermissions(path.parent_path(), true) != 0)
-            return Error("rpc.path", std::strerror(errno), path.parent_path().string());
+            return Error("rpc.path", std::strerror(errno), net::pathName(path.parent_path()),
+                         "Use a private runtime directory owned by your user; remove any symlink "
+                         "or reparse point.");
         // Serialize stale-path inspection and bind across competing processes.
         auto lockPath = path;
         lockPath += ".lock";
@@ -448,10 +550,11 @@ struct Server::Impl : std::enable_shared_from_this<Impl> {
                 return Error("rpc.path", "socket path is too long", name);
             }
             std::memcpy(addr.sun_path, name.c_str(), name.size() + 1);
-            int connected = probe != net::invalid ? net::connect(probe, addr) : -1;
+            const bool probeReady = probe != net::invalid && net::nonblocking(probe) == 0;
+            int connected = probeReady ? net::connect(probe, addr) : -1;
             int connectError = errno;
             if (probe != net::invalid) net::close(probe);
-            if (connected == 0 || !existing.socket ||
+            if (!probeReady || connected == 0 || !existing.socket ||
                 (connectError != ECONNREFUSED && connectError != ENOENT)) {
                 return Error("rpc.address_in_use", "socket address is in use", name,
                              "choose another instance or socket path");
@@ -665,23 +768,28 @@ void Client::setTimeout(std::chrono::milliseconds timeout) {
                           std::chrono::milliseconds(std::chrono::hours(24)));
 }
 Result<json::Value> Client::call(std::string_view method, const json::Value& params) {
+    return callWithDelivery(method, params).result;
+}
+CallResult Client::callWithDelivery(std::string_view method, const json::Value& params) {
     const auto deadline = std::chrono::steady_clock::now() + timeout_;
     if (fd_ == -1) {
         if (!hello_)
-            return Error("rpc.connect", "client is not connected", "", "call connect() first");
+            return {Error("rpc.connect", "client is not connected", "", "call connect() first"),
+                    Delivery::Unsent};
         if (auto reopened = open(deadline); !reopened) {
             Error error("rpc.connect", "could not reconnect: " + reopened.error().message,
                         path_.string(), "start the app, then retry the call");
             error.details.push_back(reopened.error());
-            return error;
+            return {std::move(error), Delivery::Unsent};
         }
     }
-    auto result = exchange(method, params, deadline);
+    auto delivery = Delivery::Unsent;
+    auto result = exchange(method, params, deadline, &delivery);
     if (result && method == "rpc.hello") hello_ = params;
-    return result;
+    return {std::move(result), delivery};
 }
 Result<json::Value> Client::exchange(std::string_view method, const json::Value& params,
-                                     Deadline deadline) {
+                                     Deadline deadline, Delivery* delivery) {
     // Any transport failure leaves the stream in an unknown state (a partial
     // request, or a response still on its way): close it.
     auto fail = [this](Error error) -> Result<json::Value> {
@@ -720,6 +828,7 @@ Result<json::Value> Client::exchange(std::string_view method, const json::Value&
         if (n <= 0) return fail(Error("rpc.write", std::strerror(errno)));
         sent += static_cast<std::size_t>(n);
     }
+    if (delivery) *delivery = Delivery::Sent;
     std::size_t scanned = 0;  // input_ before this offset holds no newline
     while (true) {
         auto newline = input_.find('\n', scanned);
@@ -733,7 +842,8 @@ Result<json::Value> Client::exchange(std::string_view method, const json::Value&
             auto frame = input_.substr(0, newline);
             input_.erase(0, newline + 1);
             scanned = 0;
-            auto parsed = json::parse(frame);
+            auto parsed =
+                json::parse(frame, {.maxBytes = kMaxMessageBytes, .maxValues = kMaxFrameValues});
             if (!parsed) return fail(parsed.error());
             auto* responseId = parsed->isObject() ? parsed->find("id") : nullptr;
             if (!responseId) continue;  // subscribed event

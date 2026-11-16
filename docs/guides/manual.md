@@ -1229,3 +1229,21 @@ not put them early; nothing is sent during a count-in, and an output on
 the device Steppe follows (Transport sync) does not get its own clock
 back. `midi.outputs.get` and `engine.status` show what each output sends
 and how many messages went out.
+
+### Agent transport limits
+
+Control/MCP are local same-user endpoints. RPC queues at most1,024 pending
+requests and64 MiB globally; excess calls receive `rpc.busy` and should be
+retried later. Each peer permits64 subscriptions. Request IDs are at most1,024
+serialized bytes, and untrusted frames at most1,000,000 JSON values.
+
+MCP stdio uses a64 MiB writer reservation: keep reading replies even after
+closing stdin. Output backpressure pauses new commands while model service
+continues. EOF drains replies before finishing capture/shutdown; an open consumer
+that stops reading can defer that completion. Oversized replies return an explicit
+error. If a reply is lost, inspect state before repeating an edit: it may have run.
+
+If control-socket startup reports `rpc.path` for the product runtime directory,
+choose a writable private directory owned by your user and remove any symlink
+or Windows directory junction at that product directory. Steppe refuses these
+aliases rather than changing their targets' permissions.
