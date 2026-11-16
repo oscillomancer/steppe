@@ -1372,8 +1372,9 @@ It is null when there is no sampled anticipative boundary (including an
 all-live graph); observations and anticipation misses are reported separately.
 
 `tools/bench` accepts 64/128-frame requests. Run JSON is
-`supple.capacity-run/2.3` (`tools/bench/README.md` lists what 2.2 and 2.3
-add: scheduling, `bridge_timing` and, on Linux, per-thread `threads`): `xruns` is a JACK server counter delta or null for
+`supple.capacity-run/2.4` (`tools/bench/README.md` lists what 2.2 to 2.4
+add: scheduling, `bridge_timing`, on Linux per-thread `threads`, and page
+faults per thread and as `engine.status` counts them): `xruns` is a JACK server counter delta or null for
 paced runs; `live_helpers` reports enabled live capacity (0: serial);
 `synthetic_over_budget` and `synthetic_late_wakes` are paced-only
 counters (null for JACK). Callback `over_budget` is a duration test, never a

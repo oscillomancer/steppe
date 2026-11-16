@@ -102,7 +102,13 @@ Scheduling and isolation (B1 only, engine.md §2.2, ADR-0026):
 
 A background scheduling fallback is a warning, so it invalidates the run.
 
-B1 run schema **`supple.capacity-run/2.3`** adds `bridge_timing`, the
+B1 run schema **`supple.capacity-run/2.4`** adds page faults over the
+interval: `audio_page_faults` as `engine.status` counts them (`scope`, `minor`,
+`major`, `threads`; on Linux the callback's and the live helpers'),
+`thp_opt_out` (`advised_only`, `all` or `off`, ADR-0084), and on Linux each
+listed thread's `minor_faults` and `major_faults` (a thread that took any is
+listed). `minor_faults` and `major_faults` at the top level stay the whole
+process's. Schema 2.3 added `bridge_timing`, the
 interval's live bridged calls and overrun classes as in
 `engine.status.bridge_timing` (ADR-0081), and on Linux `threads`: for each
 real-time thread of the bench and its bridge processes (and any other thread

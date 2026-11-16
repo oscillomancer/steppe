@@ -35,11 +35,13 @@ using namespace supple::engine;
 namespace {
 // What the kernel says about each thread of the bench and of its bridge
 // children (Linux): its class, the switches it made and suffered, its
-// migrations and how long it waited runnable for a CPU (schedstat run_delay).
-// Read before and after the measured interval, off the audio path.
+// migrations, how long it waited runnable for a CPU (schedstat run_delay) and
+// the page faults it took. Read before and after the measured interval, off
+// the audio path.
 struct TaskSched {
     std::string process, comm;
     long long policy = 0, prio = 0, voluntary = 0, involuntary = 0, migrations = 0;
+    long long minorFaults = 0, majorFaults = 0;
     long long cpuNs = 0, runDelayNs = 0, slices = 0;
     // With kernel.sched_schedstats=1 (else -1), in ms since the reset at the
     // interval's start: the longest wait runnable for a CPU, and the longest
@@ -82,6 +84,22 @@ SchedSnapshot schedSnapshot(bool reset = false) {
             std::ifstream comm(task.path() / "comm");
             std::getline(comm, t.comm);
             if (reset) std::ofstream(task.path() / "sched") << "0";
+            {
+                // stat: after "(comm)", fields 3.. ; minflt is 10, majflt 12.
+                std::ifstream tstat(task.path() / "stat");
+                std::string tline;
+                if (std::getline(tstat, tline)) {
+                    const auto close = tline.rfind(')');
+                    long long minflt = 0, majflt = 0;
+                    if (close != std::string::npos &&
+                        std::sscanf(tline.c_str() + close + 1,
+                                    " %*c %*d %*d %*d %*d %*d %*u %lld %*u %lld", &minflt,
+                                    &majflt) == 2) {
+                        t.minorFaults = minflt;
+                        t.majorFaults = majflt;
+                    }
+                }
+            }
             std::ifstream schedstat(task.path() / "schedstat");
             schedstat >> t.cpuNs >> t.runDelayNs >> t.slices;
             std::ifstream sched(task.path() / "sched");
@@ -126,7 +144,9 @@ json::Value schedDelta(const SchedSnapshot& before, const SchedSnapshot& after) 
         const TaskSched z;
         const TaskSched& b = was == before.end() ? z : was->second;
         const long long delay = t.runDelayNs - b.runDelayNs;
-        if (t.policy == 0 && delay < 1'000'000) continue;
+        const long long minor = t.minorFaults - b.minorFaults;
+        const long long major = t.majorFaults - b.majorFaults;
+        if (t.policy == 0 && delay < 1'000'000 && minor == 0 && major == 0) continue;
         auto e = json::Value::object();
         e["id"] = id;
         e["process"] = t.process;
@@ -139,6 +159,8 @@ json::Value schedDelta(const SchedSnapshot& before, const SchedSnapshot& after) 
         e["voluntary"] = t.voluntary - b.voluntary;
         e["involuntary"] = t.involuntary - b.involuntary;
         e["migrations"] = t.migrations - b.migrations;
+        e["minor_faults"] = minor;
+        e["major_faults"] = major;
         if (t.waitMaxMs >= 0) {
             e["wait_max_ms"] = t.waitMaxMs;
             e["wait_sum_ms"] = t.waitSumMs;
@@ -519,6 +541,7 @@ int main(int argc, char** argv) {
     const auto o0 = engine->bridgeOverruns();
     const auto c0 = backend.cycles();
     const SchedSnapshot s0 = schedSnapshot(true);
+    const auto f0 = (*app)->engineStatus().audioPageFaults;
     rusage ru0{}, ru1{};
     getrusage(RUSAGE_SELF, &ru0);
     const auto begin = std::chrono::steady_clock::now();
@@ -532,10 +555,12 @@ int main(int argc, char** argv) {
         std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
     getrusage(RUSAGE_SELF, &ru1);
     const SchedSnapshot s1 = schedSnapshot();
+    const auto f1 = (*app)->engineStatus().audioPageFaults;
+    const auto thp = (*app)->engineStatus().thpOptOut;
     const auto after = backend.status();
     const double rate = backend.config().sampleRate;
     auto result = json::Value::object();
-    result["schema"] = "supple.capacity-run/2.3";
+    result["schema"] = "supple.capacity-run/2.4";
     result["tracks"] = tracks;
     result["workload"] = pluginFile.empty() ? "stock" : "effect";
     result["plugin_file"] = pluginFile;
@@ -637,6 +662,16 @@ int main(int argc, char** argv) {
     result["process_cpu_cores"] = (cpu(ru1) - cpu(ru0)) / measured;
     result["minor_faults"] = ru1.ru_minflt - ru0.ru_minflt;
     result["major_faults"] = ru1.ru_majflt - ru0.ru_majflt;
+    {
+        // As engine.status counts them: the callback's and live helpers' (Linux).
+        auto faults = json::Value::object();
+        faults["scope"] = f1.scope;
+        faults["minor"] = f1.minor - f0.minor;
+        faults["major"] = f1.major && f0.major ? json::Value(*f1.major - *f0.major) : json::Value();
+        faults["threads"] = f1.threads;
+        result["audio_page_faults"] = std::move(faults);
+        result["thp_opt_out"] = thp.active ? (thp.advisedOnly ? "advised_only" : "all") : "off";
+    }
     // Silence means a missing signal unless the anticipative renderer fell
     // behind: then its starved ring explains it and the run is a failure.
     const bool signal = backend.peak > 1e-5 || result["anticipation_misses"].asInt() > 0;
