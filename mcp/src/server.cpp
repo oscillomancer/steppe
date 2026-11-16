@@ -344,8 +344,17 @@ std::optional<json::Value> Server::handle(const json::Value& request) {
         if (!requested || !requested->isString())
             return error(*id, -32602, "Missing protocolVersion");
         auto* clientInfo = args.find("clientInfo");
-        origin_.client = clientInfo ? stringField(*clientInfo, "name") : std::string{};
         auto* meta = args.find("_meta");
+        auto stringMember = [](const json::Value* object, std::string_view key) {
+            const auto* member = object ? object->find(key) : nullptr;
+            return !member || member->isString();
+        };
+        if (clientInfo && (!clientInfo->isObject() || !stringMember(clientInfo, "name") ||
+                           !stringMember(clientInfo, "version")))
+            return error(*id, -32602, "clientInfo must be an object with string name/version");
+        if (meta && (!meta->isObject() || !stringMember(meta, "agent")))
+            return error(*id, -32602, "_meta must be an object with a string agent");
+        origin_.client = clientInfo ? stringField(*clientInfo, "name") : std::string{};
         origin_.agent = meta ? stringField(*meta, "agent") : std::string{};
         auto versionName = requested->asString();
         if (versionName != "2025-06-18" && versionName != "2025-11-25") versionName = "2025-11-25";

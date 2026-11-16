@@ -441,7 +441,11 @@ validation of sibling fields. The inner command still uses dispatcher validation
 
 `tools/call` → dispatcher `execute` with `Origin{Mcp, client name from
 initialize, agent}`. Every valid `initialize` replaces the client and agent
-identity; an absent `_meta.agent` clears the agent. The proxy forwards that
+identity; an absent `_meta.agent` clears the agent. Present `clientInfo` and
+`_meta` must be objects;
+present `clientInfo.name`, `clientInfo.version` and `_meta.agent` must be strings.
+Invalid identity fields return Invalid params before changing the accepted
+identity or sending a new handshake. The proxy forwards the accepted
 identity in its RPC handshake. Success: `structuredContent` = result JSON
 when the result is an object (MCP structured content is an object) and
 `content: [{"type":"text","text": <compact JSON of the result>}]`. Failure:

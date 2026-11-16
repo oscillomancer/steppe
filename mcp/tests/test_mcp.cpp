@@ -956,6 +956,32 @@ TEST_CASE("generic MCP argument envelopes are validated before executing edits")
     CHECK(host.count == 5);
 }
 
+TEST_CASE("malformed initialize identity cannot replace the accepted audit identity") {
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    mcp::Server server(commands, bus);
+    const auto initial = parse(R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+        "protocolVersion":"2025-11-25","clientInfo":{"name":"accepted"},"_meta":{"agent":"original"}}})");
+    REQUIRE(server.handle(initial)->find("result"));
+    for (const auto* params : {R"({"clientInfo":false})", R"({"clientInfo":{"name":3}})",
+                               R"({"clientInfo":{"version":false}})", R"({"_meta":[]})",
+                               R"({"_meta":{"agent":null}})"}) {
+        auto input = initial;
+        const auto patch = parse(params);
+        for (const auto& field : patch.asObject()) input["params"][field.key] = field.value;
+        const auto reply = server.handle(input);
+        REQUIRE(reply);
+        REQUIRE(reply->find("error"));
+        CHECK(reply->find("error")->find("code")->asInt() == -32602);
+        request(
+            server,
+            R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"counter_history"}})");
+        CHECK(host.last.client == "accepted");
+        CHECK(host.last.agent == "original");
+    }
+}
+
 TEST_CASE("stdio service fds run while an incomplete request waits without a periodic tick") {
     auto r = registry();
     Host host;

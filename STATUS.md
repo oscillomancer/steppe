@@ -191,6 +191,8 @@ instructions are in `docs/guides/installing.md`.
   envelope before dispatch, including batch siblings, so malformed wrappers cannot edit.
   Socket collision probes are nonblocking and conservatively refuse a busy or
   uncertain endpoint; a full listener backlog cannot stall the connect probe.
+  Malformed MCP initialize identity fields are refused before replacing the
+  accepted client/agent identity or forwarding it to the app.
   The engine MCP default is 37 common tools plus describe/exec/query, with a
   60,000-byte tools/list budget. Other commands remain discoverable in the compact
   namespace index and callable through exec/query; --tools all exposes every
