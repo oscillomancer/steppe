@@ -147,7 +147,8 @@ instructions are in `docs/guides/installing.md`.
   versions with stable ids, per-branch undo, branches with object-level diff
   and merge by replay (field-level conflicts, id remapping), A/B renders of
   two branches, a command log with origins, a history budget that squashes
-  the oldest steps. Undo to an FX's initial unsaved settings restores its factory
+  the oldest steps. Incremental unique-payload accounting measures only new or
+  changed snapshots; ordinary commits and size queries reuse retained totals. Undo to an FX's initial unsaved settings restores its factory
   state while retaining the previous processing instance until plan retirement.
   Project format `supple.project/2.15` with migration from
   1.x, autosave (unsaved projects too, recovered from File > Recover unsaved
@@ -180,7 +181,32 @@ instructions are in `docs/guides/installing.md`.
   (in process or as a proxy to the running app); Lua scripts on the bus
   (ADR-0006). Lua structured-error expansion has the same value/text budget
   as returned values, including repeated references to shared details.
+  Optional null is accepted as omission for caller leniency; exported argument
+  schemas deliberately remain narrower on this point (ADR-0087).
   The skill's command reference is generated and drift-tested.
+  Control admission globally bounds posted work to1,024 requests/64 MiB, including
+  disconnected owners; excess gets rpc.busy and admitted edits still run. Each
+  peer permits64 subscriptions and retains its16-request limit (ADR-0087).
+  Production fd-backed MCP uses a joined writer with a64 MiB packet reservation;
+  input admission pauses under backpressure while ticks/watches keep model service
+  alive. Enqueue publishes through atomic ownership, never a writer-held lock.
+  Oversized replies produce explicit bounded errors rather than being dropped.
+  RPC/MCP untrusted frames are limited to 1,000,000 parsed values before
+  construction, in addition to byte/depth limits; params move into dispatch.
+  Trusted file parsing is unchanged (ADR-0087).
+  Fixed-seed schema mutations exercise every engine/sandbox command's argument
+  decoder and rejected dispatches, checking structured errors and unchanged state;
+  engine coverage includes recording in both executors and interleaved saves.
+  RPC and MCP reject invalid request IDs using a null response ID, keeping error
+  envelopes valid while preserving valid IDs for other envelope errors. IDs
+  are limited to 1,024 serialized bytes, including escapes; longer IDs receive
+  a structured null-ID error before dispatch, and final fallback bounds are checked.
+  Generic MCP describe/exec/query arguments are checked against their advertised
+  envelope before dispatch, including batch siblings, so malformed wrappers cannot edit.
+  Socket collision probes are nonblocking and conservatively refuse a busy or
+  uncertain endpoint; a full listener backlog cannot stall the connect probe.
+  Malformed MCP initialize identity fields are refused before replacing the
+  accepted client/agent identity or forwarding it to the app.
   The engine MCP default is 37 common tools plus describe/exec/query, with a
   60,000-byte tools/list budget. Other commands remain discoverable in the compact
   namespace index and callable through exec/query; --tools all exposes every
@@ -190,6 +216,8 @@ instructions are in `docs/guides/installing.md`.
   Named describe calls fetch contracts on demand, and exec dispatches without
   schema prefetch. Reconnects refresh the index before cached query admission;
   changed catalogues replace selected definitions and notify MCP clients.
+  RPC call results carry explicit local Unsent/Sent delivery provenance; only
+  proved-unsent calls may retry. Remote error codes never authorize replay.
   Edits with lost replies are never retried automatically. The proxy requires
   the updated index from the running app.
   Sandbox exposures are unchanged. Native macOS/Windows CI for these catalogue,
@@ -279,7 +307,12 @@ instructions are in `docs/guides/installing.md`.
   time onto a lane of their own (ADR-0057): the take is bit-identical to
   `render.mix` of that master in every executor; a master's items play after
   its fader, beside the live mix, with a lane mute, and are silent in the
-  punch range while it records.
+  punch range while it records. WAV recovery repairs both container byte counts
+  even when a damaged length still rounds down to the correct frame count.
+  Simultaneous recording targets reserve case-folded names before opening files.
+  Audio write errors retain the complete physical prefix and wake the model
+  immediately; the GUI status line identifies the failure while healthy targets
+  continue (ADR-0082). Recording file operations stay on the writer thread.
 - **Editing**: items, takes, comping lanes, fades and crossfades with shapes,
   cursor splitting from the item right-click menu (shared with S) and an audio-only prior
   zero-crossing split (100 ms search, louder stereo channel, cursor fallback;
@@ -432,10 +465,21 @@ instructions are in `docs/guides/installing.md`.
   of its prepared state for that, so its memory is held twice, apart from
   buffers and delay lines `prepare()` leaves all zero, which are held once
   (so a delay's 10 s lines are). No stock module's sound depends on where
-  host blocks split the grid, which a seek off it does (checked for every
-  stock module); the one limit is a song position a module computes from its
-  call's transport, which after such a seek can differ in the last bits and
-  move a step that falls exactly on it by a frame. Engine-owned `module.copy` / `rack.paste` retain modules,
+  host blocks split the grid, which a seek off it does, song positions
+  included (`gridTransport()` and `Transport::offset`; checked for every
+  stock module, and in both executors after seeks off the grid). A module's
+  `transport()` keeps its meaning, the call's start, so a project's or the
+  library's module source computing positions from it plays as it did,
+  positions differing in the last bits between renders that split the
+  grid differently. Getting there changed the
+  sound of some saved patches, on the grid too, since projects play the
+  current stock modules: in a feedback group, Harmonic, Resonator, Delay,
+  VCO with drift, and modulated Drum and Sequencer do their control-rate
+  work every 32 frames instead of every frame; Slew and a moving Macro
+  glide from a start's second frame instead of after the first 32; Markov
+  clocked from a cable restores its step length at a reset's frame; Reverb
+  damps from the frame Freeze ends (`rack.md` lists them). There is no
+  compatibility path to the old sound. Engine-owned `module.copy` / `rack.paste` retain modules,
   internal cables (including plug-in parameter modulation), learn bindings
   and copy-time live plug-in state across cuts and racks, as one paste undo
   step; unavailable types or plug-ins refuse the paste without changing the
@@ -522,7 +566,11 @@ instructions are in `docs/guides/installing.md`.
   pointer when off. Projects and renders default to
   `~/Documents/<slug>-media` (the render folder is choosable), each project
   in a folder of its own with its own media; imports are copied into the
-  project by default, and Save as into another folder copies the media. FX
+  project by default, and Save as into another folder copies the media. Media
+  staging names are short and exclusively reserved; valid destination filenames
+  need no spare bytes for a temporary suffix, and a reserved staging entry
+  cannot alias the final payload name. Save As retains media with
+  temporary-looking suffixes, including files used only by saved branches. FX
   chain presets, track templates (a strip and its chains) and project
   templates (with a copy of their audio) are saved, loaded and deleted in
   the app. Tracks duplicate from either right-click menu with their chains,
@@ -1010,6 +1058,17 @@ Library boundaries:
 - The control client bounds connecting and sending, as well as the
   response, by its timeout through nonblocking sockets; that path is tested
   on Linux, and native macOS/Windows CI has not run on it.
+- Lossless MCP EOF drain awaits consumer progress; a reader retaining an open
+  pipe without draining can defer serve return and capture finalization, while
+  model service continues. There is no owner abort token or finite lossless drain
+  deadline; error teardown joins/cancels native workers. Stream embedding APIs
+  stay synchronous; arbitrary device/filesystem cancellation remains platform-limited.
+- Socket startup refuses a linked or foreign-owned product runtime directory on
+  POSIX (no-follow open, owner check, handle-based 0700); Windows refuses reparse
+  points and keeps inherited directory ACLs (ADR-0035), not a named-pipe DACL.
+  Ancestors and arbitrary explicit socket parents retain their native policy.
+  Endpoint lock acquisition can still wait on another holder without a deadline,
+  independently of the nonblocking collision probe. Native macOS/Windows CI is due.
 
 Engine and hosting:
 - Sync (ADR-0070, ADR-0071, ADR-0073): sync input, LTC output and MIDI
@@ -1189,6 +1248,24 @@ Engine and hosting:
   malformed UTF-8 parameter input is refused. Native verification is pending.
 
 Session and editing:
+- Audio recording recovery has durability limits: the writer flushes to the OS
+  each drain and syncs data/header at the shared five-second journal cadence,
+  off RT. Copied/moved media and POSIX directories are checkpointed before the
+  project, and originals stay until its checkpoint succeeds. Windows uses
+  unprivileged file flushes and write-through media publication, with no claimed
+  POSIX-style parent/ancestor namespace durability after a power cut (ADR-0082).
+  Native macOS/Windows validation of these changes remains pending.
+- Audio loop/seek recovery uses an append-only placement journal, sharing MIDI
+  validation and checkpoints (ADR-0082). Recovery keeps physical tails but places
+  only trusted progress and its punch; final sidecars retain both after save/autosave
+  retirement. Initial loop-range changes remain unsupported as for MIDI.
+  Native macOS/Windows journal validation remains pending.
+- Streaming audio recording reserves JUNK/ds64 space and promotes to RF64 in
+  place at the 32-bit size limit (ADR-0082). Old 44-byte recordings and new
+  RIFF/RF64 files remain repairable, including bytewise-torn promotion tags;
+  decode/import accept RF64. Promotion is
+  covered locally using an injected limit and sparse files; native macOS/Windows
+  validation remains pending.
 - Consolidation's shared engine/model code has local Linux coverage; native
   macOS/Windows validation remains pending before merge.
 - Project files accept `record.mode: output`, but output capture is not
@@ -1266,8 +1343,8 @@ Session and editing:
   armed master or items on a master do not open in builds before schema 2.5.
   Linux is tested locally; native macOS/Windows CI has not run on it yet.
 - `fx.copy` does not copy envelopes or key routes; take FX cannot be keyed.
-- The history budget's size estimate walks shared payloads per version, and
-  squashed steps keep large invocation arguments.
+- Squashed history steps keep large invocation arguments; actual squashing
+  and graph edits may still traverse retained history.
 - Saved branches (ADR-0076): main's undo history and redo steps are kept only
   with `project.save {history: true}`, which the GUI does not offer yet. A
   command whose arguments change incompatibly makes a merge of an older

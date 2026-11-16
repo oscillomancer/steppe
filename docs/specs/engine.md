@@ -880,16 +880,23 @@ first use, and no plug-in code runs early to warm it.
 - **Recording**: RT thread writes input frames into large preallocated SPSC
   rings (≥ 10 s); an I/O thread writes them to WAV/RF64 files incrementally,
   rewriting the header every 5 s so a crash leaves a valid file up to the last
-  flush; a sidecar per file records its track and start, and
+  flush. Targets reserve their sanitized track/take stems with ASCII case folding
+  before any files are opened, so simultaneous names cannot collide on
+  case-insensitive filesystems. Existing WAV, sidecar and audio/MIDI journal entries
+  also reserve their stems. A sidecar per file records its track and start;
   `project.recover` repairs the header to cover everything on disk and places
-  takes a crash left out (ADR-0014); punch in/out and loop recording (one take per pass); MIDI recording
+  takes a crash left out, clipping placement to trusted journal/sidecar progress
+  when present (ADR-0014/0082). Repair checks both RIFF and data byte
+  counts against the whole frames physically present, including a torn size
+  whose rounded-down frame count already matches; partial trailing frames are
+  not included in either repaired size. Punch in/out and loop recording (one take per pass); MIDI recording
   into MIDI takes, each journaled for crash recovery (below). Audio ring overflow becomes equal-length silence at its file
   position and is still reported; loop run positions remain in file-time units.
   Disk and periodic header errors stop only the failing target and retain that
   target's first error. The loop run table holds the initial run plus 4096 wraps;
   when full, capture stops adding input and returns retained passes with a
   structured `recording.loop_runs_full` warning for the commit. Sidecars require
-  `supple.recording/1.0`, a track id, a positive finite sample rate, and complete,
+  `supple.recording/1.0`, `1.1` or `1.2`, a track id, a positive finite sample rate, and complete,
   ordered loop runs beginning at file frame zero, with the loop range they were
   recorded in, or `[0, 0]` when seeks split the runs while no loop was active
   (an inactive loop range is never recorded); invalid sidecars return a
@@ -897,13 +904,68 @@ first use, and no plug-in code runs early to warm it.
   survive pending hash jobs (including finalized loop runs at stop); the
   background finalization adds an optional `hash` without changing their
   recovery contract.
+- **Streaming RF64** (ADR-0082): new audio takes reserve a 28-byte JUNK payload
+  in their 80-byte RIFF header. A take crossing the 32-bit size limit promotes
+  that space to ds64 and becomes RF64 in place, without moving samples or
+  stopping capture. Recovery reads/repairs old 44-byte recordings and new
+  RIFF/RF64 recordings, including bytewise-torn promotion FourCCs in the
+  otherwise unchanged fixed layout. Decoding, metadata
+  inspection and media import accept RF64. Tests inject a small size threshold
+  or use sparse files, without writing a 4 GiB audio payload.
+- **Authoritative punch placement** (round-18 correction): audio/MIDI journal
+  version 1.1 records `punch: {enabled, start, end}` in the header, in the take's
+  sample-rate frames. Coordinates are nonnegative and at most 2^48; an enabled
+  range increases. Mid-take punch edits retain ADR-0015's commit-time behavior:
+  the writer snapshots the latest model setting off RT and includes a changed
+  punch in the same complete progress record as captured/physical frames.
+  A torn or invalid progress line advances neither frames nor punch. Normal
+  stop takes the final snapshot; recovery uses the last trusted one, never
+  the recovering app's transport setting. Version 1.0 journals load with punch
+  disabled. Final sidecars 1.2 persist the same punch and trusted frame bound;
+  sidecars 1.0/1.1 remain readable with punch disabled. Hash completion and
+  retirement preserve it. Mixed recovered punches are logged as contiguous
+  `record.commit` groups within one undo transaction, using its existing punch
+  arguments; history replay therefore retains each take's placement.
+  `RecordedPunch` carries `{enabled, start, end}` in recording-rate samples.
+  `Engine::startRecording(targets, punch = {})` starts with disabled punch by
+  default; `setRecordingPunch(punch)` is model-thread-only. The recorder's
+  model/writer mutex protects only the small punch snapshot, never file work;
+  the callback never accesses it. `RecordedTake::punch` preserves the final
+  snapshot for deferred commit. Initial sidecars 1.2 omit the trusted frame
+  field until finalization; failed finalization therefore cannot retire a journal; the journal supplies live progress. No other non-model
+  placement input is omitted: start/rate, latency-adjusted runs, initial loop,
+  physical frame extent and MIDI input clocks are already persisted.
+- **Audio placement journals** (ADR-0082): each WAV owns an exclusively
+  created `<stem>.audio.jsonl`, schema `supple.audio-recording/1.1` (legacy 1.0 still loads). The shared
+  MIDI journal reader/writer handles header, append, flush/sync and torn tails.
+  Its header has `track`, `sample_rate`, `start_sample`, `latency`, `channels`
+  and the initial `loop` and `punch`. Runs use the same captured-frame clock as MIDI;
+  progress is `{"captured": n, "frames": f}`, where `f` counts complete WAV
+  frames actually written (including rendered-input padding/trim). The writer
+  flushes audio before progress, and syncs data/header before the journal at
+  each five-second checkpoint. Audio journal failure stops that target and
+  reports `record.error`; healthy targets continue. Recovery lists the WAV,
+  clips placement to min(physical frames, last complete journal progress),
+  and uses stop's initial start/latency/run rule. Extra WAV frames are kept,
+  never guessed into an unknown placement. Loop-range changes retain the
+  initial-loop limitation of ADR-0080. Before journal retirement, a final
+  `supple.recording/1.2` sidecar preserves the trusted `frames` bound and punch;
+  legacy 1.0/1.1 sidecars still load. Hash completion preserves the bound. Save/autosave
+  checkpoint the stopped audio before publishing and retire owned journals
+  only after success; Save As retires its new copies, never another project's.
+`RecordedTake::journal` is the owned audio placement journal path (empty if
+exclusive creation failed); it is not project media and does not enter
+`record.commit`. Recovery reconstructs it from the checked WAV companion.
+The final sidecar 1.1/1.2 `frames` is a nonnegative clock bounded by 2^48, and
+clips recovery without truncating the physical WAV.
+
 - **MIDI take journals** (ADR-0080): each MIDI target writes
   `<media>/rec/<Track>-<n>.midi.jsonl` (created exclusively, never through a
   link; a name any entry has, a dangling link too, is not free, and a take
   whose journal could not be created names none, so nothing already there
-  is ever deleted as its journal), JSON Lines with schema `supple.midi-recording/1.0`: a header object
+  is ever deleted as its journal), JSON Lines with schema `supple.midi-recording/1.1` (legacy 1.0 still loads): a header object
   (`track`, `sample_rate`, `start_sample`, `latency`, `device`, `routed`,
-  `shift`, `loop`), then events `[at, status, data1, data2]` (plus `route`,
+  `shift`, `loop`, `punch`), then events `[at, status, data1, data2]` (plus `route`,
   `voice` for Note Out voices; `at` in captured frames), `{"run": [captured
   frame, timeline]}` per loop wrap or seek, and `{"captured": n}`. The audio
   thread only pushes to the MIDI rings and stores how far capture got (one
@@ -928,7 +990,9 @@ first use, and no plug-in code runs early to warm it.
   copy it made there (an identical file already there is not its copy and
   stays; one a failed save as made is, and the retry deletes it, whatever
   spelling of the same file it is retried under: copies are known by file
-  identity, not by literal path), leaving
+  identity as the file system reports it, not by spelling, since a path
+  through a link followed by `..` is not the path with both removed; a
+  path where no file is matches no copy), leaving
   the old folder's for the old project, whose file does not hold the take. A save as into another folder waits for a running
   recording to stop (`project.recording`). Replacing a saved project without saving leaves its journals, offered on
   its next open; replacing an unsaved one without saving discards them with
@@ -1564,6 +1628,39 @@ harness. See the tooling README for schemas, limits and invocation details.
   `docs/benchmarks/b1.md`, `b2.md` (tooling: `tools/bench/README.md`).
 
 ### Recording diagnostics (2026-10-04)
+
+**Durability (ADR-0082):** the recording writer flushes each drain and syncs
+audio data and header at the MIDI journal's shared five-second deadline and
+at stop, through the same core-base helper (fsync / macOS full-sync-or-fsync /
+FlushFileBuffers). New audio and journal directory entries are checkpointed
+off RT too. The cadence assumes healthy storage making progress; a stalled or
+failed barrier is not a successful checkpoint. A sync failure latches
+`file.sync` / `file.sync_directory` as a target failure and reaches `record.error` through the model
+wake, like an append failure. Healthy targets and the engine continue.
+
+Copied/moved media is synced, then published without replace, and its directory
+is checkpointed before the referencing project is published. The project is
+confirmed durable before originals are removed. A failure after project
+publication returns `project.sync` and retains both originals and copied media;
+its hint explains that the project may already exist and storage needs checking.
+On Windows these operations use only unprivileged FlushFileBuffers and
+MoveFileExW with MOVEFILE_WRITE_THROUGH for media publication. This matches the
+project-save level of file durability; it does **not** establish POSIX-style
+parent/ancestor namespace durability after a power cut. No elevation is used.
+
+Audio writer failures (ADR-0082) latch the first error per target and wake the
+model thread. `Engine::takeRecordingErrors()` consumes these off-RT notices
+(`track`, `file`, structured `error`); EngineApp emits `record.error` immediately,
+with `track`, `file`, `error` text and `code`, `message`, `path`, `hint`.
+Stop reports a not-yet-delivered failure, without duplicating an earlier event.
+`RecordedTake::failure` retains the structured first error for that stop/close
+fallback, beside the existing `error` text.
+The failed audio target stops writing and retains every complete frame physically
+written, including a short-write prefix; its final header and take use that
+count. Healthy targets and playback continue. Recording file creation, writes,
+prefix accounting, header updates and closure run on the recording writer;
+the model joins it and commits metadata only. The GUI shows the error in its
+status line while recording continues for healthy targets.
 
 A committed recording may carry a `warnings` array with structured
 `code`, `message`, `path`, `hint`, `track` and `file` fields.

@@ -79,6 +79,15 @@ if(SUPPLE_BUILD_TESTS AND NOT SUPPLE_PLATFORM_LINUX)
                              SUPPLE_RACK_GUIDE="${PROJECT_SOURCE_DIR}/skill/guides/rack.md")
 endif()
 
+if(SUPPLE_BUILD_TESTS)
+  # A fresh process fixes the media staging serial at zero for each collision.
+  foreach(mode import folder import-case folder-case)
+    add_test(NAME engine.media-staging.${mode}
+      COMMAND engine.tests --no-skip "--test-case=media staging collision: ${mode}")
+    set_tests_properties(engine.media-staging.${mode} PROPERTIES LABELS "engine;rt" TIMEOUT 60)
+  endforeach()
+endif()
+
 if(SUPPLE_PLATFORM_LINUX)
 # Capacity benchmark (engine.md §7 B1), with a command-built shared session.
 add_executable(engine-bench bench/engine_bench.cpp bench/session.cpp)
@@ -144,6 +153,14 @@ if(SUPPLE_BUILD_TESTS)
               $<TARGET_FILE:${PRODUCT_SLUG}-engine> ${CMAKE_BINARY_DIR}/plugins/clap/Marram.clap)
     set_tests_properties(engine.mcp-arrangement PROPERTIES LABELS "engine;slow")
   endif()
+endif()
+
+if(SUPPLE_BUILD_TESTS)
+  add_executable(engine-command-inputs.tests tests/test_command_inputs.cpp)
+  target_link_libraries(engine-command-inputs.tests PRIVATE supple::engine supple::control-protocol supple::doctest-main)
+  supple_target_defaults(engine-command-inputs.tests)
+  add_test(NAME engine-command-inputs.tests COMMAND engine-command-inputs.tests)
+  set_tests_properties(engine-command-inputs.tests PROPERTIES LABELS "engine;command;rt")
 endif()
 
 if(SUPPLE_BUILD_TESTS)

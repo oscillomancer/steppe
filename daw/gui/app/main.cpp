@@ -346,9 +346,12 @@ int frontendMain(int argc, char** argv) {
     rpc::ModelLoop loop;
     loop.setWaker([p = platform->get()] { p->wake(); });
     std::unique_ptr<rpc::Server> server;
+    gui::Shell* eventShell = nullptr;
     auto publish = [&] {
-        for (auto& [topic, payload] : (*app)->takeEvents())
+        for (auto& [topic, payload] : (*app)->takeEvents()) {
+            if (eventShell && topic == "record.error") eventShell->recordingError(payload);
             if (server) server->publish(topic, payload);
+        }
     };
     std::string status = "offscreen";
     if (o.serve) {
@@ -387,6 +390,7 @@ int frontendMain(int argc, char** argv) {
         return out;
     });
     gui::Shell shell(**app, dispatcher, uiState, status, peaks, meterFeed);
+    eventShell = &shell;
     peaks.onReady = [&](const std::string&) { shell.arrange()->lanes().invalidate(); };
     const fs::path appearanceFile = gui::Appearance::defaultFile(product::kSlug);
     gui::Appearance look = gui::Appearance::load(appearanceFile);

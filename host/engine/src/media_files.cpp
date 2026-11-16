@@ -37,19 +37,43 @@ bool sameBytes(const fs::path& a, const fs::path& b) {
 
 // A whole copy at `to`, which must not exist: a clone (FICLONE) or a byte
 // copy into a temporary name, published with link() so nothing is replaced.
-Status copyNew(const fs::path& from, const fs::path& to) {
+Status copyNew(const fs::path& from, const fs::path& to, bool* raced = nullptr,
+               bool* created = nullptr) {
+    if (raced) *raced = false;
+    if (created) *created = false;
     static std::atomic<unsigned> serial{0};
-    fs::path temp = to;
-    temp += "." + std::to_string(files::processId()) + "." + std::to_string(serial.fetch_add(1)) +
-            ".copy-tmp";
+    const auto nextTemp = [&] {
+        return to.parent_path() / (".copy-" + std::to_string(files::processId()) + "-" +
+                                   std::to_string(serial.fetch_add(1)) + ".copy-tmp");
+    };
+    fs::path temp;
+    // Check after reservation: native identity catches case folding and other
+    // filesystem aliases too, including a final name equal to this candidate.
+    const auto isPayload = [&] {
+        std::error_code ignored;
+        return fs::equivalent(temp, to, ignored);
+    };
 #if defined(__linux__)
     const int in = ::open(from.c_str(), O_RDONLY | O_CLOEXEC);
     if (in < 0) return copyError(from, to, std::strerror(errno));
-    const int out = ::open(temp.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
-    if (out < 0) {
-        const int error = errno;
-        ::close(in);
-        return copyError(from, to, std::strerror(error));
+    int out = -1;
+    for (;;) {
+        temp = nextTemp();
+        out = ::open(temp.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
+        if (out >= 0) {
+            if (!isPayload()) break;
+            ::close(out);
+            std::error_code cleanup;
+            fs::remove(temp, cleanup);
+            if (!cleanup) continue;
+            ::close(in);
+            return copyError(from, to, cleanup.message());
+        }
+        const auto error = errno;
+        if (error != EEXIST) {
+            ::close(in);
+            return copyError(from, to, std::strerror(error));
+        }
     }
     const bool cloned = ::ioctl(out, FICLONE, in) == 0;
     ::close(in);
@@ -57,21 +81,59 @@ Status copyNew(const fs::path& from, const fs::path& to) {
     std::error_code ec;
     if (!cloned) fs::copy_file(from, temp, fs::copy_options::overwrite_existing, ec);
 #else
+    // Reserve the staging file ourselves, so cleanup can never remove an
+    // entry copy_file found already there (including after a PID is reused).
     std::error_code ec;
-    fs::copy_file(from, temp, fs::copy_options::none, ec);
+    for (;;) {
+        temp = nextTemp();
+        auto* reserved = files::createAppend(temp, ec);
+        if (reserved) {
+            if (std::fclose(reserved) == 0) {
+                if (!isPayload()) break;
+                fs::remove(temp, ec);
+                if (!ec) continue;
+                return copyError(from, to, ec.message());
+            }
+            const std::string reason = std::strerror(errno);
+            fs::remove(temp, ec);
+            return copyError(from, to, reason);
+        }
+        if (ec != std::errc::file_exists) return copyError(from, to, ec.message());
+    }
+    fs::copy_file(from, temp, fs::copy_options::overwrite_existing, ec);
 #endif
     if (ec) {
         const auto reason = ec.message();
         fs::remove(temp, ec);
         return copyError(from, to, reason);
     }
+#if defined(_WIN32)
+    // CopyFile may copy the source's read-only attribute. This staging file
+    // is ours; FlushFileBuffers needs a writable handle. The source stays as is.
+    fs::permissions(temp, fs::perms::owner_write, fs::perm_options::add, ec);
+    if (ec) {
+        const auto reason = ec.message();
+        fs::remove(temp, ec);
+        return copyError(from, to, reason);
+    }
+#endif
+    if (auto synced = syncFile(temp); !synced) {
+        const auto reason = synced.error().message;
+        fs::remove(temp, ec);
+        return copyError(from, to, reason);
+    }
     const int linked = files::publishNew(temp, to);
     const int error = errno;
     fs::remove(temp, ec);
-    if (linked != 0)
+    if (linked != 0) {
+        if (raced && error == EEXIST) *raced = true;
         return copyError(from, to,
                          error == EBUSY ? "another program has the file open; close it and retry"
                                         : std::strerror(error));
+    }
+    if (created) *created = true;
+    if (auto synced = syncParentDirectories(to); !synced)
+        return copyError(from, to, synced.error().message);
     return {};
 }
 
@@ -89,13 +151,22 @@ Result<std::string> copyIntoFolder(const fs::path& file, const fs::path& dir, bo
     for (int n = 1; n < 10000; ++n) {
         const std::string name = n == 1 ? stem + ext : stem + "-" + std::to_string(n) + ext;
         const fs::path target = dir / name;
-        if (fs::equivalent(file, target, ec)) return name;  // already in this folder
+        if (fs::equivalent(file, target, ec)) {
+            SUPPLE_TRY(syncFile(target));
+            SUPPLE_TRY(syncParentDirectories(target));
+            return name;
+        }
         if (fs::exists(target, ec)) {
-            if (sameBytes(file, target)) return name;
+            if (sameBytes(file, target)) {
+                SUPPLE_TRY(syncFile(target));
+                SUPPLE_TRY(syncParentDirectories(target));
+                return name;
+            }
             continue;
         }
-        if (auto copied = copyNew(file, target); !copied) {
-            if (fs::exists(target, ec)) continue;  // another writer took the name
+        bool raced = false;
+        if (auto copied = copyNew(file, target, &raced, created); !copied) {
+            if (raced) continue;  // only an actual no-replace race, never a failed barrier
             return std::move(copied).error();
         }
         if (created) *created = true;
@@ -140,17 +211,22 @@ Status copyFolder(const fs::path& from, const fs::path& to, std::vector<fs::path
         }
         if (!it->is_regular_file(ec)) continue;
         const fs::path rel = it->path().lexically_relative(from);
-        if (rel.filename().string().ends_with(".copy-tmp")) continue;
         const fs::path target = to / rel;
         if (fs::exists(target, ec)) {
-            if (sameBytes(it->path(), target)) continue;
+            if (sameBytes(it->path(), target)) {
+                SUPPLE_TRY(syncFile(target));
+                SUPPLE_TRY(syncParentDirectories(target));
+                continue;
+            }
             return Error("media.conflict", target.string() + " already exists with other contents",
                          {}, "save into a folder of its own, without another project's media");
         }
         fs::create_directories(target.parent_path(), ec);
         if (ec) return copyError(it->path(), target, ec.message());
-        SUPPLE_TRY(copyNew(it->path(), target));
-        if (created) created->push_back(target);
+        bool made = false;
+        auto copied = copyNew(it->path(), target, nullptr, &made);
+        if (created && made) created->push_back(target);  // even if its directory barrier failed
+        SUPPLE_TRY(std::move(copied));
     }
     if (ec) return copyError(from, to, ec.message());
     return {};

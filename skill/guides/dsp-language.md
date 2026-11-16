@@ -194,7 +194,8 @@ values it is given, as `.smoothed()` parameters do by themselves.
 
 `Block`: `io.channels`, `io.frames` (a block may be a single frame),
 `io[c][i]` (read the input, write the output, in place), `io.transport`
-(`playing`, `tempo`, `beats`, `barStart`, time signature),
+(`playing`, `tempo`, `beats`, `barStart`, time signature, and `offset`,
+always 0 in a plugin: `beats` is the block's start),
 `io.sidechain(c)[i]` (the key input with Info's `.sidechain`; silent until
 `io.sidechainConnected`, which is false while nothing is routed to the key
 in Steppe and in hosts that deactivate an unused port; a host that always

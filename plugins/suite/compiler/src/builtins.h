@@ -45,6 +45,7 @@ enum class Intrinsic : std::uint8_t {
     Channels,
     Offline,
     ModuleTransport,
+    ModuleGridTransport,
     // Containers
     ArraySize,
     ArrayFill,

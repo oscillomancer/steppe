@@ -377,7 +377,8 @@ void Builtins::addClasses() {
         {"beats", double_, static_cast<int>(offsetof(S::Transport, beats))},
         {"barStart", double_, static_cast<int>(offsetof(S::Transport, barStart))},
         {"timeSigNumerator", int_, static_cast<int>(offsetof(S::Transport, timeSigNumerator))},
-        {"timeSigDenominator", int_, static_cast<int>(offsetof(S::Transport, timeSigDenominator))}};
+        {"timeSigDenominator", int_, static_cast<int>(offsetof(S::Transport, timeSigDenominator))},
+        {"offset", int_, static_cast<int>(offsetof(S::Transport, offset))}};
     transport->declarable = false;
     transport_ = transport;
 
@@ -560,6 +561,8 @@ void Builtins::addClasses() {
     addEnum("SignalKind",
             {{"Audio", 0}, {"Pitch", 1}, {"Gate", 2}, {"Cv", 3}, {"Unipolar", 4}, {"Phase", 5}});
     r.inlineMethod(plugin, "Transport transport() const", Intrinsic::ModuleTransport);
+    plugin->methods.back().module = true;
+    r.inlineMethod(plugin, "Transport gridTransport() const", Intrinsic::ModuleGridTransport);
     plugin->methods.back().module = true;
     r.method(plugin, "int seed() const", +[](const S::Module* p) { return p->seed(); });
     plugin->methods.back().module = true;

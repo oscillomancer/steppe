@@ -185,11 +185,23 @@ folder: stop recording first, and its files move or are copied then.
 Saving in place works while recording. Quitting, or starting
 another project, without saving deletes that folder after the app has asked.
 
+If an audio recording cannot be written, the status line shows the failed
+file and error immediately. That target keeps every complete sample frame
+written so far and stops writing; other armed targets and playback continue.
+Stop and save the retained takes, then check free space and storage before
+starting another recording.
+
 An unsaved project is autosaved into that folder every minute while it
 changes, like a saved one. If Steppe stops without you saving or discarding
 (a crash, a power cut), the folder stays, with its autosaves and recordings.
-MIDI recordings are kept as they are played, so a crash loses at most the
-last moment of a take (a power cut, at most the last five seconds).
+Audio and MIDI recordings are kept as they are played. With storage keeping
+up, a program crash loses about the writer's last pass; a power cut retains
+the last completed file checkpoint, at most about five seconds behind. Storage
+failures are shown immediately for audio, with the written prefix kept.
+On Windows file data is flushed without elevation, but a power cut can still
+lose newly created file or folder names; the file checkpoint does not promise
+that stronger namespace guarantee. A failed save that reports the project may
+already exist keeps both original and copied media; check storage before retrying.
 The next time Steppe starts without a project to open, it lists what was left
 behind: each with its name, when it was last autosaved, how many tracks and
 recordings it has, and its size. **Recover** opens it (after asking about any
@@ -689,6 +701,28 @@ gliding. So the rack sounds the same from a given point on every play and
 in every render, whatever it played before. A loop going round does not
 restart them: an LFO runs on and tails carry across the loop point. While
 the transport is stopped a rack runs on as it was.
+
+Some stock modules play a little differently than in earlier versions,
+and a project saved then plays them the new way: a project does not keep
+its own copy of the stock modules, and there is no setting for the old
+sound. They used to do some of their work once per block the audio
+engine handed them, so how they sounded after you moved the playhead
+could differ between playing and exporting; they now keep their own
+steady 32-sample pace. You may hear it in these cases:
+
+- modules on a loop of cables (one with a dashed cable): **Harmonic**,
+  **Resonator**, **Delay** (its Wow and Flutter), **VCO** with Drift, and
+  **Drum** or **Sequencer** with cables on their knobs follow their
+  cables and wander every 32 samples instead of every sample;
+- **Slew**, and a **Macro** whose knob is moving, glide from the very
+  start of playback (or a move of the playhead) instead of following
+  their input unglided for the first 32 samples;
+- **Markov** clocked from a cable: just after a reset, a note's length
+  can change by up to 31 samples;
+- **Reverb** with **Freeze**: when Freeze ends, the damping comes back
+  at once instead of up to 31 samples later, so the tail is slightly
+  darker there.
+
 A rack sends audio both ways. Its Out modules are channel inputs, and an
 **In** module takes sends, and the rack becomes an effect. Send a track to
 it in the routing matrix (**View > Routing matrix**), where each In module
@@ -951,6 +985,25 @@ input FX, before its own items, inserts and fader. It uses ordinary audio
 takes, loop/punch recording and recovery. Disable the live rack feed when
 auditioning the recorded item to avoid doubling it.
 
+Recorded filenames use sanitized track names and take numbers. Tracks named
+`Vocal` and `vocal` receive distinct take names when recorded together, including
+on case-insensitive filesystems.
+
+Audio takes begin as ordinary WAV files and become RF64 automatically above the
+32-bit size limit, without interrupting recording. Steppe can import and recover
+both formats, including recordings made with the older WAV header layout.
+
+Audio takes keep an append-only placement journal beside each WAV. After a
+crash, Project recovery restores loop passes and seeks through the last complete
+checkpoint; extra audio bytes are kept without guessing their placement. Stop
+keeps a final placement sidecar, and the next successful save/autosave retires
+the journal. The loop range at recording start is used for recovery; changing
+it during the take has the same limitation as MIDI recording. Punch changes
+continue to apply at stop; crash recovery restores the punch from the last
+complete recording checkpoint, independently of the current transport punch.
+During recording the punch must contain at least one sample and fit the
+recording clock; a refused change leaves the range unchanged.
+
 Output recording is not supported yet. If a loaded project has an armed track
 in output record mode, recording fails before creating any files. Switch that
 track to input mode with `track.set {track: "tr_1", record_mode: "input"}`.
@@ -1185,3 +1238,21 @@ limited to 20 reports or 50 MB, oldest removed. They exclude your project, audio
 MIDI and command arguments. Steppe never uploads them; your OS crash reporting
 continues under your own OS settings. Safe-load and next-start notices arrive in
 a later topic; the current delivery scope is listed in STATUS.md.
+
+### Agent transport limits
+
+Control/MCP are local same-user endpoints. RPC queues at most1,024 pending
+requests and64 MiB globally; excess calls receive `rpc.busy` and should be
+retried later. Each peer permits64 subscriptions. Request IDs are at most1,024
+serialized bytes, and untrusted frames at most1,000,000 JSON values.
+
+MCP stdio uses a64 MiB writer reservation: keep reading replies even after
+closing stdin. Output backpressure pauses new commands while model service
+continues. EOF drains replies before finishing capture/shutdown; an open consumer
+that stops reading can defer that completion. Oversized replies return an explicit
+error. If a reply is lost, inspect state before repeating an edit: it may have run.
+
+If control-socket startup reports `rpc.path` for the product runtime directory,
+choose a writable private directory owned by your user and remove any symlink
+or Windows directory junction at that product directory. Steppe refuses these
+aliases rather than changing their targets' permissions.

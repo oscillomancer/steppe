@@ -59,6 +59,14 @@ int inputDescriptor() {
 #endif
 }
 
+int outputDescriptor() {
+#if defined(_WIN32)
+    return _fileno(stdout);
+#else
+    return ::fileno(stdout);
+#endif
+}
+
 int usage() {
     const auto slug = std::string(product::kSlug);
     std::fprintf(
@@ -367,7 +375,7 @@ int frontendMain(int argc, char** argv) {
             return watches;
         };
         tick.fn();
-        auto status = server.serve(inputDescriptor(), std::cout, tick);
+        auto status = server.serve(inputDescriptor(), outputDescriptor(), tick);
         (*app)->stopEngine();  // EOF/error still finishes audio and MIDI takes on the model thread
         if (!status) {
             std::fprintf(stderr, "%s\n", status.error().toString().c_str());

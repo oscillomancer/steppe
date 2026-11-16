@@ -1593,6 +1593,7 @@ void Editor::routes(double x, double y, double w, double h) {
 // --- modules ------------------------------------------------------------------------
 
 Transport Module::transport() const { return instanceOf(instance_).transport; }
+Transport Module::gridTransport() const { return instanceOf(instance_).gridTransport; }
 int Module::seed() const { return instanceOf(instance_).seed; }
 
 void Panel::size(double width, double height) {

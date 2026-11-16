@@ -1310,7 +1310,7 @@ TEST_CASE("recorded MIDI notes are clipped at punch and overdub item edges") {
     r.frames = 48000;
     r.segments = {{0, 0}};
     r.midi = {{9600, 0, {0x90, 72, 100}}, {38400, 0, {0x80, 72, 0}}};
-    app->setPunch({true, 0.4, 0.6});
+    REQUIRE(app->setPunch({true, 0.4, 0.6}));
     REQUIRE(app->commitTakes({r}));
     const auto& punched = app->head();
     REQUIRE(punched.items.size() == 1);

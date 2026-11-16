@@ -217,7 +217,9 @@ it is allowed.
   hash (SHA-256 of file bytes), format, sample_rate, channels, frames}`.
   Decoding and resampling to the engine rate are cached by the engine keyed
   by `(hash, rate)`; peak pyramids are cached outside the project (never in
-  diffs). Recording sources may initially have an empty hash. A background
+  diffs). Recording sources may initially have an empty hash. A recovered recording's
+  `frames` may name only its journal-trusted prefix; unplaced physical tail
+  bytes remain in the file. A background
   completion replaces matching media metadata in stored sessions without a
   version/undo step or revision change; existing reader leases remain immutable
   and retain their versions. An undone/deleted take drops its completion.
@@ -641,6 +643,24 @@ reused) instead of naming it where it is. The GUI gives each project a
 folder of its own (gui.md §4.11).
 Copy failures retain the underlying filesystem error even when temporary-file
 cleanup succeeds, so `media.copy` identifies the cause of a failed import or save.
+Copy staging uses short, exclusively reserved names independent of the final
+filename: a valid destination name needs no spare bytes for a temporary suffix,
+and cleanup removes only the staging file this operation created.
+After reserving a staging file its native identity must differ from the final
+payload path (including case-insensitive aliases); otherwise it is removed and
+a different candidate reserved. A payload may itself have a staging-looking name.
+Copies sync their complete payload before publication and checkpoint parent
+directories before a referencing project is published (ADR-0082). First save
+verifies and syncs staged media, publishes it without replacement, and confirms
+the project checkpoint before removing scratch originals. A `project.sync`
+failure after project publication keeps both originals and destination media:
+the project may already exist, and rollback must not remove its audio.
+Windows uses flushed files and write-through media renames without elevation;
+it has no claimed POSIX-equivalent parent/ancestor namespace durability bound.
+Save As does not discard a media file by a temporary-looking filename suffix:
+an imported file named `take.copy-tmp` may be used by a saved branch even when
+the current branch has no items. Unreferenced stale copy files may therefore
+travel with the folder; filename-based garbage collection must not omit payload.
 Only if the resolved destination is a strict descendant of the resolved source
 media folder does the recursive copy skip that destination subtree, including
 symlink aliases. Existing destination files stay there; copied files are never
@@ -700,6 +720,11 @@ is gone; one whose lock is held is a running app's and is never listed or
 touched. Process IDs decide nothing. Left-behind folders with content stay
 until the user recovers or deletes them; empty ones untouched for an hour
 are removed when an app starts.
+Recording recovery uses the take's saved punch, not the current transport punch
+(ADR-0082). A mixed recovery remains one undo step; its history may contain
+multiple `record.commit` invocations, each with its corresponding existing punch
+argument. No project or command schema changes.
+
 `project.recoverable` lists them (MIDI takes' journals among the
 recordings, ADR-0080) as `sessions` beside `recordings`
 (`session`, `started_ms`, `autosaved_ms`, `name`, `tracks`, `branches`,
@@ -871,7 +896,15 @@ persisted estimated history byte budget (default 1 GiB, positive integer).
 Above it, oldest eligible linear steps on each branch combine into one
 `earlier history` step; intermediate snapshots are released and undo/redo crosses
 the combined step as one operation. Shared MIDI/blob/object/collection payloads
-are counted once. Leases, branch bases/heads, redo targets and fork/merge
+are counted once. A model-thread reference-counted size index is updated only
+for added/replaced/removed snapshots (including metadata completion and
+squashing); queries reuse its total. Ordinary append commits do not remeasure
+retained versions or retrace unchanged reachability. New snapshot/container
+contents still cost their own size; graph edits, leased unreachable tails and
+actual budget squashing may traverse history. Counts, oldest-first retention,
+leases and fork/merge protection are identical to a full recount.
+`VersionStore::accountingVisits()` reports cumulative snapshot measurements for
+deterministic work diagnostics, not a time or memory limit. Leases, branch bases/heads, redo targets and fork/merge
 boundaries survive; required data/replay logs may exceed the budget.
 `history.list` reports `truncated`, `retained_bytes`, `budget_bytes`, and
 `squashed_steps` per entry. Project files keep undo history only with

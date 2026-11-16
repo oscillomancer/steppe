@@ -3,6 +3,8 @@
 // Every stock module is the same program as C++, generated MIR and interpreted MIR.
 #include <doctest/doctest.h>
 
+#include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstdint>
@@ -272,4 +274,99 @@ struct Primed : Module {
         CHECK(sd::bufferAllocations() == before + 3);
     }
     CHECK(supple::rack::test::replaysAfterRestart(std::move(jit), supple::rack::Origin::Project));
+}
+
+namespace {
+// A project module's song phase from 3217 on, in calls of `block` frames,
+// through the production schedule: `body` is its process() loop's
+// expression; `feedback` puts it in a feedback group (a cable into itself).
+std::vector<double> songPhase(const std::string& body, int block, bool feedback, bool interpret) {
+    using namespace supple::rack;
+    const std::string source =
+        "#include <supple/script.h>\n"
+        "using namespace supple::script;\n"
+        "struct Song : Module {\n"
+        "    static constexpr ModuleInfo info = {.name = \"Song\",\n"
+        "        .id = \"org.example.song\", .vendor = \"Example\"};\n"
+        "    Input dummy = cvIn(\"Dummy\");\n"
+        "    Output phase = cvOut(\"Phase\");\n"
+        "    void process(int frames) {\n" +
+        body +
+        "    }\n"
+        "};\n";
+    auto result = supple::scriptc::compile(source, {.interpret = interpret});
+    REQUIRE_MESSAGE(result.program, supple::scriptc::toText(result.diagnostics));
+    auto code = supple::scriptc::moduleCode(std::move(result.program));
+    REQUIRE(code);
+    const auto type = ModuleType::fromCode(std::move(code), Origin::Project);
+    REQUIRE(type);
+    Instance::Setup setup;
+    auto in = Instance::make(type, setup);
+    auto out = host::make(host::outType(), setup);
+    Patch p;
+    p.modules = {{1, in.get(), false, {}}, {2, out.get(), false, {}}};
+    if (feedback) p.cables.push_back({0, 0, 0, false, 0, 0.5});
+    p.cables.push_back({0, 0, 1, false, 0, 1.0});
+    std::string error;
+    auto schedule = Schedule::build(p, &error);
+    REQUIRE_MESSAGE(schedule, error);
+    struct Song final : Clock {
+        supple::script::Transport transport(std::int64_t position) override {
+            supple::script::Transport t;
+            t.playing = true;
+            t.tempo = 128;
+            t.beats = 0.25 + static_cast<double>(position - 3217) * 128.0 / 60.0 / 48000.0;
+            return t;
+        }
+    } clock;
+    std::vector<double> samples;
+    for (int at = 0; at < 512;) {
+        const int n = std::min(block, 512 - at);
+        std::array<float, 1024> l{}, r{};
+        static_cast<host::Out*>(out->host())->bind(l.data(), r.data());
+        schedule->process(3217 + at, n, clock);
+        for (int i = 0; i < n; ++i) samples.push_back(double(l[static_cast<std::size_t>(i)]));
+        at += n;
+    }
+    return samples;
+}
+}  // namespace
+
+TEST_CASE("module source reading transport() plays as it did however host blocks split the grid") {
+    // Round 19: transport() had become the grid interval's start, so source
+    // written as the guide used to say, beats + i * perFrame, was off by up
+    // to 31 frames' worth whenever a call started off the grid.
+    const std::string old =
+        "        const Transport t = transport();\n"
+        "        for (int i = 0; i < frames; ++i)\n"
+        "            phase[0][i] = t.beats + i * t.tempo / 60.0 / sampleRate();\n";
+    for (const bool interpret : {false, true}) {
+        CAPTURE(interpret);
+        const auto whole = songPhase(old, 32, false, interpret);
+        const auto split = songPhase(old, 17, false, interpret);
+        REQUIRE(whole.size() == split.size());
+        double worst = 0;
+        for (std::size_t i = 0; i < whole.size(); ++i)
+            worst = std::max(worst, std::abs(whole[i] - split[i]));
+        CAPTURE(worst);
+        CHECK(worst < 1e-7);  // the last bits, as before d82c9569
+        CHECK(whole.front() == doctest::Approx(0.25));
+    }
+}
+
+TEST_CASE("gridTransport() gives exact song positions however host blocks split the grid") {
+    const std::string exact =
+        "        const Transport t = gridTransport();\n"
+        "        for (int i = 0; i < frames; ++i)\n"
+        "            phase[0][i] = t.beats + (t.offset + i) * t.tempo / 60.0 / sampleRate();\n";
+    for (const bool feedback : {false, true})
+        for (const bool interpret : {false, true}) {
+            CAPTURE(feedback);
+            CAPTURE(interpret);
+            const auto whole = songPhase(exact, 32, feedback, interpret);
+            const auto split = songPhase(exact, 17, feedback, interpret);
+            CHECK(whole == split);
+            CHECK(whole.front() == 0.25);
+            CHECK(whole.back() > whole.front());
+        }
 }
