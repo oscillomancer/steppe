@@ -51,10 +51,16 @@ struct MemoryOps {
             thpMode = disable ? (f ? 3 : 1) : 0;
             return 0;
         };
-        ops->thpMode = [this] { return thpMode; };
+        ops->thpMode = [this] {
+            if (thpQueryError) {
+                errno = thpQueryError;
+                return -1;
+            }
+            return thpMode;
+        };
     }
     std::vector<std::pair<unsigned long, unsigned long>> thpCalls;
-    int thpFlagsError = 0, thpError = 0, thpReleaseError = 0, thpMode = 0;
+    int thpFlagsError = 0, thpError = 0, thpReleaseError = 0, thpMode = 0, thpQueryError = 0;
 };
 }  // namespace
 
@@ -128,6 +134,24 @@ TEST_CASE("the process stays out of transparent huge pages while the engine runs
         controls.stop();
         CHECK(fake.thpCalls.size() == 1);
         CHECK(fake.thpMode == 1);
+        CHECK_FALSE(controls.thpOptOut().active);
+    }
+    SUBCASE("a refused mode query at stop is reported, and a later stop releases") {
+        // Round 23: a failed PR_GET_THP_DISABLE at stop cleared ownership, so
+        // the process stayed opted out with nothing left to undo it.
+        MemoryOps fake;
+        detail::RuntimeProtection controls(fake.ops);
+        controls.start();
+        REQUIRE(fake.thpMode == 3);
+        fake.thpQueryError = EPERM;
+        controls.stop();
+        CHECK(fake.thpMode == 3);
+        CHECK(controls.thpOptOut().active);  // still kept out, still the engine's
+        REQUIRE(controls.thpOptOut().error);
+        CHECK(controls.thpOptOut().error->errnoValue == EPERM);
+        fake.thpQueryError = 0;
+        controls.stop();
+        CHECK(fake.thpMode == 0);
         CHECK_FALSE(controls.thpOptOut().active);
     }
     SUBCASE("a refused release is reported, and the engine still owns it") {

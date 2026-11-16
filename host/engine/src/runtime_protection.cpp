@@ -283,7 +283,27 @@ void RuntimeProtection::releaseThp() {
     if (!thp_.active) return;
     // Undo only what the engine set, and only while it is still what the
     // engine set: an inherited setting, or one a plug-in changed since, stays.
-    if (thpSet_ != 0 && ops_->thpMode() == thpSet_ && ops_->thpDisable(0, 0) != 0) {
+    if (thpSet_ != 0) {
+        // Without the mode the engine cannot tell its own setting from one
+        // changed since: keep it, and its ownership, for a later stop.
+        if (const int mode = ops_->thpMode(); mode < 0) {
+            const int value = errno;
+            thp_.error = RuntimeProtectionError{
+                "engine.thp_opt_out",
+                std::string("prctl(PR_GET_THP_DISABLE): ") + std::strerror(value) + " (errno " +
+                    std::to_string(value) + ")",
+                "/thp_opt_out",
+                "the process stays out of transparent huge pages until a later stop can read "
+                "the mode, or it exits; nothing else is affected",
+                value};
+            return;
+        } else if (mode != thpSet_) {
+            thpSet_ = 0;
+            thp_ = {};
+            return;
+        }
+    }
+    if (thpSet_ != 0 && ops_->thpDisable(0, 0) != 0) {
         const int value = errno;
         thp_.error = RuntimeProtectionError{
             "engine.thp_opt_out",
