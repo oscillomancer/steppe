@@ -53,6 +53,23 @@ int body(int argc, char** argv) {
     const std::string mode = argv[2];
     if (mode == "normal") return 7;
     if (mode == "exit") std::_Exit(31);
+#if !defined(_WIN32)
+    if (mode == "fork-channel") {
+        const auto helper = ::fork();
+        if (helper < 0) return 2;
+        if (helper == 0) {
+            // Keep the diagnostic channel, but no protocol output pipe writer.
+            ::close(STDOUT_FILENO);
+            ::close(STDERR_FILENO);
+            char release;
+            while (::read(STDIN_FILENO, &release, 1) < 0 && errno == EINTR) {
+            }
+            ::_exit(0);
+        }
+        std::cout << helper << std::endl;
+        std::_Exit(31);
+    }
+#endif
     if (mode == "abort") std::abort();
     if (mode == "terminate") std::terminate();
     if (mode == "fault") actualFault();

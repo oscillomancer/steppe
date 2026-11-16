@@ -21,6 +21,9 @@ struct Native {
     void* shared = nullptr;
     std::uint32_t seen = 0;
     bool trusted = true;
+    // POSIX caches waitpid observation independently of channel ownership.
+    bool exited = false, statusKnown = false;
+    int status = 0;
 };
 Result<Native> launch(int argc, char** argv, const Packet& boot);
 Result<Native> adopt(std::string_view value, Packet& boot);

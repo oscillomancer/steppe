@@ -180,7 +180,35 @@ Result<Native> adopt(std::string_view value, Packet& boot) {
 }
 
 bool receive(Native& native, Packet& packet) {
-    return packetRead(static_cast<int>(native.channel), packet);
+    auto* bytes = reinterpret_cast<char*>(&packet);
+    std::size_t at = 0;
+    const int fd = static_cast<int>(native.channel);
+    for (;;) {
+        if (!native.exited) {
+            pid_t result;
+            do {
+                result = ::waitpid(static_cast<pid_t>(native.process), &native.status, WNOHANG);
+            } while (result < 0 && errno == EINTR);
+            native.statusKnown = result > 0;
+            native.exited = native.statusKnown || (result < 0 && errno == ECHILD);
+        }
+        // Drain complete packets already sent before exit, even if a forked
+        // helper retains the endpoint. Never block on a partial packet/EOF.
+        const auto n = ::recv(fd, bytes + at, sizeof(packet) - at, MSG_DONTWAIT);
+        if (n > 0) {
+            at += static_cast<std::size_t>(n);
+            if (at == sizeof(packet)) return valid(packet);
+            continue;
+        }
+        if (n == 0) return false;
+        if (errno == EINTR) continue;
+        if (errno != EAGAIN && errno != EWOULDBLOCK) return false;
+        if (native.exited) return false;
+        pollfd item{fd, POLLIN, 0};
+        // A bounded idle park observes process exit without installing a
+        // SIGCHLD hook or relying on EOF from every inherited descriptor.
+        if (::poll(&item, 1, 100) < 0 && errno != EINTR) return false;
+    }
 }
 bool publish(Native& native, const Packet& packet) noexcept {
     return ::send(static_cast<int>(native.channel), &packet, sizeof(packet),
@@ -200,13 +228,18 @@ void awaitAcknowledgement(Native& native) noexcept {
     (void)::pselect(fd + 1, &ready, nullptr, nullptr, &timeout, nullptr);
 }
 int wait(Native& native, bool& fatal) {
-    int status = 0;
-    pid_t result;
-    do {
-        result = ::waitpid(static_cast<pid_t>(native.process), &status, 0);
-    } while (result < 0 && errno == EINTR);
-    fatal = result >= 0 && WIFSIGNALED(status);
-    return result < 0 ? 1 : fatal ? 128 + WTERMSIG(status) : WEXITSTATUS(status);
+    if (!native.exited) {
+        pid_t result;
+        do {
+            result = ::waitpid(static_cast<pid_t>(native.process), &native.status, 0);
+        } while (result < 0 && errno == EINTR);
+        native.statusKnown = result > 0;
+        native.exited = true;
+    }
+    fatal = native.statusKnown && WIFSIGNALED(native.status);
+    return !native.statusKnown ? 1
+           : fatal             ? 128 + WTERMSIG(native.status)
+                               : WEXITSTATUS(native.status);
 }
 void close(Native& native) {
     if (native.channel >= 0) ::close(static_cast<int>(native.channel));

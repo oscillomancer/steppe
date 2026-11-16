@@ -32,6 +32,20 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
             if sanitized: assert report["cause"]==0,(mode,report)
             assert "private-project-sentinel" not in raw
             assert str(root) not in raw
+    if os.name != "nt":
+        # The worker exits while its fork helper retains the channel. The
+        # supervisor must finish before we release that helper. Timeout only
+        # aborts a hung fixture; status/report contents decide correctness.
+        root=base/"fork-channel"/"app"/"diagnostics"
+        p=subprocess.Popen([binary,str(root),"fork-channel"],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        helper=int(p.stdout.readline())
+        try:
+            assert p.wait(timeout=30)==31
+            assert len(list(root.glob("*.json")))==1
+        finally:
+            p.stdin.write(b"release");p.stdin.close()
+            if p.poll() is None: p.kill();p.wait()
+            p.stdout.close();p.stderr.close()
     # Invalid/partial bootstrap degrades to ordinary operation, with a watchdog
     # only to abort a hung fixture. No elapsed-time assertion.
     root=base/"bad-bootstrap"/"app"/"diagnostics"

@@ -25,7 +25,9 @@ A fixed native packet is bounded below PIPE_BUF; version/magic/type/length and
 role are validated. Only the inherited peer can send it; there is no named network
 listener. `ready` follows private marker/terminal setup, `expected_return` follows
 Main's return; terminal cause overrides expected return. The supervisor observes
-OS process exit independently. An unexpected exit without terminal packet remains
+OS process exit independently. POSIX checks/reaps the worker while parking on
+channel readiness; a forked helper retaining the channel cannot defer collection,
+and already queued terminal/return packets are drained before classification. An unexpected exit without terminal packet remains
 unknown, never guessed into a signal or plug-in attribution. Sanitizer deaths
 remain visible and do not get converted into successful app returns.
 
