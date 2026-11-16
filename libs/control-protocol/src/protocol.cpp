@@ -448,10 +448,11 @@ struct Server::Impl : std::enable_shared_from_this<Impl> {
                 return Error("rpc.path", "socket path is too long", name);
             }
             std::memcpy(addr.sun_path, name.c_str(), name.size() + 1);
-            int connected = probe != net::invalid ? net::connect(probe, addr) : -1;
+            const bool probeReady = probe != net::invalid && net::nonblocking(probe) == 0;
+            int connected = probeReady ? net::connect(probe, addr) : -1;
             int connectError = errno;
             if (probe != net::invalid) net::close(probe);
-            if (connected == 0 || !existing.socket ||
+            if (!probeReady || connected == 0 || !existing.socket ||
                 (connectError != ECONNREFUSED && connectError != ENOENT)) {
                 return Error("rpc.address_in_use", "socket address is in use", name,
                              "choose another instance or socket path");

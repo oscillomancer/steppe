@@ -570,7 +570,9 @@ an informational Linux-reference diff; DSP values are deterministic per platform
   drop-and-notify behavior.
 - Socket startup serializes the stale-path connect check and bind with an
   instance lock file. A connected address reports `rpc.address_in_use`; only
-  refused or missing sockets are stale. Failed bind never unlinks the path,
+  refused or missing sockets are stale. The connect probe is nonblocking on
+  every platform; a full backlog, pending connect or failed probe setup means
+  occupied, never stale. Failed bind never unlinks the path,
   and shutdown checks the socket's device and inode before unlinking.
 - MCP stdio framing retains no more than 16 MiB of one line. It discards the
   rest of an oversized frame through newline (or EOF) and returns `-32600`.

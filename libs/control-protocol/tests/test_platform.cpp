@@ -76,6 +76,59 @@ TEST_CASE("malformed request ids are never echoed into portable RPC error envelo
     CHECK(host.count == 0);
 }
 
+TEST_CASE("portable startup refuses an occupied socket even with an undrained backlog") {
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    rpc::Server server(commands, bus, [](auto) {});
+    std::filesystem::path dir;
+    for (std::uint64_t suffix = 0;; ++suffix) {
+        dir = std::filesystem::temp_directory_path() / ("rpc-backlog-" + std::to_string(suffix));
+        std::error_code error;
+        if (std::filesystem::create_directory(dir, error)) break;
+        REQUIRE((!error || error == std::errc::file_exists));
+    }
+    struct Cleanup {
+        std::filesystem::path dir;
+        ~Cleanup() { std::filesystem::remove_all(dir); }
+    } cleanup{dir};
+    struct Sockets {
+        std::vector<rpc::net::Socket> handles;
+        ~Sockets() {
+            for (auto fd : handles) rpc::net::close(fd);
+        }
+        rpc::net::Socket add() {
+            const auto fd = rpc::net::open();
+            REQUIRE(fd != rpc::net::invalid);
+            handles.push_back(fd);
+            return fd;
+        }
+    } sockets;
+    const auto path = dir / "endpoint.sock";
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    const auto name = rpc::net::pathName(path);
+    REQUIRE(name.size() < sizeof(address.sun_path));
+    std::memcpy(address.sun_path, name.c_str(), name.size() + 1);
+    const auto listener = sockets.add();
+    REQUIRE(rpc::net::bind(listener, address) == 0);
+    REQUIRE(rpc::net::listen(listener) == 0);
+    // The synthetic listener never accepts. On Linux this fills its 16-slot
+    // backlog; other platforms can report a pending connect earlier. Neither
+    // outcome proves an endpoint stale, so startup must conservatively refuse.
+    for (int i = 0; i < 64; ++i) {
+        const auto client = sockets.add();
+        REQUIRE(rpc::net::nonblocking(client) == 0);
+        (void)rpc::net::connect(client, address);
+    }
+    // An external test watchdog may abort a broken blocking implementation;
+    // elapsed time is never used to accept or reject endpoint ownership.
+    const auto result = server.start(path);
+    REQUIRE_FALSE(result);
+    CHECK(result.error().code == "rpc.address_in_use");
+    CHECK(std::filesystem::exists(path));
+}
+
 TEST_CASE("model loop portable waitable snapshots respect model-thread cancellation") {
     rpc::ModelLoop loop;
     WakeEvent event;
