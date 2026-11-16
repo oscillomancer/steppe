@@ -3,8 +3,8 @@
 ## Delivery boundary
 
 The approved nine-topic sequence is delivered in steps with a review stop after each.
-Topic 4 (thread traces) has landed for Linux only; Windows, macOS in-process capture and
-the offline resolver follow. Until later topics land, engine inventory, bridge
+Topic 4 (thread traces) has landed for Linux and is written for Windows, which native CI
+has yet to prove; macOS in-process capture and the offline resolver follow. Until later topics land, engine inventory, bridge
 correlation, restart UI, hang diagnostics and final release packaging are contracts,
 not working features.
 No crash path attempts a save or normal teardown. No automatic upload exists.
@@ -109,7 +109,7 @@ and symbols. `threads` has at most 128 entries, in order: the faulting thread (`
 the main thread (`main`), then the rest by thread id. Each is `{ordinal, role, state,
 frames, stop | reason}`; `ordinal` is its index, never an OS thread id. `state` is
 `walked` with `stop` (`end`, `depth`, `unreadable`, `not_executable`, `bad_frame_pointer`,
-`cycle`, `deadline`), or `unavailable` with `reason` (`ptrace_denied`, `thread_exited`,
+`cycle`, `deadline`), or `unavailable` with `reason` (`ptrace_denied`, `access_denied`, `thread_exited`,
 `deadline`, `registers_unreadable`, `maps_unreadable`, `unsupported`, `not_collected`) and
 no frames. A frame is `{module, offset, return}`: `module` an index into `modules`,
 `offset` the lowercase `0x` hex address minus the module's load bias (the link-time
@@ -142,6 +142,28 @@ handler. Nothing is left stopped when the acknowledgement is sent. Module identi
 read from the ELF headers in the target's memory through `process_vm_readv`, so a deleted
 or replaced file cannot mislead it. Formatting, JSON and file work happen after the
 acknowledgement.
+
+Windows collection also runs in the supervisor inside the terminal hold, on the same
+600 ms budget. The supervisor created the worker, so its process handle already allows
+suspending threads and reading memory: no privilege, policy or debug right is raised.
+Threads come from a toolhelp snapshot filtered to the worker's process id; the main
+thread is the earliest created. Each other thread is suspended, its context read, and
+resumed before the next; the faulting thread is not suspended, since it is parked in its
+last-chance filter, and is walked from the pc, stack and frame pointers in the capsule.
+A thread the OS refuses reports `access_denied`; one that exited, `thread_exited`.
+Frames come from the OS unwinder (`StackWalk64` over each image's unwind data, x64 only;
+other Windows architectures report the faulting thread `unsupported`), with memory read
+through `ReadProcessMemory`. All DbgHelp work is serialized under one lock and loads
+module images from their local files without symbols: no symbol path, no environment
+symbol path, no symbol server, no network. A module's file path stays inside the
+supervisor and is never recorded. Executable regions come from the worker's committed
+executable pages; a region with no image is generated code. Module identity is the PE
+CodeView record read from the image in the worker's memory: the PDB GUID in
+symbol-server order followed by the age as eight hex digits (40 lowercase hex characters),
+and `offset` is the address minus the load bias (load address minus the image's
+preferred base), the link-time address a symbolizer expects, as for ELF. The PDB path is
+never read. Stack-overflow and fail-fast faults keep the limits stated for the terminal hook:
+fail-fast bypasses the last-chance filter and yields no trace.
 
 ## Frame pointers
 

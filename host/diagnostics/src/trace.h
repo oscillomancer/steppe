@@ -55,6 +55,13 @@ struct Layout {
 std::optional<std::string> elfBuildId(const ReadMemory& read, std::uint64_t base,
                                       std::uint64_t* bias = nullptr);
 Layout buildLayout(const std::vector<Mapping>& mappings, const ReadMemory& read);
+// CodeView identity of the PE image loaded at `base` (64-bit images only): the PDB
+// GUID in symbol-server order followed by the age as eight hex digits, 40 lowercase
+// hex characters. The PDB path is never read. `bias` receives load address minus
+// the image's preferred base once the headers parsed, even when there is no CodeView
+// record. Every offset and count read from the image is bounded.
+std::optional<std::string> peDebugId(const ReadMemory& read, std::uint64_t base,
+                                     std::uint64_t* bias = nullptr);
 
 struct Frame {
     int module = -1;  // -1: unavailable, only its kind is recorded
@@ -74,6 +81,9 @@ struct Walk {
     std::vector<Frame> frames;
     Stop stop = Stop::End;
 };
+// The frame for an address, validated against the executable regions: none when the
+// address lies outside every one. For walkers that find frames some other way.
+std::optional<Frame> layoutFrame(const Layout& layout, std::uint64_t address, bool returnAddress);
 enum class Arch : std::uint8_t { X86_64, Arm64 };
 Arch hostArch();
 // Follows the frame-pointer chain from `regs`. Return addresses are validated
@@ -91,6 +101,7 @@ enum class Missing : std::uint8_t {
     MapsUnreadable,
     Unsupported,
     NotCollected,
+    AccessDenied,  // the OS refused access to the thread (Windows)
 };
 struct ThreadTrace {
     Role role = Role::Other;
@@ -111,6 +122,12 @@ struct TraceOps {
     std::function<bool()> expired;                     // the hold budget is spent
     std::function<std::optional<std::string>()> maps;  // mappings text, none if unreadable
     ReadMemory read;
+    // Optional replacements for platforms whose memory map is not a maps file or whose
+    // frames are not found by frame pointers (Windows). `layout` supersedes `maps`;
+    // `walk` supersedes the frame-pointer walker for every thread, the faulting one
+    // included, and receives the thread id so it can use that thread's own context.
+    std::function<std::optional<Layout>()> layout;
+    std::function<Walk(std::uint64_t tid, const Regs& regs, const Layout&)> walk;
     std::function<std::vector<std::uint64_t>()> threads;  // ascending thread ids
     std::function<Missing(std::uint64_t tid, Regs& regs)> stop;
     std::function<void(std::uint64_t tid)> release;

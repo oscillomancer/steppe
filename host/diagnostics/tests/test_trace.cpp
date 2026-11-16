@@ -566,3 +566,186 @@ TEST_CASE("a report with a trace is published, validated and retained like any o
     std::error_code ec;
     fs::remove_all(rootFor(id->c_str()), ec);
 }
+
+namespace {
+// A minimal PE32+ image: DOS header, NT headers with a 240-byte optional header and a
+// debug directory whose one CodeView entry points at an RSDS record.
+struct PeOptions {
+    std::uint16_t magic = 0x20b;
+    std::uint32_t peOffset = 0x80;
+    std::uint16_t optionalSize = 240;
+    std::uint32_t directories = 16;
+    std::uint32_t debugRva = 0x2000, debugSize = 28;
+    std::uint32_t entryType = 2, dataSize = 0x40, dataRva = 0x2100;
+    const char* signature = "RSDS";
+    std::uint32_t imageSize = 0x3000;
+};
+std::vector<unsigned char> pe(const PeOptions& o = {}) {
+    std::vector<unsigned char> bytes(0x2200, 0);
+    poke<std::uint16_t>(bytes, 0, 0x5a4d);
+    poke<std::uint32_t>(bytes, 0x3c, o.peOffset);
+    if (o.peOffset + 24 + 240 <= bytes.size()) {
+        std::memcpy(&bytes[o.peOffset], "PE\0\0", 4);
+        poke<std::uint16_t>(bytes, o.peOffset + 4 + 16, o.optionalSize);
+        const std::size_t opt = o.peOffset + 24;
+        poke<std::uint16_t>(bytes, opt, o.magic);
+        poke<std::uint64_t>(bytes, opt + 24, 0x140000000ULL);  // preferred base
+        poke<std::uint32_t>(bytes, opt + 56, o.imageSize);
+        poke<std::uint32_t>(bytes, opt + 108, o.directories);
+        poke<std::uint32_t>(bytes, opt + 112 + 6 * 8, o.debugRva);
+        poke<std::uint32_t>(bytes, opt + 112 + 6 * 8 + 4, o.debugSize);
+    }
+    if (o.debugRva >= 0x200 && o.debugRva + 28 <= bytes.size()) {
+        poke<std::uint32_t>(bytes, o.debugRva + 12, o.entryType);
+        poke<std::uint32_t>(bytes, o.debugRva + 16, o.dataSize);
+        poke<std::uint32_t>(bytes, o.debugRva + 20, o.dataRva);
+    }
+    if (o.dataRva >= 0x200 && o.dataRva + 24 <= bytes.size()) {
+        std::memcpy(&bytes[o.dataRva], o.signature, 4);
+        poke<std::uint32_t>(bytes, o.dataRva + 4, 0x12345678);  // Data1
+        poke<std::uint16_t>(bytes, o.dataRva + 8, 0xabcd);      // Data2
+        poke<std::uint16_t>(bytes, o.dataRva + 10, 0xef01);     // Data3
+        const unsigned char tail[8] = {0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01};
+        std::memcpy(&bytes[o.dataRva + 12], tail, 8);
+        poke<std::uint32_t>(bytes, o.dataRva + 20, 3);  // age
+        std::memcpy(&bytes[o.dataRva + 24], "C:\\secret\\project\\app.pdb", 25);
+    }
+    return bytes;
+}
+constexpr std::uint64_t kPeBase = 0x140100000ULL;
+}  // namespace
+
+TEST_CASE("a PE image yields its CodeView GUID and age, symbol-server ordered, and a bias") {
+    Image image;
+    image.put(kPeBase, pe());
+    std::uint64_t bias = 0;
+    const auto id = peDebugId(image.reader(), kPeBase, &bias);
+    REQUIRE(id);
+    CHECK(*id == "12345678abcdef0123456789abcdef0100000003");
+    CHECK(bias == 0x100000);
+    // The PDB path is never read, so it cannot reach a report.
+    for (const auto& [at, size] : image.reads) {
+        CHECK(size <= 1024);
+        CHECK(at < kPeBase + 0x2118);
+    }
+}
+
+TEST_CASE("malformed or truncated PE images yield no identity and bounded reads") {
+    const auto none = [](const PeOptions& o) {
+        Image image;
+        image.put(kPeBase, pe(o));
+        const auto id = peDebugId(image.reader(), kPeBase);
+        for (const auto& [at, size] : image.reads) {
+            CHECK(size <= 1024);
+            (void)at;
+        }
+        return !id.has_value();
+    };
+    CHECK_FALSE(none({}));
+    PeOptions o;
+    o = {};
+    o.magic = 0x10b;  // PE32
+    CHECK(none(o));
+    o = {};
+    o.peOffset = 0x20000;  // far beyond the allowed header distance
+    CHECK(none(o));
+    o = {};
+    o.peOffset = 8;  // inside the DOS header
+    CHECK(none(o));
+    o = {};
+    o.optionalSize = 100;  // too small to hold the debug directory entry
+    CHECK(none(o));
+    o = {};
+    o.optionalSize = 60000;
+    CHECK(none(o));
+    o = {};
+    o.directories = 3;
+    CHECK(none(o));
+    o = {};
+    o.debugRva = 0;
+    CHECK(none(o));
+    o = {};
+    o.debugSize = 12;  // smaller than one entry
+    CHECK(none(o));
+    o = {};
+    o.debugRva = 0x2f00;  // runs past SizeOfImage
+    o.imageSize = 0x2f10;
+    CHECK(none(o));
+    o = {};
+    o.entryType = 1;  // COFF, not CodeView
+    CHECK(none(o));
+    o = {};
+    o.dataSize = 8;  // too small for a CodeView record
+    CHECK(none(o));
+    o = {};
+    o.dataRva = 0;
+    CHECK(none(o));
+    o = {};
+    o.dataRva = 0x2ff0;  // record past SizeOfImage
+    CHECK(none(o));
+    o = {};
+    o.signature = "NB10";  // old PDB format
+    CHECK(none(o));
+    // Truncated memory: every prefix of the image fails cleanly.
+    const auto full = pe();
+    for (std::size_t keep :
+         {0, 1, 63, 64, 0x80, 0x90, 0x150, 0x1ff0, 0x2000, 0x2010, 0x2100, 0x2110}) {
+        Image image;
+        image.put(kPeBase, std::vector<unsigned char>(
+                               full.begin(), full.begin() + static_cast<std::ptrdiff_t>(keep)));
+        CHECK_FALSE(peDebugId(image.reader(), kPeBase).has_value());
+    }
+    // A header that parsed still reports its bias when there is no CodeView record.
+    Image image;
+    PeOptions noDebug;
+    noDebug.debugRva = 0;
+    image.put(kPeBase, pe(noDebug));
+    std::uint64_t bias = 0;
+    CHECK_FALSE(peDebugId(image.reader(), kPeBase, &bias).has_value());
+    CHECK(bias == 0x100000);
+}
+
+TEST_CASE("a platform layout and walker replace the maps file and the frame-pointer walk") {
+    auto p = process();
+    p.maps.clear();  // a maps file is not needed when a layout is supplied
+    auto ops = p.ops();
+    Layout supplied;
+    supplied.modules.push_back({std::string("00112233445566778899aabbccddeeff00000001"), 0x400000});
+    supplied.regions.push_back({0x400000, 0x500000, 0});
+    ops.layout = [&] { return std::optional<Layout>(supplied); };
+    std::vector<std::uint64_t> walked;
+    ops.walk = [&](std::uint64_t tid, const Regs& regs, const Layout& layout) {
+        walked.push_back(tid);
+        Walk walk;
+        auto frame = layoutFrame(layout, regs.pc, false);
+        REQUIRE(frame);
+        walk.frames.push_back(*frame);
+        walk.stop = Stop::End;
+        return walk;
+    };
+    const auto snapshot = collectTrace(ops, 11, {0x400200, 0x6ff0, 0x7000}, 10, Arch::X86_64);
+    REQUIRE(snapshot.threads.size() == 3);
+    CHECK(walked == std::vector<std::uint64_t>{11, 10, 12});  // fault, main, the rest
+    for (const auto& t : snapshot.threads) CHECK(t.missing == Missing::None);
+    CHECK(snapshot.threads[0].walk.frames[0].offset == 0x200);
+    REQUIRE(snapshot.modules.size() == 1);
+    CHECK(*snapshot.modules[0].id == "00112233445566778899aabbccddeeff00000001");
+    // A layout that cannot be read marks every thread, the faulting one included.
+    ops.layout = [] { return std::optional<Layout>(); };
+    walked.clear();
+    const auto none = collectTrace(ops, 11, {0x400200, 0x6ff0, 0x7000}, 10, Arch::X86_64);
+    for (const auto& t : none.threads) CHECK(t.missing == Missing::MapsUnreadable);
+    CHECK(walked.empty());
+}
+
+TEST_CASE("access_denied is a valid reason and validates strictly") {
+    auto p = process();
+    p.refuse[10] = Missing::AccessDenied;
+    const auto snapshot = collectTrace(p.ops(), 11, {0x400200, 0x6ff0, 0x7000}, 10, Arch::X86_64);
+    CHECK(snapshot.threads[1].missing == Missing::AccessDenied);
+    const auto modules = modulesJson(snapshot);
+    const auto threads = threadsJson(snapshot);
+    CHECK(traceShape(&modules, threads));
+    CHECK(json::writeCanonical(threads).find("\"access_denied\"") != std::string::npos);
+    CHECK(p.releases == 1);  // only the thread that was stopped is released
+}

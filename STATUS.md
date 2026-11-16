@@ -1488,9 +1488,11 @@ hold (600 ms budget under the worker's one-second wait): module build IDs plus
 module-relative offsets for the faulting, main and other threads (at most 128 threads and
 128 frames), with a reason for any thread it could not read (Yama scope 2+, a
 non-dumpable worker or a deadline). Foreign frames are best effort and frames of
-frameless code can be missing. Windows collection, macOS in-process capture and the
-offline symbol resolver are the remaining steps of topic 4 and are not delivered;
-Windows and macOS reports list their fault thread as unavailable (`unsupported`).
+frameless code can be missing. The Windows collector (suspend, `StackWalk64` under
+one DbgHelp lock without symbol paths or servers, PE CodeView GUID and age) is
+written but unproven until native CI runs it. macOS in-process capture and the offline
+symbol resolver are the remaining steps of topic 4 and are not delivered; macOS
+reports list their fault thread as unavailable (`unsupported`).
 Inventory, other owned-thread registration, bridge correlation, restart UI/hangs and
 release package verification remain later topics. Native macOS/Windows CI and
 signed Mach capability/collector-loss tests are due before merge/release.

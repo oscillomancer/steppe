@@ -15,6 +15,10 @@
 #define WIN32_LEAN_AND_MEAN
 #include <crtdbg.h>
 #include <windows.h>
+
+#include <chrono>
+#include <cstring>
+#include <fstream>
 #else
 #include <sys/resource.h>
 #include <unistd.h>
@@ -104,6 +108,69 @@ void writeExpected(const char* path) {
 }
 #endif
 #if defined(_WIN32)
+// Trace fixtures, as on Linux but without page alignment: the lifecycle test
+// attributes a frame to the nearest marked function start below it.
+std::atomic<unsigned> parked{0};
+std::atomic<bool> neverReleased{false};
+std::atomic<unsigned> sink{0};  // work after each call keeps it from being a tail call
+[[gnu::noinline]] void parkInner() {
+    while (!neverReleased.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    sink.fetch_add(1);
+}
+[[gnu::noinline]] void parkOuter() {
+    parked.fetch_add(1);
+    parkInner();
+    sink.fetch_add(1);
+}
+[[gnu::noinline]] void faultMiddle() {
+    actualFault();
+    sink.fetch_add(1);
+}
+[[gnu::noinline]] void faultOuter() {
+    faultMiddle();
+    sink.fetch_add(1);
+}
+// The executable's CodeView identity and load bias, read from its own headers with the
+// SDK's structures, independently of the collector's parser. The id is the PDB GUID in
+// symbol-server order followed by the age, 40 lowercase hex characters; empty when the
+// image has no CodeView record.
+void writeExpected(const char* path) {
+    const auto base = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
+    const std::uintptr_t bias = base - static_cast<std::uintptr_t>(nt->OptionalHeader.ImageBase);
+    const auto& directory = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
+    std::string id;
+    const auto* entries =
+        reinterpret_cast<const IMAGE_DEBUG_DIRECTORY*>(base + directory.VirtualAddress);
+    for (DWORD i = 0;
+         directory.VirtualAddress && i < directory.Size / sizeof(IMAGE_DEBUG_DIRECTORY); ++i) {
+        if (entries[i].Type != IMAGE_DEBUG_TYPE_CODEVIEW) continue;
+        const auto* record =
+            reinterpret_cast<const unsigned char*>(base + entries[i].AddressOfRawData);
+        if (std::memcmp(record, "RSDS", 4) != 0) continue;
+        GUID guid;
+        DWORD age;
+        std::memcpy(&guid, record + 4, sizeof(guid));
+        std::memcpy(&age, record + 20, sizeof(age));
+        char text[64];
+        std::snprintf(text, sizeof(text), "%08lx%04x%04x", static_cast<unsigned long>(guid.Data1),
+                      static_cast<unsigned>(guid.Data2), static_cast<unsigned>(guid.Data3));
+        id = text;
+        for (unsigned char byte : guid.Data4) {
+            std::snprintf(text, sizeof(text), "%02x", static_cast<unsigned>(byte));
+            id += text;
+        }
+        std::snprintf(text, sizeof(text), "%08lx", static_cast<unsigned long>(age));
+        id += text;
+        break;
+    }
+    auto offset = [&](auto function) { return reinterpret_cast<std::uintptr_t>(function) - bias; };
+    std::ofstream out(path);
+    out << "{\"build_id\":\"" << id << "\",\"parkOuter\":" << offset(&parkOuter)
+        << ",\"faultMiddle\":" << offset(&faultMiddle) << ",\"faultOuter\":" << offset(&faultOuter)
+        << ",\"pid\":" << GetCurrentProcessId() << "}\n";
+}
 // An earlier handler that deals with the exception, so it never reaches the
 // last-chance filter. A vectored handler, not __try: clang-cl rejects the
 // language extension under -Werror.
@@ -166,16 +233,21 @@ int body(int argc, char** argv) {
         });
         worker.join();
     }
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
     if (mode == "trace" || mode == "trace-nondumpable") {
         if (argc != 4) return 4;
         writeExpected(argv[3]);
+        const bool nondumpable = mode == "trace-nondumpable";  // Linux only
         std::thread first([] { parkOuter(); });
         std::thread second([] { parkOuter(); });
-        std::thread faulting([nondumpable = mode == "trace-nondumpable"] {
+        std::thread faulting([nondumpable] {
             (void)supple::diagnostics::registerCurrentThread();
             while (parked.load() != 3) supple::rt::relax();  // two threads plus main
+#if defined(__linux__)
             if (nondumpable) (void)::prctl(PR_SET_DUMPABLE, 0);
+#else
+            (void)nondumpable;
+#endif
             faultOuter();
         });
         parkOuter();  // the main thread parks too; the fault ends the process

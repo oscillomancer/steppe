@@ -63,6 +63,8 @@ const char* missingName(Missing why) {
     switch (why) {
         case Missing::PtraceDenied:
             return "ptrace_denied";
+        case Missing::AccessDenied:
+            return "access_denied";
         case Missing::ThreadExited:
             return "thread_exited";
         case Missing::Deadline:
@@ -218,6 +220,69 @@ std::optional<std::string> elfBuildId(const ReadMemory& read, std::uint64_t base
     return std::nullopt;
 }
 
+std::optional<std::string> peDebugId(const ReadMemory& read, std::uint64_t base,
+                                     std::uint64_t* bias) {
+    std::array<unsigned char, 64> dos{};
+    if (!read(base, dos.data(), dos.size()) || load<std::uint16_t>(dos.data()) != 0x5a4d)
+        return std::nullopt;  // "MZ"
+    const auto peOffset = load<std::uint32_t>(&dos[0x3c]);
+    if (peOffset < 64 || peOffset > 0x10000) return std::nullopt;
+    // "PE\0\0", the 20-byte COFF header, then the optional header.
+    std::array<unsigned char, 24> coff{};
+    if (!read(base + peOffset, coff.data(), coff.size()) ||
+        std::memcmp(coff.data(), "PE\0\0", 4) != 0)
+        return std::nullopt;
+    const auto optionalSize = load<std::uint16_t>(&coff[20]);
+    constexpr std::size_t kDebugEntry = 112 + 6 * 8;  // data directory 6, past 7 entries
+    if (optionalSize < kDebugEntry + 8 || optionalSize > 1024) return std::nullopt;
+    std::vector<unsigned char> optional(optionalSize);
+    if (!read(base + peOffset + 24, optional.data(), optional.size())) return std::nullopt;
+    if (load<std::uint16_t>(optional.data()) != 0x20b) return std::nullopt;  // PE32+
+    const auto preferred = load<std::uint64_t>(&optional[24]);
+    const auto imageSize = load<std::uint32_t>(&optional[56]);
+    const auto directories = load<std::uint32_t>(&optional[108]);
+    if (bias) *bias = base - preferred;
+    if (directories < 7 || imageSize == 0) return std::nullopt;
+    const auto debugRva = load<std::uint32_t>(&optional[kDebugEntry]);
+    const auto debugSize = load<std::uint32_t>(&optional[kDebugEntry + 4]);
+    constexpr std::size_t kEntry = 28, kMaxEntries = 16;
+    if (debugRva == 0 || debugSize < kEntry || std::uint64_t{debugRva} + debugSize > imageSize)
+        return std::nullopt;
+    const std::size_t count = std::min<std::size_t>(debugSize / kEntry, kMaxEntries);
+    std::vector<unsigned char> entries(count * kEntry);
+    if (!read(base + debugRva, entries.data(), entries.size())) return std::nullopt;
+    for (std::size_t i = 0; i < count; ++i) {
+        const unsigned char* entry = &entries[i * kEntry];
+        const auto type = load<std::uint32_t>(entry + 12);
+        const auto dataSize = load<std::uint32_t>(entry + 16);
+        const auto dataRva = load<std::uint32_t>(entry + 20);
+        if (type != 2 || dataSize < 24 || dataRva == 0 || std::uint64_t{dataRva} + 24 > imageSize)
+            continue;
+        std::array<unsigned char, 24> record{};  // "RSDS", GUID, age; the path is not read
+        if (!read(base + dataRva, record.data(), record.size()) ||
+            std::memcmp(record.data(), "RSDS", 4) != 0)
+            continue;
+        // GUID fields in symbol-server order: Data1, Data2, Data3 as numbers, Data4 as bytes.
+        std::array<unsigned char, 16> guid{};
+        const auto data1 = load<std::uint32_t>(&record[4]);
+        const auto data2 = load<std::uint16_t>(&record[8]);
+        const auto data3 = load<std::uint16_t>(&record[10]);
+        for (std::size_t b = 0; b < 4; ++b)
+            guid[b] = static_cast<unsigned char>((data1 >> (24 - 8 * b)) & 0xff);
+        guid[4] = static_cast<unsigned char>(data2 >> 8);
+        guid[5] = static_cast<unsigned char>(data2 & 0xff);
+        guid[6] = static_cast<unsigned char>(data3 >> 8);
+        guid[7] = static_cast<unsigned char>(data3 & 0xff);
+        std::memcpy(&guid[8], &record[12], 8);
+        const auto age = load<std::uint32_t>(&record[20]);
+        std::array<unsigned char, 4> ageBytes{
+            static_cast<unsigned char>(age >> 24), static_cast<unsigned char>((age >> 16) & 0xff),
+            static_cast<unsigned char>((age >> 8) & 0xff), static_cast<unsigned char>(age & 0xff)};
+        return hex(guid.data(), guid.size()) + hex(ageBytes.data(), ageBytes.size());
+    }
+    return std::nullopt;
+}
+
 Layout buildLayout(const std::vector<Mapping>& mappings, const ReadMemory& read) {
     Layout layout;
     // Group file-backed mappings by (device, inode): one module per file.
@@ -266,6 +331,10 @@ Layout buildLayout(const std::vector<Mapping>& mappings, const ReadMemory& read)
         if (clean.empty() || r.start >= clean.back().end) clean.push_back(r);
     layout.regions = std::move(clean);
     return layout;
+}
+
+std::optional<Frame> layoutFrame(const Layout& layout, std::uint64_t address, bool returnAddress) {
+    return frameAt(layout, address, returnAddress);
 }
 
 Arch hostArch() {
@@ -354,17 +423,29 @@ TraceSnapshot collectTrace(const TraceOps& ops, std::uint64_t faultTid, const Re
         snapshot.dropped = order.size() - kMaxThreads;
         order.resize(kMaxThreads);
     }
-    const auto text = ops.maps ? ops.maps() : std::nullopt;
     Layout layout;
-    const bool haveMaps = text && !text->empty();
-    if (haveMaps) layout = buildLayout(parseMaps(*text), ops.read);
+    bool haveMaps = false;
+    if (ops.layout) {
+        if (auto found = ops.layout()) {
+            layout = std::move(*found);
+            haveMaps = true;
+        }
+    } else {
+        const auto text = ops.maps ? ops.maps() : std::nullopt;
+        haveMaps = text && !text->empty();
+        if (haveMaps) layout = buildLayout(parseMaps(*text), ops.read);
+    }
+    const auto walkThread = [&](std::uint64_t tid, const Regs& regs) {
+        return ops.walk ? ops.walk(tid, regs, layout)
+                        : walkFrames(ops.read, layout, regs, arch, expired);
+    };
     for (const auto& [tid, role] : order) {
         ThreadTrace trace;
         trace.role = role;
         if (!haveMaps) {
             trace.missing = Missing::MapsUnreadable;
         } else if (role == Role::Fault) {
-            trace.walk = walkFrames(ops.read, layout, faultRegs, arch, expired);
+            trace.walk = walkThread(tid, faultRegs);
             trace.missing = Missing::None;
         } else if (expired()) {
             trace.missing = Missing::Deadline;
@@ -372,7 +453,7 @@ TraceSnapshot collectTrace(const TraceOps& ops, std::uint64_t faultTid, const Re
             Regs regs;
             const Missing why = ops.stop ? ops.stop(tid, regs) : Missing::Unsupported;
             if (why == Missing::None) {
-                trace.walk = walkFrames(ops.read, layout, regs, arch, expired);
+                trace.walk = walkThread(tid, regs);
                 trace.missing = Missing::None;
                 if (ops.release) ops.release(tid);
             } else {
@@ -512,8 +593,8 @@ bool traceShape(const json::Value* modules, const json::Value& threads) {
         } else {
             if (thread.find("stop") || frames->size() != 0 ||
                 !oneOf(thread.find("reason"),
-                       {"ptrace_denied", "thread_exited", "deadline", "registers_unreadable",
-                        "maps_unreadable", "unsupported", "not_collected"}))
+                       {"ptrace_denied", "access_denied", "thread_exited", "deadline",
+                        "registers_unreadable", "maps_unreadable", "unsupported", "not_collected"}))
                 return false;
         }
         for (const auto& frame : frames->asArray()) {

@@ -114,64 +114,108 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
         finally:
             parent.close();child.close()
 
-if sys.platform.startswith("linux") and not sanitized:
-    # Thread traces (ADR-0083, topic 4). The fixture parks three threads in marked
-    # functions and faults a fourth; it records where those functions are, and its
-    # build ID read independently of the collector.
-    def trace_run(mode):
-        root=base/mode/"app"/"diagnostics"
-        expected_file=base/(mode+"-expected.json")
-        run=subprocess.run([binary,str(root),mode,str(expected_file)],capture_output=True,timeout=60)
-        assert run.returncode!=0,(mode,run)
+    if sys.platform.startswith("linux") and not sanitized:
+        # Thread traces (ADR-0083, topic 4). The fixture parks three threads in marked
+        # functions and faults a fourth; it records where those functions are, and its
+        # build ID read independently of the collector.
+        def trace_run(mode):
+            root=base/mode/"app"/"diagnostics"
+            expected_file=base/(mode+"-expected.json")
+            run=subprocess.run([binary,str(root),mode,str(expected_file)],capture_output=True,timeout=60)
+            assert run.returncode!=0,(mode,run)
+            expected=json.loads(expected_file.read_text())
+            found=list(root.glob("*.json"))
+            assert len(found)==1,(mode,found,run.stderr)
+            raw=found[0].read_text()
+            return expected,raw,json.loads(raw)
+        def yama_scope():
+            try: return int(pathlib.Path("/proc/sys/kernel/yama/ptrace_scope").read_text())
+            except OSError: return 0
+        expected,raw,report=trace_run("trace")
+        assert report["kind"]=="crash" and report["terminal_context"],report
+        threads=report["threads"]
+        assert len(threads)==4,threads
+        assert [t["role"] for t in threads]==["fault","main","other","other"],threads
+        assert [t["ordinal"] for t in threads]==[0,1,2,3]
+        assert not report["complete"]
+        assert not re.search(r"\b%d\b"%expected["pid"],raw),"process id leaked"
+        for forbidden in ("/proc","\"tid\"","\"pid\"","registers"):
+            assert forbidden not in raw,forbidden
+        if yama_scope()>=2 and os.geteuid()!=0:
+            # Restricted tracing: partial but honest, never an empty success.
+            for t in threads:
+                assert t["state"] in ("walked","unavailable"),t
+                if t["state"]=="unavailable": assert t["reason"]=="ptrace_denied",t
+        else:
+            assert all(t["state"]=="walked" for t in threads),threads
+            exe=[i for i,m in enumerate(report["modules"]) if m["id"]==expected["build_id"]]
+            assert len(exe)==1,(report["modules"],expected)
+            def in_function(frame,name):
+                return frame["module"]==exe[0] and int(frame["offset"],16)>=expected[name] and int(frame["offset"],16)<expected[name]+4096
+            def index(frames,name):
+                for i,f in enumerate(frames):
+                    if in_function(f,name): return i
+                return None
+            fault=threads[0]["frames"]
+            middle,outer=index(fault,"faultMiddle"),index(fault,"faultOuter")
+            assert middle is not None and outer is not None and middle<outer,fault
+            assert not fault[0]["return"] and all(f["return"] for f in fault[1:]),fault
+            for t in threads[1:]:
+                assert index(t["frames"],"parkOuter") is not None,t
+            assert all(t["stop"] in ("end","not_executable","bad_frame_pointer","depth","unreadable","cycle") for t in threads),threads
+            for t in threads:
+                assert len(t["frames"])<=128
+        if os.geteuid()!=0:
+            # A non-dumpable worker refuses every external read: all threads unavailable.
+            expected,raw,report=trace_run("trace-nondumpable")
+            assert report["kind"]=="crash",report
+            assert len(report["threads"])>=1
+            for t in report["threads"]:
+                assert t["state"]=="unavailable" and t["reason"]=="maps_unreadable",t
+                assert t["frames"]==[],t
+
+    if os.name=="nt" and not sanitized:
+        # Thread traces on Windows: the same fixture parks three threads and faults a
+        # fourth. Offsets are attributed to the nearest marked function start below
+        # them (functions are not page aligned here), and extra OS threads the process
+        # may have are tolerated.
+        root=base/"trace"/"app"/"diagnostics"
+        expected_file=base/"trace-expected.json"
+        run=subprocess.run([binary,str(root),"trace",str(expected_file)],capture_output=True,timeout=120)
+        assert run.returncode!=0,run
         expected=json.loads(expected_file.read_text())
         found=list(root.glob("*.json"))
-        assert len(found)==1,(mode,found,run.stderr)
+        assert len(found)==1,(found,run.stderr)
         raw=found[0].read_text()
-        return expected,raw,json.loads(raw)
-    def yama_scope():
-        try: return int(pathlib.Path("/proc/sys/kernel/yama/ptrace_scope").read_text())
-        except OSError: return 0
-    expected,raw,report=trace_run("trace")
-    assert report["kind"]=="crash" and report["terminal_context"],report
-    threads=report["threads"]
-    assert len(threads)==4,threads
-    assert [t["role"] for t in threads]==["fault","main","other","other"],threads
-    assert [t["ordinal"] for t in threads]==[0,1,2,3]
-    assert not report["complete"]
-    assert not re.search(r"\b%d\b"%expected["pid"],raw),"process id leaked"
-    for forbidden in ("/proc","\"tid\"","\"pid\"","registers"):
-        assert forbidden not in raw,forbidden
-    if yama_scope()>=2 and os.geteuid()!=0:
-        # Restricted tracing: partial but honest, never an empty success.
-        for t in threads:
-            assert t["state"] in ("walked","unavailable"),t
-            if t["state"]=="unavailable": assert t["reason"]=="ptrace_denied",t
-    else:
-        assert all(t["state"]=="walked" for t in threads),threads
+        report=json.loads(raw)
+        assert report["kind"]=="crash" and report["terminal_context"],report
+        threads=report["threads"]
+        assert len(threads)>=4,threads
+        assert [t["role"] for t in threads[:2]]==["fault","main"],threads
+        assert all(t["role"]=="other" for t in threads[2:]),threads
+        assert [t["ordinal"] for t in threads]==list(range(len(threads)))
+        assert not report["complete"]
+        assert not re.search(r"\b%d\b"%expected["pid"],raw),"process id leaked"
+        for forbidden in (".exe",".dll",".pdb","\\\\","C:","\"tid\"","\"pid\"","registers"):
+            assert forbidden not in raw,forbidden
+        assert expected["build_id"] and len(expected["build_id"])==40,expected
         exe=[i for i,m in enumerate(report["modules"]) if m["id"]==expected["build_id"]]
         assert len(exe)==1,(report["modules"],expected)
-        def in_function(frame,name):
-            return frame["module"]==exe[0] and int(frame["offset"],16)>=expected[name] and int(frame["offset"],16)<expected[name]+4096
-        def index(frames,name):
-            for i,f in enumerate(frames):
-                if in_function(f,name): return i
-            return None
-        fault=threads[0]["frames"]
-        middle,outer=index(fault,"faultMiddle"),index(fault,"faultOuter")
-        assert middle is not None and outer is not None and middle<outer,fault
-        assert not fault[0]["return"] and all(f["return"] for f in fault[1:]),fault
-        for t in threads[1:]:
-            assert index(t["frames"],"parkOuter") is not None,t
-        assert all(t["stop"] in ("end","not_executable","bad_frame_pointer","depth","unreadable","cycle") for t in threads),threads
+        assert all(m["format"]=="pe" for m in report["modules"]),report["modules"]
+        names=("parkOuter","faultMiddle","faultOuter")
+        def owner(frame):
+            if frame["module"]!=exe[0]: return None
+            off=int(frame["offset"],16)
+            near=[(expected[n],n) for n in names if expected[n]<=off<expected[n]+512]
+            return max(near)[1] if near else None
+        def owners(thread): return [owner(f) for f in thread["frames"]]
+        assert threads[0]["state"]=="walked",threads[0]
+        assert "faultOuter" in owners(threads[0]),threads[0]
+        assert not threads[0]["frames"][0]["return"] and all(f["return"] for f in threads[0]["frames"][1:]),threads[0]
+        assert threads[1]["state"]=="walked" and "parkOuter" in owners(threads[1]),threads[1]
+        assert sum(1 for t in threads[2:] if t["state"]=="walked" and "parkOuter" in owners(t))>=2,threads
         for t in threads:
             assert len(t["frames"])<=128
-    if os.geteuid()!=0:
-        # A non-dumpable worker refuses every external read: all threads unavailable.
-        expected,raw,report=trace_run("trace-nondumpable")
-        assert report["kind"]=="crash",report
-        assert len(report["threads"])>=1
-        for t in report["threads"]:
-            assert t["state"]=="unavailable" and t["reason"]=="maps_unreadable",t
-            assert t["frames"]==[],t
+            if t["state"]=="unavailable": assert t["reason"] in ("access_denied","thread_exited","deadline","registers_unreadable"),t
 
 print("diagnostics lifecycle: normal/error/teardown/stdio/collector loss passed")
