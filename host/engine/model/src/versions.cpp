@@ -625,7 +625,7 @@ struct VersionStore::RetainedSize {
 VersionStore::RetainedSize& VersionStore::retainedSize() const {
     // Payload identities survive store copies/moves; version metadata uses
     // IDs rather than map-node addresses. Mutations detach a copied cache.
-    if (retainedSize_ && !retainedSize_.unique())
+    if (retainedSize_ && retainedSize_.use_count() != 1)
         retainedSize_ = std::make_shared<RetainedSize>(*retainedSize_);
     if (!retainedSize_) {
         retainedSize_ = std::make_shared<RetainedSize>();
