@@ -443,6 +443,48 @@ TEST_CASE("text output never carries control bytes from symbol files or reports"
     CHECK(json.find('\x1b') == std::string::npos);
 }
 
+TEST_CASE("text output escapes every byte that is not part of valid UTF-8") {
+    // A terminal in a Latin-1 locale obeys a raw 0x9b as CSI, and an overlong or truncated
+    // sequence is not text at all; well-formed UTF-8 is left alone.
+    struct Case {
+        std::string name, shown;
+    };
+    const std::vector<Case> cases = {
+        {"raw\x9b"
+         "31m",
+         "raw\\x9b"
+         "31m"},                                             // a lone C1 byte
+        {"a\x80z", "a\\x80z"},                               // a lone continuation byte
+        {"bad\xc0\x80x", "bad\\xc0\\x80x"},                  // overlong NUL
+        {"cut\xe2\x82|", "cut\\xe2\\x82|"},                  // truncated three-byte sequence
+        {"sur\xed\xa0\x80r", "sur\\xed\\xa0\\x80r"},         // a surrogate
+        {"big\xf4\x90\x80\x80", "big\\xf4\\x90\\x80\\x80"},  // beyond U+10FFFF
+        {"high\xff\xfe", "high\\xff\\xfe"},                  // never valid in UTF-8
+        {"c1\xc2\x9b"
+         "x",
+         "c1\\xc2\\x9b"
+         "x"},  // a well-formed C1 control
+        {"caf\xc3\xa9 \xe2\x82\xac \xf0\x9f\x8e\xb5", "caf\xc3\xa9 \xe2\x82\xac \xf0\x9f\x8e\xb5"},
+        {"\xd0\x90\xc2\xa0",
+         "\xd0\x90\xc2\xa0"},  // continuation bytes in 0x80-0x9f of a valid pair
+    };
+    for (const auto& c : cases) {
+        CAPTURE(c.name);
+        Dir dir("crash-resolver-utf8");
+        images::ElfSpec spec;
+        spec.buildId = kIdBytes;
+        spec.functions = {{c.name, 0x1100, 0x40}};
+        write(dir.path / "app", images::elf(spec));
+        ScanStats stats;
+        const auto candidates = scan({dir.path}, stats);
+        const auto report = parseReport(reportText("elf", kId));
+        REQUIRE(report);
+        const auto resolution = resolve(*report, candidates);
+        const auto out = formatText(*report, resolution);
+        CHECK(out.find(c.shown) != std::string::npos);
+    }
+}
+
 TEST_CASE("scratch folders are unique to a run") {
     // Two suites sharing a TMPDIR must never share a folder name.
     const auto first = tempdir::uniquePath("crash-resolver-x");

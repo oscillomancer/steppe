@@ -420,10 +420,40 @@ std::optional<std::string> Resolution::name(const ReportFrame& frame) const {
 }
 
 namespace {
-// Text for a terminal: a control byte, DEL or a C1 control (U+0080 to U+009F, two bytes in
-// UTF-8, which some terminals obey) becomes \xNN, so a hostile symbol file, report or file
-// name cannot set a window title, clear the screen or write the clipboard. JSON output has
-// its own escaping.
+// The length of the well-formed UTF-8 sequence that starts at text[i] (1 to 4), 0 if the
+// bytes there are not one: a lone continuation byte, an overlong form, a surrogate, a value
+// beyond U+10FFFF, a truncated sequence or a byte that is never valid.
+std::size_t utf8Length(std::string_view text, std::size_t i) {
+    const auto at = [&](std::size_t k) { return static_cast<unsigned char>(text[i + k]); };
+    const unsigned char lead = at(0);
+    if (lead < 0x80) return 1;
+    std::size_t length = 0;
+    unsigned char low = 0x80, high = 0xbf;  // the range the first continuation byte may take
+    if (lead >= 0xc2 && lead <= 0xdf) {
+        length = 2;
+    } else if (lead >= 0xe0 && lead <= 0xef) {
+        length = 3;
+        if (lead == 0xe0) low = 0xa0;   // no overlong forms
+        if (lead == 0xed) high = 0x9f;  // no surrogates
+    } else if (lead >= 0xf0 && lead <= 0xf4) {
+        length = 4;
+        if (lead == 0xf0) low = 0x90;   // no overlong forms
+        if (lead == 0xf4) high = 0x8f;  // nothing beyond U+10FFFF
+    } else {
+        return 0;
+    }
+    if (i + length > text.size()) return 0;
+    if (at(1) < low || at(1) > high) return 0;
+    for (std::size_t k = 2; k < length; ++k)
+        if (at(k) < 0x80 || at(k) > 0xbf) return 0;
+    return length;
+}
+
+// Text for a terminal: a control byte, DEL, a C1 control (U+0080 to U+009F, two bytes in
+// UTF-8, which some terminals obey) or any byte that is not part of well-formed UTF-8
+// (a terminal in a Latin-1 locale obeys a raw 0x9b as CSI) becomes \xNN, so a hostile
+// symbol file, report or file name cannot set a window title, clear the screen or write
+// the clipboard. JSON output has its own escaping.
 std::string printable(std::string_view text) {
     static constexpr char kHex[] = "0123456789abcdef";
     std::string out;
@@ -433,17 +463,22 @@ std::string printable(std::string_view text) {
         out += kHex[c >> 4];
         out += kHex[c & 15];
     };
-    for (std::size_t i = 0; i < text.size(); ++i) {
+    for (std::size_t i = 0; i < text.size();) {
         const auto c = static_cast<unsigned char>(text[i]);
         if (c < 0x20 || c == 0x7f) {
             escape(c);
-        } else if (c == 0xc2 && i + 1 < text.size() &&
-                   static_cast<unsigned char>(text[i + 1]) >= 0x80 &&
-                   static_cast<unsigned char>(text[i + 1]) <= 0x9f) {
-            escape(c);
-            escape(static_cast<unsigned char>(text[++i]));
+            ++i;
+            continue;
+        }
+        const std::size_t length = c < 0x80 ? 1 : utf8Length(text, i);
+        const bool c1 = length == 2 && c == 0xc2 && static_cast<unsigned char>(text[i + 1]) <= 0x9f;
+        if (length == 0 || c1) {
+            for (std::size_t k = 0; k < (length ? length : 1); ++k)
+                escape(static_cast<unsigned char>(text[i + k]));
+            i += length ? length : 1;
         } else {
-            out += text[i];
+            out.append(text.substr(i, length));
+            i += length;
         }
     }
     return out;
