@@ -9,6 +9,7 @@
 #include <supple/engine/realtime.h>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -367,6 +368,75 @@ TEST_CASE("an offline render of a bridged plug-in is the in-process render, bit 
     CHECK(bridged.audio.channels[1] == inProcess.audio.channels[1]);
     CHECK(*std::max_element(bridged.audio.channels[0].begin(), bridged.audio.channels[0].end()) >
           0.01f);
+}
+
+TEST_CASE(
+    "a render job takes the overrides too: a disabled plug-in is missing, a bridged one is "
+    "bridged") {
+    Bus f;
+    f.song();
+    const test::BridgeDeadline patient(test::kPatientBridgeMs);
+    int count = 0;
+    // render.mix with job:true renders a snapshot of the project on a job thread, in a pool of
+    // its own (renderSnapshot), and writes a file: read back as samples.
+    auto mixed = [&]() -> Result<audio::AudioData> {
+        const auto queued = f.call("render.mix", R"({"name":"job)" + std::to_string(++count) +
+                                                     R"(","end_beat":2,"job":true})");
+        const std::string id = queued.find("job")->asString();
+        for (int waited = 0; waited < 6000; ++waited) {  // 60 s, bounded and named below
+            f.bus->flushJobEvents();
+            auto state = f.bus->jobs().status(id);
+            REQUIRE(state);
+            const auto status = state->find("status")->asString();
+            if (status == "done") {
+                const auto* result = state->find("result");
+                REQUIRE(result);
+                REQUIRE(result->find("path"));
+                return audio::readAudio(result->find("path")->asString());
+            }
+            if (status == "failed") return Error("render.job_failed", json::writeCompact(*state));
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        FAIL("the render.mix job did not finish in 60 s");
+        return Error("render.job_timeout", "timed out");
+    };
+    auto peakOf = [](const audio::AudioData& a) {
+        float peak = 0;
+        for (float x : a.channels[0]) peak = std::max(peak, std::fabs(x));
+        return peak;
+    };
+    const auto gain = std::string(R"({"plugin":")") + kGain + R"(","mode":")";
+    auto normal = mixed();
+    REQUIRE_MESSAGE(normal, (normal ? std::string() : normal.error().toString()));
+    REQUIRE(peakOf(*normal) > 0.01f);
+
+    SUBCASE("disabled: the job renders the plug-in as missing") {
+        f.call("plugin.override", gain + R"(disable"})");
+        auto disabled = mixed();
+        REQUIRE_MESSAGE(disabled, (disabled ? std::string() : disabled.error().toString()));
+        // The gain at -12 dB lowers the level; the placeholder passes the audio through.
+        const float ratio = peakOf(*disabled) / peakOf(*normal);
+        CHECK(ratio > 3.5f);
+        CHECK(ratio < 4.5f);
+    }
+    SUBCASE("bridged: the job's plug-in is made on a bridge, and renders the same") {
+        f.call("plugin.override", gain + R"(bridge"})");
+        auto bridged = mixed();
+        REQUIRE_MESSAGE(bridged, (bridged ? std::string() : bridged.error().toString()));
+        const bool same = bridged->channels == normal->channels;  // not printed: it is long
+        CHECK(same);
+        // With no bridge to make, the job cannot make it: the override is what asked for one.
+        // (In process it would render as before, which is what the audio above cannot tell apart.)
+        const auto executable = host::bridgeExecutable();
+        host::setBridgeExecutable(fs::path("/nonexistent") / "bridge");
+        const auto without = mixed();
+        host::setBridgeExecutable(executable);
+        if (without) {
+            const bool alike = without->channels == normal->channels;
+            CHECK_FALSE(alike);
+        } else
+            CHECK_FALSE(without.error().code.empty());
+    }
 }
 
 TEST_CASE("changing an override while playing swaps the instance in both executors" *
