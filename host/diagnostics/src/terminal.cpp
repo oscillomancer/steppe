@@ -69,7 +69,10 @@ void handoff(Packet packet) noexcept {
     // No inventory event goes out from here on: on macOS the channel carries the capsule
     // right after this packet, and another thread's packet inside it would corrupt it. The
     // count of events that were not sent travels with this packet.
-    detail::closeInventory();
+    // A stream an announcement left torn cannot carry this packet (the supervisor would read it
+    // as the end of the torn one and stop): nothing is sent, and the process goes on dying as it
+    // would with no supervisor listening. A send still in progress is waited out first.
+    if (!detail::closeInventory()) return;
     packet.dropped = detail::inventoryDropped();
 #if defined(__APPLE__)
     // The hold's clock starts before the packet goes out. The supervisor's own budget

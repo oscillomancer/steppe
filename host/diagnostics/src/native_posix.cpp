@@ -284,7 +284,7 @@ bool publish(Native& native, const Packet& packet) noexcept {
     // finished the stream is torn, the supervisor's next packet fails its checks and it stops
     // reading, as it does for any damaged packet.
     std::size_t at = static_cast<std::size_t>(sent);
-    for (int attempts = 0; at < sizeof(packet) && attempts < 250; ++attempts) {
+    for (int attempts = 0; at < sizeof(packet) && attempts < kPartSendPolls; ++attempts) {
         pollfd item{fd, POLLOUT, 0};
         const int ready = ::poll(&item, 1, 1);
         if (ready < 0 && errno != EINTR) break;

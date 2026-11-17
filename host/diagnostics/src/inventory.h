@@ -32,8 +32,13 @@ namespace supple::diagnostics::detail {
 // incident and role. Once, after the Ready packet; later calls do nothing.
 void installInventory(const Native& native, const Packet& boot);
 // A terminal handoff is about to use the channel: no further event is sent, and the ones
-// being sent are given a moment (bounded) to finish. Async-signal-safe.
-void closeInventory() noexcept;
+// being sent are waited out for as long as a send can take (a part-sent packet is finished
+// for up to kPartSendPolls ms), so the terminal packet never lands inside another packet.
+// Returns false when a send left the stream torn (a part of a packet is in it for good): the
+// terminal packet would be read as the rest of that one and rejected, so the caller sends
+// nothing. A send still running when the bound ends is not known to be torn: true.
+// Async-signal-safe.
+bool closeInventory() noexcept;
 // Tests only: forgets the installed sink, the closed gate and the drop count, and replaces the
 // function that sends a packet (null restores publish()).
 void resetInventoryForTests(bool (*publishFn)(Native&, const Packet&) noexcept);

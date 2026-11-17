@@ -149,10 +149,16 @@ void resetInventoryForTests(bool (*publishFn)(Native&, const Packet&) noexcept) 
     gNamesGivenUp.store(false);
 }
 
-void closeInventory() noexcept {
+bool closeInventory() noexcept {
     gClosed.store(true);  // seq_cst
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+    // As long as publish() may spend finishing a part-sent packet, and a little more for the
+    // thread that is doing it to be scheduled: a shorter wait could write this process's
+    // terminal packet into the middle of that one (macOS takes part of a packet).
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(kPartSendPolls) + std::chrono::milliseconds(50);
     while (gSenders.load() != 0 && std::chrono::steady_clock::now() < deadline) yieldThread();
+    // Every sender has left, so what it wrote to gNative is visible (its decrement released it).
+    return gSenders.load() != 0 || !gNative.torn;
 }
 
 std::uint32_t inventoryDropped() noexcept { return gDropped.load(std::memory_order_relaxed); }

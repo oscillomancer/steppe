@@ -2,9 +2,12 @@
 // Copyright (c) 2026 Supple Audio
 #include <doctest/doctest.h>
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstring>
 #include <initializer_list>
 #include <string>
+#include <thread>
 #include "../src/inventory.h"
 #include "../src/native.h"
 #if !defined(_WIN32)
@@ -467,6 +470,51 @@ TEST_CASE("a torn stream closes the sink for good; a merely full one does not") 
     diagctx::announceRemove(1);
     CHECK(gHookCalls == 3);  // nothing was sent, nothing waited
     CHECK(inventoryDropped() == 2 + 1 + 5 + 1);
+    resetInventoryForTests(nullptr);
+}
+
+namespace {
+std::atomic<bool> gSlowStarted{false}, gSlowFinished{false};
+// A send that takes a while, as one finishing a part-sent packet does on macOS (up to 250 ms).
+bool slowPublish(Native&, const Packet&) noexcept {
+    gSlowStarted.store(true);
+    std::this_thread::sleep_for(std::chrono::milliseconds(160));
+    gSlowFinished.store(true);
+    return true;
+}
+}  // namespace
+
+TEST_CASE("closing the inventory waits out a send as long as a part-sent packet can take") {
+    Native native;
+    Packet boot = base();
+    resetInventoryForTests(&slowPublish);
+    installInventory(native, boot);
+    gSlowStarted.store(false);
+    gSlowFinished.store(false);
+    std::thread announcer([] { diagctx::announceState(1, diagctx::InstanceState::Active); });
+    while (!gSlowStarted.load()) std::this_thread::yield();
+    // The terminal packet goes out right after this returns: the send in progress must be done
+    // by then, or the two packets interleave in the stream (the wait used to give up at 100 ms).
+    CHECK(closeInventory());
+    CHECK(gSlowFinished.load());
+    announcer.join();
+    resetInventoryForTests(nullptr);
+}
+
+TEST_CASE("closing the inventory says when a send left the stream torn") {
+    Native native;
+    Packet boot = base();
+    resetInventoryForTests(&hookPublish);
+    installInventory(native, boot);
+    gHookTears = false;
+    diagctx::announceState(1, diagctx::InstanceState::Active);  // lost, but the stream is whole
+    CHECK(closeInventory());
+    resetInventoryForTests(&hookPublish);
+    installInventory(native, boot);
+    gHookTears = true;
+    diagctx::announceState(1, diagctx::InstanceState::Active);
+    CHECK_FALSE(closeInventory());  // the terminal packet must not be sent into it
+    gHookTears = false;
     resetInventoryForTests(nullptr);
 }
 
