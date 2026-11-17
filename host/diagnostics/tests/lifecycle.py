@@ -30,6 +30,21 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
                 if mode=="terminate": assert report["cause"]==3,report
                 if mode in ("fault","thread-fault","stack"): assert report["terminal_context"],(mode,report)
             if mode in ("killed","failfast"): assert not report["terminal_context"],report
+            if mode in ("fault","thread-fault","terminate","abort") and not sanitized and sys.platform=="darwin":
+                # macOS reads its own threads in the terminal handler (ADR-0083, topic 4):
+                # the fault entry is walked, in an image dyld lists, with its Mach-O UUID.
+                threads=report["threads"]
+                assert threads and threads[0]["role"]=="fault" and threads[0]["state"]=="walked",(mode,report)
+                assert len(threads[0]["frames"])>=2,(mode,threads[0])
+                assert all(t["role"]!="fault" for t in threads[1:]),(mode,threads)
+                assert [t["ordinal"] for t in threads]==list(range(len(threads)))
+                assert report["modules"] and all(m["format"]=="macho" for m in report["modules"]),(mode,report["modules"])
+                assert any(m["id"] and re.fullmatch("[0-9a-f]{32}",m["id"]) for m in report["modules"]),report["modules"]
+                assert threads[0]["frames"][0].get("module") is not None,(mode,threads[0])
+                for forbidden in ("/Users","\"tid\"","\"pid\"","registers"): assert forbidden not in raw,(mode,forbidden)
+                for t in threads:
+                    assert len(t["frames"])<=128
+                    if t["state"]=="unavailable": assert t["reason"] in ("thread_exited","access_denied","registers_unreadable","deadline","unsupported"),t
             if mode in ("terminate","abort") and not sanitized and (sys.platform.startswith("linux") or os.name=="nt"):
                 # The calling thread is the fault entry and is read from the live thread
                 # (terminate and abort capture no registers): its real stack, not a
