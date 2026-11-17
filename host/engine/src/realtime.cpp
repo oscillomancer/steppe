@@ -317,7 +317,9 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
         return started;
     }
     config_ = backend.config();  // what the device granted (e.g. its rate)
-    // Before any plan or sync runtime is published, so their release orders it.
+    // Before any plan or sync runtime is published, so their release orders
+    // it for every reader that loads it after acquiring one. BridgeCycle
+    // loads it at the top of a cycle, before the plan: see there.
     deviceRate_.store(config_.sampleRate, std::memory_order_relaxed);
     hardwareMidi_->prepare(config_.sampleRate, config_.outputs);
     backend_ = &backend;
@@ -1524,6 +1526,12 @@ void Engine::cycle(const float* const* in, float* const* out, std::uint32_t fram
     // ADR-0081: bridged calls on this thread, and on the live helpers serving
     // this cycle, wait no later than the cycle's start plus its period or
     // 2 ms, whichever is larger. A cycle with a late call ran past its period.
+    // The period is fixed here, before any bridged call (the final callback
+    // below stops plug-ins), so before the cycle acquires its plan: in the
+    // one cycle that first adopts a plan, a callback preempted between here
+    // and that acquire for longer than the rest of start() and a whole load()
+    // may still read the requested rate, and that cycle's deadline is off by
+    // the requested-to-granted ratio. Later cycles read the granted rate.
     struct BridgeCycle {
         Engine& engine;
         std::uint64_t late = host::bridgeLateCalls();
