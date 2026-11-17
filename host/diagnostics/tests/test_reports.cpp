@@ -326,6 +326,23 @@ TEST_CASE("a marker with no holder and no report is an unreported run; a held on
     CHECK(listing->liveRuns == 0);
     CHECK(listing->unreported.size() == 2);
 }
+TEST_CASE("unreported runs are listed newest first by the time read once, ties by incident") {
+    Root root;
+    for (unsigned id : {1, 2, 3, 4}) staleMarker(root, id);
+    const auto now = fs::file_time_type::clock::now();
+    fs::last_write_time(file(root, 1, ".run"), now - std::chrono::hours(3));
+    fs::last_write_time(file(root, 2, ".run"), now - std::chrono::hours(1));
+    fs::last_write_time(file(root, 3, ".run"), now - std::chrono::hours(2));
+    fs::last_write_time(file(root, 4, ".run"), now - std::chrono::hours(2));
+    auto listing = listReports(root.path);
+    REQUIRE(listing);
+    REQUIRE(listing->unreported.size() == 4);
+    std::vector<std::string> order;
+    for (const auto& run : listing->unreported) order.push_back(run.incident);
+    CHECK(order == std::vector<std::string>{name(2), name(4), name(3), name(1)});
+    for (std::size_t i = 1; i < listing->unreported.size(); ++i)
+        CHECK(listing->unreported[i - 1].started >= listing->unreported[i].started);
+}
 TEST_CASE("a marker still being created is live, however its lock looks") {
     Root root;
     // The creator takes its lock before it writes: an empty marker is one being created.

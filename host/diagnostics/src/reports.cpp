@@ -229,15 +229,11 @@ Result<ReportListing> listReports(const fs::path& directory) {
         return a.written == b.written ? a.incident > b.incident : a.written > b.written;
     });
     // Markers carry no time of their own that a test or a user could rely on: file times order
-    // them.
-    const auto markerTime = [](const UnreportedRun& r) {
-        std::error_code e;
-        return fs::last_write_time(r.marker, e);
-    };
+    // them, as read once above (a comparator that read them again could meet a marker removed or
+    // rewritten between two comparisons, which is not an ordering).
     std::sort(listing.unreported.begin(), listing.unreported.end(),
-              [&](const auto& a, const auto& b) {
-                  const auto ta = markerTime(a), tb = markerTime(b);
-                  return ta == tb ? a.incident > b.incident : ta > tb;
+              [](const auto& a, const auto& b) {
+                  return a.started == b.started ? a.incident > b.incident : a.started > b.started;
               });
     return listing;
 }
