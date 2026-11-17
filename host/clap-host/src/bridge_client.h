@@ -77,6 +77,9 @@ class BridgeProcess {
             refreshOnly_.push_back(member);
     }
     std::vector<RemoteInstance*> members_;  // main only, includes retired instances
+    // Ids an ACK may name beyond members_: destroys in flight. Longer lists
+    // are unreadable (review round 26: they cost O(count x members) on main).
+    static constexpr std::size_t kAckSlack = 16;
     std::mutex subscribersMutex_;
     std::map<MainThreadWake*, std::size_t> subscribers_;
     std::atomic<int> pid_{-1};

@@ -25,6 +25,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <mutex>
 #include <sstream>
 #include <thread>
 #include <vector>
@@ -2130,6 +2131,90 @@ TEST_CASE("remote subscribed snapshot consumers skip IPC on unrelated app wakes"
             CHECK(calls.load() - initial == 8);
         }
     }
+}
+
+namespace {
+// A scripted bridge with members 1, 2 and 3 on one wake: after the first pass a
+// delivery is made, the ACK answered with `ack`, and member 1 serviced. Returns
+// the instance ids of the Service requests, in order.
+std::vector<std::uint32_t> servicedAfterAck(const std::vector<std::uint32_t>& ack, bool& failed) {
+    int sockets[2];
+    REQUIRE(::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets) == 0);
+    auto process = BridgeTestAccess::adopt(sockets[0], -1);
+    std::mutex m;
+    std::vector<std::uint32_t> serviced;
+    struct Peer {
+        int socket;
+        std::thread thread;
+        ~Peer() {
+            ::shutdown(socket, SHUT_RDWR);
+            thread.join();
+            ::close(socket);
+        }
+    } peer{sockets[1], std::thread([&, s = sockets[1]] {
+               std::uint32_t op = 0, id = 0;
+               std::vector<std::uint8_t> payload;
+               while (bridge::recvFrame(s, op, id, payload)) {
+                   bridge::Writer reply;
+                   switch (static_cast<bridge::Op>(op)) {
+                       case bridge::Op::Service: {
+                           reply.bytes.resize(35);
+                           std::lock_guard lock(m);
+                           serviced.push_back(id);
+                           break;
+                       }
+                       case bridge::Op::TakeIdleOutputs:
+                           reply.bytes.resize(12);
+                           break;
+                       case bridge::Op::EditorRequests:
+                           reply.bytes.resize(29);
+                           break;
+                       case bridge::Op::AckNotifications:
+                           reply.u32(static_cast<std::uint32_t>(ack.size()));
+                           for (const auto named : ack) reply.u32(named);
+                           break;
+                       default:
+                           break;
+                   }
+                   if (!bridge::sendFrame(s, 0, id, reply.bytes)) break;
+               }
+           })};
+    MainThreadWake wake;
+    auto a = BridgeTestAccess::controlPlane(process);
+    auto b = BridgeTestAccess::controlPlane(process);
+    auto c = BridgeTestAccess::controlPlane(process);
+    BridgeTestAccess::setId(*b, 2);
+    BridgeTestAccess::setId(*c, 3);
+    for (auto* member : {a.get(), b.get(), c.get()}) member->setMainThreadWake(wake);
+    Instance::Notifications notes;
+    std::vector<std::string> log;
+    a->service(notes, log);  // the first pass: every member
+    {
+        std::lock_guard lock(m);
+        serviced.clear();
+    }
+    BridgeTestAccess::deliver(*process);
+    a->service(notes, log);
+    failed = process->failed();
+    std::lock_guard lock(m);
+    return serviced;
+}
+}  // namespace
+
+TEST_CASE("an ACK's named instances are pulled once each, in order, and a long list pulls all") {
+    // Review round 26: the pulls were sorted by address, so their order
+    // changed from run to run, and a count was bounded only by the message
+    // size, costing count x members comparisons on main.
+    bool failed = false;
+    CHECK(servicedAfterAck({3, 2, 3, 2}, failed) == std::vector<std::uint32_t>{3, 2});
+    CHECK_FALSE(failed);
+    const std::size_t readable = 3 + 16;  // members plus the slack for destroys in flight
+    CHECK(servicedAfterAck(std::vector<std::uint32_t>(readable, 2), failed) ==
+          std::vector<std::uint32_t>{2});
+    CHECK_FALSE(failed);
+    const auto all = servicedAfterAck(std::vector<std::uint32_t>(readable + 1, 2), failed);
+    CHECK(all == std::vector<std::uint32_t>{1, 2, 3});  // unreadable: every member
+    CHECK_FALSE(failed);
 }
 
 TEST_CASE(

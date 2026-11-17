@@ -256,12 +256,18 @@ bool BridgeProcess::refresh(const RemoteInstance* self) {
             if (auto reply = call(Op::AckNotifications, 0, Writer{})) {
                 Reader r(reply->data(), reply->size());
                 const std::uint32_t count = r.u32();
-                for (std::uint32_t i = 0; i < count && r.ok(); ++i) {
-                    const std::uint32_t id = r.u32();
-                    for (auto* member : members_)
-                        if (member->instanceId_ == id) only.push_back(member);
+                // The bridge names each of its instances at most once; a
+                // longer list is unreadable, and refreshes every member.
+                if (count <= members_.size() + kAckSlack) {
+                    for (std::uint32_t i = 0; i < count && r.ok(); ++i) {
+                        const std::uint32_t id = r.u32();
+                        for (auto* member : members_)
+                            if (member->instanceId_ == id &&
+                                std::find(only.begin(), only.end(), member) == only.end())
+                                only.push_back(member);
+                    }
+                    named = r.done();
                 }
-                named = r.done();
             }
         }
         all = all || !named;
@@ -270,9 +276,7 @@ bool BridgeProcess::refresh(const RemoteInstance* self) {
         for (auto* member : members_) member->pullSnapshot();
         return true;
     }
-    std::sort(only.begin(), only.end());
-    only.erase(std::unique(only.begin(), only.end()), only.end());
-    for (auto* member : only) member->pullSnapshot();
+    for (auto* member : only) member->pullSnapshot();  // queued, then named, each once
     return std::find(only.begin(), only.end(), self) != only.end();
 }
 

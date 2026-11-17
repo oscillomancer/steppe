@@ -19,6 +19,7 @@
 #include <chrono>
 #include <ostream>
 #include <thread>
+#include <vector>
 #include "../src/bridge_client.h"
 #include "../src/bridge_protocol.h"
 using namespace supple;
@@ -360,6 +361,30 @@ TEST_CASE("a publication from a bridged audio thread reaches its instance throug
     CHECK_FALSE((*x)->failed());
     (*x)->stopProcessing();
     (*x)->deactivate();
+}
+
+TEST_CASE("a destroyed bridged instance is not named by the next ACK") {
+    // Review round 26: a destroyed slot stayed listed until the next ACK, so
+    // instances created, changed and destroyed between refreshes grew the list.
+    setBridgeExecutable(BRIDGE_PATH);
+    auto process = createBridgeProcess();
+    REQUIRE(process);
+    const auto info = nativePlugin(FIXTURE_CLAP_PATH, "com.suppleaudio.test.edge");
+    auto x = Instance::create(info, {}, true, *process);
+    auto y = Instance::create(info, {}, true, *process);
+    REQUIRE(x);
+    REQUIRE(y);
+    for (auto* i : {x->get(), y->get()})  // each requests a flush: a publication
+        REQUIRE(i->loadState(std::array<std::uint8_t, 4>{0, 0, 0, 0}));
+    x->reset();
+    auto reply = (*process)->call(bridge::Op::AckNotifications, 0, bridge::Writer{});
+    REQUIRE(reply);
+    bridge::Reader r(reply->data(), reply->size());
+    const auto count = r.u32();
+    std::vector<std::uint32_t> named;
+    for (std::uint32_t i = 0; i < count && r.ok(); ++i) named.push_back(r.u32());
+    REQUIRE(r.done());
+    CHECK(named == std::vector<std::uint32_t>{2});  // y; x (id 1) was destroyed
 }
 
 TEST_CASE("native bridge malformed payloads and unexpected resources close cleanly") {

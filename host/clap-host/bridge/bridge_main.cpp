@@ -916,6 +916,7 @@ struct Bridge {
                 instance.reset();
                 unmap();
                 reply(Writer{});
+                if (slot.published) std::erase(published, slot.id);  // no ACK names it now
                 instances.erase(it);
                 return true;  // an idle pool-owned bridge must accept the next Create
         }

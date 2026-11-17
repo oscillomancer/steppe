@@ -273,7 +273,8 @@ even when no instance is activated. Existing operation numbers are preserved;
 SubscribeNotifications and AckNotifications are appended after TakeIdleOutputs.
 `AckNotifications` uses instance 0 and no payload/fd; since protocol 25 (26 on
 Windows) its reply names the instances with captures since the last ACK
-(`u32 count`, then `count` instance ids), each once.
+(`u32 count`, then `count` instance ids), each once. A destroyed instance
+leaves the list. A count above the parent's members plus 16 is unreadable.
 Protocol 12 appends the main-thread `PluginStatus` query after it (no payload,
 one JSON string reply); the data plane and earlier operation numbers are
 unchanged. See [plugin-status](plugin-status-extension.md).
@@ -300,7 +301,8 @@ until ACK. ACK acknowledges all publications captured before it and rearms;
 it does not consume the snapshots. The parent's parked process watcher drains
 the outward fd, publishes a pending delivery and calls subscribed app relays'
 notify(). Before pulling snapshots, parent main ACKs the drained delivery and
-refreshes the members the ACK names. A delivery with no ACK (a failure or the
+refreshes the members the ACK names: those queued by their own requests first,
+then the named ones in the ACK's order, each once. A delivery with no ACK (a failure or the
 child's death), the first pass, and a reply that cannot be read refresh every
 registered member, including retired/editor instances. A new member, a
 member's wake subscription and its own state-changing request refresh only
