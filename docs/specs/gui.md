@@ -308,6 +308,13 @@ edge (§4.14: the inspector and the history); separate
 floating windows for the FX chain, routing matrix and plugin GUIs. Render and
 other dialogs remain popups. Window layout is UI state (§1.2).
 
+The status line at the window's foot shows the strip count and the session
+version, then a note: "Preparing audio…", a preparation error, or the last
+message a view or an action reported. An action that fails (`AppActions`'
+`onError`: a menu entry, a key, a toolbar or transport button, an inspector
+field) puts its message there, and on stderr as before; the message stays
+until the next one.
+
 FX and routing are resizable utility windows owned by the main window, using
 the same SDL utility/parent mechanism as plugin editors (ADR-0005/0039).
 Each has its own GL context, bundled fonts, retained root, focus, damage cache

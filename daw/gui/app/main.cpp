@@ -425,8 +425,11 @@ int main(int argc, char** argv) {
     gui::AppActions appActions(registry, dispatcher, **app, uiState,
                                actions::Keymap::defaultFile(product::kSlug),
                                gui::ControlMap::defaultFile(product::kSlug));
-    appActions.onError = [](const std::string& message) {
+    // An action that fails says so in the status line (gui.md §4.1): stderr
+    // is not seen from Finder or a desktop entry. It is still written there.
+    appActions.onError = [&shell](const std::string& message) {
         std::fprintf(stderr, "%s\n", message.c_str());
+        shell.setStatus(message);
     };
     // Before the chrome: the toolbar and menus list the actions it adds.
     gui::RackWindow racks(rackPanel, appActions, dispatcher, **app, uiState);
