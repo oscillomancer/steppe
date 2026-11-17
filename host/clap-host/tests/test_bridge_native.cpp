@@ -320,6 +320,48 @@ TEST_CASE("native bridge notifications ACK and rearm without periodic parent pol
     (*remote)->deactivate();
 }
 
+TEST_CASE("a publication from a bridged audio thread reaches its instance through the named ACK") {
+    // Review round 26 (F1): every other test that sees a bridge-side
+    // publication also holds a pull of the same instance's own, which carries
+    // the data. Here X publishes from its audio thread (edge mode 44: process
+    // -> request_callback -> on_main_thread marks the state dirty) after its
+    // own pulls are consumed, so only an ACK that names X brings the change.
+    // Passes by completing; with an ACK that names nobody no further wake
+    // comes and awaitWake fails at its lost-event guard.
+    setBridgeExecutable(BRIDGE_PATH);
+    MainThreadWake wake;
+    auto process = createBridgeProcess();
+    REQUIRE(process);
+    const auto info = nativePlugin(FIXTURE_CLAP_PATH, "com.suppleaudio.test.edge");
+    auto x = Instance::create(info, {}, true, *process);
+    auto y = Instance::create(info, {}, true, *process);
+    REQUIRE(x);
+    REQUIRE(y);
+    (*x)->setMainThreadWake(wake);
+    (*y)->setMainThreadWake(wake);
+    REQUIRE((*x)->loadState(std::array<std::uint8_t, 4>{44, 0, 0, 0}));
+    REQUIRE((*x)->activate(48000, 1, 64));
+    REQUIRE((*x)->startProcessing());
+    awaitWake(wake);
+    for (Instance* i : {x->get(), y->get()}) {  // consumes the queued own-request pulls
+        i->serviceMainThread();
+        (void)i->takeNotifications();
+    }
+    Audio audio;
+    REQUIRE((*x)->process(audio.block()));
+    bool dirty = false;
+    while (!dirty) {
+        awaitWake(wake);
+        (*y)->serviceMainThread();  // another member's consumer runs the pass first
+        (void)(*y)->takeNotifications();
+        (*x)->serviceMainThread();
+        dirty = (*x)->takeNotifications().stateDirty;
+    }
+    CHECK_FALSE((*x)->failed());
+    (*x)->stopProcessing();
+    (*x)->deactivate();
+}
+
 TEST_CASE("native bridge malformed payloads and unexpected resources close cleanly") {
     setBridgeExecutable(BRIDGE_PATH);
     auto process = createBridgeProcess();
