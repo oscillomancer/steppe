@@ -235,10 +235,14 @@ and evaluation-order rules apply to helpers and their calls.
 | `void factoryPatches(Patches& p)` | Named knob presets |
 
 The runtime calls hooks; scripts do not call them. `sampleRate()`,
-`maxBlockSize()` (32), `channels()`, `transport()`, `seed()` and
-`trace(name, value[, i])` are available. `transport()` gives `playing`,
-`tempo`, `beats`, `barStart`, `timeSigNumerator`, `timeSigDenominator` at
-the block's start. `offline()` exists; making sound depend on it defeats
+`maxBlockSize()` (32), `channels()`, `transport()`, `gridTransport()`,
+`seed()` and `trace(name, value[, i])` are available. Both transports give
+`playing`, `tempo`, `beats`, `barStart`, `timeSigNumerator`,
+`timeSigDenominator` and `offset`, the frames from where they were read to
+the block's first frame. `transport()` is read at the block's start
+(offset 0), and computed, as it always was; `gridTransport()` at the start of the block's
+grid interval (offset 0 unless a host block split the interval).
+`offline()` exists; making sound depend on it defeats
 the same-render guarantee.
 
 The rack processes blocks of at most 32 frames on a grid aligned to the
@@ -247,6 +251,21 @@ of the host block size. Acyclic cables have no delay: a module's output
 reaches its dependents in the same block. In a feedback group, modules
 run one frame at a time in fixed id order. Cables going backwards in that
 order, including self-feedback, carry the previous frame (ADR-0062 §5).
+
+A host block need not end on the grid (after a seek off it, for one), so
+one grid interval can arrive as two calls, and the offline render splits
+it elsewhere or not at all. Keep what a module plays independent of where
+calls fall: advance state per frame, and do work you would do "once a
+block" (a random wander, retuning filters from a cable, planning partials)
+on a count of frames you keep yourself, every 32 frames from `prepare()`,
+reading the cables at that frame. Do not clear a "first frame" flag at the
+end of a call: test it for the first frame only. Compute frame i's song
+position from `const Transport t = gridTransport();` as
+`t.beats + (t.offset + i) * t.tempo / 60.0 / sampleRate()`: it is read at
+the grid interval's start and `offset` says how far into it the call
+starts, so the position is exact however calls fall. The same expression
+on `transport()` (offset 0, as modules written before `gridTransport()`
+have it) can differ in the last bits when a call starts off the grid.
 A process loop has a budget of `65536 * frames`; exhaustion stops that
 module, silences its outputs and reports the problem.
 
@@ -319,5 +338,10 @@ help on every port and parameter, musical defaults, grouped controls,
 smoothing on audio levels. Gate inputs use hysteresis (rise at ≥0.5,
 fall below 0.25); trigger outputs stay high for 1 ms. Keep per-channel
 state independent, use `seed()` for repeatability, and size memory in
-`prepare()`. Every stock module is tested against the JIT and interpreter
+`prepare()` only: a seek or a play from a position returns every module to
+what `prepare()` left (as a plugin's reset does), copying that state back
+in place on the audio thread, so a buffer sized elsewhere would allocate
+there. That state is kept twice, except a `Buffer` `prepare()` leaves all
+zero and a `DelayLine` it pushes nothing into: those are kept by size and
+cleared (a line's `clear()` costs nothing, however long the line). A loop wrap keeps the state. Every stock module is tested against the JIT and interpreter
 for the same bits as its native C++ build.

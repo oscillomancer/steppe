@@ -287,7 +287,7 @@ void registerMidiPortCommands(cmd::Registry& registry) {
         cmd::Command<cmd::NoArgs, json::Value> get;
         get.name = prefix + ".get";
         get.kind = cmd::Kind::Query;
-        get.exposure = cmd::Exposure::McpTool;
+        get.exposure = cmd::Exposure::McpExec;
         get.summary = output ? "Hardware MIDI outputs: settings, clock/MTC, timing, loss, warnings."
                              : "Hardware MIDI inputs, timing, settings, loss and startup warnings.";
         get.description =
@@ -320,7 +320,7 @@ void registerMidiPortCommands(cmd::Registry& registry) {
         cmd::Command<PortEdit, json::Value> set;
         set.name = prefix + ".set";
         set.kind = cmd::Kind::Action;
-        set.exposure = cmd::Exposure::McpTool;
+        set.exposure = cmd::Exposure::McpExec;
         set.summary = output ? "Change one MIDI output: enabled, offset, reset, clock, SPP, MTC."
                              : "Change one machine MIDI port's enabled state and timing offset.";
         set.description =

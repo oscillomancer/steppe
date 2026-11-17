@@ -92,9 +92,11 @@ class FxWindow {
     model::Id track() const { return track_; }
     model::Id selected() const { return selected_; }
     // The badge a row shows: how the effect runs (in-process / shared bridge /
-    // isolated), offline, and failed. Pure, so the composition is testable
-    // without an engine that can crash a bridge.
-    static std::string badgeText(const model::FxInstance& fx, bool failed);
+    // isolated; `effective` is where an fx on inherit runs, marked
+    // "(default)", ADR-0081), offline, and failed. Pure, so the composition
+    // is testable without an engine that can crash a bridge.
+    static std::string badgeText(const model::FxInstance& fx, model::Isolation effective,
+                                 bool failed);
     // The pins button's text (ADR-0020): "pins 1/2", "3/4 → 1/2", "key 3/4".
     static std::string pinsText(const model::PinMap& pins);
     // The pins menu of a track-chain effect: input pair, output pair, key.

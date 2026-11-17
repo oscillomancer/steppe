@@ -126,7 +126,7 @@ struct Arp : Module {
         out.setChannels(1);
         outGate.setChannels(1);
         const int n = min(16, max(pitch.channels(), gate.channels()));
-        const Transport t = transport();
+        const Transport t = gridTransport();
         const bool internal = !clock.connected();
         const double perFrame = t.tempo / 15.0 / sampleRate();
         const bool holding = latch.on();
@@ -164,7 +164,7 @@ struct Arp : Module {
             bool tick = false;
             if (internal) {
                 if (t.playing) {
-                    const int s = floorToInt(t.beats * 4.0 + i * perFrame + 1e-7);
+                    const int s = floorToInt(t.beats * 4.0 + (t.offset + i) * perFrame + 1e-7);
                     tick = s != lastSixteenth;
                     lastSixteenth = s;
                     period = max(1, roundToInt(sampleRate() * 15.0 / max(1.0, t.tempo)));

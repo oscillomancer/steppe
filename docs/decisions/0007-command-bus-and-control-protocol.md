@@ -130,3 +130,15 @@ successful empty callback.
 
 [ADR-0063](0063-command-warnings.md) defines how context warnings reach
 successful replies and their exported schemas across RPC, MCP and Lua.
+
+### MCP catalogue follow-up (2026-11-14)
+
+[ADR-0077](0077-mcp-core-tool-catalogue.md) bounds the default engine tool set,
+omits dedicated MCP output schemas while retaining registry result schemas,
+and defines compact discovery and the optional all-tools catalogue.
+
+### Registry index follow-up (2026-11-14)
+
+[ADR-0079](0079-registry-index-exposure.md) adds exposure metadata to registry.list
+so the proxy fetches only selected dedicated-tool descriptions at startup and
+resolves other contracts on demand.

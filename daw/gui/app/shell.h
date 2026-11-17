@@ -65,6 +65,8 @@ class Shell {
     const json::Value& inputs(bool force = false);
     // Shown by the app's status line when a command fails.
     std::function<void(const std::string&)> onError;
+    // Model-thread recording diagnostic, shown without stopping healthy targets.
+    void recordingError(const json::Value& payload);
     // The TCP's output click hands the matrix its strip and popup anchor.
     std::function<void(const model::Id&, const ui::Rect&)> onRouting;
     // The track's colour menu (model::kTrackColors and "None"), at `anchor`

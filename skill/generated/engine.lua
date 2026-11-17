@@ -310,6 +310,8 @@ q = nil
 ---@field plan_latency integer
 ---@field device_latency integer
 ---@field xruns integer
+---@field bridge_late integer
+---@field bridge_timing table
 ---@field midi_dropped integer
 ---@field midi_inputs any
 ---@field midi_outputs any
@@ -331,8 +333,11 @@ q = nil
 ---@field warnings (string|table)[]
 ---@field memory_lock table
 ---@field cpu_idle_latency table
+---@field thp_opt_out table
+---@field audio_page_faults table
 ---@field meter_drops table
 ---@field failed_fx string[]
+---@field bridge_threads_refused string[]
 ---@field dropped integer
 ---@field voice_dropped integer
 ---@field failed_errors any
@@ -351,6 +356,8 @@ q = nil
 ---@field plan_latency integer
 ---@field device_latency integer
 ---@field xruns integer
+---@field bridge_late integer
+---@field bridge_timing table
 ---@field midi_dropped integer
 ---@field midi_inputs any
 ---@field midi_outputs any
@@ -372,8 +379,11 @@ q = nil
 ---@field warnings (string|table)[]
 ---@field memory_lock table
 ---@field cpu_idle_latency table
+---@field thp_opt_out table
+---@field audio_page_faults table
 ---@field meter_drops table
 ---@field failed_fx string[]
+---@field bridge_threads_refused string[]
 ---@field dropped integer
 ---@field voice_dropped integer
 ---@field failed_errors any
@@ -427,6 +437,15 @@ q = nil
 ---@field mode? "trim"|"read"|"touch"|"latch"|"latch_preview"|"write"
 
 ---@class Steppe.env_set_result
+---@field warnings? table[]
+
+---@class Steppe.env_write_commit_args
+---@field env string Envelope id, e.g. "en_1".
+---@field after number
+---@field through number
+---@field points table[]
+
+---@class Steppe.env_write_commit_result
 ---@field warnings? table[]
 
 ---@class Steppe.fx_add_args
@@ -503,6 +522,7 @@ q = nil
 ---@field problems? any Current plugin problems: code, message, scope, line when known, hint, silent; scope host when unreadable
 ---@field sidechain_channels? integer The plug-in's key input: route.add {fx} feeds it
 ---@field latency_samples? integer The instance's reported latency, in samples
+---@field isolation_effective? string Where the instance runs: in_process, shared_bridge or dedicated; inherit resolves to the plug-in isolation preference (stock plug-ins in process), as the instance is made
 ---@field outputs_notes? boolean The loaded plug-in sends notes or MIDI: fx.set midi_output chooses replace or merge
 ---@field params_total? integer Plain parameters matching; at most 512 are listed.
 ---@field warnings? table[]
@@ -537,7 +557,7 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.fx_meters_args
----@field fx string
+---@field fx string Plugin instance id, e.g. "fx_1".
 ---@field from? "live"|"render" live: the playing instance; render: the last render.mix (default: "live")
 
 ---@class Steppe.fx_meters_result
@@ -546,15 +566,15 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.fx_move_args
----@field fx string
----@field track? string
+---@field fx string Plugin instance id, e.g. "fx_1".
+---@field track? string Track id, e.g. "tr_1".
 ---@field index integer
 
 ---@class Steppe.fx_move_result
 ---@field warnings? table[]
 
 ---@class Steppe.fx_param_get_args
----@field fx string
+---@field fx string Plugin instance id, e.g. "fx_1".
 ---@field param string
 
 ---@class Steppe.fx_param_get_result
@@ -572,7 +592,7 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.fx_patch_get_args
----@field fx string
+---@field fx string Plugin instance id, e.g. "fx_1".
 ---@field changed_only? boolean (default: false)
 
 ---@class Steppe.fx_patch_get_result
@@ -580,7 +600,7 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.fx_patch_list_args
----@field fx string
+---@field fx string Plugin instance id, e.g. "fx_1".
 
 ---@class Steppe.fx_patch_list_result
 ---@field patches any
@@ -597,7 +617,7 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.fx_patch_set_args
----@field fx string
+---@field fx string Plugin instance id, e.g. "fx_1".
 ---@field patch? any
 ---@field name? string
 
@@ -662,6 +682,13 @@ q = nil
 ---@field midi_output? "replace"|"merge"
 
 ---@class Steppe.fx_set_result
+---@field warnings? table[]
+
+---@class Steppe.fx_state_capture_args
+---@field fx string Plug-in id, e.g. "fx_1".
+---@field state string The state's blob hash, as the plug-in's state field holds it
+
+---@class Steppe.fx_state_capture_result
 ---@field warnings? table[]
 
 ---@class Steppe.group_add_args
@@ -759,7 +786,7 @@ q = nil
 ---@field warnings? (string|table)[]
 
 ---@class Steppe.item_apply_fx_args
----@field item string
+---@field item string Item id, e.g. "it_1".
 ---@field mode? string (default: "take")
 
 ---@class Steppe.item_apply_fx_result
@@ -778,7 +805,7 @@ q = nil
 
 ---@class Steppe.item_duplicate_args
 ---@field bypass_groups? boolean (default: false)
----@field item string
+---@field item string Item id, e.g. "it_1".
 ---@field to? number
 
 ---@class Steppe.item_duplicate_result
@@ -787,7 +814,7 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.item_explode_takes_args
----@field item string
+---@field item string Item id, e.g. "it_1".
 ---@field mode? string (default: "tracks")
 
 ---@class Steppe.item_explode_takes_result
@@ -849,7 +876,7 @@ q = nil
 
 ---@class Steppe.item_set_args
 ---@field bypass_groups? boolean (default: false)
----@field item string
+---@field item string Item id, e.g. "it_1".
 ---@field position? number
 ---@field bar? integer
 ---@field length? number
@@ -870,7 +897,7 @@ q = nil
 
 ---@class Steppe.item_split_args
 ---@field bypass_groups? boolean (default: false)
----@field item string
+---@field item string Item id, e.g. "it_1".
 ---@field at number
 ---@field snap? "none"|"zero_crossing" (default: "none")
 
@@ -914,13 +941,13 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.marker_remove_args
----@field id string
+---@field id string Marker id, e.g. "mk_1".
 
 ---@class Steppe.marker_remove_result
 ---@field warnings? table[]
 
 ---@class Steppe.marker_set_args
----@field id string
+---@field id string Marker id, e.g. "mk_1".
 ---@field pos? number
 ---@field name? string
 ---@field color? string
@@ -1071,6 +1098,7 @@ q = nil
 ---@field name string
 ---@field path string
 ---@field branch string
+---@field branches string[] Every branch the project holds; the file keeps them all
 ---@field sample_rate number
 ---@field tempo number
 ---@field meter string
@@ -1079,6 +1107,7 @@ q = nil
 ---@field generation integer
 ---@field recoverable integer
 ---@field autosave_available boolean
+---@field recoverable_sessions integer Unsaved projects earlier runs left behind (project.recoverable lists them)
 ---@field warnings? table[]
 
 ---@class Steppe.project_new_args
@@ -1089,6 +1118,7 @@ q = nil
 ---@field name string
 ---@field path string
 ---@field branch string
+---@field branches string[] Every branch the project holds; the file keeps them all
 ---@field sample_rate number
 ---@field tempo number
 ---@field meter string
@@ -1097,6 +1127,7 @@ q = nil
 ---@field generation integer
 ---@field recoverable integer
 ---@field autosave_available boolean
+---@field recoverable_sessions integer Unsaved projects earlier runs left behind (project.recoverable lists them)
 ---@field warnings? table[]
 
 ---@class Steppe.project_open_args
@@ -1106,6 +1137,7 @@ q = nil
 ---@field name string
 ---@field path string
 ---@field branch string
+---@field branches string[] Every branch the project holds; the file keeps them all
 ---@field sample_rate number
 ---@field tempo number
 ---@field meter string
@@ -1114,22 +1146,36 @@ q = nil
 ---@field generation integer
 ---@field recoverable integer
 ---@field autosave_available boolean
+---@field recoverable_sessions integer Unsaved projects earlier runs left behind (project.recoverable lists them)
 ---@field warnings? table[]
 
 ---@class Steppe.project_recover_args
 ---@field files? string[]
 ---@field track? string Track id, e.g. "tr_1".
+---@field session? string A session project.recoverable lists
+---@field autosave? boolean The saved project's newer autosave (default: false)
+---@field autosave_file? string With autosave: which one, e.g. autosave-3.json, as offered
 
 ---@class Steppe.project_recover_result
 ---@field recovered table[]
+---@field autosave? string The autosave it opened
 ---@field warnings? table[]
 
 ---@class Steppe.project_recoverable_result
 ---@field warnings? table[]
 ---@field recordings table[]
+---@field sessions table[]
+
+---@class Steppe.project_recoverable_delete_args
+---@field session string
+
+---@class Steppe.project_recoverable_delete_result
+---@field session string
+---@field warnings? table[]
 
 ---@class Steppe.project_save_args
 ---@field path? string
+---@field history? boolean Also keep undo and redo history (ADR-0076) (default: false)
 
 ---@class Steppe.project_save_result
 ---@field path string
@@ -1265,6 +1311,10 @@ q = nil
 ---@field name? string
 ---@field track? string
 
+---@class Steppe.record_commit_args
+---@field takes table[]
+---@field punch table
+
 ---@class Steppe.region_add_args
 ---@field start? number
 ---@field end? number
@@ -1280,13 +1330,13 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.region_remove_args
----@field id string
+---@field id string Region id, e.g. "rg_1".
 
 ---@class Steppe.region_remove_result
 ---@field warnings? table[]
 
 ---@class Steppe.region_set_args
----@field id string
+---@field id string Region id, e.g. "rg_1".
 ---@field start? number
 ---@field end? number
 ---@field name? string
@@ -1570,13 +1620,13 @@ q = nil
 ---@field mode? string (default: "audio")
 
 ---@class Steppe.route_remove_args
----@field route string
+---@field route string Route id, e.g. "sd_1".
 
 ---@class Steppe.route_remove_result
 ---@field warnings? table[]
 
 ---@class Steppe.route_set_args
----@field route string
+---@field route string Route id, e.g. "sd_1".
 ---@field from? string|table
 ---@field to? string|table
 ---@field to_midi? string Exact hardware MIDI output name; requires midi: {} and replaces to/fx.
@@ -1634,24 +1684,24 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.take_activate_args
----@field item string
----@field take? string
+---@field item string Item id, e.g. "it_1".
+---@field take? string Take id, e.g. "tk_1".
 ---@field index? integer
 
 ---@class Steppe.take_activate_result
 ---@field warnings? table[]
 
 ---@class Steppe.take_add_args
----@field item string
----@field from? string
+---@field item string Item id, e.g. "it_1".
+---@field from? string Take id, e.g. "tk_1".
 
 ---@class Steppe.take_add_result
 ---@field id string
 ---@field warnings? table[]
 
 ---@class Steppe.take_extract_args
----@field take string
----@field track string
+---@field take string Take id, e.g. "tk_1".
+---@field track string Track id, e.g. "tr_1".
 ---@field position? number Beats.
 
 ---@class Steppe.take_extract_result
@@ -1674,14 +1724,14 @@ q = nil
 ---@field sensitivity? number (default: 0.5)
 
 ---@class Steppe.take_list_args
----@field item string
+---@field item string Item id, e.g. "it_1".
 
 ---@class Steppe.take_list_result
 ---@field takes table[]
 ---@field warnings? table[]
 
 ---@class Steppe.take_remove_args
----@field take string
+---@field take string Take id, e.g. "tk_1".
 
 ---@class Steppe.take_remove_result
 ---@field item string
@@ -1689,7 +1739,7 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.take_set_args
----@field take string
+---@field take string Take id, e.g. "tk_1".
 ---@field gain_db? number|string Quantity strings are range-checked by the server.
 ---@field pan? number|string Quantity strings are range-checked by the server.
 ---@field channel_mode? "normal"|"reverse_stereo"|"mono_mix"|"left"|"right"
@@ -1832,8 +1882,8 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.track_move_args
----@field track string
----@field parent? string
+---@field track string Track id, e.g. "tr_1".
+---@field parent? string Track id, e.g. "tr_1".
 ---@field index? integer
 
 ---@class Steppe.track_move_result
@@ -2178,6 +2228,9 @@ q = nil
 ---@class Steppe.env.points
 ---@field set fun(args: Steppe.env_points_set_args): Steppe.env_points_set_result Replace an envelope's points (all of them, or those in a beat range).
 
+---@class Steppe.env.write
+---@field commit fun(args: Steppe.env_write_commit_args): Steppe.env_write_commit_result Record what a write pass wrote into an envelope as a replayable edit.
+
 ---@class Steppe.fx
 ---@field add fun(args: Steppe.fx_add_args): Steppe.fx_add_result Insert a plugin into a track's (or a take's) FX chain and return its id.
 ---@field copy fun(args: Steppe.fx_copy_args): Steppe.fx_copy_result Copy a plugin and its current settings into a track's FX chain.
@@ -2214,6 +2267,9 @@ q = nil
 ---@field list fun(args: Steppe.fx_preset_list_args): Steppe.fx_preset_list_result List a plugin's presets: its factory ones, then the user's.
 ---@field load fun(args: Steppe.fx_preset_load_args): Steppe.fx_preset_load_result Apply a factory or user preset to a plugin instance in one undo step.
 ---@field save fun(args: Steppe.fx_preset_save_args): Steppe.fx_preset_save_result Save a plugin instance's current settings as a named user preset.
+
+---@class Steppe.fx.state
+---@field capture fun(args: Steppe.fx_state_capture_args): Steppe.fx_state_capture_result Record a plug-in's own state change as a replayable edit.
 
 ---@class Steppe.group
 ---@field add fun(args: Steppe.group_add_args): Steppe.group_add_result Create a named track group with optional links and members.
@@ -2309,11 +2365,14 @@ q = nil
 ---@class Steppe.project
 ---@field get fun(): Steppe.project_get_result Show the project: name, rate, tempo, meter, file, version and branch.
 ---@field new fun(args?: Steppe.project_new_args): Steppe.project_new_result Start a new, empty project (replaces the current one and its history).
----@field open fun(args?: Steppe.project_open_args): Steppe.project_open_result Open a project file (replaces the current project and its history).
----@field recover fun(args?: Steppe.project_recover_args): Steppe.project_recover_result Put recordings a crash left out back into the project (one undo step).
----@field recoverable fun(): Steppe.project_recoverable_result List recordings a crash left out of the project.
+---@field open fun(args?: Steppe.project_open_args): Steppe.project_open_result Open a project file and its branches (replaces the current project).
+---@field recover fun(args?: Steppe.project_recover_args): Steppe.project_recover_result Put back what a crash left behind: recordings, or an unsaved project.
+---@field recoverable fun(): Steppe.project_recoverable_result List recordings and unsaved projects a crash left behind.
 ---@field save fun(args?: Steppe.project_save_args): Steppe.project_save_result Save the project (canonical JSON) to its file or a new path.
 ---@field set fun(args?: Steppe.project_set_args): Steppe.project_set_result Set project name, notes, Console 9, pan law, timebase or timecode.
+
+---@class Steppe.project.recoverable
+---@field delete fun(args: Steppe.project_recoverable_delete_args): Steppe.project_recoverable_delete_result Delete an unsaved project a crash left behind, with its recordings.
 
 ---@class Steppe.project.template
 ---@field delete fun(args: Steppe.project_template_delete_args): Steppe.project_template_delete_result Delete a saved project template by name.
@@ -2342,6 +2401,9 @@ q = nil
 ---@field list fun(args?: Steppe.rack_preset_list_args): table List rack presets, saved and factory: names and contents.
 ---@field load fun(args: Steppe.rack_preset_load_args): table Add a saved preset's modules and cables to a rack.
 ---@field save fun(args: Steppe.rack_preset_save_args): table Save a rack's modules and cables as a preset.
+
+---@class Steppe.record
+---@field commit fun(args: Steppe.record_commit_args): table Record a recording's commit (or a recovery's) as a replayable edit.
 
 ---@class Steppe.region
 ---@field add fun(args?: Steppe.region_add_args): Steppe.region_add_result Add a named region in beats.
@@ -2496,6 +2558,7 @@ q = nil
 ---@field plugin Steppe.plugin Commands named plugin.*
 ---@field project Steppe.project Commands named project.*
 ---@field rack Steppe.rack Commands named rack.*
+---@field record Steppe.record Commands named record.*
 ---@field region Steppe.region Commands named region.*
 ---@field registry Steppe.registry Commands named registry.*
 ---@field render Steppe.render Commands named render.*

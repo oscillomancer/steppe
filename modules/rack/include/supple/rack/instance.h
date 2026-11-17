@@ -38,6 +38,7 @@ struct HostContext {
     int offset = 0;               // of this block in the host's block
     std::int64_t position = 0;    // its first frame's timeline position
     script::Transport transport;  // at its start
+    script::Transport grid;       // at its grid interval's start, with offset into it
     int channels = 1;             // the module's (its widest input or cable)
 };
 
@@ -49,6 +50,9 @@ class HostModule {
     virtual ~HostModule() = default;
     // Main thread, once the instance exists.
     virtual void prepare(Instance& instance) { (void)instance; }
+    // Back to how prepare() left it, on the audio thread (Instance::restart).
+    // A module whose state is only its bindings keeps the default.
+    virtual void restart(Instance& instance) SUPPLE_RT { (void)instance; }
     virtual void process(const HostContext& ctx) SUPPLE_RT = 0;
 };
 
@@ -115,6 +119,12 @@ class Instance {
     // Back to how prepare() left it: a fresh start. Main thread, while no
     // executor processes it.
     void reset();
+    // The same fresh start on the audio thread, by the owning executor: a
+    // locate's (ADR-0062 §5). The module plays on as a new instance would,
+    // its knobs, the schedule's bindings and its status kept. Never
+    // allocates: prepare() keeps a copy of the struct as it left it, which
+    // this copies back in place.
+    void restart() SUPPLE_RT;
 
     // --- the schedule's (audio thread) ----------------------------------------
     script::Param& paramMember(int i) const { return *params_[static_cast<std::size_t>(i)]; }
@@ -146,6 +156,13 @@ class Instance {
     std::atomic<const void*> owner_{nullptr};
     sd::Instance record_;
     void* self_ = nullptr;  // a script's struct
+    // The struct as prepare() left it, and what restart() keeps of the
+    // current one while it copies that back: the members' bindings.
+    void* pristine_ = nullptr;
+    int pristineTail_ = sd::Instance::kInfoTail;
+    std::vector<script::Param> heldParams_;
+    std::vector<script::Input> heldInputs_;
+    std::vector<script::Output> heldOutputs_;
     std::vector<script::Param*> params_;
     std::vector<script::Input*> inputs_;
     std::vector<script::Output*> outputs_;

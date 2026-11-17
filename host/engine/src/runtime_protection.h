@@ -18,7 +18,11 @@ class RuntimeProtection {
     RuntimeProtection& operator=(const RuntimeProtection&) = delete;
     Status setMemoryLock(bool requested, bool running);
     Status setPreventDeepIdle(bool requested, bool running);
+    // ADR-0086: whether a bridged plug-in plays live; while one does, the
+    // idle-latency request is held as if asked for. Acts on a change only.
+    Status setBridgedLive(bool live, bool running);
     const RuntimeProtectionStatus& cpuIdleLatency() const { return latency_; }
+    const ThpOptOutStatus& thpOptOut() const { return thp_; }
     void start();
     void stop();
     const RuntimeProtectionStatus& memoryLock() const { return memory_; }
@@ -26,12 +30,17 @@ class RuntimeProtection {
   private:
     Status applyMemory();
     Status releaseMemory();
+    Status updateLatency(bool running);
     Status applyLatency();
     Status releaseLatency();
+    void applyThp();
+    void releaseThp();
     std::shared_ptr<RuntimeProtectionOps> ops_;
     RuntimeProtectionStatus memory_;
     RuntimeProtectionStatus latency_;
+    ThpOptOutStatus thp_;
     int latencyFd_ = -1;
+    int thpSet_ = 0;  // the THP mode applyThp set (1 or 3); 0: none of its own
 };
 
 }  // namespace supple::engine::detail

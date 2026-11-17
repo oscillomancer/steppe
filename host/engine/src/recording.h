@@ -8,9 +8,12 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <thread>
 #include <vector>
@@ -18,6 +21,12 @@
 #include "supple/audio/wav_stream.h"
 #include "supple/base/rt.h"
 #include "supple/engine/realtime.h"
+#include "supple/json/json.h"
+
+namespace supple::engine {
+struct TransportRange;
+struct RecordingErrorTestAccess;
+}  // namespace supple::engine
 
 namespace supple::engine::detail {
 
@@ -52,7 +61,9 @@ struct RecordingInfo {
     // Written when the recording ends (loop passes, ADR-0015); empty before.
     std::vector<RecordedSegment> segments;
     std::int64_t loopStart = 0, loopEnd = 0;
-    std::string hash = {};  // optional; finalized by the background recording job
+    std::string hash = {};                    // optional; finalized by the background recording job
+    std::optional<std::int64_t> frames = {};  // trusted placement prefix, sidecar 1.1
+    std::optional<RecordedPunch> punch = {};  // sidecar 1.2; old files default disabled
 };
 // A track's input after its input FX (ADR-0014): what it records
 // instead of the raw device channels, and the latency of those FX. For a
@@ -72,20 +83,97 @@ struct RoutedMidiEvent {
     int voice = -1;
 };
 
+// A MIDI message as captured (ADR-0016): `at` counts captured frames, as an
+// audio file's frames do; the runs place it on the timeline.
+struct CapturedMidiEvent {
+    std::int64_t at = 0;
+    std::uint8_t bytes[3] = {0, 0, 0};
+    model::Id route = {};
+    int voice = -1;
+};
+
+// What placing a MIDI take needs. The recorder has it when recording stops;
+// a crash leaves it in the take's journal (ADR-0080).
+struct MidiCapture {
+    model::Id track;
+    double rate = 0;
+    std::int64_t start = 0;    // timeline sample of captured frame 0, less the device round trip
+    std::int64_t latency = 0;  // the device round trip
+    RecordTarget::Midi midi;   // ports: only whether there are any
+    std::vector<RecordedSegment> runs;  // after the first: {captured frame, timeline}
+    std::int64_t captured = 0;          // frames captured
+    LoopRange loop;                     // inactive: runs split by seeks
+    std::vector<CapturedMidiEvent> events;
+    std::uint64_t overflow = 0;
+    bool runsFull = false;
+    std::int64_t audioFrames = 0;  // audio journal: complete physical prefix
+    std::uint32_t channels = 0;
+    RecordedPunch punch;
+};
+// The clock a MIDI target's events are captured on: the device round trip,
+// or a Note Out destination's input shift (ADR-0016).
+std::int64_t midiClock(const RecordTarget::Midi& midi, std::int64_t latency);
+// The take stop commits, from what was captured (events in time order).
+RecordedTake placeMidi(const MidiCapture& capture);
+
+// Every clock a recording's file (its MIDI journal) or replayed commit
+// (record.commit) holds is within this many frames of zero (over 23 years at
+// 384 kHz). A value beyond it is damage, and the bound keeps placement's
+// sums, of at most six such terms, far inside int64.
+inline constexpr std::int64_t kRecordingClockLimit = std::int64_t(1) << 48;
+
+// A MIDI take's crash-recovery journal (ADR-0080), <name>.midi.jsonl beside
+// the WAVs: a header line, then events, runs and how far capture got, one
+// canonical JSON value per line, appended by the recorder's writer thread.
+bool isMidiJournal(const std::filesystem::path& file);
+std::filesystem::path audioJournalPath(const std::filesystem::path& wav);
+bool isAudioJournal(const std::filesystem::path& file);
+Result<RecordingInfo> readAudioJournal(const std::filesystem::path& wav,
+                                       const std::filesystem::path& root, bool* torn = nullptr);
+// Reads one, only inside `root` (media_files.h). A torn last line (the
+// write a crash interrupted) is left out and `torn` set; so is everything
+// from the first line that does not read. record.journal when the header
+// does not read.
+Result<MidiCapture> readMidiJournal(const std::filesystem::path& file,
+                                    const std::filesystem::path& root, bool* torn = nullptr);
+
+// record.commit's arguments for takes committed with `punch` (take_commands.cpp):
+// files relative to `media` when inside it, so they resolve after a save
+// moves the project (ADR-0076).
+Status validateRecordingPunch(RecordedPunch punch);
+
+json::Value recordCommitArgs(const std::vector<RecordedTake>& takes, const TransportRange& punch,
+                             const std::filesystem::path& media);
+
 std::filesystem::path sidecarPath(const std::filesystem::path& wav);
 Status writeSidecar(const std::filesystem::path& wav, const RecordingInfo& info);
-Result<RecordingInfo> readSidecar(const std::filesystem::path& wav);
+// `root` (optional): the sidecar is read only if it resolves inside it
+// (recover.outside otherwise; media_files.h).
+Result<RecordingInfo> readSidecar(const std::filesystem::path& wav,
+                                  const std::filesystem::path& root = {});
 
 class Recorder {
   public:
-    Recorder(std::vector<RecordTarget> targets, double rate, std::int64_t latency);
+    Recorder(std::vector<RecordTarget> targets, double rate, std::int64_t latency,
+             RecordedPunch punch = {});
+    Status setPunch(RecordedPunch punch);  // model thread; writer snapshots off RT
     ~Recorder();
     // While slaved (ADR-0071) the timeline moves at the chase rate, not one
     // frame per frame: a position within a block of the expected one is the
     // same run (the take drifts by the chase rate's distance from 1); only a
     // larger jump (a locate, a loop wrap) starts a new one. Before capture.
     void setDriftTolerant(bool on) { driftTolerant_ = on; }
-    Status open();  // creates the files and starts the writer thread
+    // The loop in effect when recording starts, for the MIDI journals'
+    // headers (ADR-0080). Before open().
+    void setLoop(LoopRange loop) {
+        startLoop_ = loop;
+        loopConfigured_ = true;
+    }
+    // Creates the files (WAVs, and the MIDI targets' journals at their
+    // `file`) and starts the writer thread.
+    Status open();
+    void setMainThreadWake(MainThreadWake* wake) { mainWake_ = wake; }
+    std::vector<RecordingError> takeErrors();  // model thread, immutable published errors
     // Audio thread: `pos` is the timeline sample of this callback's output.
     // A track listed in `processed` records that signal, its first `latency`
     // frames dropped so the file lines up with what was played.
@@ -108,7 +196,18 @@ class Recorder {
 
   private:
     friend struct RecorderTestAccess;
-    struct Track {
+    friend struct ::supple::engine::RecordingErrorTestAccess;
+    struct Journal {
+        std::FILE* journal = nullptr;
+        std::filesystem::path journalFile;
+        bool journalCreated = false;
+        Status journalError = okStatus();
+        bool header = false;
+        std::size_t eventsJournaled = 0, runsJournaled = 0;
+        std::int64_t capturedJournaled = -1, framesJournaled = -1;
+        std::optional<RecordedPunch> punchJournaled;
+    };
+    struct Track : Journal {
         RecordTarget target;
         FrameRing ring;
         audio::WavStreamWriter writer;
@@ -116,6 +215,7 @@ class Recorder {
         Status writeError = okStatus();  // writer thread, then finish after join
         Status sidecarError = okStatus();
         Status firstError = okStatus();
+        std::atomic<bool> errorPending{false};
         // Input FX latency (set at the first frame), or a master's offset
         // (set at construction, ADR-0057): `skip` frames still to drop,
         // `shift` how far the file runs behind the captured frames (ahead of
@@ -124,13 +224,8 @@ class Recorder {
     };
     // MIDI: events stamped with the captured-frame position they arrived at
     // (placed on the timeline by finish(), knowing the runs).
-    struct MidiEvent {
-        std::int64_t at = 0;
-        std::uint8_t bytes[3] = {0, 0, 0};
-        model::Id route = {};
-        int voice = -1;
-    };
-    struct MidiTrack {
+    using MidiEvent = CapturedMidiEvent;
+    struct MidiTrack : Journal {
         RecordTarget target;
         static constexpr std::size_t kRing = 4096;
         std::array<MidiEvent, kRing> ring{};
@@ -140,13 +235,22 @@ class Recorder {
         std::atomic<std::uint64_t> overflow{0};
     };
     void writerLoop();
+    Status openFiles();
+    void closeFiles();
     std::int64_t midiClock(const MidiTrack& track) const SUPPLE_RT;
     void pushMidi(MidiTrack& track, const MidiEvent& event) SUPPLE_RT;
+    // Appends what the MIDI tracks drained since the last call to their
+    // journals and flushes them to the OS; `sync`: to the disk too.
+    void writeJournals(bool sync);
+    void closeJournals();
+    void openJournal(Journal& journal, const std::filesystem::path& path);
+    void appendJournal(Journal& journal, const RecordTarget& target,
+                       std::span<const MidiEvent> events, std::int64_t frames, RecordedPunch punch);
     void drain(Track& t, std::vector<float>& scratch);
     void padTo(Track& t, std::int64_t frame);
     void writeSidecars();
     void updateHeaders();
-    static void rememberError(Track& track, Status status, bool sidecar = false);
+    void rememberError(Track& track, Status status, bool sidecar = false);
 
     std::vector<std::unique_ptr<Track>> tracks_;
     std::vector<std::unique_ptr<MidiTrack>> midiTracks_;
@@ -158,6 +262,15 @@ class Recorder {
     // frames captured so far, and the runs after the first (preallocated;
     // read by finish() after capture has stopped).
     std::int64_t expected_ = 0, captured_ = 0;
+    // captured_ as of the end of the latest capture(), for the journals: a
+    // MIDI event the writer has drained was captured no later than this.
+    std::atomic<std::int64_t> published_{0};
+    RecordedPunch getPunch();  // model/writer only; no file work while locked
+    const RecordedPunch startPunch_;
+    std::mutex punchMutex_;
+    RecordedPunch punch_;
+    LoopRange startLoop_;
+    bool loopConfigured_ = false;
     bool driftTolerant_ = false;
     bool runsFull_ = false;
     static constexpr std::size_t kMaxSegments = 4096;
@@ -167,7 +280,12 @@ class Recorder {
     std::atomic<bool> stop_{false};
     std::atomic<bool> writerStalled_{false}, writerStallAck_{false};  // test access
     std::thread writer_;
-    bool sidecars_ = false;  // writer thread
+    bool sidecars_ = false;               // writer thread
+    MainThreadWake* mainWake_ = nullptr;  // set before starting the writer
+    // Cold writer instrumentation: deterministic cadence tests, never read by audio.
+    std::chrono::steady_clock::time_point (*nowForTests_)(void*) = nullptr;
+    void* clockContext_ = nullptr;
+    std::atomic<std::uint64_t> writerPasses_{0};
 };
 
 }  // namespace supple::engine::detail

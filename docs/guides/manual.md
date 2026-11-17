@@ -56,6 +56,14 @@ restarts the running engine at once.
   rates. ASIO uses one device for input and output, and its driver may round
   the buffer size.
 
+On Linux, while the engine runs, Steppe keeps its own memory out of
+transparent huge pages, except where a plug-in asks for them. With the
+system set to `always`, the kernel otherwise merges memory in the
+background, and audio can stop for a fraction of a second while it does. This
+applies to Steppe and its plug-in bridges only: it changes no system setting,
+and ends when Steppe stops the engine. macOS and Windows do not merge memory
+this way, and nothing changes there.
+
 If the device is missing or busy when Steppe starts, the app still opens. The
 Audio device dialog then opens and says why. Choose another device, or
 **Restart audio** once the device is ready. The dialog's status lines show
@@ -164,11 +172,59 @@ A project is a JSON file. Its media lives in the `media/` folder beside it.
 Project and FX chain files accept oversampling factors 1, 2, 4 or 8. If a
 hand-edited file uses another factor, loading reports the field and allowed values.
 
+A project file keeps every branch, not just the one you are on: an agent's
+branch you have not merged yet is still there after quitting and reopening,
+with each of its steps (History panel), and it can be undone step by step or
+merged into main as before. The file opens on the branch that was current when
+it was saved. Main's own undo history is not kept: after reopening, undo on
+main starts from the saved state. (Agents can keep it with
+`project.save {"history": true}`.) Autosaves keep branches too.
+
+If a program that does not know about branches (an older Steppe, a script)
+changed the file's main project, the saved branches no longer fit it: Steppe
+opens main alone and says so, and the first time you save over that file it
+keeps a copy of the old one beside it as `<file>.pre-branches.bak`.
+
 Until a project is saved, its recordings go to a folder of its own under the
 data folder (below), in `unsaved/<start time>-<pid>/media/rec`. The first
-save moves them into `media/` beside the project file. Quitting, or starting
+save moves them into `media/` beside the project file. While a recording runs, a
+project cannot be saved for the first time, or saved as into another
+folder: stop recording first, and its files move or are copied then.
+Saving in place works while recording. Quitting, or starting
 another project, without saving deletes that folder after the app has asked.
-A crashed run leaves its folder behind, recordings included.
+
+If an audio recording cannot be written, the status line shows the failed
+file and error immediately. That target keeps every complete sample frame
+written so far and stops writing; other armed targets and playback continue.
+Stop and save the retained takes, then check free space and storage before
+starting another recording.
+
+An unsaved project is autosaved into that folder every minute while it
+changes, like a saved one. If Steppe stops without you saving or discarding
+(a crash, a power cut), the folder stays, with its autosaves and recordings.
+Audio and MIDI recordings are kept as they are played. With storage keeping
+up, a program crash loses about the writer's last pass; a power cut retains
+the last completed file checkpoint, at most about five seconds behind. Storage
+failures are shown immediately for audio, with the written prefix kept.
+On Windows file data is flushed without elevation, but a power cut can still
+lose newly created file or folder names; the file checkpoint does not promise
+that stronger namespace guarantee. A failed save that reports the project may
+already exist keeps both original and copied media; check storage before retrying.
+The next time Steppe starts without a project to open, it lists what was left
+behind: each with its name, when it was last autosaved, how many tracks and
+recordings it has, and its size. **Recover** opens it (after asking about any
+unsaved changes in the current project), still unsaved: save it to keep it.
+**Delete** removes it for good, after asking once more. **Later** closes the
+list and keeps everything; File > Recover unsaved work… shows it again. A
+Steppe that is still running keeps its own folder to itself, so two copies
+of the app never offer each other's work.
+
+The same list appears when you open a saved project that Steppe autosaved
+after its last save, or whose recordings were not added because Steppe
+stopped while recording. **Open autosave** replaces what you opened with
+those later changes; the file itself is not changed until you save.
+**Put back** adds the recordings where they were recorded, as one step you
+can undo.
 
 New, Open and Quit (including File > Quit, Cmd+Q on macOS and closing the main
 window) first stop an active recording and add its takes to the
@@ -644,6 +700,37 @@ Patches that play from the song (a Transport module, sequencers, clocks:
 Rain Bells, Song Machine and the other generative ones) stay silent until
 you press play; while the transport is stopped, the rack window's status
 bar says so. Instrument patches need notes: MIDI items on their channel.
+Pressing play, or moving the playhead while playing, starts every module
+afresh, as plug-ins are reset there: an LFO starts its cycle again from
+its offset, a delay or reverb drops its tail, a filter its ringing, a
+cable patched back into the rack (feedback) starts from silence, and a
+knob you just turned is at its new value at once instead of still
+gliding. So the rack sounds the same from a given point on every play and
+in every render, whatever it played before. A loop going round does not
+restart them: an LFO runs on and tails carry across the loop point. While
+the transport is stopped a rack runs on as it was.
+
+Some stock modules play a little differently than in earlier versions,
+and a project saved then plays them the new way: a project does not keep
+its own copy of the stock modules, and there is no setting for the old
+sound. They used to do some of their work once per block the audio
+engine handed them, so how they sounded after you moved the playhead
+could differ between playing and exporting; they now keep their own
+steady 32-sample pace. You may hear it in these cases:
+
+- modules on a loop of cables (one with a dashed cable): **Harmonic**,
+  **Resonator**, **Delay** (its Wow and Flutter), **VCO** with Drift, and
+  **Drum** or **Sequencer** with cables on their knobs follow their
+  cables and wander every 32 samples instead of every sample;
+- **Slew**, and a **Macro** whose knob is moving, glide from the very
+  start of playback (or a move of the playhead) instead of following
+  their input unglided for the first 32 samples;
+- **Markov** clocked from a cable: just after a reset, a note's length
+  can change by up to 31 samples;
+- **Reverb** with **Freeze**: when Freeze ends, the damping comes back
+  at once instead of up to 31 samples later, so the tail is slightly
+  darker there.
+
 A rack sends audio both ways. Its Out modules are channel inputs, and an
 **In** module takes sends, and the rack becomes an effect. Send a track to
 it in the routing matrix (**View > Routing matrix**), where each In module
@@ -701,11 +788,13 @@ If a project copy cannot be loaded, opening the project reports the source
 problem and whether a library version is used instead or a type is unavailable.
 
 Agents can do all of this through the MCP tools: build a patch in one
-step (`rack_patch`), listen to it as numbers (`rack_probe` reports pitch,
-levels, gate rates and the notes a sequencer plays), write and edit
-modules (`module_write`, `module_edit`; the modules playing one are
-rebuilt at once), save and load rack presets, automate knobs and bind
-them to MIDI controllers (`module_learn_set`).
+step (`exec {"command": "rack.patch"}`), listen to it as numbers
+(`exec {"command": "rack.probe"}` reports pitch, levels, gate rates and the
+notes a sequencer plays), write and edit modules
+(`exec {"command": "module.write"}`, `exec {"command": "module.edit"}`; the
+modules playing one are rebuilt at once), save and load rack presets,
+automate knobs and bind
+them to MIDI controllers (`exec {"command": "module.learn.set"}`).
 
 ## MIDI controllers
 
@@ -775,12 +864,55 @@ In the chain window, Ctrl-click (Cmd-click on macOS) toggles a row in the
 selection, including the active row. Effects moved to another track leave
 that window’s selection.
 
+Each row in the chain window says where its plugin runs: in-process (inside
+Steppe), shared bridge (in a helper process shared with other plugins) or
+isolated (in a process of its own). A plugin that crashes in a bridge
+process goes silent and can be restarted, and Steppe keeps playing; one
+that crashes in-process takes Steppe down with it. **Edit > Preferences… >
+Third-party plug-ins run** sets where plugins you have not set yourself
+run: in the app (the default), in a shared bridge process, or each in its
+own process. Those rows say "(default)". The choice applies as plugins
+load (adding one, opening a project, restarting one); Steppe's own plugins
+always run in the app.
+
+On Linux, while a plugin in a bridge process plays live, for example on a
+monitored track, Steppe keeps the CPUs out of deep idle, as **Edit > Preferences… > Keep CPUs out of deep idle** does whenever
+the engine runs. A bridged plugin waits for its bridge to wake, and a CPU in
+deep idle wakes late. This is a request Steppe's process holds, not a system
+setting: it ends when no bridged plugin plays live, when the engine stops or
+when Steppe quits, and nothing changes after. While held, the computer may
+use more power and run warmer. Many systems let only administrators make the
+request; the preference's note then says it was refused, audio plays
+without it, and the preference's caution line says how to allow it. With the
+preference on, the request is held whenever the engine runs. macOS and
+Windows have no such per-process request (Windows' power plan is
+system-wide, and Steppe leaves it alone); there Steppe's audio threads and
+its bridges' ask for the system's audio class instead, as they always have.
+
 ## Agents (MCP)
 
 Steppe is built to be driven by an AI agent as well as by hand. `steppe-mcp`
 serves the running app's commands as MCP tools over stdio. What an agent
 does lands in the same undo history as your own edits. The bundled skill
 teaches the agent Steppe's commands, units and notation.
+
+By default, the engine exposes 37 common command tools plus `describe`, `exec`
+and `query`; the running GUI also exposes `gui_selection` for its selection. `describe` with no arguments lists every command, grouped by
+namespace; pass `command` for its full schemas, errors and examples. Call
+other commands with `exec {"command": "fx.patch.list", "args": {"fx": "fx_2"}}`,
+or `query` for read-only commands. Dedicated tool definitions leave out result
+schemas; `describe` provides them when needed. For clients that defer tool
+loading, add `--tools all` to `steppe-mcp` or `steppe-engine --mcp` to expose
+every non-Internal command as a dedicated tool. `--tools core` explicitly
+selects the default. The plugin sandbox keeps its existing dedicated commands.
+
+The proxy loads the command index once and fetches descriptions only for the
+selected dedicated tools. Use `describe` for other contracts when needed; `exec`
+validates through the running application. Use the proxy and application from
+the same installation: startup requires exposure metadata in the command index.
+After an app restart, the proxy checks the catalogue on the next tool request
+and notifies the agent when it changes. If an edit loses its response, inspect
+project state before deciding whether to retry it.
 
 Saved `dsp.test` audio and `dsp.preview` pictures use readable, shortened
 filenames with a hash when a plugin ID needs escaping or truncation, or ends
@@ -871,8 +1003,9 @@ report the option and how to correct it before playback starts.
 
 For headless recording, stop the transport and save the project before closing
 an MCP connection or stopping the socket server. Shutdown finishes capture but
-does not save the project. Unsaved audio files can be recovered; unsaved MIDI
-recordings and other session edits are lost when the process exits.
+does not save the project. Unsaved audio and MIDI recordings can be recovered
+(File > Recover unsaved work…, or `project.recover`); other session edits are
+lost when the process exits.
 
 MIDI sends, including a rack's Note Out routes, can be recorded by their destination channel. Arm
 it in MIDI replace or MIDI overdub mode, then record; loop and punch apply
@@ -884,6 +1017,25 @@ In input record mode, an armed channel whose input is a rack Out records stereo 
 input FX, before its own items, inserts and fader. It uses ordinary audio
 takes, loop/punch recording and recovery. Disable the live rack feed when
 auditioning the recorded item to avoid doubling it.
+
+Recorded filenames use sanitized track names and take numbers. Tracks named
+`Vocal` and `vocal` receive distinct take names when recorded together, including
+on case-insensitive filesystems.
+
+Audio takes begin as ordinary WAV files and become RF64 automatically above the
+32-bit size limit, without interrupting recording. Steppe can import and recover
+both formats, including recordings made with the older WAV header layout.
+
+Audio takes keep an append-only placement journal beside each WAV. After a
+crash, Project recovery restores loop passes and seeks through the last complete
+checkpoint; extra audio bytes are kept without guessing their placement. Stop
+keeps a final placement sidecar, and the next successful save/autosave retires
+the journal. The loop range at recording start is used for recovery; changing
+it during the take has the same limitation as MIDI recording. Punch changes
+continue to apply at stop; crash recovery restores the punch from the last
+complete recording checkpoint, independently of the current transport punch.
+During recording the punch must contain at least one sample and fit the
+recording clock; a refused change leaves the range unchanged.
 
 Output recording is not supported yet. If a loaded project has an armed track
 in output record mode, recording fails before creating any files. Switch that
@@ -1110,3 +1262,21 @@ not put them early; nothing is sent during a count-in, and an output on
 the device Steppe follows (Transport sync) does not get its own clock
 back. `midi.outputs.get` and `engine.status` show what each output sends
 and how many messages went out.
+
+### Agent transport limits
+
+Control/MCP are local same-user endpoints. RPC queues at most 1,024 pending
+requests and 64 MiB globally; excess calls receive `rpc.busy` and should be
+retried later. Each peer permits 64 subscriptions. Request IDs are at most 1,024
+serialized bytes, and untrusted frames at most 1,000,000 JSON values.
+
+MCP stdio uses a 64 MiB writer reservation: keep reading replies even after
+closing stdin. Output backpressure pauses new commands while model service
+continues. EOF drains replies before finishing capture/shutdown; an open consumer
+that stops reading can defer that completion. Oversized replies return an explicit
+error. If a reply is lost, inspect state before repeating an edit: it may have run.
+
+If control-socket startup reports `rpc.path` for the product runtime directory,
+choose a writable private directory owned by your user and remove any symlink
+or Windows directory junction at that product directory. Steppe refuses these
+aliases rather than changing their targets' permissions.

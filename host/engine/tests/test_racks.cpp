@@ -13,6 +13,7 @@
 #include <supple/engine/realtime.h>
 
 #include <clap/ext/params.h>
+#include "bridge_patience.h"
 #include "plan.h"
 #include "rack_runtime.h"
 #include "supple/model/groups.h"
@@ -597,6 +598,314 @@ TEST_CASE("racks: a held gate plays again after a seek resets the instrument" *
 }
 
 namespace {
+// A VCA, its level just edited from -30 to -27 dB, on Transport's beat phase
+// or on a free-running 3.7 Hz LFO, into an Out: a level glide caught when the
+// transport stops, or an oscillator's phase, is what a module carries past a
+// locate unless it starts afresh.
+struct Afresh {
+    model::Session before, after;
+    explicit Afresh(bool lfo) {
+        model::Project project;
+        project.console9 = false;
+        project.seed = 31337;
+        model::EditTxn t(model::Session::create(project), 1);
+        const Id channel = addChannel(t);
+        const Id rack = t.create(model::Rack{channel, ""});
+        const Id source = lfo ? addModule(t, rack, "com.suppleaudio.rack.lfo",
+                                          json::parse(R"({"rate": 3.7})").value())
+                              : addModule(t, rack, "com.suppleaudio.rack.transport");
+        const Id vca = addModule(t, rack, "com.suppleaudio.rack.vca",
+                                 json::parse(R"({"level": -30})").value());
+        const Id out = addModule(t, rack, "com.suppleaudio.rack.out");
+        cable(t, source, lfo ? "out" : "beat_phase", vca, "in");
+        cable(t, vca, "out", out, "l");
+        listen(t, out, channel);
+        before = commit(t);
+        model::EditTxn edit(before, 2);
+        edit.modify<model::RackModule>(
+            vca, [](model::RackModule& m) { m.params = json::parse(R"({"level": -27})").value(); });
+        after = commit(edit);
+    }
+};
+
+void runCycles(Engine& engine, DummyBackend& backend, bool anticipative, std::int64_t cycles,
+               std::uint32_t block) {
+    while (cycles > 0) {
+        if (anticipative) REQUIRE(engine.awaitRendered(4096));
+        const std::int64_t n = std::min<std::int64_t>(cycles, 4096 / block);
+        backend.run(n);
+        cycles -= n;
+    }
+}
+
+double worstFrom(const std::vector<float>& captured, std::size_t from,
+                 const std::vector<float>& reference) {
+    REQUIRE(captured.size() >= from + reference.size());
+    double worst = 0;
+    for (std::size_t i = 0; i < reference.size(); ++i)
+        worst = std::max(worst, std::fabs(double(captured[from + i]) - double(reference[i])));
+    return worst;
+}
+}  // namespace
+
+// ADR-0062 §5 (2026-11-14 note), engine.md §3: a seek, and a play from a
+// position, restart the rack's modules as they reset plug-ins, so what
+// follows is the offline render's whatever the modules played before.
+TEST_CASE("racks: a seek, or a play after a restart, starts the modules afresh as offline" *
+          doctest::description("rt")) {
+    constexpr std::uint32_t kBlock = 128;
+    constexpr std::size_t kFrames = 24000;
+    for (const bool lfo : {false, true}) {
+        const Afresh scene(lfo);
+        InstancePool offlinePool = makePool();
+        const auto offline = renderOffline(scene.after, offlinePool, {.endSeconds = 0.5}).value();
+        const std::vector<float> reference(offline.audio.channels[0].begin(),
+                                           offline.audio.channels[0].begin() + kFrames);
+        for (const bool anticipative : {false, true}) {
+            INFO((lfo ? "LFO" : "level glide") << ", anticipative " << anticipative);
+            const EngineOptions options{.anticipative = anticipative, .workers = 0};
+            InstancePool pool = makePool();
+            MediaCache media;
+            {
+                // Played, the level edited, a seek back to the start while playing.
+                DummyBackend backend(
+                    {.mode = DummyBackend::Mode::Manual, .captureFrames = 4096 + 2 * kFrames});
+                Engine engine(pool, media, options);
+                REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+                REQUIRE(engine.load(scene.before));
+                engine.play();
+                runCycles(engine, backend, anticipative, 30, kBlock);
+                REQUIRE(engine.load(scene.after));
+                runCycles(engine, backend, anticipative, 2, kBlock);
+                engine.seek(0);
+                runCycles(engine, backend, anticipative, (kFrames + 2 * kBlock) / kBlock, kBlock);
+                engine.stop();
+                CHECK(engine.processErrors() == 0);
+                CHECK(engine.outputLatency() == 0);
+                CHECK(worstFrom(backend.capture().channels[0], 32 * kBlock, reference) == 0.0);
+            }
+            {
+                // A new engine on the same pool (its modules kept): play from 0.
+                DummyBackend backend(
+                    {.mode = DummyBackend::Mode::Manual, .captureFrames = kFrames + 4096});
+                Engine engine(pool, media, options);
+                REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+                REQUIRE(engine.load(scene.after));
+                engine.seek(0);
+                engine.play();
+                runCycles(engine, backend, anticipative, (kFrames + 2 * kBlock) / kBlock, kBlock);
+                engine.stop();
+                CHECK(engine.processErrors() == 0);
+                CHECK(worstFrom(backend.capture().channels[0], 0, reference) == 0.0);
+            }
+        }
+    }
+}
+
+// Round-13 review, finding 3: a feedback cable's last samples live in the
+// rack's schedule, not in a module. A seek restarts them with the modules,
+// so a warm feedback rack plays from there as a fresh offline render does.
+TEST_CASE("racks: a seek starts a feedback rack afresh, as offline" * doctest::description("rt")) {
+    for (const bool feedback : {false, true})
+        for (const bool anticipative : {false, true})
+            for (const std::int64_t seek : {std::int64_t{0}, std::int64_t{3217}}) {
+                INFO("feedback " << feedback << ", anticipative " << anticipative << ", seek "
+                                 << seek);
+                model::Project project;
+                project.console9 = false;
+                project.seed = 31337;
+                model::EditTxn t(model::Session::create(project), 1);
+                const Id channel = addChannel(t);
+                const Id rack = t.create(model::Rack{channel, ""});
+                const Id lfo = addModule(t, rack, "com.suppleaudio.rack.lfo",
+                                         json::parse(R"({"rate": 3.7})").value());
+                const Id vca = addModule(t, rack, "com.suppleaudio.rack.vca",
+                                         json::parse(R"({"level": -6})").value());
+                const Id out = addModule(t, rack, "com.suppleaudio.rack.out");
+                cable(t, lfo, "out", vca, "in");
+                if (feedback) cable(t, vca, "out", vca, "in", 0.5);
+                cable(t, vca, "out", out, "l");
+                listen(t, out, channel);
+                const auto scene = commit(t);
+                InstancePool offlinePool = makePool();
+                const auto reference = renderOffline(scene, offlinePool,
+                                                     {.startSeconds = double(seek) / 48000,
+                                                      .endSeconds = double(seek + 8192) / 48000,
+                                                      .threads = 1});
+                REQUIRE(reference);
+                REQUIRE(reference->audio.frames() == 8192);
+                InstancePool pool = makePool();
+                MediaCache media;
+                DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 20000});
+                Engine engine(pool, media, {.anticipative = anticipative, .workers = 0});
+                REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+                REQUIRE(engine.load(scene));
+                engine.play();
+                runCycles(engine, backend, anticipative, 32, 128);
+                engine.seek(double(seek) / 48000);
+                runCycles(engine, backend, anticipative, 64, 128);
+                engine.stop();
+                CHECK(engine.processErrors() == 0);
+                CHECK(worstFrom(backend.capture().channels[0], 32 * 128,
+                                reference->audio.channels[0]) == 0.0);
+            }
+}
+
+// Round-15 review: Delay's wow and flutter wandered once per process()
+// call, so after a seek off the rack's grid, where device blocks split grid
+// intervals into two calls, a modulated feedback delay no longer played as
+// the offline render did, in either executor.
+TEST_CASE("racks: a warm modulated feedback delay seeks and loops as offline" *
+          doctest::description("rt")) {
+    for (const bool anticipative : {false, true})
+        for (const bool loop : {false, true})
+            for (const std::int64_t seek : {std::int64_t{0}, std::int64_t{3217}}) {
+                INFO("anticipative " << anticipative << ", loop " << loop << ", seek " << seek);
+                model::Project project;
+                project.console9 = false;
+                project.seed = 31337;
+                model::EditTxn t(model::Session::create(project), 1);
+                const Id channel = addChannel(t);
+                const Id rack = t.create(model::Rack{channel, ""});
+                const Id lfo =
+                    addModule(t, rack, "com.suppleaudio.rack.lfo",
+                              json::parse(R"({"rate": 3.7, "voices": 4, "spread": 25})").value());
+                const Id delay = addModule(t, rack, "com.suppleaudio.rack.delay",
+                                           json::parse(R"({"time": 7.5, "feedback": 65,
+                                               "mix": 100, "wow": 70, "flutter": 50,
+                                               "offset": 11, "tone": 0})")
+                                               .value());
+                const Id out = addModule(t, rack, "com.suppleaudio.rack.out");
+                cable(t, lfo, "out", delay, "in_l");
+                cable(t, delay, "out_l", out, "l");
+                cable(t, delay, "out_r", out, "r");
+                listen(t, out, channel);
+                const auto scene = commit(t);
+                const std::int64_t first = loop ? 0 : seek;
+                InstancePool offlinePool = makePool();
+                const auto reference = renderOffline(scene, offlinePool,
+                                                     {.startSeconds = double(first) / 48000,
+                                                      .endSeconds = double(first + 8192) / 48000,
+                                                      .threads = 1});
+                REQUIRE(reference);
+                CHECK(std::any_of(reference->audio.channels[0].begin(),
+                                  reference->audio.channels[0].end(),
+                                  [](float x) { return std::abs(x) > 0.01f; }));
+                InstancePool pool = makePool();
+                MediaCache media;
+                DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 20000});
+                Engine engine(pool, media, {.anticipative = anticipative, .workers = 0});
+                REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+                REQUIRE(engine.load(scene));
+                if (loop) engine.setLoop(0, 0.016, true);
+                engine.play();
+                if (!loop) {
+                    runCycles(engine, backend, anticipative, 64, 128);
+                    engine.seek(double(seek) / 48000);
+                }
+                runCycles(engine, backend, anticipative, 64, 128);
+                engine.stop();
+                CHECK(engine.processErrors() == 0);
+                for (std::size_t ch = 0; ch < 2; ++ch)
+                    CHECK(worstFrom(backend.capture().channels[ch], loop ? 0 : 8192,
+                                    reference->audio.channels[ch]) == 0.0);
+            }
+}
+
+// A module following the song reads its position from the transport at the
+// start of the rack's grid interval plus the call's offset into it
+// (Transport::offset), so after a seek off the grid, where device blocks
+// split intervals elsewhere than the offline render does, its ramps and
+// gates land on the same frames to the bit, in both executors.
+TEST_CASE("racks: a song-following module seeks off the grid as offline" *
+          doctest::description("rt")) {
+    for (const bool anticipative : {false, true})
+        for (const std::int64_t seek : {std::int64_t{0}, std::int64_t{3217}, std::int64_t{70001}}) {
+            INFO("anticipative " << anticipative << ", seek " << seek);
+            model::Project project;
+            project.console9 = false;
+            project.seed = 31337;
+            model::EditTxn t(model::Session::create(project), 1);
+            const Id channel = addChannel(t);
+            const Id rack = t.create(model::Rack{channel, ""});
+            const Id poly =
+                addModule(t, rack, "com.suppleaudio.rack.polyrhythm",
+                          json::parse(R"({"span": 0, "count_1": 7, "count_2": 5})").value());
+            const Id out = addModule(t, rack, "com.suppleaudio.rack.out");
+            cable(t, poly, "ramp_1", out, "l");
+            cable(t, poly, "ramp_2", out, "r");
+            listen(t, out, channel);
+            const auto scene = commit(t);
+            InstancePool offlinePool = makePool();
+            const auto reference = renderOffline(scene, offlinePool,
+                                                 {.startSeconds = double(seek) / 48000,
+                                                  .endSeconds = double(seek + 8192) / 48000,
+                                                  .threads = 1});
+            REQUIRE(reference);
+            InstancePool pool = makePool();
+            MediaCache media;
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 20000});
+            Engine engine(pool, media, {.anticipative = anticipative, .workers = 0});
+            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+            REQUIRE(engine.load(scene));
+            engine.play();
+            runCycles(engine, backend, anticipative, 32, 128);
+            engine.seek(double(seek) / 48000);
+            runCycles(engine, backend, anticipative, 64, 128);
+            engine.stop();
+            CHECK(engine.processErrors() == 0);
+            for (std::size_t ch = 0; ch < 2; ++ch) {
+                double peak = 0;
+                for (float x : reference->audio.channels[ch]) peak = std::max(peak, double(x));
+                CHECK(peak > 0.5);  // the ramps play
+                CHECK(worstFrom(backend.capture().channels[ch], 32 * 128,
+                                reference->audio.channels[ch]) == 0.0);
+            }
+        }
+}
+
+// A loop going round keeps the history (ADR-0015): modules and feedback
+// samples run on, as one continuous offline render does.
+TEST_CASE("racks: a loop wrap keeps a feedback rack's history" * doctest::description("rt")) {
+    for (const bool anticipative : {false, true}) {
+        INFO("anticipative " << anticipative);
+        model::Project project;
+        project.console9 = false;
+        project.seed = 12345;
+        model::EditTxn t(model::Session::create(project), 1);
+        const Id channel = addChannel(t);
+        const Id rack = t.create(model::Rack{channel, ""});
+        const Id lfo =
+            addModule(t, rack, "com.suppleaudio.rack.lfo",
+                      json::parse(R"({"rate": 3.7, "voices": 4, "spread": 25})").value());
+        const Id vca =
+            addModule(t, rack, "com.suppleaudio.rack.vca", json::parse(R"({"level": -6})").value());
+        const Id out = addModule(t, rack, "com.suppleaudio.rack.out");
+        cable(t, lfo, "out", vca, "in");
+        cable(t, vca, "out", vca, "in", 0.5);
+        cable(t, vca, "out", out, "l");
+        listen(t, out, channel);
+        const auto scene = commit(t);
+        InstancePool offlinePool = makePool();
+        const auto reference =
+            renderOffline(scene, offlinePool, {.endSeconds = 0.128, .threads = 1});
+        REQUIRE(reference);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 8192});
+        Engine engine(pool, media, {.anticipative = anticipative, .workers = 0});
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        REQUIRE(engine.load(scene));
+        engine.setLoop(0, 0.016, true);
+        engine.play();
+        runCycles(engine, backend, anticipative, 48, 128);
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+        CHECK(worstFrom(backend.capture().channels[0], 0, reference->audio.channels[0]) == 0.0);
+    }
+}
+
+namespace {
 struct NoteRouteScene {
     model::Session session, itemReference;
     Id source, target, rack, notes, noteOut;
@@ -1060,7 +1369,9 @@ TEST_CASE("racks: feed-forward latency aligns independent Outs with reference im
             auto livePool = makePool();
             MediaCache liveMedia;
             DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 12288});
-            Engine engine(livePool, liveMedia, {.anticipative = anticipative, .workers = workers});
+            Engine engine(
+                livePool, liveMedia,
+                engine::test::patient({.anticipative = anticipative, .workers = workers}));
             REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 37}));
             REQUIRE(engine.load(s));
             engine.play();
@@ -1068,6 +1379,7 @@ TEST_CASE("racks: feed-forward latency aligns independent Outs with reference im
                 if (anticipative) REQUIRE(engine.awaitRendered(37));
                 backend.run(1);
             }
+            CHECK(engine.bridgeLateCycles() == 0);
             engine.stop();
             CHECK(engine.processErrors() == 0);
             const auto latency = engine.outputLatency();
@@ -1262,7 +1574,8 @@ TEST_CASE(
         // Room for every cycle below, the restart's longest wait included.
         DummyBackend backend(
             {.mode = DummyBackend::Mode::Manual, .captureFrames = (20 + 40 + 160 + 180) * 128});
-        Engine engine(pool, media, {.anticipative = anticipative, .workers = 2});
+        Engine engine(pool, media,
+                      engine::test::patient({.anticipative = anticipative, .workers = 2}));
         REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
         REQUIRE(engine.load(state));
         REQUIRE(engine.awaitPlan());
@@ -1299,6 +1612,7 @@ TEST_CASE(
         for (int i = 0; i < 180; ++i) run();
         CHECK(engine.planGeneration() == settled);
         CHECK(engine.processErrors() == 0);
+        CHECK(engine.bridgeLateCycles() == 0);
         engine.stop();
         const auto& audio = backend.capture();
         const auto end = static_cast<std::size_t>(backend.cycles() * 128);
@@ -3057,5 +3371,41 @@ TEST_CASE("rack sends: home mute and send level are mix edits beside a hardware 
         CHECK(soft ==
               doctest::Approx(loud * std::pow(10.0, -9.0 / 20)).epsilon(0.02));  // -3 to -12 dB
         CHECK(peakIn(L, 130000, 153600) < 1e-5);  // the home's mute silences its send
+    }
+}
+
+TEST_CASE("racks: transport() keeps its arithmetic at a nonzero start; gridTransport() is exact") {
+    // Review round 20: transport() had taken the exact grid arithmetic,
+    // (origin + sample) / rate, which rounds apart in the last bit from the
+    // start-plus-samples arithmetic saved module source was written against.
+    model::EditTxn t(model::Session::create(), 1);
+    const auto channel = addChannel(t);
+    t.create(model::Rack{channel, ""});
+    const auto s = commit(t);
+    auto pool = makePool();
+    for (const std::int64_t origin : {std::int64_t{3217}, std::int64_t{70001}}) {
+        CAPTURE(origin);
+        auto plan = supple::engine::detail::compile(s, pool, double(origin) / 48000.0, 128, 48000);
+        REQUIRE(plan);
+        supple::engine::detail::RackNode* rack = nullptr;
+        for (auto& node : plan->nodes)
+            if (node.rack) rack = node.rack.get();
+        REQUIRE(rack);
+        rack->clock.plan = &*plan;
+        rack->origin = origin;
+        rack->playing = true;
+        int apart = 0;
+        for (std::int64_t sample = 0; sample < 512; ++sample) {
+            const auto historical = supple::engine::detail::transportAt(*plan, sample);
+            const auto exact = supple::engine::detail::transportAtSeconds(
+                *plan, double(origin + sample) / 48000.0);
+            const auto call = rack->clock.callTransport(origin + sample);
+            const auto grid = rack->clock.transport(origin + sample);
+            CHECK(call.beats == historical.beat);
+            CHECK(call.tempo == historical.tempo);
+            CHECK(grid.beats == exact.beat);
+            apart += call.beats != grid.beats;
+        }
+        CHECK(apart > 0);  // the two arithmetics do differ here
     }
 }

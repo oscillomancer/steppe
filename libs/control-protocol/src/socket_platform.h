@@ -116,6 +116,11 @@ inline int recv(Socket fd, char* data, std::size_t size) {
     const int result = ::recv(fd, data, static_cast<int>(std::min<std::size_t>(size, INT_MAX)), 0);
     return result == SOCKET_ERROR ? failed() : result;
 }
+inline int peek(Socket fd) {
+    char byte;
+    const int result = ::recv(fd, &byte, 1, MSG_PEEK);
+    return result == SOCKET_ERROR ? failed() : result;
+}
 // On a nonblocking socket a connect still under way fails with EINPROGRESS:
 // poll for POLLOUT, then connectError() says how it ended.
 inline int connect(Socket fd, const sockaddr_un& address) {
@@ -195,6 +200,10 @@ inline auto send(Socket fd, const char* data, std::size_t size) {
 #endif
 }
 inline auto recv(Socket fd, char* data, std::size_t size) { return ::recv(fd, data, size, 0); }
+inline auto peek(Socket fd) {
+    char byte;
+    return ::recv(fd, &byte, 1, MSG_PEEK);
+}
 // On a nonblocking socket a connect still under way fails with EINPROGRESS:
 // poll for POLLOUT, then connectError() says how it ended. Linux fails with
 // EAGAIN instead while the listener's backlog is full: try again.

@@ -154,14 +154,14 @@ struct Groove : Module {
         out.setChannels(n);
         velocity.setChannels(n);
         weight.setChannels(1);
-        const Transport t = transport();
+        const Transport t = gridTransport();
         const bool internal = !clock.connected();
         const double rate = sampleRate();
         const double beatsPerFrame = t.tempo / 60.0 / rate;
         const int f = feel.index();
         int playing = 0;
         for (int i = 0; i < frames; ++i) {
-            const double song = (t.beats + i * beatsPerFrame) * 4.0;  // sixteenths
+            const double song = (t.beats + (t.offset + i) * beatsPerFrame) * 4.0;  // sixteenths
             if (!internal) {
                 ++since;
                 if (clockEdge.rose(clock[0][i])) {

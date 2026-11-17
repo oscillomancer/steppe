@@ -75,7 +75,7 @@ Estimate masking between two tracks over the same range.
 
 
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -366,7 +366,7 @@ Put an automation item on an envelope: a block that replaces it there.
 
 position (beat) or bar, length in beats. points (beats from the item's start, values in the envelope's units) over source_length beats (default: length), repeated while loop (default true) and the item is longer; without points it captures what the envelope plays over that range. Duplicate it pooled (autoitem.duplicate) to edit several at once. Track, route and plugin envelopes.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -446,7 +446,7 @@ Copy an automation item (pooled by default: edits to either reach both).
 
 position: where the copy starts (default: right after the item).
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -487,7 +487,7 @@ List automation items (all, or one envelope's), with their points.
 
 
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -526,7 +526,7 @@ Remove an automation item (the envelope under it plays again).
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -577,7 +577,7 @@ Move, resize, loop, scale or rewrite an automation item.
 
 points and source_length reach every item of its pool; position, length, loop, baseline, amplitude (values play as baseline + amplitude x (value - baseline)) and name are the item's own.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -625,7 +625,7 @@ Take an automation item out of its pool (its points stay).
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -793,7 +793,7 @@ Delete a branch (not main, not the current one).
 
 
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -923,7 +923,7 @@ List branches and the current one.
 
 
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -1056,7 +1056,7 @@ Render two branch heads over the same range and compare them.
 
 
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -1162,7 +1162,7 @@ Connect an output to an input or a knob.
 
 from: "mo_N.<output>"; to: "mo_N.<input>" or "mo_N.<knob>" (a modulation cable: amount is the knob's movement at a signal of 1, in octaves for a frequency, the knob's unit otherwise; default an octave or half the range), or a plugin module's plug-in parameter "fx_N.<key>" (CLAP modulation, amount a fraction of its range, default 0.5; it must be modulatable). A numeric CLAP id is also accepted (fx_3.12), with no leading zeros except 0; a numeric semantic key takes precedence. Several cables into one input sum; a mono cable reaches every voice of a poly module. feedback: it closes a loop, so it carries the previous frame (a one-sample delay).
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -1235,7 +1235,7 @@ Remove a cable, by id or by its two ends.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -1293,7 +1293,7 @@ Set a modulation cable's amount or a cable's colour.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -1335,7 +1335,7 @@ Compile a DSP script without saving it; return its diagnostics.
 
 Give source (a whole script) or name (one in the library). ok is true when it compiles; plugin then lists its id, name and parameters as the patch shows them.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -1540,7 +1540,7 @@ Change part of a library script by replacing text; compile it, as dsp.write.
 
 For a change to part of a script, instead of sending all of it to dsp.write. Each edit replaces old, which must be in the script exactly once, with new (empty deletes it). The edits apply in order, each to the script as the ones before left it, and all or none: when one fails, nothing is saved and the error says where old and the script part. Then as dsp.write: it saves the script, compiles it and returns the diagnostics; instances playing it follow within half a second.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -1748,7 +1748,7 @@ Export a DSP script as a plugin for other DAWs: a CLAP file, or C++ source.
 
 format clap (the default): copies the platform's script player and embeds the script in its trailer (Linux/Windows) or bundle resource (macOS, re-signed ad hoc with the system codesign tool). The copy is a plugin of its own, under the script's id and name, that plays this version of the script in any CLAP host (it reads no library), written to <folder>/<plugin name>.clap (default: the script's folder, under export/) with the licenses to ship beside it (notices). It runs on this platform, as fast as the player it copies (a debug build's is slow). format source: a C++ project of the plugin template that builds the same plugin (same id, parameters and state) as CLAP and VST3, plus AU on macOS, with the script compiled as C++, written to the empty <folder> (default: the script's folder, under export/<script>-source); its README says how to build it, and license (MIT unless GPL-3.0-or-later) is the license of its own files. Export again after changing the script; an export does not follow the library.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -1872,7 +1872,7 @@ Read a DSP script from the library.
 
 
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -1941,7 +1941,7 @@ List the DSP scripts in the library, compiled, with their plugin ids.
 
 
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -2028,7 +2028,7 @@ Draw a plugin's editor to a PNG, after a test signal plays through it.
 
 Give plugin (an id) or script (a name in the library). A fresh instance, set by patch (a merge patch) when given, plays signal -- an effect: sine (the default, at frequency_hz), sweep, impulse, noise or silence, peaking at level_db, for seconds, or file (the default with audio_file), the file played whole as dsp.test plays it; an instrument: notes (the default), note or silence, for seconds -- while its editor watches, so meters and the script's draw() show what played. Then the editor is drawn without a window, scale times its design size, and saved as a PNG (path; width and height in pixels): read the file to see it. A script with neither editor() nor draw() shows the automatic editor. pointer, if given, acts on the editor first, in its design units (the picture's pixels at scale 1): move (a hover; a drag after a press), press, release, click, double_click, drag (from x, y to to_x, to_y) and wheel (steps notches, up positive), with shift, ctrl or alt held; edits is a merge patch of what they changed, as a user's edits would. problems says what went wrong in the editor's code (a loop stopped by its budget, an index out of range), with the line. Headless pictures use EGL on Linux, Metal on macOS and WGL on Windows; an unavailable renderer returns dsp.no_picture.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -2174,7 +2174,7 @@ Play test signals or notes through a plugin and measure it: levels, THD, pitch.
 
 Give plugin (an id: a script's, or any effect's or instrument's) or script (a name in the library). A fresh instance, set by patch (a merge patch) when given, plays each signal. An effect: sine (frequency_hz; gain_db and thd_percent), sweep (20 Hz to 20 kHz), impulse (response_db at octave centres), pink noise and silence, each peaking at level_db; and file, audio_file played as it is (resampled to the render's rate, mono on both channels, at most 60 s), the only signal when signals is not given. An instrument, at velocity 0.8: notes (a note, then a chord), note (A4; pitch_hz, the pitch heard), and silence (no notes); release_ms is how long the sound lasts after the last release. Each reports peak and RMS in dBFS, DC, samples beyond 0 dBFS and denormals; problems says in words what looks wrong (clipping, DC, sound from silence, no output, a note out of tune, sound that never dies away, non-finite samples the framework silenced, a script stopped by its loop budget or indexing outside an array). cpu_percent is measured, so it varies between runs. save: true keeps each output as a WAV (path) for analyze and compare. automation is a list of {param, at_s, value}: semantic patch keys and physical values, as discrete sample-accurate changes applied to every signal (no implicit ramps). automation.max_step is the largest adjacent-sample change in full-scale amplitude; baseline_max_step uses the same render without automation; excess_step is their positive difference. A step above both four times baseline and 0.05 suggests clicks or zipper noise: a screening heuristic, not proof of an artifact or of inaudibility. sidechain supplies a timed key; its middle half is measured against a connected silent key with identical automation: gain_change_db is negative for ducking, null if either output is below -120 dBFS. Slow attack may not settle in that window. Each pass has a fresh instance and initial patch. THD and impulse response are omitted during automation or a non-silent key; gain_db then describes the changing render, not static gain. notes supplies an instrument's sequence ({key, velocity, start_s, length_s}), replacing the notes signal; defaults become notes and silence. Do not combine it with the A4 note signal or select only silence. release_ms starts at its last note-off. Times round to samples at the render rate; spans must fit within seconds. sample_rate renders at that rate instead of the session's (sandbox) or the project's (DAW); latency is in samples at the rate used, which sample_rate in the result reports. meters gives a semantic plugin's read-only parameters (its meters and readouts) by patch key in physical units, as they stood when the signal ended (the tail after it does not move them). traces gives what a script's trace(name, value) calls recorded over the signal, in trace_points intervals of trace_interval_s: for each name, the last value in each interval and the lowest and highest, null where none was given.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -2562,7 +2562,7 @@ Save a DSP script to the library and compile it, with diagnostics.
 
 Writes <library>/<name>/<name>.cpp (replacing it), compiles it and returns the compiler's diagnostics, each with a hint. A script that compiles becomes a plugin of the script player under the id its Info gives: plugin.list shows it (listed) and fx.add loads it. Instances already playing it pick up the change within half a second, crossfaded; one that fails to compile leaves them playing the old code. Language: the dsp-language guide.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -2764,7 +2764,7 @@ List native audio device names, host APIs, rates and channel capacities.
 
 Enumerates PortAudio devices on macOS/Windows without opening a stream. backend defaults to portaudio; dummy returns an empty list without initializing hardware. Use exact host_api and name values with engine.start. Linux uses JACK ports and returns backend.unsupported; engine.inputs lists running JACK inputs.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -2862,7 +2862,7 @@ The device's audio inputs, MIDI devices and the outputs masters play to.
 
 audio: one entry per input channel (channel, the 1-based number track.set record_input takes, and the device port it is connected to). midi: the MIDI devices (names track.set record_midi matches; JACK ports or native CoreMIDI/WinMM inputs, fixed until restart). midi_outputs: destination names for the hardware output API (routing and clock generation are separate). outputs: one entry per output channel (channel, the number track.set hw_output takes for a master, and the port it is connected to). While the engine is stopped: running false and empty lists (engine.start opens the device).
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -2902,7 +2902,7 @@ Result:
 
 Start playback through JACK, native PortAudio, or a device-free dummy.
 
-backend: jack (Linux default), portaudio (macOS/Windows native device), or dummy (default elsewhere, no device). For portaudio, host_api, input_device and output_device select exact names from engine.devices. inputs defaults to 0 (playback only); outputs (the device channels masters can play to, track.set hw_output) defaults to one per physical playback port with JACK (2 to 64) and 2 otherwise. rate defaults to the project rate; a rate given is asked of the device (CoreAudio switches the device's rate when it can, WASAPI converts) or, with JACK on PipeWire, suggested to the graph (node.rate: applied only while the devices are idle and the rate is allowed). force_graph (JACK on PipeWire, default false) instead forces block as the graph's quantum, and rate if given, while the engine runs. PortAudio opens up to 16 native MIDI inputs and outputs; engine.inputs lists their names. Dummy is paced like a device. block: the device block in frames (default 256); the device's period may differ and is reported. anticipative (default true): render ahead of the playhead on worker threads (edits are heard up to 200 ms later); false renders everything in the audio callback. The engine runs at the device's rate (media is resampled; renders stay at the project's rate). Background and live thread capacities follows the app's Audio processing threads preference (Automatic by default); live helpers join each callback with no added latency. memory_lock reports the default-off host-process memory policy: requested, active, and a structured OS error on failure. cpu_idle_latency reports the default-off 20 microsecond PM QoS request, released on engine stop. A protection failure does not prevent audio startup. MIDI output refusals are in midi_output_warnings; midi_output_latency reports signed audio-minus-MIDI frames per output. MIDI inputs that refuse to open are skipped: midi_warnings reports each device, numeric os_error, message and corrective hint; audio continues.
+backend: jack (Linux default), portaudio (macOS/Windows native device), or dummy (default elsewhere, no device). For portaudio, host_api, input_device and output_device select exact names from engine.devices. inputs defaults to 0 (playback only); outputs (the device channels masters can play to, track.set hw_output) defaults to one per physical playback port with JACK (2 to 64) and 2 otherwise. rate defaults to the project rate; a rate given is asked of the device (CoreAudio switches the device's rate when it can, WASAPI converts) or, with JACK on PipeWire, suggested to the graph (node.rate: applied only while the devices are idle and the rate is allowed). force_graph (JACK on PipeWire, default false) instead forces block as the graph's quantum, and rate if given, while the engine runs. PortAudio opens up to 16 native MIDI inputs and outputs; engine.inputs lists their names. Dummy is paced like a device. block: the device block in frames (default 256); the device's period may differ and is reported. anticipative (default true): render ahead of the playhead on worker threads (edits are heard up to 200 ms later); false renders everything in the audio callback. The engine runs at the device's rate (media is resampled; renders stay at the project's rate). Background and live thread capacities follows the app's Audio processing threads preference (Automatic by default); live helpers join each callback with no added latency. memory_lock reports the default-off host-process memory policy: requested, active, and a structured OS error on failure. cpu_idle_latency reports the 20 microsecond PM QoS request: requested by the default-off option, or automatic, held on Linux while a bridged plug-in plays live; released on engine stop. thp_opt_out: on Linux the process is kept out of transparent huge pages while the engine runs (advised_only: regions a plug-in advised keep them). A protection failure does not prevent audio startup. MIDI output refusals are in midi_output_warnings; midi_output_latency reports signed audio-minus-MIDI frames per output. MIDI inputs that refuse to open are skipped: midi_warnings reports each device, numeric os_error, message and corrective hint; audio continues.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -2964,6 +2964,101 @@ Kind: `action`. Exposure: `mcp-tool`.
     "xruns": {
       "type": "integer"
     },
+    "bridge_late": {
+      "type": "integer"
+    },
+    "bridge_timing": {
+      "type": "object",
+      "title": "engine_bridge_timing",
+      "properties": {
+        "calls": {
+          "type": "integer"
+        },
+        "late": {
+          "type": "integer"
+        },
+        "settles": {
+          "type": "integer"
+        },
+        "past_deadline": {
+          "type": "integer"
+        },
+        "spun": {
+          "type": "integer"
+        },
+        "wait_max_us": {
+          "type": "number"
+        },
+        "wait_mean_us": {
+          "type": "number"
+        },
+        "wake_max_us": {
+          "type": "number"
+        },
+        "wake_mean_us": {
+          "type": "number"
+        },
+        "work_max_us": {
+          "type": "number"
+        },
+        "return_max_us": {
+          "type": "number"
+        },
+        "wakes_over_200us": {
+          "type": "integer"
+        },
+        "wakes_over_1ms": {
+          "type": "integer"
+        },
+        "bridge_cpus": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "migrations": {
+          "type": "integer"
+        },
+        "class_mismatches": {
+          "type": "integer"
+        },
+        "longest_cycle_us": {
+          "type": "number"
+        },
+        "overruns_late_wait": {
+          "type": "integer"
+        },
+        "overruns_slow_bridge": {
+          "type": "integer"
+        },
+        "overruns_not_waiting": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "calls",
+        "late",
+        "settles",
+        "past_deadline",
+        "spun",
+        "wait_max_us",
+        "wait_mean_us",
+        "wake_max_us",
+        "wake_mean_us",
+        "work_max_us",
+        "return_max_us",
+        "wakes_over_200us",
+        "wakes_over_1ms",
+        "bridge_cpus",
+        "migrations",
+        "class_mismatches",
+        "longest_cycle_us",
+        "overruns_late_wait",
+        "overruns_slow_bridge",
+        "overruns_not_waiting"
+      ],
+      "additionalProperties": false
+    },
     "midi_dropped": {
       "type": "integer"
     },
@@ -3205,12 +3300,15 @@ Kind: `action`. Exposure: `mcp-tool`.
     },
     "cpu_idle_latency": {
       "type": "object",
-      "title": "runtime_protection_status",
+      "title": "cpu_idle_latency_status",
       "properties": {
         "requested": {
           "type": "boolean"
         },
         "active": {
+          "type": "boolean"
+        },
+        "automatic": {
           "type": "boolean"
         },
         "error": {
@@ -3237,7 +3335,71 @@ Kind: `action`. Exposure: `mcp-tool`.
           "additionalProperties": false
         }
       },
-      "required": ["requested", "active"],
+      "required": ["requested", "active", "automatic"],
+      "additionalProperties": false
+    },
+    "thp_opt_out": {
+      "type": "object",
+      "title": "thp_opt_out_status",
+      "properties": {
+        "active": {
+          "type": "boolean"
+        },
+        "advised_only": {
+          "type": "boolean"
+        },
+        "inherited": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": "object",
+          "title": "runtime_protection_error",
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "hint": {
+              "type": "string"
+            },
+            "errno": {
+              "type": "integer"
+            }
+          },
+          "required": ["code", "message", "path", "hint", "errno"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["active", "advised_only", "inherited"],
+      "additionalProperties": false
+    },
+    "audio_page_faults": {
+      "type": "object",
+      "title": "audio_page_faults",
+      "properties": {
+        "scope": {
+          "type": "string",
+          "pattern": "^(audio_threads|process|none)$"
+        },
+        "minor": {
+          "type": "integer"
+        },
+        "major": {
+          "type": "integer"
+        },
+        "threads": {
+          "type": "integer"
+        },
+        "saturated": {
+          "type": "boolean"
+        }
+      },
+      "required": ["scope", "minor", "threads", "saturated"],
       "additionalProperties": false
     },
     "meter_drops": {
@@ -3255,6 +3417,12 @@ Kind: `action`. Exposure: `mcp-tool`.
       "additionalProperties": false
     },
     "failed_fx": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "bridge_threads_refused": {
       "type": "array",
       "items": {
         "type": "string"
@@ -3349,6 +3517,8 @@ Kind: `action`. Exposure: `mcp-tool`.
     "plan_latency",
     "device_latency",
     "xruns",
+    "bridge_late",
+    "bridge_timing",
     "midi_dropped",
     "midi_inputs",
     "midi_outputs",
@@ -3370,8 +3540,11 @@ Kind: `action`. Exposure: `mcp-tool`.
     "warnings",
     "memory_lock",
     "cpu_idle_latency",
+    "thp_opt_out",
+    "audio_page_faults",
     "meter_drops",
     "failed_fx",
+    "bridge_threads_refused",
     "dropped",
     "voice_dropped",
     "failed_errors",
@@ -3415,6 +3588,29 @@ Result:
   "plan_latency": 0,
   "device_latency": 0,
   "xruns": 0,
+  "bridge_late": 0,
+  "bridge_timing": {
+    "calls": 0,
+    "late": 0,
+    "settles": 0,
+    "past_deadline": 0,
+    "spun": 0,
+    "wait_max_us": 0,
+    "wait_mean_us": 0,
+    "wake_max_us": 0,
+    "wake_mean_us": 0,
+    "work_max_us": 0,
+    "return_max_us": 0,
+    "wakes_over_200us": 0,
+    "wakes_over_1ms": 0,
+    "bridge_cpus": [],
+    "migrations": 0,
+    "class_mismatches": 0,
+    "longest_cycle_us": 0,
+    "overruns_late_wait": 0,
+    "overruns_slow_bridge": 0,
+    "overruns_not_waiting": 0
+  },
   "midi_dropped": 0,
   "midi_warnings": [],
   "midi_out_dropped": 0,
@@ -3462,13 +3658,17 @@ Result:
   },
   "cpu_idle_latency": {
     "requested": false,
-    "active": false
+    "active": false,
+    "automatic": false
   },
+  "thp_opt_out": "<any>",
+  "audio_page_faults": "<any>",
   "meter_drops": {
     "renderer": 0,
     "callback": 0
   },
   "failed_fx": [],
+  "bridge_threads_refused": [],
   "dropped": 0,
   "voice_dropped": 0,
   "failed_errors": [],
@@ -3481,9 +3681,9 @@ Result:
 
 Real-time engine state: backend, rate, block, device period, latency, xruns.
 
-preparing_audio: source preparation is pending; the previous ready plan stays audible. prepared_version is the last compiled version, preparation_version the pending target (zero when idle); preparation_error explains a failed preparation. plan_latency: plugin delay plus prepared MIDI audio lead in frames; midi_lead_frames reports the latter. midi_inputs/midi_outputs give per-port enabled/timing/loss/warnings, and for outputs what each sends (clock, transport, spp, mtc), as midi.inputs.get/midi.outputs.get. device_latency: frames from the engine's outputs to the device. restart_needed: the device changed rate or went away; engine.stop and engine.start again. midi_devices_changed is advisory: MIDI topology changed but audio keeps running. midi_devices_message asks for an explicit engine restart to pick up the new set; existing port names stay fixed. midi_out_dropped counts hardware output rejections, queue/device loss and pending events discarded at shutdown. midi_output_warnings lists outputs skipped at start; midi_output_latency is signed audio-minus-MIDI latency per output, in frames. sync: external sync (sync.get has the same status with the settings). midi_dropped: MIDI input messages/packets rejected or lost to bounded queues (JACK and native; zero for the dummy backend). midi_warnings lists inputs skipped at start, with device, numeric os_error, message and corrective hint. meter_drops: entries a full ring dropped (the renderer's, the audio callback's) — a strip's peak/RMS missed a block, never audio. dropped/voice_dropped count lost plug-in output/voice records. memory_lock reports requested/active and an optional OS error with errno and a corrective hint, including while stopped. Bridges are excluded. cpu_idle_latency reports the owned 20 microsecond request with the same status/error fields; it affects system idle while held and leaves CPU frequency policy unchanged. live_helpers is the enabled live helper capacity. scheduling: each thread class's policy (none, normal, fifo, rr, high) and priority as applied at start: the device callback, live helpers, renderer and background helpers (real-time below a real-time callback when permitted). workgroup: whether the live helpers joined the device's audio workgroup (macOS CoreAudio; state none, ready, joined, partial or failed, with the helper counts and the last refusal's OS error, message and hint). warnings includes scheduling fallbacks and plan warnings with corrective actions. failed_errors adds structured code, message, path and hint to each failure. failed_fx: isolated plugins whose process crashed or hung (silent now; fx.restart re-creates them).
+preparing_audio: source preparation is pending; the previous ready plan stays audible. prepared_version is the last compiled version, preparation_version the pending target (zero when idle); preparation_error explains a failed preparation. plan_latency: plugin delay plus prepared MIDI audio lead in frames; midi_lead_frames reports the latter. midi_inputs/midi_outputs give per-port enabled/timing/loss/warnings, and for outputs what each sends (clock, transport, spp, mtc), as midi.inputs.get/midi.outputs.get. device_latency: frames from the engine's outputs to the device. restart_needed: the device changed rate or went away; engine.stop and engine.start again. midi_devices_changed is advisory: MIDI topology changed but audio keeps running. midi_devices_message asks for an explicit engine restart to pick up the new set; existing port names stay fixed. midi_out_dropped counts hardware output rejections, queue/device loss and pending events discarded at shutdown. midi_output_warnings lists outputs skipped at start; midi_output_latency is signed audio-minus-MIDI latency per output, in frames. sync: external sync (sync.get has the same status with the settings). midi_dropped: MIDI input messages/packets rejected or lost to bounded queues (JACK and native; zero for the dummy backend). midi_warnings lists inputs skipped at start, with device, numeric os_error, message and corrective hint. meter_drops: entries a full ring dropped (the renderer's, the audio callback's) — a strip's peak/RMS missed a block, never audio. dropped/voice_dropped count lost plug-in output/voice records. memory_lock reports requested/active and an optional OS error with errno and a corrective hint, including while stopped. Bridges are excluded. cpu_idle_latency reports the owned 20 microsecond request with the same status/error fields, and automatic: held without the option because a bridged plug-in plays live (Linux; an automatic failure is no warning). It affects system idle while held and leaves CPU frequency policy unchanged. thp_opt_out: active, advised_only, inherited (the process was already kept out when the engine started; left as it was, not undone at stop) and an optional error, Linux only (khugepaged collapsing memory would stall audio threads). audio_page_faults: page faults since the engine started; scope audio_threads counts the callback's and live helpers' (Linux), process the whole process's (macOS, Windows, where major is omitted), none while stopped; saturated: the platform's counter stopped at its limit (macOS 32-bit counts), so minor is 0 and major omitted, not counts. live_helpers is the enabled live helper capacity. scheduling: each thread class's policy (none, normal, fifo, rr, high) and priority as applied at start: the device callback, live helpers, renderer and background helpers (real-time below a real-time callback when permitted). workgroup: whether the live helpers joined the device's audio workgroup (macOS CoreAudio; state none, ready, joined, partial or failed, with the helper counts and the last refusal's OS error, message and hint). warnings includes scheduling fallbacks and plan warnings with corrective actions. failed_errors adds structured code, message, path and hint to each failure. failed_fx: isolated plugins whose process crashed or hung (silent now; fx.restart re-creates them). bridge_late: callback cycles in which a bridged plugin had not answered by the cycle's bridge deadline (its period or 2 ms, whichever is larger); its output was silent for that cycle, and xruns counts each of these cycles too. bridge_threads_refused: isolated plugins whose bridge audio thread was refused the scheduling it asked for (it runs at what it had and can fall behind under load; grant real-time scheduling to the user and restart the engine).
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -3533,6 +3733,101 @@ Kind: `query`. Exposure: `mcp-tool`.
     "xruns": {
       "type": "integer"
     },
+    "bridge_late": {
+      "type": "integer"
+    },
+    "bridge_timing": {
+      "type": "object",
+      "title": "engine_bridge_timing",
+      "properties": {
+        "calls": {
+          "type": "integer"
+        },
+        "late": {
+          "type": "integer"
+        },
+        "settles": {
+          "type": "integer"
+        },
+        "past_deadline": {
+          "type": "integer"
+        },
+        "spun": {
+          "type": "integer"
+        },
+        "wait_max_us": {
+          "type": "number"
+        },
+        "wait_mean_us": {
+          "type": "number"
+        },
+        "wake_max_us": {
+          "type": "number"
+        },
+        "wake_mean_us": {
+          "type": "number"
+        },
+        "work_max_us": {
+          "type": "number"
+        },
+        "return_max_us": {
+          "type": "number"
+        },
+        "wakes_over_200us": {
+          "type": "integer"
+        },
+        "wakes_over_1ms": {
+          "type": "integer"
+        },
+        "bridge_cpus": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "migrations": {
+          "type": "integer"
+        },
+        "class_mismatches": {
+          "type": "integer"
+        },
+        "longest_cycle_us": {
+          "type": "number"
+        },
+        "overruns_late_wait": {
+          "type": "integer"
+        },
+        "overruns_slow_bridge": {
+          "type": "integer"
+        },
+        "overruns_not_waiting": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "calls",
+        "late",
+        "settles",
+        "past_deadline",
+        "spun",
+        "wait_max_us",
+        "wait_mean_us",
+        "wake_max_us",
+        "wake_mean_us",
+        "work_max_us",
+        "return_max_us",
+        "wakes_over_200us",
+        "wakes_over_1ms",
+        "bridge_cpus",
+        "migrations",
+        "class_mismatches",
+        "longest_cycle_us",
+        "overruns_late_wait",
+        "overruns_slow_bridge",
+        "overruns_not_waiting"
+      ],
+      "additionalProperties": false
+    },
     "midi_dropped": {
       "type": "integer"
     },
@@ -3774,12 +4069,15 @@ Kind: `query`. Exposure: `mcp-tool`.
     },
     "cpu_idle_latency": {
       "type": "object",
-      "title": "runtime_protection_status",
+      "title": "cpu_idle_latency_status",
       "properties": {
         "requested": {
           "type": "boolean"
         },
         "active": {
+          "type": "boolean"
+        },
+        "automatic": {
           "type": "boolean"
         },
         "error": {
@@ -3806,7 +4104,71 @@ Kind: `query`. Exposure: `mcp-tool`.
           "additionalProperties": false
         }
       },
-      "required": ["requested", "active"],
+      "required": ["requested", "active", "automatic"],
+      "additionalProperties": false
+    },
+    "thp_opt_out": {
+      "type": "object",
+      "title": "thp_opt_out_status",
+      "properties": {
+        "active": {
+          "type": "boolean"
+        },
+        "advised_only": {
+          "type": "boolean"
+        },
+        "inherited": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": "object",
+          "title": "runtime_protection_error",
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "hint": {
+              "type": "string"
+            },
+            "errno": {
+              "type": "integer"
+            }
+          },
+          "required": ["code", "message", "path", "hint", "errno"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["active", "advised_only", "inherited"],
+      "additionalProperties": false
+    },
+    "audio_page_faults": {
+      "type": "object",
+      "title": "audio_page_faults",
+      "properties": {
+        "scope": {
+          "type": "string",
+          "pattern": "^(audio_threads|process|none)$"
+        },
+        "minor": {
+          "type": "integer"
+        },
+        "major": {
+          "type": "integer"
+        },
+        "threads": {
+          "type": "integer"
+        },
+        "saturated": {
+          "type": "boolean"
+        }
+      },
+      "required": ["scope", "minor", "threads", "saturated"],
       "additionalProperties": false
     },
     "meter_drops": {
@@ -3824,6 +4186,12 @@ Kind: `query`. Exposure: `mcp-tool`.
       "additionalProperties": false
     },
     "failed_fx": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "bridge_threads_refused": {
       "type": "array",
       "items": {
         "type": "string"
@@ -3918,6 +4286,8 @@ Kind: `query`. Exposure: `mcp-tool`.
     "plan_latency",
     "device_latency",
     "xruns",
+    "bridge_late",
+    "bridge_timing",
     "midi_dropped",
     "midi_inputs",
     "midi_outputs",
@@ -3939,8 +4309,11 @@ Kind: `query`. Exposure: `mcp-tool`.
     "warnings",
     "memory_lock",
     "cpu_idle_latency",
+    "thp_opt_out",
+    "audio_page_faults",
     "meter_drops",
     "failed_fx",
+    "bridge_threads_refused",
     "dropped",
     "voice_dropped",
     "failed_errors",
@@ -3972,6 +4345,29 @@ Result:
   "plan_latency": 0,
   "device_latency": 0,
   "xruns": 0,
+  "bridge_late": 0,
+  "bridge_timing": {
+    "calls": 0,
+    "late": 0,
+    "settles": 0,
+    "past_deadline": 0,
+    "spun": 0,
+    "wait_max_us": 0,
+    "wait_mean_us": 0,
+    "wake_max_us": 0,
+    "wake_mean_us": 0,
+    "work_max_us": 0,
+    "return_max_us": 0,
+    "wakes_over_200us": 0,
+    "wakes_over_1ms": 0,
+    "bridge_cpus": [],
+    "migrations": 0,
+    "class_mismatches": 0,
+    "longest_cycle_us": 0,
+    "overruns_late_wait": 0,
+    "overruns_slow_bridge": 0,
+    "overruns_not_waiting": 0
+  },
   "midi_dropped": 0,
   "midi_warnings": [],
   "midi_out_dropped": 0,
@@ -4025,13 +4421,27 @@ Result:
   },
   "cpu_idle_latency": {
     "requested": false,
-    "active": false
+    "active": false,
+    "automatic": false
+  },
+  "thp_opt_out": {
+    "active": false,
+    "advised_only": false,
+    "inherited": false
+  },
+  "audio_page_faults": {
+    "scope": "none",
+    "minor": 0,
+    "major": 0,
+    "threads": 0,
+    "saturated": false
   },
   "meter_drops": {
     "renderer": 0,
     "callback": 0
   },
   "failed_fx": [],
+  "bridge_threads_refused": [],
   "dropped": 0,
   "voice_dropped": 0,
   "failed_errors": [],
@@ -4046,7 +4456,7 @@ Stop real-time playback and release the audio device.
 
 
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -4294,7 +4704,7 @@ List envelopes (optionally of one track, route or plugin).
 
 
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -4463,7 +4873,7 @@ Remove an envelope (the parameter returns to its set value).
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -4514,7 +4924,7 @@ Set an envelope's options: active (heard), mode (read, touch, latch, write).
 
 visible shows or hides the envelope's lane in the arrange view (a hidden envelope still plays while active).
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -4562,6 +4972,44 @@ Result:
 {}
 
 ```
+
+## `env.write.commit@1`
+
+Record what a write pass wrote into an envelope as a replayable edit.
+
+Points with after < pos <= through go and the given points come in, in the envelope's own units (beats or seconds by its timebase, stored values).
+
+Kind: `edit`. Exposure: `internal`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `env` | string |  |  |  | Envelope id, e.g. "en_1". |
+| `after` | number |  |  |  |  |
+| `through` | number |  |  |  |  |
+| `points` | array |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "empty",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "additionalProperties": false
+}
+
+```
+
+### Examples
 
 ## `fx.add@1`
 
@@ -4696,7 +5144,7 @@ Delete a saved FX chain preset by name.
 
 Removes the preset file from the user's chains directory. Tracks that loaded it keep their effects.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -4757,7 +5205,7 @@ List saved FX chain presets by name, path and effect count.
 
 Lists valid supple.fx-chain/1.0 files, sorted by name and path. Invalid documents are skipped with warnings. See fx.chain.save and fx.chain.load.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -4829,7 +5277,7 @@ Append or replace a track's FX chain from a preset in one undo step.
 
 Give exactly one of name (in the user's chains directory) or path (relative to the work directory). mode defaults to append; replace removes the target chain, its envelopes and key routes. Validates every plugin and state before changing the model.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -4900,7 +5348,7 @@ Save an ordered FX chain as a named preset.
 
 Save main (default) or input FX to the user's chains directory. Preserves semantic patches or opaque base64 state. Refuses empty chains; replace: true explicitly overwrites an existing name.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -4972,7 +5420,7 @@ Copy a plugin and its current settings into a track's FX chain.
 
 Adds a new instance of fx's plugin to track's main (default) or input chain, at index (default: the end), with the source's options (label, bypass, offline, wet, isolation, oversampling, parallel, pdc) and its settings as they are now: the running plugin's own state when the engine has one (editor edits included), else the model's patch or state. Not copied: envelopes, key routes into the source, and, when the track differs, channel pins. The source stays where it is; use fx.move to move it. One undo step.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -5088,6 +5536,10 @@ Kind: `query`. Exposure: `mcp-tool`.
       "type": "integer",
       "description": "The instance's reported latency, in samples"
     },
+    "isolation_effective": {
+      "type": "string",
+      "description": "Where the instance runs: in_process, shared_bridge or dedicated; inherit resolves to the plug-in isolation preference (stock plug-ins in process), as the instance is made"
+    },
     "outputs_notes": {
       "type": "boolean",
       "description": "The loaded plug-in sends notes or MIDI: fx.set midi_output chooses replace or merge"
@@ -5128,6 +5580,7 @@ Result:
   "name": "<any>",
   "description": "<any>",
   "latency_samples": "<any>",
+  "isolation_effective": "in_process",
   "status_available": false
 }
 
@@ -5139,7 +5592,7 @@ List the MIDI controller bindings of plugin parameters.
 
 Every effect's, or one effect's (fx). control names the message in words.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -5203,7 +5656,7 @@ Remove a plugin parameter's MIDI controller binding.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -5256,7 +5709,7 @@ Let a MIDI controller (CC, note, pitch bend) move a plugin parameter.
 
 One binding per parameter (a new one replaces it). midi.device: a substring of the MIDI input's name (empty: any). mode for a CC: absolute, relative1 (127 = -1, 1 = +1), relative2 (63 = -1, 65 = +1), relative3 (65 = -1, 1 = +1) or toggle (above 0 flips it). soft_takeover: an absolute control acts once it reaches the value. when_selected / when_focused / when_visible: only while the effect's track is selected, or its window or editor has the focus or shows (the GUI).
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -5330,13 +5783,13 @@ Read a plugin's meters and readouts, playing now or as a render ended.
 
 The read-only parameters of a plugin: a semantic plugin's by patch key in physical units (an analyzer's loudness, a reverb's RT60, a gate's suggested threshold), any other plugin's by name as CLAP values. from live (the default): the playing instance's, which move while it processes (playback, monitoring); source none while no instance runs (start the engine). from render: as the last render.mix ended, which renders through instances of its own; source none until a render.mix has included this plugin.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `fx` | string |  |  |  |  |
+| `fx` | string |  |  |  | Plugin instance id, e.g. "fx_1". |
 | `from` | string |  |  | "live" | live: the playing instance; render: the last render.mix |
 
 ### Result
@@ -5393,14 +5846,14 @@ Move a plugin within a track chain or to another track.
 
 Works on the track's chain, on its input chain (an input-chain effect stays on its track) and on a take's chain (take FX stay on their take: index only).
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `fx` | string |  |  |  |  |
-| `track` | string |  |  |  |  |
+| `fx` | string |  |  |  | Plugin instance id, e.g. "fx_1". |
+| `track` | string |  |  |  | Track id, e.g. "tr_1". |
 | `index` | integer |  | 0.0.. |  |  |
 
 ### Result
@@ -5447,13 +5900,13 @@ Read one saved plugin parameter by semantic key or numeric CLAP id.
 
 
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `fx` | string |  |  |  |  |
+| `fx` | string |  |  |  | Plugin instance id, e.g. "fx_1". |
 | `param` | string |  |  |  |  |
 
 ### Result
@@ -5504,7 +5957,7 @@ Set semantic parameters in units, or plain plugin parameters by name/id.
 
 Plain CLAP/VST3 values use the declared range or plugin text; read-only parameters refuse edits.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -5580,7 +6033,7 @@ Kind: `query`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `fx` | string |  |  |  |  |
+| `fx` | string |  |  |  | Plugin instance id, e.g. "fx_1". |
 | `changed_only` | boolean |  |  | false |  |
 
 ### Result
@@ -5630,13 +6083,13 @@ List an instance's read-only factory patches, by name.
 
 
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `fx` | string |  |  |  |  |
+| `fx` | string |  |  |  | Plugin instance id, e.g. "fx_1". |
 
 ### Result
 
@@ -5757,13 +6210,13 @@ Replace a semantic patch, or apply a factory patch by name.
 
 Give exactly one of patch or name. Factory names come from fx.patch.list; omitted parameters take defaults.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `fx` | string |  |  |  |  |
+| `fx` | string |  |  |  | Plugin instance id, e.g. "fx_1". |
 | `patch` | value |  |  |  |  |
 | `name` | string |  |  |  |  |
 
@@ -5820,7 +6273,7 @@ Delete one of the user's presets for a plugin; factory presets stay.
 
 Removes the user preset's file. Factory presets belong to the plugin and cannot be deleted. Instances that loaded the preset keep their settings.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -5884,7 +6337,7 @@ List a plugin's presets: its factory ones, then the user's.
 
 source factory: the plugin's own patches in its order (read-only; the same as fx.patch.list's names). source user: the user's saved presets for this plugin, sorted by name, with their file path. See fx.preset.load and fx.preset.save.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -5962,7 +6415,7 @@ Apply a factory or user preset to a plugin instance in one undo step.
 
 name from fx.preset.list. source (factory or user) is needed only when both have the name. A factory preset or a semantic plugin's user preset replaces the whole patch (omitted parameters take defaults); a plain plugin's user preset is its saved state. Options such as wet and bypass are not part of a preset.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -6032,7 +6485,7 @@ Save a plugin instance's current settings as a named user preset.
 
 Saves what the running plugin has now (editor edits included): the patch of a semantic plugin, else its state. The preset is the user's, for every instance of this plugin in any project. A factory preset's name cannot be taken; replace: true overwrites a user preset of that name.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -6149,7 +6602,7 @@ Re-create a plugin instance from its saved patch/state (after a crash).
 
 engine.status lists failed_fx: isolated plugins whose process crashed or hung. The new instance starts from the model's patch or state.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -6200,7 +6653,7 @@ Set instance options: bypass, offline, wet, label, isolation, pins, MIDI.
 
 isolation: in_process, dedicated (the plugin runs in a process of its own: a crash silences only it), shared_bridge (one process for all such plugins), inherit (the project default: in_process). pins: which of the track's channels (1-based; track.set channels adds 3-128) the plugin reads ({in: [l, r]}), writes ({out: [l, r]}) and keys from ({key: [3, 4]}: a detector on 3/4, for a plugin with a sidechain input); {} restores 1/2 in and out. out past its first two entries: a track channel for each of the plugin's auxiliary output channels in order (0: unconnected); fx.add sets them for a multi-out instrument. midi_output, for a plug-in with note output (fx.describe outputs_notes): replace (default) gives the plug-ins after it, and the track's post-FX MIDI sends, only its output; merge adds its output to the MIDI that reached it.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -6272,13 +6725,49 @@ Result:
 
 ```
 
+## `fx.state.capture@1`
+
+Record a plug-in's own state change as a replayable edit.
+
+
+
+Kind: `edit`. Exposure: `internal`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `fx` | string |  |  |  | Plug-in id, e.g. "fx_1". |
+| `state` | string |  |  |  | The state's blob hash, as the plug-in's state field holds it |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "empty",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
 ## `group.add@1`
 
 Create a named track group with optional links and members.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -6348,7 +6837,7 @@ Describe a track group's membership, links and VCA ancestry.
 
 
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -6537,7 +7026,7 @@ List track groups, linked attributes and optional VCA controls.
 
 
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -6732,7 +7221,7 @@ Replace a group's track membership; an empty array clears it.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -6792,7 +7281,7 @@ Remove a track group and its VCA, keeping its tracks.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -6850,7 +7339,7 @@ Change a group's name, color, links or active state.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -6913,7 +7402,7 @@ Resolve linked tracks or matching items for an edit or selection.
 
 
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -6992,7 +7481,7 @@ List the current branch's recent versions (newest first).
 
 
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -7086,7 +7575,7 @@ Redo the last undone change.
 
 
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -7296,13 +7785,13 @@ Render an item through its take and track FX into a new audio take.
 
 Renders the heard take alone (other items on the track silent) through its take FX and the track's main chain, before the fader and pan, over the item's span: MIDI becomes audio through the track's instrument. The file goes to the project's media folder. mode take: a new take, heard, beside the old one (MIDI stays a take). mode replace: the new take takes the old one's place. The item's fades and gain still apply when it plays; the track FX still process the result, so bypass or move them if they should not apply twice.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `item` | string |  |  |  |  |
+| `item` | string |  |  |  | Item id, e.g. "it_1". |
 | `mode` | string |  |  | "take" |  |
 
 ### Result
@@ -7362,7 +7851,7 @@ Consolidate selected audio and MIDI per track in a background job.
 
 Partitions by track and active source kind. Audio bakes active takes, item controls, warp and take FX/automation to float WAV; track processing remains live. MIDI items on a track become one item (each item's heard take, gaps empty, overlaps layered); a lone MIDI item with several MIDI takes layers them into one take; other lone MIDI stays unchanged. Select complete linked/warp bundles on matching lanes/groups. One undo step after successful job publication. No item-count cap; existing render/source sample budgets apply. job.get returns resulting items/files.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -7434,14 +7923,14 @@ Copy an item and its takes to a new beat position (default: immediately after).
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `bypass_groups` | boolean |  |  | false |  |
-| `item` | string |  |  |  |  |
+| `item` | string |  |  |  | Item id, e.g. "it_1". |
 | `to` | number |  | 0.0.. |  |  |
 
 ### Result
@@ -7500,13 +7989,13 @@ Spread an item's takes onto new tracks, or one after another on its track.
 
 In recording order. mode tracks: the first take stays on the item's track and each other take gets a new channel right below it (named after the take) at the same time. mode serial: the takes follow each other on the item's own track, each as long as the item. Every take becomes a one-take item with its FX and envelopes.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `item` | string |  |  |  |  |
+| `item` | string |  |  |  | Item id, e.g. "it_1". |
 | `mode` | string |  |  | "tracks" |  |
 
 ### Result
@@ -7588,7 +8077,7 @@ Write an item's raw audio (WAV) or its MIDI (SMF) to a file.
 
 Exports the active take over the part the item covers (trims and splits respected). Audio: the source's own samples, rate and channels, from the source position at the item's start to the one at its end (playrate, unpreserved pitch and stretch markers decide that span but are not applied; a looping item ignores markers and repeats its source as heard; outside the source is silence). No gain, fades, pan, channel mode, FX or track processing. 16/24-bit PCM WAV sources keep their format; others are 32-bit float. MIDI: what the item plays (loops unrolled, notes ending by its end) from 0, at the source PPQ, with the tempo and meter at the item's start. Relative paths resolve against the work directory; a missing extension is added; existing files are replaced, the project's media never.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -7700,7 +8189,7 @@ Heal compatible consecutive audio pieces without rendering.
 
 One chain per track, complete linked/warp selection, matching stored audio/take/FX properties and continuous source maps. Accepts touching split pieces and unchanged linear Slice-at-hits overlaps up to 50 ms. Keep all left takes, outer fades and full warp maps; remove interior slice fades. Nonlinear envelope seams that cannot be recovered refuse. Stored FX states must match exactly; no live plugin queries or audio rendering. One undo step.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -7746,7 +8235,7 @@ Mix the selected items through their strips onto a new muted channel.
 
 Background job. Only the given items sound; each plays through its channel's full strip (take FX, item gain/fades, track FX, automation, fader, pan, Console 9 encode), and the sum is decoded by a neutral Console 9 Buss, as a fresh buss fed by those channels hears it. Sends, parent busses, mute switches and solo are ignored. Span: earliest item start to latest end, no tail. Result: a project-rate stereo float WAV in the media folder on a new muted channel after the last source (under their common parent, else the main master), one item at the span's start. Source items stay. One undo step; job.get returns track, item and file.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -7821,7 +8310,7 @@ Move an item in time (position in beats or bar) and/or to another track.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -7877,7 +8366,7 @@ Copy items as they were in a version (a clipboard) to tracks and beats.
 
 version: where the items are read (default: now) — a GUI copy or cut remembers the version, so a paste reproduces the items as copied even after they were removed or edited. items: [{item, track, position}] (beats; channels only). Takes, fades, take FX and MIDI are copied; an audio source the project no longer has is restored.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -8003,7 +8492,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `bypass_groups` | boolean |  |  | false |  |
-| `item` | string |  |  |  |  |
+| `item` | string |  |  |  | Item id, e.g. "it_1". |
 | `position` | number |  | 0.0.. |  |  |
 | `bar` | integer |  | 1.0..2147483647.0 |  |  |
 | `length` | number |  | 0.0.. |  |  |
@@ -8080,14 +8569,14 @@ Split an item at a beat, optionally at the prior audio zero crossing.
 
 snap defaults to none. zero_crossing searches the active take's prepared playback source up to 100 ms before at, before FX/fades/gain. After channel mode, use the louder stereo channel by window energy (left on ties), never a stereo sum unless MonoMix is selected. Choose the latest exact zero or sign-change sample boundary; never search forward or outside the item. Without a crossing, split at at. MIDI and empty takes refuse zero_crossing; the GUI skips them. Current prepared audio must be available; start the engine and retry after preparation. Linked items use the initiating item's resolved split time. History records that time for replay.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `bypass_groups` | boolean |  |  | false |  |
-| `item` | string |  |  |  |  |
+| `item` | string |  |  |  | Item id, e.g. "it_1". |
 | `at` | number |  | 0.0.. |  |  |
 | `snap` | string |  |  | "none" |  |
 
@@ -8461,7 +8950,7 @@ Recent commands with origin, arguments and outcome (the command log).
 
 Newest last. Who did what: origin is gui, agent:<client>/<model>, mcp:<client>, lua:<script>, rpc. queries: include read-only commands (left out by default). since: only entries after this seq (poll with the last seq seen). origin: entries whose origin starts with this. The log keeps the last 2000 commands.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -8506,7 +8995,7 @@ Add a named marker in beats.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -8566,7 +9055,7 @@ List rulers in this project.
 
 
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -8650,13 +9139,13 @@ Remove a ruler.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `id` | string |  |  |  |  |
+| `id` | string |  |  |  | Marker id, e.g. "mk_1". |
 
 ### Result
 
@@ -8701,13 +9190,13 @@ Edit a ruler's position, name, or color.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `id` | string |  |  |  |  |
+| `id` | string |  |  |  | Marker id, e.g. "mk_1". |
 | `pos` | number |  | 0.0.. |  |  |
 | `name` | string |  |  |  |  |
 | `color` | string |  |  |  |  |
@@ -8756,7 +9245,7 @@ Edit a MIDI item's notes and CCs: add, remove, move, resize, velocity, quantize.
 
 ops run in order and are one undo step. notes: indices into midi.notes' list as it was before this command (every op refers to that list, so later ops are not affected by earlier removals). Beats are from the item's start. add {pitch, start, length, velocity?, channel?}; remove {notes}; move {notes, beats?, semitones?}; resize {notes, length? | length_delta? | start_delta?}; velocity {notes, velocity? and/or velocity_delta?}; quantize {notes? (all), grid (beats, on the project's grid), strength? 0-1, ends?}; cc.set {number, points [{beat, value}], channel?}; cc.clear {number, from?, to?}. Returns the new indices of the notes the ops added or changed (to keep a selection).
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -8868,7 +9357,7 @@ Hardware MIDI inputs, timing, settings, loss and startup warnings.
 
 ports contains name, zero-based index (-1 absent), enabled, offset_ms, latency_ms, dropped and structured warnings. A disabled input feeds nothing, the sync chase included; offset_ms moves played and recorded MIDI, not the chase (sync.set has its own offset). Settings are machine preferences keyed by exact port name; they are not project state.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -8906,7 +9395,7 @@ Change one machine MIDI port's enabled state and timing offset.
 
 port is a unique case-insensitive match to a present or recorded name; settings use its exact spelling. Omitted members keep their values; a record back at every default is removed. offset_ms is signed -1000..1000 milliseconds. Positive offsets delay. Inputs retain the existing channel input mechanism. Machine settings: not an undo step, not saved in the project. Returns the updated ports list.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -8950,7 +9439,7 @@ List a MIDI item's notes and CC points (beats from the item's start).
 
 Notes are in a fixed order (by start, then pitch); midi.edit refers to them by their position in this list. start/length/beat are in beats from the item's start; channel is 1-16 (omitted for 1). pooled: other items share this MIDI, and edits change them too. For writing whole phrases, midi.write with notation is usually better.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -8996,7 +9485,7 @@ Hardware MIDI outputs: settings, clock/MTC, timing, loss, warnings.
 
 ports contains name, zero-based index (-1 absent), enabled, offset_ms, reset_on_stop, latency_ms (audio minus MIDI), dropped (routed MIDI, clock and MTC, and device loss) and structured warnings. lead_ms is the shared lead added to all audio, including monitoring. Clock output (ADR-0073): clock, transport, spp, mtc and clock_while_stopped as set; sends, what goes out now; suppressed, what is set but not sent back to the sync master's device; delay_ms (plan latency + latency + offset) and sent, the clock and MTC messages since the engine started. Settings are machine preferences keyed by exact port name; they are not project state.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -9034,7 +9523,7 @@ Change one MIDI output: enabled, offset, reset, clock, SPP, MTC.
 
 port is a unique case-insensitive match to a present or recorded name; settings use its exact spelling. Omitted members keep their values; a record back at every default is removed. offset_ms is signed -1000..1000 milliseconds. Positive offsets delay. reset_on_stop defaults true. clock sends MIDI clock (24 per quarter note) while playing; transport Start, Continue and Stop; spp Song Position before Continue and on locates; mtc MIDI time code at the project's timecode; clock_while_stopped keeps clocking at the tempo while stopped. Clock and MTC leave with the audio they belong to, after the plan's latency, the output's latency and offset_ms; nothing is sent during a count-in. Applying settings releases disabled/changed output routes. Machine settings: not an undo step, not saved in the project. Returns the updated ports list.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -9137,7 +9626,7 @@ Add a module to a rack: a type with knob values.
 
 type: an id or a short name ("vca", "notes"; module.list). x, y: its top-left corner in the rack (default: right of the others). params: knob values by key in the knob's units (a choice by its key, a switch as a bool). Notes: source (the track whose MIDI it plays; default the rack's channel) and device (a live MIDI input it always plays; "" any). plugin (instead of type): a plug-in id (fx.scan) for a plugin module, which shows the plug-in's name and opens its editor; its ports are in_l, in_r, out_l, out_r and, for instruments, pitch, gate and velocity. preset: a factory preset (module.describe), params on top. Returns its size and keys.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -9234,7 +9723,7 @@ Compile a module without saving it; return its diagnostics and description.
 
 source (a whole module) or name (one in the library). ok is true when it compiles; type then describes it as module.describe would.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -9301,7 +9790,7 @@ Copy modules, their current plug-in settings and internal cables.
 
 Replace this engine's clipboard, independent of the project and undo. Module order is retained; cables to unselected modules are omitted.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -9348,7 +9837,7 @@ A module type's knobs, inputs and outputs, with units and help.
 
 type (an id or a short name, "vca") or module (a module's type). Knobs: key, name, kind (number, integer, choice, toggle), unit, min, max, default, choices (keys), group, help. Ports: key, name, signal (audio, pitch in octaves from C4, gate, cv -1..1, unipolar 0..1, phase 0..1), help, and an input's normal (its value with nothing connected). A cable into a knob moves it by amount per unit of signal: octaves for a frequency, the knob's own unit otherwise.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -9401,7 +9890,7 @@ Duplicate modules, with the cables between them.
 
 The copies sit dx, dy from the originals (default 0, 40 below the lowest). cables (default true): cables among the given modules are copied too. Plugin modules copy their plug-in with its state.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -9446,7 +9935,7 @@ Edit a library module in place: replace text, then save and compile it.
 
 name (or type, a library or project module's id). A project type is edited into the library's entry of the same id, or a free name when the id is absent. Each edit replaces old, which must be in the source exactly once, with new (empty deletes it), in order and all or none. Then as module.write: saved, compiled, and racks playing it rebuilt.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -9506,7 +9995,7 @@ Copy a module type's source into the library under a new id.
 
 type: the one to copy (stock or library). id: the copy's ("com.<you>.<name>"). name: its library name (default: the id's last part). The copy is saved and compiled as module.write does; then module.edit changes it.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -9561,7 +10050,7 @@ A module type's source: stock or library.
 
 type (an id or short name: every stock module's source is readable, a good start for your own) or name (a library module's file, also when it does not compile).
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -9611,7 +10100,7 @@ List the MIDI controllers of module knobs.
 
 Every module's, or one module's. control names the message in words.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -9661,7 +10150,7 @@ Remove a module knob's MIDI controller.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -9702,7 +10191,7 @@ Let a MIDI controller turn a module's knob.
 
 One binding per knob (a new one replaces it). midi.device: a substring of the MIDI input's name (empty: any). mode for a CC: absolute, relative1 (127 = -1, 1 = +1), relative2 (63 = -1, 65 = +1), relative3 (65 = -1, 1 = +1) or toggle. soft_takeover: an absolute control acts once it reaches the knob. A knob turns along its travel (a frequency's is logarithmic); each movement is one undo step. A plugin module's knobs are its plug-in's: fx.learn.set.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -9754,7 +10243,7 @@ List module types: id, name, tags, what they do.
 
 Host modules (Out, In, Notes, Transport) first, then stock, the user's library and the project's. query matches names, ids, tags and descriptions; tag one tag.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -9804,7 +10293,7 @@ Move a module's knobs at random, by an amount.
 
 amount 0..1 (default 0.25): how far each knob may move, as a share of its range (choices change with that probability); switches stay. seed makes it repeatable. Returns the knobs it set.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -9848,7 +10337,7 @@ Remove a module with its cables.
 
 Also its knob envelopes; an Out module's channels lose it as input; an In module's sends go; a plugin module's plug-in goes.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -9887,7 +10376,7 @@ Set a module's knobs, label, place or bypass.
 
 params merge into its knobs (values in the knob's units; a choice by key; a default value is dropped from the file). A knob edit is heard at once, without a recompile. Notes source/device accept null to clear them (source returns to the home track; device to none). source: none disables the track feed while keeping routes and device. source_sends: false stops it hearing MIDI sends into its source track (its own sends and device still play). bypass passes each input to the output of its kind. label names it (an Out module's label is what channels' input menus list). preset: a factory preset by name (module.describe lists them): every knob to it, then params on top.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -9955,7 +10444,7 @@ Write a module to the library and compile it; racks use it at once.
 
 name: its library name (lower case, digits, '_' or '-'). source: the whole module, a struct deriving from Module (the module guide; module.get shows any type's source). The file is saved even when it does not compile, so module.edit can fix it; ok and diagnostics (line, column, hint) say how it went. Once it compiles, type describes it as module.describe does and module.add takes its id; modules already playing it are rebuilt with the new code (reloaded counts them), their knobs kept. A version that does not compile leaves racks on the last that did.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -10187,7 +10676,7 @@ Rescan configured plugin paths and return the available plugins.
 
 wait: false scans in the background (every module through the supervised scanner) and returns at once with the current list and the scan's job; the catalogue changes when the job is done. A background scan already running is returned instead of a second one.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -10389,6 +10878,13 @@ Kind: `query`. Exposure: `mcp-tool`.
     "branch": {
       "type": "string"
     },
+    "branches": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Every branch the project holds; the file keeps them all"
+    },
     "sample_rate": {
       "type": "number"
     },
@@ -10425,6 +10921,10 @@ Kind: `query`. Exposure: `mcp-tool`.
     "autosave_available": {
       "type": "boolean"
     },
+    "recoverable_sessions": {
+      "type": "integer",
+      "description": "Unsaved projects earlier runs left behind (project.recoverable lists them)"
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -10436,6 +10936,7 @@ Kind: `query`. Exposure: `mcp-tool`.
     "name",
     "path",
     "branch",
+    "branches",
     "sample_rate",
     "tempo",
     "meter",
@@ -10443,7 +10944,8 @@ Kind: `query`. Exposure: `mcp-tool`.
     "version",
     "generation",
     "recoverable",
-    "autosave_available"
+    "autosave_available",
+    "recoverable_sessions"
   ],
   "additionalProperties": false
 }
@@ -10466,6 +10968,7 @@ Result:
   "name": "",
   "path": "",
   "branch": "main",
+  "branches": ["main"],
   "sample_rate": 48000.0,
   "tempo": 120.0,
   "meter": "4/4",
@@ -10476,7 +10979,8 @@ Result:
   "version": 0,
   "recoverable": 0,
   "generation": "<any>",
-  "autosave_available": false
+  "autosave_available": false,
+  "recoverable_sessions": 0
 }
 
 ```
@@ -10512,6 +11016,13 @@ Kind: `action`. Exposure: `mcp-exec`.
     "branch": {
       "type": "string"
     },
+    "branches": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Every branch the project holds; the file keeps them all"
+    },
     "sample_rate": {
       "type": "number"
     },
@@ -10548,6 +11059,10 @@ Kind: `action`. Exposure: `mcp-exec`.
     "autosave_available": {
       "type": "boolean"
     },
+    "recoverable_sessions": {
+      "type": "integer",
+      "description": "Unsaved projects earlier runs left behind (project.recoverable lists them)"
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -10559,6 +11074,7 @@ Kind: `action`. Exposure: `mcp-exec`.
     "name",
     "path",
     "branch",
+    "branches",
     "sample_rate",
     "tempo",
     "meter",
@@ -10566,7 +11082,8 @@ Kind: `action`. Exposure: `mcp-exec`.
     "version",
     "generation",
     "recoverable",
-    "autosave_available"
+    "autosave_available",
+    "recoverable_sessions"
   ],
   "additionalProperties": false
 }
@@ -10591,6 +11108,7 @@ Result:
   "name": "Sketch",
   "path": "",
   "branch": "main",
+  "branches": ["main"],
   "sample_rate": 48000.0,
   "tempo": "<any>",
   "meter": "<any>",
@@ -10598,16 +11116,17 @@ Result:
   "version": 0,
   "recoverable": 0,
   "generation": "<any>",
-  "autosave_available": false
+  "autosave_available": false,
+  "recoverable_sessions": 0
 }
 
 ```
 
 ## `project.open@1`
 
-Open a project file (replaces the current project and its history).
+Open a project file and its branches (replaces the current project).
 
-recoverable > 0: recordings a crash left out of the project; project.recoverable lists them and project.recover puts them back. autosave_available: a newer autosave exists next to the file (it is not loaded silently). warnings also report project module copies that could not be read or compiled, and name types using a library version instead or left unavailable.
+recoverable > 0: recordings a crash left out of the project; project.recoverable lists them and project.recover puts them back. autosave_available: a newer autosave exists next to the file (it is not loaded silently). branch: the branch current when saved. warnings: project.history when the saved branches could not be restored (main opens alone; the first save over the file keeps a copy of it); also project module copies that could not be read or compiled, and name types using a library version instead or left unavailable.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -10633,6 +11152,13 @@ Kind: `action`. Exposure: `mcp-tool`.
     "branch": {
       "type": "string"
     },
+    "branches": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Every branch the project holds; the file keeps them all"
+    },
     "sample_rate": {
       "type": "number"
     },
@@ -10669,6 +11195,10 @@ Kind: `action`. Exposure: `mcp-tool`.
     "autosave_available": {
       "type": "boolean"
     },
+    "recoverable_sessions": {
+      "type": "integer",
+      "description": "Unsaved projects earlier runs left behind (project.recoverable lists them)"
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -10680,6 +11210,7 @@ Kind: `action`. Exposure: `mcp-tool`.
     "name",
     "path",
     "branch",
+    "branches",
     "sample_rate",
     "tempo",
     "meter",
@@ -10687,7 +11218,8 @@ Kind: `action`. Exposure: `mcp-tool`.
     "version",
     "generation",
     "recoverable",
-    "autosave_available"
+    "autosave_available",
+    "recoverable_sessions"
   ],
   "additionalProperties": false
 }
@@ -10717,6 +11249,7 @@ Result:
   "name": "<any>",
   "path": "<any>",
   "branch": "main",
+  "branches": ["main"],
   "sample_rate": "<any>",
   "tempo": "<any>",
   "meter": "<any>",
@@ -10724,18 +11257,19 @@ Result:
   "version": "<any>",
   "recoverable": 0,
   "generation": "<any>",
-  "autosave_available": false
+  "autosave_available": false,
+  "recoverable_sessions": 0
 }
 
 ```
 
 ## `project.recover@1`
 
-Put recordings a crash left out back into the project (one undo step).
+Put back what a crash left behind: recordings, or an unsaved project.
 
-files: as project.recoverable lists them (omit for all). Each becomes an item on the track it was recorded on (or track) at the position it was recorded.
+files: as project.recoverable lists them (omit for all). Each becomes an item on the track it was recorded on (or track) at the position it was recorded, in one undo step. session: instead opens that unsaved project from its newest readable autosave in place of the current one (unsaved changes are lost: save first), still unsaved, and puts back its leftover recordings as one more undo step. autosave: instead opens the saved project's autosave newer than its file (project.get autosave_available) in place of what is open, keeping its path: it is unsaved until saved over the file. autosave_file names the autosave to open (as project.recover returned or a client offered it); it must be newer than the file as this project was opened.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -10743,6 +11277,9 @@ Kind: `action`. Exposure: `mcp-tool`.
 | --- | --- | --- | --- | --- | --- |
 | `files` | array |  |  |  |  |
 | `track` | string |  |  |  | Track id, e.g. "tr_1". |
+| `session` | string |  |  |  | A session project.recoverable lists |
+| `autosave` | boolean |  |  | false | The saved project's newer autosave |
+| `autosave_file` | string |  |  |  | With autosave: which one, e.g. autosave-3.json, as offered |
 
 ### Result
 
@@ -10815,6 +11352,10 @@ Kind: `action`. Exposure: `mcp-tool`.
         "additionalProperties": false
       }
     },
+    "autosave": {
+      "type": "string",
+      "description": "The autosave it opened"
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -10834,6 +11375,13 @@ Kind: `action`. Exposure: `mcp-tool`.
 - `recover.unknown_file`: a file is not a recording to recover Hint: project.recoverable lists them
 - `recover.duplicate_file`: a file is listed twice Hint: list each once
 - `recover.no_track`: the track it was recorded on is gone Hint: give track
+- `recover.unknown_session`: no unsaved project of that name was left behind Hint: project.recoverable lists them
+- `recover.busy`: the session belongs to an app that is running Hint: recover it in that app
+- `recover.damaged`: nothing in the session can be opened Hint: project.recoverable.delete
+- `recover.session_args`: session cannot be combined with files or track Hint: recover the session, then its recordings
+- `recover.no_autosave`: no autosave is newer than the saved file Hint: open the project as saved
+- `recover.keep`: a copy recovery must keep could not be made; nothing changed Hint: make the folder writable and retry
+- `recover.autosave_args`: autosave cannot be combined with session, files or track Hint: recover the autosave, then the recordings
 
 ### Examples
 
@@ -10863,13 +11411,42 @@ Result:
 
 ```
 
+**Recover an unsaved project** (`session_left_behind`)
+
+```json
+{
+  "session": "20261114-090000-4242"
+}
+
+```
+
+Result:
+
+```json
+{
+  "recovered": [
+    {
+      "track": "tr_1",
+      "item": "<any>",
+      "take": "<any>",
+      "file": "<any>",
+      "seconds": 1.0,
+      "lost_frames": 0,
+      "takes": "<any>"
+    }
+  ],
+  "autosave": "autosave-1.json"
+}
+
+```
+
 ## `project.recoverable@1`
 
-List recordings a crash left out of the project.
+List recordings and unsaved projects a crash left behind.
 
-Takes recorded but never committed (the program stopped mid-recording) or never saved, found in the media folder's rec/. start_seconds is where each was recorded; seconds includes audio written after the file's last header update.
+recordings: takes (audio WAVs, and MIDI takes' journals with midi_events) recorded but never committed (the program stopped mid-recording) or never saved, found in the media folder's rec/ (file: relative to the media folder, with / on every platform). start_seconds is where each was recorded; seconds includes audio written after the file's last header update. sessions: unsaved projects of earlier runs that ended without saving or discarding them (a crash), each with its newest autosave's project name, tracks and branches, its leftover recordings and its size on disk; project.recover {session} opens one, project.recoverable.delete deletes one.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -10909,14 +11486,61 @@ Kind: `query`. Exposure: `mcp-tool`.
           },
           "channels": {
             "type": "integer"
+          },
+          "midi_events": {
+            "type": "integer",
+            "description": "A MIDI take's journal: the events it holds"
           }
         },
         "required": ["file", "track", "start_seconds", "seconds", "channels"],
         "additionalProperties": false
       }
+    },
+    "sessions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "recoverable_session",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "started_ms": {
+            "type": "integer",
+            "description": "When that run started (Unix ms)"
+          },
+          "autosaved_ms": {
+            "type": "integer",
+            "description": "When its newest readable autosave was written (Unix ms); absent: none, only recordings"
+          },
+          "name": {
+            "type": "string"
+          },
+          "tracks": {
+            "type": "integer",
+            "description": "Channels and busses, not masters"
+          },
+          "branches": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "recordings": {
+            "type": "integer",
+            "description": "Takes no autosaved version uses"
+          },
+          "bytes": {
+            "type": "integer",
+            "description": "Its folder's size on disk"
+          }
+        },
+        "required": ["session", "name", "tracks", "branches", "recordings", "bytes"],
+        "additionalProperties": false
+      }
     }
   },
-  "required": ["recordings"],
+  "required": ["recordings", "sessions"],
   "additionalProperties": false
 }
 
@@ -10943,6 +11567,35 @@ Result:
       "seconds": 1.0,
       "channels": 2
     }
+  ],
+  "sessions": []
+}
+
+```
+
+**An unsaved project a crash left behind** (`session_left_behind`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "recordings": [],
+  "sessions": [
+    {
+      "session": "20261114-090000-4242",
+      "started_ms": "<any>",
+      "autosaved_ms": "<any>",
+      "name": "Sketch",
+      "tracks": 1,
+      "branches": ["main"],
+      "recordings": 1,
+      "bytes": "<any>"
+    }
   ]
 }
 
@@ -10959,7 +11612,71 @@ Result:
 
 ```json
 {
-  "recordings": []
+  "recordings": [],
+  "sessions": []
+}
+
+```
+
+## `project.recoverable.delete@1`
+
+Delete an unsaved project a crash left behind, with its recordings.
+
+session: as project.recoverable lists it. Its folder and everything in it are deleted for good (this is not an undo step).
+
+Kind: `action`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `session` | string |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "session_deleted",
+  "properties": {
+    "session": {
+      "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["session"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `recover.unknown_session`: no unsaved project of that name was left behind Hint: project.recoverable lists them
+- `recover.busy`: the session belongs to an app that is running Hint: quit that app
+- `recover.delete`: the folder could not be deleted Hint: make it writable
+
+### Examples
+
+**Delete one** (`session_left_behind`)
+
+```json
+{
+  "session": "20261114-090000-4242"
+}
+
+```
+
+Result:
+
+```json
+{
+  "session": "20261114-090000-4242"
 }
 
 ```
@@ -10968,7 +11685,7 @@ Result:
 
 Save the project (canonical JSON) to its file or a new path.
 
-path: where to save (becomes the project's file); omit to save in place. warnings: running plug-ins whose current state could not be read; the file keeps the state each had before (fx.restart, then save again, or replace the plug-in).
+path: where to save (becomes the project's file); omit to save in place. The file keeps every branch with its unmerged steps (undoable after opening) and which branch is current; history: true also keeps undo history. warnings: running plug-ins whose current state could not be read; the file keeps the state each had before (fx.restart, then save again, or replace the plug-in); project.history_backup names the copy kept of a file whose branches could not be restored when opened. project.recording: a first save, or a save into another folder, while recording; stop first. project.autosave_folder: the autosave folder beside the file (<file>-data) could not be read; nothing was written.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -10977,6 +11694,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `path` | string |  |  |  |  |
+| `history` | boolean |  |  | false | Also keep undo and redo history (ADR-0076) |
 
 ### Result
 
@@ -11027,7 +11745,7 @@ Set project name, notes, Console 9, pan law, timebase or timecode.
 
 timebase: what items follow when the tempo changes, for items and tracks that inherit it — beats (default), time or beats_position; they keep their place now. timecode: the frame rate (23.976, 24, 25, 29.97df, 29.97 or 30; default 30) and start, the timecode at project time 0 (default 00:00:00:00), which MTC and LTC sync and output use; either member alone keeps the other.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -11125,7 +11843,7 @@ Delete a saved project template by name.
 
 
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -11186,7 +11904,7 @@ List saved project templates by name and path.
 
 
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -11254,7 +11972,7 @@ Start a new, unsaved project from a project template.
 
 Replaces the current project and its history, like project.new: unsaved changes are lost, so save first. The new project has no file until project.save {path} and gets its own copy of the template's audio; the template itself is never changed.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -11311,7 +12029,7 @@ Save the whole project as a named project template.
 
 Writes the project as it is now (tracks, FX and their states, routing, items, settings; not the history) to a folder of its own in the user's templates directory, with a copy of every audio file it uses. The project keeps its own file. replace: true replaces a template of that name. warnings: running plug-ins whose current state could not be read; the template has the state each had before.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -11374,7 +12092,7 @@ Add a modular rack on a channel, its Out the input.
 
 A rack is a patching space homed on a channel (track, or a new channel named after name). It starts with an Out module, replacing the channel's previous audio, MIDI or rack input: what the patch sends to Out plays on the channel, before its inserts and Console 9 stage. The channel's MIDI items play into Notes modules. Add modules with module.add and connect them with cable.add.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -11443,7 +12161,7 @@ Lay out a rack's modules by signal flow.
 
 Moves the modules (default all the rack's) as rack.patch lays out new ones: left to right by signal flow along their cables, ordered within columns so cables cross less, wrapped to about a window's shape. From x, y (default the modules' top-left corner). One undo step; returns the new places.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -11504,7 +12222,7 @@ Record a rack's pitch and gate as notes in a MIDI item on a track.
 
 Renders the project offline from from_beat (default 0) for beats (default 16, at most 1024) and writes the notes that the pitch and gate outputs ("mo_N.<output>", poly: a note per voice) play as a MIDI item on track at at (default from_beat): a gate's rise starts a note at the pitch then (round(60 + 12 x pitch)), its fall ends it. velocity: an output (0..1) read at each rise; default 96. quantize: a grid in beats (0.25 = sixteenths) for starts and lengths. notes: notation the rack's Notes modules play, as rack.probe takes it. The rack is not changed; edit the notes with midi.edit, or play them through any instrument. async:true returns {job}; rendering uses a snapshot, cancellation leaves the project unchanged, and completion adds one undo step. A changed rack graph or automation, destination type/frozen state or overlapping items, timing, or project fails with rack.capture_stale; submit again. Destination fader moves and unrelated item edits are allowed. Notes MIDI and incoming In routes are snapshotted.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -11603,7 +12321,7 @@ A rack's modules, cables, Out modules and problems.
 
 Modules with their type, label, place and size and the knobs that differ from their defaults (detail full: also their input, output and knob keys); cables with feedback (true: it closes a loop and carries the previous frame); Out modules and the channels they feed (sends: their rack sends to busses and masters, ADR-0075, {route, to}); latency_samples for each Out and the rack node, and note_outs with their latencies (ADR-0064); problems (missing types, cables that do not fit). Brief/default latency reads prepared values without creating plug-ins; unprepared latency is null. detail full may probe unprepared plug-ins.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -11660,7 +12378,7 @@ Read every module output's linear peak, without subscribing to telemetry.
 
 Returns {modules: {mo_N: {port: level}}}. Each level is the maximum absolute sample across all channels in the latest processed rack block (at most 32 frames), including unconnected outputs. Levels may exceed 1. Stopped, silent or uninstantiated modules read zero; unavailable types have no known ports. Anticipative levels can lead the heard audio.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -11719,7 +12437,7 @@ List racks: home channels, module counts, Outs.
 
 Each Out lists the channels it is the input of (channels) and, when it has any, its rack sends to busses and masters (sends: {route, to}, ADR-0075).
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -11772,7 +12490,7 @@ Paste the module clipboard with its plug-in settings as one undo step.
 
 Place the clip's top-left at x/y; omitted coordinates use free space right of existing modules. No routes or automation are copied.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -11828,7 +12546,7 @@ Add named modules and the cables among them in one step.
 
 modules: {name: {type | plugin, params?, preset?, label?, x?, y?, source?, device?}} as module.add takes them; a name is lower-case letters, digits and '_'. cables: [{from, to, amount?, color?}] or [from, to, amount?], an end "name.port" or "name.knob" (a plugin module's knob is its plug-in's: "synth.cutoff"), or an existing module's "mo_N.port" (the rack's Out from rack.add). Modules without x, y are laid out left to right by signal flow from x, y (default right of the rack's modules), as rack.arrange does. A name labels its module unless label is given: "kick" is Kick, "vco2" is VCO 2, a type's own key ("vco") none. Everything is checked as module.add and cable.add check it; one error changes nothing. Returns the ids by name.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -11904,7 +12622,7 @@ Delete a saved rack preset.
 
 
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -11950,7 +12668,7 @@ List rack presets, saved and factory: names and contents.
 
 query: a part of the name or description. factory: true lists only the factory patches that ship with the app, false only the saved ones (default both). Each preset: name, path (a saved one's) or factory: true, description, its module and cable counts and its module types. A saved preset hides a factory patch of its name. Files that are not rack presets are skipped with a warning (warnings).
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -12039,7 +12757,7 @@ Add a saved preset's modules and cables to a rack.
 
 name (rack.preset.list: a saved preset, or else a factory patch) or path (a preset file). x, y: the group's top-left (default right of the rack's modules). io: join (default) gives the preset's Out and In modules' cables to the rack's own Outs and Ins in order, so a whole patch sounds at once (extra ones are added); add makes new ones. Notes modules play the rack's channel. Your own modules the preset carries are written into the library when it lacks them (installed lists them). Every embedded source must compile and declare its sources key as ModuleInfo.id before any module is installed. Knobs and cables the module types no longer have are left out with a warning (warnings); a module type or plug-in that is not installed is an error, and the rack does not change.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -12095,7 +12813,7 @@ Save a rack's modules and cables as a preset.
 
 modules: which (default the whole rack); the cables among them come too. Plugin modules keep their plug-in's settings, and the source of your own (library) modules goes with them. A Notes module's source track, MIDI learn, envelopes, sends and the channels an Out feeds stay with the project. Saved by name in the user's rack presets; replace: true overwrites one.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -12148,7 +12866,7 @@ Listen to a rack's ports: level, pitch, gate rate, notes, a CV's range.
 
 Renders the project offline from from_beat (default 0) for seconds (default 2, at most 10) with a listener on each port ("mo_N.<output key>", at most 8) and describes what each carried: audio's peak and rms (dB) and its pitch when periodic (a poly cable's first 4 voices summed); gates counted over the voices, per beat, and how long any is high; the notes the voices' pitches visit; a CV's range and speed (voice 1). notes: notation (as midi.write takes it) the rack's Notes modules play from from_beat, besides what their tracks hold. Nothing is changed; playback is not disturbed.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -12203,7 +12921,7 @@ Remove a rack with its modules and cables.
 
 Channels that took one of its Out modules as input lose it; sends into its In modules go; plugin modules' plug-ins go with them.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -12242,7 +12960,7 @@ Rename a rack or move it to another channel.
 
 name "" shows the home channel's name. track moves its home (its Out modules keep feeding the channels they feed; Notes modules without a source follow the new home's MIDI; its rack sends to busses and masters follow the new home's mute and solo, ADR-0075). A frozen home's rack cannot move (track.frozen).
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -12278,13 +12996,37 @@ Result:
 
 ```
 
+## `record.commit@1`
+
+Record a recording's commit (or a recovery's) as a replayable edit.
+
+The takes as the device delivered them and the punch range then; placing them again builds the same items, takes and sources. Audio files must still be there.
+
+Kind: `edit`. Exposure: `internal`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `takes` | array |  |  |  |  |
+| `punch` | object |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
 ## `region.add@1`
 
 Add a named region in beats.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -12346,7 +13088,7 @@ List rulers in this project.
 
 
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -12430,13 +13172,13 @@ Remove a ruler.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `id` | string |  |  |  |  |
+| `id` | string |  |  |  | Region id, e.g. "rg_1". |
 
 ### Result
 
@@ -12481,13 +13223,13 @@ Edit a ruler's position, name, or color.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `id` | string |  |  |  |  |
+| `id` | string |  |  |  | Region id, e.g. "rg_1". |
 | `start` | number |  | 0.0.. |  |  |
 | `end` | number |  | 0.0.. |  |  |
 | `name` | string |  |  |  |  |
@@ -12624,7 +13366,8 @@ Result:
             "name": "registry.list",
             "version": 1,
             "kind": "query",
-            "summary": "List available commands."
+            "summary": "List available commands.",
+            "exposure": "mcp-exec"
           }
         ]
       },
@@ -12688,7 +13431,8 @@ Result:
       "name": "registry.list",
       "version": 1,
       "kind": "query",
-      "summary": "List available commands."
+      "summary": "List available commands.",
+      "exposure": "mcp-exec"
     }
   ]
 }
@@ -12701,7 +13445,7 @@ List the files a render would write, with lengths, without rendering.
 
 Each file: path (where if_exists sends it), exists (its destination is already there), skip (if_exists skip leaves it out), seconds and outputs. operation: mix, stems or regions (default: tracks or regions given, else the settings' source).
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -12862,7 +13606,7 @@ Delete one of the user's render presets, or the user's render default.
 
 
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -12908,7 +13652,7 @@ Render presets: the factory ones, then the user's, with their settings.
 
 default: the user's render default, or null. Presets live in the user's data folder (render-presets/), shared by every project.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -12947,7 +13691,7 @@ Replace the project's render settings with a preset (one undo step).
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -12993,7 +13737,7 @@ Save render settings as a named preset, or as the user's render default.
 
 settings: what to save (default: the effective settings now). Never saved: stems.tracks, matrix and custom bounds, which belong to one project. A file per preset in the user's data folder; factory presets cannot be overwritten.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -13047,7 +13791,7 @@ Queue a render (mix, stems or regions) to run later with render.queue.run.
 
 args: the render command's arguments (as for render.mix/stems/regions). The queued render is pinned to the session and settings as they are now (its version, a branch's head when branch is given, and the effective render settings, a loop range as beats), so later edits do not change it; a dry run lists its files now. The queue is transport-like state: not an undo step, not saved with the project.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -13103,7 +13847,7 @@ The queued renders, in the order render.queue.run runs them.
 
 
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -13141,7 +13885,7 @@ Take a render off the queue (id), or clear it (all: true).
 
 
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -13187,7 +13931,7 @@ Run every queued render in order; each one leaves the queue when it is done.
 
 Each render renders the version it was queued at. job: true runs them as one job (job.get for progress). The result lists each render's files under its id.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -13230,7 +13974,7 @@ Render each region (or the render matrix's tracks per region) to files.
 
 Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -13307,7 +14051,7 @@ The render settings that apply, and the layer each one comes from.
 
 effective: what a render with these arguments would use (every member filled in); project: project.render as stored; default: the user's render default (null if none); from: per member, args, project, default or built-in (ADR-0055). Change the project's settings with project.set {render} or render.preset.load.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -13384,7 +14128,7 @@ Render each selected track to its own file (stems).
 
 Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -13605,7 +14349,7 @@ List the MIDI controller bindings of send controls.
 
 Every send's, or one's (route). control names the message in words.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -13669,7 +14413,7 @@ Remove a send control's MIDI controller binding.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -13722,7 +14466,7 @@ Let a MIDI controller move a send's level, pan, mute or tap.
 
 One binding per control (a new one replaces it); saved with the project. param: volume, pan, mute, phase_invert, mono, tap:post_fader, tap:pre_fader, tap:pre_fx. midi.device: a substring of the MIDI input's name (empty: any). A level or pan follows a knob (mode absolute, soft_takeover: once it reaches the value) or an encoder (relative1 127 = -1, relative2 63 = -1, relative3 65 = -1). A button: a note or program change flips it per press, as a CC in toggle mode does; an absolute CC is on above 63. A tap:… control sets that tap on each press.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -13798,7 +14542,7 @@ List sends with endpoints and mixer settings.
 
 
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -13971,7 +14715,7 @@ Read audio or MIDI endpoints, existing sends and blocked pairs.
 
 mode: audio (default), midi or hardware_midi (channels/Note Out and hardware inputs to channels/hardware outputs). MIDI sources are channels and Note Out; destinations are channels and Notes, with no audio controls. Audio sources: strips in tree order (depth, parent, parent_send). destinations: strips (kind track), plug-in keys (kind key: fx with a sidechain input) and racks' In modules (kind module: mo_N, named "<rack> » <In>", with rack and home track), each strip's keys and In modules after it. Each channel's rack Out modules follow it among sources (type rack_out, named "<rack> » <Out>", with rack and home track): they send only to busses and masters (their rule), added after the decode, never encoded (ADR-0075). A pair is blocked when the source's rule applies (masters feed only keys), the destination's rule applies (channels take only hardware audio), it is the same strip, or it is listed in cycles (the destination already feeds the source; for an In module, its rack's Outs reach the source; path names its ids, names the same by name). sends: existing routes per pair (to: a strip, an fx or an In module). Otherwise route.add accepts the pair (an In module: route.add {from, to: mo_N}). A source's channels past 2 are auxiliary (ADR-0020); channel_names names those a multi-out plug-in writes ({"3": "Kick"}), and route.add {channels: {from: [3, 4], to: [1, 2]}} sends that pair.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -14013,13 +14757,13 @@ Remove a send.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `route` | string |  |  |  |  |
+| `route` | string |  |  |  | Route id, e.g. "sd_1". |
 
 ### Result
 
@@ -14064,13 +14808,13 @@ Change a route's endpoints, tap, level, pan, mute, or channel map.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `route` | string |  |  |  |  |
+| `route` | string |  |  |  | Route id, e.g. "sd_1". |
 | `from` | value |  |  |  |  |
 | `to` | value |  |  |  |  |
 | `to_midi` | string |  |  |  | Exact hardware MIDI output name; requires midi: {} and replaces to/fx. |
@@ -14305,7 +15049,7 @@ Show external sync settings and what the engine hears from the master.
 
 source: off, midi_clock, mtc or ltc. midi_input: the MIDI input port the master's clock or MTC arrives on (its name, or a part of it). ltc_input: the device input channel carrying LTC (1-based). follow_tempo (midi_clock): chase the master's tempo with the live playrate (pitch preserved); off follows Start, Continue, Stop and Song Position only. offset_ms: positive plays Steppe that much behind the master. on_loss: stop, or freewheel for freewheel_frames timecode frames, when the signal stops. ltc_output: write LTC of the transport (the project's timecode) to ltc_output_channel, replacing whatever a master plays there, at ltc_level_db. status: present (the signal arrives), running, locked, state (idle, acquiring, relocating, chasing, locked), the master's bpm (midi_clock) or timecode and rate (mtc, ltc), chase_rate (the live playrate the chase applies on top of the saved one) and error_ms.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -14437,7 +15181,7 @@ Set external sync (MIDI clock, MTC, LTC) and LTC output; returns them.
 
 source: off, midi_clock, mtc or ltc. midi_input: the MIDI input port the master's clock or MTC arrives on (its name, or a part of it). ltc_input: the device input channel carrying LTC (1-based). follow_tempo (midi_clock): chase the master's tempo with the live playrate (pitch preserved); off follows Start, Continue, Stop and Song Position only. offset_ms: positive plays Steppe that much behind the master. on_loss: stop, or freewheel for freewheel_frames timecode frames, when the signal stops. ltc_output: write LTC of the transport (the project's timecode) to ltc_output_channel, replacing whatever a master plays there, at ltc_level_db. Omitted members keep their values. Machine settings: not an undo step, not saved in the project (the app keeps them with its preferences).
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -14582,14 +15326,14 @@ Choose the take heard from an item.
 
 take (its id) or index (0-based in the item's take order — the same position after item.split, which copies the takes in order: comping splits an item and picks a take by index on the piece).
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `item` | string |  |  |  |  |
-| `take` | string |  |  |  |  |
+| `item` | string |  |  |  | Item id, e.g. "it_1". |
+| `take` | string |  |  |  | Take id, e.g. "tk_1". |
 | `index` | integer |  | 0.0.. |  |  |
 
 ### Result
@@ -14636,14 +15380,14 @@ Add a take to an item, optionally copied from another take of that item.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `item` | string |  |  |  |  |
-| `from` | string |  |  |  |  |
+| `item` | string |  |  |  | Item id, e.g. "it_1". |
+| `from` | string |  |  |  | Take id, e.g. "tk_1". |
 
 ### Result
 
@@ -14695,14 +15439,14 @@ Take a take out of its item into an item of its own on any channel.
 
 The new item copies the old one's length, fades, gain and timebase and starts at position (beats; default: where the item starts). The take keeps its FX and envelopes. The only take of an item moves the item itself.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `take` | string |  |  |  |  |
-| `track` | string |  |  |  |  |
+| `take` | string |  |  |  | Take id, e.g. "tk_1". |
+| `track` | string |  |  |  | Track id, e.g. "tr_1". |
 | `position` | number |  | 0.0.. |  | Beats. |
 
 ### Result
@@ -14872,13 +15616,13 @@ List the takes of an item and identify its active take.
 
 
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `item` | string |  |  |  |  |
+| `item` | string |  |  |  | Item id, e.g. "it_1". |
 
 ### Result
 
@@ -15014,13 +15758,13 @@ Delete a take from its item (the item goes with its last take).
 
 The take's FX, envelopes and unshared MIDI go with it. When it was the heard take, the next take is heard (else the previous one). item_removed: it was the item's only take, so the item was removed too.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `take` | string |  |  |  |  |
+| `take` | string |  |  |  | Take id, e.g. "tk_1". |
 
 ### Result
 
@@ -15075,13 +15819,13 @@ Set take gain, pan, channel mode, name, source offset, or playrate and pitch.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `take` | string |  |  |  |  |
+| `take` | string |  |  |  | Take id, e.g. "tk_1". |
 | `gain_db` | value | dB | -150.0..24.0 |  | Quantity strings are range-checked by the server. |
 | `pan` | value | % | -100.0..100.0 |  | Quantity strings are range-checked by the server. |
 | `channel_mode` | string |  |  |  |  |
@@ -15421,7 +16165,7 @@ Convert a seconds, beat, or bar position to all three time domains.
 
 
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -15496,7 +16240,7 @@ Remove the meter change at a bar: the meter before it continues.
 
 Bar 1's meter cannot be removed (change it with timesig.set).
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -15547,7 +16291,7 @@ Set the meter from a bar on, e.g. {"bar": 9, "meter": "3/4"}.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -15661,7 +16405,7 @@ Describe track groups and requested/applied effective gain at a time.
 
 
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -15788,7 +16532,7 @@ Duplicate channels or busses with their FX, items, sends and automation.
 
 Each copy goes right after its original, under the same parent, with the same settings and name; its main and input chains (each plugin's settings as it sounds now, as fx.copy), items and takes (unpooled MIDI copied, audio media shared), sends and record input, and the envelopes on the track, its plugins, sends and takes. Not copied: a folder's children, sends into the track, and item groups. Masters cannot be duplicated. One undo step; the copies' ids in the order given.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -15853,7 +16597,7 @@ Freeze a channel's items and FX to pre-fader audio and release its plugins.
 
 One undo step after rendering; job:true reports progress through job.get. Fader, pan and outgoing sends remain live. Unfreeze to edit the captured sound.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -15933,7 +16677,7 @@ List the MIDI controller bindings of track controls.
 
 Every track's, or one's (track). control names the message in words.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -15997,7 +16741,7 @@ Remove a track control's MIDI controller binding.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -16050,7 +16794,7 @@ Let a MIDI controller move a track's fader, pan, mute, solo or arm.
 
 One binding per control (a new one replaces it); saved with the project. param: volume, pan, width, pan_left, pan_right, pan_boost, mute, solo, phase_invert, mono, armed, monitor, lane_mute. midi.device: a substring of the MIDI input's name (empty: any). A level or pan follows a knob (mode absolute, soft_takeover: once it reaches the value) or an encoder (relative1 127 = -1, relative2 63 = -1, relative3 65 = -1). A button: a note or program change flips it per press, as a CC in toggle mode does; an absolute CC is on above 63. monitor goes off, on, auto in turn on each press.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -16329,14 +17073,14 @@ Move a track under another track or reorder it among its siblings.
 
 parent defaults to the track's current parent (a pure reorder); index defaults to the end of the destination's children. A track cannot move under itself or one of its own descendants.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `track` | string |  |  |  |  |
-| `parent` | string |  |  |  |  |
+| `track` | string |  |  |  | Track id, e.g. "tr_1". |
+| `parent` | string |  |  |  | Track id, e.g. "tr_1". |
 | `index` | integer |  | 0.0.. |  |  |
 
 ### Result
@@ -16719,7 +17463,7 @@ Delete a saved track template by name.
 
 
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -16780,7 +17524,7 @@ List saved track templates by name, path and effect count.
 
 
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -16852,7 +17596,7 @@ Add a strip from a track template (settings and FX) in one undo step.
 
 Give exactly one of name (in the user's track-templates directory) or path. parent defaults to the master. Every plugin and state is checked before the model changes.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -16918,7 +17662,7 @@ Save a strip (settings and FX chains) as a named track template.
 
 Writes a supple.track-template/1.0 file to the user's track-templates directory: the strip's type, name, colour, notes, level, pan and monitoring, and its main and input chains as fx.chain.save stores them (semantic patches or base64 state). Not routing or items. replace: true overwrites an existing name.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -16983,7 +17727,7 @@ Restore a frozen channel's original items and plugin state.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -17029,7 +17773,7 @@ The play position and whether it is playing.
 
 
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -17215,7 +17959,7 @@ Set or toggle the loop range: playback reaching its end repeats it.
 
 start and end as seconds, beat or bar (start_bar 5, end_bar 9 = bars 5-8); a range turns the loop on unless enabled says otherwise; enabled alone toggles the current range; clear removes the range and turns the loop off. Recording while looping makes one take per pass on one item. Transport state: not an undo step, not saved in the project.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -17312,7 +18056,7 @@ Turn the metronome on or off and set its level; returns the settings.
 
 A click on every beat of the meter while the transport plays (the bar's first accented), in the live output only: renders and recordings never contain it. count_in_bars: that many bars of clicks (at the meter and tempo where playback starts) before transport.record begins — the position holds and nothing is recorded until the count ends; count_in_playback counts in before transport.play too. The count clicks even with the metronome off. Transport state: not an undo step, not saved in the project. No arguments: the current settings.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -17405,7 +18149,7 @@ Pause playback where it is (ends a recording).
 
 
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -17765,7 +18509,7 @@ Scale every tempo-point BPM by master playrate, then reset the rate to 1.
 
 One version: multiply every BPM by the saved scalar rate, preserving beat positions, ramp flags and meter changes, and reset rate to 1. Require stopped transport, no recording and no active nonempty master playrate envelope. Reject resulting BPM outside 1..1000 before mutation. Existing item timebases still apply; time-locked audio is not made sound-equivalent by this tempo edit.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -17820,7 +18564,7 @@ Get requested/effective master playrate, pitch mode and active envelope.
 
 requested_rate is the saved project ratio; envelope names the active nonempty tr_0/playrate envelope, including automation items. No engine is required. effective_rate follows consumed output, including compensated source transitions and graph/backend output latency; it is 1.0 without a running engine. GUI clients can use EngineApp::playrateState() without executing/logging a query each sync.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -17885,7 +18629,7 @@ Set the project's master playrate ratio and preserve-pitch flag.
 
 rate: finite 0.25..4.0 (default 1); preserve_pitch defaults false in a new project. Omitted fields keep their values. Updates during a drag use Origin.gesture like strip faders, and write/touch/latch capture tr_0/playrate coarsely: unlike strip levels (ADR-0061), the curve keeps playing while it is written (no hold or touch return). Recording requires unity. Settings are saved/undoable. File sources convert before take FX and live input mixing; instruments retain their pitch. Scalar edits ramp and converter changes crossfade for 10 ms after priming. Edits include the render horizon and compensated source lookahead; newer requests coalesce while a transition finishes. Long-latency take chains can exceed the usual 200 ms response. effective_rate follows audible output, independently of requested_rate.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -17959,7 +18703,7 @@ Set or toggle the punch range: recordings keep only that range.
 
 start and end as seconds, beat or bar; a range turns punch on unless enabled says otherwise; clear removes the range and turns punch off. The recording keeps running; the committed items cover only the punch range (the file keeps everything). Not an undo step.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -18006,6 +18750,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 ### Errors
 
 - `transport.range`: not one start and one end, end not after start, or clear with a range Hint: e.g. start_bar 5, end_bar 9
+- `record.punch`: the active recording cannot represent this punch Hint: clear the punch or use a range within 2^48 recording frames
 
 ### Examples
 
@@ -18056,7 +18801,7 @@ Play and record every armed track's input or master's output.
 
 Recording requires saved master rate 1 and no active master rate envelope that leaves 1 anywhere, including automation items. Non-unity recording and an armed track with unsupported output record mode are refused before opening files. An armed master records its output (after its fader, before its own items) as an item on the master; while it records, its items are silent in the punch range, or everywhere without punch. Armed channels in midi_overdub or midi_replace also record every incoming Note Out route, alongside an optional MIDI device input; no instrument is required. Rack Out audio inputs record stereo after input FX, before items and track inserts.
 
-Kind: `action`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -18604,7 +19349,7 @@ Add an audio-free VCA fader to a track group.
 
 VCA gain adds to member automation before the fader, capped at the Console 9 native top. Group suspension only suspends linked editing. Use vca.members.set to nest VCAs.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -18667,7 +19412,7 @@ List the MIDI controller bindings of VCA controls.
 
 Every VCA's, or one's (group). control names the message in words.
 
-Kind: `query`. Exposure: `mcp-tool`.
+Kind: `query`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -18731,7 +19476,7 @@ Remove a VCA control's MIDI controller binding.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -18784,7 +19529,7 @@ Let a MIDI controller move a VCA's fader, mute or solo.
 
 One binding per control (a new one replaces it); saved with the project. param: volume, mute, solo. midi.device: a substring of the MIDI input's name (empty: any). A level or pan follows a knob (mode absolute, soft_takeover: once it reaches the value) or an encoder (relative1 127 = -1, relative2 63 = -1, relative3 65 = -1). A button: a note or program change flips it per press, as a CC in toggle mode does; an absolute CC is on above 63. The bindings go with the VCA.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -18860,7 +19605,7 @@ Replace the tracks or nested VCAs controlled by a VCA.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -18922,7 +19667,7 @@ Remove a VCA and its automation, keeping the track group.
 
 
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
@@ -18980,7 +19725,7 @@ Set a VCA's level, mute or solo without moving member faders.
 
 VCA gain adds to member automation before the fader, capped at the Console 9 native top. Group suspension only suspends linked editing. Use vca.members.set to nest VCAs.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 

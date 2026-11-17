@@ -26,7 +26,7 @@ struct Fixture {
     cmd::Registry registry;
     std::unique_ptr<EngineApp> app;
     std::unique_ptr<cmd::Dispatcher> bus;
-    Fixture() {
+    explicit Fixture(bool seedSong = true) {
         AppOptions options;
         options.workdir = dir;
         options.pluginPath = {FIXTURE_CLAP_PATH};
@@ -40,7 +40,7 @@ struct Fixture {
         app = std::move(*created);
         registerEngineCommands(registry);
         bus = std::make_unique<cmd::Dispatcher>(registry, *app);
-        app->setupFixture(*bus, "song_with_audio");
+        if (seedSong) app->setupFixture(*bus, "song_with_audio");
     }
     ~Fixture() {
         bus.reset();
@@ -55,6 +55,14 @@ struct Fixture {
         REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
         return *result;
     }
+    void checkUnknown(const char* command, std::string_view args, std::string_view code,
+                      std::string_view path, std::string_view hint) {
+        auto result = call(command, args);
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == code);
+        CHECK(result.error().path == path);
+        CHECK(result.error().hint == hint);
+    }
     json::Value finish(const json::Value& job) {
         {
             std::unique_lock lock(mutex);
@@ -68,6 +76,118 @@ struct Fixture {
     }
 };
 }  // namespace
+
+TEST_CASE("track.move permits non-root reorders and sibling folders but rejects descendants") {
+    Fixture f(false);
+    f.run("track.add", R"({"name":"A","type":"buss"})");                      // tr_1
+    f.run("track.add", R"({"name":"B","type":"buss"})");                      // tr_2
+    f.run("track.add", R"({"name":"Child","type":"buss","parent":"tr_1"})");  // tr_3
+    f.run("track.add", R"({"name":"Deep","type":"buss","parent":"tr_3"})");   // tr_4
+    f.run("track.add", R"({"name":"First","parent":"tr_1"})");                // tr_5
+    f.run("track.add", R"({"name":"Second","parent":"tr_1"})");               // tr_6
+    const auto initial = model::serializeProject(f.app->head());
+    const auto track = [&](unsigned n) -> const model::Track& {
+        const auto* result = f.app->head().tracks.find({model::Kind::Track, n});
+        REQUIRE(result);
+        return *result;
+    };
+    const auto children = [&](unsigned parent, std::initializer_list<unsigned> expected) {
+        std::vector<model::Id> ids;
+        for (auto n : expected) ids.push_back({model::Kind::Track, n});
+        CHECK(track(parent).children == ids);
+        REQUIRE(model::checkInvariants(f.app->head()));
+    };
+    // Explicit and inferred current parents must both permit real reorders.
+    f.run("track.move", R"({"track":"tr_6","parent":"tr_1","index":0})");
+    children(1, {6, 3, 5});
+    CHECK(track(6).parent == model::Id{model::Kind::Track, 1});
+    const auto reordered = model::serializeProject(f.app->head());
+    f.run("track.move", R"({"track":"tr_5","index":0})");
+    children(1, {5, 6, 3});
+    f.run("history.undo");
+    CHECK(model::serializeProject(f.app->head()) == reordered);
+    f.run("history.undo");
+    CHECK(model::serializeProject(f.app->head()) == initial);
+
+    // Reparent a whole subtree between sibling folders, then undo it exactly.
+    f.run("track.move", R"({"track":"tr_3","parent":"tr_2","index":0})");
+    children(1, {5, 6});
+    children(2, {3});
+    children(3, {4});
+    CHECK(track(3).parent == model::Id{model::Kind::Track, 2});
+    CHECK(track(4).parent == model::Id{model::Kind::Track, 3});
+    const auto moved = model::serializeProject(f.app->head());
+    const auto version = f.app->head().version;
+    for (unsigned parent : {2, 3, 4}) {
+        CAPTURE(parent);
+        auto refused = f.call(
+            "track.move", "{\"track\":\"tr_2\",\"parent\":\"tr_" + std::to_string(parent) + "\"}");
+        REQUIRE_FALSE(refused);
+        CHECK(refused.error().code == "tr.cycle");
+        CHECK(refused.error().path == "/args/parent");
+        CHECK_FALSE(refused.error().hint.empty());
+        CHECK(refused.error().message ==
+              (parent == 2 ? "a track cannot be moved under itself"
+                           : "a track cannot be moved under one of its own children"));
+        CHECK(f.app->head().version == version);
+        CHECK(model::serializeProject(f.app->head()) == moved);
+    }
+    f.run("history.undo");
+    CHECK(model::serializeProject(f.app->head()) == initial);
+    children(0, {1, 2});
+    children(1, {3, 5, 6});
+    children(2, {});
+}
+
+TEST_CASE("unknown track IDs list the existing tracks, including the empty project's master") {
+    Fixture f(false);
+    auto check = [&](std::string_view hint) {
+        f.checkUnknown("track.remove", R"({"track":"tr_999"})", "tr.unknown", "/args/track", hint);
+    };
+    check("existing: tr_0");
+    f.run("track.add");
+    check("existing: tr_0, tr_1");
+    for (int i = 0; i < 6; ++i) f.run("track.add");
+    check("existing: tr_0, tr_1, tr_2, tr_3, tr_4, tr_5, tr_6, tr_7");
+    f.run("track.add");
+    check("existing: tr_0, tr_1, tr_2, tr_3, tr_4, tr_5, tr_6, tr_7, …");
+}
+
+TEST_CASE("unknown item IDs list existing items or explain that there are none") {
+    Fixture f(false);
+    auto check = [&](std::string_view hint) {
+        f.checkUnknown("item.remove", R"({"item":"it_999"})", "it.unknown", "/args/item", hint);
+    };
+    check("there are none yet");
+    f.run("track.add");
+    const auto add = [&] {
+        f.run("item.add", R"({"track":"tr_1","notation":"voice a; 1: C4:w"})");
+    };
+    add();
+    check("existing: it_1");
+    for (int i = 0; i < 7; ++i) add();
+    check("existing: it_1, it_2, it_3, it_4, it_5, it_6, it_7, it_8");
+    add();
+    check("existing: it_1, it_2, it_3, it_4, it_5, it_6, it_7, it_8, …");
+}
+
+TEST_CASE("unknown FX IDs list existing instances or explain that there are none") {
+    Fixture f(false);
+    auto check = [&](std::string_view hint) {
+        f.checkUnknown("fx.remove", R"({"fx":"fx_999"})", "fx.unknown", "/args/fx", hint);
+    };
+    check("there are none yet");
+    f.run("track.add");
+    const auto add = [&] {
+        f.run("fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.gain"})");
+    };
+    add();
+    check("existing: fx_1");
+    for (int i = 0; i < 7; ++i) add();
+    check("existing: fx_1, fx_2, fx_3, fx_4, fx_5, fx_6, fx_7, fx_8");
+    add();
+    check("existing: fx_1, fx_2, fx_3, fx_4, fx_5, fx_6, fx_7, fx_8, …");
+}
 
 TEST_CASE("consolidation bakes item and take FX with silence in gaps, leaving track FX live") {
     Fixture f;

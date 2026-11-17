@@ -13,6 +13,10 @@
 
 namespace supple::rpc {
 inline constexpr std::size_t kMaxMessageBytes = 16 * 1024 * 1024;
+inline constexpr std::size_t kMaxRequestIdBytes = 1024;
+inline constexpr std::size_t kMaxFrameValues = 1000000;
+// Valid ID type and at most kMaxRequestIdBytes of compact serialized JSON.
+bool requestIdFits(const json::Value& id);
 using Post = std::function<void(std::function<void()>)>;
 
 // Structured errors on the wire: code, message, path, hint, the optional text
@@ -21,6 +25,12 @@ using Post = std::function<void(std::function<void()>)>;
 json::Value errorJson(const Error& error);
 Error errorFromJson(const json::Value& value);
 std::filesystem::path socketPath(std::string_view instance);
+
+enum class Delivery { Unsent, Sent };
+struct CallResult {
+    Result<json::Value> result;
+    Delivery delivery;
+};
 
 // The I/O thread owns sockets and framing. `post` schedules every request on
 // the caller's model thread; the caller must drain that queue until stop().
@@ -66,6 +76,10 @@ class Client {
                    bool mcp = false);
     // Disconnects and forgets the endpoint; later calls fail with rpc.connect.
     void close();
+    // Observe the current connection without consuming data or sending requests.
+    // Returns zero if disconnected (including an observed peer close), otherwise
+    // a generation that increases after each successful connection handshake.
+    std::uint64_t connectionGeneration();
     // How long connect() or a call may take in all -- connecting (a call's
     // reconnect included), the handshake, sending the request and waiting
     // for the response -- clamped to [1 ms, 24 h]; 30 s by default. A peer
@@ -74,15 +88,20 @@ class Client {
     void setTimeout(std::chrono::milliseconds timeout);
     Result<json::Value> call(std::string_view method,
                              const json::Value& params = json::Value::object());
+    // Local provenance of this command, independent of a reconnect handshake or
+    // remote error codes. Sent means a complete frame may have executed.
+    CallResult callWithDelivery(std::string_view method,
+                                const json::Value& params = json::Value::object());
 
   private:
     using Deadline = std::chrono::steady_clock::time_point;
     Status open(Deadline deadline);
     void drop();
     Result<json::Value> exchange(std::string_view method, const json::Value& params,
-                                 Deadline deadline);
+                                 Deadline deadline, Delivery* delivery = nullptr);
     std::intptr_t fd_ = -1;
     std::uint64_t nextId_ = 1;
+    std::uint64_t connectionGeneration_ = 0;
     std::string input_;
     std::filesystem::path path_;
     std::optional<json::Value> hello_;  // set while an endpoint is remembered

@@ -212,6 +212,16 @@ cable buffers, binds ports and parameters, and calls the modules' hooks.
   on that grid, so a rack renders the same in real time, in either
   executor and offline, even if a module is not itself block-size
   invariant: determinism is the runtime's, not each author's.
+  **2026-11-15 note:** only on the grid. A host block that ends off it (a
+  seek off the grid does this) splits a grid interval into two calls, and
+  real time and offline split differently, so a module must not depend on
+  where calls fall: per-frame state, control-rate work on a frame count of
+  its own, and song positions from `Transport::offset` (rack.md §4.2).
+  Review round 15 found Delay's wander, and a sweep nine more stock
+  modules, depending on it; the runtime now hands every call of an
+  interval the interval's transport plus its offset, as `gridTransport()`
+  (review round 19: `transport()` keeps its meaning, the call's start, so
+  module source written for it is unchanged).
 - **Real time.** `process` and everything the runtime does there follow
   ADR-0032's rules; schedules, buffers and instances are made on the main
   thread. Each module runs under the script budget; one that spends it is
@@ -221,6 +231,17 @@ cable buffers, binds ports and parameters, and calls the modules' hooks.
   phase, a reverb's tail). Knob edits reach running instances through
   atomic slots without a rebuild. A module whose code changes starts fresh
   in the new code.
+  **2026-11-14 note:** state lives across edits, not across a locate. A
+  seek, and a play from a position, restart every module as plug-ins are
+  reset there (`rack::Instance::restart()`, on the audio thread: each
+  instance keeps a copy of its prepared struct and copies it back in
+  place, as the script plug-in glue's `reset()` already does), so real time equals an offline render from that point in both
+  executors, as §5's determinism requires. The plan-swap soak found a
+  locate keeping a smoother mid-glide and an LFO's phase (finding F1). A
+  loop wrap keeps module state, as ADR-0015 keeps plug-ins' history.
+  **2026-11-15 note:** that includes the history feedback cables carry in
+  the rack's schedule (`rack::Schedule::restart()`); review round 13 found
+  it surviving a seek.
 
 ### 6. Engine integration
 

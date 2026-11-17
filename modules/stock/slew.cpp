@@ -54,7 +54,7 @@ struct Slew : Module {
             for (int i = 0; i < frames; ++i) {
                 const double x = in[c][i];
                 const double limit = glideLimit.at(i, c);
-                if (fresh || (limit < 48.0 && abs(x - last[c]) * 12.0 > limit + 1e-9)) {
+                if ((fresh && i == 0) || (limit < 48.0 && abs(x - last[c]) * 12.0 > limit + 1e-9)) {
                     level[c] = x;
                 } else {
                     const double d = x - level[c];

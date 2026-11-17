@@ -762,7 +762,7 @@ template <class A>
 void common(Command<A, json::Value>& c, std::string name, Kind kind, std::string summary) {
     c.name = std::move(name);
     c.kind = kind;
-    c.exposure = cmd::Exposure::McpTool;
+    c.exposure = cmd::Exposure::McpExec;
     c.summary = std::move(summary);
     c.tags = {"rack", "modular"};
     c.result = schema::any();
@@ -2188,6 +2188,12 @@ void registerRackPresetCommands(cmd::Registry& registry) {
                                  at);
                         continue;
                     }
+                    // A replayed step changes the project only (ADR-0076).
+                    if (e.replaying())
+                        return Error("rack.preset_module",
+                                     "a replayed step does not install " + m.key +
+                                         " into the module library",
+                                     at, "install it (module.write) and merge again");
                     auto destination = detail::availableModuleName(
                         e.moduleDir(), m.value.find("name")->asString());
                     if (!destination) return std::move(destination).error();

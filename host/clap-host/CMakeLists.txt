@@ -39,6 +39,9 @@ if(APPLE)
                              COMPILE_OPTIONS "${_bridge_objcxx_options}")
 endif()
 target_link_libraries(${PRODUCT_SLUG}-bridge PRIVATE supple::clap-host supple::core-dsp)
+if(WIN32)
+  target_link_libraries(${PRODUCT_SLUG}-bridge PRIVATE avrt)  # MMCSS for live audio (ADR-0081)
+endif()
 supple_target_defaults(${PRODUCT_SLUG}-bridge)
 
 if(SUPPLE_BUILD_TESTS)
@@ -68,6 +71,12 @@ if(SUPPLE_BUILD_TESTS)
     target_link_libraries(clap-host.tests PRIVATE "-framework CoreGraphics")
   endif()
   add_dependencies(clap-host.tests ${PRODUCT_SLUG}-scanner host-child-fixture)
+  # The agent skill beside the binary (test_scan.cpp) and, with the stock
+  # plugins, the script player in their folder (review round 33).
+  add_dependencies(clap-host.tests skill-tree)
+  if(TARGET plugin-player)
+    add_dependencies(clap-host.tests plugin-player)
+  endif()
   target_compile_definitions(clap-host.tests PRIVATE CHILD_FIXTURE_PATH="$<TARGET_FILE:host-child-fixture>")
   target_compile_definitions(clap-host.tests PRIVATE SCANNER_PATH="$<TARGET_FILE:${PRODUCT_SLUG}-scanner>")
   target_compile_definitions(clap-host.tests PRIVATE SUPPLE_TEST_STOCK_EDITORS=$<BOOL:${SUPPLE_BUILD_GUI}>)
@@ -76,6 +85,39 @@ if(SUPPLE_BUILD_TESTS)
   target_compile_definitions(clap-host.tests PRIVATE FIXTURE_CLAP_PATH="$<TARGET_FILE:clap-host-fixtures>"
                              BRIDGE_PATH="$<TARGET_FILE:${PRODUCT_SLUG}-bridge>")
 
+
+  # B6 (ADR-0013): bridged against in-process process() cost, on the gain
+  # fixture. A measurement tool; its test only proves that it runs.
+  add_executable(bridge-bench tools/bridge_bench.cpp)
+  target_link_libraries(bridge-bench PRIVATE supple::clap-host supple::core-json)
+  supple_target_defaults(bridge-bench)
+  add_dependencies(bridge-bench clap-host-fixtures ${PRODUCT_SLUG}-bridge)
+  target_compile_definitions(bridge-bench PRIVATE FIXTURE_CLAP_PATH="$<TARGET_FILE:clap-host-fixtures>"
+                             BRIDGE_PATH="$<TARGET_FILE:${PRODUCT_SLUG}-bridge>")
+  add_test(NAME clap-host.bridge-bench COMMAND bridge-bench --blocks 64 --instances 1,2
+           --cycles 20 --warmup 5)
+  set_tests_properties(clap-host.bridge-bench PROPERTIES LABELS "clap-host;tsan-skip")
+
+  # ADR-0081: the rtsan preset checks the callback's bridged path. A bridged
+  # call under a live deadline must pass, and an allocation after it in the
+  # same SUPPLE_RT code must still be caught: the marker, then no "did not
+  # fire" (a report inside the bridged call prints no marker).
+  if(SUPPLE_SANITIZE MATCHES "realtime")
+    add_executable(rtsan-bridge-selfcheck tests/rtsan_bridge_selfcheck.cpp)
+    target_link_libraries(rtsan-bridge-selfcheck PRIVATE supple::clap-host)
+    supple_target_defaults(rtsan-bridge-selfcheck)
+    target_compile_options(rtsan-bridge-selfcheck PRIVATE -Wno-function-effects)
+    add_dependencies(rtsan-bridge-selfcheck clap-host-fixtures ${PRODUCT_SLUG}-bridge)
+    target_compile_definitions(rtsan-bridge-selfcheck PRIVATE
+                               FIXTURE_CLAP_PATH="$<TARGET_FILE:clap-host-fixtures>"
+                               BRIDGE_PATH="$<TARGET_FILE:${PRODUCT_SLUG}-bridge>")
+    add_test(NAME rtsan-bridge-selfcheck COMMAND rtsan-bridge-selfcheck)
+    set_tests_properties(rtsan-bridge-selfcheck PROPERTIES
+      ENVIRONMENT "RTSAN_OPTIONS=halt_on_error=1"
+      PASS_REGULAR_EXPRESSION "bridged call under a live deadline: clean"
+      FAIL_REGULAR_EXPRESSION "rtsan did not fire"
+      LABELS "clap-host;rt")
+  endif()
 
   foreach(_mode good crash hang)
     add_library(clap-scan-${_mode} MODULE tests/fixture_scan.cpp)

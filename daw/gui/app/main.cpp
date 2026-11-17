@@ -356,9 +356,12 @@ int main(int argc, char** argv) {
     rpc::ModelLoop loop;
     loop.setWaker([p = platform->get()] { p->wake(); });
     std::unique_ptr<rpc::Server> server;
+    gui::Shell* eventShell = nullptr;
     auto publish = [&] {
-        for (auto& [topic, payload] : (*app)->takeEvents())
+        for (auto& [topic, payload] : (*app)->takeEvents()) {
+            if (eventShell && topic == "record.error") eventShell->recordingError(payload);
             if (server) server->publish(topic, payload);
+        }
     };
     std::string status = "offscreen";
     if (o.serve) {
@@ -397,6 +400,7 @@ int main(int argc, char** argv) {
         return out;
     });
     gui::Shell shell(**app, dispatcher, uiState, status, peaks, meterFeed);
+    eventShell = &shell;
     peaks.onReady = [&](const std::string&) { shell.arrange()->lanes().invalidate(); };
     const fs::path appearanceFile = gui::Appearance::defaultFile(product::kSlug);
     gui::Appearance look = gui::Appearance::load(appearanceFile);
@@ -486,6 +490,13 @@ int main(int argc, char** argv) {
     gui::FileActions fileActions(root, appActions, dispatcher, **app, uiState, (*window)->sdl(),
                                  [&](std::function<void()> f) { loop.post(std::move(f)); });
     fileActions.registerQuit([&] { quit = true; }, !o.offscreen && o.frames <= 0);
+    // Unsaved projects earlier runs left behind: offered, never opened unasked
+    // (ADR-0078).
+    const bool projectLeftovers =
+        !(*app)->projectPath().empty() &&
+        (!(*app)->newerAutosave((*app)->projectPath()).empty() || !(*app)->recoverable().empty());
+    if ((o.project.empty() && (*app)->recoverableSessionCount() > 0) || projectLeftovers)
+        o.actions.insert(o.actions.begin(), "ui.file.recover");
     gui::HelpActions helpActions(
         root, appActions, (*window)->sdl(),
         [&](std::function<void()> f) { loop.post(std::move(f)); }, gui::help::ownExecutable());

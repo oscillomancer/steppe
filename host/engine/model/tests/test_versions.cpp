@@ -1,11 +1,45 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include <doctest/doctest.h>
+#include <supple/model/project_file.h>
+#include <supple/model/schemas.h>
 #include <supple/model/versions.h>
+#include <algorithm>
 #include <ostream>
+
+#if defined(__linux__) && !defined(__SANITIZE_ADDRESS__) && !defined(__SANITIZE_THREAD__)
+#if defined(__has_feature)
+#if !__has_feature(address_sanitizer) && !__has_feature(thread_sanitizer) && \
+    !__has_feature(memory_sanitizer)
+#define SUPPLE_MEMORY_LIMIT_TEST 1
+#endif
+#else
+#define SUPPLE_MEMORY_LIMIT_TEST 1
+#endif
+#endif
+#if SUPPLE_MEMORY_LIMIT_TEST
+#include <sys/resource.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <fstream>
+#endif
 
 using namespace supple;
 using namespace supple::model;
+
+namespace supple::model {
+struct VersionStoreAccountingTest {
+    static std::uint64_t recount(const VersionStore& store) {
+        VersionStore copy = store;
+        copy.retainedSize_.reset();
+        return copy.retainedBytes();
+    }
+    static void reset(VersionStore& store) {
+        store.retainedSize_.reset();
+        store.collectionNeeded_ = true;
+    }
+};
+}  // namespace supple::model
 
 namespace {
 
@@ -723,6 +757,7 @@ TEST_CASE("media hash completion preserves snapshots, revisions, caches and open
     const auto next = vs.nextVersion();
     const auto history = vs.history().size();
     const std::string hash = "sha256:" + std::string(64, 'a');
+    CHECK(vs.retainedBytes() == VersionStoreAccountingTest::recount(vs));
     CHECK(vs.updateMediaHash(source, media, hash, "main"));
     CHECK(vs.nextVersion() == next);
     CHECK(vs.history().size() == history);
@@ -747,6 +782,7 @@ TEST_CASE("media hash completion preserves snapshots, revisions, caches and open
     REQUIRE(vs.undo());
     CHECK(vs.head()->media.find(source)->hash == hash);
     REQUIRE(vs.undo());  // remove the record step
+    CHECK(vs.retainedBytes() == VersionStoreAccountingTest::recount(vs));
     CHECK_FALSE(vs.updateMediaHash(source, media, hash, "main"));
     // An import can have already populated the head while the recording job
     // was pending. Its older stored version still needs the same completion.
@@ -797,4 +833,436 @@ TEST_CASE("history budget preserves leases of snapshots replaced by media hash c
     lease.reset();
     vs.enforceBudget();
     CHECK_FALSE(vs.version(*recorded));
+}
+
+// --- project files keep branches (ADR-0076) -------------------------------------------------
+
+namespace {
+
+VersionStore reopen(const VersionStore& vs, bool history = false) {
+    auto opened = parseProjectFile(serializeProjectFile(vs, history));
+    REQUIRE_MESSAGE(opened, (opened ? std::string() : opened.error().toString()));
+    REQUIRE_MESSAGE(
+        !opened->branchesDropped,
+        (opened->branchesDropped ? opened->branchesDropped->toString() : std::string()));
+    return std::move(opened->store);
+}
+
+std::string headText(const VersionStore& vs, std::string_view branch) {
+    return serializeProject(*vs.head(branch));
+}
+
+// Drums on main; an agent branch adds a bass (tr_2 there) and sets its level
+// in two steps; main meanwhile adds keys (also tr_2) and mutes the drums.
+VersionStore diverged() {
+    VersionStore vs(Session::create());
+    run(vs, {inv("track.add", R"({"name": "Drums"})")});
+    REQUIRE(vs.createBranch("agent/claude/bass", "main"));
+    REQUIRE(vs.switchBranch("agent/claude/bass"));
+    run(vs, {inv("track.add", R"({"name": "Bass"})")});
+    run(vs, {inv("track.set", R"({"track": "tr_2", "volume_db": -4})")});
+    REQUIRE(vs.switchBranch("main"));
+    run(vs, {inv("track.add", R"({"name": "Keys"})")});
+    run(vs, {inv("track.set", R"({"track": "tr_1", "mute": true})")});
+    return vs;
+}
+
+}  // namespace
+
+TEST_CASE("a project file keeps every branch head, its unmerged steps and the current branch") {
+    VersionStore vs = diverged();
+    REQUIRE(vs.switchBranch("agent/claude/bass"));
+    const std::string text = serializeProjectFile(vs);
+    // The document is main's head whichever branch is current.
+    auto document = parseProject(text);
+    REQUIRE(document);
+    CHECK(serializeProject(*document) == headText(vs, "main"));
+
+    VersionStore back = reopen(vs);
+    CHECK(back.branches() == vs.branches());
+    CHECK(back.branch() == "agent/claude/bass");
+    for (const auto& name : vs.branches()) CHECK(headText(back, name) == headText(vs, name));
+    CHECK(back.nextVersion() == vs.nextVersion());
+    CHECK(serializeProjectFile(back) == text);  // saving again changes nothing
+
+    // The branch's own steps are exact and undoable; main's history is not kept.
+    const auto steps = back.history();
+    REQUIRE(steps.size() == 3);  // both steps and the fork they start from
+    CHECK(steps[0]->txn.label == "track.set");
+    CHECK(steps[1]->txn.label == "track.add");
+    REQUIRE(back.undo());
+    REQUIRE(back.undo());
+    CHECK(back.head()->tracks.size() == 2);  // the master and the drums: the fork
+    CHECK_FALSE(back.undo());
+    REQUIRE(back.redo());
+    REQUIRE(back.redo());
+    REQUIRE(back.switchBranch("main"));
+    CHECK_FALSE(back.canUndo());
+
+    // Merging after reopening does what merging before the save did.
+    auto before = vs.merge("agent/claude/bass", "main", apply, schemas);
+    auto after = back.merge("agent/claude/bass", "main", apply, schemas);
+    REQUIRE(before.conflicts.empty());
+    REQUIRE_MESSAGE(after.conflicts.empty(),
+                    (after.conflicts.empty() ? "" : after.conflicts[0].message));
+    CHECK(after.remap == before.remap);
+    CHECK(after.remap.at(*Id::parse("tr_2")) == *Id::parse("tr_3"));
+    CHECK(track(back, "main", "tr_3")->name == "Bass");
+    CHECK(track(back, "main", "tr_3")->volumeDb == -4.0);
+    CHECK(track(back, "main", "tr_1")->mute);
+    CHECK(headText(back, "main") == headText(vs, "main"));
+}
+
+TEST_CASE("after reopening, a merge still finds both sides' edits of one object") {
+    VersionStore vs = diverged();
+    REQUIRE(vs.switchBranch("agent/claude/bass"));
+    run(vs, {inv("track.set", R"({"track": "tr_1", "volume_db": -2})")});  // the drums
+    REQUIRE(vs.switchBranch("main"));
+    SUBCASE("the same field: a conflict") {
+        run(vs, {inv("track.set", R"({"track": "tr_1", "volume_db": -6})")});
+        VersionStore back = reopen(vs);
+        const auto head = back.headVersion("main");
+        auto m = back.merge("agent/claude/bass", "main", apply, schemas);
+        REQUIRE(m.conflicts.size() == 1);
+        CHECK(m.conflicts[0].kind == Conflict::Kind::ConcurrentEdit);
+        CHECK(m.conflicts[0].step == 2);  // the third step of the branch, as before the save
+        CHECK(m.conflicts[0].message.find("volume_db") != std::string::npos);
+        CHECK(back.headVersion("main") == head);
+    }
+    SUBCASE("another field of an object main changed: no conflict") {
+        VersionStore back = reopen(vs);  // main muted the drums, the branch set their level
+        auto m = back.merge("agent/claude/bass", "main", apply, schemas);
+        REQUIRE_MESSAGE(m.conflicts.empty(), (m.conflicts.empty() ? "" : m.conflicts[0].message));
+        CHECK(track(back, "main", "tr_1")->mute);
+        CHECK(track(back, "main", "tr_1")->volumeDb == -2.0);
+    }
+}
+
+TEST_CASE("a branch merged, continued and reopened merges only its new steps") {
+    VersionStore vs(Session::create());
+    REQUIRE(vs.createBranch("topic", "main"));
+    run(vs, {inv("track.add", R"({"name": "Main track"})")});  // tr_1 on main
+    REQUIRE(vs.switchBranch("topic"));
+    run(vs, {inv("track.add", R"({"name": "Branch track"})")});            // tr_1 on the branch
+    REQUIRE(vs.merge("topic", "main", apply, schemas).conflicts.empty());  // tr_2 on main
+    run(vs, {inv("track.set", R"({"track": "tr_1", "volume_db": -9})")});
+    VersionStore back = reopen(vs);
+    REQUIRE(back.history().size() == 2);  // the new step and where it continues from
+    auto m = back.merge("topic", "main", apply, schemas);
+    REQUIRE_MESSAGE(m.conflicts.empty(), (m.conflicts.empty() ? "" : m.conflicts[0].message));
+    CHECK(m.remap.at(*Id::parse("tr_1")) == *Id::parse("tr_2"));
+    CHECK(back.head("main")->tracks.size() == 3);  // no second copy of the branch track
+    CHECK(track(back, "main", "tr_1")->volumeDb == 0.0);
+    CHECK(track(back, "main", "tr_2")->volumeDb == -9.0);
+    CHECK(back.merge("topic", "main", apply, schemas).upToDate);
+}
+
+TEST_CASE("a merged and deleted branch leaves nothing behind in the file") {
+    VersionStore vs = diverged();
+    REQUIRE(vs.merge("agent/claude/bass", "main", apply, schemas).conflicts.empty());
+    REQUIRE(vs.deleteBranch("agent/claude/bass"));
+    const std::string text = serializeProjectFile(vs);
+    CHECK(text.find("\"branches\"") == std::string::npos);
+    CHECK(text == serializeProject(*vs.head()));
+}
+
+TEST_CASE("history: true keeps undo and redo; the default keeps neither on main") {
+    VersionStore vs(Session::create());
+    run(vs, {inv("track.add", R"({"name": "One"})")});
+    run(vs, {inv("track.add", R"({"name": "Two"})")});
+    run(vs, {inv("track.add", R"({"name": "Three"})")});
+    REQUIRE(vs.undo());
+    const std::string plain = serializeProjectFile(vs);
+    CHECK(plain.find("\"branches\"") == std::string::npos);  // main alone: just the document
+    VersionStore flat = reopen(vs);
+    CHECK_FALSE(flat.canUndo());
+    CHECK_FALSE(flat.canRedo());
+
+    VersionStore back = reopen(vs, true);
+    CHECK(headText(back, "main") == headText(vs, "main"));
+    REQUIRE(back.canRedo());
+    REQUIRE(back.redo());
+    CHECK(back.head()->tracks.size() == 4);
+    REQUIRE(back.undo());
+    REQUIRE(back.undo());
+    REQUIRE(back.undo());
+    CHECK(back.head()->tracks.size() == 1);
+    CHECK_FALSE(back.undo());
+    CHECK(serializeProjectFile(reopen(vs, true), true) == serializeProjectFile(vs, true));
+}
+
+TEST_CASE("a damaged or stale branches section opens main alone") {
+    const VersionStore vs = diverged();
+    auto doc = json::parse(serializeProjectFile(vs)).value();
+    REQUIRE(doc.find("branches"));
+    auto open = [](const json::Value& d) {
+        auto opened = projectFileFromJson(d);
+        REQUIRE(opened);
+        REQUIRE(opened->branchesDropped);
+        CHECK(opened->store.branches() == std::vector<std::string>{"main"});
+        return opened->branchesDropped->code;
+    };
+    SUBCASE("main edited by a program that does not keep branches") {
+        auto edited = doc;
+        edited["project"]["name"] = "Renamed elsewhere";
+        CHECK(open(edited) == "history.stale");
+    }
+    SUBCASE("a version missing its parent") {
+        auto damaged = doc;
+        auto& versions = damaged["branches"]["versions"];
+        for (auto& v : versions.asObject())
+            if (v.value.find("parents")->size()) {
+                v.value["parents"] = json::parse("[999999]").value();
+                break;
+            }
+        CHECK(open(damaged) == "history.saved");
+    }
+    SUBCASE("a logged step the program may not replay (ADR-0076, review of item A #1)") {
+        auto crafted = doc;
+        bool replaced = false;
+        for (auto& v : crafted["branches"]["versions"].asObject())
+            if (const auto* list = v.value.find("invocations"); list && list->size() && !replaced) {
+                v.value["invocations"] =
+                    json::parse(R"([{"command": "project.save", "args": {"path": "x.json"}}])")
+                        .value();
+                replaced = true;
+            }
+        REQUIRE(replaced);
+        CHECK(projectFileFromJson(crafted)->branchesDropped == std::nullopt);  // no rule given
+        const InvocationCheck edits = [](const Invocation& i) -> Status {
+            if (i.command.rfind("track.", 0) == 0) return okStatus();
+            return Error("history.command", i.command + " is not an edit");
+        };
+        auto opened = projectFileFromJson(crafted, nullptr, edits);
+        REQUIRE(opened);
+        REQUIRE(opened->branchesDropped);
+        CHECK(opened->branchesDropped->code == "history.command");
+        CHECK(opened->branchesDropped->path.find("/invocations/0") != std::string::npos);
+        CHECK(opened->store.branches() == std::vector<std::string>{"main"});
+        CHECK_FALSE(projectFileFromJson(doc, nullptr, edits)->branchesDropped);  // the real one
+    }
+    SUBCASE("a version that is a replay of itself (review of item A #3)") {
+        auto damaged = doc;
+        auto& versions = damaged["branches"]["versions"].asObject();
+        REQUIRE(versions.begin() != versions.end());
+        auto& first = *versions.begin();
+        first.value["replay_of"] = json::parse(first.key).value();  // a cycle a merge would loop on
+        CHECK(open(damaged) == "history.saved");
+    }
+    SUBCASE("a later version named as what a version replays") {
+        auto damaged = doc;
+        auto& versions = damaged["branches"]["versions"].asObject();
+        std::string newest;
+        for (const auto& v : versions)
+            newest = std::max(newest, v.key, [](auto& a, auto& b) {
+                return a.size() != b.size() ? a.size() < b.size() : a < b;
+            });
+        versions.begin()->value["replay_of"] = json::parse(newest).value();
+        CHECK(open(damaged) == "history.saved");
+    }
+    SUBCASE("a redo step that does not continue the head (review of item A #4)") {
+        auto damaged = doc;
+        auto& main = damaged["branches"]["refs"]["main"];
+        REQUIRE(main.find("head")->asDouble() == main.find("base")->asDouble());
+        // Any other saved version: redo would jump there and undo then walk
+        // off its parents.
+        for (const auto& v : damaged["branches"]["versions"].asObject())
+            if (v.key !=
+                std::to_string(static_cast<std::uint64_t>(main.find("head")->asDouble()))) {
+                main["redo"] = json::Value::array();
+                main["redo"].push_back(json::parse(v.key).value());
+                break;
+            }
+        REQUIRE(main.find("redo"));
+        CHECK(open(damaged) == "history.saved");
+    }
+    SUBCASE("a state that does not load") {
+        auto damaged = doc;
+        for (auto& v : damaged["branches"]["versions"].asObject())
+            if (v.value.find("state")) {
+                v.value["state"]["set"]["/tracks/tr_9"] = json::parse(R"({"type": 4})").value();
+                break;
+            }
+        CHECK(open(damaged) == "history.saved");
+    }
+}
+
+#if SUPPLE_MEMORY_LIMIT_TEST
+TEST_CASE("many saved versions of a large document open in bounded memory") {
+    // Review of item A, finding 5: 2,005 versions of a project with 128 KiB of
+    // notes were each decoded in full before any sharing, which needs well
+    // over 256 MiB and died with std::bad_alloc. Rebuilt oldest first, each
+    // shares its parent's objects as it is decoded.
+    Project project;
+    project.notes = std::string(128 * 1024, 'n');
+    VersionStore vs(Session::create(std::move(project)));
+    run(vs, {inv("track.add", R"({"name": "One"})")});
+    auto doc = json::parse(serializeProjectFile(vs, true)).value();
+    auto& section = doc["branches"];
+    auto& versions = section["versions"].asObject();
+    REQUIRE(versions.size() == 2);
+    json::Value root = versions.begin()->value, head = std::next(versions.begin())->value;
+    REQUIRE(root.find("state"));
+    REQUIRE_FALSE(head.find("state"));
+    constexpr std::uint64_t n = 2005;
+    json::Value chain = json::Value::object();
+    for (std::uint64_t id = 1; id <= n; ++id) {
+        json::Value v = id == n ? head : root;
+        // Each earlier version equals the document: a full decode each.
+        if (id != n) v["state"] = json::Value::object();
+        v["parents"] = json::Value::array();
+        if (id > 1) v["parents"].push_back(id - 1);
+        chain[std::to_string(id)] = std::move(v);
+    }
+    section["versions"] = std::move(chain);
+    section["next_version"] = n + 1;
+    section["refs"]["main"]["head"] = n;
+    section["refs"]["main"]["base"] = 1;
+    section["refs"]["main"].asObject().erase("redo");
+    const std::string text = json::writeCanonical(doc);
+    REQUIRE(text.size() < 1024 * 1024);  // a small file
+
+    // A child process gets 160 MiB more address space than it has now.
+    std::size_t pages = 0;
+    std::ifstream("/proc/self/statm") >> pages;
+    const auto limit = static_cast<rlim_t>(pages) * static_cast<rlim_t>(sysconf(_SC_PAGESIZE)) +
+                       (rlim_t{160} << 20);
+    const pid_t child = fork();
+    REQUIRE(child >= 0);
+    if (child == 0) {
+        rlimit cap{limit, limit};
+        if (setrlimit(RLIMIT_AS, &cap) != 0) _exit(9);
+        try {
+            auto opened = parseProjectFile(text);
+            if (!opened) _exit(4);
+            if (opened->branchesDropped) _exit(2);
+            _exit(opened->store.canUndo() ? 0 : 5);
+        } catch (const std::bad_alloc&) {
+            _exit(3);  // escaped the loader
+        }
+    }
+    int status = 0;
+    REQUIRE(waitpid(child, &status, 0) == child);
+    REQUIRE(WIFEXITED(status));
+    CHECK(WEXITSTATUS(status) == 0);  // 3: bad_alloc escaped; 2: refused as too large
+}
+#endif
+
+TEST_CASE("a project saved before branches were kept opens as main") {
+    VersionStore vs(Session::create());
+    run(vs, {inv("track.add", R"({"name": "Old"})")});
+    auto doc = projectToJson(*vs.head());
+    doc["schema"] = "supple.project/2.13";
+    auto opened = projectFileFromJson(doc);
+    REQUIRE(opened);
+    CHECK_FALSE(opened->branchesDropped);
+    CHECK(opened->store.branches() == std::vector<std::string>{"main"});
+    CHECK(opened->store.head()->tracks.find(*Id::parse("tr_1"))->name == "Old");
+}
+
+TEST_CASE("a project file carries the autosave number it holds, beside its branches") {
+    // Round-12 review: autosaves are compared by number, not file time
+    // (ADR-0078). The count reads back, with or without a branches section,
+    // and leaves main's document and its hash alone.
+    for (bool branches : {false, true}) {
+        CAPTURE(branches);
+        VersionStore vs = branches ? diverged() : VersionStore(Session::create());
+        const std::string plain = serializeProjectFile(vs);
+        const std::string text = serializeProjectFile(vs, false, 7);
+        CHECK(text.find("\"autosaved_through\": 7") != std::string::npos);
+        auto opened = parseProjectFile(text);
+        REQUIRE(opened);
+        CHECK_FALSE(opened->branchesDropped);
+        REQUIRE(opened->autosavedThrough);
+        CHECK(*opened->autosavedThrough == 7);
+        CHECK(serializeProjectFile(opened->store, false, 7) == text);
+        auto without = parseProjectFile(plain);
+        REQUIRE(without);
+        CHECK_FALSE(without->autosavedThrough);
+        auto doc = json::parse(text).value();
+        doc["autosaved_through"] = "seven";
+        std::vector<schema::Warning> warnings;
+        auto bad = parseProjectFile(json::writeCanonical(doc), &warnings);
+        REQUIRE(bad);  // the project still opens
+        CHECK_FALSE(bad->autosavedThrough);
+        CHECK(std::any_of(warnings.begin(), warnings.end(), [](const schema::Warning& w) {
+            return w.code == "project.autosaved_through";
+        }));
+    }
+}
+
+TEST_CASE("history accounting measures only the new snapshot on an ordinary commit") {
+    VersionStore store(Session::create());
+    run(store, {inv("track.add", R"({"name":"A"})")});
+    // Warm any lazy cache; measure work, never elapsed time.
+    (void)store.retainedBytes();
+    const auto start = store.accountingVisits();
+    for (unsigned i = 0; i < 128; ++i) {
+        auto args = json::Value::object();
+        args["track"] = "tr_1";
+        args["volume_db"] = -static_cast<double>(i % 64);
+        run(store, {{"track.set", std::move(args)}});
+        (void)store.retainedBytes();
+        store.enforceBudget();
+    }
+    CHECK(store.accountingVisits() - start == 128);
+}
+
+TEST_CASE("incremental history bytes and retention match a full recount across mutations") {
+    VersionStore fast(Session::create()), slow(Session::create());
+    auto check = [&] {
+        CHECK(fast.retainedBytes() == VersionStoreAccountingTest::recount(fast));
+        CHECK(slow.retainedBytes() == fast.retainedBytes());
+        CHECK(serializeProjectFile(fast, true) == serializeProjectFile(slow, true));
+    };
+    auto edit = [&](std::vector<Invocation> commands, const std::string& key = "") {
+        VersionStoreAccountingTest::reset(slow);
+        run(fast, commands, key);
+        run(slow, commands, key);
+        check();
+    };
+    edit({inv("track.add", R"({"name":"A"})")});
+    for (int i = 0; i < 80; ++i) {
+        if (i == 4) {
+            REQUIRE(fast.createBranch("keep", "main"));
+            REQUIRE(slow.createBranch("keep", "main"));
+        }
+        if (i > 0 && i < 30 && i % 11 == 0) {
+            REQUIRE(fast.undo());
+            REQUIRE(slow.undo());
+        }
+        auto args = json::Value::object();
+        args["track"] = "tr_1";
+        args["name"] = "change " + std::to_string(i);
+        edit({{"track.set", std::move(args)}}, i % 4 ? "gesture" : "");
+        if (i == 20) {
+            REQUIRE(fast.deleteBranch("keep"));
+            REQUIRE(slow.deleteBranch("keep"));
+            check();
+        }
+        if (i == 30 || i == 60) {
+            for (auto* store : {&fast, &slow}) {
+                EditTxn txn(*store->head(), store->nextVersion());
+                auto project = txn.project();
+                project.historyBudgetBytes = i == 30 ? 24000 : 1;
+                txn.setProject(std::move(project));
+                auto changes = txn.changes();
+                auto result = txn.commit();
+                REQUIRE(result);
+                REQUIRE(store->commit(std::move(*result), {"budget", "test", {}, {}},
+                                      std::move(changes), {}));
+            }
+            check();
+        }
+    }
+    // Copy survives destruction of its source, then coalesces and drops nodes.
+    VersionStore copy = [&] {
+        VersionStore temporary = fast;
+        return temporary;
+    }();
+    const auto bytes = fast.retainedBytes();
+    CHECK(copy.retainedBytes() == bytes);
+    run(copy, {inv("track.set", R"({"track":"tr_1","name":"copy only"})")}, "gesture");
+    CHECK(copy.retainedBytes() == VersionStoreAccountingTest::recount(copy));
+    CHECK(fast.retainedBytes() == bytes);
 }

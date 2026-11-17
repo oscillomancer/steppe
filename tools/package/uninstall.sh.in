@@ -16,7 +16,7 @@ check_file_path() {
   local file=$1 relative
   case "$file" in
     "$prefix/bin/"*) relative=${file#"$prefix/bin/"} ;;
-    "$prefix/share/applications/$slug.desktop"|"$prefix/share/applications/mimeinfo.cache") return ;;
+    "$prefix/share/applications/$slug.desktop"|"$prefix/share/applications/mimeinfo.cache"|"$prefix/share/applications/intent.cache") return ;;
     "$prefix/share/icons/"*) relative=${file#"$prefix/share/icons/"} ;;
     "$HOME/.clap/"*) relative=${file#"$HOME/.clap/"} ;;
     "$app/"*) relative=${file#"$app/"} ;;
@@ -53,7 +53,7 @@ fi
 while IFS= read -r file; do
   if [[ $file == "$app/"* ]]; then check_payload_ancestors "$file"; fi
   case "$file" in
-    "$prefix/bin/"*|"$prefix/share/applications/$slug.desktop"|"$prefix/share/applications/mimeinfo.cache"|"$prefix/share/icons/"*|"$HOME/.clap/"*|"$app/"*) rm -f -- "$file" ;;
+    "$prefix/bin/"*|"$prefix/share/applications/$slug.desktop"|"$prefix/share/applications/mimeinfo.cache"|"$prefix/share/applications/intent.cache"|"$prefix/share/icons/"*|"$HOME/.clap/"*|"$app/"*) rm -f -- "$file" ;;
     *) echo "Invalid manifest path: $file" >&2; exit 1 ;;
   esac
   # Prune only ancestors of files this installer owned, never unrelated

@@ -3,7 +3,201 @@
 #include <supple/base/waitable.h>
 #include <supple/rpc/model_loop.h>
 #include <array>
+#include <atomic>
+#include <cstring>
+#include <memory>
+#include <thread>
+#if !defined(_WIN32)
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+#include "../src/endpoint_platform.h"
+#include "../src/socket_platform.h"
 #include "protocol_fixture.h"
+
+TEST_CASE("malformed request ids are never echoed into portable RPC error envelopes") {
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    ModelQueue queue;
+    rpc::Server server(commands, bus, [&](auto task) { queue.post(std::move(task)); });
+    std::filesystem::path dir;
+    for (std::uint64_t suffix = 0;; ++suffix) {
+        dir = std::filesystem::temp_directory_path() / ("rpc-boundary-" + std::to_string(suffix));
+        std::error_code error;
+        if (std::filesystem::create_directory(dir, error)) break;
+        REQUIRE((!error || error == std::errc::file_exists));
+    }
+    struct Cleanup {
+        std::filesystem::path dir;
+        ~Cleanup() { std::filesystem::remove_all(dir); }
+    } cleanup{dir};
+    const auto path = dir / "endpoint.sock";
+    REQUIRE(server.start(path));
+    struct Socket {
+        rpc::net::Socket fd = rpc::net::open();
+        ~Socket() {
+            if (fd != rpc::net::invalid) rpc::net::close(fd);
+        }
+    } socket;
+    REQUIRE(socket.fd != rpc::net::invalid);
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    const auto name = rpc::net::pathName(path);
+    REQUIRE(name.size() < sizeof(address.sun_path));
+    std::memcpy(address.sun_path, name.c_str(), name.size() + 1);
+    REQUIRE(rpc::net::connect(socket.fd, address) == 0);
+    auto exchange = [&](const std::string& frame) {
+        const auto line = frame + '\n';
+        std::size_t sent = 0;
+        while (sent < line.size()) {
+            auto n = rpc::net::send(socket.fd, line.data() + sent, line.size() - sent);
+            REQUIRE(n > 0);
+            sent += static_cast<std::size_t>(n);
+        }
+        std::string response;
+        while (response.find('\n') == std::string::npos) {
+            rpc::net::PollFd item{socket.fd, POLLIN, 0};
+            REQUIRE_MESSAGE(rpc::net::poll(&item, 1, kGuardMs) > 0,
+                            "WATCHDOG ABORT waiting for RPC reply");
+            char bytes[4096];
+            const auto n = rpc::net::recv(socket.fd, bytes, sizeof(bytes));
+            REQUIRE(n > 0);
+            response.append(bytes, static_cast<std::size_t>(n));
+        }
+        return parse(response);
+    };
+    for (const auto* id : {"true", "[]", "{}", "1.5"}) {
+        const auto reply =
+            exchange(std::string(R"({"jsonrpc":"2.0","method":"rpc.hello","id":)") + id + "}");
+        CHECK(reply.find("id")->isNull());
+        CHECK(reply.find("error")->find("code")->asInt() == -32600);
+        const auto* detail = reply.find("error")->find("data");
+        for (const char* key : {"code", "message", "path", "hint"}) {
+            REQUIRE(detail->find(key));
+            CHECK(detail->find(key)->isString());
+        }
+    }
+    const auto reply = exchange(R"({"jsonrpc":"1.0","method":"rpc.hello","id":"valid-id"})");
+    CHECK(*reply.find("id") == "valid-id");
+    for (const auto& [id, fits] :
+         std::vector<std::pair<std::string, bool>>{{std::string(1022, 'i'), true},
+                                                   {std::string(1023, 'i'), false},
+                                                   {std::string(511, '\n'), true},
+                                                   {std::string(512, '\n'), false},
+                                                   {std::string(170, '\0'), true},
+                                                   {std::string(171, '\0'), false},
+                                                   {std::string(65536, 'i'), false}}) {
+        auto frame = parse(
+            R"({"jsonrpc":"2.0","method":"rpc.hello","params":{"client":"id-limit","protocol":1}})");
+        frame["id"] = id;
+        const auto result = exchange(json::writeCompact(frame));
+        if (fits) {
+            CHECK(*result.find("id") == id);
+            CHECK(result.find("result"));
+        } else {
+            CHECK(result.find("id")->isNull());
+            REQUIRE(result.find("error"));
+            CHECK(result.find("error")->find("data")->find("code")->asString() == "rpc.id_size");
+            CHECK(json::writeCompact(result).size() < 1024);
+        }
+    }
+    std::string wide = R"({"jsonrpc":"2.0","id":1,"method":"counter.add","params":{"values":[)";
+    for (int i = 0; i < 1000000; ++i) wide += i ? ",0" : "0";
+    wide += "]}}";
+    const auto refused = exchange(wide);
+    REQUIRE(refused.find("error"));
+    CHECK(refused.find("error")->find("data")->find("code")->asString() ==
+          "json.parse.too_many_values");
+    server.stop();
+    CHECK(host.count == 0);
+}
+
+namespace {
+// A listener that never accepts stands at the endpoint, its backlog full.
+// `owned` makes it hold the endpoint lock, as a live server does.
+void refusesOccupiedEndpoint(bool owned) {
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    rpc::Server server(commands, bus, [](auto) {});
+    std::filesystem::path dir;
+    for (std::uint64_t suffix = 0;; ++suffix) {
+        dir = std::filesystem::temp_directory_path() / ("rpc-backlog-" + std::to_string(suffix));
+        std::error_code error;
+        if (std::filesystem::create_directory(dir, error)) break;
+        REQUIRE((!error || error == std::errc::file_exists));
+    }
+    struct Cleanup {
+        std::filesystem::path dir;
+        ~Cleanup() { std::filesystem::remove_all(dir); }
+    } cleanup{dir};
+    struct Sockets {
+        std::vector<rpc::net::Socket> handles;
+        ~Sockets() {
+            for (auto fd : handles) rpc::net::close(fd);
+        }
+        rpc::net::Socket add() {
+            const auto fd = rpc::net::open();
+            REQUIRE(fd != rpc::net::invalid);
+            handles.push_back(fd);
+            return fd;
+        }
+    } sockets;
+    const auto path = dir / "endpoint.sock";
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    const auto name = rpc::net::pathName(path);
+    REQUIRE(name.size() < sizeof(address.sun_path));
+    std::memcpy(address.sun_path, name.c_str(), name.size() + 1);
+    auto lockPath = path;
+    lockPath += ".lock";
+    std::unique_ptr<rpc::net::EndpointLock> owner;
+    if (owned) {
+        owner = std::make_unique<rpc::net::EndpointLock>(lockPath);
+        REQUIRE(owner->valid());
+    }
+    const auto listener = sockets.add();
+    REQUIRE(rpc::net::bind(listener, address) == 0);
+    REQUIRE(rpc::net::listen(listener) == 0);
+    // The synthetic listener never accepts. On Linux this fills its 16-slot
+    // backlog; other platforms can report a pending connect earlier. Neither
+    // outcome proves an endpoint stale, so startup must conservatively refuse.
+    for (int i = 0; i < 64; ++i) {
+        const auto client = sockets.add();
+        REQUIRE(rpc::net::nonblocking(client) == 0);
+        (void)rpc::net::connect(client, address);
+    }
+    // An external test watchdog may abort a broken blocking implementation;
+    // elapsed time is never used to accept or reject endpoint ownership.
+    const auto result = server.start(path);
+    REQUIRE_FALSE(result);
+    CHECK(result.error().code == "rpc.address_in_use");
+    // The name must survive the refusal. Windows cannot stat a socket file
+    // (std::filesystem::exists throws on it), so look for the directory entry.
+    bool listed = false;
+    for (const auto& entry : std::filesystem::directory_iterator(dir))
+        listed = listed || entry.path().filename() == path.filename();
+    CHECK(listed);
+    // The refused start left the owner's lock alone: a second try is refused too.
+    if (owned) CHECK(rpc::net::EndpointLock(lockPath).heldElsewhere());
+}
+}  // namespace
+
+TEST_CASE("portable startup refuses an endpoint whose owner holds its lock, backlog full") {
+    refusesOccupiedEndpoint(true);
+}
+
+// Without the lock only the connect probe can tell a live listener from a dead
+// socket file. macOS refuses a connect to a full backlog exactly as it refuses a
+// dead socket, so there the probe cannot hold this; the lock above is what
+// protects a live server on every platform.
+#if !defined(__APPLE__)
+TEST_CASE("portable startup refuses an occupied socket even with an undrained backlog") {
+    refusesOccupiedEndpoint(false);
+}
+#endif
 
 TEST_CASE("model loop portable waitable snapshots respect model-thread cancellation") {
     rpc::ModelLoop loop;
@@ -73,8 +267,19 @@ TEST_CASE("portable AF_UNIX transport dispatches and protects a live endpoint") 
     auto refused = competing.start(path);
     REQUIRE_FALSE(refused);
     CHECK(refused.error().code == "rpc.address_in_use");
+    // A running server holds its endpoint lock, and the refused start left it alone.
+    auto lockPath = path;
+    lockPath += ".lock";
+    CHECK(rpc::net::EndpointLock(lockPath).heldElsewhere());
     rpc::Client client;
+    auto absent = client.callWithDelivery("counter.add", parse(R"({"value":7})"));
+    REQUIRE_FALSE(absent.result);
+    CHECK(absent.delivery == rpc::Delivery::Unsent);
     REQUIRE(client.connect(path, "portable-test"));
+    auto remoteError = client.callWithDelivery("counter.fail", parse(R"({"value":0})"));
+    REQUIRE_FALSE(remoteError.result);
+    CHECK(remoteError.delivery == rpc::Delivery::Sent);
+    CHECK(remoteError.result.error().code == "test.located");
     auto result = client.call("counter.add", parse(R"({"value":7})"));
     REQUIRE(result);
     CHECK((*result)["count"].asInt() == 7);
@@ -93,8 +298,159 @@ TEST_CASE("portable AF_UNIX transport dispatches and protects a live endpoint") 
     client.close();
     server.stop();
     CHECK_FALSE(std::filesystem::exists(path));
+    CHECK(rpc::net::EndpointLock(lockPath).valid());  // released once stopped
     std::filesystem::remove_all(dir);
 }
+namespace {
+std::filesystem::path freshDir(const char* stem) {
+    for (std::uint64_t suffix = 0;; ++suffix) {
+        auto dir = std::filesystem::temp_directory_path() / (stem + std::to_string(suffix));
+        std::error_code error;
+        if (std::filesystem::create_directory(dir, error)) return dir;
+        REQUIRE((!error || error == std::errc::file_exists));
+    }
+}
+std::filesystem::path lockOf(std::filesystem::path path) {
+    path += ".lock";
+    return path;
+}
+}  // namespace
+
+TEST_CASE(
+    "servers racing for one endpoint leave one owner, and a successor starts after it stops") {
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    const auto dir = freshDir("supple-rpc-race-");
+    const auto path = dir / "endpoint.sock";
+    for (int round = 0; round < 20; ++round) {
+        constexpr int n = 8;
+        std::vector<std::unique_ptr<rpc::Server>> servers;
+        for (int i = 0; i < n; ++i)
+            servers.push_back(std::make_unique<rpc::Server>(commands, bus, [](auto) {}));
+        std::vector<std::string> codes(n);
+        std::atomic<int> ready{0};
+        std::vector<std::thread> threads;
+        for (int i = 0; i < n; ++i)
+            threads.emplace_back([&, i] {
+                ++ready;
+                while (ready.load() != n) std::this_thread::yield();
+                auto started = servers[static_cast<std::size_t>(i)]->start(path);
+                codes[static_cast<std::size_t>(i)] = started ? "ok" : started.error().code;
+            });
+        for (auto& thread : threads) thread.join();
+        int owners = 0, refused = 0, winner = -1;
+        for (int i = 0; i < n; ++i) {
+            const auto& code = codes[static_cast<std::size_t>(i)];
+            if (code == "ok") {
+                ++owners;
+                winner = i;
+            } else if (code == "rpc.address_in_use") {
+                ++refused;
+            } else {
+                MESSAGE("unexpected code " << code);
+            }
+        }
+        CHECK(owners == 1);
+        CHECK(refused == n - 1);
+        CHECK(rpc::net::EndpointLock(lockOf(path)).heldElsewhere());
+        if (winner >= 0) servers[static_cast<std::size_t>(winner)]->stop();
+        // Free at once: the lock never waits, so a slow release would refuse
+        // the successor.
+        CHECK(rpc::net::EndpointLock(lockOf(path)).valid());
+        rpc::Server successor(commands, bus, [](auto) {});
+        CHECK(successor.start(path));
+        successor.stop();
+    }
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("a failed start and a server destroyed while running both release the endpoint lock") {
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    const auto dir = freshDir("supple-rpc-life-");
+    // The lock file can be created; the socket name exceeds the platform limit.
+    const auto longPath = dir / std::string(150, 'x');
+    {
+        rpc::Server server(commands, bus, [](auto) {});
+        auto started = server.start(longPath);
+        REQUIRE_FALSE(started);
+        CHECK(started.error().code == "rpc.path");
+        CHECK(rpc::net::EndpointLock(lockOf(longPath)).valid());
+    }
+    const auto path = dir / "endpoint.sock";
+    {
+        rpc::Server server(commands, bus, [](auto) {});
+        REQUIRE(server.start(path));
+        CHECK(rpc::net::EndpointLock(lockOf(path)).heldElsewhere());
+    }  // destroyed without stop()
+    CHECK(rpc::net::EndpointLock(lockOf(path)).valid());
+    std::filesystem::remove_all(dir);
+}
+
+#if !defined(_WIN32)
+// POSIX only: the test needs fork to kill an owner without running its cleanup.
+// On Windows the same release rests on the system dropping a dead process's
+// byte-range locks, which no in-process test can show.
+TEST_CASE("a killed server's endpoint lock and socket are reclaimed") {
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    const auto dir = freshDir("supple-rpc-kill-");
+    const auto path = dir / "endpoint.sock";
+    int ready[2];
+    REQUIRE(::pipe(ready) == 0);
+    const pid_t child = ::fork();
+    REQUIRE(child >= 0);
+    if (child == 0) {
+        rpc::Server server(commands, bus, [](auto) {});
+        const char ok = server.start(path) ? 'y' : 'n';
+        (void)!::write(ready[1], &ok, 1);
+        if (ok != 'y') ::_exit(1);
+        for (;;) ::pause();  // killed by the parent
+    }
+    // A check that fails before the kill below must not leave the child behind:
+    // it would keep the test's output open and turn a failure into a hang.
+    struct Reap {
+        pid_t pid;
+        bool done = false;
+        ~Reap() {
+            if (done) return;
+            ::kill(pid, SIGKILL);
+            int status = 0;
+            ::waitpid(pid, &status, 0);
+        }
+    } reap{child};
+    ::close(ready[1]);
+    char ok = 0;
+    REQUIRE(::read(ready[0], &ok, 1) == 1);
+    ::close(ready[0]);
+    REQUIRE(ok == 'y');
+    CHECK(rpc::net::EndpointLock(lockOf(path)).heldElsewhere());
+    {
+        rpc::Server competing(commands, bus, [](auto) {});
+        auto refused = competing.start(path);
+        REQUIRE_FALSE(refused);
+        CHECK(refused.error().code == "rpc.address_in_use");
+    }
+    REQUIRE(::kill(child, SIGKILL) == 0);
+    int status = 0;
+    const pid_t reaped = ::waitpid(child, &status, 0);
+    reap.done = reaped == child;
+    REQUIRE(reaped == child);
+    CHECK(WIFSIGNALED(status));
+    bool listed = false;
+    for (const auto& entry : std::filesystem::directory_iterator(dir))
+        listed = listed || entry.path().filename() == path.filename();
+    CHECK(listed);  // the dead server's socket file remains
+    rpc::Server successor(commands, bus, [](auto) {});
+    CHECK(successor.start(path));  // lock free, socket refused: stale, reclaimed
+    successor.stop();
+    std::filesystem::remove_all(dir);
+}
+#endif
+
 TEST_CASE("portable AF_UNIX startup refuses paths beyond the platform limit") {
     auto reg = registry();
     Host host;
@@ -104,5 +460,48 @@ TEST_CASE("portable AF_UNIX startup refuses paths beyond the platform limit") {
     const auto result = server.start(dir / (std::string(200, 'x') + ".sock"));
     REQUIRE_FALSE(result);
     CHECK(result.error().code == "rpc.path");
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("client connection generations distinguish reconnects from calls") {
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    ModelQueue queue;
+    rpc::Server first(commands, bus, [&](auto task) { queue.post(std::move(task)); });
+    // Atomic directory creation keeps concurrent test processes independent
+    // without native process-id APIs or long platform temporary paths.
+    std::filesystem::path dir;
+    for (std::uint64_t suffix = 0;; ++suffix) {
+        dir = std::filesystem::temp_directory_path() / ("supple-rpc-gen-" + std::to_string(suffix));
+        std::error_code error;
+        if (std::filesystem::create_directory(dir, error)) break;
+        REQUIRE_MESSAGE((!error || error == std::errc::file_exists), error.message());
+    }
+    const auto path = dir / "endpoint.sock";
+    REQUIRE(first.start(path));
+    rpc::Client client;
+    CHECK(client.connectionGeneration() == 0);
+    REQUIRE(client.connect(path, "generation-test"));
+    const auto original = client.connectionGeneration();
+    REQUIRE(original != 0);
+    REQUIRE(client.call("registry.list"));
+    CHECK(client.connectionGeneration() == original);
+    first.stop();
+    // Observe EOF deterministically, rather than deciding by how quickly
+    // a native socket reports its peer's close to a nonblocking probe.
+    REQUIRE_FALSE(client.call("registry.list"));
+    CHECK(client.connectionGeneration() == 0);
+    rpc::Server second(commands, bus, [&](auto task) { queue.post(std::move(task)); });
+    REQUIRE(second.start(path));
+    REQUIRE(client.call("registry.list"));  // automatic reconnect
+    const auto automatic = client.connectionGeneration();
+    CHECK(automatic > original);
+    client.close();
+    CHECK(client.connectionGeneration() == 0);
+    REQUIRE(client.connect(path, "generation-test"));
+    CHECK(client.connectionGeneration() > automatic);
+    client.close();
+    second.stop();
     std::filesystem::remove_all(dir);
 }

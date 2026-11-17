@@ -415,7 +415,7 @@ void registerSyncCommands(cmd::Registry& registry) {
         cmd::Command<NoArgs, SyncInfo> c;
         c.name = "sync.get";
         c.kind = cmd::Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Show external sync settings and what the engine hears from the master.";
         c.description = std::string(settingsDoc) +
                         " status: present (the signal arrives), running, locked, state (idle, "
@@ -442,7 +442,7 @@ void registerSyncCommands(cmd::Registry& registry) {
         cmd::Command<json::Value, SyncInfo> c;
         c.name = "sync.set";
         c.kind = cmd::Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Set external sync (MIDI clock, MTC, LTC) and LTC output; returns them.";
         c.description = std::string(settingsDoc) +
                         " Omitted members keep their values. Machine settings: not an undo step, "

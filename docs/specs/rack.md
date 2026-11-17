@@ -222,7 +222,8 @@ see each element as an ordinary declaration.
 | `sampleRate()` | |
 | `maxBlockSize()` | 32: the rack's grid |
 | `channels()` | The widest connected input or modulating cable, at least 1 |
-| `transport()` | `Transport` at the block's start (playing, tempo, beats, barStart, time signature) |
+| `transport()` | `Transport` (playing, tempo, beats, barStart, time signature) read at the block's start (`offset` 0): frame i is near `beats + i * tempo / 60 / sampleRate()`, which can differ in the last bits however host blocks split the grid |
+| `gridTransport()` | The same read at the start of the block's grid interval, and `offset`, the frames from there to the block's first frame: frame i is at `beats + (offset + i) * tempo / 60 / sampleRate()` exactly, however host blocks split the grid (§4.2) |
 | `seed()` | An `int` from the project's seed and the module's id: the same every render |
 | `trace(...)` | As a plugin's |
 
@@ -384,12 +385,30 @@ saying when the library version is used instead or the type is unavailable.
   generations so racks notice changed code.
 - `rack::Instance`: one module's state (the struct, its runtime record,
   its parameter slots and telemetry). Lives across schedule rebuilds.
+  `reset()` (main thread) makes the struct anew and prepares it;
+  `restart()` (`SUPPLE_RT`, by the owner) returns it to the same state on
+  the audio thread without allocating: `prepare()` keeps a copy of the
+  prepared struct (so a module's memory is held twice, except a `Buffer`
+  it leaves all zero and a `DelayLine` nothing was pushed into since it was
+  prepared: those are kept as their size alone, `detail::PristineCopy`,
+  and cleared in place: a buffer by `memset`, a line in O(1), since a
+  line reads what it held before its last clear as zero), and `restart()`
+  copies it back in place, keeping the members' bindings, the knobs and
+  the status, and snapping parameters to their targets. Runtime objects
+  are sized in `prepare()` only, so the copy never reallocates. A host
+  module restarts through `HostModule::restart()`: Transport and Notes
+  clear what they track; Out and In hold only bindings, and a plugin module
+  follows its plug-in's own reset (below).
   `owner()`, `claimOwner(token)` and `releaseOwner()` provide an atomic
   executor handoff. A claim succeeds only from null; only the owning
   executor releases, after joining all helpers. A host using ownership
   must own every instance before binding or processing a schedule.
 - `rack::Schedule`: an immutable compiled rack: order, feedback groups,
   cable buffers, port and parameter bindings. Built on the main thread.
+  What it carries from block to block (each feedback cable's last frame,
+  its outputs, where automation was last sampled) `restart()` (`SUPPLE_RT`,
+  no allocation) returns to how `build()` left it: with the instances'
+  `restart()`, a locate's fresh start (§6).
 - `rack::HostModule`: what a host module implements: `process(HostBlock&)`
   given its port buffers and the block's context.
 
@@ -408,7 +427,52 @@ grid of that position, and for each grid block:
 4. publishes telemetry when due.
 
 Automation targets are sampled at absolute grid starts and held when host
-blocks split a grid interval; smoothing still advances every frame. A first
+blocks split a grid interval; smoothing still advances every frame. A
+module's own output must not depend on where host blocks split an
+interval (they split it differently in the real-time and offline renders):
+stock modules advance state per frame, and do their control-rate work
+(Delay's wander, VCO's drift, Harmonic's partial plan, Resonator's and
+Drum's tuning, Sequencer's step knobs) every 32 frames counted from
+`prepare()` or a restart, reading cables at that frame. Outside a feedback
+group, a run whose calls start on the grid does that work where it did
+once a call. A feedback group calls its modules a frame at a time, so
+there it now comes every 32 frames, not every frame. Projects do not pin
+stock modules (a project's module copies cannot override a stock id), so
+a saved patch plays the current ones, and these patches sound different
+from before this cadence, even on the grid:
+
+- in a feedback group: Harmonic (its partial plan and ramp), Resonator
+  (tuning from its pitch input and knobs), Delay (the wow and flutter
+  wander, on by default), VCO with drift, and Drum and Sequencer whose
+  knobs are modulated (tuning and tone; the step knobs);
+- Slew, and a Macro whose value moves: they glide from a start's second
+  frame (they passed the whole first call through, unglided);
+- Markov clocked from a cable: the step length goes back to the song's
+  eighth at the frame a reset falls on (it waited for the next call), so
+  a gate after a reset can differ for up to 31 frames;
+- Reverb: damping comes back at the frame Freeze ends (the rest of that
+  call ran undamped), and the tail differs from there.
+
+Song positions are exact too: every call of a grid interval gets, as
+`gridTransport()`, the transport read at the interval's start
+(`Clock::transport(position - phase)`) with `Transport::offset` set to the
+phase (plus the frame, for a feedback group's per-frame calls), and stock
+modules compute frame i's position as `beats + (offset + i) * perFrame`,
+the same expression for a frame whatever call it falls in. `transport()`
+keeps its meaning, the transport at the call's start (a feedback group's
+per-frame calls all see their fragment's start), so a project's or the
+library's module source computing `beats + i * perFrame` from it plays as
+it did, its positions differing in the last bits between renders that
+split the grid differently. It is also computed as it always was
+(`Clock::callTransport`: the plan's start plus the samples since), so the
+same source in the same render gives the same bits as before review round
+20. For `gridTransport()`, without playrate, the engine's clock reads the
+time of a timeline sample as `(origin + sample) / rate`, so an offline
+render that starts at a seek and the real-time plan agree on it to the
+bit; `transport()` at a nonzero start can differ from it in the last bit.
+`rack-stock.tests` checks every stock module with split calls against whole
+ones, from the timeline's start and off the grid, with the song playing and
+clocked modules following it. A first
 call or a discontinuity samples the grid interval containing its start,
 including for negative positions. A zero-frame call leaves that state alone.
 
@@ -421,7 +485,9 @@ Kahn's algorithm over modules ordered by id; strongly connected components
 (Tarjan) become feedback groups, each placed where its first module would
 be. Inside a group modules run in id order, and a cable from a later to an
 earlier (or the same) module reads the previous frame. Such cables are
-`feedback: true` in `rack.get`.
+`feedback: true` in `rack.get`. A block's first frame reads the last frame
+of the block before, carried by the schedule: zero when it is new or
+restarted.
 
 ### 4.4 Polyphony and buffers
 
@@ -641,6 +707,13 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   silent. Claims retry at block boundaries without waiting. A locate's
   Notes/Note Out reset is deferred until ownership is obtained, retained
   through continuing plan swaps, and applied before any bindings or MIDI.
+  A seek, and a play from a position (where plug-ins are reset: the
+  callback's seek and play start for non-live nodes, the renderer's
+  relocation and play start, the live region's fresh entry and a node
+  joining it), also restart every module of the rack
+  (`RackNode::resetModules`, deferred and retained the same way, applied
+  first), so real time equals an offline render from there. A loop wrap,
+  and an executor's adoption of a plan, keep module state.
   With anticipation off, the callback owns all modules; offline plans have
   private instances and need no ownership check. The callback and renderer
   graphs remain disjoint within each plan; ownership protects shared

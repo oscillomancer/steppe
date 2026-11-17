@@ -6,7 +6,8 @@
 //   com.suppleaudio.test.gain  — stereo effect; params "gain" (dB, ADR-0010
 //     normalized CLAP value, modulatable by param_mod) and "latency" (0/64 samples, stepped;
 //     changing it while active requests a restart); versioned state; the semantic-params extension
-//     implemented with core-params + core-patch.
+//     implemented with core-params + core-patch. With SUPPLE_TEST_START_GATE set when it is
+//     made (POSIX), start_processing waits on a gate shared with the test (see factoryCreate).
 //   com.suppleaudio.test.sine  — instrument; 0 inputs, stereo output, CLAP and
 //     MIDI note dialects; one sine voice per key at velocity * 0.25, stops at
 //     note off and reports NOTE_END.
@@ -35,6 +36,8 @@
 #include <windows.h>
 
 #else
+#include <fcntl.h>
+#include <sys/mman.h>
 #include <unistd.h>
 #endif
 
@@ -45,6 +48,7 @@
 #include <cmath>
 #include <csignal>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <thread>
@@ -1359,7 +1363,8 @@ clap_process_status CLAP_ABI multiOutProcess(const clap_plugin_t* pl, const clap
 
 // --- crash (the isolation fixture) -------------------------------------------------------
 // An effect that passes audio through until its Mode parameter says otherwise:
-// 1 crashes the process in process() (SIGSEGV), 2 hangs it there.
+// 1 crashes the process in process() (SIGSEGV), 2 hangs it there, 3 takes
+// 20 ms over each block (a plug-in that misses a live deadline, ADR-0081).
 
 const clap_plugin_descriptor_t* crashDescriptor() {
     static const char* features[] = {CLAP_PLUGIN_FEATURE_AUDIO_EFFECT, nullptr};
@@ -1391,7 +1396,7 @@ bool CLAP_ABI crashParamInfo(const clap_plugin_t*, uint32_t index, clap_param_in
     info->id = 1;
     info->flags = CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_AUTOMATABLE;
     std::snprintf(info->name, sizeof(info->name), "Mode");
-    info->max_value = 2;
+    info->max_value = 3;
     return true;
 }
 bool CLAP_ABI crashParamValue(const clap_plugin_t* pl, clap_id id, double* out) {
@@ -1400,8 +1405,8 @@ bool CLAP_ABI crashParamValue(const clap_plugin_t* pl, clap_id id, double* out) 
     return true;
 }
 bool CLAP_ABI crashValueToText(const clap_plugin_t*, clap_id, double v, char* out, uint32_t size) {
-    static const char* kNames[] = {"pass", "crash", "hang"};
-    std::snprintf(out, size, "%s", kNames[std::clamp(static_cast<int>(v), 0, 2)]);
+    static const char* kNames[] = {"pass", "crash", "hang", "slow"};
+    std::snprintf(out, size, "%s", kNames[std::clamp(static_cast<int>(v), 0, 3)]);
     return true;
 }
 bool CLAP_ABI crashTextToValue(const clap_plugin_t*, clap_id, const char*, double*) {
@@ -1432,6 +1437,11 @@ clap_process_status CLAP_ABI crashProcess(const clap_plugin_t* pl, const clap_pr
     crashEvents(pl, p->in_events);
     if (C(pl)->mode.load() == 1) std::raise(SIGSEGV);
     while (C(pl)->mode.load() == 2) {  // spin (no system call: sanitizers see a hang, not a call)
+    }
+    if (C(pl)->mode.load() == 3) {  // spin on the clock: no system call either
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(20);
+        while (std::chrono::steady_clock::now() < until) {
+        }
     }
     for (uint32_t c = 0; c < 2; ++c)
         for (uint32_t i = 0; i < p->frames_count; ++i)
@@ -1481,7 +1491,31 @@ const clap_plugin_t* make(const clap_host_t* host, const clap_plugin_descriptor_
 // on also emits CC 74 = velocity (CLAP_EVENT_MIDI) at the same time, after the
 // note. A MIDI 1.0 note in comes out a fifth up as MIDI. Key 120 emits a burst
 // of every kind, out of time order (see noteEchoStress); key 121 emits 300
-// CC 1 events, one per frame from the note's time (wrapping).
+// CC 1 events, one per frame from the note's time (wrapping); key 119 takes
+// 30 ms over its block (a block that misses a live deadline, ADR-0088), or,
+// when SUPPLE_TEST_ECHO_GATE names a file of three atomic words (POSIX),
+// sets word 0, spins until the test sets word 1 and sets word 2: a block
+// that is late for exactly as long as the test wants, with no system call.
+
+std::atomic<unsigned>* echoGate() {
+#if defined(_WIN32)
+    return nullptr;
+#else
+    // Mapped once, on the main thread (the plug-in's creation), never freed.
+    static std::atomic<unsigned>* const gate = []() -> std::atomic<unsigned>* {
+        const char* file = std::getenv("SUPPLE_TEST_ECHO_GATE");
+        if (!file) return nullptr;
+        const int fd = ::open(file, O_RDWR);
+        if (fd < 0) return nullptr;
+        void* words = ::mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        ::close(fd);
+        return words == MAP_FAILED ? nullptr : static_cast<std::atomic<unsigned>*>(words);
+    }();
+    return gate;
+#endif
+}
+// Set when a note echo is made (main thread), read by its process.
+std::atomic<std::atomic<unsigned>*> gEchoGate{nullptr};
 
 const clap_plugin_descriptor_t* noteEchoDescriptor() {
     static const char* features[] = {CLAP_PLUGIN_FEATURE_NOTE_EFFECT, nullptr};
@@ -1610,6 +1644,19 @@ clap_process_status CLAP_ABI noteEchoProcess(const clap_plugin_t*, const clap_pr
                              static_cast<uint8_t>(k & 0x7f));
                 continue;
             }
+            if (on && n->key == 119) {  // spin: no system call
+                if (auto* gate = gEchoGate.load(std::memory_order_acquire)) {
+                    gate[0].store(1, std::memory_order_release);
+                    while (!gate[1].load(std::memory_order_acquire)) {
+                    }
+                    gate[2].store(1, std::memory_order_release);
+                    continue;
+                }
+                const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(30);
+                while (std::chrono::steady_clock::now() < until) {
+                }
+                continue;
+            }
             if (n->key < 0 || n->key >= 100) continue;
             pushNote(out, h->type, h->time, n->channel, static_cast<int16_t>(n->key + 7),
                      n->note_id, n->velocity);
@@ -1713,6 +1760,29 @@ const clap_plugin_t* CLAP_ABI factoryCreate(const clap_plugin_factory_t*, const 
             std::memset(G(pl)->delay, 0, sizeof(G(pl)->delay));
             G(pl)->delayPos = 0;
         };
+#if !defined(_WIN32)
+        // A gated start for host tests: SUPPLE_TEST_START_GATE names a file of
+        // at least three atomic words, mapped here, on the main thread. Then
+        // start_processing sets word 0, spins until the test sets word 1, sets
+        // word 2 and succeeds: no system call on the audio thread.
+        if (const char* file = std::getenv("SUPPLE_TEST_START_GATE")) {
+            static std::atomic<unsigned>* gate = nullptr;
+            const int fd = ::open(file, O_RDWR);
+            void* words = fd >= 0 ? ::mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)
+                                  : MAP_FAILED;
+            if (fd >= 0) ::close(fd);
+            if (words != MAP_FAILED) {
+                gate = static_cast<std::atomic<unsigned>*>(words);
+                plugin->start_processing = [](const clap_plugin_t*) {
+                    gate[0].store(1, std::memory_order_release);
+                    while (!gate[1].load(std::memory_order_acquire)) {
+                    }
+                    gate[2].store(1, std::memory_order_release);
+                    return true;
+                };
+            }
+        }
+#endif
         return plugin;
     }
     if (!std::strcmp(id, checkedGainDescriptor(false)->id) ||
@@ -1775,9 +1845,11 @@ const clap_plugin_t* CLAP_ABI factoryCreate(const clap_plugin_factory_t*, const 
         const_cast<clap_plugin_t*>(p)->stop_processing = edgeStop;
         return p;
     }
-    if (!std::strcmp(id, noteEchoDescriptor()->id))
+    if (!std::strcmp(id, noteEchoDescriptor()->id)) {
+        gEchoGate.store(echoGate(), std::memory_order_release);
         return make<NoteEcho>(host, noteEchoDescriptor(), noteEchoActivate, noteEchoProcess,
                               noteEchoExt);
+    }
     if (!std::strcmp(id, noteGenDescriptor()->id)) {
         const clap_plugin_t* p =
             make<NoteGen>(host, noteGenDescriptor(), noteGenActivate, noteGenProcess, noteGenExt);

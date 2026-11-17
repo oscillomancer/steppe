@@ -1,5 +1,9 @@
 # ADR-0014: Recording, input monitoring and the live region
 
+**Amendment, 2026-11-15:** [ADR-0082](0082-audio-media-durability.md)
+defines immediate recording errors, physical-prefix salvage, durable audio
+checkpoints, append-only audio placement journals and RIFF-to-RF64 promotion.
+
 **Status:** Accepted, 2026-09-27 (recording, input monitoring and crash recovery implemented). Spec: `docs/specs/engine.md` §2.1, §4
 (recording), `docs/specs/session-model.md` (`track.record`, routes from
 `hw_input`). Builds on ADR-0012 (anticipation) and ADR-0004 (JACK inputs).
@@ -13,6 +17,10 @@ graphs; model/command support precedes DSP integration.
 unimplemented monitoring-latency promise with a backwards read-ahead solve
 and clarifies actual recording placement. The former forward solve
 delayed live paths to match playback; read-ahead removes that padding.
+
+**Amendment, 2026-11-14:** [ADR-0080](0080-midi-recording-recovery.md)
+gives MIDI takes the crash recovery of decision 3, through a journal per
+take beside the WAVs.
 
 **Amendment, 2026-11-03:** [ADR-0057](0057-master-recording.md) adds armed
 masters: decision 1's capture also takes a master's output (from its node in

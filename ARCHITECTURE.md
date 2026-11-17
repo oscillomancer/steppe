@@ -79,7 +79,8 @@ probes and conformance tests also link host libraries.
   `RenderPlan`: reads inputs, runs live-path nodes at device buffer size,
   consumes render-ahead buffers for non-live paths, writes outputs, posts
   meters into SPSC rings. Never allocates, frees, locks, blocks, logs, throws,
-  or touches files. Entry points are annotated `SUPPLE_RT` and every audio-path
+  or touches files, except that it may wait for a bridged plug-in's answer
+  up to the cycle's bridge deadline (ADR-0081, below). Entry points are annotated `SUPPLE_RT` and every audio-path
   test also runs under RealtimeSanitizer.
 - **Native MIDI receive threads** — CoreMIDI's client receive thread or WinMM's
   per-device callback publishes timestamped short messages into preallocated
@@ -172,18 +173,24 @@ model: two kinds of channel, never confused:
 - **Lossy** channels for telemetry only (meters, scopes, analysis frames):
   SPSC rings that drop the newest item on overflow and count drops.
 
-The device callback never blocks or calls the synchronous bridge. ADR-0013
-sanctions a narrower exception for background rendering: bridge calls wake a
+ADR-0013 sanctions an exception for background rendering: bridge calls wake a
 child with a futex, spin briefly, then wait with a bounded failure deadline,
-inside `supple::rt::ScopedSanctionedSyscall`. This exception does not authorize
-waits or synchronous bridge calls in the device callback. ADR-0024 additionally
+inside `supple::rt::ScopedSanctionedSyscall`. ADR-0081 sanctions the only wait
+in the device callback (and its live helpers): for a bridged plug-in on a live
+node, one wake of its request word and timed waits on its done word, never
+past the cycle's bridge deadline (cycle start plus its period or 2 ms,
+whichever is larger), with no process checks, kills, allocation or locks. A
+stage still unanswered at the deadline is silent for that cycle, the cycle
+counts as an xrun, and after 50 ms of late cycles the plug-in fails; the
+main thread kills its process. ADR-0024 additionally
 sanctions `supple::rt::wake()`, a nonblocking private futex wake for live
 helpers. ADR-0028 extends that same nonblocking wake to the renderer;
-no callback waits are allowed. The callback executes ready nodes and joins
+no other callback waits are allowed. The callback executes ready nodes and joins
 using atomics only; helpers park between segments, and every helper that
 claimed the job must depart before plan state is reused. Unclaimed late
 helpers cannot access retired jobs and need not be awaited. A late in-flight
-node makes the cycle late; no output is discarded. The background pool
+node makes the cycle late; no output is discarded (a bridged stage past the
+bridge deadline is the one exception, above). The background pool
 currently uses atomic wait/notify between jobs and when no task is ready.
 Participation is bounded by graph dependencies and departure is joined
 explicitly (ADR-0023); this pool does not participate in live callback execution.
@@ -246,15 +253,16 @@ CLAP (including `com.suppleaudio.semantic-params`) and VST3; LV2 is not
 supported. Isolation modes per plugin instance, REAPER-style: in-process,
 shared bridge process, dedicated process (ADR-0013). Bridged plugins
 exchange audio and events with the engine through shared memory. The
-caller (the anticipative renderer, or an offline render) writes the block's
-input, wakes the bridge and waits for its output up to a deadline; a bridge
-that dies or misses the deadline fails the plugins it hosts (one in a
-dedicated process, every instance in a shared one: silence and an error
-event) and the session survives. Bridges isolate crashes of ordinary plugins;
-they are not a security sandbox against hostile ones. Synchronous bridge calls never run in
-the device callback, so a bridged plugin on a live (monitored) node is
-passed through with a warning; a pipelined mode for live nodes is future
-work.
+caller (the anticipative renderer, an offline render, or on a live
+(monitored) node the device callback and its live helpers) writes the
+block's input, wakes the bridge and waits for its output up to a deadline; a
+bridge that dies or misses the background deadline fails the plugins it hosts
+(one in a dedicated process, every instance in a shared one: silence and an
+error event) and the session survives. In the callback the wait ends at the
+cycle's bridge deadline (ADR-0081): a late block is silent and counted as an
+xrun, and 50 ms of late blocks fail the plug-in. Bridges isolate crashes of
+ordinary plugins; they are not a security sandbox against hostile ones. A
+pipelined mode for live nodes is future work.
 
 Linux keeps its memfd/socketpair/shared futex/pidfd path. macOS transfers an
 unlinked shm_open descriptor, uses shared address waits and pipe notifications,
@@ -315,8 +323,14 @@ matching one-paragraph text summary. No audio model ever "listens".
 ## 8. Agents
 
 - **MCP**: in-process (sandbox/engine serve stdio) or proxy (`<slug>-mcp`
-  to a running engine's socket). Most commands are MCP tools of their own;
-  `describe`, `exec` and `query` reach the rest.
+  to a running engine's socket). The engine's default catalogue exposes 37
+  common commands as dedicated tools plus `describe`, `exec` and `query`.
+  `describe` lists all commands or returns one command's full contract;
+  `exec` calls any command and `query` calls read-only commands. Both engine
+  MCP and proxy accept `--tools all` to expose every non-Internal command as
+  a dedicated tool (ADR-0077). Proxy startup reads the command index once
+  and fetches only selected dedicated-tool descriptions; other contracts are
+  described on demand (ADR-0079). The sandbox's dedicated set is unchanged.
 - **Branches first**: the skill teaches agents to propose on a branch and ask
   the human to listen. Every agent action is in the command log and undo
   history with its origin.

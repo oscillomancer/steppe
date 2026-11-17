@@ -24,6 +24,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <sched.h>
+#include <sys/mman.h>
 #include <sys/resource.h>
 #include <unistd.h>
 #include <cerrno>
@@ -34,6 +35,7 @@
 #include <supple/engine/realtime.h>
 #include <supple/host/clap_host.h>
 
+#include "bridge_patience.h"
 #include "fake_jack.h"
 #include "live_workers.h"
 #include "meters.h"
@@ -62,6 +64,20 @@ struct EngineTestAccess {
         e.liveWorkersReady_.store(e.liveWorkers_.get());
     }
     static std::size_t plans(const Engine& e) { return e.plans_.size(); }
+    static void afterCollect(Engine& e, void (*hook)(void*), void* context) {
+        e.afterCollectForTests_ = hook;
+        e.afterCollectContext_ = context;
+    }
+    // Every instance a kept plan's stages name (pointers only: never used).
+    static std::vector<host::Instance*> planInstances(const Engine& e) {
+        std::vector<host::Instance*> out;
+        for (const auto& plan : e.plans_)
+            for (const auto& node : plan->nodes)
+                detail::forEachStage(node, [&](const detail::Stage& st) {
+                    if (st.instance) out.push_back(st.instance);
+                });
+        return out;
+    }
     static std::uint64_t beginWrite(Engine& e) {
         const std::uint64_t seq = e.xportSeq_.load();
         e.xportSeq_.store(seq + 1);
@@ -124,8 +140,11 @@ struct RecorderTestAccess {
     static bool failHeader(Recorder& recorder, std::size_t index) {
         const auto& file = recorder.tracks_[index]->target.file;
         std::error_code ec;
+        const auto target = std::filesystem::canonical(file, ec);
+        if (ec) return false;
         for (const auto& entry : std::filesystem::directory_iterator("/proc/self/fd")) {
-            if (std::filesystem::read_symlink(entry.path(), ec) != file || ec) continue;
+            const auto opened = std::filesystem::canonical(entry.path(), ec);
+            if (ec || opened != target) continue;
             const int descriptor = std::stoi(entry.path().filename().string());
             const int readOnly = ::open(file.c_str(), O_RDONLY);
             if (readOnly < 0) return false;
@@ -143,6 +162,7 @@ struct RecorderTestAccess {
 }  // namespace supple::engine::detail
 
 namespace {
+using supple::engine::test::patient;
 template <class Predicate>
 bool waitForRecorder(Predicate predicate) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -370,10 +390,9 @@ TEST_CASE("pan modes and laws: real-time output equals the offline render (ADR-0
         auto pool = makePool();
         auto offline =
             renderOffline(isolated, pool, {.startSeconds = 0, .endSeconds = 2.0}).value();
-        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 2}}) {
-            // The callback deliberately bypasses bridged plug-ins; only the
-            // anticipative renderer runs their blocking bridge transport.
-            if (!options.anticipative && isolation != model::Isolation::InProcess) continue;
+        CHECK(pool.failedErrors().empty());  // a killed bridge fails as killed, not as audio
+        // Bridged plug-ins run in the callback too (ADR-0081).
+        for (const EngineOptions& options : {patient(kInCallback), patient({.workers = 2})}) {
             INFO("anticipative " << options.anticipative);
             auto rtPool = makePool();
             MediaCache media;
@@ -387,8 +406,10 @@ TEST_CASE("pan modes and laws: real-time output equals the offline render (ADR-0
                 runAhead(engine, backend, (48000 * 2 + 4096) / 96, 96);
             else
                 backend.run((48000 * 2 + 4096) / 96);
+            CHECK(engine.bridgeLateCycles() == 0);
             engine.stop();
             CHECK(engine.processErrors() == 0);
+            CHECK(rtPool.failedErrors().empty());
             const auto& cap = backend.capture();
             const std::uint32_t L = engine.outputLatency();
             CHECK(maxDiff(cap.channels[0], L, offline.audio.channels[0], 96000) == 0.0);
@@ -799,6 +820,71 @@ TEST_CASE("a stage that leaves processing mid-ramp does not replay the ramp" *
     REQUIRE(detail::processNode(p, 0, 0, 256, transport, nullptr));         // ours again
     CHECK(static_cast<double>(stage->appliedWet) == doctest::Approx(0.0));  // the new target
     stage->instance->stopProcessing();
+}
+
+TEST_CASE(
+    "an instance outlives every kept plan that names it, even when the executor adopts "
+    "a newer plan during service()" *
+    doctest::description("rt")) {
+    // service() kept the old plans an executor might still use, then pruned
+    // the pool with a second, newer reading of the executors' generation. An
+    // adoption in between freed an instance that a kept plan still named;
+    // the next service() called it (a gcc-preset assertion in the plan soak).
+    for (bool anticipative : {false, true}) {
+        CAPTURE(anticipative);
+        auto pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+        Engine engine(
+            pool, media,
+            anticipative ? EngineOptions{.anticipative = true, .workers = 0} : kInCallback);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256}));
+        // Every executor adopts the newest plan: the renderer by itself, the
+        // callback at its next cycle.
+        const auto adopt = [&] {
+            REQUIRE(engine.awaitPlan());
+            backend.run(1);
+        };
+        REQUIRE(engine.load(synthSession(0.0, "com.suppleaudio.test.gain")));
+        adopt();
+        engine.service();
+        const auto withGain = pool.instances();
+        const auto found = std::find_if(withGain.begin(), withGain.end(), [](host::Instance* in) {
+            return in->info().id == "com.suppleaudio.test.gain";
+        });
+        REQUIRE(found != withGain.end());
+        host::Instance* gain = *found;
+        REQUIRE(engine.load(synthSession(0.0)));  // the gain leaves; the callback has not adopted
+        struct Hook {
+            decltype(adopt)& step;
+            int runs = 0;
+        } hook{adopt};
+        EngineTestAccess::afterCollect(
+            engine,
+            [](void* context) {
+                auto* h = static_cast<Hook*>(context);
+                ++h->runs;
+                h->step();  // every executor adopts the newest plan here
+            },
+            &hook);
+        engine.service();
+        EngineTestAccess::afterCollect(engine, nullptr, nullptr);
+        REQUIRE(hook.runs == 1);
+        // A kept plan naming a destroyed instance ends the test here, before
+        // the next service() would call it.
+        const auto alive = pool.instances();
+        for (host::Instance* named : EngineTestAccess::planInstances(engine)) {
+            CAPTURE(named == gain);
+            REQUIRE(std::find(alive.begin(), alive.end(), named) != alive.end());
+        }
+        // The next service() retires the old plan, then the gain.
+        engine.service();
+        CHECK(EngineTestAccess::plans(engine) == 1);
+        const auto after = pool.instances();
+        CHECK(after.size() == withGain.size() - 1);
+        CHECK(std::find(after.begin(), after.end(), gain) == after.end());
+        engine.stop();
+    }
 }
 
 TEST_CASE(
@@ -3255,6 +3341,46 @@ TEST_CASE("meters show a monitored input while the transport is stopped" *
     engine.stop();
 }
 
+TEST_CASE("the audio path runs at the rate the device granted, not the one requested" *
+          doctest::description("rt")) {
+    // The device grants 44.1 kHz for a 48 kHz request: the count-in's clicks
+    // (synthesised on the audio thread at the engine's device rate) must be
+    // those of a device asked for 44.1 kHz in the first place.
+    constexpr std::uint32_t kBlock = 256;
+    constexpr std::int64_t kBar = 88200, kCycles = kBar / kBlock + 8;
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        auto runOnce = [&](double requested, double granted) {
+            auto pool = makePool();
+            MediaCache media;
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual,
+                                  .captureFrames = kCycles * kBlock,
+                                  .grantedRate = granted});
+            Engine engine(pool, media, options);
+            REQUIRE(engine.start(backend, {.sampleRate = requested, .blockSize = kBlock}));
+            CHECK(engine.config().sampleRate == 44100.0);
+            REQUIRE(engine.load(synthSession(0.0)));
+            engine.setMetronome(false, 0.0);  // the count clicks regardless
+            engine.playCountIn(kBar, kBar / 4, 4);
+            if (options.anticipative)
+                runAhead(engine, backend, kCycles, kBlock);
+            else
+                backend.run(kCycles);
+            engine.stop();
+            return backend.capture().channels[0];
+        };
+        const auto asked = runOnce(44100.0, 0.0);
+        const auto granted = runOnce(48000.0, 44100.0);
+        REQUIRE(asked.size() == granted.size());
+        REQUIRE(std::any_of(asked.begin(), asked.begin() + kBar,
+                            [](float v) { return std::fabs(v) > 0.05f; }));
+        std::size_t differ = 0;
+        for (std::size_t i = 0; i < static_cast<std::size_t>(kBar); ++i)
+            differ += asked[i] != granted[i];
+        CHECK(differ == 0);
+    }
+}
+
 TEST_CASE("a count-in clicks a bar while the position holds, then plays and records on time" *
           doctest::description("rt")) {
     // 120 BPM 4/4 at 48 kHz: a beat is 24000 frames, the bar 96000. Block 333
@@ -3442,71 +3568,277 @@ TEST_CASE("the metronome clicks every beat in the live output, accented on the b
         }
 }
 
-TEST_CASE("live bridged effects pass through without callback lifecycle or processing") {
+TEST_CASE("live bridged effects play in the callback as in-process ones do") {
+    // ADR-0081: a bridged effect on a monitored track is processed by the
+    // callback (or its live helpers) under the cycle's bridge deadline, with
+    // the in-process output; it used to pass through with a warning.
     host::setBridgeExecutable(BRIDGE_PATH);
-    for (auto isolation : {model::Isolation::SharedBridge, model::Isolation::Dedicated})
-        for (const auto& options : {kInCallback, EngineOptions{.workers = 0}}) {
-            auto pool = makePool();
+    auto monitored = [](model::Isolation isolation, Id& fxId) {
+        auto base = monitoring(synthSession(0, "com.suppleaudio.test.gain"));
+        model::EditTxn t(base, 2);
+        for (const auto& fx : base.fx)
+            if (fx.value->plugin.id == "com.suppleaudio.test.gain") {
+                fxId = fx.id;
+                t.modify<model::FxInstance>(fx.id, [&](auto& f) {
+                    f.isolation = isolation;
+                    f.patch = json::parse(R"({"schema":"supple.test-gain-patch/1.0",
+                        "params":{"gain":-12,"latency":"short"}})")
+                                  .value();
+                });
+            }
+        return t.commit().value();
+    };
+    for (const EngineOptions& options :
+         {patient(kInCallback), patient({.anticipative = false, .workers = 2}),
+          patient({.workers = 0}), patient({.workers = 2})}) {
+        auto run = [&](model::Isolation isolation, Id& fxId, InstancePool& pool,
+                       std::uint64_t& late) {
             MediaCache media;
             DummyBackend backend(constantInput(1024));
             Engine engine(pool, media, options);
             REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128, .inputs = 2}));
-            auto base = monitoring(synthSession(0, "com.suppleaudio.test.gain"));
-            model::EditTxn t(base, 2);
-            Id fxId;
-            for (const auto& fx : base.fx)
-                if (fx.value->plugin.id == "com.suppleaudio.test.gain") {
-                    fxId = fx.id;
-                    t.modify<model::FxInstance>(fx.id, [&](auto& f) {
-                        f.isolation = isolation;
-                        f.patch = json::parse(R"({"schema":"supple.test-gain-patch/1.0",
-                        "params":{"gain":-12,"latency":"short"}})")
-                                      .value();
-                    });
-                }
-            auto session = t.commit().value();
-            REQUIRE(engine.load(session));
+            // The live class's period is the device's, not the render block's:
+            // 128 frames at 48 kHz, as a duration.
+            CHECK(host::liveBridgePeriodNs() == 2666667);
+            REQUIRE(engine.load(monitored(isolation, fxId)));
             if (options.anticipative) REQUIRE(engine.awaitPlan());
             backend.run(4);
             REQUIRE(pool.find(fxId));
-            CHECK_FALSE(pool.find(fxId)->processing());
-            auto warnings = engine.warnings();
-            CHECK(std::any_of(warnings.begin(), warnings.end(), [&](const auto& w) {
-                return w.find(fxId.str()) != std::string::npos &&
-                       w.find("in_process") != std::string::npos;
+            CHECK(pool.find(fxId)->processing());
+            const auto warnings = engine.warnings();
+            CHECK(std::none_of(warnings.begin(), warnings.end(), [&](const auto& w) {
+                return w.find(fxId.str()) != std::string::npos;
             }));
-            CHECK(double(backend.capture().channels[0][300]) == doctest::Approx(.5).epsilon(1e-4));
-            CHECK(double(backend.capture().channels[1][300]) ==
-                  doctest::Approx(-.25).epsilon(1e-4));
-            CHECK(std::all_of(backend.capture().channels[0].begin(),
-                              backend.capture().channels[0].begin() + 64,
-                              [](float value) { return value == 0; }));
+            late = engine.bridgeLateCycles();
             engine.stop();
-            model::EditTxn unmonitor(session, 3);
-            for (const auto& track : session.tracks)
-                unmonitor.modify<model::Track>(
-                    track.id, [](auto& tr) { tr.record.monitor = model::Monitor::Off; });
-            const auto aheadSession = unmonitor.commit().value();
-            auto referencePool = makePool();
-            const auto reference =
-                renderOffline(aheadSession, referencePool, {.startSeconds = 0, .endSeconds = .1})
-                    .value();
-            CHECK(reference.warnings.empty());
-            if (options.anticipative) {
-                DummyBackend aheadBackend(
-                    {.mode = DummyBackend::Mode::Manual, .captureFrames = 8192});
-                Engine aheadEngine(pool, media, options);
-                REQUIRE(aheadEngine.start(aheadBackend,
-                                          {.sampleRate = 48000, .blockSize = 128, .inputs = 2}));
-                REQUIRE(aheadEngine.load(aheadSession));
-                REQUIRE(aheadEngine.awaitPlan());
-                aheadEngine.play();
-                runAhead(aheadEngine, aheadBackend, 48, 128);
-                aheadEngine.stop();
-                CHECK(maxDiff(aheadBackend.capture().channels[0], aheadEngine.outputLatency(),
-                              reference.audio.channels[0], 4800) == 0);
-            }
+            return backend.capture();
+        };
+        Id localFx;
+        auto localPool = makePool();
+        std::uint64_t late = 0;
+        const auto local = run(model::Isolation::InProcess, localFx, localPool, late);
+        // -12 dB on the 0.5 / -0.25 input.
+        CHECK(double(local.channels[0][300]) == doctest::Approx(.5 * 0.2511886).epsilon(1e-4));
+        for (auto isolation : {model::Isolation::SharedBridge, model::Isolation::Dedicated}) {
+            INFO("anticipative " << options.anticipative << ", workers " << options.workers
+                                 << ", isolation " << static_cast<int>(isolation));
+            Id fxId;
+            auto pool = makePool();
+            const auto bridged = run(isolation, fxId, pool, late);
+            REQUIRE(pool.find(fxId)->isolated());
+            CHECK(late == 0);
+            CHECK(maxDiff(bridged.channels[0], 0, local.channels[0], 512) == 0);
+            CHECK(maxDiff(bridged.channels[1], 0, local.channels[1], 512) == 0);
         }
+    }
+}
+
+TEST_CASE("a bridged start answered after its live deadline is not taken for a refusal") {
+    // Round 16: a healthy bridge whose start missed the first cycle's deadline
+    // was marked refused, so its stage passed audio through, unprocessed and
+    // unreported, until another plan came. The gain's start waits on a gate
+    // in shared memory that the test opens once that cycle is over.
+    host::setBridgeExecutable(BRIDGE_PATH);
+    const std::filesystem::path file = std::filesystem::temp_directory_path() /
+                                       ("supple-start-gate-" + std::to_string(::getpid()));
+    const int fd = ::open(file.c_str(), O_CREAT | O_TRUNC | O_RDWR, 0600);
+    REQUIRE(fd >= 0);
+    REQUIRE(::ftruncate(fd, 4096) == 0);
+    void* words = ::mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    ::close(fd);
+    REQUIRE(words != MAP_FAILED);
+    auto* gate = static_cast<std::atomic<unsigned>*>(words);
+    for (int i = 0; i < 3; ++i) new (gate + i) std::atomic<unsigned>(0);
+    // Only a guard against a bridge that died: the gate, not the clock,
+    // orders the test.
+    auto reached = [&](int word) {
+        const auto giveUp = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        while (!gate[word].load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < giveUp)
+            std::this_thread::yield();
+        return gate[word].load(std::memory_order_acquire) != 0;
+    };
+    ::setenv("SUPPLE_TEST_START_GATE", file.c_str(), 1);
+    auto base = monitoring(synthSession(0, "com.suppleaudio.test.gain"));
+    model::EditTxn t(base, 2);
+    Id fxId;
+    for (const auto& fx : base.fx)
+        if (fx.value->plugin.id == "com.suppleaudio.test.gain") {
+            fxId = fx.id;
+            t.modify<model::FxInstance>(fx.id, [&](auto& f) {
+                f.isolation = model::Isolation::Dedicated;
+                f.patch = json::parse(R"({"schema":"supple.test-gain-patch/1.0",
+                    "params":{"gain":-12,"latency":"none"}})")
+                              .value();
+            });
+        }
+    const auto session = t.commit().value();
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend(constantInput(64 * 128));
+    Engine engine(pool, media, kInCallback);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128, .inputs = 2}));
+    REQUIRE(engine.load(session));
+    ::unsetenv("SUPPLE_TEST_START_GATE");  // the bridge has it; nothing else made later
+    backend.run(1);                        // the start is held past this cycle's deadline
+    REQUIRE(reached(0));                   // the bridge is in the plug-in's start
+    gate[1].store(1, std::memory_order_release);
+    REQUIRE(reached(2));
+    backend.run(16);
+    host::Instance* instance = pool.find(fxId);
+    REQUIRE(instance);
+    CHECK_FALSE(instance->failed());
+    CHECK(instance->processing());
+    CHECK(engine.processErrors() == 0);
+    // Processed from the second cycle on: -12 dB on the 0.5 input.
+    const auto& out = backend.capture().channels[0];
+    CHECK(double(out[0]) == 0.5);  // not started yet: passed through, as a refused one is
+    CHECK(double(out[300]) == doctest::Approx(.5 * 0.2511886).epsilon(1e-4));
+    engine.stop();
+    ::munmap(words, 4096);
+    std::filesystem::remove(file);
+}
+
+TEST_CASE("a cycle late before its bridged call is not blamed on the bridge") {
+    // ADR-0081 diagnostics: an in-process stage spends 20 ms, so the bridged
+    // gain after it is posted past the cycle's deadline. The overrun is the
+    // in-process stage's, not the bridge's wait.
+    host::setBridgeExecutable(BRIDGE_PATH);
+    auto base = monitoring(synthSession(0, "com.suppleaudio.test.crash"));
+    model::EditTxn t(base, 2);
+    Id live, crash;
+    for (const auto& e : base.tracks)
+        if (e.value->type == model::StripType::Channel) live = e.id;
+    crash = base.tracks.find(live)->chain.back();
+    model::FxInstance gain;
+    gain.plugin.id = "com.suppleaudio.test.gain";
+    gain.isolation = model::Isolation::Dedicated;
+    gain.patch =
+        json::parse(R"({"schema": "supple.test-gain-patch/1.0", "params": {"latency": "short"}})")
+            .value();
+    const Id gainId = t.create(gain);
+    t.modify<model::Track>(live, [&](auto& tr) { tr.chain.push_back(gainId); });
+    const auto session = t.commit().value();
+    constexpr std::uint32_t kBlock = 128;
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend(constantInput(16 * kBlock));
+    Engine engine(pool, media, kInCallback);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock, .inputs = 2}));
+    REQUIRE(engine.load(session));
+    engine.play();
+    backend.run(2);
+    REQUIRE(pool.find(gainId));
+    REQUIRE(pool.find(gainId)->isolated());
+    REQUIRE(pool.find(crash));
+    REQUIRE_FALSE(pool.find(crash)->isolated());
+    const auto before = engine.bridgeOverruns();
+    const auto lateBefore = engine.bridgeLateCycles();
+    REQUIRE(pool.find(crash)->setParam(1, 3));  // 20 ms in every block from now
+    backend.run(2);
+    const auto after = engine.bridgeOverruns();
+    // Whether the gain's answer is also late is the runner's timing: posted
+    // past the deadline, a fast bridge can still answer before the cycle
+    // looks (native CI saw 0 late). The blame below holds either way.
+    (void)lateBefore;
+    CHECK(after.notWaiting - before.notWaiting >= 1);
+    CHECK(after.lateWait == before.lateWait);
+    CHECK(after.slowBridge == before.slowBridge);
+    engine.stop();
+}
+
+TEST_CASE("a hung bridged plug-in on a live track fails within the bound; the rest plays") {
+    // ADR-0081: each callback waits for it only until the cycle's bridge
+    // deadline, its output silent; after 50 ms of late cycles it fails (the
+    // failed node of ADR-0013) and the session plays on, unchanged.
+    host::setBridgeExecutable(BRIDGE_PATH);
+    auto build = [](bool hung) {
+        auto base = monitoring(synthSession(0, "com.suppleaudio.test.crash", 2));
+        model::EditTxn t(base, 2);
+        Id live;  // the monitored track: the last channel
+        for (const auto& e : base.tracks)
+            if (e.value->type == model::StripType::Channel) live = e.id;
+        const Id crash = base.tracks.find(live)->chain.back();
+        if (hung)
+            t.modify<model::FxInstance>(
+                crash, [&](auto& f) { f.isolation = model::Isolation::Dedicated; });
+        else
+            t.modify<model::Track>(live, [](auto& tr) { tr.mute = true; });
+        return std::pair(t.commit().value(), crash);
+    };
+    constexpr std::uint32_t kBlock = 128;
+    constexpr int kCycles = 200;  // 533 ms
+    Engine::BridgeOverruns overruns;
+    host::BridgeTiming::Calls liveCalls;
+    auto run = [&](bool hung, InstancePool& pool, Engine*& out, std::uint64_t& late) {
+        host::resetBridgeTiming();
+        MediaCache media;
+        DummyBackend backend(constantInput(kCycles * kBlock + 1024));
+        Engine engine(pool, media, kInCallback);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock, .inputs = 2}));
+        const auto [session, crash] = build(hung);
+        REQUIRE(engine.load(session));
+        engine.play();
+        if (hung) {
+            // It plays from the start; from the next block it hangs in process().
+            backend.run(1);
+            REQUIRE(pool.find(crash));
+            REQUIRE(pool.find(crash)->processing());
+            REQUIRE(pool.find(crash)->setParam(1, 2));
+            backend.run(kCycles - 1);
+        } else {
+            backend.run(kCycles);
+        }
+        engine.service();
+        CHECK(engine.processErrors() == 0);
+        late = engine.bridgeLateCycles();
+        overruns = engine.bridgeOverruns();
+        liveCalls = host::bridgeTiming().live;
+        out = nullptr;
+        engine.stop();
+        return backend.capture();
+    };
+    Engine* none = nullptr;
+    std::uint64_t late = 0, referenceLate = 0;
+    auto pool = makePool();
+    const auto played = run(true, pool, none, late);
+    // ADR-0081 diagnostics: each late cycle waited to its deadline (at least
+    // its period), so it ran over for that reason, and the calls say so.
+    CHECK(overruns.lateWait >= 1);
+    CHECK(overruns.lateWait <= late);
+    CHECK(liveCalls.late + liveCalls.lateSettles >= late);
+    CHECK(liveCalls.waitMaxNs >= 2'000'000);  // the deadline: at least 2 ms
+    const Id crash = build(true).second;
+    REQUIRE(pool.find(crash));
+    CHECK(pool.find(crash)->failed());
+    CHECK(pool.find(crash)->failure().find("stopped responding") != std::string::npos);
+    const auto failed = pool.failedErrors();
+    CHECK(
+        std::any_of(failed.begin(), failed.end(), [&](const auto& f) { return f.first == crash; }));
+    // Late until it failed, 50 ms after its first late cycle by the clock. How
+    // many cycles that is depends on the machine (a slow one runs fewer, each
+    // longer than its period), so only what the deadline guarantees is
+    // checked: each late cycle waited at least its period, so no more than
+    // 50 ms of periods, and the two cycles at its ends, were late.
+    CHECK(late >= 1);
+    CHECK(late <= 50 * 48000 / 1000 / kBlock + 2);
+    CHECK(late < static_cast<std::uint64_t>(kCycles));
+    // The other track played on exactly as with the hung one muted (after
+    // the first block, which the hung track also played).
+    auto referencePool = makePool();
+    const auto reference = run(false, referencePool, none, referenceLate);
+    CHECK(referenceLate == 0);
+    double peak = 0;
+    for (float x : reference.channels[0]) peak = std::max(peak, double(std::fabs(x)));
+    REQUIRE(peak > 0.01);
+    CHECK(maxDiff(played.channels[0], kBlock,
+                  std::vector<float>(reference.channels[0].begin() + kBlock,
+                                     reference.channels[0].end()),
+                  (kCycles - 1) * kBlock) == 0);
+    CHECK(maxDiff(played.channels[1], kBlock,
+                  std::vector<float>(reference.channels[1].begin() + kBlock,
+                                     reference.channels[1].end()),
+                  (kCycles - 1) * kBlock) == 0);
 }
 
 TEST_CASE("recording header errors retain the first error and spare other targets") {
@@ -3912,6 +4244,9 @@ TEST_CASE("plugin outputs retain FX epoch timeline flags addresses and counted o
     auto first = engine.takePluginOutputs();
     REQUIRE(first.events.size() == 256);
     CHECK(first.dropped == 900 - 256);
+    // The drop names its FX, once, for a recovery of that FX alone.
+    CHECK(first.droppedFx == std::vector<model::Id>{fx});
+    CHECK_FALSE(first.droppedAll);
     CHECK(first.events[0].fx == fx);
     CHECK(first.events[0].planGeneration == EngineTestAccess::latestPlan(engine).generation);
     CHECK(first.events[0].epoch == EngineTestAccess::epoch(engine));
@@ -3931,7 +4266,11 @@ TEST_CASE("plugin outputs retain FX epoch timeline flags addresses and counted o
     CHECK(overflow.events.size() == 4096);
     CHECK(overflow.dropped == first.dropped + 20 * 900 - 4096);
     CHECK(engine.pluginOutputDrops() == overflow.dropped);
-    CHECK(engine.takePluginOutputs().events.empty());
+    CHECK(overflow.droppedFx == std::vector<model::Id>{fx});
+    const auto quiet = engine.takePluginOutputs();
+    CHECK(quiet.events.empty());
+    CHECK(quiet.droppedFx.empty());  // nothing dropped since
+    CHECK_FALSE(quiet.droppedAll);
     engine.stop();
 }
 
@@ -4327,117 +4666,135 @@ TEST_CASE("parallel, oversampled and pdc-ignored FX: real-time output equals the
 
 TEST_CASE("input FX process the armed input: monitored and recorded, aligned with the plain input" *
           doctest::description("rt")) {
-    for (const EngineOptions& options : {kInCallback, EngineOptions{}}) {
-        INFO("anticipative " << options.anticipative);
-        // Two channels armed on the same inputs; the second has a -6 dB input
-        // FX with 64 samples of latency, and is not monitored.
-        model::Session base = monitoring(synthSession(0.0), model::Monitor::Off);
-        model::EditTxn t(base, 3);
-        Id plain;
-        for (const auto& e : base.tracks)
-            if (e.value->type == model::StripType::Channel) plain = e.id;
-        model::Track second;
-        second.name = "Processed";
-        second.parent = kMaster;
-        const Id processed = t.create(second);
-        t.modify<model::Track>(kMaster, [&](model::Track& m) { m.children.push_back(processed); });
-        model::FxInstance fx;
-        fx.plugin.id = "com.suppleaudio.test.gain";
-        fx.patch =
-            json::parse(
-                R"({"schema": "supple.test-gain-patch/1.0", "params": {"gain": -6, "latency": "short"}})")
-                .value();
-        const Id f = t.create(fx);
-        model::Route input;
-        input.from.hwChannels = std::vector<int>{1, 2};
-        input.to.track = processed;
-        const Id route = t.create(input);
-        t.modify<model::Track>(processed, [&](model::Track& x) {
-            x.inputChain = {f};
-            x.record.input = route;
-            x.record.armed = true;
-            x.record.monitor = model::Monitor::Off;
-        });
-        auto committed = t.commit();
-        REQUIRE_MESSAGE(committed, (committed ? std::string() : committed.error().toString()));
-        const model::Session s = std::move(*committed);
+    host::setBridgeExecutable(BRIDGE_PATH);
+    // In process and bridged (ADR-0081: a bridged input FX used to pass through).
+    for (const auto isolation :
+         {model::Isolation::InProcess, model::Isolation::SharedBridge, model::Isolation::Dedicated})
+        for (const EngineOptions& options : {patient(kInCallback), patient({})}) {
+            INFO("anticipative " << options.anticipative << ", isolation "
+                                 << static_cast<int>(isolation));
+            // Two channels armed on the same inputs; the second has a -6 dB input
+            // FX with 64 samples of latency, and is not monitored.
+            model::Session base = monitoring(synthSession(0.0), model::Monitor::Off);
+            model::EditTxn t(base, 3);
+            Id plain;
+            for (const auto& e : base.tracks)
+                if (e.value->type == model::StripType::Channel) plain = e.id;
+            model::Track second;
+            second.name = "Processed";
+            second.parent = kMaster;
+            const Id processed = t.create(second);
+            t.modify<model::Track>(kMaster,
+                                   [&](model::Track& m) { m.children.push_back(processed); });
+            model::FxInstance fx;
+            fx.plugin.id = "com.suppleaudio.test.gain";
+            fx.patch =
+                json::parse(
+                    R"({"schema": "supple.test-gain-patch/1.0", "params": {"gain": -6, "latency": "short"}})")
+                    .value();
+            fx.isolation = isolation;
+            const Id f = t.create(fx);
+            model::Route input;
+            input.from.hwChannels = std::vector<int>{1, 2};
+            input.to.track = processed;
+            const Id route = t.create(input);
+            t.modify<model::Track>(processed, [&](model::Track& x) {
+                x.inputChain = {f};
+                x.record.input = route;
+                x.record.armed = true;
+                x.record.monitor = model::Monitor::Off;
+            });
+            auto committed = t.commit();
+            REQUIRE_MESSAGE(committed, (committed ? std::string() : committed.error().toString()));
+            const model::Session s = std::move(*committed);
 
-        auto pool = makePool();
-        MediaCache media;
-        DummyBackend backend({.mode = DummyBackend::Mode::Manual,
-                              .input = [](float* const* in, std::uint32_t channels, std::uint32_t n,
-                                          std::int64_t frame) {
-                                  for (std::uint32_t c = 0; c < channels; ++c)
-                                      for (std::uint32_t i = 0; i < n; ++i)
-                                          in[c][i] = static_cast<float>((frame + i) % 1000) /
-                                                     1000.0f * (c ? -1.0f : 1.0f);
-                              }});
-        Engine engine(pool, media, options);
-        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
-        REQUIRE(engine.load(s));
-        CHECK(engine.processErrors() == 0);
-        const auto dir = std::filesystem::temp_directory_path() /
-                         ("supple-inputfx-" + std::to_string(::getpid()));
-        std::filesystem::remove_all(dir);
-        REQUIRE(engine
-                    .startRecording({{plain, {0, 1}, dir / "plain.wav", {}},
-                                     {processed, {0, 1}, dir / "processed.wav", {}}})
-                    .ok());
-        engine.play();
-        if (options.anticipative)
-            runAhead(engine, backend, 100, 256);
-        else
-            backend.run(100);
-        auto takes = engine.stopRecording();
-        engine.stop();
-        REQUIRE(takes);
-        REQUIRE(takes->size() == 2);
-        auto a = audio::readAudio((*takes)[0].track == plain ? (*takes)[0].file : (*takes)[1].file);
-        auto b = audio::readAudio((*takes)[0].track == plain ? (*takes)[1].file : (*takes)[0].file);
-        REQUIRE(a);
-        REQUIRE(b);
-        const double g = std::pow(10.0, -6.0 / 20.0);
-        const std::size_t frames = 100 * 256 - 64;  // the processed file's last 64 are padding
-        double worst = 0;
-        for (std::size_t c = 0; c < 2; ++c)
-            for (std::size_t i = 0; i < frames; ++i)
-                worst = std::max(
-                    worst, std::fabs(double(b->channels[c][i]) - g * double(a->channels[c][i])));
-        CHECK(worst < 1e-6);
-        CHECK(engine.processErrors() == 0);
-        std::filesystem::remove_all(dir);
-    }
+            auto pool = makePool();
+            MediaCache media;
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual,
+                                  .input = [](float* const* in, std::uint32_t channels,
+                                              std::uint32_t n, std::int64_t frame) {
+                                      for (std::uint32_t c = 0; c < channels; ++c)
+                                          for (std::uint32_t i = 0; i < n; ++i)
+                                              in[c][i] = static_cast<float>((frame + i) % 1000) /
+                                                         1000.0f * (c ? -1.0f : 1.0f);
+                                  }});
+            Engine engine(pool, media, options);
+            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
+            REQUIRE(engine.load(s));
+            CHECK(engine.processErrors() == 0);
+            const auto dir = std::filesystem::temp_directory_path() /
+                             ("supple-inputfx-" + std::to_string(::getpid()));
+            std::filesystem::remove_all(dir);
+            REQUIRE(engine
+                        .startRecording({{plain, {0, 1}, dir / "plain.wav", {}},
+                                         {processed, {0, 1}, dir / "processed.wav", {}}})
+                        .ok());
+            engine.play();
+            if (options.anticipative)
+                runAhead(engine, backend, 100, 256);
+            else
+                backend.run(100);
+            auto takes = engine.stopRecording();
+            CHECK(engine.bridgeLateCycles() == 0);
+            engine.stop();
+            REQUIRE(takes);
+            REQUIRE(takes->size() == 2);
+            auto a =
+                audio::readAudio((*takes)[0].track == plain ? (*takes)[0].file : (*takes)[1].file);
+            auto b =
+                audio::readAudio((*takes)[0].track == plain ? (*takes)[1].file : (*takes)[0].file);
+            REQUIRE(a);
+            REQUIRE(b);
+            const double g = std::pow(10.0, -6.0 / 20.0);
+            const std::size_t frames = 100 * 256 - 64;  // the processed file's last 64 are padding
+            double worst = 0;
+            for (std::size_t c = 0; c < 2; ++c)
+                for (std::size_t i = 0; i < frames; ++i)
+                    worst = std::max(worst, std::fabs(double(b->channels[c][i]) -
+                                                      g * double(a->channels[c][i])));
+            CHECK(worst < 1e-6);
+            CHECK(engine.processErrors() == 0);
+            std::filesystem::remove_all(dir);
+        }
 }
 
 TEST_CASE("a monitored input is heard through its input FX" * doctest::description("rt")) {
-    model::Session base = monitoring(synthSession(-6.0206));
-    model::EditTxn t(base, 3);
-    Id track;
-    for (const auto& e : base.tracks)
-        if (e.value->type == model::StripType::Channel) track = e.id;
-    model::FxInstance fx;
-    fx.plugin.id = "com.suppleaudio.test.gain";
-    fx.patch =
-        json::parse(R"({"schema": "supple.test-gain-patch/1.0", "params": {"gain": -6}})").value();
-    const Id f = t.create(fx);
-    t.modify<model::Track>(track, [&](model::Track& x) { x.inputChain = {f}; });
-    const model::Session s = t.commit().value();
-    for (const EngineOptions& options : {kInCallback, EngineOptions{}}) {
-        INFO("anticipative " << options.anticipative);
-        auto pool = makePool();
-        MediaCache media;
-        DummyBackend backend(constantInput(48000));
-        Engine engine(pool, media, options);
-        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
-        REQUIRE(engine.load(s));
-        REQUIRE(engine.awaitPlan());
-        backend.run(20);  // stopped: the input, the input FX, the fader and centre pan
-        const auto& cap = backend.capture();
-        const double g = 0.5 * std::pow(10.0, -6.0 / 20.0);
-        CHECK(double(cap.channels[0][4000]) == doctest::Approx(0.5 * g).epsilon(1e-4));
-        CHECK(double(cap.channels[1][4000]) == doctest::Approx(-0.25 * g).epsilon(1e-4));
-        CHECK(engine.processErrors() == 0);
-        engine.stop();
+    host::setBridgeExecutable(BRIDGE_PATH);
+    for (const auto isolation : {model::Isolation::InProcess, model::Isolation::SharedBridge,
+                                 model::Isolation::Dedicated}) {
+        INFO("isolation " << static_cast<int>(isolation));
+        model::Session base = monitoring(synthSession(-6.0206));
+        model::EditTxn t(base, 3);
+        Id track;
+        for (const auto& e : base.tracks)
+            if (e.value->type == model::StripType::Channel) track = e.id;
+        model::FxInstance fx;
+        fx.plugin.id = "com.suppleaudio.test.gain";
+        fx.patch =
+            json::parse(R"({"schema": "supple.test-gain-patch/1.0", "params": {"gain": -6}})")
+                .value();
+        fx.isolation = isolation;
+        const Id f = t.create(fx);
+        t.modify<model::Track>(track, [&](model::Track& x) { x.inputChain = {f}; });
+        const model::Session s = t.commit().value();
+        for (const EngineOptions& options : {patient(kInCallback), patient({})}) {
+            INFO("anticipative " << options.anticipative);
+            auto pool = makePool();
+            MediaCache media;
+            DummyBackend backend(constantInput(48000));
+            Engine engine(pool, media, options);
+            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
+            REQUIRE(engine.load(s));
+            REQUIRE(engine.awaitPlan());
+            backend.run(20);  // stopped: the input, the input FX, the fader and centre pan
+            const auto& cap = backend.capture();
+            const double g = 0.5 * std::pow(10.0, -6.0 / 20.0);
+            CHECK(double(cap.channels[0][4000]) == doctest::Approx(0.5 * g).epsilon(1e-4));
+            CHECK(double(cap.channels[1][4000]) == doctest::Approx(-0.25 * g).epsilon(1e-4));
+            CHECK(engine.processErrors() == 0);
+            CHECK(engine.bridgeLateCycles() == 0);
+            engine.stop();
+        }
     }
 }
 
@@ -5249,8 +5606,7 @@ TEST_CASE("MIDI sends: timeline chains null offline in both executors and all is
         const auto offline = renderOffline(*isolated, pool, {.startSeconds = 0, .endSeconds = 2.0});
         REQUIRE(offline);
         CHECK(offline->audio.channels == offlineReference->audio.channels);
-        for (const auto& options : {kInCallback, EngineOptions{.workers = 2}}) {
-            if (!options.anticipative && isolation != model::Isolation::InProcess) continue;
+        for (const auto& options : {patient(kInCallback), patient({.workers = 2})}) {
             CAPTURE(isolation);
             CAPTURE(options.anticipative);
             auto rtPool = makePool();
@@ -5264,6 +5620,7 @@ TEST_CASE("MIDI sends: timeline chains null offline in both executors and all is
                 runAhead(engine, backend, 100096 / 96, 96);
             else
                 backend.run(100096 / 96);
+            CHECK(engine.bridgeLateCycles() == 0);
             engine.stop();
             CHECK(engine.processErrors() == 0);
             for (int channel = 0; channel < 2; ++channel)
@@ -5458,10 +5815,10 @@ TEST_CASE("MIDI bus: plug-in note output nulls offline in both executors and all
             const auto offline =
                 renderOffline(*isolated, pool, {.startSeconds = 0, .endSeconds = 2.0});
             REQUIRE(offline);
+            CHECK(pool.failedErrors().empty());  // a killed bridge fails as killed, not as audio
             CHECK(offline->audio.channels == reference->audio.channels);
-            for (const auto& options : {kInCallback, EngineOptions{.workers = 2}}) {
-                // Bridged plug-ins never run on the device thread.
-                if (!options.anticipative && isolation != model::Isolation::InProcess) continue;
+            // Bridged plug-ins run in the callback too (ADR-0081).
+            for (const auto& options : {patient(kInCallback), patient({.workers = 2})}) {
                 CAPTURE(options.anticipative);
                 auto rtPool = makePool();
                 MediaCache media;
@@ -5474,8 +5831,10 @@ TEST_CASE("MIDI bus: plug-in note output nulls offline in both executors and all
                     runAhead(engine, backend, 100096 / 96, 96);
                 else
                     backend.run(100096 / 96);
+                CHECK(engine.bridgeLateCycles() == 0);
                 engine.stop();
                 CHECK(engine.processErrors() == 0);
+                CHECK(rtPool.failedErrors().empty());
                 for (int c = 0; c < 2; ++c)
                     CHECK(maxDiff(backend.capture().channels[static_cast<std::size_t>(c)],
                                   engine.outputLatency(),
@@ -5484,4 +5843,181 @@ TEST_CASE("MIDI bus: plug-in note output nulls offline in both executors and all
             }
         }
     }
+}
+
+TEST_CASE("a bridged note plug-in's lost block ends the notes its output held" *
+          doctest::description("rt")) {
+    // ADR-0088. The echo plays key 60 as 67 (with CC 74) to a hardware MIDI
+    // send. Key 119, at 60's end, makes the echo's block wait on a gate in
+    // shared memory that the test opens only after the run: that block, which
+    // held the echo's 67 off, is lost however loaded the machine is, and the
+    // 1 s deadline keeps every healthy block on time. The host must end 67
+    // and reset the controllers itself. (Round 22: a 30 ms spin against a
+    // 10 ms deadline let a loaded machine skip the check.)
+#if defined(_WIN32)
+    MESSAGE("POSIX only: the echo's gate is a shared mapping (see STATUS)");
+#else
+    host::setBridgeExecutable(BRIDGE_PATH);
+    const std::filesystem::path file =
+        std::filesystem::temp_directory_path() / ("supple-echo-gate-" + std::to_string(::getpid()));
+    const int fd = ::open(file.c_str(), O_CREAT | O_TRUNC | O_RDWR, 0600);
+    REQUIRE(fd >= 0);
+    REQUIRE(::ftruncate(fd, 4096) == 0);
+    void* words = ::mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    ::close(fd);
+    REQUIRE(words != MAP_FAILED);
+    auto* gate = static_cast<std::atomic<unsigned>*>(words);
+    for (int i = 0; i < 3; ++i) new (gate + i) std::atomic<unsigned>(0);
+    // Only a guard against a bridge that died: the gate orders the test.
+    auto reached = [&](int word) {
+        const auto giveUp = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        while (!gate[word].load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < giveUp)
+            std::this_thread::yield();
+        return gate[word].load(std::memory_order_acquire) != 0;
+    };
+    // Opens the gate and removes the file however the test ends (after the
+    // engine, declared later, has stopped).
+    struct Release {
+        std::atomic<unsigned>* words;
+        std::filesystem::path path;
+        ~Release() {
+            words[1].store(1, std::memory_order_release);
+            ::munmap(words, 4096);
+            std::error_code ec;
+            std::filesystem::remove(path, ec);
+        }
+    } release{gate, file};
+    ::setenv("SUPPLE_TEST_ECHO_GATE", file.c_str(), 1);
+    model::EditTxn t(model::Session::create({.console9 = false}), 1);
+    model::Track tr;
+    tr.parent = kMaster;
+    const Id track = t.create(tr);
+    t.modify<model::Track>(kMaster, [&](model::Track& m) { m.children.push_back(track); });
+    model::FxInstance echo;
+    echo.plugin.id = "com.suppleaudio.test.note-echo";
+    echo.midiOutput = model::MidiOutputMode::Replace;
+    echo.isolation = model::Isolation::SharedBridge;
+    const Id echoId = t.create(echo);
+    t.modify<model::Track>(track, [&](model::Track& x) { x.chain.push_back(echoId); });
+    model::MidiSource src;
+    src.sequence.ppq = 960;
+    src.sequence.length = 4 * 960;
+    src.sequence.notes.push_back({0, 960, 0, 60, 100, 0});
+    src.sequence.notes.push_back({960, 240, 0, 119, 100, 0});
+    model::Take take;
+    take.source = t.create(src);
+    model::Item item;
+    item.track = track;
+    item.length = 4.0;
+    item.takes = {t.create(take)};
+    item.activeTake = item.takes[0];
+    t.create(item);
+    model::Route send;
+    send.from.track = track;
+    send.to.midiDevice = "Synth";
+    send.midi = model::MidiRouting{};
+    t.create(send);
+    const auto session = t.commit();
+    REQUIRE_MESSAGE(session, (session ? "" : session.error().toString()));
+
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.midiOutputPorts = {"Synth"}});
+    Engine engine(pool, media,
+                  {.anticipative = false, .workers = 0, .liveBridgeDeadlineMs = 1000.0});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128, .midiOutputs = true}));
+    auto port = json::Value::object();
+    port["offset_ms"] = 0.0;
+    port["enabled"] = true;
+    port["reset_on_stop"] = true;
+    engine.setMidiPreferences({}, {{"Synth", port}});
+    REQUIRE(engine.load(*session));
+    engine.play();
+    ::unsetenv("SUPPLE_TEST_ECHO_GATE");      // the bridge has it
+    backend.run(180);                         // to 0.48 s: key 60 (the echo's 67) is held
+    REQUIRE(engine.bridgeLateCycles() == 0);  // the healthy baseline
+    backend.run(200);                         // through key 119's gated block, lost at its deadline
+    CHECK(reached(0));
+    CHECK(engine.bridgeLateCycles() >= 1);
+    gate[1].store(1, std::memory_order_release);  // the echo answers
+    CHECK(reached(2));
+    backend.run(8);
+    // Before stop, which ends held notes on the port anyway.
+    std::vector<DummyBackend::CapturedMidi> heard(backend.midiCapture().begin(),
+                                                  backend.midiCapture().end());
+    engine.stop();
+    auto is = [](const DummyBackend::CapturedMidi& m, std::uint8_t status, int d1) {
+        return (m.event.bytes[0] & 0xf0) == status && m.event.bytes[1] == d1;
+    };
+    const auto on = std::find_if(heard.begin(), heard.end(), [&](const auto& m) {
+        return is(m, 0x90, 67) && m.event.bytes[2] > 0;
+    });
+    REQUIRE(on != heard.end());
+    CHECK(std::any_of(heard.begin(), heard.end(), [&](const auto& m) { return is(m, 0xb0, 74); }));
+    const auto off = std::find_if(on, heard.end(), [&](const auto& m) {
+        return is(m, 0x80, 67) || (is(m, 0x90, 67) && m.event.bytes[2] == 0);
+    });
+    REQUIRE(off != heard.end());  // the echo's own off was in the lost block
+    CHECK(off->frame >= 23936);   // that block (60's end at 24000), not before
+    CHECK(std::any_of(off, heard.end(), [&](const auto& m) { return is(m, 0xb0, 121); }));
+    // Exactly one off: the echo's own, in its late answer, was discarded.
+    CHECK(std::count_if(heard.begin(), heard.end(), [&](const auto& m) {
+              return is(m, 0x80, 67) || (is(m, 0x90, 67) && m.event.bytes[2] == 0);
+          }) == 1);
+#endif
+}
+
+namespace {
+// N tracks, each a shared-bridge Test Gain; `edited`'s gain is -6, others 0.
+model::Session sharedGains(int n, int edited) {
+    model::EditTxn t(model::Session::create({.console9 = false}), 1);
+    for (int i = 0; i < n; ++i) {
+        model::Track tr;
+        tr.parent = kMaster;
+        const Id track = t.create(tr);
+        t.modify<model::Track>(kMaster, [&](model::Track& m) { m.children.push_back(track); });
+        model::FxInstance gain;
+        gain.plugin.id = "com.suppleaudio.test.gain";
+        gain.isolation = model::Isolation::SharedBridge;
+        gain.patch =
+            json::parse(
+                std::string(R"({"schema": "supple.test-gain-patch/1.0", "params": {"gain": )") +
+                (i == edited ? "-6" : "0") + "}}")
+                .value();
+        const Id fx = t.create(gain);
+        t.modify<model::Track>(track, [&](model::Track& x) { x.chain.push_back(fx); });
+    }
+    return t.commit().value();
+}
+}  // namespace
+
+TEST_CASE("one bridged FX's patch edit costs bridge requests independent of its bridge's size") {
+    // Item D: an FX patch edit's reload cost grew about quadratically with
+    // the instances sharing a bridge. Counted, not timed.
+    host::setBridgeExecutable(BRIDGE_PATH);
+    auto requestsFor = [](int n) {
+        auto pool = makePool();
+        MainThreadWake wake;  // as the app has: service() then polls nothing
+        pool.setMainThreadWake(wake);
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        Engine engine(pool, media, {.anticipative = false, .workers = 0});
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 64}));
+        REQUIRE(engine.load(sharedGains(n, -1)));
+        backend.run(2);
+        for (int i = 0; i < 3; ++i) engine.service();
+        const auto before = host::bridgeRequests();
+        REQUIRE(engine.load(sharedGains(n, 0)));
+        backend.run(2);
+        for (int i = 0; i < 3; ++i) engine.service();
+        const auto used = host::bridgeRequests() - before;
+        engine.stop();
+        return used;
+    };
+    const auto small = requestsFor(4);
+    const auto large = requestsFor(16);
+    CAPTURE(small);
+    CAPTURE(large);
+    CHECK(large <= small + 4);  // not 4x as many instances, 4x (or 16x) the requests
 }

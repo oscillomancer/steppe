@@ -1741,27 +1741,32 @@ Status prepare(Plan& p, const Session& s) {
     return okStatus();
 }
 
-host::Transport transportAt(const Plan& p, std::int64_t sample, const LoopRange* loop,
-                            bool live) SUPPLE_RT {
+host::Transport transportAtSeconds(const Plan& p, double seconds) SUPPLE_RT {
     host::Transport t;
-    const double seconds = p.rateSeconds(sample, live);
     const double beat = p.timeMap->beatAt(seconds);
     const auto bb = p.timeMap->barBeat(beat);
     const auto meter = p.timeMap->meterAt(bb.bar);
     t.playing = true;
     t.tempo = p.timeMap->bpmAt(beat);
-    if (p.rateEnabled) {
-        const auto control = sample - static_cast<std::int64_t>(
-                                          static_cast<std::uint64_t>(sample - p.rateOrigin) & 63);
-        const auto controlBeat = p.timeMap->beatAt(p.rateSeconds(control, live));
-        t.tempo = p.timeMap->bpmAt(controlBeat) * p.timelines[live ? 1 : 0]->rate(control);
-    }
     t.beat = beat;
     t.barStartBeat = p.timeMap->beatOfBar(bb.bar);
     t.bar = bb.bar == std::numeric_limits<int>::min() ? bb.bar : bb.bar - 1;
     t.numerator = static_cast<std::uint16_t>(meter.numerator);
     t.denominator = static_cast<std::uint16_t>(meter.denominator);
     t.seconds = seconds;
+    return t;
+}
+
+host::Transport transportAt(const Plan& p, std::int64_t sample, const LoopRange* loop,
+                            bool live) SUPPLE_RT {
+    const double seconds = p.rateSeconds(sample, live);
+    host::Transport t = transportAtSeconds(p, seconds);
+    if (p.rateEnabled) {
+        const auto control = sample - static_cast<std::int64_t>(
+                                          static_cast<std::uint64_t>(sample - p.rateOrigin) & 63);
+        const auto controlBeat = p.timeMap->beatAt(p.rateSeconds(control, live));
+        t.tempo = p.timeMap->bpmAt(controlBeat) * p.timelines[live ? 1 : 0]->rate(control);
+    }
     if (loop && loop->active()) {
         t.loopActive = true;
         t.loopStartSeconds = p.startSeconds + static_cast<double>(loop->start) / p.rate;
@@ -3351,7 +3356,7 @@ void locateTakes(Node& n, std::int64_t pos, bool wrap, bool keepPlaying = false)
 }  // namespace
 
 void locateNode(Plan& p, Node& n, std::int64_t pos, bool restartConsole) SUPPLE_RT {
-    if (n.rack) locateRack(n, pos, restartConsole);
+    if (n.rack) locateRack(n, pos, restartConsole, restartConsole);
     locateTakes(n, pos, false, !restartConsole);
     auto it = std::lower_bound(n.events.begin(), n.events.end(), pos,
                                [](const TimedEvent& e, std::int64_t x) { return e.sample < x; });
@@ -3423,7 +3428,7 @@ bool processBlockOn(Workers& workers, Plan& p, std::int64_t pos, std::uint32_t n
 
 void locate(Plan& p, std::int64_t pos, bool restartConsole) SUPPLE_RT {
     for (Node& n : p.nodes) {
-        if (n.rack) locateRack(n, pos, restartConsole);
+        if (n.rack) locateRack(n, pos, restartConsole, restartConsole);
         locateTakes(n, pos, false, !restartConsole);  // adoption keeps takes playing
         auto it =
             std::lower_bound(n.events.begin(), n.events.end(), pos,
@@ -3480,7 +3485,7 @@ void locate(Plan& p, std::int64_t pos, bool restartConsole) SUPPLE_RT {
 void wrapTo(Plan& p, std::int64_t pos, int liveClass) SUPPLE_RT {
     for (Node& n : p.nodes) {
         if (liveClass >= 0 && n.live != (liveClass == 1)) continue;
-        if (n.rack) locateRack(n, pos, true);  // notes held at the wrap end there
+        if (n.rack) locateRack(n, pos, true, false);  // notes held at the wrap end there
         if (!p.rateEnabled) locateTakes(n, pos, true);
         auto it =
             std::lower_bound(n.events.begin(), n.events.end(), pos,
@@ -3587,7 +3592,10 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
             if (fromClass >= 0 && old.live != (fromClass == 1)) break;
             // A locate may still be waiting for pooled module ownership.
             // Keep that reset through another plan adoption by this executor.
-            if (n.rack && old.rack) n.rack->resetNotes |= old.rack->resetNotes;
+            if (n.rack && old.rack) {
+                n.rack->resetNotes |= old.rack->resetNotes;
+                n.rack->resetModules |= old.rack->resetModules;
+            }
             // Match inside the destination's incoming edges: scanning every
             // node to rediscover each edge's destination would be cubic.
             for (std::size_t ei : n.in) {

@@ -132,6 +132,7 @@ struct Delay : Module {
     Random random;
     double wowPhase = 0.0, flutterPhase = 0.0;
     double wowRate = 0.6, wobble = 0.0, wobbleTarget = 0.0;
+    int untilWander = 0;  // frames to the next wander step
     bool unplayed = true;
 
     void prepare() {
@@ -142,6 +143,7 @@ struct Delay : Module {
         }
         random.seed(seed());
         unplayed = true;
+        untilWander = 0;
     }
 
     void process(int frames) {
@@ -150,7 +152,7 @@ struct Delay : Module {
         sendL.setChannels(1);
         sendR.setChannels(1);
         const double sr = sampleRate();
-        const Transport t = transport();
+        const Transport t = gridTransport();
         double target = time.value() * 0.001 * sr;
         if (sync.index() > 0) target = beatsOf(sync.index()) * 60.0 / max(t.tempo, 1.0) * sr;
         const double most = kMaxSeconds * sr;
@@ -163,13 +165,18 @@ struct Delay : Module {
             side[s].dark.setCutoff(min(darkHz, 0.45 * sr));
             side[s].thin.setCutoff(thinHz);
         }
-        // Wow's rate wanders between 0.4 and 0.9 Hz; flutter's amount
-        // between half and all of itself, a new target every block.
-        wowRate += (0.4 + 0.5 * random.next() - wowRate) * 0.01;
-        wobbleTarget = 0.5 + 0.5 * random.next();
         const double glide = 1.0 - exp(-1.0 / (0.15 * sr));
         const bool cross = pingPong.on();
         for (int i = 0; i < frames; ++i) {
+            // Wow's rate wanders between 0.4 and 0.9 Hz; flutter's amount
+            // between half and all of itself, a new target every 32 frames
+            // (whatever the host's blocks, so a render does not depend on them).
+            if (untilWander == 0) {
+                wowRate += (0.4 + 0.5 * random.next() - wowRate) * 0.01;
+                wobbleTarget = 0.5 + 0.5 * random.next();
+                untilWander = 32;
+            }
+            --untilWander;
             wowPhase += wowRate / sr;
             wowPhase -= floor(wowPhase);
             flutterPhase += 8.7 / sr;

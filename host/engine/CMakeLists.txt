@@ -8,7 +8,9 @@ find_package(ZLIB REQUIRED)
 supple_add_library(engine
   SOURCES src/transients.cpp src/audio_commands.cpp src/prepared_sources.cpp src/offline.cpp src/plan.cpp src/workers.cpp src/live_workers.cpp src/realtime.cpp src/recording.cpp
           src/stretch.cpp src/playrate_dsp.cpp src/playrate_timeline.cpp src/rate_sources.cpp src/rate_runtime.cpp src/mix_runtime.cpp src/meters.cpp src/runtime_protection.cpp src/media_files.cpp
-          src/rack_runtime.cpp src/rack_midi.cpp src/midi_bus.cpp src/rack_clip_commands.cpp src/rack_level_commands.cpp src/rack_commands.cpp src/module_library.cpp src/module_commands.cpp src/rack_probe.cpp src/app.cpp src/plugin_outputs.cpp src/commands.cpp src/extra_commands.cpp src/group_commands.cpp src/midi_commands.cpp src/analysis_commands.cpp
+          src/rack_runtime.cpp src/rack_midi.cpp src/midi_bus.cpp src/rack_clip_commands.cpp src/rack_level_commands.cpp src/rack_commands.cpp src/module_library.cpp src/module_commands.cpp src/rack_probe.cpp src/app.cpp src/session_lock.cpp src/plugin_outputs.cpp src/commands.cpp src/project_commands.cpp src/tempo_commands.cpp src/track_commands.cpp src/item_commands.cpp src/fx_commands.cpp src/history_commands.cpp
+          src/envelope_commands.cpp src/device_commands.cpp src/transport_commands.cpp src/route_commands.cpp src/log_commands.cpp src/ruler_commands.cpp
+          src/plugin_commands.cpp src/group_commands.cpp src/midi_commands.cpp src/analysis_commands.cpp
           src/freeze_commands.cpp src/consolidate_commands.cpp src/export_commands.cpp src/mix_commands.cpp src/heal_commands.cpp src/render_commands.cpp src/render_settings.cpp src/render_chain.cpp src/chain_commands.cpp src/take_commands.cpp src/learn.cpp src/control_learn.cpp src/dsp_commands.cpp
           src/midi_control.cpp src/midi_ports.cpp src/hardware_midi.cpp src/midi_port_commands.cpp src/midi_output.cpp src/midi_input.cpp src/portaudio_backend.cpp src/portaudio_native.cpp src/sync_runtime.cpp src/sync_commands.cpp src/midi_clock_outputs.cpp
   DEPS supple::model supple::clap-host supple::audio-file supple::timeline supple::semantic-params-abi
@@ -51,9 +53,9 @@ if(SUPPLE_BUILD_TESTS AND SUPPLE_PLATFORM_LINUX)
   # no signature for -fsanitize=function to check).
   target_compile_options(engine-fake-jack PRIVATE $<$<CXX_COMPILER_ID:Clang>:-fno-sanitize=function>)
 
-  supple_add_tests(engine SOURCES tests/test_item_edits.cpp tests/test_audio_warp.cpp tests/test_offline.cpp tests/test_freeze.cpp tests/test_instance_pool.cpp tests/test_autosave.cpp tests/test_take_copy.cpp tests/test_groups.cpp tests/test_media_files.cpp tests/test_recording_shutdown.cpp tests/test_realtime.cpp tests/test_realtime_arming.cpp tests/test_realtime_lookahead.cpp tests/test_realtime_playrate.cpp tests/test_app.cpp
+  supple_add_tests(engine SOURCES tests/bridge_patience.cpp tests/test_item_edits.cpp tests/test_audio_warp.cpp tests/test_offline.cpp tests/test_freeze.cpp tests/test_instance_pool.cpp tests/test_autosave.cpp tests/test_take_copy.cpp tests/test_groups.cpp tests/test_media_files.cpp tests/test_recording_shutdown.cpp tests/test_realtime.cpp tests/test_realtime_arming.cpp tests/test_realtime_lookahead.cpp tests/test_realtime_playrate.cpp tests/test_app.cpp
                    tests/test_commands.cpp tests/test_scripts.cpp tests/test_strips.cpp tests/test_playrate.cpp tests/test_mix_edits.cpp tests/test_pdc.cpp
-                   tests/test_runtime_protection.cpp tests/test_jack.cpp tests/test_workers.cpp tests/test_live_workers.cpp tests/test_meters.cpp
+                   tests/test_runtime_protection.cpp tests/test_page_faults.cpp tests/test_idle_hold.cpp tests/test_jack.cpp tests/test_workers.cpp tests/test_live_workers.cpp tests/test_meters.cpp
                    tests/test_learn.cpp tests/test_dsp.cpp tests/test_bridge_engine.cpp tests/test_render.cpp tests/test_racks.cpp tests/test_rack_clip.cpp tests/test_rack_levels.cpp tests/test_module_library.cpp tests/test_rack_recipes.cpp tests/test_rack_patches.cpp tests/test_rack_patches_play.cpp tests/test_sync.cpp LABELS rt SPLIT)
   target_include_directories(engine.tests PRIVATE src)
   target_include_directories(engine.tests PRIVATE ${PROJECT_SOURCE_DIR}/tests/fuzz)
@@ -69,12 +71,21 @@ if(SUPPLE_BUILD_TESTS AND SUPPLE_PLATFORM_LINUX)
 endif()
 
 if(SUPPLE_BUILD_TESTS AND NOT SUPPLE_PLATFORM_LINUX)
-  supple_add_tests(engine SOURCES tests/test_item_edits.cpp tests/test_audio_warp.cpp tests/test_native_engine.cpp tests/test_freeze.cpp tests/test_instance_pool.cpp tests/test_autosave.cpp tests/test_take_copy.cpp tests/test_groups.cpp tests/test_media_files.cpp tests/test_recording_shutdown.cpp tests/test_bridge_engine.cpp tests/test_playrate.cpp tests/test_mix_edits.cpp tests/test_pdc.cpp tests/test_render.cpp tests/test_racks.cpp tests/test_rack_clip.cpp tests/test_rack_levels.cpp tests/test_module_library.cpp tests/test_rack_recipes.cpp tests/test_rack_patches.cpp tests/test_rack_patches_play.cpp tests/test_sync.cpp LABELS rt SPLIT)
+  supple_add_tests(engine SOURCES tests/bridge_patience.cpp tests/test_item_edits.cpp tests/test_audio_warp.cpp tests/test_native_engine.cpp tests/test_freeze.cpp tests/test_instance_pool.cpp tests/test_autosave.cpp tests/test_take_copy.cpp tests/test_groups.cpp tests/test_media_files.cpp tests/test_recording_shutdown.cpp tests/test_bridge_engine.cpp tests/test_page_faults.cpp tests/test_idle_hold.cpp tests/test_playrate.cpp tests/test_mix_edits.cpp tests/test_pdc.cpp tests/test_render.cpp tests/test_racks.cpp tests/test_rack_clip.cpp tests/test_rack_levels.cpp tests/test_module_library.cpp tests/test_rack_recipes.cpp tests/test_rack_patches.cpp tests/test_rack_patches_play.cpp tests/test_sync.cpp LABELS rt SPLIT)
   target_include_directories(engine.tests PRIVATE src)
   add_dependencies(engine.tests clap-host-fixtures ${PRODUCT_SLUG}-scanner ${PRODUCT_SLUG}-bridge)
   target_compile_definitions(engine.tests PRIVATE FIXTURE_CLAP_PATH="$<TARGET_FILE:clap-host-fixtures>" BRIDGE_PATH="$<TARGET_FILE:${PRODUCT_SLUG}-bridge>"
                              STOCK_CLAP_DIR="${CMAKE_BINARY_DIR}/plugins/clap"
                              SUPPLE_RACK_GUIDE="${PROJECT_SOURCE_DIR}/skill/guides/rack.md")
+endif()
+
+if(SUPPLE_BUILD_TESTS)
+  # A fresh process fixes the media staging serial at zero for each collision.
+  foreach(mode import folder import-case folder-case)
+    add_test(NAME engine.media-staging.${mode}
+      COMMAND engine.tests --no-skip "--test-case=media staging collision: ${mode}")
+    set_tests_properties(engine.media-staging.${mode} PROPERTIES LABELS "engine;rt" TIMEOUT 60)
+  endforeach()
 endif()
 
 if(SUPPLE_PLATFORM_LINUX)
@@ -142,6 +153,27 @@ if(SUPPLE_BUILD_TESTS)
               $<TARGET_FILE:${PRODUCT_SLUG}-engine> ${CMAKE_BINARY_DIR}/plugins/clap/Marram.clap)
     set_tests_properties(engine.mcp-arrangement PROPERTIES LABELS "engine;slow")
   endif()
+endif()
+
+if(SUPPLE_BUILD_TESTS)
+  add_executable(engine-command-inputs.tests tests/test_command_inputs.cpp)
+  target_link_libraries(engine-command-inputs.tests PRIVATE supple::engine supple::control-protocol supple::doctest-main)
+  supple_target_defaults(engine-command-inputs.tests)
+  add_test(NAME engine-command-inputs.tests COMMAND engine-command-inputs.tests)
+  set_tests_properties(engine-command-inputs.tests PROPERTIES LABELS "engine;command;rt")
+endif()
+
+if(SUPPLE_BUILD_TESTS)
+  # Kept separate so long seeded runs build without unrelated test fixtures.
+  add_executable(engine-plan-soak.tests tests/test_plan_soak.cpp)
+  target_link_libraries(engine-plan-soak.tests PRIVATE supple::engine supple::doctest-main)
+  target_include_directories(engine-plan-soak.tests PRIVATE src)
+  target_compile_definitions(engine-plan-soak.tests PRIVATE FIXTURE_CLAP_PATH="$<TARGET_FILE:clap-host-fixtures>")
+  add_dependencies(engine-plan-soak.tests clap-host-fixtures)
+  supple_target_defaults(engine-plan-soak.tests)
+  add_test(NAME engine-plan-soak.tests COMMAND engine-plan-soak.tests)
+  set_tests_properties(engine-plan-soak.tests PROPERTIES LABELS "engine;rt"
+    ENVIRONMENT "RTSAN_OPTIONS=halt_on_error=1;UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1")
 endif()
 
 if(SUPPLE_BUILD_TESTS)

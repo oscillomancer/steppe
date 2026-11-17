@@ -713,6 +713,31 @@ TEST_CASE("rack presets: a patch brings its own modules to another library") {
     CHECK((*differs)["warnings"].at(0).find("code")->asString() == "rack.preset_module");
 }
 
+TEST_CASE("rack presets: a replayed step does not install modules (ADR-0076)") {
+    Fixture here;
+    here.write("level", kLevel);
+    here.run("track.add", R"({"name": "Synth"})");
+    here.run("rack.add", R"({"track": "tr_1"})");
+    here.run("rack.patch", R"({"rack": "rk_1", "modules": {"lvl": {"type": "com.example.level"}},
+                               "cables": [["lvl.out", "mo_1.l"]]})");
+    json::Value saved = here.run("rack.preset.save", R"({"rack": "rk_1", "name": "Constant"})");
+    // A merge replays a saved branch's step on a machine without the module:
+    // the step may change the project, not the user's library.
+    Fixture there;
+    there.run("track.add", R"({"name": "Synth"})");
+    there.run("rack.add", R"({"track": "tr_1"})");
+    json::Value args = json::Value::object();
+    args["rack"] = "rk_1";
+    args["path"] = saved["path"].asString();
+    auto replayed =
+        there.app->replay(there.registry, there.app->head(), {{"rack.preset.load", args}},
+                          there.app->versions().nextVersion());
+    REQUIRE_FALSE(replayed);
+    CHECK(replayed.error().code == "rack.preset_module");
+    CHECK_FALSE(std::filesystem::exists(there.app->moduleDir() / "level"));
+    CHECK_FALSE(there.app->replaying());
+}
+
 TEST_CASE("module library: a project keeps copies of the modules it plays") {
     Fixture here;
     here.write("level", kLevel);
@@ -744,6 +769,32 @@ TEST_CASE("module library: a project keeps copies of the modules it plays") {
     auto saved = readTextFile(copy, 1 << 20);
     REQUIRE(saved);
     CHECK(saved->find("0.5") != std::string::npos);
+}
+
+TEST_CASE("module library: a save keeps the modules every kept version plays") {
+    // Review of item A, finding 2: only the current head's modules were copied.
+    Fixture here;
+    here.write("level", kLevel);
+    here.run("project.set", R"({"console9": false})");
+    here.run("track.add", R"({"name": "Synth"})");
+    here.run("rack.add", R"({"track": "tr_1"})");
+    REQUIRE(here.app->versions().createBranch("topic", "main"));
+    REQUIRE(here.app->switchBranch("topic"));
+    here.run("rack.patch", R"({"rack": "rk_1", "modules": {"lvl": {"type": "com.example.level"}},
+                               "cables": [["lvl.out", "mo_1.l"]]})");
+    REQUIRE(here.app->switchBranch("main"));  // main plays no custom module
+    const auto song = here.dir / "song" / "song.json";
+    json::Value args = json::Value::object();
+    args["path"] = song.string();
+    REQUIRE(here.call("project.save", args));
+    CHECK(std::filesystem::exists(song.parent_path() / "modules" / "level" / "level.cpp"));
+
+    // Opened where the library lacks it: the branch still plays it.
+    Fixture there;
+    REQUIRE(there.call("project.open", args));
+    REQUIRE(there.app->switchBranch("topic"));
+    CHECK(there.app->modules()->find("com.example.level") != nullptr);
+    CHECK(there.level() == doctest::Approx(0.25).epsilon(1e-3));
 }
 
 TEST_CASE("rack presets: a malformed file is skipped with a warning") {
@@ -1883,6 +1934,93 @@ TEST_CASE("rack.get: a deferred structural edit cannot use the older prepared pl
     }
 }
 
+TEST_CASE("a deferred playrate edit whose reload fails never frees what the playing plan runs") {
+    // Review 37 F1. A structural edit inside a prepared playrate span is
+    // deferred; when its reload failed before taking a generation, the engine
+    // went on naming the unplayed session as its latest, and the prune freed
+    // the instances it dropped while the playing plan still ran them.
+    for (bool anticipative : {false, true}) {
+        CAPTURE(anticipative);
+        Fixture f;
+        f.run("transport.playrate.set", R"({"rate":0.8})");
+        const auto track = f.run("track.add", R"({"name":"Src"})")["track"].asString();
+        const auto fxText =
+            f.run("fx.add",
+                  "{\"track\":\"" + track + "\",\"plugin\":\"com.suppleaudio.test.gain\"}")["fx"]
+                .asString();
+        const auto fx = *model::Id::parse(fxText);
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        REQUIRE(f.app->startEngine(backend, {.sampleRate = 8000, .blockSize = 128},
+                                   {.anticipative = anticipative, .workers = 0}));
+        auto& engine = *f.app->engine();
+        const auto cycle = [&] {
+            if (anticipative) REQUIRE(engine.awaitRendered(1024));
+            backend.run(1);
+            f.app->tick();  // services the engine, and reports an unplayed edit
+        };
+        engine.play();
+        for (int i = 0; i < 32; ++i) cycle();
+        REQUIRE(f.app->instances().find(fx) != nullptr);
+        // A future non-unity plan: edits inside its span are deferred.
+        f.run("env.add", R"({"track":"tr_0","param":"playrate",
+                             "points":[{"seconds":0,"value":1.25}]})");
+        const auto generation = engine.planGeneration();
+        f.run("fx.remove", "{\"fx\":\"" + fxText + "\"}");  // deferred: the gain leaves
+        REQUIRE(engine.planGeneration() == generation);
+        // A second deferred edit that cannot compile: 257 hardware MIDI sends,
+        // over the engine's budget of 256 (engine.midi_budget).
+        auto tx = f.app->beginTransaction(origin, "Too many hardware MIDI sends");
+        REQUIRE(tx);
+        for (int i = 0; i < 257; ++i) {
+            model::Route send;
+            send.from.track = *model::Id::parse(track);
+            send.to.midiDevice = "nowhere";
+            send.midi = model::MidiRouting{};
+            f.app->txn().create(send);
+        }
+        REQUIRE(f.app->commitTransaction(*tx));
+        REQUIRE(engine.planGeneration() == generation);
+        const auto withSends = f.app->head().version;
+        (void)f.app->takeEvents();
+        const auto errors = engine.processErrors();
+        // Through the span, the failed reload, and long after: the playing
+        // plan still has the gain, so the pool keeps it. Checked before every
+        // cycle, so a regression stops here rather than in a freed instance.
+        bool failed = false;
+        for (int i = 0; i < 400; ++i) {
+            cycle();
+            REQUIRE(f.app->instances().find(fx) != nullptr);
+            REQUIRE(engine.processErrors() == errors);
+            for (const auto& warning : engine.warnings())
+                failed |= warning.find("deferred playrate edit") != std::string::npos;
+        }
+        REQUIRE(failed);
+        CHECK(engine.planGeneration() == generation);
+        const auto& warnings = engine.warnings();
+        CHECK(std::any_of(warnings.begin(), warnings.end(), [](const std::string& w) {
+            return w.find("never played") != std::string::npos;
+        }));
+        // The app learns it as it learns a failed load: an engine.error, and
+        // a prepared version that is the one playing, before both edits.
+        int reported = 0;
+        for (const auto& [topic, value] : f.app->takeEvents())
+            if (topic == "engine.error" && value.isString() &&
+                value.asString().find("never played") != std::string::npos &&
+                value.asString().find("engine.midi_budget") != std::string::npos)
+                ++reported;
+        CHECK(reported == 1);
+        CHECK(f.app->engineStatus().preparedVersion < withSends - 1);
+        // Undoing the sends leaves the removal, which compiles and plays; the
+        // gain goes only once a plan without it is running.
+        REQUIRE(f.app->undo());
+        for (int i = 0; i < 400 && f.app->instances().find(fx) != nullptr; ++i) cycle();
+        CHECK(engine.planGeneration() > generation);
+        CHECK(f.app->instances().find(fx) == nullptr);
+        CHECK(engine.processErrors() == errors);
+        f.app->stopEngine();
+    }
+}
+
 TEST_CASE(
     "rack.capture: sync does not scan unused plugins and snapshot lookup keeps name fallback") {
     host::setBridgeExecutable(std::filesystem::temp_directory_path() / "no-such-plugin-scanner");
@@ -2026,11 +2164,16 @@ TEST_CASE("rack inputs: Notes hears a separate monitored MIDI channel in both ex
                 CHECK(f.app->engine()->processErrors() == 0);
                 REQUIRE(std::abs(backend.capture().channels[0][90 * 37 - 1]) > .01f);
                 f.run("track.set", R"({"track":"tr_2","monitor":"off"})");
+                // Manual callbacks can outrun the renderer. awaitRendered()
+                // returns immediately while stopped and does not acknowledge
+                // this edit's plan; start the settling budget after it is queued.
+                REQUIRE(f.app->engine()->awaitPlan());
                 for (int i = 0; i < 64; ++i) {
                     if (anticipative) REQUIRE(f.app->engine()->awaitRendered(37));
                     backend.run(1);
                 }
                 CHECK(backend.capture().channels[0][154 * 37 - 1] == 0);
+                CHECK(f.app->engine()->processErrors() == 0);
                 f.run("transport.stop");
                 if (recording) {
                     REQUIRE(f.app->head().items.size() == 1);

@@ -206,12 +206,12 @@ struct Clock : Module {
     void process(int frames) {
         for (int k = 0; k < 6; ++k) out[k].setChannels(1);
         resetOut.setChannels(1);
-        const Transport t = transport();
+        const Transport t = gridTransport();
         const bool external = clock.connected();
         const bool song = !external && followSong.on();
         const double songBeatsPerFrame = t.tempo / 60.0 / sampleRate();
         for (int i = 0; i < frames; ++i) {
-            const double songBeats = t.beats + i * songBeatsPerFrame;
+            const double songBeats = t.beats + (t.offset + i) * songBeatsPerFrame;
             const bool resetNow = resetEdge.rose(reset[0][i]);
             const bool go = run[0][i] >= 0.5 && (!song || t.playing);
             if (go && !running) {

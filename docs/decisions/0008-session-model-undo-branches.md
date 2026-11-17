@@ -111,6 +111,8 @@ model code and a reconciler between model versions and live plugin instances.
   nothing. Unreachable versions are freed immediately (reference counting).
   Saving a project writes branch heads; history persistence is optional
   (`project.save {history: true}`), capped by the same budget.
+  *(2026-11-14: implemented by ADR-0076, which also keeps each branch's
+  unmerged steps by default so that it merges after reopening.)*
 - **Coalescing.** Continuous gestures (a fader drag, an agent sweeping a
   value through many `fx.param.set` calls in one batch) coalesce into one
   version per gesture/batch, not one per event.
@@ -143,3 +145,8 @@ addressable and exact; their required snapshots and retained replay logs may
 exceed the budget. No payload is discarded from a live session. The bound is an
 estimate of model/history data, not a process RSS or media-cache limit. Releasing
 a lease allows later budget enforcement to squash formerly protected steps.
+
+*Clarified 2026-11-15:* retained-byte estimates are maintained incrementally by
+shared identity, with the same counts and oldest-first retention decisions.
+Ordinary append commits do not remeasure earlier snapshots. Session-model §6.2
+describes the size index and its deterministic work counter.

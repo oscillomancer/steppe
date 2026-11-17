@@ -67,6 +67,9 @@ extern "C" double supple_script_param_at(const S::Param* p, int i, int c) { retu
 extern "C" void supple_script_transport(const S::Module* p, S::Transport* out) {
     *out = p->transport();
 }
+extern "C" void supple_script_grid_transport(const S::Module* p, S::Transport* out) {
+    *out = p->gridTransport();
+}
 extern "C" void supple_script_input(const S::Input* p, int c, S::InputChannel* out) {
     *out = (*p)[c];
 }
@@ -556,9 +559,13 @@ MIR_reg_t Codegen::aggregate(Expr* e) {
     MIR_reg_t addr = frameSlot(t->size, t->align, offset);
     if (e->kind == ExprKind::Call) {
         auto* call = static_cast<CallExpr*>(e);
-        if (call->builtinMethod && call->builtinMethod->intrinsic == Intrinsic::ModuleTransport) {
+        const Intrinsic which =
+            call->builtinMethod ? call->builtinMethod->intrinsic : Intrinsic::None;
+        if (which == Intrinsic::ModuleTransport || which == Intrinsic::ModuleGridTransport) {
             MIR_reg_t self = call->object ? aggregate(call->object) : selfReg_;
-            callC(reinterpret_cast<void*>(&supple_script_transport),
+            callC(which == Intrinsic::ModuleTransport
+                      ? reinterpret_cast<void*>(&supple_script_transport)
+                      : reinterpret_cast<void*>(&supple_script_grid_transport),
                   {Abi::Void, Abi::Ptr, Abi::Ptr}, {reg(self), reg(addr)});
             return addr;
         }

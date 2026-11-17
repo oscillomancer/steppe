@@ -310,6 +310,47 @@ The callback-only executor uses the same ownership rule for the whole plan;
 offline instances are private. Normal processing keeps the same grid,
 summation and samples in both executors and offline.
 
+`engine-plan-soak.tests` exercises this contract with seeded command sequences
+while a paced dummy audio thread plays, in both executors with two helpers.
+Its `engine;rt` CTest entry runs in the normal and sanitizer presets. Every
+command checks model invariants and nondecreasing per-branch ID counters;
+after source preparation and plan adoption, every step checks finite, bounded
+device output, process errors, and reclamation of old plans and replaced FX
+and rack modules. The graph, pending handoffs and retained-plan capacity are
+bounded independently of the long-run duration. At the start and after every
+settled edit, a 1024-frame intermediate window is compared bit for bit with a
+private offline render of the current project, in both executors. The dummy
+driver parks between callbacks, outside the RT entry, then runs fixed callback
+counts on its existing paced audio thread with renderer readiness handshakes.
+The engine and pooled instances stay running. A locate supplies the defined
+DSP reset boundary; before it, four complete 128-frame callbacks after parking
+drain the specified 10 ms swap/wet fade. Adoption alone can acknowledge at a
+block's start, so an earlier cycle-count observation is insufficient.
+Window anchors cycle through beats 0, 1, 2 and 3 of the
+current tempo map. Output latency is accounted for, and the preceding loop
+and position are restored afterwards. JSONL checkpoint rows preserve exact
+sample windows when replaying or shrinking an edit prefix. These probes cover
+intermediate project states after a locate, not arbitrary uninterrupted DSP
+history or the pre-locate plan-swap crossfade.
+
+Each epoch stops playback,
+compares an offline render with a fresh app reopened from the saved final
+project, and checks the retained RT pool against that reference bit for bit.
+Unwinding both branches restores the original canonical project content,
+excluding only `project.next_ids`, whose high-water marks intentionally survive
+undo (ADR-0008). The seed determines the operation stream; native thread
+interleaving remains free. Readiness, callback counts and sample values decide
+correctness; elapsed time does not. A 60-second handshake watchdog exits 124
+with `WATCHDOG ABORT` and no audio-mismatch verdict, rather than asserting or
+continuing the diagnostic run. Wall time also paces the driver and selects an
+opt-in long-run budget, without deciding a sample comparison. Long-run and
+replay controls are in `tests/fuzz/README.md`.
+
+Reclamation checkpoints observe both executor acknowledgements before
+collecting on the model thread and require the published generation to stay
+unchanged through collection. A callback acknowledgement arriving after an
+earlier collection does not imply that collection already freed its old plan.
+
 **Mix-value edits (ADR-0060).** A session that differs from the last one
 `Engine::load` took only in strip `volume_db`/`pan`/`width`/`pan_left`/`pan_right`,
 send `volume_db`/`pan` and VCA `volume_db` (and in the points of envelopes a
@@ -378,8 +419,8 @@ editor/automation eligibility preferences remain planned (ADR-0014).
   them together with any CLAP request.
 - **Live nodes** run on the callback and its separate bounded live pool
   (ADR-0024). With anticipation disabled this executor runs the entire graph.
-  Limit 1 processes it serially. Synchronous
-  bridged stages pass through on live nodes, with a warning (§5).
+  Limit 1 processes it serially. Bridged stages on live nodes are processed
+  there too, under the cycle's bridge deadline (§5, ADR-0081).
 
 ### 2.2 Worker pool
 
@@ -447,8 +488,11 @@ classes from it, all process-local:
 - **Lifetime.** Threads end at `stop()`, so nothing is restored. CPU affinity
   is never changed: threads keep the inherited mask.
 - **Bridges.** `host::setBridgeAudioPolicy` carries the applied background
-  policy to bridged instances while the engine runs (normal otherwise): each
-  bridge audio thread takes it when its processing starts (§5).
+  policy to bridged instances while the engine runs (normal otherwise), and
+  `host::setLiveBridgeAudioPolicy` the callback's policy for live calls
+  (ADR-0081): each bridge audio thread takes the class each command asks
+  for (§5). `engine.status.bridge_threads_refused` lists the isolated FX
+  whose bridge thread was refused it.
 - **Reporting.** `Engine::scheduling()` records each class's applied policy
   at start (None for a class without threads, and for all while stopped).
   `engine.start` and `engine.status` report it as `scheduling`: `callback`,
@@ -489,7 +533,16 @@ retain the job; an old wake may harmlessly claim the next open job.
 
 The callback helps execute ready nodes and spins on atomics (CPU relax only)
 while work or claimed departures remain. Helpers spin only within that job and
-park between segments, with no post-cycle spin. Participation uses the chain
+park between segments, with no post-cycle spin. The one exception
+(ADR-0085): while a bridged call of the job blocks past its spin under the
+live deadline (`host::LiveBridgeBlocked`, counted in the pool's
+`host::LiveBridgeWaiters`, which `run` sets on the callback and each helper),
+an idle helper parks on its own futex word, after setting its parked bit and
+a fence, and only if the count is still nonzero. The call's end (decrement,
+fence, read the bits) wakes every parked helper; a push wakes as many as it
+pushed, best effort. No helper is parked past its job, since the job's last
+node ends after its waits. In-process jobs never park: the count is read
+once per idle spin and the parked bits once per push, relaxed. Participation uses the chain
 cover, configured capacity and usable CPUs minus one; a chain runs directly
 without queue/wake traffic. The callback joins a helper preempted after claiming,
 including after completing DSP. No helper touches the job after its departure
@@ -500,8 +553,9 @@ ownership tokens to every helper. There is no late-output discard, timeout or
 rerun: a late in-flight node makes its cycle late. A processing error still joins
 all work before silencing/counting the failed segment; it never cancels in-flight
 plug-in state. Summation order and numeric policy (§2.4) remain identical to
-offline processing. Synchronous bridge stages still pass through, including on
-helpers.
+offline processing. Bridged stages run on the callback and on helpers alike:
+`LiveWorkers::run` hands the callback's bridge deadline to every helper that
+claims the job (ADR-0081).
 
 `Backend::liveThreadCapacity()` and `prepareLiveThread(native_handle)` run on
 main after backend start, before publishing the pool to callbacks. Unknown
@@ -534,6 +588,14 @@ path; Audio processing threads Limit 1 disables it on next start.
    output).
 6. Write hardware outputs; publish meters (lossy rings) and state deltas
    (coalescing slots).
+
+When driving a manual dummy backend, wait for `Engine::awaitPlan()` after
+publishing a plan before counting its output-settling callbacks. This wait
+ends after the renderer has adopted the plan and queued it for the callback.
+`awaitRendered()` waits for audio in the transport epoch, not for the latest
+plan; while stopped it can return immediately. Fast manual callbacks do not
+pace the renderer like a device clock does. Both waits belong on the
+test/model thread.
 
 **Device outputs (ADR-0056).** The plan lists the masters with a
 `hw_output` (tr_0 plays to 1/2 unless it says otherwise) as output taps.
@@ -820,8 +882,9 @@ first use, and no plug-in code runs early to warm it.
   socket-loop shutdown explicitly stop the engine while the session and bus
   still exist. This does not save a project: clients must stop recording and
   save before disconnecting to retain MIDI/session edits across process exit.
-  Audio WAVs and placement sidecars remain recoverable; MIDI has no recovery
-  sidecar. Forced termination cannot execute this shutdown path.
+  Audio WAVs and placement sidecars remain recoverable, and so do MIDI takes
+  through their journals (ADR-0080). Forced termination cannot execute this
+  shutdown path.
 - **Recording admission**: an armed track with `record.mode: output` fails
   `transport.record` with `record.output_unsupported`, its `/tracks/<id>/record/mode`
   path, and a hint to select input mode. This check runs before any recording
@@ -830,16 +893,23 @@ first use, and no plug-in code runs early to warm it.
 - **Recording**: RT thread writes input frames into large preallocated SPSC
   rings (≥ 10 s); an I/O thread writes them to WAV/RF64 files incrementally,
   rewriting the header every 5 s so a crash leaves a valid file up to the last
-  flush; a sidecar per file records its track and start, and
+  flush. Targets reserve their sanitized track/take stems with ASCII case folding
+  before any files are opened, so simultaneous names cannot collide on
+  case-insensitive filesystems. Existing WAV, sidecar and audio/MIDI journal entries
+  also reserve their stems. A sidecar per file records its track and start;
   `project.recover` repairs the header to cover everything on disk and places
-  takes a crash left out (ADR-0014); punch in/out and loop recording (one take per pass); MIDI recording
-  into MIDI takes. Audio ring overflow becomes equal-length silence at its file
+  takes a crash left out, clipping placement to trusted journal/sidecar progress
+  when present (ADR-0014/0082). Repair checks both RIFF and data byte
+  counts against the whole frames physically present, including a torn size
+  whose rounded-down frame count already matches; partial trailing frames are
+  not included in either repaired size. Punch in/out and loop recording (one take per pass); MIDI recording
+  into MIDI takes, each journaled for crash recovery (below). Audio ring overflow becomes equal-length silence at its file
   position and is still reported; loop run positions remain in file-time units.
   Disk and periodic header errors stop only the failing target and retain that
   target's first error. The loop run table holds the initial run plus 4096 wraps;
   when full, capture stops adding input and returns retained passes with a
   structured `recording.loop_runs_full` warning for the commit. Sidecars require
-  `supple.recording/1.0`, a track id, a positive finite sample rate, and complete,
+  `supple.recording/1.0`, `1.1` or `1.2`, a track id, a positive finite sample rate, and complete,
   ordered loop runs beginning at file frame zero, with the loop range they were
   recorded in, or `[0, 0]` when seeks split the runs while no loop was active
   (an inactive loop range is never recorded); invalid sidecars return a
@@ -847,6 +917,99 @@ first use, and no plug-in code runs early to warm it.
   survive pending hash jobs (including finalized loop runs at stop); the
   background finalization adds an optional `hash` without changing their
   recovery contract.
+- **Streaming RF64** (ADR-0082): new audio takes reserve a 28-byte JUNK payload
+  in their 80-byte RIFF header. A take crossing the 32-bit size limit promotes
+  that space to ds64 and becomes RF64 in place, without moving samples or
+  stopping capture. Recovery reads/repairs old 44-byte recordings and new
+  RIFF/RF64 recordings, including bytewise-torn promotion FourCCs in the
+  otherwise unchanged fixed layout. Decoding, metadata
+  inspection and media import accept RF64. Tests inject a small size threshold
+  or use sparse files, without writing a 4 GiB audio payload.
+- **Authoritative punch placement** (round-18 correction): audio/MIDI journal
+  version 1.1 records `punch: {enabled, start, end}` in the header, in the take's
+  sample-rate frames. Coordinates are nonnegative and at most 2^48; an enabled
+  range increases. Mid-take punch edits retain ADR-0015's commit-time behavior:
+  the writer snapshots the latest model setting off RT and includes a changed
+  punch in the same complete progress record as captured/physical frames.
+  A torn or invalid progress line advances neither frames nor punch. Normal
+  stop takes the final snapshot; recovery uses the last trusted one, never
+  the recovering app's transport setting. Version 1.0 journals load with punch
+  disabled. Final sidecars 1.2 persist the same punch and trusted frame bound;
+  sidecars 1.0/1.1 remain readable with punch disabled. Hash completion and
+  retirement preserve it. Mixed recovered punches are logged as contiguous
+  `record.commit` groups within one undo transaction, using its existing punch
+  arguments; history replay therefore retains each take's placement.
+  `RecordedPunch` carries `{enabled, start, end}` in recording-rate samples.
+  `Engine::startRecording(targets, punch = {})` starts with disabled punch by
+  default; `setRecordingPunch(punch)` is model-thread-only. The recorder's
+  model/writer mutex protects only the small punch snapshot, never file work;
+  the callback never accesses it. `RecordedTake::punch` preserves the final
+  snapshot for deferred commit. Initial sidecars 1.2 omit the trusted frame
+  field until finalization; failed finalization therefore cannot retire a journal; the journal supplies live progress. No other non-model
+  placement input is omitted: start/rate, latency-adjusted runs, initial loop,
+  physical frame extent and MIDI input clocks are already persisted.
+- **Audio placement journals** (ADR-0082): each WAV owns an exclusively
+  created `<stem>.audio.jsonl`, schema `supple.audio-recording/1.1` (legacy 1.0 still loads). The shared
+  MIDI journal reader/writer handles header, append, flush/sync and torn tails.
+  Its header has `track`, `sample_rate`, `start_sample`, `latency`, `channels`
+  and the initial `loop` and `punch`. Runs use the same captured-frame clock as MIDI;
+  progress is `{"captured": n, "frames": f}`, where `f` counts complete WAV
+  frames actually written (including rendered-input padding/trim). The writer
+  flushes audio before progress, and syncs data/header before the journal at
+  each five-second checkpoint. Audio journal failure stops that target and
+  reports `record.error`; healthy targets continue. Recovery lists the WAV,
+  clips placement to min(physical frames, last complete journal progress),
+  and uses stop's initial start/latency/run rule. Extra WAV frames are kept,
+  never guessed into an unknown placement. Loop-range changes retain the
+  initial-loop limitation of ADR-0080. Before journal retirement, a final
+  `supple.recording/1.2` sidecar preserves the trusted `frames` bound and punch;
+  legacy 1.0/1.1 sidecars still load. Hash completion preserves the bound. Save/autosave
+  checkpoint the stopped audio before publishing and retire owned journals
+  only after success; Save As retires its new copies, never another project's.
+`RecordedTake::journal` is the owned audio placement journal path (empty if
+exclusive creation failed); it is not project media and does not enter
+`record.commit`. Recovery reconstructs it from the checked WAV companion.
+The final sidecar 1.1/1.2 `frames` is a nonnegative clock bounded by 2^48, and
+clips recovery without truncating the physical WAV.
+
+- **MIDI take journals** (ADR-0080): each MIDI target writes
+  `<media>/rec/<Track>-<n>.midi.jsonl` (created exclusively, never through a
+  link; a name any entry has, a dangling link too, is not free, and a take
+  whose journal could not be created names none, so nothing already there
+  is ever deleted as its journal), JSON Lines with schema `supple.midi-recording/1.1` (legacy 1.0 still loads): a header object
+  (`track`, `sample_rate`, `start_sample`, `latency`, `device`, `routed`,
+  `shift`, `loop`, `punch`), then events `[at, status, data1, data2]` (plus `route`,
+  `voice` for Note Out voices; `at` in captured frames), `{"run": [captured
+  frame, timeline]}` per loop wrap or seek, and `{"captured": n}`. The audio
+  thread only pushes to the MIDI rings and stores how far capture got (one
+  atomic store); the writer thread appends what it drains every 20 ms,
+  flushes to the OS each pass and fsyncs every 5 s. Loss window: about 20 ms
+  on a program crash (more only if the writer fell behind, up to the
+  4096-event ring), 5 s on a system crash. Readers drop a torn last line and
+  everything from the first line that does not read, or that holds what the
+  writer cannot write: an event that is not a channel message (status
+  0x80..0xEF, 7-bit data), a device event in a take with no device, a Note
+  Out event in one that is not routed, a voice outside 0..2^31-1, or a
+  clock (`at`, a run, `captured`) beyond 2^48 frames. A header whose clocks
+  are beyond that (or `latency` negative, or a loop that is neither `[0, 0]`
+  nor increasing), or that records neither a device nor Note Out, makes the
+  file not a journal (`record.journal`). The bound keeps placement's
+  arithmetic inside 64 bits. Stop and recovery
+  place a take with the same function (`detail::placeMidi`). A journal that
+  cannot be written gives the committed take a `record.journal` warning and
+  does not stop the recording. The app deletes a committed take's journal
+  once a save or autosave is written, where the save put it: a first save
+  moves it with the media, and a save as into another folder deletes the
+  copy it made there (an identical file already there is not its copy and
+  stays; one a failed save as made is, and the retry deletes it, whatever
+  spelling of the same file it is retried under: copies are known by file
+  identity as the file system reports it, not by spelling, since a path
+  through a link followed by `..` is not the path with both removed; a
+  path where no file is matches no copy), leaving
+  the old folder's for the old project, whose file does not hold the take. A save as into another folder waits for a running
+  recording to stop (`project.recording`). Replacing a saved project without saving leaves its journals, offered on
+  its next open; replacing an unsaved one without saving discards them with
+  its folder (ADR-0078).
 - **Recording a rack Out** (rack.md §6): an armed channel whose selected
   `record.input` is an Out module records its stereo input, after input FX
   and before its own items, inserts, fader and Console 9 encode. Arming makes
@@ -915,6 +1078,19 @@ not suppress a key connected later; a missing block key supplies silence.
 
 ## 5. Plugin isolation (`host/clap-host/bridge`)
 
+**Default isolation (ADR-0081).** An fx's `isolation` names its process;
+`inherit` is resolved when its instance is made
+(`InstancePool::setDefaultIsolation`, from `EngineApp::setPluginIsolation`,
+the GUI's preference): a stock plug-in (its file in `stockPluginDir()`) runs
+in process, any other at the default (`in_process`, as shipped;
+`shared_bridge`; `dedicated`). A bridged default with no bridge executable
+set runs it in process and `engine.status.warnings` says so. An instance
+keeps its process until it is made again (fx.restart, the plug-in replaced,
+a project opened), so changing the default never reloads a running
+plug-in. `fx.describe isolation_effective` says where it runs. Offline
+renders, render snapshots and rack probes make their own instances in
+process, as before; isolation does not change the output.
+
 The bridge is native on Linux, macOS and Windows (ADR-0037). Linux retains
 memfd, SCM_RIGHTS, shared futexes and pidfd behavior. macOS uses unlinked
 shm_open descriptors transferred over socketpair, shared address waits/wakes,
@@ -925,7 +1101,18 @@ handles. The existing background/offline bounded-wait exception and failure
 semantics apply on each platform. Native editor hosting follows ADR-0040;
 the DAW shell is integrated separately on port-gui.
 
-POSIX protocol 19 / Windows protocol 20 carry typed native editor parents
+POSIX protocol 24 / Windows protocol 25 carry that period as a duration
+(`livePeriodNs`): in device frames, the bridge read it at an oversampled
+plug-in's rate, 2 or 4 times the device's.
+POSIX protocol 23 / Windows protocol 24 add the device period
+(`livePeriod`) to each command, which sizes the macOS live class (ADR-0081).
+POSIX protocol 22 / Windows protocol 23 add each command's timing to the
+header: when the host posted it, when the bridge saw it and finished it, the
+CPU the bridge thread ran on, its migrations, and the scheduling class it read
+back after taking the requested one (ADR-0081 diagnostics, §5).
+POSIX protocol 21 / Windows protocol 22 add each command's audio class and the
+bridge's refusal flag to the header (ADR-0081); 20/21 added plug-in note and
+MIDI output (ADR-0068). POSIX protocol 19 / Windows protocol 20 carry typed native editor parents
 (ADR-0040), live editor scale changes (`EditorScale`) and Cocoa editor window
 frames, with unchanged Header layout. Windows retains the v14
 u64 recipient-owned resource after each frame prefix (all-ones means
@@ -1046,19 +1233,90 @@ instance).
 - The bridge's audio thread sets FTZ and DAZ around each `process()` and
   restores its MXCSR afterwards (§2.4), so a bridged plug-in computes as an
   in-process one does.
-- Each instance's audio thread is named `audio-bridge`. On `StartProcessing`
-  it takes the scheduling the host writes into the shared-memory header
-  (`audioPolicy`, `audioPriority`; protocol version 10), which is the engine's
-  background policy while an engine runs and normal otherwise (§2.2,
-  ADR-0026). A renderer waiting for a bridged plug-in therefore never waits
-  behind a lower-priority thread. Applying it is best effort: a refusal leaves
-  the thread as it was.
-- The current bridge is synchronous and runs only offline or on rendered-ahead
-  nodes. A stage on a device-callback node (including a take FX stage) passes
-  through with its compensated delay; the callback calls neither processing nor
-  lifecycle methods of the bridge. The plan warning names the FX and asks for
-  `isolation: in_process` to monitor through it. Pipelined live bridging is future
-  work (ADR-0013); synchronous monitoring is not supported.
+- Each instance's audio thread is named `audio-bridge`. Every command carries
+  the class it runs in (protocol POSIX 24 / Windows 25; `audioClass` in the
+  header): background, the policy in `audioPolicy`/`audioPriority` (the
+  engine's background policy while an engine runs, normal otherwise; §2.2,
+  ADR-0026), or live under a live deadline (ADR-0081): on Linux the
+  callback's policy in `livePolicy`/`livePriority`, on macOS a
+  time-constraint policy for the device period (`livePeriodNs`, a duration
+  the engine sets with `host::setLiveBridgeAudioPolicy` from the device's
+  period and rate while it runs, so an oversampled plug-in's rate does not
+  scale it; without one, the command's block at the activation rate), read
+  back after it is set, on Windows MMCSS "Pro Audio" at critical priority
+  (the bridge links `avrt`). The thread changes class only when the
+  request, period included, changes. The class read back on macOS is `high` for a time-constraint
+  policy, else the QoS. A waiting renderer
+  or callback therefore never waits behind a lower-priority thread. Applying
+  it is best effort: a refusal leaves the thread as it was, and the answer's
+  `classRefused` says so; `Instance::bridgeThreadRefused()` and
+  `engine.status.bridge_threads_refused` report it.
+- **Live deadline (ADR-0081).** `host::LiveBridgeDeadline` sets, for the
+  calling thread, the steady-clock time (`host::steadyNanoseconds()`) by which
+  bridged audio-thread calls must be answered. Under it a call spins briefly,
+  then makes timed waits on the done word up to the deadline and nothing
+  else: no `alive()` check, kill or reap. Unanswered, `process()` outputs
+  silence (no output events) and returns true, and the request stays
+  outstanding (a flag says so, not its number, which wraps through 0); every
+  later call first waits for that answer (under its own deadline) before it
+  touches the shared memory, and discards the late output. A block skipped
+  meanwhile is silent and its audio is lost, but its events reach the
+  plug-in at offset 0 of the next block it processes, in order and before
+  that block's own: no note off, pedal or parameter change is lost. The
+  block's own output is lost (`OutputEvents::lost`, also for a failed
+  bridge), so the chain's MIDI bus ends what it held and resets the
+  controllers it moved (ADR-0088, below). At most
+  `RemoteInstance::kMaxCarried` (512) are carried; beyond that, or when they
+  and the next block's would not fit the arena's 2048, the notes and MIDI are
+  dropped, each parameter keeps its latest value, and, if anything but
+  parameters went, the plug-in is reset before that block, so no note whose
+  end it never heard hangs. A carry full of distinct parameters still takes
+  a later value of one of them; a value for a 513th target is lost. A legal
+  block (at most 2048 events) never loses one of its own to the carry: the
+  carried parameters it sets again give way to its later values, as many of
+  the rest as fit go before it, and the others wait for the next block. Stop, reset
+  and flush asked for meanwhile are kept, once each, and sent first when the
+  answer comes, in the order reset, stop, flush; a reset drops the carried
+  notes, which came before it. A start not answered by the deadline returns
+  false with `startUnanswered()` set; asked again, it returns the answer
+  (no second start). A stop reaches such an instance too, and the bridge
+  stops an instance still processing before it deactivates it. `host::bridgeLateCalls()` counts late calls
+  process-wide. Consecutive late calls spanning 50 ms fail the instance with
+  the hung reason; the audio thread only sets the flag, and the main thread
+  kills the process when it services the instance. Without a deadline the
+  background rules below apply unchanged.
+  Only the wake and each timed wait are inside `rt::ScopedSanctionedSyscall`,
+  so the rtsan preset checks the rest of the path; the background wait
+  (ADR-0013: `alive()`, kill) keeps one scope over its loop. The rtsan-only
+  test `rtsan-bridge-selfcheck` makes a bridged call under a live deadline,
+  which must pass, then allocates, which must be caught.
+- The bridge is synchronous everywhere. Offline and on rendered-ahead nodes it
+  keeps the background deadlines below. On device-callback nodes (armed and
+  monitored tracks, input FX, take FX stages, and every node with
+  anticipation off) the callback and its live helpers process bridged stages
+  and make their lifecycle calls under the cycle's bridge deadline (ADR-0081):
+  `Engine::cycle` sets it to the cycle's start plus its period or
+  `EngineOptions::liveBridgeDeadlineMs` (default 2 ms), whichever is larger.
+  No latency is added and the output is the in-process output. A cycle with a
+  late bridged call counts in `Engine::bridgeLateCycles()`,
+  `engine.status.bridge_late`, and in `engine.status.xruns`. A pipelined mode
+  remains future work.
+- Bridge timing. Every bridged call records where its time went
+  (`host::bridgeTiming()`, live and background apart): the host's wait, the
+  bridge's wake (post to seen), its work and the return (finished to seen by
+  the host), wakes over 200 µs and 1 ms, whether the answer came while the
+  host still spun, the CPUs the bridge thread ran on, its migrations, and
+  calls whose bridge thread did not hold the class asked for (Linux). A wait
+  for an earlier late block before the next call (`settles`) counts its wait
+  too. `Engine::bridgeOverruns()` sorts each callback cycle with live bridged
+  calls that ran past its period. When the cycle's bridged waits cover the
+  overrun it is `late_wait` (a call hit the deadline) or `slow_bridge` (the
+  bridge answered in time but slowly); otherwise it is `not_waiting`: the
+  time went elsewhere, such as another stage's work or the callback thread
+  waiting for a CPU, including a call that was late because it was posted
+  after the deadline had passed. The longest such cycle is kept.
+  `engine.status.bridge_timing` reports both; the call counters are
+  process-wide, the cycle counters per engine.
 - Crash handling: a control thread watches the process (pidfd); on crash the
   instance becomes a **failed node** (silence; `fx.failed` event with the
   signal and last known state kept in the model), the rest of the session
@@ -1078,8 +1336,10 @@ decimal integers. Command schemas still validate the device/transport ranges.
 The engine registers the session-model §7 command catalogue on the command
 bus and exposes it through the control protocol (Unix socket), Lua and MCP (proxy or in-process). Engine-specific commands:
 `engine.start {backend, device, rate, block}`, `engine.stop`,
-`engine.status` (q: backend, rate, block, load, xruns, anticipation
-misses, meter drops), `engine.settings.set {render_ahead_ms,
+`engine.status` (q: backend, rate, block, load, xruns (device xruns plus
+`bridge_late`, the callback cycles a bridged plug-in made late, ADR-0081),
+`bridge_timing` (the live bridged calls' waits and why cycles overran, §5),
+anticipation misses, meter drops), `engine.settings.set {render_ahead_ms,
 worker_threads, automation_resolution, …}`.
 `OfflineResult::graph` supplies compiled graph text: input edges and residual
 padding, `lat_in` (the forward arrival diagnostic), `lat_chain` (compensated
@@ -1187,7 +1447,10 @@ controls); `moveParam` moves any parameter the way a binding does, for the
 - **B5 edit responsiveness:** 1000 random edits via the bus while playing:
   main-thread time per edit (p95 < 2 ms), no xruns, plan swap latency.
 - **B6 isolation:** crash test (§5) + CPU overhead of synchronous background bridge vs
-  in-process for 16 instances.
+  in-process for 16 instances. `bridge-bench` (host/clap-host/tools) times
+  bridged against in-process calls on the gain fixture per block size,
+  stage count and isolation, paced like a callback; results are in
+  `docs/benchmarks/b6.md`.
 
 Results are recorded with kernel, PipeWire version, quantum actually
 granted, and CPU governor (read-only facts).
@@ -1232,7 +1495,10 @@ It is null when there is no sampled anticipative boundary (including an
 all-live graph); observations and anticipation misses are reported separately.
 
 `tools/bench` accepts 64/128-frame requests. Run JSON is
-`supple.capacity-run/2.1`: `xruns` is a JACK server counter delta or null for
+`supple.capacity-run/2.5` (`tools/bench/README.md` lists what 2.2 to 2.5
+add: scheduling, `bridge_timing`, on Linux per-thread `threads`, and page
+faults per thread and as `engine.status` counts them, and the idle-latency
+hold and huge-page setting in effect): `xruns` is a JACK server counter delta or null for
 paced runs; `live_helpers` reports enabled live capacity (0: serial);
 `synthetic_over_budget` and `synthetic_late_wakes` are paced-only
 counters (null for JACK). Callback `over_budget` is a duration test, never a
@@ -1261,14 +1527,20 @@ harness. See the tooling README for schemas, limits and invocation details.
   instances the new plan dropped and starts new ones, then stores the plan's
   generation; the main thread prunes the instance pool only once that
   generation reaches the newest published one (`service()`), so no instance
-  is destroyed before the audio thread has stopped it. An executor takes a
+  is destroyed before the audio thread has stopped it. It prunes at the
+  generation it freed old plans at, read once: an adoption after that read
+  waits for the next `service()`, so no plan the main thread keeps (and
+  services) names a destroyed instance. An executor takes a
   free instance by a compare-exchange of its owner token from none
   (`Instance::claimOwner`), so the renderer and the callback, both finding
   one free, never both start it. A plugin whose `start_processing()` fails
   is left out of processing (its stage passes audio through,
   delay-compensated, and `processErrors` counts it) and is reset as it
   refuses, so a retry that succeeds starts it clean; the next plan retries
-  it. Per-stage event storage is reserved for the most events any block-long
+  it. A bridged plug-in whose start is not answered by the live deadline
+  (`Instance::startUnanswered()`, ADR-0081) has not refused: it is reset and
+  let go the same way, uncounted, and the next cycle asks again; one that
+  never answers fails as a hung bridge. Per-stage event storage is reserved for the most events any block-long
   window holds, so a seek off the block grid never allocates. Plans share
   ownership of the session's TimeMap (a session version may be freed while
   its plan plays).
@@ -1279,7 +1551,12 @@ harness. See the tooling README for schemas, limits and invocation details.
   thread), and the engine stops every plugin there — no timeout, no stop from
   the main thread however long the device's period. Pause and
   seek `reset()` the plugins (no hanging notes); seek re-locates event and
-  automation cursors and clears delay lines. Timeline output lags the
+  automation cursors and clears delay lines. A seek, and a play from a
+  position, also restart every rack module (`rack::Instance::restart()`)
+  and its feedback cables' history (`rack::Schedule::restart()`), once the
+  executor owns the rack (ADR-0062 §5, 2026-11-14 note), where the
+  plug-ins are reset: the rack then plays as an offline render from there.
+  A loop wrap restarts neither. Timeline output lags the
   processing position by the plan's output latency; monitored input incurs
   its own downstream path latency (ADR-0051).
 - **Mixing decisions:** instruments add their output to the track's input;
@@ -1427,9 +1704,8 @@ harness. See the tooling README for schemas, limits and invocation details.
   a frontier miss, or the switch from unity to a rate) the nodes entering
   the live region start afresh: voices and held notes cleared, plug-ins
   reset, racks restarted, so nothing hangs, but a held note cuts. Bridged
-  stages pass through on live nodes (§2.1), so a bridged instrument falls
-  silent when armed. A node leaving the live region stays live while the
-  transport plays (`keepLive`).
+  stages take part as in-process ones do (§2.1, §5). A node leaving the live
+  region stays live while the transport plays (`keepLive`).
 - **Smooth swaps:** a plan swap carries each strip's fader ramps and Console 9 state
   and each insert's applied wet level into the new plan
   (`carryMix`, by track and by instance, per executor); a changed volume,
@@ -1474,12 +1750,55 @@ harness. See the tooling README for schemas, limits and invocation details.
 
 ### Recording diagnostics (2026-10-04)
 
+**Durability (ADR-0082):** the recording writer flushes each drain and syncs
+audio data and header at the MIDI journal's shared five-second deadline and
+at stop, through the same core-base helper (fsync / macOS full-sync-or-fsync /
+FlushFileBuffers). New audio and journal directory entries are checkpointed
+off RT too. The cadence assumes healthy storage making progress; a stalled or
+failed barrier is not a successful checkpoint. A sync failure latches
+`file.sync` / `file.sync_directory` as a target failure and reaches `record.error` through the model
+wake, like an append failure. Healthy targets and the engine continue.
+
+Copied/moved media is synced, then published without replace, and its directory
+is checkpointed before the referencing project is published. The project is
+confirmed durable before originals are removed. A failure after project
+publication returns `project.sync` and retains both originals and copied media;
+its hint explains that the project may already exist and storage needs checking.
+On Windows these operations use only unprivileged FlushFileBuffers and
+MoveFileExW with MOVEFILE_WRITE_THROUGH for media publication. This matches the
+project-save level of file durability; it does **not** establish POSIX-style
+parent/ancestor namespace durability after a power cut. No elevation is used.
+
+Audio writer failures (ADR-0082) latch the first error per target and wake the
+model thread. `Engine::takeRecordingErrors()` consumes these off-RT notices
+(`track`, `file`, structured `error`); EngineApp emits `record.error` immediately,
+with `track`, `file`, `error` text and `code`, `message`, `path`, `hint`.
+Stop reports a not-yet-delivered failure, without duplicating an earlier event.
+`RecordedTake::failure` retains the structured first error for that stop/close
+fallback, beside the existing `error` text.
+The failed audio target stops writing and retains every complete frame physically
+written, including a short-write prefix; its final header and take use that
+count. Healthy targets and playback continue. Recording file creation, writes,
+prefix accounting, header updates and closure run on the recording writer;
+the model joins it and commits metadata only. The GUI shows the error in its
+status line while recording continues for healthy targets.
+
 A committed recording may carry a `warnings` array with structured
 `code`, `message`, `path`, `hint`, `track` and `file` fields.
 `recording.loop_runs_full` is forwarded to `transport.stop` / pause callers
 and the `record.warning` event while retained passes still commit.
 `project.recoverable` and `project.recover` expose skipped invalid-sidecar
-diagnostics in the same optional `warnings` shape (`record.sidecar`). Recovery
+diagnostics in the same optional `warnings` shape (`record.sidecar`, and
+`record.journal` for a MIDI journal whose header does not read). Their
+`file`, like the media path a committed take is stored under, is relative
+to the media folder with `/` between its parts on every platform
+(`rec/Vocal-1.wav`).
+`project.recoverable` lists a MIDI journal with at least one event that no
+committed take of the project holds (`midi_events`: how many; `channels`
+0); `project.recover` places it as stop would have, with its Note Out route
+ids dropped where the project no longer has the route; each such voice
+keeps its own identity, so overlapping notes of one pitch pair as stop paired
+them (ADR-0080). Recovery
 skips corrupt selections and continues with valid recordings; an unknown path
 still fails, and a directory with no recordings or diagnostics reports
 `recover.nothing`.
@@ -1598,7 +1917,11 @@ The app-side consumer belongs in `EngineApp::tick()` after engine main servicing
    points without executing a setter during output consumption. The consumer
    bounds pending records (8192), gestures (128) and recording points per gesture
    (4096); overflow discards missing recording intervals and resynchronizes
-   current values. Status exposes `dropped`, `voice_dropped`, and
+   current values: the writable parameters of the FX whose outputs were
+   dropped (all FX when the engine's 512-entry table of them overflows or a
+   voice drop names none; read-only outputs never enter the model), and a
+   semantic FX's resynchronized value is an edit only when its patch changes.
+   Status exposes `dropped`, `voice_dropped`, and
    `failed_errors` alongside legacy `failed_fx` IDs. Failure entries and
    `fx.failed` retain `reason` and add structured `error` details.
    Known limit: a plain plug-in's state is one opaque blob, so when two of its
@@ -1719,13 +2042,29 @@ on EINTR: the descriptor is already released and may have been reused.
 CLOEXEC excludes child bridge/scanner processes from retaining the fd.
 
 `engine.start`/`engine.status` add `cpu_idle_latency` with the same typed
-`{requested, active, error?}` structure as memory_lock. Failures use
+`{requested, active, error?}` structure as memory_lock, plus `automatic`
+(below). Failures use
 `engine.cpu_idle_latency`, path `/prevent_deep_idle`, with numeric errno and
 a corrective hint. EACCES/EPERM explain that the account needs membership
 in a group with device write access (commonly audio; policy varies);
 ENOENT/ENODEV report that the device is unavailable. Acquisition failure
 keeps intent enabled and audio usable; close failure records an error with
 active=false because the descriptor has been released.
+
+**Automatic hold (2026-11-16, ADR-0086).** On Linux the request is also held,
+without the option, while the device callback processes a bridged plug-in:
+`Engine::bridgedLive()` (main thread) is true when the last published plan's
+callback instances (its `liveInstances` with the renderer, all of
+`instances` with the in-callback executor) include an isolated one, and
+false when stopped. `EngineApp::tick` passes it to
+`RuntimeProtection::setBridgedLive`, which acts on a change only, so a
+refused request is not retried every tick. The request is held while the
+option or the automatic state wants it, and released when neither does or
+the engine stops. Status gains `automatic`. An automatic failure keeps its
+error, with a hint that does not mention an option, but adds no engine
+warning; it is cleared when the automatic state ends and the option is off.
+On macOS and Windows `setBridgedLive` does nothing: they have no
+per-process request (ADR-0086).
 
 Tests inject open/write/close operations for all lifecycle and error paths.
 The real libc write/close path is exercised against a temporary file through
@@ -1734,6 +2073,60 @@ User-only acceptance: enable/disable and engine-stop/restart/exit cleanup
 with the real device, plus repeated sparse/dense 64/128-frame sessions,
 actual granted period, callback tails/xruns and power/thermal/fan behavior.
 No latency benefit is claimed without those measurements.
+
+### Audio-thread page faults (2026-11-15, ADR-0084)
+
+A page fault on a deadline thread (the callback, a live helper) is cheap
+until it has to wait for the process's address-space lock, which has no
+priority inheritance. Three rules keep the audio threads from faulting where
+the app can prevent it:
+
+- **Transparent huge pages (Linux).** While the engine runs, the process is
+  out of THP: `prctl(PR_SET_THP_DISABLE, 1, PR_THP_DISABLE_EXCEPT_ADVISED)`,
+  so regions a plug-in advised with `MADV_HUGEPAGE` keep huge pages, or on
+  kernels before 6.18 (which refuse the flag with EINVAL)
+  `prctl(PR_SET_THP_DISABLE, 1)`, and none do. This is a per-process setting
+  that changes no system setting; children inherit it, and every bridge
+  process sets it at its own start too, since a bridge may start before the
+  engine. Without it, with `transparent_hugepage=always`, khugepaged
+  collapses the heap's small pages into huge ones every scan (10 s by
+  default); an audio thread touching a range being collapsed faults and
+  waits for khugepaged, a nice-19 kernel thread that a loaded machine starves
+  of CPU, to finish. Memory locking does not prevent this: the kernel
+  collapses locked pages too. Applied after the backend start with the other
+  controls; a refusal is reported and the engine runs regardless. The
+  process's mode is read first (`PR_GET_THP_DISABLE`: 0 none, 1 all, 3 all
+  but advised regions). A mode the process already has, from whatever
+  launched it or a plug-in, is kept as it is, whether stricter (1) or the
+  same (3), reported as `inherited` and not undone at stop. Only from 0 does
+  the engine set it, and at stop it writes 0 again only if the mode is still
+  the one it set; a refused release, or a refused mode read at stop, is
+  reported, and the engine still owns
+  it until a later stop releases it. A bridge likewise sets it only from 0.
+  `engine.status.thp_opt_out` is `{active, advised_only, inherited, error?}`
+  (code `engine.thp_opt_out`, path `/thp_opt_out`); never active on macOS or
+  Windows, which collapse no pages under a running process.
+- **Memory is touched when it is prepared.** Storage the audio path will use
+  is written when it is allocated, off the audio thread, so its first touch
+  is not a callback's. Engine buffers are value-initialised containers. The
+  script runtime's `Buffer` allocates with `calloc` and then writes one byte
+  per 4 KiB, since a large `calloc` returns fresh pages it does not write.
+- **Locking stays optional** (Memory locking above): it keeps pages from
+  reclaim and, where the kernel's `compact_unevictable_allowed` is 0, from
+  compaction, but it prefaults nothing.
+
+`engine.status.audio_page_faults` counts the faults since the engine
+started: `{scope, minor, major, threads}`. On Linux, `scope` is
+`audio_threads`: the callback thread's and the live helpers', each counted
+from when the main thread first sees it (the helpers at start, the callback
+within a tick of its first cycle; the cycle records `pthread_self()`, which
+makes no system call). The kernel thread id comes from the thread's CPU clock
+id and the counts from `/proc/self/task/<tid>/stat`. On macOS (`task_info` event counts:
+`getrusage` there misses fresh pages' zero-fill faults) and Windows (`GetProcessMemoryInfo`, which does not separate minor from major,
+so `major` is omitted) neither keeps a count per thread, and `scope` is
+`process`. `none` while stopped. The bench reports the same count over its
+measured interval, and each thread's on Linux (`tools/bench/README.md`). On macOS a counter at its 32-bit limit makes `saturated` true, with
+`minor` 0 and `major` omitted: the counts are not counts then.
 
 ### Headless platform mechanisms (2026-10-14, ADR-0035)
 
@@ -2391,6 +2784,17 @@ compiled with; once rate scheduling has started the engine keeps rate-enabled
 plans until it stops, and tape reads at exactly 1.0 are the original samples.
 Each structural edit then prepares a rate plan; level and pan edits do not
 (ADR-0060, §1.6).
+While a prepared rate plan covers audio not yet played, `load()` defers a
+structural edit: it returns success at once, and the edit compiles once that
+span has played (in `service()`, or in whichever `load()` comes first). If
+that compile fails, the edit never played. The engine then keeps the session
+it plays as its latest, for later reloads, the mix and scalar shortcuts and
+the instance prune, and adds a warning. `takeUnplayedEdit()` returns the error
+once; `EngineApp` emits it as `engine.error` and reports the version that
+plays as `prepared_version`. The project's head keeps the edit: undoing or
+changing it reloads. Whatever the engine names as latest, the instance pool
+is pruned against the session the newest published plan was compiled from,
+so no instance a running plan uses is destroyed.
 Two cases prepare a plan instead: leaving the unity bypass (no rate plan yet),
 and leaving 1.0 on a preserve-pitch plan compiled at 1.0, whose sources read as
 tape and need the stretch converter. When that prepared transition only changes
@@ -3126,7 +3530,13 @@ stage, `stageMidiBus` turns a note-output stage's output into bus events:
 notes (and MIDI 1.0 note messages) take its voice slots, keyed by the
 plug-in's `(port, channel, key, note id)`, with an end before an onset on a
 held address and CLAP wildcard ends; all-notes-off ends that channel; other
-MIDI passes. Replace makes that the bus; merge interleaves it after the
+MIDI passes. It also records, per output port below 8, the channels the
+stage's MIDI moved a controller (not a channel mode message), pitch bend or
+pressure on; Reset All Controllers clears one. A block whose output is lost
+(`OutputEvents::lost`: a late or skipped bridged block, or a failed bridge,
+ADR-0088) ends every held voice at frame 0 and sends Reset All Controllers
+on each recorded channel, as the stage's output; `carryBus` keeps the
+record with the held notes. Replace makes that the bus; merge interleaves it after the
 bus's own events at each frame. `finishMidiBus` writes `midiPostFx`: first
 the releases of post-FX voices of parts no longer reaching the end, then
 the bus; `midiPostHeld` follows it, and post-FX send restarts read its

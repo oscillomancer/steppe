@@ -943,7 +943,7 @@ TEST_CASE("the plugin browser names the plugin's file and marks a shadowed copy"
     CHECK(browser.detail().find("shadowed") != std::string::npos);
     // The copy the loader would use is the one earlier on the search path.
     list->select(*shadowedRow == 0 ? 1 : 0, true);
-    CHECK(browser.detail().find(dup.string()) != std::string::npos);
+    CHECK(browser.detail().find(std::filesystem::canonical(dup).string()) != std::string::npos);
     browser.close();
 }
 
@@ -1001,18 +1001,26 @@ TEST_CASE("the FX chain badges each effect's state, and a failed one offers a re
     f.key("Return");
     REQUIRE(f.fx->chain().size() == 1);
     const model::Id fx = f.fx->chain()[0];
-    CHECK(f.uiRoot().find("fx.badge." + fx.str())->valueText() == "in-process");
+    CHECK(f.uiRoot().find("fx.badge." + fx.str())->valueText() == "in-process (default)");
     f.click("fx.offline." + fx.str());
-    CHECK(f.uiRoot().find("fx.badge." + fx.str())->valueText() == "in-process · offline");
+    CHECK(f.uiRoot().find("fx.badge." + fx.str())->valueText() == "in-process (default) · offline");
     f.click("fx.offline." + fx.str());  // back on
-    CHECK(f.uiRoot().find("fx.badge." + fx.str())->valueText() == "in-process");
+    CHECK(f.uiRoot().find("fx.badge." + fx.str())->valueText() == "in-process (default)");
     // The isolation modes and a failed instance compose the same badge.
     model::FxInstance inst;
     inst.isolation = model::Isolation::Dedicated;
-    CHECK(gui::FxWindow::badgeText(inst, false) == "isolated");
+    CHECK(gui::FxWindow::badgeText(inst, model::Isolation::Dedicated, false) == "isolated");
     inst.isolation = model::Isolation::SharedBridge;
     inst.offline = true;
-    CHECK(gui::FxWindow::badgeText(inst, true) == "shared bridge · offline · failed");
+    CHECK(gui::FxWindow::badgeText(inst, model::Isolation::SharedBridge, true) ==
+          "shared bridge · offline · failed");
+    // On inherit: where the preference put it (ADR-0081), marked as the default.
+    inst.isolation = model::Isolation::Inherit;
+    inst.offline = false;
+    CHECK(gui::FxWindow::badgeText(inst, model::Isolation::SharedBridge, false) ==
+          "shared bridge (default)");
+    CHECK(gui::FxWindow::badgeText(inst, model::Isolation::InProcess, false) ==
+          "in-process (default)");
     // A healthy engine reports no failure: no Restart button, and tick() keeps
     // the set empty.
     f.fx->tick();

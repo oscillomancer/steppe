@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include "supple/engine/app.h"
+#include "file_platform.h"
 #include "media_files.h"
 #include "module_library.h"
 #include "rack_runtime.h"
 #include "runtime_protection.h"
+#include "session_lock.h"
 #include "source_preparation.h"
 #include "supple/model/freeze.h"
 #include "supple/model/numeric.h"
@@ -18,7 +20,9 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <ctime>
 #include <fstream>
+#include <iterator>
 #include <numbers>
 #include <set>
 #include <string_view>
@@ -33,6 +37,7 @@
 #include "supple/dsp/oversampler.h"
 #include "supple/engine/jack.h"
 #include "supple/model/env_shape.h"
+#include "supple/model/project_file.h"
 #include "supple/model/schemas.h"
 #include "supple/product.h"
 
@@ -46,6 +51,23 @@ namespace fs = std::filesystem;
 using model::Id;
 
 namespace {
+// The engine's own commands, for checking a file's logged steps before any
+// dispatcher exists (open() may run without one).
+const cmd::Registry& engineCommands() {
+    static const cmd::Registry* registry = [] {
+        auto* r = new cmd::Registry;  // never destroyed: a static's exit order is unknown
+        registerEngineCommands(*r);
+        return r;
+    }();
+    return *registry;
+}
+
+// Every project file the engine reads (opened, autosaves listed or
+// recovered) checks its saved steps with the same rule (ADR-0076).
+Status replayableStep(const model::Invocation& step) {
+    return EngineApp::replayableFromFile(engineCommands(), step);
+}
+
 bool iequals(std::string_view a, std::string_view b) {
     return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
                return std::tolower(static_cast<unsigned char>(x)) ==
@@ -113,9 +135,11 @@ Result<std::unique_ptr<EngineApp>> EngineApp::create(AppOptions options, model::
         [self](const model::PluginRef& ref) { return self->findPlugin(ref.id); },
         app->options_.identity);
     app->pool_->setMainThreadWake(app->mainWake_);
+    app->pool_->setDefaultIsolation(app->pluginIsolation_);
     app->modules_ = detail::loadModuleLibrary(detail::builtinModuleCatalog(), app->moduleDir());
     app->pool_->racks().setCatalog(app->modules_);
     SUPPLE_TRY(app->newProject(std::move(project)));
+    app->pruneEmptySessions();
     return app;
 }
 
@@ -572,6 +596,13 @@ Result<model::Id> copyTake(const model::Session& source, model::EditTxn& txn, mo
 Status EngineApp::replaceProject(model::Session session, fs::path path,
                                  const std::function<Status()>& prepare,
                                  std::vector<schema::Warning>* warnings) {
+    return replaceProject(model::VersionStore(std::move(session)), std::move(path), prepare,
+                          warnings);
+}
+
+Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
+                                 const std::function<Status()>& prepare,
+                                 std::vector<schema::Warning>* warnings) {
     Backend* running = engine_ ? backend_ : nullptr;
     const auto config = engine_ ? engine_->config() : BackendConfig{};
     // Preserve the caller's Automatic/explicit choice, not the resolved count:
@@ -597,6 +628,8 @@ Status EngineApp::replaceProject(model::Session session, fs::path path,
         engine_->stop();
         engine_.reset();
         protections_->stop();
+        processFaultBase_.reset();
+        faultWatch_.clear();
         backend_ = nullptr;
     }
     if (versions_ && projectPath_.empty()) clearScratch();
@@ -605,6 +638,11 @@ Status EngineApp::replaceProject(model::Session session, fs::path path,
     scratch_.clear();
     reportedFailures_.clear();
     recordingFiles_.clear();
+    recordingErrorsReported_.clear();
+    // Not saved: a saved project's journals stay, offered on its next open;
+    // an unsaved one's went with its folder above (ADR-0078, ADR-0080).
+    recordingJournalsPending_.clear();
+    unpublishedCopies_.clear();
     endMasterRecording();
     autoWrite_.clear();
     renderQueue_.clear();
@@ -625,7 +663,7 @@ Status EngineApp::replaceProject(model::Session session, fs::path path,
         // An unreadable or broken source may not reveal its id. Name every
         // used type left without a project copy, and the version that will play.
         std::set<std::string> seen;
-        for (const auto& m : session.modules) {
+        for (const auto& m : store.head()->modules) {
             const std::string& id = m.value->type;
             if (!seen.insert(id).second) continue;
             const auto* entry = modules_->find(id);
@@ -639,18 +677,27 @@ Status EngineApp::replaceProject(model::Session session, fs::path path,
     pool_ = std::make_unique<InstancePool>(
         [this](const model::PluginRef& ref) { return findPlugin(ref.id); }, options_.identity);
     pool_->setMainThreadWake(mainWake_);
+    pool_->setDefaultIsolation(pluginIsolation_);
     pool_->racks().setCatalog(modules_);
     pendingDirtyStates_.clear();
     if (scripts_) {
         clearScripts_ = scripts_->active();
         if (!clearScripts_) scripts_->clear();
     }
-    versions_ = std::make_unique<model::VersionStore>(std::move(session));
+    versions_ = std::make_unique<model::VersionStore>(std::move(store));
     projectPath_ = std::move(path);
-    autosaveMarked_ = !projectPath_.empty();
+    openedFile_.reset();
+    autosavedThrough_.reset();  // open() sets the file's
+    if (std::error_code ec; !projectPath_.empty())
+        if (const auto time = fs::last_write_time(projectPath_, ec); !ec)
+            openedFile_.emplace(OpenedFile{projectPath_, time, std::nullopt});
+    branchesBackupFor_.clear();
+    recoveryKeep_.clear();
+    autosaveMarked_ = !autosaveDir().empty();
     autosaveMs_ = serviceClockMs();
-    autosaveVersion_ = head().version;
+    autosaveHeads_ = versions_->heads();
     const Status prepared = prepare ? prepare() : Status{};
+    if (projectPath_.empty()) holdScratch();  // an unsaved project's folder is this run's
     if (running) SUPPLE_TRY(startEngine(*running, config, settings));
     headChanged();
     return prepared;
@@ -672,7 +719,28 @@ fs::path EngineApp::resolve(const fs::path& path) const {
     return path.is_relative() ? options_.workdir / path : path;
 }
 
-Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warnings) {
+namespace {
+// autosave-<n>.json's n (defined with the autosave code below).
+std::optional<std::uint64_t> autosaveIndex(std::string_view name);
+
+// Whether two spellings name one file, as the file system says: through
+// `.`, links or a case-insensitive file system. Spelling alone decides
+// nothing: a/link/../b is not a/b when link points into another folder.
+// A path where no file is names the same file as no other path:
+// equivalent() is then false, or reports an error, which is taken as no.
+bool sameFile(const fs::path& a, const fs::path& b) {
+    std::error_code ec;
+    return fs::equivalent(a, b, ec) && !ec;
+}
+
+bool holds(const std::vector<fs::path>& files, const fs::path& file) {
+    return std::any_of(files.begin(), files.end(),
+                       [&](const fs::path& f) { return sameFile(f, file); });
+}
+}  // namespace
+
+Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warnings,
+                       bool history) {
     const fs::path path = resolve(where);
     if (!txn_) commitLearned(true);  // a control just moved: its values in the file
     // What running plug-ins hold now (a sampler's loaded files), as hosts
@@ -681,24 +749,126 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
     for (const auto& e : head().fx) running.push_back(e.id);
     captureFxStates(running, warnings);
     SUPPLE_TRY(model::checkInvariants(head()));
+    SUPPLE_TRY(checkpointRecordingJournals());
+    const bool relocated = !projectPath_.empty() || !options_.scratchDir.empty();
     const bool fromScratch = projectPath_.empty() && !options_.scratchDir.empty();
     if (fromScratch && engine_ && engine_->recording())
         return Error("project.recording", "a recording is running", {},
                      "stop it before the project's first save (its files move then)");
-    auto publish = [&] { return writeFileAtomic(path, model::serializeProject(head())); };
+    // The file holds the work of every autosave already beside it (and of
+    // those this project numbered before them): one numbered above that is
+    // newer than it (ADR-0078). File times decide nothing here.
+    std::uint64_t through = 0;
+    {
+        std::error_code ec;
+        const fs::path data = path.parent_path() / (path.filename().string() + "-data");
+        for (fs::directory_iterator it(data, ec), end; !ec && it != end; it.increment(ec))
+            if (const auto n = autosaveIndex(it->path().filename().string()))
+                through = std::max(through, *n);
+        // A folder it cannot read may hold autosaves above what it read: a
+        // count short of them would offer them over this file once the folder
+        // reads again. No folder (or a file in its place) holds none.
+        if (ec && ec != std::errc::no_such_file_or_directory && ec != std::errc::not_a_directory)
+            return Error("project.autosave_folder",
+                         "could not read the autosave folder beside the file: " + ec.message(),
+                         data.string(),
+                         "make the folder readable (or move it aside), then save again; or save "
+                         "to another file");
+        if (path == projectPath_ && autosavedThrough_)
+            through = std::max(through, *autosavedThrough_);
+    }
+    auto publish = [&]() -> Status {
+        // This file's branches could not be restored when it was opened:
+        // keep it before writing main alone over it.
+        std::error_code ec;
+        if (!branchesBackupFor_.empty() && fs::exists(path, ec) &&
+            fs::equivalent(path, branchesBackupFor_, ec)) {
+            const std::string name = path.filename().string();
+            // The only copy of those branches: written like a save (temporary
+            // file, fsync, then published) before the file is replaced, so a
+            // power loss leaves it whole or absent. Published only under a
+            // free name, atomically: another app that opened the same file
+            // may be keeping its own copy under the same name right now.
+            auto bytes = readFile(path, std::size_t(1) << 30);
+            fs::path backup;
+            Status kept = bytes ? Status(Error("file.exists", "")) : Status(bytes.error());
+            for (int n = 1; bytes && !kept && kept.error().code == "file.exists" && n < 10000;
+                 ++n) {
+                backup = path.parent_path() /
+                         (n == 1 ? name + ".pre-branches.bak"
+                                 : name + ".pre-branches-" + std::to_string(n) + ".bak");
+                if (fs::exists(backup, ec)) continue;
+                kept = writeFileNew(backup, *bytes);
+            }
+            if (!kept)
+                return Error("project.history_backup",
+                             "could not keep a copy of the file before saving over its unreadable "
+                             "branches: " +
+                                 kept.error().message,
+                             backup.string(),
+                             "make the project folder writable, or save to another file");
+            if (warnings)
+                warnings->push_back(
+                    {"project.history_backup",
+                     "kept the file with its unreadable branches as " + backup.filename().string(),
+                     backup.string()});
+            branchesBackupFor_.clear();
+        }
+        SUPPLE_TRY(publishRecoveryKeeps(path, warnings));
+        auto written =
+            writeFileAtomic(path, model::serializeProjectFile(*versions_, history, through));
+        if (!written && written.error().code != "file.sync_published") return written;
+        auto confirmed = written ? syncFile(path) : written;
+        if (confirmed) confirmed = syncParentDirectories(path);
+        if (!confirmed)
+            return Status{
+                Error("project.sync", confirmed.error().message, path.string(),
+                      "the project may already exist; originals and copied media are kept; "
+                      "check storage before retrying the save")};
+        return okStatus();
+    };
     const fs::path media = path.parent_path() / head().project->mediaDir;
+    const fs::path oldMedia = mediaDir();
+    std::error_code sameError;
+    const bool sameMedia =
+        media == oldMedia || (fs::exists(media, sameError) && fs::exists(oldMedia, sameError) &&
+                              fs::equivalent(media, oldMedia, sameError));
+    // A recording writes into the project's media folder until it stops: a
+    // save as into another folder would copy its first part while the rest
+    // goes on into the old one. As a first save, it waits for the stop.
+    if (!fromScratch && !projectPath_.empty() && !sameMedia && engine_ && engine_->recording())
+        return Error("project.recording", "a recording is running", {},
+                     "stop it before saving as into another folder (its files are copied then), "
+                     "or save in place");
+    std::vector<fs::path> createdMedia;  // what this save created in the new media folder
     if (fromScratch) {
         SUPPLE_TRY(moveScratchMedia(media, publish));
     } else {
         // Saved as into another folder: that folder gets its own copy of the
         // media (the old project keeps its files).
-        if (!projectPath_.empty()) SUPPLE_TRY(detail::copyFolder(mediaDir(), media));
+        if (!projectPath_.empty()) {
+            Status copied = detail::copyFolder(mediaDir(), media, &createdMedia);
+            // Until a file holds them, a failure keeps them ours: a retry
+            // would take them for files that were there before it.
+            for (const fs::path& file : createdMedia)
+                if (!holds(unpublishedCopies_, file)) unpublishedCopies_.push_back(file);
+            SUPPLE_TRY(std::move(copied));
+        }
         SUPPLE_TRY(publish());
+        createdMedia = std::move(unpublishedCopies_);
+        unpublishedCopies_.clear();
     }
-    // The user's modules it plays go with it, as its media do (ADR-0062).
+    // The user's modules it plays go with it, as its media do (ADR-0062):
+    // those of every version the store keeps, not only the current head's,
+    // since the file keeps branches and may keep undo (ADR-0076). A version
+    // the save squashes away costs at most an unused copy.
     if (const fs::path dir = projectModuleDir(path); !dir.empty()) {
+        std::set<std::string> seen;
         std::vector<std::string> types;
-        for (const auto& e : head().modules) types.push_back(e.value->type);
+        versions_->forEachVersion([&](const model::Version& v) {
+            for (const auto& e : v.session->modules)
+                if (seen.insert(e.value->type).second) types.push_back(e.value->type);
+        });
         if (Status copied = detail::saveProjectModules(*modules_, types, dir); !copied && warnings)
             warnings->push_back(
                 {"project.modules",
@@ -706,9 +876,33 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
                  dir.string()});
     }
     projectPath_ = path;
-    autosaveMarked_ = true;  // the file itself is the newest copy
+    // A first save or a save as gives the project a file: an autosave
+    // offered from now on is offered against the file as it is now, and a
+    // later save to the same path keeps that (recoverAutosave).
+    autosavedThrough_ = through;
+    if (std::error_code ec; !openedFile_ || openedFile_->path != path)
+        if (const auto time = fs::last_write_time(path, ec); !ec)
+            openedFile_.emplace(OpenedFile{path, time, through});
+    // The journals of the takes this file holds are retired where the save
+    // put them: moved with a first save, copied by a save as into another
+    // folder (whose old copy stays the old project's, as its WAVs do). A
+    // file the copy found already there is not this save's: it stays.
+    std::vector<fs::path> retire;
+    for (const fs::path& journal : recordingJournalsPending_) {
+        const fs::path rel = journal.lexically_relative(oldMedia);
+        if (!relocated || sameMedia || rel.empty() || *rel.begin() == "..") {
+            retire.push_back(journal);
+            continue;
+        }
+        const fs::path moved = media / rel;
+        if (fromScratch || holds(createdMedia, moved)) retire.push_back(moved);
+    }
+    recordingJournalsPending_ = std::move(retire);
+    dropSavedRecordingJournals();
+    if (fromScratch) releaseScratch();  // its media moved; its autosaves are older than the file
+    autosaveMarked_ = true;             // the file itself is the newest copy
     autosaveMs_ = serviceClockMs();
-    autosaveVersion_ = head().version;
+    autosaveHeads_ = versions_->heads();
     return okStatus();
 }
 
@@ -716,8 +910,19 @@ Status EngineApp::open(const fs::path& where, std::vector<schema::Warning>* warn
     const fs::path path = resolve(where);
     auto text = readTextFile(path, std::size_t(1) << 30);
     if (!text) return std::move(text).error();
-    auto s = model::parseProject(*text, warnings);
-    if (!s) return std::move(s).error();
+    auto opened = model::parseProjectFile(*text, warnings, replayableStep);
+    if (!opened) return std::move(opened).error();
+    if (opened->branchesDropped && warnings) {
+        const Error& why = *opened->branchesDropped;
+        warnings->push_back({"project.history",
+                             "opened main alone: the saved branches could not be restored (" +
+                                 why.message + (why.path.empty() ? "" : " at " + why.path) +
+                                 "). Saving over this file first keeps a copy of it as " +
+                                 path.filename().string() + ".pre-branches.bak",
+                             why.path.empty() ? "/branches" : why.path});
+    }
+    const auto current = opened->store.head();
+    const model::Session* s = current.get();
     if (warnings) {
         // Scoped so that its probes are released before the engine creates
         // the real instances (no probe sits beside its instance during open).
@@ -737,7 +942,13 @@ Status EngineApp::open(const fs::path& where, std::vector<schema::Warning>* warn
                                      checked.error().path});
         }
     }
-    return replaceProject(std::move(*s), path, {}, warnings);
+    const bool dropped = opened->branchesDropped.has_value();
+    const auto through = opened->autosavedThrough;
+    SUPPLE_TRY(replaceProject(std::move(opened->store), path, {}, warnings));
+    autosavedThrough_ = through;
+    if (openedFile_) openedFile_->through = through;
+    if (dropped) branchesBackupFor_ = path;
+    return okStatus();
 }
 
 Status EngineApp::writeTemplate(const fs::path& folder, std::vector<schema::Warning>* warnings) {
@@ -799,15 +1010,37 @@ Status EngineApp::openTemplate(const fs::path& where, std::vector<schema::Warnin
 
 // --- branches ----------------------------------------------------------------------------
 
+Status EngineApp::replayableFromFile(const cmd::Registry& registry,
+                                     const model::Invocation& invocation) {
+    auto refuse = [&](std::string why) {
+        return Error("history.command", invocation.command + ": " + why, "/command",
+                     "a branch may replay only edits of the session");
+    };
+    const cmd::CommandInfo* info = registry.find(invocation.command);
+    if (!info) return refuse("not a command of this program");
+    if (info->kind != cmd::Kind::Edit || invocation.command == "batch")
+        return refuse("not an edit of the session, so a saved step may not run it");
+    if (info->validate)
+        if (Status fits = info->validate(invocation.args); !fits)
+            return refuse("its arguments do not fit the command: " + fits.error().message);
+    return okStatus();
+}
+
 Result<model::Replayed> EngineApp::replay(const cmd::Registry& registry, const model::Session& base,
                                           const std::vector<model::Invocation>& invocations,
                                           std::uint64_t version) {
+    // Before any step runs, and before the live transaction is set aside: a
+    // replay writes files only inside the project's own folder (a file's
+    // media_dir may name any folder, or a link out).
+    SUPPLE_TRY(replayMayWriteMedia());
     std::unique_ptr<model::EditTxn> saved = std::move(txn_);
     model::TxnRecord savedRecord = std::move(record_);
     txn_ = std::make_unique<model::EditTxn>(base, version);
+    const bool wasReplaying = std::exchange(replaying_, true);
     auto restore = [&] {
         txn_ = std::move(saved);
         record_ = std::move(savedRecord);
+        replaying_ = wasReplaying;
     };
     for (std::size_t i = 0; i < invocations.size(); ++i) {
         const model::Invocation& inv = invocations[i];
@@ -817,6 +1050,10 @@ Result<model::Replayed> EngineApp::replay(const cmd::Registry& registry, const m
             return Error("history.replay", "unknown command " + inv.command + " in history", {},
                          "use history undo or a branch predating the unsupported command, or open "
                          "this history with an engine that provides that command");
+        }
+        if (Status allowed = replayableFromFile(registry, inv); !allowed) {
+            restore();
+            return std::move(allowed).error();
         }
         cmd::Context ctx = makeContext({cmd::Origin::Type::Internal, "replay", ""});
         ctx.provide<const cmd::Registry>(registry);
@@ -924,6 +1161,10 @@ model::MergeOutcome EngineApp::mergeBranch(const cmd::Registry& registry, std::s
                 return refused;
             }
         }
+    // Files and folders the replays create are removed if nothing is merged.
+    std::vector<fs::path> created;
+    std::error_code ec;
+    mergeCreated_ = &created;
     auto outcome = versions_->merge(
         from, into,
         [&](const model::Session& base, const std::vector<model::Invocation>& inv,
@@ -938,6 +1179,9 @@ model::MergeOutcome EngineApp::mergeBranch(const cmd::Registry& registry, std::s
             return info ? &info->argsSchema : nullptr;
         },
         clockMs());
+    mergeCreated_ = nullptr;
+    if (!outcome.conflicts.empty())  // files first, then the folders deepest first
+        for (auto it = created.rbegin(); it != created.rend(); ++it) fs::remove(*it, ec);
     if (outcome.conflicts.empty() && !outcome.upToDate && versions_->branch() == into)
         headChanged();
     return outcome;
@@ -1020,6 +1264,32 @@ void EngineApp::stopJobs() {
 
 // --- real-time engine -----------------------------------------------------------------------
 
+namespace {
+Result<RecordedPunch> punchFrames(const TransportRange& punch, double rate) {
+    const long double start =
+        static_cast<long double>(punch.start) * static_cast<long double>(rate);
+    const long double end = static_cast<long double>(punch.end) * static_cast<long double>(rate);
+    if (!std::isfinite(start) || !std::isfinite(end) || start < 0 || end < 0 ||
+        start >= static_cast<long double>(detail::kRecordingClockLimit) + .5L ||
+        end >= static_cast<long double>(detail::kRecordingClockLimit) + .5L)
+        return Error("record.punch", "the punch is outside the recording clock range", "/punch",
+                     "clear the punch or use a nonnegative range within 2^48 recording frames");
+    RecordedPunch frames{punch.enabled, static_cast<std::int64_t>(std::llround(start)),
+                         static_cast<std::int64_t>(std::llround(end))};
+    SUPPLE_TRY(detail::validateRecordingPunch(frames));
+    return frames;
+}
+}  // namespace
+Status EngineApp::setPunch(const TransportRange& punch) {
+    if (engine_ && engine_->recording()) {
+        auto frames = punchFrames(punch, engine_->config().sampleRate);
+        if (!frames) return std::move(frames).error();
+        SUPPLE_TRY(engine_->setRecordingPunch(*frames));
+    }
+    punch_ = punch;
+    return okStatus();
+}
+
 Status EngineApp::setAudioThreadLimit(unsigned limit) {
     if (limit > 64)
         return Error("engine.audio_threads", "audio processing thread limit is out of range",
@@ -1100,7 +1370,25 @@ Status EngineApp::startEngine(Backend& backend, const BackendConfig& config,
     }
     loadedHead_ = versions_->head();
     protections_->start();
+    startFaultWatch();
     return {};
+}
+
+void EngineApp::startFaultWatch() {
+    faultWatch_.clear();
+    processFaultBase_ = processPageFaults();
+    watchFaults();
+}
+
+void EngineApp::watchFaults() {
+    if (!engine_ || !processFaultBase_) return;
+    for (const auto thread : engine_->deadlineThreads()) {
+        const std::int64_t id = kernelThreadId(thread);
+        if (id == 0 || std::any_of(faultWatch_.begin(), faultWatch_.end(),
+                                   [&](const FaultWatch& w) { return w.id == id; }))
+            continue;
+        if (const auto now = threadPageFaults(id)) faultWatch_.push_back({id, *now, *now});
+    }
 }
 
 Status EngineApp::startEngine(std::string_view backend, std::uint32_t block, bool anticipative,
@@ -1199,6 +1487,8 @@ void EngineApp::haltEngine() {
         pool_->prune(head());  // nothing processes now: replaced instances can go
     }
     protections_->stop();
+    processFaultBase_.reset();
+    faultWatch_.clear();
     if (backend_) backend_->setMainThreadWake(nullptr);
     backend_ = nullptr;
     ownedBackend_.reset();
@@ -1225,6 +1515,23 @@ constexpr std::uint64_t kRestartGiveUpMs = 30'000;
 constexpr std::uint64_t kTouchReleaseMs = 500;
 }  // namespace
 
+void EngineApp::emitRecordingError(const RecordingError& failure) {
+    if (!recordingErrorsReported_.insert(failure.file).second) return;
+    const auto& error = failure.error;
+    auto event = json::Value::object();
+    event["track"] = failure.track.str();
+    event["file"] = failure.file.string();
+    event["error"] = error.toString();
+    event["code"] = error.code;
+    event["message"] = error.message;
+    event["path"] = error.path.empty() ? "/recording/" + failure.track.str() : error.path;
+    event["hint"] =
+        error.hint.empty()
+            ? "save the retained audio; check free space and storage before recording again"
+            : error.hint;
+    emit("record.error", std::move(event));
+}
+
 void EngineApp::tick() {
     mainWake_.drain();  // re-arm before inspecting producer queues
     std::erase_if(jobs_,
@@ -1247,6 +1554,12 @@ void EngineApp::tick() {
     }
     if (engine_) {
         engine_->service();
+        noteUnplayedEdit();
+        watchFaults();  // a callback thread seen for the first time
+        // ADR-0086: the idle-latency request is held while a bridged plug-in
+        // plays live (acts on a change only).
+        (void)protections_->setBridgedLive(backend_ && engine_->bridgedLive(), backend_ != nullptr);
+        for (const auto& error : engine_->takeRecordingErrors()) emitRecordingError(error);
         serviceSync();                  // what the sync master did, to the transport (ADR-0071)
         if (!txn_) updateWriteHolds();  // a touch hold's release time passed
         consumePluginOutputs();
@@ -1353,7 +1666,7 @@ std::optional<std::uint64_t> EngineApp::nextServiceDelayMs() const {
         const auto ms = deadline <= now ? 0 : deadline - now;
         if (!delay || ms < *delay) delay = ms;
     };
-    if (!projectPath_.empty() && head().version != autosaveVersion_)
+    if (!autosaveDir().empty() && versions_->heads() != autosaveHeads_)
         at(autosaveMs_ + kAutosaveIntervalMs);
     if (restarting_) at(std::min(restartRetryAt_, restartUntil_));
     if (!txn_)
@@ -1380,16 +1693,17 @@ std::optional<std::chrono::steady_clock::time_point> EngineApp::nextServiceDeadl
 }
 
 void EngineApp::maybeAutosave() {
-    if (projectPath_.empty()) return;
+    if (autosaveDir().empty()) return;
     const std::uint64_t now = serviceClockMs();
     if (!autosaveMarked_) {
         autosaveMarked_ = true;
         autosaveMs_ = now;
-        autosaveVersion_ = head().version;
+        autosaveHeads_ = versions_->heads();
         return;
     }
-    // Autosave when the head changed and an interval passed since the last one.
-    if (head().version == autosaveVersion_ || now < autosaveMs_ + kAutosaveIntervalMs) return;
+    // Autosave when the project (any branch) changed and an interval passed
+    // since the last one.
+    if (versions_->heads() == autosaveHeads_ || now < autosaveMs_ + kAutosaveIntervalMs) return;
     autosave();
 }
 
@@ -1450,8 +1764,23 @@ void EngineApp::retryRestart() {
     restartRetryAt_ = finishedAt + restartBackoff_;
 }
 
+Status EngineApp::setPluginIsolation(model::Isolation isolation) {
+    if (isolation == model::Isolation::Inherit)
+        return Error("preferences.plugin_isolation", "inherit is not a default isolation",
+                     "/plugin_isolation", "use in_process, shared_bridge or dedicated");
+    pluginIsolation_ = isolation;
+    if (pool_) pool_->setDefaultIsolation(isolation);
+    return okStatus();
+}
+
+model::Isolation EngineApp::effectiveIsolation(model::Id fx) const {
+    const model::FxInstance* instance = head().fx.find(fx);
+    if (!instance) return model::Isolation::InProcess;
+    return pool_ ? pool_->effectiveIsolation(fx, *instance) : instance->isolation;
+}
+
 fs::path EngineApp::autosaveDir() const {
-    if (projectPath_.empty()) return {};
+    if (projectPath_.empty()) return options_.scratchDir;  // an unsaved project's (ADR-0078)
     return projectPath_.parent_path() / (projectPath_.filename().string() + "-data");
 }
 
@@ -1463,10 +1792,13 @@ std::optional<std::uint64_t> autosaveIndex(std::string_view name) {
     name.remove_suffix(suffix.size());
     std::uint64_t index = 0;
     const auto parsed = std::from_chars(name.data(), name.data() + name.size(), index);
-    if (parsed.ec != std::errc{} || parsed.ptr != name.data() + name.size() || index == 0)
+    // Above the largest count a project file holds, it is not an autosave.
+    if (parsed.ec != std::errc{} || parsed.ptr != name.data() + name.size() || index == 0 ||
+        index > model::kAutosaveNumberMax)
         return std::nullopt;
     return index;
 }
+
 }  // namespace
 
 fs::path EngineApp::newerAutosave(const fs::path& project) const {
@@ -1474,21 +1806,28 @@ fs::path EngineApp::newerAutosave(const fs::path& project) const {
     std::error_code ec;
     const fs::path dir = project.parent_path() / (project.filename().string() + "-data");
     if (!fs::is_directory(dir, ec)) return {};
-    const auto written = fs::last_write_time(project, ec);
-    if (ec) return {};
+    // The open project's file says which autosaves it holds; another file,
+    // or one written before 2.15, goes by file time.
+    const std::optional<std::uint64_t> through =
+        project == projectPath_ ? autosavedThrough_ : std::nullopt;
+    fs::file_time_type written{};
+    if (!through) {
+        written = fs::last_write_time(project, ec);
+        if (ec) return {};
+    }
     fs::path best;
-    fs::file_time_type bestTime{};
+    std::uint64_t bestIndex = 0;
     for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
         const fs::path& candidate = it->path();
-        const std::string name = candidate.filename().string();
-        if (!autosaveIndex(name)) continue;
-        if (!fs::is_regular_file(candidate, ec)) continue;
-        const auto time = fs::last_write_time(candidate, ec);
-        if (ec) break;
-        if (time > written && (best.empty() || time > bestTime)) {
-            best = candidate;
-            bestTime = time;
-        }
+        const auto index = autosaveIndex(candidate.filename().string());
+        if (!index || *index <= bestIndex) continue;
+        std::error_code fileError;
+        if (!fs::is_regular_file(fs::symlink_status(candidate, fileError))) continue;
+        if (through ? *index <= *through
+                    : fs::last_write_time(candidate, fileError) <= written || fileError)
+            continue;
+        best = candidate;
+        bestIndex = *index;
     }
     return best;
 }
@@ -1514,6 +1853,11 @@ bool EngineApp::captureFxState(model::Id id, Error* failure) {
     origin.gesture = "state:" + id.str();  // later changes to it join this step
     auto txid = beginTransaction(origin, "Plug-in state");
     if (!txid) return false;
+    // Logged as fx.state.capture, so a merge replays it on another branch.
+    json::Value args = json::Value::object();
+    args["fx"] = id.str();
+    args["state"] = hash;
+    record_.invocations.push_back({"fx.state.capture", std::move(args)});
     txn().putBlob(hash, std::make_shared<const model::Blob>(model::Blob{std::move(*saved)}));
     model::FxInstance next = *fx;
     next.state = hash;
@@ -1548,6 +1892,7 @@ void EngineApp::captureFxStates(const std::vector<model::Id>& fx,
 void EngineApp::autosave() {
     const fs::path dir = autosaveDir();
     if (dir.empty()) return;
+    if (projectPath_.empty()) holdScratch();
     // Rotate: the next free index, then the oldest files over the keep count go.
     std::uint64_t next = 1;
     std::vector<std::pair<std::uint64_t, fs::path>> existing;
@@ -1556,7 +1901,7 @@ void EngineApp::autosave() {
         const std::string name = it->path().filename().string();
         const auto n = autosaveIndex(name);
         if (!n) continue;
-        if (*n == UINT64_MAX) {
+        if (*n == model::kAutosaveNumberMax) {
             emit(
                 "engine.error",
                 json::Value(Error("autosave.index", "autosave numbering is exhausted", dir.string(),
@@ -1568,12 +1913,28 @@ void EngineApp::autosave() {
         next = std::max(next, *n + 1);
         existing.push_back({*n, it->path()});
     }
+    // Past what the project file holds, even when its autosaves are gone.
+    if (!projectPath_.empty() && autosavedThrough_ && *autosavedThrough_ >= next) {
+        if (*autosavedThrough_ >= model::kAutosaveNumberMax) {
+            emit(
+                "engine.error",
+                json::Value(Error("autosave.index", "autosave numbering is exhausted", dir.string(),
+                                  "save the project under a new name to number afresh")
+                                .toString()));
+            autosaveMs_ = serviceClockMs();
+            return;
+        }
+        next = *autosavedThrough_ + 1;
+    }
     const fs::path file = dir / ("autosave-" + std::to_string(next) + ".json");
-    if (auto st = writeFileAtomic(file, model::serializeProject(head())); !st) {
+    auto st = checkpointRecordingJournals();
+    if (st) st = writeFileAtomic(file, model::serializeProjectFile(*versions_));
+    if (!st) {
         emit("engine.error", json::Value(st.error().toString()));
         autosaveMs_ = serviceClockMs();  // try again after an interval, not every tick
         return;
     }
+    dropSavedRecordingJournals();
     existing.push_back({next, file});
     std::sort(existing.begin(), existing.end(),
               [](const auto& a, const auto& b) { return a.first < b.first; });
@@ -1582,15 +1943,86 @@ void EngineApp::autosave() {
         fs::remove(existing.front().second, ignored);
         existing.erase(existing.begin());
     }
-    autosaveVersion_ = head().version;
+    autosaveHeads_ = versions_->heads();
     autosaveMs_ = serviceClockMs();
     autosaveMarked_ = true;
+}
+
+namespace {
+fs::path audioJournalWave(const fs::path& journal) {
+    auto stem = journal.filename().string();
+    stem.resize(stem.size() - std::string_view(".audio.jsonl").size());
+    return journal.parent_path() / (stem + ".wav");
+}
+}  // namespace
+Status EngineApp::checkpointRecordingJournals() {
+    for (const auto& journal : recordingJournalsPending_) {
+        if (!detail::isAudioJournal(journal)) continue;
+        const auto wav = audioJournalWave(journal);
+        // A prior writer sync may have failed; never retire its recovery
+        // metadata on the strength of a durable project but volatile audio.
+        SUPPLE_TRY(syncFile(wav));
+        SUPPLE_TRY(syncParentDirectories(wav));
+    }
+    return okStatus();
+}
+void EngineApp::dropSavedRecordingJournals() {
+    std::vector<fs::path> kept;
+    for (const fs::path& journal : recordingJournalsPending_) {
+        if (detail::isAudioJournal(journal)) {
+            const auto wav = audioJournalWave(journal);
+            auto side = detail::readSidecar(wav, wav.parent_path());
+            // Metadata failure leaves the journal, including across retry.
+            if (!side || !side->frames) {
+                const auto inspected = audio::inspectWavStream(wav);
+                if (!inspected || inspected->fileFrames != 0) {
+                    kept.push_back(journal);
+                    continue;
+                }
+            }
+        }
+        std::error_code ec;
+        fs::remove(journal, ec);
+        if (ec) kept.push_back(journal);
+    }
+    recordingJournalsPending_ = std::move(kept);
 }
 
 void EngineApp::restartFx(model::Id fx) {
     pool_->restart(fx);
     reportedFailures_.erase(fx);
     headChanged();  // a running engine gets the new instance in its next plan
+}
+
+EngineBridgeTiming bridgeTimingStatus(const host::BridgeTiming::Calls& live,
+                                      const Engine::BridgeOverruns& overruns) {
+    EngineBridgeTiming t;
+    const double calls =
+        live.calls + live.settles ? static_cast<double>(live.calls + live.settles) : 1.0;
+    const double answered =
+        live.calls > live.late ? static_cast<double>(live.calls - live.late) : 1.0;
+    t.calls = static_cast<std::int64_t>(live.calls);
+    t.late = static_cast<std::int64_t>(live.late + live.lateSettles);
+    t.settles = static_cast<std::int64_t>(live.settles);
+    t.pastDeadline = static_cast<std::int64_t>(live.pastDeadline);
+    t.spun = static_cast<std::int64_t>(live.spun);
+    t.waitMaxUs = static_cast<double>(live.waitMaxNs) / 1000.0;
+    t.waitMeanUs = static_cast<double>(live.waitSumNs) / calls / 1000.0;
+    t.wakeMaxUs = static_cast<double>(live.wakeMaxNs) / 1000.0;
+    t.wakeMeanUs = static_cast<double>(live.wakeSumNs) / answered / 1000.0;
+    t.workMaxUs = static_cast<double>(live.workMaxNs) / 1000.0;
+    t.returnMaxUs = static_cast<double>(live.returnMaxNs) / 1000.0;
+    t.longestCycleUs = static_cast<double>(overruns.longestCycleNs) / 1000.0;
+    t.wakesOver200us = static_cast<std::int64_t>(live.wakesOver200us);
+    t.wakesOver1ms = static_cast<std::int64_t>(live.wakesOver1ms);
+    for (int c = 0; c < 64; ++c)
+        if (live.bridgeCpus >> c & 1) t.bridgeCpus.push_back(c);
+    t.migrations = live.migrations;
+    t.classMismatches = static_cast<std::int64_t>(live.classMismatches);
+    t.overrunsLateWait = static_cast<std::int64_t>(overruns.lateWait);
+    t.overrunsSlowBridge = static_cast<std::int64_t>(overruns.slowBridge);
+    t.overrunsNotWaiting = static_cast<std::int64_t>(overruns.notWaiting);
+    return t;
 }
 
 EngineStatus EngineApp::engineStatus() {
@@ -1605,13 +2037,55 @@ EngineStatus EngineApp::engineStatus() {
     st.preparationError = preparationError_;
     st.memoryLock = protections_->memoryLock();
     st.cpuIdleLatency = protections_->cpuIdleLatency();
-    if (st.cpuIdleLatency.error)
+    st.thpOptOut = protections_->thpOptOut();
+    if (processFaultBase_) {
+        watchFaults();
+        auto& faults = st.audioPageFaults;
+#if defined(__linux__)
+        faults.scope = "audio_threads";
+        for (FaultWatch& w : faultWatch_) {
+            // Gone keeps its last count; an id reused by a later thread, whose
+            // count starts again, is not taken for it.
+            if (const auto now = threadPageFaults(w.id); now && now->minor >= w.last.minor)
+                w.last = *now;
+            faults.minor += w.last.minor - w.base.minor;
+            *faults.major += w.last.major - w.base.major;
+        }
+        faults.threads = static_cast<std::int64_t>(faultWatch_.size());
+#else
+        faults.scope = "process";
+        const PageFaults now = processPageFaults();
+        faults.minor = now.minor - processFaultBase_->minor;
+        if (now.saturated || processFaultBase_->saturated) {
+            // A counter stopped at its limit: no delta is a count (round 23).
+            faults.saturated = true;
+            faults.minor = 0;
+            faults.major.reset();
+        } else if (now.major < 0)
+            faults.major.reset();
+        else
+            faults.major = now.major - processFaultBase_->major;
+#endif
+    }
+    if (st.thpOptOut.error)
+        st.warnings.push_back(st.thpOptOut.error->message + "; " + st.thpOptOut.error->hint);
+    // An automatic hold that failed is no warning: audio plays without it, and
+    // on many systems only root may make the request (ADR-0086).
+    if (st.cpuIdleLatency.error && st.cpuIdleLatency.requested)
         st.warnings.push_back(st.cpuIdleLatency.error->message + "; " +
                               st.cpuIdleLatency.error->hint);
     if (st.memoryLock.error)
         st.warnings.push_back(st.memoryLock.error->message + "; " + st.memoryLock.error->hint);
+    for (model::Id id : pool_->isolationFallbacks()) {
+        const model::FxInstance* fx = head().fx.find(id);
+        st.warnings.push_back((fx ? fx->plugin.name : id.str()) + " (" + id.str() +
+                              ") runs in process: no plug-in bridge was found for the plug-in "
+                              "isolation preference; reinstall, or choose In the app");
+    }
     st.dropped = static_cast<std::int64_t>(outputDrops_ + consumerDrops_);
     st.voiceDropped = static_cast<std::int64_t>(voiceDrops_);
+    for (const model::Id& id : pool_->bridgeThreadsRefused())
+        st.bridgeThreadsRefused.push_back(id.str());
     for (const auto& [id, error] : pool_->failedErrors()) {
         st.failedFx.push_back(id.str());
         auto failure = json::Value::object();
@@ -1630,7 +2104,10 @@ EngineStatus EngineApp::engineStatus() {
     st.period = b.period;
     st.planLatency = engine_->outputLatency();
     st.deviceLatency = b.outputLatency;
-    st.xruns = static_cast<std::int64_t>(b.xruns);
+    // A cycle a bridged plug-in made late is an xrun too (ADR-0081).
+    st.bridgeLate = static_cast<std::int64_t>(engine_->bridgeLateCycles());
+    st.xruns = static_cast<std::int64_t>(b.xruns) + st.bridgeLate;
+    st.bridgeTiming = bridgeTimingStatus(host::bridgeTiming().live, engine_->bridgeOverruns());
     st.midiDropped = static_cast<std::int64_t>(backend_->midiDropped());
     st.midiWarnings = backend_->midiWarnings();
     st.midiOutDropped = static_cast<std::int64_t>(backend_->midiOutDropped());
@@ -1695,6 +2172,7 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
         SUPPLE_TRY(model::validateRecordingPlayrate(s));  // before creating a record folder/file
         const fs::path dir = recordDir();
         std::vector<RecordTarget> targets;
+        std::set<std::string> reservedStems;
         for (const auto& e : s.tracks) {
             const model::Track& tr = *e.value;
             if (tr.record.armed && tr.record.mode == model::RecordMode::Output)
@@ -1716,13 +2194,43 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
                 output || !tr.record.input ? nullptr : s.routes.find(*tr.record.input);
             const auto* midi = output ? nullptr : model::midiInputRoute(s, e.id);
             // Explicit MIDI record modes capture sends independently of the selected input.
-            if (routed || midi) {  // MIDI (ADR-0016): events, no file
+            std::string base;
+            for (char c : tr.name.empty() ? e.id.str() : tr.name)
+                base += std::isalnum(static_cast<unsigned char>(c)) ? c : '-';
+            // <base>-<n> free for a WAV, its sidecar and a MIDI journal alike
+            // (the writer also creates each exclusively).
+            // Any entry takes a name, a dangling link too (fs::exists
+            // follows it and says no).
+            auto occupied = [](const fs::path& p) {
+                std::error_code ec;
+                return fs::exists(fs::symlink_status(p, ec));
+            };
+            auto freeName = [&](const char* extension) {
+                for (int n = 1;; ++n) {
+                    const std::string stem = base + "-" + std::to_string(n);
+                    auto folded = stem;
+                    for (char& c : folded)
+                        if (c >= 'A' && c <= 'Z') c = char(c - 'A' + 'a');
+                    const fs::path file = dir / (stem + extension);
+                    const bool taken = reservedStems.contains(folded) ||
+                                       occupied(dir / (stem + ".wav")) ||
+                                       occupied(dir / (stem + ".rec.json")) ||
+                                       occupied(dir / (stem + ".midi.jsonl")) ||
+                                       occupied(dir / (stem + ".audio.jsonl"));
+                    if (!taken) {
+                        reservedStems.insert(std::move(folded));
+                        return file;
+                    }
+                }
+            };
+            if (routed || midi) {  // MIDI (ADR-0016): events; a journal for recovery (ADR-0080)
                 RecordTarget t;
                 t.track = e.id;
                 t.midi = RecordTarget::Midi{
                     midi ? midiPortMask(engine_->midiPorts(), *midi->from.midiDevice) : 0,
                     midi && midi->midi ? midi->midi->fromChannel : 0,
                     midi && midi->midi ? midi->midi->toChannel : 0, routed};
+                t.file = freeName(".midi.jsonl");
                 targets.push_back(std::move(t));
                 continue;
             }
@@ -1733,24 +2241,14 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
             t.rackInput = in && in->from.module.has_value();
             if (in && in->from.hwChannels)
                 for (int ch : *in->from.hwChannels) t.inputs.push_back(ch - 1);
-            std::string base;
-            for (char c : tr.name.empty() ? e.id.str() : tr.name)
-                base += std::isalnum(static_cast<unsigned char>(c)) ? c : '-';
-            for (int n = 1;; ++n) {  // (the writer also creates it exclusively)
-                t.file = dir / (base + "-" + std::to_string(n) + ".wav");
-                std::error_code ec;
-                const bool taken =
-                    std::any_of(targets.begin(), targets.end(),
-                                [&](const RecordTarget& o) { return o.file == t.file; });
-                if (!taken && !fs::exists(t.file, ec) &&
-                    !fs::exists(detail::sidecarPath(t.file), ec))
-                    break;
-            }
+            t.file = freeName(".wav");
             targets.push_back(std::move(t));
         }
-        std::vector<fs::path> files;
+        auto recordPunch = punchFrames(punch_, engine_->config().sampleRate);
+        if (!recordPunch) return std::move(recordPunch).error();
+        std::vector<fs::path> files;  // WAVs and MIDI journals: not leftovers while recording
         for (const RecordTarget& t : targets)
-            if (!t.midi) files.push_back(t.file);
+            if (!t.file.empty()) files.push_back(t.file);
         // A recording master's own items are silent where it records: in the
         // punch range, else everywhere (ADR-0057). The plan changes first.
         std::vector<RecordingMaster> masters;
@@ -1761,11 +2259,12 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
             recordingMasters_ = true;
             headChanged();
         }
-        if (auto started = engine_->startRecording(std::move(targets)); !started) {
+        if (auto started = engine_->startRecording(std::move(targets), *recordPunch); !started) {
             endMasterRecording();
             return std::move(started).error();
         }
         recordingFiles_ = std::move(files);
+        recordingErrorsReported_.clear();
         playStart_ = engine_->transport().seconds;
         startPlaying(metronome_.countInBars);
     } else if (action == "play") {
@@ -1898,7 +2397,9 @@ bool EngineApp::writesAutomation(model::Id object, const std::string& param) con
 }
 
 void EngineApp::recordAutomation(model::Id object, const std::string& param, double value) {
-    if (!engine_ || !txn_ || !engine_->transport().playing) return;
+    // A replayed step's writes come from its logged env.write.commit, not
+    // from where the live transport is now (nor into the live pass).
+    if (replaying_ || !engine_ || !txn_ || !engine_->transport().playing) return;
     recordAutomationAt(object, param, value, engine_->transport().seconds);
 }
 
@@ -1918,21 +2419,21 @@ void EngineApp::recordAutomationAt(model::Id object, const std::string& param, d
     const double fromSeconds =
         !first && it->second.lastSeconds < seconds ? it->second.lastSeconds : seconds;
     const double startSeconds = it == autoWrite_.end() ? seconds : it->second.startSeconds;
-    txn().modify<model::Envelope>(*envId, [&](model::Envelope& env) {
+    {
+        const model::Envelope& env = *s.envelopes.find(*envId);
         const double pos = envelopePosition(s, env, seconds);
         const double from = envelopePosition(s, env, fromSeconds);
         const double before = envelopeAt(env.points, pos, staticValue(s, env.target));
-        std::erase_if(env.points, [&](const model::EnvPoint& p) {
-            return first ? std::abs(p.pos - pos) < 1e-9 : p.pos > from && p.pos <= pos + 1e-9;
-        });
+        std::vector<model::EnvPoint> points;
         // Preserve the existing 0.001-beat entry guard, converted into the
         // envelope's domain just like the write position and erase window.
         const double beat = s.timeMap->beatAt(seconds);
         if (first && beat > 1e-3)
-            insertPoint(env.points, envelopePosition(s, env, s.timeMap->secondsAt(beat - 1e-3)),
-                        before);
-        insertPoint(env.points, pos, value);
-    });
+            points.push_back({envelopePosition(s, env, s.timeMap->secondsAt(beat - 1e-3)), before});
+        points.push_back({pos, value});
+        // The first write replaces only a point at its own position.
+        writeEnvelope(*envId, first ? pos - 1e-9 : from, pos + 1e-9, points, true);
+    }
     AutoWrite w;
     w.startSeconds = startSeconds;
     w.lastSeconds = seconds;
@@ -1985,18 +2486,40 @@ Status EngineApp::finishAutomationPass(double stopSeconds) {
     auto txnId =
         beginTransaction({cmd::Origin::Type::Internal, "engine", ""}, "Automation written");
     if (!txnId) return std::move(txnId).error();
-    for (const auto& [id, w] : work)
-        txn().modify<model::Envelope>(id, [&](model::Envelope& env) {
-            const double start = envelopePosition(s, env, w.startSeconds);
-            const double stop = envelopePosition(s, env, stopSeconds);
-            const double from = w.touched ? envelopePosition(s, env, w.lastSeconds) : start - 1e-9;
-            std::erase_if(env.points, [&](const model::EnvPoint& p) {
-                return p.pos > from && p.pos <= stop + 1e-9;
-            });
-            if (!w.touched) insertPoint(env.points, start, w.lastValue);
-            insertPoint(env.points, stop, w.lastValue);
-        });
+    for (const auto& [id, w] : work) {
+        const model::Envelope& env = *s.envelopes.find(id);
+        const double start = envelopePosition(s, env, w.startSeconds);
+        const double stop = envelopePosition(s, env, stopSeconds);
+        const double from = w.touched ? envelopePosition(s, env, w.lastSeconds) : start - 1e-9;
+        std::vector<model::EnvPoint> points;
+        if (!w.touched) points.push_back({start, w.lastValue});
+        points.push_back({stop, w.lastValue});
+        writeEnvelope(id, from, stop + 1e-9, points, true);
+    }
     return commitTransaction(*txnId);
+}
+
+void EngineApp::writeEnvelope(model::Id env, double after, double through,
+                              const std::vector<model::EnvPoint>& points, bool log) {
+    txn().modify<model::Envelope>(env, [&](model::Envelope& e) {
+        std::erase_if(e.points,
+                      [&](const model::EnvPoint& p) { return p.pos > after && p.pos <= through; });
+        for (const auto& p : points) insertPoint(e.points, p.pos, p.value);
+    });
+    if (!log) return;
+    json::Value args = json::Value::object();
+    args["env"] = env.str();
+    args["after"] = after;
+    args["through"] = through;
+    json::Value list = json::Value::array();
+    for (const auto& p : points) {
+        json::Value point = json::Value::object();
+        point["pos"] = p.pos;
+        point["value"] = p.value;
+        list.push_back(std::move(point));
+    }
+    args["points"] = std::move(list);
+    record_.invocations.push_back({"env.write.commit", std::move(args)});
 }
 
 void EngineApp::startPlaying(int countInBars) {
@@ -2120,6 +2643,12 @@ Status recordingBounds(const model::Session& s, const detail::RecordingInfo& sid
         return Error("record.sidecar", "recording positions exceed the finite timeline range",
                      std::move(path), "restore valid recording positions or skip this file");
     };
+    if (side.punch) {
+        const auto& punch = *side.punch;
+        if (punch.start < 0 || punch.end < 0 || punch.start > detail::kRecordingClockLimit ||
+            punch.end > detail::kRecordingClockLimit || (punch.enabled && punch.end <= punch.start))
+            return invalid("/punch");
+    }
     if (!std::isfinite(side.sampleRate) || side.sampleRate < 8000 || side.sampleRate > 384000 ||
         (fileRate > 0 && side.sampleRate != fileRate) || frames > INT64_MAX)
         return invalid("/sample_rate");
@@ -2279,7 +2808,6 @@ Status commitMidiTake(model::EditTxn& t, const model::Session& s, const Recorded
 
 Result<std::vector<RecordedInfo>> EngineApp::commitTakes(const std::vector<RecordedTake>& takes,
                                                          std::string_view label) {
-    std::vector<RecordedInfo> out;
     std::vector<std::pair<Id, RecordedTake>> pendingHashes;
     const model::Session initial = view();
     for (const auto& r : takes) {
@@ -2287,140 +2815,54 @@ Result<std::vector<RecordedInfo>> EngineApp::commitTakes(const std::vector<Recor
         const double rate = r.sampleRate == 0 ? initial.project->sampleRate : r.sampleRate;
         detail::RecordingInfo side{r.track,    r.startSample, rate,
                                    r.segments, r.loop.start,  r.loop.end};
+        side.punch = r.punch;
         SUPPLE_TRY(recordingBounds(initial, side, static_cast<std::uint64_t>(r.frames)));
     }
     auto txnId = beginTransaction({cmd::Origin::Type::Internal, "engine", ""}, label);
     if (!txnId) return std::move(txnId).error();
-    const model::Session s = view();
-    // Relative to the media folder when there is one (a saved project's or the
-    // scratch folder), so a first save can move the files and keep the paths.
-    const fs::path media = projectDir().empty() ? fs::path() : projectDir() / s.project->mediaDir;
-    for (const RecordedTake& r : takes) {
-        for (const Error& e : r.warnings) {
-            json::Value ev = json::Value::object();
-            ev["code"] = e.code;
-            ev["message"] = e.message;
-            ev["path"] = e.path;
-            ev["hint"] = e.hint;
-            ev["track"] = r.track.str();
-            ev["file"] = r.file.string();
-            emit("record.warning", std::move(ev));
+    std::vector<RecordedInfo> out;
+    // One undo step, with contiguous groups retaining each recording's punch.
+    // record.commit already has a top-level punch: no argument/schema change.
+    const fs::path media =
+        projectDir().empty() ? fs::path() : projectDir() / head().project->mediaDir;
+    auto punchFor = [&](const RecordedTake& take) {
+        if (!take.punch) return punch_;
+        const auto& p = *take.punch;
+        const double rate = take.sampleRate > 0 ? take.sampleRate : initial.project->sampleRate;
+        return TransportRange{p.enabled, static_cast<double>(p.start) / rate,
+                              static_cast<double>(p.end) / rate};
+    };
+    for (std::size_t first = 0; first < takes.size();) {
+        const auto punch = punchFor(takes[first]);
+        auto last = first + 1;
+        while (last < takes.size()) {
+            const auto other = punchFor(takes[last]);
+            if (other.enabled != punch.enabled || other.start != punch.start ||
+                other.end != punch.end)
+                break;
+            ++last;
         }
-        if (!r.error.empty()) {
-            json::Value ev = json::Value::object();
-            ev["track"] = r.track.str();
-            ev["file"] = r.file.string();
-            ev["error"] = r.error;
-            emit("record.error", std::move(ev));
-        }
-        const double rate = r.sampleRate > 0 ? r.sampleRate : s.project->sampleRate;
-        if (r.frames <= 0 || !s.tracks.find(r.track)) continue;
-        // The runs on the timeline (ADR-0015): one per loop pass, or one.
-        std::vector<RecordedSegment> segs = r.segments;
-        if (segs.empty()) segs.push_back({0, r.startSample});
-        std::vector<Run> runs;
-        for (std::size_t k = 0; k < segs.size(); ++k) {
-            const std::int64_t to =
-                std::min(r.frames, k + 1 < segs.size() ? segs[k + 1].fileFrame : r.frames);
-            if (to > segs[k].fileFrame)
-                runs.push_back({segs[k].fileFrame, to, segs[k].timeline, k});
-        }
-        const bool passes = runs.size() > 1 && r.loop.end > r.loop.start;
-        // Items: the loop range for passes (one take per pass), else one per
-        // run; within the punch range and never before the timeline's start
-        // (material outside stays in the file, skipped by the take).
-        const auto punchFrom = static_cast<std::int64_t>(std::llround(punch_.start * rate));
-        const auto punchTo = static_cast<std::int64_t>(std::llround(punch_.end * rate));
-        auto clip = [&](std::int64_t& from, std::int64_t& to) {
-            if (punch_.enabled) {
-                from = std::max(from, punchFrom);
-                to = std::min(to, punchTo);
-            }
-            from = std::max<std::int64_t>(from, 0);
-            return to > from;
-        };
-        std::vector<ItemPlan> items;
-        if (passes) {
-            ItemPlan ip{r.loop.start, r.loop.end, {}};
-            if (clip(ip.start, ip.end)) {
-                for (std::size_t k = 0; k < runs.size(); ++k) {
-                    const Run& run = runs[k];
-                    const std::int64_t t1 = run.t0 + (run.to - run.from);
-                    if (t1 <= ip.start || run.t0 >= ip.end) continue;
-                    ip.takes.push_back(
-                        {run.from + (ip.start - run.t0), run.t0 <= ip.start && t1 >= ip.end, k});
-                }
-                if (!ip.takes.empty()) items.push_back(std::move(ip));
-            }
-        } else {
-            for (std::size_t k = 0; k < runs.size(); ++k) {
-                const Run& run = runs[k];
-                ItemPlan ip{run.t0, run.t0 + (run.to - run.from), {}};
-                if (!clip(ip.start, ip.end)) continue;
-                ip.takes.push_back({run.from + (ip.start - run.t0), true, k});
-                items.push_back(std::move(ip));
-            }
-        }
-        if (items.empty()) continue;
-        if (r.isMidi) {
-            if (!r.midi.empty()) SUPPLE_TRY(commitMidiTake(txn(), s, r, runs, items, rate, out));
-            continue;
-        }
-        // Known hashes may reuse a source; freshly closed files commit now
-        // with an empty hash and complete their metadata in the background.
-        model::EditTxn& t = txn();
-        Id source;
-        if (const auto known = model::mediaSourceWithHash(s, r.hash)) {
-            source = *known;
-        } else {
-            model::MediaSource md;
-            std::error_code ec;
-            const fs::path rel = media.empty() ? fs::path() : fs::relative(r.file, media, ec);
-            md.path = !ec && !rel.empty() && *rel.begin() != ".." ? rel.string() : r.file.string();
-            md.hash = r.hash;
-            md.format = "wav";
-            md.sampleRate = rate;  // the device's (resampled to the plan's rate on playback)
-            md.channels = 0;
-            if (auto head = audio::inspectWavStream(r.file))
-                md.channels = static_cast<int>(head->channels);
-            md.frames = r.frames;
-            source = t.create(std::move(md));
-            if (r.hash.empty() && commands_) pendingHashes.emplace_back(source, r);
-        }
-        for (const ItemPlan& ip : items) {
-            model::Item item;
-            item.track = r.track;
-            const double start = static_cast<double>(ip.start) / rate;
-            const double end = static_cast<double>(ip.end) / rate;
-            model::placeItemSeconds(s, item, start, end);  // in the track's timebase
-            RecordedInfo info;
-            info.warnings = recordingWarnings(r);
-            std::optional<Id> active;
-            for (std::size_t k = 0; k < ip.takes.size(); ++k) {
-                model::Take take;
-                take.source = source;
-                take.startOffset =
-                    static_cast<double>(ip.takes[k].fileFrame) / rate;  // < 0: silence first
-                take.name = r.file.stem().string();
-                if (ip.takes.size() > 1) take.name += " pass " + std::to_string(k + 1);
-                const Id tk = t.create(std::move(take));
-                item.takes.push_back(tk);
-                info.takes.push_back(tk.str());
-                if (ip.takes[k].whole) active = tk;  // the newest whole pass...
-            }
-            if (!active) active = item.takes.back();  // ...or the last one
-            item.activeTake = active;
-            const Id it = t.create(std::move(item));
-            info.track = r.track.str();
-            info.item = it.str();
-            info.take = active->str();
-            info.file = r.file.string();
-            info.seconds = end - start;
-            info.lostFrames = static_cast<std::int64_t>(r.overflowFrames);
-            out.push_back(std::move(info));
-        }
+        const std::vector<RecordedTake> group(takes.begin() + static_cast<std::ptrdiff_t>(first),
+                                              takes.begin() + static_cast<std::ptrdiff_t>(last));
+        auto placed = placeTakes(group, punch, &pendingHashes);
+        if (!placed) return std::move(placed).error();
+        out.insert(out.end(), std::make_move_iterator(placed->begin()),
+                   std::make_move_iterator(placed->end()));
+        record_.invocations.push_back(
+            {"record.commit", detail::recordCommitArgs(group, punch, media)});
+        first = last;
     }
+    if (takes.empty())
+        record_.invocations.push_back(
+            {"record.commit", detail::recordCommitArgs(takes, punch_, media)});
     SUPPLE_TRY(commitTransaction(*txnId));
+    // The takes are in the project now; owned journals go once a saved
+    // file or autosave holds them (ADR-0080/0082).
+    for (const RecordedTake& r : takes)
+        if (r.isMidi && !r.file.empty())
+            recordingJournalsPending_.push_back(r.file);
+        else if (!r.isMidi && !r.journal.empty())
+            recordingJournalsPending_.push_back(r.journal);
     for (auto& [source, pendingTake] : pendingHashes) {
         // Open only; all reads happen on the worker. The handle survives a
         // first save moving the scratch file before the job gets to run.
@@ -2462,7 +2904,160 @@ Result<std::vector<RecordedInfo>> EngineApp::commitTakes(const std::vector<Recor
                              });
         });
     }
+    return out;
+}
 
+Result<std::vector<RecordedInfo>> EngineApp::placeTakes(
+    const std::vector<RecordedTake>& takes, const TransportRange& punch,
+    std::vector<std::pair<Id, RecordedTake>>* pendingHashes) {
+    std::vector<RecordedInfo> out;
+    const bool live = pendingHashes != nullptr;  // else record.commit replays them
+    const model::Session s = view();
+    if (!live)  // commitTakes checked them before its transaction
+        for (const auto& r : takes) {
+            if (r.frames <= 0) continue;
+            const double rate = r.sampleRate == 0 ? s.project->sampleRate : r.sampleRate;
+            detail::RecordingInfo side{r.track,    r.startSample, rate,
+                                       r.segments, r.loop.start,  r.loop.end};
+            SUPPLE_TRY(recordingBounds(s, side, static_cast<std::uint64_t>(r.frames)));
+        }
+    // Relative to the media folder when there is one (a saved project's or the
+    // scratch folder), so a first save can move the files and keep the paths.
+    const fs::path media = projectDir().empty() ? fs::path() : projectDir() / s.project->mediaDir;
+    for (const RecordedTake& r : takes) {
+        if (live)
+            for (const Error& e : r.warnings) {
+                json::Value ev = json::Value::object();
+                ev["code"] = e.code;
+                ev["message"] = e.message;
+                ev["path"] = e.path;
+                ev["hint"] = e.hint;
+                ev["track"] = r.track.str();
+                ev["file"] = r.file.string();
+                emit("record.warning", std::move(ev));
+            }
+        if (live && !r.error.empty())
+            emitRecordingError(
+                {r.track, r.file, r.failure.value_or(Error("record.write", r.error))});
+        const double rate = r.sampleRate > 0 ? r.sampleRate : s.project->sampleRate;
+        if (r.frames <= 0 || !s.tracks.find(r.track)) continue;
+        // The runs on the timeline (ADR-0015): one per loop pass, or one.
+        std::vector<RecordedSegment> segs = r.segments;
+        if (segs.empty()) segs.push_back({0, r.startSample});
+        std::vector<Run> runs;
+        for (std::size_t k = 0; k < segs.size(); ++k) {
+            const std::int64_t to =
+                std::min(r.frames, k + 1 < segs.size() ? segs[k + 1].fileFrame : r.frames);
+            if (to > segs[k].fileFrame)
+                runs.push_back({segs[k].fileFrame, to, segs[k].timeline, k});
+        }
+        const bool passes = runs.size() > 1 && r.loop.end > r.loop.start;
+        // Items: the loop range for passes (one take per pass), else one per
+        // run; within the punch range and never before the timeline's start
+        // (material outside stays in the file, skipped by the take).
+        const auto punchFrom = static_cast<std::int64_t>(std::llround(punch.start * rate));
+        const auto punchTo = static_cast<std::int64_t>(std::llround(punch.end * rate));
+        auto clip = [&](std::int64_t& from, std::int64_t& to) {
+            if (punch.enabled) {
+                from = std::max(from, punchFrom);
+                to = std::min(to, punchTo);
+            }
+            from = std::max<std::int64_t>(from, 0);
+            return to > from;
+        };
+        std::vector<ItemPlan> items;
+        if (passes) {
+            ItemPlan ip{r.loop.start, r.loop.end, {}};
+            if (clip(ip.start, ip.end)) {
+                for (std::size_t k = 0; k < runs.size(); ++k) {
+                    const Run& run = runs[k];
+                    const std::int64_t t1 = run.t0 + (run.to - run.from);
+                    if (t1 <= ip.start || run.t0 >= ip.end) continue;
+                    ip.takes.push_back(
+                        {run.from + (ip.start - run.t0), run.t0 <= ip.start && t1 >= ip.end, k});
+                }
+                if (!ip.takes.empty()) items.push_back(std::move(ip));
+            }
+        } else {
+            for (std::size_t k = 0; k < runs.size(); ++k) {
+                const Run& run = runs[k];
+                ItemPlan ip{run.t0, run.t0 + (run.to - run.from), {}};
+                if (!clip(ip.start, ip.end)) continue;
+                ip.takes.push_back({run.from + (ip.start - run.t0), true, k});
+                items.push_back(std::move(ip));
+            }
+        }
+        if (items.empty()) continue;
+        if (r.isMidi) {
+            if (!r.midi.empty()) SUPPLE_TRY(commitMidiTake(txn(), s, r, runs, items, rate, out));
+            continue;
+        }
+        // Known hashes may reuse a source; freshly closed files commit now
+        // with an empty hash and complete their metadata in the background.
+        model::EditTxn& t = txn();
+        // Replayed before its hash was known here: the branch's own source
+        // for the file may have it by now.
+        std::string hash = r.hash;
+        std::error_code relError;
+        const fs::path relative =
+            media.empty() ? fs::path() : fs::relative(r.file, media, relError);
+        const std::string mediaPath = !relError && !relative.empty() && *relative.begin() != ".."
+                                          ? relative.generic_string()
+                                          : r.file.string();
+        if (!live && hash.empty())
+            versions_->forEachVersion([&](const model::Version& v) {
+                for (const auto& e : v.session->media)
+                    if (hash.empty() && e.value->path == mediaPath) hash = e.value->hash;
+            });
+        Id source;
+        if (const auto known = model::mediaSourceWithHash(s, hash)) {
+            source = *known;
+        } else {
+            model::MediaSource md;
+            md.path = mediaPath;
+            md.hash = hash;
+            md.format = "wav";
+            md.sampleRate = rate;  // the device's (resampled to the plan's rate on playback)
+            md.channels = 0;
+            if (auto head = audio::inspectWavStream(r.file))
+                md.channels = static_cast<int>(head->channels);
+            md.frames = r.frames;
+            source = t.create(std::move(md));
+            if (hash.empty() && commands_ && live) pendingHashes->emplace_back(source, r);
+        }
+        for (const ItemPlan& ip : items) {
+            model::Item item;
+            item.track = r.track;
+            const double start = static_cast<double>(ip.start) / rate;
+            const double end = static_cast<double>(ip.end) / rate;
+            model::placeItemSeconds(s, item, start, end);  // in the track's timebase
+            RecordedInfo info;
+            info.warnings = recordingWarnings(r);
+            std::optional<Id> active;
+            for (std::size_t k = 0; k < ip.takes.size(); ++k) {
+                model::Take take;
+                take.source = source;
+                take.startOffset =
+                    static_cast<double>(ip.takes[k].fileFrame) / rate;  // < 0: silence first
+                take.name = r.file.stem().string();
+                if (ip.takes.size() > 1) take.name += " pass " + std::to_string(k + 1);
+                const Id tk = t.create(std::move(take));
+                item.takes.push_back(tk);
+                info.takes.push_back(tk.str());
+                if (ip.takes[k].whole) active = tk;  // the newest whole pass...
+            }
+            if (!active) active = item.takes.back();  // ...or the last one
+            item.activeTake = active;
+            const Id it = t.create(std::move(item));
+            info.track = r.track.str();
+            info.item = it.str();
+            info.take = active->str();
+            info.file = r.file.string();
+            info.seconds = end - start;
+            info.lostFrames = static_cast<std::int64_t>(r.overflowFrames);
+            out.push_back(std::move(info));
+        }
+    }
     return out;
 }
 
@@ -2484,6 +3079,8 @@ void EngineApp::finalizeRecordingHash(Id source, model::MediaSource expected, Re
         detail::RecordingInfo side{take.track,    take.startSample, take.sampleRate,
                                    take.segments, take.loop.start,  take.loop.end,
                                    hash};
+        side.frames = take.frames;
+        side.punch = take.punch;
         Status finalized;
         {
             std::lock_guard lock(recordingFinalizeMutex_);
@@ -2532,6 +3129,68 @@ fs::path EngineApp::mediaDir() const {
                                 : projectDir() / head().project->mediaDir;
 }
 
+namespace {
+// Why the media folder `setting` (a project's media_dir) names from `folder`
+// may not hold files a replayed step writes: it names ".." anywhere (a step
+// may make folders, so where one leads must not depend on what exists), or
+// it does not resolve inside `folder`. Empty when it may. `missing`
+// (optional) receives the folders that do not exist yet, deepest first.
+std::string mediaOutside(const fs::path& folder, const std::string& setting,
+                         std::vector<fs::path>* missing = nullptr) {
+    for (const auto& part : fs::path(setting))
+        if (part == "..") return "names '..'";
+    if (!detail::resolvedInside(folder, folder / setting, missing))
+        return "is outside the project folder";
+    return {};
+}
+}  // namespace
+
+Status EngineApp::replayMayWriteMedia() {
+    // A project with no folder (a headless engine's unsaved one) keeps its
+    // media in the engine's own <workdir>/media, which no file names. An
+    // unsaved project with a session folder is held to that folder: its
+    // state may have come from a recovered autosave (ADR-0078).
+    const fs::path project = projectDir();
+    if (project.empty()) return okStatus();
+    auto outside = [&](const std::string& why) {
+        return Error("history.media_outside",
+                     "the media folder " + mediaDir().string() + " " + why +
+                         "; steps replayed in a merge may create files only inside the project "
+                         "folder " +
+                         project.string(),
+                     "/project/media_dir",
+                     "set media_dir to a folder inside the project without '..', or merge into "
+                     "a branch that has not moved since the fork");
+    };
+    // Nothing is made anywhere until the deepest folder that exists (a link
+    // counts, and is followed) resolves inside the project.
+    std::vector<fs::path> made;
+    if (std::string why = mediaOutside(project, head().project->mediaDir, &made); !why.empty())
+        return outside(why);
+    std::reverse(made.begin(), made.end());  // shallowest first
+    // Then make the rest and resolve it for real once more: the folders this
+    // made are removed again if it is outside after all, and by a merge that
+    // fails.
+    const fs::path media = mediaDir();
+    std::error_code ec;
+    fs::create_directories(media, ec);
+    if (ec) {
+        for (auto it = made.rbegin(); it != made.rend(); ++it) fs::remove(*it, ec);
+        return outside("cannot be made (" + ec.message() + ")");
+    }
+    if (!detail::resolvedInside(project, media)) {
+        for (auto it = made.rbegin(); it != made.rend(); ++it) fs::remove(*it, ec);
+        return outside("is outside the project folder");
+    }
+    if (mergeCreated_)  // a failed merge removes them (after its files)
+        mergeCreated_->insert(mergeCreated_->begin(), made.begin(), made.end());
+    return okStatus();
+}
+
+fs::path EngineApp::recoveryRoot() const {
+    return projectPath_.empty() ? options_.scratchDir : fs::path();
+}
+
 fs::path EngineApp::projectDir() const {
     return projectPath_.empty() ? options_.scratchDir : projectPath_.parent_path();
 }
@@ -2551,8 +3210,722 @@ void EngineApp::clearScratch() {
     // file (or, if that failed, are still here and must stay).
     if (!projectPath_.empty() || scratch.empty() || scratch == scratch.root_path()) return;
     if (within(options_.workdir, scratch)) return;
+    if (scratchLock_) {
+        scratchLock_->releaseAndRemove();
+        scratchLock_.reset();
+    }
     std::error_code ec;
     fs::remove_all(scratch, ec);
+}
+
+// --- unsaved projects left behind (ADR-0078) --------------------------------------------------
+
+namespace {
+// The numbered autosaves in `folder`, newest first.
+std::vector<fs::path> autosavesIn(const fs::path& folder) {
+    std::vector<std::pair<std::uint64_t, fs::path>> found;
+    std::error_code ec;
+    for (fs::directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec))
+        if (const auto n = autosaveIndex(it->path().filename().string());
+            n && it->is_regular_file(ec))
+            found.push_back({*n, it->path()});
+    std::sort(found.begin(), found.end(),
+              [](const auto& a, const auto& b) { return a.first > b.first; });
+    std::vector<fs::path> out;
+    for (auto& f : found) out.push_back(std::move(f.second));
+    return out;
+}
+
+// Whether `folder` holds anything but its lock file (empty folders do not
+// count), and the size of its files.
+bool sessionContent(const fs::path& folder, std::int64_t* bytes = nullptr) {
+    bool content = false;
+    std::error_code ec;
+    for (fs::recursive_directory_iterator
+             it(folder, fs::directory_options::skip_permission_denied, ec),
+         end;
+         !ec && it != end; it.increment(ec)) {
+        const auto status = it->symlink_status(ec);
+        if (ec || fs::is_directory(status)) continue;
+        if (it.depth() == 0 && it->path().filename() == detail::kSessionLockName) continue;
+        content = true;
+        if (!bytes) return true;
+        if (fs::is_regular_file(status)) {
+            std::error_code sizeError;
+            const auto size = it->file_size(sizeError);
+            if (!sizeError) *bytes += static_cast<std::int64_t>(size);
+        }
+    }
+    return content;
+}
+
+// When the run that named the folder <YYYYmmdd-HHMMSS>-<pid> started, in Unix
+// milliseconds (the name is local time).
+std::optional<std::int64_t> sessionStartedMs(const std::string& name) {
+    std::tm t{};
+    int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
+    if (name.size() < 15 || name[8] != '-') return std::nullopt;
+    for (std::size_t i = 0; i < 15; ++i)
+        if (i != 8 && !std::isdigit(static_cast<unsigned char>(name[i]))) return std::nullopt;
+    auto number = [&](std::size_t at, std::size_t n) {
+        int v = 0;
+        std::from_chars(name.data() + at, name.data() + at + n, v);
+        return v;
+    };
+    year = number(0, 4), month = number(4, 2), day = number(6, 2);
+    hour = number(9, 2), minute = number(11, 2), second = number(13, 2);
+    t.tm_year = year - 1900, t.tm_mon = month - 1, t.tm_mday = day;
+    t.tm_hour = hour, t.tm_min = minute, t.tm_sec = second, t.tm_isdst = -1;
+    const std::time_t when = std::mktime(&t);
+    if (when == static_cast<std::time_t>(-1)) return std::nullopt;
+    return static_cast<std::int64_t>(when) * 1000;
+}
+
+std::optional<std::int64_t> fileTimeMs(const fs::path& file) {
+    std::error_code ec;
+    const auto written = fs::last_write_time(file, ec);
+    if (ec) return std::nullopt;
+    // The file clock's epoch is unspecified: measure from now on both clocks.
+    const auto age = fs::file_time_type::clock::now() - written;
+    const auto at = std::chrono::system_clock::now() -
+                    std::chrono::duration_cast<std::chrono::system_clock::duration>(age);
+    return std::chrono::duration_cast<std::chrono::milliseconds>(at.time_since_epoch()).count();
+}
+
+// Recordings with a sidecar in <folder>/<mediaDir>/rec that no path in
+// `used` (relative to the media folder) names.
+std::int64_t leftoverRecordings(const fs::path& folder, const fs::path& rec,
+                                const std::set<std::string>& used) {
+    std::int64_t n = 0;
+    std::error_code ec;
+    if (!detail::resolvedInside(folder, rec)) return 0;  // not the session's: never looked at
+    for (fs::directory_iterator it(rec, ec), end; !ec && it != end; it.increment(ec)) {
+        const fs::path& f = it->path();
+        if (detail::isMidiJournal(f)) {  // ADR-0080: no sidecar; the journal says it all
+            if (!fs::is_regular_file(fs::symlink_status(f, ec))) continue;
+            // Counted as recovery would place it: only with something played.
+            if (auto c = detail::readMidiJournal(f, rec); c && !c->events.empty()) ++n;
+            continue;
+        }
+        if (f.extension() != ".wav" || !it->is_regular_file(ec)) continue;
+        if (used.count(("rec" / f.filename()).generic_string())) continue;
+        const auto journal = detail::audioJournalPath(f);
+        if (fs::symlink_status(journal, ec).type() != fs::file_type::not_found) {
+            auto side = detail::readAudioJournal(f, rec);
+            auto wav = audio::inspectWavStream(f);
+            if (side && side->frames && *side->frames > 0 && wav && wav->fileFrames > 0) ++n;
+            continue;
+        }
+        std::error_code sideError;  // a sidecar recovery would read: regular, inside
+        if (detail::recoveryFileInside(rec, f) &&
+            detail::recoveryFileInside(rec, detail::sidecarPath(f)) &&
+            fs::is_regular_file(fs::status(detail::sidecarPath(f), sideError)))
+            ++n;
+    }
+    return n;
+}
+
+// What recover() can put back from one WAV in `rec` (ADR-0014): a regular
+// file directly in that real folder (recovery rewrites headers, so nothing
+// reached through a link), a sidecar that reads, frames, and a placement
+// inside the timeline of `s`. With `root` (an unsaved project's session
+// folder), the file must resolve inside it too: nothing reached through a
+// link out of the session is read or repaired. The listing, the recovery
+// itself and a session's preflight all ask this, so none accepts what
+// another refuses.
+// A MIDI journal (ADR-0080) is checked the same way: it reads (inside its
+// folder), it holds at least one event, and the take it places is inside
+// the timeline; `midi` is then that take, as stop would have committed it
+// up to the crash.
+struct RecordingCheck {
+    std::optional<detail::RecordingInfo> side;
+    std::optional<audio::WavStreamInfo> wav;  // set when it can be put back
+    std::optional<RecordedTake> midi;         // or this, for a MIDI journal
+    std::optional<Error> problem;             // why not, when it is worth saying
+    bool usable() const { return wav.has_value() || midi.has_value(); }
+};
+
+RecordingCheck checkRecording(const model::Session& s, const fs::path& rec, const fs::path& f,
+                              const fs::path& root) {
+    RecordingCheck out;
+    std::error_code ec;
+    if (!fs::is_directory(fs::symlink_status(rec, ec)) ||
+        !fs::is_regular_file(fs::symlink_status(f, ec)) ||
+        !fs::equivalent(f.parent_path(), rec, ec) || ec || !detail::recoveryFileInside(root, f))
+        return out;
+    if (detail::isMidiJournal(f)) {
+        auto capture = detail::readMidiJournal(f, rec);
+        if (!capture) {
+            Error e = std::move(capture).error();
+            e.code = "record.journal";
+            if (e.path.empty()) e.path = "/";
+            if (e.hint.empty()) e.hint = "skip this file; it is not a readable MIDI journal";
+            out.problem = std::move(e);
+            return out;
+        }
+        RecordedTake take = detail::placeMidi(*capture);
+        out.side = detail::RecordingInfo{take.track,    take.startSample, take.sampleRate,
+                                         take.segments, take.loop.start,  take.loop.end};
+        out.side->punch = take.punch;
+        if (take.midi.empty() || take.frames <= 0) return out;  // nothing was played
+        if (auto valid = recordingBounds(s, *out.side, static_cast<std::uint64_t>(take.frames));
+            !valid) {
+            out.problem = valid.error();
+            return out;
+        }
+        take.file = f;
+        out.midi = std::move(take);
+        return out;
+    }
+    // The sidecar is opened only inside the WAV's own folder (itself inside
+    // `root`): a link to placement metadata elsewhere is not followed.
+    const auto journal = detail::audioJournalPath(f);
+    const bool journalPresent = fs::symlink_status(journal, ec).type() != fs::file_type::not_found;
+    auto side = journalPresent ? detail::readAudioJournal(f, rec) : detail::readSidecar(f, rec);
+    // A journal is authoritative while present: never flatten an unreadable one.
+    if (!side) {
+        if (journalPresent || fs::exists(detail::sidecarPath(f), ec)) {
+            Error e = std::move(side).error();
+            e.code = journalPresent ? "record.journal" : "record.sidecar";
+            if (e.path.empty()) e.path = "/";
+            if (e.hint.empty()) e.hint = "restore a valid recording sidecar or skip this file";
+            out.problem = std::move(e);
+        }
+        return out;
+    }
+    out.side = *side;
+    auto wav = audio::inspectWavStream(f);
+    if (!wav) {
+        Error e = std::move(wav).error();
+        if (e.path.empty()) e.path = "/file";
+        if (e.hint.empty()) e.hint = "restore the recording audio or skip this file";
+        out.problem = std::move(e);
+        return out;
+    }
+    if (side->frames)
+        wav->fileFrames = std::min(wav->fileFrames, static_cast<std::uint64_t>(*side->frames));
+    if (wav->fileFrames == 0) return out;
+    if (auto valid = recordingBounds(s, *side, wav->fileFrames, wav->sampleRate); !valid) {
+        out.problem = valid.error();
+        return out;
+    }
+    out.wav = *wav;
+    return out;
+}
+
+// Recordings in `rec` that recover() could put back into `s`.
+std::int64_t usableRecordings(const model::Session& s, const fs::path& rec, const fs::path& root) {
+    std::int64_t n = 0;
+    std::error_code ec;
+    if (!detail::resolvedInside(root, rec)) return 0;
+    for (fs::directory_iterator it(rec, ec), end; !ec && it != end; it.increment(ec))
+        if ((it->path().extension() == ".wav" || detail::isMidiJournal(it->path())) &&
+            checkRecording(s, rec, it->path(), root).usable())
+            ++n;
+    return n;
+}
+
+// A recovered session's media live in its folder (ADR-0078): on each branch
+// whose media_dir does not resolve inside it (resolvedInside, as it is on
+// disk now: "a/../media" that does is kept), one more version puts it back
+// to the default. Only a file not written by this program names such a
+// folder. If the default does not resolve inside either (a link out), the
+// recordings there are not recovered: recover() asks the same test.
+Status confineMedia(model::VersionStore& store, const fs::path& folder,
+                    std::vector<RecordingWarning>& warnings) {
+    const std::string current = store.branch();
+    const std::string fallback = model::Project{}.mediaDir;
+    for (const std::string& name : store.branches()) {
+        SUPPLE_TRY(store.switchBranch(name));
+        const auto head = store.head();
+        const std::string was = head->project->mediaDir;
+        if (detail::resolvedInside(folder, folder / was)) continue;
+        // The default itself leads out (a link): nothing better to point at;
+        // recoverSession says its recordings are not recovered.
+        if (was == fallback) continue;
+        model::EditTxn t(*head, store.nextVersion());
+        model::Project project = t.project();
+        project.mediaDir = fallback;
+        t.setProject(std::move(project));
+        auto changes = t.changes();
+        auto created = t.created();
+        auto confined = t.commit();
+        if (!confined) return std::move(confined).error();
+        model::TxnRecord record;
+        record.label = "Keep media in the session folder";
+        record.origin = "engine";
+        auto committed = store.commit(std::move(*confined), std::move(record), std::move(changes),
+                                      std::move(created));
+        if (!committed) return std::move(committed).error();
+        warnings.push_back({"recover.media_dir",
+                            "the media folder " + was + " of branch " + name +
+                                " is outside the session folder; recovered, it uses " + fallback +
+                                " in the session folder, so media only in " + was + " are missing",
+                            "/project/media_dir",
+                            "copy the media into the session's " + fallback + " folder", "", ""});
+    }
+    return store.switchBranch(current);
+}
+
+constexpr std::chrono::hours kPruneAfter{1};
+}  // namespace
+
+void EngineApp::holdScratch() {
+    const fs::path& scratch = options_.scratchDir;
+    if (scratch.empty() || scratchLock_) return;
+    // Another run may hold the lock for a moment while it looks at this
+    // folder (recoverableSessions()): try again briefly.
+    for (int attempt = 0; attempt < 40 && !scratchLock_; ++attempt) {
+        if (attempt) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        std::error_code ec;
+        fs::create_directories(scratch, ec);
+        if (auto lock = detail::SessionLock::tryAcquire(scratch))
+            scratchLock_ = std::make_unique<detail::SessionLock>(std::move(*lock));
+    }
+}
+
+void EngineApp::releaseScratch() {
+    const fs::path& scratch = options_.scratchDir;
+    if (scratch.empty()) return;
+    std::error_code ec;
+    for (const fs::path& f : autosavesIn(scratch)) fs::remove(f, ec);
+    if (scratchLock_) {
+        scratchLock_->releaseAndRemove();
+        scratchLock_.reset();
+    }
+    fs::remove(scratch, ec);  // only when empty: media whose move failed stay
+}
+
+Result<fs::path> EngineApp::sessionFolder(const std::string& session) const {
+    const fs::path& own = options_.scratchDir;
+    auto unknown = [&](std::string why) {
+        return Error("recover.unknown_session", std::move(why), "/session",
+                     "use a session project.recoverable lists");
+    };
+    if (own.empty()) return unknown("this app keeps no unsaved projects in folders");
+    const fs::path name(session);
+    if (session.empty() || name.filename() != name || session == "." || session == ".." ||
+        session.find_first_of("/\\") != std::string::npos)
+        return unknown("\"" + session + "\" is not a session name");
+    const fs::path folder = own.parent_path() / name;
+    std::error_code ec;
+    if (name == own.filename() || !fs::is_directory(fs::symlink_status(folder, ec)))
+        return unknown("there is no unsaved project " + session + " left behind");
+    return folder;
+}
+
+std::vector<RecoverableSession> EngineApp::recoverableSessions(
+    std::vector<RecordingWarning>* warnings) const {
+    std::vector<RecoverableSession> out;
+    const fs::path& own = options_.scratchDir;
+    if (own.empty()) return out;
+    std::vector<fs::path> folders;
+    std::error_code ec;
+    for (fs::directory_iterator it(own.parent_path(), ec), end; !ec && it != end; it.increment(ec))
+        if (it->path().filename() != own.filename() && fs::is_directory(it->symlink_status(ec)))
+            folders.push_back(it->path());
+    std::sort(folders.begin(), folders.end());
+    for (const fs::path& folder : folders) {
+        const auto lock = detail::SessionLock::tryAcquire(folder);
+        if (!lock) continue;  // a running app's
+        RecoverableSession s;
+        s.session = folder.filename().string();
+        if (!sessionContent(folder, &s.bytes)) continue;
+        s.startedMs = sessionStartedMs(s.session);
+        std::string media = model::Project{}.mediaDir;
+        std::set<std::string> used;
+        for (const fs::path& file : autosavesIn(folder)) {
+            auto text = detail::readRecoveryText(folder, file, std::size_t(1) << 30);
+            auto opened = text ? model::parseProjectFile(*text, nullptr, replayableStep)
+                               : Result<model::OpenedProject>(std::move(text).error());
+            if (!opened) {
+                if (warnings)
+                    warnings->push_back({"recover.autosave",
+                                         "an autosave of " + s.session +
+                                             " cannot be read: " + opened.error().message,
+                                         "/sessions", "an older autosave is used instead", "",
+                                         s.session + "/" + file.filename().string()});
+                continue;
+            }
+            const auto head = opened->store.head();
+            s.autosavedMs = fileTimeMs(file);
+            s.name = head->project->name;
+            for (const auto& t : head->tracks)
+                if (t.value->parent) ++s.tracks;  // masters are not counted
+            s.branches = opened->store.branches();
+            media = head->project->mediaDir;
+            opened->store.forEachVersion([&](const model::Version& v) {
+                for (const auto& e : v.session->media)
+                    if (const fs::path p = e.value->path; p.is_relative())
+                        used.insert(p.lexically_normal().generic_string());
+            });
+            break;
+        }
+        s.recordings = leftoverRecordings(folder, folder / media / "rec", used);
+        out.push_back(std::move(s));
+    }
+    return out;
+}
+
+std::int64_t EngineApp::recoverableSessionCount() const {
+    const fs::path& own = options_.scratchDir;
+    if (own.empty()) return 0;
+    std::int64_t n = 0;
+    std::error_code ec;
+    for (fs::directory_iterator it(own.parent_path(), ec), end; !ec && it != end;
+         it.increment(ec)) {
+        if (it->path().filename() == own.filename() || !fs::is_directory(it->symlink_status(ec)))
+            continue;
+        if (detail::SessionLock::tryAcquire(it->path()) && sessionContent(it->path())) ++n;
+    }
+    return n;
+}
+
+void EngineApp::pruneEmptySessions() {
+    const fs::path& own = options_.scratchDir;
+    if (own.empty()) return;
+    std::vector<fs::path> empty;
+    std::error_code ec;
+    for (fs::directory_iterator it(own.parent_path(), ec), end; !ec && it != end;
+         it.increment(ec)) {
+        const fs::path& folder = it->path();
+        if (folder.filename() == own.filename() || !fs::is_directory(it->symlink_status(ec)))
+            continue;
+        // A run starting now may not hold its new folder's lock yet: only
+        // folders untouched for a while go.
+        std::error_code timeError;
+        const auto written = fs::last_write_time(folder, timeError);
+        if (timeError || fs::file_time_type::clock::now() - written < kPruneAfter) continue;
+        auto lock = detail::SessionLock::tryAcquire(folder);
+        if (!lock || sessionContent(folder)) continue;
+        for (fs::directory_iterator child(folder, ec), last; !ec && child != last;
+             child.increment(ec))
+            if (child->path().filename() != detail::kSessionLockName) {
+                std::error_code ignored;
+                fs::remove_all(child->path(), ignored);
+            }
+        lock->releaseAndRemove();
+        empty.push_back(folder);
+    }
+    for (const fs::path& folder : empty) fs::remove(folder, ec);
+}
+
+Result<std::vector<EngineApp::RecoveryKeep>> EngineApp::keepForFirstSave(
+    const fs::path& folder, const std::vector<RawAutosave>& raw, const std::string& path) {
+    std::vector<RecoveryKeep> kept;
+    auto undo = [&] {
+        std::error_code ec;
+        for (const RecoveryKeep& k : kept) fs::remove(k.copy, ec);
+    };
+    for (const auto& [name, bytes, suffix] : raw) {
+        const auto data =
+            std::span(reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
+        Status written = Error("file.exists", "too many kept copies of " + name);
+        for (int n = 1; n < 1000; ++n) {
+            const fs::path copy =
+                folder / (name + suffix + (n == 1 ? "" : "-" + std::to_string(n)) + ".keep");
+            written = writeFileNew(copy, data);
+            if (written) {
+                kept.push_back({copy, suffix});
+                break;
+            }
+            if (written.error().code != "file.exists") break;
+        }
+        if (!written) {
+            undo();
+            return Error(
+                "recover.keep",
+                "could not keep a copy of " + name +
+                    ", which saving the recovered project would delete: " + written.error().message,
+                path,
+                "make " + folder.string() +
+                    " writable (or free space) and retry; nothing was changed");
+        }
+    }
+    return kept;
+}
+
+Status EngineApp::publishRecoveryKeeps(const fs::path& file,
+                                       std::vector<schema::Warning>* warnings) {
+    for (auto it = recoveryKeep_.begin(); it != recoveryKeep_.end();) {
+        auto bytes =
+            detail::readRecoveryFile(it->copy.parent_path(), it->copy, std::size_t(1) << 30);
+        const std::string name = file.filename().string() + it->suffix;
+        fs::path backup;
+        Status kept = bytes ? Status(Error("file.exists", "")) : Status(bytes.error());
+        for (int n = 1; bytes && !kept && kept.error().code == "file.exists" && n < 10000; ++n) {
+            backup = file.parent_path() /
+                     (n == 1 ? name + ".bak" : name + "-" + std::to_string(n) + ".bak");
+            kept = writeFileNew(backup, *bytes);
+        }
+        if (!kept)
+            return Error("project.history_backup",
+                         "could not keep a copy of the recovered autosave before its folder is "
+                         "released: " +
+                             kept.error().message,
+                         backup.string(),
+                         "make the project folder writable, or save to another file");
+        if (warnings)
+            warnings->push_back({"project.history_backup",
+                                 "kept the recovered session's " +
+                                     std::string(it->suffix == ".pre-branches"
+                                                     ? "autosave with its unrestored branches"
+                                                     : "unreadable autosave") +
+                                     " as " + backup.filename().string(),
+                                 backup.string()});
+        std::error_code ec;
+        fs::remove(it->copy, ec);
+        it = recoveryKeep_.erase(it);
+    }
+    return okStatus();
+}
+
+Result<SessionRecovery> EngineApp::recoverAutosave(const std::string& name) {
+    auto none = [] {
+        return Error("recover.no_autosave", "there is no autosave newer than the saved file",
+                     "/autosave", "open the project as saved; nothing was lost");
+    };
+    if (projectPath_.empty()) return none();
+    std::error_code ec;
+    // Newer than the file: numbered above its autosaved_through, or, for a
+    // file without one (before 2.15), written after it.
+    fs::file_time_type written{};
+    if (!autosavedThrough_) {
+        written = fs::last_write_time(projectPath_, ec);
+        if (ec) return none();
+    }
+    auto newer = [&](const fs::path& file, std::optional<std::uint64_t> through,
+                     fs::file_time_type time) {
+        if (through) return autosaveIndex(file.filename().string()).value_or(0) > *through;
+        std::error_code timeError;
+        const auto t = fs::last_write_time(file, timeError);
+        return !timeError && t > time;
+    };
+    SessionRecovery out;
+    const fs::path folder = autosaveDir();
+    // A named one is the one that was offered: it must be newer than the
+    // file as this project was opened, so a save since (the question before
+    // opening it offers Save) does not make it unopenable, and a name offered
+    // for another project opens nothing older in this one.
+    std::vector<fs::path> candidates;
+    if (!name.empty()) {
+        const fs::path file = folder / name;
+        if (!autosaveIndex(name) || fs::path(name).filename() != fs::path(name) ||
+            !fs::is_regular_file(fs::symlink_status(file, ec)))
+            return Error("recover.no_autosave", name + " is not an autosave of this project",
+                         "/autosave_file",
+                         "omit autosave_file to open the newest autosave newer than the file");
+        const bool asOpened = openedFile_ && openedFile_->path == projectPath_;
+        const auto openedThrough = asOpened ? openedFile_->through : autosavedThrough_;
+        const auto openedTime = asOpened ? openedFile_->time : written;
+        if (!newer(file, openedThrough, openedTime))
+            return Error("recover.no_autosave",
+                         name + " is not newer than " + projectPath_.filename().string() +
+                             " as it was opened",
+                         "/autosave_file",
+                         "open the project as saved, or omit autosave_file to open the newest "
+                         "autosave newer than the file");
+        candidates.push_back(file);
+    } else {
+        candidates = autosavesIn(folder);  // newest first
+    }
+    // The same rule as a session's (ADR-0078): what this recovery cannot
+    // fully restore is kept for the first save to publish beside the file.
+    std::vector<RawAutosave> keep;
+    for (const fs::path& file : candidates) {
+        if (name.empty() && !newer(file, autosavedThrough_, written)) continue;
+        std::vector<schema::Warning> parsed;
+        auto text = detail::readRecoveryText(folder, file, std::size_t(1) << 30);
+        auto opened = text ? model::parseProjectFile(*text, &parsed, replayableStep)
+                           : Result<model::OpenedProject>(text.error());
+        if (!opened && !name.empty())
+            return Error("recover.no_autosave", name + " cannot be read: " + opened.error().message,
+                         "/autosave_file",
+                         "open the project as saved, or omit autosave_file to try the others");
+        if (!opened && text)
+            keep.emplace_back(file.filename().string(), *text, ".unreadable-autosave");
+        if (!opened) {
+            out.warnings.push_back(
+                {"recover.autosave",
+                 file.filename().string() +
+                     " cannot be read, an older autosave was tried: " + opened.error().message,
+                 "/autosave", "", "", file.filename().string()});
+            continue;
+        }
+        for (auto& w : parsed)
+            out.warnings.push_back({w.code, w.message, w.path, "", "", file.filename().string()});
+        if (opened->branchesDropped)
+            out.warnings.push_back({"project.history",
+                                    "opened main alone: the autosave's branches could not be "
+                                    "restored (" +
+                                        opened->branchesDropped->message + ")",
+                                    "/branches", "", "", file.filename().string()});
+        if (opened->branchesDropped)
+            keep.emplace_back(file.filename().string(), *text, ".pre-branches");
+        // Kept before anything is replaced: without the copies, the first
+        // save would delete the only source of what this cannot restore.
+        auto kept = keepForFirstSave(folder, keep, "/autosave");
+        if (!kept) return std::move(kept).error();
+        std::vector<schema::Warning> replaced;
+        // The file is unchanged: what it holds, and how it was opened, stay.
+        const auto fileThrough = autosavedThrough_;
+        const auto fileOpened = openedFile_;
+        if (Status st = replaceProject(std::move(opened->store), projectPath_, {}, &replaced);
+            !st) {
+            std::error_code removeError;
+            for (const RecoveryKeep& k : *kept) fs::remove(k.copy, removeError);
+            return std::move(st).error();
+        }
+        autosavedThrough_ = fileThrough;
+        openedFile_ = fileOpened;
+        recoveryKeep_ = std::move(*kept);
+        for (auto& w : replaced) out.warnings.push_back({w.code, w.message, w.path, "", "", ""});
+        out.autosave = file.filename().string();
+        return out;
+    }
+    return none();
+}
+
+Result<SessionRecovery> EngineApp::recoverSession(const std::string& session) {
+    auto folder = sessionFolder(session);
+    if (!folder) return std::move(folder).error();
+    auto lock = detail::SessionLock::tryAcquire(*folder);
+    if (!lock)
+        return Error("recover.busy", session + " belongs to an app that is running", "/session",
+                     "recover it in that app, or quit that app and retry");
+    if (!sessionContent(*folder))
+        return Error("recover.unknown_session", "there is nothing in " + session + " to recover",
+                     "/session", "use a session project.recoverable lists");
+    SessionRecovery out;
+    std::optional<model::VersionStore> store;
+    // Raw autosaves that must outlive the first save.
+    std::vector<RawAutosave> keep;
+    for (const fs::path& file : autosavesIn(*folder)) {
+        std::vector<schema::Warning> parsed;
+        auto text = detail::readRecoveryText(*folder, file, std::size_t(1) << 30);
+        auto opened = text ? model::parseProjectFile(*text, &parsed, replayableStep)
+                           : Result<model::OpenedProject>(text.error());
+        if (!opened && text)
+            keep.emplace_back(file.filename().string(), *text, ".unreadable-autosave");
+        if (!opened) {
+            out.warnings.push_back(
+                {"recover.autosave",
+                 file.filename().string() +
+                     " cannot be read, an older autosave was tried: " + opened.error().message,
+                 "/session", "", "", file.filename().string()});
+            continue;
+        }
+        for (auto& w : parsed)
+            out.warnings.push_back({w.code, w.message, w.path, "", "", file.filename().string()});
+        if (opened->branchesDropped)
+            out.warnings.push_back({"project.history",
+                                    "opened main alone: the autosave's branches could not be "
+                                    "restored (" +
+                                        opened->branchesDropped->message + ")",
+                                    "/branches", "", "", file.filename().string()});
+        if (opened->branchesDropped)
+            keep.emplace_back(file.filename().string(), *text, ".pre-branches");
+        store = std::move(opened->store);
+        out.autosave = file.filename().string();
+        break;
+    }
+    // Without a readable autosave, only recordings that can really be put
+    // back make a recovery: a blank project in place of the user's work, and
+    // the unreadable autosaves deleted by its first save, would be worse.
+    std::optional<Id> recoveredTrack;
+    if (store) {
+        // An unsaved project's media live in its session folder: a media_dir
+        // that leads elsewhere was not written by this program, and nothing
+        // recorded, rendered or replayed may follow it out (ADR-0078).
+        SUPPLE_TRY(confineMedia(*store, *folder, out.warnings));
+    } else {
+        // The tracks they were recorded on are in the unreadable autosave:
+        // they go on one new channel.
+        model::Session blank = model::Session::create(model::Project{});
+        model::EditTxn t(blank, blank.version);
+        model::Track tr;
+        tr.type = model::StripType::Channel;
+        tr.name = "Recovered";
+        tr.parent = model::kMaster;
+        const Id id = t.create(tr);
+        t.modify<model::Track>(model::kMaster, [&](model::Track& m) { m.children.push_back(id); });
+        auto made = t.commit();
+        if (!made) return std::move(made).error();
+        // Placed by the same rules recover() uses, against this project.
+        if (usableRecordings(*made, *folder / made->project->mediaDir / "rec", *folder) == 0)
+            return Error("recover.damaged", "nothing in " + session + " can be opened", "/session",
+                         "delete it with project.recoverable.delete, or copy what you need out "
+                         "of " +
+                             folder->string() + " first");
+        store.emplace(std::move(*made));
+        recoveredTrack = id;
+    }
+    // Kept before anything is replaced: without the copies, the first save
+    // would delete the only source of what this cannot restore.
+    auto kept = keepForFirstSave(*folder, keep, "/session");
+    if (!kept) return std::move(kept).error();
+    auto held = std::make_unique<detail::SessionLock>(std::move(*lock));
+    std::vector<schema::Warning> replaced;
+    Status replacing = (replaceProject(
+        std::move(*store), {},
+        [&]() -> Status {
+            // The left-behind folder becomes this run's: its media resolve
+            // there, autosaves continue its numbering.
+            options_.scratchDir = *folder;
+            scratchLock_ = std::move(held);
+            return okStatus();
+        },
+        &replaced));
+    if (!replacing) {
+        std::error_code removeError;
+        for (const RecoveryKeep& k : *kept) fs::remove(k.copy, removeError);
+        return std::move(replacing).error();
+    }
+    recoveryKeep_ = std::move(*kept);
+    for (auto& w : replaced) out.warnings.push_back({w.code, w.message, w.path, "", "", ""});
+    if (std::error_code ec;
+        fs::exists(recordDir(), ec) && !detail::resolvedInside(*folder, recordDir()))
+        out.warnings.push_back(
+            {"recover.media_outside",
+             "the recordings folder " + recordDir().string() +
+                 " leads outside the session folder: its recordings are not recovered, and "
+                 "nothing there was read or changed",
+             "/project/media_dir", "copy the recordings into the session folder, then recover them",
+             "", ""});
+    if (!recoverable().empty()) {
+        auto r = recover({}, recoveredTrack, &out.warnings);
+        if (r)
+            out.recovered = std::move(*r);
+        else
+            out.warnings.push_back(
+                {r.error().code, r.error().message + "; the recordings stay recoverable",
+                 r.error().path, "use project.recover with files and track to place them", "", ""});
+    }
+    return out;
+}
+
+Status EngineApp::deleteSession(const std::string& session) {
+    auto folder = sessionFolder(session);
+    if (!folder) return std::move(folder).error();
+    auto lock = detail::SessionLock::tryAcquire(*folder);
+    if (!lock)
+        return Error("recover.busy", session + " belongs to an app that is running", "/session",
+                     "quit the app using it and retry");
+    std::error_code ec;
+    for (fs::directory_iterator child(*folder, ec), last; !ec && child != last; child.increment(ec))
+        if (child->path().filename() != detail::kSessionLockName) {
+            std::error_code removeError;
+            fs::remove_all(child->path(), removeError);
+            if (removeError)
+                return Error("recover.delete", removeError.message(), "/session",
+                             "make " + child->path().string() + " writable and retry");
+        }
+    lock->releaseAndRemove();
+    fs::remove(*folder, ec);
+    if (ec)
+        return Error("recover.delete", ec.message(), "/session",
+                     "make " + folder->string() + " writable and retry");
+    return okStatus();
 }
 
 // First save: stage and verify copies while the scratch originals remain.
@@ -2629,6 +4002,9 @@ Status EngineApp::moveScratchMedia(const fs::path& dest, const std::function<Sta
         const auto staged = stage / rel;
         fs::create_directories(staged.parent_path(), ec);
         if (!ec) fs::copy_file(from / rel, staged, fs::copy_options::none, ec);
+#if defined(_WIN32)
+        if (!ec) fs::permissions(staged, fs::perms::owner_write, fs::perm_options::add, ec);
+#endif
         if (ec)
             return Error("project.media_move", ec.message(), (from / rel).string(),
                          "save to a writable project directory with sufficient space and keep all "
@@ -2638,18 +4014,27 @@ Status EngineApp::moveScratchMedia(const fs::path& dest, const std::function<Sta
             return Error("project.media_move", "staged media verification failed", rel.string(),
                          "keep source media unchanged during the save and save into a directory "
                          "with reliable writable storage");
+        SUPPLE_TRY(syncFile(staged));
     }
     for (const auto& rel : files) {
         const auto target = dest / rel;
         fs::create_directories(target.parent_path(), ec);
-        if (!ec) fs::create_hard_link(stage / rel, target, ec);
+        if (!ec && detail::files::publishNew(stage / rel, target) != 0)
+            ec = std::error_code(errno, std::generic_category());
         if (ec)
             return Error("project.media_move", ec.message(), target.string(),
                          "save to a writable project directory with sufficient space and keep all "
                          "scratch media readable during the save");
         placed.push_back(target);
+        SUPPLE_TRY(syncParentDirectories(target));
     }
-    SUPPLE_TRY(publish());
+    auto saved = publish();
+    if (!saved) {
+        // Publication may already have replaced the file. Keep its audio
+        // as well as the originals; rollback must never strand that project.
+        if (saved.error().code == "project.sync") published = true;
+        return saved;
+    }
     published = true;
     std::vector<fs::path> emptyDirs;
     for (const auto& rel : files) {
@@ -2712,51 +4097,38 @@ std::vector<RecoverableInfo> EngineApp::recoverable(std::vector<RecordingWarning
         }
     });
     for (const fs::path& f : recordingFiles_) used.insert(comparable(f));
+    for (const fs::path& f : recordingJournalsPending_) used.insert(comparable(f));
     std::vector<fs::path> files;
     for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator();
          it.increment(ec))
-        if (it->path().extension() == ".wav") files.push_back(it->path());
+        if (it->path().extension() == ".wav" || detail::isMidiJournal(it->path()))
+            files.push_back(it->path());
     std::sort(files.begin(), files.end());
     const fs::path media = mediaDir();
     for (const fs::path& f : files) {
-        if (!inRecordDir(f) || used.count(comparable(f))) continue;
-        auto side = detail::readSidecar(f);  // none: not a recording, or capture never began
-        if (!side) {
-            if (warnings && fs::exists(detail::sidecarPath(f), ec)) {
-                const auto& e = side.error();
-                warnings->push_back({"record.sidecar", e.message, e.path.empty() ? "/" : e.path,
-                                     e.hint.empty()
-                                         ? "restore a valid recording sidecar or skip this file"
-                                         : e.hint,
-                                     "", f.lexically_relative(media).string()});
+        if (used.count(comparable(f))) continue;
+        const RecordingCheck check = checkRecording(head(), dir, f, recoveryRoot());
+        if (!check.usable()) {
+            if (warnings && check.problem) {
+                const Error& e = *check.problem;
+                warnings->push_back({e.code, e.message, e.path, e.hint,
+                                     check.side ? check.side->track.str() : std::string(),
+                                     f.lexically_relative(media).generic_string()});
             }
             continue;
         }
-        auto info = audio::inspectWavStream(f);
-        if (!info) {
-            const auto& e = info.error();
-            if (warnings)
-                warnings->push_back(
-                    {e.code, e.message, e.path.empty() ? "/file" : e.path,
-                     e.hint.empty() ? "restore the recording audio or skip this file" : e.hint,
-                     side->track.str(), f.lexically_relative(media).string()});
-            continue;
-        }
-        if (info->fileFrames == 0) continue;
-        if (auto valid = recordingBounds(head(), *side, info->fileFrames, info->sampleRate);
-            !valid) {
-            const auto& e = valid.error();
-            if (warnings)
-                warnings->push_back({e.code, e.message, e.path, e.hint, side->track.str(),
-                                     f.lexically_relative(media).string()});
-            continue;
-        }
+        const detail::RecordingInfo* side = &*check.side;
         RecoverableInfo r;
-        r.file = f.lexically_relative(media).string();
+        r.file = f.lexically_relative(media).generic_string();
         r.track = side->track.str();
         r.startSeconds = static_cast<double>(side->startSample) / side->sampleRate;
-        r.seconds = static_cast<double>(info->fileFrames) / info->sampleRate;
-        r.channels = info->channels;
+        if (check.midi) {
+            r.seconds = static_cast<double>(check.midi->frames) / check.midi->sampleRate;
+            r.midiEvents = static_cast<std::int64_t>(check.midi->midi.size());
+        } else {
+            r.seconds = static_cast<double>(check.wav->fileFrames) / check.wav->sampleRate;
+            r.channels = check.wav->channels;
+        }
         out.push_back(std::move(r));
     }
     return out;
@@ -2803,22 +4175,33 @@ Result<std::vector<RecordedInfo>> EngineApp::recover(const std::vector<std::stri
     for (const RecoverableInfo* r : chosen) {
         RecordedTake t;
         t.file = mediaDir() / r->file;
-        auto side = detail::readSidecar(t.file);
-        if (!side) {
-            Error e = side.error();
-            e.code = "record.sidecar";
-            warn(e, r->file, r->track);
+        // Again, as the preflight and the listing ask: it may have changed.
+        const RecordingCheck check = checkRecording(s, recordDir(), t.file, recoveryRoot());
+        if (!check.usable() && !check.problem)  // gone or replaced since it was listed
+            return Error("recover.unknown_file", r->file + " is not a recording to recover", {},
+                         "choose a file listed by project.recoverable for the current project");
+        if (!check.usable()) {
+            warn(*check.problem, r->file, r->track);
             continue;
         }
-        auto info = audio::inspectWavStream(t.file);
-        if (!info) {
-            warn(info.error(), r->file, r->track);
-            continue;
+        const detail::RecordingInfo* side = &*check.side;
+        if (check.midi) {  // placed as stop places it (ADR-0080)
+            t = *check.midi;
+            // Note Out addresses of routes this project no longer has: the
+            // events stay, unaddressed. Each voice keeps its own identity
+            // (numbered below a device's -1), so overlapping notes of one
+            // pitch still pair as stop paired them.
+            std::map<std::pair<model::Id, int>, int> unaddressed;
+            for (RecordedMidiEvent& e : t.midi)
+                if (e.route != model::Id{} && !s.routes.find(e.route)) {
+                    const auto [it, added] = unaddressed.try_emplace(
+                        {e.route, e.voice}, -2 - static_cast<int>(unaddressed.size()));
+                    (void)added;
+                    e.route = {};
+                    e.voice = it->second;
+                }
         }
-        if (auto valid = recordingBounds(s, *side, info->fileFrames, info->sampleRate); !valid) {
-            warn(valid.error(), r->file, r->track);
-            continue;
-        }
+        t.punch = side->punch.value_or(RecordedPunch{});
         t.track = track.value_or(side->track);
         if (!s.tracks.find(t.track))
             return Error("recover.no_track",
@@ -2828,24 +4211,48 @@ Result<std::vector<RecordedInfo>> EngineApp::recover(const std::vector<std::stri
         if (s.tracks.find(t.track)->type == model::StripType::Buss)
             return Error("track.strip_type", "recover recordings onto a channel or master",
                          "/track", "choose a child channel of the buss instead");
-        t.startSample = side->startSample;
-        t.sampleRate = side->sampleRate;
-        t.segments = side->segments;  // loop passes, when the recording ended normally
-        t.loop = {side->loopStart, side->loopEnd};
+        if (!check.midi) {
+            t.frames = static_cast<std::int64_t>(check.wav->fileFrames);
+            t.startSample = side->startSample;
+            t.sampleRate = side->sampleRate;
+            t.segments = side->segments;  // loop passes, when the recording ended normally
+            t.loop = {side->loopStart, side->loopEnd};
+        }
         takes.push_back(std::move(t));
     }
     for (auto it = takes.begin(); it != takes.end();) {
         RecordedTake& t = *it;
+        if (t.isMidi) {  // nothing to repair; checked just above
+            ++it;
+            continue;
+        }
         if (!inRecordDir(t.file))  // replaced since it was listed
             return Error("recover.unknown_file", t.file.string() + " is not a recording to recover",
                          {}, "choose a file listed by project.recoverable for the current project");
-        auto frames = audio::repairWavStream(t.file);
+        // Checked again right before the header is rewritten.
+        Status inside = detail::recoveryFileInside(recoveryRoot(), t.file);
+        auto frames = inside ? audio::repairWavStream(t.file)
+                             : Result<std::uint64_t>(std::move(inside).error());
         if (!frames) {
             warn(frames.error(), t.file.lexically_relative(mediaDir()), t.track.str());
             it = takes.erase(it);
             continue;
         }
-        t.frames = static_cast<std::int64_t>(*frames);
+        t.frames = std::min(t.frames, static_cast<std::int64_t>(*frames));
+        const auto journal = detail::audioJournalPath(t.file);
+        std::error_code ec;
+        if (fs::is_regular_file(fs::symlink_status(journal, ec))) t.journal = journal;
+        // Keep trusted placement after the next save retires the journal.
+        detail::RecordingInfo side{t.track,    t.startSample, t.sampleRate,
+                                   t.segments, t.loop.start,  t.loop.end};
+        side.frames = t.frames;
+        side.punch = t.punch;
+        auto metadata = detail::writeSidecar(t.file, side);
+        if (!metadata) {
+            warn(metadata.error(), t.file.lexically_relative(mediaDir()), t.track.str());
+            it = takes.erase(it);
+            continue;
+        }
         ++it;
     }
     return commitTakes(takes, "recover");
@@ -2942,8 +4349,26 @@ void EngineApp::headChanged() {
     (void)engine_->setWriteHolds(writeHolds(), false);  // the load takes them
     auto st = engine_->load(head(), projectDir());
     if (st) loadedHead_ = versions_->head();
-    if (!st) emit("engine.error", json::Value(st.error().toString()));
+    if (!st) {
+        // This failure also ends an edit deferred before it: neither played.
+        if (engine_->takeUnplayedEdit()) loadedHead_ = engine_->latestSession();
+        emit("engine.error", json::Value(st.error().toString()));
+    }
     engine_->service();
+    noteUnplayedEdit();
+}
+
+void EngineApp::noteUnplayedEdit() {
+    // An edit that playrate scheduling deferred (load() returned success, so
+    // loadedHead_ took it) and that then failed to compile never played: say
+    // so as a failed load does, and report the version that plays.
+    auto unplayed = engine_ ? engine_->takeUnplayedEdit() : std::nullopt;
+    if (!unplayed) return;
+    loadedHead_ = engine_->latestSession();
+    emit("engine.error", json::Value("an edit deferred by playrate scheduling never played: " +
+                                     unplayed->toString() + "; the engine plays version " +
+                                     std::to_string(loadedHead_ ? loadedHead_->version : 0) +
+                                     " (undo or change the edit)"));
 }
 
 // --- cmd::Host ------------------------------------------------------------------------------
@@ -3112,8 +4537,29 @@ void EngineApp::setupFixture(cmd::Dispatcher& d, std::string_view fixture) {
         (void)st;
         return;
     }
-    if (fixture == "recording_interrupted") {  // tr_1 "Vocal" + rec/Vocal-1.wav, never committed
+    // Beside this run's unsaved folder, one a crashed run left: project
+    // "Sketch" autosaved with tr_1 "Vocal", then rec/Vocal-1.wav recorded and
+    // never committed (ADR-0078).
+    if (fixture == "session_left_behind") {
+        const fs::path unsaved = options_.workdir / "unsaved";
+        options_.scratchDir = unsaved / "20261114-090000-4242";
+        model::Project sketch;
+        sketch.name = "Sketch";
+        auto st = newProject(std::move(sketch));
+        assert(st && "fixture project failed");
         run("track.add", R"({"name": "Vocal"})");
+        autosave();
+        setupFixture(d, "recording_take_file");
+        scratchLock_.reset();  // the run ends without discarding its folder
+        options_.scratchDir = unsaved / "20261114-100000-1";
+        st = newProject(model::Project{});
+        assert(st && "fixture project failed");
+        (void)st;
+        return;
+    }
+    if (fixture == "recording_interrupted" || fixture == "recording_take_file") {
+        // tr_1 "Vocal" + rec/Vocal-1.wav, never committed
+        if (fixture == "recording_interrupted") run("track.add", R"({"name": "Vocal"})");
         // One second of stereo from 1 s on; the recording stopped (crashed)
         // half a second after its last header rewrite.
         const fs::path file = recordDir() / "Vocal-1.wav";

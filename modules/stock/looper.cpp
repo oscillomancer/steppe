@@ -115,7 +115,7 @@ struct Looper : Module {
         out.setChannels(1);
         outGate.setChannels(1);
         loop.setChannels(1);
-        const Transport t = transport();
+        const Transport t = gridTransport();
         if (t.playing && !wasPlaying) origin = 0.0;
         wasPlaying = t.playing;
         const double beatsPerFrame = t.tempo / 60.0 / sampleRate();
@@ -124,7 +124,7 @@ struct Looper : Module {
         for (int i = 0; i < frames; ++i) {
             if (clearEdge.rose(clear[0][i])) forget();
             const bool resetNow = resetEdge.rose(reset[0][i]);
-            const double songAt = t.beats + i * beatsPerFrame;
+            const double songAt = t.beats + (t.offset + i) * beatsPerFrame;
             if (resetNow) {
                 origin = songAt;
                 freePhase = 0.0;

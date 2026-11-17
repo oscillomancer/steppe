@@ -24,6 +24,91 @@ namespace {
 std::vector<std::uint8_t> bytesOf(std::string_view s) { return {s.begin(), s.end()}; }
 }  // namespace
 
+TEST_CASE("files: durable checkpoints flush streams and report path barrier failures") {
+    const auto dir = fs::temp_directory_path() / ("supple-sync-" + std::to_string(getpid()));
+    REQUIRE(fs::create_directory(dir));
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() {
+            setDurabilityHookForTesting({});
+            fs::remove_all(path);
+        }
+    } cleanup{dir};
+    const auto file = dir / "data.bin";
+#ifdef _WIN32
+    auto* stream = _wfopen(file.c_str(), L"w+b");
+#else
+    auto* stream = std::fopen(file.c_str(), "w+b");
+#endif
+    REQUIRE(stream);
+    REQUIRE(std::fwrite("payload", 1, 7, stream) == 7);
+    CHECK(syncFileStream(stream));
+    REQUIRE(std::fclose(stream) == 0);
+    CHECK(*readTextFile(file) == "payload");
+    CHECK_FALSE(syncFileStream(nullptr));
+    const auto missing = syncFile(dir / "missing");
+    REQUIRE_FALSE(missing);
+    CHECK(missing.error().code == "file.sync");
+    CHECK_FALSE(syncFile(dir));
+    std::vector<fs::path> observed;
+    setDurabilityHookForTesting([&](const fs::path& path, bool) {
+        observed.push_back(path);
+        return true;
+    });
+    REQUIRE(syncFile(file));
+    REQUIRE(syncParentDirectories(file));
+    REQUIRE(observed.size() >= 2);
+    CHECK(observed[0] == file);
+    CHECK(observed[1] == fs::canonical(dir));
+    setDurabilityHookForTesting([&](const fs::path& path, bool) { return path != file; });
+    const auto failed = syncFile(file);
+    REQUIRE_FALSE(failed);
+    CHECK(failed.error().code == "file.sync");
+    // The checkpoint names the resolved directory; the temp folder is often reached through a link.
+    const auto resolvedDir = fs::canonical(dir);
+    setDurabilityHookForTesting([&](const fs::path& path, bool) { return path != resolvedDir; });
+    const auto failedDirectory = syncParentDirectories(file);
+    REQUIRE_FALSE(failedDirectory);
+    CHECK(failedDirectory.error().code == "file.sync_directory");
+    CHECK_FALSE(failedDirectory.error().hint.empty());
+    CHECK(*readTextFile(file) == "payload");
+}
+
+TEST_CASE("files: parent checkpoints resolve symlinks before dot segments") {
+    const auto root = fs::temp_directory_path() / ("supple-sync-alias-" + std::to_string(getpid()));
+    REQUIRE(fs::create_directory(root));
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() {
+            setDurabilityHookForTesting({});
+            fs::remove_all(path);
+        }
+    } cleanup{root};
+    fs::create_directories(root / "real" / "child");
+    std::error_code ec;
+    fs::create_directory_symlink(root / "real" / "child", root / "alias", ec);
+    if (ec) {
+        MESSAGE("directory symlink unavailable: " << ec.message());
+        return;
+    }
+    const auto file = root / "alias" / ".." / "data.bin";
+    std::ofstream(file) << "payload";
+    if (!fs::exists(root / "real" / "data.bin")) {
+        // Windows removes ".." from a path before it follows the link, so the alias cannot arise.
+        REQUIRE(fs::exists(root / "data.bin"));
+        MESSAGE("the platform resolves dot segments before symlinks");
+        return;
+    }
+    std::vector<fs::path> directories;
+    setDurabilityHookForTesting([&](const fs::path& path, bool directory) {
+        if (directory) directories.push_back(path);
+        return true;
+    });
+    REQUIRE(syncParentDirectories(file));
+    REQUIRE_FALSE(directories.empty());
+    CHECK(directories.front() == fs::canonical(root / "real"));
+}
+
 TEST_CASE("base64: RFC 4648 test vectors round-trip") {
     const std::pair<const char*, const char*> vectors[] = {
         {"", ""},
@@ -271,3 +356,43 @@ TEST_CASE("files: retryWhileFileBusy gives up at once on other errors") {
     CHECK(attempts == 1);
 }
 #endif
+
+TEST_CASE("writeFileNew publishes only under a free name, synced, never replacing") {
+    const fs::path dir = fs::temp_directory_path() / ("supple-new-" + std::to_string(getpid()));
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    const fs::path file = dir / "copy.bak";
+    REQUIRE(writeFileNew(file, bytesOf("first")));
+    CHECK(*readTextFile(file) == "first");
+    auto again = writeFileNew(file, bytesOf("second"));
+    REQUIRE_FALSE(again);
+    CHECK(again.error().code == "file.exists");
+    CHECK(*readTextFile(file) == "first");
+
+    // Taken between the sync and the publication (another writer chose the
+    // same free name): still refused, the other writer's file kept.
+    const fs::path raced = dir / "raced.bak";
+    std::vector<fs::path> synced;
+    setFileSyncHookForTesting([&](const fs::path& p) {
+        synced.push_back(p);
+        if (p == raced) std::ofstream(raced) << "other";
+        return true;
+    });
+    auto lost = writeFileNew(raced, bytesOf("mine"));
+    setFileSyncHookForTesting({});
+    REQUIRE_FALSE(lost);
+    CHECK(lost.error().code == "file.exists");
+    CHECK(*readTextFile(raced) == "other");
+    CHECK(synced == std::vector<fs::path>{raced});
+
+    // A failed sync publishes nothing.
+    setFileSyncHookForTesting([](const fs::path&) { return false; });
+    auto unsynced = writeFileNew(dir / "never.bak", bytesOf("x"));
+    setFileSyncHookForTesting({});
+    REQUIRE_FALSE(unsynced);
+    CHECK_FALSE(fs::exists(dir / "never.bak"));
+    std::size_t files = 0;
+    for ([[maybe_unused]] const auto& e : fs::directory_iterator(dir)) ++files;
+    CHECK(files == 2);  // no temporary file left behind
+    fs::remove_all(dir);
+}

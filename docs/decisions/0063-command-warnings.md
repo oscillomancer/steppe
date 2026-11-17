@@ -49,3 +49,9 @@ are preserved. Consumers of warning-bearing scalar or array results use
 `result` to obtain the original value. Scripts receiving a command result
 can inspect or return its warnings; a batch caller inspects each step.
 Diagnostics are local to an invocation and do not leak to subsequent calls.
+
+### MCP catalogue follow-up (2026-11-14)
+
+[ADR-0077](0077-mcp-core-tool-catalogue.md) bounds the default engine tool set,
+omits dedicated MCP output schemas while retaining registry result schemas,
+and defines compact discovery and the optional all-tools catalogue.

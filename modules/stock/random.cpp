@@ -240,7 +240,7 @@ struct RandomModule : Module {
         gateA.setChannels(n);
         gateB.setChannels(n);
         gateC.setChannels(n);
-        const Transport t = transport();
+        const Transport t = gridTransport();
         const bool internal = !clock.connected();
         if (internal && t.playing && !wasPlaying) startOver();
         wasPlaying = t.playing;
@@ -256,7 +256,7 @@ struct RandomModule : Module {
             bool high = false;
             if (internal) {
                 if (t.playing) {
-                    const double e = t.beats * 2.0 + i * eighthsPerFrame;
+                    const double e = t.beats * 2.0 + (t.offset + i) * eighthsPerFrame;
                     high = e - floor(e) < 0.5;
                 }
             } else {

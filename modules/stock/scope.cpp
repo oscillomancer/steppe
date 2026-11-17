@@ -180,7 +180,7 @@ struct Scope : Module {
         const int src = clamp(source.index(), 0, 3);
         const bool xy = view.index() == 2;
         const bool falling = slope.index() == 1;
-        const Transport t = transport();
+        const Transport t = gridTransport();
         const bool synced = sync.on() && t.playing;
         double spanBeats = 0.25;
         for (int k = 0; k < clamp(span.index(), 0, 6); ++k) spanBeats *= 2.0;
@@ -220,7 +220,7 @@ struct Scope : Module {
             }
 
             if (synced) {
-                const double q = (t.beats + i * perFrame + 1e-7) / spanBeats;
+                const double q = (t.beats + (t.offset + i) * perFrame + 1e-7) / spanBeats;
                 const int s = floorToInt(q);
                 if (s != lastSpan) {
                     if (sweeping) finish();

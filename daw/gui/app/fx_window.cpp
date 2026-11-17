@@ -828,9 +828,10 @@ Status FxWindow::dispatch(const char* command, json::Value args) {
     return {};
 }
 
-std::string FxWindow::badgeText(const model::FxInstance& fx, bool failed) {
+std::string FxWindow::badgeText(const model::FxInstance& fx, model::Isolation effective,
+                                bool failed) {
     std::string text;
-    switch (fx.isolation) {
+    switch (fx.isolation == model::Isolation::Inherit ? effective : fx.isolation) {
         case model::Isolation::Dedicated:
             text = "isolated";
             break;
@@ -842,6 +843,7 @@ std::string FxWindow::badgeText(const model::FxInstance& fx, bool failed) {
             text = "in-process";
             break;
     }
+    if (fx.isolation == model::Isolation::Inherit) text += " (default)";
     if (fx.offline) text += " · offline";
     if (failed) text += " · failed";
     return text;
@@ -1265,10 +1267,11 @@ void FxWindow::buildRow(ui::Node& body, model::Id fx, std::size_t index, bool in
     }
     {
         auto& l2 = line(row, prefix + "line2." + id);
-        auto& badge =
-            l2.emplace<ui::Label>(prefix + "badge." + id, badgeText(*inst, isFailed),
-                                  ui::Font::Mono, "caption", isFailed ? "clip" : "ink-faint");
-        badge.layout.width = ui::SizeRule::fixed(170);
+        auto& badge = l2.emplace<ui::Label>(
+            prefix + "badge." + id, badgeText(*inst, app_.effectiveIsolation(fx), isFailed),
+            ui::Font::Mono, "caption", isFailed ? "clip" : "ink-faint");
+        // Room for the longest: "shared bridge (default) · offline · failed".
+        badge.layout.width = ui::SizeRule::fixed(296);
         auto* wetLabel = &l2.emplace<ui::Label>(prefix + "wetlabel." + id, "", ui::Font::Mono,
                                                 "caption", "ink-quiet");
         wetLabel->layout.width = ui::SizeRule::fixed(76);

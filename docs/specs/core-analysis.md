@@ -326,6 +326,33 @@ IEEE-float WAV headers, including those EXTENSIBLE subformats, must have
 to whole bytes). FLAC inspection requires a complete, exactly 34-byte
 STREAMINFO with a positive sample rate. Violations return `audio.format`.
 
+`WavStreamWriter` is owned off-RT by the recording writer. On a short append
+or buffered flush failure it stops accepting audio and reconciles `frames()`
+with complete frames physically present in its open file; final header updates
+retain that prefix (ADR-0082). A failed write never claims buffered, unwritten
+frames as retained, and never discards complete frames already written.
+`WavStreamWriter::sync()` updates/flushes the header and syncs the complete
+prefix through core-base's shared stream helper. `close()` establishes the
+same durable file checkpoint before closing, unless it was already synced
+and unchanged. Sync failures stop further appends and return `file.sync`.
+
+Streaming recording files reserve an 80-byte header: RIFF/WAVE, `JUNK` with a
+28-byte payload, float32 `fmt `, then `data`. Short takes remain plain WAV.
+Crossing either 32-bit container/data limit promotes JUNK to `ds64` and RIFF
+to RF64 in place, with 64-bit RIFF/data/frame counts and 32-bit sentinels.
+Audio never moves. Promotion writes ds64 payload/tag and sentinels before the
+RF64 marker; recovery also recognizes interrupted promotion tags, including every bytewise
+mixture of the old/new RIFF/RF64 and JUNK/ds64 FourCCs. This requires the
+unchanged reserved-chunk length, float32 fmt, data position and rate/alignment
+checks; unrelated or truncated layouts remain invalid. Repair reconstructs
+sizes from the complete physical prefix, never the torn size fields.
+`inspectWavStream`/`repairWavStream` accept the legacy 44-byte recording layout
+and the new reserved RIFF/RF64 layout. Repair covers every complete physical
+frame, excludes a trailing partial frame, and syncs the repaired header before
+returning. A valid read-only file requires no rewrite. Decode, metadata inspection
+and import accept RF64. Overflow beyond representable 64-bit file offsets is
+still refused before reading the input pointer (`audio.stream_full`).
+
 ## 10. Tests and docs
 
 Beyond §1.2: each descriptor against synthetic signals with known answers

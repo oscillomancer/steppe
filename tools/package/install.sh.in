@@ -122,12 +122,16 @@ if ((plugins)); then
   done
 fi
 desktop_cache="$prefix/share/applications/mimeinfo.cache"
+# desktop-file-utils 0.28 and later also write intent.cache.
+intent_cache="$prefix/share/applications/intent.cache"
 icon_cache="$prefix/share/icons/hicolor/icon-theme.cache"
 [[ -e "$desktop_cache" ]] && had_desktop_cache=1 || had_desktop_cache=0
+[[ -e "$intent_cache" ]] && had_intent_cache=1 || had_intent_cache=0
 [[ -e "$icon_cache" ]] && had_icon_cache=1 || had_icon_cache=0
 command -v update-desktop-database >/dev/null && update-desktop-database "$prefix/share/applications" || true
 command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -f -t "$prefix/share/icons/hicolor" >/dev/null 2>&1 || true
 if ((!had_desktop_cache)) && [[ -f "$desktop_cache" ]]; then printf '%s\n' "$desktop_cache" >> "$manifest"; fi
+if ((!had_intent_cache)) && [[ -f "$intent_cache" ]]; then printf '%s\n' "$intent_cache" >> "$manifest"; fi
 if ((!had_icon_cache)) && [[ -f "$icon_cache" ]]; then printf '%s\n' "$icon_cache" >> "$manifest"; fi
 trap - ERR
 printf 'Installed %s in %s\nMCP command: %s/bin/%s-mcp\n' '@PRODUCT_NAME@' "$app" "$prefix" "$slug"

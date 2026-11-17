@@ -5,6 +5,7 @@
 #pragma once
 
 #include "supple/base/result.h"
+#include "supple/host/clap_host.h"
 #include "thread_startup.h"
 #include "workers.h"
 
@@ -17,7 +18,9 @@ class LiveWorkers {
     using Fn = Workers::Fn;
     // Test seams: Join precedes the claim; Claimed precedes the open check;
     // Entered/Leave surround job access. Published/JoinWait run on the caller.
-    enum class Event { Join, Claimed, Entered, Leave, Missed, Idle, Published, JoinWait };
+    // Park: a helper is about to wait within a job, which it does only while
+    // one of the job's bridged calls blocks (ADR-0085).
+    enum class Event { Join, Claimed, Entered, Leave, Missed, Idle, Published, JoinWait, Park };
     struct Hooks {
         void (*event)(void*, Event) = nullptr;
         void* context = nullptr;
@@ -30,6 +33,12 @@ class LiveWorkers {
     LiveWorkers& operator=(const LiveWorkers&) = delete;
 
     unsigned helpers() const { return static_cast<unsigned>(threads_.size()); }
+    // Main thread: the helpers' native handles.
+    std::vector<std::thread::native_handle_type> handles() {
+        std::vector<std::thread::native_handle_type> out;
+        for (auto& t : threads_) out.push_back(t.native_handle());
+        return out;
+    }
     // Main thread, before publication: CPU capacity and backend RT scheduling.
     static unsigned maxHelpers();
     Status configure(Backend& backend);
@@ -40,12 +49,18 @@ class LiveWorkers {
   private:
     void shutDown();
     void loop(unsigned index);
-    void help(TaskGraph& graph, Fn fn, void* context) SUPPLE_RT;
+    // `self`: the helper's index, or -1 for the callback (which never parks).
+    void help(TaskGraph& graph, Fn fn, void* context, int self) SUPPLE_RT;
+    void park(TaskGraph& graph, int self) SUPPLE_RT;
+    // Wakes up to `count` parked helpers, or all of them.
+    void unpark(int count, bool all) SUPPLE_RT;
+    static void bridgeWaitEnded(void* self) SUPPLE_RT;
     void event(Event e) {
         if (hooks_.event) hooks_.event(hooks_.context, e);
     }
     struct alignas(64) Slot {
         std::atomic<std::uint32_t> sequence{0};
+        std::atomic<std::uint32_t> park{0};  // bumped to wake it from park()
     };
     std::unique_ptr<Slot[]> slots_;
     ThreadStartup startup_;
@@ -59,6 +74,13 @@ class LiveWorkers {
     TaskGraph* job_ = nullptr;
     Fn fn_ = nullptr;
     void* context_ = nullptr;
+    // The callback's bridge deadline for this job (ADR-0081), which helpers
+    // take for their bridged calls; 0 for none.
+    std::int64_t deadline_ = 0;
+    // The job's threads' blocking bridged waits (ADR-0085), set on each of
+    // them for the job; helpers park only while one blocks.
+    host::LiveBridgeWaiters waiters_{.ended = &LiveWorkers::bridgeWaitEnded, .context = this};
+    std::atomic<std::uint64_t> parked_{0};  // a bit per parked helper
 };
 
 }  // namespace detail

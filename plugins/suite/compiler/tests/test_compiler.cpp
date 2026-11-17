@@ -6,13 +6,27 @@
 #include <doctest/doctest.h>
 #include <clocale>
 #include <cstdlib>
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
+// After windows.h, whose types it uses (tools/ci/windows_includes.py).
+#include <psapi.h>
+#else
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 
 #include <array>
 #include <bit>
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <limits>
 #include <sstream>
+#include <vector>
 
 #include "runner.h"
 #include "supple/script_module.h"
@@ -194,6 +208,60 @@ TEST_CASE("compiled buffers release their allocations and copies own independent
             CHECK(D::bufferAllocations() == baseline);
         }
     }
+}
+
+namespace {
+// How many of the pages under [data, data + bytes) are in memory: pages
+// nothing has touched yet are not, and the first touch faults.
+std::size_t residentPages(const void* data, std::size_t bytes, std::size_t& pages) {
+#if defined(_WIN32)
+    SYSTEM_INFO info;
+    GetSystemInfo(&info);
+    const std::size_t page = info.dwPageSize;
+#else
+    const auto page = static_cast<std::size_t>(sysconf(_SC_PAGESIZE));
+#endif
+    const auto first = reinterpret_cast<std::uintptr_t>(data) / page * page;
+    const auto last = (reinterpret_cast<std::uintptr_t>(data) + bytes + page - 1) / page * page;
+    pages = (last - first) / page;
+    std::size_t resident = 0;
+#if defined(_WIN32)
+    std::vector<PSAPI_WORKING_SET_EX_INFORMATION> query(pages);
+    for (std::size_t i = 0; i < pages; ++i)
+        query[i].VirtualAddress = reinterpret_cast<void*>(first + i * page);
+    REQUIRE(QueryWorkingSetEx(GetCurrentProcess(), query.data(),
+                              static_cast<DWORD>(query.size() * sizeof(query[0]))));
+    for (const auto& q : query) resident += q.VirtualAttributes.Valid ? 1 : 0;
+#else
+#if defined(__APPLE__)
+    std::vector<char> in(pages);
+#else
+    std::vector<unsigned char> in(pages);
+#endif
+    REQUIRE(mincore(reinterpret_cast<void*>(first), last - first, in.data()) == 0);
+    for (auto v : in) resident += (v & 1) ? 1 : 0;
+#endif
+    return resident;
+}
+}  // namespace
+
+TEST_CASE(
+    "a buffer's storage is in memory when prepare() returns, so the audio thread never "
+    "touches a page first") {
+    // Large enough that the allocator maps fresh pages for it, which a zeroing
+    // allocation would leave untouched.
+    constexpr int kSize = 4 << 20;
+    script::Buffer<float> grown;
+    grown.resize(kSize);
+    REQUIRE(grown.size() == kSize);
+    std::size_t pages = 0;
+    CHECK(residentPages(grown.begin(), kSize * sizeof(float), pages) == pages);
+    // A copy into a buffer of another size allocates too.
+    script::Buffer<float> copy;
+    copy = grown;
+    REQUIRE(copy.size() == kSize);
+    CHECK(residentPages(copy.begin(), kSize * sizeof(float), pages) == pages);
+    for (float x : copy) REQUIRE(x == 0.0f);
 }
 
 TEST_CASE("factory patches are constant checked declarations with physical values") {
@@ -1960,5 +2028,56 @@ TEST_CASE("module banks and gate helpers run in real-time native and generated h
                 CHECK(std::bit_cast<std::uint64_t>(audio[i]) ==
                       std::bit_cast<std::uint64_t>(expected[i]));
         code->destroy(self);
+    }
+}
+
+#include "dsp/Interpolation.h"
+
+// The runtime's DelayLine is the framework's FractionalDelay ring for ring,
+// and its clear() is O(1): it reads what it held before as zero instead of
+// zeroing the ring. Every read, around the edge of what was pushed since,
+// must equal the framework's line whose ring clear() zeroed, to the bit.
+TEST_CASE("a cleared DelayLine reads exactly as the framework's zeroed line") {
+    for (const int longest : {0, 5, 100, 1000}) {
+        CAPTURE(longest);
+        script::DelayLine line;
+        dsp::FractionalDelay reference;
+        line.prepare(longest);
+        reference.prepare(longest);
+        std::uint32_t seed = 12345;
+        auto next = [&] {
+            seed = seed * 1664525u + 1013904223u;
+            return static_cast<double>(seed >> 8) / double(1 << 24) * 2.0 - 1.0;
+        };
+        const double most = reference.capacity();
+        auto agree = [&](int pushed) {
+            std::vector<double> delays = {0.0, 0.25, 0.5,  0.999,      1.0,        1.5,
+                                          2.0, 2.75, most, most - 0.5, most + 3.0, -1.0};
+            for (int k = -3; k <= 3; ++k)
+                for (double f : {0.0, 0.3, 0.7}) delays.push_back(pushed + k + f);
+            for (double d : delays) {
+                if (d > most + 3.0) continue;
+                CAPTURE(d);
+                const double a = line.read(d), b = reference.read(d);
+                CHECK(std::bit_cast<std::uint64_t>(a) == std::bit_cast<std::uint64_t>(b));
+            }
+        };
+        for (int round = 0; round < 3; ++round) {
+            const int fill = round == 0 ? 7 : longest + 40;
+            for (int i = 0; i < fill; ++i) {
+                const double x = next();
+                line.push(x);
+                reference.push(x);
+                agree(i + 1 + (round == 0 ? 0 : 1 << 20));
+            }
+            line.clear();
+            reference.clear();
+            for (int i = 0; i < longest + 12; ++i) {
+                const double x = next();
+                line.push(x);
+                reference.push(x);
+                agree(i + 1);
+            }
+        }
     }
 }

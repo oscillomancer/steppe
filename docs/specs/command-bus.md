@@ -1,7 +1,7 @@
 # Spec: command bus, control protocol and MCP adapter
 
 **Status:** Implemented. Interface changes go through an ADR.
-**Decision record:** ADR-0007, ADR-0063.
+**Decision record:** ADR-0007, ADR-0063, ADR-0077, ADR-0079.
 **Libraries:** `libs/command-bus` (`supple::cmd`), `libs/control-protocol`
 (`supple::rpc`), `mcp/` (`supple::mcp`). All run on the model thread only
 (transports marshal requests onto it). Depend on core-json and core-schema.
@@ -101,8 +101,13 @@ struct CommandInfo {
 ```
 
 The library registers its own meta commands: `registry.list` (filter by
-tag/kind/text; returns name, version, kind, summary) and `registry.describe`
+tag/kind/text; returns name, version, kind, summary, exposure) and `registry.describe`
 (one command: full schemas, errors, examples). Both `Query`, `McpExec`.
+
+Each `registry.list` row identifies one registered command version. `exposure`
+is `mcp-tool`, `mcp-exec` or `internal`, matching that version's declaration.
+Filters retain all five fields. This additive protocol-1 extension (ADR-0079)
+lets consumers select tool definitions without fetching every full description.
 
 ### 1.4 Dispatch
 
@@ -161,7 +166,7 @@ non-object results, a warning-bearing reply is
 replies retain their original shape. Failed invocations use the existing
 structured Error contract, without a success warning payload.
 
-The registry's result JSON Schema and MCP output schemas include optional
+The registry's result JSON Schema includes optional
 warning metadata: `warnings: {type: "array", items: {type: "object"}}`,
 without repeating the entry fields or their description per command. Legacy
 non-object command warnings retain mixed item schemas. The shared entry
@@ -235,7 +240,8 @@ Registered by the library, `Kind::Edit`, `McpTool`.
 Generators (each a function in the library, deterministic output, committed
 results checked by a drift test):
 
-- `mcpToolList(registry)` — MCP tool definitions (§4.2).
+- `mcpToolList(registry, bool allTools = false)` — dedicated MCP definitions (§4.2);
+  false selects McpTool, true selects every non-Internal command.
 - `markdownReference(registry)` → `skill/generated/*-commands.md`: per command,
   heading, summary, description, an args table (field, type, unit, range,
   default, description), result shape, errors with hints, examples as JSON.
@@ -298,6 +304,13 @@ transaction-safe inside a batch), `rpc.*` (§3), `mcp.*` (§4).
   `TMPDIR`, else the per-user temporary directory it normally names; Windows
   uses `LOCALAPPDATA\Temp`, else the native temporary directory (by default
   the same folder).
+  Before binding, the product runtime directory itself must be a real directory:
+  POSIX opens it without following links, checks the effective user's ownership,
+  and applies 0700 through that handle; Windows refuses reparse points and retains
+  inherited directory ACLs (ADR-0035). A refusal returns `rpc.path`, names the
+  directory and explains how to choose a private owned directory without aliases.
+  This checks the product directory, not every ancestor or arbitrary explicit
+  socket parent. Endpoint-lock acquisition never waits (ADR-0089).
   Accepted connection descriptors are nonblocking and close-on-exec.
   Framing: one JSON value per line (UTF-8, `\n`-terminated, compact JSON; no
   embedded newlines), max 16 MiB per message.
@@ -309,6 +322,8 @@ transaction-safe inside a batch), `rpc.*` (§3), `mcp.*` (§4).
 - **Errors:** `-32700` parse error, `-32600` invalid request, `-32601`
   method not found, `-32602` invalid params, `-32000` command error. `data`
   is always the `supple::Error` JSON (code, message, path, hint, details).
+  Invalid request ID types receive `id: null`, never the invalid value; a valid
+  ID is preserved when another envelope field is invalid. MCP follows the same rule.
 - **Handshake:** `rpc.hello {"client": "...", "agent": "...", "protocol": 1}`
   → `{"server": "<slug>", "product": "<name>", "version": "...",
   "protocol": 1, "commands": N}`; required before other methods. Sets the
@@ -323,6 +338,14 @@ transaction-safe inside a batch), `rpc.*` (§3), `mcp.*` (§4).
   frames messages; requests are posted to the model thread's queue and
   answered in order per connection.
 
+The synchronous `rpc::Client::connectionGeneration()` returns zero when it is
+disconnected, including when a nonblocking probe observes a closed peer. A live
+connection has a generation incremented after every successful `rpc.hello`
+connection handshake, including automatic reconnects. Closing the client does
+not reset the counter. Observation consumes no data and sends no requests;
+ordinary `call` retains its existing no-replay transport contract. This lets
+adapters refresh peer metadata before relying on cached admission decisions.
+
 ---
 
 ## 4. MCP adapter (`mcp/`)
@@ -330,8 +353,8 @@ transaction-safe inside a batch), `rpc.*` (§3), `mcp.*` (§4).
 - **Protocol:** MCP over stdio (JSON-RPC 2.0, newline-delimited), protocol
   version negotiation per the MCP spec: support `2025-06-18` and newer
   revisions that are backward compatible; reply with the client's requested
-  version if supported, else the newest supported. Capabilities: `tools`
-  (no `listChanged`). `ping` supported. `logging`/`resources`
+  version if supported, else the newest supported. Capabilities: `tools`; the proxy declares
+  `tools.listChanged: true`. `ping` supported. `logging`/`resources`
   later.
 - **Envelopes:** validate JSON-RPC fields before suppressing replies to valid
   notifications. Malformed objects without `id` receive Invalid Request
@@ -339,7 +362,7 @@ transaction-safe inside a batch), `rpc.*` (§3), `mcp.*` (§4).
   array. Array params in requests to this adapter return Invalid params
   (`-32602`).
 - **Deployments:** in-process (`McpServer` wraps a `Dispatcher` directly —
-  the sandbox CLI `--mcp` mode) and proxy (`<slug>-mcp` forwarding to a
+  the sandbox or engine CLI `--mcp` mode) and proxy (`<slug>-mcp` forwarding to a
   control-protocol socket).
 
 ### 4.1 Tool naming
@@ -352,21 +375,84 @@ version). Generic tools: `describe` (→ `registry.describe`/`registry.list`),
 
 ### 4.2 Tool definitions
 
-For every `McpTool` command: `name`, `title` (summary), `description`
-(summary + description + a one-line pointer to errors/examples via
-`describe`), `inputSchema` (args JSON Schema, with `x-unit` hints folded into
-field descriptions like "(Hz; accepts \"1.2 kHz\")" because clients ignore
-unknown keywords), `outputSchema` (result JSON Schema, only when it is an
-object schema: MCP requires `type: "object"`, and clients such as the Python
-SDK refuse the whole tool list otherwise), `annotations`
-(`readOnlyHint` for Query, `destructiveHint: false` for Edit — undoable —
-and `idempotentHint` where true).
+Both `<slug>-mcp` and `<slug>-engine --mcp` accept `--tools core|all`,
+defaulting to `core`; invalid or missing values fail with usage (exit 2).
+Core lists only `McpTool` commands; `all` lists every non-Internal command,
+including existing `McpExec` commands. Both use the latest command version.
+The sandbox exposure declarations and the GUI's additional `gui.selection`
+context query are unchanged.
+
+The proxy makes one `registry.list` request, selects the latest version of
+each command, then fetches exactly one `registry.describe` per dedicated tool
+selected by the chosen mode. Its startup command-request count is therefore
+`1 + dedicated tools` (excluding RPC handshakes). Internal commands are never
+hydrated at startup. Kind metadata from the full index supports `query` for
+commands outside the dedicated set. A named `describe` fetches its full contract
+on demand; `exec` forwards directly to the dispatcher for validation and
+execution without a schema-prefetch request. The compact MCP describe index
+continues to contain only name, kind and summary.
+
+The proxy requires a valid exposure on each latest index row. Missing or
+unknown values fail startup with `mcp.registry` at `/commands` and a hint to
+update the running application and proxy to matching versions, rather than
+silently fetching every description. Older proxies can ignore the added field.
+
+The engine core is exactly these 37 commands, plus `describe`, `exec`, `query`:
+
+```
+project.get project.open project.save session.describe
+track.add track.set track.list track.remove
+item.add item.set item.remove midi.write midi.get
+fx.add fx.describe fx.patch.get fx.patch.merge fx.remove plugin.list
+route.add env.add env.points.set tempo.set
+transport.play transport.stop transport.seek
+render.mix analyze.track analyze.render analyze.compare
+branch.create branch.switch branch.diff branch.merge history.undo batch engine.start
+```
+
+All other formerly dedicated engine commands use `McpExec`. Every command
+remains callable via `exec`, read-only commands via `query`, and discoverable
+via `describe`. The complete core `tools/list` JSON-RPC frame (UTF-8, including
+newline) must be at most 60,000 bytes; tests pin both this budget and the set.
+
+Each dedicated definition contains `name`, `title` (summary), `description`
+(command description, falling back to summary if empty, followed by
+"See describe for errors and examples."), `inputSchema` (args JSON Schema,
+with `x-unit` hints folded into field descriptions because clients ignore
+unknown keywords), and `annotations` (`readOnlyHint` for Query,
+`destructiveHint: false` for Edit — undoable — and `idempotentHint` where true).
+Dedicated definitions omit `outputSchema` in both modes and deployments;
+`describe` still exposes the complete result schema, and results still carry
+structured content. MCP 2025-06-18 Tools / Output Schema makes the schema
+optional and Structured Content permits JSON-object results independently:
+<https://modelcontextprotocol.io/specification/2025-06-18/server/tools>.
+
+`describe {}` returns `{columns: ["name", "kind", "summary"], namespaces:
+{<namespace>: [[<name>, <kind>, <summary>], ...]}}`. Namespace is the first
+name segment; standalone `batch` has its own group. Rows retain the registry's
+name/version order and include every registered command; summaries are at most
+80 characters. The full engine index targets less than 25,000 UTF-8 bytes.
+Existing `tag`, `kind`, and `text` filters apply before grouping (`text`
+searches names and summaries). `describe {command: <name>}` is unchanged:
+full args/result schemas, errors, examples and command metadata. The underlying
+`registry.list` contract is unchanged. Initialize instructions explain the
+common tools, describe/exec/query workflow and argument-free index.
 
 ### 4.3 Calls and results
 
+The adapter validates the generic describe/exec/query envelopes against their
+advertised member names, types and required fields before invoking any command.
+An invalid envelope returns structured `mcp.arguments` with the offending
+`/arguments/...` path and a corrective hint. A present batch does not bypass
+validation of sibling fields. The inner command still uses dispatcher validation.
+
 `tools/call` → dispatcher `execute` with `Origin{Mcp, client name from
 initialize, agent}`. Every valid `initialize` replaces the client and agent
-identity; an absent `_meta.agent` clears the agent. The proxy forwards that
+identity; an absent `_meta.agent` clears the agent. Present `clientInfo` and
+`_meta` must be objects;
+present `clientInfo.name`, `clientInfo.version` and `_meta.agent` must be strings.
+Invalid identity fields return Invalid params before changing the accepted
+identity or sending a new handshake. The proxy forwards the accepted
 identity in its RPC handshake. Success: `structuredContent` = result JSON
 when the result is an object (MCP structured content is an object) and
 `content: [{"type":"text","text": <compact JSON of the result>}]`. Failure:
@@ -375,6 +461,31 @@ when the result is an object (MCP structured content is an object) and
 the Error JSON. Protocol-level problems (unknown tool) are JSON-RPC errors
 per MCP.
 
+The proxy checks its RPC connection generation before consulting cached tool
+names or query kinds. A disconnected peer is detected with a nonblocking,
+non-consuming socket probe; explicit and automatic reconnects both change the
+generation. After reconnect it fetches `registry.list` once. An identical index
+retains the existing definitions without a notification or description requests.
+A changed index stages fresh kinds, dedicated-tool mappings and descriptions
+for the selected mode, then replaces them together. Failed or interrupted
+refreshes leave catalogue admission invalid until a later refresh succeeds.
+
+After initialization, a successful changed-index refresh queues
+`notifications/tools/list_changed` (JSON-RPC 2.0, no id) on the existing MCP
+stream. `serve` drains and flushes notifications before the triggering request's
+response; embedders using `handle` must drain `takeNotifications()` after each
+call. Multiple pending changes may coalesce into one notification. In-process
+catalogues are fixed and omit the `listChanged` capability. MCP Tools /
+[List Changed Notification](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#list-changed-notification)
+says servers advertising that capability SHOULD notify when their tools change.
+
+A failed invocation proved unsent by local RPC delivery provenance
+may be retried once, after refreshing the catalogue and rerouting the original
+tool call through current query admission and tool lookup. A sent but unanswered
+invocation (`rpc.read`, timeout or interruption) is never automatically replayed,
+including edits whose committed result was lost. A sent transport failure may reconnect
+and refresh metadata for subsequent calls while returning the original error.
+
 The standalone MCP proxy gives its RPC client twice the command bus's maximum
 job-wait duration (currently 60 seconds versus 30). Dispatch and response delivery
 therefore have headroom when `job.wait` consumes its full server-side budget.
@@ -382,6 +493,14 @@ The generic RPC client's configurable 30-second default and no-resend recovery
 contract remain unchanged.
 
 ### 4.4 Tests
+
+Fixed-seed schema-derived argument mutations cover all registered engine and
+sandbox commands, including nested/optional fields and numeric limits. Rejected
+inputs pass through dispatch, must retain structured errors, and must leave
+project/session state unchanged. The engine repeats this while recording in both
+executors with manual dummy blocks and interleaved saves. Schema-accepted actions
+are counted rather than executed without domain fixtures; see `tests/fuzz/README.md`
+for the conservative contract oracle and replay output.
 
 A scripted MCP client (C++ test or Python tooling in `tests/integration/`)
 runs initialize → tools/list → a sequence of calls against the sandbox, and
@@ -460,10 +579,18 @@ an informational Linux-reference diff; DSP values are deterministic per platform
   requests, 32 MiB of posted request frames and 32 MiB of unsent output;
   the I/O thread removes `POLLIN` while full. Events retain the existing
   drop-and-notify behavior.
-- Socket startup serializes the stale-path connect check and bind with an
-  instance lock file. A connected address reports `rpc.address_in_use`; only
-  refused or missing sockets are stale. Failed bind never unlinks the path,
-  and shutdown checks the socket's device and inode before unlinking.
+- A server owns its socket through an exclusive lock on `<socket>.lock`, taken
+  without waiting before startup inspects the path and held until the server
+  has stopped and removed its socket; the OS releases it if the process dies.
+  A lock held elsewhere reports `rpc.address_in_use`, whatever the socket
+  answers. With the lock in hand, a connected address also reports
+  `rpc.address_in_use`; only refused or missing sockets are stale. The connect
+  probe is nonblocking on every platform; a pending connect or failed probe
+  setup means occupied, never stale, and so does a full backlog on Linux and
+  Windows. macOS refuses a connect to a full backlog as it does a dead socket,
+  so there a listener that does not hold the lock is protected only while its
+  backlog has room. Failed bind never unlinks the path, and shutdown checks
+  the socket's device and inode before unlinking.
 - MCP stdio framing retains no more than 16 MiB of one line. It discards the
   rest of an oversized frame through newline (or EOF) and returns `-32600`.
   RPC distinguishes invalid top-level JSON values (`-32600`, null id) from
@@ -579,3 +706,94 @@ a console read during reader teardown, so shutdown can await a keypress. Pipe-ba
 MCP clients are the tested transport contract. Windows signal teardown clears the
 borrowed wake handle and joins lock-free handler claims before the event can close;
 Linux retains its existing signal/descriptor lifecycle.
+
+### Explicit local delivery (2026-11-16, ADR-0087 D4)
+
+`rpc::Client::callWithDelivery` returns `{result, delivery}`; `Delivery::Unsent`
+means no complete newline-terminated command frame was transmitted, and
+`Delivery::Sent` means it may have executed. A reconnect handshake has separate
+delivery state. The existing `call` API returns just `result` and never retries.
+Remote structured errors preserve their code/path/hint and carry Sent provenance.
+The proxy retries once only on Unsent, after refreshing/rerouting; error-code
+strings never authorize replay. Local adapter validation does not authorize retry.
+
+### Request ID budget (ADR-0087 D5)
+
+RPC and MCP request IDs must fit in 1,024 bytes of compact serialized JSON,
+including quotes and escape expansion. Longer IDs receive -32600 with id:null
+and structured rpc.id_size at /id, before handshake/dispatch or identity changes.
+IDs are never truncated. RPC rechecks final fallback frame bounds; with a bounded
+ID even its response-too-large/queue-full errors fit the 16 MiB wire limit.
+
+### Optional null leniency (ADR-0087 D7)
+
+Exported argument schemas deliberately describe a narrower client subset for
+optional members: callers should omit an optional value rather than send null.
+The decoder nevertheless accepts null as omitted, for LLM caller leniency.
+This does not admit other wrong types or bypass numeric constraints on present
+values. Exported schemas and tool-list byte budgets remain unchanged. The
+schema-driven corpus keeps probing null and exempts it only in its conservative
+exported-contract oracle.
+
+### Untrusted JSON value budget (ADR-0087 D3)
+
+RPC request/response frames and MCP stdin frames admit at most 1,000,000 JSON
+values (containers and primitives, not object keys), checked before constructing
+the next value. Refusal is a parse error with structured json.parse.too_many_values
+and a corrective hint; the next newline-delimited frame remains usable. Raw byte
+and depth limits remain. Trusted files keep the parser's unlimited value default.
+MCP handle takes ownership of its request; transports move parsed requests/params
+rather than deep-copying them. Embedders passing lvalues retain ordinary copy
+semantics. No bad_alloc catch is introduced.
+
+### Global admission (ADR-0087 D1)
+
+A server admits at most 1,024 posted-but-unexecuted requests and 64 MiB of frame
+bytes globally, including disconnected peers. Credits return when execution
+begins or the last unexecuted closure is destroyed; per-peer credits also return
+on destruction. Closure copies share frame/credit ownership. Admitted work still
+runs after disconnect; stop/destruction retains its existing lifecycle rules.
+Excess work is not posted or executed: a live peer receives structured rpc.busy
+with its bounded ID and a retry-later hint. A bounded, serialized I/O preflight
+extracts the ID without model dispatch. Existing per-peer16 limits remain; no
+additional fairness scheme is added. Each peer admits at most 64 subscriptions;
+excess returns rpc.subscriptions with an unsubscribe hint.
+
+### FD-backed output (ADR-0087 D2)
+
+Production engine, sandbox and proxy stdio use `serve(inputFd, outputFd, Tick)`.
+A joined native writer owns a noninheritable output duplicate. The single producer
+reserves one complete packet's worst-case capacity before dispatch: queued plus
+in-flight serialized bytes (notifications followed by reply, including newlines)
+never exceed 64 MiB. This conservative full-packet reservation pauses even buffered
+stdin admission while output is pending; it does not wait for a consumer or take
+a writer-held mutex in enqueue. Packet ownership uses an atomic SPSC publication
+and native wakes; storage is freed before capacity returns.
+
+During backpressure/drain the serving thread waits on writer progress plus Tick
+watches/deadlines, excluding stdin, and continues model service. Windows pauses
+new input reads; one already-buffered/in-flight64 KiB read-ahead may remain.
+POSIX duplicates share status flags: this API requires exclusive transport use,
+adds nonblocking output and restores its original nonblocking bit after join.
+The writer blocks SIGPIPE only on its owned POSIX thread; on macOS, which
+raises SIGPIPE for the whole process, it also opts the output descriptor out
+(`F_SETNOSIGPIPE`) and restores that setting after join. Windows abort teardown
+retries CancelSynchronousIo across the entry race, retaining handles through join.
+Invalid descriptors and read/write/wait failures return actionable structured
+transport errors. Pending delivery may be incomplete after an I/O error; an edit
+may already have executed and is never replayed on that basis.
+
+Normal EOF drains all replies while servicing Tick, then joins. A consumer that
+keeps stdout open but never reads can delay lossless completion indefinitely;
+there is no finite drain timeout or silent reply drop. Engine capture finalization
+follows serve's return, so it is likewise deferred by an undrained connection.
+The current API has no owner-triggered abort token; error teardown cancels/joins.
+Arbitrary device/filesystem cancellation latency and Windows console input retain
+their existing platform limits. No audio-thread work or system configuration changes.
+
+Bounded/counting serialization precedes wire allocation. A single oversized or
+over-deep reply becomes an explicit mcp.response_too_large error retaining its
+bounded ID; final fallback packet bounds are checked. Tool result text/structured
+content are both charged, without charging a fictitious additional escaping layer.
+The `serve(istream, ostream, Tick)` and `serve(inputFd, ostream, Tick)` overloads
+remain synchronous for tests/embedding only; they are not production stdio.

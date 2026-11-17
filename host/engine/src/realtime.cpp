@@ -105,6 +105,7 @@ Status DummyBackend::start(const BackendConfig& config, Callback callback) {
         return Error("backend.running", "the backend is already running", {},
                      "stop this backend before starting it again or changing its configuration");
     config_ = config;
+    if (options_.grantedRate > 0) config_.sampleRate = options_.grantedRate;
     callback_ = std::move(callback);
     outputs_.assign(config.outputs, std::vector<float>(config.blockSize, 0.0f));
     outPtrs_.clear();
@@ -258,6 +259,14 @@ std::uint64_t Engine::midiPortDropped(bool output, std::size_t port) const {
 
 unsigned Engine::liveHelpers() const { return liveWorkers_ ? liveWorkers_->helpers() : 0; }
 
+std::vector<std::thread::native_handle_type> Engine::deadlineThreads() {
+    std::vector<std::thread::native_handle_type> out;
+    if (liveWorkers_) out = liveWorkers_->handles();
+    const auto callback = callbackThread_.load(std::memory_order_relaxed);
+    if (callback != std::thread::native_handle_type{}) out.insert(out.begin(), callback);
+    return out;
+}
+
 Status Engine::start(Backend& backend, const BackendConfig& config) {
     if (backend_)
         return Error("engine.running", "the engine is already running", {},
@@ -296,6 +305,7 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
     outputWakeSerial_.fetch_add(1);
     outputWakeSeen_ = 0;
     midiSource_ = &backend;  // before any callback (backend_ is set after start returns)
+    deviceRate_.store(config.sampleRate, std::memory_order_relaxed);
     syncDevice_ = 0;
     syncRt_ = nullptr;
     for (auto& n : syncOutSent_) n.store(0, std::memory_order_relaxed);
@@ -308,6 +318,10 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
         return started;
     }
     config_ = backend.config();  // what the device granted (e.g. its rate)
+    // Before any plan or sync runtime is published, so their release orders
+    // it for every reader that loads it after acquiring one. BridgeCycle
+    // loads it at the top of a cycle, before the plan: see there.
+    deviceRate_.store(config_.sampleRate, std::memory_order_relaxed);
     hardwareMidi_->prepare(config_.sampleRate, config_.outputs);
     backend_ = &backend;
     startWarnings_.clear();
@@ -346,6 +360,11 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
     liveWorkersReady_.store(liveWorkers_.get(), std::memory_order_release);
     scheduling_.callback = backend.callbackPolicy();
     if (liveWorkers_) scheduling_.live = liveWorkers_->policy();
+    // A bridged plug-in on a live node runs in the callback's class (ADR-0081).
+    host::setLiveBridgeAudioPolicy(scheduling_.callback.kind == ThreadPolicy::Kind::None
+                                       ? ThreadPolicy{ThreadPolicy::Kind::Normal, 0}
+                                       : scheduling_.callback,
+                                   config_.blockSize, config_.sampleRate);
     if (options_.anticipative) {
         aheadFrames_ = std::max<std::int64_t>(
             2 * options_.renderBlock,
@@ -542,12 +561,16 @@ void Engine::stop() {
     while (ratePlanRequests_.pop(discarded)) {
     }
     latestPlan_.store(nullptr);
+    bridgedLive_ = false;
     for (const auto& plan : plans_)
         for (auto* instance : plan->instances) instance->setAudioWake(nullptr);
     ratePreparedTail_ = nullptr;
     rateReseekGeneration_.store(0);
     rateReseekServiced_ = 0;
     rateDeferred_ = false;
+    // A deferred edit dropped here never played either; the engine is
+    // stopped, so the app's next start loads its head anyway.
+    if (rateDeferredFrom_) latest_ = *std::exchange(rateDeferredFrom_, std::nullopt);
     scalarPending_ = false;
     scalarHeardEpoch_ = UINT64_MAX;
     ratePreparationSeconds_ = 0;
@@ -568,9 +591,24 @@ void Engine::stop() {
     ring_.reset();  // no callbacks after backend_->stop()
     scheduling_ = {};
     host::setBridgeAudioPolicy({ThreadPolicy::Kind::Normal, 0});
+    host::setLiveBridgeAudioPolicy({ThreadPolicy::Kind::Normal, 0});
 }
 
 Status Engine::load(const model::Session& session, const std::filesystem::path& projectDir) {
+    auto loaded = loadNow(session, projectDir);
+    // A deferred edit compiles in the first load() past its deferral, whoever
+    // calls it. If that failed, the edit never played: latest_ goes back to
+    // the session that did, so the prune, the mix and scalar shortcuts and
+    // later reloads do not act on it, and the app learns it (review 37 F1).
+    // A failure before the deferral is decided leaves the edit deferred.
+    if (!loaded && rateDeferredFrom_ && !rateDeferred_) {
+        latest_ = *std::exchange(rateDeferredFrom_, std::nullopt);
+        unplayedEdit_ = loaded.error();
+    }
+    return loaded;
+}
+
+Status Engine::loadNow(const model::Session& session, const std::filesystem::path& projectDir) {
     if (recording()) SUPPLE_TRY(model::validateRecordingPlayrate(session));
     // Neither shortcut may release a hold whose compiled curve is stale; the
     // scalar one publishes no mix values, so it carries pending holds after.
@@ -588,6 +626,7 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
     if (!rateSeekTarget_ && wantPlaying_.load(std::memory_order_acquire) &&
         rateSafeEpoch_.load(std::memory_order_acquire) == controlEpoch &&
         playedStream(controlEpoch) + lead < rateSafeStream_.load(std::memory_order_acquire)) {
+        if (!rateDeferredFrom_) rateDeferredFrom_ = latest_;  // what keeps playing meanwhile
         latest_ = std::make_shared<const model::Session>(session);
         rateDeferredDir_ = projectDir;
         rateDeferred_ = true;
@@ -667,25 +706,8 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
             plan = std::move(*again);
         }
     }
-    // Synchronous bridge calls (including lifecycle) belong to the renderer.
-    // A live bridge is a compensated pass-through until live pipelining exists.
-    std::vector<host::Instance*> blocked;
-    for (detail::Node& node : plan->nodes) {
-        if (options_.anticipative && !node.live) continue;
-        detail::forEachStage(node, [&](detail::Stage& stage) {
-            if (!stage.instance || !stage.instance->isolated()) return;
-            stage.callbackBypass = true;
-            blocked.push_back(stage.instance);
-            plan->warnings.push_back(stage.fx.str() +
-                                     ": bridged FX is passed through on a live node; set isolation "
-                                     "to in_process to monitor through it");
-        });
-    }
-    std::sort(blocked.begin(), blocked.end());
-    for (auto* instances : {&plan->instances, &plan->liveInstances, &plan->rendererInstances})
-        std::erase_if(*instances, [&](host::Instance* instance) {
-            return std::binary_search(blocked.begin(), blocked.end(), instance);
-        });
+    // Bridged FX on live nodes run in the callback under its bridge deadline
+    // (ADR-0081): no stage is passed through for being isolated.
     if (std::any_of(plan->nodes.begin(), plan->nodes.end(),
                     [](const detail::Node& n) { return n.midiIn.has_value() || n.rack; })) {
         const std::vector<std::string> ports = backend_->midiPorts();  // ADR-0016
@@ -810,6 +832,8 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
         rateScheduling_.store(true, std::memory_order_release);
     }
     latest_ = std::make_shared<const model::Session>(session);
+    compiled_ = latest_;
+    rateDeferredFrom_.reset();  // the deferred edit compiled with this one
     prunePending_ = true;
     if (options_.anticipative)
         for (auto* instance : plan->instances) instance->setAudioWake(&rendererEvent_);
@@ -830,6 +854,13 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
     holdsPending_ = false;
     staleCurves_.clear();
     latestPlan_.store(plan.get(), std::memory_order_release);
+    // The callback's instances: the live nodes', or all of them without the
+    // renderer (ADR-0086).
+    {
+        const auto& callback = options_.anticipative ? plan->liveInstances : plan->instances;
+        bridgedLive_ = std::any_of(callback.begin(), callback.end(),
+                                   [](const host::Instance* in) { return in->isolated(); });
+    }
     if (recoverySeek)
         writeTransport([&] {
             seekSample_.store(time::samplesAt(*recoverySeek, config_.sampleRate),
@@ -1068,7 +1099,7 @@ bool Engine::awaitRendererHeld(double timeoutSeconds) {
     return true;
 }
 
-void Engine::collectPlans() {
+std::uint64_t Engine::collectPlans() {
     // The oldest generation an executor may still be using.
     const std::uint64_t rendered = stoppedGen_.load(std::memory_order_acquire);
     const std::uint64_t oldest =
@@ -1091,6 +1122,7 @@ void Engine::collectPlans() {
     std::erase_if(plans_, retired);
     if (std::none_of(plans_.begin(), plans_.end(), [](const auto& p) { return p->hardwareLead; }))
         (void)hardwareMidi_->releaseHistory();
+    return oldest;
 }
 
 std::vector<model::Id> Engine::takeDirtyStates() { return std::exchange(dirtyStates_, {}); }
@@ -1182,7 +1214,8 @@ void Engine::service() {
             rateDeferred_ = false;
             const auto loaded = load(session, dir);
             if (!loaded)
-                warnings_.push_back("deferred playrate edit: " + loaded.error().toString());
+                warnings_.push_back("deferred playrate edit: " + loaded.error().toString() +
+                                    "; it never played: the engine plays the session before it");
         }
     }
     if (latest_) {
@@ -1191,9 +1224,11 @@ void Engine::service() {
         auto drainIdle = [&](host::Instance& instance, model::Id fx, std::uint64_t generation) {
             auto idle = instance.takeIdleOutputs();
             idleOutputDrops_ += idle.dropped;
+            if (idle.dropped != 0) noteDroppedFx(fx);
             for (const auto& event : idle.events) {
                 if (idleOutputs_.size() == 4096) {
                     ++idleOutputDrops_;
+                    noteDroppedFx(fx);
                     continue;
                 }
                 PluginOutput output;
@@ -1256,14 +1291,17 @@ void Engine::service() {
         if (!loaded)
             warnings_.push_back("plugin notification reload: " + loaded.error().toString());
     }
-    collectPlans();
-    const std::uint64_t rendered = stoppedGen_.load(std::memory_order_acquire);
-    const std::uint64_t live =
-        options_.anticipative ? std::min(rendered, callbackGen_.load(std::memory_order_acquire))
-                              : rendered;
-    if (prunePending_ && !rateDeferred_ && latest_ && live >= publishedGen_) {
-        // Every executor has adopted the newest plan and stopped what it dropped.
-        plugins_.prune(*latest_, live);
+    // The pool is pruned at the generation the plans were collected at: a
+    // newer reading may let an executor's adoption since then free an
+    // instance that a plan kept above still names (the next service()
+    // walks those plans).
+    const std::uint64_t live = collectPlans();
+    if (afterCollectForTests_) afterCollectForTests_(afterCollectContext_);
+    if (prunePending_ && !rateDeferred_ && compiled_ && live >= publishedGen_) {
+        // Every executor has adopted the newest plan and stopped what it
+        // dropped. Pruned against that plan's own session: latest_ may name
+        // one that never compiled.
+        plugins_.prune(*compiled_, live);
         prunePending_ = false;
     }
 }
@@ -1280,7 +1318,34 @@ PluginOutputs Engine::takePluginOutputs() {
     }
     out.dropped = pluginOutputDrops();
     out.voiceDropped = voiceDrops_.load();
+    // A slot not yet written (a drop racing this take) or a full table: all.
+    const auto count = droppedFxCount_.exchange(0, std::memory_order_acq_rel);
+    out.droppedAll = droppedFxAll_.exchange(false, std::memory_order_acq_rel) || count > kDroppedFx;
+    for (std::uint32_t i = 0; i < std::min<std::uint32_t>(count, kDroppedFx); ++i) {
+        const auto v = droppedFx_[i].exchange(0, std::memory_order_acq_rel);
+        if (v == 0) {
+            out.droppedAll = true;
+            continue;
+        }
+        const model::Id id{static_cast<model::Kind>((v >> 32) - 1),
+                           static_cast<std::uint32_t>(v & 0xffffffffu)};
+        if (std::find(out.droppedFx.begin(), out.droppedFx.end(), id) == out.droppedFx.end())
+            out.droppedFx.push_back(id);
+    }
     return out;
+}
+
+void Engine::noteDroppedFx(model::Id fx) SUPPLE_RT {
+    const std::uint64_t v = (static_cast<std::uint64_t>(fx.kind) + 1) << 32 | fx.n;
+    const auto known = std::min<std::uint32_t>(droppedFxCount_.load(std::memory_order_acquire),
+                                               static_cast<std::uint32_t>(kDroppedFx));
+    for (std::uint32_t i = 0; i < known; ++i)
+        if (droppedFx_[i].load(std::memory_order_relaxed) == v) return;
+    const auto slot = droppedFxCount_.fetch_add(1, std::memory_order_acq_rel);
+    if (slot < kDroppedFx)
+        droppedFx_[slot].store(v, std::memory_order_release);
+    else
+        droppedFxAll_.store(true, std::memory_order_release);
 }
 
 void Engine::publishPluginOutputs(detail::Plan& p, bool renderer, std::uint64_t epoch,
@@ -1298,7 +1363,9 @@ void Engine::publishPluginOutputs(detail::Plan& p, bool renderer, std::uint64_t 
             changed |= st.voiceDropped != 0 || st.outEvents.dropped != 0;
             voiceDrops_.fetch_add(st.voiceDropped, std::memory_order_relaxed);
             st.voiceDropped = 0;
-            outputDrops_.fetch_add(st.outEvents.dropped, std::memory_order_relaxed);
+            // The FX before its count, so a drain that sees the count can name it.
+            if (st.outEvents.dropped != 0) noteDroppedFx(st.fx);
+            outputDrops_.fetch_add(st.outEvents.dropped, std::memory_order_release);
             for (std::size_t i = 0; i < st.outEvents.count; ++i) {
                 const auto& event = st.outEvents.storage[i];
                 // Voice ends and note/MIDI output stay on the audio path;
@@ -1315,7 +1382,10 @@ void Engine::publishPluginOutputs(detail::Plan& p, bool renderer, std::uint64_t 
                 output.streamSample = stream + event.time;
                 output.event = event;
                 output.anticipative = renderer;
-                if (!queue.push(output)) outputDrops_.fetch_add(1, std::memory_order_relaxed);
+                if (!queue.push(output)) {
+                    noteDroppedFx(st.fx);
+                    outputDrops_.fetch_add(1, std::memory_order_release);
+                }
             }
         });
     }
@@ -1371,6 +1441,13 @@ void Engine::startFree(std::vector<host::Instance*>& owned,
             // renderer's held note) that the callback then restarts must not
             // resume that note when a retry succeeds, untracked, so never ended.
             in->reset();
+            if (in->startUnanswered()) {
+                // Not refused: a bridge that has not answered by the live
+                // deadline (ADR-0081). Asked again next cycle; one that never
+                // answers fails within 50 ms like any late bridge.
+                in->setOwner(nullptr);
+                continue;
+            }
             in->setOwner(&kRefused);
             processErrors_.fetch_add(1);
             notifyMain();
@@ -1440,6 +1517,63 @@ void Engine::cycle(const float* const* in, float* const* out, std::uint32_t fram
                 e.notifyMain();
         }
     } inCycle(*this, out, frames);
+#if defined(__linux__)
+    // The thread the device calls on, so its page faults can be counted
+    // (deadlineThreads()). pthread_self() only reads thread-local storage.
+    if (const auto self = currentThreadHandle();
+        callbackThread_.load(std::memory_order_relaxed) != self)
+        callbackThread_.store(self, std::memory_order_relaxed);
+#endif
+    // ADR-0081: bridged calls on this thread, and on the live helpers serving
+    // this cycle, wait no later than the cycle's start plus its period or
+    // 2 ms, whichever is larger. A cycle with a late call ran past its period.
+    // The period is fixed here, before any bridged call (the final callback
+    // below stops plug-ins), so before the cycle acquires its plan: in the
+    // one cycle that first adopts a plan, a callback preempted between here
+    // and that acquire for longer than the rest of start() and a whole load()
+    // may still read the requested rate, and that cycle's deadline is off by
+    // the requested-to-granted ratio. Later cycles read the granted rate.
+    struct BridgeCycle {
+        Engine& engine;
+        std::uint64_t late = host::bridgeLateCalls();
+        host::BridgeWaits waits = host::bridgeLiveWaits();
+        std::int64_t start = host::steadyNanoseconds();
+        std::int64_t period;
+        host::LiveBridgeDeadline deadline;
+        BridgeCycle(Engine& e, std::uint32_t count)
+            : engine(e),
+              period(static_cast<std::int64_t>(count * 1e9 /
+                                               e.deviceRate_.load(std::memory_order_relaxed))),
+              deadline(start + std::max<std::int64_t>(
+                                   static_cast<std::int64_t>(e.options_.liveBridgeDeadlineMs * 1e6),
+                                   period)) {}
+        ~BridgeCycle() {
+            const bool lateCall = host::bridgeLateCalls() != late;
+            if (lateCall) {
+                engine.bridgeLate_.fetch_add(1, std::memory_order_relaxed);
+                engine.notifyMain();
+            }
+            // Why a cycle with bridged calls ran past its period (ADR-0081
+            // diagnostics). The waits are summed over this cycle's threads.
+            const host::BridgeWaits now = host::bridgeLiveWaits();
+            if (now.calls == waits.calls) return;
+            const std::int64_t took = host::steadyNanoseconds() - start;
+            std::int64_t longest = engine.longestBridgedCycle_.load(std::memory_order_relaxed);
+            while (took > longest && !engine.longestBridgedCycle_.compare_exchange_weak(
+                                         longest, took, std::memory_order_relaxed)) {
+            }
+            if (took <= period) return;
+            // The bridge is to blame only when its waits cover the overrun:
+            // a call posted after the deadline had passed is late, but the
+            // time went before it.
+            if (now.waitNs - waits.waitNs < took - period)
+                engine.overrunNotWaiting_.fetch_add(1, std::memory_order_relaxed);
+            else if (lateCall)
+                engine.overrunLateWait_.fetch_add(1, std::memory_order_relaxed);
+            else
+                engine.overrunSlowBridge_.fetch_add(1, std::memory_order_relaxed);
+        }
+    } bridgeCycle(*this, frames);
     hardwareMidi_->begin(*midiSource_, frames);
     if (frames == 0) {  // the backend's final callback: stop every plugin here
         detail::adoptRackModules(livePlan_ ? &livePlan_->liveModules : nullptr, nullptr,
@@ -1533,7 +1667,7 @@ void Engine::runSync(const float* const* in, float* const* out, std::uint32_t fr
                      bool playingBefore) SUPPLE_RT {
     detail::SyncRuntime* rt = syncRt_;
     if (!rt) return;
-    const double rate = config_.sampleRate;
+    const double rate = deviceRate_.load(std::memory_order_relaxed);
     const double after = rtTimeline_.load(std::memory_order_relaxed);
     const auto epochAfter = timelineEpoch_.load(std::memory_order_acquire);
     // The timeline is published only for a cycle that played.
@@ -1580,6 +1714,7 @@ void Engine::runSync(const float* const* in, float* const* out, std::uint32_t fr
 
 // The status travels as words; copying it bytewise is sound.
 static_assert(std::is_trivially_copyable_v<SyncStatus>);
+static_assert(std::atomic<double>::is_always_lock_free);  // deviceRate_, read by the callback
 
 void Engine::publishSyncStatus(const SyncStatus& status) SUPPLE_RT {
     std::array<std::uint64_t, kSyncWords> words{};
@@ -1943,7 +2078,8 @@ void Engine::countClicks(float* const* out, std::uint32_t k) SUPPLE_RT {
     const float gain = metroGain_.load(std::memory_order_relaxed);
     for (std::uint32_t i = 0; i < k; ++i, ++countPos_) {
         if (countPos_ % countBeatA_ == 0)
-            startClick((countPos_ / countBeatA_) % countBarA_ == 0, config_.sampleRate);
+            startClick((countPos_ / countBeatA_) % countBarA_ == 0,
+                       deviceRate_.load(std::memory_order_relaxed));
         const float v = gain * clickSample();
         out[0][i] += v;
         out[1][i] += v;
@@ -2093,7 +2229,12 @@ Engine::Pulled Engine::pullAhead(float* const* out, std::uint32_t frames) SUPPLE
 
 // --- recording (ADR-0014) --------------------------------------------------------------------
 
-Status Engine::startRecording(std::vector<RecordTarget> targets) {
+Status Engine::setRecordingPunch(RecordedPunch punch) {
+    SUPPLE_TRY(detail::validateRecordingPunch(punch));
+    return recorderOwned_ ? recorderOwned_->setPunch(punch) : okStatus();
+}
+
+Status Engine::startRecording(std::vector<RecordTarget> targets, RecordedPunch punch) {
     if (!backend_)
         return Error("engine.stopped", "start the engine first", {},
                      "call engine.start with a valid backend before loading or recording");
@@ -2101,6 +2242,7 @@ Status Engine::startRecording(std::vector<RecordTarget> targets) {
         return Error("record.running", "already recording", {},
                      "stop the current recording with transport.stop before starting another");
     if (latest_) SUPPLE_TRY(model::validateRecordingPlayrate(*latest_));
+    SUPPLE_TRY(detail::validateRecordingPunch(punch));
     // While slaved the chase rate stays close to 1 and is not part of the
     // project: recording goes ahead (ADR-0071). Only the saved rate counts.
     const auto* slaved = latestPlan_.load(std::memory_order_acquire);
@@ -2180,8 +2322,11 @@ Status Engine::startRecording(std::vector<RecordTarget> targets) {
     const BackendStatus b = backend_->status();
     const std::int64_t latency =
         static_cast<std::int64_t>(outputLatency()) + b.outputLatency + b.inputLatency;
-    auto rec = std::make_unique<detail::Recorder>(std::move(targets), config_.sampleRate, latency);
+    auto rec =
+        std::make_unique<detail::Recorder>(std::move(targets), config_.sampleRate, latency, punch);
+    rec->setMainThreadWake(mainWake_);
     rec->setDriftTolerant(slaved && slaved->syncRate);
+    rec->setLoop(readLoop());  // for the MIDI journals (ADR-0080)
     SUPPLE_TRY(rec->open());
     recorderOwned_ = std::move(rec);
     recorder_.store(recorderOwned_.get(), std::memory_order_release);
@@ -2212,6 +2357,10 @@ Result<std::vector<RecordedTake>> Engine::stopRecording() {
     recorderOwned_.reset();
     for (auto& take : takes) stoppedTakes_.push_back(std::move(take));
     return std::exchange(stoppedTakes_, {});
+}
+
+std::vector<RecordingError> Engine::takeRecordingErrors() {
+    return recorderOwned_ ? recorderOwned_->takeErrors() : std::vector<RecordingError>{};
 }
 
 std::uint64_t Engine::relocate(std::uint64_t previous) {

@@ -105,14 +105,49 @@ class ModuleHarness {
         p.modSignal = std::move(signal);
         p.amount = amount;
     }
-    void transport(const ss::Transport& t) { transport_ = t; }
+    // The song: `t.beats` is the position at the next frame run; while it
+    // plays it moves on at t.tempo. Each call gets it as the rack gives it,
+    // read at the grid interval's start with the call's offset into it.
+    void transport(const ss::Transport& t) {
+        transport_ = t;
+        anchor_ = start_ + frame_;
+    }
+    // Where the first frame run sits on the timeline, as after a seek: the
+    // grid is the timeline's, so a start off it begins with a short call.
+    // Call before running.
+    void startAt(std::int64_t position) {
+        start_ = position;
+        anchor_ = position;
+    }
 
     // Runs `frames` frames in grid blocks, recording every output.
     void run(std::int64_t frames) {
         while (frames > 0) {
-            const int n = static_cast<int>(std::min<std::int64_t>(frames, kGrid));
+            const int n = static_cast<int>(std::min<std::int64_t>(frames, kGrid - phase()));
             block(n);
             frames -= n;
+        }
+    }
+
+    // Runs `frames` frames as host blocks of the given sizes in turn split
+    // them: each piece is cut where it crosses the grid, so a grid interval
+    // can reach the module in two calls, as after a seek off the grid. The
+    // knobs here are constant, so holding them across a split interval (as
+    // the rack does) and sampling them per call agree.
+    void runSplit(std::int64_t frames, const std::vector<int>& pieces) {
+        std::size_t k = 0;
+        int left = pieces.at(0);
+        while (frames > 0) {
+            const int toGrid = kGrid - phase();
+            const int n =
+                static_cast<int>(std::min<std::int64_t>({frames, std::int64_t{left}, toGrid}));
+            block(n);
+            frames -= n;
+            left -= n;
+            if (left == 0) {
+                k = (k + 1) % pieces.size();
+                left = pieces[k];
+            }
         }
     }
 
@@ -235,7 +270,19 @@ class ModuleHarness {
         for (const InputState& in : inputs_) width = std::max(width, in.channels);
         for (const ParamState& p : params_) width = std::max(width, p.modChannels);
         record_.channels = width;
+        // As the rack gives them: transport() at the call's start,
+        // gridTransport() at its grid interval's start with the offset.
         record_.transport = transport_;
+        record_.gridTransport = transport_;
+        record_.gridTransport.offset = phase();
+        if (transport_.playing) {
+            const double perFrame = transport_.tempo / 60.0 / record_.sampleRate;
+            record_.transport.beats =
+                transport_.beats + static_cast<double>(start_ + frame_ - anchor_) * perFrame;
+            record_.gridTransport.beats =
+                transport_.beats +
+                static_cast<double>(start_ + frame_ - phase() - anchor_) * perFrame;
+        }
         if (changed) call(code_.update(), kBudget);
         for (InputState& in : inputs_) {
             ss::Input& port = inputPort(*in.model);
@@ -268,8 +315,6 @@ class ModuleHarness {
                         c < out.lastChannels ? out.buffer[static_cast<std::size_t>(c * kGrid + f)]
                                              : 0.0);
         }
-        if (transport_.playing)
-            transport_.beats += n * transport_.tempo / 60.0 / record_.sampleRate;
         frame_ += n;
     }
 
@@ -280,8 +325,13 @@ class ModuleHarness {
     std::vector<InputState> inputs_;
     std::vector<OutputState> outputs_;
     std::array<double, kGrid> zero_{};
+    // The frame's place in the rack's grid.
+    int phase() const { return static_cast<int>(((start_ + frame_) % kGrid + kGrid) % kGrid); }
+
     ss::Transport transport_;
     std::int64_t frame_ = 0;
+    std::int64_t start_ = 0;   // the timeline position of the first frame
+    std::int64_t anchor_ = 0;  // where transport_.beats is the song position
 };
 
 }  // namespace supple::rack::test

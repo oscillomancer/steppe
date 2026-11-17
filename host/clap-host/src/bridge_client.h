@@ -5,6 +5,7 @@
 
 #include "bridge_child.h"
 
+#include <algorithm>
 #include <atomic>
 #include <map>
 #include <memory>
@@ -31,6 +32,7 @@ class RemoteInstance;
 
 class BridgeProcess {
   public:
+    static constexpr int kHung = -2;
     static Result<std::shared_ptr<BridgeProcess>> spawn();
     ~BridgeProcess();
     Result<std::vector<std::uint8_t>> call(bridge::Op op, std::uint32_t instance,
@@ -48,7 +50,6 @@ class BridgeProcess {
   private:
     friend struct BridgeTestAccess;
     friend class RemoteInstance;
-    static constexpr int kHung = -2;
     static constexpr int kProtocolViolation = -3;
     BridgeProcess() = default;
     Status initializeNotifications();
@@ -56,7 +57,10 @@ class BridgeProcess {
     void notifySubscribers();
     void subscribe(RemoteInstance& instance, MainThreadWake& wake);
     void unsubscribe(RemoteInstance& instance);
-    bool refresh();  // main only: ACK before snapshotting every registered member
+    // Main only: ACK, then snapshot the members that need it (every member for
+    // a pending whole-bridge refresh or an unnamed delivery). True when `self`
+    // was among them, so its consumer need not pull it again (round 25).
+    bool refresh(const RemoteInstance* self);
     MainThreadWake watcherWake_;
     WakeEvent notification_;
     bool notificationsReady_ = false;
@@ -64,8 +68,18 @@ class BridgeProcess {
     std::atomic<bool> watcherQuit_{false}, ackPending_{false};
     std::atomic<std::uint64_t> delivery_{0};
     std::uint64_t servedDelivery_ = 0;
-    bool refreshNeeded_ = true;
+    bool refreshNeeded_ = true;  // every member: a delivery names none
+    // Members whose own request changed them: only these are pulled (item D:
+    // pulling every member made one FX's edit cost the bridge's size).
+    std::vector<RemoteInstance*> refreshOnly_;
+    void queueRefresh(RemoteInstance* member) {
+        if (std::find(refreshOnly_.begin(), refreshOnly_.end(), member) == refreshOnly_.end())
+            refreshOnly_.push_back(member);
+    }
     std::vector<RemoteInstance*> members_;  // main only, includes retired instances
+    // Ids an ACK may name beyond members_: destroys in flight. Longer lists
+    // are unreadable (review round 26: they cost O(count x members) on main).
+    static constexpr std::size_t kAckSlack = 16;
     std::mutex subscribersMutex_;
     std::map<MainThreadWake*, std::size_t> subscribers_;
     std::atomic<int> pid_{-1};
@@ -131,15 +145,25 @@ class RemoteInstance {
     Instance::EditorRequests editorRequests();
 
     // audio thread
+    // False when the plug-in refused, or when the bridge has not answered yet
+    // (startUnanswered(): a live deadline passed first; asking again later
+    // gets the answer, ADR-0081).
     bool startProcessing() SUPPLE_RT;
+    bool startUnanswered() const SUPPLE_RT { return startUnanswered_; }
+    // While a late request is outstanding (ADR-0081 §4) these are kept, in
+    // this order and once each, and sent before the next block: stop, reset,
+    // flush. A reset drops the notes carried from skipped blocks.
     void stopProcessing() SUPPLE_RT;
     void reset() SUPPLE_RT;
     void flush() SUPPLE_RT;
     bool process(const ProcessBlock& block, OutputEvents* out) SUPPLE_RT;
+    // Events a skipped block carries to the next one the plug-in processes.
+    static constexpr std::uint32_t kMaxCarried = 512;
 
     bool failed() const { return process_->failed(); }
+    // The bridge's audio thread did not get the class its last command asked for.
+    bool classRefused() const { return classRefused_.load(std::memory_order_relaxed); }
     std::string failure() const;
-    void setDeadlineMs(int ms) { deadlineMs_ = ms; }
     int bridgePid() const { return process_->pid(); }
 
   private:
@@ -159,7 +183,33 @@ class RemoteInstance {
     Result<std::vector<std::uint8_t>> call(bridge::Op op, const bridge::Writer& w,
                                            bridge::Resource fd = bridge::noResource,
                                            int timeoutMs = 10000);
+    enum class Sent : std::uint8_t { Answered, Late, Unsent };
+    // Posts `cmd` and waits for its answer; Late leaves it outstanding.
+    // Requires a settled instance.
+    Sent post(bridge::Cmd cmd) SUPPLE_RT;
+    // settle(), then post(): false unless it was answered.
     bool command(bridge::Cmd cmd) SUPPLE_RT;
+    // While unsettled, keeps a lifecycle command for settle() to send.
+    void lifecycle(bridge::Cmd cmd) SUPPLE_RT;
+    // A skipped block's events, for the next block the plug-in processes.
+    // Full of distinct parameters, it still takes a later value of one.
+    void carry(std::span<const Event> events) SUPPLE_RT;
+    void dropCarriedNotes() SUPPLE_RT;
+    // Too much carried: keep each parameter's latest value, drop the notes
+    // and, if any went, reset the plug-in first, so no note it never hears
+    // the end of hangs.
+    void overflow() SUPPLE_RT;
+    // Drops the carried parameters `events` set again.
+    void supersede(std::span<const Event> events) SUPPLE_RT;
+    // Whether request `req` was answered: within the live deadline when the
+    // calling thread has one (ADR-0081), else within the background one
+    // (ADR-0013), which fails and kills a bridge that misses it.
+    bool answered(std::uint32_t req, bridge::Cmd cmd) SUPPLE_RT;
+    // The shared memory is the bridge's until it answers the request a late
+    // live block left outstanding: waits for that answer first, then sends
+    // the lifecycle commands kept meanwhile. False while one is outstanding.
+    bool settle() SUPPLE_RT;
+    void late() SUPPLE_RT;
     void unmap();
 
     std::shared_ptr<BridgeProcess> process_;
@@ -169,12 +219,21 @@ class RemoteInstance {
     bridge::SharedSignals signals_;
     bridge::Layout layout_{0, 0, 0};
     std::uint32_t seq_ = 0;
-    int deadlineMs_ = 2000;  // for process(); lifecycle commands get longer
+    std::uint32_t outstanding_ = 0;  // a late live request not yet answered (if pending_)
+    bool pending_ = false;           // apart from its number, which wraps through 0
+    bool startUnanswered_ = false;
+    std::uint8_t lifecycle_ = 0;  // kept commands, a bit each (bridge_client.cpp)
+    std::unique_ptr<Event[]> carried_ = std::make_unique<Event[]>(kMaxCarried);
+    std::uint32_t carriedCount_ = 0;
+    std::int64_t lateSince_ = 0;            // steady ns of the first of consecutive late calls
+    std::int64_t lateFailNs_ = 50'000'000;  // consecutive late calls fail it after this
+    bool spun_ = false;                     // the last answer came while spinning, before a wait
     std::uint32_t latency_ = 0, tail_ = 0;
     bool reportsTail_ = false, restartPending_ = false;
     // Control servicing publishes this flag while audio checks for idle work.
     std::atomic<bool> needsAudioFlush_{false};
     std::atomic<bool> processRequested_{false};
+    std::atomic<bool> classRefused_{false};
 };
 
 std::filesystem::path bridgeExecutable();

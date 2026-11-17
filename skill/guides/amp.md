@@ -89,7 +89,7 @@ The cabinet only, for a pedal's or a preamp's signal:
 
 ## Checking it
 
-`analyze_track` before and after, or `dsp_test` with `audio_file` (a DI)
+`analyze_track` before and after, or `exec {"command": "dsp.test"}` with `audio_file` (a DI)
 and its `meters` (`distortion`, `sag_now`). The editor draws the
-cabinet's response as the audio has it, so `dsp_preview` with a patch shows
+cabinet's response as the audio has it, so `exec {"command": "dsp.preview"}` with a patch shows
 what a mic move does to the spectrum.

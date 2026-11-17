@@ -13,6 +13,7 @@
 #include <string>
 
 #include "app_actions.h"
+#include "supple/model/versions.h"
 #include "supple/ui/root.h"
 
 struct SDL_Window;
@@ -99,6 +100,12 @@ class FileActions {
     // A save's (or template's) warnings, if it has any, in a popup: a plug-in
     // whose state could not be read keeps its earlier state.
     void showSaveWarnings(const std::string& command, const json::Value& result);
+    // File > Recover unsaved work… (also offered at start and after opening
+    // a project when there is some): the open project's newer autosave and
+    // leftover recordings, then unsaved projects earlier runs left behind
+    // (project.recoverable), newest first, each with Recover and Delete.
+    // Nothing loads until the user chooses (ADR-0078).
+    void openRecovery();
 
   private:
     struct DiscardRequest;
@@ -110,6 +117,16 @@ class FileActions {
     Result<json::Value> exec(const std::string& command, json::Value args);
     void markSaved();
     void showError(const std::string& message);
+    void recoverSession(const std::string& session, const std::string& title);
+    // `autosave`: the one the popup offered for the project at `path` in
+    // `generation`, opened even if the question before it saves the file
+    // over it; nothing, if another project has replaced that one since.
+    void recoverProjectAutosave(const std::string& autosave, std::uint64_t generation,
+                                const std::filesystem::path& path);
+    void recoverProjectRecordings();
+    void confirmDeleteSession(const std::string& session, const std::string& title,
+                              const std::string& size);
+    void showNotice(const std::string& id, const std::string& title, const std::string& text);
     ui::Root& root_;
     AppActions& actions_;
     cmd::Dispatcher& dispatcher_;
@@ -119,9 +136,8 @@ class FileActions {
     Post post_;
     SaveDialog saveDialog_;
     DialogLifetime dialogs_;
-    std::uint64_t savedVersion_ = 0;
+    model::VersionStore::Heads savedHeads_;  // the branch heads when last saved
     std::uint64_t projectGeneration_ = ~std::uint64_t{0};
-    std::string savedBranch_;
     std::string replaceTemplate_;  // a name that exists: Save again replaces it
 };
 

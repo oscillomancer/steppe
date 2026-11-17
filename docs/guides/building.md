@@ -141,10 +141,21 @@ disable the GUI; `gcc` and `asan` exclude the nested source-export test, and
 `asan` also runs LeakSanitizer: a test fails when a process it starts exits
 with memory nothing points to any more.
 
+The `engine-plan-soak.tests` target provides a short seeded playback plan-swap
+test in every preset, labelled `rt`. `SUPPLE_SOAK_SECONDS` extends it for stress
+runs; `SUPPLE_SOAK_SEED` and a flushed JSONL journal reproduce its edits.
+[The fuzzing guide](../../tests/fuzz/README.md#playback-plan-swap-soak) describes
+the invariants, long sanitizer runs and replay controls.
+
 `cmake --build --preset dev -j3 --target gui-app.tests` also stages the
 stock plugins its cases use (when plugins are enabled), the MCP helper and the
 agent skill tree.
 Run it with `ctest --preset dev -R '^gui-app\.tests$'`.
+
+In a Debug build (`dev`), setting `SUPPLE_SCRIPT_INTERPRET` makes the Script
+Player run scripts in MIR's interpreter rather than as machine code, to compare
+the two. The interpreter allocates on the audio thread, so use it only for that;
+release builds ignore the variable.
 
 Tests that open real hardware are skipped unless you opt in:
 `SUPPLE_AUDIO_DEVICE_TEST=1` (the audio device), `SUPPLE_MIDI_DEVICE_TEST=1`

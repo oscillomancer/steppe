@@ -9,6 +9,10 @@ region), ADR-0015 (loop passes).
 **2026-10-15 amendment:** [ADR-0042](0042-native-midi-input.md) extends the
 backend input contract to CoreMIDI/WinMM through PortAudio on macOS/Windows.
 
+**2026-11-14 amendment:** [ADR-0080](0080-midi-recording-recovery.md)
+journals each MIDI take while it records (off the audio thread), so a crash
+no longer loses it: `project.recover` places it as stop would have.
+
 **2026-11-07 amendment:** [ADR-0065](0065-independent-record-inputs.md)
 lets a rack's channel keep a MIDI input beside its Out, fixing the rack
 home-channel monitoring contract; hardware audio and MIDI still replace
