@@ -46,17 +46,22 @@ constexpr std::size_t kMaxStackRegions = 64;
 constexpr DWORD kExecutable =
     PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
 
-// Evidence for the test fixture's sink (trace.h); formats nothing without one, and stops
-// after a fixed number of lines so a long stack cannot flood a log.
+// Evidence for the test fixture's sink (trace.h). Without a sink a note costs one atomic
+// load: the macro tests it first, so the arguments (the layout lookups, GetLastError) are not
+// even evaluated. At most 600 lines come out in all, so a long stack cannot flood a log.
+int evidenceLines = 0;
 template <class... Args>
-void note(const char* format, Args... args) {
-    static int lines = 0;
-    if (!traceEvidenceEnabled() || lines >= 600) return;
-    ++lines;
+void noteLine(const char* format, Args... args) {
+    if (evidenceLines >= 600) return;
+    ++evidenceLines;
     char line[256];
     std::snprintf(line, sizeof(line), format, args...);
     traceEvidence(line);
 }
+#define SUPPLE_NOTE(...)                                   \
+    do {                                                   \
+        if (traceEvidenceEnabled()) noteLine(__VA_ARGS__); \
+    } while (0)
 unsigned long long ull(std::uint64_t value) { return static_cast<unsigned long long>(value); }
 
 std::mutex& dbghelpLock() {
@@ -235,8 +240,8 @@ class Collector {
             release(id);
             return Missing::RegistersUnreadable;
         }
-        note("evidence: thread stopped rip=%llx rsp=%llx rbp=%llx\n", ull(entry.context.Rip),
-             ull(entry.context.Rsp), ull(entry.context.Rbp));
+        SUPPLE_NOTE("evidence: thread stopped rip=%llx rsp=%llx rbp=%llx\n", ull(entry.context.Rip),
+                    ull(entry.context.Rsp), ull(entry.context.Rbp));
         regs = {entry.context.Rip, entry.context.Rsp, entry.context.Rbp};
         return Missing::None;
     }
@@ -284,15 +289,15 @@ class Collector {
             // callbacks.
             if (!StackWalk64(IMAGE_FILE_MACHINE_AMD64, process_, nullptr, &frame, &context,
                              &readThunk, &tableThunk, &baseThunk, nullptr)) {
-                note("evidence: StackWalk64 ended after %zu frames, error %lu\n",
-                     result.frames.size(), static_cast<unsigned long>(GetLastError()));
+                SUPPLE_NOTE("evidence: StackWalk64 ended after %zu frames, error %lu\n",
+                            result.frames.size(), static_cast<unsigned long>(GetLastError()));
                 result.stop = Stop::End;
                 break;
             }
             const std::uint64_t pc = frame.AddrPC.Offset;
-            note("evidence: step pc=%llx sp=%llx initial=%d executable=%d\n", ull(pc),
-                 ull(frame.AddrStack.Offset), initial ? 1 : 0,
-                 layoutFrame(layout, pc, true) ? 1 : 0);
+            SUPPLE_NOTE("evidence: step pc=%llx sp=%llx initial=%d executable=%d\n", ull(pc),
+                        ull(frame.AddrStack.Offset), initial ? 1 : 0,
+                        layoutFrame(layout, pc, true) ? 1 : 0);
             if (pc == 0) {
                 result.stop = Stop::End;
                 break;
@@ -351,28 +356,28 @@ class Collector {
     PVOID functionEntry(DWORD64 address) {
         const auto base = baseOf(address);
         if (base == 0) {
-            note("evidence: no module for unwind data at %llx\n", ull(address));
+            SUPPLE_NOTE("evidence: no module for unwind data at %llx\n", ull(address));
             return nullptr;
         }
         auto found = tables_.find(base);
         if (found == tables_.end()) {
             auto table = PeFunctionTable::open(readFunction(), base);
-            note("evidence: exception directory of the module at %llx %s\n", ull(base),
-                 table ? "found" : "NOT FOUND");
+            SUPPLE_NOTE("evidence: exception directory of the module at %llx %s\n", ull(base),
+                        table ? "found" : "NOT FOUND");
             found = tables_.emplace(base, std::move(table)).first;
         }
         if (!found->second) return nullptr;
         const auto entry = found->second->find(readFunction(), address);
         if (!entry) {
-            note("evidence: no function table at %llx\n", ull(address));
+            SUPPLE_NOTE("evidence: no function table at %llx\n", ull(address));
             return nullptr;
         }
         RUNTIME_FUNCTION& slot = entries_[nextEntry_++ % kEntrySlots];
         slot.BeginAddress = entry->begin;
         slot.EndAddress = entry->end;
         slot.UnwindData = entry->unwind;
-        note("evidence: function at %llx is %x..%x, unwind data %x\n", ull(address), entry->begin,
-             entry->end, entry->unwind);
+        SUPPLE_NOTE("evidence: function at %llx is %x..%x, unwind data %x\n", ull(address),
+                    entry->begin, entry->end, entry->unwind);
         return &slot;
     }
     ReadMemory readFunction() const {
