@@ -62,9 +62,10 @@ def run_mode(binary, shim, mode, base):
         # The hang this test exists for: the worker's leader is a zombie, a worker thread
         # is a zombie still traced by the supervisor, and the supervisor sits in
         # wait4(worker). Only the supervisor can reap that thread, so the wait cannot end.
-        zombies = [t for t in tasks(worker) if t != worker
-                   and (status(worker, t) or {}).get("State", "").startswith("Z")
-                   and status(worker, t).get("TracerPid") == str(supervisor)]
+        # One read per thread: a thread that exits between two reads is no zombie of interest.
+        states = {t: status(worker, t) or {} for t in tasks(worker) if t != worker}
+        zombies = [t for t, st in states.items()
+                   if st.get("State", "").startswith("Z") and st.get("TracerPid") == str(supervisor)]
         call = (read(f"/proc/{supervisor}/syscall") or "").split()
         if pstate(worker) == "Z" and zombies and call and call[0] == WAIT4 and int(call[1], 16) == worker:
             outcome = "hang"; break
