@@ -6,6 +6,9 @@
 #include <supple/host/child_process.h>
 #include <filesystem>
 #include "bridge_platform.h"
+namespace supple::host {
+struct BridgeTestAccess;  // defined by the tests alone
+}
 namespace supple::host::bridge {
 class NativeChild {
   public:
@@ -22,6 +25,7 @@ class NativeChild {
     void revoke(Resource resource) const;
 #endif
   private:
+    friend struct ::supple::host::BridgeTestAccess;
     NativeChild() = default;
     int pid_ = -1;
     std::unique_ptr<ChildProcess> owner_;
