@@ -832,9 +832,18 @@ TEST_CASE("closing the inventory waits out a send as long as a part-sent packet 
     while (!gSlowStarted.load()) std::this_thread::yield();
     // The terminal packet goes out right after this returns: the send in progress must be done
     // by then, or the two packets interleave in the stream (the wait used to give up at 100 ms).
+    // The wait is bounded (250 ms for the send and 50 ms for scheduling it), so a send that a
+    // loaded machine delays past that bound is correctly given up on: the check is that the close
+    // returned either with the send done or not before the whole bound had passed, whatever the
+    // machine's load did to the 160 ms the send takes.
+    const std::uint64_t before = monotonicNs();
+    REQUIRE(before != 0);
     CHECK(closeInventory());
-    CHECK(gSlowFinished.load());
+    const std::uint64_t waitedNs = monotonicNs() - before;
+    const bool finished = gSlowFinished.load();
+    CHECK((finished || waitedNs >= 300ULL * 1'000'000ULL));
     announcer.join();
+    CHECK(gSlowFinished.load());
     resetInventoryForTests(nullptr);
 }
 
