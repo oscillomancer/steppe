@@ -7,6 +7,7 @@
 #include "native.h"
 #include "storage.h"
 #include "supple/base/paths.h"
+#include "supple/diagctx/table.h"
 #include "supple/product.h"
 #include "terminal.h"
 #include "trace.h"
@@ -45,6 +46,7 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
         ready.kind = Message::Ready;
         ready.pid = pid();
         ready.cause = terminal ? 1U : 0U;
+        ready.pc = reinterpret_cast<std::uintptr_t>(&diagctx::table());
         ready.code = marker && *marker >= 0 ? 0U : 1U;
         if (ready.code) std::fputs("local diagnostic marker unavailable\n", stderr);
         (void)publish(native, ready);
@@ -81,6 +83,7 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
     while (receive(native, packet)) {
         if (packet.incident != boot.incident || packet.role != boot.role) break;
         if (packet.kind == Message::Ready) {
+            native.table = packet.pc;
             markerUnavailable = packet.code != 0;
             ownsMarker = !markerUnavailable;
         }

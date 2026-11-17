@@ -13,7 +13,7 @@ supple_add_library(engine
           src/plugin_commands.cpp src/group_commands.cpp src/midi_commands.cpp src/analysis_commands.cpp
           src/freeze_commands.cpp src/consolidate_commands.cpp src/export_commands.cpp src/mix_commands.cpp src/heal_commands.cpp src/render_commands.cpp src/render_settings.cpp src/render_chain.cpp src/chain_commands.cpp src/take_commands.cpp src/learn.cpp src/control_learn.cpp src/dsp_commands.cpp
           src/midi_control.cpp src/midi_ports.cpp src/hardware_midi.cpp src/midi_port_commands.cpp src/midi_output.cpp src/midi_input.cpp src/portaudio_backend.cpp src/portaudio_native.cpp src/sync_runtime.cpp src/sync_commands.cpp src/midi_clock_outputs.cpp
-  DEPS supple::model supple::clap-host supple::audio-file supple::timeline supple::semantic-params-abi
+  DEPS supple::model supple::clap-host supple::diagnostics-context supple::audio-file supple::timeline supple::semantic-params-abi
        supple::command-bus supple::lua-bus supple::notation supple::core-params supple::core-analysis
        supple::core-dsp supple::signalsmith-stretch supple::console9 supple::rack
   PRIVATE_DEPS supple::rack-stock supple::product-info supple::script-compiler supple::sandbox-render supple::audio-codecs ZLIB::ZLIB ${CMAKE_DL_LIBS})

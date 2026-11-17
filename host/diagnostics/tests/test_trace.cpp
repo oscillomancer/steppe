@@ -532,6 +532,212 @@ TEST_CASE("trace shape validation is strict and nested") {
 }
 
 namespace {
+using supple::diagctx::kClaiming;
+using supple::diagctx::kMaxThreadSlots;
+using supple::diagctx::kTableMagic;
+using supple::diagctx::kTableVersion;
+using supple::diagctx::ThreadRole;
+constexpr std::uint64_t kTableAt = 0x900000;
+// A table image as the worker's static one looks to a remote read.
+supple::diagctx::TableImage tableImage() {
+    supple::diagctx::TableImage image{};
+    image.header.magic = kTableMagic;
+    image.header.version = kTableVersion;
+    return image;
+}
+void claim(supple::diagctx::TableImage& image, std::size_t slot, std::uint64_t id, ThreadRole role,
+           std::uint16_t ordinal = 0) {
+    image.threads[slot].id = id;
+    image.threads[slot].info = static_cast<std::uint64_t>(role) | std::uint64_t{ordinal} << 8;
+}
+void put(FakeProcess& p, const supple::diagctx::TableImage& image) {
+    std::vector<unsigned char> bytes(sizeof(image));
+    std::memcpy(bytes.data(), &image, sizeof(image));
+    p.image.put(kTableAt, bytes);
+}
+}  // namespace
+
+TEST_CASE("the execution table labels threads by the role they registered") {
+    auto p = process();
+    auto image = tableImage();
+    claim(image, 0, 10, ThreadRole::Model);
+    claim(image, 1, 11, ThreadRole::AudioRender);
+    claim(image, 5, 12, ThreadRole::AudioLive, 3);
+    claim(image, 6, 99, ThreadRole::Recorder);  // a thread that is not in the process
+    put(p, image);
+    const auto snapshot =
+        collectTrace(p.ops(), 11, {0x400200, 0x6ff0, 0x7000}, 10, Arch::X86_64, kTableAt);
+    CHECK(snapshot.table == TableState::Read);
+    REQUIRE(snapshot.threads.size() == 3);
+    // The fault thread stays the fault entry and says what it was.
+    CHECK(snapshot.threads[0].role == Role::Fault);
+    CHECK(snapshot.threads[0].registered == ThreadRole::AudioRender);
+    CHECK(snapshot.threads[1].registered == ThreadRole::Model);
+    CHECK(snapshot.threads[2].registered == ThreadRole::AudioLive);
+    CHECK(snapshot.threads[2].worker == 3);
+    CHECK(roleString(snapshot.threads[0]) == "fault");
+    CHECK(roleString(snapshot.threads[1]) == "model");
+    CHECK(roleString(snapshot.threads[2]) == "audio_live");
+    const auto threads = threadsJson(snapshot);
+    const auto modules = modulesJson(snapshot);
+    CHECK(traceShape(&modules, threads));
+    CHECK(threads.at(0).find("registered")->asString() == "audio_render");
+    CHECK(threads.at(0).find("worker") == nullptr);
+    CHECK(threads.at(1).find("registered") == nullptr);  // role already says it
+    CHECK(threads.at(2).find("worker")->asInt() == 3);
+    CHECK(traceLimits(snapshot).size() == 1);  // best-effort frames only
+}
+
+TEST_CASE("without a table every thread keeps its position as its role") {
+    auto p = process();
+    const auto snapshot = collectTrace(p.ops(), 11, {0x400200, 0x6ff0, 0x7000}, 10, Arch::X86_64);
+    CHECK(snapshot.table == TableState::NotOffered);
+    CHECK(roleString(snapshot.threads[0]) == "fault");
+    CHECK(roleString(snapshot.threads[1]) == "model");  // the main thread, by its position
+    CHECK(roleString(snapshot.threads[2]) == "other");
+    const auto limits = traceLimits(snapshot);
+    for (const auto& limit : limits) CHECK(limit.find("execution table") == std::string::npos);
+}
+
+TEST_CASE("a table that is missing, unreadable or not ours gives roles nothing and says so") {
+    auto limited = [](const TraceSnapshot& snapshot) {
+        for (const auto& limit : traceLimits(snapshot))
+            if (limit.find("execution table") != std::string::npos) return true;
+        return false;
+    };
+    {  // the address reads nothing
+        auto p = process();
+        const auto snapshot =
+            collectTrace(p.ops(), 11, {0x400200, 0x6ff0, 0x7000}, 10, Arch::X86_64, kTableAt);
+        CHECK(snapshot.table == TableState::Unreadable);
+        CHECK(limited(snapshot));
+        for (const auto& t : snapshot.threads) CHECK(t.registered == ThreadRole::None);
+        CHECK(snapshot.threads.size() == 3);  // traces are unaffected
+        CHECK(snapshot.threads[1].missing == Missing::None);
+    }
+    for (int broken = 0; broken < 3; ++broken) {  // wrong magic, wrong version, zeroes
+        auto p = process();
+        auto image = tableImage();
+        claim(image, 0, 10, ThreadRole::Model);
+        if (broken == 0) image.header.magic ^= 1;
+        if (broken == 1) image.header.version += 1;
+        if (broken == 2) image = {};
+        put(p, image);
+        const auto snapshot =
+            collectTrace(p.ops(), 11, {0x400200, 0x6ff0, 0x7000}, 10, Arch::X86_64, kTableAt);
+        CHECK(snapshot.table == TableState::Invalid);
+        CHECK(limited(snapshot));
+        for (const auto& t : snapshot.threads) CHECK(t.registered == ThreadRole::None);
+    }
+    {  // slots that are free, mid-claim or carry an unknown role label nothing
+        auto p = process();
+        auto image = tableImage();
+        claim(image, 0, 0, ThreadRole::Model);
+        claim(image, 1, kClaiming, ThreadRole::Model);
+        claim(image, 2, 10, ThreadRole::None);
+        image.threads[3].id = 12;
+        image.threads[3].info = 200;  // outside the closed set
+        put(p, image);
+        const auto snapshot =
+            collectTrace(p.ops(), 11, {0x400200, 0x6ff0, 0x7000}, 10, Arch::X86_64, kTableAt);
+        CHECK(snapshot.table == TableState::Read);
+        for (const auto& t : snapshot.threads) CHECK(t.registered == ThreadRole::None);
+    }
+}
+
+TEST_CASE("the table is read once, right after the fault thread and before any other is stopped") {
+    auto p = process();
+    auto image = tableImage();
+    claim(image, 0, 10, ThreadRole::Model);
+    put(p, image);
+    std::vector<std::string> log;
+    auto ops = p.ops();
+    const auto read = ops.read;
+    ops.read = [&](std::uint64_t at, void* out, std::size_t n) {
+        if (at == kTableAt) log.push_back("table");
+        return read(at, out, n);
+    };
+    const auto stop = ops.stop;
+    ops.stop = [&](std::uint64_t tid, Regs& regs) {
+        log.push_back("stop " + std::to_string(tid));
+        return stop(tid, regs);
+    };
+    const auto snapshot =
+        collectTrace(ops, 11, {0x400200, 0x6ff0, 0x7000}, 10, Arch::X86_64, kTableAt);
+    REQUIRE(snapshot.threads.size() == 3);
+    REQUIRE(log.size() == 3);
+    CHECK(log[0] == "table");
+    CHECK(log[1] == "stop 10");
+    CHECK(log[2] == "stop 12");
+}
+
+TEST_CASE("a spent deadline cuts other threads but never the table") {
+    auto p = process();
+    auto image = tableImage();
+    claim(image, 0, 11, ThreadRole::AudioRender);
+    claim(image, 1, 10, ThreadRole::Model);
+    put(p, image);
+    p.expireAfter = 0;  // already expired when the first thread has been walked
+    const auto snapshot =
+        collectTrace(p.ops(), 11, {0x400200, 0x6ff0, 0x7000}, 10, Arch::X86_64, kTableAt);
+    REQUIRE(snapshot.threads.size() == 3);
+    CHECK(snapshot.table == TableState::Read);
+    CHECK(snapshot.threads[1].missing == Missing::Deadline);
+    CHECK(snapshot.threads[2].missing == Missing::Deadline);
+    // The roles are still known, for the threads whose traces were cut as well.
+    CHECK(snapshot.threads[0].registered == ThreadRole::AudioRender);
+    CHECK(snapshot.threads[1].registered == ThreadRole::Model);
+    CHECK(p.stops == 0);
+}
+
+TEST_CASE("role fields in a report are validated strictly") {
+    auto p = process();
+    auto image = tableImage();
+    claim(image, 0, 11, ThreadRole::AudioRender);
+    claim(image, 1, 12, ThreadRole::AudioBackground, 4);
+    put(p, image);
+    const auto snapshot =
+        collectTrace(p.ops(), 11, {0x400200, 0x6ff0, 0x7000}, 10, Arch::X86_64, kTableAt);
+    const auto modules = modulesJson(snapshot);
+    const auto good = threadsJson(snapshot);
+    REQUIRE(traceShape(&modules, good));
+    auto mutate = [&](auto change) {
+        auto threads = good;
+        change(threads);
+        return traceShape(&modules, threads);
+    };
+    // every registered role is a valid role string, and "main" stays valid for old reports
+    for (const char* role : {"model", "audio_render", "audio_live", "audio_background",
+                             "audio_offline", "recorder", "midi_output", "other", "main"})
+        CHECK(mutate([&](json::Value& t) { t.asArray()[1]["role"] = role; }));
+    CHECK_FALSE(mutate([](json::Value& t) { t.asArray()[1]["role"] = "audio"; }));
+    CHECK_FALSE(mutate([](json::Value& t) { t.asArray()[1]["role"] = "Model"; }));
+    // "registered" belongs to the fault thread and is one of the registrable roles
+    CHECK_FALSE(mutate([](json::Value& t) { t.asArray()[0]["registered"] = "fault"; }));
+    CHECK_FALSE(mutate([](json::Value& t) { t.asArray()[0]["registered"] = "other"; }));
+    CHECK_FALSE(mutate([](json::Value& t) { t.asArray()[0]["registered"] = 5; }));
+    CHECK_FALSE(mutate([](json::Value& t) { t.asArray()[1]["registered"] = "model"; }));
+    // "worker" is a number from 1 to 65535 on a thread with a registered role
+    CHECK(good.at(2).find("worker")->asInt() == 4);
+    CHECK_FALSE(mutate([](json::Value& t) { t.asArray()[2]["worker"] = 0; }));
+    CHECK_FALSE(mutate([](json::Value& t) { t.asArray()[2]["worker"] = 65536; }));
+    CHECK_FALSE(mutate([](json::Value& t) { t.asArray()[2]["worker"] = "4"; }));
+    CHECK_FALSE(mutate([](json::Value& t) { t.asArray()[2]["role"] = "other"; }));
+    CHECK_FALSE(mutate([](json::Value& t) { t.asArray()[2]["role"] = "main"; }));
+    CHECK(mutate([](json::Value& t) { t.asArray()[2]["role"] = "audio_live"; }));
+    // a fault thread's worker number needs the role it was registered as
+    auto plain = process();
+    const auto unlabelled =
+        threadsJson(collectTrace(plain.ops(), 11, {0x400200, 0x6ff0, 0x7000}, 10, Arch::X86_64));
+    REQUIRE(traceShape(&modules, unlabelled));
+    auto numbered = unlabelled;
+    numbered.asArray()[0]["worker"] = 1;
+    CHECK_FALSE(traceShape(&modules, numbered));
+    numbered.asArray()[0]["registered"] = "audio_live";
+    CHECK(traceShape(&modules, numbered));
+}
+
+namespace {
 fs::path rootFor(const char* name) { return fs::temp_directory_path() / name; }
 Packet bootFor(unsigned id) {
     Packet p;

@@ -349,7 +349,7 @@ TraceSnapshot collectProcessTrace(Native& native, const Packet& terminal) {
         return collector.walk(tid, regs, layout);
     };
     return collectTrace(ops, terminal.tid, Regs{terminal.pc, terminal.sp, terminal.frame},
-                        collector.mainThread(tids), hostArch());
+                        collector.mainThread(tids), hostArch(), native.table);
 }
 #else
 TraceSnapshot collectProcessTrace(Native&, const Packet&) {

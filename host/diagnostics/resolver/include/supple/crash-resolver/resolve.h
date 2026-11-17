@@ -26,9 +26,13 @@ struct ReportFrame {
     bool isReturn = false;
 };
 struct ReportThread {
-    std::string role;   // fault | main | other
-    std::string state;  // walked | unavailable
-    std::string why;    // `stop` when walked, `reason` when unavailable
+    // fault | model | audio_render | audio_live | audio_background | audio_offline |
+    // recorder | midi_output | other, or main in reports written before thread roles
+    std::string role;
+    std::string registered;  // the fault thread's own registered role, else empty
+    unsigned worker = 0;     // the N of audio-live-N and audio-bg-N, else 0
+    std::string state;       // walked | unavailable
+    std::string why;         // `stop` when walked, `reason` when unavailable
     std::vector<ReportFrame> frames;
 };
 struct Report {

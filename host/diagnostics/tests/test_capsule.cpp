@@ -211,6 +211,35 @@ TEST_CASE("a capsule becomes module identity and offsets, fault first") {
     CHECK_FALSE(parseCapsule(reinterpret_cast<const std::uint8_t*>(&header), sizeof(header)));
 }
 
+TEST_CASE("a capsule carries the role each thread registered as") {
+    using supple::diagctx::ThreadRole;
+    auto data = fresh();
+    addModule(*data, 0x100000, 0x100000, 0x180000, 0x10);
+    addThread(*data, Role::Fault, Missing::None, Stop::End, {0x100300});
+    addThread(*data, Role::Main, Missing::None, Stop::End, {0x100200});
+    addThread(*data, Role::Other, Missing::None, Stop::End, {0x100100});
+    addThread(*data, Role::Other, Missing::Deadline, Stop::End, {});
+    data->threads[0].head.registered = static_cast<std::uint8_t>(ThreadRole::AudioRender);
+    data->threads[1].head.registered = static_cast<std::uint8_t>(ThreadRole::Model);
+    data->threads[2].head.registered = static_cast<std::uint8_t>(ThreadRole::AudioLive);
+    data->threads[2].head.worker = 2;
+    const auto bytes = encode(*data);
+    const auto snapshot = parseCapsule(bytes.data(), bytes.size());
+    REQUIRE(snapshot);
+    REQUIRE(snapshot->threads.size() == 4);
+    CHECK(snapshot->threads[0].registered == ThreadRole::AudioRender);
+    CHECK(snapshot->threads[1].registered == ThreadRole::Model);
+    CHECK(snapshot->threads[2].registered == ThreadRole::AudioLive);
+    CHECK(snapshot->threads[2].worker == 2);
+    CHECK(snapshot->threads[3].registered == ThreadRole::None);  // unregistered: "other"
+    CHECK(roleString(snapshot->threads[2]) == "audio_live");
+    CHECK(roleString(snapshot->threads[3]) == "other");
+    // The registered role of an unreadable thread is still reported.
+    data->threads[3].head.registered = static_cast<std::uint8_t>(ThreadRole::Recorder);
+    const auto cut = encode(*data);
+    CHECK(parseCapsule(cut.data(), cut.size())->threads[3].registered == ThreadRole::Recorder);
+}
+
 TEST_CASE("overlapping module ranges cannot make an address ambiguous") {
     auto data = fresh();
     addModule(*data, 0, 0x1000, 0x3000);
@@ -257,6 +286,12 @@ TEST_CASE("a malformed or truncated capsule yields nothing") {
     mutate("reason", [](CapsuleData& d) { d.threads[1].head.missing = 9; });
     mutate("stop", [](CapsuleData& d) { d.threads[0].head.stop = 7; });
     mutate("thread reserved", [](CapsuleData& d) { d.threads[0].head.reserved = 1; });
+    mutate("unknown registered role", [](CapsuleData& d) {
+        d.threads[0].head.registered = supple::diagctx::kThreadRoleCount;
+    });
+    mutate("registered role out of range",
+           [](CapsuleData& d) { d.threads[1].head.registered = 255; });
+    mutate("worker number without a role", [](CapsuleData& d) { d.threads[0].head.worker = 1; });
     mutate("too many frames", [](CapsuleData& d) { d.threads[0].head.frameCount = 129; });
     mutate("walked without frames", [](CapsuleData& d) { d.threads[0].head.frameCount = 0; });
     mutate("unavailable with frames", [](CapsuleData& d) { d.threads[1].head.frameCount = 1; });

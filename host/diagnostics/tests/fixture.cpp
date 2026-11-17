@@ -11,6 +11,7 @@
 #include <thread>
 #include "../src/terminal.h"
 #include "supple/base/rt.h"
+#include "supple/diagctx/table.h"
 #include "supple/diagnostics/frontend.h"
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -257,9 +258,19 @@ int body(int argc, char** argv) {
         if (argc != 4) return 4;
         writeExpected(argv[3]);
         const bool nondumpable = mode == "trace-nondumpable";  // Linux only
-        std::thread first([] { parkOuter(); });
-        std::thread second([] { parkOuter(); });
+        // Owned threads register their roles, as the engine's do (topic 5): the report
+        // must label each by what it registered as, and the faulting one as the fault.
+        using supple::diagctx::ThreadRole;
+        std::thread first([] {
+            (void)supple::diagctx::registerThread(ThreadRole::AudioLive, 2);
+            parkOuter();
+        });
+        std::thread second([] {
+            (void)supple::diagctx::registerThread(ThreadRole::AudioBackground, 1);
+            parkOuter();
+        });
         std::thread faulting([nondumpable] {
+            (void)supple::diagctx::registerThread(ThreadRole::AudioRender);
             (void)supple::diagnostics::registerCurrentThread();
             while (parked.load() != 3) supple::rt::relax();  // two threads plus main
 #if defined(__linux__)

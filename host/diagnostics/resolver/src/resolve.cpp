@@ -120,12 +120,25 @@ Result<Report> parseReport(std::string_view text) {
         const auto* role = member(thread, "role");
         const auto* state = member(thread, "state");
         const auto* frames = member(thread, "frames");
-        if (!oneOf(role, {"fault", "main", "other"})) return bad(at + "/role", "unknown role");
+        const std::initializer_list<std::string_view> kRegistered{
+            "model",         "audio_render", "audio_live", "audio_background",
+            "audio_offline", "recorder",     "midi_output"};
+        if (!oneOf(role, {"fault", "main", "model", "audio_render", "audio_live",
+                          "audio_background", "audio_offline", "recorder", "midi_output", "other"}))
+            return bad(at + "/role", "unknown role");
+        const auto* registered = member(thread, "registered");
+        if (registered && !oneOf(registered, kRegistered))
+            return bad(at + "/registered", "unknown registered role");
+        const auto* worker = member(thread, "worker");
+        if (worker && (!worker->isInt() || worker->asInt() < 1 || worker->asInt() > 65535))
+            return bad(at + "/worker", "worker is not a number from 1 to 65535");
         if (!oneOf(state, {"walked", "unavailable"})) return bad(at + "/state", "unknown state");
         if (!frames || !frames->isArray() || frames->size() > kMaxFrames)
             return bad(at + "/frames", "frames is missing or too long");
         ReportThread out;
         out.role = role->asString();
+        if (registered) out.registered = registered->asString();
+        if (worker) out.worker = static_cast<unsigned>(worker->asInt());
         out.state = state->asString();
         const auto* why = member(thread, out.state == "walked" ? "stop" : "reason");
         if (!why || !why->isString() || why->asString().size() > 32)
@@ -333,8 +346,10 @@ std::string formatText(const Report& report, const Resolution& resolution) {
     }
     for (std::size_t t = 0; t < report.threads.size(); ++t) {
         const auto& thread = report.threads[t];
-        out << "thread " << t << " " << thread.role << ": " << thread.state << " ("
-            << (thread.state == "walked" ? "stop: " : "reason: ") << thread.why << ")\n";
+        out << "thread " << t << " " << thread.role;
+        if (!thread.registered.empty()) out << " (" << thread.registered << ")";
+        out << ": " << thread.state << " (" << (thread.state == "walked" ? "stop: " : "reason: ")
+            << thread.why << ")\n";
         for (std::size_t f = 0; f < thread.frames.size(); ++f) {
             const auto& frame = thread.frames[f];
             out << "  #" << f << "  ";
@@ -385,6 +400,8 @@ json::Value formatJson(const Report& report, const Resolution& resolution) {
         auto entry = json::Value::object();
         entry["ordinal"] = static_cast<std::uint64_t>(t);
         entry["role"] = thread.role;
+        if (!thread.registered.empty()) entry["registered"] = thread.registered;
+        if (thread.worker != 0) entry["worker"] = thread.worker;
         entry["state"] = thread.state;
         entry[thread.state == "walked" ? "stop" : "reason"] = thread.why;
         json::Array frames;

@@ -20,6 +20,7 @@
 
 #include "supple/base/thread.h"
 #include "supple/clap/semantic_params.h"
+#include "supple/diagctx/table.h"
 #include "supple/dsp/dsp.h"
 #include "supple/model/numeric.h"
 #include "supple/params/params.h"
@@ -677,6 +678,7 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
     std::thread audio([&] {
         auto progressAt = std::chrono::steady_clock::time_point::min();
         nameThread("audio-offline");
+        (void)diagctx::registerThread(diagctx::ThreadRole::AudioOffline);
         const auto primed = detail::prepareRateSources(p, 0, 0);
         if (!primed) {
             preparationError = primed.error();

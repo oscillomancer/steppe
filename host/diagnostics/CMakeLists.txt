@@ -20,7 +20,7 @@ else()
   set(trace_source src/trace_other.cpp)
 endif()
 supple_add_library(diagnostics SOURCES src/frontend.cpp src/terminal.cpp src/storage.cpp src/private_files.cpp src/trace.cpp ${native_source} ${trace_source}
-  DEPS supple::core-base supple::core-json supple::product-info)
+  DEPS supple::core-base supple::core-json supple::product-info supple::diagnostics-context)
 add_dependencies(diagnostics diagnostics-build-id)
 target_include_directories(diagnostics PUBLIC include PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 if(WIN32)

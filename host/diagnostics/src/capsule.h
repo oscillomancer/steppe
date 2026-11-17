@@ -21,7 +21,7 @@
 #include <vector>
 #include "native.h"
 namespace supple::diagnostics::detail {
-constexpr std::uint32_t kCapsuleMagic = 0x31435443;  // "CTC1"
+constexpr std::uint32_t kCapsuleMagic = 0x32435443;  // "CTC2": v2 adds thread roles
 constexpr std::size_t kCapsuleThreads = 128, kCapsuleFrames = 128, kCapsuleModules = 256;
 constexpr std::uint32_t kCapsuleModulesTruncated = 1, kCapsuleThreadsDropped = 2;
 
@@ -40,9 +40,13 @@ struct CapsuleModule {
     std::uint32_t hasUuid, reserved;
 };
 // `role` is a Role, `missing` a Missing (None once walked) and `stop` a Stop; the
-// parser validates all three. Frame 0 is the exact pc, the rest return addresses.
+// parser validates all three. `registered` is the diagctx::ThreadRole the process
+// registered the thread as (0: none) and `worker` its number for audio-live-N and
+// audio-bg-N; the worker reads both from its own execution table. Frame 0 is the exact
+// pc, the rest return addresses.
 struct CapsuleThread {
-    std::uint8_t role, missing, stop, reserved;
+    std::uint8_t role, missing, stop, registered;
+    std::uint16_t worker, reserved;
     std::uint32_t frameCount;
 };
 struct CapsuleThreadData {

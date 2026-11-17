@@ -195,7 +195,7 @@ TraceSnapshot collectProcessTrace(Native& native, const Packet& terminal) {
     ops.stop = [&](std::uint64_t tid, Regs& regs) { return collector.stop(tid, regs); };
     ops.release = [&](std::uint64_t tid) { collector.release(tid); };
     return collectTrace(ops, terminal.tid, Regs{terminal.pc, terminal.sp, terminal.frame},
-                        static_cast<std::uint64_t>(native.process), hostArch());
+                        static_cast<std::uint64_t>(native.process), hostArch(), native.table);
 #else
     (void)native;
     TraceSnapshot snapshot;

@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include "supple/diagctx/table.h"
 #include "supple/diagnostics/frontend.h"
 #if defined(__APPLE__)
 #include "capsule.h"
@@ -241,6 +242,10 @@ bool installTerminal(Native native, const Packet& boot) {
     endpoint = native;
     initial = boot;
     active.store(true, std::memory_order_release);
+    // Owned threads register in the execution table next to their name; each new one
+    // gets the alternate stack through this hook, so the engine never links this library.
+    diagctx::setThreadHook([]() noexcept { (void)registerCurrentThread(); });
+    (void)diagctx::registerThread(diagctx::ThreadRole::Model);  // installed by the main thread
     (void)registerCurrentThread();
 #if defined(__APPLE__)
     rememberMainThread();  // installed by the main thread, before frontend code

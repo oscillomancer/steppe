@@ -19,6 +19,9 @@ struct Packet {
     std::uint64_t pid = 0, pc = 0, frame = 0, tid = 0, sp = 0;
     std::array<char, 33> incident{};
 };
+// Ready packets carry the address of the worker's execution table in `pc` (topic 5): the
+// supervisor keeps it and reads the table from the worker only when a terminal packet
+// arrives. It is the worker's own address, meaningful only to a bounded remote read.
 static_assert(sizeof(Packet) <= 128);
 struct Native {
     std::intptr_t channel = -1, process = -1, event = -1, ack = -1;
@@ -32,6 +35,8 @@ struct Native {
     // before the deadline). Only this supervisor can reap such a thread once it dies,
     // and the worker is not reported until it has; wait() and receive() drain them.
     bool traced = false;
+    // The worker's execution table (diagctx), from its Ready packet; 0 until then.
+    std::uint64_t table = 0;
 };
 Result<Native> launch(int argc, char** argv, const Packet& boot);
 Result<Native> adopt(std::string_view value, Packet& boot);

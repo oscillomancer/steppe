@@ -50,7 +50,8 @@ std::string reportText(const std::string& format, const std::string& id) {
            R"("modules":[{"format":")" +
            format + R"(","id":)" + (id.empty() ? "null" : "\"" + id + "\"") +
            R"(}],"threads":[)"
-           R"({"ordinal":0,"role":"fault","state":"walked","stop":"end","frames":[)"
+           R"({"ordinal":0,"role":"fault","registered":"audio_live","worker":2,)"
+           R"("state":"walked","stop":"end","frames":[)"
            R"({"module":0,"offset":"0x1110","return":false},)"
            R"({"module":0,"offset":"0x1201","return":true},)"
            R"({"module":null,"return":true},)"
@@ -109,6 +110,11 @@ TEST_CASE("a report with anything the resolver would have to guess at is refused
         {"\"state\":\"walked\"", "\"state\":\"running\"", "/threads/0/state"},
         {"\"stop\":\"end\",", "", "/threads/0"},
         {"\"role\":\"main\"", "\"role\":\"god\"", "/threads/1/role"},
+        {"\"registered\":\"audio_live\"", "\"registered\":\"other\"", "/threads/0/registered"},
+        {"\"registered\":\"audio_live\"", "\"registered\":3", "/threads/0/registered"},
+        {"\"worker\":2", "\"worker\":0", "/threads/0/worker"},
+        {"\"worker\":2", "\"worker\":65536", "/threads/0/worker"},
+        {"\"worker\":2", "\"worker\":\"2\"", "/threads/0/worker"},
     };
     for (const auto& c : cases) {
         auto text = good;
@@ -213,9 +219,13 @@ TEST_CASE("frames are named by the file whose build id matches, return addresses
     CHECK(text.find("(generated code)") != std::string::npos);
     CHECK(text.find("(no symbol)") != std::string::npos);
     CHECK(text.find("thread 1 main: unavailable (reason: ptrace_denied)") != std::string::npos);
+    CHECK(text.find("thread 0 fault (audio_live): walked (stop: end)") != std::string::npos);
 
     const auto json = formatJson(*report, resolution);
     CHECK(json.find("schema")->asString() == "supple.crash-symbols/1.0");
+    CHECK(json.find("threads")->at(0).find("registered")->asString() == "audio_live");
+    CHECK(json.find("threads")->at(0).find("worker")->asInt() == 2);
+    CHECK_FALSE(json.find("threads")->at(1).find("registered"));
     const auto& jframes = *json.find("threads")->at(0).find("frames");
     CHECK(jframes.at(0).find("function")->asString() == "plain_main");
     CHECK(jframes.at(0).find("offset")->asString() == "0x1110");

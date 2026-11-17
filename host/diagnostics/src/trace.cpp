@@ -57,9 +57,6 @@ bool skip(std::string_view& text, char c) {
 void skipSpaces(std::string_view& text) {
     while (!text.empty() && text.front() == ' ') text.remove_prefix(1);
 }
-const char* roleName(Role role) {
-    return role == Role::Fault ? "fault" : role == Role::Main ? "main" : "other";
-}
 const char* missingName(Missing why) {
     switch (why) {
         case Missing::PtraceDenied:
@@ -404,8 +401,14 @@ Walk walkFrames(const ReadMemory& read, const Layout& layout, const Regs& regs, 
     return walk;
 }
 
+std::string roleString(const ThreadTrace& thread) {
+    if (thread.role == Role::Fault) return "fault";
+    if (const char* name = diagctx::threadRoleName(thread.registered)) return name;
+    return thread.role == Role::Main ? "model" : "other";
+}
+
 TraceSnapshot collectTrace(const TraceOps& ops, std::uint64_t faultTid, const Regs& faultRegs,
-                           std::uint64_t mainTid, Arch arch) {
+                           std::uint64_t mainTid, Arch arch, std::uint64_t tableAddress) {
     TraceSnapshot snapshot;
     const auto expired = [&] { return ops.expired && ops.expired(); };
     std::vector<std::uint64_t> tids = ops.threads ? ops.threads() : std::vector<std::uint64_t>{};
@@ -443,6 +446,16 @@ TraceSnapshot collectTrace(const TraceOps& ops, std::uint64_t faultTid, const Re
         return ops.walk ? ops.walk(tid, regs, layout)
                         : walkFrames(ops.read, layout, regs, arch, expired);
     };
+    // The table is read after the first thread of `order`, the fault thread.
+    diagctx::TableImage table;
+    const auto readTable = [&] {
+        if (tableAddress == 0) return;
+        if (!ops.read || !ops.read(tableAddress, &table, sizeof(table)))
+            snapshot.table = TableState::Unreadable;
+        else
+            snapshot.table = diagctx::imageValid(table) ? TableState::Read : TableState::Invalid;
+    };
+    std::vector<std::uint64_t> tidOf;
     for (const auto& [tid, role] : order) {
         ThreadTrace trace;
         trace.role = role;
@@ -469,6 +482,15 @@ TraceSnapshot collectTrace(const TraceOps& ops, std::uint64_t faultTid, const Re
             }
         }
         snapshot.threads.push_back(std::move(trace));
+        tidOf.push_back(tid);
+        if (snapshot.threads.size() == 1) readTable();
+    }
+    if (snapshot.table == TableState::Read) {
+        for (std::size_t i = 0; i < snapshot.threads.size(); ++i) {
+            const auto found = diagctx::findThread(table, tidOf[i]);
+            snapshot.threads[i].registered = found.role;
+            snapshot.threads[i].worker = found.ordinal;
+        }
     }
     snapshot.modules = std::move(layout.modules);
     snapshot.truncatedModules = layout.truncatedModules;
@@ -492,7 +514,11 @@ json::Value threadsJson(const TraceSnapshot& trace) {
     for (const auto& thread : trace.threads) {
         auto entry = json::Value::object();
         entry["ordinal"] = ordinal++;
-        entry["role"] = roleName(thread.role);
+        entry["role"] = roleString(thread);
+        if (const char* registered = diagctx::threadRoleName(thread.registered)) {
+            if (thread.role == Role::Fault) entry["registered"] = registered;
+            if (thread.worker != 0) entry["worker"] = static_cast<long long>(thread.worker);
+        }
         const bool walked = thread.missing == Missing::None;
         entry["state"] = walked ? "walked" : "unavailable";
         if (walked)
@@ -536,6 +562,8 @@ std::vector<std::string> traceLimits(const TraceSnapshot& trace) {
     if (trace.dropped) limits.push_back("threads beyond the report limit were omitted");
     if (trace.truncatedModules)
         limits.push_back("modules beyond the report limit have no identity");
+    if (trace.table == TableState::Unreadable || trace.table == TableState::Invalid)
+        limits.push_back("the execution table could not be read, so threads have no roles");
     return limits;
 }
 
@@ -580,12 +608,34 @@ bool traceShape(const json::Value* modules, const json::Value& threads) {
     if (!threads.isArray() || threads.size() > kMaxThreads) return false;
     std::size_t index = 0;
     for (const auto& thread : threads.asArray()) {
-        if (!onlyKeys(thread, {"ordinal", "role", "state", "reason", "stop", "frames"}))
+        if (!onlyKeys(thread, {"ordinal", "role", "registered", "worker", "state", "reason", "stop",
+                               "frames"}))
             return false;
         const auto* ordinal = thread.find("ordinal");
         if (!ordinal || !ordinal->isInt() || ordinal->asInt() != static_cast<std::int64_t>(index++))
             return false;
-        if (!oneOf(thread.find("role"), {"fault", "main", "other"})) return false;
+        // "main" is what reports written before the thread roles called the model thread.
+        if (!oneOf(thread.find("role"),
+                   {"fault", "main", "model", "audio_render", "audio_live", "audio_background",
+                    "audio_offline", "recorder", "midi_output", "other"}))
+            return false;
+        {  // the fault thread's own role, and the worker number of a numbered thread
+            const bool fault = thread.find("role")->asString() == "fault";
+            const auto* registered = thread.find("registered");
+            if (registered && (!fault || !oneOf(registered, {"model", "audio_render", "audio_live",
+                                                             "audio_background", "audio_offline",
+                                                             "recorder", "midi_output"})))
+                return false;
+            const auto* worker = thread.find("worker");
+            if (worker) {
+                const std::string_view effective =
+                    fault ? (registered ? registered->asString() : std::string_view())
+                          : thread.find("role")->asString();
+                if (!worker->isInt() || worker->asInt() < 1 || worker->asInt() > 65535 ||
+                    effective.empty() || effective == "other" || effective == "main")
+                    return false;
+            }
+        }
         const auto* state = thread.find("state");
         const auto* frames = thread.find("frames");
         if (!state || !state->isString() || !frames || !frames->isArray() ||
@@ -680,12 +730,15 @@ std::optional<TraceSnapshot> parseCapsule(const std::uint8_t* bytes, std::size_t
         if (!take(&head, sizeof(head)) || head.role > static_cast<std::uint8_t>(Role::Other) ||
             head.missing > static_cast<std::uint8_t>(Missing::AccessDenied) ||
             head.stop > static_cast<std::uint8_t>(Stop::Deadline) || head.reserved != 0 ||
-            head.frameCount > kCapsuleFrames)
+            head.registered >= diagctx::kThreadRoleCount ||
+            (head.worker != 0 && head.registered == 0) || head.frameCount > kCapsuleFrames)
             return std::nullopt;
         const bool walked = head.missing == static_cast<std::uint8_t>(Missing::None);
         if (walked != (head.frameCount > 0)) return std::nullopt;
         ThreadTrace trace;
         trace.role = static_cast<Role>(head.role);
+        trace.registered = static_cast<diagctx::ThreadRole>(head.registered);
+        trace.worker = head.worker;
         // The fault entry is the first thread and the only one.
         if ((i == 0) != (trace.role == Role::Fault)) return std::nullopt;
         trace.missing = static_cast<Missing>(head.missing);

@@ -72,7 +72,7 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
                 fault=report["threads"][0]
                 assert fault["role"]=="fault" and fault["state"]=="walked",(mode,fault)
                 assert len(fault["frames"])>=3,(mode,fault)
-                assert all(t["role"]!="main" for t in report["threads"]),(mode,report["threads"])
+                assert all(t["role"] not in ("main","model") for t in report["threads"]),(mode,report["threads"])
             if sanitized: assert report["cause"]==0,(mode,report)
             assert "private-project-sentinel" not in raw
             assert str(root) not in raw
@@ -191,7 +191,12 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
         assert report["kind"]=="crash" and report["terminal_context"],report
         threads=report["threads"]
         assert len(threads)==4,threads
-        assert [t["role"] for t in threads]==["fault","main","other","other"],threads
+        # Roles come from the process's execution table (topic 5): main registered itself
+        # as the model thread, the parked workers as numbered audio workers, and the
+        # faulting thread keeps "fault" and says what it was.
+        assert [t["role"] for t in threads[:2]]==["fault","model"],threads
+        assert threads[0]["registered"]=="audio_render" and "worker" not in threads[0],threads[0]
+        assert sorted((t["role"],t["worker"]) for t in threads[2:])==[("audio_background",1),("audio_live",2)],threads
         assert [t["ordinal"] for t in threads]==[0,1,2,3]
         assert not report["complete"]
         assert not re.search(r"\b%d\b"%expected["pid"],raw),"process id leaked"
@@ -234,7 +239,7 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
                     for f in t["frames"]:
                         if f["return"] and "function" in f: assert f["displacement"]>=1,f
                 text=subprocess.run([resolver,"--symbols",binary,str(report_file)],capture_output=True,timeout=60)
-                assert text.returncode==0 and b"faultOuter" in text.stdout and b"thread 0 fault: walked" in text.stdout,text
+                assert text.returncode==0 and b"faultOuter" in text.stdout and b"thread 0 fault (audio_render): walked" in text.stdout,text
                 # Without the build's files nothing is guessed: modules are not found, frames unnamed.
                 empty=base/"no-symbols"; empty.mkdir()
                 lost=resolve_json(report_file,empty)
@@ -289,8 +294,11 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
         assert report["kind"]=="crash" and report["terminal_context"],report
         threads=report["threads"]
         assert len(threads)>=4,threads
-        assert [t["role"] for t in threads[:2]]==["fault","main"],threads
-        assert all(t["role"]=="other" for t in threads[2:]),threads
+        assert [t["role"] for t in threads[:2]]==["fault","model"],threads
+        assert threads[0]["registered"]=="audio_render",threads[0]
+        roles=[(t["role"],t.get("worker")) for t in threads[2:]]
+        assert ("audio_live",2) in roles and ("audio_background",1) in roles,threads
+        assert all(r in ("audio_live","audio_background","other") for r,_ in roles),threads
         assert [t["ordinal"] for t in threads]==list(range(len(threads)))
         assert not report["complete"]
         assert not re.search(r"\b%d\b"%expected["pid"],raw),"process id leaked"

@@ -199,7 +199,9 @@ kern_return_t registersOf(thread_act_t thread, CapsuleRegs& regs) {
 #endif
 }
 
-CapsuleThreadData* newThread(Role role) {
+// `id` is the thread's Mach port name, the key its registration in the execution table
+// uses; only atomic loads of that table, so nothing here allocates or locks.
+CapsuleThreadData* newThread(Role role, std::uint64_t id) {
     if (capsule.header.threadCount >= kCapsuleThreads) {
         ++capsule.header.dropped;
         capsule.header.flags |= kCapsuleThreadsDropped;
@@ -208,6 +210,9 @@ CapsuleThreadData* newThread(Role role) {
     CapsuleThreadData& thread = capsule.threads[capsule.header.threadCount++];
     thread.head.role = static_cast<std::uint8_t>(role);
     thread.head.missing = static_cast<std::uint8_t>(Missing::None);
+    const diagctx::SlotInfo slot = diagctx::findThread(id);
+    thread.head.registered = static_cast<std::uint8_t>(slot.role);
+    thread.head.worker = slot.ordinal;
     return &thread;
 }
 void unavailable(CapsuleThreadData& thread, Missing why) {
@@ -219,7 +224,7 @@ void unavailable(CapsuleThreadData& thread, Missing why) {
 // when it has none (terminate, abort): it is parked in the handler, so its stack is
 // stable and readable without suspending it.
 void captureSelf(const Packet& terminal, std::uint64_t deadline) {
-    CapsuleThreadData* thread = newThread(Role::Fault);
+    CapsuleThreadData* thread = newThread(Role::Fault, diagctx::currentThreadId());
     if (!thread) return;
     CapsuleRegs regs{terminal.pc, terminal.sp, terminal.frame};
     if (regs.sp == 0) {  // no registers at all (a null pc alone is a real crash site)
@@ -240,7 +245,8 @@ void captureOthers(std::uint64_t deadline) {
     for (mach_msg_type_number_t i = 0; i < count; ++i) {
         const thread_act_t port = list[i];
         if (port != self) {
-            CapsuleThreadData* thread = newThread(port == mainThread ? Role::Main : Role::Other);
+            CapsuleThreadData* thread =
+                newThread(port == mainThread ? Role::Main : Role::Other, port);
             if (thread) {
                 if (monotonicNanoseconds() >= deadline) {
                     unavailable(*thread, Missing::Deadline);

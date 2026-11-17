@@ -18,6 +18,7 @@
 #include <string_view>
 #include <vector>
 #include "native.h"
+#include "supple/diagctx/table.h"
 #include "supple/json/json.h"
 namespace supple::diagnostics::detail {
 constexpr std::size_t kMaxThreads = 128, kMaxFrames = 128, kMaxModules = 256;
@@ -107,12 +108,24 @@ struct ThreadTrace {
     Role role = Role::Other;
     Missing missing = Missing::NotCollected;  // None once frames were walked
     Walk walk;
+    // What the process registered this thread as (execution table, topic 5); None for a
+    // thread nobody registered: a driver's callback thread, a plug-in's own threads.
+    diagctx::ThreadRole registered = diagctx::ThreadRole::None;
+    std::uint16_t worker = 0;  // the N of audio-live-N and audio-bg-N, else 0
+};
+// Whether the execution table was found and usable.
+enum class TableState : std::uint8_t {
+    NotOffered,  // the worker published no address (it never reported ready)
+    Unreadable,  // the read failed or ran into a limit
+    Invalid,     // read, but not a table this build wrote
+    Read,
 };
 struct TraceSnapshot {
     std::vector<Module> modules;
     std::vector<ThreadTrace> threads;  // fault first, then main, then by thread id
     std::size_t dropped = 0;           // threads omitted beyond kMaxThreads
     bool truncatedModules = false;
+    TableState table = TableState::NotOffered;
 };
 
 // What a platform provides. `stop` interrupts a thread and returns its registers,
@@ -134,8 +147,17 @@ struct TraceOps {
 };
 // Collects the fault thread (registers supplied by the capsule), the main thread
 // (`mainTid`) and the others. Stops at `expired` with the rest marked unavailable.
+// `tableAddress` is the worker's execution table (0: none): it is read once, right after
+// the fault thread's walk and before any other thread is stopped, and read even if the
+// walk spent the deadline, so what the deadline cuts is other threads' traces and never
+// the table. Its thread slots label the threads by role.
 TraceSnapshot collectTrace(const TraceOps& ops, std::uint64_t faultTid, const Regs& faultRegs,
-                           std::uint64_t mainTid, Arch arch);
+                           std::uint64_t mainTid, Arch arch, std::uint64_t tableAddress = 0);
+
+// The role string a report shows for a thread. The fault thread is always "fault" (what
+// it was registered as goes in "registered"); any other thread is its registered role,
+// "model" for the main thread, else "other".
+std::string roleString(const ThreadTrace& thread);
 
 // Report JSON: top-level "modules" and "threads" values, and the limit strings
 // to add to "unavailable". Offsets are hex strings; frames without module identity

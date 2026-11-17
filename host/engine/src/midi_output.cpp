@@ -5,6 +5,7 @@
 #include <cmath>
 #include <limits>
 #include "supple/base/thread.h"
+#include "supple/diagctx/table.h"
 namespace supple::engine::detail {
 namespace {
 bool valid(const MidiOutputEvent& e) SUPPLE_RT {
@@ -111,6 +112,7 @@ Status MidiOutputSender::start() {
     try {
         thread_ = std::thread([this] {
             nameThread("midi-output");
+            (void)diagctx::registerThread(diagctx::ThreadRole::MidiOutput);
             sink_.prepareThread();
             while (!quit_.load(std::memory_order_acquire)) sink_.waitUntil(dispatch());
             sink_.releaseThread();

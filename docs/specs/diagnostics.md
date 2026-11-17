@@ -108,8 +108,12 @@ Sources: [POSIX signal safety](https://man7.org/linux/man-pages/man7/signal-safe
 the lowercase-hex build ID (ELF note, Mach-O UUID or CodeView GUID+age) or null when the
 image has none. Names and paths are never recorded; a local resolver maps an id to a name
 and symbols. `threads` has at most 128 entries, in order: the faulting thread (`fault`),
-the main thread (`main`), then the rest by thread id. Each is `{ordinal, role, state,
-frames, stop | reason}`; `ordinal` is its index, never an OS thread id. `state` is
+the main thread, then the rest by thread id. Each is `{ordinal, role, state, frames,
+stop | reason}` plus the optional `registered` and `worker` below; `ordinal` is its index,
+never an OS thread id. `role` is `fault` for the faulting thread; for every other thread it
+is the role the process registered it as (see Thread roles), `model` for the main thread
+if it is not registered, else `other`. (`main` is what reports written before thread roles
+called the model thread, and stays valid.) `state` is
 `walked` with `stop` (`end`, `depth`, `unreadable`, `not_executable`, `bad_frame_pointer`,
 `cycle`, `deadline`), or `unavailable` with `reason` (`ptrace_denied`, `access_denied`, `thread_exited`,
 `deadline`, `registers_unreadable`, `maps_unreadable`, `unsupported`, `not_collected`) and
@@ -227,6 +231,67 @@ and the walk goes on. Frames need frame pointers: the first-party code and the s
 have them (see Frame pointers), system frames are best effort. On arm64 pointer-authentication
 bits are stripped from return addresses.
 
+## Thread roles and the execution table (topic 5)
+
+Library placement: the table lives in the GPL library `diagnostics-context`
+(`libs/diagnostics-context/`, header `supple/diagctx/table.h`). It is under `libs/` because
+command-bus, also there, links it and a `libs/` library does not depend on host products;
+it is not in `core-base` or `modules/rack`, which are MIT and plug-in-linked, so no stock
+plug-in, module or MIT library links it (`tools/license-check` enforces that by leaving it
+out of its MIT list). Today `diagnostics` and `engine` link it; clap-host and command-bus
+join in the steps that use it.
+
+The table is one static, zero-filled, page-aligned block per process (18,464 bytes: a
+32-byte header, 64 thread slots, 1,024 instance cells and a 64-entry command ring, 16
+bytes each; the cells and ring are laid out now and used from later steps). It holds
+integers and enums only, never a string, a pointer into model or plug-in memory or
+anything a user typed, and carries a magic and a version. It is not in the binary's file
+image (it is `.bss`).
+
+An owned thread registers once while cold, next to `nameThread`:
+`registerThread(role, worker)` claims a slot (compare-and-swap, so threads may register
+concurrently; a full table counts `threadsDropped` and the thread is reported as `other`),
+stores the role, then publishes the operating-system thread id (Linux and Windows thread id,
+macOS Mach thread port name) last, so a reader never pairs an id with a stale role. The
+slot is released when the thread exits, so an id that is reused is not mislabelled. It is
+idempotent per thread. A hook, set by `diagnostics`, runs on each newly registered thread
+and installs its alternate signal stack (so the engine does not link `diagnostics`). The
+roles are a closed set: `model` (the main thread, registered when terminal handling is
+installed), `audio_render` (the anticipative renderer), `audio_live` and
+`audio_background` (the pool helpers, numbered from 1), `audio_offline`, `recorder`,
+`midi_output`. Not registered, so `other`: the audio driver's callback thread (created by
+the driver; registering it would need a thread-id call or TLS write on the audio path),
+the dummy backend's thread (it stands in for that driver thread, and tests should see it
+as one), `main-wake` (in MIT `core-base`), the sandbox and bridge children, and any thread
+a plug-in or the OS creates.
+
+The report labels each thread with its role. The fault thread keeps `role: "fault"` and
+adds `registered` with the role it was registered as; a thread of a numbered pool carries
+`worker` (1 to 65535) next to its role. `registered` and `worker` appear only where they
+say something, and retention validates them: `registered` only on the fault thread and
+only a registrable role, `worker` only on a thread with a role.
+
+How the supervisor gets the table: the worker's `ready` packet carries the table's address
+(`pc` field; the private channel is not a place for anything else secret). When the terminal
+packet arrives, Linux and Windows read the table with the same bounded remote read the stack
+walk uses (`process_vm_readv`, `ReadMemory` on Windows), once, right after the faulting
+thread's walk and before any other thread is stopped. It is read even if the walk spent the
+deadline: one read, 18 KiB. If the budget ends, what is cut is the traces of the other
+threads (`deadline`), never the table; their roles are still known. The table is untrusted
+input: it is used only if its magic and version are this build's, a slot with a free,
+claiming or unknown role labels nothing, and an address that cannot be read is a stated
+limit ("the execution table could not be read, so threads have no roles") with every thread
+still traced, labelled by position as before. macOS has no remote read: the in-process
+capture labels each thread from the live table's slots (atomic loads, no lock or
+allocation) and the capsule carries the result in each thread's header (`registered`,
+`worker`). The capsule wire format is version 2 for that (magic `CTC2`); it carries no copy
+of the table yet, which the steps that record execution entries add.
+
+Threads other than the faulting one keep running while the table is read, so a later step's
+instance cells are each read atomically but describe the moment of the read, not the moment of
+the fault; only the faulting thread is parked. The thread slots do not have that problem:
+they change only when a thread starts or ends.
+
 ## Offline resolver (topic 4)
 
 `resolve-crash [--json] --symbols PATH... REPORT.json` names the functions in a local
@@ -271,7 +336,7 @@ sanitizers.
 
 Output is text, or with `--json` `supple.crash-symbols/1.0`: `{incident, kind, role, platform,
 modules: [{format, id|null, state, file?, functions?, truncated?, error?}], threads:
-[{ordinal, role, state, stop|reason, frames: [{module|null, offset?, return, function?,
+[{ordinal, role, registered?, worker?, state, stop|reason, frames: [{module|null, offset?, return, function?,
 displacement?}]}]}` (`state`: resolved, no_symbols, unreadable, no_identity, not_found). It
 carries local file paths, since the person running it supplied them, and is never stored in
 the crash folder. Exit status: 0 when the report was read (unresolved modules included), 1
@@ -307,7 +372,8 @@ capsule, a verified lock-free reentry claim and a native handoff. Acknowledgemen
 wait is at most one second; the worker is never suspended and never waits for
 file writing/symbolication. `registerCurrentThread()` reserves a guarded alternate
 stack (POSIX) or a stack guarantee (Windows), while cold; main registers before
-frontend code. Other owned-thread integration belongs to topic 5; unregistered
+frontend code. Other owned threads register through the execution table, which also gives them the
+alternate stack (see Thread roles and the execution table); unregistered
 foreign/driver threads have best-effort context and no stack-exhaustion promise.
 A thread's alternate stack is unmapped at its exit only after the previous one was
 restored; if the restore fails the 64 KiB stays mapped, since the kernel answers a signal

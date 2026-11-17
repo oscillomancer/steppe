@@ -16,6 +16,7 @@
 #include "supple/base/files.h"
 #include "supple/base/main_thread_wake.h"
 #include "supple/base/thread.h"
+#include "supple/diagctx/table.h"
 #include "supple/json/json.h"
 
 namespace supple::engine::detail {
@@ -914,6 +915,7 @@ void Recorder::updateHeaders() {
 
 void Recorder::writerLoop() {
     nameThread("audio-recorder");
+    (void)diagctx::registerThread(diagctx::ThreadRole::Recorder);
     std::vector<float> scratch(8192 * 16);
     auto now = [&] {
         return nowForTests_ ? nowForTests_(clockContext_) : std::chrono::steady_clock::now();
