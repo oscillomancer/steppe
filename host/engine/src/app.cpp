@@ -10,6 +10,7 @@
 #include "source_preparation.h"
 #include "supple/model/freeze.h"
 #include "supple/model/numeric.h"
+#include "suspects.h"
 
 #if !defined(_WIN32)
 #include <poll.h>
@@ -756,6 +757,7 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
         }
         warnings->push_back({"project.modules", std::move(message), moduleFolder.string()});
     }
+    harvestRan();  // what this project ran in process counts for the run
     pool_ = std::make_unique<InstancePool>(
         [this](const model::PluginRef& ref) { return findPlugin(ref.id); }, options_.identity);
     pool_->setMainThreadWake(mainWake_);
@@ -989,12 +991,173 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
     return okStatus();
 }
 
-Status EngineApp::open(const fs::path& where, std::vector<schema::Warning>* warnings) {
+// --- crash safe-load (topic 7d) ---------------------------------------------------------
+
+std::vector<EngineApp::ProjectPlugin> EngineApp::gatherPlugins(const std::vector<NamedHead>& heads,
+                                                               const std::string& current) const {
+    using Key = std::pair<std::string, std::string>;
+    std::map<Key, ProjectPlugin> byKey;
+    for (const auto& [branch, session] : heads)
+        for (const auto& entry : session->fx) {
+            const model::PluginRef& ref = entry.value->plugin;
+            std::optional<host::PluginInfo> resolved;
+            if (catalogue_)
+                if (auto found = findPlugin(std::span<const host::PluginInfo>(*catalogue_), ref.id))
+                    resolved = std::move(*found);
+            const Key key =
+                resolved ? Key(resolved->format, resolved->id) : Key(ref.format, ref.id);
+            auto [it, added] = byKey.try_emplace(key);
+            ProjectPlugin& p = it->second;
+            if (added) {
+                p.format = key.first;
+                p.id = key.second;
+                p.name = ref.name.empty() && resolved ? resolved->name : ref.name;
+                p.vendor = ref.vendor.empty() && resolved ? resolved->vendor : ref.vendor;
+                p.version = ref.version.empty() && resolved ? resolved->version : ref.version;
+                p.resolved = std::move(resolved);
+                p.mode = overrides_.mode(key.first, key.second);
+                p.stock = p.resolved && pool_ && pool_->isStock(*p.resolved);
+                p.bridgeable = p.resolved && !p.stock && !host::bridgeExecutable().empty();
+            }
+            if (branch == current) ++p.uses;
+            if (std::ranges::find(p.branches, branch) == p.branches.end())
+                p.branches.push_back(branch);
+        }
+    std::vector<ProjectPlugin> out;
+    for (auto& [key, p] : byKey) out.push_back(std::move(p));
+    return out;
+}
+
+void EngineApp::annotateSuspects(std::vector<ProjectPlugin>& plugins) {
+    auto found = diagnostics::suspects(diagnosticsDir());
+    if (!found || found->empty()) return;
+    detail::SuspectCheck check(std::move(*found));
+    for (auto& p : plugins) {
+        if (!p.resolved) continue;  // not installed: nothing to load, nothing to protect
+        const auto verdict = check.check(*p.resolved);
+        if (!verdict.applies()) continue;
+        p.suspectBuild = std::string(detail::buildName(verdict.build));
+        p.attribution = verdict.attribution;
+        p.incidents = verdict.incidents;
+    }
+}
+
+void EngineApp::warnSuspects(const std::vector<ProjectPlugin>& plugins,
+                             std::vector<schema::Warning>* warnings) {
+    for (const auto& p : plugins) {
+        // A bridge or a disable already protects this run; a settled one is not a suspect.
+        if (p.suspectBuild.empty() || p.mode != LoadMode::Normal) continue;
+        const std::string who = (p.name.empty() ? p.id : p.name) + " (" + p.id + ")";
+        const std::string how = p.suspectBuild == "unreadable"
+                                    ? ", and the installed file could not be checked against it"
+                                : p.suspectBuild == "version" ? ", for the version installed"
+                                                              : ", for the build installed";
+        const std::string remedy =
+            p.stock ? "it looks like a product fault, so only disabling it is offered: "
+                      "plugin.override {plugin, mode: \"disable\"}"
+                    : (p.bridgeable ? "plugin.override {plugin, mode: \"bridge\" or \"disable\"}"
+                                    : "plugin.override {plugin, mode: \"disable\"}") +
+                          std::string(" before opening protects this run");
+        std::string message = who + " may crash: crash report " + p.incidents.front() +
+                              " points at it (" + p.attribution + how +
+                              "); it loads normally here. " + remedy +
+                              "; crash.settle the report once the plug-in is trusted.";
+        if (options_.warnSuspectsOnStderr && suspectsWarned_.insert(p.format + "/" + p.id).second)
+            std::fprintf(stderr, "%s\n", message.c_str());
+        if (warnings)
+            warnings->push_back({"project.suspect_plugin", std::move(message), "/plugins/" + p.id});
+    }
+}
+
+Result<EngineApp::ProjectPlugins> EngineApp::projectPlugins(
+    const fs::path& where, bool asTemplate, std::vector<schema::Warning>* warnings) {
+    const fs::path path = resolve(where);
+    std::error_code ec;
+    const fs::path file = asTemplate && fs::is_directory(path, ec) ? path / "project.json" : path;
+    auto text = readTextFile(file, std::size_t(1) << 30);
+    if (!text) return std::move(text).error();
+    ProjectPlugins out;
+    out.path = file.string();
+    out.hash = "sha256:" + sha256Hex(*text);
+    std::vector<NamedHead> heads;
+    std::string current = "main";
+    if (asTemplate) {
+        auto session = model::parseProject(*text, warnings);
+        if (!session) return std::move(session).error();
+        heads.emplace_back(current, std::make_shared<const model::Session>(std::move(*session)));
+    } else {
+        auto opened = model::parseProjectFile(*text, warnings, replayableStep);
+        if (!opened) return std::move(opened).error();
+        current = opened->store.branch();
+        for (const auto& name : opened->store.branches())
+            if (auto head = opened->store.head(name)) heads.emplace_back(name, std::move(head));
+    }
+    out.catalogueEmpty = !catalogue_ || catalogue_->empty();
+    out.plugins = gatherPlugins(heads, current);
+    annotateSuspects(out.plugins);
+    return out;
+}
+
+void EngineApp::harvestRan() {
+    if (!pool_) return;
+    for (auto& info : pool_->ranInProcess()) {
+        const bool known = std::ranges::any_of(ranBefore_, [&](const host::PluginInfo& seen) {
+            return seen.format == info.format && seen.id == info.id;
+        });
+        if (!known) ranBefore_.push_back(std::move(info));
+    }
+}
+
+void EngineApp::settleCleanSuspects() {
+    harvestRan();
+    if (ranBefore_.empty()) return;
+    auto found = diagnostics::suspects(diagnosticsDir());
+    if (!found || found->empty()) return;
+    detail::SuspectCheck check(std::move(*found));
+    for (const auto& info : ranBefore_) {
+        // Only the build the report named, or the version when it named none: a plug-in whose
+        // file could not be checked ran fine, but is not known to be the one that crashed.
+        const auto verdict = check.check(info);
+        if (verdict.build != detail::SuspicionVerdict::Build::Same &&
+            verdict.build != detail::SuspicionVerdict::Build::Version)
+            continue;
+        for (const auto& incident : verdict.incidents)
+            (void)diagnostics::settle(incident, diagnosticsDir());
+    }
+    ranBefore_.clear();
+}
+
+Status EngineApp::open(const fs::path& where, std::vector<schema::Warning>* warnings,
+                       std::string_view expectHash) {
     const fs::path path = resolve(where);
     auto text = readTextFile(path, std::size_t(1) << 30);
     if (!text) return std::move(text).error();
+    if (!expectHash.empty() && "sha256:" + sha256Hex(*text) != expectHash)
+        return Error("project.changed",
+                     path.filename().string() + " changed since its plug-ins were checked", "/path",
+                     "run project.plugins again and decide again, or open without expect_hash");
     auto opened = model::parseProjectFile(*text, warnings, replayableStep);
     if (!opened) return std::move(opened).error();
+    // A plug-in an earlier crash report points at is warned of, never refused or changed here:
+    // the engine does not prompt and does not override itself (the frontend or the agent asked
+    // first with project.plugins, and plugin.override).
+    if (auto suspected = diagnostics::suspects(diagnosticsDir());
+        suspected && !suspected->empty()) {
+        std::vector<NamedHead> heads;
+        bool holdsPlugins = false;
+        for (const auto& name : opened->store.branches())
+            if (auto head = opened->store.head(name)) {
+                holdsPlugins = holdsPlugins || !head->fx.empty();
+                heads.emplace_back(name, std::move(head));
+            }
+        if (holdsPlugins) {
+            // The load scans the catalogue for these plug-ins anyway; the check needs it first.
+            if (!catalogue_) (void)plugins();
+            auto list = gatherPlugins(heads, opened->store.branch());
+            annotateSuspects(list);
+            warnSuspects(list, warnings);
+        }
+    }
     if (opened->branchesDropped && warnings) {
         const Error& why = *opened->branchesDropped;
         warnings->push_back({"project.history",

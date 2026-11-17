@@ -1333,7 +1333,7 @@ Result:
 
 Mark a crash report, or a run that left none, as seen.
 
-Writes a small marker beside the report; the report itself is never changed. An acknowledged report no longer counts for the restart notice or for suspecting a plug-in. Repeating it changes nothing.
+Writes a small marker beside the report; the report itself is never changed. An acknowledged report no longer counts for the restart notice. It does not end the suspicion of a plug-in: seen is not resolved, and crash.settle does that. Repeating it changes nothing.
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -1546,6 +1546,52 @@ Result:
 {
   "incident": "0123456789abcdef0123456789abcdef",
   "report": "<any>"
+}
+
+```
+
+## `crash.settle@1`
+
+Mark the suspicion a crash report raised as resolved.
+
+Writes a small marker beside the report; the report itself is never changed. A settled report no longer makes its plug-in a suspect (project.plugins, project.open's project.suspect_plugin warning). Use it once the plug-in was loaded normally and ran well, or when the person chose to load it normally; crash.acknowledge only says the report was seen. A report whose run has not ended cannot be settled. Repeating it changes nothing.
+
+Kind: `action`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `incident` | string |  |  |  | A report's incident id, from crash.list. |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `crash.no_report`: no finished report has that incident id Hint: list the reports with crash.list
+
+### Examples
+
+**Settle a report** (`song_with_crash_report`)
+
+```json
+{
+  "incident": "0123456789abcdef0123456789abcdef"
+}
+
+```
+
+Result:
+
+```json
+{
+  "incident": "0123456789abcdef0123456789abcdef",
+  "settled": true
 }
 
 ```
@@ -11539,7 +11585,7 @@ Result:
 
 Open a project file and its branches (replaces the current project).
 
-recoverable > 0: recordings a crash left out of the project; project.recoverable lists them and project.recover puts them back. autosave_available: a newer autosave exists next to the file (it is not loaded silently). branch: the branch current when saved. warnings: project.history when the saved branches could not be restored (main opens alone; the first save over the file keeps a copy of it); also project module copies that could not be read or compiled, and name types using a library version instead or left unavailable.
+recoverable > 0: recordings a crash left out of the project; project.recoverable lists them and project.recover puts them back. autosave_available: a newer autosave exists next to the file (it is not loaded silently). branch: the branch current when saved. warnings: project.history when the saved branches could not be restored (main opens alone; the first save over the file keeps a copy of it); also project module copies that could not be read or compiled, and name types using a library version instead or left unavailable; project.suspect_plugin when a crash report points at a plug-in the project holds (it loads normally: the engine never prompts or changes how a plug-in loads by itself; plugin.override first to protect the run).
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -11548,6 +11594,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `path` | string |  |  |  |  |
+| `expect_hash` | string |  |  |  | The hash project.plugins returned: the file is opened only if its bytes are those it checked (project.changed otherwise) |
 
 ### Result
 
@@ -11672,6 +11719,56 @@ Result:
   "generation": "<any>",
   "autosave_available": false,
   "recoverable_sessions": 0
+}
+
+```
+
+## `project.plugins@1`
+
+The plug-ins a project file names, and any a crash report suspects.
+
+Reads the file as project.open would and loads nothing: no plug-in, no probe. Every branch's head is read, not the history steps behind them. plugins lists each (format, id) once with the name, vendor and version the file saves, uses (its fx in the saved branch), branches, mode (this run's plugin.override), stock and bridgeable, and resolved: the installed plug-in (id, name, vendor, version, path) from the catalogue as it stands, or null (not installed, or the catalogue is empty: catalogue_empty says it is, and no scan was started; plugin.scan first). suspect is null, or says that a crash report points at it and the installed file is that build (build same), that version when the report names no build (version), or could not be checked against it (unreadable): attribution (fault_in_image or active_token) and the incidents, newest first. A plug-in is never loaded to find out. hash is the SHA-256 of the file's bytes: pass it to project.open as expect_hash so the check and the load read the same file. template: true reads a project template (a folder or file) instead.
+
+Kind: `query`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `path` | string |  |  |  |  |
+| `template` | boolean |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `file.open`: the file cannot be read Hint: check the path
+- `schema.invalid`: the file has problems Hint: details list each with its path
+
+### Examples
+
+**Which plug-ins** (`saved`)
+
+```json
+{
+  "path": "example-project.json"
+}
+
+```
+
+Result:
+
+```json
+{
+  "path": "<any>",
+  "hash": "<any>",
+  "catalogue_empty": "<any>",
+  "plugins": "<any>"
 }
 
 ```

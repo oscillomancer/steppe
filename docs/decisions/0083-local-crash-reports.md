@@ -225,3 +225,11 @@ plan's six, since threads omitted from the report and threads the table had no s
 different things); a report of an earlier build with a plain count, or none of `attribution`, is
 still a report the validator recognises. (7) Rack modules are not announced yet and have no
 cell; a crash inside one reports no module entry, a stated limit in `STATUS.md`.
+
+*Note, 2026-11-17 (topic 7d, safe-load):* a suspicion of a plug-in ends by *settling* a report
+(`<incident>.settled`, `crash.settle`), not by acknowledging it: seen is not resolved. The engine
+compares the installed plug-in file's build id with the report's before anyone is asked
+(`project.plugins`, `project.open`'s `project.suspect_plugin` warning), never prompts, never changes
+how a plug-in loads by itself, and settles what a run that ended well loaded normally in process.
+`plugin.override` (ADR-0081 note) is how a run bridges or disables a plug-in. Contracts:
+`docs/specs/diagnostics.md` "Safe-load in the engine", `docs/specs/engine.md` §5.

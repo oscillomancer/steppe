@@ -169,8 +169,9 @@ void registerCrashReportCommands(cmd::Registry& registry) {
         c.summary = "Mark a crash report, or a run that left none, as seen.";
         c.description =
             "Writes a small marker beside the report; the report itself is never changed. "
-            "An acknowledged report no longer counts for the restart notice or for suspecting "
-            "a plug-in. Repeating it changes nothing.";
+            "An acknowledged report no longer counts for the restart notice. It does not end "
+            "the suspicion of a plug-in: seen is not resolved, and crash.settle does that. "
+            "Repeating it changes nothing.";
         c.tags = {"diagnostics"};
         c.args = incidentSchema("crash_acknowledge_args");
         c.result = schema::any();
@@ -186,6 +187,37 @@ void registerCrashReportCommands(cmd::Registry& registry) {
             json::Value out = json::Value::object();
             out["incident"] = a.incident;
             out["acknowledged"] = true;
+            return out;
+        };
+        addChecked(registry, std::move(c));
+    }();
+    [&] {
+        Command<IncidentArgs, json::Value> c;
+        c.name = "crash.settle";
+        c.kind = Kind::Action;
+        c.exposure = cmd::Exposure::McpExec;
+        c.summary = "Mark the suspicion a crash report raised as resolved.";
+        c.description =
+            "Writes a small marker beside the report; the report itself is never changed. A "
+            "settled report no longer makes its plug-in a suspect (project.plugins, "
+            "project.open's project.suspect_plugin warning). Use it once the plug-in was "
+            "loaded normally and ran well, or when the person chose to load it normally; "
+            "crash.acknowledge only says the report was seen. A report whose run has not ended "
+            "cannot be settled. Repeating it changes nothing.";
+        c.tags = {"diagnostics"};
+        c.args = incidentSchema("crash_settle_args");
+        c.result = schema::any();
+        c.errors = {{"crash.no_report", "no finished report has that incident id",
+                     "list the reports with crash.list"}};
+        c.examples = {{"Settle a report", j(std::string(R"({"incident":")") + kIncident + "\"}"),
+                       j(R"({"incident":"0123456789abcdef0123456789abcdef","settled":true})"),
+                       "song_with_crash_report"}};
+        c.run = [](const IncidentArgs& a, Context& ctx) -> Result<json::Value> {
+            auto st = diag::settle(a.incident, app(ctx).diagnosticsDir());
+            if (!st) return failed(st.error());
+            json::Value out = json::Value::object();
+            out["incident"] = a.incident;
+            out["settled"] = true;
             return out;
         };
         addChecked(registry, std::move(c));

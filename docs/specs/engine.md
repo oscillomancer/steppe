@@ -1138,6 +1138,9 @@ project saved without it, byte for byte.
   both executors have adopted a newer plan) and recompiles. Whatever state
   was never saved is lost and held notes end. Setting the mode a plug-in
   already has changes nothing.
+- **Which plug-ins to protect.** `project.plugins`, `project.open`'s
+  `project.suspect_plugin` warning, `crash.settle` and the clean-run settlement that
+  decide it are in `docs/specs/diagnostics.md` "Safe-load in the engine".
 
 The bridge is native on Linux, macOS and Windows (ADR-0037). Linux retains
 memfd, SCM_RIGHTS, shared futexes and pidfd behavior. macOS uses unlinked

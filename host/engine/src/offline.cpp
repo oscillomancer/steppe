@@ -231,13 +231,16 @@ void InstancePool::restartPlugin(std::string_view format, std::string_view id) {
     }
 }
 
-std::vector<LoadOverrides::Key> InstancePool::ranInProcess() const {
-    std::set<LoadOverrides::Key> keys;
+std::vector<host::PluginInfo> InstancePool::ranInProcess() const {
+    std::map<LoadOverrides::Key, host::PluginInfo> ran;
     for (const auto& [id, e] : instances_)
         if (e.instance && e.activated && e.effective == model::Isolation::InProcess && !e.failure &&
             !e.instance->failed())
-            keys.emplace(e.instance->info().format, e.instance->info().id);
-    return {keys.begin(), keys.end()};
+            ran.emplace(LoadOverrides::Key(e.instance->info().format, e.instance->info().id),
+                        e.instance->info());
+    std::vector<host::PluginInfo> out;
+    for (auto& [key, info] : ran) out.push_back(std::move(info));
+    return out;
 }
 
 std::vector<model::Id> InstancePool::isolationFallbacks() const {

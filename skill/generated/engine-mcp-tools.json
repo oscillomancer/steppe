@@ -869,13 +869,17 @@
   {
     "name": "project_open",
     "title": "Open a project file and its branches (replaces the current project).",
-    "description": "recoverable > 0: recordings a crash left out of the project; project.recoverable lists them and project.recover puts them back. autosave_available: a newer autosave exists next to the file (it is not loaded silently). branch: the branch current when saved. warnings: project.history when the saved branches could not be restored (main opens alone; the first save over the file keeps a copy of it); also project module copies that could not be read or compiled, and name types using a library version instead or left unavailable. See describe for errors and examples.",
+    "description": "recoverable > 0: recordings a crash left out of the project; project.recoverable lists them and project.recover puts them back. autosave_available: a newer autosave exists next to the file (it is not loaded silently). branch: the branch current when saved. warnings: project.history when the saved branches could not be restored (main opens alone; the first save over the file keeps a copy of it); also project module copies that could not be read or compiled, and name types using a library version instead or left unavailable; project.suspect_plugin when a crash report points at a plug-in the project holds (it loads normally: the engine never prompts or changes how a plug-in loads by itself; plugin.override first to protect the run). See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "path_args",
       "properties": {
         "path": {
           "type": "string"
+        },
+        "expect_hash": {
+          "type": "string",
+          "description": "The hash project.plugins returned: the file is opened only if its bytes are those it checked (project.changed otherwise)"
         }
       },
       "additionalProperties": false

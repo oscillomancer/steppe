@@ -1273,9 +1273,12 @@ continues under your own OS settings. After an unexpected close, the next start 
 banner under the transport that says so (naming the plug-in the report points at, when it
 points at one, or saying no report was written); Dismiss hides it for good. It is a note,
 not a question, and project recovery is offered separately. An agent connected over MCP can list, read,
-acknowledge and delete these reports (`crash.list`, `crash.read`, `crash.acknowledge`,
-`crash.delete`, `crash.clear`); a report names plug-ins and commands, never project
-content. Safe-load and next-start notices arrive in a later topic; the current delivery
+acknowledge, settle and delete these reports (`crash.list`, `crash.read`, `crash.acknowledge`,
+`crash.settle`, `crash.delete`, `crash.clear`); a report names plug-ins and commands, never project
+content. Before opening a project, `project.plugins` says which of its plug-ins a recent
+report points at, and `plugin.override` loads a plug-in on a bridge or not at all for the
+run (`bridge`, `disable`), so the project can be opened safely; `project.open` warns of such a plug-in
+and loads it normally unless one of those was set first. Safe-load and next-start notices arrive in a later topic; the current delivery
 scope is listed in STATUS.md.
 
 #### Stopping Steppe from a script or a service

@@ -98,10 +98,10 @@ class InstancePool {
     // Retires the instances of one plug-in (every fx of it): the next get()
     // makes new ones, and the old stay until prune() like a restart().
     void restartPlugin(std::string_view format, std::string_view id);
-    // The plug-ins (format, id) with an instance in this process that was
+    // The plug-ins, one entry each, with an instance in this process that was
     // active at some point and has not failed: a run that ended cleanly with
     // them loaded normally (topic 7d, E12).
-    std::vector<LoadOverrides::Key> ranInProcess() const;
+    std::vector<host::PluginInfo> ranInProcess() const;
     // Where `id`'s instance runs, or would if it were made now.
     model::Isolation effectiveIsolation(model::Id id, const model::FxInstance& fx) const;
     // Instances on inherit made in process because no bridge was set.

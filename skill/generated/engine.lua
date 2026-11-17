@@ -176,6 +176,9 @@ q = nil
 ---@class Steppe.crash_read_args
 ---@field incident string A report's incident id, from crash.list.
 
+---@class Steppe.crash_settle_args
+---@field incident string A report's incident id, from crash.list.
+
 ---@class Steppe.dsp_check_args
 ---@field name? string
 ---@field source? string
@@ -1165,6 +1168,7 @@ q = nil
 
 ---@class Steppe.project_open_args
 ---@field path? string
+---@field expect_hash? string The hash project.plugins returned: the file is opened only if its bytes are those it checked (project.changed otherwise)
 
 ---@class Steppe.project_open_result
 ---@field name string
@@ -1181,6 +1185,10 @@ q = nil
 ---@field autosave_available boolean
 ---@field recoverable_sessions integer Unsaved projects earlier runs left behind (project.recoverable lists them)
 ---@field warnings? table[]
+
+---@class Steppe.project_plugins_args
+---@field path string
+---@field template? boolean
 
 ---@class Steppe.project_recover_args
 ---@field files? string[]
@@ -2241,6 +2249,7 @@ q = nil
 ---@field delete fun(args: Steppe.crash_delete_args): table Delete one crash report, or the record of a run that left none.
 ---@field list fun(args?: Steppe.crash_list_args): table The crash reports earlier runs left, newest first.
 ---@field read fun(args: Steppe.crash_read_args): table One crash report in full.
+---@field settle fun(args: Steppe.crash_settle_args): table Mark the suspicion a crash report raised as resolved.
 
 ---@class Steppe.dsp
 ---@field check fun(args?: Steppe.dsp_check_args): Steppe.dsp_check_result Compile a DSP script without saving it; return its diagnostics.
@@ -2408,6 +2417,7 @@ q = nil
 ---@field get fun(): Steppe.project_get_result Show the project: name, rate, tempo, meter, file, version and branch.
 ---@field new fun(args?: Steppe.project_new_args): Steppe.project_new_result Start a new, empty project (replaces the current one and its history).
 ---@field open fun(args?: Steppe.project_open_args): Steppe.project_open_result Open a project file and its branches (replaces the current project).
+---@field plugins fun(args: Steppe.project_plugins_args): table The plug-ins a project file names, and any a crash report suspects.
 ---@field recover fun(args?: Steppe.project_recover_args): Steppe.project_recover_result Put back what a crash left behind: recordings, or an unsaved project.
 ---@field recoverable fun(): Steppe.project_recoverable_result List recordings and unsaved projects a crash left behind.
 ---@field save fun(args?: Steppe.project_save_args): Steppe.project_save_result Save the project (canonical JSON) to its file or a new path.

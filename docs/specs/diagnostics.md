@@ -239,14 +239,51 @@ never rewritten and the acknowledgement is not touched. `settle(suspect)` settle
 suspect's incidents and keeps going past a failure. Retention, deleting a report and
 `deleteAllReports` remove the `.settled` with the report; deleting the reports is how a user clears
 the evidence (P11). The load overrides that act on a suspect (`plugin.override`) are in
-`docs/specs/engine.md` §5; the pre-scan of a project's plug-ins, the headless warning and the
-clean-run settlement come after them in 7d.
+`docs/specs/engine.md` §5, and so is the rest of the engine's part (below).
+
+*Safe-load in the engine (topic 7d, design note (c), (d), (e)).* The reader names plug-ins from
+reports alone; the engine decides whether the suspicion applies to the plug-in installed now
+(`host/engine/src/suspects.h`, `SuspectCheck`), and it never prompts or overrides by itself.
+- *Identity.* A suspect applies to an installed plug-in of the same format and id when the file's
+  build id is the report's `build.id` (`same`), looking at every image of a universal Mach-O file;
+  a different build is not offered (E10). A suspect with no build id (an `active_token`, VST3)
+  applies when the installed version is the one the report names (`version`). A file that cannot
+  be read, is not an image, or is beyond the budget is asked about (`unreadable`, E11): at most 3
+  files, 250 ms from the first read, headers only, each read once. A string compare of ids comes
+  first; no file is read for a plug-in no suspect names. The CLAP file is the plug-in's path, or a
+  macOS bundle's executable (`host::pluginImageFile`); a VST3 has no build id to compare. The
+  parsers are `libs/image-identity`'s, tested on synthetic ELF, Mach-O (also universal) and PE
+  bytes on every platform.
+- *`project.plugins {path, template?}`* reads a project file (or, with `template`, a template
+  folder or file) with the parser `project.open` uses and loads nothing: every branch's head, not
+  the history steps behind them, each `(format, id)` once, as the catalogue resolves it, with
+  `uses`, `branches`, `mode`, `stock`, `bridgeable`, `resolved` (null when not installed or the
+  catalogue is empty: it answers from the catalogue as it stands and never scans,
+  `catalogue_empty` says so), and `suspect` (`build` same, version or unreadable, `attribution`,
+  `incidents`) when the check above says a report applies. Its `hash` is the SHA-256 of the bytes
+  read; `project.open {expect_hash}` refuses other bytes with `project.changed`, so the check and
+  the load read one file. An autosave source is not read here: an autosave belongs to a project
+  already open.
+- *`project.open`* adds the warning `project.suspect_plugin` (path `/plugins/<id>`) for each
+  suspect still on the normal load and loads normally. A suspect already bridged or disabled
+  this run raises none, and a settled one is not a suspect. A stock plug-in's warning says it looks
+  like a product fault and offers disable only. The check costs no scan unless a suspect exists
+  and the project holds plug-ins. A service (`--mcp`, `serve`, never a one-shot `exec`) writes the
+  same text once per plug-in per run on standard error. Remembered rules do not apply headless,
+  and nothing here changes how anything loads.
+- *Settling by a clean run (E12, Q8).* `EngineApp::settleCleanSuspects()`, which the services call
+  when they end normally, settles the reports of a plug-in that ran in this process, activated,
+  loaded normally, in this project or an earlier one of the run, when it is the build (or version)
+  the report names. A bridged plug-in, a disabled one, one never activated and one whose file
+  could not be checked settle nothing (E13), and a run that dies settles nothing, since the call
+  is only made on the way out.
 
 *Commands.* The engine exposes the reader to agents (P9) as `crash.list {limit?}` (the listing:
 reports, unreported runs, `live_runs`, `reports_pending`, `ignored`, each list capped by `limit`,
 default 50, with its `_total`), `crash.read {incident}` (the report as written),
-`crash.acknowledge {incident}`, `crash.delete {incident}` and `crash.clear` (what `deleteAllReports`
-does). The folder is `AppOptions::diagnosticsDir`, empty meaning `<workdir>/diagnostics`; the apps
+`crash.acknowledge {incident}`, `crash.settle {incident}` (what `settle` does: the suspicion of a
+plug-in ends, the report stays), `crash.delete {incident}` and `crash.clear` (what
+`deleteAllReports` does). The folder is `AppOptions::diagnosticsDir`, empty meaning `<workdir>/diagnostics`; the apps
 pass `defaultDirectory()` when they run without `--workdir`, so a test never reads the user's own
 reports. A report the reader refuses is `crash.no_report` at `/args/incident`, with a hint to list
 first. `writeSampleReport` makes the one report the command examples and tests start from.

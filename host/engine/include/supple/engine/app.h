@@ -80,6 +80,10 @@ struct AppOptions {
     // diagnostics frontend writes to. Empty = <workdir>/diagnostics; the apps pass
     // diagnostics::defaultDirectory() when they have no --workdir, so tests never read the user's.
     std::filesystem::path diagnosticsDir;
+    // A service (--mcp, --rpc) says once per plug-in, on standard error, when a project it opens
+    // holds a plug-in an earlier crash report points at (topic 7d); never a prompt, and one-shot
+    // exec and the tests say nothing. The warning project.suspect_plugin is given either way.
+    bool warnSuspectsOnStderr = false;
     // An unsaved project's own folder (the GUI's, one per run): its media (the
     // recordings) and autosaves live in <scratchDir>/<media_dir> and
     // <scratchDir>/autosave-<n>.json until the first save moves the media
@@ -391,6 +395,36 @@ class EngineApp : public cmd::Host {
     // finds it all the same, for the commands that manage overrides.
     Result<host::PluginInfo> findPlugin(std::string_view idOrName);
     Result<host::PluginInfo> lookupPlugin(std::string_view idOrName);
+    // --- crash safe-load (topic 7d) -----------------------------------------------------
+    // One plug-in a project names, as project.plugins reports it.
+    struct ProjectPlugin {
+        std::string format, id, name, vendor, version;  // as the file names it (id: as resolved)
+        std::int64_t uses = 0;                          // its fx in the saved (current) branch
+        std::vector<std::string> branches;              // the branches whose head uses it
+        std::optional<host::PluginInfo> resolved;       // the catalogue as it stands, never a scan
+        LoadMode mode = LoadMode::Normal;               // this run's override
+        bool stock = false, bridgeable = false;
+        // A crash report points at it and the installed file is that build (or that version
+        // when the report names no build, or it could not be checked): which, and why.
+        std::string suspectBuild;  // "", same, version or unreadable
+        std::string attribution;   // fault_in_image or active_token
+        std::vector<std::string> incidents;
+    };
+    struct ProjectPlugins {
+        std::string path, hash;  // hash: "sha256:" of the bytes read, for open's expectHash
+        bool catalogueEmpty = false;
+        std::vector<ProjectPlugin> plugins;
+    };
+    // The plug-ins a project file names, without loading any: every branch's head, not the
+    // history steps behind them, de-duplicated by (format, id) as the catalogue resolves it.
+    // `asTemplate`: a template (folder or file) rather than a project file.
+    Result<ProjectPlugins> projectPlugins(const std::filesystem::path& file, bool asTemplate,
+                                          std::vector<schema::Warning>* warnings = nullptr);
+    // At a clean end of the run: the plug-ins that ran in this process, activated, loaded
+    // normally (this project's and earlier ones'), settle the reports that suspected exactly
+    // that build (E12). Bridged and disabled ones never do. Writes only `.settled` markers.
+    void settleCleanSuspects();
+
     // --- load overrides (topic 7d): how this run loads a named plug-in, whatever
     // the project says. Main thread; not in the project, not in history, kept
     // across open and new; every pool made takes a copy. ------------------------
@@ -462,8 +496,10 @@ class EngineApp : public cmd::Host {
     // A branches section that cannot be restored opens main alone with a
     // project.history warning; the first save over that file keeps a copy of
     // it (<file>.pre-branches.bak).
-    Status open(const std::filesystem::path& path,
-                std::vector<schema::Warning>* warnings = nullptr);
+    // `expectHash` (project.plugins' `hash`): refuses a file whose bytes are not the ones that
+    // were checked (project.changed), so the plug-in check and the load read the same file.
+    Status open(const std::filesystem::path& path, std::vector<schema::Warning>* warnings = nullptr,
+                std::string_view expectHash = {});
     Status newProject(model::Project project);
     // A project template (project.template.*): `folder` receives project.json
     // (the head, without history) and media/ with a copy of every audio file
@@ -950,6 +986,17 @@ class EngineApp : public cmd::Host {
     std::mutex recordingFinalizeMutex_;  // sidecar publication vs scratch relocation, never RT
     std::map<std::string, std::unique_ptr<host::Instance>> scratch_;
     LoadOverrides overrides_;
+    // Topic 7d. The plug-ins earlier projects of this run ran in process (the pool that made
+    // them is replaced with the project), and the ones this run already said it suspects.
+    std::vector<host::PluginInfo> ranBefore_;
+    std::set<std::string> suspectsWarned_;
+    using NamedHead = std::pair<std::string, std::shared_ptr<const model::Session>>;
+    std::vector<ProjectPlugin> gatherPlugins(const std::vector<NamedHead>& heads,
+                                             const std::string& current) const;
+    void annotateSuspects(std::vector<ProjectPlugin>& plugins);
+    void warnSuspects(const std::vector<ProjectPlugin>& plugins,
+                      std::vector<schema::Warning>* warnings);
+    void harvestRan();
     Status moveScratchMedia(const std::filesystem::path& dest,
                             const std::function<Status()>& publish);
     std::unique_ptr<SourcePreparation> sourcePreparation_;

@@ -289,6 +289,7 @@ int frontendMain(int argc, char** argv) {
         }
         if (auto stock = host::stockPluginDir()) options.pluginPath.push_back(*stock);
         for (auto& path : host::defaultSearchPath()) options.pluginPath.push_back(path);
+        options.warnSuspectsOnStderr = true;  // a service says it once; exec never does
         auto app = engine::EngineApp::create(options);
         if (!app) {
             std::fprintf(stderr, "%s\n", app.error().toString().c_str());
@@ -365,6 +366,7 @@ int frontendMain(int argc, char** argv) {
             (*app)->stopEngine();  // commit captured takes while the session/bus still exist
             publishEvents();
             server.stop();
+            (*app)->settleCleanSuspects();  // a run that ended well clears what it loaded normally
             return 0;
         }
         mcp::Server server(registry, dispatcher, tools);
@@ -392,6 +394,7 @@ int frontendMain(int argc, char** argv) {
             std::fprintf(stderr, "%s\n", status.error().toString().c_str());
             return 1;
         }
+        (*app)->settleCleanSuspects();  // a run that ended well clears what it loaded normally
         return 0;
     }
     if (args[0] == "registry") {
