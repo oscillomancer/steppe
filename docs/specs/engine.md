@@ -317,7 +317,10 @@ specified here as it lands); so far:
   (and keeps it, so the address is not reused). Given that same object
   again it knows the patch and state are unchanged; given another, or a
   copy that is not the session's, it compares the patch's canonical text
-  as before, and applies that text when it differs.
+  as before, and applies that text when it differs. It forgets the object
+  when it recreates the instance and when the app acknowledges a patch or
+  state the plug-in produced, since the object then no longer describes
+  the instance.
 Returning to a version with neither patch nor state after applying saved FX
 settings recreates the factory-default instance. The old instance remains alive
 until both executors release its plan, as with a changed opaque state.

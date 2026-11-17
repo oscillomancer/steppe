@@ -437,14 +437,20 @@ bool InstancePool::automationCleared(Id id, std::uint32_t param) const {
                      param) != it->second.clearedAutomation.end();
 }
 
+// Both forget the session object the instance was configured from: it no
+// longer describes the instance, so the next get() compares by text.
 void InstancePool::acknowledgeOutputPatch(Id id, const json::Value& patch) {
-    if (auto it = instances_.find(id); it != instances_.end() && it->second.instance)
+    if (auto it = instances_.find(id); it != instances_.end() && it->second.instance) {
         it->second.appliedState = "patch:" + json::writeCompact(patch);
+        it->second.appliedFx.reset();
+    }
 }
 
 void InstancePool::acknowledgeOutputState(Id id, const std::string& hash) {
-    if (auto it = instances_.find(id); it != instances_.end() && it->second.instance)
+    if (auto it = instances_.find(id); it != instances_.end() && it->second.instance) {
         it->second.appliedState = "blob:" + hash;
+        it->second.appliedFx.reset();
+    }
 }
 
 void InstancePool::resetAutomation(Id id) {

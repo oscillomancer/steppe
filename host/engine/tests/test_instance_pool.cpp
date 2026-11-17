@@ -115,3 +115,74 @@ TEST_CASE("an unchanged FX costs the pool no patch serialization") {
     CHECK(pool.patchSerializations() == settled + 1);
     CHECK(pool.find(ids[3])->paramValue(0).value() != before);
 }
+
+TEST_CASE("an FX the pool remembers is compared by text once it may not describe the instance") {
+    // Route E stage 2 skips the comparison only when the instance was last
+    // configured from this very session object, and nothing changed it since.
+    const std::filesystem::path fixture = FIXTURE_CLAP_PATH;
+    const auto plugins = host::scan(std::span(&fixture, 1));
+    REQUIRE(plugins);
+    InstancePool pool([&](const model::PluginRef& ref) -> Result<host::PluginInfo> {
+        for (const auto& plugin : *plugins)
+            if (plugin.id == ref.id) return plugin;
+        return Error("engine.plugin_missing", ref.id);
+    });
+    const auto patch = [](int gain) {
+        return json::parse(R"({"schema":"supple.test-gain-patch/1.0","params":{"gain":)" +
+                           std::to_string(gain) + "}}")
+            .value();
+    };
+    model::EditTxn t(model::Session::create(), 1);
+    model::FxInstance gain;
+    gain.plugin.id = "com.suppleaudio.test.gain";
+    gain.patch = patch(-6);
+    const model::Id id = t.create(gain);
+    t.modify<model::Track>(model::kMaster, [&](auto& m) { m.chain.push_back(id); });
+    auto committed = t.commit();
+    REQUIRE_MESSAGE(committed, (committed ? "" : committed.error().toString()));
+    const auto session = *committed;
+    const model::FxInstance& own = *session.fx.find(id);
+    auto first = pool.get(id, own, session);
+    REQUIRE(first);
+    const auto applied = (*first)->paramValue(0).value();
+
+    SUBCASE("an acknowledged output patch whose commit did not happen") {
+        // The plug-in moved its own parameter and the app acknowledged that
+        // patch, but the session kept the object from before.
+        const auto moved = json::writeCompact(patch(-20));
+        REQUIRE((*first)->setPatch(moved, CLAP_SUPPLE_SET_REPLACE));
+        pool.acknowledgeOutputPatch(id, patch(-20));
+        REQUIRE((*first)->paramValue(0).value() != applied);
+        auto again = pool.get(id, own, session);
+        REQUIRE(again);
+        CHECK((*again)->paramValue(0).value() == applied);
+    }
+
+    SUBCASE("a recreated instance whose state failed to load") {
+        // A state edit recreates a processing instance; its blob is missing,
+        // so the fresh instance keeps its defaults. Undo returns the object
+        // the old instance was configured from: the fresh one needs its patch.
+        REQUIRE((*first)->activate(48000, 1, 256));
+        REQUIRE((*first)->startProcessing());
+        auto stateful = gain;
+        stateful.patch.reset();
+        stateful.state = "sha256:missing";
+        CHECK_FALSE(pool.get(id, stateful, session));
+        auto undone = pool.get(id, own, session);
+        REQUIRE(undone);
+        CHECK(*undone != *first);
+        CHECK((*undone)->paramValue(0).value() == applied);
+        (*first)->stopProcessing();
+    }
+
+    SUBCASE("a copy with another patch than the session's") {
+        auto copy = own;
+        copy.patch = patch(-20);
+        auto edited = pool.get(id, copy, session);
+        REQUIRE(edited);
+        CHECK((*edited)->paramValue(0).value() != applied);
+        auto back = pool.get(id, own, session);
+        REQUIRE(back);
+        CHECK((*back)->paramValue(0).value() == applied);
+    }
+}
