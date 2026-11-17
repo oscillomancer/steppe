@@ -59,6 +59,11 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
         expected.kind = Message::Expected;
         expected.code = static_cast<std::uint32_t>(code);
         (void)publish(native, expected);
+        // The launcher's stop (ADR-0091): the supervisor is gone and cannot remove the marker
+        // for this orderly end, so the worker does, and a later start does not read it as an
+        // unexpected exit. On the hard-exit path this line is never reached and the marker stays.
+        if (supervisorEnd() == SupervisorEnd::Launcher && marker && *marker >= 0)
+            removeOwnMarker(options.directory, boot, *marker);
         // Keep marker and channel until actual process exit, including static
         // teardown: returning from main is not yet a clean process exit.
         (void)marker;

@@ -263,6 +263,15 @@ void removeMarker(const fs::path& root, const Packet& boot) {
     std::error_code ec;
     fs::remove(root / (std::string(boot.incident.data(), 32) + ".run"), ec);
 }
+void removeOwnMarker(const fs::path& root, const Packet& boot, std::intptr_t file) {
+#if defined(_WIN32)
+    releaseMarker(file);
+    removeMarker(root, boot);
+#else
+    removeMarker(root, boot);
+    releaseMarker(file);
+#endif
+}
 Status publishReport(const fs::path& root, const Packet& boot, const Packet* terminal, int code,
                      bool fatal, const TraceSnapshot* trace) {
     auto v = base(boot);

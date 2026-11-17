@@ -262,15 +262,17 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
                         else: assert output==b"worker survived\n",(mode,output)
                 finally:
                     p.stdout.close();p.stderr.close()
-    for name,mode,lines in (
-            ("supervisor-killed","supervisor-killed",b"decision launcher\nstop requested\nstopped\n"),
-            ("supervisor-killed-hung","supervisor-killed-hung",b"decision launcher\nstop requested\n")):
+    for name,mode,lines,markers in (
+            ("supervisor-killed","supervisor-killed",b"decision launcher\nstop requested\nstopped\n",0),
+            ("supervisor-killed-hung","supervisor-killed-hung",b"decision launcher\nstop requested\n",1)):
         with check(name):
             # The supervisor ends with no notice, as a launcher's hard kill leaves it (SIGKILL;
             # TerminateProcess on Windows, which is what p.kill() does there): the worker takes
             # the stop path a SIGTERM takes and is gone. The hung variant has a worker whose
             # stop never finishes: it is ended within the bound (the fixture shortens it to
-            # 300 ms), and the test passes by the worker being gone.
+            # 300 ms), and the test passes by the worker being gone. A stop that finishes removes
+            # the worker's own run marker, so that a later start does not read the run as an
+            # unexpected end; a hard exit leaves it, as the end it is.
             p,worker=spawn(mode)
             try:
                 with watchdog(p,worker):
@@ -278,6 +280,7 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
                     output,errors=read_until_eof(p,worker)
                     assert output==lines,(output,errors)
                     assert worker_gone(worker),worker
+                    assert len(list((base/mode/"app"/"diagnostics").glob("*.run")))==markers,(name,"run markers")
             finally:
                 p.stdout.close();p.stderr.close()
     with check('watch-channel'):

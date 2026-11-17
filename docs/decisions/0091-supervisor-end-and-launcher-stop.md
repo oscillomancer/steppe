@@ -47,6 +47,10 @@ A hard kill of the supervisor, from any launcher on any platform, stops the prog
 control socket and endpoint lock are released and a restart succeeds. A collector crash
 still leaves the worker running without crash capture, as before.
 
+When the worker's stop completes it removes its own `.run` marker, which the dead supervisor
+cannot (decided on review, 2026-11-17), so that a later start does not read an orderly stop as an
+unexpected end. On the hard-exit path the marker stays.
+
 The program that is stopped this way ends as `SIGTERM` ends it today. A GUI session does not
 ask about unsaved changes and does not offer a save, exactly as when `SIGTERM` stops it
 today; the maintainer accepted that and it is recorded in `STATUS.md` as known behaviour.

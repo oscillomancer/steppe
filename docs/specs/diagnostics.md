@@ -81,7 +81,12 @@ runs no destructor: the bridge children of a hard-ended worker end with it (POSI
 its control socket hang up, Windows: they are in a kill-on-close job); the endpoint lock is
 released by the system when the process ends (POSIX `flock`; Windows closes the handle during
 process rundown, a moment the system chooses, so a restart that races it can still be
-refused once, as ADR-0089 notes).
+refused once, as ADR-0089 notes). The run marker follows the same split: when the worker's
+normal stop completes (the program returns and the frontend resumes), the worker removes its
+own marker, which the dead supervisor cannot, so a later start does not read the run as an
+unexpected end (POSIX unlinks the file while still holding its lock; Windows closes the
+handle, which was not opened for deletion, and then removes the file); on the hard-exit path
+nothing runs and the marker stays, as the end it is.
 
 *Known limits.* A fast-fail or a stack overflow too deep for the filter to run (Windows) sets
 no flag and reads as the launcher's stop; a supervisor ended by the kernel (the out-of-memory
