@@ -364,9 +364,9 @@ TEST_CASE("deleting all leaves live runs, reports in the making and files it can
 }
 namespace {
 std::optional<RestartNotice> noticeFor(const Root& root) {
-    auto listing = listReports(root.path);
-    REQUIRE(listing);
-    return restartNotice(*listing);
+    auto notice = lastRunNotice(root.path);
+    REQUIRE(notice);
+    return *notice;
 }
 }  // namespace
 TEST_CASE("a restart says nothing when there is nothing unacknowledged") {
@@ -460,6 +460,53 @@ TEST_CASE("an unexpected report a newer build wrote still counts for the notice"
     CHECK(notice->kind == RestartNotice::Kind::Report);
 }
 
+TEST_CASE("the notice reads the newest three reports and counts the rest by name") {
+    Root root;
+    for (unsigned id = 1; id <= 6; ++id) {
+        report(root, id);
+        age(root, id, static_cast<int>(10 - id));  // 6 is the newest
+    }
+    // The three older ones are not valid reports: if the notice parsed them it would drop them.
+    for (unsigned id = 1; id <= 3; ++id) {
+        REQUIRE(privateRemove(file(root, id, ".json")));
+        REQUIRE(privatePublish(file(root, id, ".json"), "not json"));
+        age(root, id, static_cast<int>(10 - id));
+    }
+    auto notice = noticeFor(root);
+    REQUIRE(notice);
+    CHECK(notice->incidents ==
+          std::vector<std::string>{name(6), name(5), name(4), name(3), name(2), name(1)});
+    CHECK(notice->earlier == 5);
+    // Dismissing covers the ones it did not read, without reading them.
+    REQUIRE(acknowledgeNotice(*notice, root.path));
+    CHECK_FALSE(noticeFor(root));
+    CHECK(fs::exists(file(root, 1, ".ack")));
+}
+TEST_CASE("an unreadable report among the newest three is not announced") {
+    Root root;
+    report(root, 1);
+    report(root, 2);
+    age(root, 1, 5);
+    age(root, 2, 1);
+    REQUIRE(privateRemove(file(root, 2, ".json")));
+    REQUIRE(privatePublish(file(root, 2, ".json"), "not json"));
+    age(root, 2, 1);
+    auto notice = noticeFor(root);
+    REQUIRE(notice);
+    CHECK(notice->incidents == std::vector<std::string>{name(1)});
+}
+TEST_CASE("dismissing the notice for an unreported run acknowledges it for good") {
+    Root root;
+    staleMarker(root, 1);
+    auto notice = noticeFor(root);
+    REQUIRE(notice);
+    CHECK(notice->kind == RestartNotice::Kind::NoReport);
+    REQUIRE(acknowledgeNotice(*notice, root.path));
+    CHECK_FALSE(noticeFor(root));
+    // The run is announced once, not again at the next start.
+    CHECK_FALSE(noticeFor(root));
+    CHECK(fs::exists(file(root, 1, ".ack")));
+}
 namespace {
 // A marker nobody holds, written without `createMarker` (which prunes as it goes).
 void rawMarker(const Root& root, unsigned id) {

@@ -219,16 +219,20 @@ pass `defaultDirectory()` when they run without `--workdir`, so a test never rea
 reports. A report the reader refuses is `crash.no_report` at `/args/incident`, with a hint to list
 first. `writeSampleReport` makes the one report the command examples and tests start from.
 
-*Restart notice (topic 7b, P1, P10).* `restartNotice(listing)` decides what a restart says: it
-considers the unacknowledged reports and the unacknowledged unreported runs of the listing (so only
-runs that are over), the newest by file time (a run's marker time is when it started), and says
-nothing when there are none. A report gives `Kind::Report`; the headline names the plug-in only when
+*Restart notice (topic 7b, P1, P10).* `lastRunNotice(directory)` decides what a restart says: it
+lists the folder's names, probes the markers and reads each acknowledgement, which finds the
+unacknowledged reports and unacknowledged unreported runs whose run is over, newest first by file
+time (a run's marker time is when it started), and says nothing when there are none. It parses only
+the newest `kNoticeReportsRead` (3, P4) reports; the ones behind them are counted by file name
+without being read, so a file that is not a valid report still counts as an earlier close there,
+while an unreadable report among the three read is not announced. Unreported runs cost no read. A report gives `Kind::Report`; the headline names the plug-in only when
 the attribution is `fault_in_image` or `active_token` and the report names one, and the detail says
-the report was saved here, was sent nowhere, and cannot prove the plug-in was the cause; any other
+the report was saved here, was sent nowhere, and that the report cannot prove the plug-in was the cause; any other
 attribution, and a kind this build does not know, gets the plain sentence. An unreported run gives
 `Kind::NoReport` and says why that happens. The other unacknowledged incidents are counted in
 `earlier`, and `incidents` lists every one the notice covers, newest first, so that
-`acknowledgeNotice` marks them all. The product's name comes from `product::kName`. The wording is
+`acknowledgeNotice` marks them all, unreported runs included, by name and without parsing, so the
+run is not announced again. The product's name comes from `product::kName`. The wording is
 provisional (P12). The GUI shows it as a banner (gui.md). A headless service (`<slug>-engine --mcp`
 or the RPC server, never a one-shot `exec`) writes the same text, plus how to read and dismiss it
 (`crash.list`, `crash.acknowledge`), once to stderr at start, never to a protocol stream, never a

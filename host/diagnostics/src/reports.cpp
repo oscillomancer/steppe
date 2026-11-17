@@ -120,6 +120,42 @@ std::optional<Loaded> loadReport(const fs::path& path) {
     if (ec) return std::nullopt;
     return Loaded{std::move(*value), written};
 }
+// One pass over the folder: which incidents have a report file, which a marker, and what each
+// marker says. Nothing is parsed.
+struct Scan {
+    std::map<std::string, fs::path> reportFiles, markerFiles;
+    std::map<std::string, MarkerState> markers;
+};
+Result<Scan> scanFolder(const fs::path& root) {
+    Scan scan;
+    std::error_code ec;
+    for (auto it = fs::directory_iterator(root, ec); !ec && it != fs::directory_iterator();
+         it.increment(ec)) {
+        const auto path = it->path();
+        const std::string stem = reportStem(path);
+        if (stem.empty()) continue;
+        if (path.extension() == ".json") scan.reportFiles.emplace(stem, path);
+        if (path.extension() == ".run") scan.markerFiles.emplace(stem, path);
+    }
+    if (ec) return storageFailure();
+    for (const auto& [incident, path] : scan.markerFiles)
+        scan.markers.emplace(incident, probeMarker(path));
+    return scan;
+}
+bool isHeld(const Scan& scan, const std::string& incident) {
+    const auto marker = scan.markers.find(incident);
+    return marker != scan.markers.end() && marker->second == MarkerState::Held;
+}
+// Records the sighting. A file that is there but is not an acknowledgement is replaced:
+// publishing does not overwrite on Windows.
+Status writeAck(const fs::path& root, const std::string& incident) {
+    if (isAcknowledged(root, incident)) return okStatus();
+    if (!privateRemove(pathFor(root, incident, ".ack"))) return storageFailure();
+    auto value = json::Value::object();
+    value["schema"] = "supple.crash-ack/1.0";
+    value["incident"] = incident;
+    return privatePublish(pathFor(root, incident, ".ack"), json::writeCanonical(value) + "\n");
+}
 }  // namespace
 fs::path defaultDirectory() {
     const auto data = paths::localData();
@@ -132,24 +168,15 @@ Result<ReportListing> listReports(const fs::path& directory) {
     SUPPLE_TRY(checkDirectoryForReading(root));
     std::error_code ec;
     if (!fs::exists(fs::symlink_status(root, ec))) return listing;
-    // One pass over the folder, then the decisions: which incidents have a report, which a marker.
-    std::map<std::string, fs::path> reportFiles, markerFiles;
-    for (auto it = fs::directory_iterator(root, ec); !ec && it != fs::directory_iterator();
-         it.increment(ec)) {
-        const auto path = it->path();
-        const std::string stem = reportStem(path);
-        if (stem.empty()) continue;
-        if (path.extension() == ".json") reportFiles.emplace(stem, path);
-        if (path.extension() == ".run") markerFiles.emplace(stem, path);
-    }
-    if (ec) return storageFailure();
-    std::map<std::string, MarkerState> markers;
-    for (const auto& [incident, path] : markerFiles) markers.emplace(incident, probeMarker(path));
+    auto scanned = scanFolder(root);
+    if (!scanned) return scanned.error();
+    const auto& reportFiles = scanned->reportFiles;
+    const auto& markerFiles = scanned->markerFiles;
+    const auto& markers = scanned->markers;
     for (const auto& [incident, state] : markers)
         if (state == MarkerState::Held) ++listing.liveRuns;
     for (const auto& [incident, path] : reportFiles) {
-        const auto marker = markers.find(incident);
-        if (marker != markers.end() && marker->second == MarkerState::Held) {
+        if (isHeld(*scanned, incident)) {
             ++listing.pending;
             continue;
         }
@@ -166,7 +193,7 @@ Result<ReportListing> listReports(const fs::path& directory) {
         if (state != MarkerState::Free || reportFiles.count(incident)) continue;
         UnreportedRun run;
         run.incident = incident;
-        run.marker = markerFiles[incident];
+        run.marker = markerFiles.at(incident);
         if (auto text = privateRead(run.marker))
             if (auto value = json::parse(*text); value && value->isObject())
                 run.role = textOf(*value, "role");
@@ -212,14 +239,7 @@ Status acknowledge(const std::string& incident, const fs::path& directory) {
     // ended and left its marker.
     if (!loadReport(pathFor(root, incident, ".json")) && state != MarkerState::Free)
         return noReport(incident);
-    if (isAcknowledged(root, incident)) return okStatus();
-    // A file that is there but is not an acknowledgement is replaced: publishing does not
-    // overwrite on Windows.
-    if (!privateRemove(pathFor(root, incident, ".ack"))) return storageFailure();
-    auto value = json::Value::object();
-    value["schema"] = "supple.crash-ack/1.0";
-    value["incident"] = incident;
-    return privatePublish(pathFor(root, incident, ".ack"), json::writeCanonical(value) + "\n");
+    return writeAck(root, incident);
 }
 namespace {
 // The files of an incident whose run is over. The marker goes last: while it is there the
@@ -323,47 +343,33 @@ std::string who(const ReportPlugin& p) {
     return p.vendor.empty() ? p.name : p.name + " by " + p.vendor;
 }
 }  // namespace
-std::optional<RestartNotice> restartNotice(const ReportListing& listing) {
-    // The newest unacknowledged incident, report or run without one, and the rest behind it.
-    struct Candidate {
-        std::filesystem::file_time_type time;
-        const ReportSummary* report;
-        const UnreportedRun* run;
-    };
-    std::vector<Candidate> found;
-    for (const auto& r : listing.reports)
-        if (!r.acknowledged) found.push_back({r.written, &r, nullptr});
-    for (const auto& r : listing.unreported)
-        if (!r.acknowledged) found.push_back({r.started, nullptr, &r});
-    if (found.empty()) return std::nullopt;
-    std::stable_sort(found.begin(), found.end(),
-                     [](const auto& a, const auto& b) { return a.time > b.time; });
+namespace {
+RestartNotice composeNotice(const ReportSummary* report, bool noReport,
+                            std::vector<std::string> incidents) {
     RestartNotice notice;
-    for (const auto& c : found)
-        notice.incidents.push_back(c.report ? c.report->incident : c.run->incident);
-    notice.earlier = found.size() - 1;
+    notice.earlier = incidents.size() - 1;
+    notice.incidents = std::move(incidents);
     const std::string app(product::kName);
-    const Candidate& newest = found.front();
-    if (newest.report) {
-        notice.kind = RestartNotice::Kind::Report;
-        const auto& r = *newest.report;
-        const bool points =
-            (r.attribution == "fault_in_image" || r.attribution == "active_token") && r.culprit &&
-            !r.culprit->name.empty();
-        notice.headline = points ? who(*r.culprit) + " was running when " + app +
-                                       " closed unexpectedly last time."
-                                 : app + " closed unexpectedly last time.";
-        notice.detail = "A crash report was saved on this computer; it was not sent anywhere.";
-        if (points) {
-            notice.plugin = r.culprit->name;
-            notice.detail +=
-                " The report points at that plug-in but cannot prove it was the cause.";
-        }
-    } else {
+    if (noReport) {
         notice.kind = RestartNotice::Kind::NoReport;
         notice.headline = app + " closed unexpectedly last time, and no crash report was written.";
         notice.detail =
             "That happens when the program that watches it stopped too, or could not save one.";
+    } else {
+        notice.kind = RestartNotice::Kind::Report;
+        const bool points =
+            report &&
+            (report->attribution == "fault_in_image" || report->attribution == "active_token") &&
+            report->culprit && !report->culprit->name.empty();
+        notice.headline = points ? who(*report->culprit) + " was running when " + app +
+                                       " closed unexpectedly last time."
+                                 : app + " closed unexpectedly last time.";
+        notice.detail = "A crash report was saved on this computer; it was not sent anywhere.";
+        if (points) {
+            notice.plugin = report->culprit->name;
+            notice.detail +=
+                " The report points at that plug-in but cannot prove it was the cause.";
+        }
     }
     if (notice.earlier == 1)
         notice.detail += " " + app + " also closed unexpectedly once before that.";
@@ -372,13 +378,94 @@ std::optional<RestartNotice> restartNotice(const ReportListing& listing) {
                          " times before that.";
     return notice;
 }
+}  // namespace
+Result<std::optional<RestartNotice>> lastRunNotice(const fs::path& directory) {
+    const fs::path root = directory.empty() ? defaultDirectory() : directory;
+    if (root.empty()) return std::optional<RestartNotice>();
+    SUPPLE_TRY(checkDirectoryForReading(root));
+    std::error_code ec;
+    if (!fs::exists(fs::symlink_status(root, ec))) return std::optional<RestartNotice>();
+    auto scanned = scanFolder(root);
+    if (!scanned) return scanned.error();
+    // The incidents nobody has acknowledged whose run is over, newest first by file time (a
+    // run's marker time is when it started). Nothing is parsed to decide that.
+    struct Candidate {
+        std::string incident;
+        fs::file_time_type time;
+        bool report;
+    };
+    std::vector<Candidate> found;
+    for (const auto& [incident, path] : scanned->reportFiles) {
+        if (isHeld(*scanned, incident) || isAcknowledged(root, incident)) continue;
+        std::error_code e;
+        const auto time = fs::last_write_time(path, e);
+        if (!e) found.push_back({incident, time, true});
+    }
+    for (const auto& [incident, path] : scanned->markerFiles) {
+        if (scanned->markers.at(incident) != MarkerState::Free ||
+            scanned->reportFiles.count(incident) || isAcknowledged(root, incident))
+            continue;
+        std::error_code e;
+        const auto time = fs::last_write_time(path, e);
+        if (!e) found.push_back({incident, time, false});
+    }
+    std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) {
+        return a.time == b.time ? a.incident > b.incident : a.time > b.time;
+    });
+    // Only the newest few reports are read; the rest are counted by name (P4). A report that
+    // cannot be read is not announced. An unreported run costs no read.
+    std::optional<ReportSummary> head;
+    bool headIsRun = false, anyHead = false;
+    std::vector<std::string> incidents;
+    std::size_t parsed = 0;
+    for (const auto& c : found) {
+        if (!c.report) {
+            if (!anyHead) headIsRun = anyHead = true;
+            incidents.push_back(c.incident);
+            continue;
+        }
+        if (parsed >= kNoticeReportsRead) {
+            incidents.push_back(c.incident);
+            continue;
+        }
+        ++parsed;
+        const auto path = scanned->reportFiles.at(c.incident);
+        auto loaded = loadReport(path);
+        if (!loaded) continue;
+        if (!anyHead) {
+            anyHead = true;
+            head = summarise(loaded->value, path, loaded->written);
+        }
+        incidents.push_back(c.incident);
+    }
+    if (incidents.empty()) return std::optional<RestartNotice>();
+    // No report read was readable but older ones were not read: the plain sentence (no head).
+    return std::optional<RestartNotice>(
+        composeNotice(head ? &*head : nullptr, headIsRun, std::move(incidents)));
+}
 std::string noticeText(const RestartNotice& notice) {
     return notice.headline + " " + notice.detail;
 }
 Status acknowledgeNotice(const RestartNotice& notice, const fs::path& directory) {
+    const fs::path root = directory.empty() ? defaultDirectory() : directory;
+    if (root.empty()) return storageFailure();
+    SUPPLE_TRY(checkDirectoryForReading(root));
+    // The listing established that these exist; confirming each by name keeps a click from
+    // parsing the reports the notice did not read.
     Status first = okStatus();
-    for (const auto& incident : notice.incidents)
-        if (auto st = acknowledge(incident, directory); !st && first) first = st;
+    for (const auto& incident : notice.incidents) {
+        Status st = okStatus();
+        const auto state = probeMarker(pathFor(root, incident, ".run"));
+        std::error_code ec;
+        const bool hasReport =
+            fs::is_regular_file(fs::symlink_status(pathFor(root, incident, ".json"), ec));
+        if (!incidentName(incident) || state == MarkerState::Held ||
+            (!hasReport && state != MarkerState::Free))
+            st = noReport(incident);
+        else
+            st = writeAck(root, incident);
+        if (!st && first) first = st;
+    }
     return first;
 }
 }  // namespace supple::diagnostics

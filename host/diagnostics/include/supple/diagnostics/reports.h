@@ -104,8 +104,8 @@ Result<std::size_t> deleteAllReports(const std::filesystem::path& directory = {}
 
 // What a restart shows the user (topic 7b, P1): one plain statement that the last run ended
 // unexpectedly, for the newest incident nobody has acknowledged, and how many earlier ones the
-// same dismissal covers. Wording is provisional (P12). Only incidents whose run is over count
-// (`listReports`), so a report still being written is never announced half done.
+// same dismissal covers. Wording is provisional (P12). Only incidents whose run is over count, so
+// a report still being written is never announced half done.
 struct RestartNotice {
     enum class Kind { Report, NoReport } kind = Kind::Report;
     std::string headline;                // the sentence the user reads first
@@ -114,10 +114,19 @@ struct RestartNotice {
     std::size_t earlier = 0;             // incidents.size() - 1
     std::string plugin;                  // the plug-in the report points at, when it points at one
 };
-// Empty when every ended run is acknowledged (or there were none).
-std::optional<RestartNotice> restartNotice(const ReportListing& listing);
+// How many reports `lastRunNotice` parses; the unacknowledged ones behind them are counted by
+// file name only (P4: the notice looks at the last three).
+inline constexpr std::size_t kNoticeReportsRead = 3;
+// Decides the notice from the folder, cheaply enough for a start: it lists names, probes the run
+// markers, reads each acknowledgement, and parses only the newest `kNoticeReportsRead` reports,
+// newest first by file time. The reports behind them are counted without being read, so a file
+// that turns out not to be a valid report still counts as an earlier close. Empty when every
+// ended run is acknowledged (or there were none); a folder that is not private to the user is
+// an error.
+Result<std::optional<RestartNotice>> lastRunNotice(const std::filesystem::path& directory = {});
 // The headline and detail as one text, for a place with no layout (a terminal).
 std::string noticeText(const RestartNotice& notice);
-// Acknowledges every incident the notice covers; keeps going past a failure and returns the first.
+// Acknowledges every incident the notice covers (the latest and the earlier ones); keeps going
+// past a failure and returns the first. Parses nothing.
 Status acknowledgeNotice(const RestartNotice& notice, const std::filesystem::path& directory = {});
 }  // namespace supple::diagnostics

@@ -304,13 +304,12 @@ int frontendMain(int argc, char** argv) {
         // A service that outlives one call says once, on stderr, that the last run ended
         // unexpectedly (never on a protocol stream; never a prompt). The agent reads it with
         // crash.list and dismisses it with crash.acknowledge.
-        if (auto listing = supple::diagnostics::listReports((*app)->diagnosticsDir()))
-            if (auto notice = supple::diagnostics::restartNotice(*listing))
-                std::fprintf(
-                    stderr,
-                    "%s Use crash.list to read it, and crash.acknowledge with an incident id to "
-                    "dismiss it.\n",
-                    supple::diagnostics::noticeText(*notice).c_str());
+        if (auto notice = supple::diagnostics::lastRunNotice((*app)->diagnosticsDir());
+            notice && *notice)
+            std::fprintf(stderr,
+                         "%s Use crash.list to read it, and crash.acknowledge with an incident id "
+                         "to dismiss it.\n",
+                         supple::diagnostics::noticeText(**notice).c_str());
         cmd::Dispatcher dispatcher(registry, **app);
         rpc::Server* activeServer = nullptr;
         auto publishEvents = [&] {

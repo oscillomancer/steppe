@@ -3657,6 +3657,9 @@ TEST_CASE("the restart notice sits under the transport and Dismiss acknowledges 
         CHECK_FALSE(a.root->find("crash.notice")->visibleInTree());
         // The marker is not deleted by dismissing: the record of that run stays.
         CHECK(std::filesystem::exists(dir / (std::string(kNoticeOne) + ".run")));
+        // And that run is not announced again at the next start.
+        NoticeShell next(a);
+        CHECK_FALSE(a.root->find("crash.notice")->visibleInTree());
     }
     SUBCASE("earlier closes are counted, and one Dismiss covers them all") {
         REQUIRE(diagnostics::writeSampleReport(kNoticeOne, dir));
@@ -3672,9 +3675,9 @@ TEST_CASE("the restart notice sits under the transport and Dismiss acknowledges 
         a.snapshot("crash-notice-earlier.png");
         REQUIRE(a.root->click("crash.notice.dismiss"));
         a.root->frame(false);
-        auto listing = diagnostics::listReports(dir);
-        REQUIRE(listing);
-        CHECK_FALSE(diagnostics::restartNotice(*listing));
+        auto notice = diagnostics::lastRunNotice(dir);
+        REQUIRE(notice);
+        CHECK_FALSE(*notice);
     }
     SUBCASE("a report still being written is not announced") {
         // The worker of that run still holds its marker: its report is not yet one.

@@ -8,9 +8,8 @@
 namespace supple::gui {
 CrashBanner::CrashBanner(std::filesystem::path directory)
     : CrashBanner(directory, [&] {
-          auto listing = diagnostics::listReports(directory);
-          return listing ? diagnostics::restartNotice(*listing)
-                         : std::optional<diagnostics::RestartNotice>();
+          auto notice = diagnostics::lastRunNotice(directory);
+          return notice ? *notice : std::optional<diagnostics::RestartNotice>();
       }()) {}
 CrashBanner::CrashBanner(std::filesystem::path directory,
                          std::optional<diagnostics::RestartNotice> notice)
