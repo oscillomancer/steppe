@@ -58,8 +58,8 @@ void Engine::publishRateClock(detail::Plan& p, std::int64_t device, std::int64_t
         (epoch != rateSafeEpoch_.load(std::memory_order_acquire) ||
          stream + (options_.anticipative
                        ? aheadFrames_
-                       : static_cast<std::int64_t>(config_.sampleRate * options_.renderAheadMs /
-                                                   1000.)) >=
+                       : static_cast<std::int64_t>(deviceRate_.load(std::memory_order_relaxed) *
+                                                   options_.renderAheadMs / 1000.)) >=
              rateSafeStream_.load(std::memory_order_acquire))) {
         if (rateDeferredWake_.exchange(false)) notifyMain();
     }
@@ -92,8 +92,13 @@ bool scalarOnly(const model::Session& a, const model::Session& b) {
 
 bool Engine::loadScalarRate(const model::Session& session, const std::filesystem::path& dir) {
     auto* p = latestPlan_.load(std::memory_order_acquire);
+    // Never while an edit is deferred, nor for the reload that ends the
+    // deferral (rateDeferredFrom_ is set until a plan is published): latest_
+    // is then the deferred session itself, so scalarOnly() would compare it
+    // with itself, and a pending value would let it through uncompiled
+    // (review 37b F1). The compile carries the pending value.
     if (!backend_ || !latest_ || !p || !p->rateEnabled || rateSeekTarget_ || rateLoopTarget_ ||
-        notificationReload_ || rateDeferred_ || dir != p->projectDir ||
+        notificationReload_ || rateDeferred_ || rateDeferredFrom_ || dir != p->projectDir ||
         !scalarOnly(*latest_, session))
         return false;
     const auto saved = session.project->playrate.rate;

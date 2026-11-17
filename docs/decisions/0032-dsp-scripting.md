@@ -491,6 +491,8 @@ workdir and the headless engine use their own `<workdir>/scripts`.
   allocates on its first call and still generates small machine-code
   shims for calls into C, so it is neither real-time safe nor usable where
   executable memory is forbidden. There is no fallback for such hosts.
+  *Note 2026-11-16:* release builds of the Script Player ignore
+  `SUPPLE_SCRIPT_INTERPRET`; only Debug builds honour it (review round 33).
 - The budget counts calls as well as back edges, so a tree of calls with
   no loop in it stops too. Frames are limited to 64 KiB per function and
   256 KiB along any chain of calls, and nesting to a few hundred levels, so

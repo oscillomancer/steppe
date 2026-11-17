@@ -13,6 +13,24 @@ struct Filter {
     std::string mode;
     std::optional<double> drive;
 };
+TEST_CASE("optional null is omitted while its export deliberately stays narrower") {
+    auto s = object<Filter>("optional_filter")
+                 .field("drive", &Filter::drive, number().range(0, 24))
+                 .build();
+    const auto omitted = s.decode(json::Value::object());
+    const auto explicitNull = s.decode(*json::parse(R"({"drive":null})"));
+    REQUIRE(omitted);
+    REQUIRE(explicitNull);
+    CHECK_FALSE(explicitNull->drive);
+    CHECK(s.encode(*omitted) == s.encode(*explicitNull));
+    const auto exported = s.jsonSchema();
+    const auto* field = exported.find("properties")->find("drive");
+    REQUIRE(field);
+    CHECK(*field->find("type") == "number");
+    CHECK_FALSE(field->find("anyOf"));
+    CHECK_FALSE(s.decode(*json::parse(R"({"drive":false})")));
+    CHECK_FALSE(s.decode(*json::parse(R"({"drive":25})")));
+}
 TEST_CASE("object decode encode and errors") {
     auto s = object<Filter>("filter")
                  .field("cutoff", &Filter::cutoff, number().range(20, 20000).unit(Unit::Hz))

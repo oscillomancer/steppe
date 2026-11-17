@@ -5,11 +5,13 @@
 #include <algorithm>
 #include <array>
 #include "../../../tests/file_platform.h"
+#include "../../../tests/fuzz/command_inputs.h"
 
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 
 #include <supple/audio/audio_file.h>
 #include <supple/base/files.h>
@@ -45,6 +47,51 @@ json::Value j(std::string_view text) { return json::parse(text).value(); }
 const cmd::Origin kTest{cmd::Origin::Type::Test, "unit", ""};
 
 }  // namespace
+
+TEST_CASE("registered sandbox argument mutations return structured errors") {
+    constexpr std::uint64_t seed = 0xc017a01;
+    Root root;
+    cmd::Registry registry;
+    registerCommands(registry);
+    auto host = makeHost(root.path / "input-fuzz");
+    cmd::Dispatcher bus(registry, *host);
+    const auto before = bus.execute({"session.get", json::Value::object(), kTest});
+    REQUIRE(before);
+    test::CommandInputs inputs(seed);
+    std::size_t generated = 0, rejected = 0, accepted = 0;
+    for (const auto* command : registry.all()) {
+        std::size_t commandRejected = 0;
+        inputs.generate(command->argsSchema, [&](const json::Value& args, const std::string& path) {
+            ++generated;
+            INFO("seed=" << seed << " case=" << generated << " command=" << command->name << "@"
+                         << command->version << " target=" << path
+                         << " args=" << json::writeCompact(args));
+            if (command->validate(args)) {
+                REQUIRE_MESSAGE(inputs.allows(command->argsSchema, args),
+                                "decoder accepted an input outside its exported contract");
+                ++accepted;
+                return;
+            }
+            ++rejected;
+            ++commandRejected;
+            const auto result =
+                bus.execute({command->name + "@" + std::to_string(command->version), args, kTest});
+            REQUIRE_FALSE(result);
+            CHECK(result.error().code == "command.invalid_args");
+            CHECK_FALSE(result.error().message.empty());
+            CHECK(result.error().path == "/args");
+            CHECK_FALSE(result.error().hint.empty());
+            CHECK_FALSE(result.error().details.empty());
+            const auto after = bus.execute({"session.get", json::Value::object(), kTest});
+            REQUIRE(after);
+            CHECK(*after == *before);
+        });
+        CHECK_MESSAGE(commandRejected > 0, "no rejected inputs for " << command->name);
+    }
+    std::cout << "sandbox command-inputs seed=" << seed << " commands=" << registry.all().size()
+              << " generated=" << generated << " rejected=" << rejected
+              << " schema-accepted-not-executed=" << accepted << '\n';
+}
 
 TEST_CASE("audio filenames beginning with rd_ are not render identifiers") {
     Root root;

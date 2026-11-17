@@ -763,11 +763,8 @@ TEST_CASE("dsp.export makes a plugin that plays its version of the script, and n
     json::Value first = exportTo(library, output);
     CHECK(first["path"].asString() == utf8(plugin));
     CHECK(first["id"].asString() == "com.example.boost");
-#if !defined(__linux__)
-    CHECK(fs::equivalent(dsp_commands::binary_export::path(first["player"].asString()), player));
-#else
-    CHECK(first["player"].asString() == player.string());
-#endif
+    CHECK(fs::canonical(dsp_commands::binary_export::path(first["player"].asString())) ==
+          fs::canonical(player));
 #if defined(__APPLE__)
     CHECK(fs::is_directory(plugin));
     CHECK(fs::is_regular_file(plugin / "Contents/Resources/supple-script.json"));
@@ -824,11 +821,8 @@ TEST_CASE("dsp.export makes a plugin that plays its version of the script, and n
     // An export exported again starts from the player, with the new script.
     write(anywhere, "boost", boost(12));
     json::Value second = exportTo(anywhere, root.path / "again");
-#if !defined(__linux__)
-    CHECK(fs::equivalent(dsp_commands::binary_export::path(second["player"].asString()), plugin));
-#else
-    CHECK(second["player"].asString() == first["path"].asString());
-#endif
+    CHECK(fs::canonical(dsp_commands::binary_export::path(second["player"].asString())) ==
+          fs::canonical(dsp_commands::binary_export::path(first["path"].asString())));
 #if !defined(__APPLE__)
     CHECK(second["bytes"].asInt() == first["bytes"].asInt() + 1);  // "12" for "6"
 #endif

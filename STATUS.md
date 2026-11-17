@@ -181,7 +181,32 @@ instructions are in `docs/guides/installing.md`.
   (in process or as a proxy to the running app); Lua scripts on the bus
   (ADR-0006). Lua structured-error expansion has the same value/text budget
   as returned values, including repeated references to shared details.
+  Optional null is accepted as omission for caller leniency; exported argument
+  schemas deliberately remain narrower on this point (ADR-0087).
   The skill's command reference is generated and drift-tested.
+  Control admission globally bounds posted work to 1,024 requests/64 MiB, including
+  disconnected owners; excess gets rpc.busy and admitted edits still run. Each
+  peer permits 64 subscriptions and retains its 16-request limit (ADR-0087).
+  Production fd-backed MCP uses a joined writer with a 64 MiB packet reservation;
+  input admission pauses under backpressure while ticks/watches keep model service
+  alive. Enqueue publishes through atomic ownership, never a writer-held lock.
+  Oversized replies produce explicit bounded errors rather than being dropped.
+  RPC/MCP untrusted frames are limited to 1,000,000 parsed values before
+  construction, in addition to byte/depth limits; params move into dispatch.
+  Trusted file parsing is unchanged (ADR-0087).
+  Fixed-seed schema mutations exercise every engine/sandbox command's argument
+  decoder and rejected dispatches, checking structured errors and unchanged state;
+  engine coverage includes recording in both executors and interleaved saves.
+  RPC and MCP reject invalid request IDs using a null response ID, keeping error
+  envelopes valid while preserving valid IDs for other envelope errors. IDs
+  are limited to 1,024 serialized bytes, including escapes; longer IDs receive
+  a structured null-ID error before dispatch, and final fallback bounds are checked.
+  Generic MCP describe/exec/query arguments are checked against their advertised
+  envelope before dispatch, including batch siblings, so malformed wrappers cannot edit.
+  Socket collision probes are nonblocking and conservatively refuse a busy or
+  uncertain endpoint; a full listener backlog cannot stall the connect probe.
+  Malformed MCP initialize identity fields are refused before replacing the
+  accepted client/agent identity or forwarding it to the app.
   The engine MCP default is 37 common tools plus describe/exec/query, with a
   60,000-byte tools/list budget. Other commands remain discoverable in the compact
   namespace index and callable through exec/query; --tools all exposes every
@@ -191,6 +216,8 @@ instructions are in `docs/guides/installing.md`.
   Named describe calls fetch contracts on demand, and exec dispatches without
   schema prefetch. Reconnects refresh the index before cached query admission;
   changed catalogues replace selected definitions and notify MCP clients.
+  RPC call results carry explicit local Unsent/Sent delivery provenance; only
+  proved-unsent calls may retry. Remote error codes never authorize replay.
   Edits with lost replies are never retried automatically. The proxy requires
   the updated index from the running app.
   Sandbox exposures are unchanged. Native macOS/Windows CI for these catalogue,
@@ -1055,6 +1082,18 @@ Library boundaries:
 - The control client bounds connecting and sending, as well as the
   response, by its timeout through nonblocking sockets; that path is tested
   on Linux, and native macOS/Windows CI has not run on it.
+- Lossless MCP EOF drain awaits consumer progress; a reader retaining an open
+  pipe without draining can defer serve return and capture finalization, while
+  model service continues. There is no owner abort token or finite lossless drain
+  deadline; error teardown joins/cancels native workers. Stream embedding APIs
+  stay synchronous; arbitrary device/filesystem cancellation remains platform-limited.
+- Socket startup refuses a linked or foreign-owned product runtime directory on
+  POSIX (no-follow open, owner check, handle-based 0700); Windows refuses reparse
+  points and keeps inherited directory ACLs (ADR-0035), not a named-pipe DACL.
+  Ancestors and arbitrary explicit socket parents retain their native policy.
+  A server holds its endpoint lock while it runs and takes it without waiting
+  (ADR-0089); on macOS a foreign listener that holds no lock is protected only
+  while its backlog has room.
 
 Engine and hosting:
 - Sync (ADR-0070, ADR-0071, ADR-0073): sync input, LTC output and MIDI
@@ -1122,6 +1161,12 @@ Engine and hosting:
   plug-in changes compile the session, and with playrate scheduling started
   each also prepares a rate plan, which costs several milliseconds per edit in
   a session of a few dozen tracks.
+- A structural edit that playrate scheduling defers is accepted before it
+  compiles. If it then fails to compile (for example over the hardware MIDI
+  route budget), it never plays. The engine keeps playing the version before
+  it and the app gets an `engine.error`, but the edit stays in the project's
+  head and history until it is undone or changed. While it waits,
+  `prepared_version` already names it.
 - A touch-mode write hold ends 500 ms after the last move, not when the
   control is let go (ADR-0061): nothing reports a strip control's release to
   the engine, so a fader held still longer than that hears its old curve.
@@ -1440,7 +1485,8 @@ Plugins:
   `/clang:-ffp-contract=off` and `/clang:-fwrapv` (they had neither); native
   Windows CI has not run since.
 - Scripts need a JIT: there is no fallback for hosts that forbid executable
-  memory (MIR's interpreter is a test backend, not real-time safe).
+  memory (MIR's interpreter is a test backend, not real-time safe; only Debug
+  builds of the Script Player honour `SUPPLE_SCRIPT_INTERPRET`).
 - A script save that redefines the plugin while an editor drag is under way
   can leave that gesture open in the host until it rescans.
 - Stock CLAP builds and product/conformance/reset checks run on Linux, macOS

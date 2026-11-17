@@ -65,6 +65,20 @@ struct EngineTestAccess {
         e.liveWorkersReady_.store(e.liveWorkers_.get());
     }
     static std::size_t plans(const Engine& e) { return e.plans_.size(); }
+    static void afterCollect(Engine& e, void (*hook)(void*), void* context) {
+        e.afterCollectForTests_ = hook;
+        e.afterCollectContext_ = context;
+    }
+    // Every instance a kept plan's stages name (pointers only: never used).
+    static std::vector<host::Instance*> planInstances(const Engine& e) {
+        std::vector<host::Instance*> out;
+        for (const auto& plan : e.plans_)
+            for (const auto& node : plan->nodes)
+                detail::forEachStage(node, [&](const detail::Stage& st) {
+                    if (st.instance) out.push_back(st.instance);
+                });
+        return out;
+    }
     static std::uint64_t beginWrite(Engine& e) {
         const std::uint64_t seq = e.xportSeq_.load();
         e.xportSeq_.store(seq + 1);
@@ -127,8 +141,11 @@ struct RecorderTestAccess {
     static bool failHeader(Recorder& recorder, std::size_t index) {
         const auto& file = recorder.tracks_[index]->target.file;
         std::error_code ec;
+        const auto target = std::filesystem::canonical(file, ec);
+        if (ec) return false;
         for (const auto& entry : std::filesystem::directory_iterator("/proc/self/fd")) {
-            if (std::filesystem::read_symlink(entry.path(), ec) != file || ec) continue;
+            const auto opened = std::filesystem::canonical(entry.path(), ec);
+            if (ec || opened != target) continue;
             const int descriptor = std::stoi(entry.path().filename().string());
             const int readOnly = ::open(file.c_str(), O_RDONLY);
             if (readOnly < 0) return false;
@@ -804,6 +821,71 @@ TEST_CASE("a stage that leaves processing mid-ramp does not replay the ramp" *
     REQUIRE(detail::processNode(p, 0, 0, 256, transport, nullptr));         // ours again
     CHECK(static_cast<double>(stage->appliedWet) == doctest::Approx(0.0));  // the new target
     stage->instance->stopProcessing();
+}
+
+TEST_CASE(
+    "an instance outlives every kept plan that names it, even when the executor adopts "
+    "a newer plan during service()" *
+    doctest::description("rt")) {
+    // service() kept the old plans an executor might still use, then pruned
+    // the pool with a second, newer reading of the executors' generation. An
+    // adoption in between freed an instance that a kept plan still named;
+    // the next service() called it (a gcc-preset assertion in the plan soak).
+    for (bool anticipative : {false, true}) {
+        CAPTURE(anticipative);
+        auto pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+        Engine engine(
+            pool, media,
+            anticipative ? EngineOptions{.anticipative = true, .workers = 0} : kInCallback);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256}));
+        // Every executor adopts the newest plan: the renderer by itself, the
+        // callback at its next cycle.
+        const auto adopt = [&] {
+            REQUIRE(engine.awaitPlan());
+            backend.run(1);
+        };
+        REQUIRE(engine.load(synthSession(0.0, "com.suppleaudio.test.gain")));
+        adopt();
+        engine.service();
+        const auto withGain = pool.instances();
+        const auto found = std::find_if(withGain.begin(), withGain.end(), [](host::Instance* in) {
+            return in->info().id == "com.suppleaudio.test.gain";
+        });
+        REQUIRE(found != withGain.end());
+        host::Instance* gain = *found;
+        REQUIRE(engine.load(synthSession(0.0)));  // the gain leaves; the callback has not adopted
+        struct Hook {
+            decltype(adopt)& step;
+            int runs = 0;
+        } hook{adopt};
+        EngineTestAccess::afterCollect(
+            engine,
+            [](void* context) {
+                auto* h = static_cast<Hook*>(context);
+                ++h->runs;
+                h->step();  // every executor adopts the newest plan here
+            },
+            &hook);
+        engine.service();
+        EngineTestAccess::afterCollect(engine, nullptr, nullptr);
+        REQUIRE(hook.runs == 1);
+        // A kept plan naming a destroyed instance ends the test here, before
+        // the next service() would call it.
+        const auto alive = pool.instances();
+        for (host::Instance* named : EngineTestAccess::planInstances(engine)) {
+            CAPTURE(named == gain);
+            REQUIRE(std::find(alive.begin(), alive.end(), named) != alive.end());
+        }
+        // The next service() retires the old plan, then the gain.
+        engine.service();
+        CHECK(EngineTestAccess::plans(engine) == 1);
+        const auto after = pool.instances();
+        CHECK(after.size() == withGain.size() - 1);
+        CHECK(std::find(after.begin(), after.end(), gain) == after.end());
+        engine.stop();
+    }
 }
 
 TEST_CASE(
@@ -3258,6 +3340,46 @@ TEST_CASE("meters show a monitored input while the transport is stopped" *
         devicePeak = std::max(devicePeak, std::fabs(static_cast<double>(sample)));
     CHECK(masterPeak == doctest::Approx(devicePeak).epsilon(1e-6));
     engine.stop();
+}
+
+TEST_CASE("the audio path runs at the rate the device granted, not the one requested" *
+          doctest::description("rt")) {
+    // The device grants 44.1 kHz for a 48 kHz request: the count-in's clicks
+    // (synthesised on the audio thread at the engine's device rate) must be
+    // those of a device asked for 44.1 kHz in the first place.
+    constexpr std::uint32_t kBlock = 256;
+    constexpr std::int64_t kBar = 88200, kCycles = kBar / kBlock + 8;
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        auto runOnce = [&](double requested, double granted) {
+            auto pool = makePool();
+            MediaCache media;
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual,
+                                  .captureFrames = kCycles * kBlock,
+                                  .grantedRate = granted});
+            Engine engine(pool, media, options);
+            REQUIRE(engine.start(backend, {.sampleRate = requested, .blockSize = kBlock}));
+            CHECK(engine.config().sampleRate == 44100.0);
+            REQUIRE(engine.load(synthSession(0.0)));
+            engine.setMetronome(false, 0.0);  // the count clicks regardless
+            engine.playCountIn(kBar, kBar / 4, 4);
+            if (options.anticipative)
+                runAhead(engine, backend, kCycles, kBlock);
+            else
+                backend.run(kCycles);
+            engine.stop();
+            return backend.capture().channels[0];
+        };
+        const auto asked = runOnce(44100.0, 0.0);
+        const auto granted = runOnce(48000.0, 44100.0);
+        REQUIRE(asked.size() == granted.size());
+        REQUIRE(std::any_of(asked.begin(), asked.begin() + kBar,
+                            [](float v) { return std::fabs(v) > 0.05f; }));
+        std::size_t differ = 0;
+        for (std::size_t i = 0; i < static_cast<std::size_t>(kBar); ++i)
+            differ += asked[i] != granted[i];
+        CHECK(differ == 0);
+    }
 }
 
 TEST_CASE("a count-in clicks a bar while the position holds, then plays and records on time" *

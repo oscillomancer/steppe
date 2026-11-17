@@ -3,6 +3,8 @@
 #include <supple/mcp/server.h>
 #include <supple/product.h>
 #include <supple/rpc/model_loop.h>
+#include "native_writer.h"
+#include "wire_size.h"
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -16,9 +18,11 @@
 #include <mutex>
 #include <thread>
 #else
+#include <fcntl.h>
 #include <unistd.h>
 #endif
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <string>
 
@@ -58,6 +62,38 @@ json::Value error(const json::Value& id, int code, std::string message) {
 std::string stringField(const json::Value& value, std::string_view key) {
     auto* part = value.isObject() ? value.find(key) : nullptr;
     return part && part->isString() ? part->asString() : std::string{};
+}
+json::Value genericInput(std::string_view name) {
+    const auto string = typeSchema("string"), object = typeSchema("object");
+    if (name == "exec")
+        return objectSchema({{"command", string}, {"args", object}, {"batch", object}});
+    if (name == "query") return objectSchema({{"command", string}, {"args", object}}, {"command"});
+    return objectSchema({{"command", string}, {"tag", string}, {"kind", string}, {"text", string}});
+}
+Status validateGenericInput(std::string_view name, const json::Value& args) {
+    if (!args.isObject())
+        return Error("mcp.arguments", "tool arguments must be an object", "/arguments",
+                     "send the named arguments shown by tools/list");
+    const auto contract = genericInput(name);
+    const auto& properties = *contract.find("properties");
+    for (const auto& field : args.asObject()) {
+        const auto path = json::pointerJoin("/arguments", field.key);
+        const auto* property = properties.find(field.key);
+        if (!property)
+            return Error("mcp.arguments", "unknown tool argument", path,
+                         "use only the arguments shown by tools/list");
+        const auto type = stringField(*property, "type");
+        if ((type == "string" && !field.value.isString()) ||
+            (type == "object" && !field.value.isObject()))
+            return Error("mcp.arguments", "tool argument must be a " + type, path,
+                         "send a " + type + " as shown by tools/list");
+    }
+    for (const auto& required : contract.find("required")->asArray())
+        if (!args.find(required.asString()))
+            return Error("mcp.arguments", "missing required tool argument",
+                         json::pointerJoin("/arguments", required.asString()),
+                         "provide the argument shown by tools/list");
+    return {};
 }
 json::Value tool(std::string name, std::string title, std::string description, json::Value input,
                  json::Value output = typeSchema("object")) {
@@ -121,8 +157,10 @@ Server::Server(const cmd::Registry& registry, cmd::Dispatcher& dispatcher, ToolS
 }
 Server::Server(rpc::Client& client, Reconnect reconnect, ToolSet tools)
     : proxyClient_(&client), reconnect_(std::move(reconnect)), toolSet_(tools) {
-    invoke_ = [&client](std::string_view name, const json::Value& args, const cmd::Origin&) {
-        return client.call(name, args);
+    invoke_ = [this, &client](std::string_view name, const json::Value& args, const cmd::Origin&) {
+        auto call = client.callWithDelivery(name, args);
+        delivery_ = call.delivery;
+        return std::move(call.result);
     };
 }
 Result<std::unique_ptr<Server>> Server::proxy(rpc::Client& client, Reconnect reconnect,
@@ -216,26 +254,24 @@ json::Value Server::takeNotifications() {
 }
 json::Value Server::tools() const {
     auto out = dedicated_;
-    auto string = typeSchema("string"), object = typeSchema("object");
     out.push_back(tool(
         "describe", "Describe commands",
         "List all commands grouped by namespace, filter by tag/kind/text, or describe one command.",
-        objectSchema({{"command", string}, {"tag", string}, {"kind", string}, {"text", string}})));
-    auto execInput = objectSchema({{"command", string}, {"args", object}, {"batch", object}});
+        genericInput("describe")));
     out.push_back(tool("exec", "Execute a command", "Run one command or an atomic batch.",
-                       std::move(execInput)));
+                       genericInput("exec")));
     if (queryTool_)
-        out.push_back(tool("query", "Query the session", "Run a read-only command.",
-                           objectSchema({{"command", string}, {"args", object}}, {"command"})));
+        out.push_back(
+            tool("query", "Query the session", "Run a read-only command.", genericInput("query")));
     return out;
 }
 Result<json::Value> Server::call(std::string_view name, const json::Value& args) {
     SUPPLE_TRY(prepareProxy());
+    delivery_ = rpc::Delivery::Sent;  // local validation is never permission to retry
     auto result = callTool(name, args);
     if (result || !proxyClient_) return result;
-    const auto& code = result.error().code;
-    const bool unsent = code == "rpc.write" || code == "rpc.connect";
-    if (!unsent && code != "rpc.read") return result;
+    const bool unsent = delivery_ == rpc::Delivery::Unsent;
+    if (!unsent && proxyClient_->connectionGeneration()) return result;
     // Refresh for the next call even when this one was sent but unanswered.
     // Only a request known not to have been sent may run again; reroute it
     // through fresh query admission and dedicated-tool lookup before retrying.
@@ -243,6 +279,8 @@ Result<json::Value> Server::call(std::string_view name, const json::Value& args)
     return ready && unsent ? callTool(name, args) : result;
 }
 Result<json::Value> Server::callTool(std::string_view name, const json::Value& args) {
+    if (name == "describe" || name == "exec" || (name == "query" && queryTool_))
+        SUPPLE_TRY(validateGenericInput(name, args));
     if (name == "describe") {
         auto command = stringField(args, "command");
         if (!command.empty()) {
@@ -292,27 +330,44 @@ Result<json::Value> Server::callTool(std::string_view name, const json::Value& a
     if (it == commands_.end()) return Error("mcp.tool", "unknown tool", "/name", "use tools/list");
     return invoke_(it->second, args, origin_);
 }
-std::optional<json::Value> Server::handle(const json::Value& request) {
+std::optional<json::Value> Server::handle(json::Value request) {
     if (!request.isObject()) return error(nullptr, -32600, "Invalid Request");
     auto* id = request.find("id");
     auto* version = request.find("jsonrpc");
     auto* method = request.find("method");
     auto* params = request.find("params");
+    const bool validId = id && (id->isString() || id->isInt() || id->isNull());
+    if (validId && !rpc::requestIdFits(*id)) {
+        auto reply = error(nullptr, -32600, "Request ID exceeds 1024 serialized bytes");
+        reply["error"]["data"] =
+            rpc::errorJson(Error("rpc.id_size", "request ID exceeds 1024 serialized bytes", "/id",
+                                 "use a shorter request ID"));
+        return reply;
+    }
     if (!version || !version->isString() || version->asString() != "2.0" || !method ||
-        !method->isString() || (id && !(id->isString() || id->isInt() || id->isNull())) ||
+        !method->isString() || (id && !validId) ||
         (params && !(params->isObject() || params->isArray())))
-        return error(id ? *id : json::Value(nullptr), -32600, "Invalid Request");
+        return error(validId ? *id : json::Value(nullptr), -32600, "Invalid Request");
     if (!id) return std::nullopt;
     if (params && !params->isObject()) return error(*id, -32602, "Invalid params");
-    auto args = params ? *params : json::Value::object();
+    auto args = params ? std::move(request["params"]) : json::Value::object();
     auto name = method->asString();
     if (name == "initialize") {
         auto* requested = args.find("protocolVersion");
         if (!requested || !requested->isString())
             return error(*id, -32602, "Missing protocolVersion");
         auto* clientInfo = args.find("clientInfo");
-        origin_.client = clientInfo ? stringField(*clientInfo, "name") : std::string{};
         auto* meta = args.find("_meta");
+        auto stringMember = [](const json::Value* object, std::string_view key) {
+            const auto* member = object ? object->find(key) : nullptr;
+            return !member || member->isString();
+        };
+        if (clientInfo && (!clientInfo->isObject() || !stringMember(clientInfo, "name") ||
+                           !stringMember(clientInfo, "version")))
+            return error(*id, -32602, "clientInfo must be an object with string name/version");
+        if (meta && (!meta->isObject() || !stringMember(meta, "agent")))
+            return error(*id, -32602, "_meta must be an object with a string agent");
+        origin_.client = clientInfo ? stringField(*clientInfo, "name") : std::string{};
         origin_.agent = meta ? stringField(*meta, "agent") : std::string{};
         auto versionName = requested->asString();
         if (versionName != "2025-06-18" && versionName != "2025-11-25") versionName = "2025-11-25";
@@ -362,17 +417,24 @@ std::optional<json::Value> Server::handle(const json::Value& request) {
             return error(*id, -32602, "tools/call needs name and object arguments");
         auto result = call(toolName, arguments ? *arguments : json::Value::object());
         if (!result && result.error().code == "mcp.tool") return error(*id, -32601, "Unknown tool");
+        if (result && !detail::resultFits(*result)) result = detail::responseTooLarge();
         json::Value output = json::Value::object();
         output["content"] = json::Value::array();
         json::Value text = json::Value::object();
         text["type"] = "text";
         if (result) {
             // MCP structured content is an object; other results go as text only.
-            if (result->isObject()) output["structuredContent"] = *result;
             text["text"] = json::writeCompact(*result);
+            if (result->isObject()) output["structuredContent"] = std::move(*result);
         } else {
             output["isError"] = true;
-            output["structuredContent"] = rpc::errorJson(result.error());
+            auto diagnostic = rpc::errorJson(result.error());
+            detail::WireSize size;
+            const bool fits =
+                size.value(diagnostic) && size.plain < (detail::NativeWriter::kCapacity - 4096) / 2;
+            if (!fits) result = detail::responseTooLarge();
+            output["structuredContent"] =
+                fits ? std::move(diagnostic) : rpc::errorJson(result.error());
             text["text"] = result.error().toString();
         }
         output["content"].push_back(std::move(text));
@@ -391,6 +453,8 @@ struct Byter {
         const std::vector<Tick::Watch>& watches) = 0;  // >0 ready, 0 not ready (yet), <0 end
     virtual bool buffered() const { return false; }
     virtual int get() = 0;  // the byte, or <0 at the end
+    virtual void pause(bool) {}
+    virtual Status status() const { return {}; }
 };
 
 struct StreamByter : Byter {
@@ -426,6 +490,22 @@ struct FdByter : Byter {
     }
 #endif
     bool buffered() const override { return pos_ < end_; }
+    Status status() const override {
+        return readError_.load() ? Status(Error("mcp.read", "failed to read stdio input", "/stdin",
+                                                "check the input pipe or file"))
+                                 : Status{};
+    }
+    void pause(bool value) override {
+#if defined(_WIN32)
+        {
+            std::lock_guard lock(mutex_);
+            paused_ = value;
+        }
+        consumed_.notify_one();
+#else
+        (void)value;
+#endif
+    }
     int wait(int timeoutMs, const std::vector<Tick::Watch>& watches) override {
         const bool buffered = pos_ < end_;
         if (buffered && watches.empty()) return 1;
@@ -436,7 +516,11 @@ struct FdByter : Byter {
 #endif
         for (const auto& watch : watches) fds.push_back({watch.source, watch.events, 0});
         const int ready = waitFor(fds, buffered ? 0 : timeoutMs);
-        if (ready < 0) return errno == EINTR ? 0 : -1;
+        if (ready < 0) {
+            if (errno == EINTR) return 0;
+            readError_.store(errno ? errno : EIO);
+            return -1;
+        }
         bool serviced = false;
         for (std::size_t i = 0; i < watches.size(); ++i) {
             if (!fds[i + 1].ready) continue;
@@ -448,6 +532,10 @@ struct FdByter : Byter {
         if (serviced) return 0;
         if (buffered) return 1;
         if (ready == 0) return 0;
+        if (fds[0].ready & kWaitInvalid) {
+            readError_.store(EBADF);
+            return -1;
+        }
         return (fds[0].ready & (kWaitRead | kWaitHangup | kWaitError)) ? 1 : -1;
     }
     int get() override {
@@ -467,7 +555,10 @@ struct FdByter : Byter {
             ssize_t n;
             do n = ::read(fd_, buffer_, sizeof(buffer_));
             while (n < 0 && errno == EINTR);
-            if (n <= 0) return -1;
+            if (n <= 0) {
+                if (n < 0) readError_.store(errno);
+                return -1;
+            }
             pos_ = 0;
             end_ = static_cast<std::size_t>(n);
 #endif
@@ -476,15 +567,20 @@ struct FdByter : Byter {
     }
 #if defined(_WIN32)
     void readLoop() {
-        const auto handle = reinterpret_cast<HANDLE>(_get_osfhandle(fd_));
+        const auto handle = reinterpret_cast<HANDLE>(detail::checkedNativeHandle(fd_));
         for (;;) {
             {
                 std::unique_lock lock(mutex_);
-                consumed_.wait(lock, [this] { return quit_ || inboxSize_ == 0; });
+                consumed_.wait(lock, [this] { return quit_ || (!paused_ && inboxSize_ == 0); });
                 if (quit_) return;
             }
             DWORD count = 0;
             const bool ok = ReadFile(handle, inbox_, sizeof(inbox_), &count, nullptr) != 0;
+            if (!ok) {
+                const auto code = GetLastError();
+                if (code != ERROR_BROKEN_PIPE && code != ERROR_HANDLE_EOF)
+                    readError_.store(static_cast<int>(code));
+            }
             {
                 std::lock_guard lock(mutex_);
                 inboxSize_ = ok ? count : 0;
@@ -497,18 +593,21 @@ struct FdByter : Byter {
     std::mutex mutex_;
     std::condition_variable consumed_;
     bool quit_ = false;
+    bool paused_ = false;
     char inbox_[65536];
     std::size_t inboxSize_ = 0;
     std::thread reader_;
 #endif
     int fd_;
+    std::atomic<int> readError_{0};
     char buffer_[65536];
     std::size_t pos_ = 0, end_ = 0;
 };
 
 // Frames newline-delimited requests. Async service also runs between bytes
 // of partial frames and buffered input; dispatch itself stays model-thread only.
-Status pump(Server& server, Byter& byter, std::ostream& output, const Tick& tick) {
+Status pump(Server& server, Byter& byter, std::ostream* output, const Tick& tick,
+            detail::NativeWriter* writer = nullptr) {
     const bool periodic = tick.fn && !tick.deadline && !tick.watches;
     std::size_t bytes = 0;
     bool boundary = true;
@@ -519,7 +618,81 @@ Status pump(Server& server, Byter& byter, std::ostream& output, const Tick& tick
         if (tick.fn) tick.fn();
         last = std::chrono::steady_clock::now();
     };
+    auto reserveOutput = [&]() -> Status {
+        if (!writer) return {};
+        if (writer->idle()) return writer->status();
+        byter.pause(true);
+        for (;;) {
+            writer->drainProgress();
+            SUPPLE_TRY(writer->status());
+            if (writer->idle()) {
+                byter.pause(false);
+                return writer->status();
+            }
+            auto watches = tick.watches ? tick.watches() : std::vector<Tick::Watch>{};
+            std::vector<WaitItem> sources{{writer->progress(), kWaitRead}};
+            for (const auto& watch : watches) sources.push_back({watch.source, watch.events});
+            int timeout = periodic ? rpc::detail::waitMilliseconds(last + tick.interval -
+                                                                   std::chrono::steady_clock::now())
+                                   : -1;
+            if (tick.deadline)
+                if (const auto next = tick.deadline())
+                    timeout =
+                        rpc::detail::waitMilliseconds(*next - std::chrono::steady_clock::now());
+            if (timeout == 0) {
+                runTick();
+                continue;
+            }
+            const int ready = waitFor(sources, timeout);
+            if (ready < 0) {
+                if (errno == EINTR) {
+                    runTick();
+                    continue;
+                }
+                return Error("mcp.wait", "failed waiting for output/service", "/stdout",
+                             "check native service sources");
+            }
+            bool serviced = ready == 0;
+            for (std::size_t i = 0; i < watches.size(); ++i)
+                if (sources[i + 1].ready) {
+                    watches[i].ready(sources[i + 1].ready);
+                    serviced = true;
+                }
+            if (serviced) runTick();
+        }
+    };
+    auto deliver = [&](const json::Value& notifications,
+                       std::optional<json::Value> reply) -> Status {
+        detail::WireSize size{false};
+        for (const auto& notification : notifications.asArray())
+            if (!size.value(notification) || !size.add(1, 1))
+                return Error("mcp.write", "notification packet exceeds output budget", "/stdout",
+                             "check the server notification source");
+        auto actual = std::move(reply);
+        if (actual && (!size.value(*actual) || !size.add(1, 1))) {
+            const auto* id = actual->find("id");
+            auto fallback = error(id ? *id : json::Value(nullptr), -32000, "Response too large");
+            fallback["error"]["data"] = rpc::errorJson(detail::responseTooLarge());
+            actual = std::move(fallback);
+            detail::WireSize finalSize{false};
+            for (const auto& notification : notifications.asArray())
+                if (!finalSize.value(notification) || !finalSize.add(1, 1))
+                    return Error("mcp.write", "fallback notification exceeds output budget");
+            if (!finalSize.value(*actual) || !finalSize.add(1, 1))
+                return Error("mcp.write", "fallback exceeds output budget");
+        }
+        std::string packet;
+        for (const auto& notification : notifications.asArray())
+            packet += json::writeCompact(notification) + '\n';
+        if (actual) packet += json::writeCompact(*actual) + '\n';
+        if (packet.empty()) return {};
+        if (writer) return writer->submit(std::move(packet));
+        *output << packet;
+        output->flush();
+        return *output ? Status{} : Status(Error("mcp.write", "failed to write stdio response"));
+    };
     while (true) {
+        SUPPLE_TRY(reserveOutput());
         // Inspect async sources at frame boundaries and every 4 KiB while
         // framing long/continuous input, including the reader's buffered bytes.
         const bool inspect = boundary || bytes % 4096 == 0 || !byter.buffered();
@@ -560,45 +733,50 @@ Status pump(Server& server, Byter& byter, std::ostream& output, const Tick& tick
             continue;
         }
         if (overflow) {
-            output << json::writeCompact(error(nullptr, -32600, "Message too large")) << '\n';
-            output.flush();
-            if (!output) return Error("mcp.write", "failed to write stdio response");
+            SUPPLE_TRY(deliver(json::Value::array(), error(nullptr, -32600, "Message too large")));
             frame.clear();
             overflow = false;
             continue;
         }
-        auto parsed = json::parse(frame);
-        auto reply = parsed ? server.handle(*parsed)
+        auto parsed = json::parse(
+            frame, {.maxBytes = rpc::kMaxMessageBytes, .maxValues = rpc::kMaxFrameValues});
+        auto reply = parsed ? server.handle(std::move(*parsed))
                             : std::optional<json::Value>(error(nullptr, -32700, "Parse error"));
-        const auto notifications = server.takeNotifications();
-        for (const auto& notification : notifications.asArray())
-            output << json::writeCompact(notification) << '\n';
-        if (notifications.size() != 0) output.flush();
-        if (!output) return Error("mcp.write", "failed to write stdio notification");
-        if (reply) {
-            output << json::writeCompact(*reply) << '\n';
-            output.flush();
-            if (!output) return Error("mcp.write", "failed to write stdio response");
-        }
+        if (!parsed) (*reply)["error"]["data"] = rpc::errorJson(parsed.error());
+        SUPPLE_TRY(deliver(server.takeNotifications(), std::move(reply)));
         frame.clear();
     }
     if (overflow) {
-        output << json::writeCompact(error(nullptr, -32600, "Message too large")) << '\n';
-        output.flush();
-        if (!output) return Error("mcp.write", "failed to write stdio response");
+        SUPPLE_TRY(deliver(json::Value::array(), error(nullptr, -32600, "Message too large")));
     }
-    return {};
+    SUPPLE_TRY(reserveOutput());
+    return byter.status();
 }
 
 }  // namespace
 
 Status Server::serve(std::istream& input, std::ostream& output, Tick tick) {
     StreamByter byter(input);
-    return pump(*this, byter, output, tick);
+    return pump(*this, byter, &output, tick);
 }
 
 Status Server::serve(int fd, std::ostream& output, Tick tick) {
     FdByter byter(fd);
-    return pump(*this, byter, output, tick);
+    return pump(*this, byter, &output, tick);
+}
+Status Server::serve(int inputFd, int outputFd, Tick tick) {
+    if (inputFd < 0)
+        return Error("mcp.read", "invalid input descriptor", "/stdin", "provide a pipe or file");
+#if defined(_WIN32)
+    if (detail::checkedNativeHandle(inputFd) == -1)
+        return Error("mcp.read", "invalid input descriptor", "/stdin", "provide a pipe or file");
+#else
+    if (::fcntl(inputFd, F_GETFD) < 0)
+        return Error("mcp.read", "invalid input descriptor", "/stdin", "provide a pipe or file");
+#endif
+    auto writer = detail::NativeWriter::create(outputFd);
+    if (!writer) return writer.error();
+    FdByter byter(inputFd);
+    return pump(*this, byter, nullptr, tick, writer->get());
 }
 }  // namespace supple::mcp

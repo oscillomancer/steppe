@@ -140,12 +140,15 @@ TEST_CASE("the agent skill ships beside the binary") {
 TEST_CASE("the stock folder's modules are scanned afresh, never from the cache") {
     // The script player lists the scripts in its library: its file does not
     // change when they do.
+    // Skipped only without stock plugins; a stock folder without the player
+    // is a build that left it out (review round 33).
     const auto stock = stockPluginDir();
-    const fs::path player = stock ? *stock / "Script Player.clap" : fs::path();
-    if (!stock || !fs::exists(player)) {
-        MESSAGE("skipped: no script player in the stock plugin folder");
+    if (!stock) {
+        MESSAGE("skipped: no stock plugin folder");
         return;
     }
+    const fs::path player = *stock / "Script Player.clap";
+    REQUIRE_MESSAGE(fs::exists(player), player.string() << " is missing from the stock folder");
     ScanTest fixture;
     fixture.options.superviseAll = true;  // as a background plugin.scan does
     REQUIRE(scan(std::span<const fs::path>(&player, 1), fixture.options));

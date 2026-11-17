@@ -156,6 +156,14 @@ if(SUPPLE_BUILD_TESTS)
 endif()
 
 if(SUPPLE_BUILD_TESTS)
+  add_executable(engine-command-inputs.tests tests/test_command_inputs.cpp)
+  target_link_libraries(engine-command-inputs.tests PRIVATE supple::engine supple::control-protocol supple::doctest-main)
+  supple_target_defaults(engine-command-inputs.tests)
+  add_test(NAME engine-command-inputs.tests COMMAND engine-command-inputs.tests)
+  set_tests_properties(engine-command-inputs.tests PROPERTIES LABELS "engine;command;rt")
+endif()
+
+if(SUPPLE_BUILD_TESTS)
   # Kept separate so long seeded runs build without unrelated test fixtures.
   add_executable(engine-plan-soak.tests tests/test_plan_soak.cpp)
   target_link_libraries(engine-plan-soak.tests PRIVATE supple::engine supple::doctest-main)

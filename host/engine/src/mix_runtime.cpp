@@ -141,8 +141,10 @@ bool mixOnly(const model::Session& a, const model::Session& b,
 
 bool Engine::loadMixValues(const model::Session& session, const std::filesystem::path& dir) {
     auto* p = latestPlan_.load(std::memory_order_acquire);
+    // As loadScalarRate: never while an edit is deferred or for the reload
+    // that ends the deferral (review 37b F1).
     if (!backend_ || !latest_ || !p || rateSeekTarget_ || rateLoopTarget_ || notificationReload_ ||
-        rateDeferred_ || scalarPending_ || dir != p->projectDir)
+        rateDeferred_ || rateDeferredFrom_ || scalarPending_ || dir != p->projectDir)
         return false;
     // A hold can end in headChanged alongside an unrelated mix edit. Its
     // stale curve must be compiled before that edit may take the fast path.

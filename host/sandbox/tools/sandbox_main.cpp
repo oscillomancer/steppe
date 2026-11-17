@@ -50,6 +50,14 @@ int inputDescriptor() {
 #endif
 }
 
+int outputDescriptor() {
+#if defined(_WIN32)
+    return _fileno(stdout);
+#else
+    return ::fileno(stdout);
+#endif
+}
+
 int usage() {
     std::fprintf(
         stderr,
@@ -240,7 +248,7 @@ int main(int argc, char** argv) {
         }
         mcp::Server server(registry, dispatcher);
         // The tick drains the host's events: MCP has no event channel.
-        auto status = server.serve(inputDescriptor(), std::cout,
+        auto status = server.serve(inputDescriptor(), outputDescriptor(),
                                    mcp::Tick{[&] {
                                                  host.tick();
                                                  host.takeEvents();

@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #pragma once
 #include <supple/base/result.h>
+#include <cerrno>
 #include <cstring>
 #include <filesystem>
 #if defined(_WIN32)
@@ -61,13 +62,43 @@ inline int remove(const std::filesystem::path& path) {
 inline int privatePermissions(const std::filesystem::path& path, bool directory) {
 #if defined(_WIN32)
     // The user's profile directories supply the inherited Windows ACL.
-    (void)path;
-    (void)directory;
-    return 0;
+    if (!directory) return 0;
+    const auto handle = CreateFileW(
+        path.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        errno = EACCES;
+        return -1;
+    }
+    FILE_ATTRIBUTE_TAG_INFO info{};
+    const bool valid =
+        GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &info, sizeof(info)) &&
+        (info.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+        !(info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT);
+    CloseHandle(handle);
+    if (!valid) errno = EACCES;
+    return valid ? 0 : -1;
 #else
-    return ::chmod(path.c_str(), directory ? 0700 : 0600);
+    if (!directory) return ::chmod(path.c_str(), 0600);
+    const int fd = ::open(path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0) return -1;
+    struct stat info{};
+    int result = ::fstat(fd, &info);
+    if (result == 0 && (!S_ISDIR(info.st_mode) || info.st_uid != ::geteuid())) {
+        errno = EACCES;
+        result = -1;
+    }
+    if (result == 0) result = ::fchmod(fd, 0700);
+    const int error = errno;
+    ::close(fd);
+    errno = error;
+    return result;
 #endif
 }
+// The exclusive lock a server takes on `<socket>.lock` before it inspects the
+// socket path and keeps until it has stopped. It never waits. The lock, not the
+// connect probe, is what proves a live owner: a full backlog is refused like a
+// dead socket on macOS. The kernel releases it when the owner dies.
 class EndpointLock {
   public:
     explicit EndpointLock(const std::filesystem::path& path) {
@@ -76,17 +107,36 @@ class EndpointLock {
                             FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
                             FILE_ATTRIBUTE_NORMAL, nullptr);
         OVERLAPPED overlapped{};
-        valid_ = file_ != INVALID_HANDLE_VALUE &&
-                 LockFileEx(file_, LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, &overlapped);
-        if (!valid_) errno = EACCES;
+        if (file_ == INVALID_HANDLE_VALUE) {
+            errno = EACCES;
+        } else if (LockFileEx(file_, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0,
+                              &overlapped)) {
+            valid_ = true;
+        } else {
+            const DWORD error = GetLastError();
+            held_ = error == ERROR_LOCK_VIOLATION || error == ERROR_IO_PENDING;
+            errno = EACCES;
+        }
 #else
         fd_ = ::open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0600);
-        valid_ = fd_ >= 0 && ::flock(fd_, LOCK_EX) == 0;
+        if (fd_ >= 0) {
+            int result;
+            do result = ::flock(fd_, LOCK_EX | LOCK_NB);
+            while (result != 0 && errno == EINTR);
+            valid_ = result == 0;
+            held_ = !valid_ && errno == EWOULDBLOCK;
+        }
 #endif
     }
     ~EndpointLock() {
 #if defined(_WIN32)
-        if (file_ != INVALID_HANDLE_VALUE) CloseHandle(file_);
+        if (file_ != INVALID_HANDLE_VALUE) {
+            // Closing alone releases the lock at a time the system chooses; a
+            // successor that never waits must find it free at once.
+            OVERLAPPED overlapped{};
+            if (valid_) UnlockFileEx(file_, 0, 1, 0, &overlapped);
+            CloseHandle(file_);
+        }
 #else
         if (fd_ >= 0) {
             if (valid_) ::flock(fd_, LOCK_UN);
@@ -97,9 +147,11 @@ class EndpointLock {
     EndpointLock(const EndpointLock&) = delete;
     EndpointLock& operator=(const EndpointLock&) = delete;
     bool valid() const { return valid_; }
+    // Another server holds the lock: it owns the endpoint or is starting on it.
+    bool heldElsewhere() const { return held_; }
 
   private:
-    bool valid_ = false;
+    bool valid_ = false, held_ = false;
 #if defined(_WIN32)
     HANDLE file_ = INVALID_HANDLE_VALUE;
 #else

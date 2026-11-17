@@ -1567,7 +1567,10 @@ harness. See the tooling README for schemas, limits and invocation details.
   instances the new plan dropped and starts new ones, then stores the plan's
   generation; the main thread prunes the instance pool only once that
   generation reaches the newest published one (`service()`), so no instance
-  is destroyed before the audio thread has stopped it. An executor takes a
+  is destroyed before the audio thread has stopped it. It prunes at the
+  generation it freed old plans at, read once: an adoption after that read
+  waits for the next `service()`, so no plan the main thread keeps (and
+  services) names a destroyed instance. An executor takes a
   free instance by a compare-exchange of its owner token from none
   (`Instance::claimOwner`), so the renderer and the callback, both finding
   one free, never both start it. A plugin whose `start_processing()` fails
@@ -2821,6 +2824,19 @@ compiled with; once rate scheduling has started the engine keeps rate-enabled
 plans until it stops, and tape reads at exactly 1.0 are the original samples.
 Each structural edit then prepares a rate plan; level and pan edits do not
 (ADR-0060, §1.6).
+While a prepared rate plan covers audio not yet played, `load()` defers a
+structural edit: it returns success at once, and the edit compiles once that
+span has played (in `service()`, or in whichever `load()` comes first). That
+load always compiles: neither the scalar nor the mix shortcut takes it, even
+when a playrate move is still pending from a full queue (the compile carries
+the pending value). If that compile fails, the edit never played. The engine then keeps the session
+it plays as its latest, for later reloads, the mix and scalar shortcuts and
+the instance prune, and adds a warning. `takeUnplayedEdit()` returns the error
+once; `EngineApp` emits it as `engine.error` and reports the version that
+plays as `prepared_version`. The project's head keeps the edit: undoing or
+changing it reloads. Whatever the engine names as latest, the instance pool
+is pruned against the session the newest published plan was compiled from,
+so no instance a running plan uses is destroyed.
 Two cases prepare a plan instead: leaving the unity bypass (no rate plan yet),
 and leaving 1.0 on a preserve-pitch plan compiled at 1.0, whose sources read as
 tape and need the stretch converter. When that prepared transition only changes
