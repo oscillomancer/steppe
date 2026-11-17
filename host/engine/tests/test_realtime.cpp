@@ -64,6 +64,20 @@ struct EngineTestAccess {
         e.liveWorkersReady_.store(e.liveWorkers_.get());
     }
     static std::size_t plans(const Engine& e) { return e.plans_.size(); }
+    static void afterCollect(Engine& e, void (*hook)(void*), void* context) {
+        e.afterCollectForTests_ = hook;
+        e.afterCollectContext_ = context;
+    }
+    // Every instance a kept plan's stages name (pointers only: never used).
+    static std::vector<host::Instance*> planInstances(const Engine& e) {
+        std::vector<host::Instance*> out;
+        for (const auto& plan : e.plans_)
+            for (const auto& node : plan->nodes)
+                detail::forEachStage(node, [&](const detail::Stage& st) {
+                    if (st.instance) out.push_back(st.instance);
+                });
+        return out;
+    }
     static std::uint64_t beginWrite(Engine& e) {
         const std::uint64_t seq = e.xportSeq_.load();
         e.xportSeq_.store(seq + 1);
@@ -806,6 +820,58 @@ TEST_CASE("a stage that leaves processing mid-ramp does not replay the ramp" *
     REQUIRE(detail::processNode(p, 0, 0, 256, transport, nullptr));         // ours again
     CHECK(static_cast<double>(stage->appliedWet) == doctest::Approx(0.0));  // the new target
     stage->instance->stopProcessing();
+}
+
+TEST_CASE(
+    "an instance outlives every kept plan that names it, even when the executor adopts "
+    "a newer plan during service()" *
+    doctest::description("rt")) {
+    // service() kept the old plans an executor might still use, then pruned
+    // the pool with a second, newer reading of the executors' generation. An
+    // adoption in between freed an instance that a kept plan still named;
+    // the next service() called it (a gcc-preset assertion in the plan soak).
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+    Engine engine(pool, media, kInCallback);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256}));
+    REQUIRE(engine.load(synthSession(0.0, "com.suppleaudio.test.gain")));
+    backend.run(2);
+    engine.service();
+    const auto withGain = pool.instances();
+    const auto found = std::find_if(withGain.begin(), withGain.end(), [](host::Instance* in) {
+        return in->info().id == "com.suppleaudio.test.gain";
+    });
+    REQUIRE(found != withGain.end());
+    host::Instance* gain = *found;
+    REQUIRE(engine.load(synthSession(0.0)));  // the gain leaves; the callback has not adopted
+    struct Adopt {
+        DummyBackend& backend;
+        int runs = 0;
+    } adopt{backend};
+    EngineTestAccess::afterCollect(
+        engine,
+        [](void* context) {
+            auto* a = static_cast<Adopt*>(context);
+            ++a->runs;
+            a->backend.run(1);  // the callback adopts the newest plan here
+        },
+        &adopt);
+    engine.service();
+    EngineTestAccess::afterCollect(engine, nullptr, nullptr);
+    REQUIRE(adopt.runs == 1);
+    const auto alive = pool.instances();
+    for (host::Instance* named : EngineTestAccess::planInstances(engine)) {
+        CAPTURE(named == gain);
+        CHECK(std::find(alive.begin(), alive.end(), named) != alive.end());
+    }
+    // The next service() retires the old plan, then the gain.
+    engine.service();
+    CHECK(EngineTestAccess::plans(engine) == 1);
+    const auto after = pool.instances();
+    CHECK(after.size() == withGain.size() - 1);
+    CHECK(std::find(after.begin(), after.end(), gain) == after.end());
+    engine.stop();
 }
 
 TEST_CASE(

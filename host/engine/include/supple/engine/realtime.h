@@ -884,7 +884,9 @@ class Engine {
     void startFree(std::vector<host::Instance*>& owned, const std::vector<host::Instance*>* next,
                    const void* self) SUPPLE_RT;
     static void resetOwned(const std::vector<host::Instance*>& owned, detail::Plan* plan) SUPPLE_RT;
-    void collectPlans();
+    // Frees the plans no executor can still use; returns the oldest
+    // generation an executor may use, as read for that decision.
+    std::uint64_t collectPlans();
     void publishPluginOutputs(detail::Plan& plan, bool renderer, std::uint64_t epoch,
                               std::int64_t pos, std::int64_t stream) SUPPLE_RT;
 
@@ -947,6 +949,10 @@ class Engine {
     // Plans carry a generation; the audio thread stores it here after adopt()
     // has stopped the instances the plan dropped. service() prunes only then.
     std::uint64_t publishedGen_ = 0;
+    // Tests only (EngineTestAccess): runs inside service() right after the
+    // old plans are collected, where an executor may adopt a newer plan.
+    void (*afterCollectForTests_)(void*) = nullptr;
+    void* afterCollectContext_ = nullptr;
     bool bridgedLive_ = false;  // main thread (bridgedLive())
     std::atomic<std::uint64_t> stoppedGen_{0};
     std::shared_ptr<const model::Session> latest_;

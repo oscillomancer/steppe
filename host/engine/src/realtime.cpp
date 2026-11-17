@@ -1076,7 +1076,7 @@ bool Engine::awaitRendererHeld(double timeoutSeconds) {
     return true;
 }
 
-void Engine::collectPlans() {
+std::uint64_t Engine::collectPlans() {
     // The oldest generation an executor may still be using.
     const std::uint64_t rendered = stoppedGen_.load(std::memory_order_acquire);
     const std::uint64_t oldest =
@@ -1099,6 +1099,7 @@ void Engine::collectPlans() {
     std::erase_if(plans_, retired);
     if (std::none_of(plans_.begin(), plans_.end(), [](const auto& p) { return p->hardwareLead; }))
         (void)hardwareMidi_->releaseHistory();
+    return oldest;
 }
 
 std::vector<model::Id> Engine::takeDirtyStates() { return std::exchange(dirtyStates_, {}); }
@@ -1266,11 +1267,12 @@ void Engine::service() {
         if (!loaded)
             warnings_.push_back("plugin notification reload: " + loaded.error().toString());
     }
-    collectPlans();
-    const std::uint64_t rendered = stoppedGen_.load(std::memory_order_acquire);
-    const std::uint64_t live =
-        options_.anticipative ? std::min(rendered, callbackGen_.load(std::memory_order_acquire))
-                              : rendered;
+    // The pool is pruned at the generation the plans were collected at: a
+    // newer reading may let an executor's adoption since then free an
+    // instance that a plan kept above still names (the next service()
+    // walks those plans).
+    const std::uint64_t live = collectPlans();
+    if (afterCollectForTests_) afterCollectForTests_(afterCollectContext_);
     if (prunePending_ && !rateDeferred_ && latest_ && live >= publishedGen_) {
         // Every executor has adopted the newest plan and stopped what it dropped.
         plugins_.prune(*latest_, live);

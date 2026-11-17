@@ -1527,7 +1527,10 @@ harness. See the tooling README for schemas, limits and invocation details.
   instances the new plan dropped and starts new ones, then stores the plan's
   generation; the main thread prunes the instance pool only once that
   generation reaches the newest published one (`service()`), so no instance
-  is destroyed before the audio thread has stopped it. An executor takes a
+  is destroyed before the audio thread has stopped it. It prunes at the
+  generation it freed old plans at, read once: an adoption after that read
+  waits for the next `service()`, so no plan the main thread keeps (and
+  services) names a destroyed instance. An executor takes a
   free instance by a compare-exchange of its owner token from none
   (`Instance::claimOwner`), so the renderer and the callback, both finding
   one free, never both start it. A plugin whose `start_processing()` fails
