@@ -247,4 +247,8 @@ the host records before every kill), and a bridge that dies by a signal or an ex
 application lives gets a report of its own, kind `bridge_exit`, under an incident with no run marker:
 at most 3 per run, none that repeats one already reported. It is the host's account of the death, not
 a capture of the bridge, and it is not a restart notice or a place in the suspect window. No protocol
-change, no change to the bridge. Contracts: `docs/specs/diagnostics.md` "Bridge processes (topic 6a)".
+change, no change to the bridge. Instead of the `Message::BridgeEnd`, the worker-minted incident id
+and the worker's pending/ready watcher sketched under "Later integration contracts", the `Bridge` end
+event travels in order on the inventory channel and the supervisor, applying it, mints the incident id
+and writes the report; a bridge death does not wake the model by itself. Contracts:
+`docs/specs/diagnostics.md` "Bridge processes (topic 6a)".

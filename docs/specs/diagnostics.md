@@ -859,7 +859,12 @@ instruction. It belongs to a `bridge_exit` report only, and a `bridge_exit` repo
 level. At most 3 are written per worker run, and none for a bridge whose members (plug-in id and
 version, or the name when it has no id) and native status repeat one already reported (until the
 bridge's own modules are read, those stand in for a build); the others are counted in
-`dropped.bridge_reports` of every later report of the run, with a line in `unavailable`. A report
+`dropped.bridge_reports` of every later report of the run, with a line in `unavailable`. There is no `Message::BridgeEnd`, and the worker does not mint the incident id or watch for the
+report: the `Bridge` end event travels in order on the same channel as the other inventory events,
+so the supervisor alone decides, from what it has applied, whether the death is reported and under
+which id. The worker's "pending/ready/unavailable" association (the wake of the model through its
+existing watcher, under Later integration contracts) is not built; a bridge death does not wake the
+model by itself. A report
 that cannot be written prints one line to the supervisor's standard error. The strict validator
 holds the kind to its parts: `bridge` is a listed bridge that ended by `signal` or `exception`
 with the report's `code`, `attribution` is the `bridge_exit` level and its plug-in a listed member
@@ -1079,7 +1084,8 @@ uses the OS unwinder and takes no flag.
 
 Register inventory/command names off RT; preallocated lock-free execution tokens
 cover DSP and lifecycle calls. Bridge death still wakes the model through its
-existing watcher, with a separate pending/ready/unavailable incident association.
+existing watcher, with a separate pending/ready/unavailable incident association
+(not built in topic 6a: see "A report when the worker lives").
 Never delay established bridge kills to collect diagnostics. Next-start safe-load
 selection precedes project instantiation; one-time bridged/disabled choices persist
 only on opt-in. Existing recovery remains a separate explicit offer. Hangs use
