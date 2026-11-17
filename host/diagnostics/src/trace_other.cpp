@@ -15,7 +15,7 @@ TraceSnapshot collectProcessTrace(Native& native, const Packet& terminal) {
     Missing why = Missing::Unsupported;
 #if defined(__APPLE__)
     why = Missing::NotCollected;
-    const std::uint64_t deadline = monotonicNanoseconds() + 600'000'000ULL;
+    const std::uint64_t deadline = monotonicNanoseconds() + kCollectionBudget;
     if (const auto bytes = receiveCapsule(static_cast<int>(native.channel), terminal, deadline))
         if (auto snapshot = parseCapsule(bytes->data(), bytes->size())) return std::move(*snapshot);
 #else

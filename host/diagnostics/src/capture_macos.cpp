@@ -22,11 +22,16 @@
 // stack are read and is resumed before the next, on every path.
 namespace supple::diagnostics::detail {
 namespace {
-// Of the worker's one second: thread reads end at 400 ms, sending at 700 ms, and the
-// wait for the supervisor's acknowledgement gets what is left.
-constexpr std::uint64_t kThreadBudget = 400'000'000ULL, kSendBudget = 700'000'000ULL,
-                        kHold = 1'000'000'000ULL;
-constexpr std::size_t kMaxImages = 4096, kMaxCommands = 32 * 1024, kMaxMisses = 64;
+// Of the worker's one second: thread reads end at 400 ms, listing the images and finding
+// the module of each frame at 450 ms, sending at 500 ms, and the wait for the supervisor's
+// acknowledgement gets what is left. The supervisor reads for kCollectionBudget (600 ms)
+// from when it starts, which is after the worker's clock does, so the send must end with
+// a margin before that; a late capsule is lost and the fault thread is not_collected.
+constexpr std::uint64_t kThreadBudget = 400'000'000ULL, kImageBudget = 450'000'000ULL,
+                        kSendBudget = 500'000'000ULL, kHold = 1'000'000'000ULL;
+static_assert(kThreadBudget < kImageBudget && kImageBudget < kSendBudget &&
+              kSendBudget + 50'000'000ULL <= kCollectionBudget && kCollectionBudget < kHold);
+constexpr std::size_t kMaxImages = 4096, kMaxCommands = 32 * 1024;
 #if defined(__aarch64__)
 constexpr bool kArm64 = true;
 #else
@@ -38,8 +43,14 @@ mach_port_t mainThread = MACH_PORT_NULL;
 std::uint64_t imageBases[kMaxImages];
 std::uint32_t imageCount = 0;
 alignas(8) unsigned char commandBytes[kMaxCommands];
-std::uint64_t misses[kMaxMisses];
-std::uint32_t missCount = 0;
+// What an image's header said, kept so it is read once: its __TEXT range (size 0 if it had
+// none or could not be read) and its UUID.
+struct ImageText {
+    std::uint64_t vmaddr, size;
+    std::uint8_t uuid[16];
+    bool examined, hasUuid;
+};
+ImageText images[kMaxImages];
 
 bool readOwn(void*, std::uint64_t address, void* out, std::size_t bytes) {
     mach_vm_size_t got = 0;
@@ -52,7 +63,9 @@ bool readOwn(void*, std::uint64_t address, void* out, std::size_t bytes) {
 const StackReader kReader{&readOwn, nullptr};
 
 // The images dyld lists, as load addresses only; headers are read when a frame needs one.
-void listImages() {
+// Stops at `deadline`: the images after it are simply not known, and their frames carry no
+// identity.
+void listImages(std::uint64_t deadline) {
     task_dyld_info_data_t info{};
     mach_msg_type_number_t count = TASK_DYLD_INFO_COUNT;
     if (task_info(mach_task_self(), TASK_DYLD_INFO, reinterpret_cast<task_info_t>(&info), &count) !=
@@ -69,6 +82,7 @@ void listImages() {
     if (array == 0) return;
     dyld_image_info chunk[64];
     for (std::uint32_t done = 0; done < total && imageCount < kMaxImages;) {
+        if (monotonicNanoseconds() >= deadline) break;
         const std::uint32_t n = std::min<std::uint32_t>(64, total - done);
         if (!readOwn(nullptr, array + std::uint64_t{done} * sizeof(dyld_image_info), chunk,
                      n * sizeof(dyld_image_info)))
@@ -89,65 +103,62 @@ bool inModules(std::uint64_t address) {
 }
 
 // Adds the image whose text holds `address`, if dyld's list has it: the listed image with
-// the highest load address at or below it, whose header is read and bounded.
+// the highest load address at or below it, whose header is read and bounded. An image's
+// header is read once, whatever the outcome: what it said is kept, so a later frame in
+// the same image costs a comparison, and a damaged stack of addresses that fall in no
+// image's text cannot make the handler read the same headers again and again.
 void addImageFor(std::uint64_t address) {
     if (inModules(address)) return;
     std::uint64_t best = 0;
+    std::uint32_t bestIndex = 0;
     for (std::uint32_t i = 0; i < imageCount; ++i)
-        if (imageBases[i] <= address && imageBases[i] > best) best = imageBases[i];
-    if (best == 0) return;
-    for (std::uint32_t i = 0; i < missCount; ++i)
-        if (misses[i] == best) return;  // looked at already: its text does not hold this
-    const auto miss = [&] {
-        if (missCount < kMaxMisses) misses[missCount++] = best;
-    };
-    mach_header_64 header{};
-    if (!readOwn(nullptr, best, &header, sizeof(header)) || header.magic != MH_MAGIC_64 ||
-        header.sizeofcmds == 0 || header.sizeofcmds > kMaxCommands || header.ncmds > 1024 ||
-        !readOwn(nullptr, best + sizeof(header), commandBytes, header.sizeofcmds)) {
-        miss();
-        return;
-    }
-    std::uint64_t textAddress = 0, textSize = 0;
-    bool haveText = false, haveUuid = false;
-    std::uint8_t uuid[16] = {};
-    std::size_t at = 0;
-    for (std::uint32_t i = 0; i < header.ncmds; ++i) {
-        if (header.sizeofcmds - at < sizeof(load_command)) break;
-        load_command command{};
-        std::memcpy(&command, commandBytes + at, sizeof(command));
-        if (command.cmdsize < sizeof(load_command) || command.cmdsize > header.sizeofcmds - at)
-            break;
-        if (command.cmd == LC_SEGMENT_64 && command.cmdsize >= sizeof(segment_command_64)) {
-            segment_command_64 segment{};
-            std::memcpy(&segment, commandBytes + at, sizeof(segment));
-            if (std::strncmp(segment.segname, "__TEXT", sizeof(segment.segname)) == 0) {
-                textAddress = segment.vmaddr;
-                textSize = segment.vmsize;
-                haveText = true;
-            }
-        } else if (command.cmd == LC_UUID && command.cmdsize >= sizeof(uuid_command)) {
-            uuid_command found{};
-            std::memcpy(&found, commandBytes + at, sizeof(found));
-            std::memcpy(uuid, found.uuid, sizeof(uuid));
-            haveUuid = true;
+        if (imageBases[i] <= address && imageBases[i] > best) {
+            best = imageBases[i];
+            bestIndex = i;
         }
-        at += command.cmdsize;
+    if (best == 0) return;
+    ImageText& known = images[bestIndex];
+    if (!known.examined) {
+        known.examined = true;
+        mach_header_64 header{};
+        if (!readOwn(nullptr, best, &header, sizeof(header)) || header.magic != MH_MAGIC_64 ||
+            header.sizeofcmds == 0 || header.sizeofcmds > kMaxCommands || header.ncmds > 1024 ||
+            !readOwn(nullptr, best + sizeof(header), commandBytes, header.sizeofcmds))
+            return;
+        std::size_t at = 0;
+        for (std::uint32_t i = 0; i < header.ncmds; ++i) {
+            if (header.sizeofcmds - at < sizeof(load_command)) break;
+            load_command command{};
+            std::memcpy(&command, commandBytes + at, sizeof(command));
+            if (command.cmdsize < sizeof(load_command) || command.cmdsize > header.sizeofcmds - at)
+                break;
+            if (command.cmd == LC_SEGMENT_64 && command.cmdsize >= sizeof(segment_command_64)) {
+                segment_command_64 segment{};
+                std::memcpy(&segment, commandBytes + at, sizeof(segment));
+                if (std::strncmp(segment.segname, "__TEXT", sizeof(segment.segname)) == 0) {
+                    known.vmaddr = segment.vmaddr;
+                    known.size = segment.vmsize;
+                }
+            } else if (command.cmd == LC_UUID && command.cmdsize >= sizeof(uuid_command)) {
+                uuid_command found{};
+                std::memcpy(&found, commandBytes + at, sizeof(found));
+                std::memcpy(known.uuid, found.uuid, sizeof(known.uuid));
+                known.hasUuid = true;
+            }
+            at += command.cmdsize;
+        }
     }
-    if (!haveText || textSize == 0 || address - best >= textSize) {
-        miss();
-        return;
-    }
+    if (known.size == 0 || address - best >= known.size) return;
     if (capsule.header.moduleCount >= kCapsuleModules) {
         capsule.header.flags |= kCapsuleModulesTruncated;
         return;
     }
     CapsuleModule& module = capsule.modules[capsule.header.moduleCount++];
     module.start = best;
-    module.end = best + textSize;
-    module.bias = best - textAddress;
-    if (haveUuid) {
-        std::memcpy(module.uuid, uuid, sizeof(uuid));
+    module.end = best + known.size;
+    module.bias = best - known.vmaddr;
+    if (known.hasUuid) {
+        std::memcpy(module.uuid, known.uuid, sizeof(known.uuid));
         module.hasUuid = 1;
     }
 }
@@ -255,11 +266,15 @@ void captureOthers(std::uint64_t deadline) {
                         count * sizeof(thread_act_t));
 }
 
-// Modules for every frame address found, added as they are met.
-void resolveModules() {
+// Modules for every frame address found, added as they are met, until `deadline`; frames
+// met after it carry no identity, which the parser accepts.
+void resolveModules(std::uint64_t deadline) {
     for (std::uint32_t t = 0; t < capsule.header.threadCount; ++t) {
         const CapsuleThreadData& thread = capsule.threads[t];
-        for (std::uint32_t f = 0; f < thread.head.frameCount; ++f) addImageFor(thread.frames[f]);
+        for (std::uint32_t f = 0; f < thread.head.frameCount; ++f) {
+            if (monotonicNanoseconds() >= deadline) return;
+            addImageFor(thread.frames[f]);
+        }
     }
 }
 }  // namespace
@@ -271,8 +286,8 @@ void captureAndHold(Native& endpoint, const Packet& terminal) noexcept {
     capsule.header.magic = kCapsuleMagic;
     captureSelf(terminal, start + kThreadBudget);
     captureOthers(start + kThreadBudget);
-    listImages();
-    resolveModules();
+    listImages(start + kImageBudget);
+    resolveModules(start + kImageBudget);
     const int fd = static_cast<int>(endpoint.channel);
     // If the capsule cannot be sent in time the supervisor stops waiting at its own
     // deadline; the terminal packet it already has is what matters most.

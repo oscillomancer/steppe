@@ -204,10 +204,15 @@ path; a thread whose suspension or state call failed is `unavailable` with `thre
 `access_denied` or `registers_unreadable`, and threads left when the budget ends are
 `deadline`. The calling thread is the `fault` entry: from the signal's registers, or from
 its own frame for terminate and abort, which carry none. The worker keeps to its one
-second: thread reads end at 400 ms, the capsule is sent by 700 ms (a `Message::Trace`
-packet carrying the byte count, then the bytes, each wait bounded) and the wait for the
-acknowledgement gets the rest. The supervisor reads the capsule within the same 600 ms
-budget and validates it strictly (counts, roles, reasons and ranges, the bytes consumed
+second: thread reads end at 400 ms; listing dyld's images and finding the module of each
+frame end at 450 ms (after that, frames carry no identity, which the parser accepts); the
+capsule is sent by 500 ms (a `Message::Trace` packet carrying the byte count, then the
+bytes, each wait bounded) and the wait for the acknowledgement gets the rest. An image's
+header is read once, and what it said is kept, so a stack of addresses outside every image
+cannot make the handler read the same headers repeatedly. The supervisor reads the
+capsule for 600 ms from when it starts collecting, which is after the worker's clock starts, so the
+send ends with a margin of at least 50 ms before the supervisor gives up (a compile-time
+check ties the two). It validates it strictly (counts, roles, reasons and ranges, the bytes consumed
 exactly); a capsule that is missing, late, truncated or malformed leaves the fault thread
 `unavailable` with `not_collected`, and the report is otherwise unchanged. The addresses
 in the capsule never leave the supervisor's parser: a frame is reported as an index into

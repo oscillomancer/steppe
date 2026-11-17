@@ -59,6 +59,9 @@ constexpr std::size_t kCapsuleMaxBytes =
     kCapsuleThreads * (sizeof(CapsuleThread) + kCapsuleFrames * sizeof(std::uint64_t));
 
 #if !defined(_WIN32)
+// How long the supervisor reads a capsule for, from the moment it starts collecting. The
+// worker must have sent it well before this ends (capture_macos.cpp checks the margin).
+constexpr std::uint64_t kCollectionBudget = 600'000'000ULL;
 // Monotonic nanoseconds; async-signal-safe.
 std::uint64_t monotonicNanoseconds() noexcept;
 
