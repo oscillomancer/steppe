@@ -5,8 +5,8 @@
 namespace supple::diagnostics::detail {
 bool installTerminal(Native native, const Packet& boot);
 #if defined(_WIN32)
-// Test support: whether this module's last-chance filter is the process's top-level
-// filter, that is, whether installTerminal did not decline to replace an earlier one.
+// Whether this module's last-chance filter is the process's top-level filter right now.
+// installTerminal reports success only if it is; the fixture prints it as evidence.
 bool lastChanceFilterInstalled();
 #endif
 }  // namespace supple::diagnostics::detail

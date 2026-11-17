@@ -81,6 +81,11 @@ void handoff(Packet packet) noexcept {
 #endif
 }
 #if defined(_WIN32)
+// The top-level filter that was in place when ours went in. An EXE linked with the MSVC
+// runtime always has one (the runtime's own, which turns an uncaught C++ exception into
+// std::terminate), so this is never null in the product. Written once at install, before
+// other threads exist; read only after the handoff.
+LPTOP_LEVEL_EXCEPTION_FILTER priorFilter = nullptr;
 [[maybe_unused]] LONG WINAPI lastChance(EXCEPTION_POINTERS* exception) {
     if (claimed.exchange(1, std::memory_order_relaxed)) return EXCEPTION_CONTINUE_SEARCH;
     Packet packet = initial;
@@ -100,8 +105,10 @@ void handoff(Packet packet) noexcept {
 #endif
     }
     handoff(packet);
-    // Preserve independently configured OS crash reporting. Never continue DSP.
-    return EXCEPTION_CONTINUE_SEARCH;
+    // Chain to the filter we replaced (ADR-0083 clarification, 2026-11-16): the runtime's
+    // and any other that would have run anyway, so independently configured crash
+    // reporting is preserved. Never continue DSP: whatever it returns, the fault is fatal.
+    return priorFilter ? priorFilter(exception) : EXCEPTION_CONTINUE_SEARCH;
 }
 [[maybe_unused]] void abortSignal(int signal) {
     if (!claimed.exchange(1, std::memory_order_relaxed)) {
@@ -237,16 +244,16 @@ bool installTerminal(Native native, const Packet& boot) {
 #endif
     bool installed = false;
 #if defined(_WIN32)
-    const auto prior = SetUnhandledExceptionFilter(lastChance);
-    if (prior)
-        SetUnhandledExceptionFilter(prior);
-    else
-        installed = true;
-    const auto old = std::signal(SIGABRT, abortSignal);
-    if (old != SIG_DFL)
-        std::signal(SIGABRT, old);
-    else
-        installed = true;
+    // Always ours, whatever was there before: the MSVC runtime's startup has set its own
+    // filter long before this runs, so declining to replace an existing one meant never
+    // installing in a real executable. "Installed" means the filter really is the
+    // process's top-level filter, which covers faults; abort has its own hook below.
+    priorFilter = SetUnhandledExceptionFilter(lastChance);
+    installed = lastChanceFilterInstalled();
+    if (installed) {
+        const auto old = std::signal(SIGABRT, abortSignal);
+        if (old != SIG_DFL) std::signal(SIGABRT, old);
+    }
 #else
     for (int signal : {SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT}) {
         struct sigaction prior{}, action{};

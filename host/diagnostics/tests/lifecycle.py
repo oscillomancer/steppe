@@ -85,6 +85,19 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
     prior_report=json.loads(prior_reports[0].read_text())
     assert prior_report["cause"]==(0 if sanitized else 3),prior_report
     if not sanitized: assert prior_report["kind"]=="crash",prior_report
+    if os.name=="nt" and not sanitized:
+        # A top-level filter already in place (the MSVC runtime always has one) must not
+        # stop the last-chance filter from capturing, and must still run after it
+        # (review round 29, F1). The fixture installs one before the frontend starts.
+        root=base/"prior-filter"/"app"/"diagnostics"
+        run=subprocess.run([binary,str(root),"prior-filter"],capture_output=True,timeout=30)
+        assert run.returncode!=0,run
+        assert b"last-chance filter installed: yes" in run.stderr,run.stderr
+        assert b"prior filter ran" in run.stderr,run.stderr
+        found=list(root.glob("*.json"))
+        assert len(found)==1,(found,run.stderr)
+        report=json.loads(found[0].read_text())
+        assert report["kind"]=="crash" and report["terminal_context"] and report["cause"]!=0,report
     if os.name != "nt":
         # The worker exits while its fork helper retains the channel. The
         # supervisor must finish before we release that helper. Timeout only

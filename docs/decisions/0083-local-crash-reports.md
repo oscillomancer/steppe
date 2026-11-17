@@ -135,6 +135,14 @@ Terminate capsules use code 0 because the chained handler chooses the exit path;
 no exception text is inspected. Re-entry terminates without chaining again.
 Sanitizers retain ownership and are not wrapped.
 
+*Maintainer decision, 2026-11-16, review round 29 finding 1:* the Windows last-chance
+filter is always installed and chains to the filter it replaced after the terminal
+handoff, replacing the earlier preserve-only policy. The MSVC runtime's startup always
+installs its own top-level filter, so declining to replace an existing one meant the
+filter was never installed in a real executable while terminal coverage still reported
+true. The chained filter (and with it the user's OS crash reporting) still runs; the
+fault stays fatal; "installed" now means the filter is really in place.
+
 *Maintainer decisions, 2026-11-16, topic 4 (thread traces):* (1) External thread reads
 happen inside the existing terminal hold; the bound does not grow, and an expired budget
 gives a partial report with a stated reason, never a longer hold. (2) macOS captures in

@@ -200,6 +200,14 @@ void priorTerminate() {
     std::fputs("prior terminate handler\n", stderr);
     std::_Exit(44);
 }
+#if defined(_WIN32)
+// A top-level filter that was already in place when the worker installed its own, as the
+// MSVC runtime's always is. The last-chance filter must chain to it after its handoff.
+LONG WINAPI priorFilter(EXCEPTION_POINTERS*) {
+    std::fputs("prior filter ran\n", stderr);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif
 int body(int argc, char** argv) {
     if (argc < 3) return 2;
     const std::string mode = argv[2];
@@ -230,11 +238,11 @@ int body(int argc, char** argv) {
     }
 #if defined(_WIN32)
     // Evidence for a failed capture: whether the last-chance filter is in place.
-    if (mode == "fault")
+    if (mode == "fault" || mode == "prior-filter")
         std::fprintf(stderr, "last-chance filter installed: %s\n",
                      supple::diagnostics::detail::lastChanceFilterInstalled() ? "yes" : "no");
 #endif
-    if (mode == "fault") actualFault();
+    if (mode == "fault" || mode == "prior-filter") actualFault();
     if (mode == "thread-fault") {
         std::thread worker([] {
             (void)supple::diagnostics::registerCurrentThread();
@@ -406,6 +414,9 @@ int main(int argc, char** argv) {
     if (std::string_view(argv[2]) == "handled") std::signal(SIGSEGV, priorSignal);
 #endif
     if (std::string_view(argv[2]) == "prior-terminate") std::set_terminate(priorTerminate);
+#if defined(_WIN32)
+    if (std::string_view(argv[2]) == "prior-filter") SetUnhandledExceptionFilter(priorFilter);
+#endif
     return supple::diagnostics::runFrontend(argc, argv, supple::diagnostics::Role::Fixture, body,
                                             {std::filesystem::path(argv[1])});
 }

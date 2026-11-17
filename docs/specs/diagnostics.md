@@ -305,9 +305,17 @@ foreign/driver threads have best-effort context and no stack-exhaustion promise.
 No callback hook, TLS registration or sanitizer suppression is added. Sanitized
 builds retain their handlers and emit exit-only summaries.
 
-Existing non-default fatal handlers/SEH filters are preserved. After capture,
-POSIX restores/re-raises the fatal default and Windows continues OS exception
-search. Terminate records only an enum, then chains the previously installed handler;
+Existing non-default POSIX fatal handlers are preserved (ours is not installed over
+them). On Windows the last-chance filter is always installed, replacing whatever top-level
+filter was there, and chains to it after the handoff, returning what it returns. An EXE
+linked with the MSVC runtime always has such a filter (the runtime's own, which turns an
+uncaught C++ exception into `std::terminate`), so declining to replace an existing one
+would never have installed in the product; chaining keeps both that filter and any other
+that would have run, and with them the user's own OS crash reporting. `installed` (the
+worker's terminal coverage) is true on Windows only when the filter really is the
+process's top-level filter. After capture POSIX restores/re-raises the fatal default.
+A plug-in that later replaces the top-level filter without chaining still takes the
+capture away; that is a stated limit. Terminate records only an enum, then chains the previously installed handler;
 its deliberate message/exit behavior survives. A subsequent native fatal signal
 restores/re-raises the default without overwriting the terminate capsule. Aborts, asserts, teardown
 faults, registered worker faults and collector loss are isolated fixtures. Raw
