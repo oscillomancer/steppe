@@ -604,6 +604,9 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
     // A failure before the deferral is decided leaves the edit deferred.
     if (!loaded && rateDeferredFrom_ && !rateDeferred_) {
         latest_ = *std::exchange(rateDeferredFrom_, std::nullopt);
+        // A refused playrate move in that session is pending again: the
+        // compile that cleared it never published it (review 37c F1).
+        scalarPending_ = rateDeferredScalarPending_;
         unplayedEdit_ = loaded.error();
     }
     return loaded;
@@ -627,7 +630,10 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
     if (!rateSeekTarget_ && wantPlaying_.load(std::memory_order_acquire) &&
         rateSafeEpoch_.load(std::memory_order_acquire) == controlEpoch &&
         playedStream(controlEpoch) + lead < rateSafeStream_.load(std::memory_order_acquire)) {
-        if (!rateDeferredFrom_) rateDeferredFrom_ = latest_;  // what keeps playing meanwhile
+        if (!rateDeferredFrom_) {
+            rateDeferredFrom_ = latest_;  // what keeps playing meanwhile
+            rateDeferredScalarPending_ = scalarPending_;
+        }
         latest_ = std::make_shared<const model::Session>(session);
         rateDeferredDir_ = projectDir;
         rateDeferred_ = true;
