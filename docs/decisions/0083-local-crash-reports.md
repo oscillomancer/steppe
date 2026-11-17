@@ -207,3 +207,21 @@ thread, and an exception with the code `0xE06D7363` that the prior filter return
 handling is captured as a fault instead of being lost. Both are in `docs/specs/diagnostics.md`
 and rest on native CI to run them.
 
+*Note, 2026-11-17, topics 5c to 5e (inventory, command breadcrumbs, attribution):* `plugins`,
+`commands`, `attribution` and `dropped` are filled and validated inside `supple.crash-report/1.0`,
+as approved, and the checks in `docs/specs/diagnostics.md` apply. Points that differ from the
+plan of 5a. (1) A loaded plug-in library has an inventory entry of its own (`clap_library`,
+`vst3_library`), so a crash in a plug-in's load that has not yet said what plug-in it is still
+shows what was loading. (2) `build` is not computed in the worker: each announcement carries an
+address inside the plug-in's binary (never reported), and the supervisor finds the module that
+holds it among the regions it read. (3) The packet grew to 392 bytes (protocol version 2) rather
+than adding a second framing; the sink closes for good if a half-sent packet cannot be finished,
+so a process waits for a stalled supervisor at most once. (4) Command names go to the supervisor
+once, when the process's first dispatcher is built; the ring holds ids, origin categories and
+states only. The macOS capsule (now `CTC4`) carries the command ring's entries, and still not a
+copy of the table. (5) Plug-in ids in a report are the order of first announcement, not cell
+numbers. (6) `dropped` is an object with seven counts (`unregistered_threads` is added to the
+plan's six, since threads omitted from the report and threads the table had no slot for are
+different things); a report of an earlier build with a plain count, or none of `attribution`, is
+still a report the validator recognises. (7) Rack modules are not announced yet and have no
+cell; a crash inside one reports no module entry, a stated limit in `STATUS.md`.
