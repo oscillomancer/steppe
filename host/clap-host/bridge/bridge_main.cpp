@@ -8,16 +8,30 @@
 #if defined(_WIN32)
 #include <fcntl.h>
 #include <io.h>
+#include <windows.h>
+// After windows.h, whose types it uses (tools/ci/windows_includes.py).
+#include <avrt.h>
+#elif defined(__APPLE__)
+#include <fcntl.h>
+#include <mach/mach.h>
+#include <mach/mach_time.h>
+#include <mach/thread_policy.h>
+#include <pthread.h>
+#include <signal.h>
+#include <unistd.h>
 #else
 #include <fcntl.h>
 #include <pthread.h>
+#include <sched.h>
 #include <signal.h>
+#include <sys/prctl.h>
 #include <unistd.h>
 #endif
 
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
@@ -46,6 +60,122 @@ using namespace supple::host::bridge;
 
 namespace {
 
+// The class an instance's audio thread runs a command in (ADR-0026,
+// ADR-0081): what the host asked for, as the header carries it.
+struct AudioClass {
+    std::uint32_t kind = 0;  // 0: none yet, 1: background, 2: live
+    ThreadPolicy background, live;
+    std::uint32_t periodNs = 0;  // live: the device period (0: unknown)
+    bool operator==(const AudioClass&) const = default;
+};
+
+ThreadPolicy policyFrom(std::uint32_t kind, std::uint32_t priority) {
+    return {kind <= static_cast<std::uint32_t>(ThreadPolicy::Kind::High)
+                ? static_cast<ThreadPolicy::Kind>(kind)
+                : ThreadPolicy::Kind::None,
+            static_cast<int>(std::min(priority, 99u))};
+}
+
+// The calling thread (an instance's audio thread) takes `want`; false when it
+// was refused, the thread then keeping what it could. The live class is the
+// callback's: on Linux its policy and priority; on macOS a time-constraint
+// policy for the device period, or without one a block of `frames` at the
+// activation's `rate` (the device helpers' rule, ADR-0038); on Windows MMCSS
+// Pro Audio at critical priority. Setup calls, made only when the class
+// changes.
+bool takeAudioClass(const AudioClass& want, double rate, std::uint32_t frames) {
+#if defined(_WIN32)
+    static thread_local HANDLE mmcss = nullptr;
+    const auto thread = GetCurrentThread();
+    if (want.kind == 2) {
+        (void)rate;
+        (void)frames;
+        DWORD index = 0;
+        if (!mmcss) mmcss = AvSetMmThreadCharacteristicsW(L"Pro Audio", &index);
+        return mmcss && AvSetMmThreadPriority(mmcss, AVRT_PRIORITY_CRITICAL);
+    }
+    if (mmcss) AvRevertMmThreadCharacteristics(mmcss);
+    mmcss = nullptr;
+#elif defined(__APPLE__)
+    const auto thread = ::pthread_self();
+    const auto mach = pthread_mach_thread_np(thread);
+    if (want.kind == 2) {
+        mach_timebase_info_data_t timebase{};
+        mach_timebase_info(&timebase);
+        const double ticks =
+            liveClassPeriodNs(want.periodNs, frames, rate) * timebase.denom / timebase.numer;
+        const auto period = static_cast<std::uint32_t>(std::clamp(ticks, 1.0, double(UINT32_MAX)));
+        thread_time_constraint_policy_data_t policy{};
+        policy.period = period;
+        policy.computation = std::max<std::uint32_t>(1, period / 3);
+        policy.constraint = std::max(policy.computation, period / 2);
+        policy.preemptible = TRUE;
+        if (thread_policy_set(mach, THREAD_TIME_CONSTRAINT_POLICY,
+                              reinterpret_cast<thread_policy_t>(&policy),
+                              THREAD_TIME_CONSTRAINT_POLICY_COUNT) != KERN_SUCCESS)
+            return false;
+        // Read back, as Linux does: the thread has the constraint asked for.
+        thread_time_constraint_policy_data_t got{};
+        mach_msg_type_number_t count = THREAD_TIME_CONSTRAINT_POLICY_COUNT;
+        boolean_t isDefault = FALSE;
+        return thread_policy_get(mach, THREAD_TIME_CONSTRAINT_POLICY,
+                                 reinterpret_cast<thread_policy_t>(&got), &count,
+                                 &isDefault) == KERN_SUCCESS &&
+               !isDefault && got.period == policy.period;
+    }
+    (void)thread_policy_set(mach, THREAD_STANDARD_POLICY, nullptr, THREAD_STANDARD_POLICY_COUNT);
+#else
+    (void)rate;
+    (void)frames;
+    const auto thread = ::pthread_self();
+    if (want.kind == 2) {
+        if (want.live.kind == ThreadPolicy::Kind::None) return true;
+        return setThreadPolicy(thread, want.live) && threadPolicy(thread) == want.live;
+    }
+#endif
+    if (want.background.kind == ThreadPolicy::Kind::None) return true;
+    return static_cast<bool>(setThreadPolicy(thread, want.background));
+}
+
+// The steady clock, as the host reads it (one clock for both processes).
+std::int64_t steadyNs() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+// The CPU the calling thread runs on, -1 where the platform does not say.
+std::int32_t currentCpu() {
+#if defined(_WIN32)
+    return static_cast<std::int32_t>(GetCurrentProcessorNumber());
+#elif defined(__linux__)
+    return static_cast<std::int32_t>(sched_getcpu());
+#else
+    return -1;
+#endif
+}
+
+// The calling thread's class as the platform reports it after taking one.
+ThreadPolicy appliedClass() {
+#if defined(_WIN32)
+    return threadPolicy(GetCurrentThread());
+#elif defined(__APPLE__)
+    // The live class is a Mach time-constraint policy, which the QoS that
+    // threadPolicy() reads does not show.
+    thread_time_constraint_policy_data_t policy{};
+    mach_msg_type_number_t count = THREAD_TIME_CONSTRAINT_POLICY_COUNT;
+    boolean_t isDefault = FALSE;
+    if (thread_policy_get(pthread_mach_thread_np(::pthread_self()), THREAD_TIME_CONSTRAINT_POLICY,
+                          reinterpret_cast<thread_policy_t>(&policy), &count,
+                          &isDefault) == KERN_SUCCESS &&
+        !isDefault && policy.period > 0)
+        return {ThreadPolicy::Kind::High, 0};
+    return threadPolicy(::pthread_self());
+#else
+    return threadPolicy(::pthread_self());
+#endif
+}
+
 struct BridgeInstance {
     std::unique_ptr<Instance> instance;
     MainThreadWake* wake = nullptr;
@@ -54,6 +184,8 @@ struct BridgeInstance {
     Instance::EditorSize floatingSize;
     std::optional<Instance::EditorFrame> reportedFrame;  // the last one sent to the DAW
 #endif
+    std::uint32_t id = 0;
+    bool published = false;  // listed in Bridge::published, for the next ACK
     Instance::Notifications notes;
     Instance::IdleOutputs idle;
     Instance::EditorRequests editor;
@@ -131,6 +263,7 @@ struct BridgeInstance {
     Header* hdr = nullptr;
     SharedSignals signals;
     Layout layout{0, 0, 0};
+    double rate = 0;  // of the current activation
     std::thread audio;
     std::atomic<bool> quit{false};
     // Serializes the plugin's lifecycle: the main thread's servicing (which
@@ -165,7 +298,11 @@ struct BridgeInstance {
         for (std::uint32_t c = 0; c < layout.outChannels; ++c)
             out[c] = outAudio + static_cast<std::size_t>(c) * layout.maxFrames;
         // Created by the bridge's main thread: normal until told otherwise.
-        ThreadPolicy policy{ThreadPolicy::Kind::Normal, 0};
+        AudioClass taken;
+        bool refused = false;
+        ThreadPolicy applied{ThreadPolicy::Kind::Normal, 0};
+        std::int32_t lastCpu = -1;
+        std::uint32_t migrations = 0;
         while (!quit.load()) {
             const std::uint32_t req = hdr->request.load(std::memory_order_acquire);
             if (req == last) {
@@ -178,7 +315,29 @@ struct BridgeInstance {
             }
             if (quit.load(std::memory_order_acquire)) break;
             last = req;
+            hdr->seenNs = steadyNs();
+            const std::int32_t cpu = currentCpu();
+            if (cpu >= 0 && lastCpu >= 0 && cpu != lastCpu) ++migrations;
+            if (cpu >= 0) lastCpu = cpu;
             const auto command = static_cast<Cmd>(hdr->cmd);
+            // The class the host asks for with this command, taken before it
+            // runs, only when it changed (best effort: a refusal keeps the
+            // thread as it was, and the answer says so).
+            if (hdr->audioClass == 1 || hdr->audioClass == 2) {
+                // The live class's period is the device's, not the
+                // activation's capacity (render-ahead blocks are larger);
+                // a change of it is a change of class.
+                const AudioClass want{hdr->audioClass,
+                                      policyFrom(hdr->audioPolicy, hdr->audioPriority),
+                                      policyFrom(hdr->livePolicy, hdr->livePriority),
+                                      hdr->audioClass == 2 ? hdr->livePeriodNs : 0};
+                if (want != taken) {
+                    refused = !takeAudioClass(
+                        want, rate, command == Cmd::Process ? hdr->frames : layout.maxFrames);
+                    taken = want;
+                    applied = appliedClass();
+                }
+            }
             bool hadFlush = false;
             std::uint32_t result = 1;
             switch (command) {
@@ -219,23 +378,6 @@ struct BridgeInstance {
                     break;
                 }
                 case Cmd::StartProcessing: {
-                    // The host's background policy (ADR-0026), best effort: a
-                    // refusal leaves the thread as it was.
-                    const auto kind = hdr->audioPolicy;  // an unknown kind is ignored
-                    const ThreadPolicy want{
-                        kind <= static_cast<std::uint32_t>(ThreadPolicy::Kind::High)
-                            ? static_cast<ThreadPolicy::Kind>(kind)
-                            : ThreadPolicy::Kind::None,
-                        static_cast<int>(std::min(hdr->audioPriority, 99u))};
-                    if (want.kind != ThreadPolicy::Kind::None && want != policy) {
-#if defined(_WIN32)
-                        const auto thread = GetCurrentThread();
-#else
-                        const auto thread = ::pthread_self();
-#endif
-                        (void)setThreadPolicy(thread, want);
-                        policy = threadPolicy(thread);
-                    }
                     std::lock_guard lock(lifecycle);
                     result = instance->startProcessing() ? 1 : 0;
                     break;
@@ -261,6 +403,12 @@ struct BridgeInstance {
             }
             hdr->result = result;
             hdr->processing = instance->processing() ? 1 : 0;
+            hdr->classRefused = refused ? 1 : 0;
+            hdr->cpu = cpu;
+            hdr->migrations = migrations;
+            hdr->appliedPolicy = static_cast<std::uint32_t>(applied.kind);
+            hdr->appliedPriority = static_cast<std::uint32_t>(std::max(applied.priority, 0));
+            hdr->finishedNs = steadyNs();
             hdr->done.store(req, std::memory_order_release);
 #if defined(__linux__)
             futexWake(hdr->done);
@@ -299,8 +447,13 @@ struct Bridge {
     ~Bridge() {
         if (outward != noResource) closeResource(outward);
     }
+    // The instances with captures since the last ACK, which the ACK names so
+    // the parent pulls only those (item D: it pulled every instance).
+    std::vector<std::uint32_t> published;
     void collect(BridgeInstance& slot) {
-        if (slot.collect()) notifications.publish();
+        if (!slot.collect()) return;
+        notifications.publish();
+        if (!std::exchange(slot.published, true)) published.push_back(slot.id);
     }
     bool announce() {
         if (outward < 0 || !notifications.announce()) return true;
@@ -351,6 +504,13 @@ struct Bridge {
         }
         if (op == Op::SubscribeNotifications) {
             const auto version = r.u32();
+            if (version != kVersion && !instanceId && outward < 0) {
+                if (fd >= 0) closeResource(fd);
+                return fail(Error("bridge.subscription",
+                                  "bridge protocol " + std::to_string(kVersion) + ", host " +
+                                      std::to_string(version),
+                                  "/version", "use matching host and bridge builds"));
+            }
             if (instanceId || outward >= 0 || version != kVersion || fd < 0) {
                 if (fd >= 0) closeResource(fd);
                 return fail(Error("bridge.subscription", "invalid notification subscription",
@@ -380,7 +540,15 @@ struct Bridge {
                                   "/instance",
                                   "subscribe first, then acknowledge with instance 0"));
             notifications.acknowledge();
-            return reply(Writer{});
+            Writer w;
+            w.u32(static_cast<std::uint32_t>(published.size()));
+            for (const std::uint32_t id : published) {
+                w.u32(id);
+                if (const auto it = instances.find(id); it != instances.end())
+                    it->second->published = false;
+            }
+            published.clear();
+            return reply(w);
         }
         if (outward < 0) {
             if (fd >= 0) closeResource(fd);
@@ -408,6 +576,7 @@ struct Bridge {
             slot->instance->setMainThreadWake(wake);
             slot->wake = &wake;
             const std::uint32_t newId = nextId++;
+            slot->id = newId;
             Writer w;
             w.u32(newId);
             w.u32(slot->instance->audioInputChannels());
@@ -496,6 +665,7 @@ struct Bridge {
                     unmap();
                     return fail(st.error());
                 }
+                slot.rate = rate;
                 const std::uint32_t first = hdr->request.load(std::memory_order_acquire);
                 audio = std::thread([&slot, first] {
                     nameThread("audio-bridge");
@@ -519,6 +689,10 @@ struct Bridge {
             }
             case Op::Deactivate:
                 stopAudio();
+                // A start answered after the host's live deadline passed may
+                // have left it processing (ADR-0081); this thread is its audio
+                // thread now that that one has ended.
+                if (instance->processing()) instance->stopProcessing();
                 instance->deactivate();
                 unmap();
                 return reply(Writer{});
@@ -749,6 +923,7 @@ struct Bridge {
                 instance.reset();
                 unmap();
                 reply(Writer{});
+                if (slot.published) std::erase(published, slot.id);  // no ACK names it now
                 instances.erase(it);
                 return true;  // an idle pool-owned bridge must accept the next Create
         }
@@ -807,6 +982,16 @@ int main(int argc, char** argv) {
 #endif
 #if !defined(_WIN32)
     ::signal(SIGPIPE, SIG_IGN);
+#if defined(__linux__)
+    // As the engine keeps the host (ADR-0084): out of transparent huge pages
+    // but where a plug-in advised them (Linux 6.18), or out entirely. A bridge
+    // started before the engine did inherits nothing; one that inherited a
+    // setting (the host's, or its launcher's stricter one) keeps it. Best
+    // effort.
+    if (::prctl(PR_GET_THP_DISABLE, 0UL, 0UL, 0UL, 0UL) == 0 &&
+        ::prctl(PR_SET_THP_DISABLE, 1UL, 1UL << 1, 0UL, 0UL) != 0)
+        (void)::prctl(PR_SET_THP_DISABLE, 1UL, 0UL, 0UL, 0UL);
+#endif
     if (argc == 3 && std::string_view(argv[1]) == "--scan") {
         // Keep plugin printf/cout (including background threads and unload
         // destructors) away from the protocol stream. Only our saved fd writes it.

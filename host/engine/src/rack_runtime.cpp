@@ -323,6 +323,19 @@ double RackCurve::at(std::int64_t position) SUPPLE_RT {
     return curve.at(sample);
 }
 
+namespace {
+script::Transport scriptTransport(const RackNode& rack, const host::Transport& t) SUPPLE_RT {
+    script::Transport out;
+    out.playing = rack.playing;
+    out.tempo = t.tempo;
+    out.beats = t.beat;
+    out.barStart = t.barStartBeat;
+    out.timeSigNumerator = t.numerator;
+    out.timeSigDenominator = t.denominator;
+    return out;
+}
+}  // namespace
+
 script::Transport RackClock::transport(std::int64_t position) SUPPLE_RT {
     const std::int64_t sample = rack->playing ? position - rack->origin : rack->stoppedAt;
     // Without playrate, the time of a timeline sample, computed alike whatever
@@ -331,14 +344,15 @@ script::Transport RackClock::transport(std::int64_t position) SUPPLE_RT {
     const host::Transport t =
         plan->rateEnabled ? transportAt(*plan, sample, nullptr, rack->live)
                           : transportAtSeconds(*plan, double(rack->origin + sample) / plan->rate);
-    script::Transport out;
-    out.playing = rack->playing;
-    out.tempo = t.tempo;
-    out.beats = t.beat;
-    out.barStart = t.barStartBeat;
-    out.timeSigNumerator = t.numerator;
-    out.timeSigDenominator = t.denominator;
-    return out;
+    return scriptTransport(*rack, t);
+}
+
+// transport() as modules have always read it: from the plan's start plus the
+// samples since, which can round apart in the last bit from the absolute
+// time above at a nonzero start (review round 20).
+script::Transport RackClock::callTransport(std::int64_t position) SUPPLE_RT {
+    const std::int64_t sample = rack->playing ? position - rack->origin : rack->stoppedAt;
+    return scriptTransport(*rack, transportAt(*plan, sample, nullptr, rack->live));
 }
 
 // --- compile -----------------------------------------------------------------------------

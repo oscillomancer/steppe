@@ -135,6 +135,7 @@ Result<std::unique_ptr<EngineApp>> EngineApp::create(AppOptions options, model::
         [self](const model::PluginRef& ref) { return self->findPlugin(ref.id); },
         app->options_.identity);
     app->pool_->setMainThreadWake(app->mainWake_);
+    app->pool_->setDefaultIsolation(app->pluginIsolation_);
     app->modules_ = detail::loadModuleLibrary(detail::builtinModuleCatalog(), app->moduleDir());
     app->pool_->racks().setCatalog(app->modules_);
     SUPPLE_TRY(app->newProject(std::move(project)));
@@ -627,6 +628,8 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
         engine_->stop();
         engine_.reset();
         protections_->stop();
+        processFaultBase_.reset();
+        faultWatch_.clear();
         backend_ = nullptr;
     }
     if (versions_ && projectPath_.empty()) clearScratch();
@@ -674,6 +677,7 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
     pool_ = std::make_unique<InstancePool>(
         [this](const model::PluginRef& ref) { return findPlugin(ref.id); }, options_.identity);
     pool_->setMainThreadWake(mainWake_);
+    pool_->setDefaultIsolation(pluginIsolation_);
     pool_->racks().setCatalog(modules_);
     pendingDirtyStates_.clear();
     if (scripts_) {
@@ -1366,7 +1370,25 @@ Status EngineApp::startEngine(Backend& backend, const BackendConfig& config,
     }
     loadedHead_ = versions_->head();
     protections_->start();
+    startFaultWatch();
     return {};
+}
+
+void EngineApp::startFaultWatch() {
+    faultWatch_.clear();
+    processFaultBase_ = processPageFaults();
+    watchFaults();
+}
+
+void EngineApp::watchFaults() {
+    if (!engine_ || !processFaultBase_) return;
+    for (const auto thread : engine_->deadlineThreads()) {
+        const std::int64_t id = kernelThreadId(thread);
+        if (id == 0 || std::any_of(faultWatch_.begin(), faultWatch_.end(),
+                                   [&](const FaultWatch& w) { return w.id == id; }))
+            continue;
+        if (const auto now = threadPageFaults(id)) faultWatch_.push_back({id, *now, *now});
+    }
 }
 
 Status EngineApp::startEngine(std::string_view backend, std::uint32_t block, bool anticipative,
@@ -1465,6 +1487,8 @@ void EngineApp::haltEngine() {
         pool_->prune(head());  // nothing processes now: replaced instances can go
     }
     protections_->stop();
+    processFaultBase_.reset();
+    faultWatch_.clear();
     if (backend_) backend_->setMainThreadWake(nullptr);
     backend_ = nullptr;
     ownedBackend_.reset();
@@ -1530,6 +1554,10 @@ void EngineApp::tick() {
     }
     if (engine_) {
         engine_->service();
+        watchFaults();  // a callback thread seen for the first time
+        // ADR-0086: the idle-latency request is held while a bridged plug-in
+        // plays live (acts on a change only).
+        (void)protections_->setBridgedLive(backend_ && engine_->bridgedLive(), backend_ != nullptr);
         for (const auto& error : engine_->takeRecordingErrors()) emitRecordingError(error);
         serviceSync();                  // what the sync master did, to the transport (ADR-0071)
         if (!txn_) updateWriteHolds();  // a touch hold's release time passed
@@ -1733,6 +1761,21 @@ void EngineApp::retryRestart() {
     restartBackoff_ =
         restartBackoff_ == 0 ? 250 : std::min<std::uint64_t>(restartBackoff_ * 2, 4000);
     restartRetryAt_ = finishedAt + restartBackoff_;
+}
+
+Status EngineApp::setPluginIsolation(model::Isolation isolation) {
+    if (isolation == model::Isolation::Inherit)
+        return Error("preferences.plugin_isolation", "inherit is not a default isolation",
+                     "/plugin_isolation", "use in_process, shared_bridge or dedicated");
+    pluginIsolation_ = isolation;
+    if (pool_) pool_->setDefaultIsolation(isolation);
+    return okStatus();
+}
+
+model::Isolation EngineApp::effectiveIsolation(model::Id fx) const {
+    const model::FxInstance* instance = head().fx.find(fx);
+    if (!instance) return model::Isolation::InProcess;
+    return pool_ ? pool_->effectiveIsolation(fx, *instance) : instance->isolation;
 }
 
 fs::path EngineApp::autosaveDir() const {
@@ -1950,6 +1993,37 @@ void EngineApp::restartFx(model::Id fx) {
     headChanged();  // a running engine gets the new instance in its next plan
 }
 
+EngineBridgeTiming bridgeTimingStatus(const host::BridgeTiming::Calls& live,
+                                      const Engine::BridgeOverruns& overruns) {
+    EngineBridgeTiming t;
+    const double calls =
+        live.calls + live.settles ? static_cast<double>(live.calls + live.settles) : 1.0;
+    const double answered =
+        live.calls > live.late ? static_cast<double>(live.calls - live.late) : 1.0;
+    t.calls = static_cast<std::int64_t>(live.calls);
+    t.late = static_cast<std::int64_t>(live.late + live.lateSettles);
+    t.settles = static_cast<std::int64_t>(live.settles);
+    t.pastDeadline = static_cast<std::int64_t>(live.pastDeadline);
+    t.spun = static_cast<std::int64_t>(live.spun);
+    t.waitMaxUs = static_cast<double>(live.waitMaxNs) / 1000.0;
+    t.waitMeanUs = static_cast<double>(live.waitSumNs) / calls / 1000.0;
+    t.wakeMaxUs = static_cast<double>(live.wakeMaxNs) / 1000.0;
+    t.wakeMeanUs = static_cast<double>(live.wakeSumNs) / answered / 1000.0;
+    t.workMaxUs = static_cast<double>(live.workMaxNs) / 1000.0;
+    t.returnMaxUs = static_cast<double>(live.returnMaxNs) / 1000.0;
+    t.longestCycleUs = static_cast<double>(overruns.longestCycleNs) / 1000.0;
+    t.wakesOver200us = static_cast<std::int64_t>(live.wakesOver200us);
+    t.wakesOver1ms = static_cast<std::int64_t>(live.wakesOver1ms);
+    for (int c = 0; c < 64; ++c)
+        if (live.bridgeCpus >> c & 1) t.bridgeCpus.push_back(c);
+    t.migrations = live.migrations;
+    t.classMismatches = static_cast<std::int64_t>(live.classMismatches);
+    t.overrunsLateWait = static_cast<std::int64_t>(overruns.lateWait);
+    t.overrunsSlowBridge = static_cast<std::int64_t>(overruns.slowBridge);
+    t.overrunsNotWaiting = static_cast<std::int64_t>(overruns.notWaiting);
+    return t;
+}
+
 EngineStatus EngineApp::engineStatus() {
     checkFailures();
     EngineStatus st;
@@ -1962,13 +2036,55 @@ EngineStatus EngineApp::engineStatus() {
     st.preparationError = preparationError_;
     st.memoryLock = protections_->memoryLock();
     st.cpuIdleLatency = protections_->cpuIdleLatency();
-    if (st.cpuIdleLatency.error)
+    st.thpOptOut = protections_->thpOptOut();
+    if (processFaultBase_) {
+        watchFaults();
+        auto& faults = st.audioPageFaults;
+#if defined(__linux__)
+        faults.scope = "audio_threads";
+        for (FaultWatch& w : faultWatch_) {
+            // Gone keeps its last count; an id reused by a later thread, whose
+            // count starts again, is not taken for it.
+            if (const auto now = threadPageFaults(w.id); now && now->minor >= w.last.minor)
+                w.last = *now;
+            faults.minor += w.last.minor - w.base.minor;
+            *faults.major += w.last.major - w.base.major;
+        }
+        faults.threads = static_cast<std::int64_t>(faultWatch_.size());
+#else
+        faults.scope = "process";
+        const PageFaults now = processPageFaults();
+        faults.minor = now.minor - processFaultBase_->minor;
+        if (now.saturated || processFaultBase_->saturated) {
+            // A counter stopped at its limit: no delta is a count (round 23).
+            faults.saturated = true;
+            faults.minor = 0;
+            faults.major.reset();
+        } else if (now.major < 0)
+            faults.major.reset();
+        else
+            faults.major = now.major - processFaultBase_->major;
+#endif
+    }
+    if (st.thpOptOut.error)
+        st.warnings.push_back(st.thpOptOut.error->message + "; " + st.thpOptOut.error->hint);
+    // An automatic hold that failed is no warning: audio plays without it, and
+    // on many systems only root may make the request (ADR-0086).
+    if (st.cpuIdleLatency.error && st.cpuIdleLatency.requested)
         st.warnings.push_back(st.cpuIdleLatency.error->message + "; " +
                               st.cpuIdleLatency.error->hint);
     if (st.memoryLock.error)
         st.warnings.push_back(st.memoryLock.error->message + "; " + st.memoryLock.error->hint);
+    for (model::Id id : pool_->isolationFallbacks()) {
+        const model::FxInstance* fx = head().fx.find(id);
+        st.warnings.push_back((fx ? fx->plugin.name : id.str()) + " (" + id.str() +
+                              ") runs in process: no plug-in bridge was found for the plug-in "
+                              "isolation preference; reinstall, or choose In the app");
+    }
     st.dropped = static_cast<std::int64_t>(outputDrops_ + consumerDrops_);
     st.voiceDropped = static_cast<std::int64_t>(voiceDrops_);
+    for (const model::Id& id : pool_->bridgeThreadsRefused())
+        st.bridgeThreadsRefused.push_back(id.str());
     for (const auto& [id, error] : pool_->failedErrors()) {
         st.failedFx.push_back(id.str());
         auto failure = json::Value::object();
@@ -1987,7 +2103,10 @@ EngineStatus EngineApp::engineStatus() {
     st.period = b.period;
     st.planLatency = engine_->outputLatency();
     st.deviceLatency = b.outputLatency;
-    st.xruns = static_cast<std::int64_t>(b.xruns);
+    // A cycle a bridged plug-in made late is an xrun too (ADR-0081).
+    st.bridgeLate = static_cast<std::int64_t>(engine_->bridgeLateCycles());
+    st.xruns = static_cast<std::int64_t>(b.xruns) + st.bridgeLate;
+    st.bridgeTiming = bridgeTimingStatus(host::bridgeTiming().live, engine_->bridgeOverruns());
     st.midiDropped = static_cast<std::int64_t>(backend_->midiDropped());
     st.midiWarnings = backend_->midiWarnings();
     st.midiOutDropped = static_cast<std::int64_t>(backend_->midiOutDropped());

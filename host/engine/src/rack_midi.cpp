@@ -789,6 +789,7 @@ void carryBus(Node& node, const Node& old) SUPPLE_RT {
             if (!st.instance || os.instance != st.instance || os.fx != st.fx ||
                 os.busHeld.size() != st.busHeld.size())
                 continue;
+            st.busControllers = os.busControllers;
             for (std::size_t g = 0; g < os.busHeld.size(); ++g) {
                 st.busHeld[g] = os.busHeld[g];
                 if (os.busHeld[g].high && node.midiBusRemap.size() < node.midiBusRemap.capacity())

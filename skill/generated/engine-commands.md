@@ -2902,7 +2902,7 @@ Result:
 
 Start playback through JACK, native PortAudio, or a device-free dummy.
 
-backend: jack (Linux default), portaudio (macOS/Windows native device), or dummy (default elsewhere, no device). For portaudio, host_api, input_device and output_device select exact names from engine.devices. inputs defaults to 0 (playback only); outputs (the device channels masters can play to, track.set hw_output) defaults to one per physical playback port with JACK (2 to 64) and 2 otherwise. rate defaults to the project rate; a rate given is asked of the device (CoreAudio switches the device's rate when it can, WASAPI converts) or, with JACK on PipeWire, suggested to the graph (node.rate: applied only while the devices are idle and the rate is allowed). force_graph (JACK on PipeWire, default false) instead forces block as the graph's quantum, and rate if given, while the engine runs. PortAudio opens up to 16 native MIDI inputs and outputs; engine.inputs lists their names. Dummy is paced like a device. block: the device block in frames (default 256); the device's period may differ and is reported. anticipative (default true): render ahead of the playhead on worker threads (edits are heard up to 200 ms later); false renders everything in the audio callback. The engine runs at the device's rate (media is resampled; renders stay at the project's rate). Background and live thread capacities follows the app's Audio processing threads preference (Automatic by default); live helpers join each callback with no added latency. memory_lock reports the default-off host-process memory policy: requested, active, and a structured OS error on failure. cpu_idle_latency reports the default-off 20 microsecond PM QoS request, released on engine stop. A protection failure does not prevent audio startup. MIDI output refusals are in midi_output_warnings; midi_output_latency reports signed audio-minus-MIDI frames per output. MIDI inputs that refuse to open are skipped: midi_warnings reports each device, numeric os_error, message and corrective hint; audio continues.
+backend: jack (Linux default), portaudio (macOS/Windows native device), or dummy (default elsewhere, no device). For portaudio, host_api, input_device and output_device select exact names from engine.devices. inputs defaults to 0 (playback only); outputs (the device channels masters can play to, track.set hw_output) defaults to one per physical playback port with JACK (2 to 64) and 2 otherwise. rate defaults to the project rate; a rate given is asked of the device (CoreAudio switches the device's rate when it can, WASAPI converts) or, with JACK on PipeWire, suggested to the graph (node.rate: applied only while the devices are idle and the rate is allowed). force_graph (JACK on PipeWire, default false) instead forces block as the graph's quantum, and rate if given, while the engine runs. PortAudio opens up to 16 native MIDI inputs and outputs; engine.inputs lists their names. Dummy is paced like a device. block: the device block in frames (default 256); the device's period may differ and is reported. anticipative (default true): render ahead of the playhead on worker threads (edits are heard up to 200 ms later); false renders everything in the audio callback. The engine runs at the device's rate (media is resampled; renders stay at the project's rate). Background and live thread capacities follows the app's Audio processing threads preference (Automatic by default); live helpers join each callback with no added latency. memory_lock reports the default-off host-process memory policy: requested, active, and a structured OS error on failure. cpu_idle_latency reports the 20 microsecond PM QoS request: requested by the default-off option, or automatic, held on Linux while a bridged plug-in plays live; released on engine stop. thp_opt_out: on Linux the process is kept out of transparent huge pages while the engine runs (advised_only: regions a plug-in advised keep them). A protection failure does not prevent audio startup. MIDI output refusals are in midi_output_warnings; midi_output_latency reports signed audio-minus-MIDI frames per output. MIDI inputs that refuse to open are skipped: midi_warnings reports each device, numeric os_error, message and corrective hint; audio continues.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -2964,6 +2964,101 @@ Kind: `action`. Exposure: `mcp-tool`.
     "xruns": {
       "type": "integer"
     },
+    "bridge_late": {
+      "type": "integer"
+    },
+    "bridge_timing": {
+      "type": "object",
+      "title": "engine_bridge_timing",
+      "properties": {
+        "calls": {
+          "type": "integer"
+        },
+        "late": {
+          "type": "integer"
+        },
+        "settles": {
+          "type": "integer"
+        },
+        "past_deadline": {
+          "type": "integer"
+        },
+        "spun": {
+          "type": "integer"
+        },
+        "wait_max_us": {
+          "type": "number"
+        },
+        "wait_mean_us": {
+          "type": "number"
+        },
+        "wake_max_us": {
+          "type": "number"
+        },
+        "wake_mean_us": {
+          "type": "number"
+        },
+        "work_max_us": {
+          "type": "number"
+        },
+        "return_max_us": {
+          "type": "number"
+        },
+        "wakes_over_200us": {
+          "type": "integer"
+        },
+        "wakes_over_1ms": {
+          "type": "integer"
+        },
+        "bridge_cpus": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "migrations": {
+          "type": "integer"
+        },
+        "class_mismatches": {
+          "type": "integer"
+        },
+        "longest_cycle_us": {
+          "type": "number"
+        },
+        "overruns_late_wait": {
+          "type": "integer"
+        },
+        "overruns_slow_bridge": {
+          "type": "integer"
+        },
+        "overruns_not_waiting": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "calls",
+        "late",
+        "settles",
+        "past_deadline",
+        "spun",
+        "wait_max_us",
+        "wait_mean_us",
+        "wake_max_us",
+        "wake_mean_us",
+        "work_max_us",
+        "return_max_us",
+        "wakes_over_200us",
+        "wakes_over_1ms",
+        "bridge_cpus",
+        "migrations",
+        "class_mismatches",
+        "longest_cycle_us",
+        "overruns_late_wait",
+        "overruns_slow_bridge",
+        "overruns_not_waiting"
+      ],
+      "additionalProperties": false
+    },
     "midi_dropped": {
       "type": "integer"
     },
@@ -3205,12 +3300,15 @@ Kind: `action`. Exposure: `mcp-tool`.
     },
     "cpu_idle_latency": {
       "type": "object",
-      "title": "runtime_protection_status",
+      "title": "cpu_idle_latency_status",
       "properties": {
         "requested": {
           "type": "boolean"
         },
         "active": {
+          "type": "boolean"
+        },
+        "automatic": {
           "type": "boolean"
         },
         "error": {
@@ -3237,7 +3335,71 @@ Kind: `action`. Exposure: `mcp-tool`.
           "additionalProperties": false
         }
       },
-      "required": ["requested", "active"],
+      "required": ["requested", "active", "automatic"],
+      "additionalProperties": false
+    },
+    "thp_opt_out": {
+      "type": "object",
+      "title": "thp_opt_out_status",
+      "properties": {
+        "active": {
+          "type": "boolean"
+        },
+        "advised_only": {
+          "type": "boolean"
+        },
+        "inherited": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": "object",
+          "title": "runtime_protection_error",
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "hint": {
+              "type": "string"
+            },
+            "errno": {
+              "type": "integer"
+            }
+          },
+          "required": ["code", "message", "path", "hint", "errno"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["active", "advised_only", "inherited"],
+      "additionalProperties": false
+    },
+    "audio_page_faults": {
+      "type": "object",
+      "title": "audio_page_faults",
+      "properties": {
+        "scope": {
+          "type": "string",
+          "pattern": "^(audio_threads|process|none)$"
+        },
+        "minor": {
+          "type": "integer"
+        },
+        "major": {
+          "type": "integer"
+        },
+        "threads": {
+          "type": "integer"
+        },
+        "saturated": {
+          "type": "boolean"
+        }
+      },
+      "required": ["scope", "minor", "threads", "saturated"],
       "additionalProperties": false
     },
     "meter_drops": {
@@ -3255,6 +3417,12 @@ Kind: `action`. Exposure: `mcp-tool`.
       "additionalProperties": false
     },
     "failed_fx": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "bridge_threads_refused": {
       "type": "array",
       "items": {
         "type": "string"
@@ -3349,6 +3517,8 @@ Kind: `action`. Exposure: `mcp-tool`.
     "plan_latency",
     "device_latency",
     "xruns",
+    "bridge_late",
+    "bridge_timing",
     "midi_dropped",
     "midi_inputs",
     "midi_outputs",
@@ -3370,8 +3540,11 @@ Kind: `action`. Exposure: `mcp-tool`.
     "warnings",
     "memory_lock",
     "cpu_idle_latency",
+    "thp_opt_out",
+    "audio_page_faults",
     "meter_drops",
     "failed_fx",
+    "bridge_threads_refused",
     "dropped",
     "voice_dropped",
     "failed_errors",
@@ -3415,6 +3588,29 @@ Result:
   "plan_latency": 0,
   "device_latency": 0,
   "xruns": 0,
+  "bridge_late": 0,
+  "bridge_timing": {
+    "calls": 0,
+    "late": 0,
+    "settles": 0,
+    "past_deadline": 0,
+    "spun": 0,
+    "wait_max_us": 0,
+    "wait_mean_us": 0,
+    "wake_max_us": 0,
+    "wake_mean_us": 0,
+    "work_max_us": 0,
+    "return_max_us": 0,
+    "wakes_over_200us": 0,
+    "wakes_over_1ms": 0,
+    "bridge_cpus": [],
+    "migrations": 0,
+    "class_mismatches": 0,
+    "longest_cycle_us": 0,
+    "overruns_late_wait": 0,
+    "overruns_slow_bridge": 0,
+    "overruns_not_waiting": 0
+  },
   "midi_dropped": 0,
   "midi_warnings": [],
   "midi_out_dropped": 0,
@@ -3462,13 +3658,17 @@ Result:
   },
   "cpu_idle_latency": {
     "requested": false,
-    "active": false
+    "active": false,
+    "automatic": false
   },
+  "thp_opt_out": "<any>",
+  "audio_page_faults": "<any>",
   "meter_drops": {
     "renderer": 0,
     "callback": 0
   },
   "failed_fx": [],
+  "bridge_threads_refused": [],
   "dropped": 0,
   "voice_dropped": 0,
   "failed_errors": [],
@@ -3481,7 +3681,7 @@ Result:
 
 Real-time engine state: backend, rate, block, device period, latency, xruns.
 
-preparing_audio: source preparation is pending; the previous ready plan stays audible. prepared_version is the last compiled version, preparation_version the pending target (zero when idle); preparation_error explains a failed preparation. plan_latency: plugin delay plus prepared MIDI audio lead in frames; midi_lead_frames reports the latter. midi_inputs/midi_outputs give per-port enabled/timing/loss/warnings, and for outputs what each sends (clock, transport, spp, mtc), as midi.inputs.get/midi.outputs.get. device_latency: frames from the engine's outputs to the device. restart_needed: the device changed rate or went away; engine.stop and engine.start again. midi_devices_changed is advisory: MIDI topology changed but audio keeps running. midi_devices_message asks for an explicit engine restart to pick up the new set; existing port names stay fixed. midi_out_dropped counts hardware output rejections, queue/device loss and pending events discarded at shutdown. midi_output_warnings lists outputs skipped at start; midi_output_latency is signed audio-minus-MIDI latency per output, in frames. sync: external sync (sync.get has the same status with the settings). midi_dropped: MIDI input messages/packets rejected or lost to bounded queues (JACK and native; zero for the dummy backend). midi_warnings lists inputs skipped at start, with device, numeric os_error, message and corrective hint. meter_drops: entries a full ring dropped (the renderer's, the audio callback's) — a strip's peak/RMS missed a block, never audio. dropped/voice_dropped count lost plug-in output/voice records. memory_lock reports requested/active and an optional OS error with errno and a corrective hint, including while stopped. Bridges are excluded. cpu_idle_latency reports the owned 20 microsecond request with the same status/error fields; it affects system idle while held and leaves CPU frequency policy unchanged. live_helpers is the enabled live helper capacity. scheduling: each thread class's policy (none, normal, fifo, rr, high) and priority as applied at start: the device callback, live helpers, renderer and background helpers (real-time below a real-time callback when permitted). workgroup: whether the live helpers joined the device's audio workgroup (macOS CoreAudio; state none, ready, joined, partial or failed, with the helper counts and the last refusal's OS error, message and hint). warnings includes scheduling fallbacks and plan warnings with corrective actions. failed_errors adds structured code, message, path and hint to each failure. failed_fx: isolated plugins whose process crashed or hung (silent now; fx.restart re-creates them).
+preparing_audio: source preparation is pending; the previous ready plan stays audible. prepared_version is the last compiled version, preparation_version the pending target (zero when idle); preparation_error explains a failed preparation. plan_latency: plugin delay plus prepared MIDI audio lead in frames; midi_lead_frames reports the latter. midi_inputs/midi_outputs give per-port enabled/timing/loss/warnings, and for outputs what each sends (clock, transport, spp, mtc), as midi.inputs.get/midi.outputs.get. device_latency: frames from the engine's outputs to the device. restart_needed: the device changed rate or went away; engine.stop and engine.start again. midi_devices_changed is advisory: MIDI topology changed but audio keeps running. midi_devices_message asks for an explicit engine restart to pick up the new set; existing port names stay fixed. midi_out_dropped counts hardware output rejections, queue/device loss and pending events discarded at shutdown. midi_output_warnings lists outputs skipped at start; midi_output_latency is signed audio-minus-MIDI latency per output, in frames. sync: external sync (sync.get has the same status with the settings). midi_dropped: MIDI input messages/packets rejected or lost to bounded queues (JACK and native; zero for the dummy backend). midi_warnings lists inputs skipped at start, with device, numeric os_error, message and corrective hint. meter_drops: entries a full ring dropped (the renderer's, the audio callback's) — a strip's peak/RMS missed a block, never audio. dropped/voice_dropped count lost plug-in output/voice records. memory_lock reports requested/active and an optional OS error with errno and a corrective hint, including while stopped. Bridges are excluded. cpu_idle_latency reports the owned 20 microsecond request with the same status/error fields, and automatic: held without the option because a bridged plug-in plays live (Linux; an automatic failure is no warning). It affects system idle while held and leaves CPU frequency policy unchanged. thp_opt_out: active, advised_only, inherited (the process was already kept out when the engine started; left as it was, not undone at stop) and an optional error, Linux only (khugepaged collapsing memory would stall audio threads). audio_page_faults: page faults since the engine started; scope audio_threads counts the callback's and live helpers' (Linux), process the whole process's (macOS, Windows, where major is omitted), none while stopped; saturated: the platform's counter stopped at its limit (macOS 32-bit counts), so minor is 0 and major omitted, not counts. live_helpers is the enabled live helper capacity. scheduling: each thread class's policy (none, normal, fifo, rr, high) and priority as applied at start: the device callback, live helpers, renderer and background helpers (real-time below a real-time callback when permitted). workgroup: whether the live helpers joined the device's audio workgroup (macOS CoreAudio; state none, ready, joined, partial or failed, with the helper counts and the last refusal's OS error, message and hint). warnings includes scheduling fallbacks and plan warnings with corrective actions. failed_errors adds structured code, message, path and hint to each failure. failed_fx: isolated plugins whose process crashed or hung (silent now; fx.restart re-creates them). bridge_late: callback cycles in which a bridged plugin had not answered by the cycle's bridge deadline (its period or 2 ms, whichever is larger); its output was silent for that cycle, and xruns counts each of these cycles too. bridge_threads_refused: isolated plugins whose bridge audio thread was refused the scheduling it asked for (it runs at what it had and can fall behind under load; grant real-time scheduling to the user and restart the engine).
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -3533,6 +3733,101 @@ Kind: `query`. Exposure: `mcp-exec`.
     "xruns": {
       "type": "integer"
     },
+    "bridge_late": {
+      "type": "integer"
+    },
+    "bridge_timing": {
+      "type": "object",
+      "title": "engine_bridge_timing",
+      "properties": {
+        "calls": {
+          "type": "integer"
+        },
+        "late": {
+          "type": "integer"
+        },
+        "settles": {
+          "type": "integer"
+        },
+        "past_deadline": {
+          "type": "integer"
+        },
+        "spun": {
+          "type": "integer"
+        },
+        "wait_max_us": {
+          "type": "number"
+        },
+        "wait_mean_us": {
+          "type": "number"
+        },
+        "wake_max_us": {
+          "type": "number"
+        },
+        "wake_mean_us": {
+          "type": "number"
+        },
+        "work_max_us": {
+          "type": "number"
+        },
+        "return_max_us": {
+          "type": "number"
+        },
+        "wakes_over_200us": {
+          "type": "integer"
+        },
+        "wakes_over_1ms": {
+          "type": "integer"
+        },
+        "bridge_cpus": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "migrations": {
+          "type": "integer"
+        },
+        "class_mismatches": {
+          "type": "integer"
+        },
+        "longest_cycle_us": {
+          "type": "number"
+        },
+        "overruns_late_wait": {
+          "type": "integer"
+        },
+        "overruns_slow_bridge": {
+          "type": "integer"
+        },
+        "overruns_not_waiting": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "calls",
+        "late",
+        "settles",
+        "past_deadline",
+        "spun",
+        "wait_max_us",
+        "wait_mean_us",
+        "wake_max_us",
+        "wake_mean_us",
+        "work_max_us",
+        "return_max_us",
+        "wakes_over_200us",
+        "wakes_over_1ms",
+        "bridge_cpus",
+        "migrations",
+        "class_mismatches",
+        "longest_cycle_us",
+        "overruns_late_wait",
+        "overruns_slow_bridge",
+        "overruns_not_waiting"
+      ],
+      "additionalProperties": false
+    },
     "midi_dropped": {
       "type": "integer"
     },
@@ -3774,12 +4069,15 @@ Kind: `query`. Exposure: `mcp-exec`.
     },
     "cpu_idle_latency": {
       "type": "object",
-      "title": "runtime_protection_status",
+      "title": "cpu_idle_latency_status",
       "properties": {
         "requested": {
           "type": "boolean"
         },
         "active": {
+          "type": "boolean"
+        },
+        "automatic": {
           "type": "boolean"
         },
         "error": {
@@ -3806,7 +4104,71 @@ Kind: `query`. Exposure: `mcp-exec`.
           "additionalProperties": false
         }
       },
-      "required": ["requested", "active"],
+      "required": ["requested", "active", "automatic"],
+      "additionalProperties": false
+    },
+    "thp_opt_out": {
+      "type": "object",
+      "title": "thp_opt_out_status",
+      "properties": {
+        "active": {
+          "type": "boolean"
+        },
+        "advised_only": {
+          "type": "boolean"
+        },
+        "inherited": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": "object",
+          "title": "runtime_protection_error",
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "hint": {
+              "type": "string"
+            },
+            "errno": {
+              "type": "integer"
+            }
+          },
+          "required": ["code", "message", "path", "hint", "errno"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["active", "advised_only", "inherited"],
+      "additionalProperties": false
+    },
+    "audio_page_faults": {
+      "type": "object",
+      "title": "audio_page_faults",
+      "properties": {
+        "scope": {
+          "type": "string",
+          "pattern": "^(audio_threads|process|none)$"
+        },
+        "minor": {
+          "type": "integer"
+        },
+        "major": {
+          "type": "integer"
+        },
+        "threads": {
+          "type": "integer"
+        },
+        "saturated": {
+          "type": "boolean"
+        }
+      },
+      "required": ["scope", "minor", "threads", "saturated"],
       "additionalProperties": false
     },
     "meter_drops": {
@@ -3824,6 +4186,12 @@ Kind: `query`. Exposure: `mcp-exec`.
       "additionalProperties": false
     },
     "failed_fx": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "bridge_threads_refused": {
       "type": "array",
       "items": {
         "type": "string"
@@ -3918,6 +4286,8 @@ Kind: `query`. Exposure: `mcp-exec`.
     "plan_latency",
     "device_latency",
     "xruns",
+    "bridge_late",
+    "bridge_timing",
     "midi_dropped",
     "midi_inputs",
     "midi_outputs",
@@ -3939,8 +4309,11 @@ Kind: `query`. Exposure: `mcp-exec`.
     "warnings",
     "memory_lock",
     "cpu_idle_latency",
+    "thp_opt_out",
+    "audio_page_faults",
     "meter_drops",
     "failed_fx",
+    "bridge_threads_refused",
     "dropped",
     "voice_dropped",
     "failed_errors",
@@ -3972,6 +4345,29 @@ Result:
   "plan_latency": 0,
   "device_latency": 0,
   "xruns": 0,
+  "bridge_late": 0,
+  "bridge_timing": {
+    "calls": 0,
+    "late": 0,
+    "settles": 0,
+    "past_deadline": 0,
+    "spun": 0,
+    "wait_max_us": 0,
+    "wait_mean_us": 0,
+    "wake_max_us": 0,
+    "wake_mean_us": 0,
+    "work_max_us": 0,
+    "return_max_us": 0,
+    "wakes_over_200us": 0,
+    "wakes_over_1ms": 0,
+    "bridge_cpus": [],
+    "migrations": 0,
+    "class_mismatches": 0,
+    "longest_cycle_us": 0,
+    "overruns_late_wait": 0,
+    "overruns_slow_bridge": 0,
+    "overruns_not_waiting": 0
+  },
   "midi_dropped": 0,
   "midi_warnings": [],
   "midi_out_dropped": 0,
@@ -4025,13 +4421,27 @@ Result:
   },
   "cpu_idle_latency": {
     "requested": false,
-    "active": false
+    "active": false,
+    "automatic": false
+  },
+  "thp_opt_out": {
+    "active": false,
+    "advised_only": false,
+    "inherited": false
+  },
+  "audio_page_faults": {
+    "scope": "none",
+    "minor": 0,
+    "major": 0,
+    "threads": 0,
+    "saturated": false
   },
   "meter_drops": {
     "renderer": 0,
     "callback": 0
   },
   "failed_fx": [],
+  "bridge_threads_refused": [],
   "dropped": 0,
   "voice_dropped": 0,
   "failed_errors": [],
@@ -5126,6 +5536,10 @@ Kind: `query`. Exposure: `mcp-tool`.
       "type": "integer",
       "description": "The instance's reported latency, in samples"
     },
+    "isolation_effective": {
+      "type": "string",
+      "description": "Where the instance runs: in_process, shared_bridge or dedicated; inherit resolves to the plug-in isolation preference (stock plug-ins in process), as the instance is made"
+    },
     "outputs_notes": {
       "type": "boolean",
       "description": "The loaded plug-in sends notes or MIDI: fx.set midi_output chooses replace or merge"
@@ -5166,6 +5580,7 @@ Result:
   "name": "<any>",
   "description": "<any>",
   "latency_samples": "<any>",
+  "isolation_effective": "in_process",
   "status_available": false
 }
 

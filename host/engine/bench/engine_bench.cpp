@@ -13,6 +13,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -30,6 +33,151 @@
 using namespace supple;
 using namespace supple::engine;
 namespace {
+// What the kernel says about each thread of the bench and of its bridge
+// children (Linux): its class, the switches it made and suffered, its
+// migrations, how long it waited runnable for a CPU (schedstat run_delay) and
+// the page faults it took. Read before and after the measured interval, off
+// the audio path.
+struct TaskSched {
+    std::string process, comm;
+    long long policy = 0, prio = 0, voluntary = 0, involuntary = 0, migrations = 0;
+    long long minorFaults = 0, majorFaults = 0;
+    long long cpuNs = 0, runDelayNs = 0, slices = 0;
+    // With kernel.sched_schedstats=1 (else -1), in ms since the reset at the
+    // interval's start: the longest wait runnable for a CPU, and the longest
+    // run without a switch; the waits' sum and count.
+    double waitMaxMs = -1, execMaxMs = -1, waitSumMs = -1;
+    long long waitCount = -1;
+};
+using SchedSnapshot = std::map<std::string, TaskSched>;
+
+// `reset`: clear each thread's scheduler statistics first (allowed for one's
+// own threads), so the maxima cover what follows.
+SchedSnapshot schedSnapshot(bool reset = false) {
+    SchedSnapshot out;
+#if defined(__linux__)
+    namespace fs = std::filesystem;
+    const std::string self = std::to_string(::getpid());
+    std::vector<std::string> pids{self};
+    std::error_code ec;
+    for (const auto& entry : fs::directory_iterator("/proc", ec)) {
+        const std::string pid = entry.path().filename().string();
+        if (pid.empty() || pid.find_first_not_of("0123456789") != std::string::npos) continue;
+        std::ifstream stat(entry.path() / "stat");
+        std::string line;
+        if (!std::getline(stat, line)) continue;
+        const auto close = line.rfind(')');
+        if (close == std::string::npos) continue;
+        char state = 0;
+        long long ppid = 0;
+        if (std::sscanf(line.c_str() + close + 1, " %c %lld", &state, &ppid) == 2 &&
+            std::to_string(ppid) == self)
+            pids.push_back(pid);
+    }
+    for (const auto& pid : pids) {
+        std::ifstream pcomm("/proc/" + pid + "/comm");
+        std::string process;
+        std::getline(pcomm, process);
+        for (const auto& task : fs::directory_iterator("/proc/" + pid + "/task", ec)) {
+            TaskSched t;
+            t.process = process;
+            std::ifstream comm(task.path() / "comm");
+            std::getline(comm, t.comm);
+            if (reset) std::ofstream(task.path() / "sched") << "0";
+            {
+                // stat: after "(comm)", fields 3.. ; minflt is 10, majflt 12.
+                std::ifstream tstat(task.path() / "stat");
+                std::string tline;
+                if (std::getline(tstat, tline)) {
+                    const auto close = tline.rfind(')');
+                    long long minflt = 0, majflt = 0;
+                    if (close != std::string::npos &&
+                        std::sscanf(tline.c_str() + close + 1,
+                                    " %*c %*d %*d %*d %*d %*d %*u %lld %*u %lld", &minflt,
+                                    &majflt) == 2) {
+                        t.minorFaults = minflt;
+                        t.majorFaults = majflt;
+                    }
+                }
+            }
+            std::ifstream schedstat(task.path() / "schedstat");
+            schedstat >> t.cpuNs >> t.runDelayNs >> t.slices;
+            std::ifstream sched(task.path() / "sched");
+            std::string line;
+            while (std::getline(sched, line)) {
+                const auto colon = line.find(':');
+                if (colon == std::string::npos) continue;
+                std::string key = line.substr(0, colon);
+                key.erase(key.find_last_not_of(' ') + 1);
+                const long long value = std::atoll(line.c_str() + colon + 1);
+                if (key == "nr_voluntary_switches")
+                    t.voluntary = value;
+                else if (key == "nr_involuntary_switches")
+                    t.involuntary = value;
+                else if (key == "se.nr_migrations")
+                    t.migrations = value;
+                else if (key == "policy")
+                    t.policy = value;
+                else if (key == "prio")
+                    t.prio = value;
+                else if (key == "wait_max")
+                    t.waitMaxMs = std::atof(line.c_str() + colon + 1);
+                else if (key == "exec_max")
+                    t.execMaxMs = std::atof(line.c_str() + colon + 1);
+                else if (key == "wait_sum")
+                    t.waitSumMs = std::atof(line.c_str() + colon + 1);
+                else if (key == "wait_count")
+                    t.waitCount = value;
+            }
+            out[pid + "/" + task.path().filename().string()] = std::move(t);
+        }
+    }
+#endif
+    return out;
+}
+
+// The interval's real-time threads (and the busiest others) with their deltas.
+// `intervalMs` bounds the schedstat waits: no wait in the interval is longer.
+// A thread reset while it waited for a CPU has been seen to report about the
+// uptime (its wait start cleared, it seems); such a thread's waits are null
+// and flagged `wait_stale`.
+json::Value schedDelta(const SchedSnapshot& before, const SchedSnapshot& after, double intervalMs) {
+    auto threads = json::Value::array();
+    for (const auto& [id, t] : after) {
+        const auto was = before.find(id);
+        const TaskSched z;
+        const TaskSched& b = was == before.end() ? z : was->second;
+        const long long delay = t.runDelayNs - b.runDelayNs;
+        const long long minor = t.minorFaults - b.minorFaults;
+        const long long major = t.majorFaults - b.majorFaults;
+        if (t.policy == 0 && delay < 1'000'000 && minor == 0 && major == 0) continue;
+        auto e = json::Value::object();
+        e["id"] = id;
+        e["process"] = t.process;
+        e["comm"] = t.comm;
+        e["policy"] = t.policy;
+        e["prio"] = t.prio;
+        e["cpu_ms"] = static_cast<double>(t.cpuNs - b.cpuNs) / 1e6;
+        e["run_delay_ms"] = static_cast<double>(delay) / 1e6;
+        e["slices"] = t.slices - b.slices;
+        e["voluntary"] = t.voluntary - b.voluntary;
+        e["involuntary"] = t.involuntary - b.involuntary;
+        e["migrations"] = t.migrations - b.migrations;
+        e["minor_faults"] = minor;
+        e["major_faults"] = major;
+        if (t.waitMaxMs >= 0) {
+            const bool stale = t.waitMaxMs > intervalMs || t.waitSumMs > intervalMs;
+            e["wait_max_ms"] = stale ? json::Value() : json::Value(t.waitMaxMs);
+            e["wait_sum_ms"] = stale ? json::Value() : json::Value(t.waitSumMs);
+            e["wait_count"] = t.waitCount;
+            e["exec_max_ms"] = t.execMaxMs;
+            if (stale) e["wait_stale"] = true;
+        }
+        threads.push_back(std::move(e));
+    }
+    return threads;
+}
+
 // Supplies silent monitored inputs and silences the physical outputs after DSP.
 // JACK owns whole-period timing; the paced thread owns synthetic timing. With
 // a callback priority the paced thread and live helpers run SCHED_FIFO at it,
@@ -392,7 +540,11 @@ int main(int argc, char** argv) {
     if (!service(1)) return changedDevice();
     const auto before = backend.status();
     const auto m0 = engine->anticipationMisses(), e0 = engine->processErrors();
+    host::resetBridgeTiming();  // the measured interval's bridged calls only
+    const auto o0 = engine->bridgeOverruns();
     const auto c0 = backend.cycles();
+    const SchedSnapshot s0 = schedSnapshot(true);
+    const auto f0 = (*app)->engineStatus().audioPageFaults;
     rusage ru0{}, ru1{};
     getrusage(RUSAGE_SELF, &ru0);
     const auto begin = std::chrono::steady_clock::now();
@@ -405,10 +557,14 @@ int main(int argc, char** argv) {
     const double measured =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
     getrusage(RUSAGE_SELF, &ru1);
+    const SchedSnapshot s1 = schedSnapshot();
+    const auto f1 = (*app)->engineStatus().audioPageFaults;
+    const auto thp = (*app)->engineStatus().thpOptOut;
+    const auto idle = (*app)->engineStatus().cpuIdleLatency;
     const auto after = backend.status();
     const double rate = backend.config().sampleRate;
     auto result = json::Value::object();
-    result["schema"] = "supple.capacity-run/2.2";
+    result["schema"] = "supple.capacity-run/2.5";
     result["tracks"] = tracks;
     result["workload"] = pluginFile.empty() ? "stock" : "effect";
     result["plugin_file"] = pluginFile;
@@ -445,6 +601,45 @@ int main(int argc, char** argv) {
     result["xruns"] = device == "jack" ? json::Value(after.xruns - before.xruns) : json::Value();
     result["anticipation_misses"] = engine->anticipationMisses() - m0;
     result["process_errors"] = engine->processErrors() - e0;
+    {
+        // Where live bridged calls spent the interval, and why cycles ran late.
+        auto o1 = engine->bridgeOverruns();
+        o1.lateWait -= o0.lateWait;
+        o1.slowBridge -= o0.slowBridge;
+        o1.notWaiting -= o0.notWaiting;
+        const auto t = bridgeTimingStatus(host::bridgeTiming().live, o1);
+        json::Value b = json::Value::object();
+        b["calls"] = t.calls;
+        b["late"] = t.late;
+        b["past_deadline"] = t.pastDeadline;
+        b["spun"] = t.spun;
+        b["wait_max_us"] = t.waitMaxUs;
+        b["wait_mean_us"] = t.waitMeanUs;
+        b["wake_max_us"] = t.wakeMaxUs;
+        b["wake_mean_us"] = t.wakeMeanUs;
+        b["work_max_us"] = t.workMaxUs;
+        b["return_max_us"] = t.returnMaxUs;
+        b["wakes_over_200us"] = t.wakesOver200us;
+        b["wakes_over_1ms"] = t.wakesOver1ms;
+        // Under 10, 20, 50, 100, 200, 500, 1000, 2000 µs, and at or over 2 ms.
+        const host::BridgeTiming::Calls liveCalls = host::bridgeTiming().live;
+        b["wake_buckets"] = json::Value::array();
+        b["return_buckets"] = json::Value::array();
+        for (std::size_t k = 0; k < liveCalls.wakeBuckets.size(); ++k) {
+            b["wake_buckets"].push_back(static_cast<std::int64_t>(liveCalls.wakeBuckets[k]));
+            b["return_buckets"].push_back(static_cast<std::int64_t>(liveCalls.returnBuckets[k]));
+        }
+        b["bridge_cpus"] = json::Value::array();
+        for (auto c : t.bridgeCpus) b["bridge_cpus"].push_back(c);
+        b["migrations"] = t.migrations;
+        b["class_mismatches"] = t.classMismatches;
+        b["longest_cycle_us"] = t.longestCycleUs;  // since the engine started
+        b["overruns_late_wait"] = t.overrunsLateWait;
+        b["overruns_slow_bridge"] = t.overrunsSlowBridge;
+        b["overruns_not_waiting"] = t.overrunsNotWaiting;
+        result["bridge_timing"] = std::move(b);
+    }
+    result["threads"] = schedDelta(s0, s1, measured * 1000.0);
     result["cycles"] = backend.cycles() - c0;
     result["restart_needed"] = after.restartNeeded;
     result["warnings"] = json::Value::array();
@@ -470,6 +665,26 @@ int main(int argc, char** argv) {
     result["process_cpu_cores"] = (cpu(ru1) - cpu(ru0)) / measured;
     result["minor_faults"] = ru1.ru_minflt - ru0.ru_minflt;
     result["major_faults"] = ru1.ru_majflt - ru0.ru_majflt;
+    {
+        // As engine.status counts them: the callback's and live helpers' (Linux).
+        auto faults = json::Value::object();
+        faults["scope"] = f1.scope;
+        faults["minor"] = f1.minor - f0.minor;
+        faults["major"] = f1.major && f0.major ? json::Value(*f1.major - *f0.major) : json::Value();
+        faults["threads"] = f1.threads;
+        result["audio_page_faults"] = std::move(faults);
+        result["thp_opt_out"] = thp.active ? (thp.advisedOnly ? "advised_only" : "all") : "off";
+        result["thp_inherited"] = thp.inherited;
+    }
+    // Whether the 20 us idle-latency request was held at the interval's end,
+    // and why (ADR-0086): asked for, automatic (a bridged plug-in plays
+    // live), or refused (its errno).
+    auto latency = json::Value::object();
+    latency["active"] = idle.active;
+    latency["requested"] = idle.requested;
+    latency["automatic"] = idle.automatic;
+    latency["errno"] = idle.error ? json::Value(idle.error->errnoValue) : json::Value();
+    result["cpu_idle_latency"] = std::move(latency);
     // Silence means a missing signal unless the anticipative renderer fell
     // behind: then its starved ring explains it and the run is a failure.
     const bool signal = backend.peak > 1e-5 || result["anticipation_misses"].asInt() > 0;

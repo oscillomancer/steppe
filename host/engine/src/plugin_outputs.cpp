@@ -103,7 +103,11 @@ Status EngineApp::commitOutputGesture(const OutputKey& key, const OutputGesture&
             params::toJson(semantic->spec, params::fromClap(semantic->spec, *value));
     }
     const auto before = head();
-    bool changed = fx->params != next.params || fx->patch != next.patch;
+    // A semantic FX's values live in its patch: raw params gain this id
+    // whatever its value, so they alone would make every repeated value an
+    // edit (each parameter, at each overflow recovery).
+    bool changed =
+        semantic ? fx->patch != next.patch : fx->params != next.params || fx->patch != next.patch;
     const bool records =
         std::any_of(before.envelopes.begin(), before.envelopes.end(), [&](const auto& env) {
             const auto& e = *env.value;
@@ -205,6 +209,7 @@ void EngineApp::consumePluginOutputs() {
             if (auto* instance = pool_->find(fx.id)) {
                 auto idle = instance->takeIdleOutputs();
                 taken.dropped += idle.dropped;
+                if (idle.dropped != 0) taken.droppedFx.push_back(fx.id);
                 for (const auto& event : idle.events) {
                     PluginOutput output;
                     output.fx = fx.id;
@@ -238,6 +243,16 @@ void EngineApp::consumePluginOutputs() {
     }
     bool overflow =
         outputOverflow_ || taken.dropped != outputDrops_ || taken.voiceDropped != voiceDrops_;
+    // Voice tracking names no FX; the engine's table may have overflowed; a
+    // count whose FX is not named yet (round 23: the identity can trail the
+    // count) is recovered as all. A named FX recovers even when the count it
+    // belongs to was seen by an earlier drain.
+    overflowAll_ = overflowAll_ || taken.droppedAll || taken.voiceDropped != voiceDrops_ ||
+                   (taken.dropped != outputDrops_ && taken.droppedFx.empty());
+    overflow = overflow || taken.droppedAll || !taken.droppedFx.empty();
+    for (const auto& fx : taken.droppedFx)
+        if (std::find(overflowFx_.begin(), overflowFx_.end(), fx) == overflowFx_.end())
+            overflowFx_.push_back(fx);
     outputDrops_ = taken.dropped;
     voiceDrops_ = taken.voiceDropped;
     if (engine_ && loadedHead_ && loadedHead_->version != head().version) {
@@ -255,6 +270,8 @@ void EngineApp::consumePluginOutputs() {
         if (pendingOutputs_.size() == kPendingOutputs) {
             ++consumerDrops_;
             overflow = true;
+            if (std::find(overflowFx_.begin(), overflowFx_.end(), output.fx) == overflowFx_.end())
+                overflowFx_.push_back(output.fx);
         } else
             pendingOutputs_.push_back(output);
     }
@@ -270,18 +287,28 @@ void EngineApp::consumePluginOutputs() {
     };
     if (overflow) {
         outputOverflow_ = false;
-        pendingOutputs_.clear();
-        outputGestures_.clear();
+        // Only the FX whose outputs were dropped, and only their writable
+        // parameters: read-only outputs (meters) never enter the model. What
+        // the others sent in this drain stays pending and is consumed below
+        // (round 23: clearing every FX's lost their valid outputs).
+        const auto dropped = [&](model::Id id) {
+            return overflowAll_ ||
+                   std::find(overflowFx_.begin(), overflowFx_.end(), id) != overflowFx_.end();
+        };
+        std::erase_if(pendingOutputs_, [&](const PluginOutput& o) { return dropped(o.fx); });
+        std::erase_if(outputGestures_, [&](const auto& g) { return dropped(g.first.first); });
         std::erase_if(autoWrite_, [&](const auto& entry) {
             const auto* env = head().envelopes.find(entry.first);
-            return env && env->target.object.kind == model::Kind::Fx;
+            return env && env->target.object.kind == model::Kind::Fx && dropped(env->target.object);
         });
         // Read current values rather than guessing missing events or points.
         const auto session = head();
         for (const auto& fx : session.fx) {
+            if (!dropped(fx.id)) continue;
             auto* instance = pool_->find(fx.id);
             if (!instance || instance->failed()) continue;
             for (const auto& param : instance->params()) {
+                if (param.flags & CLAP_PARAM_IS_READONLY) continue;
                 auto value = instance->paramValue(param.id);
                 if (!value) continue;
                 PluginOutput output;
@@ -299,7 +326,9 @@ void EngineApp::consumePluginOutputs() {
                 commit({fx.id, param.id}, recovered);
             }
         }
-        return;
+        overflowFx_.clear();
+        overflowAll_ = false;
+        // The other FX's outputs kept above are consumed in this drain.
     }
     for (auto it = pendingOutputs_.begin(); it != pendingOutputs_.end();) {
         if (engine_ && it->anticipative && !it->idle &&
@@ -341,13 +370,13 @@ void EngineApp::consumePluginOutputs() {
                 outputGestures_.emplace(key, OutputGesture{});
             else {
                 ++consumerDrops_;
-                outputOverflow_ = true;
+                outputOverflow_ = overflowAll_ = true;  // names no FX
             }
         } else if (event.kind == Kind::ParamValue) {
             const bool single = found == outputGestures_.end();
             if (single && outputGestures_.size() >= kGestures) {
                 ++consumerDrops_;
-                outputOverflow_ = true;
+                outputOverflow_ = overflowAll_ = true;  // names no FX
                 continue;
             }
             auto& gesture = outputGestures_[key];
@@ -360,7 +389,7 @@ void EngineApp::consumePluginOutputs() {
                     ++consumerDrops_;
                     gesture.recording.clear();
                     gesture.ended = true;
-                    outputOverflow_ = true;
+                    outputOverflow_ = overflowAll_ = true;  // names no FX
                 }
             }
             if (single || gesture.ended) {

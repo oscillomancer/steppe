@@ -48,7 +48,14 @@ same change, and say what you found.
    frees, locks, blocks, logs synchronously, throws, or touches files or
    the network. State reaches it through lock-free queues and atomic
    pointer swaps. Audio-path entry points are marked `SUPPLE_RT` and their
-   tests run under RealtimeSanitizer (the `rtsan` preset).
+   tests run under RealtimeSanitizer (the `rtsan` preset). The only
+   exceptions are the system calls the ADRs name, inside
+   `rt::ScopedSanctionedSyscall`: nonblocking wakes (ADR-0024, ADR-0028),
+   and waiting for a bridged plug-in's answer: with a failure deadline on
+   background threads (ADR-0013), and in the device callback only until the
+   cycle's bridge deadline, its start plus its period or 2 ms, whichever is
+   larger (ADR-0081); and a live helper's wait within a job while one of the
+   job's bridged calls blocks (ADR-0085).
 3. **The product name lives in one place.** `cmake/Product.cmake` defines
    it, and C++ reads it from the generated `supple/product.h`
    (`supple::product::kName`, `kSlug`, …). Never hard-code "Steppe" or

@@ -3,10 +3,12 @@
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/prctl.h>
 #include <unistd.h>
 #include <cstring>
 #include <filesystem>
 #include <utility>
+#include <vector>
 #include "fake_jack.h"
 #include "supple/base/files.h"
 #include "supple/engine/jack.h"
@@ -39,9 +41,163 @@ struct MemoryOps {
             limit->rlim_cur = 4096;
             return 0;
         };
+        // The process's THP mode, as the kernel keeps it: 0 none, 1 all, 3
+        // all but advised regions.
+        ops->thpDisable = [this](unsigned long disable, unsigned long f) {
+            thpCalls.emplace_back(disable, f);
+            const int e = disable && f ? thpFlagsError : disable ? thpError : thpReleaseError;
+            errno = e;
+            if (e) return -1;
+            thpMode = disable ? (f ? 3 : 1) : 0;
+            return 0;
+        };
+        ops->thpMode = [this] {
+            if (thpQueryError) {
+                errno = thpQueryError;
+                return -1;
+            }
+            return thpMode;
+        };
     }
+    std::vector<std::pair<unsigned long, unsigned long>> thpCalls;
+    int thpFlagsError = 0, thpError = 0, thpReleaseError = 0, thpMode = 0, thpQueryError = 0;
 };
 }  // namespace
+
+TEST_CASE("the process stays out of transparent huge pages while the engine runs") {
+    using Call = std::pair<unsigned long, unsigned long>;
+    SUBCASE("advised regions keep them where the kernel takes the flag") {
+        MemoryOps fake;
+        detail::RuntimeProtection controls(fake.ops);
+        CHECK_FALSE(controls.thpOptOut().active);
+        controls.start();
+        CHECK(fake.thpCalls == std::vector<Call>{{1, 2}});  // PR_THP_DISABLE_EXCEPT_ADVISED
+        CHECK(controls.thpOptOut().active);
+        CHECK(controls.thpOptOut().advisedOnly);
+        CHECK_FALSE(controls.thpOptOut().inherited);
+        controls.start();  // once
+        CHECK(fake.thpCalls.size() == 1);
+        controls.stop();
+        REQUIRE(fake.thpCalls.size() == 2);
+        CHECK(fake.thpCalls.back() == Call{0, 0});
+        CHECK(fake.thpMode == 0);
+        CHECK_FALSE(controls.thpOptOut().active);
+        CHECK_FALSE(controls.thpOptOut().advisedOnly);
+    }
+    SUBCASE("an inherited setting stays as it was, stricter or the same, and is not undone") {
+        // Round 21: whatever launched the process, or a plug-in, may have kept
+        // it out entirely (1) or as advised-only (3). 0->3->0 is the engine's
+        // own; 1 and 3 must end as they began.
+        for (const int inherited : {1, 3}) {
+            CAPTURE(inherited);
+            MemoryOps fake;
+            fake.thpMode = inherited;
+            detail::RuntimeProtection controls(fake.ops);
+            controls.start();
+            CHECK(fake.thpCalls.empty());
+            CHECK(fake.thpMode == inherited);
+            CHECK(controls.thpOptOut().active);
+            CHECK(controls.thpOptOut().inherited);
+            CHECK(controls.thpOptOut().advisedOnly == (inherited == 3));
+            controls.stop();
+            CHECK(fake.thpCalls.empty());
+            CHECK(fake.thpMode == inherited);
+            CHECK_FALSE(controls.thpOptOut().active);
+        }
+    }
+    SUBCASE("with the kernel's own prctl, each starting mode ends as it began") {
+        // This test process's own setting only, restored after.
+        const int before = ::prctl(PR_GET_THP_DISABLE, 0UL, 0UL, 0UL, 0UL);
+        REQUIRE(before >= 0);
+        for (const unsigned long flags : {~0UL, 0UL, 2UL}) {  // none, all, advised-only
+            CAPTURE(flags);
+            if (flags == ~0UL)
+                REQUIRE(::prctl(PR_SET_THP_DISABLE, 0UL, 0UL, 0UL, 0UL) == 0);
+            else if (::prctl(PR_SET_THP_DISABLE, 1UL, flags, 0UL, 0UL) != 0)
+                continue;  // a kernel before 6.18 has no advised-only mode
+            const int start = ::prctl(PR_GET_THP_DISABLE, 0UL, 0UL, 0UL, 0UL);
+            detail::RuntimeProtection controls(std::make_shared<RuntimeProtectionOps>());
+            controls.start();
+            CHECK(controls.thpOptOut().active);
+            CHECK(::prctl(PR_GET_THP_DISABLE, 0UL, 0UL, 0UL, 0UL) != 0);
+            controls.stop();
+            CHECK(::prctl(PR_GET_THP_DISABLE, 0UL, 0UL, 0UL, 0UL) == start);
+        }
+        (void)::prctl(PR_SET_THP_DISABLE, before ? 1UL : 0UL, before == 3 ? 2UL : 0UL, 0UL, 0UL);
+    }
+    SUBCASE("a setting changed while the engine ran is not the engine's to undo") {
+        MemoryOps fake;
+        detail::RuntimeProtection controls(fake.ops);
+        controls.start();
+        REQUIRE(fake.thpCalls.size() == 1);
+        fake.thpMode = 1;  // a plug-in keeps the process out entirely
+        controls.stop();
+        CHECK(fake.thpCalls.size() == 1);
+        CHECK(fake.thpMode == 1);
+        CHECK_FALSE(controls.thpOptOut().active);
+    }
+    SUBCASE("a refused mode query at stop is reported, and a later stop releases") {
+        // Round 23: a failed PR_GET_THP_DISABLE at stop cleared ownership, so
+        // the process stayed opted out with nothing left to undo it.
+        MemoryOps fake;
+        detail::RuntimeProtection controls(fake.ops);
+        controls.start();
+        REQUIRE(fake.thpMode == 3);
+        fake.thpQueryError = EPERM;
+        controls.stop();
+        CHECK(fake.thpMode == 3);
+        CHECK(controls.thpOptOut().active);  // still kept out, still the engine's
+        REQUIRE(controls.thpOptOut().error);
+        CHECK(controls.thpOptOut().error->errnoValue == EPERM);
+        fake.thpQueryError = 0;
+        controls.stop();
+        CHECK(fake.thpMode == 0);
+        CHECK_FALSE(controls.thpOptOut().active);
+    }
+    SUBCASE("a refused release is reported, and the engine still owns it") {
+        MemoryOps fake;
+        fake.thpReleaseError = EPERM;
+        detail::RuntimeProtection controls(fake.ops);
+        controls.start();
+        controls.stop();
+        REQUIRE(fake.thpCalls.size() == 2);
+        CHECK(fake.thpMode == 3);
+        CHECK(controls.thpOptOut().active);  // it is still kept out
+        REQUIRE(controls.thpOptOut().error);
+        CHECK(controls.thpOptOut().error->errnoValue == EPERM);
+        fake.thpReleaseError = 0;
+        controls.start();  // still active: nothing set again
+        CHECK(fake.thpCalls.size() == 2);
+        controls.stop();
+        CHECK(fake.thpMode == 0);
+        CHECK_FALSE(controls.thpOptOut().active);
+        CHECK_FALSE(controls.thpOptOut().error);
+    }
+    SUBCASE("an older kernel refuses the flag: none keep them") {
+        MemoryOps fake;
+        fake.thpFlagsError = EINVAL;
+        detail::RuntimeProtection controls(fake.ops);
+        controls.start();
+        CHECK(fake.thpCalls == std::vector<Call>{{1, 2}, {1, 0}});
+        CHECK(controls.thpOptOut().active);
+        CHECK_FALSE(controls.thpOptOut().advisedOnly);
+        CHECK_FALSE(controls.thpOptOut().error);
+    }
+    SUBCASE("a refusal is reported, and the engine runs regardless") {
+        MemoryOps fake;
+        fake.thpFlagsError = EINVAL;
+        fake.thpError = EPERM;
+        detail::RuntimeProtection controls(fake.ops);
+        controls.start();
+        CHECK_FALSE(controls.thpOptOut().active);
+        REQUIRE(controls.thpOptOut().error);
+        CHECK(controls.thpOptOut().error->code == "engine.thp_opt_out");
+        CHECK(controls.thpOptOut().error->errnoValue == EPERM);
+        controls.stop();
+        REQUIRE_FALSE(fake.thpCalls.empty());
+        CHECK(fake.thpCalls.back() == Call{1, 0});  // nothing to undo
+    }
+}
 
 TEST_CASE("memory lock ownership, flags, pending intent and repeated lifecycle") {
     MemoryOps fake;
@@ -132,9 +288,11 @@ TEST_CASE(
         CHECK(fake.locks == 0);
         CHECK_FALSE(app->startEngine(backend, {.blockSize = 0}));
         CHECK(fake.locks == 0);
+        CHECK_FALSE(app->engineStatus().thpOptOut.active);
         REQUIRE(app->startEngine(backend, {}, {.anticipative = false, .workers = 0}));
         CHECK(fake.locks == 1);
         CHECK(app->engineStatus().memoryLock.active);
+        CHECK(app->engineStatus().thpOptOut.active);
         REQUIRE(app->transport("stop"));
         CHECK(fake.unlocks == 0);  // transport stop still processes monitored inputs
         REQUIRE(app->newProject({.console9 = false}));
@@ -142,6 +300,7 @@ TEST_CASE(
         CHECK(fake.locks == 2);
         app->stopEngine();
         CHECK_FALSE(app->engineStatus().memoryLock.active);
+        CHECK_FALSE(app->engineStatus().thpOptOut.active);
         CHECK(app->engineStatus().memoryLock.requested);
         CHECK(fake.unlocks == 2);
         fake.lockError = ENOMEM;

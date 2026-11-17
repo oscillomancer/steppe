@@ -388,7 +388,11 @@ bool validReply(Op op, Reader r) {
         case Op::SubscribeNotifications:
             if (r.u32() != kVersion) return false;
             break;
-        case Op::AckNotifications:
+        case Op::AckNotifications: {  // the instances with new captures
+            const auto count = r.u32();
+            for (std::uint32_t i = 0; i < count && r.ok(); ++i) r.skip(4);
+            break;
+        }
         case Op::Deactivate:
         case Op::SetParam:
         case Op::SetPatch:

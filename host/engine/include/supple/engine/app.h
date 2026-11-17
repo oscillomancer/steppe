@@ -30,6 +30,7 @@
 #include <utility>
 #include <vector>
 #include "supple/base/stop.h"
+#include "supple/base/thread.h"
 
 #include "supple/cmd/bus.h"
 #include "supple/engine/midi_control.h"
@@ -113,6 +114,22 @@ struct EngineScheduling {
     ThreadClass callback, live, renderer, background;
 };
 
+// Where live bridged calls spent their time, and why cycles with them ran
+// late (ADR-0081 diagnostics): host::BridgeTiming's live calls, process-wide,
+// and the engine's overrun causes. Times in microseconds.
+struct EngineBridgeTiming {
+    // late: posted calls and waits on an earlier late block that missed.
+    std::int64_t calls = 0, late = 0, settles = 0, pastDeadline = 0, spun = 0;
+    double waitMaxUs = 0, waitMeanUs = 0, wakeMaxUs = 0, wakeMeanUs = 0;
+    double workMaxUs = 0, returnMaxUs = 0, longestCycleUs = 0;
+    std::int64_t wakesOver200us = 0, wakesOver1ms = 0;
+    std::vector<std::int64_t> bridgeCpus;
+    std::int64_t migrations = 0, classMismatches = 0;
+    std::int64_t overrunsLateWait = 0, overrunsSlowBridge = 0, overrunsNotWaiting = 0;
+};
+EngineBridgeTiming bridgeTimingStatus(const host::BridgeTiming::Calls& live,
+                                      const Engine::BridgeOverruns& overruns);
+
 // The live helpers' audio workgroup membership (ADR-0038); see WorkgroupStatus.
 struct EngineWorkgroup {
     std::string state = "none";
@@ -169,6 +186,8 @@ struct EngineStatus {
     std::int64_t block = 0, period = 0;
     std::int64_t planLatency = 0, deviceLatency = 0;  // frames
     std::int64_t xruns = 0, cycles = 0, processErrors = 0;
+    std::int64_t bridgeLate = 0;  // callback cycles a bridged plug-in made late (ADR-0081)
+    EngineBridgeTiming bridgeTiming;
     std::int64_t midiDropped = 0, midiOutDropped = 0, midiLeadFrames = 0;
     json::Value midiInputs = json::Value::array(), midiOutputs = json::Value::array();
     std::vector<MidiInputWarning> midiOutputWarnings;
@@ -185,8 +204,23 @@ struct EngineStatus {
     std::vector<std::string> warnings;
     RuntimeProtectionStatus memoryLock;
     RuntimeProtectionStatus cpuIdleLatency;
-    MeterDrops meterDrops;                       // meter entries dropped by a full ring
-    std::vector<std::string> failedFx;           // isolated instances whose bridge crashed or hung
+    ThpOptOutStatus thpOptOut;
+    // Page faults since the engine started (engine.md §2.2): on Linux the
+    // callback's and the live helpers' ("audio_threads"), elsewhere the whole
+    // process's ("process"); "none" while stopped. `major` is unset where the
+    // platform does not tell minor and major apart (Windows).
+    struct AudioPageFaults {
+        std::string scope = "none";
+        std::int64_t minor = 0;
+        std::optional<std::int64_t> major = 0;
+        std::int64_t threads = 0;  // the threads counted, for audio_threads
+        bool saturated = false;    // the platform's counter stopped at its limit
+    } audioPageFaults;
+    MeterDrops meterDrops;              // meter entries dropped by a full ring
+    std::vector<std::string> failedFx;  // isolated instances whose bridge crashed or hung
+    // Isolated instances whose bridge audio thread was refused its scheduling
+    // class (ADR-0026, ADR-0081).
+    std::vector<std::string> bridgeThreadsRefused;
     std::int64_t dropped = 0, voiceDropped = 0;  // plug-in output/voice transport
     json::Value failedErrors = json::Value::array();
     SyncReport sync;  // external sync (ADR-0071)
@@ -414,6 +448,15 @@ class EngineApp : public cmd::Host {
     // unsaved one) always names the original.
     void setCopyImportedMedia(bool on) { copyImports_ = on; }
     bool copyImportedMedia() const { return copyImports_; }
+    // Where third-party plug-ins left on inherit run (the GUI's preference,
+    // ADR-0081): in_process, shared_bridge or dedicated, applied as their
+    // instances are made (InstancePool::setDefaultIsolation); stock plug-ins
+    // stay in process. engine.status warns of an instance kept in process
+    // because no bridge was found. inherit is not a preference.
+    Status setPluginIsolation(model::Isolation isolation);
+    model::Isolation pluginIsolation() const { return pluginIsolation_; }
+    // Where `fx` runs, or would if its instance were made now.
+    model::Isolation effectiveIsolation(model::Id fx) const;
     std::uint64_t projectGeneration() const {
         return projectGeneration_.load(std::memory_order_acquire);
     }
@@ -783,6 +826,16 @@ class EngineApp : public cmd::Host {
     model::Monitor defaultMonitor_ = model::Monitor::On;
     unsigned audioThreadLimit_ = 0;
     std::unique_ptr<detail::RuntimeProtection> protections_;
+    // Page faults of the engine's deadline threads, from when each was first
+    // seen (Linux), or of the process from the engine's start.
+    struct FaultWatch {
+        std::int64_t id = 0;
+        PageFaults base, last;
+    };
+    std::vector<FaultWatch> faultWatch_;
+    std::optional<PageFaults> processFaultBase_;
+    void startFaultWatch();
+    void watchFaults();  // main thread: notes threads not yet seen
     void finalizeRecordingHash(model::Id source, model::MediaSource expected, RecordedTake take,
                                std::string hash, std::string branch, std::uint64_t generation);
     void startPlaying(int countInBars);  // engine play(), after a count-in when > 0
@@ -811,6 +864,7 @@ class EngineApp : public cmd::Host {
                           const std::function<Status()>& prepare = {},
                           std::vector<schema::Warning>* warnings = nullptr);
     bool copyImports_ = false;
+    model::Isolation pluginIsolation_ = model::Isolation::InProcess;
     // Declared first: outlives instances, engine/backend, and worker joins.
     MainThreadWake mainWake_;
     MidiPortPreferences midiInputsPreferences_, midiOutputsPreferences_;
@@ -899,6 +953,9 @@ class EngineApp : public cmd::Host {
     std::uint64_t outputGeneration_ = 0, outputEpoch_ = 0;
     std::uint64_t outputDrops_ = 0, voiceDrops_ = 0, consumerDrops_ = 0;
     bool outputOverflow_ = false;
+    // Whose outputs were dropped since the last recovery (all: unknown).
+    std::vector<model::Id> overflowFx_;
+    bool overflowAll_ = false;
     static json::Value pluginErrorJson(const Error& error);
     std::vector<model::Id> pendingDirtyStates_;
     std::vector<host::Instance*> serviceInstances() const;

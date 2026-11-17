@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "live_workers.h"
+#include "supple/host/clap_host.h"
 
 using namespace supple::engine::detail;
 
@@ -54,6 +55,118 @@ TEST_CASE("live pool: runs every task once, after its dependencies") {
             CHECK(r.violations.load() == 0);
         }
     }
+}
+
+namespace {
+// Counts helpers' parks (LiveWorkers::Event::Park).
+LiveWorkers::Hooks countParks(std::atomic<int>& parks) {
+    LiveWorkers::Hooks hooks;
+    hooks.context = &parks;
+    hooks.event = [](void* c, LiveWorkers::Event e) {
+        if (e == LiveWorkers::Event::Park) static_cast<std::atomic<int>*>(c)->fetch_add(1);
+    };
+    return hooks;
+}
+// A task that holds a blocking bridged wait, as a late-answering bridged call
+// counts one (ADR-0085), until `until` holds or a bound of iterations passes.
+template <typename Until>
+void blockLikeABridgedCall(Until until) SUPPLE_RT {
+    const supple::host::LiveBridgeBlocked blocked;
+    for (long i = 0; i < 100'000'000 && !until(); ++i) supple::rt::relax();
+}
+}  // namespace
+
+TEST_CASE("live pool: idle helpers park while a bridged call blocks, and run its successors") {
+    // ADR-0085. Task 0 blocks as a bridged call does; tasks 1 to 3 wait on
+    // it, so the job's idle helpers find nothing ready and park. Task 0's
+    // wait ends only once one has parked, and its end must wake them.
+    std::atomic<int> parks{0};
+    LiveWorkers workers(3, countParks(parks));
+    struct Ctx {
+        Run run;
+        std::atomic<int>* parks;
+    } ctx;
+    ctx.parks = &parks;
+    ctx.run.deps = {{}, {0}, {0}, {0}};
+    TaskGraph g;
+    g.build(ctx.run.deps);
+    REQUIRE(g.parallelism >= 3);  // two helpers join: one is idle whoever runs task 0
+    for (int rep = 0; rep < 20; ++rep) {
+        parks.store(0);
+        ctx.run.done = std::make_unique<std::atomic<int>[]>(4);
+        workers.run(
+            g,
+            [](void* c, std::uint32_t t) SUPPLE_RT {
+                auto* x = static_cast<Ctx*>(c);
+                if (t == 0) blockLikeABridgedCall([x]() SUPPLE_RT { return x->parks->load() > 0; });
+                task(&x->run, t);
+            },
+            &ctx);
+        REQUIRE(parks.load() > 0);
+        for (int i = 0; i < 4; ++i) REQUIRE(ctx.run.done[i].load() == 1);
+        CHECK(ctx.run.violations.load() == 0);
+    }
+}
+
+TEST_CASE("live pool: helpers never park in a job without blocked bridged calls") {
+    // In-process work is unchanged by ADR-0085: helpers idle behind a long
+    // task spin, as ADR-0024 has them.
+    std::atomic<int> parks{0};
+    LiveWorkers workers(3, countParks(parks));
+    Run r;
+    r.deps = {{}, {0}, {0}, {0}};
+    r.spin = 2'000'000;
+    TaskGraph g;
+    g.build(r.deps);
+    for (int rep = 0; rep < 5; ++rep) {
+        r.done = std::make_unique<std::atomic<int>[]>(4);
+        workers.run(g, &task, &r);
+        for (int i = 0; i < 4; ++i) REQUIRE(r.done[i].load() == 1);
+    }
+    CHECK(parks.load() == 0);
+}
+
+TEST_CASE("live pool: helpers that park while bridged calls block still run every task once") {
+    // Some tasks block as bridged calls do, briefly, so helpers park and are
+    // woken by pushes and by waits' ends in every order (also under TSan and
+    // rtsan).
+    std::atomic<int> parks{0};
+    std::mt19937 rng(11);
+    for (unsigned helpers : {1u, 3u, 7u}) {
+        LiveWorkers workers(helpers, countParks(parks));
+        for (int graph = 0; graph < 40; ++graph) {
+            Run r;
+            const std::uint32_t n = 1 + rng() % 40;
+            r.deps.resize(n);
+            for (std::uint32_t i = 1; i < n; ++i)
+                for (std::uint32_t k = rng() % 3; k > 0; --k) r.deps[i].push_back(rng() % i);
+            r.spin = static_cast<int>(rng() % 20000);
+            const std::uint32_t every = 1 + rng() % 4;  // every n-th task blocks
+            struct Ctx {
+                Run* run;
+                std::uint32_t every;
+            } ctx{&r, every};
+            TaskGraph g;
+            g.build(r.deps);
+            for (int rep = 0; rep < 5; ++rep) {
+                r.done = std::make_unique<std::atomic<int>[]>(n);
+                workers.run(
+                    g,
+                    [](void* c, std::uint32_t t) SUPPLE_RT {
+                        auto* x = static_cast<Ctx*>(c);
+                        if (t % x->every == 0) {
+                            int left = x->run->spin;
+                            blockLikeABridgedCall([&left]() SUPPLE_RT { return --left < 0; });
+                        }
+                        task(x->run, t);
+                    },
+                    &ctx);
+                for (std::uint32_t i = 0; i < n; ++i) REQUIRE(r.done[i].load() == 1);
+            }
+            CHECK(r.violations.load() == 0);
+        }
+    }
+    CHECK(parks.load() > 0);  // the path ran
 }
 
 TEST_CASE("live pool: an empty graph and a chain") {

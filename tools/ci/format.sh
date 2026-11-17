@@ -14,3 +14,6 @@ mapfile -t files < <(git ls-files --cached --others --exclude-standard -- \
   || true)
 [ ${#files[@]} -eq 0 ] && exit 0
 clang-format "${mode[@]}" "${files[@]}"
+# Windows SDK headers that need windows.h must follow it, whatever the sort
+# did (checked after formatting, in either mode).
+python3 tools/ci/windows_includes.py "${files[@]}"

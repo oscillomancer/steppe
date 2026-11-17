@@ -435,7 +435,8 @@ def main(argv=None):
                                "--background", args.background,
                                "--background-priority", str(args.background_priority),
                                "--callback-priority", str(args.callback_priority),
-                               "--isolation", args.isolation, *effect_args]
+                               "--isolation", args.isolation,
+                               *effect_args]
                     with (run_dir / "console.log").open("w") as log:
                         completed = subprocess.run(command, check=False, timeout=args.seconds + args.timeout,
                                                    stdout=log, stderr=subprocess.STDOUT)
@@ -448,8 +449,13 @@ def main(argv=None):
                 result["confirmation"] = confirmation
                 report["runs"].append(result)
                 write_json(mode_dir / "progress.json", report)
-                print(f"{args.host} {mode}: N={n}, xruns={result.get('xruns','offline')}, "
-                      f"ahead={result.get('anticipation_misses',0)}, confirmation={confirmation}", flush=True)
+                # `confirming`: this run is the search's confirmation of its
+                # result; `valid` and the counts say whether it passed.
+                print(f"{args.host} {mode}: N={n}, valid={result.get('valid')}, "
+                      f"xruns={result.get('xruns','offline')}, "
+                      f"over_budget={result.get('synthetic_over_budget','n/a')}, "
+                      f"ahead={result.get('anticipation_misses',0)}, confirming={confirmation}",
+                      flush=True)
                 return result
             if args.search:
                 report["search"] = capacity_search(measure, args.max_tracks)

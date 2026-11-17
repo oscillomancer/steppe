@@ -36,18 +36,52 @@ schema::Schema<MeterDrops> meterDropsSchema() {
         .build();
 }
 
+schema::Schema<RuntimeProtectionError> runtimeProtectionErrorSchema() {
+    return schema::object<RuntimeProtectionError>("runtime_protection_error")
+        .field("code", &RuntimeProtectionError::code, schema::string())
+        .field("message", &RuntimeProtectionError::message, schema::string())
+        .field("path", &RuntimeProtectionError::path, schema::string())
+        .field("hint", &RuntimeProtectionError::hint, schema::string())
+        .field("errno", &RuntimeProtectionError::errnoValue, schema::integer())
+        .build();
+}
+
 schema::Schema<RuntimeProtectionStatus> runtimeProtectionSchema() {
-    auto error = schema::object<RuntimeProtectionError>("runtime_protection_error")
-                     .field("code", &RuntimeProtectionError::code, schema::string())
-                     .field("message", &RuntimeProtectionError::message, schema::string())
-                     .field("path", &RuntimeProtectionError::path, schema::string())
-                     .field("hint", &RuntimeProtectionError::hint, schema::string())
-                     .field("errno", &RuntimeProtectionError::errnoValue, schema::integer())
-                     .build();
     return schema::object<RuntimeProtectionStatus>("runtime_protection_status")
         .field("requested", &RuntimeProtectionStatus::requested, schema::boolean())
         .field("active", &RuntimeProtectionStatus::active, schema::boolean())
-        .field("error", &RuntimeProtectionStatus::error, error)
+        .field("error", &RuntimeProtectionStatus::error, runtimeProtectionErrorSchema())
+        .build();
+}
+
+// memory_lock's fields, and whether a live bridged plug-in holds it (ADR-0086).
+schema::Schema<RuntimeProtectionStatus> cpuIdleLatencySchema() {
+    return schema::object<RuntimeProtectionStatus>("cpu_idle_latency_status")
+        .field("requested", &RuntimeProtectionStatus::requested, schema::boolean())
+        .field("active", &RuntimeProtectionStatus::active, schema::boolean())
+        .field("automatic", &RuntimeProtectionStatus::automatic, schema::boolean())
+        .field("error", &RuntimeProtectionStatus::error, runtimeProtectionErrorSchema())
+        .build();
+}
+
+schema::Schema<ThpOptOutStatus> thpOptOutSchema() {
+    return schema::object<ThpOptOutStatus>("thp_opt_out_status")
+        .field("active", &ThpOptOutStatus::active, schema::boolean())
+        .field("advised_only", &ThpOptOutStatus::advisedOnly, schema::boolean())
+        .field("inherited", &ThpOptOutStatus::inherited, schema::boolean())
+        .field("error", &ThpOptOutStatus::error, runtimeProtectionErrorSchema())
+        .build();
+}
+
+schema::Schema<EngineStatus::AudioPageFaults> audioPageFaultsSchema() {
+    return schema::object<EngineStatus::AudioPageFaults>("audio_page_faults")
+        .field("scope", &EngineStatus::AudioPageFaults::scope,
+               schema::string().pattern("^(audio_threads|process|none)$",
+                                        "audio_threads, process or none"))
+        .field("minor", &EngineStatus::AudioPageFaults::minor, schema::integer())
+        .field("major", &EngineStatus::AudioPageFaults::major, schema::integer())
+        .field("threads", &EngineStatus::AudioPageFaults::threads, schema::integer())
+        .field("saturated", &EngineStatus::AudioPageFaults::saturated, schema::boolean())
         .build();
 }
 
@@ -69,6 +103,32 @@ schema::Schema<EngineScheduling> engineSchedulingSchema() {
         .field("live", &EngineScheduling::live, threadClassSchema())
         .field("renderer", &EngineScheduling::renderer, threadClassSchema())
         .field("background", &EngineScheduling::background, threadClassSchema())
+        .build();
+}
+
+schema::Schema<EngineBridgeTiming> engineBridgeTimingSchema() {
+    using T = EngineBridgeTiming;
+    return schema::object<T>("engine_bridge_timing")
+        .field("calls", &T::calls, schema::integer())
+        .field("late", &T::late, schema::integer())
+        .field("settles", &T::settles, schema::integer())
+        .field("past_deadline", &T::pastDeadline, schema::integer())
+        .field("spun", &T::spun, schema::integer())
+        .field("wait_max_us", &T::waitMaxUs, schema::number())
+        .field("wait_mean_us", &T::waitMeanUs, schema::number())
+        .field("wake_max_us", &T::wakeMaxUs, schema::number())
+        .field("wake_mean_us", &T::wakeMeanUs, schema::number())
+        .field("work_max_us", &T::workMaxUs, schema::number())
+        .field("return_max_us", &T::returnMaxUs, schema::number())
+        .field("wakes_over_200us", &T::wakesOver200us, schema::integer())
+        .field("wakes_over_1ms", &T::wakesOver1ms, schema::integer())
+        .field("bridge_cpus", &T::bridgeCpus, schema::arrayOf(schema::integer()))
+        .field("migrations", &T::migrations, schema::integer())
+        .field("class_mismatches", &T::classMismatches, schema::integer())
+        .field("longest_cycle_us", &T::longestCycleUs, schema::number())
+        .field("overruns_late_wait", &T::overrunsLateWait, schema::integer())
+        .field("overruns_slow_bridge", &T::overrunsSlowBridge, schema::integer())
+        .field("overruns_not_waiting", &T::overrunsNotWaiting, schema::integer())
         .build();
 }
 
@@ -108,6 +168,8 @@ schema::Schema<EngineStatus> engineStatusSchema() {
         .field("plan_latency", &EngineStatus::planLatency, schema::integer())
         .field("device_latency", &EngineStatus::deviceLatency, schema::integer())
         .field("xruns", &EngineStatus::xruns, schema::integer())
+        .field("bridge_late", &EngineStatus::bridgeLate, schema::integer())
+        .field("bridge_timing", &EngineStatus::bridgeTiming, engineBridgeTimingSchema())
         .field("midi_dropped", &EngineStatus::midiDropped, schema::integer())
         .field("midi_inputs", &EngineStatus::midiInputs, schema::any())
         .field("midi_outputs", &EngineStatus::midiOutputs, schema::any())
@@ -131,9 +193,13 @@ schema::Schema<EngineStatus> engineStatusSchema() {
         .field("workgroup", &EngineStatus::workgroup, engineWorkgroupSchema())
         .field("warnings", &EngineStatus::warnings, schema::arrayOf(schema::string()))
         .field("memory_lock", &EngineStatus::memoryLock, runtimeProtectionSchema())
-        .field("cpu_idle_latency", &EngineStatus::cpuIdleLatency, runtimeProtectionSchema())
+        .field("cpu_idle_latency", &EngineStatus::cpuIdleLatency, cpuIdleLatencySchema())
+        .field("thp_opt_out", &EngineStatus::thpOptOut, thpOptOutSchema())
+        .field("audio_page_faults", &EngineStatus::audioPageFaults, audioPageFaultsSchema())
         .field("meter_drops", &EngineStatus::meterDrops, meterDropsSchema())
         .field("failed_fx", &EngineStatus::failedFx, schema::arrayOf(schema::string()))
+        .field("bridge_threads_refused", &EngineStatus::bridgeThreadsRefused,
+               schema::arrayOf(schema::string()))
         .field("dropped", &EngineStatus::dropped, schema::integer())
         .field("voice_dropped", &EngineStatus::voiceDropped, schema::integer())
         .field("failed_errors", &EngineStatus::failedErrors, schema::any())
@@ -222,8 +288,12 @@ void registerDeviceCommands(cmd::Registry& registry) {
             "follows the app's Audio processing threads preference (Automatic by default); "
             "live helpers join each callback with no added latency. memory_lock reports the "
             "default-off host-process memory policy: requested, active, and a structured OS "
-            "error on failure. cpu_idle_latency reports the default-off 20 microsecond PM QoS "
-            "request, released on engine stop. A protection failure does not prevent audio "
+            "error on failure. cpu_idle_latency reports the 20 microsecond PM QoS request: "
+            "requested by the default-off option, or automatic, held on Linux while a bridged "
+            "plug-in plays live; released on engine stop. thp_opt_out: on Linux the process is "
+            "kept out of "
+            "transparent huge pages while the engine runs (advised_only: regions a plug-in "
+            "advised keep them). A protection failure does not prevent audio "
             "startup. MIDI output refusals are in midi_output_warnings; midi_output_latency "
             "reports signed audio-minus-MIDI frames per output. MIDI inputs that refuse to open "
             "are skipped: midi_warnings reports each "
@@ -256,7 +326,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
         c.examples = {
             {"Without a device", j(R"({"backend": "dummy", "block": 128})"),
              j(R"({"running": true, "backend": "dummy", "sample_rate": 48000.0, "block": 128,
-                     "period": 128, "plan_latency": 0, "device_latency": 0, "xruns": 0, "midi_dropped": 0, "midi_warnings": [], "midi_out_dropped": 0, "midi_output_warnings": [], "midi_output_latency": [], "midi_inputs": [], "midi_outputs": [], "midi_lead_frames": 0,
+                     "period": 128, "plan_latency": 0, "device_latency": 0, "xruns": 0, "bridge_late": 0, "bridge_timing": {"calls": 0, "late": 0, "settles": 0, "past_deadline": 0, "spun": 0, "wait_max_us": 0, "wait_mean_us": 0, "wake_max_us": 0, "wake_mean_us": 0, "work_max_us": 0, "return_max_us": 0, "wakes_over_200us": 0, "wakes_over_1ms": 0, "bridge_cpus": [], "migrations": 0, "class_mismatches": 0, "longest_cycle_us": 0, "overruns_late_wait": 0, "overruns_slow_bridge": 0, "overruns_not_waiting": 0}, "midi_dropped": 0, "midi_warnings": [], "midi_out_dropped": 0, "midi_output_warnings": [], "midi_output_latency": [], "midi_inputs": [], "midi_outputs": [], "midi_lead_frames": 0,
                      "midi_devices_changed": false, "midi_devices_message": "",
                      "preparing_audio": false, "preparation_error": "",
                      "prepared_version": "<any>", "preparation_version": 0,
@@ -270,8 +340,10 @@ void registerDeviceCommands(cmd::Registry& registry) {
                                    "message": "", "hint": ""},
                      "warnings": [],
                      "memory_lock": {"requested": false, "active": false},
-                     "cpu_idle_latency": {"requested": false, "active": false},
+                     "cpu_idle_latency": {"requested": false, "active": false, "automatic": false},
+                     "thp_opt_out": "<any>", "audio_page_faults": "<any>",
                      "meter_drops": {"renderer": 0, "callback": 0}, "failed_fx": [],
+                     "bridge_threads_refused": [],
                      "dropped": 0, "voice_dropped": 0, "failed_errors": [], "sync": "<any>"})"),
              "empty"}};
         c.run = [](const EngineStartArgs& a, Context& ctx) -> Result<EngineStatus> {
@@ -408,8 +480,18 @@ void registerDeviceCommands(cmd::Registry& registry) {
             "never audio. dropped/voice_dropped count lost plug-in output/voice records. "
             "memory_lock reports requested/active and an optional OS error with errno and a "
             "corrective hint, including while stopped. Bridges are excluded. cpu_idle_latency "
-            "reports the owned 20 microsecond request with the same status/error fields; it "
-            "affects system idle while held and leaves CPU frequency policy unchanged. "
+            "reports the owned 20 microsecond request with the same status/error fields, and "
+            "automatic: held without the option because a bridged plug-in plays live (Linux; "
+            "an automatic failure is no warning). It affects system idle while held and leaves "
+            "CPU frequency policy unchanged. "
+            "thp_opt_out: active, advised_only, inherited (the process was already kept out "
+            "when the engine started; left as it was, not undone at stop) and an optional "
+            "error, Linux only (khugepaged "
+            "collapsing memory would stall audio threads). audio_page_faults: page faults since "
+            "the engine started; scope audio_threads counts the callback's and live helpers' "
+            "(Linux), process the whole process's (macOS, Windows, where major is omitted), none "
+            "while stopped; saturated: the platform's counter stopped at its limit (macOS 32-bit "
+            "counts), so minor is 0 and major omitted, not counts. "
             "live_helpers is the enabled live helper capacity. scheduling: each thread class's "
             "policy (none, normal, fifo, rr, high) and priority as applied at start: the device "
             "callback, live helpers, renderer and background helpers (real-time below a "
@@ -420,13 +502,19 @@ void registerDeviceCommands(cmd::Registry& registry) {
             "plan warnings with corrective actions. failed_errors adds structured code, "
             "message, path and hint to each failure. "
             "failed_fx: isolated plugins whose "
-            "process crashed or hung (silent now; fx.restart re-creates them).";
+            "process crashed or hung (silent now; fx.restart re-creates them). "
+            "bridge_late: callback cycles in which a bridged plugin had not answered by the "
+            "cycle's bridge deadline (its period or 2 ms, whichever is larger); its output was "
+            "silent for that cycle, and xruns counts each of these cycles too. "
+            "bridge_threads_refused: isolated plugins whose bridge audio thread was refused "
+            "the scheduling it asked for (it runs at what it had and can fall behind under "
+            "load; grant real-time scheduling to the user and restart the engine).";
         c.tags = {"engine"};
         c.args = schema::object<NoArgs>("no_args").build();
         c.result = engineStatusSchema();
         c.examples = {{"Not running", j("{}"),
                        j(R"({"running": false, "backend": "", "sample_rate": 0.0, "block": 0,
-                     "period": 0, "plan_latency": 0, "device_latency": 0, "xruns": 0, "midi_dropped": 0, "midi_warnings": [], "midi_out_dropped": 0, "midi_output_warnings": [], "midi_output_latency": [], "midi_inputs": [], "midi_outputs": [], "midi_lead_frames": 0,
+                     "period": 0, "plan_latency": 0, "device_latency": 0, "xruns": 0, "bridge_late": 0, "bridge_timing": {"calls": 0, "late": 0, "settles": 0, "past_deadline": 0, "spun": 0, "wait_max_us": 0, "wait_mean_us": 0, "wake_max_us": 0, "wake_mean_us": 0, "work_max_us": 0, "return_max_us": 0, "wakes_over_200us": 0, "wakes_over_1ms": 0, "bridge_cpus": [], "migrations": 0, "class_mismatches": 0, "longest_cycle_us": 0, "overruns_late_wait": 0, "overruns_slow_bridge": 0, "overruns_not_waiting": 0}, "midi_dropped": 0, "midi_warnings": [], "midi_out_dropped": 0, "midi_output_warnings": [], "midi_output_latency": [], "midi_inputs": [], "midi_outputs": [], "midi_lead_frames": 0,
                      "midi_devices_changed": false, "midi_devices_message": "",
                      "preparing_audio": false, "preparation_error": "",
                      "prepared_version": 0, "preparation_version": 0,
@@ -440,8 +528,12 @@ void registerDeviceCommands(cmd::Registry& registry) {
                                    "message": "", "hint": ""},
                      "warnings": [],
                      "memory_lock": {"requested": false, "active": false},
-                     "cpu_idle_latency": {"requested": false, "active": false},
+                     "cpu_idle_latency": {"requested": false, "active": false, "automatic": false},
+                     "thp_opt_out": {"active": false, "advised_only": false, "inherited": false},
+                     "audio_page_faults": {"scope": "none", "minor": 0, "major": 0, "threads": 0,
+                                           "saturated": false},
                      "meter_drops": {"renderer": 0, "callback": 0}, "failed_fx": [],
+                     "bridge_threads_refused": [],
                      "dropped": 0, "voice_dropped": 0, "failed_errors": [], "sync": "<any>"})"),
                        "empty"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<EngineStatus> {

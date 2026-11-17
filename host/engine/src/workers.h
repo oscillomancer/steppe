@@ -28,6 +28,10 @@ class ReadyQueue {
     void init(std::size_t minCapacity);
     bool push(std::uint32_t task) SUPPLE_RT;
     bool pop(std::uint32_t& task) SUPPLE_RT;
+    // Nothing pushed that is not popped (a push still publishing counts).
+    bool empty() const SUPPLE_RT {
+        return tail_.load(std::memory_order_acquire) == head_.load(std::memory_order_acquire);
+    }
 
   private:
     struct Cell {

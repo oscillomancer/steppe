@@ -498,6 +498,11 @@ struct EngineOptions {
     double renderAheadMs = 200.0;      // how far ahead of the playhead
     int workers = -1;                  // helpers per pool; -1: every allowed CPU but three
     BenchProbe* benchProbe = nullptr;  // benchmark only; preallocated, outlives stop()
+    // The floor of each callback cycle's bridge deadline (ADR-0081): bridged
+    // calls on live nodes wait until the cycle's start plus its period or
+    // this, whichever is larger. Tests raise it so that a loaded machine
+    // never makes a healthy bridged plug-in late.
+    double liveBridgeDeadlineMs = 2.0;
     // The renderer's and background pool's scheduling (engine.md §2.2,
     // ADR-0026). Auto: real-time below a real-time callback, else normal. The
     // others force it for benchmarks and tests (still below a real-time
@@ -520,6 +525,10 @@ struct PluginOutputs {
     std::vector<PluginOutput> events;
     std::uint64_t dropped = 0;       // cumulative since this Engine was constructed
     std::uint64_t voiceDropped = 0;  // voice tracking capacity, same lifetime
+    // The FX whose outputs were dropped since the last take (each once), or
+    // droppedAll when more did than are tracked: only these need recovery.
+    std::vector<model::Id> droppedFx;
+    bool droppedAll = false;
 };
 
 // Prepared main-thread rack timing, without instantiating plug-ins for queries.
@@ -637,6 +646,21 @@ class Engine {
     // Audio cycles that found no rendered audio while playing (after the
     // pre-roll of a start or seek).
     std::uint64_t anticipationMisses() const { return misses_.load(); }
+    // Callback cycles in which a bridged plug-in did not answer by the
+    // cycle's bridge deadline (ADR-0081): each ran past its period.
+    std::uint64_t bridgeLateCycles() const { return bridgeLate_.load(); }
+    // Callback cycles with bridged calls that ran past their period, by
+    // cause (ADR-0081 diagnostics): a call's wait reached the deadline; the
+    // bridged waits took the overrun without reaching it; or the cycle was
+    // not waiting on the bridge (its own work, or its thread descheduled).
+    struct BridgeOverruns {
+        std::uint64_t lateWait = 0, slowBridge = 0, notWaiting = 0;
+        std::int64_t longestCycleNs = 0;  // of the cycles with bridged calls
+    };
+    BridgeOverruns bridgeOverruns() const {
+        return {overrunLateWait_.load(), overrunSlowBridge_.load(), overrunNotWaiting_.load(),
+                longestBridgedCycle_.load()};
+    }
     // Recording (main thread): capture starts with the first played cycle,
     // placed where the performer heard it (device and plan latency).
     // Main thread: masters recording their output (ADR-0057), for the plans
@@ -660,6 +684,10 @@ class Engine {
     bool awaitRendererHeld(double timeoutSeconds = 10.0);
     const EngineOptions& options() const { return options_; }
     unsigned liveHelpers() const;  // main thread: enabled capacity, 0 when serial
+    // Main thread: the threads that work to the device's deadline, the
+    // callback's (once it has run, Linux only) and the live helpers'. For
+    // counting their page faults (engine.md §2.2).
+    std::vector<std::thread::native_handle_type> deadlineThreads();
     // The background threads' real-time priority (ADR-0026): below the
     // kernel's threaded interrupts (50) and the audio threads rtkit grants
     // other applications (up to 20). Any real-time level outruns normal
@@ -686,6 +714,10 @@ class Engine {
     std::int64_t playedStream(std::uint64_t epoch) const;
     std::optional<RackLatencyInfo> rackLatencies(model::Id rack, std::uint64_t version) const;
     std::uint64_t planGeneration() const { return publishedGen_; }  // main thread
+    // Main thread (ADR-0086): the last plan load() published has the device
+    // callback process a bridged plug-in (one on a live node, or any with
+    // the in-callback executor). False when stopped.
+    bool bridgedLive() const { return bridgedLive_; }
     std::uint64_t pluginOutputDrops() const { return outputDrops_.load() + idleOutputDrops_; }
 
     std::uint32_t outputLatency() const;
@@ -723,6 +755,7 @@ class Engine {
 
   private:
     friend struct EngineTestAccess;  // defined by the tests alone
+    friend struct OutputTestAccess;  // likewise (test_app.cpp)
     friend struct RecordingErrorTestAccess;
     void cycle(const float* const* in, float* const* out, std::uint32_t frames) SUPPLE_RT;
     // cycle() after its bookkeeping: count-in, then the transport's work.
@@ -863,6 +896,13 @@ class Engine {
     std::unique_ptr<OutputQueue> rendererOutputs_, callbackOutputs_;
     std::vector<PluginOutput> idleOutputs_;  // bounded main-thread queue
     std::atomic<std::uint64_t> outputDrops_{0}, voiceDrops_{0};
+    // FX whose plug-in outputs were dropped, written on the audio thread:
+    // slots hold (kind + 1) << 32 | n; more than fit set droppedFxAll_.
+    static constexpr std::size_t kDroppedFx = 512;
+    std::array<std::atomic<std::uint64_t>, kDroppedFx> droppedFx_{};
+    std::atomic<std::uint32_t> droppedFxCount_{0};
+    std::atomic<bool> droppedFxAll_{false};
+    void noteDroppedFx(model::Id fx) SUPPLE_RT;
     std::uint64_t idleOutputDrops_ = 0;
     bool notificationReload_ = false;
     MidiPortPreferences midiInputsPreferences_, midiOutputsPreferences_;
@@ -905,6 +945,7 @@ class Engine {
     // Plans carry a generation; the audio thread stores it here after adopt()
     // has stopped the instances the plan dropped. service() prunes only then.
     std::uint64_t publishedGen_ = 0;
+    bool bridgedLive_ = false;  // main thread (bridgedLive())
     std::atomic<std::uint64_t> stoppedGen_{0};
     std::shared_ptr<const model::Session> latest_;
     bool prunePending_ = false;
@@ -1019,6 +1060,9 @@ class Engine {
     LoopRange loopC_;                           // audio thread: the loop it plays
     std::uint64_t xportSeen_ = ~0ull;           // as seekSeen_: one executor at a time
     std::atomic<std::uint64_t> misses_{0};
+    std::atomic<std::uint64_t> bridgeLate_{0};
+    std::atomic<std::uint64_t> overrunLateWait_{0}, overrunSlowBridge_{0}, overrunNotWaiting_{0};
+    std::atomic<std::int64_t> longestBridgedCycle_{0};
 
     // The callback's share when anticipative: its plan and the live instances
     // it owns, and where it plays live nodes.
@@ -1048,6 +1092,8 @@ class Engine {
     std::vector<RecordingMaster> recordingMasters_;  // main thread (ADR-0057)
     std::atomic<detail::Recorder*> recorder_{nullptr};
     std::atomic<std::uint64_t> cycleSeq_{0};
+    // The thread the last cycle ran on (Linux), for deadlineThreads().
+    std::atomic<std::thread::native_handle_type> callbackThread_{};
 };
 
 }  // namespace supple::engine

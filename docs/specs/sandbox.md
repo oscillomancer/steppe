@@ -264,14 +264,19 @@ objects above implement the same publication and lifetime contracts.
 
 Before Create, the Linux parent sends process-level `SubscribeNotifications` with
 instance id 0, exactly one dedicated nonblocking eventfd via SCM_RIGHTS, and
-`u32 version = 19`; the reply is `u32 version = 19`. The descriptor is checked
+`u32 version` (the current `bridge::kVersion`); the reply repeats it. The descriptor is checked
 for eventfd type, read/write access and O_NONBLOCK; received copies are CLOEXEC.
 Missing, wrong-type, extra or duplicate descriptors, duplicate subscriptions,
 wrong versions/instance ids and trailing payloads are rejected with structured
-errors; rejected descriptors are closed. A host/bridge mismatch is detected
+errors; rejected descriptors are closed. A wrong version's error names both
+protocols ("bridge protocol 25, host 24"); a refusal from a bridge older than
+protocol 25, which names neither, is reported with the host's. A host/bridge mismatch is detected
 even when no instance is activated. Existing operation numbers are preserved;
 SubscribeNotifications and AckNotifications are appended after TakeIdleOutputs.
-`AckNotifications` uses instance 0, no payload/fd and an empty success reply.
+`AckNotifications` uses instance 0 and no payload/fd; since protocol 25 (26 on
+Windows) its reply names the instances with captures since the last ACK
+(`u32 count`, then `count` instance ids), each once. A destroyed instance
+leaves the list. A count above the parent's members plus 16 is unreadable.
 Protocol 12 appends the main-thread `PluginStatus` query after it (no payload,
 one JSON string reply); the data plane and earlier operation numbers are
 unchanged. See [plugin-status](plugin-status-extension.md).
@@ -298,7 +303,13 @@ until ACK. ACK acknowledges all publications captured before it and rearms;
 it does not consume the snapshots. The parent's parked process watcher drains
 the outward fd, publishes a pending delivery and calls subscribed app relays'
 notify(). Before pulling snapshots, parent main ACKs the drained delivery and
-refreshes every registered member, including retired/editor instances. Results
+refreshes the members the ACK names: those queued by their own requests first,
+then the named ones in the ACK's order, each once. A delivery with no ACK (a failure or the
+child's death), the first pass, and a reply that cannot be read refresh every
+registered member, including retired/editor instances. A new member, a
+member's wake subscription and its own state-changing request refresh only
+that member; a consumer pulls its own
+snapshot on call when unsubscribed and the pass did not include it. Results
 remain in proxy caches until the existing per-instance consumers drain them.
 A publication during/after ACK or during those pulls creates another event.
 Rescans supersede older clears; clear accumulation is bounded at 4096. Idle
@@ -331,6 +342,13 @@ release ordering and wakes it before joining. Audio rechecks quit before
 reading cmd. This covers shutdown before/during parking, including control
 HUP/EOF, without fabricating a processing command. Parent request/done safety
 deadlines and bounded in-flight failure checks are unchanged.
+
+A call made off the device callback (ADR-0013) fails at a process-wide
+deadline, `host::setBridgeDeadlineMs` (2000 ms by default, at least 1):
+`process` waits that long, lifecycle commands 5/2 of it plus 2 s. The engine
+tests raise it to 60 s for the whole binary (`bridge_patience.cpp`), so a
+stall of a loaded machine never decides a bit-identity comparison; the tests
+of the deadline itself set it explicitly.
 
 Thread discipline follows CLAP: create/activate/params-info/state/GUI on the
 main thread; `process` on one audio thread. The sandbox's audio thread is

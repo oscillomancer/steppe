@@ -13,6 +13,7 @@
 #include <supple/engine/realtime.h>
 
 #include <clap/ext/params.h>
+#include "bridge_patience.h"
 #include "plan.h"
 #include "rack_runtime.h"
 #include "supple/model/groups.h"
@@ -1368,7 +1369,9 @@ TEST_CASE("racks: feed-forward latency aligns independent Outs with reference im
             auto livePool = makePool();
             MediaCache liveMedia;
             DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 12288});
-            Engine engine(livePool, liveMedia, {.anticipative = anticipative, .workers = workers});
+            Engine engine(
+                livePool, liveMedia,
+                engine::test::patient({.anticipative = anticipative, .workers = workers}));
             REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 37}));
             REQUIRE(engine.load(s));
             engine.play();
@@ -1376,6 +1379,7 @@ TEST_CASE("racks: feed-forward latency aligns independent Outs with reference im
                 if (anticipative) REQUIRE(engine.awaitRendered(37));
                 backend.run(1);
             }
+            CHECK(engine.bridgeLateCycles() == 0);
             engine.stop();
             CHECK(engine.processErrors() == 0);
             const auto latency = engine.outputLatency();
@@ -1570,7 +1574,8 @@ TEST_CASE(
         // Room for every cycle below, the restart's longest wait included.
         DummyBackend backend(
             {.mode = DummyBackend::Mode::Manual, .captureFrames = (20 + 40 + 160 + 180) * 128});
-        Engine engine(pool, media, {.anticipative = anticipative, .workers = 2});
+        Engine engine(pool, media,
+                      engine::test::patient({.anticipative = anticipative, .workers = 2}));
         REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
         REQUIRE(engine.load(state));
         REQUIRE(engine.awaitPlan());
@@ -1607,6 +1612,7 @@ TEST_CASE(
         for (int i = 0; i < 180; ++i) run();
         CHECK(engine.planGeneration() == settled);
         CHECK(engine.processErrors() == 0);
+        CHECK(engine.bridgeLateCycles() == 0);
         engine.stop();
         const auto& audio = backend.capture();
         const auto end = static_cast<std::size_t>(backend.cycles() * 128);
@@ -3365,5 +3371,41 @@ TEST_CASE("rack sends: home mute and send level are mix edits beside a hardware 
         CHECK(soft ==
               doctest::Approx(loud * std::pow(10.0, -9.0 / 20)).epsilon(0.02));  // -3 to -12 dB
         CHECK(peakIn(L, 130000, 153600) < 1e-5);  // the home's mute silences its send
+    }
+}
+
+TEST_CASE("racks: transport() keeps its arithmetic at a nonzero start; gridTransport() is exact") {
+    // Review round 20: transport() had taken the exact grid arithmetic,
+    // (origin + sample) / rate, which rounds apart in the last bit from the
+    // start-plus-samples arithmetic saved module source was written against.
+    model::EditTxn t(model::Session::create(), 1);
+    const auto channel = addChannel(t);
+    t.create(model::Rack{channel, ""});
+    const auto s = commit(t);
+    auto pool = makePool();
+    for (const std::int64_t origin : {std::int64_t{3217}, std::int64_t{70001}}) {
+        CAPTURE(origin);
+        auto plan = supple::engine::detail::compile(s, pool, double(origin) / 48000.0, 128, 48000);
+        REQUIRE(plan);
+        supple::engine::detail::RackNode* rack = nullptr;
+        for (auto& node : plan->nodes)
+            if (node.rack) rack = node.rack.get();
+        REQUIRE(rack);
+        rack->clock.plan = &*plan;
+        rack->origin = origin;
+        rack->playing = true;
+        int apart = 0;
+        for (std::int64_t sample = 0; sample < 512; ++sample) {
+            const auto historical = supple::engine::detail::transportAt(*plan, sample);
+            const auto exact = supple::engine::detail::transportAtSeconds(
+                *plan, double(origin + sample) / 48000.0);
+            const auto call = rack->clock.callTransport(origin + sample);
+            const auto grid = rack->clock.transport(origin + sample);
+            CHECK(call.beats == historical.beat);
+            CHECK(call.tempo == historical.tempo);
+            CHECK(grid.beats == exact.beat);
+            apart += call.beats != grid.beats;
+        }
+        CHECK(apart > 0);  // the two arithmetics do differ here
     }
 }

@@ -25,6 +25,8 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <mutex>
+#include <sstream>
 #include <thread>
 #include <vector>
 #include "../src/bridge_client.h"
@@ -51,18 +53,26 @@ struct BridgeTestAccess {
         instance->process_->members_.push_back(instance.get());
         return instance;
     }
+    static void setId(RemoteInstance& i, std::uint32_t id) { i.instanceId_ = id; }
     static void deliver(BridgeProcess& process) {
         process.ackPending_.store(true, std::memory_order_release);
         process.delivery_.fetch_add(1, std::memory_order_release);
     }
+    // `previous`: the last request number the arena has seen.
     static std::unique_ptr<RemoteInstance> dataPlane(std::shared_ptr<BridgeProcess> process,
-                                                     void* arena, bridge::Layout layout) {
+                                                     void* arena, bridge::Layout layout,
+                                                     std::uint32_t previous = 0) {
         std::unique_ptr<RemoteInstance> instance(new RemoteInstance);
         instance->process_ = std::move(process);
         instance->map_ = arena;
         instance->hdr_ = static_cast<bridge::Header*>(arena);
         instance->layout_ = layout;
+        instance->seq_ = previous;
         return instance;
+    }
+    // Gated tests: consecutive late calls never fail the instance as hung.
+    static void neverHung(RemoteInstance& instance) {
+        instance.lateFailNs_ = std::numeric_limits<std::int64_t>::max();
     }
     static bool pendingDirty(const std::shared_ptr<BridgeProcess>& process, std::size_t member) {
         return process->members_.at(member)->pendingNotes_.stateDirty;
@@ -73,6 +83,7 @@ struct BridgeTestAccess {
         process->child_ = std::move(child);
         return process;
     }
+    static Status subscribe(BridgeProcess& process) { return process.initializeNotifications(); }
     static std::shared_ptr<BridgeProcess> adopt(int socket, pid_t pid) {
         std::shared_ptr<BridgeProcess> process(new BridgeProcess);
         process->sock_ = socket;
@@ -921,6 +932,70 @@ TEST_CASE("isolation: a hanging plugin is killed at the deadline") {
     c.stopProcessing();
 }
 
+namespace {
+// The scheduling policy (SCHED_*) of the bridge process's audio thread, read
+// from /proc; -1 when it is not found.
+int bridgeAudioThreadPolicy(int pid) {
+    std::error_code ec;
+    for (const auto& task :
+         std::filesystem::directory_iterator("/proc/" + std::to_string(pid) + "/task", ec)) {
+        std::string name;
+        std::getline(std::ifstream(task.path() / "comm"), name);
+        if (name != "audio-bridge") continue;
+        std::string stat;
+        std::getline(std::ifstream(task.path() / "stat"), stat);
+        std::istringstream fields(stat.substr(stat.rfind(')') + 2));
+        std::string field;
+        for (int i = 3; i <= 41 && fields >> field; ++i)
+            if (i == 41) return std::stoi(field);  // proc(5): policy
+    }
+    return -1;
+}
+}  // namespace
+
+TEST_CASE("a bridged audio thread takes the class each call asks for, and says when refused") {
+    // ADR-0081 point 5: live calls run in the callback's class, others in the
+    // background class; a refusal is reported (it used to leave no trace).
+    setBridgeExecutable(BRIDGE_PATH);
+    auto inst = Instance::create(find("com.suppleaudio.test.gain"), {}, true);
+    REQUIRE(inst);
+    Instance& g = **inst;
+    REQUIRE(g.activate(48000, 1, 64));
+    REQUIRE(g.startProcessing());
+    Buffers buf(64);
+    auto live = [&] {
+        LiveBridgeDeadline deadline(steadyNanoseconds() + 5'000'000'000);
+        REQUIRE(g.process(buf.block(64)));
+    };
+    struct Restore {
+        ~Restore() { setLiveBridgeAudioPolicy({ThreadPolicy::Kind::Normal, 0}); }
+    } restore;
+    rlimit limit{};
+    REQUIRE(::getrlimit(RLIMIT_RTPRIO, &limit) == 0);
+    if (::geteuid() != 0 && limit.rlim_cur < 99) {
+        setLiveBridgeAudioPolicy({ThreadPolicy::Kind::Fifo, 99});  // beyond RLIMIT_RTPRIO
+        live();
+        CHECK(g.bridgeThreadRefused());
+        CHECK(bridgeAudioThreadPolicy(g.bridgePid()) == SCHED_OTHER);
+        REQUIRE(g.process(buf.block(64)));  // background: normal, granted
+        CHECK_FALSE(g.bridgeThreadRefused());
+    } else {
+        MESSAGE("skipped the refusal: real-time priority 99 is allowed here");
+    }
+    if (limit.rlim_cur >= 1) {
+        setLiveBridgeAudioPolicy({ThreadPolicy::Kind::Fifo, 1});
+        live();
+        CHECK_FALSE(g.bridgeThreadRefused());
+        CHECK(bridgeAudioThreadPolicy(g.bridgePid()) == SCHED_FIFO);
+        REQUIRE(g.process(buf.block(64)));  // back to the background class
+        CHECK(bridgeAudioThreadPolicy(g.bridgePid()) == SCHED_OTHER);
+    } else {
+        MESSAGE("skipped the live class: RLIMIT_RTPRIO is 0");
+    }
+    g.stopProcessing();
+    g.deactivate();
+}
+
 TEST_CASE("isolation: a missing bridge is a clean error") {
     setBridgeExecutable("/nonexistent/supple-bridge");
     auto inst = Instance::create(find("com.suppleaudio.test.gain"), {}, true);
@@ -1164,6 +1239,7 @@ TEST_CASE("bridge rejects undersized shared memory and unexpected descriptors wi
         const auto detail = error.error();
         CHECK_FALSE(detail.code.empty());
         CHECK_FALSE(detail.hint.empty());
+        return detail;
     };
     rejected(bridge::Op::AckNotifications, {});
     rejected(bridge::Op::SubscribeNotifications, subscription);  // missing fd
@@ -1173,7 +1249,9 @@ TEST_CASE("bridge rejects undersized shared memory and unexpected descriptors wi
     rejected(bridge::Op::SubscribeNotifications, trailing, notifications);
     bridge::Writer wrongVersion;
     wrongVersion.u32(bridge::kVersion - 1);
-    rejected(bridge::Op::SubscribeNotifications, wrongVersion, notifications);
+    const auto mismatch = rejected(bridge::Op::SubscribeNotifications, wrongVersion, notifications);
+    CHECK(mismatch.message == "bridge protocol " + std::to_string(bridge::kVersion) + ", host " +
+                                  std::to_string(bridge::kVersion - 1));  // review round 26
     const int blocking = ::eventfd(0, EFD_CLOEXEC);
     REQUIRE(blocking >= 0);
     rejected(bridge::Op::SubscribeNotifications, subscription, blocking);
@@ -1393,7 +1471,11 @@ TEST_CASE("bridge protocol v6 retains nested structured error details") {
     CHECK(decoded.details[0].hint == "correct it");
     REQUIRE(decoded.details[0].details.size() == 1);
     CHECK(decoded.details[0].details[0].code == "leaf");
-    CHECK(bridge::kVersion == 20);
+#if defined(_WIN32)
+    CHECK(bridge::kVersion == 26);
+#else
+    CHECK(bridge::kVersion == 25);
+#endif
 }
 
 TEST_CASE("editor failures destroy the partial editor and show-hide requests reach its owner") {
@@ -2011,8 +2093,12 @@ TEST_CASE("remote subscribed snapshot consumers skip IPC on unrelated app wakes"
                            case bridge::Op::EditorRequests:
                                reply.bytes.resize(29);  // no GUI requests and no window frame
                                break;
+                           case bridge::Op::AckNotifications:
+                               reply.u32(1);  // the instance with new captures
+                               reply.u32(1);
+                               break;
                            default:
-                               break;  // ACK, SetParam and Destroy have empty success replies
+                               break;  // SetParam and Destroy have empty success replies
                        }
                        if (!bridge::sendFrame(sockets[1], 0, id, reply.bytes)) break;
                        if (static_cast<bridge::Op>(op) == bridge::Op::Destroy) break;
@@ -2052,8 +2138,119 @@ TEST_CASE("remote subscribed snapshot consumers skip IPC on unrelated app wakes"
     }
 }
 
+namespace {
+// A scripted bridge with members 1, 2 and 3 on one wake: after the first pass a
+// delivery is made, the ACK answered with `ack`, and member 1 serviced. Returns
+// the instance ids of the Service requests, in order.
+std::vector<std::uint32_t> servicedAfterAck(const std::vector<std::uint32_t>& ack, bool& failed) {
+    int sockets[2];
+    REQUIRE(::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets) == 0);
+    auto process = BridgeTestAccess::adopt(sockets[0], -1);
+    std::mutex m;
+    std::vector<std::uint32_t> serviced;
+    struct Peer {
+        int socket;
+        std::thread thread;
+        ~Peer() {
+            ::shutdown(socket, SHUT_RDWR);
+            thread.join();
+            ::close(socket);
+        }
+    } peer{sockets[1], std::thread([&, s = sockets[1]] {
+               std::uint32_t op = 0, id = 0;
+               std::vector<std::uint8_t> payload;
+               while (bridge::recvFrame(s, op, id, payload)) {
+                   bridge::Writer reply;
+                   switch (static_cast<bridge::Op>(op)) {
+                       case bridge::Op::Service: {
+                           reply.bytes.resize(35);
+                           std::lock_guard lock(m);
+                           serviced.push_back(id);
+                           break;
+                       }
+                       case bridge::Op::TakeIdleOutputs:
+                           reply.bytes.resize(12);
+                           break;
+                       case bridge::Op::EditorRequests:
+                           reply.bytes.resize(29);
+                           break;
+                       case bridge::Op::AckNotifications:
+                           reply.u32(static_cast<std::uint32_t>(ack.size()));
+                           for (const auto named : ack) reply.u32(named);
+                           break;
+                       default:
+                           break;
+                   }
+                   if (!bridge::sendFrame(s, 0, id, reply.bytes)) break;
+               }
+           })};
+    MainThreadWake wake;
+    auto a = BridgeTestAccess::controlPlane(process);
+    auto b = BridgeTestAccess::controlPlane(process);
+    auto c = BridgeTestAccess::controlPlane(process);
+    BridgeTestAccess::setId(*b, 2);
+    BridgeTestAccess::setId(*c, 3);
+    for (auto* member : {a.get(), b.get(), c.get()}) member->setMainThreadWake(wake);
+    Instance::Notifications notes;
+    std::vector<std::string> log;
+    a->service(notes, log);  // the first pass: every member
+    {
+        std::lock_guard lock(m);
+        serviced.clear();
+    }
+    BridgeTestAccess::deliver(*process);
+    a->service(notes, log);
+    failed = process->failed();
+    std::lock_guard lock(m);
+    return serviced;
+}
+}  // namespace
+
+TEST_CASE("an ACK's named instances are pulled once each, in order, and a long list pulls all") {
+    // Review round 26: the pulls were sorted by address, so their order
+    // changed from run to run, and a count was bounded only by the message
+    // size, costing count x members comparisons on main.
+    bool failed = false;
+    CHECK(servicedAfterAck({3, 2, 3, 2}, failed) == std::vector<std::uint32_t>{3, 2});
+    CHECK_FALSE(failed);
+    const std::size_t readable = 3 + 16;  // members plus the slack for destroys in flight
+    CHECK(servicedAfterAck(std::vector<std::uint32_t>(readable, 2), failed) ==
+          std::vector<std::uint32_t>{2});
+    CHECK_FALSE(failed);
+    const auto all = servicedAfterAck(std::vector<std::uint32_t>(readable + 1, 2), failed);
+    CHECK(all == std::vector<std::uint32_t>{1, 2, 3});  // unreadable: every member
+    CHECK_FALSE(failed);
+}
+
+TEST_CASE("a bridge too old to name protocol versions is refused naming the host's") {
+    // Review round 26: a protocol-24 bridge's refusal named neither version.
+    int sockets[2];
+    REQUIRE(::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets) == 0);
+    auto process = BridgeTestAccess::adopt(sockets[0], -1);
+    std::thread peer([s = sockets[1]] {
+        std::uint32_t op = 0, id = 0;
+        std::vector<std::uint8_t> payload;
+        if (!bridge::recvFrame(s, op, id, payload)) return;
+        bridge::Writer reply;
+        reply.error(Error("bridge.subscription", "invalid notification subscription", "/version",
+                          "subscribe once with instance 0, matching protocol version and a "
+                          "native wake source"));
+        (void)bridge::sendFrame(s, static_cast<std::uint32_t>(bridge::Reply::Error), id,
+                                reply.bytes);
+    });
+    const auto status = BridgeTestAccess::subscribe(*process);
+    peer.join();
+    ::close(sockets[1]);
+    REQUIRE_FALSE(status);
+    CHECK(status.error().code == "bridge.subscription");
+    CHECK(status.error().message == "invalid notification subscription (host protocol " +
+                                        std::to_string(bridge::kVersion) + ")");
+    CHECK(status.error().hint == "use matching host and bridge builds");
+}
+
 TEST_CASE(
-    "remote wake subscriptions snapshot all shared members and deliver callback GUI requests") {
+    "remote wake subscriptions pull the members an ACK names and deliver callback GUI "
+    "requests") {
     setBridgeExecutable(BRIDGE_PATH);
     MainThreadWake wake;
     REQUIRE(wake.fd() >= 0);
@@ -2092,7 +2289,7 @@ TEST_CASE(
         if (editor.resize) width = editor.width;
     }
     CHECK(tail);
-    CHECK(BridgeTestAccess::pendingDirty(*process, 1));  // other member already snapshotted
+    CHECK(BridgeTestAccess::pendingDirty(*process, 1));  // the ACK named it in the same pass
     (*second)->serviceMainThread();
     CHECK((*second)->takeNotifications().stateDirty);
     CHECK((*second)->nextTimerMs() == -1);  // closed-editor timer stayed in child
@@ -2116,6 +2313,76 @@ TEST_CASE("remote initial snapshots retain idle outputs and state before subscri
     CHECK(editor.resize);
     CHECK(editor.width == 320);
     (*instance)->closeEditor();
+}
+
+TEST_CASE("opening instances on a shared bridge costs requests linear in their number") {
+    // Item D (review round 25): each new or subscribing instance made the next
+    // pass pull every instance, so opening N cost about N^2 requests.
+    setBridgeExecutable(BRIDGE_PATH);
+    auto requestsFor = [](int n) {
+        MainThreadWake wake;
+        auto process = createBridgeProcess();
+        REQUIRE(process);
+        const auto info = find("com.suppleaudio.test.gain");
+        const auto before = bridgeRequests();
+        std::vector<std::unique_ptr<Instance>> all;
+        for (int i = 0; i < n; ++i) {
+            auto made = Instance::create(info, {}, true, *process);
+            REQUIRE(made);
+            (*made)->setMainThreadWake(wake);
+            (*made)->serviceMainThread();  // as a load services each new instance
+            (void)(*made)->takeIdleOutputs();
+            all.push_back(std::move(*made));
+        }
+        return bridgeRequests() - before;
+    };
+    const auto small = requestsFor(4);
+    const auto large = requestsFor(16);
+    CAPTURE(small);
+    CAPTURE(large);
+    CHECK(large <= small * 4 + 4);  // 4x the instances, about 4x the requests
+}
+
+TEST_CASE("a bridge-side publication pulls the instance that published, not its whole bridge") {
+    // Item D: the bridge announced new captures without naming an instance,
+    // so each announcement pulled every instance sharing the bridge. The ACK
+    // now names them. Counted, not timed.
+    setBridgeExecutable(BRIDGE_PATH);
+    auto requestsFor = [](int quiet) {
+        MainThreadWake wake;
+        auto process = createBridgeProcess();
+        REQUIRE(process);
+        const auto info = find("com.suppleaudio.test.edge");
+        std::vector<std::unique_ptr<Instance>> all;
+        for (int i = 0; i <= quiet; ++i) {
+            auto made = Instance::create(info, {}, true, *process);
+            REQUIRE(made);
+            (*made)->setMainThreadWake(wake);
+            all.push_back(std::move(*made));
+        }
+        drainWake(wake);
+        for (auto& instance : all) {
+            instance->serviceMainThread();
+            (void)instance->takeNotifications();
+        }
+        Instance& timed = *all.back();
+        const auto before = bridgeRequests();
+        // Its bridge-side timer marks the state dirty: a publication that no
+        // request of the parent's made, announced to the parent.
+        REQUIRE(timed.loadState(std::array<std::uint8_t, 4>{47, 0, 0, 0}));
+        bool dirty = false;
+        while (!dirty) {
+            drainWake(wake);
+            timed.serviceMainThread();
+            dirty = timed.takeNotifications().stateDirty;
+        }
+        return bridgeRequests() - before;
+    };
+    const auto small = requestsFor(2);
+    const auto large = requestsFor(10);
+    CAPTURE(small);
+    CAPTURE(large);
+    CHECK(large <= small + 6);  // a pull of every instance is 3 requests each
 }
 
 TEST_CASE("parent failure wake works for an alive bridge and subscriber teardown") {
@@ -2173,4 +2440,597 @@ TEST_CASE("bridge rejects main layouts beyond its channel limit") {
     auto activated = (*remote)->activate(48000, 1, 64, 17, 2);
     REQUIRE_FALSE(activated);
     CHECK(activated.error().code == "host.layout");
+}
+
+TEST_CASE("bridged calls report where their time went") {
+    // ADR-0081 diagnostics: a call's wait splits into the bridge seeing it,
+    // running it and the host seeing its answer; live calls apart, with the
+    // late ones and those posted after their deadline.
+    setBridgeExecutable(BRIDGE_PATH);
+    resetBridgeTiming();
+    auto gain = Instance::create(find("com.suppleaudio.test.gain"), {}, true);
+    REQUIRE(gain);
+    Instance& g = **gain;
+    REQUIRE(g.activate(48000, 1, 64));
+    REQUIRE(g.startProcessing());
+    Buffers buf(256);
+    resetBridgeTiming();
+    for (int i = 0; i < 50; ++i) REQUIRE(g.process(buf.block(64)));
+    BridgeTiming t = bridgeTiming();
+    CHECK(t.background.calls == 50);
+    CHECK(t.live.calls == 0);
+    CHECK(t.background.late == 0);
+    CHECK(t.background.workSumNs > 0);
+    CHECK(t.background.waitMaxNs >= t.background.workMaxNs);
+    CHECK(t.background.wakeSumNs >= 0);
+    CHECK(t.background.returnSumNs >= 0);
+    CHECK(t.background.classMismatches == 0);
+    {
+        // Every answered call is counted once in each distribution.
+        std::uint64_t wakes = 0, returns = 0;
+        for (std::size_t b = 0; b < t.background.wakeBuckets.size(); ++b) {
+            wakes += t.background.wakeBuckets[b];
+            returns += t.background.returnBuckets[b];
+        }
+        CHECK(wakes == 50);
+        CHECK(returns == 50);
+    }
+#if defined(__linux__) || defined(_WIN32)
+    CHECK(t.background.bridgeCpus != 0);
+#endif
+    {
+        // A deadline already past: the call is still made, and counted so.
+        LiveBridgeDeadline deadline(steadyNanoseconds() - 1);
+        (void)g.process(buf.block(64));
+    }
+    t = bridgeTiming();
+    CHECK(t.live.calls == 1);
+    CHECK(t.live.pastDeadline == 1);
+    g.stopProcessing();
+    g.deactivate();
+
+    auto hang = Instance::create(find("com.suppleaudio.test.crash"), {}, true);
+    REQUIRE(hang);
+    Instance& h = **hang;
+    REQUIRE(h.activate(48000, 1, 256));
+    REQUIRE(h.startProcessing());
+    REQUIRE(h.setParam(1, 2.0));  // hang in the next process()
+    resetBridgeTiming();
+    const std::int64_t span = 20'000'000;
+    {
+        LiveBridgeDeadline deadline(steadyNanoseconds() + span);
+        CHECK(h.process(buf.block(256)));  // silent for the block, not failed
+    }
+    t = bridgeTiming();
+    CHECK(t.live.calls == 1);
+    CHECK(t.live.late == 1);
+    CHECK(t.live.pastDeadline == 0);
+    CHECK(t.live.waitMaxNs >= span);  // it gives up only once the deadline passed
+    h.stopProcessing();
+}
+
+namespace {
+// A scripted bridge audio thread for the live path (ADR-0081). It answers the
+// requests it receives in turn, the n-th (from 1) only once `allowed` >= n.
+// The gate is an atomic, so nothing depends on timing: a call made under a
+// deadline already past is late exactly when the peer holds its request.
+struct GatedPeer {
+    bridge::Layout layout{64, 2, 2};
+    bridge::Header* header = nullptr;
+    std::unique_ptr<RemoteInstance> instance;
+    std::atomic<bool> quit{false};
+    std::atomic<unsigned> allowed, accepted{0}, completed{0};
+    bool refuseStart = false;
+    // Written by the peer before it answers; read once that answer is seen.
+    std::vector<bridge::Cmd> commands;
+    std::vector<std::vector<Event>> blocks;  // each Process's events
+    std::vector<float> firstInput;           // each Process's first input sample
+    std::vector<std::uint32_t> periods;      // each command's livePeriodNs
+    std::thread thread;
+
+    // `hold`: the first request it holds (0: none).
+    explicit GatedPeer(unsigned hold = 1, std::uint32_t previous = 0, bool refuse = false)
+        : allowed(hold ? hold - 1 : ~0u), refuseStart(refuse) {
+        commands.reserve(64);
+        blocks.reserve(64);
+        firstInput.reserve(64);
+        periods.reserve(64);
+        void* arena =
+            ::mmap(nullptr, layout.size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+        REQUIRE(arena != MAP_FAILED);
+        header = new (arena) bridge::Header{};
+        header->request = previous;
+        header->done = previous;
+        instance =
+            BridgeTestAccess::dataPlane(BridgeTestAccess::adopt(-1, -1), arena, layout, previous);
+        BridgeTestAccess::neverHung(*instance);
+        thread = std::thread([this, previous] { run(previous); });
+    }
+    ~GatedPeer() {
+        quit = true;
+        thread.join();
+        instance.reset();  // unmaps the arena
+    }
+    void release(unsigned upTo = ~0u) { allowed.store(upTo); }
+    void run(std::uint32_t last) {
+        auto* base = reinterpret_cast<std::uint8_t*>(header);
+        bool sounding = false, processing = false;
+        while (!quit.load()) {
+            const std::uint32_t req = header->request.load(std::memory_order_acquire);
+            if (req == last) {
+                std::this_thread::yield();
+                continue;
+            }
+            const unsigned n = accepted.fetch_add(1) + 1;
+            while (allowed.load() < n && !quit.load()) std::this_thread::yield();
+            if (quit.load()) return;
+            const auto cmd = static_cast<bridge::Cmd>(header->cmd);
+            commands.push_back(cmd);
+            periods.push_back(header->livePeriodNs);
+            if (cmd == bridge::Cmd::StartProcessing) processing = !refuseStart;
+            if (cmd == bridge::Cmd::StopProcessing) processing = false;
+            if (cmd == bridge::Cmd::Reset) sounding = false;
+            if (cmd == bridge::Cmd::Process) {
+                const auto* ev = reinterpret_cast<const Event*>(base + layout.events);
+                blocks.emplace_back(ev, ev + header->eventCount);
+                for (const Event& e : blocks.back()) {
+                    if (e.kind == Event::Kind::NoteOn) sounding = true;
+                    if (e.kind == Event::Kind::NoteOff) sounding = false;
+                }
+                firstInput.push_back(reinterpret_cast<const float*>(base + layout.inAudio)[0]);
+                auto* out = reinterpret_cast<float*>(base + layout.outAudio);
+                std::fill_n(out, layout.maxFrames * layout.outChannels, sounding ? 1.0f : 0.0f);
+                header->outEventCount = 0;
+            }
+            header->processing = processing ? 1 : 0;
+            header->result = 1;
+            header->seenNs = header->postedNs;
+            header->finishedNs = steadyNanoseconds();
+            header->cpu = 0;
+            last = req;
+            header->done.store(req, std::memory_order_release);
+            bridge::futexWake(header->done);
+            completed.fetch_add(1);
+        }
+    }
+    static void waitFor(const std::atomic<unsigned>& count, unsigned n) {
+        while (count.load() < n) std::this_thread::yield();
+    }
+};
+
+// Calls under a deadline already past: late unless already answered. Only
+// held requests, or ones answered before the call, are made this way.
+struct Past {
+    LiveBridgeDeadline deadline{steadyNanoseconds() - 1};
+};
+// Calls with a deadline far off: they wait for the peer's answer.
+struct Patient {
+    LiveBridgeDeadline deadline{steadyNanoseconds() + 30'000'000'000};
+};
+
+Event note(Event::Kind kind, std::int16_t key, std::uint32_t time = 0) {
+    Event e;
+    e.kind = kind;
+    e.key = key;
+    e.time = time;
+    return e;
+}
+Event param(std::uint32_t id, double value, std::uint32_t time = 0) {
+    Event e;
+    e.kind = Event::Kind::Param;
+    e.paramId = id;
+    e.value = value;
+    e.time = time;
+    return e;
+}
+}  // namespace
+
+TEST_CASE("a late bridged request stays outstanding when its number wraps through zero") {
+    // Round 16: request 0 could not be told from none outstanding, so the
+    // next call wrote the arena the bridge still owned.
+    GatedPeer peer(1, std::numeric_limits<std::uint32_t>::max());
+    Buffers buf(64);
+    std::fill(buf.l.begin(), buf.l.end(), 1.0f);
+    {
+        Past past;
+        CHECK(peer.instance->process(buf.block(64), nullptr));  // request 0, held
+    }
+    GatedPeer::waitFor(peer.accepted, 1);
+    std::fill(buf.l.begin(), buf.l.end(), 2.0f);
+    {
+        Past past;
+        CHECK(peer.instance->process(buf.block(64), nullptr));  // skipped: 0 is outstanding
+    }
+    CHECK(peer.header->request.load() == 0);
+    const auto* input = reinterpret_cast<const float*>(
+        reinterpret_cast<std::uint8_t*>(peer.header) + peer.layout.inAudio);
+    CHECK(input[0] == 1.0f);
+    peer.release();
+    {
+        Patient patient;
+        CHECK(peer.instance->process(buf.block(64), nullptr));
+    }
+    REQUIRE(peer.firstInput.size() == 2);
+    CHECK(peer.firstInput[0] == 1.0f);
+    CHECK(peer.firstInput[1] == 2.0f);
+    CHECK_FALSE(peer.instance->failed());
+}
+
+TEST_CASE("what skipped blocks tell a late bridged plug-in reaches it with the next block") {
+    // Round 16: a block skipped while a late one was outstanding lost its
+    // events, a note off among them, and the note sounded on (ADR-0081 §4).
+    GatedPeer peer;
+    Buffers buf(64);
+    const Event on = note(Event::Kind::NoteOn, 60, 3);
+    {
+        Past past;
+        CHECK(peer.instance->process(buf.block(64, {&on, 1}), nullptr));  // late, held
+    }
+    GatedPeer::waitFor(peer.accepted, 1);
+    const std::array skipped{param(3, 0.25, 5), note(Event::Kind::NoteOff, 60, 17)};
+    {
+        Past past;
+        CHECK(peer.instance->process(buf.block(64, skipped), nullptr));
+    }
+    CHECK(std::all_of(buf.ol.begin(), buf.ol.end(), [](float x) { return x == 0.0f; }));
+    peer.release();
+    const Event own = param(3, 0.5, 9);
+    {
+        Patient patient;
+        CHECK(peer.instance->process(buf.block(64, {&own, 1}), nullptr));
+    }
+    CHECK(buf.ol[0] == 0.0f);  // the note off arrived
+    REQUIRE(peer.blocks.size() == 2);
+    const std::vector<Event>& got = peer.blocks[1];
+    REQUIRE(got.size() == 3);
+    CHECK(got[0].kind == Event::Kind::Param);
+    CHECK(got[0].value == 0.25);
+    CHECK(got[0].time == 0);
+    CHECK(got[1].kind == Event::Kind::NoteOff);
+    CHECK(got[1].time == 0);
+    CHECK(got[2].value == 0.5);
+    CHECK(got[2].time == 9);
+    CHECK_FALSE(peer.instance->failed());
+}
+
+TEST_CASE("lifecycle commands a late bridge cannot take yet are sent before its next block") {
+    // Round 16: reset, stop and flush issued while a late request was
+    // outstanding were dropped, so a seek left the plug-in's voices playing.
+    Buffers buf(64);
+    const Event on = note(Event::Kind::NoteOn, 60);
+    using bridge::Cmd;
+    SUBCASE("a reset, sent once, drops the notes carried before it") {
+        GatedPeer peer;
+        {
+            Past past;
+            CHECK(peer.instance->process(buf.block(64, {&on, 1}), nullptr));
+        }
+        GatedPeer::waitFor(peer.accepted, 1);
+        const std::array skipped{note(Event::Kind::NoteOn, 64), param(2, 0.75)};
+        {
+            Past past;
+            CHECK(peer.instance->process(buf.block(64, skipped), nullptr));
+            peer.instance->reset();
+            peer.instance->reset();
+        }
+        peer.release();
+        {
+            Patient patient;
+            CHECK(peer.instance->process(buf.block(64), nullptr));
+        }
+        CHECK(peer.commands == std::vector{Cmd::Process, Cmd::Reset, Cmd::Process});
+        REQUIRE(peer.blocks.size() == 2);
+        REQUIRE(peer.blocks[1].size() == 1);
+        CHECK(peer.blocks[1][0].kind == Event::Kind::Param);
+        CHECK(buf.ol[0] == 0.0f);  // nothing sounds after the reset
+    }
+    SUBCASE("in order: reset, stop, flush, then what is asked next") {
+        GatedPeer peer;
+        {
+            Past past;
+            CHECK(peer.instance->process(buf.block(64), nullptr));
+        }
+        GatedPeer::waitFor(peer.accepted, 1);
+        {
+            Past past;
+            peer.instance->flush();
+            peer.instance->stopProcessing();
+            peer.instance->reset();
+        }
+        peer.release();
+        {
+            Patient patient;
+            CHECK(peer.instance->startProcessing());
+        }
+        CHECK(peer.commands == std::vector{Cmd::Process, Cmd::Reset, Cmd::StopProcessing,
+                                           Cmd::Flush, Cmd::StartProcessing});
+    }
+    SUBCASE("a kept command late in its turn is outstanding, the others still kept") {
+        GatedPeer peer;
+        {
+            Past past;
+            CHECK(peer.instance->process(buf.block(64), nullptr));  // request 1, held
+        }
+        GatedPeer::waitFor(peer.accepted, 1);
+        {
+            Past past;
+            peer.instance->reset();
+            peer.instance->stopProcessing();
+        }
+        peer.release(1);  // answers the block, holds what comes next
+        GatedPeer::waitFor(peer.completed, 1);
+        {
+            Past past;
+            peer.instance->flush();  // settles, posts the reset, which is held
+        }
+        CHECK(peer.header->request.load() == 2);
+        peer.release();
+        {
+            Patient patient;
+            CHECK(peer.instance->process(buf.block(64), nullptr));
+        }
+        CHECK(peer.commands ==
+              std::vector{Cmd::Process, Cmd::Reset, Cmd::StopProcessing, Cmd::Flush, Cmd::Process});
+    }
+}
+
+TEST_CASE("more than a late bridge can carry resets it and keeps each parameter's value") {
+    GatedPeer peer;
+    Buffers buf(64);
+    const Event on = note(Event::Kind::NoteOn, 60);
+    {
+        Past past;
+        CHECK(peer.instance->process(buf.block(64, {&on, 1}), nullptr));
+    }
+    GatedPeer::waitFor(peer.accepted, 1);
+    // A note, then more parameter changes than fit: ten parameters, cycling.
+    std::vector<Event> skipped{note(Event::Kind::NoteOn, 64)};
+    const std::uint32_t changes = RemoteInstance::kMaxCarried + 88;
+    for (std::uint32_t i = 0; i < changes; ++i) skipped.push_back(param(i % 10, i, i % 64));
+    {
+        Past past;
+        CHECK(peer.instance->process(buf.block(64, skipped), nullptr));
+    }
+    peer.release();
+    {
+        Patient patient;
+        CHECK(peer.instance->process(buf.block(64), nullptr));
+    }
+    using bridge::Cmd;
+    CHECK(peer.commands == std::vector{Cmd::Process, Cmd::Reset, Cmd::Process});
+    REQUIRE(peer.blocks.size() == 2);
+    const std::vector<Event>& got = peer.blocks[1];
+    CHECK(got.size() <= RemoteInstance::kMaxCarried);
+    CHECK(std::all_of(got.begin(), got.end(),
+                      [](const Event& e) { return e.kind == Event::Kind::Param; }));
+    for (std::uint32_t id = 0; id < 10; ++id) {
+        CAPTURE(id);
+        const auto last =
+            std::find_if(got.rbegin(), got.rend(), [&](const Event& e) { return e.paramId == id; });
+        REQUIRE(last != got.rend());
+        // The last change of parameter `id`.
+        std::uint32_t expected = changes - 1;
+        while (expected % 10 != id) --expected;
+        CHECK(last->value == double(expected));
+    }
+    CHECK(buf.ol[0] == 0.0f);
+}
+
+TEST_CASE("a full block after a late bridge loses none of its events to the carry") {
+    // Round 19: one carried parameter crowded a 2048-event block's last
+    // event, its NoteOff, out, and the reset kept for the overflow came
+    // before the block's NoteOn, so the note hung.
+    GatedPeer peer;
+    Buffers buf(64);
+    {
+        Past past;
+        CHECK(peer.instance->process(buf.block(64), nullptr));
+    }
+    GatedPeer::waitFor(peer.accepted, 1);
+    const std::vector<Event> skipped{param(7, 0.25, 3), param(8, 0.5, 9)};
+    {
+        Past past;
+        CHECK(peer.instance->process(buf.block(64, skipped), nullptr));
+    }
+    // A legal block, full: a note from its start to its end, parameter 7
+    // again, and other parameters.
+    std::vector<Event> full{note(Event::Kind::NoteOn, 60)};
+    full.push_back(param(7, 0.75, 1));
+    while (full.size() < bridge::kMaxEvents - 1)
+        full.push_back(param(100 + full.size() % 50, double(full.size()), 2));
+    full.push_back(note(Event::Kind::NoteOff, 60, 63));
+    peer.release();
+    {
+        Patient patient;
+        CHECK(peer.instance->process(buf.block(64, full), nullptr));
+        CHECK(peer.instance->process(buf.block(64), nullptr));
+    }
+    using bridge::Cmd;
+    // Nothing but parameters was carried: no reset.
+    CHECK(peer.commands == std::vector{Cmd::Process, Cmd::Process, Cmd::Process});
+    REQUIRE(peer.blocks.size() == 3);
+    const std::vector<Event>& got = peer.blocks[1];
+    REQUIRE(got.size() == full.size());  // every event of the block
+    for (std::size_t i = 0; i < full.size(); ++i) {
+        CAPTURE(i);
+        CHECK(got[i].kind == full[i].kind);
+        CHECK(got[i].time == full[i].time);
+        CHECK(got[i].paramId == full[i].paramId);
+        CHECK(got[i].value == full[i].value);
+    }
+    // Parameter 7's carried value gave way to the block's later one;
+    // parameter 8's, which did not fit, came with the next block.
+    REQUIRE(peer.blocks[2].size() == 1);
+    CHECK(peer.blocks[2][0].paramId == 8);
+    CHECK(peer.blocks[2][0].value == 0.5);
+    CHECK(peer.blocks[2][0].time == 0);
+    CHECK(buf.ol[0] == 0.0f);  // the note ended
+}
+
+TEST_CASE("a late bridge's carry full of parameters still takes a later value of one") {
+    // Round 19: once 512 distinct parameters filled it, the carry stopped
+    // looking, and a later value of one of them was lost.
+    GatedPeer peer;
+    Buffers buf(64);
+    {
+        Past past;
+        CHECK(peer.instance->process(buf.block(64), nullptr));
+    }
+    GatedPeer::waitFor(peer.accepted, 1);
+    std::vector<Event> skipped;
+    for (std::uint32_t id = 0; id < RemoteInstance::kMaxCarried; ++id)
+        skipped.push_back(param(id, 0.1));
+    const std::vector<Event> later{param(0, 0.9, 5), param(9999, 0.3, 6)};
+    {
+        Past past;
+        CHECK(peer.instance->process(buf.block(64, skipped), nullptr));
+        CHECK(peer.instance->process(buf.block(64, later), nullptr));
+    }
+    peer.release();
+    {
+        Patient patient;
+        CHECK(peer.instance->process(buf.block(64), nullptr));
+    }
+    using bridge::Cmd;
+    CHECK(peer.commands == std::vector{Cmd::Process, Cmd::Process});
+    REQUIRE(peer.blocks.size() == 2);
+    const std::vector<Event>& got = peer.blocks[1];
+    CHECK(got.size() == RemoteInstance::kMaxCarried);
+    const auto zero =
+        std::find_if(got.begin(), got.end(), [](const Event& e) { return e.paramId == 0; });
+    REQUIRE(zero != got.end());
+    CHECK(zero->value == 0.9);  // the latest value
+    CHECK(std::count_if(got.begin(), got.end(), [](const Event& e) { return e.paramId == 0; }) ==
+          1);
+    // A 513th target has no room: it is the one value lost.
+    CHECK(std::none_of(got.begin(), got.end(), [](const Event& e) { return e.paramId == 9999; }));
+}
+
+TEST_CASE("a bridged start that misses its live deadline is unanswered, not refused") {
+    // Round 16: the engine took it for a refusal and never asked again.
+    {
+        GatedPeer peer;
+        {
+            Past past;
+            CHECK_FALSE(peer.instance->startProcessing());
+        }
+        CHECK(peer.instance->startUnanswered());
+        GatedPeer::waitFor(peer.accepted, 1);
+        {
+            Past past;  // still held
+            CHECK_FALSE(peer.instance->startProcessing());
+            CHECK(peer.instance->startUnanswered());
+        }
+        peer.release();
+        {
+            Patient patient;
+            CHECK(peer.instance->startProcessing());  // its answer, not a second start
+        }
+        CHECK_FALSE(peer.instance->startUnanswered());
+        CHECK(peer.commands == std::vector{bridge::Cmd::StartProcessing});
+    }
+    {
+        GatedPeer peer(0, 0, true);  // answers at once, refusing
+        Patient patient;
+        CHECK_FALSE(peer.instance->startProcessing());
+        CHECK_FALSE(peer.instance->startUnanswered());
+    }
+}
+
+TEST_CASE("bridged calls carry the device period for the live class") {
+    // Round 16: macOS sized the live time constraint by the activation's
+    // capacity (the 1024-frame render block on a 128-frame device) and never
+    // corrected it. The engine's device period now goes with every command.
+    struct Restore {
+        ~Restore() { setLiveBridgeAudioPolicy({ThreadPolicy::Kind::Normal, 0}); }
+    } restore;
+    GatedPeer peer(0);
+    Buffers buf(64);
+    setLiveBridgeAudioPolicy({ThreadPolicy::Kind::Normal, 0}, 128, 48000);
+    {
+        Patient patient;
+        CHECK(peer.instance->startProcessing());
+        CHECK(peer.instance->process(buf.block(64), nullptr));
+    }
+    setLiveBridgeAudioPolicy({ThreadPolicy::Kind::Normal, 0}, 256, 48000);
+    {
+        Patient patient;
+        CHECK(peer.instance->process(buf.block(64), nullptr));
+    }
+    CHECK(liveBridgePeriodNs() == 5333333);
+    // A duration (round 19): the device's frames at the device's rate.
+    CHECK(peer.periods == std::vector<std::uint32_t>{2666667, 2666667, 5333333});
+}
+
+TEST_CASE("the live class's period is the device's whatever rate a plug-in runs at") {
+    // Round 19: the bridge divided the device's period in frames by the
+    // plug-in's activation rate, so a 2x or 4x oversampled effect on a
+    // 48 kHz, 128-frame device asked for a half or a quarter of 2.667 ms.
+    const std::uint32_t device = 2666667;  // 128 frames at 48 kHz
+    for (const double rate : {48000.0, 96000.0, 192000.0}) {
+        CAPTURE(rate);
+        CHECK(bridge::liveClassPeriodNs(device, 128, rate) == double(device));
+        CHECK(bridge::liveClassPeriodNs(device, 1024, rate) == double(device));
+    }
+    // Without a device period: the command's block at the activation rate.
+    CHECK(bridge::liveClassPeriodNs(0, 256, 96000) == doctest::Approx(2666666.67));
+    CHECK(bridge::liveClassPeriodNs(0, 256, 0) == 0.0);
+}
+
+// Round 25 (review-builds/round25/probe_nowake.patch).
+// A shared bridge with two unsubscribed members (no wake: offline-render pools and
+// tests). Member B's state changed in the bridge after its initial snapshot. Member A
+// then makes a state-changing request. B's own service() must still pull B on demand.
+TEST_CASE("an unsubscribed bridged instance still pulls itself after another member's request") {
+    int sockets[2];
+    REQUIRE(::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets) == 0);
+    auto process = BridgeTestAccess::adopt(sockets[0], -1);
+    std::atomic<unsigned> serviceOfB{0}, calls{0};
+    struct Peer {
+        int socket;
+        std::thread thread;
+        ~Peer() {
+            ::shutdown(socket, SHUT_RDWR);
+            thread.join();
+            ::close(socket);
+        }
+    } peer{sockets[1], std::thread([&] {
+               std::uint32_t op = 0, id = 0;
+               std::vector<std::uint8_t> payload;
+               while (bridge::recvFrame(sockets[1], op, id, payload)) {
+                   ++calls;
+                   bridge::Writer reply;
+                   switch (static_cast<bridge::Op>(op)) {
+                       case bridge::Op::Service:
+                           reply.bytes.resize(35);
+                           // B (id 2): latencyChanged from its second snapshot on.
+                           if (id == 2 && ++serviceOfB >= 2) reply.bytes[3] = 1;
+                           break;
+                       case bridge::Op::TakeIdleOutputs:
+                           reply.bytes.resize(12);
+                           break;
+                       case bridge::Op::EditorRequests:
+                           reply.bytes.resize(29);
+                           break;
+                       default:
+                           break;
+                   }
+                   if (!bridge::sendFrame(sockets[1], 0, id, reply.bytes)) break;
+                   if (static_cast<bridge::Op>(op) == bridge::Op::Destroy) break;
+               }
+           })};
+    auto a = BridgeTestAccess::controlPlane(process);
+    auto b = BridgeTestAccess::controlPlane(process);
+    BridgeTestAccess::setId(*b, 2);
+    Instance::Notifications notes;
+    std::vector<std::string> log;
+    a->service(notes, log);  // initial snapshot of both members
+    REQUIRE(serviceOfB.load() == 1);
+    notes = {};
+    REQUIRE(a->setParam(0, 0.5));  // A's own state-changing request
+    const auto before = calls.load();
+    b->service(notes, log);  // B, unsubscribed, polls on demand
+    CAPTURE(calls.load() - before);
+    CHECK(serviceOfB.load() == 2);  // B was asked for its state
+    CHECK(notes.latencyChanged);    // and B's change reached its caller
 }

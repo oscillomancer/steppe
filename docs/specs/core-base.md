@@ -71,6 +71,25 @@ hardware-count fallback; `allowedCpuCount()` returns zero if Linux affinity
 cannot be read, preserving conservative live-helper admission. `realtimePriorityLimit`
 clamps to Linux RLIMIT_RTPRIO and leaves other platforms unchanged.
 
+Page faults (ADR-0084): `currentThreadHandle()` is the calling thread's
+native handle without a system call (`pthread_self()`; Windows'
+pseudo handle), so an audio path may record it. `kernelThreadId(handle)` is
+a live thread's tid on Linux, decoded from its CPU clock id
+(`pthread_getcpuclockid`; glibc and musl encode `(~tid << 3) | 6`), and 0
+elsewhere. `threadPageFaults(tid)` reads `minflt`/`majflt` from
+`/proc/self/task/<tid>/stat` (nullopt for an id no thread has, which an ended
+thread's becomes only once the kernel releases it, possibly after its join
+returns, and which a later thread may then reuse; and always on
+macOS and Windows, which keep no per-thread count). `processPageFaults()` is
+the process's: `getrusage` on Linux; on macOS the task's event counts
+(`TASK_EVENTS_INFO`: every fault, less page-ins as `minor`, page-ins as
+`major`), since `getrusage` there counts only page reclaims and misses
+fresh pages' zero-fill faults; it maps fresh anonymous memory in clusters,
+so touching N new pages can count far fewer than N faults, and its 32-bit
+counts stop at INT32_MAX (`saturated`, from `pageFaultsFromTaskCounts`); `GetProcessMemoryInfo` on Windows with
+`major` -1, since it does not separate them. None of these but
+the first may run on an audio path.
+
 ## Directory roots
 
 Header `supple/base/paths.h`, namespace `supple::paths`, functions returning

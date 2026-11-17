@@ -96,6 +96,11 @@ current state.
 | [0078](0078-unsaved-recovery.md) | Unsaved projects autosave and come back after a crash | Accepted |
 | [0079](0079-registry-index-exposure.md) | Exposure metadata in the registry index | Accepted |
 | [0080](0080-midi-recording-recovery.md) | MIDI takes survive a crash through a journal | Accepted |
+| [0081](0081-live-bridged-plugins.md) | Bridged plug-ins run on live nodes, with a bounded wait | Accepted |
 | [0082](0082-audio-media-durability.md) | Audio takes and published media survive a crash | Accepted |
+| [0084](0084-audio-thread-page-faults.md) | Audio threads take no page faults the app can prevent | Accepted |
+| [0085](0085-live-helpers-park-while-bridged.md) | Live helpers park while a bridged call blocks | Accepted |
+| [0086](0086-idle-hold-for-live-bridged-plugins.md) | The idle-latency request is held while a bridged plug-in plays live | Accepted |
 | [0087](0087-control-boundary-budgets.md) | Bounded local control input and output | Accepted |
+| [0088](0088-lost-bridged-output-ends-held-notes.md) | A bridged block's lost output ends the notes it held | Accepted |
 | [0089](0089-endpoint-lock-ownership.md) | A server owns its control endpoint by holding its lock | Accepted |

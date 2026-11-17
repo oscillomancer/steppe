@@ -14,6 +14,8 @@
 // target hears its MIDI, as before 2.10, and post-FX equals pre-FX. Nothing
 // here allocates: every buffer is sized in prepareRackMidi.
 #include <algorithm>
+#include <bit>
+#include <utility>
 
 #include "rack_runtime.h"
 
@@ -206,6 +208,29 @@ void stageMidiBus(Node& node, Stage& st) SUPPLE_RT {
                        st.busBase + static_cast<std::int32_t>(free - st.busHeld.begin()),
                        velocity));
     };
+    // ADR-0088: a block whose output never arrived (a late or skipped bridged
+    // block, or a failed bridge) lost whatever ends the plug-in sent. What its
+    // output holds ends now, at the block's start, and each channel it moved
+    // a controller on is reset, so nothing downstream stays held; the plug-in's
+    // own later ends of those notes match nothing and pass no further.
+    if (st.outEvents.lost) {
+        for (std::size_t s = 0; s < st.busHeld.size(); ++s)
+            if (st.busHeld[s].high) end(s, host::Event::Kind::NoteOff, 0);
+        for (std::size_t port = 0; port < st.busControllers.size(); ++port)
+            for (auto mask = std::exchange(st.busControllers[port], std::uint16_t{0}); mask != 0;
+                 mask = static_cast<std::uint16_t>(mask & (mask - 1))) {
+                const auto channel = static_cast<std::uint8_t>(std::countr_zero(mask));
+                host::Event e;
+                e.kind = host::Event::Kind::Midi;
+                e.time = 0;
+                e.port = static_cast<std::int16_t>(port);
+                e.channel = channel;
+                e.midi[0] = static_cast<std::uint8_t>(0xb0 | channel);
+                e.midi[1] = 121;  // reset all controllers
+                e.midi[2] = 0;
+                emit(e);
+            }
+    }
     if (st.processed)
         for (std::size_t i = 0; i < st.outEvents.count; ++i) {
             const host::OutputEvent& o = st.outEvents.storage[i];
@@ -238,6 +263,19 @@ void stageMidiBus(Node& node, Stage& st) SUPPLE_RT {
                     }
                     if (status == 0xb0 && (o.midi[1] == 120 || o.midi[1] == 123))
                         endMatching(host::Event::Kind::NoteOff, o.time, o.port, channel, -1, -1);
+                    // The controllers a lost block resets (ADR-0088): any
+                    // controller (bar the channel mode messages), pitch bend
+                    // and pressure set one; resetting them all clears it.
+                    if (o.port >= 0 &&
+                        static_cast<std::size_t>(o.port) < st.busControllers.size()) {
+                        auto& moved = st.busControllers[static_cast<std::size_t>(o.port)];
+                        const auto bit = static_cast<std::uint16_t>(1u << channel);
+                        if (status == 0xb0 && o.midi[1] == 121)
+                            moved = static_cast<std::uint16_t>(moved & ~bit);
+                        else if ((status == 0xb0 && o.midi[1] < 120) || status == 0xa0 ||
+                                 status == 0xd0 || status == 0xe0)
+                            moved = static_cast<std::uint16_t>(moved | bit);
+                    }
                     host::Event e;
                     e.kind = host::Event::Kind::Midi;
                     e.time = o.time;

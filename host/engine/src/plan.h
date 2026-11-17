@@ -552,6 +552,10 @@ struct Stage {
     bool midiOnly = false;  // no audio ports: it runs for its notes, audio passes
     std::int32_t busBase = 0;
     std::vector<BusVoice> busHeld;
+    // For each of its first 8 output ports, the channels (a bit each) its MIDI
+    // output has moved a controller, pitch bend or pressure on since it last
+    // reset them: what a block whose output is lost resets (ADR-0088).
+    std::array<std::uint16_t, 8> busControllers{};
     host::Instance* instance = nullptr;  // null: placeholder (pass-through)
     Id fx;
     std::vector<ParamLane> lanes;

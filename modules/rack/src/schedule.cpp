@@ -387,8 +387,8 @@ void Schedule::process(std::int64_t position, int frames, Clock& clock) SUPPLE_R
         // grid interval's start with how far into it this call starts, from
         // which a frame's song position is computed alike however host
         // blocks split the interval (gridTransport()).
-        ctx.transport = clock.transport(pos);
-        ctx.grid = phase ? clock.transport(pos - phase) : ctx.transport;
+        ctx.transport = clock.callTransport(pos);
+        ctx.grid = clock.transport(pos - phase);
         ctx.grid.offset = phase;
         // Host blocks may split one grid interval into several calls. Keep
         // its sampled automation target while smoothing still advances every

@@ -12,6 +12,7 @@
 
 #include <clap/clap.h>
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
@@ -223,12 +224,20 @@ struct OutputEvent {
 // events keep the order the plug-in emitted them in). `unsupported` counts
 // note/MIDI output with no OutputEvent form: SysEx, MIDI 2.0 messages and
 // note expressions without a MIDI 1.0 equivalent, malformed notes and MIDI.
+// `lost`: the block's output never arrived and never will (a bridged block
+// that missed its live deadline or was skipped behind one, or a failed
+// bridge): process() returned silence and no events, whatever the plug-in
+// made of it (ADR-0088).
 struct OutputEvents {
     std::span<OutputEvent> storage;
     std::size_t count = 0;
     std::size_t dropped = 0;
     std::size_t unsupported = 0;
-    void clear() { count = dropped = unsupported = 0; }
+    bool lost = false;
+    void clear() {
+        count = dropped = unsupported = 0;
+        lost = false;
+    }
 };
 
 class Library;         // a loaded .clap binary (shared by its instances)
@@ -238,6 +247,8 @@ class Vst3Instance;    // local VST3 backing
 
 // The bridge executable for isolated instances (process-wide, set at startup).
 void setBridgeExecutable(std::filesystem::path path);
+// The one set (empty when none is).
+std::filesystem::path bridgeExecutable();
 // Finds the bridge named `name` (<slug>-bridge) next to the running
 // executable (installed) or in the build tree's host/clap-host directory, and
 // sets it. False when there is none.
@@ -249,7 +260,132 @@ Result<std::shared_ptr<BridgeProcess>> createBridgeProcess();
 // does not wait behind a lower-priority thread (ADR-0026).
 void setBridgeAudioPolicy(ThreadPolicy policy);
 ThreadPolicy bridgeAudioPolicy() SUPPLE_RT;
+// The failure deadline of a bridged call made off the device callback
+// (ADR-0013): `process` waits this long, lifecycle commands 5/2 of it plus
+// 2 s; a bridge that has not answered by then is killed and its instances
+// fail (silent). Process-wide; 2000 ms by default, at least 1. A test that
+// compares bridged renders bit for bit raises it, so a stalled machine
+// fails no healthy plug-in (see bridge_patience.cpp in the engine tests).
+void setBridgeDeadlineMs(int ms);
+int bridgeDeadlineMs() SUPPLE_RT;
+// The class a bridged instance's audio thread takes while it runs under a
+// live deadline (ADR-0081): the device callback's (process-wide; Normal by
+// default). On Linux this policy and priority; macOS and Windows apply their
+// own audio class in the bridge (time-constraint, MMCSS Pro Audio) whatever
+// it says. The engine sets it while it runs, with the device period (frames
+// at the device's rate), which sizes the macOS time constraint (0: the
+// command's block). Commands carry it as a duration, so an oversampled
+// plug-in, running at another rate, asks for the device's period.
+void setLiveBridgeAudioPolicy(ThreadPolicy policy, std::uint32_t periodFrames = 0,
+                              double sampleRate = 0);
+ThreadPolicy liveBridgeAudioPolicy() SUPPLE_RT;
+std::uint32_t liveBridgePeriodNs() SUPPLE_RT;  // 0: none
 bool bridgeProcessFailed(const std::shared_ptr<BridgeProcess>& process);
+
+// ADR-0081: the device callback's bridge deadline, on the steady clock in
+// nanoseconds (steadyNanoseconds()). While one is set on the calling thread,
+// a bridged instance's audio-thread calls wait for its answer only until
+// then, and never check, kill or reap its process: a stage that has not
+// answered is silent for the block (process() returns true) and its request
+// stays outstanding, answered before the shared memory is used again. After
+// 50 ms of consecutive late blocks the instance fails, and the main thread
+// kills its process when it next services it. Unset (0), the background
+// deadline applies (ADR-0013). Each callback-owned thread sets it per cycle;
+// 0 sets none (a live helper serving a cycle without one).
+class LiveBridgeDeadline {
+  public:
+    explicit LiveBridgeDeadline(std::int64_t steadyNs) SUPPLE_RT;
+    ~LiveBridgeDeadline() SUPPLE_RT;
+    LiveBridgeDeadline(const LiveBridgeDeadline&) = delete;
+    LiveBridgeDeadline& operator=(const LiveBridgeDeadline&) = delete;
+
+  private:
+    std::int64_t previous_;
+};
+// ADR-0085: a live pool's view of its threads' bridged waits. While one is
+// set on the calling thread (LiveBridgeWaitScope), a bridged call under a
+// live deadline that has not been answered within its spin, and so blocks,
+// counts itself in `blocked` for as long as it blocks, then calls
+// ended(context). The pool's idle helpers park only while `blocked` is
+// nonzero, and ended() wakes them.
+struct LiveBridgeWaiters {
+    std::atomic<std::uint32_t> blocked{0};
+    void (*ended)(void* context) = nullptr;  // real-time; may be null
+    void* context = nullptr;
+};
+class LiveBridgeWaitScope {
+  public:
+    explicit LiveBridgeWaitScope(LiveBridgeWaiters* waiters) SUPPLE_RT;
+    ~LiveBridgeWaitScope() SUPPLE_RT;
+    LiveBridgeWaitScope(const LiveBridgeWaitScope&) = delete;
+    LiveBridgeWaitScope& operator=(const LiveBridgeWaitScope&) = delete;
+
+  private:
+    LiveBridgeWaiters* previous_;
+};
+// One blocking wait, as a bridged live call counts it: in the calling
+// thread's waiters (if any) from construction, out at destruction, which
+// then calls their ended(). seq_cst, with a fence before ended().
+class LiveBridgeBlocked {
+  public:
+    LiveBridgeBlocked() SUPPLE_RT;
+    ~LiveBridgeBlocked() SUPPLE_RT;
+    LiveBridgeBlocked(const LiveBridgeBlocked&) = delete;
+    LiveBridgeBlocked& operator=(const LiveBridgeBlocked&) = delete;
+
+  private:
+    LiveBridgeWaiters* waiters_;
+};
+std::int64_t steadyNanoseconds() SUPPLE_RT;
+// The calling thread's live deadline, 0 for none.
+std::int64_t currentLiveBridgeDeadline() SUPPLE_RT;
+// Bridged audio-thread calls that missed a live deadline, process-wide.
+std::uint64_t bridgeLateCalls() SUPPLE_RT;
+
+// How bridged calls spent their time (ADR-0081 diagnostics), process-wide
+// since start or resetBridgeTiming(): calls under a live deadline and the
+// rest apart. A call's wait runs from posting it to its answer (or giving
+// up); its wake, from posting to the bridge's thread seeing it; its work,
+// that thread's run of it; its return, from the bridge finishing to the
+// host seeing the answer. Times in nanoseconds on the steady clock. `calls`
+// and `late` count posted calls; wake, work and return are over those
+// answered.
+struct BridgeTiming {
+    struct Calls {
+        std::uint64_t calls = 0;
+        std::uint64_t late = 0;          // live: not answered by the deadline
+        std::uint64_t pastDeadline = 0;  // live: posted once the deadline had passed
+        std::uint64_t spun = 0;          // answered while the host still spun, before a wait
+        // Waits for the answer to an earlier late block before the next
+        // call (its wait counts in the totals), and those that missed again.
+        std::uint64_t settles = 0, lateSettles = 0;
+        std::int64_t waitMaxNs = 0, waitSumNs = 0;
+        std::int64_t wakeMaxNs = 0, wakeSumNs = 0;
+        std::int64_t workMaxNs = 0, workSumNs = 0;
+        std::int64_t returnMaxNs = 0, returnSumNs = 0;
+        std::uint64_t wakesOver200us = 0, wakesOver1ms = 0;
+        std::uint64_t bridgeCpus = 0;       // bit c: a bridge thread ran a call on CPU c
+        std::uint64_t classMismatches = 0;  // Linux: answers from a thread not in the class asked
+        std::uint32_t migrations = 0;       // the most CPU changes one bridge thread reported
+        // How many answered calls' wake and return fell under each bound of
+        // kTimingBucketsUs (the last: at or over 2 ms).
+        std::array<std::uint64_t, 9> wakeBuckets{}, returnBuckets{};
+    };
+    static constexpr std::array<int, 8> kTimingBucketsUs{10, 20, 50, 100, 200, 500, 1000, 2000};
+    Calls live, background;
+};
+BridgeTiming bridgeTiming();
+void resetBridgeTiming();
+// Main-thread requests to plug-in bridges (one round trip each) since start:
+// a count, for tests that bound how many an operation makes.
+std::uint64_t bridgeRequests();
+// The live calls and settles so far and their summed waits, for a cycle to
+// compare.
+struct BridgeWaits {
+    std::uint64_t calls = 0;
+    std::int64_t waitNs = 0;
+};
+BridgeWaits bridgeLiveWaits() SUPPLE_RT;
 
 class Instance {
   public:
@@ -281,6 +417,9 @@ class Instance {
     std::string failure() const;
     bool isolated() const { return remote_ != nullptr; }
     int bridgePid() const;  // -1 for in-process
+    // Bridged: its bridge's audio thread was refused the scheduling class the
+    // last audio-thread call asked for (ADR-0026, ADR-0081); false in process.
+    bool bridgeThreadRefused() const;
 
     // --- ports (valid after create; a stereo configuration is selected when offered) ---
     std::uint32_t audioInputChannels() const { return inChannels_; }
@@ -373,8 +512,12 @@ class Instance {
 
     // --- processing (audio thread) ---
     // start_processing; false if inactive or the plugin refused (then
-    // process() must not be called).
+    // process() must not be called), or when a bridged plug-in has not
+    // answered yet (startUnanswered()).
     bool startProcessing() SUPPLE_RT;
+    // The last startProcessing() of a bridged instance passed its live
+    // deadline unanswered (ADR-0081): not a refusal; ask again later.
+    bool startUnanswered() const SUPPLE_RT;
     void stopProcessing() SUPPLE_RT;
     bool processing() const { return processing_; }
     // The host's executor that currently processes this instance (an opaque
