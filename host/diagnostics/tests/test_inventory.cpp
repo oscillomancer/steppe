@@ -700,8 +700,9 @@ void inside(TraceSnapshot& trace, std::size_t thread, std::uint32_t cell) {
 std::pair<std::string, long long> attributed(const Inventory& inventory,
                                              const TraceSnapshot& trace) {
     const auto attribution = inventory.attributionJson(&trace);
+    const auto modules = modulesJson(trace);
     CHECK(attributionShape(attribution, inventory.pluginsJson(&trace),
-                           inventory.commandsJson(&trace), threadsJson(trace), modulesJson(trace)));
+                           inventory.commandsJson(&trace), threadsJson(trace), &modules));
     return {attribution.find("confidence")->asString(),
             attribution.find("plugin")->isNull() ? -1 : attribution.find("plugin")->asInt()};
 }
@@ -790,7 +791,7 @@ TEST_CASE("the attribution validator refuses a claim the report's own evidence d
     const auto threads = threadsJson(trace);
     const auto modules = modulesJson(trace);
     const auto accepts = [&](const char* text) {
-        return attributionShape(parse(text), plugins, commands, threads, modules);
+        return attributionShape(parse(text), plugins, commands, threads, &modules);
     };
     CHECK(accepts(R"({"confidence":"fault_in_image","plugin":0})"));
     CHECK(accepts(R"({"confidence":"fault_in_image","plugin":null})"));
@@ -816,9 +817,9 @@ TEST_CASE("the attribution validator refuses a claim the report's own evidence d
     const auto ownedPlugins = inventory.pluginsJson(&owned);
     const auto ownedThreads = threadsJson(owned);
     CHECK(attributionShape(parse(R"({"confidence":"active_token","plugin":0})"), ownedPlugins,
-                           commands, ownedThreads, modules));
+                           commands, ownedThreads, &modules));
     CHECK_FALSE(attributionShape(parse(R"({"confidence":"concurrent_activity","plugin":0})"),
-                                 ownedPlugins, commands, ownedThreads, modules));
+                                 ownedPlugins, commands, ownedThreads, &modules));
 }
 
 TEST_CASE("the attribution validator holds fault_in_image to the plug-in's build and the fault") {
@@ -828,9 +829,9 @@ TEST_CASE("the attribution validator holds fault_in_image to the plug-in's build
     REQUIRE(inventory.apply(addAt(6, 0x9100)));  // id 2: in no module, so no build
     const auto parse = [](std::string_view text) { return json::parse(text).value(); };
     const auto check = [&](const TraceSnapshot& trace, const char* claim) {
+        const auto modules = modulesJson(trace);
         return attributionShape(parse(claim), inventory.pluginsJson(&trace),
-                                inventory.commandsJson(&trace), threadsJson(trace),
-                                modulesJson(trace));
+                                inventory.commandsJson(&trace), threadsJson(trace), &modules);
     };
     const auto fault1 = faultTrace(1);
     CHECK(check(fault1, R"({"confidence":"fault_in_image","plugin":0})"));
@@ -852,11 +853,17 @@ TEST_CASE("the attribution validator holds fault_in_image to the plug-in's build
     // build; with none that does, it is not.
     CHECK(check(fault1, R"({"confidence":"fault_in_image","plugin":null})"));
     CHECK(check(faultTrace(0), R"({"confidence":"fault_in_image","plugin":1})"));
+    const auto fault1Modules = modulesJson(fault1);
     Inventory elsewhere;
     REQUIRE(elsewhere.apply(addAt(6, 0x9100)));  // the only plug-in has no build
     CHECK_FALSE(attributionShape(parse(R"({"confidence":"fault_in_image","plugin":null})"),
                                  elsewhere.pluginsJson(&fault1), elsewhere.commandsJson(&fault1),
-                                 threadsJson(fault1), modulesJson(fault1)));
+                                 threadsJson(fault1), &fault1Modules));
+    // A report with no `modules` at all (nothing was captured) supports no fault in an image,
+    // and is refused without being read through a null pointer.
+    CHECK_FALSE(attributionShape(parse(R"({"confidence":"fault_in_image","plugin":0})"),
+                                 inventory.pluginsJson(&fault1), inventory.commandsJson(&fault1),
+                                 threadsJson(fault1), nullptr));
 }
 
 TEST_CASE(

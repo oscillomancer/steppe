@@ -571,8 +571,9 @@ bool droppedShape(const json::Value& dropped) {
 
 // The id of the module the fault thread's first frame is in, as the report's own threads and
 // modules say, or null when the report does not say.
-static const std::string* faultModuleId(const json::Value& threads, const json::Value& modules) {
-    if (!threads.isArray() || threads.size() == 0 || !modules.isArray()) return nullptr;
+static const std::string* faultModuleId(const json::Value& threads, const json::Value* modules) {
+    if (!threads.isArray() || threads.size() == 0 || !modules || !modules->isArray())
+        return nullptr;
     const auto& fault = threads.asArray()[0];
     const auto* role = fault.find("role");
     const auto* frames = fault.find("frames");
@@ -581,15 +582,15 @@ static const std::string* faultModuleId(const json::Value& threads, const json::
         return nullptr;
     const auto* index = frames->asArray()[0].find("module");
     if (!index || !index->isInt() || index->asInt() < 0 ||
-        static_cast<std::uint64_t>(index->asInt()) >= modules.size())
+        static_cast<std::uint64_t>(index->asInt()) >= modules->size())
         return nullptr;
-    const auto* id = modules.asArray()[static_cast<std::size_t>(index->asInt())].find("id");
+    const auto* id = modules->asArray()[static_cast<std::size_t>(index->asInt())].find("id");
     return id && id->isString() ? &id->asString() : nullptr;
 }
 
 bool attributionShape(const json::Value& attribution, const json::Value& plugins,
                       const json::Value& commands, const json::Value& threads,
-                      const json::Value& modules) {
+                      const json::Value* modules) {
     if (!attribution.isObject() || attribution.size() != 2) return false;
     const auto* confidence = attribution.find("confidence");
     const auto* plugin = attribution.find("plugin");

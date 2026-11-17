@@ -132,7 +132,7 @@ bool commandsShape(const json::Value& commands);
 // the `build` of the plug-in named, or of a listed one when none is).
 bool attributionShape(const json::Value& attribution, const json::Value& plugins,
                       const json::Value& commands, const json::Value& threads,
-                      const json::Value& modules);
+                      const json::Value* modules);  // null when the report has none
 // "dropped": the object this build writes, or the plain count older reports hold.
 bool droppedShape(const json::Value& dropped);
 

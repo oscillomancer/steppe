@@ -198,7 +198,7 @@ bool reportShape(const json::Value& value) {
     // one the report's own plug-ins and commands support.
     if (const auto* attribution = value.find("attribution"))
         if (!attributionShape(*attribution, *value.find("plugins"), *value.find("commands"),
-                              *threads, *value.find("modules")))
+                              *threads, value.find("modules")))
             return false;
     const auto* unavailable = value.find("unavailable");
     if (!unavailable || !unavailable->isArray() || unavailable->size() == 0 ||
