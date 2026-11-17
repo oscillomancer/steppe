@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <ctime>
 #include <functional>
 #include <initializer_list>
 #include <set>
@@ -260,6 +261,7 @@ Result<std::intptr_t> createMarkerFile(const fs::path& root, const Packet& boot,
         !WriteFile(file, text.data(), static_cast<DWORD>(text.size()), &written, nullptr) ||
         written != text.size() || !FlushFileBuffers(file)) {
         CloseHandle(file);
+        DeleteFileW(path.c_str());  // not left empty: an empty marker reads as one being created
         return failure();
     }
     return reinterpret_cast<std::intptr_t>(file);
@@ -269,6 +271,7 @@ Result<std::intptr_t> createMarkerFile(const fs::path& root, const Packet& boot,
     if (::flock(fd, LOCK_EX | LOCK_NB) != 0 ||
         ::write(fd, text.data(), text.size()) != static_cast<ssize_t>(text.size()) ||
         ::fsync(fd) != 0) {
+        ::unlink(path.c_str());  // not left empty: an empty marker reads as one being created
         ::close(fd);
         return failure();
     }
@@ -333,6 +336,12 @@ Status checkDirectoryForReading(const fs::path& root) {
     if (!privateDirectory(root.parent_path(), false) || !privateDirectory(root)) return failure();
     return okStatus();
 }
+namespace {
+// How long an empty marker is taken to be one being created. Creation takes microseconds; an
+// older empty marker is left by a creator that failed between its creation and its first write,
+// and is judged by its lock like any other (held only if someone really holds it).
+constexpr std::int64_t kEmptyMarkerGraceSeconds = 60;
+}  // namespace
 MarkerState probeMarker(const fs::path& path) {
 #if defined(_WIN32)
     HANDLE file = CreateFileW(
@@ -349,7 +358,15 @@ MarkerState probeMarker(const fs::path& path) {
     BY_HANDLE_FILE_INFORMATION info{};
     if (GetFileInformationByHandle(file, &info) &&
         !(info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY))) {
-        if (info.nFileSizeHigh == 0 && info.nFileSizeLow == 0) {
+        FILETIME nowTime{};
+        GetSystemTimeAsFileTime(&nowTime);
+        const auto ticks = [](const FILETIME& t) {
+            return (static_cast<std::uint64_t>(t.dwHighDateTime) << 32) | t.dwLowDateTime;
+        };
+        // 100 ns units; a time in the future counts as young.
+        const bool young =
+            ticks(info.ftLastWriteTime) + kEmptyMarkerGraceSeconds * 10'000'000ULL > ticks(nowTime);
+        if (info.nFileSizeHigh == 0 && info.nFileSizeLow == 0 && young) {
             result = MarkerState::Held;
         } else {
             OVERLAPPED probe{};
@@ -369,8 +386,8 @@ MarkerState probeMarker(const fs::path& path) {
     MarkerState result = MarkerState::Unreadable;
     struct stat info{};
     if (::fstat(fd, &info) == 0 && S_ISREG(info.st_mode) && info.st_uid == ::geteuid()) {
-        if (info.st_size == 0)
-            result = MarkerState::Held;
+        if (info.st_size == 0 && ::time(nullptr) - info.st_mtime < kEmptyMarkerGraceSeconds)
+            result = MarkerState::Held;  // being created
         else if (::flock(fd, LOCK_SH | LOCK_NB) == 0)
             result = MarkerState::Free;  // the lock goes with the descriptor, on close
         else if (errno == EWOULDBLOCK)

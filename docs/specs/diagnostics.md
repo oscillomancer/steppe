@@ -190,8 +190,10 @@ and never authority to delete. A report-named file that is not a valid report (i
 is its name) is counted in `ignored`, never listed, never touched.
 
 *When a report counts (T8).* A run marker is *held* when another handle holds its lock, and also
-when it is empty, because the creator locks before it writes: an empty marker is one being
-created. A marker nobody holds is *free*: the run is over. A report whose marker is held is
+when it is empty and under a minute old, because the creator locks before it writes: an empty
+marker is one being created. An older empty one (a creator that failed between creating the file
+and its first write, which now removes the file itself on a failure it sees) is judged by its lock
+like any other, so it cannot read as held for ever. A marker nobody holds is *free*: the run is over. A report whose marker is held is
 still being published and counts in `pending`, not in `reports`; `readReport` and `acknowledge`
 refuse it (`diagnostics.no_report`). A report with no marker, or a free one, counts. A free marker
 with no report is an `unreported` run: the supervisor died or could not write, and the list says
