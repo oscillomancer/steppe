@@ -29,6 +29,23 @@ inline void setTableAddress(Packet& ready, const void* table) noexcept {
 }
 inline std::uint64_t tableAddress(const Packet& ready) noexcept { return ready.pc; }
 static_assert(sizeof(Packet) <= 128);
+// The Windows channel keeps one shared slot per message kind and a bit mask of the ones
+// published and not yet taken. The slot of a kind, and which pending slot the supervisor
+// takes next, live here so a portable test can pin the order.
+inline unsigned sharedSlot(Message kind) noexcept {
+    return kind == Message::Ready ? 0U : kind == Message::Expected ? 1U : 2U;
+}
+// The next slot to take from `pending` (bit n set: slot n is published and untaken), or -1.
+// Ready comes before Terminal: a worker that publishes Ready and faults at once can have
+// both bits set when the supervisor wakes, and the table address Ready carries must be
+// known before the Terminal packet is handled, which reads the table. Terminal comes
+// before Expected, which a dying worker never needs read first.
+inline int nextSharedSlot(std::uint32_t pending) noexcept {
+    for (const unsigned slot :
+         {sharedSlot(Message::Ready), sharedSlot(Message::Terminal), sharedSlot(Message::Expected)})
+        if (pending & (1U << slot)) return static_cast<int>(slot);
+    return -1;
+}
 struct Native {
     std::intptr_t channel = -1, process = -1, event = -1, ack = -1;
     void* shared = nullptr;

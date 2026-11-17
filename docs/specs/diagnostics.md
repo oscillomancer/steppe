@@ -284,7 +284,10 @@ How the supervisor gets the table: the worker's `ready` packet carries the table
 (in the packet's `pc` field, which a Ready packet reuses: it is an address, not a program
 counter, and the code reaches it only through `setTableAddress` and `tableAddress`; the
 private channel is not a place for anything else secret). A later `Table` message would take
-over that role. When the terminal
+over that role. The Windows channel keeps one slot per message kind and hands them over
+Ready, then Terminal, then Expected (`nextSharedSlot`), so a worker that publishes Ready and
+faults before the supervisor wakes still has its table address known when the terminal packet
+is handled; POSIX's stream keeps the order by itself. When the terminal
 packet arrives, Linux and Windows read the table with the same bounded remote read the stack
 walk uses (`process_vm_readv`, `ReadMemory` on Windows), once, right after the faulting
 thread's walk and before any other thread is stopped. It is read even if the walk spent the

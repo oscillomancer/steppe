@@ -194,9 +194,7 @@ Result<Native> adopt(std::string_view text, Packet& boot) {
     return n;
 }
 bool publish(Native& n, const Packet& packet) noexcept {
-    const unsigned index = packet.kind == Message::Ready      ? 0
-                           : packet.kind == Message::Expected ? 1
-                                                              : 2;
+    const unsigned index = sharedSlot(packet.kind);
     auto& shared = *static_cast<Shared*>(n.shared);
     shared.messages[index] = packet;
     shared.ready.fetch_or(1U << index, std::memory_order_release);
@@ -206,12 +204,11 @@ bool receive(Native& n, Packet& packet) {
     auto& shared = *static_cast<Shared*>(n.shared);
     for (;;) {
         const auto ready = shared.ready.load(std::memory_order_acquire) & ~n.seen;
-        for (unsigned index : {2U, 0U, 1U})
-            if (ready & (1U << index)) {
-                packet = shared.messages[index];
-                n.seen |= 1U << index;
-                return valid(packet);
-            }
+        if (const int index = nextSharedSlot(ready); index >= 0) {
+            packet = shared.messages[index];
+            n.seen |= 1U << index;
+            return valid(packet);
+        }
         const HANDLE waits[]{handle(n.event), handle(n.process)};
         if (WaitForMultipleObjects(2, waits, FALSE, INFINITE) != WAIT_OBJECT_0) {
             const auto final = shared.ready.load(std::memory_order_acquire) & ~n.seen;
