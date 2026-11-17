@@ -140,7 +140,7 @@ with `engine.fx_failed`.
 | Command | What it does with a render error |
 |---|---|
 | `render.mix` | The job fails; no file is written. (`render.dry-run` renders nothing.) |
-| `render.stems`, `render.regions`, `render.queue.run`, `branch.render-ab` | The job fails at the failing task. Files written for earlier tasks of the same job stay on disk with their render ids. This is unchanged and applies to every error, cancellation included (see Consequences). |
+| `render.stems`, `render.regions`, `render.queue.run`, `branch.render-ab` | The job fails at the failing task. Files written for earlier tasks of the same job stay on disk with their render ids, and the failed or cancelled job's `result` lists them (see Consequences). |
 | `track.freeze` | Fails; its pending file is removed (`Artifact`). It already refused any render warning. |
 | `track.unfreeze`, and `track.freeze`'s schedule check before it commits | Not affected: these probes return before processing. |
 | `item.consolidate` | Fails; pending files are removed. It already refused warnings. |
@@ -155,11 +155,14 @@ with `engine.fx_failed`.
 - An export that loses a plug-in fails, names it and writes nothing.
 - An agent's or the user's render job can now fail where it used to
   succeed. The error says which FX failed and what to do.
-- **Open question.** A multi-file job (stems, regions) that fails at its
-  third task keeps the first two files on disk. They are complete renders
-  of their tracks. Whether a failed job should remove what it wrote is a
-  separate decision, and it applies to every error, so this ADR leaves it
-  unchanged.
+- **A multi-file job that stops early keeps what it wrote.** A stems or
+  regions job that fails at its third task keeps the first two files:
+  they are complete renders of their tracks. Decided in review round 34,
+  for every error and for cancellation: the job's snapshot carries a
+  `result` beside its `error`, listing the finished tasks' entries in
+  `files` and any file a task that did not finish had already written in
+  `unfinished_task_files` (`JobManager::fail` takes the partial result;
+  engine §3). A call made without `job` returns only the error.
 - **Tests.**
   - The engine tests' process-wide patience (`bridge_patience.cpp`, 60 s)
     now matters only for live pools. Offline renders use their own

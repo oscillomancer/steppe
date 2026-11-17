@@ -732,6 +732,16 @@ first use, and no plug-in code runs early to warm it.
   queue; results reported as files + analysis summaries. `render.mix`,
   `render.stems`, `render.regions` and `render.dry-run` share one
   implementation and one argument set (ADR-0055).
+- **A job that stops early** (`render.mix`, `render.stems`,
+  `render.regions` and `render.queue.run` with `job: true`) keeps the files
+  it has written, and its snapshot lists them in `result` beside `error`
+  (failed) or alone (cancelled): `files` holds the entry of every task it
+  finished, as a finished job's `files` does (path, outputs, render id,
+  …; across all queued renders for `render.queue.run`), and
+  `unfinished_task_files` the paths a task that did not finish had already
+  written (an output or a loudness report before a later one failed). With
+  nothing written there is no `result`. A call without `job` returns only
+  the error.
 - **Settings** (ADR-0055, session-model §1.10). Every member of
   `project.render` is also a command argument of the same name. The legacy
   arguments `format`, `bit_depth` and `secondary` remain:

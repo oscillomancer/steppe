@@ -1164,8 +1164,8 @@ Engine and hosting:
   (ADR-0090). Stopping or cancelling such a render kills its own bridges,
   so it does not wait for a hung plug-in, and neither does quitting or
   opening a project; only a render still loading its plug-ins waits, up to
-  20 s per plug-in. A stems or regions job that fails at a later task
-  keeps the files of the tasks before it.
+  20 s per plug-in. A render job that fails or is cancelled at a later
+  task keeps the files of the tasks before it and lists them in its result.
 - Audio backends: Linux JACK, dummy, and native PortAudio (CoreAudio on macOS;
   WASAPI/ASIO on Windows), with selection, latency/xruns and restart notifications.
   Fake-device output equals offline in both executors, with native CI coverage.

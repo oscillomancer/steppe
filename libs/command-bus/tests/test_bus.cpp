@@ -721,3 +721,30 @@ TEST_CASE("warning result schemas extend typed command warning arrays") {
     CHECK(*registry.find("toy.objects")->resultSchema.find("properties")->find("warnings") ==
           obj(R"({"type":"array","items":{"type":"object"}})"));
 }
+
+TEST_CASE("a failed job reports what it did before failing, when given") {
+    // Review round 34: a render job that fails after writing files keeps
+    // them, so its snapshot must list them.
+    cmd::JobManager jobs;
+    const auto plain = jobs.create();
+    REQUIRE(jobs.fail(plain, Error("toy.broken", "broken", "/x", "fix it")));
+    auto status = jobs.status(plain);
+    REQUIRE(status);
+    CHECK((*status)["status"] == "failed");
+    CHECK(status->find("result") == nullptr);
+    CHECK(status->find("error")->find("code")->asString() == "toy.broken");
+
+    const auto partial = jobs.create();
+    REQUIRE(jobs.fail(partial, Error("toy.broken", "broken", "/x", "fix it"),
+                      obj(R"({"files":[{"path":"a.wav"}]})")));
+    status = jobs.status(partial);
+    REQUIRE(status);
+    CHECK((*status)["status"] == "failed");
+    CHECK(status->find("error")->find("code")->asString() == "toy.broken");
+    REQUIRE(status->find("result"));
+    CHECK(*status->find("result") == obj(R"({"files":[{"path":"a.wav"}]})"));
+    auto events = jobs.drainEvents();
+    REQUIRE(events.size() == 2);
+    CHECK(events[1].first == "job.done");
+    CHECK(events[1].second.find("result") != nullptr);
+}
