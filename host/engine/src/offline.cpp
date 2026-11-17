@@ -576,6 +576,8 @@ class RenderDeadlines {
 // Every caller gives a render a pool of its own, so no one else uses them.
 // The watch looks every 10 ms; what it does is decided by the request, not
 // the clock. It runs only while the render has bridged instances.
+RenderWatchTestHooks gWatchHooks;  // tests only, set while no render runs
+
 class RenderWatch {
   public:
     RenderWatch(std::vector<host::Instance*> list, const OfflineSettings& opt)
@@ -588,6 +590,7 @@ class RenderWatch {
             while (!finished_) {
                 if (requested(opt_)) {
                     for (host::Instance* in : instances_) in->abandonBridge();
+                    if (gWatchHooks.killed) gWatchHooks.killed(gWatchHooks.context);
                     abandoned_.store(true, std::memory_order_release);
                     return;
                 }
@@ -605,6 +608,7 @@ class RenderWatch {
     }
     // Ends the watch; after it, abandoned() no longer changes.
     void finish() {
+        if (gWatchHooks.finishing) gWatchHooks.finishing(gWatchHooks.context);
         {
             std::lock_guard lock(mutex_);
             finished_ = true;
@@ -631,6 +635,8 @@ Error renderCancelled() {
                  "cannot resume");
 }
 }  // namespace
+
+void setRenderWatchTestHooks(const RenderWatchTestHooks& hooks) { gWatchHooks = hooks; }
 
 Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                                     const OfflineSettings& opt) {
