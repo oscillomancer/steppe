@@ -127,6 +127,7 @@ struct EngineTestAccess {
         e.wakeRendererConsumed();
     }
     static auto event(const Engine& e) { return e.rendererEvent_.load(); }
+    static detail::Recorder& recorder(Engine& e) { return *e.recorderOwned_; }
 };
 }  // namespace supple::engine
 using model::Id;
@@ -134,6 +135,16 @@ using model::kMaster;
 
 namespace supple::engine::detail {
 struct RecorderTestAccess {
+    // Waits until the writer has begun and ended `count` passes from now:
+    // the last of them drained everything published before the call.
+    static void passes(Recorder& recorder, unsigned count = 2) {
+        const auto target = recorder.writerPasses_.load() + count;
+        for (;;) {
+            const auto at = recorder.writerPasses_.load(std::memory_order_acquire);
+            if (at >= target) return;
+            recorder.writerPasses_.wait(at);
+        }
+    }
     static void stall(Recorder& recorder) { recorder.writerStalled_.store(true); }
     static bool stalled(const Recorder& recorder) { return recorder.writerStallAck_.load(); }
     static void resume(Recorder& recorder) { recorder.writerStalled_.store(false); }
@@ -2647,13 +2658,14 @@ TEST_CASE("wet and bypass edits retarget an active ramp without a step" *
 
 TEST_CASE("a long, dense MIDI performance records without overflow (the writer drains)" *
           doctest::description("rt")) {
-    // A controller sweep every 8 frames (6000 events/s) for over a second:
-    // more than one ring holds, drained while recording.
+    // A controller sweep every 8 frames (6000 events/s) for 1.2 s of audio:
+    // more than one ring (4096 events) holds, drained while recording. The
+    // test runs the cycles itself, a ring's worth at most between writer
+    // passes, so how busy the machine is cannot decide it.
     auto pool = makePool();
     MediaCache media;
     DummyBackend backend(
-        {.mode = DummyBackend::Mode::Thread,
-         .paced = true,
+        {.mode = DummyBackend::Mode::Manual,
          .midiPorts = {"Keyboard"},
          .midi = [](std::vector<MidiInputEvent>& out, std::uint32_t n, std::int64_t frame) {
              for (std::uint32_t i = 0; i < n; i += 8) {
@@ -2679,7 +2691,13 @@ TEST_CASE("a long, dense MIDI performance records without overflow (the writer d
     target.midi = RecordTarget::Midi{midiPortMask(engine.midiPorts(), "*"), 0, 0};
     REQUIRE(engine.startRecording({target}));
     engine.play();
-    std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+    // 225 cycles of 256 frames: 1.2 s, 32 events each. 64 cycles (2048
+    // events) between passes stay well inside the ring.
+    auto& recorder = EngineTestAccess::recorder(engine);
+    for (int done = 0; done < 225; done += 64) {
+        backend.run(std::min(64, 225 - done));
+        detail::RecorderTestAccess::passes(recorder);
+    }
     auto takes = engine.stopRecording();
     REQUIRE(takes);
     const RecordedTake& t = (*takes)[0];
