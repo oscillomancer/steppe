@@ -13,7 +13,11 @@
 #   python3 ptrace_faults.py <fixture> <shim.so> [sanitized]
 #
 # Exit 77: skipped (not Linux, sanitized build, or tracing is restricted).
-import json, os, pathlib, signal, subprocess, sys, tempfile, time
+import json, os, pathlib, platform, signal, subprocess, sys, tempfile, time
+
+# The wait4 system call's number on this architecture, as /proc/<pid>/syscall prints it: the
+# hang is recognised on aarch64 too, instead of being left to the watchdog.
+WAIT4 = {"x86_64": "61", "aarch64": "260", "arm64": "260"}.get(platform.machine(), "61")
 
 SKIP = 77
 WATCHDOG = 120  # seconds; aborts an unrecognised hang only
@@ -62,7 +66,7 @@ def run_mode(binary, shim, mode, base):
                    and (status(worker, t) or {}).get("State", "").startswith("Z")
                    and status(worker, t).get("TracerPid") == str(supervisor)]
         call = (read(f"/proc/{supervisor}/syscall") or "").split()
-        if pstate(worker) == "Z" and zombies and call and call[0] == "61" and int(call[1], 16) == worker:
+        if pstate(worker) == "Z" and zombies and call and call[0] == WAIT4 and int(call[1], 16) == worker:
             outcome = "hang"; break
         time.sleep(0.005)  # pacing only
     if outcome in ("hang", "watchdog"):
