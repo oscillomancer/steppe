@@ -249,5 +249,12 @@ bool installTerminal(Native native, const Packet& boot) {
     return installed;
 #endif
 }
+#if defined(_WIN32)
+bool lastChanceFilterInstalled() {
+    const auto current = SetUnhandledExceptionFilter(nullptr);
+    SetUnhandledExceptionFilter(current);
+    return current == lastChance;
+}
+#endif
 }  // namespace detail
 }  // namespace supple::diagnostics

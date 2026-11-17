@@ -227,6 +227,12 @@ int body(int argc, char** argv) {
     if (mode == "prior-terminate") {
         std::terminate();
     }
+#if defined(_WIN32)
+    // Evidence for a failed capture: whether the last-chance filter is in place.
+    if (mode == "fault")
+        std::fprintf(stderr, "last-chance filter installed: %s\n",
+                     supple::diagnostics::detail::lastChanceFilterInstalled() ? "yes" : "no");
+#endif
     if (mode == "fault") actualFault();
     if (mode == "thread-fault") {
         std::thread worker([] {

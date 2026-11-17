@@ -26,7 +26,7 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
             assert not report["complete"]
             assert report["kind"]==("crash" if report["cause"] else "unexpected_exit"),report
             if not sanitized and mode not in ("exit","killed","concurrent","failfast"):
-                assert report["cause"]!=0,(mode,report)
+                assert report["cause"]!=0,(mode,report,run.stderr)
                 if mode=="terminate": assert report["cause"]==3,report
                 if mode in ("fault","thread-fault","stack"): assert report["terminal_context"],(mode,report)
             if mode in ("killed","failfast"): assert not report["terminal_context"],report
