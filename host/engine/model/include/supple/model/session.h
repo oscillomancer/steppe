@@ -268,6 +268,11 @@ std::string trackLabel(const Session& s, Id track);
 // The name track.add gives a new strip of `type`: the first "ch_N", "buss_N" or
 // "mstr_N" (N from 1) that no track is labelled with.
 std::string nextTrackName(const Session& s, StripType type);
+// The colour track.add gives a new channel or buss that names none: of the
+// palette's hues (kTrackColors without "grey", which reads as no colour) the
+// one the fewest tracks carry, the earliest in the palette among equals. A
+// function of the session alone, so the same edits give the same colours.
+std::string nextTrackColor(const Session& s);
 
 // The media source holding the bytes `hash` identifies ("sha256:<hex>"), if the
 // session has one: a file added twice is one source, not two.

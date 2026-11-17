@@ -2064,7 +2064,11 @@ Steppe's own character, not a REAPER clone or a generic dark theme
 - **Track colours, for organizing:** a small set (red, orange, yellow, green,
   teal, blue, violet, grey; `track.set {color}` also takes "#rrggbb") drawn as
   a stripe down the TCP row's left edge, under the mixer strip's name, and
-  as the colour of the track's items in the arrange view (§4.3).
+  as the colour of the track's items in the arrange view (§4.3). A new
+  channel or buss comes with one: `track.add` gives it the palette colour
+  the fewest tracks carry (session-model.md), whoever adds it, so a session
+  is told apart by colour from its first track on. "None" in the colour
+  menu takes it away.
   Picked from the track's right-click menu (Rename, Color…, Duplicate,
   Delete; the same in the TCP and the mixer) or the `ui.track.color` action.
   A pick colours every selected track when the track is one of them (the

@@ -989,7 +989,12 @@ and naming. All `edit` unless marked (q) query or (a) action.
 - **tempo/meter**: `tempo.set {points}`, `tempo.add`, `tempo.remove`,
   `timesig.set {bar, numerator, denominator}`, `timesig.remove`,
   `time.convert {from, to, value}` (q).
-- **tracks**: `track.add {name, type: channel|buss|master, parent, index, channels, template?}`,
+- **tracks**: `track.add {name, type: channel|buss|master, parent, index, channels, color, template?}`
+  (a channel or buss that names no `color` gets the palette colour the fewest
+  tracks carry, the earliest in the palette among equals, grey left out:
+  `model::nextTrackColor`, a function of the session alone; a master gets
+  none; `""` asks for none; the channel `rack.add` creates is coloured the
+  same way),
   `track.remove`, `track.move {parent, index}`, `track.set {fields}`,
   `track.duplicate {tracks}` (each copy right after its original: settings,
   both chains with live settings, items and takes — unpooled MIDI copied —,
