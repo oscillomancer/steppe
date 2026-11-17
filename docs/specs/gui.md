@@ -535,15 +535,22 @@ take count). The label is the heard take's name; an unnamed audio take is
 called by its media file, without the folder and the extension; an item with
 neither shows its id (`Lanes::itemLabel`). A stretched take adds its rate. An
 item that begins before the view keeps its label at the view's left edge. An
+item whose top is scrolled above the view has its bar out of sight, and its
+label and marks with it: they are not redrawn on the body. An
 item under 30 units high (a compact row) has no bar and its label sits on the
-body. Waveforms are ink; MIDI notes are the item's colour at full strength. A
+body. Waveforms are ink; MIDI notes are the item's colour drawn 45% of the
+way to the ink (`Lanes::noteColor`), lighter than the body in a dark theme
+and darker in a light one, so a yellow item's notes read on its yellow body. A
 fade is drawn over the body, under the name bar (`Lanes::fadeArea`): its gain
 curve, and a shade over the part of the body above the curve, so the waveform
 dims where the fade takes it away. The fade handles stay at the item's top
 corners. A muted item, an item of a lane-muted master and a frozen track's
 items are dimmed. A selected item is lit by a wash of its own colour and
-outlined in the focus colour, two units wide; both are drawn on the overlay
-with the drag ghosts, so selecting repaints no lane.
+outlined in the focus colour, two units wide, with a one-unit line of the
+ground inside the outline: on an orange or red item, whose body is near the
+focus colour's hue, the line keeps the outline apart from the body. All
+three are drawn on the overlay with the drag ghosts, so selecting repaints
+no lane.
 
 Gestures (P0, `reaper-ux.md` 8–13): drop files onto tracks/timeline, move,
 trim edges, split (S), duplicate, slip (Alt-drag), stretch (with the rate

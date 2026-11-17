@@ -59,8 +59,13 @@ class LaneLabels : public ui::Node {
             for (model::Id id : lanes_.rowItems_[i]) {
                 const model::Item* item = s.items.find(id);
                 if (!item) continue;
-                const ui::Rect r = lanes_.itemRect(i, *item).intersect(bounds());
+                const ui::Rect full = lanes_.itemRect(i, *item);
+                const ui::Rect r = full.intersect(bounds());
                 if (r.w < 24) continue;
+                // The name bar is the item's top strip. Scrolled above the
+                // view, it takes its label and marks with it: they are not
+                // redrawn lower down, on the body.
+                const bool barShown = full.y >= bounds().y - 0.5f;
                 const model::Take* take =
                     item->activeTake ? s.takes.find(*item->activeTake) : nullptr;
                 std::string name = Lanes::itemLabel(s, *item);
@@ -90,7 +95,7 @@ class LaneLabels : public ui::Node {
                                                                              : nullptr;
                 const float badgeRight = r.right() - (item->takes.size() > 1 ? 22.0f : 4.0f);
                 float timebaseW = 0;
-                if (follows && r.w > 70) {
+                if (follows && r.w > 70 && barShown) {
                     timebaseW = c.textWidth(follows, ui::Font::Mono, t.type("caption")) + 8;
                     const ui::Rect badge{badgeRight - timebaseW, r.y + 3, timebaseW, 12};
                     c.strokeRect(badge, t.color("ink-quiet").withAlpha(alpha), 1.0f);
@@ -99,28 +104,29 @@ class LaneLabels : public ui::Node {
                 }
                 // Keep the label clear of the padlock and the snowflake an item may carry.
                 const float markX = item->locked ? r.x + 18.0f : r.x + 4.0f;
-                if (frozen)
+                if (frozen && barShown)
                     ui::drawSnowflake(c, {markX + 5, r.y + 8}, 5.5f,
                                       t.color("ink").withAlpha(alpha));
                 const float textX = frozen ? markX + 14.0f : markX;
                 const float textW = std::max(0.0f, r.right() - textX - 26.0f - timebaseW);
-                c.text({textX, r.y, textW, Lanes::kNameBar}, name, ui::Font::UiBold,
-                       t.type("caption"), t.color("ink").withAlpha(alpha), ui::kLeft | ui::kMiddle);
+                if (barShown)
+                    c.text({textX, r.y, textW, Lanes::kNameBar}, name, ui::Font::UiBold,
+                           t.type("caption"), t.color("ink").withAlpha(alpha),
+                           ui::kLeft | ui::kMiddle);
                 // A badge when the item carries more than one take.
-                if (item->takes.size() > 1) {
+                if (item->takes.size() > 1 && barShown) {
                     const ui::Rect badge{r.right() - 18, r.y + 3, 14, 12};
                     c.fillRound(badge, t.radius("s"), t.color("raised"));
                     c.text(badge, std::to_string(item->takes.size()), ui::Font::Mono,
                            t.type("caption"), t.color("ink-quiet"), ui::kCenter | ui::kMiddle);
                 }
                 // A padlock for locked items.
-                if (item->locked) {
+                if (item->locked && barShown) {
                     const ui::Color ink = t.color("ink-quiet");
                     c.strokeRect({r.x + 6, r.y + 6, 5, 6}, ink, 1.0f);
                     c.fillRect({r.x + 4, r.y + 12, 9, 7}, ink);
                 }
                 // Each take lane names its take (the heard one brighter).
-                const ui::Rect full = lanes_.itemRect(i, *item);
                 if (Lanes::showsTakeLanes(full, item->takes.size()))
                     for (std::size_t k = 0; k < item->takes.size(); ++k) {
                         const ui::Rect lane = Lanes::takeLaneRect(full, item->takes.size(), k);
@@ -433,6 +439,13 @@ ui::Color Lanes::itemColor(const ui::Theme& theme, const model::Item& item,
     return theme.color(typeToken(type));
 }
 
+ui::Color Lanes::noteColor(const ui::Theme& theme, ui::Color item) {
+    const ui::Color ink = theme.color("ink");
+    const float k = 0.45f;
+    return {item.r + (ink.r - item.r) * k, item.g + (ink.g - item.g) * k,
+            item.b + (ink.b - item.b) * k, item.a};
+}
+
 std::string Lanes::itemLabel(const model::Session& session, const model::Item& item) {
     const model::Take* take = item.activeTake ? session.takes.find(*item.activeTake) : nullptr;
     if (take && !take->name.empty()) return take->name;
@@ -498,7 +511,7 @@ void Lanes::paintGl(const ui::GlFrame& frame) {
             const model::Track* owner = s.tracks.find(item->track);
             const bool dim = item->mute || (owner && owner->laneMute);
             const ui::Color type = itemColor(t, *item, rowTrack, layout_.rows()[i].type);
-            const std::uint32_t note = ui::packRgba(type);
+            const std::uint32_t note = ui::packRgba(noteColor(t, type));
             const std::uint32_t body = ui::packRgba(type.withAlpha(dim ? 0.10f : 0.24f));
             const std::uint32_t edge = ui::packRgba(type.withAlpha(dim ? 0.35f : 0.8f));
             const std::uint32_t wave = ui::packRgba(t.color("ink").withAlpha(dim ? 0.3f : 0.8f));

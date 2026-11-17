@@ -1047,7 +1047,7 @@ struct OneItem {
     model::Id track, item;
 };
 OneItem oneItem(const std::string& trackColor, const std::string& takeName,
-                const std::string& mediaPath) {
+                const std::string& mediaPath, int emptyTracksAfter = 0) {
     model::Session s = model::Session::create();
     model::EditTxn txn(s, 1);
     model::Track track;
@@ -1057,6 +1057,15 @@ OneItem oneItem(const std::string& trackColor, const std::string& takeName,
     track.color = trackColor;
     const model::Id tid = txn.create(track);
     txn.modify<model::Track>(model::kMaster, [&](model::Track& m) { m.children.push_back(tid); });
+    for (int i = 0; i < emptyTracksAfter; ++i) {  // rows to scroll by
+        model::Track more;
+        more.type = model::StripType::Channel;
+        more.parent = model::kMaster;
+        more.name = "E";
+        const model::Id id = txn.create(more);
+        txn.modify<model::Track>(model::kMaster,
+                                 [&](model::Track& m) { m.children.push_back(id); });
+    }
     model::Take take;
     take.name = takeName;
     if (!mediaPath.empty()) {
@@ -1183,6 +1192,101 @@ TEST_CASE("an item takes its track's colour, or its strip type's without one") {
     CHECK(onGreen[1] > onGreen[2]);
     CHECK(onPlain[2] > onPlain[1]);  // blue over green and red
     CHECK(onPlain[2] > onPlain[0]);
+}
+
+TEST_CASE("an item's label goes with its name bar: with the bar above the view it is not drawn") {
+    Gl& g = gl();
+    if (!g.ok) return;
+    peaks::PeakService peaks(std::filesystem::temp_directory_path() / "supple-arrange-label-cache",
+                             [](std::function<void()>) {});
+    // Two sessions alike but for the take's name, on enough rows to scroll.
+    const OneItem wide = oneItem("green", "WWWWWWWWWW", "media/a.wav", 16);
+    const OneItem thin = oneItem("green", "iiii", "media/a.wav", 16);
+    auto render = [&](const OneItem& o, float scrollY) {
+        ui::Root root(*g.window, g.fonts, ui::Theme::dark());
+        auto arrange = std::make_unique<views::ArrangeView>(
+            peaks, [](const model::MediaSource&) { return std::filesystem::path{}; },
+            views::TransportSource{});
+        views::ArrangeView* view = arrange.get();
+        arrange->show(o.session);
+        arrange->setFollow(views::Follow::Off);
+        root.setContent(std::move(arrange));
+        root.frame(false);
+        view->setViewport({0, 60, scrollY});
+        root.damageAll();
+        root.frame(false);
+        CHECK(view->viewport().scrollY == scrollY);  // the rows did scroll
+        // The lanes only: the track panel shows the same name in both.
+        const ui::Rect lanes = view->lanes().bounds();
+        const gui::Image image = root.readBack();
+        const float ratio = static_cast<float>(image.width) / g.window->width();
+        std::vector<std::uint8_t> out;
+        for (auto y = static_cast<std::size_t>(lanes.y * ratio);
+             y < static_cast<std::size_t>(lanes.bottom() * ratio); ++y)
+            for (auto x = static_cast<std::size_t>(lanes.x * ratio);
+                 x < static_cast<std::size_t>(lanes.right() * ratio); ++x)
+                for (std::size_t k = 0; k < 3; ++k)
+                    out.push_back(
+                        image.rgba[(y * static_cast<std::size_t>(image.width) + x) * 4 + k]);
+        return out;
+    };
+    CHECK(render(wide, 0) != render(thin, 0));    // the bar is in view: the names show
+    CHECK(render(wide, 30) == render(thin, 30));  // the bar is above it: no name on the body
+}
+
+TEST_CASE("a MIDI item's notes are its colour drawn towards the ink: apart from its body") {
+    for (const ui::Theme& theme : {ui::Theme::dark(), ui::Theme::light()}) {
+        const ui::Color ink = theme.color("ink");
+        for (const char* name : {"track-yellow", "track-red", "track-blue", "channel"}) {
+            const ui::Color item = theme.color(name);
+            const ui::Color note = views::Lanes::noteColor(theme, item);
+            auto distance = [](ui::Color a, ui::Color b) {
+                return std::abs(a.r - b.r) + std::abs(a.g - b.g) + std::abs(a.b - b.b);
+            };
+            // Nearer the ink than the item's own colour is, and still the
+            // item's hue: nearer the item than the ink.
+            CHECK(distance(note, ink) < distance(item, ink));
+            CHECK(distance(note, item) < distance(note, ink));
+            CHECK(note.a == item.a);
+        }
+    }
+}
+
+TEST_CASE("a selected item's outline is set off from its body by a hairline of the ground") {
+    Gl& g = gl();
+    if (!g.ok) return;
+    const ui::Theme theme = ui::Theme::dark();
+    peaks::PeakService peaks(std::filesystem::temp_directory_path() / "supple-arrange-ring-cache",
+                             [](std::function<void()>) {});
+    const OneItem o = oneItem("orange", "Bass", "media/a.wav");  // the focus colour's own hue
+    ui::Root root(*g.window, g.fonts, theme);
+    auto arrange = std::make_unique<views::ArrangeView>(
+        peaks, [](const model::MediaSource&) { return std::filesystem::path{}; },
+        views::TransportSource{});
+    views::ArrangeView* view = arrange.get();
+    arrange->show(o.session);
+    arrange->setViewport({0, 60, 0});
+    arrange->setFollow(views::Follow::Off);
+    root.setContent(std::move(arrange));
+    REQUIRE(view->installOverlay(root));
+    view->gestures().setSelection({o.item});
+    root.damageAll();
+    root.frame(false);
+    const ui::Rect r = view->lanes().itemRect(0, *o.session.items.find(o.item));
+    const gui::Image image = root.readBack();
+    const float ratio = static_cast<float>(image.width) / g.window->width();
+    auto red = [&](float x, float y) {
+        return image
+            .rgba[(static_cast<std::size_t>(y * ratio) * static_cast<std::size_t>(image.width) +
+                   static_cast<std::size_t>(x * ratio)) *
+                  4];
+    };
+    const float y = r.y + r.h * 0.75f;  // under the name bar, clear of the label
+    const int outline = red(r.x + 1.0f, y), hairline = red(r.x + 2.5f, y),
+              body = red(r.x + 6.0f, y);
+    CHECK(outline > body + 40);  // the outline is brighter than the body
+    CHECK(hairline < body);      // and a darker line lies between them
+    CHECK(hairline < outline - 80);
 }
 
 // --- golden images ------------------------------------------------------------------

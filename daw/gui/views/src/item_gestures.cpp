@@ -174,7 +174,9 @@ class Ghost : public ui::Node {
             return ui::Rect{x0, r.y + 1, std::max(2.0f, x1 - x0), r.h - 2};
         };
         // The selection: each selected item is lit (a wash of its own colour
-        // over its body) and outlined in the focus colour.
+        // over its body) and outlined in the focus colour, with a hairline of
+        // the ground inside the outline: on an orange or red item the outline
+        // and the body are close in hue, and the hairline keeps them apart.
         for (model::Id id : g.selection())
             if (const model::Item* it = itemOf(s, id))
                 if (auto r = rectFor(*it, 0, 0, 0, 0)) {
@@ -183,6 +185,7 @@ class Ghost : public ui::Node {
                         t, *it, track, track ? track->type : model::StripType::Channel);
                     c.fillRect(*r, own.withAlpha(0.22f));
                     c.strokeRect(*r, t.color("focus"), 2);
+                    if (r->w > 8 && r->h > 8) c.strokeRect(r->inset(2), t.color("ground"), 1);
                 }
         // Selected automation points (filled), unless a drag draws them moved.
         if (st.drag != ItemGestures::Drag::EnvPoint)

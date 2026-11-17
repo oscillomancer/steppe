@@ -74,6 +74,11 @@ class Lanes : public ui::Node {
     // What an item is called: its heard take's name, or an unnamed audio
     // take's media file. Empty when it has neither (the view then shows the
     // item's id).
+    // The colour of a MIDI item's notes: the item's, drawn towards the ink.
+    // On the body, which is a wash of the same hue, the pure colour is hard
+    // to read (yellow on yellow in the light theme); towards the ink it is
+    // lighter on a dark ground and darker on a light one.
+    static ui::Color noteColor(const ui::Theme& theme, ui::Color item);
     static std::string itemLabel(const model::Session& session, const model::Item& item);
     // Take lanes (comping): an item with several takes, tall enough, shows
     // each take in its own lane under its label; the heard one is lit.
