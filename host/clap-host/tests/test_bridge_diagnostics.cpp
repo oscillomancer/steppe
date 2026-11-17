@@ -40,17 +40,6 @@ struct Sink {
         return found;
     }
 };
-PluginInfo fixture(std::string_view id) {
-    ScanOptions options;
-    options.forceInProcess = true;
-    const std::filesystem::path module = FIXTURE_CLAP_PATH;
-    auto list = scan(std::span(&module, 1), options);
-    REQUIRE_MESSAGE(list, (list ? "" : list.error().toString()));
-    for (const auto& info : *list)
-        if (info.id == id) return info;
-    FAIL("fixture plug-in not found");
-    return {};
-}
 // A guard against a lost event, not a timing assertion: the bridge is gone well before this.
 void awaitEnded(const BridgeProcess& process) {
     const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(60);
@@ -116,7 +105,27 @@ TEST_CASE("a bridge the host kills is announced as the host's end, once, when it
     CHECK(Sink::of(diagctx::EventKind::Bridge).size() == 2);
 }
 
+// The two cases below end a bridge with SIGKILL from outside. The Windows counterpart would end it
+// with TerminateProcess(OpenProcess(pid), 0xC0000005); it is not written because nothing here can
+// compile or run it, and an untried Windows branch has already broken this build once. Windows is
+// covered by the classification case above (exception and exit statuses) and by the host-kill and
+// orderly-shutdown cases; a bridge ended by an exception is proven there by native CI only, and
+// STATUS.md says so.
 #if !defined(_WIN32)
+namespace {
+PluginInfo fixture(std::string_view id) {
+    ScanOptions options;
+    options.forceInProcess = true;
+    const std::filesystem::path module = FIXTURE_CLAP_PATH;
+    auto list = scan(std::span(&module, 1), options);
+    REQUIRE_MESSAGE(list, (list ? "" : list.error().toString()));
+    for (const auto& info : *list)
+        if (info.id == id) return info;
+    FAIL("fixture plug-in not found");
+    return {};
+}
+}  // namespace
+
 TEST_CASE("a bridge that dies of a signal is announced as that signal, with its instances") {
     setBridgeExecutable(BRIDGE_PATH);
     Sink sink;

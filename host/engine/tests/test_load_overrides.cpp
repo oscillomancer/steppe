@@ -8,11 +8,15 @@
 #include <supple/engine/offline.h>
 #include <supple/engine/realtime.h>
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <random>
 #include <sstream>
+#include <string>
 #include <thread>
+#include <vector>
 #include "bridge_patience.h"
 
 using namespace supple;

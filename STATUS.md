@@ -1611,7 +1611,12 @@ attribution is the only live member or none, an exit's code is not read on POSIX
 by the out-of-memory killer reads as a signal, and the 65536th bridge of a run has no ordinal.
 It is never a restart notice and takes no place in the suspect window. Tested on Linux only
 (unit tests, `clap-host.diagnostics-inventory` with the real bridge); the Windows exception
-classification and the macOS signal path are unproven until native CI runs.
+classification and the macOS signal path are unproven until native CI runs. On Windows the
+`test_bridge_diagnostics` cases that end a bridge from outside (a signal, a bridge that died
+and was never reaped) are not compiled: the classification of an exception and an exit status is
+tested as a pure function, the host-kill and orderly-end cases run, and a bridge that really dies
+by an exception is exercised only by `clap-host.diagnostics-inventory` there, which has not run
+on Windows yet.
 Restart UI/hangs and release package verification remain later topics.
 Supervisor end (ADR-0091): a supervisor that crashes tells the worker first and the worker keeps
 running without crash capture; a supervisor ended with no notice (`SIGKILL`, `TerminateProcess`,
