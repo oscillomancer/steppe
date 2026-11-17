@@ -138,7 +138,14 @@ ancestor; no sysctl, capability or `PR_SET_PTRACER_ANY` is used or needed. Scope
 then reports its reason. The collector stops one thread at a time with `PTRACE_SEIZE` and
 `PTRACE_INTERRUPT`, reads registers, walks, and detaches it (passing back any pending
 signal) before the next; the faulting thread is not stopped, since it is parked in its
-handler. Nothing is left stopped when the acknowledgement is sent. Module identity is
+handler. A thread that cannot reach its stop by the deadline (a killable or
+uninterruptible kernel wait, such as the vfork wait inside `posix_spawn`) stays attached,
+reported `deadline`, and is never stopped by the collector afterwards. The guarantee is
+therefore not that nothing stays attached but that nothing can block the worker's exit:
+once the worker dies, the supervisor's wait reaps every thread it still traces (a traced
+thread is not reaped by anyone else, and the worker is not reported until it is) and
+detaches any that stops, handing a pending signal back. If the worker's exit is observed
+during collection, its real status is kept for the report. Module identity is
 read from the ELF headers in the target's memory through `process_vm_readv`, so a deleted
 or replaced file cannot mislead it. Formatting, JSON and file work happen after the
 acknowledgement.

@@ -13,6 +13,9 @@
 #include <chrono>
 #include <cstring>
 #include "native.h"
+#if defined(__linux__)
+#include <sys/ptrace.h>
+#endif
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
 #include <sys/random.h>
@@ -179,16 +182,49 @@ Result<Native> adopt(std::string_view value, Packet& boot) {
     return native;
 }
 
+// Observes the worker's exit: waitpid on the worker, with `flags` (WNOHANG or 0).
+// Once a trace has left a thread of the worker attached, the worker's leader is not
+// reported until that thread is reaped, and only its tracer can reap it. Everything
+// the supervisor can wait for is then drained, as the worker is its only child: a
+// dead thread is discarded and a stopped one is detached, handing back a signal-
+// delivery-stop signal (never swallowing a real one) as the collector's release does.
+namespace {
+pid_t observe(Native& native, int flags) {
+    pid_t result;
+#if defined(__linux__)
+    if (native.traced) {
+        const auto worker = static_cast<pid_t>(native.process);
+        for (;;) {
+            int status = 0;
+            result = ::waitpid(-1, &status, __WALL | flags);
+            if (result < 0 && errno == EINTR) continue;
+            if (result <= 0) return result;
+            if (WIFSTOPPED(status)) {
+                const int signal = (status >> 16) == 0 ? WSTOPSIG(status) : 0;
+                (void)::ptrace(PTRACE_DETACH, result, nullptr,
+                               reinterpret_cast<void*>(std::intptr_t{signal}));
+                continue;
+            }
+            if (result == worker) {
+                native.status = status;
+                return result;
+            }
+        }
+    }
+#endif
+    do {
+        result = ::waitpid(static_cast<pid_t>(native.process), &native.status, flags);
+    } while (result < 0 && errno == EINTR);
+    return result;
+}
+}  // namespace
 bool receive(Native& native, Packet& packet) {
     auto* bytes = reinterpret_cast<char*>(&packet);
     std::size_t at = 0;
     const int fd = static_cast<int>(native.channel);
     for (;;) {
         if (!native.exited) {
-            pid_t result;
-            do {
-                result = ::waitpid(static_cast<pid_t>(native.process), &native.status, WNOHANG);
-            } while (result < 0 && errno == EINTR);
+            const pid_t result = observe(native, WNOHANG);
             native.statusKnown = result > 0;
             native.exited = native.statusKnown || (result < 0 && errno == ECHILD);
         }
@@ -229,11 +265,7 @@ void awaitAcknowledgement(Native& native) noexcept {
 }
 int wait(Native& native, bool& fatal, std::optional<std::uint32_t> expected) {
     if (!native.exited) {
-        pid_t result;
-        do {
-            result = ::waitpid(static_cast<pid_t>(native.process), &native.status, 0);
-        } while (result < 0 && errno == EINTR);
-        native.statusKnown = result > 0;
+        native.statusKnown = observe(native, 0) > 0;
         native.exited = true;
     }
     fatal = native.statusKnown && WIFSIGNALED(native.status);

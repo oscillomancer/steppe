@@ -165,6 +165,23 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
             assert all(t["stop"] in ("end","not_executable","bad_frame_pointer","depth","unreadable","cycle") for t in threads),threads
             for t in threads:
                 assert len(t["frames"])<=128
+        if yama_scope()<2 or os.geteuid()==0:
+            # A thread in a killable kernel wait cannot be stopped: the collector gives
+            # up at its deadline, and the supervisor must still see the worker exit and
+            # write the report. The timeout is only a watchdog; the verdict is the report.
+            root=base/"trace-killable"/"app"/"diagnostics"
+            run=subprocess.run([binary,str(root),"trace-killable"],capture_output=True,timeout=30)
+            assert run.returncode==128+signal.SIGSEGV,run
+            found=list(root.glob("*.json"))
+            assert len(found)==1,(found,run.stderr)
+            assert not list(root.glob("*.run")),"run marker left behind"
+            report=json.loads(found[0].read_text())
+            assert report["kind"]=="crash" and report["terminal_context"],report
+            assert report["native_fatal_status"] and report["code"]==signal.SIGSEGV,report
+            by_role={}
+            for t in report["threads"]: by_role.setdefault(t["role"],[]).append(t)
+            assert by_role["fault"][0]["state"]=="walked",report["threads"]
+            assert [t.get("reason") for t in report["threads"] if t["state"]=="unavailable"]==["deadline"],report["threads"]
         if os.geteuid()!=0:
             # A non-dumpable worker refuses every external read: all threads unavailable.
             expected,raw,report=trace_run("trace-nondumpable")

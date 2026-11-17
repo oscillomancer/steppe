@@ -330,7 +330,7 @@ class Collector {
     std::map<std::uint64_t, Stopped> stopped_;
 };
 }  // namespace
-TraceSnapshot collectProcessTrace(const Native& native, const Packet& terminal) {
+TraceSnapshot collectProcessTrace(Native& native, const Packet& terminal) {
     std::lock_guard<std::mutex> serialized(dbghelpLock());
     Collector collector(reinterpret_cast<HANDLE>(native.process));
     const auto tids = collector.threads();
@@ -348,7 +348,7 @@ TraceSnapshot collectProcessTrace(const Native& native, const Packet& terminal) 
                         collector.mainThread(tids), hostArch());
 }
 #else
-TraceSnapshot collectProcessTrace(const Native&, const Packet&) {
+TraceSnapshot collectProcessTrace(Native&, const Packet&) {
     TraceSnapshot snapshot;
     ThreadTrace fault;
     fault.role = Role::Fault;

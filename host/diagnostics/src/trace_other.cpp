@@ -5,7 +5,7 @@
 // in process, step d). The report still records the fault thread, unavailable with a
 // stated reason, rather than an empty "successful" trace.
 namespace supple::diagnostics::detail {
-TraceSnapshot collectProcessTrace(const Native&, const Packet&) {
+TraceSnapshot collectProcessTrace(Native&, const Packet&) {
     TraceSnapshot snapshot;
     ThreadTrace fault;
     fault.role = Role::Fault;

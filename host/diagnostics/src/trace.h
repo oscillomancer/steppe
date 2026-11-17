@@ -148,5 +148,5 @@ bool traceShape(const json::Value* modules, const json::Value& threads);
 
 // The platform collector, run by the supervisor on the terminal packet inside the
 // terminal hold; it must return well before the worker's one-second wait ends.
-TraceSnapshot collectProcessTrace(const Native& native, const Packet& terminal);
+TraceSnapshot collectProcessTrace(Native& native, const Packet& terminal);
 }  // namespace supple::diagnostics::detail

@@ -26,9 +26,11 @@
 #if defined(__linux__)
 #include <link.h>
 #include <sys/prctl.h>
+#include <sys/syscall.h>
 #include <chrono>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #endif
 #endif
 namespace {
@@ -254,6 +256,44 @@ int body(int argc, char** argv) {
         faulting.join();
         first.join();
         second.join();
+    }
+#endif
+#if defined(__linux__)
+    // A thread in a killable kernel wait cannot reach a ptrace stop, so the collector
+    // gives up on it at its deadline and the supervisor must still see the worker
+    // exit and write the report (review round 27, F1). The wait is a vfork until its
+    // child execs or exits, as posix_spawn does; the child exits when the worker dies.
+    if (mode == "trace-killable") {
+        int gate[2];
+        if (::pipe(gate) != 0) return 2;
+        static std::atomic<long> blockedTid{0};
+        std::thread blocked([gate] {
+            blockedTid.store(::syscall(SYS_gettid));
+            const pid_t child = ::vfork();
+            if (child == 0) {
+                ::syscall(SYS_close, gate[1]);
+                char c;
+                ::syscall(SYS_read, gate[0], &c, 1);  // end of file once the worker is gone
+                ::syscall(SYS_exit_group, 0);
+            }
+        });
+        while (blockedTid.load() == 0) supple::rt::relax();
+        // State, not time: wait until the thread sits in the vfork wait ('D').
+        const std::string stat = "/proc/self/task/" + std::to_string(blockedTid.load()) + "/stat";
+        for (;;) {
+            std::ifstream in(stat);
+            const std::string text((std::istreambuf_iterator<char>(in)), {});
+            const auto close = text.rfind(')');
+            if (close != std::string::npos && close + 2 < text.size() && text[close + 2] == 'D')
+                break;
+            supple::rt::relax();
+        }
+        std::thread faulting([] {
+            (void)supple::diagnostics::registerCurrentThread();
+            faultOuter();
+        });
+        faulting.join();
+        blocked.join();
     }
 #endif
     if (mode == "stack") return static_cast<int>(exhaustStack());

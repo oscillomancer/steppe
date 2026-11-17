@@ -28,6 +28,10 @@ struct Native {
     // POSIX caches waitpid observation independently of channel ownership.
     bool exited = false, statusKnown = false;
     int status = 0;
+    // Linux: a trace left a thread of the worker attached (it never reached its stop
+    // before the deadline). Only this supervisor can reap such a thread once it dies,
+    // and the worker is not reported until it has; wait() and receive() drain them.
+    bool traced = false;
 };
 Result<Native> launch(int argc, char** argv, const Packet& boot);
 Result<Native> adopt(std::string_view value, Packet& boot);
