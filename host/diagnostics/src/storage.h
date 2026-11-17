@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #pragma once
 #include <filesystem>
+#include <string>
 #include "native.h"
 #include "supple/base/result.h"
 #include "supple/json/json.h"
@@ -21,4 +22,18 @@ void removeMarker(const std::filesystem::path& root, const Packet& boot);
 // handle first (the file is not opened for deletion), then removes the file.
 void removeOwnMarker(const std::filesystem::path& root, const Packet& boot, std::intptr_t file);
 Status pruneReports(const std::filesystem::path& root);
+// Reading what earlier runs left (reports.h). A report-named file is `<32 hex>.json`; its stem is
+// the incident, empty for any other name.
+std::string reportStem(const std::filesystem::path& path);
+// The shape check retention and the reader share. Tolerant (the reader's) accepts a kind and
+// top-level fields this build does not know, and an attribution level it does not know; the
+// strict one is the authority to delete, so a report it cannot fully read is kept.
+bool reportShape(const json::Value& value, bool tolerant = false);
+// The folder is the user's own, or does not exist (then the caller finds nothing). Creates nothing.
+Status checkDirectoryForReading(const std::filesystem::path& root);
+// What a run marker says. Held: some process holds its lock, or it is still being created (the
+// creator locks before it writes, so an empty marker is one being created). Free: nobody holds
+// it, so the run is over. Gone and Unreadable: no marker, or not a file this user owns.
+enum class MarkerState { Gone, Free, Held, Unreadable };
+MarkerState probeMarker(const std::filesystem::path& path);
 }  // namespace supple::diagnostics::detail

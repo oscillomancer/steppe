@@ -123,6 +123,7 @@ json::Value base(const Packet& boot) {
 #endif
     return v;
 }
+}  // namespace
 bool reportName(std::string_view stem) {
     return stem.size() == 32 && std::all_of(stem.begin(), stem.end(), [](char c) {
                return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
@@ -138,9 +139,10 @@ std::string reportStem(const fs::path& path) {
     }
     return text;
 }
-bool reportShape(const json::Value& value) {
+bool reportShape(const json::Value& value, bool tolerant) {
     if (!value.isObject()) return false;
     for (const auto& field : value.asObject()) {
+        if (tolerant) break;
         const std::string_view allowed[]{"schema",      "incident",
                                          "role",        "build",
                                          "platform",    "architecture",
@@ -167,7 +169,8 @@ bool reportShape(const json::Value& value) {
         !oneOf("role", {"gui", "engine", "fixture"}) ||
         !oneOf("platform", {"linux", "macos", "windows"}) ||
         !oneOf("architecture", {"arm64", "x86_64", "unknown"}) ||
-        !oneOf("kind", {"crash", "unexpected_exit"}))
+        !(tolerant ? text("kind", 32) && !value.find("kind")->asString().empty()
+                   : oneOf("kind", {"crash", "unexpected_exit"})))
         return false;
     auto integer = [&](const char* key, std::int64_t min, std::int64_t max) {
         const auto* v = value.find(key);
@@ -196,10 +199,18 @@ bool reportShape(const json::Value& value) {
     }
     // Attribution is optional (reports of earlier builds have none); when present it must be
     // one the report's own plug-ins and commands support.
-    if (const auto* attribution = value.find("attribution"))
-        if (!attributionShape(*attribution, *value.find("plugins"), *value.find("commands"),
+    if (const auto* attribution = value.find("attribution")) {
+        const auto* level = attribution->isObject() ? attribution->find("confidence") : nullptr;
+        const bool known =
+            level && level->isString() &&
+            (level->asString() == "fault_in_image" || level->asString() == "active_token" ||
+             level->asString() == "concurrent_activity" || level->asString() == "recent_command" ||
+             level->asString() == "unknown");
+        if ((known || !tolerant || !level || !level->isString()) &&
+            !attributionShape(*attribution, *value.find("plugins"), *value.find("commands"),
                               *threads, value.find("modules")))
             return false;
+    }
     const auto* unavailable = value.find("unavailable");
     if (!unavailable || !unavailable->isArray() || unavailable->size() == 0 ||
         unavailable->size() > 128)
@@ -216,8 +227,6 @@ bool reportShape(const json::Value& value) {
     const auto* dirty = build->find("dirty");
     return dirty && dirty->isBool();
 }
-
-}  // namespace
 Status prepareDirectory(const fs::path& root) {
     if (root.empty() || !root.is_absolute()) return failure();
     // The caller's application-local parent must already exist, or be created
@@ -281,6 +290,61 @@ void removeOwnMarker(const fs::path& root, const Packet& boot, std::intptr_t fil
 #else
     removeMarker(root, boot);
     releaseMarker(file);
+#endif
+}
+Status checkDirectoryForReading(const fs::path& root) {
+    std::error_code ec;
+    const auto status = fs::symlink_status(root, ec);
+    if (status.type() == fs::file_type::not_found) return okStatus();
+    if (ec) return failure();
+    if (!privateDirectory(root.parent_path(), false) || !privateDirectory(root)) return failure();
+    return okStatus();
+}
+MarkerState probeMarker(const fs::path& path) {
+#if defined(_WIN32)
+    HANDLE file = CreateFileW(
+        path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        const DWORD error = GetLastError();
+        if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)
+            return MarkerState::Gone;
+        // Another handle denies sharing: something holds the marker.
+        return error == ERROR_SHARING_VIOLATION ? MarkerState::Held : MarkerState::Unreadable;
+    }
+    MarkerState result = MarkerState::Unreadable;
+    BY_HANDLE_FILE_INFORMATION info{};
+    if (GetFileInformationByHandle(file, &info) &&
+        !(info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY))) {
+        if (info.nFileSizeHigh == 0 && info.nFileSizeLow == 0) {
+            result = MarkerState::Held;
+        } else {
+            OVERLAPPED probe{};
+            if (LockFileEx(file, LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &probe)) {
+                UnlockFileEx(file, 0, 1, 0, &probe);
+                result = MarkerState::Free;
+            } else if (GetLastError() == ERROR_LOCK_VIOLATION) {
+                result = MarkerState::Held;
+            }
+        }
+    }
+    CloseHandle(file);
+    return result;
+#else
+    const int fd = ::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
+    if (fd < 0) return errno == ENOENT ? MarkerState::Gone : MarkerState::Unreadable;
+    MarkerState result = MarkerState::Unreadable;
+    struct stat info{};
+    if (::fstat(fd, &info) == 0 && S_ISREG(info.st_mode) && info.st_uid == ::geteuid()) {
+        if (info.st_size == 0)
+            result = MarkerState::Held;
+        else if (::flock(fd, LOCK_SH | LOCK_NB) == 0)
+            result = MarkerState::Free;  // the lock goes with the descriptor, on close
+        else if (errno == EWOULDBLOCK)
+            result = MarkerState::Held;
+    }
+    ::close(fd);
+    return result;
 #endif
 }
 Status publishReport(const fs::path& root, const Packet& boot, const Packet* terminal, int code,
@@ -383,6 +447,8 @@ Status pruneReports(const fs::path& root,
         if (count <= 20 && total <= 50 * 1024 * 1024) break;
         if (checkpoint) checkpoint(report.path, "remove");
         if (!privateRemove(report.path)) return failure();
+        privateRemove(
+            fs::path(report.path).replace_extension(".ack"));  // its acknowledgement, if any
         --count;
         total -= report.bytes;
     }

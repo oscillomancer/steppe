@@ -11,6 +11,7 @@
 #include "storage.h"
 #include "supple/base/paths.h"
 #include "supple/diagctx/table.h"
+#include "supple/diagnostics/reports.h"
 #include "supple/product.h"
 #include "terminal.h"
 #include "trace.h"
@@ -48,10 +49,7 @@ void removeOwnMarkerAtExit() {
 
 int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
     using namespace detail;
-    if (options.directory.empty()) {
-        const auto data = paths::localData();
-        if (!data.empty()) options.directory = data / std::string(product::kSlug) / "diagnostics";
-    }
+    if (options.directory.empty()) options.directory = defaultDirectory();
     const bool storage = !options.directory.empty() && prepareDirectory(options.directory);
     if (argc >= 3 && std::string_view(argv[argc - 2]) == "--diagnostic-worker") {
         Packet boot;

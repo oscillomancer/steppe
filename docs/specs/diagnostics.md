@@ -169,6 +169,43 @@ already removed only when the NT status of the same call (`RtlGetLastNtStatus`) 
 such case: unlink is immediate and a lost race is `ENOENT`. Namespace power-cut durability on Windows has
 the same unprivileged limitations as ordinary project publication.
 
+### Reading reports (topic 7a)
+
+`supple/diagnostics/reports.h` is how an application reads what its earlier runs left; the
+frontend writes and this reads, both through the private-file checks (owner, no links, 4 MiB).
+`defaultDirectory()` is the folder above (`localData/slug/diagnostics`); every function takes `{}`
+for it. Nothing here changes a report: a report is never rewritten.
+
+*Listing.* `listReports` returns `reports` (newest first, by file time), `unreported`, and
+counts `liveRuns`, `pending` and `ignored`. A missing folder is an empty listing; one that is a
+link or not the user's own is an error (`diagnostics.storage`). A report is summarised by incident,
+role, kind (`crash`, `unexpected_exit`, or `other`), platform, the build that wrote it, file time,
+`acknowledged`, the attribution level, the plug-in the attribution names (its own strings and
+build id, any of them possibly empty) and the plug-in count. Reading is tolerant where a newer
+build writes more: a kind this build does not know is `other`, an attribution level it does not
+know is `other`, and top-level fields it does not know are ignored; nested parts it does know
+must still validate. Retention keeps the strict check, so a report it cannot fully read is kept
+and never authority to delete. A report-named file that is not a valid report (its own `incident`
+is its name) is counted in `ignored`, never listed, never touched.
+
+*When a report counts (T8).* A run marker is *held* when another handle holds its lock, and also
+when it is empty, because the creator locks before it writes: an empty marker is one being
+created. A marker nobody holds is *free*: the run is over. A report whose marker is held is
+still being published and counts in `pending`, not in `reports`; `readReport` and `acknowledge`
+refuse it (`diagnostics.no_report`). A report with no marker, or a free one, counts. A free marker
+with no report is an `unreported` run: the supervisor died or could not write, and the list says
+so with the role the marker recorded. Held markers are `liveRuns` (this process's own among them).
+POSIX probes with a shared `flock` that is released at once, Windows with a shared byte-range
+lock (`LockFileEx`) on the byte the holder locked exclusively; a Windows marker being removed by
+its own worker is briefly free, so a reader started at that instant can list that run as
+unreported. Stale markers are not removed by anything (retention never touches markers).
+
+*Acknowledgement (T2).* `acknowledge(incident)` writes `<incident>.ack`, canonical JSON
+`{"schema":"supple.crash-ack/1.0","incident":…}`, beside the report or the unreported run's
+marker, for an incident that exists and whose run is over; it is idempotent, and a file there
+that is not a valid acknowledgement does not count and is replaced. Retention removes a report's
+`.ack` with it. An acknowledgement of an unreported run stays with its marker.
+
 ## Terminal behavior
 
 POSIX SEGV/BUS/ILL/FPE/ABRT and Windows unhandled SEH use a fixed reserved capsule.
