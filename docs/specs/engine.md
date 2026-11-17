@@ -279,14 +279,32 @@ before constructing its latency request.
 
 ### 1.6 Incremental rebuild and plan swap
 
-The compiler diffs the new version against the one the current plan was built
-from (session-model §4). Unchanged nodes keep their plugin instances and
-state (their DSP objects are moved into the new plan). Held timeline notes
-carry only when the receiving instrument instance is retained. Route and parent
-edge delay histories carry when source, destination, tap, kind and delay length
-match; changed lengths start empty. New plugins are
-instantiated and activated on the main thread before the swap; parameter
-changes on existing instances become param events rather than rebuilds.
+Every compile is complete: `Engine::load` builds a whole new plan from the
+session, every node, stage, buffer and event list, except for the edits that
+publish values instead (mix values below, ADR-0060, and the playrate scalar,
+ADR-0046). Plugin instances are not rebuilt: the instance pool keeps each
+FX's instance while its plug-in and isolation stay the same, and applies a
+changed patch or state to it on the main thread during the compile
+(`InstancePool::get`). State crosses the swap when the executor adopts the
+new plan, matching nodes by id: fader, wet and Console 9 ramps
+(`carryMix`), held notes (`carryLiveNotes`, `carryRackMidi`), and delay
+histories. Held timeline notes carry only when the receiving instrument
+instance is retained. Route and parent edge delay histories carry when
+source, destination, tap, kind and delay length match; changed lengths start
+empty. New plugins are instantiated and activated on the main thread before
+the swap. Route E (`reports/route-E-design.md`) makes edits cheaper stage by
+stage; so far:
+
+- **Rings are recycled** (stage 1). A frontier or record ring of a plan
+  both executors have left goes to a main-thread pool when plans are
+  collected, and the next compile takes a ring of the shape it needs from
+  there, resetting its indices; old chunk contents are never read, since
+  the producer writes every field of a chunk before publishing it. A ring
+  of a plan an executor may still adopt or play is never reused. The pool
+  keeps as many rings as the newest plan has. Frontier and record rings
+  hold what the renderer is ahead at the device's rate (its render-ahead
+  frames in chunks of the render quantum, plus two), no longer room for
+  192 kHz.
 Returning to a version with neither patch nor state after applying saved FX
 settings recreates the factory-default instance. The old instance remains alive
 until both executors release its plan, as with a changed opaque state.

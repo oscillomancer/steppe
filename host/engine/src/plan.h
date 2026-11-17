@@ -227,6 +227,10 @@ struct Chunk {
     }
 };
 
+// ChunkRings constructed in this process (route E stage 1 counts them).
+std::uint64_t chunkRingAllocations();
+void countChunkRing();
+
 // Single producer (the renderer), single consumer (the audio callback).
 struct ChunkRing {
     std::vector<Chunk> chunks;
@@ -237,6 +241,7 @@ struct ChunkRing {
     // `channels`: 2, or the device's outputs for the root ring.
     ChunkRing(std::size_t capacity, std::uint32_t frames, bool metadata = false,
               std::uint32_t channels = 2) {
+        countChunkRing();
         chunks.resize(std::bit_ceil(std::max<std::size_t>(capacity, 4)));
         mask = chunks.size() - 1;
         for (Chunk& c : chunks) {
@@ -248,6 +253,20 @@ struct ChunkRing {
                 c.rates.resize(frames + 1, 1.);
             }
         }
+    }
+    // A frontier or record ring of this shape (route E stage 1): stereo, no
+    // metadata, `capacity` chunks rounded up as the constructor does.
+    bool fits(std::size_t capacity, std::uint32_t frames) const {
+        return chunks.size() == std::bit_ceil(std::max<std::size_t>(capacity, 4)) &&
+               chunks.front().l.size() == frames && chunks.front().extra.empty() &&
+               chunks.front().timeline.empty();
+    }
+    // Main thread, while no executor can reach the ring: empty again. Old
+    // chunk contents stay; the producer writes every field of a chunk before
+    // it publishes it, and the consumer reads only published ones.
+    void restart() {
+        write.store(0, std::memory_order_relaxed);
+        read.store(0, std::memory_order_relaxed);
     }
     // Producer: the next free chunk, or null when the ring is full.
     Chunk* slot() {

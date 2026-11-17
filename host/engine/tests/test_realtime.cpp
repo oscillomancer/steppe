@@ -82,6 +82,15 @@ struct EngineTestAccess {
     static std::uint64_t rendererEpoch(const Engine& e) { return e.epochDone_.load(); }
     static LoopRange rendererLoop(const Engine& e) { return e.loopR_; }  // after rendererEpoch
     static const detail::Plan& latestPlan(const Engine& e) { return *e.latestPlan_.load(); }
+    // Every ring of every plan an executor may still use.
+    static std::vector<const detail::ChunkRing*> planRings(const Engine& e) {
+        std::vector<const detail::ChunkRing*> out;
+        for (const auto& plan : e.plans_) {
+            for (const auto& ring : plan->frontierRings) out.push_back(ring.get());
+            for (const auto& ring : plan->recordRings) out.push_back(ring.get());
+        }
+        return out;
+    }
     static auto deadline(std::chrono::steady_clock::time_point now,
                          std::chrono::steady_clock::time_point next, bool idleWork,
                          std::chrono::steady_clock::duration safety = std::chrono::seconds(1)) {
@@ -3922,6 +3931,108 @@ TEST_CASE("callback wakes renderer once at the consumption threshold") {
     plan.split = true;
     CHECK(Access::target(engine) == INT64_MAX);
     CHECK_FALSE(Access::room(engine));
+}
+
+namespace {
+// Two sine tracks the renderer runs, and a monitored input that makes the
+// master live: both tracks reach it through frontier rings.
+model::Session frontierSession() {
+    const auto base = synthSession(-12.0, nullptr, 2);
+    model::EditTxn t(base, 2);
+    model::Track vocal;
+    vocal.parent = kMaster;
+    const Id track = t.create(vocal);
+    t.modify<model::Track>(kMaster, [&](auto& m) { m.children.push_back(track); });
+    model::Route in;
+    in.from.hwChannels = std::vector<int>{1, 2};
+    in.to.track = track;
+    const Id input = t.create(in);
+    t.modify<model::Track>(track, [&](auto& x) {
+        x.record.input = input;
+        x.record.monitor = model::Monitor::On;
+        x.record.armed = true;
+    });
+    return t.commit().value();
+}
+// The same session, needing a compile (a marker), at `version`.
+model::Session recompiled(const model::Session& s, std::uint64_t version) {
+    model::EditTxn t(s, version);
+    t.create(model::Marker{});
+    return t.commit().value();
+}
+}  // namespace
+
+TEST_CASE("plan swaps reuse retired plans' frontier rings: none is allocated per edit" *
+          doctest::description("rt")) {
+    // Route E stage 1: every compile allocated and zeroed a ring per
+    // frontier edge (512 KB each), and freed the retired plan's. The
+    // callback adopts a plan where the renderer handed it over, a render-ahead
+    // time (200 ms, 38 cycles) after it was published: edits slower than that
+    // retire each plan before the next, faster ones keep several in use.
+    for (const int pace : {64, 8}) {
+        CAPTURE(pace);
+        auto pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        Engine engine(pool, media, {.workers = 1});
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
+        auto session = frontierSession();
+        REQUIRE(engine.load(session));
+        REQUIRE(EngineTestAccess::latestPlan(engine).frontierRings.size() == 2);
+        engine.play();
+        std::uint64_t version = 10;
+        const auto edit = [&] {
+            REQUIRE(engine.load(recompiled(session, version++)));
+            runAhead(engine, backend, pace, 256);
+        };
+        for (int warm = 0; warm < 8; ++warm) edit();  // until as many plans retire as start
+        const auto before = detail::chunkRingAllocations();
+        for (int more = 0; more < 16; ++more) edit();
+        CHECK(detail::chunkRingAllocations() == before);
+        CHECK(engine.anticipationMisses() == 0);
+        engine.stop();
+    }
+}
+
+TEST_CASE("a frontier ring is reused only once both executors have left its plan" *
+          doctest::description("rt")) {
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    Engine engine(pool, media, {.workers = 1});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
+    auto session = frontierSession();
+    REQUIRE(engine.load(session));
+    engine.play();
+    runAhead(engine, backend, 16, 256);
+    std::uint64_t version = 10;
+    // The callback holds on to the plan it plays: no cycle runs, so every
+    // plan published meanwhile may still be adopted, and none is retired.
+    // Each gets rings of its own.
+    for (int edit = 0; edit < 4; ++edit) {
+        const auto before = detail::chunkRingAllocations();
+        REQUIRE(engine.load(recompiled(session, version++)));
+        CHECK(detail::chunkRingAllocations() == before + 2);
+        auto rings = EngineTestAccess::planRings(engine);
+        std::sort(rings.begin(), rings.end());
+        CHECK(std::adjacent_find(rings.begin(), rings.end()) == rings.end());
+    }
+    // Once the callback has moved on to the newest plan (past the render-ahead
+    // time), the next one takes the rings of the plans before it, never the
+    // newest's.
+    runAhead(engine, backend, 64, 256);
+    const auto older = EngineTestAccess::planRings(engine);
+    std::vector<const detail::ChunkRing*> current;
+    for (const auto& ring : EngineTestAccess::latestPlan(engine).frontierRings)
+        current.push_back(ring.get());
+    const auto before = detail::chunkRingAllocations();
+    REQUIRE(engine.load(recompiled(session, version++)));
+    CHECK(detail::chunkRingAllocations() == before);
+    for (const auto& ring : EngineTestAccess::latestPlan(engine).frontierRings) {
+        CHECK(std::find(current.begin(), current.end(), ring.get()) == current.end());
+        CHECK(std::find(older.begin(), older.end(), ring.get()) != older.end());
+    }
+    engine.stop();
 }
 
 TEST_CASE("renderer waits for full master and frontier rings to release a chunk") {
