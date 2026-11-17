@@ -3,8 +3,15 @@
 #include <supple/base/waitable.h>
 #include <supple/rpc/model_loop.h>
 #include <array>
+#include <atomic>
 #include <cstring>
 #include <memory>
+#include <thread>
+#if !defined(_WIN32)
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 #include "../src/endpoint_platform.h"
 #include "../src/socket_platform.h"
 #include "protocol_fixture.h"
@@ -294,6 +301,140 @@ TEST_CASE("portable AF_UNIX transport dispatches and protects a live endpoint") 
     CHECK(rpc::net::EndpointLock(lockPath).valid());  // released once stopped
     std::filesystem::remove_all(dir);
 }
+namespace {
+std::filesystem::path freshDir(const char* stem) {
+    for (std::uint64_t suffix = 0;; ++suffix) {
+        auto dir = std::filesystem::temp_directory_path() / (stem + std::to_string(suffix));
+        std::error_code error;
+        if (std::filesystem::create_directory(dir, error)) return dir;
+    }
+}
+std::filesystem::path lockOf(std::filesystem::path path) {
+    path += ".lock";
+    return path;
+}
+}  // namespace
+
+TEST_CASE(
+    "servers racing for one endpoint leave one owner, and a successor starts after it stops") {
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    const auto dir = freshDir("supple-rpc-race-");
+    const auto path = dir / "endpoint.sock";
+    for (int round = 0; round < 20; ++round) {
+        constexpr int n = 8;
+        std::vector<std::unique_ptr<rpc::Server>> servers;
+        for (int i = 0; i < n; ++i)
+            servers.push_back(std::make_unique<rpc::Server>(commands, bus, [](auto) {}));
+        std::vector<std::string> codes(n);
+        std::atomic<int> ready{0};
+        std::vector<std::thread> threads;
+        for (int i = 0; i < n; ++i)
+            threads.emplace_back([&, i] {
+                ++ready;
+                while (ready.load() != n) std::this_thread::yield();
+                auto started = servers[static_cast<std::size_t>(i)]->start(path);
+                codes[static_cast<std::size_t>(i)] = started ? "ok" : started.error().code;
+            });
+        for (auto& thread : threads) thread.join();
+        int owners = 0, refused = 0, winner = -1;
+        for (int i = 0; i < n; ++i) {
+            const auto& code = codes[static_cast<std::size_t>(i)];
+            if (code == "ok") {
+                ++owners;
+                winner = i;
+            } else if (code == "rpc.address_in_use") {
+                ++refused;
+            } else {
+                MESSAGE("unexpected code " << code);
+            }
+        }
+        CHECK(owners == 1);
+        CHECK(refused == n - 1);
+        CHECK(rpc::net::EndpointLock(lockOf(path)).heldElsewhere());
+        if (winner >= 0) servers[static_cast<std::size_t>(winner)]->stop();
+        // Free at once: the lock never waits, so a slow release would refuse
+        // the successor.
+        CHECK(rpc::net::EndpointLock(lockOf(path)).valid());
+        rpc::Server successor(commands, bus, [](auto) {});
+        CHECK(successor.start(path));
+        successor.stop();
+    }
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("a failed start and a server destroyed while running both release the endpoint lock") {
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    const auto dir = freshDir("supple-rpc-life-");
+    // The lock file can be created; the socket name exceeds the platform limit.
+    const auto longPath = dir / std::string(150, 'x');
+    {
+        rpc::Server server(commands, bus, [](auto) {});
+        auto started = server.start(longPath);
+        REQUIRE_FALSE(started);
+        CHECK(started.error().code == "rpc.path");
+        CHECK(rpc::net::EndpointLock(lockOf(longPath)).valid());
+    }
+    const auto path = dir / "endpoint.sock";
+    {
+        rpc::Server server(commands, bus, [](auto) {});
+        REQUIRE(server.start(path));
+        CHECK(rpc::net::EndpointLock(lockOf(path)).heldElsewhere());
+    }  // destroyed without stop()
+    CHECK(rpc::net::EndpointLock(lockOf(path)).valid());
+    std::filesystem::remove_all(dir);
+}
+
+#if !defined(_WIN32)
+// POSIX only: the test needs fork to kill an owner without running its cleanup.
+// On Windows the same release rests on the system dropping a dead process's
+// byte-range locks, which no in-process test can show.
+TEST_CASE("a killed server's endpoint lock and socket are reclaimed") {
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    const auto dir = freshDir("supple-rpc-kill-");
+    const auto path = dir / "endpoint.sock";
+    int ready[2];
+    REQUIRE(::pipe(ready) == 0);
+    const pid_t child = ::fork();
+    REQUIRE(child >= 0);
+    if (child == 0) {
+        rpc::Server server(commands, bus, [](auto) {});
+        const char ok = server.start(path) ? 'y' : 'n';
+        (void)!::write(ready[1], &ok, 1);
+        for (;;) ::pause();  // killed by the parent
+    }
+    ::close(ready[1]);
+    char ok = 0;
+    REQUIRE(::read(ready[0], &ok, 1) == 1);
+    ::close(ready[0]);
+    REQUIRE(ok == 'y');
+    CHECK(rpc::net::EndpointLock(lockOf(path)).heldElsewhere());
+    {
+        rpc::Server competing(commands, bus, [](auto) {});
+        auto refused = competing.start(path);
+        REQUIRE_FALSE(refused);
+        CHECK(refused.error().code == "rpc.address_in_use");
+    }
+    REQUIRE(::kill(child, SIGKILL) == 0);
+    int status = 0;
+    REQUIRE(::waitpid(child, &status, 0) == child);
+    CHECK(WIFSIGNALED(status));
+    bool listed = false;
+    for (const auto& entry : std::filesystem::directory_iterator(dir))
+        listed = listed || entry.path().filename() == path.filename();
+    CHECK(listed);  // the dead server's socket file remains
+    rpc::Server successor(commands, bus, [](auto) {});
+    CHECK(successor.start(path));  // lock free, socket refused: stale, reclaimed
+    successor.stop();
+    std::filesystem::remove_all(dir);
+}
+#endif
+
 TEST_CASE("portable AF_UNIX startup refuses paths beyond the platform limit") {
     auto reg = registry();
     Host host;

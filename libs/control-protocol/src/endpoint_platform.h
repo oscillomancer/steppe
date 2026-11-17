@@ -130,7 +130,13 @@ class EndpointLock {
     }
     ~EndpointLock() {
 #if defined(_WIN32)
-        if (file_ != INVALID_HANDLE_VALUE) CloseHandle(file_);
+        if (file_ != INVALID_HANDLE_VALUE) {
+            // Closing alone releases the lock at a time the system chooses; a
+            // successor that never waits must find it free at once.
+            OVERLAPPED overlapped{};
+            if (valid_) UnlockFileEx(file_, 0, 1, 0, &overlapped);
+            CloseHandle(file_);
+        }
 #else
         if (fd_ >= 0) {
             if (valid_) ::flock(fd_, LOCK_UN);
