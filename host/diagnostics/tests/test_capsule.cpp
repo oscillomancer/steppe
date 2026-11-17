@@ -406,7 +406,12 @@ TEST_CASE("an empty marker, a stranger and a short capsule are all refused") {
         addThread(*data, Role::Fault, Missing::None, Stop::End, {0x1000});
         CHECK_FALSE(receiveCapsule(pair.fds[1], base, 1));
         std::vector<char> filler(4096, 'x');
-        while (::send(pair.fds[0], filler.data(), filler.size(), MSG_DONTWAIT) > 0) {
+        // Bounded by construction: a socket buffer is never 256 MiB, so if a platform's
+        // sends never report "full" this stops anyway and the check below fails, rather
+        // than the test running on until the harness gives up.
+        for (int sends = 0;
+             sends < 65536 && ::send(pair.fds[0], filler.data(), filler.size(), MSG_DONTWAIT) > 0;
+             ++sends) {
         }
         CHECK_FALSE(sendCapsule(pair.fds[0], base, data.get(), 1));
     }
