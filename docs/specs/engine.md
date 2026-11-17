@@ -430,8 +430,9 @@ another plug-in or isolation, configured from a state blob), belongs to a
 frozen track or has an active envelope (a new plan resends automated values
 at its first block), or when any instance has automation its plug-in
 cleared (a compile restores it). Otherwise `InstancePool::applyPatch` applies
-each patch as `get()` would and services the instance; a parameter rescan or
-clear, a latency change, a restart request or failure, a change of
+each patch as `get()` would and services the instance; a rescan of the
+parameter list (INFO, ALL or no flags; a values or text rescan is not one) or
+a clear, a latency change, a restart request or failure, a change of
 activation or of ports then makes it a compile, which finds the patches
 applied. When the patch is heard is unchanged: it reaches the instance on
 the main thread inside `load` as before, and a plan swap neither drops nor

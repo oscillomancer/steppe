@@ -219,7 +219,13 @@ bool Engine::loadPatches(const model::Session& session, const std::filesystem::p
         if (notes->stateDirty &&
             std::find(dirtyStates_.begin(), dirtyStates_.end(), id) == dirtyStates_.end())
             dirtyStates_.push_back(id);
-        if (notes->paramsRescan || !notes->paramsClear.empty() || notes->restartError ||
+        // A plan holds the parameter list, not the values: a rescan of values
+        // or their text, which a plug-in reports after a patch, is not one.
+        constexpr std::uint32_t kValues = CLAP_PARAM_RESCAN_VALUES | CLAP_PARAM_RESCAN_TEXT;
+        const bool listChanged =
+            notes->paramsRescan &&
+            (notes->paramsRescanFlags == 0 || (notes->paramsRescanFlags & ~kValues) != 0);
+        if (listChanged || !notes->paramsClear.empty() || notes->restartError ||
             notes->latencyChanged || plugins_.restarting(id) || active != instance.active() ||
             before != ports())
             return false;

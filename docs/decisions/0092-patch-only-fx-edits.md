@@ -47,9 +47,14 @@ plan.
   would (the canonical text, `CLAP_SUPPLE_SET_REPLACE`), then services the
   instance. If the plug-in then reports anything a plan holds, the edit
   compiles, and the compile finds the patch already applied. That covers
-  a parameter rescan or clear, a latency change, a restart request or a
-  failed one, a change of activation, and changed ports (audio channels,
+  a rescan of the parameter list (`CLAP_PARAM_RESCAN_INFO` or `_ALL`, or a
+  rescan without flags) or a clear, a latency change, a restart request or
+  a failed one, a change of activation, and changed ports (audio channels,
   note ports, key or auxiliary channels).
+  - A rescan of values or their text is not one of them. A plan holds a
+    plug-in's parameter list (lane ids, ranges, read-only flags), not its
+    values, and a CLAP plug-in reports such a rescan after every patch:
+    the stock plug-ins call `rescan(CLAP_PARAM_RESCAN_VALUES)` each time.
 - **When it is heard.** Nothing changes. The patch reaches the instance at
   the same point as before, on the main thread inside `load`. A plan swap
   neither drops chunks already rendered ahead nor renders them again: the
@@ -78,7 +83,13 @@ plan.
 ## Consequences
 
 - A patch edit costs a model commit, the patch's serialization and its
-  application, whatever the session's size. The model commit dominates.
+  application, whatever the session's size. Measured with the stock synth
+  (40 `fx.patch.merge` edits, release build, thread CPU time, median), at 96
+  tracks: `Engine::load` 158 µs instead of 4968 µs with a shared bridge, and
+  226 µs instead of 6355 µs in process. The whole commit is 0.85 to 0.96 ms
+  instead of 5.6 to 7.5 ms, and the model commit (about 0.38 ms) is now its
+  largest part. A bridged edit's wait for its `SetPatch` answer is not CPU
+  time and is not in these numbers.
 - Offline renders still compile in full and are the reference. The real-time
   output of a patch-only edit is bit-identical to a compiled reload at the
   same block.

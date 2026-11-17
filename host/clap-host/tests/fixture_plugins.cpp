@@ -233,6 +233,7 @@ struct Gain {
     bool enforceThread = false;
     bool rejectPatch = false;
     bool slowPatch = false;
+    std::uint32_t patchRescan = 0;  // GainControl::patchRescan
     bool mismatchedId = false, missingValue = false;
     bool malformedSchema = false;
     bool badCurve = false;
@@ -467,6 +468,11 @@ bool CLAP_ABI semSetPatch(const clap_plugin_t* pl, uint32_t mode, const char* te
     const int latency = static_cast<int>(result->body.values[1]);
     if (latency != G(pl)->latencyChoice.exchange(latency) && G(pl)->host->request_restart)
         G(pl)->host->request_restart(G(pl)->host);
+    if (G(pl)->patchRescan) {
+        const auto* hp = static_cast<const clap_host_params_t*>(
+            G(pl)->host->get_extension(G(pl)->host, CLAP_EXT_PARAMS));
+        if (hp) hp->rescan(G(pl)->host, G(pl)->patchRescan);
+    }
     return true;
 }
 bool CLAP_ABI semDescribe(const clap_plugin_t* pl, uint32_t detail, const clap_ostream_t* out) {
@@ -489,6 +495,8 @@ struct GainControl {
     std::uint32_t (*deliveries)(const clap_plugin_t*);
     void (*latency)(const clap_plugin_t*, bool);
     std::uint32_t (*creates)();
+    // The rescan flags a later applied patch reports (0: none).
+    void (*patchRescan)(const clap_plugin_t*, std::uint32_t);
 };
 void gainEditorEdit(const clap_plugin_t* pl, double value, std::uint32_t flags) {
     G(pl)->gainDb = value;
@@ -504,7 +512,9 @@ void gainRequestLatency(const clap_plugin_t* pl, bool delayed) {
     G(pl)->host->request_restart(G(pl)->host);
 }
 std::uint32_t gainCreates() { return gGainCreates.load(); }
-const GainControl kGainControl{gainEditorEdit, gainHostDeliveries, gainRequestLatency, gainCreates};
+void gainPatchRescan(const clap_plugin_t* pl, std::uint32_t flags) { G(pl)->patchRescan = flags; }
+const GainControl kGainControl{gainEditorEdit, gainHostDeliveries, gainRequestLatency, gainCreates,
+                               gainPatchRescan};
 const void* CLAP_ABI gainExt(const clap_plugin_t* pl, const char* id) {
     if (!std::strcmp(id, "supple.test.gain-control")) return &kGainControl;
     if (!std::strcmp(id, CLAP_EXT_PARAMS)) return &kGainParams;

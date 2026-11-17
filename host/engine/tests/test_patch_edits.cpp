@@ -170,6 +170,50 @@ TEST_CASE("a patch-only edit while playing sounds exactly like a compiled reload
         }
 }
 
+TEST_CASE("a plug-in that rescans its values after a patch keeps the edit off the compile") {
+    // A CLAP plug-in tells the host its values moved after a patch (the
+    // stock plug-ins call rescan(CLAP_PARAM_RESCAN_VALUES) after every one).
+    // A plan holds a plug-in's parameter list, not its values, so only a
+    // rescan of that list (INFO or ALL) needs the compile.
+    struct Control {
+        void (*edit)(const clap_plugin_t*, double, std::uint32_t);
+        std::uint32_t (*deliveries)(const clap_plugin_t*);
+        void (*latency)(const clap_plugin_t*, bool);
+        std::uint32_t (*creates)();
+        void (*patchRescan)(const clap_plugin_t*, std::uint32_t);
+    };
+    const std::pair<std::uint32_t, bool> cases[] = {
+        {CLAP_PARAM_RESCAN_VALUES, true},
+        {CLAP_PARAM_RESCAN_VALUES | CLAP_PARAM_RESCAN_TEXT, true},
+        {CLAP_PARAM_RESCAN_INFO, false},
+        {CLAP_PARAM_RESCAN_ALL, false},
+    };
+    for (const auto& [flags, fast] : cases) {
+        CAPTURE(flags);
+        const Patched p = patchedSession(false);
+        auto pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        Engine engine(pool, media, kInCallback);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        REQUIRE(engine.load(p.session));
+        for (const Id id : {p.trackGain, p.masterGain}) {
+            const clap_plugin_t* plugin = pool.find(id)->raw();
+            REQUIRE(plugin);
+            const auto* control = static_cast<const Control*>(
+                plugin->get_extension(plugin, "supple.test.gain-control"));
+            REQUIRE(control);
+            control->patchRescan(plugin, flags);
+        }
+        const auto generation = engine.planGeneration();
+        REQUIRE(engine.load(repatched(p, 3)));
+        engine.service();  // the rescan was taken with the patch, not left for here
+        CHECK(engine.patchEdits() == (fast ? 1u : 0u));
+        CHECK(engine.planGeneration() == generation + (fast ? 0 : 1));
+        CHECK(pool.find(p.trackGain)->paramValue(0).value() == doctest::Approx((-14 + 60) / 72.0));
+    }
+}
+
 TEST_CASE("a patch edit a running instance cannot take compiles") {
     const Patched p = patchedSession(false);
     auto pool = makePool();
