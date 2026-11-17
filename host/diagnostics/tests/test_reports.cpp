@@ -883,6 +883,8 @@ TEST_CASE("a report that points at a plug-in makes it a suspect, keyed on its bu
     CHECK(found[0].origin == "foreign");
     CHECK(found[0].attribution == "fault_in_image");
     CHECK(found[0].incidents == std::vector<std::string>{name(1)});
+    REQUIRE(found[0].incidentTimes.size() == 1);
+    CHECK(found[0].incidentTimes[0] == found[0].newest);
     // The listing gives the same fields to a viewer.
     auto listing = listReports(root.path);
     REQUIRE(listing);
@@ -918,6 +920,10 @@ TEST_CASE(
     CHECK(found[0].incidents == std::vector<std::string>{name(3)});
     CHECK(found[1].buildId == "0123456789abcdef");
     CHECK(found[1].incidents == std::vector<std::string>{name(2), name(1)});
+    // Each incident carries its report's file time, in the same order.
+    REQUIRE(found[1].incidentTimes.size() == 2);
+    CHECK(found[1].incidentTimes[0] == found[1].newest);
+    CHECK(found[1].incidentTimes[0] > found[1].incidentTimes[1]);
     // An active_token report records no build; two versions are two suspects, one version one.
     Root second;
     Plug token;

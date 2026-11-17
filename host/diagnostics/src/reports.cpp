@@ -379,6 +379,7 @@ Result<std::vector<Suspect>> suspects(const fs::path& directory) {
         }
         if (summary.attribution == "fault_in_image") it->attribution = "fault_in_image";
         it->incidents.push_back(c.incident);
+        it->incidentTimes.push_back(c.time);
     }
     return out;
 }

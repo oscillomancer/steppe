@@ -248,7 +248,10 @@ of it. A suspect is keyed on
 VST3) is keyed on the version too, so two versions are two suspects and none is an exact build.
 The suspect carries the name, vendor, version and `origin` of its newest report (P8 decides on
 `origin`: a `stock` plug-in is a Steppe fault, for which the caller offers no bridge), the
-strongest level among its reports, and its `incidents`, newest first.
+strongest level among its reports, and its `incidents`, newest first, with `incidentTimes`, each
+report's file time in the same order. The engine's check merges the incidents of a build suspect and a
+version suspect of one plug-in (a CLAP plug-in can have both) by those times, so the list it shows
+is newest first across them.
 `settle(incident)` records that the suspicion a report raised is resolved (the user chose to load
 the plug-in normally, or a run loaded it normally and ended well): `<incident>.settled`, canonical
 JSON `{"schema":"supple.crash-settled/1.0","incident":…}`, written like `.ack` (idempotent; one that

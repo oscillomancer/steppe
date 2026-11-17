@@ -33,7 +33,10 @@ struct SuspicionVerdict {
     // different build or version is installed, or the suspicion is settled).
     enum class Build { None, Same, Version, Unreadable } build = Build::None;
     std::vector<std::string> incidents;  // newest first, without repeats
-    std::string attribution;             // the strongest level: fault_in_image over active_token
+    // Each one's report file time, in the same order. An incident whose suspect carries no times
+    // (a test's) takes the suspect's `newest`.
+    std::vector<std::filesystem::file_time_type> incidentTimes;
+    std::string attribution;  // the strongest level: fault_in_image over active_token
     bool applies() const { return build != Build::None; }
 };
 

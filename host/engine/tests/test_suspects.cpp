@@ -216,6 +216,30 @@ TEST_CASE("a report with no build is matched on the version") {
     }
 }
 
+TEST_CASE("incidents are newest first across a build suspect and a version suspect") {
+    Rig rig;
+    rig.files["/nowhere/plugin.clap"] = std::vector<std::string>{"b1"};
+    const auto at = [](int minutes) {
+        return fs::file_time_type{} + std::chrono::minutes(minutes);
+    };
+    // The reader's order: the suspect with the newest report first. The version suspect holds an
+    // older report than the build suspect, and a later one of the build suspect is older still.
+    auto build = suspect("b1", "1.0", "fault_in_image", {"newest", "oldest"});
+    build.incidentTimes = {at(30), at(5)};
+    build.newest = at(30);
+    auto version = suspect("", "1.0", "active_token", {"middle"});
+    version.incidentTimes = {at(10)};
+    version.newest = at(10);
+    for (const auto& order :
+         {std::vector<diag::Suspect>{build, version}, std::vector<diag::Suspect>{version, build}}) {
+        SuspectCheck check(order, rig.options());
+        const auto verdict = check.check(installed("1.0"));
+        CHECK(verdict.build == SuspicionVerdict::Build::Same);
+        CHECK(verdict.incidents == std::vector<std::string>{"newest", "middle", "oldest"});
+        CHECK(verdict.incidentTimes == std::vector<fs::file_time_type>{at(30), at(10), at(5)});
+    }
+}
+
 TEST_CASE("the default reader reads the build ids of ELF, Mach-O and PE files on every platform") {
     Root root;
     fs::create_directories(root.path);

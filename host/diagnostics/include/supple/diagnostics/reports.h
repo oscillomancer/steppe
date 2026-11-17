@@ -141,6 +141,9 @@ struct Suspect {
     std::string attribution;  // the strongest level among its reports
     // The reports in the window that yield it, newest first: what `settle` marks.
     std::vector<std::string> incidents;
+    // Each incident's report file time, in the order of `incidents` (so newest first too): what a
+    // caller needs to tell a report from before a run from one written while it ran.
+    std::vector<std::filesystem::file_time_type> incidentTimes;
     std::filesystem::file_time_type newest;
 };
 // The suspects, the one with the newest report first. A missing folder gives none; one that is not

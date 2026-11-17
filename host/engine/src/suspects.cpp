@@ -3,6 +3,7 @@
 #include "suspects.h"
 
 #include <algorithm>
+#include <numeric>
 
 #include "supple/imageid/image.h"
 
@@ -67,9 +68,12 @@ SuspicionVerdict SuspectCheck::check(const host::PluginInfo& installed) {
         (suspect.buildId.empty() ? byVersion : byBuild).push_back(&suspect);
     }
     auto take = [&](const diagnostics::Suspect& suspect) {
-        for (const auto& incident : suspect.incidents)
-            if (std::ranges::find(out.incidents, incident) == out.incidents.end())
-                out.incidents.push_back(incident);
+        for (std::size_t i = 0; i < suspect.incidents.size(); ++i)
+            if (std::ranges::find(out.incidents, suspect.incidents[i]) == out.incidents.end()) {
+                out.incidents.push_back(suspect.incidents[i]);
+                out.incidentTimes.push_back(
+                    i < suspect.incidentTimes.size() ? suspect.incidentTimes[i] : suspect.newest);
+            }
         if (strength(suspect.attribution) > strength(out.attribution))
             out.attribution = suspect.attribution;
     };
@@ -96,9 +100,20 @@ SuspicionVerdict SuspectCheck::check(const host::PluginInfo& installed) {
             if (same) out.build = SuspicionVerdict::Build::Same;
         }
     }
-    // Incidents newest first across the suspects merged: they are each newest first already,
-    // and the reader's order of suspects is by their newest report.
-    return out;
+    // Newest first across the suspects merged. Each suspect's own list is newest first, but a
+    // build suspect and a version suspect interleave, so the merge sorts by report time (stable:
+    // equal times keep the order they were taken in).
+    std::vector<std::size_t> order(out.incidents.size());
+    std::iota(order.begin(), order.end(), std::size_t{0});
+    std::ranges::stable_sort(order, [&](std::size_t a, std::size_t b) {
+        return out.incidentTimes[a] > out.incidentTimes[b];
+    });
+    SuspicionVerdict sorted = out;
+    for (std::size_t i = 0; i < order.size(); ++i) {
+        sorted.incidents[i] = out.incidents[order[i]];
+        sorted.incidentTimes[i] = out.incidentTimes[order[i]];
+    }
+    return sorted;
 }
 
 }  // namespace supple::engine::detail
