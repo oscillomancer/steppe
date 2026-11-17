@@ -1503,6 +1503,18 @@ tested on Linux with damaged and truncated inputs, and is unbuilt on macOS and W
 until native CI runs it. It is not packaged: the release-symbol archive and shipping the tool
 wait for topic 9. A macOS report whose capsule never arrives lists its fault thread as
 unavailable (`not_collected`).
-Inventory, other owned-thread registration, bridge correlation, restart UI/hangs and
-release package verification remain later topics. Native macOS/Windows CI and
+Owned threads register in an execution table (`libs/diagnostics-context`, 256 slots, each with
+its role and stack bounds) and reports label each thread with its role; a thread beyond the
+256, the audio driver's callback thread, the dummy backend's thread and the sandbox render
+thread are unregistered and show as `other`, and a report says when the table turned threads
+away. This is tested on Linux only: the macOS in-process labels and the Windows table read are
+written and unproven until native CI runs them. The instance inventory, plug-in scopes,
+command entries and attribution (the later steps of topic 5), bridge correlation,
+restart UI/hangs and release package verification remain later topics.
+Known limit: after a hard kill of the supervisor alone (`SIGKILL`, `TerminateProcess`) the app
+keeps running without crash capture, and a headless `serve` worker keeps its socket and
+endpoint lock until it is stopped itself. This is deliberate (collector loss must not kill
+the app and its unsaved work). POSIX forwards `SIGINT` and `SIGTERM` to the worker; on Windows
+a normal stop is the app ending (closing its window, or Ctrl-C in its console, which reaches
+the worker directly) and `taskkill /T` ends both processes. Native macOS/Windows CI and
 signed Mach capability/collector-loss tests are due before merge/release.

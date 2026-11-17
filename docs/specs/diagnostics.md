@@ -25,6 +25,17 @@ ordinary parsing. User arguments/stdio and handled return status survive. Unused
 supervisor stdio handles are closed after spawn so a dead worker closes its pipe.
 Supervision failure degrades diagnostics without killing a healthy worker.
 
+*Known limit, a hard-killed supervisor.* Collector loss leaves the healthy app alive by
+design (no kill-on-close job on Windows, no parent-death signal on POSIX), because losing
+unsaved work to a killed supervisor is the worse failure. The cost is the same on all three
+platforms: after a hard kill of the supervisor (`SIGKILL`, Task Manager or `TerminateProcess`
+on the supervisor alone) the app keeps running without crash capture, and a headless `serve`
+worker keeps its control socket and endpoint lock until it is stopped itself. On POSIX the
+supervisor forwards `SIGINT` and `SIGTERM` to the worker, so those stop both. On Windows it
+forwards nothing and ignores Ctrl-C itself, so a console Ctrl-C reaches the worker directly
+and a normal stop is the app ending (closing its window, or Ctrl-C in its console); a tool
+that must end both processes ends the tree (`taskkill /T`), as the integration tests do.
+
 A fixed native packet is bounded below PIPE_BUF; version/magic/type/length and
 role are validated. Only the inherited peer can send it; there is no named network
 listener. `ready` follows private marker/terminal setup, `expected_return` follows
@@ -254,29 +265,40 @@ graph of every target built from those directories and fails on one that reaches
 library, directly or through another target. Today `diagnostics` and `engine` link it; clap-host and command-bus
 join in the steps that use it.
 
-The table is one static, zero-filled, page-aligned block per process (18,464 bytes: a
-32-byte header, 64 thread slots, 1,024 instance cells and a 64-entry command ring, 16
-bytes each; the cells and ring are laid out now and used from later steps). It holds
-integers and enums only, never a string, a pointer into model or plug-in memory or
+The table is one static, zero-filled, page-aligned block per process (25,632 bytes: a
+32-byte header, 256 thread slots of 32 bytes, 1,024 instance cells and a 64-entry command
+ring of 16 bytes each; the cells and ring are laid out now and used from later steps). It
+holds integers and enums only, never a string, a pointer into model or plug-in memory or
 anything a user typed, and carries a magic and a version. It is not in the binary's file
-image (it is `.bss`).
+image (it is `.bss`). The 256 slots are sized for the real maximum of owned threads: the
+fixed ones (model, render, MIDI output, recorder, one offline render), a live pool and a
+background pool of up to 64 helpers each and an export's own pool of up to 63. A 32-CPU
+machine runs 92 of them during an export.
 
 An owned thread registers once while cold, next to `nameThread`:
 `registerThread(role, worker)` claims a slot (compare-and-swap, so threads may register
-concurrently; a full table counts `threadsDropped` and the thread is reported as `other`),
-stores the role, then publishes the operating-system thread id (Linux and Windows thread id,
-macOS Mach thread port name) last, so a reader never pairs an id with a stale role. The
-slot is released when the thread exits, so an id that is reused is not mislabelled. It is
-idempotent per thread. A hook, set by `diagnostics`, runs on each newly registered thread
-and installs its alternate signal stack (so the engine does not link `diagnostics`). The
-roles are a closed set: `model` (the main thread, registered when terminal handling is
-installed), `audio_render` (the anticipative renderer), `audio_live` and
-`audio_background` (the pool helpers, numbered from 1), `audio_offline`, `recorder`,
-`midi_output`. Not registered, so `other`: the audio driver's callback thread (created by
-the driver; registering it would need a thread-id call or TLS write on the audio path),
-the dummy backend's thread (it stands in for that driver thread, and tests should see it
-as one), `main-wake` (in MIT `core-base`), the sandbox and bridge children, and any thread
-a plug-in or the OS creates.
+concurrently), stores the role, the ordinal and the thread's stack bounds, then publishes
+the operating-system thread id (Linux and Windows thread id, macOS Mach thread port name)
+last, so a reader never pairs an id with a stale role. The stack bounds (`pthread_getattr_np`,
+`GetCurrentThreadStackLimits`, `pthread_get_stackaddr_np` with `pthread_get_stacksize_np`)
+let a stack address find an owned thread without the mapping list; a thread the system will
+not describe records none. The slot is released when the thread exits: its contents are
+cleared first and its id last, so the slot becomes claimable only after it is clean and a
+thread that claims it at once cannot have its role wiped by the leaving thread (a test seam
+between the two steps pins the order). Registration is idempotent per thread. A hook, set by
+`diagnostics`, runs once on each thread that registers and installs its alternate signal
+stack (so the engine does not link `diagnostics`); it runs whether or not the thread got a
+slot, so a thread the full table turned away keeps its stack-overflow protection. A full
+table counts `threadsDropped` once per thread, the thread is reported as `other`, and a
+report read from such a table carries the limit "threads beyond the execution table's
+capacity have no role and may show as other". The roles are a closed set: `model` (the main
+thread, registered when terminal handling is installed), `audio_render` (the anticipative
+renderer), `audio_live` and `audio_background` (the pool helpers, numbered from 1),
+`audio_offline`, `recorder`, `midi_output`. Not registered, so `other`: the audio driver's
+callback thread (created by the driver; registering it would need a thread-id call or TLS
+write on the audio path), the dummy backend's thread (it stands in for that driver thread,
+and tests should see it as one), `main-wake` (in MIT `core-base`), the sandbox and bridge
+children, and any thread a plug-in or the OS creates.
 
 The report labels each thread with its role. The fault thread keeps `role: "fault"` and
 adds `registered` with the role it was registered as; a thread of a numbered pool carries
@@ -295,7 +317,7 @@ is handled; POSIX's stream keeps the order by itself. When the terminal
 packet arrives, Linux and Windows read the table with the same bounded remote read the stack
 walk uses (`process_vm_readv`, `ReadMemory` on Windows), once, right after the faulting
 thread's walk and before any other thread is stopped. It is read even if the walk spent the
-deadline: one read, 18 KiB. If the budget ends, what is cut is the traces of the other
+deadline: one read, 25 KiB. If the budget ends, what is cut is the traces of the other
 threads (`deadline`), never the table; their roles are still known. The table is untrusted
 input: it is used only if its magic and version are this build's, a slot with a free,
 claiming or unknown role labels nothing, and an address that cannot be read is a stated
@@ -306,10 +328,14 @@ allocation) and the capsule carries the result in each thread's header (`registe
 `worker`). The capsule wire format is version 2 for that (magic `CTC2`); it carries no copy
 of the table yet, which the steps that record execution entries add.
 
-Threads other than the faulting one keep running while the table is read, so a later step's
-instance cells are each read atomically but describe the moment of the read, not the moment of
-the fault; only the faulting thread is parked. The thread slots do not have that problem:
-they change only when a thread starts or ends.
+Threads other than the faulting one keep running while the table is read, so a later
+step's instance cells describe the moment of the read, not the moment of the fault, and a
+remote read promises nothing about a word being copied whole (`process_vm_readv` and
+`ReadProcessMemory` are plain copies; only macOS's in-process loads are atomic). The reader
+therefore reads a cell again after the thread it matches is stopped and accepts only an
+entry both reads agree on; a generation or an ordinal in a cell is a hint checked against
+the inventory, never an identity. Only the faulting thread is parked, and the thread slots
+do not have this problem: they change only when a thread starts or ends.
 
 ## Offline resolver (topic 4)
 

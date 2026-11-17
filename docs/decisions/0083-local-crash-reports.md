@@ -166,3 +166,18 @@ On Linux the supervisor traces the worker as its ancestor under Yama; nothing
 system-wide changes. (4) Symbolication needs function names only, no DWARF line
 information, in a separate offline resolver with a strictly bounded reader. (5) The
 release-symbol archive waits for topic 9. See `docs/specs/diagnostics.md`.
+
+*Note, 2026-11-16, topic 5a (the execution table) and review rounds 31 and 32:* five points
+of the first step were confirmed by the maintainer. (1) The table's address rides in the Ready
+packet's `pc` field, named in code by `setTableAddress` and `tableAddress`; if a later step adds
+real messages it moves to a `Table` message. (2) The dummy backend's thread (`audio-dummy`)
+stays unregistered, since it stands in for the audio driver's unregistered callback thread.
+(3) The macOS capsule carries roles but no copy of the table until the step that records
+execution entries. (4) The fault thread keeps `role: "fault"` and gains `registered` instead of
+a fault flag on every thread. (5) The sandbox's render thread is not registered. The slot
+protocol changed after review: a slot's contents are cleared before its id, a thread the table
+turned away still gets its alternate stack, the table has 256 32-byte slots that carry stack
+bounds, and a Windows Ready packet is handed over before Terminal. *Maintainer decision on a
+killed supervisor:* collector loss leaves the healthy app alive; a hard-killed supervisor does
+not take the app with it, no kill-on-close job is added, and the cost is a stated limit in
+`docs/specs/diagnostics.md` and `STATUS.md`.
