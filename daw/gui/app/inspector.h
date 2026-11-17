@@ -25,6 +25,7 @@
 namespace supple::ui {
 class Dropdown;
 class Label;
+class List;
 class TextBlock;
 class TextField;
 class Toggle;
@@ -74,6 +75,8 @@ class Inspector {
     void show(const std::string& key, std::string text, bool force);
     void commit(const std::string& key, const std::string& text);  // a field's text, as typed
     void set(const std::string& key, json::Value value);           // one item.set
+    void setTake(const std::string& key, json::Value value);       // one take.set, the heard take
+    void run(const char* command, json::Value args);
     void fail(const std::string& message);
     void readItem(bool force);  // the fields from the session; a focused field keeps its text
     ui::Root& root_;
@@ -85,6 +88,13 @@ class Inspector {
     std::map<std::string, Field> fields_;
     std::map<std::string, ui::Toggle*> states_;
     ui::Dropdown* timebase_ = nullptr;
+    ui::Node* takeBox_ = nullptr;  // speed and pitch: an audio take's
+    ui::Toggle* keepPitch_ = nullptr;
+    ui::Node* takesBox_ = nullptr;  // the take list: an item with several
+    ui::List* takes_ = nullptr;
+    std::vector<model::Id> takeIds_;
+    std::vector<std::string> takeNames_;
+    std::size_t heard_ = 0;  // the heard take's row
     ui::TextBlock* locked_ = nullptr;
     ui::TextBlock* file_ = nullptr;
     std::optional<model::Id> item_;  // the item the fields show

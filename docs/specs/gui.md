@@ -1820,6 +1820,20 @@ command:
 | Mute, Loop, Lock (`inspector.mute`, `.loop`, `.locked`) | Pills, lit when on | A click | `mute`, `loop`, `locked` |
 | File (`inspector.file`) | An audio item's file path, then its rate, channels and length | Read only | |
 
+When the heard take plays audio, its speed and pitch follow
+(`inspector.take`), each one `take.set` on that take:
+
+| Field (node) | Shows | Accepts | `take.set` |
+|---|---|---|---|
+| Speed (`inspector.playrate`) | "1.000 x" | A number, with or without "x" | `playrate` |
+| Pitch (`inspector.pitch`) | "0.00 st" | A number, with or without "st" | `pitch` |
+| Keep pitch (`inspector.preserve_pitch`) | A pill, lit when on | A click | `preserve_pitch` |
+
+An item with several takes lists them in its order (`inspector.takes`,
+at most six rows before it scrolls), a take without a name as "Take *n*";
+the heard take has an accent dot and bold ink. A click on another row is
+`take.activate` and one undo step; the fields then show that take.
+
 A text field applies on Enter and when it is left (a click elsewhere, a
 change of selection, the tab or the panel going out of view): to the item
 it showed, never to the next. Escape restores it, and unchanged text runs
@@ -1829,8 +1843,7 @@ with the command's hint, and the field shows the session's value again.
 Edits made elsewhere, an agent's included, show at the next pass, except
 in the field being typed in. A locked item's fields are disabled, all but
 Lock, under a line that says so. An item with no take cannot be named.
-Take settings (pitch, speed, the take list), several items and tracks
-follow in later steps.
+Several items and tracks follow in later steps.
 
 ## 5. Agent panel (removed)
 

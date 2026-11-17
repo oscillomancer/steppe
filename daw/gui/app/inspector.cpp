@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include "inspector.h"
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <cstdio>
@@ -10,6 +11,7 @@
 
 #include "supple/ui/controls.h"
 #include "supple/ui/forms.h"
+#include "supple/ui/list.h"
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
@@ -316,6 +318,49 @@ std::unique_ptr<ui::Node> Inspector::build() {
     state(states, "mute", "Mute", "mute");
     state(states, "loop", "Loop", "accent");
     state(states, "locked", "Lock", "accent");
+
+    // The heard take, when it plays audio: each one take.set.
+    auto& take = box.emplace<ui::Node>("inspector.take");
+    takeBox_ = &take;
+    take.layout.dir = ui::Layout::Dir::Column;
+    take.layout.height = ui::SizeRule::content();
+    take.layout.gap = 4;
+    field(take, "playrate", "Speed");
+    field(take, "pitch", "Pitch");
+    auto& stretch = formRow(take, "stretch", "Stretch");
+    keepPitch_ = &stretch.emplace<ui::Toggle>("inspector.preserve_pitch", "Keep pitch", "accent",
+                                              [this](bool on) { setTake("preserve_pitch", on); });
+    keepPitch_->pill = true;
+    keepPitch_->layout.width = ui::SizeRule::content();
+
+    // Its takes, when it has several: a click chooses the one heard.
+    auto& takes = box.emplace<ui::Node>("inspector.takes.box");
+    takesBox_ = &takes;
+    takes.layout.dir = ui::Layout::Dir::Column;
+    takes.layout.height = ui::SizeRule::content();
+    takes.layout.gap = 2;
+    takes.emplace<ui::Label>("inspector.takes.title", "Takes", ui::Font::Ui, "small", "ink-quiet")
+        .layout.height = ui::SizeRule::fixed(20);
+    takes_ = &takes.emplace<ui::List>("inspector.takes");
+    takes_->rowHeight = 22;
+    takes_->paintRow = [this](ui::Canvas& c, std::size_t i, const ui::Rect& r, bool) {
+        const ui::Theme& t = c.theme();
+        const bool heard = i == heard_;
+        if (heard) {
+            c.fillRound(r.inset(1), t.radius("s"), t.color("selection"));
+            c.fillRound({r.x + 8, r.y + r.h / 2 - 3, 6, 6}, 3, t.color("accent"));
+        }
+        c.text({r.x + 22, r.y, r.w - 30, r.h}, takeNames_[i],
+               heard ? ui::Font::UiBold : ui::Font::Ui, t.type("small"),
+               t.color(heard ? "ink" : "ink-quiet"));
+    };
+    takes_->onSelect = [this](std::size_t i) {
+        if (!item_ || i >= takeIds_.size() || i == heard_) return;
+        json::Value args = json::Value::object();
+        args["item"] = item_->str();
+        args["take"] = takeIds_[i].str();
+        run("take.activate", std::move(args));
+    };
     file_ =
         &box.emplace<ui::TextBlock>("inspector.file", "", ui::Font::Mono, "caption", "ink-quiet");
     file_->layout.height = ui::SizeRule::content();
@@ -365,6 +410,29 @@ void Inspector::readItem(bool force) {
     states_["mute"]->enabled = states_["loop"]->enabled = !item->locked;
     locked_->visible = item->locked;
     const model::MediaSource* media = take && take->source ? s.media.find(*take->source) : nullptr;
+    takeBox_->visible = media != nullptr;
+    if (media) {
+        show("playrate", fixed(take->playrate, 3, "x"), force);
+        show("pitch", fixed(take->pitch, 2, "st"), force);
+        keepPitch_->setOn(take->preservePitch);
+        keepPitch_->enabled = !item->locked;
+    }
+    // The take list, in the item's order; an unnamed take goes by its place.
+    takeIds_ = item->takes;
+    takeNames_.clear();
+    heard_ = takeIds_.size();
+    for (std::size_t i = 0; i < takeIds_.size(); ++i) {
+        const model::Take* tk = s.takes.find(takeIds_[i]);
+        takeNames_.push_back(tk && !tk->name.empty() ? tk->name : "Take " + std::to_string(i + 1));
+        if (item->activeTake && takeIds_[i] == *item->activeTake) heard_ = i;
+    }
+    takesBox_->visible = takeIds_.size() > 1;
+    takes_->setCount(takeIds_.size());
+    takes_->select(heard_ < takeIds_.size() ? std::optional<std::size_t>(heard_) : std::nullopt);
+    takes_->layout.height =
+        ui::SizeRule::fixed(22.0f * static_cast<float>(std::min<std::size_t>(takeIds_.size(), 6)));
+    takes_->enabled = !item->locked;
+    takes_->invalidate();
     const std::string file = media ? fileText(*media) : std::string();
     if (file_->text() != file) file_->setText(file);
     file_->visible = !file.empty();
@@ -377,12 +445,8 @@ void Inspector::fail(const std::string& message) {
     panel_->invalidate();
 }
 
-void Inspector::set(const std::string& key, json::Value value) {
-    if (!item_) return;
-    json::Value args = json::Value::object();
-    args["item"] = item_->str();
-    args[key] = std::move(value);
-    const auto r = dispatcher_.execute({"item.set", std::move(args), kOrigin});
+void Inspector::run(const char* command, json::Value args) {
+    const auto r = dispatcher_.execute({command, std::move(args), kOrigin});
     if (!r) {
         fail(r.error().hint.empty() ? r.error().message
                                     : r.error().message + ": " + r.error().hint);
@@ -395,6 +459,23 @@ void Inspector::set(const std::string& key, json::Value value) {
     panel_->invalidate();
 }
 
+void Inspector::set(const std::string& key, json::Value value) {
+    if (!item_) return;
+    json::Value args = json::Value::object();
+    args["item"] = item_->str();
+    args[key] = std::move(value);
+    run("item.set", std::move(args));
+}
+
+void Inspector::setTake(const std::string& key, json::Value value) {
+    const model::Item* item = item_ ? app_.head().items.find(*item_) : nullptr;
+    if (!item || !item->activeTake) return;
+    json::Value args = json::Value::object();
+    args["take"] = item->activeTake->str();
+    args[key] = std::move(value);
+    run("take.set", std::move(args));
+}
+
 void Inspector::commit(const std::string& key, const std::string& text) {
     if (!item_ || text == fields_[key].shown) return;
     if (key == "name") {
@@ -402,15 +483,20 @@ void Inspector::commit(const std::string& key, const std::string& text) {
         return;
     }
     const model::Session& s = app_.head();
-    Result<double> value = key == "start"     ? inspectorParseBars(text, *s.timeMap)
-                           : key == "length"  ? inspectorParseNumber(text, "beats")
-                           : key == "gain_db" ? inspectorParseNumber(text, "dB")
-                                              : inspectorParseNumber(text, "s");
+    Result<double> value = key == "start"      ? inspectorParseBars(text, *s.timeMap)
+                           : key == "length"   ? inspectorParseNumber(text, "beats")
+                           : key == "gain_db"  ? inspectorParseNumber(text, "dB")
+                           : key == "playrate" ? inspectorParseNumber(text, "x")
+                           : key == "pitch"    ? inspectorParseNumber(text, "st")
+                                               : inspectorParseNumber(text, "s");
     if (!value) {
         fail(value.error().message);
         return;
     }
-    set(key == "start" ? "position" : key, *value);
+    if (key == "playrate" || key == "pitch")
+        setTake(key, *value);
+    else
+        set(key == "start" ? "position" : key, *value);
 }
 
 void Inspector::sync() {

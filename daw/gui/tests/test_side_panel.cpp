@@ -17,6 +17,7 @@
 #include "history_panel.h"
 #include "inspector.h"
 #include "side_panel.h"
+#include "supple/audio/audio_file.h"
 #include "supple/engine/app.h"
 #include "supple/gui/window.h"
 #include "supple/json/parse.h"
@@ -24,6 +25,7 @@
 #include "supple/ui/controls.h"
 #include "supple/ui/forms.h"
 #include "supple/ui/gl.h"
+#include "supple/ui/list.h"
 #include "supple/ui/root.h"
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/text_field.h"
@@ -526,4 +528,91 @@ TEST_CASE("inspector: one item's fields each run item.set, one undo step each") 
     f.exec("item.remove", R"({"item":")" + empty + R"("})");
     f.pass();
     CHECK_FALSE(f.inView("inspector.item"));
+}
+
+TEST_CASE("inspector: an audio take's speed and pitch, and the choice of the take heard") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::string> errors;
+    f.actions->onError = [&](const std::string& e) { errors.push_back(e); };
+    audio::AudioData audio;
+    audio.sampleRate = 48000;
+    audio.channels.assign(1, std::vector<float>(48000, 0.25f));
+    const auto path = f.dir / "tone.wav";
+    REQUIRE(audio::writeWav(path, audio));
+    const std::string track = f.exec("track.add", R"({"name":"Keys"})")["track"].asString();
+    json::Value add = json::Value::object();
+    add["track"] = track;
+    add["audio_file"] = path.string();
+    add["position"] = 0;
+    auto added = f.dispatcher->execute({"item.add", add, kTest});
+    REQUIRE_MESSAGE(added, (added ? "" : added.error().toString()));
+    const std::string it = (*added)["item"].asString();
+    const std::string first = (*added)["take"].asString();
+    auto take = [&](const std::string& id) -> const model::Take& {
+        return *f.app->head().takes.find(*model::Id::parse(id));
+    };
+
+    f.side->show("inspector");
+    f.ui.selectedItems = {it};
+    f.pass();
+    REQUIRE(f.inView("inspector.take"));
+    CHECK(f.field("inspector.playrate").text() == "1.000 x");
+    CHECK(f.field("inspector.pitch").text() == "0.00 st");
+    CHECK(f.text("inspector.preserve_pitch") == "on");
+    CHECK_FALSE(f.inView("inspector.takes"));  // one take: no list
+    CHECK(f.text("inspector.file").find("tone.wav") != std::string::npos);
+    CHECK(f.text("inspector.file").find("48 kHz, mono, 0:01") != std::string::npos);
+    CHECK(f.field("inspector.name").text().empty());  // unnamed: it goes by its file
+
+    auto before = f.steps();
+    f.type("inspector.playrate", "0.5");
+    CHECK(take(first).playrate == 0.5);
+    f.type("inspector.pitch", "+7 st");
+    CHECK(take(first).pitch == 7);
+    CHECK(f.field("inspector.pitch").text() == "7.00 st");
+    REQUIRE(f.root->click("inspector.preserve_pitch"));
+    f.pass();
+    CHECK_FALSE(take(first).preservePitch);
+    CHECK(f.steps() == before + 3);
+    f.type("inspector.pitch", "200");  // beyond the command's four octaves
+    REQUIRE(errors.size() == 1);
+    CHECK(take(first).pitch == 7);
+    CHECK(f.field("inspector.pitch").text() == "7.00 st");
+
+    // A second take: the list shows both, the heard one marked; a click on
+    // the other makes it the one heard, and the fields show its settings.
+    const std::string second =
+        f.exec("take.add", R"({"item":")" + it + R"(","from":")" + first + R"("})")["id"]
+            .asString();
+    f.exec("take.set", R"({"take":")" + second + R"(","name":"Alt","pitch":-2})");
+    f.exec("take.activate", R"({"item":")" + it + R"(","take":")" + first + R"("})");
+    f.pass();
+    REQUIRE(f.inView("inspector.takes"));
+    auto* list = dynamic_cast<ui::List*>(f.node("inspector.takes"));
+    REQUIRE(list);
+    CHECK(list->count() == 2);
+    CHECK(list->selected() == std::optional<std::size_t>(0));
+    before = f.steps();
+    list->select(1, true);
+    f.pass();
+    CHECK(*f.item(it).activeTake == *model::Id::parse(second));
+    CHECK(f.steps() == before + 1);
+    CHECK(f.field("inspector.pitch").text() == "-2.00 st");
+    CHECK(f.field("inspector.name").text() == "Alt");
+    CHECK(f.text("inspector.title") == "Alt");
+    list->select(1, true);  // the take already heard: nothing runs
+    f.pass();
+    CHECK(f.steps() == before + 1);
+    CHECK(errors.size() == 1);
+
+    // A MIDI item has no speed or pitch here.
+    const std::string midi =
+        f.exec("item.add", R"({"track":")" + track +
+                               R"(","bar":9,"notation":"voice keys; 1: C4:h E4:h"})")["item"]
+            .asString();
+    f.ui.selectedItems = {midi};
+    f.pass();
+    CHECK_FALSE(f.inView("inspector.take"));
+    CHECK_FALSE(f.inView("inspector.takes"));
 }

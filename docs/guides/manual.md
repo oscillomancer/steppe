@@ -366,6 +366,9 @@ A panel at the right of the window holds the **Inspector** and the
   seconds, and **Mute**, **Loop** and **Lock**. Type a value and press
   Enter, or click elsewhere; Escape leaves it as it was. Each change is one
   step for Undo. A locked item cannot be changed until you turn Lock off.
+  An audio item also has **Speed** (`0.5` is half speed), **Pitch** in
+  semitones and **Keep pitch**, which holds the pitch when the speed
+  changes. An item with several takes lists them; click one to hear it.
 - **View > History and command log**, or **Ctrl+H**, opens it on the History:
   the versions you can step back to, the branches, and every command with who
   ran it.
