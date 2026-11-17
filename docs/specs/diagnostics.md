@@ -402,7 +402,9 @@ alternate stack (see Thread roles and the execution table); unregistered
 foreign/driver threads have best-effort context and no stack-exhaustion promise.
 A thread's alternate stack is unmapped at its exit only after the previous one was
 restored; if the restore fails the 64 KiB stays mapped, since the kernel answers a signal
-frame pushed onto an unmapped enabled stack with a forced SIGILL and no handler.
+frame pushed onto an unmapped enabled stack with a forced SIGILL and no handler. The
+`diagnostics.altstack-restore` test (Linux, unsanitized) preloads a library that makes the
+restore fail and checks that the teardown abort is still captured with the stack mapped.
 No callback hook, TLS registration or sanitizer suppression is added. Sanitized
 builds retain their handlers and emit exit-only summaries.
 
