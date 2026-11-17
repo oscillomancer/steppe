@@ -354,16 +354,26 @@ TEST_CASE("a marker still being created is live, however its lock looks") {
     CHECK(listing->liveRuns == 1);
     CHECK(listing->unreported.empty());
 }
+namespace {
+// A marker left empty by a creator that failed between creating it and its first write, as the
+// product would leave it: made by createMarker, so that it is private to the user (on Windows,
+// the owner-only access list that deleting requires; a file made by a plain stream has the
+// folder's, which the product refuses to remove), then emptied once nobody holds it.
+void emptyMarker(const Root& root, unsigned id) {
+    auto handle = createMarker(root.path, boot(id));
+    REQUIRE(handle);
+    releaseMarker(*handle);
+    std::error_code ec;
+    fs::resize_file(file(root, id, ".run"), 0, ec);
+    REQUIRE_FALSE(ec);
+}
+}  // namespace
 TEST_CASE("an empty marker dated in the future is judged by its lock, not taken as young") {
     // The clock was set back after a creation failed: the empty file's time is ahead of now. It
     // is no younger than any other empty marker, so it must not read as held until the clock
     // catches up.
     Root root;
-    {
-        std::ofstream(file(root, 1, ".run"));
-    }
-    fs::permissions(file(root, 1, ".run"), fs::perms::owner_read | fs::perms::owner_write,
-                    fs::perm_options::replace);
+    emptyMarker(root, 1);
     fs::last_write_time(file(root, 1, ".run"),
                         fs::file_time_type::clock::now() + std::chrono::hours(2));
     auto listing = listReports(root.path);
@@ -385,11 +395,7 @@ TEST_CASE("an empty marker that stays empty is a run that ended, not one being c
     // (the creator failed in between) must not read as held for ever: it could never be listed,
     // deleted or pruned.
     Root root;
-    {
-        std::ofstream(file(root, 1, ".run"));
-    }
-    fs::permissions(file(root, 1, ".run"), fs::perms::owner_read | fs::perms::owner_write,
-                    fs::perm_options::replace);  // as createMarker makes it
+    emptyMarker(root, 1);
     fs::last_write_time(file(root, 1, ".run"),
                         fs::file_time_type::clock::now() - std::chrono::minutes(5));
     auto listing = listReports(root.path);
