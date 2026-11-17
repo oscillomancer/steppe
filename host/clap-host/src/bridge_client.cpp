@@ -393,7 +393,21 @@ BridgeProcess::~BridgeProcess() {
                 (void)waitFor({}, 10);
         }
     }
-    announceEnd(diedWith, !diedFirst);
+    // A bridge that was still there when the host let go may be dying of its own fault at that
+    // moment (a crash whose core or dump is still being written is alive until it is done): if it
+    // ended by a signal or an exception that the host did not cause, that is its own death, not
+    // the host's end.
+    int endedWith = diedWith;
+    bool hostEnded = !diedFirst;
+    if (!diedFirst && child_ && !child_->alive() && !hostKilled_.load(std::memory_order_acquire)) {
+        const int after = child_->exitStatus();
+        const auto how = classifyBridgeEnd(after, false).how;
+        if (how == diagctx::BridgeHow::Signal || how == diagctx::BridgeHow::Exception) {
+            endedWith = after;
+            hostEnded = false;
+        }
+    }
+    announceEnd(endedWith, hostEnded);
     child_.reset();
 }
 

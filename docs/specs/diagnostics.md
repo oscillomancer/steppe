@@ -849,7 +849,9 @@ destructor when nobody reaped it, never from `fail()` or `abandon()` (which can 
 or on an audio path). `hostKilled_` is set inside `killBridge()`, before the kill, so every host
 kill (a hung or abandoned bridge, a protocol violation, a shutdown) is told from the operating
 system's: the end is `host` and its status says nothing about the plug-in. A bridge the host lets go
-of while it still runs is also `host`. Otherwise POSIX says `signal` with the signal number, or
+of while it still runs is also `host`, unless it is then found to have ended by a signal or an
+exception the host did not cause (a crash whose dump was still being written when the host let go
+is alive until it is done): that is its own death. Otherwise POSIX says `signal` with the signal number, or
 `exit` with code 0 (the exit code is not read); Windows says `exception` for a status with the
 fatal severity bits set (`0xC0000000`) and `exit` for any other, with the exit code. When both
 happen (the host kills a bridge that was already dying) the end is `host`: the order cannot be
