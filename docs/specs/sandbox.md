@@ -257,7 +257,10 @@ before owner destruction. Launch and cleanup are setup/control APIs. The
 existing bounded bridge-wait exception sanctions the nonblocking killTree()
 on timeout; it never reaps there. Linux retains its pidfd death watch (socket
 HUP fallback), while main-thread exit observation uses WNOWAIT until final
-helper cleanup. The memfd/futex audio path remains unchanged.
+helper cleanup. Only an exit or a terminating signal counts as the child's
+end (`childEnded`, `child_status.h`): macOS's `waitid` also reports a stopped
+child with only `WEXITED` asked for, and a stopped bridge (a debugger, job
+control) is alive, not crashed. The memfd/futex audio path remains unchanged.
 
 The eventfd/futex/pidfd descriptions below name Linux mechanisms; the native
 objects above implement the same publication and lifetime contracts.
