@@ -103,6 +103,7 @@ struct EngineTestAccess {
     }
     static std::int64_t aheadFrames(const Engine& e) { return e.aheadFrames_; }
     static std::size_t pooledRings(const Engine& e) { return e.ringPool_.size(); }
+    static std::uint64_t callbackGeneration(const Engine& e) { return e.callbackGen_.load(); }
     // Whether the plan the callback plays is still held (manual backends).
     static bool livePlanKept(const Engine& e) {
         return !e.livePlan_ || std::any_of(e.plans_.begin(), e.plans_.end(),
@@ -4209,6 +4210,61 @@ TEST_CASE("a frontier ring is reused only once both executors have left its plan
     REQUIRE(EngineTestAccess::pooledRings(engine) > 0);
     engine.stop();
     CHECK(EngineTestAccess::pooledRings(engine) == 0);
+}
+
+TEST_CASE("plans retired while newer ones are in flight leave the pool what those hold" *
+          doctest::description("rt")) {
+    // The pool keeps as many rings as the plans still in use hold (round 36
+    // R5), not only the newest plan's count. Those differ only when several
+    // plans retire in one collection while more than the newest are still
+    // in flight: here the callback plays the first of three, and the renderer
+    // has handed the last two over farther on.
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    Engine engine(pool, media, {.workers = 1});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
+    const auto session = frontierSession();
+    REQUIRE(engine.load(session));
+    engine.play();
+    runAhead(engine, backend, 64, 256);
+    std::uint64_t version = 10;
+    const auto publish = [&] {
+        REQUIRE(engine.load(recompiled(session, version++)));
+        requirePlansKept(engine);
+        REQUIRE(engine.awaitPlan());  // the renderer took it: its handoff is set
+        return EngineTestAccess::latestPlan(engine).generation;
+    };
+    // The renderer is its full lead ahead and waits: three plans, handed over
+    // where it stands. The callback still plays the first plan.
+    REQUIRE(engine.awaitRendered(EngineTestAccess::aheadFrames(engine)));
+    publish();
+    publish();
+    const auto first = publish();
+    // Eight cycles on, the renderer stands 2048 frames farther than it did,
+    // more than one render block: two more plans, handed over there.
+    backend.run(8);
+    REQUIRE(engine.awaitRendered(EngineTestAccess::aheadFrames(engine)));
+    publish();
+    const auto last = publish();
+    // The callback reaches the first handoff, not yet the later one.
+    while (EngineTestAccess::callbackGeneration(engine) < first) {
+        backend.run(1);
+        REQUIRE(EngineTestAccess::callbackGeneration(engine) < last);
+    }
+    REQUIRE(EngineTestAccess::callbackGeneration(engine) == first);
+    // One collection retires the plans before `first`, 3 plans of 2 rings,
+    // while `first` and the two after it, 6 rings, are still in use.
+    engine.service();
+    REQUIRE(EngineTestAccess::ringsInUseKept(engine));
+    CHECK(EngineTestAccess::pooledRings(engine) == 6);
+    // Once the callback plays the newest, the next edit takes pooled rings.
+    runAhead(engine, backend, 64, 256);
+    const auto before = detail::chunkRingAllocations();
+    publish();
+    CHECK(detail::chunkRingAllocations() == before);
+    CHECK(engine.anticipationMisses() == 0);
+    engine.stop();
 }
 
 TEST_CASE("a loop shorter than a render block still lets the renderer get its lead" *
