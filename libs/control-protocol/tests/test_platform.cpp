@@ -307,6 +307,7 @@ std::filesystem::path freshDir(const char* stem) {
         auto dir = std::filesystem::temp_directory_path() / (stem + std::to_string(suffix));
         std::error_code error;
         if (std::filesystem::create_directory(dir, error)) return dir;
+        REQUIRE((!error || error == std::errc::file_exists));
     }
 }
 std::filesystem::path lockOf(std::filesystem::path path) {
@@ -406,8 +407,21 @@ TEST_CASE("a killed server's endpoint lock and socket are reclaimed") {
         rpc::Server server(commands, bus, [](auto) {});
         const char ok = server.start(path) ? 'y' : 'n';
         (void)!::write(ready[1], &ok, 1);
+        if (ok != 'y') ::_exit(1);
         for (;;) ::pause();  // killed by the parent
     }
+    // A check that fails before the kill below must not leave the child behind:
+    // it would keep the test's output open and turn a failure into a hang.
+    struct Reap {
+        pid_t pid;
+        bool done = false;
+        ~Reap() {
+            if (done) return;
+            ::kill(pid, SIGKILL);
+            int status = 0;
+            ::waitpid(pid, &status, 0);
+        }
+    } reap{child};
     ::close(ready[1]);
     char ok = 0;
     REQUIRE(::read(ready[0], &ok, 1) == 1);
@@ -422,7 +436,9 @@ TEST_CASE("a killed server's endpoint lock and socket are reclaimed") {
     }
     REQUIRE(::kill(child, SIGKILL) == 0);
     int status = 0;
-    REQUIRE(::waitpid(child, &status, 0) == child);
+    const pid_t reaped = ::waitpid(child, &status, 0);
+    reap.done = reaped == child;
+    REQUIRE(reaped == child);
     CHECK(WIFSIGNALED(status));
     bool listed = false;
     for (const auto& entry : std::filesystem::directory_iterator(dir))
