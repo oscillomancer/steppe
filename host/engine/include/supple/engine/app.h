@@ -843,6 +843,7 @@ class EngineApp : public cmd::Host {
     Result<host::Instance*> scratch(const model::FxInstance& fx);
     bool inRecordDir(const std::filesystem::path& file) const;
     void headChanged();         // reload the real-time engine
+    void noteUnplayedEdit();    // a deferred edit failed to compile: engine.error
     void endMasterRecording();  // masters' items play everywhere again (ADR-0057)
     void haltEngine();          // tears the engine down (stopEngine also cancels a restart)
     // The device changed under the running engine: stop it and remember to

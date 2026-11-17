@@ -152,6 +152,11 @@ stock plugins its cases use (when plugins are enabled), the MCP helper and the
 agent skill tree.
 Run it with `ctest --preset dev -R '^gui-app\.tests$'`.
 
+In a Debug build (`dev`), setting `SUPPLE_SCRIPT_INTERPRET` makes the Script
+Player run scripts in MIR's interpreter rather than as machine code, to compare
+the two. The interpreter allocates on the audio thread, so use it only for that;
+release builds ignore the variable.
+
 Tests that open real hardware are skipped unless you opt in:
 `SUPPLE_AUDIO_DEVICE_TEST=1` (the audio device), `SUPPLE_MIDI_DEVICE_TEST=1`
 (native MIDI inputs on macOS and Windows) and `SUPPLE_GUI_DISPLAY_TEST=1`
