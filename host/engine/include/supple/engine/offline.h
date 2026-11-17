@@ -100,8 +100,15 @@ class InstancePool {
     void restartPlugin(std::string_view format, std::string_view id);
     // The plug-ins, one entry each, with an instance in this process that was
     // active at some point and has not failed: a run that ended cleanly with
-    // them loaded normally (topic 7d, E12).
-    std::vector<host::PluginInfo> ranInProcess() const;
+    // them loaded normally (topic 7d, E12). `since` is when the first of their
+    // instances was seen active (the file system's clock, so that it compares
+    // with a crash report's file time): the run says nothing about a report
+    // written after it.
+    struct Ran {
+        host::PluginInfo info;
+        std::filesystem::file_time_type since;
+    };
+    std::vector<Ran> ranInProcess() const;
     // Where `id`'s instance runs, or would if it were made now.
     model::Isolation effectiveIsolation(model::Id id, const model::FxInstance& fx) const;
     // Instances on inherit made in process because no bridge was set.
@@ -147,6 +154,7 @@ class InstancePool {
         std::uint32_t rawLatency = 0;  // plug-in frames at its activation rate
         bool restarting = false;       // a restart the plug-in asked for waits on processing
         bool activated = false;        // it was active when last serviced, at some point
+        std::filesystem::file_time_type activatedAt;  // when that was first seen
         std::optional<Error> failure;
         std::vector<std::uint32_t> clearedAutomation;
         std::string appliedState;  // canonical patch text or blob hash last applied

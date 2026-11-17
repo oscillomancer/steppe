@@ -371,6 +371,14 @@ struct Bus {
                                        {.id = kGain, .version = gain().version, .buildId = build}));
         return incident;
     }
+    // The report's file time as `offset` from now: tests that compare a report with when a plug-in
+    // ran do not leave it to the file system's clock granularity.
+    void dateReport(const std::string& incident, std::chrono::minutes offset) {
+        std::error_code ec;
+        fs::last_write_time(app->diagnosticsDir() / (incident + ".json"),
+                            fs::file_time_type::clock::now() + offset, ec);
+        REQUIRE_FALSE(ec);
+    }
     json::Value gainEntry(json::Value listing) {
         for (std::size_t i = 0; i < listing["plugins"].size(); ++i) {
             json::Value item = listing["plugins"].at(i);
@@ -685,6 +693,7 @@ TEST_CASE("a run that ended well settles what it loaded normally, and nothing it
         f.call("engine.stop", "{}");
     };
     f.crash("00000000000000000000000000000001", build);
+    f.dateReport("00000000000000000000000000000001", std::chrono::minutes(-60));  // before this run
     REQUIRE(unsettled() == 1);
 
     SUBCASE("E12: loaded normally, activated: settled") {
@@ -708,6 +717,18 @@ TEST_CASE("a run that ended well settles what it loaded normally, and nothing it
         play(*f.app);
         f.app->settleCleanSuspects();
         CHECK(unsettled() == 1);
+    }
+    SUBCASE("a report written after the plug-in first ran here is not settled by this run") {
+        // Another process sharing the folder (the GUI, say) crashed in the same build while this
+        // one ran: this run's evidence is older than that report and says nothing about it.
+        f.crash("00000000000000000000000000000002", build);
+        f.dateReport("00000000000000000000000000000002", std::chrono::minutes(60));
+        REQUIRE(unsettled() == 1);  // one suspect, with both reports
+        play(*f.app);
+        f.app->settleCleanSuspects();
+        const auto left = diag::suspects(f.app->diagnosticsDir()).value();
+        REQUIRE(left.size() == 1);
+        CHECK(left[0].incidents == std::vector<std::string>{"00000000000000000000000000000002"});
     }
     SUBCASE("never activated: not settled (Q8)") {
         REQUIRE(f.app->instances().size() == 0);

@@ -231,15 +231,17 @@ void InstancePool::restartPlugin(std::string_view format, std::string_view id) {
     }
 }
 
-std::vector<host::PluginInfo> InstancePool::ranInProcess() const {
-    std::map<LoadOverrides::Key, host::PluginInfo> ran;
+std::vector<InstancePool::Ran> InstancePool::ranInProcess() const {
+    std::map<LoadOverrides::Key, Ran> ran;
     for (const auto& [id, e] : instances_)
         if (e.instance && e.activated && e.effective == model::Isolation::InProcess && !e.failure &&
-            !e.instance->failed())
-            ran.emplace(LoadOverrides::Key(e.instance->info().format, e.instance->info().id),
-                        e.instance->info());
-    std::vector<host::PluginInfo> out;
-    for (auto& [key, info] : ran) out.push_back(std::move(info));
+            !e.instance->failed()) {
+            const auto key = LoadOverrides::Key(e.instance->info().format, e.instance->info().id);
+            auto [it, fresh] = ran.try_emplace(key, Ran{e.instance->info(), e.activatedAt});
+            if (!fresh && e.activatedAt < it->second.since) it->second.since = e.activatedAt;
+        }
+    std::vector<Ran> out;
+    for (auto& [key, entry] : ran) out.push_back(std::move(entry));
     return out;
 }
 
@@ -379,6 +381,7 @@ host::Instance::Notifications InstancePool::service(Id id) {
     auto notes = entry.instance->takeNotifications();
     entry.restarting = entry.instance->restartPending();
     if (entry.instance->active()) {
+        if (!entry.activated) entry.activatedAt = std::filesystem::file_time_type::clock::now();
         entry.activated = true;
         const std::uint32_t latency = entry.instance->latency();
         notes.latencyChanged |= latency != entry.rawLatency;

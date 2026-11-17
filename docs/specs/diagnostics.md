@@ -309,7 +309,9 @@ reports alone; the engine decides whether the suspicion applies to the plug-in i
   loaded normally, in this project or an earlier one of the run, when it is the build (or version)
   the report names. A bridged plug-in, a disabled one, one never activated and one whose file
   could not be checked settle nothing (E13), and a run that dies settles nothing, since the call
-  is only made on the way out.
+  is only made on the way out. Only a report older than the run's first sight of the plug-in
+  active is settled: the GUI and a headless engine share the folder, and a report another process
+  wrote while this one ran says nothing this run can clear.
 
 *Commands.* The engine exposes the reader to agents (P9) as `crash.list {limit?}` (the listing:
 reports, unreported runs, `live_runs`, `reports_pending`, `ignored`, each list capped by `limit`,

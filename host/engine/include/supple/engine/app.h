@@ -1007,7 +1007,7 @@ class EngineApp : public cmd::Host {
     std::size_t instancesMade_ = 0;
     // Topic 7d. The plug-ins earlier projects of this run ran in process (the pool that made
     // them is replaced with the project), and the ones this run already said it suspects.
-    std::vector<host::PluginInfo> ranBefore_;
+    std::vector<InstancePool::Ran> ranBefore_;
     std::set<std::string> suspectsWarned_;
     using NamedHead = std::pair<std::string, std::shared_ptr<const model::Session>>;
     std::vector<ProjectPlugin> gatherPlugins(const std::vector<NamedHead>& heads,

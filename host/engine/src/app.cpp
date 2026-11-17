@@ -1169,11 +1169,15 @@ Result<EngineApp::ProjectPlugins> EngineApp::projectPlugins(
 
 void EngineApp::harvestRan() {
     if (!pool_) return;
-    for (auto& info : pool_->ranInProcess()) {
-        const bool known = std::ranges::any_of(ranBefore_, [&](const host::PluginInfo& seen) {
-            return seen.format == info.format && seen.id == info.id;
+    for (auto& ran : pool_->ranInProcess()) {
+        // An earlier project of the run may have run it already: the first sighting stands.
+        auto known = std::ranges::find_if(ranBefore_, [&](const InstancePool::Ran& seen) {
+            return seen.info.format == ran.info.format && seen.info.id == ran.info.id;
         });
-        if (!known) ranBefore_.push_back(std::move(info));
+        if (known == ranBefore_.end())
+            ranBefore_.push_back(std::move(ran));
+        else if (ran.since < known->since)
+            known->since = ran.since;
     }
 }
 
@@ -1183,15 +1187,18 @@ void EngineApp::settleCleanSuspects() {
     auto found = diagnostics::suspects(diagnosticsDir());
     if (!found || found->empty()) return;
     detail::SuspectCheck check(std::move(*found));
-    for (const auto& info : ranBefore_) {
+    for (const auto& ran : ranBefore_) {
         // Only the build the report named, or the version when it named none: a plug-in whose
         // file could not be checked ran fine, but is not known to be the one that crashed.
-        const auto verdict = check.check(info);
+        const auto verdict = check.check(ran.info);
         if (verdict.build != detail::SuspicionVerdict::Build::Same &&
             verdict.build != detail::SuspicionVerdict::Build::Version)
             continue;
-        for (const auto& incident : verdict.incidents)
-            (void)diagnostics::settle(incident, diagnosticsDir());
+        // Only a report older than this run's first sight of the plug-in active: another process
+        // sharing the folder may have crashed in it since, and a clean run here cannot clear that.
+        for (std::size_t i = 0; i < verdict.incidents.size(); ++i)
+            if (verdict.incidentTimes[i] < ran.since)
+                (void)diagnostics::settle(verdict.incidents[i], diagnosticsDir());
     }
     ranBefore_.clear();
 }
