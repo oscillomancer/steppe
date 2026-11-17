@@ -921,6 +921,8 @@ class Engine {
     std::uint64_t outputWakeSeen_ = 0;  // callback only
     EngineOptions options_;
     Backend* backend_ = nullptr;
+    // What the device granted, set once start() has returned: the main
+    // thread's. The audio path reads deviceRate_ instead.
     BackendConfig config_;
     // Plans: published by the main thread, freed once no executor can use
     // them (both acknowledged a newer generation).
@@ -1068,7 +1070,13 @@ class Engine {
     // it owns, and where it plays live nodes.
     std::uint32_t deviceInputs_ = 0;   // written before the backend starts
     std::uint32_t deviceOutputs_ = 2;  // the callback's out channels (at most 64), likewise
-    Backend* midiSource_ = nullptr;    // the backend, for the callback: set before it starts
+    // The device's rate for the audio path. Atomic, unlike the copies above:
+    // the requested rate is stored before the backend starts, and the granted
+    // one only once start() returns, while callbacks may already run. Nothing
+    // that depends on the rate (a plan, a sync runtime, a count-in) runs
+    // before the granted rate is stored.
+    std::atomic<double> deviceRate_{48000.0};
+    Backend* midiSource_ = nullptr;  // the backend, for the callback: set before it starts
     detail::Plan* livePlan_ = nullptr;
     std::vector<host::Instance*> liveProcessing_;
     std::int64_t livePos_ = 0;

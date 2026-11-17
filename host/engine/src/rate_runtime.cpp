@@ -58,8 +58,8 @@ void Engine::publishRateClock(detail::Plan& p, std::int64_t device, std::int64_t
         (epoch != rateSafeEpoch_.load(std::memory_order_acquire) ||
          stream + (options_.anticipative
                        ? aheadFrames_
-                       : static_cast<std::int64_t>(config_.sampleRate * options_.renderAheadMs /
-                                                   1000.)) >=
+                       : static_cast<std::int64_t>(deviceRate_.load(std::memory_order_relaxed) *
+                                                   options_.renderAheadMs / 1000.)) >=
              rateSafeStream_.load(std::memory_order_acquire))) {
         if (rateDeferredWake_.exchange(false)) notifyMain();
     }

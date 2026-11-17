@@ -304,6 +304,7 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
     outputWakeSerial_.fetch_add(1);
     outputWakeSeen_ = 0;
     midiSource_ = &backend;  // before any callback (backend_ is set after start returns)
+    deviceRate_.store(config.sampleRate, std::memory_order_relaxed);
     syncDevice_ = 0;
     syncRt_ = nullptr;
     for (auto& n : syncOutSent_) n.store(0, std::memory_order_relaxed);
@@ -316,6 +317,8 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
         return started;
     }
     config_ = backend.config();  // what the device granted (e.g. its rate)
+    // Before any plan or sync runtime is published, so their release orders it.
+    deviceRate_.store(config_.sampleRate, std::memory_order_relaxed);
     hardwareMidi_->prepare(config_.sampleRate, config_.outputs);
     backend_ = &backend;
     startWarnings_.clear();
@@ -1505,7 +1508,8 @@ void Engine::cycle(const float* const* in, float* const* out, std::uint32_t fram
         host::LiveBridgeDeadline deadline;
         BridgeCycle(Engine& e, std::uint32_t count)
             : engine(e),
-              period(static_cast<std::int64_t>(count * 1e9 / e.config_.sampleRate)),
+              period(static_cast<std::int64_t>(count * 1e9 /
+                                               e.deviceRate_.load(std::memory_order_relaxed))),
               deadline(start + std::max<std::int64_t>(
                                    static_cast<std::int64_t>(e.options_.liveBridgeDeadlineMs * 1e6),
                                    period)) {}
@@ -1629,7 +1633,7 @@ void Engine::runSync(const float* const* in, float* const* out, std::uint32_t fr
                      bool playingBefore) SUPPLE_RT {
     detail::SyncRuntime* rt = syncRt_;
     if (!rt) return;
-    const double rate = config_.sampleRate;
+    const double rate = deviceRate_.load(std::memory_order_relaxed);
     const double after = rtTimeline_.load(std::memory_order_relaxed);
     const auto epochAfter = timelineEpoch_.load(std::memory_order_acquire);
     // The timeline is published only for a cycle that played.
@@ -1676,6 +1680,7 @@ void Engine::runSync(const float* const* in, float* const* out, std::uint32_t fr
 
 // The status travels as words; copying it bytewise is sound.
 static_assert(std::is_trivially_copyable_v<SyncStatus>);
+static_assert(std::atomic<double>::is_always_lock_free);  // deviceRate_, read by the callback
 
 void Engine::publishSyncStatus(const SyncStatus& status) SUPPLE_RT {
     std::array<std::uint64_t, kSyncWords> words{};
@@ -2039,7 +2044,8 @@ void Engine::countClicks(float* const* out, std::uint32_t k) SUPPLE_RT {
     const float gain = metroGain_.load(std::memory_order_relaxed);
     for (std::uint32_t i = 0; i < k; ++i, ++countPos_) {
         if (countPos_ % countBeatA_ == 0)
-            startClick((countPos_ / countBeatA_) % countBarA_ == 0, config_.sampleRate);
+            startClick((countPos_ / countBeatA_) % countBarA_ == 0,
+                       deviceRate_.load(std::memory_order_relaxed));
         const float v = gain * clickSample();
         out[0][i] += v;
         out[1][i] += v;
