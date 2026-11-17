@@ -179,8 +179,8 @@ class Ghost : public ui::Node {
             if (const model::Item* it = itemOf(s, id))
                 if (auto r = rectFor(*it, 0, 0, 0, 0)) {
                     const model::Track* track = s.tracks.find(it->track);
-                    const ui::Color own =
-                        Lanes::itemColor(t, track, track ? track->type : model::StripType::Channel);
+                    const ui::Color own = Lanes::itemColor(
+                        t, *it, track, track ? track->type : model::StripType::Channel);
                     c.fillRect(*r, own.withAlpha(0.22f));
                     c.strokeRect(*r, t.color("focus"), 2);
                 }

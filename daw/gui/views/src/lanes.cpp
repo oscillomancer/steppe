@@ -425,8 +425,9 @@ ui::Rect Lanes::fadeArea(const ui::Rect& item) {
     return {item.x, item.y + kNameBar, item.w, item.h - kNameBar};
 }
 
-ui::Color Lanes::itemColor(const ui::Theme& theme, const model::Track* track,
-                           model::StripType type) {
+ui::Color Lanes::itemColor(const ui::Theme& theme, const model::Item& item,
+                           const model::Track* track, model::StripType type) {
+    if (const auto own = theme.trackColor(item.color)) return *own;
     if (track)
         if (const auto own = theme.trackColor(track->color)) return *own;
     return theme.color(typeToken(type));
@@ -485,10 +486,7 @@ void Lanes::paintGl(const ui::GlFrame& frame) {
         if (row.bottom() <= clip.y) continue;
         if (row.y >= clip.bottom()) break;
         ++stats_.rows;
-        // Every item of a row shares its track, hence its colour.
-        const ui::Color type =
-            itemColor(t, s.tracks.find(layout_.rows()[i].track), layout_.rows()[i].type);
-        const std::uint32_t note = ui::packRgba(type);
+        const model::Track* rowTrack = s.tracks.find(layout_.rows()[i].track);
         const std::uint32_t shade = ui::packRgba(t.color("ground").withAlpha(0.5f));
         for (model::Id id : rowItems_[i]) {
             const model::Item* item = s.items.find(id);
@@ -499,6 +497,8 @@ void Lanes::paintGl(const ui::GlFrame& frame) {
             ++stats_.items;
             const model::Track* owner = s.tracks.find(item->track);
             const bool dim = item->mute || (owner && owner->laneMute);
+            const ui::Color type = itemColor(t, *item, rowTrack, layout_.rows()[i].type);
+            const std::uint32_t note = ui::packRgba(type);
             const std::uint32_t body = ui::packRgba(type.withAlpha(dim ? 0.10f : 0.24f));
             const std::uint32_t edge = ui::packRgba(type.withAlpha(dim ? 0.35f : 0.8f));
             const std::uint32_t wave = ui::packRgba(t.color("ink").withAlpha(dim ? 0.3f : 0.8f));

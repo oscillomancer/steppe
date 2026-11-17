@@ -508,8 +508,9 @@ move and resize drags also compare the press-time amplitude, baseline, position,
 length, source length, loop state, envelope and pool. A change cancels the drag
 with `env.changed`; it does not rebase the draft onto the changed item.
 
-**Item appearance.** An item is drawn in its track's colour (§7), or in its
-strip type's colour when the track has none (`Lanes::itemColor`): a body at
+**Item appearance.** An item is drawn in its own colour when it has one
+(`item.set {color}`: a track colour's name or "#rrggbb"), else in its track's
+colour (§7), else in its strip type's (`Lanes::itemColor`): a body at
 about a quarter of the colour's strength, an outline, and across its top a
 15-unit **name bar** at about twice the body's strength. The bar carries the
 label in bold ink and the item's marks (padlock, snowflake, timebase badge,

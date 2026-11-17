@@ -67,10 +67,10 @@ class Lanes : public ui::Node {
     static bool hasNameBar(const ui::Rect& item) { return item.h >= 2 * kNameBar; }
     // Where an item's fades are drawn: its body, under the name bar.
     static ui::Rect fadeArea(const ui::Rect& item);
-    // The colour an item is drawn in: its track's own colour (§7), or its
-    // strip type's when the track has none.
-    static ui::Color itemColor(const ui::Theme& theme, const model::Track* track,
-                               model::StripType type);
+    // The colour an item is drawn in: its own (item.set {color}) when it has
+    // one the theme knows, else its track's (§7), else its strip type's.
+    static ui::Color itemColor(const ui::Theme& theme, const model::Item& item,
+                               const model::Track* track, model::StripType type);
     // What an item is called: its heard take's name, or an unnamed audio
     // take's media file. Empty when it has neither (the view then shows the
     // item's id).

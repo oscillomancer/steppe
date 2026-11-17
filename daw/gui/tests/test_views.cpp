@@ -1123,14 +1123,31 @@ TEST_CASE("an item takes its track's colour, or its strip type's without one") {
     const OneItem custom = oneItem("#102030", "", "");
     const OneItem plain = oneItem("", "", "");
     auto colorOf = [&](const OneItem& o) {
-        return ui::packRgba(views::Lanes::itemColor(theme, o.session.tracks.find(o.track),
+        return ui::packRgba(views::Lanes::itemColor(theme, *o.session.items.find(o.item),
+                                                    o.session.tracks.find(o.track),
                                                     model::StripType::Channel));
     };
     CHECK(colorOf(green) == ui::packRgba(theme.color("track-green")));
     CHECK(colorOf(custom) == ui::packRgba(ui::Color::hex(0x102030)));
     CHECK(colorOf(plain) == ui::packRgba(theme.color("channel")));
-    CHECK(ui::packRgba(views::Lanes::itemColor(theme, nullptr, model::StripType::Master)) ==
+    const model::Item bare;
+    CHECK(ui::packRgba(views::Lanes::itemColor(theme, bare, nullptr, model::StripType::Master)) ==
           ui::packRgba(theme.color("master")));
+    // An item's own colour (item.set {color}) comes before its track's; one
+    // the theme does not know leaves the track's.
+    model::Item own = *green.session.items.find(green.item);
+    own.color = "violet";
+    CHECK(ui::packRgba(views::Lanes::itemColor(theme, own, green.session.tracks.find(green.track),
+                                               model::StripType::Channel)) ==
+          ui::packRgba(theme.color("track-violet")));
+    own.color = "#0a0b0c";
+    CHECK(ui::packRgba(views::Lanes::itemColor(theme, own, green.session.tracks.find(green.track),
+                                               model::StripType::Channel)) ==
+          ui::packRgba(ui::Color::hex(0x0a0b0c)));
+    own.color = "no such colour";
+    CHECK(ui::packRgba(views::Lanes::itemColor(theme, own, green.session.tracks.find(green.track),
+                                               model::StripType::Channel)) ==
+          ui::packRgba(theme.color("track-green")));
 
     // And the picture follows: the name bar of an item on a green track is
     // green, on an uncoloured channel the channels' blue.
