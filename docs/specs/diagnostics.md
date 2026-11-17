@@ -246,8 +246,12 @@ Library placement: the table lives in the GPL library `diagnostics-context`
 (`libs/diagnostics-context/`, header `supple/diagctx/table.h`). It is under `libs/` because
 command-bus, also there, links it and a `libs/` library does not depend on host products;
 it is not in `core-base` or `modules/rack`, which are MIT and plug-in-linked, so no stock
-plug-in, module or MIT library links it (`tools/license-check` enforces that by leaving it
-out of its MIT list). Today `diagnostics` and `engine` link it; clap-host and command-bus
+plug-in, module or MIT library links it. Two checks enforce that: `tools/license-check`
+rejects an include of `supple/diagctx/` or a mention of the target in any file of the
+permissive tree (`plugins/`, `modules/`, the MIT libraries), which covers plug-ins built in
+isolation; and `cmake/LicenseIsolation.cmake` walks, at the end of configuration, the link
+graph of every target built from those directories and fails on one that reaches the
+library, directly or through another target. Today `diagnostics` and `engine` link it; clap-host and command-bus
 join in the steps that use it.
 
 The table is one static, zero-filled, page-aligned block per process (18,464 bytes: a

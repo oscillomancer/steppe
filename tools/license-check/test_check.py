@@ -5,6 +5,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import re
 from pathlib import Path, PureWindowsPath
 import sys
 import tempfile
@@ -108,6 +109,37 @@ class BuildFiles(unittest.TestCase):
             with self.subTest(filename=filename, identifier=identifier):
                 result, errors = self.check_fixture(filename, "// SPDX-License-" + "Identifier: " + identifier + "\n")
                 self.assertEqual(result, expected, errors)
+
+
+class GplOnlyLibraries(BuildFiles):
+    """The execution table's library is GPL-only (ADR-0083): the permissive tree never names it."""
+
+    def test_permissive_files_cannot_include_or_link_it(self):
+        for filename, text in (
+            ("libs/core-base/src/thread.cpp", '#include "supple/diagctx/table.h"\n'),
+            ("libs/core-base/src/thread.cpp", "supple::diagctx::registerThread(x);\n"),
+            ("libs/core-base/CMakeLists.txt", "supple_add_library(core-base DEPS supple::diagnostics-context)\n"),
+            ("plugins/common/example.cpp", '#include <supple/diagctx/table.h>\n'),
+            ("modules/rack/example.cpp", '#include "supple/diagctx/table.h"\n'),
+        ):
+            with self.subTest(filename=filename):
+                result, errors = self.check_fixture(filename, text)
+                self.assertEqual(result, 1, errors)
+                self.assertIn("GPL-only library diagnostics-context", errors)
+
+    def test_gpl_code_may_use_it(self):
+        for filename in ("host/engine/src/realtime.cpp", "libs/command-bus/src/bus.cpp",
+                         "libs/diagnostics-context/src/table.cpp", "daw/example.cpp"):
+            with self.subTest(filename=filename):
+                result, errors = self.check_fixture(filename, '#include "supple/diagctx/table.h"\n')
+                self.assertEqual(result, 0, errors)
+
+    def test_the_configure_time_check_names_the_same_libraries(self):
+        cmake = (Path(__file__).resolve().parents[2] / "cmake" / "LicenseIsolation.cmake").read_text()
+        listed = re.search(r"set\(SUPPLE_MIT_LIBRARIES([^)]*)\)", cmake).group(1).split()
+        self.assertEqual(set(listed), gate.MIT_LIBRARIES)
+        gpl = re.search(r"set\(SUPPLE_GPL_ONLY_TARGETS([^)]*)\)", cmake).group(1).split()
+        self.assertEqual(set(gpl), set(gate.GPL_ONLY_LIBRARIES))
 
 
 class ComponentPaths(unittest.TestCase):
