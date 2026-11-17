@@ -33,6 +33,7 @@ class RemoteInstance;
 class BridgeProcess {
   public:
     static constexpr int kHung = -2;
+    static constexpr int kAbandoned = -4;  // abandon(): its user no longer wants an answer
     static Result<std::shared_ptr<BridgeProcess>> spawn();
     ~BridgeProcess();
     Result<std::vector<std::uint8_t>> call(bridge::Op op, std::uint32_t instance,
@@ -45,6 +46,10 @@ class BridgeProcess {
     void reap();  // main thread
     bool alive() const;
     void killBridge();
+    // Any thread: fails this bridge as abandoned and kills it. A wait on it
+    // off the callback returns within one wait step (10 ms); a control
+    // request sees its socket close.
+    void abandon();
     int pid() const { return pid_.load(); }
     // This bridge's ordinal in the run (ADR-0083, topic 6a): 1, 2, ...; 0 when it has none (a
     // process adopted by a test, or the 65536th of a run).
@@ -137,6 +142,14 @@ class RemoteInstance {
         return needsAudioFlush_.load(std::memory_order_acquire);
     }
     bool restartPending() const { return restartPending_; }  // as of the last service()
+    // This instance's deadline off the callback; 0: bridgeDeadlineMs().
+    // Atomic: any thread may set it at any time, and a wait already under
+    // way keeps the deadline it started with.
+    void setCallDeadlineMs(int ms) {
+        callDeadlineMs_.store(std::max(ms, 0), std::memory_order_relaxed);
+    }
+    int callDeadlineMs() const { return callDeadlineMs_.load(std::memory_order_relaxed); }
+    void abandon() { process_->abandon(); }  // any thread (BridgeProcess::abandon)
     bool processRequested() const SUPPLE_RT {
         return processRequested_.load(std::memory_order_acquire);
     }
@@ -243,6 +256,7 @@ class RemoteInstance {
     std::atomic<bool> needsAudioFlush_{false};
     std::atomic<bool> processRequested_{false};
     std::atomic<bool> classRefused_{false};
+    std::atomic<int> callDeadlineMs_{0};  // 0: the process-wide deadline
 };
 
 std::filesystem::path bridgeExecutable();

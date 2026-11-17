@@ -1136,6 +1136,32 @@ Error cancelledError() {
                  "cannot resume");
 }
 
+// What a render has written so far. A job that stops early keeps its files
+// and lists them in its result (review round 34): the entries of the tasks it
+// finished, as a finished job lists them, and the paths a task that did not
+// finish had already written.
+struct Written {
+    json::Value files = json::Value::array();
+    json::Value unfinished = json::Value::array();
+    std::optional<json::Value> result() const {
+        if (!files.size() && !unfinished.size()) return std::nullopt;
+        json::Value out = json::Value::object();
+        out["files"] = files;
+        if (unfinished.size()) out["unfinished_task_files"] = unfinished;
+        return out;
+    }
+};
+
+// A render job that stops before it finishes: failed with `error`, or, when
+// cancelled, left cancelled. Either way its result lists what it wrote.
+void stopRenderJob(cmd::JobManager& jobs, const std::string& id, Error error,
+                   const Written& written) {
+    if (!jobs.cancelled(id))
+        (void)jobs.fail(id, std::move(error), written.result());
+    else if (auto partial = written.result())
+        (void)jobs.cancel(id, std::move(*partial));
+}
+
 // Steps 1-4: render the range and tail, fold a seamless loop, resample to
 // the chain's rate, fold to mono.
 Result<Rendered> renderSteps(RunContext& run, const RenderPlan& p, const RenderTask& task,
@@ -1259,7 +1285,8 @@ Result<audio::FileMetadata> fileMetadata(const RenderPlan& p, const RenderTask& 
 
 // The whole chain for every task (engine.md §3). The result: {files, skipped}.
 Result<json::Value> runTasks(RunContext& run, const RenderPlan& p,
-                             std::map<std::string, json::Value>* mixMeters = nullptr) {
+                             std::map<std::string, json::Value>* mixMeters = nullptr,
+                             Written* written = nullptr) {
     const rs::Settings& e = p.settings;
     const auto& normalize = *e.normalize;
     json::Value files = json::Value::array();
@@ -1342,6 +1369,7 @@ Result<json::Value> runTasks(RunContext& run, const RenderPlan& p,
             auto bytes = encodeRender(*source, file.encoding, *metadata);
             if (!bytes) return std::move(bytes).error();
             SUPPLE_TRY(writeOutput(file.path, *bytes));
+            if (written) written->unfinished.push_back(file.path.string());
             json::Value o = json::Value::object();
             o["path"] = file.path.string();
             o["format"] = std::string(rs::formatName(file.encoding.format));
@@ -1360,6 +1388,7 @@ Result<json::Value> runTasks(RunContext& run, const RenderPlan& p,
                     SUPPLE_TRY(writeFileAtomic(
                         reportPath, loudnessReport(file.path.filename().string(), file.encoding,
                                                    *measured, result)));
+                    if (written) written->unfinished.push_back(reportPath.string());
                     o["report"] = reportPath.string();
                 }
             }
@@ -1387,6 +1416,10 @@ Result<json::Value> runTasks(RunContext& run, const RenderPlan& p,
             if (report) entry["analysis"] = std::move(*report);
         }
         if (mixMeters && p.operation == rs::Source::Mix) *mixMeters = std::move(rendered->meters);
+        if (written) {
+            written->files.push_back(entry);
+            written->unfinished = json::Value::array();
+        }
         files.push_back(std::move(entry));
         if (run.jobs)
             (void)run.jobs->progress(run.job, static_cast<double>(i + 1) / p.tasks.size(),
@@ -1835,12 +1868,18 @@ void registerQueueCommands(cmd::Registry& registry) {
                           entryOf](supple::StopToken stop) {
                 json::Value renders = json::Value::array();
                 std::vector<std::string> done;
+                Written written;  // across the queued renders
                 for (const auto& w : work) {
-                    if (stop.stop_requested() || jobs.cancelled(id)) return;
+                    if (stop.stop_requested() || jobs.cancelled(id)) {
+                        if (jobs.cancelled(id))
+                            if (auto partial = written.result())
+                                (void)jobs.cancel(id, std::move(*partial));
+                        return;
+                    }
                     RunContext run{app, &jobs, id, &catalogue, &identity, &overrides, stop};
-                    auto result = runTasks(run, w.plan);
+                    auto result = runTasks(run, w.plan, nullptr, &written);
                     if (!result) {
-                        if (!jobs.cancelled(id)) (void)jobs.fail(id, std::move(result).error());
+                        stopRenderJob(jobs, id, std::move(result).error(), written);
                         // What finished leaves the queue (on the model thread).
                         dispatcher.post("render.queue.done", [&app, target, done]() -> Status {
                             return queueDone(app, target, done);
@@ -2169,7 +2208,8 @@ void registerRenderCommands(cmd::Registry& registry) {
                 if (stop.stop_requested() || jobs.cancelled(id)) return;
                 RunContext run{app, &jobs, id, &catalogue, &identity, &overrides, stop};
                 auto meters = std::make_shared<std::map<std::string, json::Value>>();
-                auto result = runTasks(run, planned, meters.get());
+                Written written;
+                auto result = runTasks(run, planned, meters.get(), &written);
                 if (result) {
                     json::Value files = filesForAdd(*result);
                     completeRenderJob(
@@ -2180,8 +2220,8 @@ void registerRenderCommands(cmd::Registry& registry) {
                             if (addToProject)
                                 postAddToProject(app, target, dispatcher, origin, files);
                         });
-                } else if (!jobs.cancelled(id))
-                    (void)jobs.fail(id, std::move(result).error());
+                } else
+                    stopRenderJob(jobs, id, std::move(result).error(), written);
             });
             json::Value out = json::Value::object();
             out["job"] = id;

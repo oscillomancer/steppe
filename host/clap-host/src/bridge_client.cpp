@@ -60,7 +60,13 @@ ThreadPolicy bridgeAudioPolicy() SUPPLE_RT {
 
 namespace {
 std::atomic<int> gBridgeDeadlineMs{2000};
+// A lifecycle command's failure deadline for a `process` deadline of
+// `deadlineMs` (ADR-0013 §5): 5/2 of it plus 2 s.
+int lifecycleDeadlineMs(int deadlineMs) SUPPLE_RT {
+    return static_cast<int>(
+        std::min<std::int64_t>(5 * std::int64_t(deadlineMs) / 2 + 2000, INT32_MAX));
 }
+}  // namespace
 void setBridgeDeadlineMs(int ms) {
     gBridgeDeadlineMs.store(std::max(ms, 1), std::memory_order_relaxed);
 }
@@ -361,7 +367,10 @@ RemoteInstance::~RemoteInstance() {
         std::erase(process_->members_, this);
         std::erase(process_->refreshOnly_, this);
     }
-    if (process_ && instanceId_ && !failed()) (void)call(Op::Destroy, Writer{}, -1, 2000);
+    // The control plane's own timeout, as for every main-thread request: a
+    // shorter one killed the bridge, and every plug-in sharing it, when a
+    // stalled machine was slow to answer (ADR-0090, review round 30).
+    if (process_ && instanceId_ && !failed()) (void)call(Op::Destroy, Writer{});
     unmap();
 }
 
@@ -417,6 +426,12 @@ void BridgeProcess::announceEnd(int why, bool hostEnded) noexcept {
     diagctx::announceBridge(ordinal_, end.how, end.status);
 }
 
+void BridgeProcess::abandon() {
+    // Failed first, so a wait that wakes sees why before it sees the death.
+    fail(kAbandoned);
+    killBridge();
+}
+
 // Main thread: observes exit without reaping the helper-owned leader.
 void BridgeProcess::reap() {
     if (pid_ <= 0) return;
@@ -447,6 +462,7 @@ std::string BridgeProcess::failure() const {
     const int s = failSignal_.load();
     if (s == kProtocolViolation) return "the plugin bridge violated the output-event protocol";
     if (s == kHung) return "the plugin stopped responding and its bridge was killed";
+    if (s == kAbandoned) return "the host abandoned the plugin's bridge and killed it";
 #if defined(_WIN32)
     if (s != 0 && s != -1)
         return "the plugin bridge exited (Windows status " +
@@ -543,6 +559,10 @@ Result<std::vector<std::uint8_t>> RemoteInstance::call(Op op, const Writer& w, R
         default:
             break;
     }
+    // An instance with a deadline of its own (an offline render's, ADR-0090)
+    // gives its control requests at least what its lifecycle commands get.
+    if (const int own = callDeadlineMs_.load(std::memory_order_relaxed); own > 0)
+        timeoutMs = std::max(timeoutMs, lifecycleDeadlineMs(own));
     return process_->call(op, instanceId_, w, fd, timeoutMs);
 }
 
@@ -795,7 +815,7 @@ std::optional<Instance::EditorFrame> RemoteInstance::closeEditor() {
     editorOpen_ = false;
     pendingEditor_ = {};
     if (failed()) return {};
-    auto reply = call(Op::EditorClose, Writer{}, -1, 2000);
+    auto reply = call(Op::EditorClose, Writer{});  // as Destroy: the control plane's timeout
     if (!reply) return {};
     Reader r(reply->data(), reply->size());
     auto frame = readFrame(r);
@@ -1026,11 +1046,9 @@ bool RemoteInstance::answered(std::uint32_t req, Cmd cmd) SUPPLE_RT {
     // Lifecycle commands may page in a plugin's code; a block must not stall
     // the renderer long, but a loaded machine must not get a healthy plugin
     // killed either.
-    const int deadlineMs = bridgeDeadlineMs();
-    const int limitMs = cmd == Cmd::Process
-                            ? deadlineMs
-                            : static_cast<int>(std::min<std::int64_t>(
-                                  5 * std::int64_t(deadlineMs) / 2 + 2000, INT32_MAX));
+    const int own = callDeadlineMs_.load(std::memory_order_relaxed);
+    const int deadlineMs = own > 0 ? own : bridgeDeadlineMs();
+    const int limitMs = cmd == Cmd::Process ? deadlineMs : lifecycleDeadlineMs(deadlineMs);
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(limitMs);
     for (;;) {
         const std::uint32_t seen = hdr_->done.load(std::memory_order_acquire);
@@ -1041,6 +1059,8 @@ bool RemoteInstance::answered(std::uint32_t req, Cmd cmd) SUPPLE_RT {
         signals_.wait(hdr_->done, seen, 10, true);
 #endif
         if (hdr_->done.load(std::memory_order_acquire) == req) return true;
+        // Abandoned (or failed by any other thread): nothing waits for it.
+        if (process_->failed()) return false;
         if (!process_->alive()) {
             process_->fail(-1);  // the signal is read when the main thread reaps it
             return false;

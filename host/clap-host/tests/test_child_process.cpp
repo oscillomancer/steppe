@@ -5,6 +5,12 @@
 #include <fstream>
 #include <iterator>
 #include "supple/host/child_process.h"
+#if !defined(_WIN32)
+#include <signal.h>
+#include <sys/wait.h>
+#include "../src/child_status.h"
+#include "process_pause.h"
+#endif
 using namespace supple::host;
 TEST_CASE("child capture preserves arguments, exit code and bounded output") {
     const std::array<std::string, 5> args{"failure", "space value", "quote\"inside", "trailing\\",
@@ -96,6 +102,31 @@ TEST_CASE("Windows child job terminates descendants retaining stdout") {
 #endif
 
 #if !defined(_WIN32)
+TEST_CASE("a stopped child is alive; only an exit or a killing signal ends it") {
+    // Native CI on macOS (review round 34): waitid(WEXITED | WNOHANG |
+    // WNOWAIT) there also returns the record of a stopped child, and the
+    // host took a stopped bridge for one that died of SIGSTOP. Linux returns
+    // that record only when asked (WSTOPPED), so ask, and judge it.
+    const std::array<std::string, 1> args{"hang"};
+    auto child = ChildProcess::spawn(CHILD_FIXTURE_PATH, args);
+    REQUIRE(child);
+    const int pid = (*child)->pid();
+    REQUIRE(supple::test::pauseProcess(pid));
+    siginfo_t stopped{};
+    REQUIRE(::waitid(P_PID, static_cast<id_t>(pid), &stopped,
+                     WEXITED | WSTOPPED | WNOHANG | WNOWAIT) == 0);
+    REQUIRE(stopped.si_pid == pid);
+    CHECK(stopped.si_code == CLD_STOPPED);
+    CHECK(stopped.si_status == SIGSTOP);
+    CHECK_FALSE(supple::host::childEnded(stopped));
+    supple::test::resumeProcess(pid);
+    REQUIRE(supple::test::killProcess(pid));
+    siginfo_t ended{};
+    REQUIRE(::waitid(P_PID, static_cast<id_t>(pid), &ended, WEXITED | WNOWAIT) == 0);
+    CHECK(ended.si_code == CLD_KILLED);
+    CHECK(supple::host::childEnded(ended));
+}
+
 TEST_CASE("child control inheritance preserves stdout capture with closed stdio") {
     const std::array<std::string, 1> args{"control-stdio"};
     auto child = ChildProcess::spawn(CHILD_FIXTURE_PATH, args);

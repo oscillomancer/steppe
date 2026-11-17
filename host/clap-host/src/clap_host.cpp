@@ -1207,6 +1207,13 @@ bool Instance::reportsTail() const {
 bool Instance::failed() const { return remote_ && remote_->failed(); }
 
 int Instance::bridgePid() const { return remote_ ? remote_->bridgePid() : -1; }
+void Instance::setCallDeadlineMs(int ms) {
+    if (remote_) remote_->setCallDeadlineMs(ms);
+}
+int Instance::callDeadlineMs() const { return remote_ ? remote_->callDeadlineMs() : 0; }
+void Instance::abandonBridge() {
+    if (remote_) remote_->abandon();
+}
 bool Instance::bridgeThreadRefused() const { return remote_ && remote_->classRefused(); }
 
 std::string Instance::failure() const { return remote_ ? remote_->failure() : std::string(); }

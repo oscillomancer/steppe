@@ -6,6 +6,10 @@
 **Amendment, 2026-10-07:** [ADR-0024](0024-live-multiprocessing.md) defines
 live callback fork-join, helper scheduling and the nonblocking wake exception.
 
+**Amendment, 2026-11-16:** [ADR-0090](0090-offline-renders-and-bridged-plugins.md)
+gives offline renders a 60 s deadline for bridged calls and fails a render
+in which a plug-in fails (§5, §6).
+
 **Amendment, 2026-11-14:** [ADR-0081](0081-live-bridged-plugins.md) lets
 the callback process bridged plug-ins on live nodes, with one bounded wait
 per cycle; it states the exception to the callback's no-wait rule.
@@ -87,6 +91,9 @@ renderer and worker threads, not in the device callback.
    for the product: whether the 2 s default should stand, offline renders
    especially, and whether a render that loses a plug-in this way should
    still report success (STATUS).
+   *Note 2026-11-16, later:* answered by
+   [ADR-0090](0090-offline-renders-and-bridged-plugins.md): offline renders
+   wait 60 s; the live paths keep 2 s.
 6. **Failure.** The parent watches each bridge with a `pidfd` and the control
    socket. A bridge that dies, or misses the deadline and is then found dead
    or killed, turns its instances *failed*: `process()` outputs silence and
@@ -96,6 +103,9 @@ renderer and worker threads, not in the device callback.
    same way. `fx.restart {fx}` re-creates the instance
    from the model's last known patch/state (the model is the source of
    truth; nothing is lost that was committed).
+   *Note 2026-11-16:* in an offline render a plug-in that fails this way
+   fails the render (`engine.fx_failed`); see
+   [ADR-0090](0090-offline-renders-and-bridged-plugins.md).
 7. **Test plugin.** The clap-host fixtures gain `com.suppleaudio.test.crash`:
    an effect that dereferences null in `process()` when its `crash`
    parameter is on (and can hang instead, for the deadline path).

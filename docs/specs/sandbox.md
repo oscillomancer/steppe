@@ -257,7 +257,10 @@ before owner destruction. Launch and cleanup are setup/control APIs. The
 existing bounded bridge-wait exception sanctions the nonblocking killTree()
 on timeout; it never reaps there. Linux retains its pidfd death watch (socket
 HUP fallback), while main-thread exit observation uses WNOWAIT until final
-helper cleanup. The memfd/futex audio path remains unchanged.
+helper cleanup. Only an exit or a terminating signal counts as the child's
+end (`childEnded`, `child_status.h`): macOS's `waitid` also reports a stopped
+child with only `WEXITED` asked for, and a stopped bridge (a debugger, job
+control) is alive, not crashed. The memfd/futex audio path remains unchanged.
 
 The eventfd/futex/pidfd descriptions below name Linux mechanisms; the native
 objects above implement the same publication and lifetime contracts.
@@ -343,12 +346,29 @@ reading cmd. This covers shutdown before/during parking, including control
 HUP/EOF, without fabricating a processing command. Parent request/done safety
 deadlines and bounded in-flight failure checks are unchanged.
 
-A call made off the device callback (ADR-0013) fails at a process-wide
-deadline, `host::setBridgeDeadlineMs` (2000 ms by default, at least 1):
-`process` waits that long, lifecycle commands 5/2 of it plus 2 s. The engine
-tests raise it to 60 s for the whole binary (`bridge_patience.cpp`), so a
-stall of a loaded machine never decides a bit-identity comparison; the tests
-of the deadline itself set it explicitly.
+A call made off the device callback (ADR-0013) fails at a deadline:
+`process` waits that long, lifecycle commands 5/2 of it plus 2 s. It is the
+instance's own, `Instance::setCallDeadlineMs`, when set (an offline render
+sets 60 s on its instances while it runs, ADR-0090), and otherwise the
+process-wide `host::setBridgeDeadlineMs` (2000 ms by default, at least 1).
+The instance's own is atomic and may be set from any thread at any time; a
+wait already under way keeps the deadline it began with.
+`Instance::abandonBridge` kills an instance's bridge from any thread, for a
+user that no longer wants its answers and owns every instance in it (a
+stopped offline render): the bridge is failed first, as abandoned, so a
+wait on it off the callback returns at its next 10 ms step and a control
+request as its socket closes.
+The engine tests raise the process-wide one to 60 s for the whole binary
+(`bridge_patience.cpp`), so a stall of a loaded machine never decides a
+bit-identity comparison of live renders; the tests of the deadline itself
+set it explicitly.
+
+A control-plane request has one deadline for its send and reply: 20 s for
+`Create`, 10 s for every other, `Destroy` and `EditorClose` included, or,
+for an instance with a deadline of its own, at least that deadline's
+lifecycle value. A bridge that misses it is killed, with every instance in
+it, since its stream is out of step. ADR-0090 lists every bridge timeout and why it is
+what it is.
 
 Thread discipline follows CLAP: create/activate/params-info/state/GUI on the
 main thread; `process` on one audio thread. The sandbox's audio thread is

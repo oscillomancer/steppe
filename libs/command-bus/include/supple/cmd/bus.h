@@ -228,7 +228,9 @@ class JobManager {
     // makes the result visible. A concurrent cancel cannot publish afterwards.
     Status completeWith(std::string_view id, json::Value result,
                         const std::function<void()>& publish);
-    Status fail(std::string_view id, Error error);
+    // `result`, when given, is what the job did before it failed (a render
+    // job's files written so far); the failed job's snapshot carries it.
+    Status fail(std::string_view id, Error error, std::optional<json::Value> result = {});
     // A late completion may attach a result to an already cancelled job (for
     // example render.stale_target); this never changes its cancelled status.
     Status cancel(std::string_view id, std::optional<json::Value> result = {});
