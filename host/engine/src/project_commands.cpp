@@ -493,7 +493,7 @@ void registerProjectCommands(cmd::Registry& registry) {
                      "open the project as saved"}};
         c.examples = {
             {"Which plug-ins", j(R"({"path": "example-project.json"})"),
-             j(R"({"path": "<any>", "hash": "<any>", "catalogue_empty": "<any>", "plugins": "<any>"})"),
+             j(R"({"source": "file", "path": "<any>", "hash": "<any>", "catalogue_empty": "<any>", "plugins": "<any>"})"),
              "saved"}};
         c.run = [](const PluginsArgs& a, Context& ctx) -> Result<json::Value> {
             EngineApp& app = engine::app(ctx);

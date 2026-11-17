@@ -11771,6 +11771,7 @@ Result:
 
 ```json
 {
+  "source": "file",
   "path": "<any>",
   "hash": "<any>",
   "catalogue_empty": "<any>",
