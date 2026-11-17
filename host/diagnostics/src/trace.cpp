@@ -410,7 +410,10 @@ TraceSnapshot collectTrace(const TraceOps& ops, std::uint64_t faultTid, const Re
     std::vector<std::uint64_t> tids = ops.threads ? ops.threads() : std::vector<std::uint64_t>{};
     std::sort(tids.begin(), tids.end());
     tids.erase(std::unique(tids.begin(), tids.end()), tids.end());
-    // Order: fault thread (always, from the capsule), main, then by thread id.
+    // Order: fault thread (always), main, then by thread id. The fault thread is read
+    // from the capsule's registers when it has them; a capsule without (terminate,
+    // abort) names only the thread, which is parked in its handler and read like any
+    // other, so its real stack is never filed under another role.
     std::vector<std::pair<std::uint64_t, Role>> order;
     order.emplace_back(faultTid, Role::Fault);
     const bool mainListed =
@@ -444,9 +447,13 @@ TraceSnapshot collectTrace(const TraceOps& ops, std::uint64_t faultTid, const Re
         trace.role = role;
         if (!haveMaps) {
             trace.missing = Missing::MapsUnreadable;
-        } else if (role == Role::Fault) {
+        } else if (role == Role::Fault && faultRegs.pc != 0) {
             trace.walk = walkThread(tid, faultRegs);
             trace.missing = Missing::None;
+        } else if (role == Role::Fault && tid == 0) {
+            // terminate and abort capture no registers; without a thread id either
+            // there is nothing to read the thread from.
+            trace.missing = Missing::RegistersUnreadable;
         } else if (expired()) {
             trace.missing = Missing::Deadline;
         } else {

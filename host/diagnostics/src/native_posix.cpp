@@ -12,6 +12,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstring>
+#include <ctime>
 #include "native.h"
 #if defined(__linux__)
 #include <sys/ptrace.h>
@@ -260,8 +261,28 @@ void awaitAcknowledgement(Native& native) noexcept {
     fd_set ready;
     FD_ZERO(&ready);
     FD_SET(fd, &ready);
-    const timespec timeout{1, 0};
-    (void)::pselect(fd + 1, &ready, nullptr, nullptr, &timeout, nullptr);
+    // The wait is one second in total. A ptrace interrupt from the collector (the worker
+    // may be the very thread it stops) or any signal ends pselect early with EINTR; the
+    // remainder is waited out rather than letting the worker die mid-collection.
+    // clock_gettime and pselect are async-signal-safe.
+    timespec start{};
+    if (::clock_gettime(CLOCK_MONOTONIC, &start) != 0) {
+        const timespec timeout{1, 0};
+        (void)::pselect(fd + 1, &ready, nullptr, nullptr, &timeout, nullptr);
+        return;
+    }
+    for (;;) {
+        timespec now{};
+        if (::clock_gettime(CLOCK_MONOTONIC, &now) != 0) return;
+        long long left = 1'000'000'000LL - ((now.tv_sec - start.tv_sec) * 1'000'000'000LL +
+                                            (now.tv_nsec - start.tv_nsec));
+        if (left <= 0) return;
+        const timespec timeout{static_cast<time_t>(left / 1'000'000'000LL),
+                               static_cast<long>(left % 1'000'000'000LL)};
+        fd_set again = ready;
+        if (::pselect(fd + 1, &again, nullptr, nullptr, &timeout, nullptr) >= 0 || errno != EINTR)
+            return;
+    }
 }
 int wait(Native& native, bool& fatal, std::optional<std::uint32_t> expected) {
     if (!native.exited) {

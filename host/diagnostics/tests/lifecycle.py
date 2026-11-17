@@ -30,6 +30,14 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
                 if mode=="terminate": assert report["cause"]==3,report
                 if mode in ("fault","thread-fault","stack"): assert report["terminal_context"],(mode,report)
             if mode in ("killed","failfast"): assert not report["terminal_context"],report
+            if mode in ("terminate","abort") and not sanitized and (sys.platform.startswith("linux") or os.name=="nt"):
+                # The calling thread is the fault entry and is read from the live thread
+                # (terminate and abort capture no registers): its real stack, not a
+                # one-frame fault entry with the stack filed under main.
+                fault=report["threads"][0]
+                assert fault["role"]=="fault" and fault["state"]=="walked",(mode,fault)
+                assert len(fault["frames"])>=3,(mode,fault)
+                assert all(t["role"]!="main" for t in report["threads"]),(mode,report["threads"])
             if sanitized: assert report["cause"]==0,(mode,report)
             assert "private-project-sentinel" not in raw
             assert str(root) not in raw

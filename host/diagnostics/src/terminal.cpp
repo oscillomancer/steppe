@@ -60,12 +60,22 @@ void handoff(Packet packet) noexcept {
     packet.kind = Message::Terminal;
     if (detail::publish(endpoint, packet)) detail::awaitAcknowledgement(endpoint);
 }
+// The calling thread's id, for the private channel only. Async-signal-safe.
+[[maybe_unused]] std::uint64_t currentThread() noexcept {
+#if defined(_WIN32)
+    return GetCurrentThreadId();
+#elif defined(__linux__)
+    return static_cast<std::uint64_t>(::syscall(SYS_gettid));
+#else
+    return 0;
+#endif
+}
 #if defined(_WIN32)
 [[maybe_unused]] LONG WINAPI lastChance(EXCEPTION_POINTERS* exception) {
     if (claimed.exchange(1, std::memory_order_relaxed)) return EXCEPTION_CONTINUE_SEARCH;
     Packet packet = initial;
     packet.cause = 2;
-    packet.tid = GetCurrentThreadId();
+    packet.tid = currentThread();
     if (exception && exception->ExceptionRecord) {
         packet.code = exception->ExceptionRecord->ExceptionCode;
         packet.pc = reinterpret_cast<std::uintptr_t>(exception->ExceptionRecord->ExceptionAddress);
@@ -88,6 +98,7 @@ void handoff(Packet packet) noexcept {
         Packet packet = initial;
         packet.cause = 4;
         packet.code = static_cast<unsigned>(signal);
+        packet.tid = currentThread();
         handoff(packet);
     }
     // CRT abort remains fatal and retains the user's OS reporting policy.
@@ -110,9 +121,7 @@ void handoff(Packet packet) noexcept {
     Packet packet = initial;
     packet.cause = 1;
     packet.code = static_cast<unsigned>(signal);
-#if defined(__linux__)
-    packet.tid = static_cast<std::uint64_t>(::syscall(SYS_gettid));  // async-signal-safe
-#endif
+    packet.tid = currentThread();
     const auto* state = static_cast<const ucontext_t*>(context);
     if (state) {
 #if defined(__APPLE__) && defined(__aarch64__)
@@ -181,6 +190,7 @@ struct SignalStack {
     Packet packet = initial;
     packet.cause = 3;
     packet.code = 0;  // The previous handler chooses the actual exit path/status.
+    packet.tid = currentThread();
     handoff(packet);
     // Ordinary terminate context only: the prior handler would have run anyway.
     // This is the sole sanctioned foreign call, never made by signal/SEH hooks.

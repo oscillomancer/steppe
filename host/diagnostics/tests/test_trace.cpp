@@ -381,6 +381,38 @@ TEST_CASE("collection reports why a thread is missing instead of an empty trace"
     CHECK(q.stops == 0);
 }
 
+TEST_CASE("a capsule without registers still names its thread, which is then read like any other") {
+    // terminate and abort capture no registers, only the calling thread: it is parked in
+    // its handler, so it can be stopped, and its real stack must not be filed elsewhere.
+    auto p = process();
+    auto snapshot = collectTrace(p.ops(), 11, Regs{}, 10, Arch::X86_64);
+    REQUIRE(snapshot.threads.size() == 3);
+    CHECK(snapshot.threads[0].role == Role::Fault);
+    CHECK(snapshot.threads[0].missing == Missing::None);
+    REQUIRE(!snapshot.threads[0].walk.frames.empty());
+    CHECK(snapshot.threads[0].walk.frames[0].offset == 0x100);  // read from the stopped thread
+    CHECK(snapshot.threads[1].role == Role::Main);
+    CHECK(snapshot.threads[2].role == Role::Other);
+    CHECK(p.stops == 3);
+    CHECK(p.releases == 3);
+    CHECK(p.maxStopped == 1);
+    // With no thread id either, the fault entry is unavailable and says why; the other
+    // threads are still read, and no thread is stopped on its behalf.
+    auto q = process();
+    snapshot = collectTrace(q.ops(), 0, Regs{}, 10, Arch::X86_64);
+    REQUIRE(snapshot.threads.size() == 4);
+    CHECK(snapshot.threads[0].role == Role::Fault);
+    CHECK(snapshot.threads[0].missing == Missing::RegistersUnreadable);
+    CHECK(snapshot.threads[0].walk.frames.empty());
+    CHECK(q.stops == 3);
+    // A refused stop is reported with its own reason, for the fault entry too.
+    auto r = process();
+    r.refuse[11] = Missing::PtraceDenied;
+    snapshot = collectTrace(r.ops(), 11, Regs{}, 10, Arch::X86_64);
+    CHECK(snapshot.threads[0].role == Role::Fault);
+    CHECK(snapshot.threads[0].missing == Missing::PtraceDenied);
+}
+
 TEST_CASE("an expired hold budget marks the rest unavailable and releases every thread") {
     for (unsigned after = 0; after < 40; ++after) {
         auto p = process();

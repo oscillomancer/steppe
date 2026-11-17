@@ -137,8 +137,14 @@ ancestor; no sysctl, capability or `PR_SET_PTRACER_ANY` is used or needed. Scope
 3, a non-dumpable worker, an existing tracer or a seccomp filter refuse, and each thread
 then reports its reason. The collector stops one thread at a time with `PTRACE_SEIZE` and
 `PTRACE_INTERRUPT`, reads registers, walks, and detaches it (passing back any pending
-signal) before the next; the faulting thread is not stopped, since it is parked in its
-handler. A thread that cannot reach its stop by the deadline (a killable or
+signal) before the next; a faulting thread whose capsule has registers (a signal or
+exception) is not stopped, since it is parked in its handler, and is walked from them. The
+terminate and abort paths capture no registers, only the calling thread's id: that thread
+is the `fault` entry and, being parked in its handler too, is stopped and read like any
+other, so its real stack is reported as the fault entry and not under `main` or `other`.
+Its hold therefore waits out interruptions: the one-second wait for the acknowledgement
+resumes after `EINTR` for the time that remains. When even the thread id is unknown, the
+fault entry is `unavailable` with `registers_unreadable`. A thread that cannot reach its stop by the deadline (a killable or
 uninterruptible kernel wait, such as the vfork wait inside `posix_spawn`) stays attached,
 reported `deadline`, and is never stopped by the collector afterwards. The guarantee is
 therefore not that nothing stays attached but that nothing can block the worker's exit:
@@ -155,8 +161,10 @@ Windows collection also runs in the supervisor inside the terminal hold, on the 
 suspending threads and reading memory: no privilege, policy or debug right is raised.
 Threads come from a toolhelp snapshot filtered to the worker's process id; the main
 thread is the earliest created. Each other thread is suspended, its context read, and
-resumed before the next; the faulting thread is not suspended, since it is parked in its
-last-chance filter, and is walked from the pc, stack and frame pointers in the capsule.
+resumed before the next; a faulting thread whose capsule has registers is not suspended,
+since it is parked in its last-chance filter, and is walked from the pc, stack and frame
+pointers in the capsule. A terminate or abort capsule has none, only the calling thread's
+id, and that thread is suspended and read like any other, as the `fault` entry.
 A thread the OS refuses reports `access_denied`; one that exited, `thread_exited`.
 Frames come from the OS unwinder (`StackWalk64` over each image's unwind data, x64 only;
 other Windows architectures report the faulting thread `unsupported`), with memory read
