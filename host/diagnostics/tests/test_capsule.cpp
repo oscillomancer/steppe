@@ -5,6 +5,7 @@
 // parser. The Mach calls that gather threads and modules are not here; they only run
 // on macOS, and native CI covers them.
 #include <doctest/doctest.h>
+#include <algorithm>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -31,11 +32,17 @@ std::vector<std::uint8_t> encode(const CapsuleData& data) {
         const auto* b = static_cast<const std::uint8_t*>(p);
         bytes.insert(bytes.end(), b, b + n);
     };
+    // A mutated header can claim more than the arrays hold; the claim is written as it
+    // stands and only what exists is copied, since the parser refuses the claim anyway.
     put(&data.header, sizeof(CapsuleHeader));
-    put(data.modules, data.header.moduleCount * sizeof(CapsuleModule));
-    for (std::uint32_t i = 0; i < data.header.threadCount; ++i) {
+    put(data.modules,
+        std::min<std::size_t>(data.header.moduleCount, kCapsuleModules) * sizeof(CapsuleModule));
+    for (std::uint32_t i = 0; i < std::min<std::size_t>(data.header.threadCount, kCapsuleThreads);
+         ++i) {
         put(&data.threads[i].head, sizeof(CapsuleThread));
-        put(data.threads[i].frames, data.threads[i].head.frameCount * sizeof(std::uint64_t));
+        put(data.threads[i].frames,
+            std::min<std::size_t>(data.threads[i].head.frameCount, kCapsuleFrames) *
+                sizeof(std::uint64_t));
     }
     return bytes;
 }
