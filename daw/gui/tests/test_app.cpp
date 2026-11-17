@@ -25,6 +25,7 @@
 #include "app_actions.h"
 #include "appearance.h"
 #include "chrome.h"
+#include "crash_banner.h"
 #include "file_actions.h"
 #include "floating_panel.h"
 #include "help_actions.h"
@@ -40,6 +41,7 @@
 #include "supple/base/environment.h"
 #include "supple/base/files.h"
 #include "supple/base/paths.h"
+#include "supple/diagnostics/reports.h"
 #include "supple/engine/app.h"
 #include "supple/gui/png.h"
 #include "supple/gui/process.h"
@@ -3571,4 +3573,113 @@ TEST_CASE("file actions: Save before Open autosave works after a first save") {
     CHECK(a.app->head().project->name == "Autosaved");
     CHECK(a.root->find("file.recovered"));
     CHECK(model::parseProjectFile(*readTextFile(file))->store.head()->project->name == "Current");
+}
+
+namespace {
+const char* kNoticeOne = "00000000000000000000000000000001";
+const char* kNoticeTwo = "00000000000000000000000000000002";
+const char* kNoticeThree = "00000000000000000000000000000003";
+// The app's shell with its transport and the restart notice under it, as the GUI builds it.
+struct NoticeShell {
+    peaks::PeakService peaks;
+    gui::MeterFeed meters;
+    gui::Shell shell;
+    explicit NoticeShell(App& a)
+        : peaks(a.dir / "cache", [](std::function<void()> f) { f(); }),
+          shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters) {
+        a.root->setContent(shell.build(*a.root, *a.actions));
+        a.root->frame(false);
+    }
+};
+std::string noticeText(App& a) {
+    auto* text = a.root->find("crash.notice.text");
+    return text ? text->valueText() : std::string();
+}
+void ageFile(const std::filesystem::path& path, int hours) {
+    std::filesystem::last_write_time(
+        path, std::filesystem::file_time_type::clock::now() - std::chrono::hours(hours));
+}
+}  // namespace
+
+TEST_CASE("the restart notice sits under the transport and Dismiss acknowledges what it covered") {
+    App a;
+    REQUIRE(a.ok);
+    const auto dir = a.app->diagnosticsDir();
+    SUBCASE("with nothing left behind there is no banner") {
+        NoticeShell s(a);
+        const auto* banner = a.root->find("crash.notice");
+        REQUIRE(banner);
+        CHECK_FALSE(banner->visibleInTree());
+        CHECK(noticeText(a).empty());
+    }
+    SUBCASE("a report says so, plainly, and Dismiss hides it for good") {
+        REQUIRE(diagnostics::writeSampleReport(kNoticeOne, dir));
+        NoticeShell s(a);
+        const auto* banner = a.root->find("crash.notice");
+        REQUIRE(banner);
+        REQUIRE(banner->visibleInTree());
+        CHECK(noticeText(a).find("closed unexpectedly last time") != std::string::npos);
+        CHECK(noticeText(a).find("not sent anywhere") != std::string::npos);
+        // Under the transport, above the arrangement: not modal, nothing else moves out of reach.
+        const auto* transport = a.root->find("transport");
+        if (transport)
+            CHECK(banner->bounds().y >= transport->bounds().y + transport->bounds().h - 1);
+        CHECK(banner->bounds().h > 0);
+        a.snapshot("crash-notice-report.png");
+        REQUIRE(a.root->click("crash.notice.dismiss"));
+        a.root->frame(false);
+        CHECK_FALSE(a.root->find("crash.notice")->visibleInTree());
+        auto listing = diagnostics::listReports(dir);
+        REQUIRE(listing);
+        REQUIRE(listing->reports.size() == 1);
+        CHECK(listing->reports[0].acknowledged);
+        CHECK(std::filesystem::exists(dir / (std::string(kNoticeOne) + ".json")));  // kept
+        // The next start has nothing to say.
+        NoticeShell next(a);
+        CHECK_FALSE(a.root->find("crash.notice")->visibleInTree());
+    }
+    SUBCASE("a crash inside a plug-in names it") {
+        REQUIRE(diagnostics::writeSampleCrash(kNoticeOne, "Canary Verb", "Acme", dir));
+        NoticeShell s(a);
+        CHECK(noticeText(a).find("Canary Verb by Acme was running when") == 0);
+        CHECK(noticeText(a).find("cannot prove it was the cause") != std::string::npos);
+        a.snapshot("crash-notice-plugin.png");
+    }
+    SUBCASE("a run that left no report says that, and why that can be") {
+        REQUIRE(diagnostics::writeSampleUnreportedRun(kNoticeOne, dir));
+        NoticeShell s(a);
+        CHECK(noticeText(a).find("no crash report was written") != std::string::npos);
+        a.snapshot("crash-notice-no-report.png");
+        REQUIRE(a.root->click("crash.notice.dismiss"));
+        a.root->frame(false);
+        CHECK_FALSE(a.root->find("crash.notice")->visibleInTree());
+        // The marker is not deleted by dismissing: the record of that run stays.
+        CHECK(std::filesystem::exists(dir / (std::string(kNoticeOne) + ".run")));
+    }
+    SUBCASE("earlier closes are counted, and one Dismiss covers them all") {
+        REQUIRE(diagnostics::writeSampleReport(kNoticeOne, dir));
+        REQUIRE(diagnostics::writeSampleUnreportedRun(kNoticeTwo, dir));
+        REQUIRE(diagnostics::writeSampleCrash(kNoticeThree, "Canary Verb", "Acme", dir));
+        ageFile(dir / (std::string(kNoticeOne) + ".json"), 9);
+        ageFile(dir / (std::string(kNoticeTwo) + ".run"), 5);
+        NoticeShell s(a);
+        CHECK(noticeText(a).find("Canary Verb by Acme") == 0);
+        CHECK(noticeText(a).find("2 earlier unexpected closes were not looked at") !=
+              std::string::npos);
+        a.snapshot("crash-notice-earlier.png");
+        REQUIRE(a.root->click("crash.notice.dismiss"));
+        a.root->frame(false);
+        auto listing = diagnostics::listReports(dir);
+        REQUIRE(listing);
+        CHECK_FALSE(diagnostics::restartNotice(*listing));
+    }
+    SUBCASE("a report still being written is not announced") {
+        // The worker of that run still holds its marker: its report is not yet one.
+        const std::string held = "00000000000000000000000000000009";
+        REQUIRE(diagnostics::writeSampleReport(held, dir));
+        auto marker = std::ofstream(dir / (held + ".run"));  // an empty marker: being created
+        marker.close();
+        NoticeShell s(a);
+        CHECK_FALSE(a.root->find("crash.notice")->visibleInTree());
+    }
 }

@@ -2230,7 +2230,19 @@ status line displays detection, preparation and command errors.
 
 ## Crash reports and safe startup (ADR-0083; staged)
 
+**Restart notice (topic 7b; delivered).** When an earlier run ended unexpectedly and the user has
+not yet seen it, a banner (`crash.notice`) sits under the transport, above the arrangement: one
+plain statement (`crash.notice.text`) and Dismiss (`crash.notice.dismiss`). It is not modal, takes
+no focus and blocks nothing; recovery (ADR-0078) is its own offer and may show at the same time.
+The text is the diagnostics library's `restartNotice` (diagnostics.md, "Restart notice"): that the
+last run closed unexpectedly, naming the plug-in a report points at when it points at one
+(`fault_in_image` or `active_token` only), or saying that no report was written; how many earlier
+closes the same Dismiss covers; and that nothing was sent anywhere. Dismiss acknowledges every
+incident the banner covered and hides it; no report or marker is deleted. The banner reads the
+folder once, at start. It is hidden, not built, when there is nothing to say, and under `--workdir`
+it reads `<workdir>/diagnostics`. Wording is provisional (P12).
+
 Before loading an explicit project or any suspect binary, later startup UI will
-show a local-report notice and temporary dedicated-bridge/disabled/normal choice,
-remembered only on opt-in. Then offer existing recovery independently. No upload
+show a temporary dedicated-bridge/disabled/normal choice, remembered only on opt-in
+(topic 7d). Then offer existing recovery independently. No upload
 or global OS-reporting changes. See diagnostics.md and STATUS for delivery scope.

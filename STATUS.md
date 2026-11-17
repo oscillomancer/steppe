@@ -1606,6 +1606,8 @@ recorded at all, and one before it leaves the marker with no report. The watcher
 them. An application can list and read earlier runs' reports, acknowledge them and delete them
 (`supple/diagnostics/reports.h`, tolerant of kinds and fields of a newer build; a report counts
 only once its run's marker is released; a run that ended with no report is listed as unreported).
-Agents reach it through the `crash.*` commands (list, read, acknowledge, delete, clear); the restart notice, the viewer
-and safe-load are the next steps of topic 7. Stale run markers stay until the user deletes the run. Native macOS/Windows CI and
+Agents reach it through the `crash.*` commands (list, read, acknowledge, delete, clear). The GUI shows a restart
+notice (a banner under the transport, Dismiss acknowledges; wording provisional) and a headless service says the same
+on stderr at start; the viewer and safe-load are the next steps of topic 7. The notice reads the reports once at
+start, synchronously (up to 20 reports of at most 4 MiB each). Stale run markers stay until the user deletes the run. Native macOS/Windows CI and
 signed Mach capability/collector-loss tests are due before merge/release.

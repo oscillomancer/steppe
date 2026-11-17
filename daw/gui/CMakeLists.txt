@@ -80,7 +80,7 @@ supple_add_library(gui-persistence SOURCES app/ui_persistence.cpp
 target_include_directories(gui-persistence PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/app)
 
 # The app's pieces (shell, generator, actions UI, chrome), shared with tests.
-add_library(gui-app STATIC app/shell.cpp app/generate.cpp app/app_actions.cpp app/actions_list.cpp app/chrome.cpp
+add_library(gui-app STATIC app/shell.cpp app/crash_banner.cpp app/generate.cpp app/app_actions.cpp app/actions_list.cpp app/chrome.cpp
   app/plugin_windows.cpp app/floating_panel.cpp app/screensets.cpp app/file_actions.cpp app/midi_editor.cpp app/routing_matrix.cpp app/hardware_audio_matrix.cpp app/strip_learn.cpp app/pan_menu.cpp app/mixer.cpp
   app/fx_params.cpp app/plugin_browser.cpp app/fx_window.cpp app/render_dialog.cpp app/history_panel.cpp app/transport_bar.cpp app/plugin_scales.cpp
   app/midi_event_list.cpp app/appearance.cpp app/track_menu.cpp app/mouse_dialog.cpp app/selection_edit.cpp app/preferences.cpp app/audio_device.cpp app/timecode_dialog.cpp app/sync_dialog.cpp
@@ -89,7 +89,7 @@ add_library(gui-app STATIC app/shell.cpp app/generate.cpp app/app_actions.cpp ap
   app/rack_window.cpp)
 target_include_directories(gui-app PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/app)
 target_link_libraries(gui-app PUBLIC supple::gui-persistence supple::gui-service-watcher supple::gui-actions supple::gui-views supple::gui-ui supple::gui-platform
-                      supple::engine supple::control-protocol supple::core-params supple::product-info SDL3::SDL3)
+                      supple::engine supple::diagnostics supple::control-protocol supple::core-params supple::product-info SDL3::SDL3)
 supple_target_defaults(gui-app)
 
 add_executable(${PRODUCT_SLUG} app/main.cpp)

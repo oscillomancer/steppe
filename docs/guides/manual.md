@@ -1269,7 +1269,10 @@ Crash diagnostics are being added separately from autosave and recording recover
 Reports remain on this machine under the app’s local data folder/diagnostics,
 limited to 20 reports or 50 MB, oldest removed. They exclude your project, audio,
 MIDI and command arguments. Steppe never uploads them; your OS crash reporting
-continues under your own OS settings. An agent connected over MCP can list, read,
+continues under your own OS settings. After an unexpected close, the next start shows a
+banner under the transport that says so (naming the plug-in the report points at, when it
+points at one, or saying no report was written); Dismiss hides it for good. It is a note,
+not a question, and project recovery is offered separately. An agent connected over MCP can list, read,
 acknowledge and delete these reports (`crash.list`, `crash.read`, `crash.acknowledge`,
 `crash.delete`, `crash.clear`); a report names plug-ins and commands, never project
 content. Safe-load and next-start notices arrive in a later topic; the current delivery

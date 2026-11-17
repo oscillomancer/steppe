@@ -3,6 +3,7 @@
 #include "shell.h"
 #include <supple/model/groups.h>
 
+#include "crash_banner.h"
 #include "pan_menu.h"
 #include "plugin_scales.h"
 #include "strip_learn.h"
@@ -113,6 +114,8 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
     transport_->setFollow(
         [this] { return arrange_ ? arrange_->follow() : views::Follow::Page; });  // ui.follow.*
     shell->add(transport_->build());
+    // Under the transport: the restart notice, when the last run ended unexpectedly.
+    shell->add(std::make_unique<CrashBanner>(app_.diagnosticsDir()));
     // The playrate's menu leads here: open in its place.
     actions.addUi("ui.master.envelopes", "Master: envelopes",
                   [this] { openEnvelopeMenu(model::kMaster, transport_->rateAnchor()); });
