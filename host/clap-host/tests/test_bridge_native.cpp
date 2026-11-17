@@ -19,11 +19,13 @@
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
+#include <optional>
 #include <ostream>
 #include <thread>
 #include <vector>
 #include "../src/bridge_client.h"
 #include "../src/bridge_protocol.h"
+#include "lifecycle_gate.h"
 #include "process_pause.h"
 using namespace supple;
 using namespace supple::host;
@@ -580,4 +582,49 @@ TEST_CASE("native missing bridge executable preserves the structured host error"
     REQUIRE_FALSE(remote);
     CHECK(remote.error().code == "host.bridge");
     CHECK_FALSE(remote.error().hint.empty());
+}
+
+TEST_CASE("abandoning a bridge returns a call waiting on it from another thread") {
+    // ADR-0090 (review round 34): a stopped offline render kills its own
+    // bridges from a watch thread. The gain holds the call at a gate; the
+    // instance's deadline is 60 s, so only the abandonment can end the wait
+    // within the test, and the failure says which did.
+    setBridgeExecutable(BRIDGE_PATH);
+    using supple::test::GatedCall;
+    for (const GatedCall call : {GatedCall::Activate, GatedCall::Process}) {
+        const bool activating = call == GatedCall::Activate;
+        CAPTURE(activating);
+        std::optional<supple::test::LifecycleGate> gate(std::in_place, call);
+        REQUIRE(gate->mapped());
+        auto remote = Instance::create(nativePlugin(FIXTURE_CLAP_PATH, "com.suppleaudio.test.gain"),
+                                       {}, true);
+        REQUIRE(remote);
+        gate->hide();
+        Instance& gain = **remote;
+        gain.setCallDeadlineMs(60'000);
+        std::thread watch([&] {
+            if (gate->entered()) gain.abandonBridge();
+        });
+        Audio audio;
+        audio.left.fill(0.25f);
+        audio.right.fill(0.25f);
+        if (activating) {
+            // A control request: its socket closes.
+            CHECK_FALSE(gain.activate(48000, 1, 64));
+        } else {
+            // A data-plane wait: it sees the bridge failed at its next step.
+            REQUIRE(gain.activate(48000, 1, 64));
+            REQUIRE(gain.startProcessing());
+            CHECK(gain.process(audio.block()));
+            CHECK(std::all_of(audio.outLeft.begin(), audio.outLeft.end(),
+                              [](float v) { return v == 0; }));
+        }
+        watch.join();
+        REQUIRE(gate->entered());
+        CHECK_FALSE(gate->passed());
+        CHECK(gain.failed());
+        CHECK(gain.failure().find("the host abandoned the plugin's bridge") != std::string::npos);
+        CHECK(gain.callDeadlineMs() == 60'000);
+        gate.reset();
+    }
 }

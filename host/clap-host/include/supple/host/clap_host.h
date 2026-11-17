@@ -426,6 +426,14 @@ class Instance {
     // in process; callDeadlineMs() is then 0.
     void setCallDeadlineMs(int ms);
     int callDeadlineMs() const;
+    // Bridged: kills this instance's bridge now, from any thread, and fails
+    // every instance in it; failure() says the host abandoned it. A call
+    // waiting on it off the callback, on any thread, returns within one wait
+    // step (10 ms), and a control request as its socket closes. For work
+    // that no longer wants the answer and owns every instance in the bridge,
+    // such as a stopped offline render with its own pool (ADR-0090). No
+    // effect in process.
+    void abandonBridge();
     // Bridged: its bridge's audio thread was refused the scheduling class the
     // last audio-thread call asked for (ADR-0026, ADR-0081); false in process.
     bool bridgeThreadRefused() const;

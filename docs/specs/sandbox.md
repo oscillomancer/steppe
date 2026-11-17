@@ -353,6 +353,11 @@ sets 60 s on its instances while it runs, ADR-0090), and otherwise the
 process-wide `host::setBridgeDeadlineMs` (2000 ms by default, at least 1).
 The instance's own is atomic and may be set from any thread at any time; a
 wait already under way keeps the deadline it began with.
+`Instance::abandonBridge` kills an instance's bridge from any thread, for a
+user that no longer wants its answers and owns every instance in it (a
+stopped offline render): the bridge is failed first, as abandoned, so a
+wait on it off the callback returns at its next 10 ms step and a control
+request as its socket closes.
 The engine tests raise the process-wide one to 60 s for the whole binary
 (`bridge_patience.cpp`), so a stall of a loaded machine never decides a
 bit-identity comparison of live renders; the tests of the deadline itself

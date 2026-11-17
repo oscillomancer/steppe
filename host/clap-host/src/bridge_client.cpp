@@ -402,6 +402,12 @@ void BridgeProcess::killBridge() {
     if (child_) child_->kill();
 }
 
+void BridgeProcess::abandon() {
+    // Failed first, so a wait that wakes sees why before it sees the death.
+    fail(kAbandoned);
+    killBridge();
+}
+
 // Main thread: observes exit without reaping the helper-owned leader.
 void BridgeProcess::reap() {
     if (pid_ <= 0) return;
@@ -431,6 +437,7 @@ std::string BridgeProcess::failure() const {
     const int s = failSignal_.load();
     if (s == kProtocolViolation) return "the plugin bridge violated the output-event protocol";
     if (s == kHung) return "the plugin stopped responding and its bridge was killed";
+    if (s == kAbandoned) return "the host abandoned the plugin's bridge and killed it";
 #if defined(_WIN32)
     if (s != 0 && s != -1)
         return "the plugin bridge exited (Windows status " +
@@ -1026,6 +1033,8 @@ bool RemoteInstance::answered(std::uint32_t req, Cmd cmd) SUPPLE_RT {
         signals_.wait(hdr_->done, seen, 10, true);
 #endif
         if (hdr_->done.load(std::memory_order_acquire) == req) return true;
+        // Abandoned (or failed by any other thread): nothing waits for it.
+        if (process_->failed()) return false;
         if (!process_->alive()) {
             process_->fail(-1);  // the signal is read when the main thread reaps it
             return false;
