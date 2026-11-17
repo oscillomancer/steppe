@@ -11,6 +11,7 @@
 #include "supple/product.h"
 #include "terminal.h"
 #include "trace.h"
+#include "watch.h"
 namespace supple::diagnostics {
 namespace detail {
 bool valid(const Packet& p) {
@@ -50,6 +51,9 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
         ready.code = marker && *marker >= 0 ? 0U : 1U;
         if (ready.code) std::fputs("local diagnostic marker unavailable\n", stderr);
         (void)publish(native, ready);
+        // From here a supervisor that disappears without the "collector failed" notice is a
+        // launcher's stop, and the program stops as if it had been sent SIGTERM (ADR-0091).
+        startSupervisorWatch(native);
         const int code = main(argc, argv);  // no catch/unwind on an unexpected exception
         Packet expected = boot;
         expected.kind = Message::Expected;
@@ -88,6 +92,7 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
             ownsMarker = !markerUnavailable;
         }
         if (packet.kind == Message::Expected) expected = packet.code;
+        if (const auto hook = supervisorHook()) hook(packet);  // tests only
         if (packet.kind == Message::Terminal) {
             terminal = packet;
             hasTerminal = true;

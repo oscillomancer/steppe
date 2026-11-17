@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include <fcntl.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <spawn.h>
 #include <sys/select.h>
@@ -29,6 +30,8 @@ volatile sig_atomic_t supervisedPid = 0;
 void forwardSignal(int signal) {
     if (supervisedPid > 0) (void)::kill(supervisedPid, signal);
 }
+// The supervisor's end of the channel, for its fatal handlers (ADR-0091); -1 when none.
+volatile sig_atomic_t noticeChannel = -1;
 Error failure() {
     return Error("diagnostics.bootstrap", "cannot prepare private supervision", {},
                  "continue without diagnostics; check process resource limits");
@@ -39,6 +42,20 @@ int noSignal() {
 #else
     return 0;
 #endif
+}
+// The supervisor's fatal handler (ADR-0091): one byte, "collector failed", to the worker, then
+// the death the signal would have caused. Everything here is async-signal-safe. SA_RESETHAND
+// has put the default action back, so the raise is the signal's own end.
+void collectorFailed(int signal, siginfo_t*, void*) {
+    const int fd = noticeChannel;
+    const char notice = 'F';
+    if (fd >= 0) (void)::send(fd, &notice, 1, noSignal() | MSG_DONTWAIT);
+    sigset_t one;
+    (void)sigemptyset(&one);
+    (void)sigaddset(&one, signal);
+    (void)::pthread_sigmask(SIG_UNBLOCK, &one, nullptr);
+    (void)::raise(signal);
+    ::_exit(128 + signal);  // only if the re-raise did not end the process
 }
 bool packetRead(int fd, Packet& packet, bool bootstrap = false) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
@@ -145,6 +162,7 @@ Result<Native> launch(int argc, char** argv, const Packet& boot) {
     (void)::sigaction(SIGINT, &forward, nullptr);
     (void)::sigaction(SIGTERM, &forward, nullptr);
     Native native{pair[0], child};
+    announceCollectorFailure(native);
     return native;  // never kill a healthy worker for collector failure
 }
 Result<Native> adopt(std::string_view value, Packet& boot) {
@@ -304,9 +322,66 @@ int wait(Native& native, bool& fatal, std::optional<std::uint32_t> expected) {
                                : WEXITSTATUS(native.status);
 }
 void close(Native& native) {
+    // The supervisor is done with the worker: a late fatal signal has no one to tell, and the
+    // descriptor number may be someone else's by then.
+    if (noticeChannel == native.channel) noticeChannel = -1;
     if (native.channel >= 0) ::close(static_cast<int>(native.channel));
     native.channel = -1;
 }
+void announceCollectorFailure(const Native& native) noexcept {
+    // The handlers run on an alternate stack, so the notice goes out even when the supervisor's
+    // own stack is what ran out. A stack the process already enabled stays.
+    static char alternate[64 * 1024] __attribute__((aligned(16)));
+    stack_t current{};
+    if (::sigaltstack(nullptr, &current) == 0 && (current.ss_flags & SS_DISABLE)) {
+        stack_t replacement{};
+        replacement.ss_sp = alternate;
+        replacement.ss_size = sizeof(alternate);
+        (void)::sigaltstack(&replacement, nullptr);
+    }
+    noticeChannel = static_cast<int>(native.channel);
+    // The worker's own set. A signal someone else already handles (a sanitizer) stays theirs.
+    for (const int signal : {SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT}) {
+        struct sigaction prior{}, action{};
+        if (::sigaction(signal, nullptr, &prior) != 0 || prior.sa_handler != SIG_DFL) continue;
+        action.sa_sigaction = collectorFailed;
+        action.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESETHAND;
+        (void)sigemptyset(&action.sa_mask);
+        (void)::sigaction(signal, &action, nullptr);
+    }
+}
+SupervisorEnd awaitSupervisorEnd(const Native& native) noexcept {
+    const int fd = static_cast<int>(native.channel);
+    if (fd < 0) return SupervisorEnd::Unknown;
+    for (;;) {
+        pollfd item{fd, POLLIN, 0};
+        if (::poll(&item, 1, -1) < 0) {
+            if (errno == EINTR) continue;
+            return SupervisorEnd::Unknown;
+        }
+        if (item.revents & POLLNVAL) return SupervisorEnd::Unknown;
+        // A peek, with a per-call flag: the byte stays where the terminal handler's wait can
+        // see it, and the descriptor's blocking mode (which a capsule transfer changes on
+        // this same open file description) decides nothing.
+        char byte = 0;
+        const ssize_t n = ::recv(fd, &byte, 1, MSG_PEEK | MSG_DONTWAIT);
+        if (n > 0) return byte == 'F' ? SupervisorEnd::Collector : SupervisorEnd::Unknown;
+        if (n == 0) return SupervisorEnd::Launcher;
+        if (errno == EINTR) continue;
+        // A supervisor killed with packets of ours unread leaves a reset, not a clean end.
+        if (errno == ECONNRESET || errno == ENOTCONN || errno == EPIPE)
+            return SupervisorEnd::Launcher;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            // Readable but nothing to read, again and again, would be a spin; hangup or
+            // error with no way to tell which is not a reason to stop the program.
+            if (item.revents & (POLLHUP | POLLERR)) return SupervisorEnd::Unknown;
+            continue;
+        }
+        return SupervisorEnd::Unknown;
+    }
+}
+void requestStop() noexcept { (void)::kill(::getpid(), SIGTERM); }
+void hardExit() noexcept { ::_exit(128 + SIGTERM); }
 void closeProtocolStdio() {
     ::close(STDIN_FILENO);
     ::close(STDOUT_FILENO);

@@ -298,6 +298,7 @@ bool installTerminal(Native native, const Packet& boot) {
     return installed;
 #endif
 }
+bool terminalBegun() noexcept { return claimed.load(std::memory_order_relaxed) != 0; }
 #if defined(_WIN32)
 bool lastChanceFilterInstalled() {
     const auto current = SetUnhandledExceptionFilter(nullptr);

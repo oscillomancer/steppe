@@ -2,6 +2,8 @@
 // Copyright (c) 2026 Supple Audio
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -9,9 +11,11 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include "../src/terminal.h"
 #include "../src/trace.h"
+#include "../src/watch.h"
 #include "supple/base/rt.h"
 #include "supple/diagctx/scope.h"
 #include "supple/diagctx/table.h"
@@ -29,6 +33,7 @@
 #else
 #include <sys/mman.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
 #include <unistd.h>
 #include <cerrno>
 #include <csignal>
@@ -217,6 +222,60 @@ LONG WINAPI priorFilter(EXCEPTION_POINTERS*) {
     return filterResumes ? EXCEPTION_CONTINUE_EXECUTION : EXCEPTION_CONTINUE_SEARCH;
 }
 #endif
+// The supervisor watch (ADR-0091). The program's stop is a SIGTERM handler that sets a flag,
+// as the model loop's does; the body reports what the watcher concluded, in lines a test
+// can read, and then either takes the stop or carries on.
+std::atomic<bool> stopRequested{false};
+void onStop(int) { stopRequested.store(true); }
+int watchBody(const std::string& mode, int channel = -1) {
+    namespace detail = supple::diagnostics::detail;
+    std::signal(SIGTERM, onStop);
+#if defined(_WIN32)
+    std::cout << GetCurrentProcessId() << std::endl;
+#else
+    std::cout << ::getpid() << std::endl;
+#endif
+    detail::SupervisorEnd end;
+    while ((end = detail::supervisorEnd()) == detail::SupervisorEnd::Pending)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    std::cout << "decision " << detail::supervisorEndName(end) << std::endl;
+    if (end == detail::SupervisorEnd::Launcher) {
+        while (!stopRequested.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        std::cout << "stop requested" << std::endl;
+        // A stop that never finishes: only the bound ends this process.
+        if (mode == "supervisor-killed-hung")
+            for (;;) std::this_thread::sleep_for(std::chrono::seconds(1));
+        std::cout << "stopped" << std::endl;
+        return 0;
+    }
+#if !defined(_WIN32)
+    // On a channel the test holds (watch-direct): the watcher must have left the first byte
+    // where it was, for the terminal handler's wait to see.
+    char pending = 0;
+    if (channel >= 0 && ::recv(channel, &pending, 1, MSG_DONTWAIT) == 1) {
+        char text[16];
+        std::snprintf(text, sizeof(text), "pending %02x", static_cast<unsigned char>(pending));
+        std::cout << text << std::endl;
+    }
+#else
+    (void)channel;
+#endif
+    std::string line;
+    std::getline(std::cin, line);
+    if (mode == "fault-after-loss") actualFault();
+    std::cout << line << std::endl;
+    return 0;
+}
+// Crashes the supervisor once the worker's Ready packet is in: a fault, or an abort.
+void crashSupervisorByFault(const supple::diagnostics::detail::Packet& packet) {
+    if (packet.kind == supple::diagnostics::detail::Message::Ready) actualFault();
+}
+void crashSupervisorByStack(const supple::diagnostics::detail::Packet& packet) {
+    if (packet.kind == supple::diagnostics::detail::Message::Ready) (void)exhaustStack();
+}
+void crashSupervisorByAbort(const supple::diagnostics::detail::Packet& packet) {
+    if (packet.kind == supple::diagnostics::detail::Message::Ready) std::abort();
+}
 int body(int argc, char** argv) {
     if (argc < 3) return 2;
     const std::string mode = argv[2];
@@ -470,7 +529,10 @@ int body(int argc, char** argv) {
     // The product passes stdin and stdout through byte for byte, and these modes are how a
     // test shows it, so they read and write in binary: the Windows C runtime's text mode
     // would turn every "\n" written into "\r\n" and say nothing about the supervisor.
-    if (mode == "echo" || mode == "collector-loss" || mode == "fault-after-loss") {
+    const bool watching = mode == "collector-loss" || mode == "collector-loss-abort" ||
+                          mode == "collector-loss-stack" || mode == "fault-after-loss" ||
+                          mode == "supervisor-killed" || mode == "supervisor-killed-hung";
+    if (mode == "echo" || watching) {
 #if defined(_WIN32)
         (void)_setmode(_fileno(stdin), _O_BINARY);
         (void)_setmode(_fileno(stdout), _O_BINARY);
@@ -481,18 +543,7 @@ int body(int argc, char** argv) {
         std::cout << std::cin.rdbuf();
         return 0;
     }
-    if (mode == "collector-loss" || mode == "fault-after-loss") {
-#if defined(_WIN32)
-        std::cout << GetCurrentProcessId() << std::endl;
-#else
-        std::cout << ::getpid() << std::endl;
-#endif
-        std::string line;
-        std::getline(std::cin, line);
-        if (mode == "fault-after-loss") actualFault();
-        std::cout << line << std::endl;
-        return 0;
-    }
+    if (watching) return watchBody(mode);
     return 2;
 }
 }  // namespace
@@ -519,6 +570,27 @@ int main(int argc, char** argv) {
         return 9;
     }
 #endif
+#if !defined(_WIN32)
+    // The watcher on a channel the test holds the other end of: it must call end of file
+    // the launcher's stop, and anything else (the notice, or a byte nobody sends) not.
+    if (std::string_view(argv[2]) == "watch-direct" && argc == 4) {
+        supple::diagnostics::detail::Native native{std::atoi(argv[3])};
+        supple::diagnostics::detail::startSupervisorWatch(native);
+        std::cout << "ready" << std::endl;
+        return watchBody("watch-direct", std::atoi(argv[3]));
+    }
+#endif
+    {
+        const std::string_view mode = argv[2];
+        if (mode == "collector-loss" || mode == "fault-after-loss")
+            supple::diagnostics::detail::setSupervisorHook(crashSupervisorByFault);
+        if (mode == "collector-loss-stack")
+            supple::diagnostics::detail::setSupervisorHook(crashSupervisorByStack);
+        if (mode == "collector-loss-abort")
+            supple::diagnostics::detail::setSupervisorHook(crashSupervisorByAbort);
+        if (mode == "supervisor-killed-hung")
+            supple::diagnostics::detail::setStopBound(std::chrono::milliseconds(300));
+    }
 #if !defined(_WIN32)
     if (std::string_view(argv[2]) == "handled") std::signal(SIGSEGV, priorSignal);
 #endif

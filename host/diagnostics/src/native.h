@@ -73,6 +73,24 @@ inline bool windowsFatalStatus(std::uint32_t code, std::optional<std::uint32_t> 
     return (!expected || *expected != code) && (code & 0xc0000000U) == 0xc0000000U;
 }
 int wait(Native& native, bool& fatal, std::optional<std::uint32_t> expected = {});
+// What a worker concluded when its supervisor went away (ADR-0091). Pending until it has
+// looked. Collector: the supervisor's own fatal handler said "collector failed" first, so
+// the worker keeps running. Launcher: the supervisor vanished without saying so (SIGKILL,
+// TerminateProcess, a launcher's hard kill), which is a stop request. Unknown: the channel
+// showed something else, or a terminal handler is already running; the worker does nothing.
+enum class SupervisorEnd : std::uint8_t { Pending, Collector, Launcher, Unknown };
+// Worker side. Parks the calling thread until the supervisor has gone away or the channel
+// shows anything else, and says which. Never consumes a byte from the channel and never
+// depends on the descriptor's blocking mode. Never returns Pending.
+SupervisorEnd awaitSupervisorEnd(const Native& native) noexcept;
+// Supervisor side. Installs the supervisor's own fatal handlers: each tells the worker
+// "collector failed" and then lets the process die as it would have. Once, after launch.
+void announceCollectorFailure(const Native& native) noexcept;
+// Worker side. What a launcher's stop does: the same as a forwarded SIGTERM (POSIX
+// `kill(getpid(), SIGTERM)`, Windows `raise(SIGTERM)`), and the hard end after the bound
+// (`_exit(128 + SIGTERM)`, `TerminateProcess`). Neither runs a crash handler.
+void requestStop() noexcept;
+[[noreturn]] void hardExit() noexcept;
 void close(Native& native);
 void closeProtocolStdio();
 std::uint64_t pid();

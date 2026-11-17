@@ -13,6 +13,7 @@
 #include <io.h>
 #include <shellapi.h>
 #include <atomic>
+#include <csignal>
 #include <cstdio>
 #include <new>
 namespace supple::diagnostics::detail {
@@ -21,6 +22,10 @@ struct Shared {
     Packet boot;
     std::atomic<std::uint32_t> ready{0};
     Packet messages[3];  // immutable after each release publication
+    // Set by the supervisor's own fatal handlers before it dies (ADR-0091). The worker reads
+    // it after the supervisor's process handle signals: set means collector loss, clear
+    // means the supervisor was ended from outside.
+    std::atomic<std::uint32_t> collectorFailed{0};
 };
 static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
 HANDLE handle(std::intptr_t value) { return reinterpret_cast<HANDLE>(value); }
@@ -45,6 +50,19 @@ Error failure() {
     return Error("diagnostics.bootstrap", "cannot prepare private supervision", {},
                  "continue without diagnostics; check process resource limits");
 }
+// The supervisor's side of ADR-0091: its fatal paths set one flag in the shared block. One
+// atomic store each, nothing else, then the death the fault would have caused.
+std::atomic<Shared*> noticeShared{nullptr};
+LPTOP_LEVEL_EXCEPTION_FILTER priorNoticeFilter = nullptr;
+void noteCollectorFailure() noexcept {
+    if (auto* shared = noticeShared.load(std::memory_order_acquire))
+        shared->collectorFailed.store(1, std::memory_order_release);
+}
+LONG WINAPI noticeFilter(EXCEPTION_POINTERS* exception) {
+    noteCollectorFailure();
+    return priorNoticeFilter ? priorNoticeFilter(exception) : EXCEPTION_CONTINUE_SEARCH;
+}
+void noticeAbort(int) { noteCollectorFailure(); }  // the runtime ends the process after it
 }  // namespace
 std::uint64_t pid() { return GetCurrentProcessId(); }
 Result<std::string> incidentId() {
@@ -155,6 +173,7 @@ Result<Native> launch(int, char**, const Packet& boot) {
 
     CloseHandle(process.hThread);
     // No kill-on-close Job: collector loss must leave the healthy app alive.
+    announceCollectorFailure(n);
     return n;
 }
 Result<Native> adopt(std::string_view text, Packet& boot) {
@@ -226,10 +245,38 @@ int wait(Native& n, bool& fatal, std::optional<std::uint32_t> expected) {
     return static_cast<int>(code);
 }
 void close(Native& n) {
+    // A late fatal exception must not write to a view that is gone.
+    Shared* mapped = static_cast<Shared*>(n.shared);
+    noticeShared.compare_exchange_strong(mapped, nullptr);
     if (n.shared) UnmapViewOfFile(n.shared);
     for (auto value : {n.channel, n.process, n.event, n.ack})
         if (value != -1 && handle(value)) CloseHandle(handle(value));
     n = {};
+}
+void announceCollectorFailure(const Native& n) noexcept {
+    noticeShared.store(static_cast<Shared*>(n.shared), std::memory_order_release);
+    // Room for the filter to run when the supervisor's own stack is what ran out.
+    ULONG guarantee = 64 * 1024;
+    (void)SetThreadStackGuarantee(&guarantee);
+    priorNoticeFilter = SetUnhandledExceptionFilter(noticeFilter);
+    const auto old = std::signal(SIGABRT, noticeAbort);
+    if (old != SIG_DFL) std::signal(SIGABRT, old);  // someone else's handler stays
+}
+SupervisorEnd awaitSupervisorEnd(const Native& n) noexcept {
+    if (!n.shared || n.process == -1 || !handle(n.process)) return SupervisorEnd::Unknown;
+    // In a worker `process` is its supervisor: a SYNCHRONIZE duplicate the supervisor made of
+    // itself, whose process id adopt() checked against the boot packet, so it cannot be a
+    // reused id. It signals after the supervisor is gone, and then the flag has its final value.
+    if (WaitForSingleObject(handle(n.process), INFINITE) != WAIT_OBJECT_0)
+        return SupervisorEnd::Unknown;
+    const auto& shared = *static_cast<Shared*>(n.shared);
+    return shared.collectorFailed.load(std::memory_order_acquire) ? SupervisorEnd::Collector
+                                                                  : SupervisorEnd::Launcher;
+}
+void requestStop() noexcept { (void)std::raise(SIGTERM); }
+void hardExit() noexcept {
+    TerminateProcess(GetCurrentProcess(), 128 + SIGTERM);
+    for (;;) Sleep(INFINITE);  // TerminateProcess does not return for the calling process
 }
 void closeProtocolStdio() {
     _close(0);

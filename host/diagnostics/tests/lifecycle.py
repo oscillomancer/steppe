@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (c) 2026 Supple Audio
-import contextlib, json, os, pathlib, re, subprocess, sys, tempfile, signal, traceback
+import contextlib, json, os, pathlib, re, subprocess, sys, tempfile, signal, threading, traceback
 binary=sys.argv[1]
 sanitized=len(sys.argv)>2 and bool(sys.argv[2])
 resolver=sys.argv[3] if len(sys.argv)>3 and sys.argv[3] else None
@@ -170,21 +170,113 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
                     out,err=bad.communicate(timeout=30)
                     assert bad.returncode==7,(bad.returncode,err)
                 finally: parent.close();child.close()
+    # The worker's watch on its supervisor (ADR-0091). Each section is decided by what
+    # happened (what the worker concluded, whether it stopped, whether it is gone), never by
+    # how long anything took; the 30-second limits only end a run that hangs.
+    def worker_gone(pid):
+        # POSIX only (Windows has the end of the worker's output, which closes with it). The
+        # worker is an orphan by now and init reaps it, a moment after its output closes; the
+        # limit only ends a run where it never goes.
+        if os.name=="nt": return True
+        import time
+        for _ in range(3000):
+            try: os.kill(pid,0)
+            except ProcessLookupError: return True
+            except PermissionError: return False
+            time.sleep(0.01)
+        return False
+    @contextlib.contextmanager
+    def watchdog(p,worker):
+        # Ends a run whose worker hangs: reads of its output then return and the checks fail.
+        def end():
+            if os.name!="nt":
+                with contextlib.suppress(ProcessLookupError): os.kill(worker,signal.SIGKILL)
+            with contextlib.suppress(Exception): p.kill()
+        timer=threading.Timer(30,end);timer.start()
+        try: yield
+        finally: timer.cancel()
+    def read_until_eof(p,worker):
+        try: return p.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            if os.name!="nt":
+                with contextlib.suppress(ProcessLookupError): os.kill(worker,signal.SIGKILL)
+            p.kill(); p.communicate()
+            raise AssertionError("the worker did not end")
+    def spawn(mode):
+        root=base/mode/"app"/"diagnostics"
+        p=subprocess.Popen([binary,str(root),mode],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        return p,int(p.stdout.readline())
     with check('collector-loss'):
-        # A watchdog may abort these fixtures, but no elapsed-time threshold decides
-        # a successful result. Both paths must reach EOF with collector already dead.
-        for mode in ("collector-loss","fault-after-loss"):
-            root=base/mode/"app"/"diagnostics"
-            p=subprocess.Popen([binary,str(root),mode],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-            worker=int(p.stdout.readline())
+        # The supervisor crashes by itself (its own fatal handler says "collector failed"
+        # first): the worker must go on running and serving, with no collector. The old
+        # reading of this, a supervisor killed from outside, is the next section. Sanitizer
+        # builds keep their own fatal handlers, so the supervisor there says nothing.
+        if not sanitized:
+            # collector-loss-stack: the supervisor's own stack runs out, which only a handler on
+            # an alternate stack can still report (POSIX; Windows is a stated known limit).
+            for mode in ("collector-loss","collector-loss-abort","fault-after-loss")+(("collector-loss-stack",) if os.name!="nt" else ()):
+                p,worker=spawn(mode)
+                try:
+                    with watchdog(p,worker):
+                        assert p.stdout.readline()==b"decision collector\n",mode
+                        # the supervisor died of its own crash, not of a kill from outside
+                        status=p.wait(timeout=30)
+                        assert status!=0 and (os.name=="nt" or status in (-signal.SIGSEGV,-signal.SIGABRT)),(mode,status)
+                        p.stdin.write(b"worker survived\n");p.stdin.flush();p.stdin.close();p.stdin=None
+                        output,errors=read_until_eof(p,worker)
+                        if mode=="fault-after-loss": assert output==b"",(mode,output)
+                        else: assert output==b"worker survived\n",(mode,output)
+                finally:
+                    p.stdout.close();p.stderr.close()
+    for name,mode,lines in (
+            ("supervisor-killed","supervisor-killed",b"decision launcher\nstop requested\nstopped\n"),
+            ("supervisor-killed-hung","supervisor-killed-hung",b"decision launcher\nstop requested\n")):
+        with check(name):
+            # The supervisor ends with no notice, as a launcher's hard kill leaves it (SIGKILL;
+            # TerminateProcess on Windows, which is what p.kill() does there): the worker takes
+            # the stop path a SIGTERM takes and is gone. The hung variant has a worker whose
+            # stop never finishes: it is ended within the bound (the fixture shortens it to
+            # 300 ms), and the test passes by the worker being gone.
+            p,worker=spawn(mode)
             try:
-                p.kill();p.wait(timeout=30)
-                p.stdin.write(b"worker survived\n");p.stdin.flush();p.stdin.close();p.stdin=None
-                output,errors=p.communicate(timeout=30)
-                if mode=="collector-loss": assert output==b"worker survived\n",output
-                else: assert output==b"",output
+                with watchdog(p,worker):
+                    p.kill();p.wait(timeout=30)
+                    output,errors=read_until_eof(p,worker)
+                    assert output==lines,(output,errors)
+                    assert worker_gone(worker),worker
             finally:
                 p.stdout.close();p.stderr.close()
+    with check('watch-channel'):
+        if os.name!="nt":
+            # The watcher on a channel this test holds the other end of. End of file with
+            # nothing before it is the launcher's stop. The notice, or any other byte, ends
+            # the watching without a stop: it never consumes the byte and never spins on it.
+            import socket
+            for name,sent,expected in (
+                    ("end of file",b"",b"decision launcher\nstop requested\nstopped\n"),
+                    ("notice",b"F",b"decision collector\npending 46\ncontinued\n"),
+                    ("unexpected byte",b"X",b"decision unknown\npending 58\ncontinued\n"),
+                    ("acknowledgement",b"A",b"decision unknown\npending 41\ncontinued\n"),
+                    ("garbage",b"\x00\xff"*64,b"decision unknown\npending 00\ncontinued\n")):
+                parent,child=socket.socketpair()
+                p=None
+                try:
+                    root=base/("watch-"+name.replace(" ","-"))/"app"/"diagnostics"
+                    p=subprocess.Popen([binary,str(root),"watch-direct",str(child.fileno())],
+                        pass_fds=(child.fileno(),),stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+                    child.close()
+                    assert p.stdout.readline()==b"ready\n",name
+                    int(p.stdout.readline())  # the process id the body prints first
+                    if sent: parent.sendall(sent)
+                    parent.close()  # end of file follows whatever was sent
+                    try: out,err=p.communicate(b"continued\n",timeout=30)
+                    except subprocess.TimeoutExpired:
+                        p.kill();p.communicate();raise AssertionError(name+": hung")
+                    assert out==expected,(name,out,err)
+                    assert p.returncode==0,(name,p.returncode,err)
+                finally:
+                    parent.close();child.close()
+                    if p and p.poll() is None: p.kill();p.wait()
 
     with check('withheld-ack'):
         if os.name!="nt":
@@ -226,14 +318,17 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
             expected,raw,report=trace_run("trace")
             assert report["kind"]=="crash" and report["terminal_context"],report
             threads=report["threads"]
-            assert len(threads)==4,threads
+            # Four threads of the fixture and the supervisor watcher (ADR-0091), which is no
+            # registered thread: an `other` thread parked in the channel wait.
+            assert len(threads)==5,threads
+            assert [t["role"] for t in threads].count("other")==1,threads
             # Roles come from the process's execution table (topic 5): main registered itself
             # as the model thread, the parked workers as numbered audio workers, and the
             # faulting thread keeps "fault" and says what it was.
             assert [t["role"] for t in threads[:2]]==["fault","model"],threads
             assert threads[0]["registered"]=="audio_render" and "worker" not in threads[0],threads[0]
-            assert sorted((t["role"],t["worker"]) for t in threads[2:])==[("audio_background",1),("audio_live",2)],threads
-            assert [t["ordinal"] for t in threads]==[0,1,2,3]
+            assert sorted((t["role"],t["worker"]) for t in threads[2:] if t["role"]!="other")==[("audio_background",1),("audio_live",2)],threads
+            assert [t["ordinal"] for t in threads]==[0,1,2,3,4]
             assert not report["complete"]
             assert not re.search(r"\b%d\b"%expected["pid"],raw),"process id leaked"
             for forbidden in ("/proc","\"tid\"","\"pid\"","registers"):
@@ -258,6 +353,7 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
                 assert middle is not None and outer is not None and middle<outer,fault
                 assert not fault[0]["return"] and all(f["return"] for f in fault[1:]),fault
                 for t in threads[1:]:
+                    if t["role"]=="other": continue  # the supervisor watcher, parked in a wait
                     assert index(t["frames"],"parkOuter") is not None,t
                 assert all(t["stop"] in ("end","not_executable","bad_frame_pointer","depth","unreadable","cycle") for t in threads),threads
                 for t in threads:
@@ -311,13 +407,13 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
             expected,raw,report=trace_run("trace-scopes")
             assert report["kind"]=="crash" and report["terminal_context"],report
             threads=report["threads"]
-            assert len(threads)==5,threads
+            assert len(threads)==6,threads  # the five of the fixture and the supervisor watcher
             assert [t["role"] for t in threads[:2]]==["fault","model"],threads
             assert threads[0]["registered"]=="audio_render" and threads[0]["entry"]=="process",threads[0]
             restricted=yama_scope()>=2 and os.geteuid()!=0
             if not restricted:
                 assert threads[1]["entry"]=="params",threads[1]
-                entries={(t["role"],t.get("worker")):t.get("entry") for t in threads[2:]}
+                entries={(t["role"],t.get("worker")):t.get("entry") for t in threads[2:] if "entry" in t}
                 assert entries=={("audio_live",2):"reset",("audio_background",1):"library_open",("other",None):"gui"},threads
                 assert "plug-in entries" not in raw and "no thread read could be tied" not in raw,raw
             for forbidden in ("\"cell\"","generation","\"stack\""):

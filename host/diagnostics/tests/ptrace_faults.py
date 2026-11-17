@@ -95,25 +95,27 @@ def main():
 
         # PTRACE_INTERRUPT is refused for the other threads: they stay attached and
         # running, are reported as denied, and the worker's exit is still seen.
+        # The fixture has the fault thread, the model thread, two parked workers and the
+        # supervisor watcher (ADR-0091): five threads, three of them refused.
         threads, events = check("interrupt-fail", "interrupt refused")
-        assert len(threads) == 4, threads
-        assert len([e for e in events if "interrupt refused" in e]) == 2, events
+        assert len(threads) == 5, threads
+        assert len([e for e in events if "interrupt refused" in e]) == 3, events
         others = [t for t in threads if t["state"] == "unavailable"]
-        assert len(others) == 2 and all(t["reason"] == "ptrace_denied" and t["frames"] == [] for t in others), threads
+        assert len(others) == 3 and all(t["reason"] == "ptrace_denied" and t["frames"] == [] for t in others), threads
         assert threads[1]["role"] == "model" and threads[1]["state"] == "walked", threads
 
         # A thread dies while the collector holds it stopped (the worker's own hold
         # ran out): the walk finishes, the collector reaps what it can, and the
         # supervisor is not left waiting for a thread only it can reap.
         threads, events = check("walk-freeze", "leader is a zombie, walk resumes")
-        assert len(threads) == 4, threads
+        assert len(threads) == 5, threads
         assert all(t["state"] == "walked" or t["reason"] == "deadline" for t in threads), threads
 
         # The worker's main thread exits while the collector is attached to it: its exit
         # status must reach the supervisor from the collector, the thread is reported
         # as exited, and the other threads are cut at the deadline.
         threads, events = check("leader-exit", "leader is a zombie, collector resumes")
-        assert len(threads) == 4, threads
+        assert len(threads) == 5, threads
         main = [t for t in threads if t["role"] == "model"]
         assert len(main) == 1 and main[0]["state"] == "unavailable" and main[0]["reason"] == "thread_exited", threads
     return 0
