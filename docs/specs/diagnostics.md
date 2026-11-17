@@ -261,13 +261,15 @@ plug-in, module or MIT library links it. Two checks enforce that: `tools/license
 rejects an include of `supple/diagctx/` or a mention of the target in any file of the
 permissive tree (`plugins/`, `modules/`, the MIT libraries), which covers plug-ins built in
 isolation; and `cmake/LicenseIsolation.cmake` walks, at the end of configuration, the link
-graph of every target built from those directories and fails on one that reaches the
-library, directly or through another target. Today `diagnostics` and `engine` link it; clap-host and command-bus
-join in the steps that use it.
+graph of every library and module built from those directories and fails on one that reaches
+the library, directly or through another target (executables are not checked: a test tool
+that links the GPL host is a GPL combined work, not an MIT library). Today `diagnostics`,
+`engine` and `clap-host` link it; command-bus joins in the step that uses it.
 
-The table is one static, zero-filled, page-aligned block per process (25,632 bytes: a
-32-byte header, 256 thread slots of 32 bytes, 1,024 instance cells and a 64-entry command
-ring of 16 bytes each; the cells and ring are laid out now and used from later steps). It
+The table is one static, zero-filled, page-aligned block per process (74,816 bytes: a
+32-byte header, 256 thread slots of 32 bytes, 1,024 instance cells of 64 bytes, one cache
+line each, and a 64-entry command ring of 16 bytes; the ring is laid out now and used from a
+later step). It
 holds integers and enums only, never a string, a pointer into model or plug-in memory or
 anything a user typed, and carries a magic and a version. It is not in the binary's file
 image (it is `.bss`). The 256 slots are sized for the real maximum of owned threads: the
@@ -304,7 +306,9 @@ The report labels each thread with its role. The fault thread keeps `role: "faul
 adds `registered` with the role it was registered as; a thread of a numbered pool carries
 `worker` (1 to 65535) next to its role. `registered` and `worker` appear only where they
 say something, and retention validates them: `registered` only on the fault thread and
-only a registrable role, `worker` only on a thread with a role.
+only a registrable role, `worker` only on a thread with a role. A thread that was inside a
+plug-in or module entry says which in `entry` (see Execution scopes); a thread inside none
+carries no `entry`.
 
 How the supervisor gets the table: the worker's `ready` packet carries the table's address
 (in the packet's `pc` field, which a Ready packet reuses: it is an address, not a program
@@ -317,7 +321,7 @@ is handled; POSIX's stream keeps the order by itself. When the terminal
 packet arrives, Linux and Windows read the table with the same bounded remote read the stack
 walk uses (`process_vm_readv`, `ReadMemory` on Windows), once, right after the faulting
 thread's walk and before any other thread is stopped. It is read even if the walk spent the
-deadline: one read, 25 KiB. If the budget ends, what is cut is the traces of the other
+deadline: one read, 73 KiB. If the budget ends, what is cut is the traces of the other
 threads (`deadline`), never the table; their roles are still known. The table is untrusted
 input: it is used only if its magic and version are this build's, a slot with a free,
 claiming or unknown role labels nothing, and an address that cannot be read is a stated
@@ -325,8 +329,81 @@ limit ("the execution table could not be read, so threads have no roles") with e
 still traced, labelled by position as before. macOS has no remote read: the in-process
 capture labels each thread from the live table's slots (atomic loads, no lock or
 allocation) and the capsule carries the result in each thread's header (`registered`,
-`worker`). The capsule wire format is version 2 for that (magic `CTC2`); it carries no copy
-of the table yet, which the steps that record execution entries add.
+`worker`, `entry`, with the cell and generation of the entry) and the table's counters in the
+capsule header. The capsule wire format is version 3 for that (magic `CTC3`); it carries no
+copy of the table yet, which the step that records the inventory adds.
+
+### Execution scopes (topic 5b)
+
+Each in-process plug-in instance, and each loaded plug-in library (a CLAP module or a VST3
+module), owns one cell of the table: `acquireCell` when it is created or opened, `releaseCell`
+after everything about it is gone. A cell has two words, `audio` for the entries the audio
+thread makes and `main` for the rest, and a *scope* marks one of them for as long as a thread
+is inside an entry. A word packs the entry kind (8 bits), a generation (12 bits, counting the
+cell's reuses) and the scope's stack address divided by 16 (44 bits, so below 2^48; an address
+the word cannot hold is recorded as none and counted in `scopeOverflow`). The generation is a
+hint a reader checks against the inventory, never an identity: it repeats after 4,096 reuses.
+
+Entries are a closed set of at most 20 kinds, and the report names them: `create` (the
+plug-in's init, create and extension lookups), `destroy`, `activate`, `deactivate`,
+`start_processing`, `stop_processing`, `process`, `flush`, `reset` (all five on the audio word),
+`params` (reads, writes and conversions), `state`, `semantic` (schema, patch, describe, status,
+factory patches), `editor_picture`, `trace`, `gui` (a native editor window), `main_thread`
+(`on_main_thread`, timers and file-descriptor callbacks), `library_open` (the library's load,
+its `clap_entry.init` and the factory lookup), `library_close` and `bridge_call`. An isolated
+instance (running in a bridge child) records every entry as `bridge_call`: the host thread is
+waiting on the child, and the child's own table is a later step. Every call into the plug-in
+goes through a `host::Instance` method, so the scopes sit in those methods (and in
+`Library::open`, `~Library` and the VST3 module load, which are outside any instance); the
+offline render, both real-time executors, the sandbox and the rack's plug-in module all reach
+the plug-in only through them.
+
+The `audio` word needs no guard. The `main` word could see two threads at once if the host
+ever overlapped main-thread entries of one instance (an editor opened on one thread while
+another reads a parameter), and interleaved writes there could leave a stale word naming an
+entry nobody is in, which matching would attach to the wrong thread. So a main scope first
+claims the cell's `mainOwner` word with one compare-and-swap (the thread's token, released
+when its outermost scope ends); a thread that finds another owner records nothing, and the
+owner's nested scopes still record. The audio scopes never touch it. A scope writes its word on entry and puts the previous word back on exit, so scopes nest (a
+plug-in that calls back into the host; `create` around the library's open) and a word is idle
+exactly while no thread is inside an entry of that instance. The cost on the audio path is two
+stores, one on entry and one on exit, each a release store: a plain `mov` on x86-64 and a
+`stlr` on arm64, with nothing before or after them. Nothing stronger is needed because a word
+has one writer at a time (the thread inside the entry: the executors never run one instance's
+audio entries concurrently) and the reader only looks after that thread has been stopped, so it
+neither races the writer nor needs the store to be seen in any order against others (a
+stopped thread's writes are complete, and stopping it is itself a barrier). Release, and not
+relaxed, is what keeps a word from being seen before the writes it announces by a reader that
+does run alongside (an in-process observer, as the tests are); no fence and no
+sequentially consistent store is used, since nothing orders two words against each other.
+Each cell fills a cache line of its own: with four 16-byte
+cells to a line, scopes of instances processed at the same moment by different workers
+measured 6.0, 5.7 and 9.1 ns each for 2, 4 and 8 workers, against 1.75, 1.74 and 1.84 ns with
+a line to each cell (`SUPPLE_SCOPE_BENCH=1`, release preset, informational: no test decides
+anything by it); the padded layout, one worker alone, adds 0.8 ns per scope.
+
+*Tying an entry to a thread.* The supervisor (and, on macOS, the worker's capture) ties a word
+to a thread when its recorded address lies on the thread's stack at or above the thread's stack
+pointer. A registered thread's stack is the bounds in its slot; any other thread's (the audio
+driver's callback thread, which stays unregistered) is the mapping that holds its stack
+pointer (`/proc/<pid>/maps` on Linux, the allocation `VirtualQueryEx` finds on Windows, the
+region `mach_vm_region` finds on macOS). Of several entries on one stack the one with the lowest
+address is the innermost, and that is the entry the thread is reported in; the outer ones are
+still counted as tied. The address is the frame's of the function that holds the scope, so two
+scopes in one function cannot be told apart; the host's scopes each sit in a function of their
+own. Another thread's word is not quiescent while the table is read, so Linux and Windows read
+each candidate word again once the thread is stopped and accept it only if both reads agree
+(the fault thread is parked in its handler and needs no second read); macOS stops the thread
+before it reads, and one read does the work of two. An entry left out is one the thread entered
+after the table was read. A word that no thread read could claim (its thread was not read, it
+names no address, or the address lies on no stack, which a forged address is) is counted, and
+the report says so in a limit rather than guessing: "some plug-in entries were open that no
+thread read could be tied to". The report also says, as limits, when instances found no cell
+(`untracked`) and when scopes could not record an address (`scopeOverflow`).
+
+The report shows only `entry`, the kind, in the thread's object. The cell and generation stay
+in the process and the supervisor (they identify nothing until the inventory, a later step,
+says what each cell is), and no address or stack bound reaches a report.
 
 Threads other than the faulting one keep running while the table is read, so a later
 step's instance cells describe the moment of the read, not the moment of the fault, and a

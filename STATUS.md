@@ -1508,9 +1508,19 @@ its role and stack bounds) and reports label each thread with its role; a thread
 256, the audio driver's callback thread, the dummy backend's thread and the sandbox render
 thread are unregistered and show as `other`, and a report says when the table turned threads
 away. This is tested on Linux only: the macOS in-process labels and the Windows table read are
-written and unproven until native CI runs them. The instance inventory, plug-in scopes,
-command entries and attribution (the later steps of topic 5), bridge correlation,
-restart UI/hangs and release package verification remain later topics.
+written and unproven until native CI runs them. Each in-process plug-in instance and loaded
+plug-in library marks the entry a thread is inside in its table cell (scopes in `host::Instance`,
+`Library::open` and the VST3 module load: two release stores on the audio path), and a report
+names the entry each thread was in (`entry`, a kind such as `process`), tying it to the thread
+by stack address. Tested on Linux, including the real-time and offline equivalence under the
+scopes; the Windows stack lookup and the macOS in-process attribution are written and
+unproven until native CI runs them. Limits: an isolated (bridged) instance records
+`bridge_call` only and the bridge child has no table of its own yet; an entry says which kind
+but not which plug-in until the inventory lands; two scopes in one function cannot be told
+apart; the audio driver's callback thread is found by its stack mapping, which a thread with
+no readable map defeats (the report then says an entry could not be tied to a thread). The
+instance inventory, command entries and plug-in names (the later steps of topic 5), bridge
+correlation, restart UI/hangs and release package verification remain later topics.
 Known limit: after a hard kill of the supervisor alone (`SIGKILL`, `TerminateProcess`) the app
 keeps running without crash capture, and a headless `serve` worker keeps its socket and
 endpoint lock until it is stopped itself. This is deliberate (collector loss must not kill

@@ -181,3 +181,16 @@ bounds, and a Windows Ready packet is handed over before Terminal. *Maintainer d
 killed supervisor:* collector loss leaves the healthy app alive; a hard-killed supervisor does
 not take the app with it, no kill-on-close job is added, and the cost is a stated limit in
 `docs/specs/diagnostics.md` and `STATUS.md`.
+
+*Note, 2026-11-16, topic 5b (execution scopes):* plug-in and module entries are marked in the
+table by scopes inside `host::Instance`, `Library::open` and the VST3 module load, and a thread
+in an entry is reported with `entry` (a closed set of kinds), added to `supple.crash-report/1.0`
+as approved. Three points differ from the plan of 5a. (1) Each instance cell fills a cache line
+(the table is 74,816 bytes): with four 16-byte cells to a line, concurrent instances measured 3
+to 5 times the cost per scope, which the maintainer's decision to pad if visible settles. (2)
+The macOS capsule (now `CTC3`) carries each thread's attribution and the table's counters, not
+a copy of the table: the worker reads its own table while the thread is suspended, so the copy
+is not needed until the inventory has something to resolve, and it is added then. (3) The
+license-isolation check does not cover executables, since the test tools under `plugins/` link
+the GPL host already and are combined works; it covers every library and module built from the
+permissive tree.
