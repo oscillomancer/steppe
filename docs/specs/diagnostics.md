@@ -857,7 +857,11 @@ told. The 65536th bridge of a run has no ordinal (it reads as this process): a s
 
 *A report when the worker lives.* A bridge that ends by a signal or an exception (not by the
 host's kill, not by an exit: the exit code is not read on POSIX) while the worker goes on gets a
-report of its own, `kind` `bridge_exit`. The supervisor writes it from its inventory when it
+report of its own, `kind` `bridge_exit`. (On Windows an `exit` includes a bridge ended by `abort()`
+or `raise(SIGSEGV)`: the C runtime ends such a process with exit code 3 and no exception, so the
+host cannot tell it from an orderly exit and writes no report. A bridge ended by an access
+violation, a stack overflow or `__fastfail` ends with an exception status and is reported. This
+is a known gap on Windows, in STATUS.md.) The supervisor writes it from its inventory when it
 applies the `Bridge` end event, under a new incident id, with no run marker or hold, so a reader
 counts it the moment it is there. The worker's own run, marker and eventual report are untouched.
 The report has `bridge` (the ordinal), `code` (the native status, the same as `bridges[].ended.code`),

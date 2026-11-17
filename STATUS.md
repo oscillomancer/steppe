@@ -1616,7 +1616,10 @@ classification and the macOS signal path are unproven until native CI runs. On W
 and was never reaped) are not compiled: the classification of an exception and an exit status is
 tested as a pure function, the host-kill and orderly-end cases run, and a bridge that really dies
 by an exception is exercised only by `clap-host.diagnostics-inventory` there, which has not run
-on Windows yet.
+on Windows yet. A known gap on Windows: a bridge that a plug-in ends with `abort()`, an uncaught
+`std::terminate` or `raise(SIGSEGV)` exits with the C runtime's code 3 and no exception, so it is
+read as an exit and gets no report of its own (on POSIX the same plug-in dies by a signal and does);
+a real access violation or `__fastfail` is an exception and does.
 Restart UI/hangs and release package verification remain later topics.
 Supervisor end (ADR-0091): a supervisor that crashes tells the worker first and the worker keeps
 running without crash capture; a supervisor ended with no notice (`SIGKILL`, `TerminateProcess`,

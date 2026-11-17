@@ -1377,8 +1377,11 @@ clap_process_status CLAP_ABI multiOutProcess(const clap_plugin_t* pl, const clap
 
 // --- crash (the isolation fixture) -------------------------------------------------------
 // An effect that passes audio through until its Mode parameter says otherwise:
-// 1 crashes the process in process() (SIGSEGV), 2 hangs it there, 3 takes
-// 20 ms over each block (a plug-in that misses a live deadline, ADR-0081).
+// 1 crashes the process in process() (raise(SIGSEGV): a signal on POSIX, but on Windows the C
+// runtime ends the process with exit code 3 and no exception), 2 hangs it there, 3 takes
+// 20 ms over each block (a plug-in that misses a live deadline, ADR-0081), 4 writes through a bad
+// pointer: a signal on POSIX and an access violation on Windows, the crash a host classifies as
+// one on every platform.
 
 const clap_plugin_descriptor_t* crashDescriptor() {
     static const char* features[] = {CLAP_PLUGIN_FEATURE_AUDIO_EFFECT, nullptr};
@@ -1410,7 +1413,7 @@ bool CLAP_ABI crashParamInfo(const clap_plugin_t*, uint32_t index, clap_param_in
     info->id = 1;
     info->flags = CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_AUTOMATABLE;
     std::snprintf(info->name, sizeof(info->name), "Mode");
-    info->max_value = 3;
+    info->max_value = 4;
     return true;
 }
 bool CLAP_ABI crashParamValue(const clap_plugin_t* pl, clap_id id, double* out) {
@@ -1419,8 +1422,8 @@ bool CLAP_ABI crashParamValue(const clap_plugin_t* pl, clap_id id, double* out) 
     return true;
 }
 bool CLAP_ABI crashValueToText(const clap_plugin_t*, clap_id, double v, char* out, uint32_t size) {
-    static const char* kNames[] = {"pass", "crash", "hang", "slow"};
-    std::snprintf(out, size, "%s", kNames[std::clamp(static_cast<int>(v), 0, 3)]);
+    static const char* kNames[] = {"pass", "crash", "hang", "slow", "fault"};
+    std::snprintf(out, size, "%s", kNames[std::clamp(static_cast<int>(v), 0, 4)]);
     return true;
 }
 bool CLAP_ABI crashTextToValue(const clap_plugin_t*, clap_id, const char*, double*) {
@@ -1447,9 +1450,11 @@ const void* CLAP_ABI crashExt(const clap_plugin_t*, const char* id) {
     return nullptr;
 }
 bool CLAP_ABI crashActivate(const clap_plugin_t*, double, uint32_t, uint32_t) { return true; }
+[[gnu::noinline]] void badWrite() { *reinterpret_cast<volatile int*>(8) = 1; }
 clap_process_status CLAP_ABI crashProcess(const clap_plugin_t* pl, const clap_process_t* p) {
     crashEvents(pl, p->in_events);
     if (C(pl)->mode.load() == 1) std::raise(SIGSEGV);
+    if (C(pl)->mode.load() == 4) badWrite();
     while (C(pl)->mode.load() == 2) {  // spin (no system call: sanitizers see a hang, not a call)
     }
     if (C(pl)->mode.load() == 3) {  // spin on the clock: no system call either

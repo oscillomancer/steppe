@@ -12,6 +12,7 @@
 #include <supple/host/clap_host.h>
 #include <array>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <span>
 #include <string>
@@ -41,13 +42,16 @@ bool misbehave(const supple::host::PluginInfo& info, double mode) {
     (void)instance.paramValue(1);  // fails: the bridge is gone, and this is where it is reaped
     return instance.failed();
 }
-// Waits until the supervisor has written a report, so that what follows cannot overtake it.
+// Waits until the supervisor has written a report, so that what follows cannot overtake it. The
+// bound is the clock's: a count of 1 ms sleeps lasts fifteen times as long on Windows, whose sleeps
+// round up to the timer tick, and a wait for a report that never comes must fail in 30 s.
 bool awaitReport(const std::filesystem::path& directory) {
-    for (int i = 0; i < 30000; ++i) {
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (std::chrono::steady_clock::now() < until) {
         std::error_code ec;
         for (const auto& entry : std::filesystem::directory_iterator(directory, ec))
             if (entry.path().extension() == ".json") return true;
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     return false;
 }
@@ -69,10 +73,19 @@ int body(int argc, char** argv) {
             supple::host::setBridgeDeadlineMs(200);
             if (!misbehave(crash, 2.0)) return 6;
         } else {
+            // Mode 4 is a real crash on every platform (a signal, an access violation); mode 1
+            // would end a Windows bridge with exit code 3, which is not a crash to the host.
             for (int i = 0; i < 5; ++i)
-                if (!misbehave(crash, 1.0)) return 7;
+                if (!misbehave(crash, 4.0)) {
+                    std::fprintf(stderr, "bridged-crash: death %d was not seen by the host\n",
+                                 i + 1);
+                    return 7;
+                }
             // The first death has a report of its own; the other four repeat it.
-            if (!awaitReport(argv[1])) return 8;
+            if (!awaitReport(argv[1])) {
+                std::fprintf(stderr, "bridged-crash: no report of the first death in 30 s\n");
+                return 8;
+            }
         }
         fault();
         return 0;
