@@ -3691,9 +3691,16 @@ TEST_CASE("a bridged start answered after its live deadline is not taken for a r
             });
         }
     const auto session = t.commit().value();
+    // The product's live deadline, not patient(): the first cycle must pass
+    // its deadline with the start unanswered. So any later cycle may be late
+    // too on a loaded machine. A late block is silent by design and a late
+    // start leaves the stage passing audio through for that cycle; both are
+    // counted in bridgeLateCycles(), which bounds them here (CI 44147509934:
+    // the third cycle was late and silent).
+    constexpr int kCycles = 2048;  // a guard against a bridge that never answers
     auto pool = makePool();
     MediaCache media;
-    DummyBackend backend(constantInput(64 * 128));
+    DummyBackend backend(constantInput(kCycles * 128));
     Engine engine(pool, media, kInCallback);
     REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128, .inputs = 2}));
     REQUIRE(engine.load(session));
@@ -3702,16 +3709,38 @@ TEST_CASE("a bridged start answered after its live deadline is not taken for a r
     REQUIRE(reached(0));                   // the bridge is in the plug-in's start
     gate[1].store(1, std::memory_order_release);
     REQUIRE(reached(2));
-    backend.run(16);
+    const auto& out = backend.capture().channels[0];
+    CHECK(double(out[0]) == 0.5);  // not started yet: passed through, as a refused one is
+    const auto lateBefore = engine.bridgeLateCycles();
+    const double processed = .5 * 0.2511886;  // -12 dB on the 0.5 input
+    const auto at = [&](int cycle) {
+        return double(out[static_cast<std::size_t>(cycle) * 128 + 64]);
+    };
+    // Each cycle after the first until one is processed: passed through
+    // (a late start) or silent (a late block), never anything else.
+    int cycle = 1, unprocessed = 0;
+    for (; cycle < kCycles / 2; ++cycle) {
+        backend.run(1);
+        if (at(cycle) == doctest::Approx(processed).epsilon(1e-4)) break;
+        CHECK((at(cycle) == 0.5 || at(cycle) == 0.0));
+        ++unprocessed;
+    }
+    REQUIRE_MESSAGE(cycle < kCycles / 2, "the started bridge never processed a block");
+    // Once started, a cycle is processed or, late, silent: never passed through.
+    for (int more = 0; more < 16; ++more) {
+        backend.run(1);
+        ++cycle;
+        if (at(cycle) == doctest::Approx(processed).epsilon(1e-4)) continue;
+        CHECK(at(cycle) == 0.0);
+        ++unprocessed;
+    }
+    // Every cycle that was not processed was a late one.
+    CHECK(unprocessed <= static_cast<int>(engine.bridgeLateCycles() - lateBefore));
     host::Instance* instance = pool.find(fxId);
     REQUIRE(instance);
     CHECK_FALSE(instance->failed());
     CHECK(instance->processing());
     CHECK(engine.processErrors() == 0);
-    // Processed from the second cycle on: -12 dB on the 0.5 input.
-    const auto& out = backend.capture().channels[0];
-    CHECK(double(out[0]) == 0.5);  // not started yet: passed through, as a refused one is
-    CHECK(double(out[300]) == doctest::Approx(.5 * 0.2511886).epsilon(1e-4));
     engine.stop();
     ::munmap(words, 4096);
     std::filesystem::remove(file);
