@@ -1279,8 +1279,9 @@ content. Before opening a project, or recovering one (`project.plugins` with `se
 `project.plugins` says which of its plug-ins a recent
 report points at, and `plugin.override` loads a plug-in on a bridge or not at all for the
 run (`bridge`, `disable`), so the project can be opened safely; `project.open` and `project.recover` warn of such a plug-in
-and load it normally unless one of those was set first. Safe-load and next-start notices arrive in a later topic; the current delivery
-scope is listed in STATUS.md.
+and load it normally unless one of those was set first. The app's own questions about a
+suspect plug-in when a project opens, and a viewer for the reports, arrive in a later step; the
+current delivery scope is listed in STATUS.md.
 
 #### Stopping Steppe from a script or a service
 
