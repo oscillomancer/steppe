@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <exception>
 #include <iostream>
 #include <string>
@@ -337,7 +338,25 @@ int body(int argc, char** argv) {
     if (mode == "failfast") RaiseFailFastException(nullptr, nullptr, 0);
 #endif
     if (mode == "teardown") {
-        std::atexit([] { std::abort(); });
+        std::atexit([] {
+#if !defined(_WIN32)
+            // Evidence for a teardown abort that left no capsule (native CI on macOS):
+            // the state of SIGABRT as abort() is about to raise it, in write(2) only.
+            struct sigaction current{};
+            sigset_t blocked;
+            (void)::sigaction(SIGABRT, nullptr, &current);
+            (void)::sigprocmask(SIG_SETMASK, nullptr, &blocked);
+            const bool ours =
+                (current.sa_flags & SA_SIGINFO) != 0 && current.sa_sigaction != nullptr;
+            const char* text = ours ? "teardown: SIGABRT handler installed\n"
+                                    : "teardown: SIGABRT handler absent\n";
+            (void)!::write(STDERR_FILENO, text, std::strlen(text));
+            text = sigismember(&blocked, SIGABRT) == 1 ? "teardown: SIGABRT blocked\n"
+                                                       : "teardown: SIGABRT not blocked\n";
+            (void)!::write(STDERR_FILENO, text, std::strlen(text));
+#endif
+            std::abort();
+        });
         return 0;
     }
     if (mode == "echo") {
