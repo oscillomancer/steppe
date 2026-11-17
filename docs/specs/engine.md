@@ -701,6 +701,17 @@ first use, and no plug-in code runs early to warm it.
   failed when the render begins keeps its behaviour: a restart failure is
   a warned, compensated pass-through; a failed bridged instance refuses to
   start (`engine.start_failed`).
+- **Stop and cancel.** The block loop checks `OfflineSettings::cancelFlag`
+  and `stopToken` between blocks. From the same point as the deadline, a
+  watch thread also checks them every 10 ms while the render has bridged
+  instances; on either it kills the render's own bridges
+  (`host::Instance::abandonBridge`), so a render waiting in a bridged call
+  (activation, reset, flush, start, a block, stop, a readout) returns at
+  once. Every caller gives a render its own instance pool, so no other
+  user shares those bridges. A render stopped or cancelled either way
+  returns `job.cancelled`, ahead of any failure of the instances it killed.
+  Instance creation, before that point, keeps its control-plane timeouts
+  (20 s for `Create`).
 - Once a render has succeeded, each plugin's read-only parameters (meters,
   readouts) are read from its instance (`OfflineResult::meters`, by FX id);
   a failed or cancelled render reads none. A `render.mix` keeps them on the

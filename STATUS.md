@@ -1161,9 +1161,11 @@ Engine and hosting:
   (lifecycle commands 7 s; ADR-0013); the plug-in is killed and silent and
   playback goes on. An offline render waits 60 s (152 s) instead, and fails
   with `engine.fx_failed`, naming the FX, if a plug-in fails while it runs
-  (ADR-0090). Cancelling such a render while a plug-in hangs takes effect
-  only when its deadline kills it. A stems or regions job that fails at a
-  later task keeps the files of the tasks before it.
+  (ADR-0090). Stopping or cancelling such a render kills its own bridges,
+  so it does not wait for a hung plug-in, and neither does quitting or
+  opening a project; only a render still loading its plug-ins waits, up to
+  20 s per plug-in. A stems or regions job that fails at a later task
+  keeps the files of the tasks before it.
 - Audio backends: Linux JACK, dummy, and native PortAudio (CoreAudio on macOS;
   WASAPI/ASIO on Windows), with selection, latency/xruns and restart notifications.
   Fake-device output equals offline in both executors, with native CI coverage.

@@ -60,11 +60,25 @@ default.
      - A longer value buys little. A stall long enough to miss 60 s means
        the machine is unusable for the render anyway, and a hung plug-in's
        render would only take longer to fail.
-   - **Cancellation is checked between blocks, not inside a bridged wait.**
-     A cancel while a plug-in hangs takes effect when the deadline kills it.
-   - **Making the instances is not covered.** `Create` (20 s) and the
-     patch requests run before the render has its instances, and keep
-     their control-plane timeouts.
+   - **A stop or a cancel does not wait for the deadline.** The block loop
+     checks both between blocks. A watch thread also checks them every
+     10 ms, from the deadline's start until the render's last request, and
+     on either kills the render's own bridges
+     (`host::Instance::abandonBridge`: the bridge is failed as abandoned,
+     then killed). A wait in a bridged call then returns at its next 10 ms
+     step, and a control request as its socket closes. That covers
+     activation, reset, flush, start, a block, stop and the readouts. The
+     render returns `job.cancelled`, checked before any failure of the
+     instances it killed. Every caller gives a render its own instance
+     pool, so no one else uses those bridges.
+     - Review round 34 (F1) found that a cancel used to take effect only
+       when the deadline killed a hung plug-in: up to 152 s, during which
+       quitting or opening a project waited for the job's thread.
+     - The 10 ms is how often the watch looks, not a deadline: it decides
+       nothing by time, and the tests hold each call at a gate until they
+       have stopped the render.
+     - **Not covered:** making the instances. `Create` (20 s) and the
+       patch requests run before the render has instances to watch.
 
 2. **A plug-in that fails during an offline render fails the render.**
    - **When a plug-in counts as failing during the render.** An instance
@@ -151,8 +165,10 @@ with `engine.fx_failed`.
     now matters only for live pools. Offline renders use their own
     deadline either way.
   - `test_offline_bridge.cpp` stops bridges for 3 s with the product's
-    2 s live deadline, and kills or stops them mid-render. Each case
-    decides by its outcome: the render, its audio, its error.
+    2 s live deadline, and kills or stops them mid-render. It holds the
+    gain fixture inside each call at a gate (`lifecycle_gate.h`), stops or
+    cancels the render, and checks the outcome and why the plug-in failed.
+    Each case decides by its outcome: the render, its audio, its error.
 
 ## Alternatives considered
 
@@ -163,5 +179,10 @@ with `engine.fx_failed`.
 - **A warning instead of an error.** Freeze, consolidate and mix-to-track
   already refuse warnings, but a plain `render.mix` would still publish a
   file with a silent plug-in in it.
-- **Waking a bridged wait on cancellation.** It needs the bridge killed or
-  a request abandoned mid-call. A minute's bound was judged enough for now.
+- **Waking a bridged wait on cancellation by killing the bridge.** First
+  rejected as more than needed with a minute's bound; adopted in review
+  round 34 once that bound was found to hold up quitting and opening a
+  project (Decision 1).
+- **A stop callback instead of the watch.** It would kill on the stop
+  token at once, from the thread that asks for the stop, but a job's
+  cancel flag has no callback, so the watch would be needed anyway.

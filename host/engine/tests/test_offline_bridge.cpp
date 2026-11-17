@@ -1,20 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 // Offline renders and bridged plug-ins (ADR-0090): a stalled bridge is
-// waited for, and a plug-in that fails while the render runs fails it.
+// waited for, a plug-in that fails while the render runs fails it, and a
+// stop or a cancel does not wait for a bridged call.
 #include <doctest/doctest.h>
+#include <supple/base/stop.h>
 #include <supple/engine/offline.h>
 #include <atomic>
 #include <chrono>
+#include <optional>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
+#include "../../clap-host/tests/lifecycle_gate.h"
 #include "../../clap-host/tests/process_pause.h"
 #include "bridge_patience.h"
 #include "realtime_common.h"
 
 namespace {
+using supple::test::GatedCall;
 using supple::test::killProcess;
+using supple::test::LifecycleGate;
 using supple::test::pauseProcess;
 using supple::test::resumeProcess;
 
@@ -44,6 +51,28 @@ std::vector<int> bridges(const InstancePool& pool) {
 }
 
 OfflineSettings twoSeconds() { return {.startSeconds = 0, .endSeconds = 2.0}; }
+
+// Why the host failed an instance whose bridge a stop or cancel killed.
+constexpr const char* kAbandoned = "the host abandoned the plugin's bridge";
+
+// Asks a render to stop: through its job's cancel flag, or its thread's stop.
+struct Stopper {
+    bool cancel;
+    std::shared_ptr<std::atomic<bool>> flag = std::make_shared<std::atomic<bool>>(false);
+    supple::JoiningThread source{[] {}};  // a stop source on every platform
+    void arm(OfflineSettings& settings) {
+        if (cancel)
+            settings.cancelFlag = flag;
+        else
+            settings.stopToken = source.get_stop_token();
+    }
+    void operator()() {
+        if (cancel)
+            flag->store(true);
+        else
+            source.request_stop();
+    }
+};
 }  // namespace
 
 TEST_CASE("an offline render waits for a bridge stalled past the live path's deadline") {
@@ -154,4 +183,80 @@ TEST_CASE("an offline render keeps its deadline while it runs and gives it back 
     REQUIRE_FALSE(rendered);
     CHECK(rendered.error().code == "engine.fx_failed");
     for (host::Instance* in : again.instances()) CHECK(in->callDeadlineMs() == 0);
+}
+
+TEST_CASE("a stopped or cancelled offline render does not wait for a bridged call") {
+    // Review round 34 (F1): the render's own bridges are killed, wherever its
+    // thread waits for one, and the outcome is the cancellation. The gain
+    // holds the named call at a gate until the test has stopped the render;
+    // the render's deadline is the product's (60 s, lifecycle 152 s), so
+    // only the stop can end the wait within the test, and the instance's
+    // failure says which did.
+    host::setBridgeExecutable(BRIDGE_PATH);
+    const std::pair<GatedCall, const char*> calls[] = {
+        {GatedCall::Activate, "activate"},  {GatedCall::Reset, "reset"},
+        {GatedCall::Flush, "params flush"}, {GatedCall::StartProcessing, "start_processing"},
+        {GatedCall::Process, "process"},    {GatedCall::StopProcessing, "stop_processing"},
+    };
+    for (const auto& [call, name] : calls)
+        for (const bool cancel : {true, false}) {
+            CAPTURE(name);
+            CAPTURE(cancel);
+            const auto session = isolated(model::Isolation::Dedicated);
+            const Id gain = gainOf(session);
+            auto pool = makePool();
+            Stopper stop{cancel};
+            OfflineSettings settings = twoSeconds();
+            stop.arm(settings);
+            // Named while the render spawns its bridges; nothing else makes
+            // a gain meanwhile.
+            std::optional<LifecycleGate> gate(std::in_place, call);
+            REQUIRE(gate->mapped());
+            std::thread stopper([&] {
+                if (gate->entered()) stop();
+            });
+            auto rendered = renderOffline(session, pool, settings);
+            stopper.join();
+            REQUIRE(gate->entered());
+            CHECK_FALSE(gate->passed());  // the call never went on: its bridge is gone
+            REQUIRE_FALSE(rendered);
+            CHECK(rendered.error().code == "job.cancelled");
+            host::Instance* in = pool.find(gain);
+            REQUIRE(in);
+            CHECK(in->failed());
+            CHECK(in->failure().find(kAbandoned) != std::string::npos);
+            CHECK(in->callDeadlineMs() == 0);
+            gate.reset();
+        }
+}
+
+TEST_CASE("a render cancelled while its bridge is stopped does not wait out the deadline") {
+    // The reviewer's probe (round 34): the bridge is stopped and the job
+    // cancelled in the first block's progress. The loop sees the cancel and
+    // stops processing, which waits on the stopped bridge until the watch
+    // kills it. With the product's deadline (152 s for that call) the
+    // failure names the abandonment, not a plug-in that stopped responding.
+    host::setBridgeExecutable(BRIDGE_PATH);
+    for (auto isolation : {model::Isolation::SharedBridge, model::Isolation::Dedicated}) {
+        CAPTURE(isolation);
+        const auto session = isolated(isolation);
+        const Id gain = gainOf(session);
+        auto pool = makePool();
+        auto cancel = std::make_shared<std::atomic<bool>>(false);
+        std::atomic<bool> struck{false};
+        OfflineSettings settings = twoSeconds();
+        settings.cancelFlag = cancel;
+        settings.progress = [&](double) {
+            if (struck.exchange(true)) return;
+            if (host::Instance* in = pool.find(gain)) CHECK(pauseProcess(in->bridgePid()));
+            cancel->store(true);
+        };
+        auto rendered = renderOffline(session, pool, settings);
+        REQUIRE(struck.load());
+        REQUIRE_FALSE(rendered);
+        CHECK(rendered.error().code == "job.cancelled");
+        host::Instance* in = pool.find(gain);
+        REQUIRE(in);
+        CHECK(in->failure().find(kAbandoned) != std::string::npos);
+    }
 }
