@@ -805,12 +805,13 @@ namespace {
 // Tells the inventory (ADR-0083, topic 5c) what the instance in `cell` is. Only the plug-in's
 // own descriptor strings go: never its path, a project name or anything the user typed.
 void announceInstance(std::uint32_t cell, const PluginInfo& info, bool isolated,
-                      diagctx::InstanceState state, std::uint64_t image) noexcept {
+                      diagctx::InstanceState state, std::uint64_t image,
+                      std::uint16_t bridge = 0) noexcept {
     const bool vst3 = info.format == "vst3" || info.id.rfind("vst3:", 0) == 0;
     diagctx::announce(cell, vst3 ? diagctx::InstanceKind::Vst3 : diagctx::InstanceKind::Clap,
                       diagctx::InstanceOrigin::Foreign,
                       isolated ? diagctx::InstanceMode::Bridged : diagctx::InstanceMode::InProcess,
-                      state, image, {info.name, info.vendor, info.version, info.id});
+                      state, image, {info.name, info.vendor, info.version, info.id}, bridge);
 }
 }  // namespace
 
@@ -821,9 +822,17 @@ Result<std::unique_ptr<Instance>> Instance::create(const PluginInfo& info,
     // included, happens inside its Create entry. A failure destroys it, and its cell with it.
     std::unique_ptr<Instance> self(new Instance());
     self->cell_.acquire();
+    // The bridge process the instance will run in exists before its Create goes there, so the
+    // announcement below can say which it is (ADR-0083, topic 6a).
+    if (isolated && !bridge) {
+        auto made = createBridgeProcess();
+        if (!made) return std::move(made).error();
+        bridge = std::move(*made);
+    }
     // Announced before anything of the plug-in's runs, so a crash in its library or its
     // constructor still finds it in the report.
-    announceInstance(self->cell_.id(), info, isolated, diagctx::InstanceState::Loading, 0);
+    announceInstance(self->cell_.id(), info, isolated, diagctx::InstanceState::Loading, 0,
+                     bridge ? bridge->ordinal() : std::uint16_t{0});
     MainEntry creating(self->cell_.id(), isolated, diagctx::Entry::Create);
     if (isolated) {
         RemotePorts ports;

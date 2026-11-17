@@ -346,9 +346,11 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
     def check_dropped(report,mode):
         # Everything left out is counted, by kind; a clean run leaves nothing out.
         dropped=report["dropped"]
-        assert sorted(dropped)==sorted(["threads","unregistered_threads","plugins","commands","cells","messages","untracked"]),(mode,dropped)
+        assert sorted(dropped)==sorted(["threads","unregistered_threads","plugins","commands","cells","messages","untracked","bridges"]),(mode,dropped)
         assert all(isinstance(v,int) and v>=0 for v in dropped.values()),(mode,dropped)
         assert dropped["plugins"]==0 and dropped["messages"]==0 and dropped["untracked"]==0,(mode,dropped)
+        # No fixture here starts a bridge process: the section is there, and empty (topic 6a).
+        assert report["bridges"]==[] and dropped["bridges"]==0,(mode,report["bridges"])
 
     with check('inventory'):
         # The plug-in inventory (ADR-0083, topic 5c). The fixture announces a retired instance

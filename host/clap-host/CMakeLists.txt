@@ -4,7 +4,7 @@ supple_add_library(clap-host
   SOURCES src/clap_host.cpp src/vst3_host.cpp src/platform.cpp src/scan.cpp
   DEPS supple::core-base supple::core-json supple::clap supple::semantic-params-abi supple::vst3-host
   PRIVATE_DEPS ${CMAKE_DL_LIBS} supple::product-info supple::diagnostics-context)
-target_sources(clap-host PRIVATE src/bridge_client.cpp src/bridge_protocol.cpp src/bridge_platform.cpp src/bridge_child.cpp)
+target_sources(clap-host PRIVATE src/bridge_client.cpp src/bridge_protocol.cpp src/bridge_platform.cpp src/bridge_child.cpp src/bridge_diagnostics.cpp)
 if(WIN32)
   target_sources(clap-host PRIVATE src/child_process_windows.cpp src/editor_platform_windows.cpp)
   target_link_libraries(clap-host PRIVATE User32)
@@ -64,7 +64,7 @@ if(SUPPLE_BUILD_TESTS)
   else()
     set(_host_tests tests/test_native_host.cpp tests/test_main_thread_wake.cpp)
   endif()
-  supple_add_tests(clap-host SOURCES ${_host_tests} tests/test_child_process.cpp tests/test_local_host.cpp tests/test_note_output.cpp tests/test_bridge_native.cpp tests/test_editors.cpp tests/test_editor_display.cpp LABELS rt)
+  supple_add_tests(clap-host SOURCES ${_host_tests} tests/test_child_process.cpp tests/test_local_host.cpp tests/test_note_output.cpp tests/test_bridge_native.cpp tests/test_bridge_diagnostics.cpp tests/test_editors.cpp tests/test_editor_display.cpp LABELS rt)
   if(APPLE)
     set_source_files_properties(tests/test_editor_display.cpp PROPERTIES LANGUAGE OBJCXX
                                COMPILE_OPTIONS "${_bridge_objcxx_options};-fobjc-arc")

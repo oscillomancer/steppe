@@ -819,6 +819,21 @@ lock as every announcement, so none can run on an audio path (the `rtsan` check 
 host calls it only from the thread that spawns a bridge and the main thread that observes its
 end.
 
+*Host side* (`host/clap-host/src/bridge_diagnostics.*`, `BridgeProcess`). `BridgeProcess::spawn`
+takes the next ordinal and announces the start. `Instance::create` makes the bridge process
+before it announces the instance, so the instance's first announcement (`loading`, before its
+`Create` goes to the child) already names the bridge it runs in. A bridge's end is announced once,
+from `reap()` on the main thread (the one place the host observes it), or from the bridge's
+destructor when nobody reaped it, never from `fail()` or `abandon()` (which can run on any thread,
+or on an audio path). `hostKilled_` is set inside `killBridge()`, before the kill, so every host
+kill (a hung or abandoned bridge, a protocol violation, a shutdown) is told from the operating
+system's: the end is `host` and its status says nothing about the plug-in. A bridge the host lets go
+of while it still runs is also `host`. Otherwise POSIX says `signal` with the signal number, or
+`exit` with code 0 (the exit code is not read); Windows says `exception` for a status with the
+fatal severity bits set (`0xC0000000`) and `exit` for any other, with the exit code. When both
+happen (the host kills a bridge that was already dying) the end is `host`: the order cannot be
+told. The 65536th bridge of a run has no ordinal (it reads as this process): a stated limit.
+
 *Supervisor.* `Inventory` keeps a list of bridges by ordinal, at most 256: a bridge is made by
 its start, or by an instance or an end that names it when the start was lost, and an end after
 an end changes nothing. A record that has a `how` or `status` where only a `Bridge` event may

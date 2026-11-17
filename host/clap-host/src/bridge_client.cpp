@@ -4,9 +4,11 @@
 // bridge process; main-thread calls are control-plane requests, audio-thread
 // calls are commands in shared memory with a futex wake-up and a deadline.
 #include "bridge_client.h"
+#include "bridge_diagnostics.h"
 #include "bridge_notifications.h"
 #include "editor_platform.h"
 #include "platform.h"
+#include "supple/diagctx/inventory.h"
 
 #include <algorithm>
 #include <atomic>
@@ -144,6 +146,8 @@ Result<std::shared_ptr<BridgeProcess>> BridgeProcess::spawn() {
     }
     self->child_ = std::move(*child);
     self->pid_ = self->child_->pid();
+    self->ordinal_ = bridgeOrdinals().take();
+    diagctx::announceBridge(self->ordinal_);  // topic 6a: started (0 is ignored)
 #if defined(_WIN32)
     self->sock_ = new NativeControl(reinterpret_cast<HANDLE>(sv[0]));
 #else
@@ -362,6 +366,10 @@ RemoteInstance::~RemoteInstance() {
 }
 
 BridgeProcess::~BridgeProcess() {
+    // A bridge that ended before this and was never reaped ended by itself; one that is still
+    // there is ended by the host closing its socket, below.
+    const bool diedFirst = child_ && !child_->alive();
+    const int diedWith = diedFirst ? child_->exitStatus() : 0;
     watcherQuit_.store(true, std::memory_order_release);
     watcherWake_.notify();
     if (watcher_.joinable()) watcher_.join();
@@ -376,6 +384,7 @@ BridgeProcess::~BridgeProcess() {
                 (void)waitFor({}, 10);
         }
     }
+    announceEnd(diedWith, !diedFirst);
     child_.reset();
 }
 
@@ -395,8 +404,17 @@ void RemoteInstance::unmap() {
 }
 
 void BridgeProcess::killBridge() {
+    // Before the kill, so that whoever sees the end also sees that the host caused it (topic 6a).
+    hostKilled_.store(true, std::memory_order_release);
     // The helper retains the leader's identity until final tree cleanup.
     if (child_) child_->kill();
+}
+
+void BridgeProcess::announceEnd(int why, bool hostEnded) noexcept {
+    if (ordinal_ == 0 || endAnnounced_.exchange(true)) return;
+    const BridgeEnd end =
+        classifyBridgeEnd(why, hostEnded || hostKilled_.load(std::memory_order_acquire));
+    diagctx::announceBridge(ordinal_, end.how, end.status);
 }
 
 // Main thread: observes exit without reaping the helper-owned leader.
@@ -407,6 +425,7 @@ void BridgeProcess::reap() {
     if (!child_ || child_->alive()) return;
     const int why = child_->exitStatus();
     pid_ = -1;
+    announceEnd(why, false);  // the only place a bridge's end is observed (topic 6a)
     fail(why);
     if (failSignal_.load() == -1) failSignal_.store(why);
 }

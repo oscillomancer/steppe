@@ -46,6 +46,9 @@ class BridgeProcess {
     bool alive() const;
     void killBridge();
     int pid() const { return pid_.load(); }
+    // This bridge's ordinal in the run (ADR-0083, topic 6a): 1, 2, ...; 0 when it has none (a
+    // process adopted by a test, or the 65536th of a run).
+    std::uint16_t ordinal() const { return ordinal_; }
 
   private:
     friend struct BridgeTestAccess;
@@ -88,6 +91,12 @@ class BridgeProcess {
     std::mutex requests_;  // control calls from instances on the main thread
     std::atomic<bool> failed_{false};
     std::atomic<int> failSignal_{0};
+    // Topic 6a. The host sets `hostKilled_` before every kill, so that an end it caused is told
+    // from one the operating system or the plug-in caused. The end is announced once, from
+    // reap() on the main thread, or from the destructor when nobody reaped.
+    std::uint16_t ordinal_ = 0;
+    std::atomic<bool> hostKilled_{false}, endAnnounced_{false};
+    void announceEnd(int why, bool hostEnded) noexcept;
 };
 
 class RemoteInstance {

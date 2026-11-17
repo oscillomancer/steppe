@@ -19,13 +19,31 @@ static void announceEverything() {
                  dc::InstanceMode::InProcess, dc::InstanceState::Loading, 0, identity);
     dc::announceState(1, dc::InstanceState::Active);
     dc::announceRemove(1);
+    dc::announceBridge(1);
+    dc::announceBridge(1, dc::BridgeHow::Signal, 11);
 }
 
 static void announceOnAudioThread() SUPPLE_RT { announceEverything(); }
+// A bridge's start and end (topic 6a) alone: each must be refused on its own, not only after
+// the instance announcements above have already aborted the process.
+static void announceBridgeOnAudioThread() SUPPLE_RT { dc::announceBridge(1); }
+static void announceBridgeEndOnAudioThread() SUPPLE_RT {
+    dc::announceBridge(1, dc::BridgeHow::Signal, 11);
+}
 
 int main(int argc, char** argv) {
     if (argc == 2 && std::strcmp(argv[1], "audio") == 0) {
         announceOnAudioThread();
+        std::puts("rtsan did not fire");
+        return 0;
+    }
+    if (argc == 2 && std::strcmp(argv[1], "audio-bridge") == 0) {
+        announceBridgeOnAudioThread();
+        std::puts("rtsan did not fire");
+        return 0;
+    }
+    if (argc == 2 && std::strcmp(argv[1], "audio-bridge-end") == 0) {
+        announceBridgeEndOnAudioThread();
         std::puts("rtsan did not fire");
         return 0;
     }
