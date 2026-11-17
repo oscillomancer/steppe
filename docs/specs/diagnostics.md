@@ -345,6 +345,8 @@ use are ignored. Tests build images in memory and run the reader over every pref
 every byte replaced by extreme values and over reads that fail part way, under the
 sanitizers.
 
+On Windows the tool takes its arguments as wide strings (`wmain`), so a report or symbol
+folder under a name outside the ANSI code page opens.
 Text output escapes every control byte, DEL and C1 control (U+0080 to U+009F) in what it
 prints, function names, file names and report strings alike, as `\xNN`, since a hostile symbol
 file or report must not be able to drive the terminal of the person running the tool.

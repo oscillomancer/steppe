@@ -27,24 +27,24 @@ int usage(std::FILE* to, int code) {
     return code;
 }
 
-}  // namespace
-
-int main(int argc, char** argv) {
+// The arguments as paths, so a report or folder whose name is outside the ANSI code page
+// (Windows hands narrow `argv` in that code page) is still opened.
+int run(const std::vector<fs::path>& args) {
     bool asJson = false;
     std::vector<fs::path> roots;
-    std::string report;
-    for (int i = 1; i < argc; ++i) {
-        const std::string_view arg = argv[i];
+    fs::path report;
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        const fs::path& arg = args[i];
         if (arg == "--help" || arg == "-h") return usage(stdout, 0);
         if (arg == "--json") {
             asJson = true;
         } else if (arg == "--symbols") {
-            if (++i >= argc) return usage(stderr, 2);
-            roots.emplace_back(argv[i]);
-        } else if (!arg.empty() && arg[0] == '-') {
+            if (++i >= args.size()) return usage(stderr, 2);
+            roots.push_back(args[i]);
+        } else if (!arg.empty() && arg.native().front() == '-') {
             return usage(stderr, 2);
         } else if (report.empty()) {
-            report = std::string(arg);
+            report = arg;
         } else {
             return usage(stderr, 2);
         }
@@ -54,7 +54,7 @@ int main(int argc, char** argv) {
         std::fputs("resolve-crash: pass at least one --symbols file or folder\n", stderr);
         return 2;
     }
-    const auto parsed = readReport(fs::path(report));
+    const auto parsed = readReport(report);
     if (!parsed) {
         std::fprintf(stderr, "resolve-crash: %s\n", parsed.error().toString().c_str());
         return 1;
@@ -74,3 +74,11 @@ int main(int argc, char** argv) {
     std::fwrite(text.data(), 1, text.size(), stdout);
     return 0;
 }
+
+}  // namespace
+
+#if defined(_WIN32)
+int wmain(int argc, wchar_t** argv) { return run(std::vector<fs::path>(argv + 1, argv + argc)); }
+#else
+int main(int argc, char** argv) { return run(std::vector<fs::path>(argv + 1, argv + argc)); }
+#endif
