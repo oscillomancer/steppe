@@ -16,6 +16,7 @@
 #include <ctime>
 #include "capsule.h"
 #include "native.h"
+#include "nonblocking.h"
 #if defined(__linux__)
 #include <sys/ptrace.h>
 #endif
@@ -269,6 +270,9 @@ bool receive(Native& native, Packet& packet) {
 bool publish(Native& native, const Packet& packet) noexcept {
     const int fd = static_cast<int>(native.channel);
     const auto* bytes = reinterpret_cast<const char*>(&packet);
+    // The announcing thread must never wait on a full channel, so the descriptor is made
+    // non-blocking for the call (macOS decides from the socket's own state, not the flag).
+    const NonBlocking guard(fd);
     ssize_t sent = ::send(fd, bytes, sizeof(packet), noSignal() | MSG_DONTWAIT);
     if (sent == static_cast<ssize_t>(sizeof(packet))) return true;
     if (sent <= 0) return false;  // nothing went out: the stream is as it was

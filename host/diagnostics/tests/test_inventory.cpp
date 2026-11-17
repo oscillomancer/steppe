@@ -8,6 +8,7 @@
 #include "../src/inventory.h"
 #include "../src/native.h"
 #if !defined(_WIN32)
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
@@ -408,6 +409,12 @@ TEST_CASE("a full channel drops whole packets and never tears one") {
     Native sender{pair[0]};
     Native receiver{pair[1]};
     receiver.exited = true;  // receive() then drains what is queued and ends, without waitpid
+    // The worker's descriptor is blocking, as launch() leaves it. publish() must still refuse
+    // a full channel instead of waiting (macOS decides from the socket's own state, not from
+    // MSG_DONTWAIT; a hang here is that), and must hand the descriptor back as it found it.
+    const int before = ::fcntl(pair[0], F_GETFL);
+    REQUIRE(before >= 0);
+    REQUIRE((before & O_NONBLOCK) == 0);
     std::uint32_t sent = 0;
     for (; sent < 100000; ++sent) {
         auto packet = add(sent % kMaxPlugins, 0, InstanceState::Active);
@@ -416,6 +423,7 @@ TEST_CASE("a full channel drops whole packets and never tears one") {
     }
     REQUIRE(sent > 10);      // something fit
     REQUIRE(sent < 100000);  // and the buffer did fill: the send refused instead of waiting
+    CHECK(::fcntl(pair[0], F_GETFL) == before);
     std::uint32_t received = 0;
     Packet packet;
     while (receive(receiver, packet)) {

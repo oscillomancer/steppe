@@ -528,7 +528,9 @@ sink: `rtsan-announce-check` (a program that announces inside a `SUPPLE_RT` func
 trusted channel. Each announcement becomes one `Instance` packet (protocol version 2: the
 packet grew by the `InstanceRecord`, fixed-size plain fields, and by the worker's count of
 events dropped so far; 392 bytes, under 512). The send never waits for the supervisor. POSIX
-writes it to the stream socket in one non-blocking send; a stream socket may take part of a
+writes it to the stream socket in one non-blocking send (the descriptor is put in non-blocking
+mode for the call and its flags restored, as for the capsule: `MSG_DONTWAIT` alone does not make
+macOS refuse a full buffer instead of waiting); a stream socket may take part of a
 message (macOS does), so the rest of a part-sent packet is finished with a bounded wait
 (250 ms, `poll`), since a stream cannot take a part back; if even that fails the stream is torn
 and the supervisor treats the next packet as damaged, as it does for any. When it fails the
