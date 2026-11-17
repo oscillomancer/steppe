@@ -289,6 +289,10 @@ class Collector {
         const std::uint64_t base = bases_[static_cast<std::size_t>(found.module)];
         auto loaded = loaded_.find(base);
         if (loaded == loaded_.end()) {
+            // Reading a module's file can be slow (a cold disk, a virus scan, a share):
+            // new modules load only while the hold's budget remains. A single load
+            // cannot be interrupted, so the bound is "no new load after the deadline".
+            if (expired()) return 0;
             std::wstring path(32768, L'\0');
             const DWORD length = GetModuleFileNameExW(
                 process_, reinterpret_cast<HMODULE>(static_cast<std::uintptr_t>(base)), path.data(),

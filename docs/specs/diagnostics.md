@@ -144,8 +144,11 @@ is the `fault` entry and, being parked in its handler too, is stopped and read l
 other, so its real stack is reported as the fault entry and not under `main` or `other`.
 Its hold therefore waits out interruptions: the one-second wait for the acknowledgement
 resumes after `EINTR` for the time that remains. When even the thread id is unknown, the
-fault entry is `unavailable` with `registers_unreadable`. A thread that cannot reach its stop by the deadline (a killable or
-uninterruptible kernel wait, such as the vfork wait inside `posix_spawn`) stays attached,
+fault entry is `unavailable` with `registers_unreadable`. Interrupting a thread makes a
+blocking call in it (`epoll_wait`, `read`, `nanosleep`) return `EINTR` once, during the
+hold; code that treats `EINTR` as fatal misbehaves there. A thread that cannot reach its
+stop by the deadline (a killable or uninterruptible kernel wait, such as the vfork wait
+inside `posix_spawn`) stays attached,
 reported `deadline`, and is never stopped by the collector afterwards. The guarantee is
 therefore not that nothing stays attached but that nothing can block the worker's exit:
 once the worker dies, the supervisor's wait reaps every thread it still traces (a traced
@@ -166,6 +169,10 @@ since it is parked in its last-chance filter, and is walked from the pc, stack a
 pointers in the capsule. A terminate or abort capsule has none, only the calling thread's
 id, and that thread is suspended and read like any other, as the `fault` entry.
 A thread the OS refuses reports `access_denied`; one that exited, `thread_exited`.
+Module images load lazily, as a walk meets them, and only while the budget remains: after
+the deadline no new module file is opened, and a load already started (a slow disk, a virus
+scan, a network share) cannot be interrupted, which can cut a trace short but never holds
+the worker longer than its one-second wait.
 Frames come from the OS unwinder (`StackWalk64` over each image's unwind data, x64 only;
 other Windows architectures report the faulting thread `unsupported`), with memory read
 through `ReadProcessMemory`. All DbgHelp work is serialized under one lock and loads
@@ -186,9 +193,11 @@ The topic-4 walkers follow frame-pointer chains, so first-party code on Linux an
 macOS is built with `-fno-omit-frame-pointer` and, where the compiler accepts it,
 `-mno-omit-leaf-frame-pointer`, in every preset (`cmake/Defaults.cmake`). The stock
 plug-ins receive the same flags through the parent build's `CMAKE_<LANG>_FLAGS`;
-no template file changes. Third-party and foreign plug-in frames are whatever their
-builders produced: walked best effort and validated, never assumed. Windows uses the
-OS unwinder and takes no flag.
+no template file changes. Everything compiled inside that plug-in sub-build gets them,
+vendored third-party sources fetched there included (a small speed cost, no change of
+behavior). Code built elsewhere, such as foreign plug-ins and system libraries, keeps
+whatever its builders produced: walked best effort and validated, never assumed. Windows
+uses the OS unwinder and takes no flag.
 
 ## Later integration contracts
 
