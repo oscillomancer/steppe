@@ -13,8 +13,10 @@
 // scope's stack address divided by 16 (44 bits, so addresses below 2^48). The stack address
 // is what ties the word to a thread from outside the process: the thread whose stack holds
 // it, and whose stack pointer lies below it, is inside the entry; of several, the innermost
-// (the lowest address) is the one it is in. The generation counts the cell's reuses and is a
-// hint for a reader, never an identity: it repeats after 4,096 of them.
+// (the lowest address) is the one it is in. The address is the frame's, so two scopes of
+// different cells in one function cannot be told apart; nested scopes sit in different frames
+// (a scope in create(), another in the library open it calls). The generation counts the cell's
+// reuses and is a hint for a reader, never an identity: it repeats after 4,096 of them.
 //
 // Cost on the audio path: two release stores per entry, one on entry and one on exit, each
 // a plain store on x86-64 and a store-release on arm64; no loop, no lock, no allocation, no
@@ -114,15 +116,36 @@ inline void countScopeOverflow() noexcept SUPPLE_RT {
 
 enum class Word : std::uint8_t { Audio, Main };
 
+// A token for the calling thread, unique among live threads: the address of a thread-local.
+inline std::uint64_t threadToken() noexcept {
+    static thread_local char marker;
+    return reinterpret_cast<std::uintptr_t>(&marker);
+}
+
 // Marks the calling thread as inside `kind` of the instance that owns `cell` until the end of
-// the scope. `Audio` for the entries the audio thread makes. A scope on kNoCell, or one that
-// finds a word it did not leave idle or in a scope of its own, still restores what it found.
+// the scope. `Audio` for the entries the audio thread makes: the executors never run one
+// instance's audio entries at the same time, so that word has one writer and a scope is two
+// plain stores. `Main` for everything else: the host should never overlap two main-thread entries
+// of one instance, but if it does (an editor opened on one thread while another reads a parameter)
+// the thread that is not first does not record its entry, rather than interleave writes that could
+// leave a stale word naming an entry nobody is in: the first thread to enter owns the word until
+// its outermost scope ends, and its own nested scopes still record. A scope on kNoCell does
+// nothing.
 template <Word W>
 class Scope {
   public:
     Scope(std::uint32_t cell, Entry kind) noexcept SUPPLE_RT {
         if (cell >= kMaxInstances) return;
         auto& cells = table().instances[cell];
+        if constexpr (W == Word::Main) {
+            const std::uint64_t me = threadToken();
+            std::uint64_t expected = 0;
+            if (cells.mainOwner.compare_exchange_strong(expected, me, std::memory_order_acquire,
+                                                        std::memory_order_relaxed))
+                owner_ = &cells.mainOwner;  // the outermost scope releases it
+            else if (expected != me)
+                return;  // another thread is inside an entry of this instance
+        }
         word_ = W == Word::Audio ? &cells.audio : &cells.main;
         previous_ = word_->load(std::memory_order_relaxed);
         // The address of a local of this frame: the scope's own place on the stack. The
@@ -134,12 +157,14 @@ class Scope {
     }
     ~Scope() SUPPLE_RT {
         if (word_) word_->store(previous_, std::memory_order_release);
+        if (owner_) owner_->store(0, std::memory_order_release);
     }
     Scope(const Scope&) = delete;
     Scope& operator=(const Scope&) = delete;
 
   private:
     std::atomic<std::uint64_t>* word_ = nullptr;
+    std::atomic<std::uint64_t>* owner_ = nullptr;  // set only by the outermost Main scope
     std::uint64_t previous_ = 0;
 };
 using AudioScope = Scope<Word::Audio>;

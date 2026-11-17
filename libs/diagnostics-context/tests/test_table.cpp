@@ -21,12 +21,15 @@ TableImage copyOut() {
 }  // namespace
 
 TEST_CASE("the table has the documented size and a stable layout") {
-    CHECK(kTableBytes == 25632);
+    CHECK(kTableBytes == 74816);
     CHECK(sizeof(Table) == sizeof(TableImage));
     CHECK(kMaxThreadSlots == 256);
     CHECK(offsetof(TableImage, threads) == 32);
-    CHECK(offsetof(TableImage, instances) == 32 + 256 * 32);
-    CHECK(offsetof(TableImage, commands) == 32 + 256 * 32 + 1024 * 16);
+    // Each instance cell fills a cache line of its own, so the first one starts on one.
+    CHECK(offsetof(TableImage, instances) == 8256);
+    CHECK(sizeof(TableImage::InstanceCell) == 64);
+    CHECK(alignof(TableImage::InstanceCell) == 64);
+    CHECK(offsetof(TableImage, commands) == 8256 + 1024 * 64);
 }
 
 TEST_CASE("an untouched or foreign image is not valid") {
@@ -126,8 +129,9 @@ TEST_CASE("a slot records the thread's stack, and an exited thread leaves none b
     std::atomic<bool> release{false}, ready{false};
     std::thread worker([&] {
         id = currentThreadId();
-        int marker = 0;
-        local = reinterpret_cast<std::uint64_t>(&marker);
+        // The frame's own address: under AddressSanitizer a local lives on a fake stack in
+        // the heap, which is not what the thread recorded.
+        local = reinterpret_cast<std::uint64_t>(__builtin_frame_address(0));
         (void)registerThread(ThreadRole::Model);
         ready.store(true);
         while (!release.load()) std::this_thread::yield();

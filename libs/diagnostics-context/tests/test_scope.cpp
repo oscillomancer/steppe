@@ -2,9 +2,14 @@
 // Copyright (c) 2026 Supple Audio
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <set>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -180,6 +185,72 @@ TEST_CASE("scopes nest and each exit restores the scope outside it") {
     releaseCell(cell);
 }
 
+TEST_CASE("two threads in main-thread entries of one instance cannot corrupt its word") {
+    const auto cell = acquireCell();
+    REQUIRE(cell != kNoCell);
+    const auto& owner = table().instances[cell].mainOwner;
+    std::atomic<int> state{0};  // 1 A is inside, 2 B has been and gone, 3 A may leave
+    std::uint64_t whileInside = 0, whileBoth = 0;
+    std::thread a([&] {
+        MainScope scope(cell, Entry::Gui);
+        whileInside = mainWord(cell);
+        state.store(1);
+        while (state.load() != 3) std::this_thread::yield();
+    });
+    while (state.load() != 1) std::this_thread::yield();
+    CHECK(owner.load() != 0);
+    std::thread b([&] {
+        {
+            MainScope scope(cell, Entry::Params);  // not first: records nothing
+            whileBoth = mainWord(cell);
+            {
+                MainScope nested(cell, Entry::State);  // nor does anything nested in it
+                CHECK(mainWord(cell) == whileInside);
+            }
+        }
+        // B has left; A is still inside, and its word is exactly as it was.
+        CHECK(mainWord(cell) == whileInside);
+        CHECK(owner.load() != 0);
+        state.store(2);
+    });
+    b.join();
+    CHECK(whileBoth == whileInside);
+    CHECK(unpackWord(mainWord(cell)).kind == Entry::Gui);
+    state.store(3);
+    a.join();
+    // Both are gone: the word is idle and the cell is free of an owner, whichever left first.
+    CHECK(unpackWord(mainWord(cell)).kind == Entry::None);
+    CHECK(owner.load() == 0);
+    // And the next entrant, from either thread, records as usual.
+    {
+        MainScope scope(cell, Entry::Params);
+        CHECK(unpackWord(mainWord(cell)).kind == Entry::Params);
+        CHECK(owner.load() != 0);
+    }
+    CHECK(owner.load() == 0);
+    releaseCell(cell);
+}
+
+TEST_CASE("a thread's own nested main scopes record, and the audio word has no owner") {
+    const auto cell = acquireCell();
+    REQUIRE(cell != kNoCell);
+    {
+        MainScope outer(cell, Entry::Params);
+        {
+            MainScope inner(cell, Entry::MainThread);
+            CHECK(unpackWord(mainWord(cell)).kind == Entry::MainThread);
+        }
+        CHECK(unpackWord(mainWord(cell)).kind == Entry::Params);
+    }
+    CHECK(table().instances[cell].mainOwner.load() == 0);
+    {
+        AudioScope audio(cell, Entry::Process);
+        CHECK(table().instances[cell].mainOwner.load() == 0);  // audio scopes take no ownership
+        CHECK(unpackWord(audioWord(cell)).kind == Entry::Process);
+    }
+    releaseCell(cell);
+}
+
 TEST_CASE("a scope on no cell does nothing, and its overflow counter stays still") {
     const auto before = table().header.scopeOverflow.load();
     {
@@ -238,4 +309,96 @@ TEST_CASE("a scope's address lies on the stack its thread registered") {
     CHECK(low != 0);
     CHECK(recorded >= low);
     CHECK(recorded < high);
+}
+
+// ---- Overhead, informational (ADR-0083, topic 5b) ------------------------------------------
+// What a scope costs on the audio path, measured in an optimized build: alone, and with
+// several workers each in a scope on an instance of its own at the same moment. The cells
+// each fill a cache line for that reason: measured on the 16-byte cells that came first (four
+// to a line), the concurrent figure was 6.0, 5.7 and 9.1 ns for 2, 4 and 8 workers against
+// 1.75, 1.74 and 1.84 ns with each cell on its own line. It prints numbers and asserts only
+// that the work was done: no wall-clock time decides anything. Run it with SUPPLE_SCOPE_BENCH=1
+// in the release preset:
+//   SUPPLE_SCOPE_BENCH=1 diagnostics-context.tests -tc="scope overhead*"
+namespace {
+using Clock = std::chrono::steady_clock;
+double nanosecondsPer(Clock::duration time, std::uint64_t count) {
+    return std::chrono::duration<double, std::nano>(time).count() / static_cast<double>(count);
+}
+// Enters and leaves one scope on `cell`, `count` times; returns a sum that depends on every
+// pass, so the loop cannot be dropped.
+[[gnu::noinline]] std::uint64_t scopes(std::uint32_t cell, std::uint64_t count) {
+    std::uint64_t seen = 0;
+    for (std::uint64_t i = 0; i < count; ++i) {
+        AudioScope scope(cell, Entry::Process);
+        asm volatile("" ::: "memory");
+        seen += static_cast<std::uint64_t>(unpackWord(audioWord(cell)).kind);
+    }
+    return seen;
+}
+// The same loop without the scope.
+[[gnu::noinline]] std::uint64_t noScopes(std::uint32_t cell, std::uint64_t count) {
+    std::uint64_t seen = 0;
+    for (std::uint64_t i = 0; i < count; ++i) {
+        asm volatile("" ::: "memory");
+        seen += static_cast<std::uint64_t>(unpackWord(audioWord(cell)).kind);
+    }
+    return seen;
+}
+template <class Work>
+double concurrently(unsigned workers, std::uint64_t count, Work work) {
+    std::atomic<unsigned> ready{0};
+    std::atomic<bool> go{false};
+    std::vector<std::thread> threads;
+    std::vector<std::uint64_t> sums(workers);
+    for (unsigned i = 0; i < workers; ++i)
+        threads.emplace_back([&, i] {
+            ready.fetch_add(1);
+            while (!go.load()) std::this_thread::yield();
+            sums[i] = work(i, count);
+        });
+    while (ready.load() < workers) std::this_thread::yield();
+    const auto start = Clock::now();
+    go.store(true);
+    for (auto& thread : threads) thread.join();
+    const auto elapsed = Clock::now() - start;
+    for (const auto sum : sums) CHECK(sum == count);
+    return nanosecondsPer(elapsed, count);  // per scope, one worker's share
+}
+}  // namespace
+
+TEST_CASE("scope overhead (informational)") {
+    if (const char* on = std::getenv("SUPPLE_SCOPE_BENCH"); !on || std::string(on) != "1") return;
+    constexpr std::uint64_t kCount = 50'000'000;
+    const auto cell = acquireCell();
+    REQUIRE(cell != kNoCell);
+    (void)scopes(cell, 1'000'000);  // warm up
+    auto start = Clock::now();
+    const auto without = noScopes(cell, kCount);
+    const double base = nanosecondsPer(Clock::now() - start, kCount);
+    start = Clock::now();
+    const auto with = scopes(cell, kCount);
+    const double scoped = nanosecondsPer(Clock::now() - start, kCount);
+    // The loop with a scope sees it open on every pass; the loop without sees an idle word.
+    CHECK(with == static_cast<std::uint64_t>(Entry::Process) * kCount);
+    CHECK(without == 0);
+    std::fprintf(stderr,
+                 "scope overhead: one thread, %.2f ns per loop with a scope, %.2f ns without; "
+                 "the scope adds %.2f ns (one enter and one exit)\n",
+                 scoped, base, scoped - base);
+    releaseCell(cell);
+
+    // Several workers, each on an instance of its own, processed at the same moment.
+    const unsigned hardware = std::max(2u, std::thread::hardware_concurrency());
+    for (const unsigned workers : {2u, 4u, std::min(8u, hardware)}) {
+        std::vector<std::uint32_t> cells;
+        for (unsigned i = 0; i < workers; ++i) cells.push_back(acquireCell());
+        const double real = concurrently(workers, kCount / 4, [&](unsigned i, std::uint64_t n) {
+            return scopes(cells[i], n) / static_cast<std::uint64_t>(Entry::Process);
+        });
+        std::fprintf(stderr,
+                     "scope overhead: %u workers, %.2f ns per scope, one cell to a cache line\n",
+                     workers, real);
+        for (const auto c : cells) releaseCell(c);
+    }
 }

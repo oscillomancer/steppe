@@ -78,6 +78,7 @@ std::uint32_t acquireCell() noexcept {
                 (generationOf(entry.audio.load(std::memory_order_relaxed)) + 1) & kGenerationMask);
             const std::uint64_t idle = packWord(Entry::None, next, 0);
             entry.main.store(idle, std::memory_order_relaxed);
+            entry.mainOwner.store(0, std::memory_order_relaxed);
             entry.audio.store(idle, std::memory_order_release);
             return cell;
         }
@@ -93,6 +94,7 @@ void releaseCell(std::uint32_t cell) noexcept {
     const std::uint64_t idle =
         packWord(Entry::None, generationOf(entry.audio.load(std::memory_order_relaxed)), 0);
     entry.main.store(idle, std::memory_order_relaxed);
+    entry.mainOwner.store(0, std::memory_order_relaxed);
     entry.audio.store(idle, std::memory_order_relaxed);
     gTaken[cell / 64].fetch_and(~(std::uint64_t{1} << (cell % 64)), std::memory_order_release);
 }

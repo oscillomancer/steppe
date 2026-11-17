@@ -74,9 +74,15 @@ struct TableT {
         W64 id, info, stackLow, stackHigh;
     };
     // Two words per instance, each with one writer: `audio` for the audio-thread entries
-    // and `main` for everything else (step 5b).
-    struct InstanceCell {
-        W64 audio, main;
+    // and `main` for everything else (step 5b). A cell fills a cache line of its own:
+    // instances that different workers process at the same moment would otherwise write words
+    // of one line, and the line would bounce between their cores (measured with scopes
+    // around nothing: 6 to 9 ns for each scope with four cells to a line, against under 2 ns
+    // with one).
+    // `mainOwner` is the token of the thread that is inside a main-thread entry, 0 when none:
+    // it keeps two threads from writing `main` at once (see scope.h).
+    struct alignas(64) InstanceCell {
+        W64 audio, main, mainOwner;
     };
     // The last registered commands (step 5d), model thread only.
     struct CommandEntry {
@@ -94,9 +100,10 @@ static_assert(std::atomic<std::uint32_t>::is_always_lock_free &&
               std::atomic<std::uint64_t>::is_always_lock_free);
 static_assert(sizeof(Table) == sizeof(TableImage) && alignof(Table) == alignof(TableImage));
 static_assert(sizeof(Table::Header) == 32 && sizeof(Table::ThreadSlot) == 32 &&
-              sizeof(Table::InstanceCell) == 16 && sizeof(Table::CommandEntry) == 16);
+              sizeof(Table::InstanceCell) == 64 && sizeof(Table::CommandEntry) == 16);
+static_assert(offsetof(TableImage, instances) % 64 == 0);
 static_assert(sizeof(TableImage) ==
-              32 + 32 * kMaxThreadSlots + 16 * (kMaxInstances + kMaxCommandEntries));
+              offsetof(TableImage, instances) + 64 * kMaxInstances + 16 * kMaxCommandEntries);
 static_assert(std::is_trivially_copyable_v<TableImage> && std::is_standard_layout_v<TableImage>);
 constexpr std::size_t kTableBytes = sizeof(TableImage);
 
