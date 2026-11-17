@@ -196,7 +196,8 @@ is its name) is counted in `ignored`, never listed, never touched.
 when it is empty and under a minute old, because the creator locks before it writes: an empty
 marker is one being created. An older empty one (a creator that failed between creating the file
 and its first write, which now removes the file itself on a failure it sees) is judged by its lock
-like any other, so it cannot read as held for ever. A marker nobody holds is *free*: the run is over. A report whose marker is held is
+like any other, so it cannot read as held for ever; so is an empty one dated in the future (the clock
+was set back), which is not young. A marker nobody holds is *free*: the run is over. A report whose marker is held is
 still being published and counts in `pending`, not in `reports`; `readReport` and `acknowledge`
 refuse it (`diagnostics.no_report`). A report with no marker, or a free one, counts. A free marker
 with no report is an `unreported` run: the supervisor died or could not write, and the list says

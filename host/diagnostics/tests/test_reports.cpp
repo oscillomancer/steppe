@@ -354,6 +354,32 @@ TEST_CASE("a marker still being created is live, however its lock looks") {
     CHECK(listing->liveRuns == 1);
     CHECK(listing->unreported.empty());
 }
+TEST_CASE("an empty marker dated in the future is judged by its lock, not taken as young") {
+    // The clock was set back after a creation failed: the empty file's time is ahead of now. It
+    // is no younger than any other empty marker, so it must not read as held until the clock
+    // catches up.
+    Root root;
+    {
+        std::ofstream(file(root, 1, ".run"));
+    }
+    fs::permissions(file(root, 1, ".run"), fs::perms::owner_read | fs::perms::owner_write,
+                    fs::perm_options::replace);
+    fs::last_write_time(file(root, 1, ".run"),
+                        fs::file_time_type::clock::now() + std::chrono::hours(2));
+    auto listing = listReports(root.path);
+    REQUIRE(listing);
+    CHECK(listing->liveRuns == 0);
+    REQUIRE(listing->unreported.size() == 1);
+    // A creator that really holds the lock is held, whatever the time says.
+    auto live = createMarker(root.path, boot(2));
+    REQUIRE(live);
+    fs::last_write_time(file(root, 2, ".run"),
+                        fs::file_time_type::clock::now() + std::chrono::hours(2));
+    listing = listReports(root.path);
+    REQUIRE(listing);
+    CHECK(listing->liveRuns == 1);
+    releaseMarker(*live);
+}
 TEST_CASE("an empty marker that stays empty is a run that ended, not one being created") {
     // A marker is empty for the instant between its creation and its first write. One left empty
     // (the creator failed in between) must not read as held for ever: it could never be listed,

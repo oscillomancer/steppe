@@ -390,8 +390,10 @@ MarkerState probeMarker(const fs::path& path) {
         const auto ticks = [](const FILETIME& t) {
             return (static_cast<std::uint64_t>(t.dwHighDateTime) << 32) | t.dwLowDateTime;
         };
-        // 100 ns units; a time in the future counts as young.
+        // 100 ns units; a time in the future (the clock was set back) is not young: the lock
+        // decides, as for any older empty marker.
         const bool young =
+            ticks(info.ftLastWriteTime) <= ticks(nowTime) &&
             ticks(info.ftLastWriteTime) + kEmptyMarkerGraceSeconds * 10'000'000ULL > ticks(nowTime);
         if (info.nFileSizeHigh == 0 && info.nFileSizeLow == 0 && young) {
             result = MarkerState::Held;
@@ -413,7 +415,9 @@ MarkerState probeMarker(const fs::path& path) {
     MarkerState result = MarkerState::Unreadable;
     struct stat info{};
     if (::fstat(fd, &info) == 0 && S_ISREG(info.st_mode) && info.st_uid == ::geteuid()) {
-        if (info.st_size == 0 && ::time(nullptr) - info.st_mtime < kEmptyMarkerGraceSeconds)
+        // A modification time ahead of the clock (it was set back) is not young either.
+        const std::int64_t age = static_cast<std::int64_t>(::time(nullptr)) - info.st_mtime;
+        if (info.st_size == 0 && age >= 0 && age < kEmptyMarkerGraceSeconds)
             result = MarkerState::Held;  // being created
         else if (::flock(fd, LOCK_SH | LOCK_NB) == 0)
             result = MarkerState::Free;  // the lock goes with the descriptor, on close
