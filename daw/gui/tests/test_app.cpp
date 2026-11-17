@@ -1688,6 +1688,53 @@ TEST_CASE("tap tempo fills the tempo form and applies only on Set or Enter") {
     CHECK(a.root->find("tempo.form") == nullptr);
 }
 
+TEST_CASE("transport: the engine readout is in words and warns only of what happened") {
+    engine::EngineStatus st;
+    // Stopped: one warning, no format.
+    CHECK(gui::engineReadout(st).problems == "Audio stopped");
+    CHECK(gui::engineReadout(st).format.empty());
+    // Running and well: the rate and the device's period, nothing else.
+    st.running = true;
+    st.sampleRate = 48000;
+    st.block = 64;
+    st.period = 256;
+    CHECK(gui::engineReadout(st).format == "48 kHz \xc2\xb7 256 samples");
+    CHECK(gui::engineReadout(st).problems.empty());
+    st.sampleRate = 44100;
+    st.period = 0;  // a backend without a period runs in blocks
+    CHECK(gui::engineReadout(st).format == "44.1 kHz \xc2\xb7 64 samples");
+    st.block = 1;
+    CHECK(gui::engineReadout(st).format == "44.1 kHz \xc2\xb7 1 sample");
+    // Only the counts that are not zero, each with its noun.
+    st.xruns = 1;
+    CHECK(gui::engineReadout(st).problems == "1 dropout");
+    st.xruns = 3;
+    st.processErrors = 1;
+    CHECK(gui::engineReadout(st).problems == "3 dropouts \xc2\xb7 1 plug-in error");
+    st.anticipationMisses = 2;
+    CHECK(gui::engineReadout(st).problems ==
+          "3 dropouts \xc2\xb7 2 render gaps \xc2\xb7 1 plug-in error");
+
+    // The bar shows the same, and its buttons and readouts share a centre line.
+    RateApp a;
+    const gui::EngineReadout now = gui::engineReadout(a.app->engineStatus());
+    auto text = [&](const char* id) {
+        auto* label = dynamic_cast<ui::Label*>(a.root->find(id));
+        REQUIRE(label);
+        return label->text();
+    };
+    CHECK(text("transport.engine") == now.format);
+    CHECK(text("transport.engine.problems") == now.problems);
+    auto middle = [&](const char* id) {
+        const ui::Rect r = a.root->find(id)->bounds();
+        return r.y + r.h / 2;
+    };
+    const float line = middle("transport.play");
+    for (const char* id : {"transport.start", "transport.position", "transport.time",
+                           "transport.meter", "transport.tempo", "transport.rate"})
+        CHECK(std::abs(middle(id) - line) <= 0.5f);
+}
+
 TEST_CASE("playrate transport: drag coalesces undo, readback and double-click reset") {
     RateApp a;
     CHECK(a.root->find("transport.meter")->bounds().x <

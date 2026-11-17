@@ -65,6 +65,16 @@ class ToolButton : public ui::Button {
     std::function<void(const ui::Rect&)> context_;
 };
 
+// The thin upright rule between the menus and the toolbar.
+class ToolbarRule : public ui::Node {
+  public:
+    using Node::Node;
+    void paint(ui::Canvas& c) override {
+        const ui::Rect r = bounds();
+        c.fillRect({r.x + (r.w - 1) / 2, r.y, 1, r.h}, c.theme().color("rule"));
+    }
+};
+
 class ChromeBar : public ui::Node {
   public:
     using Node::Node;
@@ -325,8 +335,11 @@ void fillChrome(ui::Node& bar, ui::Root& root, AppActions& actions, const Chrome
                            anchor);
         });
     }
-    auto& gap = bar.emplace<ui::Node>("chrome.gap");
-    gap.layout.width = ui::SizeRule::fixed(16);
+    // A rule sets the toolbar off from the menus; its buttons are quiet at
+    // rest (§7), so the row reads as menus first, shortcuts second.
+    auto& gap = bar.emplace<ToolbarRule>("chrome.gap");
+    gap.layout.width = ui::SizeRule::fixed(17);
+    gap.layout.height = ui::SizeRule::fixed(16);
     for (const std::string& id : layout.toolbar) {
         const actions::Action* a = actions.registry().find(id);
         if (!a) continue;
@@ -335,6 +348,7 @@ void fillChrome(ui::Node& bar, ui::Root& root, AppActions& actions, const Chrome
         auto& b = bar.emplace<ToolButton>(
             "tool." + id, shortName(*a), [&actions, id] { actions.invoke(id); }, context);
         b.layout.height = ui::SizeRule::fixed(26);
+        b.quiet = true;
     }
 }
 

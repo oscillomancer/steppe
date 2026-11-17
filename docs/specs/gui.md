@@ -290,10 +290,19 @@ playing, red recording, accent for loop, punch, metronome, count-in and a
 follow mode other than the default (off or smooth; by page it is unlit) — and
 keeps its state word as its value text ("follow page",
 "follow off", "follow smooth"); position in bars|beats and
-time, tempo/meter, CPU/xrun/anticipation readouts from engine telemetry; the
-rate and buffer readout shows the device's period, e.g. the JACK quantum);
+time, tempo/meter, and at the right the engine readout in words
+(`engineReadout`): what the device runs at, quiet, as "48 kHz · 256
+samples" (the buffer is the device's period, e.g. the JACK quantum, or the
+engine's block for a backend without one); before it, in bold `meter-hot`
+and only while there is something to say, "Audio stopped" for an engine
+that is not running, or what has gone wrong since it started, each count
+with its noun and none shown at zero: dropouts (the device's xruns),
+render gaps (anticipation misses) and plug-in errors (`processErrors`);
+`engine.status` has the full telemetry; the bar's buttons, fields and
+readouts share one centre line);
 toolbar (actions, §6: only what the transport bar does not already have —
-undo, redo, add channel, the actions list by default); the arrange area (track control panel + timeline);
+undo, redo, add channel, racks and the actions list by default; set off
+from the menus by an upright rule, its buttons quiet at rest, §7); the arrange area (track control panel + timeline);
 bottom docks for the mixer and MIDI editor, and a history dock; separate
 floating windows for the FX chain, routing matrix and plugin GUIs. Render and
 other dialogs remain popups. Window layout is UI state (§1.2).
@@ -2086,7 +2095,10 @@ Steppe's own character, not a REAPER clone or a generic dark theme
   quiet at rest: an off toggle is an ink outline and letter, a secondary
   button its text alone. The state's colour and the button's box appear
   under the pointer, so at rest the only colour in a row is a state that is
-  on, the strip's badge and the track's own colour.
+  on, the strip's badge and the track's own colour. The toolbar's buttons
+  are quiet in the same way, so the top row reads as menus first. A
+  warning is the one thing that adds colour unasked: the engine readout
+  says nothing in colour until audio stops or drops out (§4.1).
 
 ## 8. Commands and UI state
 

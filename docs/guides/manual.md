@@ -70,6 +70,20 @@ Audio device dialog then opens and says why. Choose another device, or
 what is running: the backend, rate, buffer size, device period and output
 latency.
 
+The right end of the transport bar shows what the device is running at, for
+example **48 kHz · 256 samples**. It stays quiet while all is well. If
+something goes wrong, an amber note appears beside it and stays until the
+audio engine restarts:
+
+- **Audio stopped**: no device is running. Open **Edit > Audio device…**.
+- **dropouts**: the device asked for audio and did not get it in time. You
+  heard a click or a gap. A larger buffer size helps.
+- **render gaps**: Steppe had not finished rendering a stretch of the
+  project when it was due. A larger buffer size or fewer heavy plug-ins
+  helps.
+- **plug-in errors**: a plug-in refused to start. Its track plays without
+  it until it starts.
+
 ### Outputs and several masters
 
 Steppe opens every output of the device (up to 64; with JACK, one per
