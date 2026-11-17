@@ -194,3 +194,9 @@ is not needed until the inventory has something to resolve, and it is added then
 license-isolation check does not cover executables, since the test tools under `plugins/` link
 the GPL host already and are combined works; it covers every library and module built from the
 permissive tree.
+
+*Note, 2026-11-17, ADR-0091 (the launcher's stop):* the sentence that a dead supervisor must
+not kill a healthy worker narrows to a supervisor that failed as a collector. A supervisor
+that ends without saying so, as a launcher's hard kill leaves it, is a stop request: the
+worker stops as `SIGTERM` stops it and ends hard after ten seconds. See
+`0091-supervisor-end-and-launcher-stop.md` and `docs/specs/diagnostics.md`, "Supervisor end".

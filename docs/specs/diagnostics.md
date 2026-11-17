@@ -23,18 +23,79 @@ no worker marker or terminal handler is enabled. Invalid/unavailable bootstrap
 degrades to ordinary frontend operation without diagnostic privileges. Hidden bootstrap arguments are removed before
 ordinary parsing. User arguments/stdio and handled return status survive. Unused
 supervisor stdio handles are closed after spawn so a dead worker closes its pipe.
-Supervision failure degrades diagnostics without killing a healthy worker.
+Supervision failure (a collector that crashes) degrades diagnostics without killing a healthy
+worker; a supervisor that ends without saying so is the launcher's stop (below).
 
-*Known limit, a hard-killed supervisor.* Collector loss leaves the healthy app alive by
-design (no kill-on-close job on Windows, no parent-death signal on POSIX), because losing
-unsaved work to a killed supervisor is the worse failure. The cost is the same on all three
-platforms: after a hard kill of the supervisor (`SIGKILL`, Task Manager or `TerminateProcess`
-on the supervisor alone) the app keeps running without crash capture, and a headless `serve`
-worker keeps its control socket and endpoint lock until it is stopped itself. On POSIX the
-supervisor forwards `SIGINT` and `SIGTERM` to the worker, so those stop both. On Windows it
-forwards nothing and ignores Ctrl-C itself, so a console Ctrl-C reaches the worker directly
-and a normal stop is the app ending (closing its window, or Ctrl-C in its console); a tool
-that must end both processes ends the tree (`taskkill /T`), as the integration tests do.
+### Supervisor end (ADR-0091)
+
+A supervisor that goes away is one of two things, and the worker tells which. Supervision
+failure (the collector crashes) leaves the healthy worker running without capture, as
+above. A launcher's stop (a hard kill of the supervisor: `SIGKILL`, `TerminateProcess`,
+Task Manager, a service manager's escalation) stops the worker too, so the control socket
+and the endpoint lock (ADR-0089) are released and a restart succeeds. A graceful stop is
+unchanged: POSIX forwards `SIGINT` and `SIGTERM` from the supervisor to the worker; Windows
+forwards nothing and the supervisor ignores Ctrl-C, which reaches the worker directly.
+
+*What the supervisor says.* Before its own fatal paths end it, the supervisor tells the
+worker "collector failed". POSIX: handlers for `SIGSEGV`, `SIGBUS`, `SIGILL`, `SIGFPE` and
+`SIGABRT` (the worker's set; a signal a sanitizer or another owner already handles stays
+theirs) run on an alternate stack, so a stack overflow still reports. Each sends the one
+byte `F` with `MSG_DONTWAIT | MSG_NOSIGNAL` and re-raises with the default action; the
+supervisor's `std::terminate` ends in `abort`, which the set covers. Windows: the top-level
+exception filter (with a 64 KiB stack guarantee on the supervisor's main thread) and the
+abort signal set `collectorFailed`, one atomic in the channel's shared block, and chain to
+what was there. A supervisor that exits normally has already seen the worker exit and sends
+nothing.
+
+*Everything that flows from supervisor to worker.* The boot packet, once, before the worker
+starts (POSIX: in the socket's buffer, read by `adopt`; Windows: the shared block); the
+acknowledgement, which only a worker in its terminal handler waits for (POSIX: the byte `A`;
+Windows: an event); and the notice (POSIX: the byte `F`; Windows: `collectorFailed`).
+Nothing else is ever sent.
+
+*How the worker watches.* One thread starts right after the Ready packet, on a trusted
+channel, on every platform and in sanitizer builds. It is never on the audio path, is not in
+the execution table (a report shows it as an `other` thread parked in its wait), takes the
+alternate-stack hook so a fault on it is reported, and on POSIX runs with every signal
+blocked except the synchronous faults, so a process-directed `SIGTERM` never lands on it.
+POSIX: `poll` on the channel, then `recv(MSG_PEEK | MSG_DONTWAIT)`; a per-call flag, so the
+descriptor's blocking mode, which a capsule transfer changes on the same open file
+description, decides nothing. End of file, or a reset (a supervisor killed with packets of
+ours unread leaves one), is the supervisor gone. Any byte ends the watching, and it is only
+peeked, never consumed: `F` is collector loss; `A` means the worker is already in its
+terminal handler and its one-second wait must not be disturbed; any other byte is not
+understood and the watcher does nothing. Windows: a wait on the supervisor's process handle,
+a `SYNCHRONIZE` duplicate the supervisor made of itself whose process id `adopt` checked
+against the boot packet (so it cannot be a reused id); once it signals, `collectorFailed`
+decides. Once any terminal handler has begun the watcher does nothing: a crashing worker does
+not also start a stop.
+
+*The stop.* For the launcher's stop the worker does what a forwarded `SIGTERM` does: POSIX
+`kill(getpid(), SIGTERM)`, Windows `raise(SIGTERM)`, which runs the handler the program
+installed (the model loop of `serve` and of the GUI turn it into an orderly shutdown; a
+program that has not installed one yet gets the default action). The bound is ten seconds
+from the request on the monotonic clock, measured by the watcher, and then the worker ends
+hard: POSIX `_exit(128 + SIGTERM)`, Windows `TerminateProcess` with the same code. It is
+not `abort`, which would run the crash handlers and publish a report to nobody. The hard end
+runs no destructor: the bridge children of a hard-ended worker end with it (POSIX: each sees
+its control socket hang up, Windows: they are in a kill-on-close job); the endpoint lock is
+released by the system when the process ends (POSIX `flock`; Windows closes the handle during
+process rundown, a moment the system chooses, so a restart that races it can still be
+refused once, as ADR-0089 notes).
+
+*Known limits.* A fast-fail or a stack overflow too deep for the filter to run (Windows) sets
+no flag and reads as the launcher's stop; a supervisor ended by the kernel (the out-of-memory
+killer) leaves no notice on any platform and reads the same. Before the Ready packet there is
+no watcher, so a kill in the first milliseconds leaves what it always left. The program that
+is stopped this way ends as `SIGTERM` ends it: a GUI session is not asked about unsaved
+changes. A closed terminal (`SIGHUP` of the supervisor, which has no handler) is also an
+external end and stops the worker, which gets the same hangup from the terminal anyway. The
+tests decide each case by outcome, never by time: collector loss (the supervisor crashes by a
+fault, an abort, or a stack overflow: the worker concludes "collector" and goes on serving),
+the supervisor killed (the worker concludes "launcher", takes the stop and is gone), the
+supervisor killed with a worker whose stop never finishes (gone within the bound, which the
+fixture shortens), and the watcher on a channel a test holds (end of file, the notice, an
+acknowledgement byte, an unexpected byte and garbage; the byte is left unconsumed).
 
 A fixed native packet is bounded below PIPE_BUF; version/magic/type/length and
 role are validated. Only the inherited peer can send it; there is no named network

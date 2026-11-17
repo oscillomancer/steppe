@@ -1239,6 +1239,18 @@ MIDI and command arguments. Steppe never uploads them; your OS crash reporting
 continues under your own OS settings. Safe-load and next-start notices arrive in
 a later topic; the current delivery scope is listed in STATUS.md.
 
+#### Stopping Steppe from a script or a service
+
+Steppe runs as two processes, a supervisor that you start and a worker that does the
+work. Stop it the ordinary way: close the window, or send the program `SIGTERM` or Ctrl-C
+(on Windows, Ctrl-C in its console, or close the window). Ending only the process you
+started, with `kill -9`, Task Manager or `TerminateProcess`, stops the program too: the
+worker notices that its supervisor vanished and shuts down as if it had been sent
+`SIGTERM`, ending hard if that has not finished within ten seconds. It then frees its
+control socket, so starting Steppe again works. A window closed this way does not ask
+about unsaved changes, as with `SIGTERM`. If Steppe's supervisor itself crashes, the worker
+keeps running without crash capture.
+
 ### Agent transport limits
 
 Control/MCP are local same-user endpoints. RPC queues at most1,024 pending

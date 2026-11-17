@@ -1521,10 +1521,14 @@ apart; the audio driver's callback thread is found by its stack mapping, which a
 no readable map defeats (the report then says an entry could not be tied to a thread). The
 instance inventory, command entries and plug-in names (the later steps of topic 5), bridge
 correlation, restart UI/hangs and release package verification remain later topics.
-Known limit: after a hard kill of the supervisor alone (`SIGKILL`, `TerminateProcess`) the app
-keeps running without crash capture, and a headless `serve` worker keeps its socket and
-endpoint lock until it is stopped itself. This is deliberate (collector loss must not kill
-the app and its unsaved work). POSIX forwards `SIGINT` and `SIGTERM` to the worker; on Windows
-a normal stop is the app ending (closing its window, or Ctrl-C in its console, which reaches
-the worker directly) and `taskkill /T` ends both processes. Native macOS/Windows CI and
+Supervisor end (ADR-0091): a supervisor that crashes tells the worker first and the worker keeps
+running without crash capture; a supervisor ended with no notice (`SIGKILL`, `TerminateProcess`,
+a launcher's hard kill) stops the worker as `SIGTERM` does and ends it hard after ten seconds,
+so the endpoint lock and control socket are released and a restart succeeds. Known behaviour:
+a GUI stopped this way is not asked about unsaved changes (as `SIGTERM` does today). Known
+limits: on Windows a fast-fail or a stack overflow too deep for the filter reads as the
+launcher's stop, as does a supervisor ended by the kernel on any platform; before the Ready
+packet no watcher exists; the watcher thread shows in a report as an `other` thread. The
+watcher and the supervisor's handlers are unproven on macOS and Windows until native CI runs
+them. Native macOS/Windows CI and
 signed Mach capability/collector-loss tests are due before merge/release.
