@@ -142,9 +142,9 @@ Atomic private publication uses native wide Windows paths and existing atomic
 write/durability primitives. Retention prunes oldest validated owned reports until
 count <=20 and total <=50 MiB. Validation checks the implemented role/kind/platform/architecture
 enums, native code/cause bounds, nonnegative drop counters and incomplete-report
-reasons. The thread and plug-in arrays have nested schemas (topics 4 and 5c) that are
-validated field by field; the command array must be empty until its nested schema is
-implemented, and a nonempty one does not authorize retention deletion.
+reasons. The thread, plug-in and command arrays have nested schemas (topics 4, 5c and 5d)
+that are validated field by field; a report whose arrays have another shape is kept, never
+authority to delete another file.
 Malformed/link/foreign entries are neither followed
 nor treated as authority to delete another file. Run markers/locks and recovery
 are not report-retention inputs. Concurrent pruning tolerates entries disappearing
@@ -334,12 +334,12 @@ isolation; and `cmake/LicenseIsolation.cmake` walks, at the end of configuration
 graph of every library and module built from those directories and fails on one that reaches
 the library, directly or through another target (executables are not checked: a test tool
 that links the GPL host is a GPL combined work, not an MIT library). Today `diagnostics`,
-`engine` and `clap-host` link it; command-bus joins in the step that uses it.
+`engine`, `clap-host` and `command-bus` link it.
 
 The table is one static, zero-filled, page-aligned block per process (74,816 bytes: a
 32-byte header, 256 thread slots of 32 bytes, 1,024 instance cells of 64 bytes, one cache
-line each, and a 64-entry command ring of 16 bytes; the ring is laid out now and used from a
-later step). It
+line each, and a 64-entry command ring of 16 bytes, written by the command dispatcher from
+step 5d). It
 holds integers and enums only, never a string, a pointer into model or plug-in memory or
 anything a user typed, and carries a magic and a version. It is not in the binary's file
 image (it is `.bss`). The 256 slots are sized for the real maximum of owned threads: the
@@ -515,6 +515,15 @@ announced; their identity rules (allowlisted ids for host and stock modules, an 
 for library and project modules, never a name, source, parameter or port) are in the origin
 field's closed set and applied when modules get cells.
 
+*Which threads announce.* Creating, activating, deactivating and destroying an instance or a
+library: the model thread, the plan compiler, a scan or sandbox session thread. Never `process`,
+`reset`, a flush, or start/stop of processing. Two checks hold that. The announcement functions
+carry no `nonblocking`, so clang's function-effects analysis rejects a call from a `SUPPLE_RT`
+function at compile time. And every call takes a lock, with a sink installed or not, so under
+the `rtsan` preset an announcement reached from an audio path aborts even in a process with no
+sink: `rtsan-announce-check` (a program that announces inside a `SUPPLE_RT` function, registered
+`WILL_FAIL`, beside a control that makes the same calls outside one).
+
 *Transport.* The diagnostics frontend installs the sink after it has sent Ready, and only on a
 trusted channel. Each announcement becomes one `Instance` packet (protocol version 2: the
 packet grew by the `InstanceRecord`, fixed-size plain fields, and by the worker's count of
@@ -522,7 +531,9 @@ events dropped so far; 392 bytes, under 512). The send never waits for the super
 writes it to the stream socket in one non-blocking send; a stream socket may take part of a
 message (macOS does), so the rest of a part-sent packet is finished with a bounded wait
 (250 ms, `poll`), since a stream cannot take a part back; if even that fails the stream is torn
-and the supervisor treats the next packet as damaged, as it does for any. The Windows channel
+and the supervisor treats the next packet as damaged, as it does for any. When it fails the
+sink closes for good (the drop counted), and announcements queued behind it give up at once, so
+a process waits for a stalled supervisor at most once and never once per announcement. The Windows channel
 keeps `Instance` packets in a ring of 256 whole packets next to its one-slot-per-kind
 hand-over: the worker advances `head` after it filled a slot, the supervisor `tail` after it
 copied one out, and the supervisor drains the ring before it takes a slot, so that the
@@ -573,6 +584,62 @@ never taken for complete without that being said. The strict validator checks ev
 enum, string (length, UTF-8, no control character), the ids (strictly increasing), `build`
 (a known format and lowercase hex) and each `executing` entry (a known entry name, a thread
 of the report, a known match).
+
+### Command breadcrumbs (topic 5d)
+
+The report says which registered commands the model thread had begun. `libs/command-bus`
+links the execution table and its dispatcher writes the table's ring of 64 entries
+(`supple/diagctx/commands.h`). An entry is three integers: the command's id, the category of
+its origin and a state. Nothing else is recorded, ever: no argument, result, error text,
+label, path, script text, client or agent string, gesture, duration, or the command log's
+copy. The dispatcher writes an entry after the name resolved to a registered command (an
+unknown name or version, or text that is not a command, never enters, so a caller cannot put
+text of its own into a report) and before the arguments are validated, and marks it `ended`
+on every path out, whether the command succeeded or failed. A command run inside another (the
+steps of a batch, a script's calls) is an entry of its own, in order, inside the outer's. A
+command that nests more than 64 deep or wide overwrites its own entry, which is then left as it
+was.
+
+*The name table.* The id is the command's index in registration order. When the process's
+dispatcher is built (the registry is complete), the names go to the supervisor once, through
+the inventory sink and as `Instance` packets with the `Names` event: four names to a packet,
+`cell` the id of the first (a multiple of four), the four text slots holding the names. The
+rest of the record is zero. A name is 1 to 64 bytes of `[a-z0-9_.-]`; others are not announced.
+Command names are first-party text declared in C++. A name burst of about sixty packets can fill
+a small socket buffer (macOS) before the supervisor wakes, so a name packet that finds the
+channel full waits for room, with one budget of 250 ms for the whole table, after which the
+rest is dropped and counted: those ids read `unknown`. This is the only place an announcement
+waits for a send that did not start, and it runs once, at startup, on the thread that built the
+dispatcher.
+
+*One recorder, one writer.* The first dispatcher built in a process claims the ring
+(`claimCommands`); later ones neither announce nor record, since their ids would mean other
+names than the table the supervisor holds. The first thread to begin a command owns the ring;
+a command begun on another thread is not recorded and is counted in the table's
+`commandsDropped`. Writing an entry is four release stores on the model thread (empty the
+slot, fill it, label it with its sequence, count it); no lock, call, allocation or message.
+A thread stopped between two of them leaves a slot the reader skips, or one past the count that
+it accepts whole.
+
+*Reading.* The supervisor reads the ring with the rest of the table (Linux and Windows: the
+bounded remote read; macOS: the worker copies the entries into the capsule, whose version is
+now 4, after the threads, and `parseCapsule` stays strict). `readCommands` keeps an entry only
+if its slot is where its sequence belongs, it lies within the last 64 of the ring's count (or
+one past it), and its enums are in range; anything else that was used is counted as damaged and
+left out. The entries come out oldest first. On macOS the ring is copied after the other
+threads have been read, so the newest entry can be missing or still `begun`.
+
+*Report.* `commands` is an array of at most 64 objects `{seq, name, origin, state}`, in
+ascending `seq`: `name` is the command's name, or `unknown` when this supervisor has no name
+for the id; `origin` one of `ui`, `script`, `mcp`, `rpc`, `test`, `internal`, `agent` (the
+dispatcher's origin types, `lua` being `script`); `state` `begun` (the command had not
+finished: the crash was in or under it) or `ended`. `unavailable` always says that these are the
+last 64 the model thread began and that a command on another thread is not listed, and adds
+when entries were damaged, when commands were refused for coming from another thread, when a
+listed command has no name, and, with no readable table, that no commands are listed. The strict
+validator checks the shape (four keys, a valid name or `unknown`, closed sets, rising `seq`,
+at most 64). A listed command is evidence about what the model was doing, not about the
+cause: a crash in a plug-in's audio thread has the model's last commands too.
 
 ## Offline resolver (topic 4)
 

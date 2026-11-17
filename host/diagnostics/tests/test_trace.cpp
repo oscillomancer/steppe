@@ -1336,6 +1336,38 @@ TEST_CASE("the table's counters become report limits") {
     CHECK(limitFor(counted, "stack address the table cannot hold"));
 }
 
+TEST_CASE("the table's command ring is read with the table, validated and ordered") {
+    namespace dc = supple::diagctx;
+    auto image = tableImage();
+    // Entries 1 to 70 were written: the ring holds 7 to 70, in slot order, not time order.
+    image.header.commandHead = 70;
+    for (std::uint64_t seq = 7; seq <= 70; ++seq)
+        image.commands[seq % dc::kMaxCommandEntries] = {seq, static_cast<std::uint32_t>(seq) |
+                                                                 std::uint64_t{1 + seq % 7} << 32 |
+                                                                 std::uint64_t{2} << 40};
+    image.header.commandsDropped = 3;
+    auto p = scoped(image);
+    const auto snapshot = collectScoped(p, image);
+    REQUIRE(snapshot.commands.size() == 64);
+    for (std::size_t i = 0; i < 64; ++i) {
+        CHECK(snapshot.commands[i].seq == 7 + i);  // oldest first
+        CHECK(snapshot.commands[i].nameId == 7 + i);
+        CHECK(snapshot.commands[i].state == dc::CommandState::Ended);
+    }
+    CHECK(snapshot.commandsDamaged == 0);
+    CHECK(snapshot.commandsRefused == 3);
+    // A slot damaged after the fact is left out and counted; the rest still read.
+    image.commands[10].second |= std::uint64_t{0xff} << 32;  // an origin outside the set
+    const auto damaged = collectScoped(p, image);
+    CHECK(damaged.commands.size() == 63);
+    CHECK(damaged.commandsDamaged == 1);
+    // Without a table that is ours there are no commands to show.
+    image.header.magic = 0;
+    const auto invalid = collectScoped(p, image);
+    CHECK(invalid.table == TableState::Invalid);
+    CHECK(invalid.commands.empty());
+}
+
 TEST_CASE("an entry reaches the report only as a name from the closed set") {
     auto image = tableImage();
     auto p = scoped(image);

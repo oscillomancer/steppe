@@ -90,7 +90,7 @@ std::size_t usedBytes(const CapsuleData& data) noexcept {
     std::size_t total = sizeof(CapsuleHeader) + data.header.moduleCount * sizeof(CapsuleModule);
     for (std::uint32_t i = 0; i < data.header.threadCount; ++i)
         total += sizeof(CapsuleThread) + data.threads[i].head.frameCount * sizeof(std::uint64_t);
-    return total;
+    return total + data.header.commandCount * sizeof(CapsuleCommand);
 }
 }  // namespace
 
@@ -175,6 +175,9 @@ bool sendCapsule(int fd, const Packet& base, const CapsuleData* data,
             !sendAll(fd, thread.frames, thread.head.frameCount * sizeof(std::uint64_t), deadline))
             return false;
     }
+    if (data->header.commandCount > 0 &&
+        !sendAll(fd, data->commands, data->header.commandCount * sizeof(CapsuleCommand), deadline))
+        return false;
     return true;
 }
 

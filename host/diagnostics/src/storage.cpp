@@ -181,12 +181,11 @@ bool reportShape(const json::Value& value) {
         if (!v || !v->isBool()) return false;
     }
     if (value.find("complete")->asBool()) return false;
-    // Thread traces and the plug-in inventory have a validated nested schema. The command
-    // array has none yet, so a nonempty one cannot be validated and must not authorize
-    // deletion.
+    // Thread traces, the plug-in inventory and the command entries have a validated nested
+    // schema: a report whose array has another shape is kept, never authority to delete.
     {
         const auto* v = value.find("commands");
-        if (!v || !v->isArray() || v->size() != 0) return false;
+        if (!v || !commandsShape(*v)) return false;
     }
     const auto* threads = value.find("threads");
     if (!threads || !traceShape(value.find("modules"), *threads)) return false;
@@ -288,7 +287,6 @@ Status publishReport(const fs::path& root, const Packet& boot, const Packet* ter
     v["complete"] = false;
     v["terminal_context"] = terminal && terminal->pc != 0;
     v["unavailable"] = json::Value::array();
-    v["unavailable"].asArray().push_back("recent commands are not implemented in this stage");
     if (!terminal)
         v["unavailable"].asArray().push_back("no terminal capsule; cause may be unknown");
     if (trace) {
@@ -298,13 +296,16 @@ Status publishReport(const fs::path& root, const Packet& boot, const Packet* ter
     } else {
         v["threads"] = json::Value::array();
     }
-    if (inventory) {
-        for (auto& limit : inventory->limits()) v["unavailable"].asArray().push_back(limit);
-        v["plugins"] = inventory->pluginsJson(trace);
-    } else {
-        v["plugins"] = json::Value::array();
+    {
+        // Without an inventory (a launcher's report, a test) nothing was announced: the same
+        // code says so, with empty arrays.
+        const Inventory none;
+        const Inventory& known = inventory ? *inventory : none;
+        for (auto& limit : known.limits()) v["unavailable"].asArray().push_back(limit);
+        for (auto& limit : known.commandLimits(trace)) v["unavailable"].asArray().push_back(limit);
+        v["plugins"] = known.pluginsJson(trace);
+        v["commands"] = known.commandsJson(trace);
     }
-    v["commands"] = json::Value::array();
     v["dropped"] = trace ? static_cast<long long>(trace->dropped) : 0LL;
     // Deliberately never serialize pc/frame/sp, thread or process ids, paths, args,
     // exception or console text. Frames are module identity plus relative offsets.

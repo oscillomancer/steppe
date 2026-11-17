@@ -18,6 +18,7 @@
 #include <string_view>
 #include <vector>
 #include "native.h"
+#include "supple/diagctx/commands.h"
 #include "supple/diagctx/scope.h"
 #include "supple/json/json.h"
 namespace supple::diagnostics::detail {
@@ -165,6 +166,12 @@ struct TraceSnapshot {
     // stack address did not fit a word. Entries open in the table that no stopped thread
     // claimed (its thread was not read, or the word names no address) are `unplacedEntries`.
     std::uint32_t tableUntracked = 0, tableScopeOverflow = 0, unplacedEntries = 0;
+    // The last commands the model thread began (topic 5d), oldest first, as the table's ring
+    // held them; names come from the inventory. `commandsDamaged` counts ring entries that
+    // disagreed with the ring's own sequence and were left out; `commandsRefused` commands
+    // begun on a thread that did not own the ring (the table's own count).
+    std::vector<diagctx::CommandCrumb> commands;
+    std::uint32_t commandsDamaged = 0, commandsRefused = 0;
 };
 
 // What a platform provides. `stop` interrupts a thread and returns its registers,

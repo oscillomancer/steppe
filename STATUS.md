@@ -1528,9 +1528,17 @@ supervisor stalls with a packet half sent, and events lost are counted. Tested o
 Windows ring and the macOS part-sent path are unproven until native CI runs them. Known limits:
 rack modules are not announced and have no cell, so a crash inside a rack module is reported
 without a module entry (it is planned as a later change at the engine's call sites); VST3 and
-bridged instances carry no `build`. Command entries, attribution and the `dropped` counts (the
-later steps of topic 5), bridge correlation, restart UI/hangs and release package verification
-remain later topics.
+bridged instances carry no `build`. The model thread's last 64 registered commands reach the
+report's `commands` (name, origin category such as `mcp` or `script`, and `begun` or `ended`;
+never arguments, results or labels): the process's command dispatcher writes them into the
+execution table and the supervisor names them from a table of command names sent once at
+startup. Only the first dispatcher built in a process records, and only its model thread; on
+macOS the capsule (now version 4) copies the ring after the other threads were read, so the
+newest command can be missing or still `begun`. The command ring and the capsule copy are tested
+on Linux; the macOS capsule and the Windows ring and table read are written and unproven until
+native CI runs them. Attribution, the
+`dropped` counts, bridge correlation, restart UI/hangs and release package verification remain
+later topics.
 Supervisor end (ADR-0091): a supervisor that crashes tells the worker first and the worker keeps
 running without crash capture; a supervisor ended with no notice (`SIGKILL`, `TerminateProcess`,
 a launcher's hard kill) stops the worker as `SIGTERM` does and ends it hard after ten seconds,

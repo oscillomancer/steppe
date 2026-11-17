@@ -76,6 +76,7 @@ enum class EventKind : std::uint8_t {
     Add = 1,  // the instance exists (again, with new facts: the whole description replaces)
     State,    // its state changed
     Remove,   // it is gone
+    Names,    // four command names (topic 5d): `cell` is the id of the first, `identity` holds them
 };
 struct Event {
     EventKind event = EventKind::Add;

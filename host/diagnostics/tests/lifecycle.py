@@ -380,6 +380,45 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
             if module is not None and report["modules"][module]["id"]:
                 assert live.get("build")=={"format":report["modules"][module]["format"],"id":report["modules"][module]["id"]},(live,report["modules"][module])
 
+    with check('commands'):
+        # Command breadcrumbs (ADR-0083, topic 5d), through a real dispatcher: commands from
+        # several origins run, an unknown name is refused, then one faults in its handler. The
+        # ring lives in the process's execution table and the names come over the channel, so
+        # the entries are checked wherever the collector (or the macOS capsule) delivers them.
+        def commands_run(mode):
+            root=base/mode/"app"/"diagnostics"
+            run=subprocess.run([binary,str(root),mode],capture_output=True,timeout=60)
+            assert run.returncode!=0,(mode,run)
+            found=list(root.glob("*.json"))
+            assert len(found)==1,(mode,found,run.stderr)
+            raw=found[0].read_text()
+            return raw,json.loads(raw)
+        def named(report): return [(c["name"],c["origin"],c["state"]) for c in report["commands"]]
+        before=[("fixture.fine","ui","ended"),("fixture.note-secret","script","ended")]
+        for mode,after in (("commands-real",[("fixture.crash","agent","begun")]),
+                           ("commands-batch",[("batch","rpc","begun"),("fixture.fine","rpc","ended"),("fixture.crash","rpc","begun")]),
+                           ("commands-other",[])):
+            raw,report=commands_run(mode)
+            if not report["commands"]:
+                # The collector read nothing (restricted tracing on Linux, a sanitizer's layout)
+                # and the report must say so; anywhere it can read the process the ring is there.
+                assert any("execution table" in u for u in report["unavailable"]),report["unavailable"]
+                restricted=False
+                if sys.platform.startswith("linux"):
+                    try: restricted=int(pathlib.Path("/proc/sys/kernel/yama/ptrace_scope").read_text())>=2 and os.geteuid()!=0
+                    except OSError: pass
+                assert sanitized or restricted,(mode,"no commands where the table is readable",report["unavailable"])
+                continue
+            assert named(report)==before+after,(mode,named(report))
+            assert [c["seq"] for c in report["commands"]]==sorted(c["seq"] for c in report["commands"])
+            # Only names, categories and states reach the file: no argument, client, agent,
+            # label, or name the registry never held.
+            for forbidden in ("canary","no-such-command"):
+                assert forbidden not in raw,(mode,forbidden)
+            assert any("last 64 the model thread began" in u for u in report["unavailable"])
+            refused=any("other than the model thread" in u for u in report["unavailable"])
+            assert refused==(mode=="commands-other"),(mode,report["unavailable"])
+
     with check('linux traces'):
         if sys.platform.startswith("linux") and not sanitized:
             # Thread traces (ADR-0083, topic 4). The fixture parks three threads in marked

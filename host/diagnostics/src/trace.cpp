@@ -633,6 +633,12 @@ TraceSnapshot collectTrace(const TraceOps& ops, std::uint64_t faultTid, const Re
         snapshot.tableThreadsDropped = table.header.threadsDropped;
         snapshot.tableUntracked = table.header.untracked;
         snapshot.tableScopeOverflow = table.header.scopeOverflow;
+        {
+            const auto ring = diagctx::readCommands(table);
+            snapshot.commands.assign(ring.crumbs.begin(), ring.crumbs.begin() + ring.count);
+            snapshot.commandsDamaged = ring.damaged;
+            snapshot.commandsRefused = table.header.commandsDropped;
+        }
         for (std::size_t w = 0; w < kWords; ++w) {
             const auto& cell = table.instances[w / 2];
             const auto word = diagctx::unpackWord(w % 2 == 0 ? cell.audio : cell.main);
@@ -870,6 +876,9 @@ std::optional<TraceSnapshot> parseCapsule(const std::uint8_t* bytes, std::size_t
         return std::nullopt;
     // At most one word per cell side can be unplaced.
     if (header.unplaced > 2 * diagctx::kMaxInstances) return std::nullopt;
+    if (header.commandCount > diagctx::kMaxCommandEntries ||
+        header.commandsDamaged > diagctx::kMaxCommandEntries || header.reserved2 != 0)
+        return std::nullopt;
     TraceSnapshot snapshot;
     snapshot.dropped = header.dropped;
     snapshot.truncatedModules = (header.flags & kCapsuleModulesTruncated) != 0;
@@ -877,6 +886,8 @@ std::optional<TraceSnapshot> parseCapsule(const std::uint8_t* bytes, std::size_t
     snapshot.tableUntracked = header.tableUntracked;
     snapshot.tableScopeOverflow = header.tableScopeOverflow;
     snapshot.unplacedEntries = header.unplaced;
+    snapshot.commandsDamaged = header.commandsDamaged;
+    snapshot.commandsRefused = header.commandsRefused;
     Layout layout;
     for (std::uint32_t i = 0; i < header.moduleCount; ++i) {
         CapsuleModule module;
@@ -953,6 +964,22 @@ std::optional<TraceSnapshot> parseCapsule(const std::uint8_t* bytes, std::size_t
             }
         }
         threads.push_back(std::move(trace));
+    }
+    // The ring's entries, oldest first: each a whole entry of the 64 the ring holds, so the
+    // sequences rise and span fewer than 64.
+    for (std::uint32_t i = 0; i < header.commandCount; ++i) {
+        CapsuleCommand command;
+        if (!take(&command, sizeof(command)) || command.seq == 0 || command.reserved != 0 ||
+            command.origin == 0 || command.origin >= diagctx::kCommandOriginCount ||
+            command.state == 0 || command.state >= diagctx::kCommandStateCount)
+            return std::nullopt;
+        if (!snapshot.commands.empty() &&
+            (command.seq <= snapshot.commands.back().seq ||
+             command.seq - snapshot.commands.front().seq >= diagctx::kMaxCommandEntries))
+            return std::nullopt;
+        snapshot.commands.push_back(diagctx::CommandCrumb{
+            command.seq, command.nameId, static_cast<diagctx::CommandOrigin>(command.origin),
+            static_cast<diagctx::CommandState>(command.state)});
     }
     if (at != size) return std::nullopt;  // trailing bytes: not a capsule we wrote
     // Fault first, then main, then the rest in the order they came.

@@ -47,6 +47,9 @@ std::vector<std::uint8_t> encode(const CapsuleData& data) {
             std::min<std::size_t>(data.threads[i].head.frameCount, kCapsuleFrames) *
                 sizeof(std::uint64_t));
     }
+    put(data.commands,
+        std::min<std::size_t>(data.header.commandCount, supple::diagctx::kMaxCommandEntries) *
+            sizeof(CapsuleCommand));
     return bytes;
 }
 // A capsule whose header claims `modules` modules and `threads` threads, followed by exactly
@@ -355,6 +358,99 @@ TEST_CASE("a capsule with an impossible entry, or impossible counters, is refuse
     CHECK(refused([](CapsuleData& d) { d.threads[0].head.reserved = 1; }));
 }
 
+namespace {
+void addCommand(CapsuleData& data, std::uint64_t seq, std::uint32_t id, std::uint8_t origin,
+                std::uint8_t state) {
+    data.commands[data.header.commandCount++] = CapsuleCommand{seq, id, origin, state, 0};
+}
+}  // namespace
+
+TEST_CASE("a capsule carries the command ring, oldest first, and its counts") {
+    using supple::diagctx::CommandOrigin;
+    using supple::diagctx::CommandState;
+    auto data = fresh();
+    addModule(*data, 0x100000, 0x100000, 0x180000, 0x10);
+    addThread(*data, Role::Fault, Missing::None, Stop::End, {0x100300});
+    addCommand(*data, 41, 7, 3, 2);
+    addCommand(*data, 42, 9, 2, 2);
+    addCommand(*data, 43, 4000, 5, 1);
+    data->header.commandsDamaged = 2;
+    data->header.commandsRefused = 5;
+    const auto bytes = encode(*data);
+    const auto snapshot = parseCapsule(bytes.data(), bytes.size());
+    REQUIRE(snapshot);
+    REQUIRE(snapshot->commands.size() == 3);
+    CHECK(snapshot->commands[0].seq == 41);
+    CHECK(snapshot->commands[0].nameId == 7);
+    CHECK(snapshot->commands[0].origin == CommandOrigin::Mcp);
+    CHECK(snapshot->commands[0].state == CommandState::Ended);
+    CHECK(snapshot->commands[2].nameId == 4000);
+    CHECK(snapshot->commands[2].origin == CommandOrigin::Test);
+    CHECK(snapshot->commands[2].state == CommandState::Begun);
+    CHECK(snapshot->commandsDamaged == 2);
+    CHECK(snapshot->commandsRefused == 5);
+    // A capsule with none carries none.
+    auto empty = fresh();
+    addModule(*empty, 0x100000, 0x100000, 0x180000, 0x10);
+    addThread(*empty, Role::Fault, Missing::None, Stop::End, {0x100300});
+    const auto emptyBytes = encode(*empty);
+    const auto none = parseCapsule(emptyBytes.data(), emptyBytes.size());
+    REQUIRE(none);
+    CHECK(none->commands.empty());
+    // The ring is at its limit, and one more is refused by the count.
+    auto full = fresh();
+    addModule(*full, 0x100000, 0x100000, 0x180000, 0x10);
+    addThread(*full, Role::Fault, Missing::None, Stop::End, {0x100300});
+    for (std::uint64_t i = 0; i < supple::diagctx::kMaxCommandEntries; ++i)
+        addCommand(*full, 1000 + i, 1, 1, 1);
+    const auto fullBytes = encode(*full);
+    const auto parsed = parseCapsule(fullBytes.data(), fullBytes.size());
+    REQUIRE(parsed);
+    CHECK(parsed->commands.size() == supple::diagctx::kMaxCommandEntries);
+    full->header.commandCount = supple::diagctx::kMaxCommandEntries + 1;
+    const auto over = encode(*full);
+    CHECK_FALSE(parseCapsule(over.data(), over.size()).has_value());
+}
+
+TEST_CASE("a capsule with an impossible command entry is refused") {
+    const auto refused = [](auto change) {
+        auto data = fresh();
+        addModule(*data, 0x100000, 0x100000, 0x180000, 0x10);
+        addThread(*data, Role::Fault, Missing::None, Stop::End, {0x100300});
+        addCommand(*data, 10, 1, 1, 2);
+        addCommand(*data, 11, 2, 1, 1);
+        change(*data);
+        const auto bytes = encode(*data);
+        return !parseCapsule(bytes.data(), bytes.size()).has_value();
+    };
+    CHECK_FALSE(refused([](CapsuleData&) {}));
+    CHECK(refused([](CapsuleData& d) { d.commands[0].seq = 0; }));
+    CHECK(refused([](CapsuleData& d) { d.commands[1].seq = 10; }));       // not rising
+    CHECK(refused([](CapsuleData& d) { d.commands[1].seq = 5; }));        // going back
+    CHECK(refused([](CapsuleData& d) { d.commands[1].seq = 10 + 64; }));  // wider than the ring
+    CHECK_FALSE(refused([](CapsuleData& d) { d.commands[1].seq = 10 + 63; }));
+    CHECK(refused([](CapsuleData& d) { d.commands[0].origin = 0; }));
+    CHECK(refused([](CapsuleData& d) { d.commands[0].origin = 8; }));
+    CHECK(refused([](CapsuleData& d) { d.commands[0].state = 0; }));
+    CHECK(refused([](CapsuleData& d) { d.commands[0].state = 3; }));
+    CHECK(refused([](CapsuleData& d) { d.commands[0].reserved = 1; }));
+    CHECK(refused([](CapsuleData& d) { d.header.reserved2 = 1; }));
+    CHECK(refused([](CapsuleData& d) { d.header.commandsDamaged = 65; }));
+    // The header claims one more entry than follows (an empty one is not valid), and bytes
+    // left over after the ring are not a capsule we wrote either.
+    CHECK(refused([](CapsuleData& d) { d.header.commandCount = 3; }));
+    auto data = fresh();
+    addModule(*data, 0x100000, 0x100000, 0x180000, 0x10);
+    addThread(*data, Role::Fault, Missing::None, Stop::End, {0x100300});
+    addCommand(*data, 10, 1, 1, 2);
+    auto bytes = encode(*data);
+    REQUIRE(parseCapsule(bytes.data(), bytes.size()).has_value());
+    bytes.insert(bytes.end(), sizeof(CapsuleCommand), 0);
+    CHECK_FALSE(parseCapsule(bytes.data(), bytes.size()).has_value());
+    bytes.resize(bytes.size() - sizeof(CapsuleCommand) - 1);  // and a truncated last entry
+    CHECK_FALSE(parseCapsule(bytes.data(), bytes.size()).has_value());
+}
+
 TEST_CASE("overlapping module ranges cannot make an address ambiguous") {
     auto data = fresh();
     addModule(*data, 0, 0x1000, 0x3000);
@@ -471,6 +567,8 @@ TEST_CASE("a capsule crosses the channel intact, however large") {
         for (std::size_t f = 0; f < kCapsuleFrames; ++f) frames.push_back(0x1000 + i * 16 + f % 16);
         addThread(*data, i == 0 ? Role::Fault : Role::Other, Missing::None, Stop::Depth, frames);
     }
+    for (std::uint64_t i = 0; i < supple::diagctx::kMaxCommandEntries; ++i)
+        addCommand(*data, 900 + i, static_cast<std::uint32_t>(i), 1 + i % 7, 1 + i % 2);
     const auto expected = encode(*data);
     CHECK(expected.size() <= kCapsuleMaxBytes);
     Pair pair;
@@ -485,6 +583,8 @@ TEST_CASE("a capsule crosses the channel intact, however large") {
     const auto snapshot = parseCapsule(received->data(), received->size());
     REQUIRE(snapshot);
     CHECK(snapshot->threads.size() == kCapsuleThreads);
+    REQUIRE(snapshot->commands.size() == supple::diagctx::kMaxCommandEntries);
+    CHECK(snapshot->commands[63].seq == 963);
 }
 
 TEST_CASE("an empty marker, a stranger and a short capsule are all refused") {

@@ -136,6 +136,46 @@ TEST_CASE("a report with an inventory is published, validated and pruned like an
     CHECK(reports(root.path) == 20);
     CHECK_FALSE(fs::exists(root.path / (std::string(boot(0).incident.data()) + ".json")));
 }
+TEST_CASE("a report with command entries is published, validated, pruned, and kept when altered") {
+    namespace dc = supple::diagctx;
+    Root root;
+    Inventory inventory;
+    Packet names = boot(0);
+    names.kind = Message::Instance;
+    names.instance.event = static_cast<std::uint8_t>(dc::EventKind::Names);
+    std::memcpy(names.instance.text[0], "track.add", 9);
+    names.instance.length[0] = 9;
+    REQUIRE(inventory.apply(names));
+    TraceSnapshot trace;
+    trace.table = TableState::Read;
+    trace.threads.resize(1);
+    trace.threads[0].role = Role::Fault;
+    trace.commands = {{8, 0, dc::CommandOrigin::Mcp, dc::CommandState::Ended},
+                      {9, 5, dc::CommandOrigin::Ui, dc::CommandState::Begun}};
+    const auto file = [](unsigned i) { return std::string(boot(i).incident.data()) + ".json"; };
+    REQUIRE(publishReport(root.path, boot(0), nullptr, 31, false, &trace, &inventory));
+    const auto text = readTextFile(root.path / file(0));
+    REQUIRE(text);
+    const auto parsed = json::parse(*text);
+    REQUIRE(parsed);
+    const auto* commands = parsed->find("commands");
+    REQUIRE(commands);
+    REQUIRE(commands->size() == 2);
+    CHECK(commands->asArray()[0].find("name")->asString() == "track.add");
+    CHECK(commands->asArray()[1].find("name")->asString() == "unknown");
+    CHECK(commands->asArray()[1].find("state")->asString() == "begun");
+    // A report whose commands were rewritten into another shape is kept, never pruned.
+    auto changed = *parsed;
+    changed["commands"].asArray()[0]["args"] = "canary";
+    const auto altered = root.path / file(0);
+    REQUIRE(privateRemove(altered));
+    REQUIRE(privatePublish(altered, json::writeCanonical(changed)));
+    fs::last_write_time(altered, fs::file_time_type::clock::now() - std::chrono::hours(48));
+    for (unsigned i = 1; i < 22; ++i)
+        REQUIRE(publishReport(root.path, boot(i), nullptr, 31, false, &trace, &inventory));
+    CHECK(fs::exists(altered));       // not a report it can vouch for
+    CHECK(reports(root.path) == 21);  // twenty it owns, and the one it keeps
+}
 TEST_CASE("diagnostic byte retention applies independently of report count") {
     Root root;
     for (unsigned i = 0; i < 14; ++i) {

@@ -20,8 +20,10 @@
 #include <optional>
 #include <vector>
 #include "native.h"
+#include "supple/diagctx/commands.h"
 namespace supple::diagnostics::detail {
-constexpr std::uint32_t kCapsuleMagic = 0x33435443;  // "CTC3": v3 adds roles and open entries
+constexpr std::uint32_t kCapsuleMagic =
+    0x34435443;  // "CTC4": v4 adds the command ring (v3: roles, entries)
 constexpr std::size_t kCapsuleThreads = 128, kCapsuleFrames = 128, kCapsuleModules = 256;
 constexpr std::uint32_t kCapsuleModulesTruncated = 1, kCapsuleThreadsDropped = 2;
 
@@ -34,6 +36,9 @@ struct CapsuleHeader {
     // table turned away, scopes whose address did not fit a word), and the number of open
     // entries no captured thread claimed.
     std::uint32_t tableThreadsDropped, tableUntracked, tableScopeOverflow, unplaced;
+    // The command ring (topic 5d): entries that follow the threads, ring entries the worker
+    // found damaged, and commands begun on a thread that did not own the ring.
+    std::uint32_t commandCount, commandsDamaged, commandsRefused, reserved2;
 };
 // An image the frames fall in: [start, end) is its executable text at run time and
 // `bias` is the load address minus its link address (the slide), so an address minus
@@ -61,14 +66,24 @@ struct CapsuleThreadData {
     CapsuleThread head;
     std::uint64_t frames[kCapsuleFrames];
 };
+// One entry of the command ring: `origin` a diagctx::CommandOrigin, `state` a CommandState;
+// the parser validates both.
+struct CapsuleCommand {
+    std::uint64_t seq;
+    std::uint32_t nameId;
+    std::uint8_t origin, state;
+    std::uint16_t reserved;
+};
 struct CapsuleData {
     CapsuleHeader header;
     CapsuleModule modules[kCapsuleModules];
     CapsuleThreadData threads[kCapsuleThreads];
+    CapsuleCommand commands[diagctx::kMaxCommandEntries];
 };
 constexpr std::size_t kCapsuleMaxBytes =
     sizeof(CapsuleHeader) + kCapsuleModules * sizeof(CapsuleModule) +
-    kCapsuleThreads * (sizeof(CapsuleThread) + kCapsuleFrames * sizeof(std::uint64_t));
+    kCapsuleThreads * (sizeof(CapsuleThread) + kCapsuleFrames * sizeof(std::uint64_t)) +
+    diagctx::kMaxCommandEntries * sizeof(CapsuleCommand);
 
 #if !defined(_WIN32)
 // How long the supervisor reads a capsule for, from the moment it starts collecting. The

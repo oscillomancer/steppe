@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
+#include <supple/cmd/bus.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -372,6 +373,82 @@ int body(int argc, char** argv) {
     if (mode == "prior-filter-cpp-code")
         RaiseException(0xE06D7363, EXCEPTION_NONCONTINUABLE, 0, nullptr);
 #endif
+    // Command breadcrumbs (topic 5d), through a real registry and dispatcher: a few commands
+    // run from different origins, then one faults inside its handler.
+    //   commands-real   the faulting command is called directly
+    //   commands-batch  it is the second step of a batch
+    //   commands-other  it is run from a helper thread (not the model thread): no entry for it
+    if (mode.rfind("commands-", 0) == 0) {
+        namespace cmd = supple::cmd;
+        struct Count {
+            int count = 0;
+        };
+        struct Host : cmd::Host {
+            cmd::Context makeContext(const cmd::Origin& origin) override {
+                return cmd::Context(origin);
+            }
+            supple::Result<std::uint64_t> beginTransaction(const cmd::Origin&,
+                                                           std::string_view) override {
+                return std::uint64_t{1};
+            }
+            supple::Status commitTransaction(std::uint64_t) override { return {}; }
+            supple::Status rollbackTransaction(std::uint64_t) override { return {}; }
+            void log(const cmd::LogRecord&) override {}
+            void emit(std::string_view, supple::json::Value) override {}
+        };
+        const auto count = supple::schema::object<Count>("count")
+                               .field("count", &Count::count, supple::schema::integerOf<int>())
+                               .build();
+        cmd::Registry registry;
+        for (const char* name : {"fixture.fine", "fixture.note-secret", "fixture.crash"}) {
+            cmd::Command<cmd::NoArgs, Count> command;
+            command.name = name;
+            command.kind = cmd::Kind::Query;
+            command.exposure = cmd::Exposure::Internal;
+            command.summary = "A fixture command.";
+            command.args = supple::schema::object<cmd::NoArgs>("no_args").build();
+            command.result = count;
+            const std::string_view which = name;
+            command.run = [which](const cmd::NoArgs&, cmd::Context&) -> supple::Result<Count> {
+                if (which == "fixture.crash") actualFault();
+                return Count{1};
+            };
+            registry.add(std::move(command));
+        }
+        Host host;
+        cmd::Dispatcher dispatcher(registry, host);
+        const auto run = [&dispatcher](const char* name, cmd::Origin::Type type) {
+            (void)dispatcher.execute({name, supple::json::Value::object(),
+                                      cmd::Origin{type, "client-canary", "agent-canary"}});
+        };
+        run("fixture.fine", cmd::Origin::Type::Ui);
+        run("fixture.no-such-command", cmd::Origin::Type::Mcp);  // unknown: never recorded
+        run("fixture.note-secret", cmd::Origin::Type::Lua);
+        if (mode == "commands-real") run("fixture.crash", cmd::Origin::Type::Agent);
+        if (mode == "commands-batch") {
+            auto steps = supple::json::Value::array();
+            for (const char* name : {"fixture.fine", "fixture.crash"}) {
+                auto step = supple::json::Value::object();
+                step["command"] = name;
+                step["args"] = supple::json::Value::object();
+                steps.push_back(std::move(step));
+            }
+            auto args = supple::json::Value::object();
+            args["label"] = "canary label";
+            args["steps"] = std::move(steps);
+            (void)dispatcher.execute(
+                {"batch", std::move(args), cmd::Origin{cmd::Origin::Type::Rpc, "", ""}});
+        }
+        if (mode == "commands-other") {
+            // The crash belongs to a thread that does not own the ring: the command is not
+            // listed, and the report says commands were refused.
+            std::thread helper([&] {
+                (void)supple::diagnostics::registerCurrentThread();
+                run("fixture.crash", cmd::Origin::Type::Mcp);
+            });
+            helper.join();
+        }
+    }
     // The plug-in inventory (topic 5c). The host announces its plug-ins as it creates them; the
     // fixture does the same by hand with strings that must reach the report only bounded and
     // clean, then faults while a thread is inside an entry of one of them.

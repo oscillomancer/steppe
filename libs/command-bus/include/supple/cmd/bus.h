@@ -118,6 +118,9 @@ struct Command {
 };
 
 struct CommandInfo {
+    // Index in registration order, set by Registry::add: what a crash report's command
+    // breadcrumbs record in place of the name (ADR-0083, topic 5d).
+    std::uint32_t id = 0;
     std::string name;
     int version = 1;
     Kind kind = Kind::Query;
@@ -175,12 +178,15 @@ class Registry {
     }
     const CommandInfo* find(std::string_view name, int version = 0) const;
     std::vector<const CommandInfo*> all() const;
+    // The name of each command by id (a name once per version: the same name twice).
+    std::vector<std::string_view> namesById() const;
     Error unknown(std::string_view name) const;
     json::Value exportJson() const;
 
   private:
     void addInfo(CommandInfo info);
     std::map<std::pair<std::string, int>, CommandInfo> commands_;
+    std::uint32_t nextId_ = 0;
 };
 
 struct Invocation {
@@ -298,10 +304,7 @@ class Host {
 
 class Dispatcher {
   public:
-    Dispatcher(const Registry& registry, Host& host) : registry_(registry), host_(host) {
-        jobs_.setWaker([this] { host_.workQueued(); });
-        host_.dispatcherAttached(this);
-    }
+    Dispatcher(const Registry& registry, Host& host);
     ~Dispatcher();
     Dispatcher(const Dispatcher&) = delete;
     Dispatcher& operator=(const Dispatcher&) = delete;
@@ -345,6 +348,9 @@ class Dispatcher {
     JobManager jobs_;
     std::uint64_t sequence_ = 0;
     std::vector<Admission> admissions_;
+    // The process's first dispatcher records the commands it begins in the execution table
+    // (ADR-0083, topic 5d); any other would write ids of a different registry into the ring.
+    bool breadcrumbs_ = false;
     int transactionDepth_ = 0;  // > 0: commands join the open transact() transaction
     std::optional<Error> transactionFailure_;
     std::mutex postedMutex_;

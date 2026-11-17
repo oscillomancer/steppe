@@ -7,6 +7,8 @@
 #include <chrono>
 #include <cstring>
 #include <mutex>
+#include <thread>
+#include "supple/diagctx/commands.h"
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -27,6 +29,13 @@ std::mutex gSendMutex;  // one inventory send at a time (the Windows ring has on
 std::atomic<bool> gInstalled{false}, gClosed{false};
 std::atomic<std::uint32_t> gSenders{0}, gDropped{0};
 bool (*gPublish)(Native&, const Packet&) noexcept = &publish;  // a test replaces it
+// The command names go out in one burst when the registry is built; a small socket buffer
+// (macOS) can fill before the supervisor wakes, so a name chunk waits for room, but the
+// whole table gets one budget in all and then the rest is dropped.
+constexpr auto kNamesBudget = std::chrono::milliseconds(250);
+std::chrono::steady_clock::time_point gNamesDeadline{};
+bool gNamesStarted = false;  // guarded by gSendMutex
+std::atomic<bool> gNamesGivenUp{false};
 static_assert(std::atomic<std::uint32_t>::is_always_lock_free &&
               std::atomic<bool>::is_always_lock_free);
 
@@ -75,7 +84,25 @@ void send(const diagctx::Event& event) noexcept {
         gDropped.fetch_add(1, std::memory_order_relaxed);
         return;
     }
-    if (!gPublish(gNative, packet)) {
+    const bool names = event.event == diagctx::EventKind::Names;
+    if (names && gNamesGivenUp.load()) {
+        gDropped.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    bool sent = gPublish(gNative, packet);
+    if (!sent && names && !gNative.torn) {
+        if (!gNamesStarted) {
+            gNamesStarted = true;
+            gNamesDeadline = std::chrono::steady_clock::now() + kNamesBudget;
+        }
+        while (!sent && !gNative.torn && !gClosed.load() &&
+               std::chrono::steady_clock::now() < gNamesDeadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            sent = gPublish(gNative, packet);
+        }
+        if (!sent && !gNative.torn) gNamesGivenUp.store(true);
+    }
+    if (!sent) {
         gDropped.fetch_add(1, std::memory_order_relaxed);
         // A packet part sent and not finished leaves the stream torn: close the sink for good,
         // so the process waits for the supervisor at most once, not once per announcement.
@@ -118,6 +145,8 @@ void resetInventoryForTests(bool (*publishFn)(Native&, const Packet&) noexcept) 
     gInstalled.store(false);
     gClosed.store(false);
     gDropped.store(0);
+    gNamesStarted = false;
+    gNamesGivenUp.store(false);
 }
 
 void closeInventory() noexcept {
@@ -162,6 +191,38 @@ void Inventory::retire(PluginEntry entry) {
     }
 }
 
+// Four command names, starting at an id that is a multiple of four. A name that is not a
+// valid command name is left unknown; a slot with no name is skipped; the rest of the record
+// must be zero, which only this build's sender makes it.
+bool Inventory::applyNames(const InstanceRecord& r) {
+    if (r.cell % diagctx::kNamesPerChunk != 0 || r.cell >= diagctx::kMaxCommandNames ||
+        r.generation != 0 || r.kind != 0 || r.origin != 0 || r.mode != 0 || r.state != 0 ||
+        r.image != 0)
+        return false;
+    bool any = false;
+    for (std::size_t i = 0; i < diagctx::kNamesPerChunk; ++i) {
+        if (r.length[i] > diagctx::kMaxCommandName) return false;
+        // The table's own text slots are 64 bytes: the unused two stay empty.
+        if (r.length[i] != 0) any = true;
+    }
+    for (std::size_t i = diagctx::kNamesPerChunk; i < diagctx::kTextFields; ++i)
+        if (r.length[i] != 0) return false;
+    if (!any) return false;
+    if (names_.size() < r.cell + diagctx::kNamesPerChunk)
+        names_.resize(r.cell + diagctx::kNamesPerChunk);
+    for (std::size_t i = 0; i < diagctx::kNamesPerChunk; ++i) {
+        if (r.length[i] == 0) continue;
+        const std::string_view name(r.text[i], r.length[i]);
+        if (diagctx::validCommandName(name)) {
+            names_[r.cell + i] = std::string(name);
+        } else {
+            names_[r.cell + i].clear();
+            ++rejected_;
+        }
+    }
+    return true;
+}
+
 bool Inventory::apply(const Packet& packet) {
     noteDropped(packet.dropped);
     const auto& r = packet.instance;
@@ -169,6 +230,9 @@ bool Inventory::apply(const Packet& packet) {
         ++rejected_;
         return false;
     };
+    if (packet.kind == Message::Instance &&
+        r.event == static_cast<std::uint8_t>(diagctx::EventKind::Names))
+        return applyNames(r) || reject();
     if (packet.kind != Message::Instance || r.cell >= kMaxPlugins ||
         r.generation > diagctx::kGenerationMask)
         return reject();
@@ -223,6 +287,8 @@ bool Inventory::apply(const Packet& packet) {
             }
             return true;
         }
+        case diagctx::EventKind::Names:
+            break;  // handled above, before the cell checks
     }
     return reject();
 }
@@ -264,6 +330,13 @@ int moduleOfImage(const TraceSnapshot& trace, std::uint64_t address) {
     const Region& region = *(it - 1);
     return address < region.end ? region.module : -1;
 }
+// The id of the module that holds an entry's image, when the snapshot has it and it has one.
+const std::string* buildIdOf(const TraceSnapshot& trace, const PluginEntry& entry) {
+    const int module = moduleOfImage(trace, entry.image);
+    if (module < 0 || static_cast<std::size_t>(module) >= trace.modules.size()) return nullptr;
+    const auto& id = trace.modules[static_cast<std::size_t>(module)].id;
+    return id ? &*id : nullptr;
+}
 }  // namespace
 
 json::Value Inventory::pluginsJson(const TraceSnapshot* trace) const {
@@ -275,16 +348,13 @@ json::Value Inventory::pluginsJson(const TraceSnapshot* trace) const {
         item["origin"] = diagctx::instanceOriginName(entry->origin);
         item["mode"] = diagctx::instanceModeName(entry->mode);
         item["state"] = diagctx::instanceStateName(entry->state);
-        if (trace) {
-            const int module = moduleOfImage(*trace, entry->image);
-            if (module >= 0 && static_cast<std::size_t>(module) < trace->modules.size() &&
-                trace->modules[static_cast<std::size_t>(module)].id) {
+        if (trace)
+            if (const std::string* id = buildIdOf(*trace, *entry)) {
                 auto build = json::Value::object();
                 build["format"] = moduleFormat();
-                build["id"] = *trace->modules[static_cast<std::size_t>(module)].id;
+                build["id"] = *id;
                 item["build"] = std::move(build);
             }
-        }
         const char* const keys[diagctx::kTextFields]{"name", "vendor", "version", "plugin_id"};
         for (std::size_t i = 0; i < diagctx::kTextFields; ++i)
             if (!entry->text[i].empty()) item[keys[i]] = entry->text[i];
@@ -322,6 +392,79 @@ std::vector<std::string> Inventory::limits() const {
     if (retiredLost_ != 0)
         limits.push_back("destroyed plug-in instances beyond the last 64 are not listed");
     return limits;
+}
+
+const std::string* Inventory::commandName(std::uint32_t id) const noexcept {
+    return id < names_.size() && !names_[id].empty() ? &names_[id] : nullptr;
+}
+
+json::Value Inventory::commandsJson(const TraceSnapshot* trace) const {
+    auto commands = json::Value::array();
+    if (!trace) return commands;
+    for (const auto& crumb : trace->commands) {
+        auto item = json::Value::object();
+        item["seq"] = static_cast<long long>(crumb.seq);
+        const std::string* name = commandName(crumb.nameId);
+        item["name"] = name ? *name : std::string("unknown");
+        item["origin"] = diagctx::commandOriginName(crumb.origin);
+        item["state"] = diagctx::commandStateName(crumb.state);
+        commands.push_back(std::move(item));
+    }
+    return commands;
+}
+
+std::vector<std::string> Inventory::commandLimits(const TraceSnapshot* trace) const {
+    std::vector<std::string> limits;
+    if (!trace || trace->table != TableState::Read) {
+        limits.push_back("the execution table could not be read, so no recent commands are listed");
+        return limits;
+    }
+    limits.push_back(
+        "recent commands are the last 64 the model thread began; a command begun on another "
+        "thread, or whose name was not announced, is not named");
+    if (trace->commandsDamaged != 0)
+        limits.push_back(
+            "some command entries in the execution table were damaged and are left out");
+    if (trace->commandsRefused != 0)
+        limits.push_back(
+            "some commands began on a thread other than the model thread and are not listed");
+    for (const auto& crumb : trace->commands)
+        if (!commandName(crumb.nameId)) {
+            limits.push_back(
+                "some listed commands have no name because the name table was not received");
+            break;
+        }
+    return limits;
+}
+
+bool commandsShape(const json::Value& commands) {
+    if (!commands.isArray() || commands.size() > diagctx::kMaxCommandEntries) return false;
+    std::int64_t previous = 0;
+    for (const auto& item : commands.asArray()) {
+        if (!item.isObject() || item.size() != 4) return false;
+        const auto* seq = item.find("seq");
+        const auto* name = item.find("name");
+        const auto* origin = item.find("origin");
+        const auto* state = item.find("state");
+        if (!seq || !seq->isInt() || seq->asInt() <= previous) return false;
+        previous = seq->asInt();
+        if (!name || !name->isString() ||
+            (name->asString() != "unknown" && !diagctx::validCommandName(name->asString())))
+            return false;
+        bool known = false;
+        for (std::uint8_t i = 1; i < diagctx::kCommandOriginCount && !known; ++i)
+            known = origin && origin->isString() &&
+                    origin->asString() ==
+                        diagctx::commandOriginName(static_cast<diagctx::CommandOrigin>(i));
+        if (!known) return false;
+        known = false;
+        for (std::uint8_t i = 1; i < diagctx::kCommandStateCount && !known; ++i)
+            known = state && state->isString() &&
+                    state->asString() ==
+                        diagctx::commandStateName(static_cast<diagctx::CommandState>(i));
+        if (!known) return false;
+    }
+    return true;
 }
 
 bool pluginsShape(const json::Value& plugins, std::size_t threadCount) {

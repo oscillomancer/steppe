@@ -293,6 +293,16 @@ void summarizeTable() {
                 ++unplaced;
         }
     capsule.header.unplaced = unplaced;
+    // The command ring, read with atomic loads like the cells: the other threads run again
+    // by now, so the newest entry may be missing or still `begun`.
+    const auto ring = diagctx::readCommands();
+    capsule.header.commandCount = ring.count;
+    capsule.header.commandsDamaged = ring.damaged;
+    capsule.header.commandsRefused = table.header.commandsDropped.load(std::memory_order_relaxed);
+    for (std::uint32_t i = 0; i < ring.count; ++i)
+        capsule.commands[i] = CapsuleCommand{ring.crumbs[i].seq, ring.crumbs[i].nameId,
+                                             static_cast<std::uint8_t>(ring.crumbs[i].origin),
+                                             static_cast<std::uint8_t>(ring.crumbs[i].state), 0};
 }
 
 void unavailable(CapsuleThreadData& thread, Missing why) {

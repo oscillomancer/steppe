@@ -3,6 +3,7 @@
 #include <doctest/doctest.h>
 #include <algorithm>
 #include <cstring>
+#include <initializer_list>
 #include <string>
 #include "../src/inventory.h"
 #include "../src/native.h"
@@ -459,4 +460,151 @@ TEST_CASE("a torn stream closes the sink for good; a merely full one does not") 
     CHECK(gHookCalls == 3);  // nothing was sent, nothing waited
     CHECK(inventoryDropped() == 2 + 1 + 5 + 1);
     resetInventoryForTests(nullptr);
+}
+
+namespace {
+Packet nameChunk(std::uint32_t first, std::initializer_list<std::string_view> names) {
+    Packet p = base();
+    p.instance.event = static_cast<std::uint8_t>(diagctx::EventKind::Names);
+    p.instance.cell = first;
+    std::size_t i = 0;
+    for (const auto name : names) setText(p, i++, name);
+    return p;
+}
+TraceSnapshot traceWithCommands(std::initializer_list<diagctx::CommandCrumb> crumbs) {
+    TraceSnapshot trace;
+    trace.table = TableState::Read;
+    trace.commands.assign(crumbs.begin(), crumbs.end());
+    return trace;
+}
+}  // namespace
+
+TEST_CASE("command names arrive four at a time, are checked, and map ids to names") {
+    Inventory inventory;
+    CHECK(inventory.commandName(0) == nullptr);
+    REQUIRE(inventory.apply(nameChunk(0, {"track.add", "track.set-volume", "", "transport.play"})));
+    REQUIRE(inventory.apply(nameChunk(8, {"a.b", "c.d"})));  // the chunk at 4 never came
+    CHECK(*inventory.commandName(0) == "track.add");
+    CHECK(*inventory.commandName(1) == "track.set-volume");
+    CHECK(inventory.commandName(2) == nullptr);  // no name in that slot
+    CHECK(*inventory.commandName(3) == "transport.play");
+    CHECK(inventory.commandName(5) == nullptr);  // its chunk was lost: unknown, never invented
+    CHECK(*inventory.commandName(9) == "c.d");
+    CHECK(inventory.commandName(1u << 20) == nullptr);
+    CHECK(inventory.rejected() == 0);
+    // The same slot sent again replaces the name; the plug-in side is untouched by names.
+    REQUIRE(inventory.apply(nameChunk(0, {"track.remove"})));
+    CHECK(*inventory.commandName(0) == "track.remove");
+    CHECK(inventory.empty());  // names are not plug-ins
+}
+
+TEST_CASE("a damaged name chunk is counted and teaches nothing") {
+    Inventory inventory;
+    std::size_t expected = 0;
+    const auto refuse = [&](Packet p) {
+        CHECK_FALSE(inventory.apply(p));
+        CHECK(inventory.rejected() == ++expected);
+    };
+    refuse(nameChunk(2, {"a.b"}));                          // not a multiple of four
+    refuse(nameChunk(diagctx::kMaxCommandNames, {"a.b"}));  // past the table
+    refuse(nameChunk(0, {}));                               // nothing in it
+    auto generation = nameChunk(0, {"a.b"});
+    generation.instance.generation = 1;
+    refuse(generation);
+    auto image = nameChunk(0, {"a.b"});
+    image.instance.image = 1;
+    refuse(image);
+    auto kind = nameChunk(0, {"a.b"});
+    kind.instance.kind = 1;
+    refuse(kind);
+    auto fifth = nameChunk(0, {"a.b"});
+    setText(fifth, 3, "x");
+    fifth.instance.length[3] = 0;
+    fifth.instance.length[2] = 65;  // longer than a slot's 64 bytes
+    refuse(fifth);
+    CHECK(inventory.commandName(0) == nullptr);
+    // A name that is not a command name is left unknown but the rest of its chunk is kept.
+    REQUIRE(inventory.apply(nameChunk(4, {"Has Space", "ok.name", "../etc", "ok-2"})));
+    CHECK(inventory.commandName(4) == nullptr);
+    CHECK(*inventory.commandName(5) == "ok.name");
+    CHECK(inventory.commandName(6) == nullptr);
+    CHECK(*inventory.commandName(7) == "ok-2");
+    CHECK(inventory.rejected() == expected + 2);
+}
+
+TEST_CASE(
+    "every byte of a name chunk, replaced, makes a chunk the inventory vouches for or refuses") {
+    const auto good = nameChunk(4, {"track.add", "item.apply-fx", "x", "y.z"});
+    for (std::size_t at = 0; at < sizeof(InstanceRecord); ++at)
+        for (const unsigned char value : {0x00, 0x01, 0x20, 0x41, 0x7f, 0x80, 0xff}) {
+            Packet damaged = good;
+            reinterpret_cast<unsigned char*>(&damaged.instance)[at] = value;
+            Inventory inventory;
+            (void)inventory.apply(damaged);
+            for (std::uint32_t id = 0; id < 16; ++id)
+                if (const auto* name = inventory.commandName(id))
+                    CHECK(diagctx::validCommandName(*name));  // whatever it keeps is a valid name
+            CHECK(inventory.empty());
+        }
+}
+
+TEST_CASE("the report's commands array names each entry, or says unknown, and validates strictly") {
+    Inventory inventory;
+    REQUIRE(inventory.apply(nameChunk(0, {"track.add", "transport.play"})));
+    using diagctx::CommandCrumb;
+    using diagctx::CommandOrigin;
+    using diagctx::CommandState;
+    const auto trace = traceWithCommands({{5, 0, CommandOrigin::Mcp, CommandState::Ended},
+                                          {6, 1, CommandOrigin::Ui, CommandState::Ended},
+                                          {7, 3, CommandOrigin::Script, CommandState::Begun}});
+    const auto commands = inventory.commandsJson(&trace);
+    REQUIRE(commands.size() == 3);
+    const auto& list = commands.asArray();
+    CHECK(list[0].find("seq")->asInt() == 5);
+    CHECK(list[0].find("name")->asString() == "track.add");
+    CHECK(list[0].find("origin")->asString() == "mcp");
+    CHECK(list[0].find("state")->asString() == "ended");
+    CHECK(list[1].find("name")->asString() == "transport.play");
+    CHECK(list[2].find("name")->asString() == "unknown");  // id 3 was never announced
+    CHECK(list[2].find("origin")->asString() == "script");
+    CHECK(list[2].find("state")->asString() == "begun");
+    CHECK(commandsShape(commands));
+    CHECK(inventory.commandsJson(nullptr).size() == 0);
+    CHECK(commandsShape(json::Value::array()));
+
+    // Limits: always the standing one; more for damage, refusals and unnamed ids.
+    auto limits = inventory.commandLimits(&trace);
+    CHECK(limits.size() == 2);  // the standing text and "no name for id 3"
+    auto noisy = trace;
+    noisy.commandsDamaged = 1;
+    noisy.commandsRefused = 2;
+    CHECK(inventory.commandLimits(&noisy).size() == 4);
+    TraceSnapshot unread;
+    CHECK(inventory.commandLimits(&unread).size() == 1);
+    CHECK(inventory.commandLimits(nullptr).size() == 1);
+
+    // Shapes the writer never makes.
+    const auto parse = [](std::string_view text) { return json::parse(text).value(); };
+    const char* good = R"({"seq":1,"name":"a.b","origin":"ui","state":"begun"})";
+    CHECK(commandsShape(parse(std::string("[") + good + "]")));
+    const char* bad[] = {
+        R"({"seq":0,"name":"a.b","origin":"ui","state":"begun"})",  // seq starts at 1
+        R"({"seq":1,"name":"A.b","origin":"ui","state":"begun"})",  // not a command name
+        R"({"seq":1,"name":"a b","origin":"ui","state":"begun"})",
+        R"({"seq":1,"name":"","origin":"ui","state":"begun"})",
+        R"({"seq":1,"name":"a.b","origin":"robot","state":"begun"})",  // closed sets
+        R"({"seq":1,"name":"a.b","origin":"ui","state":"running"})",
+        R"({"seq":1,"name":"a.b","origin":"ui"})",
+        R"({"seq":1,"name":"a.b","origin":"ui","state":"begun","args":{}})",  // only four keys
+        R"({"seq":"1","name":"a.b","origin":"ui","state":"begun"})",
+        R"(["a.b"])"};
+    for (const char* entry : bad) CHECK_FALSE(commandsShape(parse(std::string("[") + entry + "]")));
+    // Not ascending, repeated, or more than 64.
+    CHECK_FALSE(commandsShape(parse(std::string("[") + good + "," + good + "]")));
+    std::string many = "[";
+    for (int i = 1; i <= 65; ++i)
+        many += std::string(i > 1 ? "," : "") + "{\"seq\":" + std::to_string(i) +
+                ",\"name\":\"a.b\",\"origin\":\"ui\",\"state\":\"ended\"}";
+    CHECK_FALSE(commandsShape(parse(many + "]")));
+    CHECK_FALSE(commandsShape(parse("{}")));
 }

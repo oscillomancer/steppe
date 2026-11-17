@@ -5,6 +5,9 @@
 #include <atomic>
 #include <mutex>
 
+#include <algorithm>
+
+#include "supple/diagctx/commands.h"
 #include "supple/diagctx/scope.h"
 
 namespace supple::diagctx {
@@ -18,11 +21,10 @@ static_assert(std::atomic<InventorySink>::is_always_lock_free);
 // cold, and the lock is how the rtsan preset proves none is made on an audio path.
 std::mutex gGate;
 
-// The sink in force, and the lock held while it runs; null when there is none or the cell
-// has no word.
-InventorySink enter(std::unique_lock<std::mutex>& lock, std::uint32_t cell) noexcept {
+// The sink in force, with the gate held (in `lock`) while it runs; null when there is none.
+InventorySink enter(std::unique_lock<std::mutex>& lock) noexcept {
     lock = std::unique_lock(gGate);
-    return cell < kMaxInstances ? gSink.load(std::memory_order_acquire) : nullptr;
+    return gSink.load(std::memory_order_acquire);
 }
 
 std::uint16_t generationOfCell(std::uint32_t cell) noexcept {
@@ -101,8 +103,8 @@ void setInventorySink(InventorySink sink) noexcept {
 void announce(std::uint32_t cell, InstanceKind kind, InstanceOrigin origin, InstanceMode mode,
               InstanceState state, std::uint64_t image, const Identity& identity) noexcept {
     std::unique_lock<std::mutex> lock;
-    const auto sink = enter(lock, cell);
-    if (!sink) return;
+    const auto sink = enter(lock);
+    if (!sink || cell >= kMaxInstances) return;
     Event event;
     event.event = EventKind::Add;
     event.cell = cell;
@@ -118,8 +120,8 @@ void announce(std::uint32_t cell, InstanceKind kind, InstanceOrigin origin, Inst
 
 void announceState(std::uint32_t cell, InstanceState state) noexcept {
     std::unique_lock<std::mutex> lock;
-    const auto sink = enter(lock, cell);
-    if (!sink) return;
+    const auto sink = enter(lock);
+    if (!sink || cell >= kMaxInstances) return;
     Event event;
     event.event = EventKind::State;
     event.cell = cell;
@@ -130,14 +132,36 @@ void announceState(std::uint32_t cell, InstanceState state) noexcept {
 
 void announceRemove(std::uint32_t cell) noexcept {
     std::unique_lock<std::mutex> lock;
-    const auto sink = enter(lock, cell);
-    if (!sink) return;
+    const auto sink = enter(lock);
+    if (!sink || cell >= kMaxInstances) return;
     Event event;
     event.event = EventKind::Remove;
     event.cell = cell;
     event.generation = generationOfCell(cell);
     event.state = InstanceState::Destroyed;
     sink(event);
+}
+
+void announceCommandNames(std::span<const std::string_view> names) noexcept {
+    const std::size_t count = std::min(names.size(), kMaxCommandNames);
+    for (std::size_t first = 0; first < count; first += kNamesPerChunk) {
+        std::string_view chunk[kNamesPerChunk]{};
+        bool any = false;
+        for (std::size_t i = 0; i < kNamesPerChunk && first + i < count; ++i)
+            if (validCommandName(names[first + i])) {
+                chunk[i] = names[first + i];
+                any = true;
+            }
+        if (!any) continue;
+        Event event;
+        event.event = EventKind::Names;
+        event.cell = static_cast<std::uint32_t>(first);
+        event.identity = {chunk[0], chunk[1], chunk[2], chunk[3]};
+        std::unique_lock<std::mutex> lock;
+        const auto sink = enter(lock);
+        if (!sink) return;
+        sink(event);
+    }
 }
 
 }  // namespace supple::diagctx

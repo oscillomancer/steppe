@@ -89,9 +89,20 @@ class Inventory {
     // Limit strings for the report's "unavailable".
     std::vector<std::string> limits() const;
 
+    // The command name table the process announced (topic 5d): the name of command `id`, or
+    // null when it was never received or was not a valid name.
+    const std::string* commandName(std::uint32_t id) const noexcept;
+    // The report's "commands" array: the table's ring entries, oldest first, each with its
+    // name ("unknown" for an id this table has no name for), origin category and state.
+    json::Value commandsJson(const TraceSnapshot* trace) const;
+    // Limit strings about the commands, for "unavailable".
+    std::vector<std::string> commandLimits(const TraceSnapshot* trace) const;
+
   private:
     void retire(PluginEntry entry);
+    bool applyNames(const InstanceRecord& record);
     std::vector<std::optional<PluginEntry>> live_;
+    std::vector<std::string> names_;  // by command id; empty: not received
     std::deque<PluginEntry> retired_;
     std::uint32_t nextOrdinal_ = 0;
     std::size_t announced_ = 0, rejected_ = 0, workerDropped_ = 0, retiredLost_ = 0;
@@ -100,5 +111,7 @@ class Inventory {
 // Strict validation of a report's "plugins" value; `threadCount` is the report's number of
 // threads (an `executing` entry names one of them).
 bool pluginsShape(const json::Value& plugins, std::size_t threadCount);
-
+// Strict validation of a report's "commands" value: at most 64 entries, ascending `seq`, a
+// name that is "unknown" or a valid command name, an origin and a state from the closed sets.
+bool commandsShape(const json::Value& commands);
 }  // namespace supple::diagnostics::detail
