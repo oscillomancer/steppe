@@ -1805,9 +1805,9 @@ a track's own; none without one), its name in the title size
 Tracks are shown when they were selected last or no item is selected, else
 items. Ids the session no longer holds are left out.
 
-**One item's fields** (`inspector.item`, shown for one selected item only).
-Each change is one `item.set` and one undo step; the inspector adds no
-command:
+**Item fields** (`inspector.item`, shown for one or several selected
+items). Each change is one `item.set` per item and one undo step; the
+inspector adds no command:
 
 | Field (node) | Shows | Accepts | `item.set` |
 |---|---|---|---|
@@ -1843,7 +1843,31 @@ with the command's hint, and the field shows the session's value again.
 Edits made elsewhere, an agent's included, show at the next pass, except
 in the field being typed in. A locked item's fields are disabled, all but
 Lock, under a line that says so. An item with no take cannot be named.
-Several items and tracks follow in later steps.
+
+**Several items** show the fields they can share: Follows, Gain, the
+fades and the three pills. Name, Start, Length, the take settings, the
+take list and the file are for one item only. A field shows the value all
+of them have, and is empty with the placeholder "mixed" when they differ;
+a pill is lit when all have the state on. An edit runs `item.set` on each
+inside one transaction (`Dispatcher::transact`, labelled "Item gain" and
+so on): one undo step, and all of them or none when the command refuses
+one. With any of them locked the fields are disabled; Lock then locks the
+ones that are not (a locked item refuses to be locked again), and a second
+click unlocks them all.
+
+**Track fields** (`inspector.track`, shown for one or several selected
+tracks), each one `track.set` per track, several in one transaction:
+
+| Field (node) | Shows | Accepts | `track.set` |
+|---|---|---|---|
+| Name (`inspector.track.name`), one track only | The stored name; unnamed, its label as a placeholder | Any text | `name` |
+| Colour (`inspector.track.color`) | The eight track colours as swatches and an empty square for none; the colour all of them have is ringed | A click | `color` |
+| Volume (`inspector.track.volume_db`) | "-6.0 dB", or empty and "mixed" | A number, with or without "dB" | `volume_db` |
+| Pan (`inspector.track.pan`) | "-30 %" (negative is left), or empty and "mixed" | A number, with or without "%" | `pan` |
+
+Inputs, outputs, sends and record settings stay where they are (the track
+row, the mixer strip and the routing matrix).
+
 
 ## 5. Agent panel (removed)
 

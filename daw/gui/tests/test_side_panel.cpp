@@ -616,3 +616,172 @@ TEST_CASE("inspector: an audio take's speed and pitch, and the choice of the tak
     CHECK_FALSE(f.inView("inspector.take"));
     CHECK_FALSE(f.inView("inspector.takes"));
 }
+
+TEST_CASE("inspector: several items show what they share; one edit is one undo step for all") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::string> errors;
+    f.actions->onError = [&](const std::string& e) { errors.push_back(e); };
+    const std::string track = f.exec("track.add", R"({"name":"Bass"})")["track"].asString();
+    auto add = [&](int bar) {
+        return f
+            .exec("item.add", R"({"track":")" + track + R"(","bar":)" + std::to_string(bar) +
+                                  R"(,"notation":"voice bass; 1: C2:q r:q C2:q r:q"})")["item"]
+            .asString();
+    };
+    const std::string a = add(1), b = add(3), c = add(5);
+    f.exec("item.set", R"({"item":")" + b + R"(","gain_db":-3})");
+    f.side->show("inspector");
+    f.ui.selectedItems = {a, b, c};
+    f.pass();
+    CHECK(f.text("inspector.title") == "3 items");
+    REQUIRE(f.inView("inspector.item"));
+    // What only one item can have is not offered.
+    CHECK_FALSE(f.inView("inspector.name"));
+    CHECK_FALSE(f.inView("inspector.start"));
+    CHECK_FALSE(f.inView("inspector.length"));
+    CHECK_FALSE(f.inView("inspector.take"));
+    // A value they share is shown; one they do not is left empty.
+    CHECK(f.field("inspector.fade_in").text() == "0.000 s");
+    CHECK(f.field("inspector.gain_db").text().empty());
+    CHECK(f.text("inspector.timebase").empty() == false);
+
+    auto before = f.steps();
+    f.type("inspector.gain_db", "-6");
+    for (const auto& id : {a, b, c}) CHECK(f.item(id).gainDb == -6);
+    CHECK(f.field("inspector.gain_db").text() == "-6.0 dB");
+    CHECK(f.steps() == before + 1);
+    REQUIRE(f.root->click("inspector.mute"));
+    f.pass();
+    for (const auto& id : {a, b, c}) CHECK(f.item(id).mute);
+    dynamic_cast<ui::Dropdown*>(f.node("inspector.timebase"))->choose("beats");
+    f.pass();
+    for (const auto& id : {a, b, c}) CHECK(f.item(id).timebase == model::ItemTimebase::Beats);
+    CHECK(f.steps() == before + 3);
+    // Undo takes the whole edit back.
+    f.exec("history.undo", "{}");
+    f.exec("history.undo", "{}");
+    f.pass();
+    for (const auto& id : {a, b, c}) CHECK_FALSE(f.item(id).mute);
+    CHECK(f.text("inspector.mute") == "off");
+
+    // A pill is lit only when all have the state; with one locked the
+    // fields are off, and Lock locks, then unlocks, them all.
+    f.exec("item.set", R"({"item":")" + b + R"(","locked":true})");
+    f.pass();
+    CHECK(f.text("inspector.locked") == "off");
+    CHECK(f.inView("inspector.locked.note"));
+    CHECK(f.text("inspector.locked.note").find("Some of these") != std::string::npos);
+    CHECK_FALSE(f.field("inspector.gain_db").enabled);
+    REQUIRE(f.root->click("inspector.locked"));
+    f.pass();
+    for (const auto& id : {a, b, c}) CHECK(f.item(id).locked);
+    REQUIRE(f.root->click("inspector.locked"));
+    f.pass();
+    for (const auto& id : {a, b, c}) CHECK_FALSE(f.item(id).locked);
+    CHECK(f.field("inspector.gain_db").enabled);
+
+    // What the command refuses for one is done for none.
+    before = f.steps();
+    f.type("inspector.gain_db", "99");
+    REQUIRE(errors.size() == 1);
+    for (const auto& id : {a, b, c}) CHECK(f.item(id).gainDb == -6);
+    CHECK(f.steps() == before);
+    // One of them removed meanwhile: the rest are still edited.
+    f.exec("item.remove", R"({"item":")" + c + R"("})");
+    f.pass();
+    CHECK(f.text("inspector.title") == "2 items");
+    f.type("inspector.fade_out", "0.5");
+    CHECK(f.item(a).fadeOut.length == 0.5);
+    CHECK(f.item(b).fadeOut.length == 0.5);
+}
+
+TEST_CASE("inspector: a track's name, colour, volume and pan; several tracks as one") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::string> errors;
+    f.actions->onError = [&](const std::string& e) { errors.push_back(e); };
+    const std::string bass = f.exec("track.add", R"({"name":"Bass"})")["track"].asString();
+    const std::string keys = f.exec("track.add", "{}")["track"].asString();
+    auto track = [&](const std::string& id) -> const model::Track& {
+        return *f.app->head().tracks.find(*model::Id::parse(id));
+    };
+    // A click on the n-th swatch of the colour row (the last is "none").
+    auto swatch = [&](std::size_t n) {
+        const ui::Rect r = f.node("inspector.track.color")->bounds();
+        const ui::Point at{r.x + static_cast<float>(n) * 22 + 9, r.y + r.h / 2};
+        f.root->pointer({ui::PointerEvent::Type::Down, at, 1});
+        f.root->pointer({ui::PointerEvent::Type::Up, at, 1});
+        f.pass();
+    };
+    f.side->show("inspector");
+    f.ui.selectedTracks = {bass};
+    f.ui.tracksFocused = true;
+    f.pass();
+    REQUIRE(f.inView("inspector.track"));
+    CHECK_FALSE(f.inView("inspector.item"));
+    CHECK(f.field("inspector.track.name").text() == "Bass");
+    CHECK(f.field("inspector.track.volume_db").text() == "0.0 dB");
+    CHECK(f.field("inspector.track.pan").text() == "0 %");
+    CHECK(f.text("inspector.track.color") == "red");  // track.add's first colour
+
+    auto before = f.steps();
+    f.type("inspector.track.name", "Upright");
+    CHECK(track(bass).name == "Upright");
+    CHECK(f.text("inspector.title") == "Upright");
+    swatch(3);
+    CHECK(track(bass).color == "green");
+    CHECK(f.text("inspector.track.color") == "green");
+    swatch(model::kTrackColors.size());
+    CHECK(track(bass).color.empty());
+    CHECK(f.text("inspector.track.color") == "none");
+    CHECK_FALSE(f.inView("inspector.swatch"));  // the header's bar goes with the colour
+    f.type("inspector.track.volume_db", "-6 dB");
+    CHECK(track(bass).volumeDb == -6);
+    f.type("inspector.track.pan", "-30");
+    CHECK(track(bass).pan == -30);
+    CHECK(f.field("inspector.track.pan").text() == "-30 %");
+    CHECK(f.steps() == before + 5);
+    f.type("inspector.track.pan", "200");  // beyond hard left and right
+    REQUIRE(errors.size() == 1);
+    CHECK(track(bass).pan == -30);
+    CHECK(f.field("inspector.track.pan").text() == "-30 %");
+
+    // Two tracks: no name; what differs is empty; an edit goes to both as
+    // one undo step.
+    f.ui.selectedTracks = {bass, keys};
+    f.pass();
+    CHECK(f.text("inspector.title") == "2 tracks");
+    CHECK_FALSE(f.inView("inspector.track.name"));
+    CHECK(f.field("inspector.track.volume_db").text().empty());
+    CHECK(f.text("inspector.track.color") == "mixed");
+    before = f.steps();
+    f.type("inspector.track.volume_db", "-3");
+    CHECK(track(bass).volumeDb == -3);
+    CHECK(track(keys).volumeDb == -3);
+    CHECK(f.field("inspector.track.volume_db").text() == "-3.0 dB");
+    swatch(5);
+    CHECK(track(bass).color == "blue");
+    CHECK(track(keys).color == "blue");
+    CHECK(f.text("inspector.track.color") == "blue");
+    CHECK(f.steps() == before + 2);
+    f.exec("history.undo", "{}");
+    CHECK(track(bass).color.empty());
+    CHECK(track(keys).color == "orange");
+
+    // From tracks to an item and back: each shows its own fields.
+    const std::string it =
+        f.exec("item.add",
+               R"({"track":")" + bass +
+                   R"(","bar":1,"notation":"voice bass; 1: C2:q r:q C2:q r:q"})")["item"]
+            .asString();
+    f.ui.selectedItems = {it};
+    f.ui.tracksFocused = false;
+    f.pass();
+    CHECK(f.inView("inspector.item"));
+    CHECK_FALSE(f.inView("inspector.track"));
+    f.ui.tracksFocused = true;
+    f.pass();
+    CHECK(f.inView("inspector.track"));
+    CHECK_FALSE(f.inView("inspector.item"));
+}

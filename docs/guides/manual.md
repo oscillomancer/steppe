@@ -369,6 +369,12 @@ A panel at the right of the window holds the **Inspector** and the
   An audio item also has **Speed** (`0.5` is half speed), **Pitch** in
   semitones and **Keep pitch**, which holds the pitch when the speed
   changes. An item with several takes lists them; click one to hear it.
+  With several items selected, the Inspector shows the settings they can
+  share. A field is empty and says "mixed" when they differ; what you type
+  goes to all of them as one step for Undo.
+  With a track selected it shows the track's **Name**, **Colour** (click a
+  swatch, or the empty square for none), **Volume** and **Pan** (`-30` is
+  30% left). With several tracks selected, a change goes to all of them.
 - **View > History and command log**, or **Ctrl+H**, opens it on the History:
   the versions you can step back to, the branches, and every command with who
   ran it.

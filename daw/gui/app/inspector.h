@@ -40,7 +40,7 @@ struct InspectorSubject {
     enum class Kind { Nothing, Item, Items, Track, Tracks } kind = Kind::Nothing;
     std::string title, detail;
     std::optional<ui::Color> color;
-    std::optional<model::Id> item;  // the one item (Kind::Item)
+    std::vector<model::Id> ids;  // the items (Item, Items) or the tracks (Track, Tracks)
 };
 // Tracks win when they were selected last (UiState::tracksFocused), else
 // items; ids the session no longer holds are left out.
@@ -72,19 +72,28 @@ class Inspector {
     ui::TextField& field(ui::Node& parent, const std::string& key, const std::string& label);
     ui::Toggle& state(ui::Node& parent, const std::string& key, const std::string& label,
                       const std::string& color);
-    void show(const std::string& key, std::string text, bool force);
+    // A field's text from the session; nothing (several values) reads "mixed".
+    void show(const std::string& key, std::optional<std::string> text, bool force);
     void commit(const std::string& key, const std::string& text);  // a field's text, as typed
-    void set(const std::string& key, json::Value value);           // one item.set
-    void setTake(const std::string& key, json::Value value);       // one take.set, the heard take
+    // One item.set or track.set on every selected item or track: one undo step.
+    void set(const std::string& key, json::Value value);
+    void setTake(const std::string& key, json::Value value);  // one take.set, the heard take
     void run(const char* command, json::Value args);
+    void finish(const Result<json::Value>& result);
     void fail(const std::string& message);
-    void readItem(bool force);  // the fields from the session; a focused field keeps its text
+    // The fields from the session; a focused field keeps its text.
+    void read(bool force);
+    void readItems(bool force);
+    void readTracks(bool force);
     ui::Root& root_;
     engine::EngineApp& app_;
     const UiState& selection_;
     cmd::Dispatcher& dispatcher_;
     AppActions& actions_;
-    ui::Node* itemBox_ = nullptr;  // the one-item fields; hidden otherwise
+    ui::Node* itemBox_ = nullptr;            // the item fields; hidden otherwise
+    ui::Node* trackBox_ = nullptr;           // the track fields
+    ui::Node* colors_ = nullptr;             // the track colour swatches
+    std::map<std::string, ui::Node*> rows_;  // a field's row, to hide with it
     std::map<std::string, Field> fields_;
     std::map<std::string, ui::Toggle*> states_;
     ui::Dropdown* timebase_ = nullptr;
@@ -97,7 +106,9 @@ class Inspector {
     std::size_t heard_ = 0;  // the heard take's row
     ui::TextBlock* locked_ = nullptr;
     ui::TextBlock* file_ = nullptr;
-    std::optional<model::Id> item_;  // the item the fields show
+    // What the fields show: items or tracks, and which.
+    InspectorSubject::Kind kind_ = InspectorSubject::Kind::Nothing;
+    std::vector<model::Id> ids_;
     ui::Node* panel_ = nullptr;
     ui::Node* swatch_ = nullptr;
     ui::Label* title_ = nullptr;
