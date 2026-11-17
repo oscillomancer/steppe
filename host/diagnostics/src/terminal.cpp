@@ -195,10 +195,13 @@ struct SignalStack {
         ready = ::sigaltstack(&replacement, nullptr) == 0;
     }
     ~SignalStack() {
-        if (memory) {
-            if (ready) (void)::sigaltstack(&previous, nullptr);
-            (void)::munmap(memory, bytes);
-        }
+        if (!memory) return;
+        // If the old alternate stack could not be restored, ours is still the enabled one:
+        // unmapping it would make the kernel push the next signal frame onto unmapped
+        // memory, which it answers with a forced SIGILL and no handler. A leaked 64 KiB at
+        // thread exit is the safe choice.
+        if (ready && ::sigaltstack(&previous, nullptr) != 0) return;
+        (void)::munmap(memory, bytes);
     }
 };
 #endif

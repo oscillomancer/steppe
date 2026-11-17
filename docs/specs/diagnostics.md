@@ -302,6 +302,9 @@ file writing/symbolication. `registerCurrentThread()` reserves a guarded alterna
 stack (POSIX) or a stack guarantee (Windows), while cold; main registers before
 frontend code. Other owned-thread integration belongs to topic 5; unregistered
 foreign/driver threads have best-effort context and no stack-exhaustion promise.
+A thread's alternate stack is unmapped at its exit only after the previous one was
+restored; if the restore fails the 64 KiB stays mapped, since the kernel answers a signal
+frame pushed onto an unmapped enabled stack with a forced SIGILL and no handler.
 No callback hook, TLS registration or sanitizer suppression is added. Sanitized
 builds retain their handlers and emit exit-only summaries.
 

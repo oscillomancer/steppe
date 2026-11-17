@@ -21,8 +21,10 @@
 #include <cstring>
 #include <fstream>
 #else
+#include <sys/mman.h>
 #include <sys/resource.h>
 #include <unistd.h>
+#include <cerrno>
 #include <csignal>
 #if defined(__linux__)
 #include <link.h>
@@ -348,20 +350,31 @@ int body(int argc, char** argv) {
     if (mode == "teardown") {
         std::atexit([] {
 #if !defined(_WIN32)
-            // Evidence for a teardown abort that left no capsule (native CI on macOS):
-            // the state of SIGABRT as abort() is about to raise it, in write(2) only.
+            // Evidence for a teardown abort that left no capsule (native CI on macOS).
+            // abort() rewrites the signal mask itself, so the mask is not worth printing;
+            // what can make the kernel force a SIGILL instead of running the handler is
+            // an alternate stack that is still enabled but no longer mapped (review
+            // round 29). Print whether SIGABRT has our handler, and the alternate stack
+            // as sigaltstack(2) reports it now: its flags, size, and whether its first
+            // page is still mapped (msync fails with ENOMEM on an unmapped page).
             struct sigaction current{};
-            sigset_t blocked;
             (void)::sigaction(SIGABRT, nullptr, &current);
-            (void)::sigprocmask(SIG_SETMASK, nullptr, &blocked);
             const bool ours =
                 (current.sa_flags & SA_SIGINFO) != 0 && current.sa_sigaction != nullptr;
-            const char* text = ours ? "teardown: SIGABRT handler installed\n"
-                                    : "teardown: SIGABRT handler absent\n";
-            (void)!::write(STDERR_FILENO, text, std::strlen(text));
-            text = sigismember(&blocked, SIGABRT) == 1 ? "teardown: SIGABRT blocked\n"
-                                                       : "teardown: SIGABRT not blocked\n";
-            (void)!::write(STDERR_FILENO, text, std::strlen(text));
+            std::fprintf(stderr, "teardown: SIGABRT handler %s\n", ours ? "installed" : "absent");
+            stack_t alt{};
+            if (::sigaltstack(nullptr, &alt) != 0) {
+                std::fprintf(stderr, "teardown: sigaltstack unreadable (errno %d)\n", errno);
+            } else if ((alt.ss_flags & SS_DISABLE) != 0) {
+                std::fprintf(stderr, "teardown: alternate stack disabled (flags %d)\n",
+                             alt.ss_flags);
+            } else {
+                const bool mapped = ::msync(alt.ss_sp, 1, MS_ASYNC) == 0 || errno != ENOMEM;
+                std::fprintf(stderr, "teardown: alternate stack enabled (flags %d, size %zu), %s\n",
+                             alt.ss_flags, static_cast<std::size_t>(alt.ss_size),
+                             mapped ? "mapped" : "NOT MAPPED");
+            }
+            std::fflush(stderr);
 #endif
             std::abort();
         });
