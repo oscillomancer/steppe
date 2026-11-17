@@ -18,7 +18,8 @@ processing, flexible isolation).
 
 The model thread (or a worker it delegates to) compiles a version into a
 `RenderPlan` whose graph and setup are immutable: a structural change means a
-new plan (built incrementally from the previous one where possible, §1.6).
+new plan, compiled complete from the session; instances, recycled rings and
+state carry over from the previous one (§1.6).
 Its DSP state belongs to the executors, and strip, send and VCA levels and
 pans arrive through its mix slots (ADR-0060, §1.6) without a new plan.
 
@@ -277,7 +278,7 @@ beat zero). Callers must still validate finite positions and leave room for
 block and latency arithmetic. JACK validates requested rates in 1..768000 Hz
 before constructing its latency request.
 
-### 1.6 Incremental rebuild and plan swap
+### 1.6 Plan rebuild and swap
 
 Every compile is complete: `Engine::load` builds a whole new plan from the
 session, every node, stage, buffer and event list, except for the edits that
@@ -292,8 +293,9 @@ histories. Held timeline notes carry only when the receiving instrument
 instance is retained. Route and parent edge delay histories carry when
 source, destination, tap, kind and delay length match; changed lengths start
 empty. New plugins are instantiated and activated on the main thread before
-the swap. Route E (`reports/route-E-design.md`) makes edits cheaper stage by
-stage; so far:
+the swap. Edits are being made cheaper in stages (route E: rings, then the
+FX identity test, then patch edits without a plan swap, each stage
+specified here as it lands); so far:
 
 - **Rings are recycled** (stage 1). A frontier or record ring of a plan
   both executors have left goes to a main-thread pool when plans are
