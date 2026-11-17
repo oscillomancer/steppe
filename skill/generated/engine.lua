@@ -164,6 +164,18 @@ q = nil
 ---@field amount? number
 ---@field color? string
 
+---@class Steppe.crash_acknowledge_args
+---@field incident string A report's incident id, from crash.list.
+
+---@class Steppe.crash_delete_args
+---@field incident string A report's incident id, from crash.list.
+
+---@class Steppe.crash_list_args
+---@field limit? integer
+
+---@class Steppe.crash_read_args
+---@field incident string A report's incident id, from crash.list.
+
 ---@class Steppe.dsp_check_args
 ---@field name? string
 ---@field source? string
@@ -2202,6 +2214,13 @@ q = nil
 ---@field remove fun(args?: Steppe.cable_remove_args): table Remove a cable, by id or by its two ends.
 ---@field set fun(args: Steppe.cable_set_args): table Set a modulation cable's amount or a cable's colour.
 
+---@class Steppe.crash
+---@field acknowledge fun(args: Steppe.crash_acknowledge_args): table Mark a crash report, or a run that left none, as seen.
+---@field clear fun(): table Delete every finished crash report and record of an ended run.
+---@field delete fun(args: Steppe.crash_delete_args): table Delete one crash report, or the record of a run that left none.
+---@field list fun(args?: Steppe.crash_list_args): table The crash reports earlier runs left, newest first.
+---@field read fun(args: Steppe.crash_read_args): table One crash report in full.
+
 ---@class Steppe.dsp
 ---@field check fun(args?: Steppe.dsp_check_args): Steppe.dsp_check_result Compile a DSP script without saving it; return its diagnostics.
 ---@field edit fun(args: Steppe.dsp_edit_args): Steppe.dsp_edit_result Change part of a library script by replacing text; compile it, as dsp.write.
@@ -2543,6 +2562,7 @@ q = nil
 ---@field autoitem Steppe.autoitem Commands named autoitem.*
 ---@field branch Steppe.branch Commands named branch.*
 ---@field cable Steppe.cable Commands named cable.*
+---@field crash Steppe.crash Commands named crash.*
 ---@field dsp Steppe.dsp Commands named dsp.*
 ---@field engine Steppe.engine Commands named engine.*
 ---@field env Steppe.env Commands named env.*

@@ -76,6 +76,10 @@ struct AppOptions {
     // Rack presets (rack.preset.*): <rackPresetDir>/<name>.json. Empty =
     // <workdir>/rack-presets; the app passes <data>/<slug>/rack-presets.
     std::filesystem::path rackPresetDir;
+    // Where the crash reports of earlier runs are (crash.* commands, ADR-0083): the folder the
+    // diagnostics frontend writes to. Empty = <workdir>/diagnostics; the apps pass
+    // diagnostics::defaultDirectory() when they have no --workdir, so tests never read the user's.
+    std::filesystem::path diagnosticsDir;
     // An unsaved project's own folder (the GUI's, one per run): its media (the
     // recordings) and autosaves live in <scratchDir>/<media_dir> and
     // <scratchDir>/autosave-<n>.json until the first save moves the media
@@ -526,6 +530,10 @@ class EngineApp : public cmd::Host {
     std::filesystem::path rackPresetDir() const {
         return options_.rackPresetDir.empty() ? options_.workdir / "rack-presets"
                                               : options_.rackPresetDir;
+    }
+    std::filesystem::path diagnosticsDir() const {
+        return options_.diagnosticsDir.empty() ? options_.workdir / "diagnostics"
+                                               : options_.diagnosticsDir;
     }
     const std::shared_ptr<const rack::Catalog>& modules() const { return modules_; }
     // Makes `catalog` the one racks use: racks playing a type whose code

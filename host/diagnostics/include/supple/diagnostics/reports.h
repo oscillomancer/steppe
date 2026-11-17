@@ -76,6 +76,11 @@ Result<std::string> readReport(const std::string& incident,
 // else is touched; deleting a report is not part of this.
 Status acknowledge(const std::string& incident, const std::filesystem::path& directory = {});
 
+// Writes one small, valid report (an unexpected exit of a fixture run, no capture) under
+// `incident`: for command examples and tests of whatever reads reports. Not for use by a run that
+// has crashed.
+Status writeSampleReport(const std::string& incident, const std::filesystem::path& directory);
+
 // Deletes one incident whose run is over: its report, its acknowledgement and, when nobody holds
 // it, its run marker (an unreported run is deleted by this too). Errors carry
 // `diagnostics.no_report` when there is no such finished incident. Idempotent per file.

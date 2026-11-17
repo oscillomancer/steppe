@@ -19,6 +19,7 @@
 //       Play a project through the audio device (to its end, or for S
 //       seconds; Ctrl-C stops), then print engine.status.
 #include "supple/diagnostics/frontend.h"
+#include "supple/diagnostics/reports.h"
 #if defined(_WIN32)
 #include <fcntl.h>
 #include <io.h>
@@ -284,6 +285,7 @@ int frontendMain(int argc, char** argv) {
         if (options.workdir.empty()) {
             options.workdir = project.empty() ? defaultWorkdir() : project.parent_path();
             options.renderPresetDir = userRenderPresetDir();
+            options.diagnosticsDir = supple::diagnostics::defaultDirectory();
         }
         if (auto stock = host::stockPluginDir()) options.pluginPath.push_back(*stock);
         for (auto& path : host::defaultSearchPath()) options.pluginPath.push_back(path);

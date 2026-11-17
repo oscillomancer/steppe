@@ -206,6 +206,15 @@ marker, for an incident that exists and whose run is over; it is idempotent, and
 that is not a valid acknowledgement does not count and is replaced. Retention removes a report's
 `.ack` with it. An acknowledgement of an unreported run stays with its marker.
 
+*Commands.* The engine exposes the reader to agents (P9) as `crash.list {limit?}` (the listing:
+reports, unreported runs, `live_runs`, `reports_pending`, `ignored`, each list capped by `limit`,
+default 50, with its `_total`), `crash.read {incident}` (the report as written),
+`crash.acknowledge {incident}`, `crash.delete {incident}` and `crash.clear` (what `deleteAllReports`
+does). The folder is `AppOptions::diagnosticsDir`, empty meaning `<workdir>/diagnostics`; the apps
+pass `defaultDirectory()` when they run without `--workdir`, so a test never reads the user's own
+reports. A report the reader refuses is `crash.no_report` at `/args/incident`, with a hint to list
+first. `writeSampleReport` makes the one report the command examples and tests start from.
+
 *Deleting (P11).* `deleteReport(incident)` removes a finished incident's report, its `.ack` and,
 when nobody holds it, its run marker (that is how an unreported run is dismissed); the marker goes
 last, so a deletion that stopped half way can be repeated. `deleteAllReports()` does that for every

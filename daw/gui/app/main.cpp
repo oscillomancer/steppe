@@ -4,6 +4,7 @@
 #include <supple/model/groups.h>
 #include "audio_edit.h"
 #include "supple/diagnostics/frontend.h"
+#include "supple/diagnostics/reports.h"
 // <slug>: the DAW with a window (docs/specs/gui.md). The UI thread is the
 // model thread: it pumps the command bus's loop (socket requests, the service
 // tick) between SDL events, and draws only when something changed.
@@ -314,6 +315,8 @@ int frontendMain(int argc, char** argv) {
     if (o.workdir.empty()) options.rackPresetDir = dataFolder() / "rack-presets";
     // Render presets and the render default likewise (ADR-0055).
     if (o.workdir.empty()) options.renderPresetDir = dataFolder() / "render-presets";
+    // Earlier runs' crash reports, where the diagnostics frontend wrote them.
+    if (o.workdir.empty()) options.diagnosticsDir = supple::diagnostics::defaultDirectory();
     auto app = engine::EngineApp::create(options);
     if (!app) {
         std::fprintf(stderr, "%s\n", app.error().toString().c_str());

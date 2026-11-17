@@ -1269,8 +1269,11 @@ Crash diagnostics are being added separately from autosave and recording recover
 Reports remain on this machine under the app’s local data folder/diagnostics,
 limited to 20 reports or 50 MB, oldest removed. They exclude your project, audio,
 MIDI and command arguments. Steppe never uploads them; your OS crash reporting
-continues under your own OS settings. Safe-load and next-start notices arrive in
-a later topic; the current delivery scope is listed in STATUS.md.
+continues under your own OS settings. An agent connected over MCP can list, read,
+acknowledge and delete these reports (`crash.list`, `crash.read`, `crash.acknowledge`,
+`crash.delete`, `crash.clear`); a report names plug-ins and commands, never project
+content. Safe-load and next-start notices arrive in a later topic; the current delivery
+scope is listed in STATUS.md.
 
 #### Stopping Steppe from a script or a service
 

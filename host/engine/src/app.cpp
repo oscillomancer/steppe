@@ -34,6 +34,7 @@
 #include "supple/base/files.h"
 #include "supple/base/sha256.h"
 #include "supple/clap/semantic_params.h"
+#include "supple/diagnostics/reports.h"
 #include "supple/dsp/oversampler.h"
 #include "supple/engine/jack.h"
 #include "supple/model/env_shape.h"
@@ -4740,6 +4741,13 @@ struct Gain : Effect {
     }
     if (fixture == "song_with_marker") {
         run("marker.add", R"({"pos":4,"name":"Verse"})");
+        return;
+    }
+    if (fixture == "song_with_crash_report") {  // + one earlier run's report, 0123…cdef
+        const auto st =
+            diagnostics::writeSampleReport("0123456789abcdef0123456789abcdef", diagnosticsDir());
+        assert(st && "fixture crash report failed");
+        (void)st;
         return;
     }
     if (fixture == "branch_ahead") {  // an agent branch one edit ahead of main, main current

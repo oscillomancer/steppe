@@ -8,6 +8,7 @@
 #include "storage.h"
 #include "supple/base/files.h"
 #include "supple/base/paths.h"
+#include "supple/diagnostics/frontend.h"
 #include "supple/json/json.h"
 #include "supple/product.h"
 namespace supple::diagnostics {
@@ -226,6 +227,14 @@ Status removeIncident(const fs::path& root, const std::string& incident) {
     return okStatus();
 }
 }  // namespace
+Status writeSampleReport(const std::string& incident, const fs::path& directory) {
+    if (!incidentName(incident)) return noReport(incident);
+    Packet boot;
+    boot.role = static_cast<std::uint32_t>(diagnostics::Role::Fixture);
+    std::copy(incident.begin(), incident.end(), boot.incident.begin());
+    SUPPLE_TRY(prepareDirectory(directory));
+    return publishReport(directory, boot, nullptr, 31, false);
+}
 Status deleteReport(const std::string& incident, const fs::path& directory) {
     const fs::path root = directory.empty() ? defaultDirectory() : directory;
     if (root.empty() || !incidentName(incident)) return noReport(incident);
