@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include "supple/base/result.h"
+#include "supple/diagnostics/frontend.h"
 namespace supple::diagnostics {
 // The crash reports an application's earlier runs left in its diagnostics folder, for a restart
 // notice or a viewer (ADR-0083, topic 7). Reading changes nothing except what `acknowledge`
@@ -86,8 +87,8 @@ Result<std::string> readReport(const std::string& incident,
 Status acknowledge(const std::string& incident, const std::filesystem::path& directory = {});
 
 // Writes the files of a run that ended without a report (a run marker nobody holds), for tests.
-Status writeSampleUnreportedRun(const std::string& incident,
-                                const std::filesystem::path& directory);
+Status writeSampleUnreportedRun(const std::string& incident, const std::filesystem::path& directory,
+                                Role role = Role::Fixture);
 
 // What else a sample crash says of its plug-in: its own id and version (without an id it is no
 // suspect, topic 7d) and the build id of the binary the fault was in, as the report records it.
@@ -99,12 +100,13 @@ struct SampleCrashPlugin {
 // instruction was in (attribution fault_in_image), for tests and examples.
 Status writeSampleCrash(const std::string& incident, const std::string& plugin,
                         const std::string& vendor, const std::filesystem::path& directory,
-                        const SampleCrashPlugin& extra = {});
+                        const SampleCrashPlugin& extra = {}, Role role = Role::Fixture);
 
 // Writes one small, valid report (an unexpected exit of a fixture run, no capture) under
 // `incident`: for command examples and tests of whatever reads reports. Not for use by a run that
 // has crashed.
-Status writeSampleReport(const std::string& incident, const std::filesystem::path& directory);
+Status writeSampleReport(const std::string& incident, const std::filesystem::path& directory,
+                         Role role = Role::Fixture);
 
 // Deletes one incident whose run is over: its report, its acknowledgement, its settlement and, when
 // nobody holds it, its run marker (an unreported run is deleted by this too). Errors carry
@@ -164,20 +166,33 @@ struct RestartNotice {
     std::vector<std::string> incidents;  // newest first: the ones dismissing this acknowledges
     std::size_t earlier = 0;             // incidents.size() - 1
     std::string plugin;                  // the plug-in the report points at, when it points at one
+    std::string role;                    // the role the notice was made for; empty: every role
 };
-// How many reports `lastRunNotice` parses; the unacknowledged ones behind them are counted by
-// file name only (P4: the notice looks at the last three).
+// How many reports `lastRunNotice` parses when it is not given a role; the unacknowledged ones
+// behind them are counted by file name only (P4: the notice looks at the last three).
 inline constexpr std::size_t kNoticeReportsRead = 3;
+// With a role, a report's role is known only by reading it, so the notice reads at most this many
+// of the newest unacknowledged report files (matching or not); older ones are left for a later
+// start rather than counted for the wrong app.
+inline constexpr std::size_t kNoticeRoleReads = 8;
 // Decides the notice from the folder, cheaply enough for a start: it lists names, probes the run
 // markers, reads each acknowledgement, and parses only the newest `kNoticeReportsRead` reports,
 // newest first by file time. The reports behind them are counted without being read, so a file
 // that turns out not to be a valid report still counts as an earlier close. Empty when every
 // ended run is acknowledged (or there were none); a folder that is not private to the user is
 // an error.
-Result<std::optional<RestartNotice>> lastRunNotice(const std::filesystem::path& directory = {});
+//
+// With `role`, the notice covers the incidents of that role only (review 38b, F6): the GUI's
+// banner is for GUI runs and the headless engine's line for engine runs, so that neither
+// announces, nor dismisses, the other's. A run's role is what its marker or its report says, so
+// an incident whose role cannot be read is nobody's; the text names the app that closed (the
+// engine's says so). Nothing else is filtered: the listing, `suspects` and an explicit
+// `acknowledge` of a named incident cover every role.
+Result<std::optional<RestartNotice>> lastRunNotice(const std::filesystem::path& directory = {},
+                                                   std::optional<Role> role = std::nullopt);
 // The headline and detail as one text, for a place with no layout (a terminal).
 std::string noticeText(const RestartNotice& notice);
-// Acknowledges every incident the notice covers (the latest and the earlier ones); keeps going
-// past a failure and returns the first. Parses nothing.
+// Acknowledges every incident the notice covers (the latest and the earlier ones, all of the
+// notice's own role); keeps going past a failure and returns the first. Parses nothing.
 Status acknowledgeNotice(const RestartNotice& notice, const std::filesystem::path& directory = {});
 }  // namespace supple::diagnostics

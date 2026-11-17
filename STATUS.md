@@ -1618,10 +1618,11 @@ them. An application can list and read earlier runs' reports, acknowledge them a
 (`supple/diagnostics/reports.h`, tolerant of kinds and fields of a newer build; a report counts
 only once its run's marker and its supervisor's hold are released; a run that ended with no report is listed as unreported).
 Agents reach it through the `crash.*` commands (list, read, acknowledge, delete, clear). The GUI shows a restart
-notice (a banner under the transport, Dismiss acknowledges; wording provisional) and a headless service says the same
-on stderr at start; the viewer and safe-load are the next steps of topic 7. The notice reads every report-named file
-in the folder once at start, synchronously, each at most 4 MiB, except that it parses only the newest three
-(the rest are counted by name); retention keeps the folder to about 20 reports but is applied only when a report is
-published, so the cost is bounded by the folder's contents, not by 20. Markers of runs that left no report are capped at
-the newest 20 (applied when a run starts). Native macOS/Windows CI and
+notice (a banner under the transport, Dismiss acknowledges; wording provisional) for GUI runs only, and a headless
+service says the same on stderr at start for engine runs only, naming itself; each dismisses only its own
+incidents, and the viewer (all roles) and the app's own safe-load questions are the next steps of topic 7. The notice
+lists every report-named and marker file in the folder once at start, synchronously, and reads the newest eight
+unacknowledged reports (each at most 4 MiB) to learn their role; retention keeps the folder to about 20 reports,
+but is applied only when a report is published, so the cost is bounded by the folder's contents, not by 20.
+Markers of runs that left no report are capped at the newest 20 (applied when a run starts). Native macOS/Windows CI and
 signed Mach capability/collector-loss tests are due before merge/release.

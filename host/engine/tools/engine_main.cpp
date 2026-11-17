@@ -305,7 +305,10 @@ int frontendMain(int argc, char** argv) {
         // A service that outlives one call says once, on stderr, that the last run ended
         // unexpectedly (never on a protocol stream; never a prompt). The agent reads it with
         // crash.list and dismisses it with crash.acknowledge.
-        if (auto notice = supple::diagnostics::lastRunNotice((*app)->diagnosticsDir());
+        // Engine runs only, and it says so: the app's own crash is the app's banner to show,
+        // and an agent must not dismiss it from here.
+        if (auto notice = supple::diagnostics::lastRunNotice((*app)->diagnosticsDir(),
+                                                             supple::diagnostics::Role::Engine);
             notice && *notice)
             std::fprintf(stderr,
                          "%s Use crash.list to read it, and crash.acknowledge with an incident id "

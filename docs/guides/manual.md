@@ -1271,8 +1271,10 @@ limited to 20 reports or 50 MB, oldest removed. They exclude your project, audio
 MIDI and command arguments. Steppe never uploads them; your OS crash reporting
 continues under your own OS settings. After an unexpected close, the next start shows a
 banner under the transport that says so (naming the plug-in the report points at, when it
-points at one, or saying no report was written); Dismiss hides it for good. It is a note,
-not a question, and project recovery is offered separately. An agent connected over MCP can list, read,
+points at one, or saying no report was written); Dismiss hides it for good. It is about the
+app's own earlier closes only: a headless engine service that an agent started has its own line
+on standard error (naming itself, "Steppe engine"), and dismissing one never dismisses the other.
+It is a note, not a question, and project recovery is offered separately. An agent connected over MCP can list, read,
 acknowledge, settle and delete these reports (`crash.list`, `crash.read`, `crash.acknowledge`,
 `crash.settle`, `crash.delete`, `crash.clear`); a report names plug-ins and commands, never project
 content. Before opening a project, or recovering one (`project.plugins` with `session` or `autosave`),

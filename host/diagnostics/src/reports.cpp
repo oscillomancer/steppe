@@ -115,6 +115,20 @@ ReportSummary summarise(const json::Value& report, const fs::path& path,
     }
     return s;
 }
+// The role a run's marker recorded; empty when it cannot be read.
+std::string markerRole(const fs::path& marker) {
+    if (auto text = privateRead(marker))
+        if (auto value = json::parse(*text); value && value->isObject()) {
+            const auto* role = value->find("role");
+            return role && role->isString() ? role->asString() : std::string();
+        }
+    return {};
+}
+const char* roleName(diagnostics::Role role) {
+    return role == diagnostics::Role::Gui      ? "gui"
+           : role == diagnostics::Role::Engine ? "engine"
+                                               : "fixture";
+}
 struct Loaded {
     json::Value value;
     fs::file_time_type written;
@@ -223,9 +237,7 @@ Result<ReportListing> listReports(const fs::path& directory) {
         UnreportedRun run;
         run.incident = incident;
         run.marker = markerFiles.at(incident);
-        if (auto text = privateRead(run.marker))
-            if (auto value = json::parse(*text); value && value->isObject())
-                run.role = textOf(*value, "role");
+        run.role = markerRole(run.marker);
         run.acknowledged = isAcknowledged(root, incident);
         std::error_code e;
         run.started = fs::last_write_time(run.marker, e);
@@ -384,10 +396,11 @@ Status removeIncident(const fs::path& root, const std::string& incident) {
     return okStatus();
 }
 }  // namespace
-Status writeSampleReport(const std::string& incident, const fs::path& directory) {
+Status writeSampleReport(const std::string& incident, const fs::path& directory,
+                         diagnostics::Role role) {
     if (!incidentName(incident)) return noReport(incident);
     Packet boot;
-    boot.role = static_cast<std::uint32_t>(diagnostics::Role::Fixture);
+    boot.role = static_cast<std::uint32_t>(role);
     std::copy(incident.begin(), incident.end(), boot.incident.begin());
     SUPPLE_TRY(prepareDirectory(directory));
     return publishReport(directory, boot, nullptr, 31, false);
@@ -416,10 +429,11 @@ Result<std::size_t> deleteAllReports(const fs::path& directory) {
     }
     return removed;
 }
-Status writeSampleUnreportedRun(const std::string& incident, const fs::path& directory) {
+Status writeSampleUnreportedRun(const std::string& incident, const fs::path& directory,
+                                diagnostics::Role role) {
     if (!incidentName(incident)) return noReport(incident);
     Packet boot;
-    boot.role = static_cast<std::uint32_t>(diagnostics::Role::Fixture);
+    boot.role = static_cast<std::uint32_t>(role);
     std::copy(incident.begin(), incident.end(), boot.incident.begin());
     SUPPLE_TRY(prepareDirectory(directory));
     auto marker = createMarker(directory, boot);
@@ -429,12 +443,12 @@ Status writeSampleUnreportedRun(const std::string& incident, const fs::path& dir
 }
 Status writeSampleCrash(const std::string& incident, const std::string& plugin,
                         const std::string& vendor, const fs::path& directory,
-                        const SampleCrashPlugin& extra) {
+                        const SampleCrashPlugin& extra, diagnostics::Role role) {
     if (!incidentName(incident) || plugin.size() > 64 || vendor.size() > 64 ||
         extra.id.size() > 64 || extra.version.size() > 64)
         return noReport(incident);
     Packet boot;
-    boot.role = static_cast<std::uint32_t>(diagnostics::Role::Fixture);
+    boot.role = static_cast<std::uint32_t>(role);
     std::copy(incident.begin(), incident.end(), boot.incident.begin());
     Packet announce = boot;
     announce.kind = Message::Instance;
@@ -480,11 +494,18 @@ std::string who(const ReportPlugin& p) {
 }  // namespace
 namespace {
 RestartNotice composeNotice(const ReportSummary* report, bool noReport,
-                            std::vector<std::string> incidents) {
+                            std::vector<std::string> incidents,
+                            std::optional<diagnostics::Role> role) {
     RestartNotice notice;
     notice.earlier = incidents.size() - 1;
     notice.incidents = std::move(incidents);
-    const std::string app(product::kName);
+    // Which app closed: the product's name, and for the headless engine (whose line a person may
+    // read beside the app's own) that it was the engine.
+    std::string app(product::kName);
+    if (role) {
+        notice.role = roleName(*role);
+        if (*role == diagnostics::Role::Engine) app += " engine";
+    }
     if (noReport) {
         notice.kind = RestartNotice::Kind::NoReport;
         notice.headline = app + " closed unexpectedly last time, and no crash report was written.";
@@ -514,7 +535,8 @@ RestartNotice composeNotice(const ReportSummary* report, bool noReport,
     return notice;
 }
 }  // namespace
-Result<std::optional<RestartNotice>> lastRunNotice(const fs::path& directory) {
+Result<std::optional<RestartNotice>> lastRunNotice(const fs::path& directory,
+                                                   std::optional<diagnostics::Role> role) {
     const fs::path root = directory.empty() ? defaultDirectory() : directory;
     if (root.empty()) return std::optional<RestartNotice>();
     SUPPLE_TRY(checkDirectoryForReading(root));
@@ -529,6 +551,7 @@ Result<std::optional<RestartNotice>> lastRunNotice(const fs::path& directory) {
         fs::file_time_type time;
         bool report;
     };
+    const std::string wanted = role ? roleName(*role) : std::string();
     std::vector<Candidate> found;
     for (const auto& [incident, path] : scanned->reportFiles) {
         if (isHeld(*scanned, incident) || isAcknowledged(root, incident)) continue;
@@ -540,6 +563,7 @@ Result<std::optional<RestartNotice>> lastRunNotice(const fs::path& directory) {
         if (scanned->markers.at(incident) != MarkerState::Free ||
             scanned->reportFiles.count(incident) || isAcknowledged(root, incident))
             continue;
+        if (role && markerRole(path) != wanted) continue;  // another app's run, or unreadable
         std::error_code e;
         const auto time = fs::last_write_time(path, e);
         if (!e) found.push_back({incident, time, false});
@@ -552,10 +576,25 @@ Result<std::optional<RestartNotice>> lastRunNotice(const fs::path& directory) {
     std::optional<ReportSummary> head;
     bool headIsRun = false, anyHead = false;
     std::vector<std::string> incidents;
-    std::size_t parsed = 0;
+    std::size_t parsed = 0, reads = 0;
     for (const auto& c : found) {
         if (!c.report) {
             if (!anyHead) headIsRun = anyHead = true;
+            incidents.push_back(c.incident);
+            continue;
+        }
+        if (role) {
+            // A report's role is known by reading it: the newest few are read, and the ones
+            // that are another app's, or cannot be read, are nobody's here.
+            if (reads >= kNoticeRoleReads) continue;
+            ++reads;
+            const auto path = scanned->reportFiles.at(c.incident);
+            auto loaded = loadReport(path);
+            if (!loaded || textOf(loaded->value, "role") != wanted) continue;
+            if (!anyHead) {
+                anyHead = true;
+                head = summarise(loaded->value, path, loaded->written);
+            }
             incidents.push_back(c.incident);
             continue;
         }
@@ -576,7 +615,7 @@ Result<std::optional<RestartNotice>> lastRunNotice(const fs::path& directory) {
     if (incidents.empty()) return std::optional<RestartNotice>();
     // No report read was readable but older ones were not read: the plain sentence (no head).
     return std::optional<RestartNotice>(
-        composeNotice(head ? &*head : nullptr, headIsRun, std::move(incidents)));
+        composeNotice(head ? &*head : nullptr, headIsRun, std::move(incidents), role));
 }
 std::string noticeText(const RestartNotice& notice) {
     return notice.headline + " " + notice.detail;

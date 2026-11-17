@@ -3613,7 +3613,7 @@ TEST_CASE("the restart notice sits under the transport and Dismiss acknowledges 
         CHECK(noticeText(a).empty());
     }
     SUBCASE("a report says so, plainly, and Dismiss hides it for good") {
-        REQUIRE(diagnostics::writeSampleReport(kNoticeOne, dir));
+        REQUIRE(diagnostics::writeSampleReport(kNoticeOne, dir, diagnostics::Role::Gui));
         NoticeShell s(a);
         const auto* banner = a.root->find("crash.notice");
         REQUIRE(banner);
@@ -3639,7 +3639,8 @@ TEST_CASE("the restart notice sits under the transport and Dismiss acknowledges 
         CHECK_FALSE(a.root->find("crash.notice")->visibleInTree());
     }
     SUBCASE("a crash inside a plug-in names it") {
-        REQUIRE(diagnostics::writeSampleCrash(kNoticeOne, "Canary Verb", "Acme", dir));
+        REQUIRE(diagnostics::writeSampleCrash(kNoticeOne, "Canary Verb", "Acme", dir, {},
+                                              diagnostics::Role::Gui));
         NoticeShell s(a);
         CHECK(noticeText(a).find("Canary Verb by Acme was running when") == 0);
         CHECK(noticeText(a).find(
@@ -3648,7 +3649,7 @@ TEST_CASE("the restart notice sits under the transport and Dismiss acknowledges 
         a.snapshot("crash-notice-plugin.png");
     }
     SUBCASE("a run that left no report says that, and why that can be") {
-        REQUIRE(diagnostics::writeSampleUnreportedRun(kNoticeOne, dir));
+        REQUIRE(diagnostics::writeSampleUnreportedRun(kNoticeOne, dir, diagnostics::Role::Gui));
         NoticeShell s(a);
         CHECK(noticeText(a).find("no crash report was written") != std::string::npos);
         a.snapshot("crash-notice-no-report.png");
@@ -3662,9 +3663,10 @@ TEST_CASE("the restart notice sits under the transport and Dismiss acknowledges 
         CHECK_FALSE(a.root->find("crash.notice")->visibleInTree());
     }
     SUBCASE("earlier closes are counted, and one Dismiss covers them all") {
-        REQUIRE(diagnostics::writeSampleReport(kNoticeOne, dir));
-        REQUIRE(diagnostics::writeSampleUnreportedRun(kNoticeTwo, dir));
-        REQUIRE(diagnostics::writeSampleCrash(kNoticeThree, "Canary Verb", "Acme", dir));
+        REQUIRE(diagnostics::writeSampleReport(kNoticeOne, dir, diagnostics::Role::Gui));
+        REQUIRE(diagnostics::writeSampleUnreportedRun(kNoticeTwo, dir, diagnostics::Role::Gui));
+        REQUIRE(diagnostics::writeSampleCrash(kNoticeThree, "Canary Verb", "Acme", dir, {},
+                                              diagnostics::Role::Gui));
         ageFile(dir / (std::string(kNoticeOne) + ".json"), 9);
         ageFile(dir / (std::string(kNoticeTwo) + ".run"), 5);
         NoticeShell s(a);
@@ -3675,14 +3677,35 @@ TEST_CASE("the restart notice sits under the transport and Dismiss acknowledges 
         a.snapshot("crash-notice-earlier.png");
         REQUIRE(a.root->click("crash.notice.dismiss"));
         a.root->frame(false);
-        auto notice = diagnostics::lastRunNotice(dir);
+        auto notice = diagnostics::lastRunNotice(dir, diagnostics::Role::Gui);
         REQUIRE(notice);
         CHECK_FALSE(*notice);
+    }
+    SUBCASE("a headless engine's incident is not the banner's, and Dismiss leaves it alone") {
+        REQUIRE(diagnostics::writeSampleReport(kNoticeOne, dir, diagnostics::Role::Engine));
+        REQUIRE(diagnostics::writeSampleUnreportedRun(kNoticeTwo, dir, diagnostics::Role::Engine));
+        {
+            NoticeShell s(a);
+            CHECK_FALSE(a.root->find("crash.notice")->visibleInTree());
+        }
+        // With a GUI incident beside them, only that one is announced and dismissed.
+        REQUIRE(diagnostics::writeSampleReport(kNoticeThree, dir, diagnostics::Role::Gui));
+        NoticeShell s(a);
+        REQUIRE(a.root->find("crash.notice")->visibleInTree());
+        CHECK(noticeText(a).find("also closed unexpectedly") == std::string::npos);
+        REQUIRE(a.root->click("crash.notice.dismiss"));
+        a.root->frame(false);
+        auto listing = diagnostics::listReports(dir);
+        REQUIRE(listing);
+        for (const auto& report : listing->reports)
+            CHECK(report.acknowledged == (report.incident == kNoticeThree));
+        REQUIRE(listing->unreported.size() == 1);
+        CHECK_FALSE(listing->unreported[0].acknowledged);
     }
     SUBCASE("a report still being written is not announced") {
         // The worker of that run still holds its marker: its report is not yet one.
         const std::string held = "00000000000000000000000000000009";
-        REQUIRE(diagnostics::writeSampleReport(held, dir));
+        REQUIRE(diagnostics::writeSampleReport(held, dir, diagnostics::Role::Gui));
         auto marker = std::ofstream(dir / (held + ".run"));  // an empty marker: being created
         marker.close();
         NoticeShell s(a);

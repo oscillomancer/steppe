@@ -8,7 +8,8 @@
 namespace supple::gui {
 CrashBanner::CrashBanner(std::filesystem::path directory)
     : CrashBanner(directory, [&] {
-          auto notice = diagnostics::lastRunNotice(directory);
+          // GUI runs only: a headless engine's incident is its own service's to announce.
+          auto notice = diagnostics::lastRunNotice(directory, diagnostics::Role::Gui);
           return notice ? *notice : std::optional<diagnostics::RestartNotice>();
       }()) {}
 CrashBanner::CrashBanner(std::filesystem::path directory,

@@ -315,10 +315,24 @@ first. `writeSampleReport` makes the one report the command examples and tests s
 *Restart notice (topic 7b, P1, P10).* `lastRunNotice(directory)` decides what a restart says: it
 lists the folder's names, probes the markers and reads each acknowledgement, which finds the
 unacknowledged reports and unacknowledged unreported runs whose run is over, newest first by file
-time (a run's marker time is when it started), and says nothing when there are none. It parses only
-the newest `kNoticeReportsRead` (3, P4) reports; the ones behind them are counted by file name
-without being read, so a file that is not a valid report still counts as an earlier close there,
-while an unreadable report among the three read is not announced. Unreported runs cost no read. A report gives `Kind::Report`; the headline names the plug-in only when
+time (a run's marker time is when it started), and says nothing when there are none. Without a
+role it parses only the newest `kNoticeReportsRead` (3, P4) reports; the ones behind them are
+counted by file name without being read, so a file that is not a valid report still counts as an
+earlier close there, while an unreadable report among the three read is not announced. Unreported
+runs cost no read.
+
+*The notice is for one app (F6, decision of the co-director).* Given a `role`, `lastRunNotice`
+covers only the incidents of that role: the GUI's banner those of `gui`, a headless service's
+stderr line those of `engine`, so that neither announces, and neither's dismissal acknowledges,
+the other's. A run's role is what its marker says; a report's is what it says, which means
+reading it, so with a role the notice reads at most the newest `kNoticeRoleReads` (8)
+unacknowledged report files (not three, and not counted by name): older ones, and any incident
+whose role cannot be read, belong to no notice and wait for a later start. The `RestartNotice`
+names its `role`, and the engine's text says which app closed ("Steppe engine closed unexpectedly
+last time"). `acknowledgeNotice` marks only the incidents its notice covers, which are of its
+role. An explicit `acknowledge(incident)` (the command `crash.acknowledge` with a named incident)
+still works for any role, and the listing, the viewer and the suspect window (7d) cover every
+role. A report gives `Kind::Report`; the headline names the plug-in only when
 the attribution is `fault_in_image` or `active_token` and the report names one, and the detail says
 the report was saved here, was sent nowhere, and that the report cannot prove the plug-in was the cause; any other
 attribution, and a kind this build does not know, gets the plain sentence. An unreported run gives
@@ -327,7 +341,7 @@ attribution, and a kind this build does not know, gets the plain sentence. An un
 `acknowledgeNotice` marks them all, unreported runs included, by name and without parsing, so the
 run is not announced again. The product's name comes from `product::kName`. The wording is
 provisional (P12). The GUI shows it as a banner (gui.md). A headless service (`<slug>-engine --mcp`
-or the RPC server, never a one-shot `exec`) writes the same text, plus how to read and dismiss it
+or the RPC server, never a one-shot `exec`) writes the same kind of text for engine runs, plus how to read and dismiss it
 (`crash.list`, `crash.acknowledge`), once to stderr at start, never to a protocol stream, never a
 prompt; the agent decides what to do. Nothing in it acknowledges by itself.
 

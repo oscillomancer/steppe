@@ -75,7 +75,7 @@ TraceSnapshot faultIn(const std::string& moduleId) {
     trace.modules[0].id = moduleId;
     trace.regions = {{0x5000, 0x6000, 0}};
     trace.threads.resize(1);
-    trace.threads[0].role = Role::Fault;
+    trace.threads[0].role = detail::Role::Fault;
     trace.threads[0].missing = Missing::None;
     Frame frame;
     frame.module = 0;
@@ -663,6 +663,112 @@ void rawMarker(const Root& root, unsigned id) {
     REQUIRE(privatePublish(file(root, id, ".run"), "{\"schema\":\"supple.crash-run/1.0\"}\n"));
 }
 }  // namespace
+TEST_CASE("a notice covers the incidents of its own role, and dismissing it touches no other") {
+    Root root;
+    auto asRole = [&](unsigned id, diagnostics::Role role) {
+        auto b = boot(id);
+        b.role = static_cast<unsigned>(role);
+        return b;
+    };
+    REQUIRE(publishReport(root.path, asRole(1, diagnostics::Role::Gui), nullptr, 31, false));
+    REQUIRE(publishReport(root.path, asRole(2, diagnostics::Role::Engine), nullptr, 31, false));
+    {  // an engine run that left no report, and a GUI one
+        auto engine = createMarker(root.path, asRole(3, diagnostics::Role::Engine));
+        REQUIRE(engine);
+        releaseMarker(*engine);
+        auto gui = createMarker(root.path, asRole(4, diagnostics::Role::Gui));
+        REQUIRE(gui);
+        releaseMarker(*gui);
+    }
+    age(root, 1, 9);
+    age(root, 2, 7);
+    fs::last_write_time(file(root, 3, ".run"),
+                        fs::file_time_type::clock::now() - std::chrono::hours(5));
+    fs::last_write_time(file(root, 4, ".run"),
+                        fs::file_time_type::clock::now() - std::chrono::hours(3));
+
+    auto gui = lastRunNotice(root.path, diagnostics::Role::Gui);
+    REQUIRE(gui);
+    REQUIRE(*gui);
+    CHECK((*gui)->role == "gui");
+    CHECK((*gui)->incidents == std::vector<std::string>{name(4), name(1)});  // its own two
+    CHECK((*gui)->headline.find(std::string(product::kName) + " closed") == 0);
+    auto engine = lastRunNotice(root.path, diagnostics::Role::Engine);
+    REQUIRE(engine);
+    REQUIRE(*engine);
+    CHECK((*engine)->role == "engine");
+    CHECK((*engine)->incidents == std::vector<std::string>{name(3), name(2)});
+    // The engine's text says which app closed.
+    CHECK((*engine)->headline.find(std::string(product::kName) + " engine closed") == 0);
+    // No role: every incident, as before.
+    auto all = lastRunNotice(root.path);
+    REQUIRE(all);
+    REQUIRE(*all);
+    CHECK((*all)->role.empty());
+    CHECK((*all)->incidents.size() == 4);
+
+    // Dismissing the banner acknowledges the GUI's incidents and none of the engine's.
+    REQUIRE(acknowledgeNotice(**gui, root.path));
+    auto listing = listReports(root.path);
+    REQUIRE(listing);
+    CHECK(find(*listing, 1)->acknowledged);
+    CHECK_FALSE(find(*listing, 2)->acknowledged);
+    for (const auto& run : listing->unreported)
+        CHECK(run.acknowledged == (run.incident == name(4)));
+    gui = lastRunNotice(root.path, diagnostics::Role::Gui);
+    REQUIRE(gui);
+    CHECK_FALSE(*gui);
+    engine = lastRunNotice(root.path, diagnostics::Role::Engine);
+    REQUIRE(engine);
+    REQUIRE(*engine);
+    CHECK((*engine)->incidents.size() == 2);
+    // An explicit acknowledgement by name still works for any role.
+    REQUIRE(acknowledge(name(2), root.path));
+    engine = lastRunNotice(root.path, diagnostics::Role::Engine);
+    REQUIRE(engine);
+    REQUIRE(*engine);
+    CHECK((*engine)->incidents == std::vector<std::string>{name(3)});
+    // An incident whose role cannot be read belongs to no one: not announced to a role.
+    REQUIRE(privatePublish(file(root, 5, ".json"), "{not json"));
+    {
+        std::ofstream(file(root, 6, ".run"));
+    }
+    fs::permissions(file(root, 6, ".run"), fs::perms::owner_read | fs::perms::owner_write,
+                    fs::perm_options::replace);
+    fs::last_write_time(file(root, 6, ".run"),
+                        fs::file_time_type::clock::now() - std::chrono::minutes(5));
+    engine = lastRunNotice(root.path, diagnostics::Role::Engine);
+    REQUIRE(engine);
+    REQUIRE(*engine);
+    CHECK((*engine)->incidents == std::vector<std::string>{name(3)});
+    all = lastRunNotice(root.path);
+    REQUIRE(all);
+    REQUIRE(*all);
+    CHECK((*all)->incidents.size() >= 2);
+}
+TEST_CASE("with a role, the notice reads only the newest few report files") {
+    Root root;
+    auto engineBoot = [&](unsigned id) {
+        auto b = boot(id);
+        b.role = static_cast<unsigned>(diagnostics::Role::Engine);
+        return b;
+    };
+    const unsigned total = static_cast<unsigned>(kNoticeRoleReads) + 4;
+    for (unsigned id = 1; id <= total; ++id) {
+        REQUIRE(publishReport(root.path, engineBoot(id), nullptr, 31, false));
+        age(root, id, static_cast<int>(100 - id));  // a higher id is newer
+    }
+    auto notice = lastRunNotice(root.path, diagnostics::Role::Engine);
+    REQUIRE(notice);
+    REQUIRE(*notice);
+    // The newest kNoticeRoleReads are covered; the rest wait for a later start.
+    CHECK((*notice)->incidents.size() == kNoticeRoleReads);
+    REQUIRE(acknowledgeNotice(**notice, root.path));
+    notice = lastRunNotice(root.path, diagnostics::Role::Engine);
+    REQUIRE(notice);
+    REQUIRE(*notice);
+    CHECK((*notice)->incidents.size() == 4);
+}
 TEST_CASE("only the newest twenty unreported runs keep their markers") {
     Root root;
     // A marker beside a report and a marker held by a live run are not unreported runs. They are
@@ -743,7 +849,7 @@ void crashing(const Root& root, unsigned id, const Plug& plug, int hoursAgo) {
         }
     }
     trace.threads.resize(2);
-    trace.threads[1].role = Role::Main;
+    trace.threads[1].role = detail::Role::Main;
     if (plug.level == "active_token") {
         trace.threads[0].entry = diagctx::Entry::Process;
         trace.threads[0].entryCell = 4;
