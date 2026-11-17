@@ -420,10 +420,11 @@ class Instance {
     int bridgePid() const;  // -1 for in-process
     // Bridged: this instance's failure deadline off the callback, in place
     // of bridgeDeadlineMs() (0, the default, uses that); lifecycle commands
-    // get 5/2 of it plus 2 s. An offline render sets it while it runs
-    // (ADR-0090). It is atomic: any thread may set it at any time, and a
-    // wait already under way keeps the deadline it started with. No effect
-    // in process; callDeadlineMs() is then 0.
+    // get 5/2 of it plus 2 s, and so do control requests (activation,
+    // parameters, patches) at least, beyond their own timeouts. An offline
+    // render sets it while it runs (ADR-0090). It is atomic: any thread may
+    // set it at any time, and a wait already under way keeps the deadline
+    // it started with. No effect in process; callDeadlineMs() is then 0.
     void setCallDeadlineMs(int ms);
     int callDeadlineMs() const;
     // Bridged: kills this instance's bridge now, from any thread, and fails

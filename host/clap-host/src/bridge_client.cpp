@@ -58,7 +58,13 @@ ThreadPolicy bridgeAudioPolicy() SUPPLE_RT {
 
 namespace {
 std::atomic<int> gBridgeDeadlineMs{2000};
+// A lifecycle command's failure deadline for a `process` deadline of
+// `deadlineMs` (ADR-0013 §5): 5/2 of it plus 2 s.
+int lifecycleDeadlineMs(int deadlineMs) SUPPLE_RT {
+    return static_cast<int>(
+        std::min<std::int64_t>(5 * std::int64_t(deadlineMs) / 2 + 2000, INT32_MAX));
 }
+}  // namespace
 void setBridgeDeadlineMs(int ms) {
     gBridgeDeadlineMs.store(std::max(ms, 1), std::memory_order_relaxed);
 }
@@ -534,6 +540,10 @@ Result<std::vector<std::uint8_t>> RemoteInstance::call(Op op, const Writer& w, R
         default:
             break;
     }
+    // An instance with a deadline of its own (an offline render's, ADR-0090)
+    // gives its control requests at least what its lifecycle commands get.
+    if (const int own = callDeadlineMs_.load(std::memory_order_relaxed); own > 0)
+        timeoutMs = std::max(timeoutMs, lifecycleDeadlineMs(own));
     return process_->call(op, instanceId_, w, fd, timeoutMs);
 }
 
@@ -1019,10 +1029,7 @@ bool RemoteInstance::answered(std::uint32_t req, Cmd cmd) SUPPLE_RT {
     // killed either.
     const int own = callDeadlineMs_.load(std::memory_order_relaxed);
     const int deadlineMs = own > 0 ? own : bridgeDeadlineMs();
-    const int limitMs = cmd == Cmd::Process
-                            ? deadlineMs
-                            : static_cast<int>(std::min<std::int64_t>(
-                                  5 * std::int64_t(deadlineMs) / 2 + 2000, INT32_MAX));
+    const int limitMs = cmd == Cmd::Process ? deadlineMs : lifecycleDeadlineMs(deadlineMs);
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(limitMs);
     for (;;) {
         const std::uint32_t seen = hdr_->done.load(std::memory_order_acquire);

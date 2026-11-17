@@ -364,9 +364,10 @@ bit-identity comparison of live renders; the tests of the deadline itself
 set it explicitly.
 
 A control-plane request has one deadline for its send and reply: 20 s for
-`Create`, 10 s for every other, `Destroy` and `EditorClose` included. A
-bridge that misses it is killed, with every instance in it, since its
-stream is out of step. ADR-0090 lists every bridge timeout and why it is
+`Create`, 10 s for every other, `Destroy` and `EditorClose` included, or,
+for an instance with a deadline of its own, at least that deadline's
+lifecycle value. A bridge that misses it is killed, with every instance in
+it, since its stream is out of step. ADR-0090 lists every bridge timeout and why it is
 what it is.
 
 Thread discipline follows CLAP: create/activate/params-info/state/GUI on the
