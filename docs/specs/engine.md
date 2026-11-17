@@ -305,6 +305,12 @@ stage; so far:
   hold what the renderer is ahead at the device's rate (its render-ahead
   frames in chunks of the render quantum, plus two), no longer room for
   192 kHz.
+- **An unchanged FX is not serialized** (stage 2). `InstancePool::get`
+  remembers the session's FX object it last configured an instance from
+  (and keeps it, so the address is not reused). Given that same object
+  again it knows the patch and state are unchanged; given another, or a
+  copy that is not the session's, it compares the patch's canonical text
+  as before, and applies that text when it differs.
 Returning to a version with neither patch nor state after applying saved FX
 settings recreates the factory-default instance. The old instance remains alive
 until both executors release its plan, as with a changed opaque state.

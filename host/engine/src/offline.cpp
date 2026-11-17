@@ -218,12 +218,24 @@ std::vector<model::Id> InstancePool::isolationFallbacks() const {
 
 Result<host::Instance*> InstancePool::get(Id id, const model::FxInstance& fx,
                                           const Session& session) {
-    std::string desired;
-    if (fx.patch)
-        desired = "patch:" + json::writeCompact(*fx.patch);
-    else if (fx.state)
-        desired = "blob:" + *fx.state;
     auto& e = instances_[id];
+    // Route E stage 2: the session's object for this FX, if `fx` is it. One
+    // the instance was last configured from (the pool keeps it, so its
+    // address is not reused) carries the same patch and state: nothing to
+    // serialize. Any other, or a copy, is compared by its text.
+    const auto* stored = session.fx.entry(id);
+    const std::shared_ptr<const model::FxInstance> own =
+        stored && stored->value.get() == &fx ? stored->value : nullptr;
+    const bool unchanged = own && e.instance && e.appliedFx == own;
+    std::string desired;
+    if (unchanged) {
+        desired = e.appliedState;
+    } else if (fx.patch) {
+        desired = "patch:" + json::writeCompact(*fx.patch);
+        ++patchSerializations_;
+    } else if (fx.state) {
+        desired = "blob:" + *fx.state;
+    }
     // A new state blob is loaded into a fresh instance when the current one
     // may be processing: CLAP's state.load runs on the main thread and a
     // plugin need not guard its DSP against a concurrent process() (semantic
@@ -272,13 +284,14 @@ Result<host::Instance*> InstancePool::get(Id id, const model::FxInstance& fx,
         e.effective = effective;
         e.fallback = fallback;
         e.appliedState.clear();
+        e.appliedFx.reset();
         e.failure.reset();
         e.clearedAutomation.clear();
     }
     if (desired != e.appliedState && !desired.empty()) {
         if (fx.patch) {
-            SUPPLE_TRY(
-                e.instance->setPatch(json::writeCompact(*fx.patch), CLAP_SUPPLE_SET_REPLACE));
+            SUPPLE_TRY(e.instance->setPatch(std::string_view(desired).substr(6),  // "patch:"
+                                            CLAP_SUPPLE_SET_REPLACE));
         } else {
             auto it = session.blobs.find(*fx.state);
             if (it == session.blobs.end())
@@ -290,6 +303,7 @@ Result<host::Instance*> InstancePool::get(Id id, const model::FxInstance& fx,
         }
         e.appliedState = desired;
     }
+    e.appliedFx = own;
     service(id);
     return e.instance.get();
 }
