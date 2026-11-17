@@ -2786,8 +2786,10 @@ Each structural edit then prepares a rate plan; level and pan edits do not
 (ADR-0060, §1.6).
 While a prepared rate plan covers audio not yet played, `load()` defers a
 structural edit: it returns success at once, and the edit compiles once that
-span has played (in `service()`, or in whichever `load()` comes first). If
-that compile fails, the edit never played. The engine then keeps the session
+span has played (in `service()`, or in whichever `load()` comes first). That
+load always compiles: neither the scalar nor the mix shortcut takes it, even
+when a playrate move is still pending from a full queue (the compile carries
+the pending value). If that compile fails, the edit never played. The engine then keeps the session
 it plays as its latest, for later reloads, the mix and scalar shortcuts and
 the instance prune, and adds a warning. `takeUnplayedEdit()` returns the error
 once; `EngineApp` emits it as `engine.error` and reports the version that
