@@ -529,6 +529,26 @@ void MediaCache::trimVariants(std::size_t samples) {
 
 using namespace detail;
 
+namespace {
+// ADR-0090: a render's bridged calls wait with its own deadline, from its
+// first activation to its last stopProcessing, and the process-wide one
+// returns after it.
+class RenderDeadlines {
+  public:
+    RenderDeadlines(std::vector<host::Instance*> list, int ms) : instances_(std::move(list)) {
+        for (host::Instance* in : instances_) in->setCallDeadlineMs(std::max(ms, 1));
+    }
+    ~RenderDeadlines() {
+        for (host::Instance* in : instances_) in->setCallDeadlineMs(0);
+    }
+    RenderDeadlines(const RenderDeadlines&) = delete;
+    RenderDeadlines& operator=(const RenderDeadlines&) = delete;
+
+  private:
+    std::vector<host::Instance*> instances_;
+};
+}  // namespace
+
 Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                                     const OfflineSettings& opt) {
     static_assert(std::atomic<double>::is_always_lock_free);
@@ -594,6 +614,9 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
     auto compiled = detail::compile(selectedSession, pool, opt.startSeconds, opt.blockSize);
     if (!compiled) return std::move(compiled).error();
     Plan& p = *compiled;
+    // From here every bridged call of the render has its deadline
+    // (ADR-0090): activation in prepare() included.
+    const RenderDeadlines deadlines(p.instances, opt.bridgeDeadlineMs);
     if (!opt.applyMasterPlayrate) p.rateEnabled = false;
     MediaCache localMedia;
     p.projectDir = opt.projectDir;
@@ -626,9 +649,7 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
     if (!sources) return sources.error();
     p.preparedSources = *sources;
     SUPPLE_TRY(prepare(p, selectedSession));
-    // ADR-0090: an offline render loses only time by waiting, so its bridged
-    // calls have a deadline of their own, far past the live path's, for as
-    // long as it runs. And a plug-in that fails while it runs fails the
+    // ADR-0090: a plug-in that fails while the render runs fails the
     // render; one that had failed before keeps its behaviour.
     struct Watched {
         host::Instance* instance;
@@ -640,17 +661,6 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
         forEachStage(node, [&](const Stage& st) {
             if (st.instance) watched.push_back({st.instance, st.fx, st.instance->failed()});
         });
-    struct RenderDeadlines {
-        const std::vector<host::Instance*>& instances;
-        RenderDeadlines(const std::vector<host::Instance*>& list, int ms) : instances(list) {
-            for (host::Instance* in : instances) in->setCallDeadlineMs(std::max(ms, 1));
-        }
-        ~RenderDeadlines() {
-            for (host::Instance* in : instances) in->setCallDeadlineMs(0);
-        }
-        RenderDeadlines(const RenderDeadlines&) = delete;
-        RenderDeadlines& operator=(const RenderDeadlines&) = delete;
-    } deadlines(p.instances, opt.bridgeDeadlineMs);
     const auto failing = [&] {
         return std::any_of(watched.begin(), watched.end(), [](const Watched& w) {
             return !w.failedBefore && w.instance->failed();
@@ -872,10 +882,6 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
     for (host::Instance* in : instances) {
         for (auto& line : in->takeLog()) r.log.push_back(in->info().name + ": " + line);
     }
-    for (const auto& fx : s.fx)
-        if (host::Instance* in = pool.find(fx.id); in && !in->failed())
-            if (auto readouts = instanceReadouts(*in); readouts && readouts->size() > 0)
-                r.meters[fx.id.str()] = std::move(*readouts);
     if (preparationError) return *preparationError;
     // Failed starting, processing or stopping: the render's audio is not
     // what the session plays (ADR-0090).
@@ -901,6 +907,12 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
     if (failed)
         return Error("engine.process_error", "a plugin reported a processing error", {},
                      "bypass or replace the failing FX and render the range again");
+    // Read once the render is known good: a readout is a bridged request too,
+    // and a failed instance has none (ADR-0090).
+    for (const auto& fx : s.fx)
+        if (host::Instance* in = pool.find(fx.id); in && !in->failed())
+            if (auto readouts = instanceReadouts(*in); readouts && readouts->size() > 0)
+                r.meters[fx.id.str()] = std::move(*readouts);
     for (const Node& n : p.nodes) {
         std::string line = n.id.str() + " in=[";
         for (std::size_t k = 0; k < n.in.size(); ++k) {

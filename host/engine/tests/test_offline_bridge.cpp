@@ -7,6 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include <thread>
+#include <utility>
 #include <vector>
 #include "../../clap-host/tests/process_pause.h"
 #include "bridge_patience.h"
@@ -119,4 +120,38 @@ TEST_CASE("a bridged plug-in that fails during an offline render fails the rende
         REQUIRE_FALSE(again);
         CHECK(again.error().code == "engine.start_failed");
     }
+}
+
+TEST_CASE("an offline render keeps its deadline while it runs and gives it back after") {
+    // Review round 34 (F3): a pool used again after a render must not keep
+    // the render's patience, or its live use would wait a minute.
+    host::setBridgeExecutable(BRIDGE_PATH);
+    const auto session = isolated(model::Isolation::Dedicated);
+    auto pool = makePool();
+    std::vector<int> during;
+    OfflineSettings settings = twoSeconds();
+    settings.progress = [&](double) {
+        if (!during.empty()) return;
+        for (host::Instance* in : pool.instances()) during.push_back(in->callDeadlineMs());
+    };
+    REQUIRE(renderOffline(session, pool, settings));
+    REQUIRE(during.size() == 2);  // the sine and the gain, each in its bridge
+    for (int ms : during) CHECK(ms == kOfflineBridgeDeadlineMs);
+    for (host::Instance* in : pool.instances()) {
+        REQUIRE(in->isolated());
+        CHECK(in->callDeadlineMs() == 0);
+    }
+    // And after a render that failed: the gain's bridge killed mid-render.
+    const Id gain = gainOf(session);
+    auto again = makePool();
+    OfflineSettings failing = twoSeconds();
+    bool struck = false;
+    failing.progress = [&](double) {
+        if (std::exchange(struck, true)) return;
+        CHECK(killProcess(again.find(gain)->bridgePid()));
+    };
+    auto rendered = renderOffline(session, again, failing);
+    REQUIRE_FALSE(rendered);
+    CHECK(rendered.error().code == "engine.fx_failed");
+    for (host::Instance* in : again.instances()) CHECK(in->callDeadlineMs() == 0);
 }

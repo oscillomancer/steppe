@@ -32,11 +32,19 @@ default.
 ## Decision
 
 1. **An offline render gives its bridged calls a deadline of its own: 60 s.**
-   - **Scope.** `renderOffline` sets it on every instance it processes, for
-     as long as it runs, and restores the process-wide deadline after
+   - **Scope.** `renderOffline` sets it on every instance the render made,
+     as soon as it has made them, and restores the process-wide deadline
+     when it returns, whatever it returns
      (`host::Instance::setCallDeadlineMs`,
      `OfflineSettings::bridgeDeadlineMs`, `kOfflineBridgeDeadlineMs`).
      Lifecycle commands get 5/2 of it plus 2 s, as before, so 152 s.
+   - **Control requests inside the render.** Activation, and the readouts
+     of meters once the render has succeeded, are control-plane requests
+     made by the render's thread. With an instance deadline set, each gets
+     at least that deadline's lifecycle value (152 s) instead of its
+     control-plane timeout (10 s). Review round 34 (F2) found them on the
+     10 s: a stall that the render's blocks survive could still fail its
+     activation.
    - **What keeps its deadline.** The live paths are unchanged: the
      callback's cycle deadline (ADR-0081), and the process-wide 2 s/7 s off
      the callback (the anticipative renderer, workers, the main thread),
@@ -54,15 +62,17 @@ default.
        render would only take longer to fail.
    - **Cancellation is checked between blocks, not inside a bridged wait.**
      A cancel while a plug-in hangs takes effect when the deadline kills it.
-   - **The control plane is not covered.** Its socket requests (create
-     20 s, others 10 s) run while instances are made, before the render
-     starts, and keep their timeouts.
+   - **Making the instances is not covered.** `Create` (20 s) and the
+     patch requests run before the render has its instances, and keep
+     their control-plane timeouts.
 
 2. **A plug-in that fails during an offline render fails the render.**
    - **When a plug-in counts as failing during the render.** An instance
      the render processes counts if it turns failed after the render
      begins. That covers starting, any block, or stopping, whether by the
-     deadline, a crash or the bridge exiting.
+     deadline, a crash or the bridge exiting. A plug-in that fails while
+     the render activates it fails the render with the activation's own
+     error, as before.
    - **What happens.**
      - The block loop stops at the end of that block.
      - `renderOffline` returns `engine.fx_failed`. The message names the
@@ -93,8 +103,8 @@ deadline does not replace to be listed with its reason. In the host
 | The cycle's bridge deadline: its period or 2 ms, whichever is larger (ADR-0081) | A bridged call in the device callback | That block is silent; the request stays outstanding | The device cannot wait. |
 | 50 ms of consecutive late calls (ADR-0081) | The same | The instance fails; main kills the bridge | A plug-in that never catches up must not cost every cycle its deadline. |
 | 2 s for `process`, 5/2 of it plus 2 s (7 s) for lifecycle commands, process-wide (`host::setBridgeDeadlineMs`) | Data-plane calls off the callback outside offline renders: the anticipative renderer, workers, the main thread | The bridge is killed; its instances fail (ADR-0013 §6) | The live session plays from what these produce, so a longer wait stalls playback behind one plug-in. |
-| 20 s (`kCreateTimeoutMs`) | `Create`, the control request that loads a plug-in | The bridge is killed | Loading may page in a large binary. It runs before any render, while instances are made. |
-| 10 s, the control plane's default | Every other control request: activate, parameters, state, patches, editors, service, notifications, and `Destroy` and `EditorClose` | The bridge is killed: an unanswered request leaves the socket stream out of step | They run on the main thread, which they block; 10 s bounds how long a hung bridge can freeze it. |
+| 20 s (`kCreateTimeoutMs`) | `Create`, the control request that loads a plug-in | The bridge is killed | Loading may page in a large binary. In a render it runs while the render makes its instances, before its own deadline and watch apply. |
+| 10 s, the control plane's default | Every other control request: activate, parameters, state, patches, editors, service, notifications, and `Destroy` and `EditorClose`. An offline render's own instances get at least 152 s (above) | The bridge is killed: an unanswered request leaves the socket stream out of step | Outside a render they run on the main thread, which they block; 10 s bounds how long a hung bridge can freeze it. |
 | 2 s | `~BridgeProcess`: the child's exit after its control socket closes | The child is killed | The process is going away and no instance uses it any more. |
 
 The bridge itself has no fixed timeout: its main loop waits for requests

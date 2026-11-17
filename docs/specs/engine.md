@@ -686,23 +686,26 @@ first use, and no plug-in code runs early to warm it.
 - Runs a **separate plan instance** with its **own plugin instances**
   (created from the version's state/patches), so rendering never disturbs
   playback and A/B renders of two branches can run side by side.
-- **Bridged plug-ins (ADR-0090).** While it runs, a render gives each
-  bridged instance it processes a call deadline of its own,
+- **Bridged plug-ins (ADR-0090).** Once it has made its instances, a
+  render gives each bridged one a call deadline of its own,
   `OfflineSettings::bridgeDeadlineMs` (`kOfflineBridgeDeadlineMs`, 60 s;
   lifecycle commands 5/2 of it plus 2 s), in place of the live paths'
-  process-wide 2 s, and restores that after. An instance that fails while
-  the render runs (starting, processing or stopping: missed deadline,
-  crash, exit) stops the block loop and fails the render with
-  `engine.fx_failed`: message naming the plug-in, its fx id and the reason
-  (and any others that failed with it), path `/fx/<id>`, a hint to render
-  again or bypass or replace the FX. No caller then has audio to write. An
-  instance already failed when the render begins keeps its behaviour: a
-  restart failure is a warned, compensated pass-through; a failed bridged
-  instance refuses to start (`engine.start_failed`).
-- As a render ends, each plugin's read-only parameters (meters, readouts)
-  are read from its instance (`OfflineResult::meters`, by FX id); a
-  `render.mix` keeps them on the main thread for `fx.meters {from:
-  "render"}` until the next one. Other renders keep none.
+  process-wide 2 s, and restores that when it returns, whatever it
+  returns. Its control requests (activation, the readouts below) get at
+  least the lifecycle value. An instance that fails while the render runs
+  (starting, processing or stopping: missed deadline, crash, exit) stops
+  the block loop and fails the render with `engine.fx_failed`: message
+  naming the plug-in, its fx id and the reason (and any others that
+  failed with it), path `/fx/<id>`, a hint to render again or bypass or
+  replace the FX. No caller then has audio to write. An instance already
+  failed when the render begins keeps its behaviour: a restart failure is
+  a warned, compensated pass-through; a failed bridged instance refuses to
+  start (`engine.start_failed`).
+- Once a render has succeeded, each plugin's read-only parameters (meters,
+  readouts) are read from its instance (`OfflineResult::meters`, by FX id);
+  a failed or cancelled render reads none. A `render.mix` keeps them on the
+  main thread for `fx.meters {from: "render"}` until the next one. Other
+  renders keep none.
 - Fixed block size (default 512; setting), no anticipative split, all nodes
   in topological order, optionally parallel across independent nodes —
   results must be **bit-identical for any worker count** (fixed summation
