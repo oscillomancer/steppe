@@ -81,8 +81,9 @@ inline int nextSharedSlot(std::uint32_t pending) noexcept {
 // out (release). A full ring drops the event (the worker counts it). The ring has one producer
 // at a time: callers of publish() serialize Instance packets themselves.
 constexpr std::uint32_t kInventoryRing = 256;
-// POSIX publish(): the polls (1 ms each) a part-sent packet is given to be finished, so the
-// longest a send can be in progress. The terminal path waits out the same bound.
+// POSIX publish(): the milliseconds (by the monotonic clock, polled 1 ms at a time) a part-sent
+// packet is given to be finished, so the longest a send can be in progress. The terminal path waits
+// out the same bound. (Only where there is no clock does it count that many polls.)
 constexpr int kPartSendPolls = 250;
 inline bool ringHasRoom(std::uint32_t head, std::uint32_t tail) noexcept {
     return head - tail < kInventoryRing;  // unsigned: the counters wrap

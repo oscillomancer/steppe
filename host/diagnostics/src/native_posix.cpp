@@ -283,8 +283,23 @@ bool publish(Native& native, const Packet& packet) noexcept {
     // and nothing else is being sent) and uses only async-signal-safe calls. If it cannot be
     // finished the stream is torn, the supervisor's next packet fails its checks and it stops
     // reading, as it does for any damaged packet.
+    // The bound is time: kPartSendPolls ms from here by the monotonic clock, which is what
+    // closeInventory waits out (a count of 1 ms polls would take longer under load or timer
+    // slack, and the terminal packet could then land inside this one). Only without a clock does
+    // it count polls.
     std::size_t at = static_cast<std::size_t>(sent);
-    for (int attempts = 0; at < sizeof(packet) && attempts < kPartSendPolls; ++attempts) {
+    timespec begin{};
+    const bool clocked = ::clock_gettime(CLOCK_MONOTONIC, &begin) == 0;
+    for (int attempts = 0; at < sizeof(packet); ++attempts) {
+        if (clocked) {
+            timespec now{};
+            if (::clock_gettime(CLOCK_MONOTONIC, &now) != 0) break;
+            const long long elapsed =
+                (now.tv_sec - begin.tv_sec) * 1'000'000'000LL + (now.tv_nsec - begin.tv_nsec);
+            if (elapsed >= static_cast<long long>(kPartSendPolls) * 1'000'000LL) break;
+        } else if (attempts >= kPartSendPolls) {
+            break;
+        }
         pollfd item{fd, POLLOUT, 0};
         const int ready = ::poll(&item, 1, 1);
         if (ready < 0 && errno != EINTR) break;
