@@ -124,6 +124,8 @@ TEST_CASE("a bridged plug-in that fails during an offline render fails the rende
         // A short deadline, for the test only: a hung plug-in is still
         // killed by the render's own, however long.
         if (hangs) settings.bridgeDeadlineMs = 300;
+        // How far the render got: the fraction is stored after every block.
+        settings.progressFlag = std::make_shared<std::atomic<double>>(0.0);
         const Id gain = gainOf(session);
         settings.progress = [&](double) {
             if (struck.exchange(true)) return;
@@ -140,6 +142,9 @@ TEST_CASE("a bridged plug-in that fails during an offline render fails the rende
         CHECK(error.message.find(gain.str()) != std::string::npos);
         CHECK_FALSE(error.hint.empty());
         if (hangs) CHECK(error.message.find("stopped responding") != std::string::npos);
+        // The loop stopped at the failing block, not after the rest of the
+        // range (the plug-in failed in the first or second of about 190).
+        CHECK(settings.progressFlag->load() < 0.5);
 
         // Rendered again with the same instances, the plug-in had failed
         // before this render started: that is as before, a refusal to start
