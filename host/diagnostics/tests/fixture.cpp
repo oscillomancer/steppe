@@ -7,6 +7,7 @@
 #include <cstring>
 #include <exception>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include "../src/terminal.h"
@@ -239,6 +240,9 @@ int body(int argc, char** argv) {
     if (mode == "prior-terminate") {
         std::terminate();
     }
+    // An exception nobody catches reaches the terminate handler on every platform, and so
+    // the program's own handler (on Windows it first meets the top-level filter).
+    if (mode == "prior-terminate-throw") throw std::runtime_error("uncaught");
 #if defined(_WIN32)
     // Evidence for a failed capture: whether the last-chance filter is in place.
     if (mode == "fault" || mode == "prior-filter")
@@ -437,7 +441,9 @@ int main(int argc, char** argv) {
 #if !defined(_WIN32)
     if (std::string_view(argv[2]) == "handled") std::signal(SIGSEGV, priorSignal);
 #endif
-    if (std::string_view(argv[2]) == "prior-terminate") std::set_terminate(priorTerminate);
+    if (std::string_view(argv[2]) == "prior-terminate" ||
+        std::string_view(argv[2]) == "prior-terminate-throw")
+        std::set_terminate(priorTerminate);
 #if defined(_WIN32)
     if (std::string_view(argv[2]) == "prior-filter") SetUnhandledExceptionFilter(priorFilter);
 #endif

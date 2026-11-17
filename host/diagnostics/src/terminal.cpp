@@ -87,7 +87,16 @@ void handoff(Packet packet) noexcept {
 // std::terminate), so this is never null in the product. Written once at install, before
 // other threads exist; read only after the handoff.
 LPTOP_LEVEL_EXCEPTION_FILTER priorFilter = nullptr;
+// The code the MSVC runtime gives an escaping C++ exception.
+constexpr DWORD kCppExceptionCode = 0xE06D7363;
 [[maybe_unused]] LONG WINAPI lastChance(EXCEPTION_POINTERS* exception) {
+    // An exception nobody caught is not a fault: the runtime's filter, which is the prior
+    // one here, turns it into std::terminate, and our terminate hook records it (cause 3)
+    // and chains the program's terminate handler, as on Linux and macOS. Claiming it here
+    // would record a different cause and skip that handler.
+    if (exception && exception->ExceptionRecord &&
+        exception->ExceptionRecord->ExceptionCode == kCppExceptionCode)
+        return priorFilter ? priorFilter(exception) : EXCEPTION_CONTINUE_SEARCH;
     if (claimed.exchange(1, std::memory_order_relaxed)) return EXCEPTION_CONTINUE_SEARCH;
     Packet packet = initial;
     packet.cause = 2;

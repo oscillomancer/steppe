@@ -76,15 +76,19 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
             if sanitized: assert report["cause"]==0,(mode,report)
             assert "private-project-sentinel" not in raw
             assert str(root) not in raw
-    root=base/"prior-terminate"/"app"/"diagnostics"
-    prior=subprocess.run([binary,str(root),"prior-terminate"],capture_output=True,timeout=30)
-    assert prior.returncode==44,prior
-    assert b"prior terminate handler" in prior.stderr,prior
-    prior_reports=list(root.glob("*.json"))
-    assert len(prior_reports)==1
-    prior_report=json.loads(prior_reports[0].read_text())
-    assert prior_report["cause"]==(0 if sanitized else 3),prior_report
-    if not sanitized: assert prior_report["kind"]=="crash",prior_report
+    # The program's own terminate handler runs after the capture, whether std::terminate was
+    # called directly or an exception nobody caught led to it (on Windows that exception
+    # first meets the top-level filter, which must leave it to the runtime: review round 31, F1).
+    for mode in ("prior-terminate","prior-terminate-throw"):
+        root=base/mode/"app"/"diagnostics"
+        prior=subprocess.run([binary,str(root),mode],capture_output=True,timeout=30)
+        assert prior.returncode==44,(mode,prior)
+        assert b"prior terminate handler" in prior.stderr,(mode,prior)
+        prior_reports=list(root.glob("*.json"))
+        assert len(prior_reports)==1,(mode,prior_reports)
+        prior_report=json.loads(prior_reports[0].read_text())
+        assert prior_report["cause"]==(0 if sanitized else 3),(mode,prior_report)
+        if not sanitized: assert prior_report["kind"]=="crash",(mode,prior_report)
     if os.name=="nt" and not sanitized:
         # A top-level filter already in place (the MSVC runtime always has one) must not
         # stop the last-chance filter from capturing, and must still run after it
