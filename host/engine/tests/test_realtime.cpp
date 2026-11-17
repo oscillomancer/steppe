@@ -4222,24 +4222,43 @@ TEST_CASE("a loop shorter than a render block still lets the renderer get its le
     DummyBackend backend({.mode = DummyBackend::Mode::Manual});
     Engine engine(pool, media, {.workers = 1});
     REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
-    REQUIRE(engine.load(frontierSession()));
+    std::vector<const detail::ChunkRing*> rings;
+    SUBCASE("frontier rings, into the live master") {
+        REQUIRE(engine.load(frontierSession()));
+        const auto& plan = EngineTestAccess::latestPlan(engine);
+        REQUIRE(plan.frontierRings.size() == 2);
+        for (const auto& ring : plan.frontierRings) rings.push_back(ring.get());
+    }
+    SUBCASE("the record ring of a recorded master the renderer runs (ADR-0057)") {
+        model::EditTxn t(synthSession(-12.0, nullptr, 2), 2);
+        t.modify<model::Track>(kMaster, [](auto& m) { m.record.armed = true; });
+        REQUIRE(engine.load(t.commit().value()));
+        const auto& plan = EngineTestAccess::latestPlan(engine);
+        REQUIRE_FALSE(plan.split);
+        REQUIRE(plan.recordRings.size() == 1);
+        rings.push_back(plan.recordRings[0].get());
+    }
     engine.setLoop(0.0, 300.0 / 48000.0, true);
     engine.play();
     runAhead(engine, backend, 64, 256);
-    const auto& plan = EngineTestAccess::latestPlan(engine);
-    REQUIRE(plan.frontierRings.size() == 2);
     const auto full = [&] {
-        for (const auto& ring : plan.frontierRings)
+        for (const auto* ring : rings)
             if (ring->write.load() - ring->read.load() == ring->chunks.size()) return true;
         return false;
     };
-    // Bounded only against a hang: one of the two always comes.
-    for (int i = 0; i < 100000; ++i) {
-        if (EngineTestAccess::lead(engine) >= EngineTestAccess::aheadFrames(engine) || full())
-            break;
+    const auto ahead = [&] {
+        return EngineTestAccess::lead(engine) >= EngineTestAccess::aheadFrames(engine);
+    };
+    // Nothing consumes from here on: the lead only grows, a full ring stays
+    // full, and the renderer runs until one of the two. The wait is on that
+    // state; its deadline only reports a hang and never decides the checks.
+    const auto hang = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    while (!ahead() && !full()) {
+        REQUIRE_MESSAGE(std::chrono::steady_clock::now() < hang,
+                        "hung: in 60 s the renderer neither got its lead nor filled a ring");
         std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
-    CHECK(EngineTestAccess::lead(engine) >= EngineTestAccess::aheadFrames(engine));
+    CHECK(ahead());
     CHECK_FALSE(full());
     CHECK(engine.anticipationMisses() == 0);
     engine.stop();
