@@ -351,6 +351,8 @@ A call made off the device callback (ADR-0013) fails at a deadline:
 instance's own, `Instance::setCallDeadlineMs`, when set (an offline render
 sets 60 s on its instances while it runs, ADR-0090), and otherwise the
 process-wide `host::setBridgeDeadlineMs` (2000 ms by default, at least 1).
+The instance's own is atomic and may be set from any thread at any time; a
+wait already under way keeps the deadline it began with.
 The engine tests raise the process-wide one to 60 s for the whole binary
 (`bridge_patience.cpp`), so a stall of a loaded machine never decides a
 bit-identity comparison of live renders; the tests of the deadline itself

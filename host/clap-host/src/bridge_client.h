@@ -129,9 +129,12 @@ class RemoteInstance {
     }
     bool restartPending() const { return restartPending_; }  // as of the last service()
     // This instance's deadline off the callback; 0: bridgeDeadlineMs().
+    // Atomic: any thread may set it at any time, and a wait already under
+    // way keeps the deadline it started with.
     void setCallDeadlineMs(int ms) {
         callDeadlineMs_.store(std::max(ms, 0), std::memory_order_relaxed);
     }
+    int callDeadlineMs() const { return callDeadlineMs_.load(std::memory_order_relaxed); }
     bool processRequested() const SUPPLE_RT {
         return processRequested_.load(std::memory_order_acquire);
     }

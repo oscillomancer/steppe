@@ -1086,6 +1086,7 @@ int Instance::bridgePid() const { return remote_ ? remote_->bridgePid() : -1; }
 void Instance::setCallDeadlineMs(int ms) {
     if (remote_) remote_->setCallDeadlineMs(ms);
 }
+int Instance::callDeadlineMs() const { return remote_ ? remote_->callDeadlineMs() : 0; }
 bool Instance::bridgeThreadRefused() const { return remote_ && remote_->classRefused(); }
 
 std::string Instance::failure() const { return remote_ ? remote_->failure() : std::string(); }

@@ -421,8 +421,11 @@ class Instance {
     // Bridged: this instance's failure deadline off the callback, in place
     // of bridgeDeadlineMs() (0, the default, uses that); lifecycle commands
     // get 5/2 of it plus 2 s. An offline render sets it while it runs
-    // (ADR-0090). Set it while nothing processes; no effect in process.
+    // (ADR-0090). It is atomic: any thread may set it at any time, and a
+    // wait already under way keeps the deadline it started with. No effect
+    // in process; callDeadlineMs() is then 0.
     void setCallDeadlineMs(int ms);
+    int callDeadlineMs() const;
     // Bridged: its bridge's audio thread was refused the scheduling class the
     // last audio-thread call asked for (ADR-0026, ADR-0081); false in process.
     bool bridgeThreadRefused() const;
