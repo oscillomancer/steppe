@@ -1601,8 +1601,18 @@ are in `docs/specs/diagnostics.md`) and counts what it left out (`dropped`, by k
 claims a crash was not a plug-in's: a plug-in's own thread has no cell. The command ring, the
 capsule copy and the attribution are tested on Linux, and the Windows ring and table read
 passed native CI 44056590141; the macOS capsule is unproven until native CI passes on the
-fixes after it. Bridge correlation,
-restart UI/hangs and release package verification remain later topics.
+fixes after it. Bridge processes (topic 6a): a report says which bridge each plug-in instance ran
+in (`plugins[].bridge`, a `bridges` section with each bridge's state and how it ended: `exit`,
+`signal`, `exception` or `host` for the host's own kill) and a bridge that dies by a signal or an
+exception while the app lives gets a report of its own, kind `bridge_exit`, at most 3 per run and
+none for a repeat (the plug-in's id and version and the status stand in for a build). It is the
+host's account only: the bridge's own threads and fault are not collected yet (6b, 6c), the
+attribution is the only live member or none, an exit's code is not read on POSIX, a bridge killed
+by the out-of-memory killer reads as a signal, and the 65536th bridge of a run has no ordinal.
+It is never a restart notice and takes no place in the suspect window. Tested on Linux only
+(unit tests, `clap-host.diagnostics-inventory` with the real bridge); the Windows exception
+classification and the macOS signal path are unproven until native CI runs.
+Restart UI/hangs and release package verification remain later topics.
 Supervisor end (ADR-0091): a supervisor that crashes tells the worker first and the worker keeps
 running without crash capture; a supervisor ended with no notice (`SIGKILL`, `TerminateProcess`,
 a launcher's hard kill) stops the worker as `SIGTERM` does and ends it hard after ten seconds,

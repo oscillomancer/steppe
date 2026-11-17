@@ -1463,7 +1463,7 @@ Result:
 
 The crash reports earlier runs left, newest first.
 
-Each report says when it was written, which build and role, how the run ended (kind: crash, unexpected_exit, or other for a kind this build does not know), the attribution level (fault_in_image, active_token, concurrent_activity, recent_command, unknown; a stated confidence, not a verdict) and the plug-in it names, if any, as the plug-in described itself. unreported lists runs that ended and left no report (the supervisor died or could not write). A report counts once its run has ended: reports_pending are still being written; live_runs are running now, this one included. ignored counts files that are not valid reports. limit caps each list (default 50); the _total fields count them all. Reports hold plug-in and command names, never project content.
+Each report says when it was written, which build and role, how the run ended (kind: crash, unexpected_exit, bridge_exit for a plug-in bridge process that died while the app lived, or other for a kind this build does not know), the attribution level (fault_in_image, active_token, concurrent_activity, recent_command, bridge_exit, unknown; a stated confidence, not a verdict) and the plug-in it names, if any, as the plug-in described itself. unreported lists runs that ended and left no report (the supervisor died or could not write). A report counts once its run has ended: reports_pending are still being written; live_runs are running now, this one included. ignored counts files that are not valid reports. limit caps each list (default 50); the _total fields count them all. Reports hold plug-in and command names, never project content.
 
 Kind: `query`. Exposure: `mcp-exec`.
 

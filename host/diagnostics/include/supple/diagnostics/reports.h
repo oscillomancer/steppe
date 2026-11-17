@@ -18,7 +18,10 @@ namespace supple::diagnostics {
 // platform has no local data folder. Every function below takes `{}` to mean this folder.
 std::filesystem::path defaultDirectory();
 
-enum class ReportKind { Crash, UnexpectedExit, Other };
+// BridgeExit: a plug-in bridge process died while the application lived (topic 6a). It is not an
+// application closing: it is never a restart notice, and it is not one of the runs the suspect
+// window looks at. The viewer lists it like any report.
+enum class ReportKind { Crash, UnexpectedExit, BridgeExit, Other };
 
 // The plug-in the report's attribution names, as the plug-in described itself (its own strings,
 // possibly absent) plus the identity of its binary when the report recorded one.
@@ -43,8 +46,8 @@ struct ReportSummary {
     std::filesystem::file_time_type written;
     bool acknowledged = false;
     // The report's attribution level as the report spells it ("fault_in_image", "active_token",
-    // "concurrent_activity", "recent_command", "unknown"), "other" for one this build does not
-    // know, empty when the report has no attribution.
+    // "concurrent_activity", "recent_command", "bridge_exit", "unknown"), "other" for one this
+    // build does not know, empty when the report has no attribution.
     std::string attribution;
     std::optional<ReportPlugin> culprit;  // the plug-in the attribution names, when it names one
     std::size_t pluginCount = 0;          // plug-ins and modules the run had announced

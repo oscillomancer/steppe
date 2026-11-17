@@ -85,8 +85,9 @@ if(SUPPLE_BUILD_TESTS)
   # The real host under the diagnostics frontend: the report must list what it announced.
   add_executable(clap-host-diagnostics-fixture tests/diagnostics_host_fixture.cpp)
   target_link_libraries(clap-host-diagnostics-fixture PRIVATE supple::clap-host supple::diagnostics)
-  add_dependencies(clap-host-diagnostics-fixture clap-host-fixtures)
-  target_compile_definitions(clap-host-diagnostics-fixture PRIVATE FIXTURE_CLAP_PATH="$<TARGET_FILE:clap-host-fixtures>")
+  add_dependencies(clap-host-diagnostics-fixture clap-host-fixtures ${PRODUCT_SLUG}-bridge)
+  target_compile_definitions(clap-host-diagnostics-fixture PRIVATE FIXTURE_CLAP_PATH="$<TARGET_FILE:clap-host-fixtures>"
+                             BRIDGE_PATH="$<TARGET_FILE:${PRODUCT_SLUG}-bridge>")
   supple_target_defaults(clap-host-diagnostics-fixture)
   # What the execution scopes cost (informational: prints numbers, decides nothing).
   add_executable(clap-host-scope-overhead tests/scope_overhead.cpp)

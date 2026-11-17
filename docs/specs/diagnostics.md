@@ -137,12 +137,15 @@ a stderr diagnostic and normal app behavior. No user work enters a marker.
 
 A `supple.crash-run/1.0` marker contains only run/build/platform/role, is exclusively
 created and owned/locked by its live worker. The supervisor publishes a report
-only after a terminal event or unexpected worker exit; ordinary acknowledged
+only after a terminal event or unexpected worker exit (and, from topic 6a, one
+report for each plug-in bridge process that dies by itself while the worker lives, under an
+incident of its own and with no marker); ordinary acknowledged
 returns remove the marker. An active run is not an abandoned incident.
 
 Report schema `supple.crash-report/1.0`: `incident`, `build` (version/commit/dirty),
 `platform`, `architecture`, `role`, `kind`, `code`, `native_fatal_status`, `complete`, `unavailable`,
-`modules`, `threads`, `plugins`, `commands`, `dropped`. Strict size/type/enum validation and
+`modules`, `threads`, `plugins`, `bridges` (topic 6a), `commands`, `dropped`, and for a
+`bridge_exit` report `bridge` and `attribution`. Strict size/type/enum validation and
 bounded allowlisted formatting apply. Phase-2 reports are honest exit summaries;
 phase 3 can attest terminal context but persists no raw address/register bytes.
 Thread frames added in topic 4 require executable module identity plus relative
@@ -179,7 +182,7 @@ for it. Nothing here changes a report: a report is never rewritten.
 *Listing.* `listReports` returns `reports` (newest first, by file time), `unreported`, and
 counts `liveRuns`, `pending` and `ignored`. A missing folder is an empty listing; one that is a
 link or not the user's own is an error (`diagnostics.storage`). A report is summarised by incident,
-role, kind (`crash`, `unexpected_exit`, or `other`), platform, the build that wrote it, file time,
+role, kind (`crash`, `unexpected_exit`, `bridge_exit`, or `other`), platform, the build that wrote it, file time,
 `acknowledged`, the attribution level, the plug-in the attribution names (its own strings, its
 own `plugin_id`, its `kind` and `origin` as written, the plug-in `format` the kind stands for
 (`clap`, `vst3`) and its build id, any of them possibly empty) and the plug-in count. Reading is tolerant where a newer
@@ -237,7 +240,10 @@ most `kSuspectAttempts` (8) of them, so a folder of damaged files costs a bounde
 in the window yields a suspect when its attribution is `fault_in_image` or `active_token`, it
 names a plug-in with an own `plugin_id` and a format this build knows, and it is not settled;
 every other level, a plug-in with no id, an unreadable report and a report still being published
-yield none, but those that are valid still occupy a place in the window. A suspect is keyed on
+yield none, but those that are valid still occupy a place in the window. The exception is a
+`bridge_exit` report (topic 6a): a bridge's death is not a run that closed, so it neither names a
+suspect nor takes a place in the window, and a loop of bridge crashes cannot push a real crash out
+of it. A suspect is keyed on
 `(format, plugin_id, build id)`; a report with no build id (an `active_token` attribution, every
 VST3) is keyed on the version too, so two versions are two suspects and none is an exact build.
 The suspect carries the name, vendor, version and `origin` of its newest report (P8 decides on
@@ -332,7 +338,10 @@ names its `role`, and the engine's text says which app closed ("Steppe engine cl
 last time"). `acknowledgeNotice` marks only the incidents its notice covers, which are of its
 role. An explicit `acknowledge(incident)` (the command `crash.acknowledge` with a named incident)
 still works for any role, and the listing, the viewer and the suspect window (7d) cover every
-role. A report gives `Kind::Report`; the headline names the plug-in only when
+role. A `bridge_exit` report is never part of a notice: the application did not close. It is
+skipped when the notice reads a report (and does not use up one of the role filter's eight reads);
+a notice with no role filter counts a report it did not read by name, so callers filter by role,
+as the GUI and the engine do. A report gives `Kind::Report`; the headline names the plug-in only when
 the attribution is `fault_in_image` or `active_token` and the report names one, and the detail says
 the report was saved here, was sent nowhere, and that the report cannot prove the plug-in was the cause; any other
 attribution, and a kind this build does not know, gets the plain sentence. An unreported run gives
@@ -834,6 +843,28 @@ fatal severity bits set (`0xC0000000`) and `exit` for any other, with the exit c
 happen (the host kills a bridge that was already dying) the end is `host`: the order cannot be
 told. The 65536th bridge of a run has no ordinal (it reads as this process): a stated limit.
 
+*A report when the worker lives.* A bridge that ends by a signal or an exception (not by the
+host's kill, not by an exit: the exit code is not read on POSIX) while the worker goes on gets a
+report of its own, `kind` `bridge_exit`. The supervisor writes it from its inventory when it
+applies the `Bridge` end event, under a new incident id, with no run marker or hold, so a reader
+counts it the moment it is there. The worker's own run, marker and eventual report are untouched.
+The report has `bridge` (the ordinal), `code` (the native status, the same as `bridges[].ended.code`),
+no threads, no commands, `complete` false, `terminal_context` false, `native_fatal_status` false, and
+`unavailable` says the bridge process's threads were not collected: the report is the host's
+account of it, nothing the bridge itself captured (a later step). `attribution` is
+`{confidence: "bridge_exit", plugin}`, the plug-in the only member of the bridge that had not been
+destroyed, or null when there is none or there are several (the host thread's own `bridge_call`
+entry is not read for it yet). `bridge_exit` is weaker than `fault_in_image`: it names no
+instruction. It belongs to a `bridge_exit` report only, and a `bridge_exit` report carries no other
+level. At most 3 are written per worker run, and none for a bridge whose members (plug-in id and
+version, or the name when it has no id) and native status repeat one already reported (until the
+bridge's own modules are read, those stand in for a build); the others are counted in
+`dropped.bridge_reports` of every later report of the run, with a line in `unavailable`. A report
+that cannot be written prints one line to the supervisor's standard error. The strict validator
+holds the kind to its parts: `bridge` is a listed bridge that ended by `signal` or `exception`
+with the report's `code`, `attribution` is the `bridge_exit` level and its plug-in a listed member
+of that bridge that was not destroyed, and no other kind has `bridge` or that level.
+
 *Supervisor.* `Inventory` keeps a list of bridges by ordinal, at most 256: a bridge is made by
 its start, or by an instance or an end that names it when the start was lost, and an end after
 an end changes nothing. A record that has a `how` or `status` where only a `Bridge` event may
@@ -952,9 +983,9 @@ which appear with the role `other`), `plugins` (destroyed instances beyond the l
 ring), `cells` (entries open in the table that no thread read could be tied to, and scopes whose
 stack address the table cannot hold), `messages` (inventory and name packets the worker could not
 send, or the supervisor refused), `untracked` (instances that found no cell) and, from topic 6a,
-`bridges` (bridge processes beyond the last 256). The validator takes the plain integer older
-reports hold, an object without `bridges`, and a report without `attribution`, as reports it
-still owns; any other shape is kept and never authorizes deletion.
+`bridges` (bridge processes beyond the last 256) and `bridge_reports` (bridge deaths not reported
+separately, above). The validator takes the plain integer older reports hold, an object without
+`bridges` or `bridge_reports`, and a report without `attribution`, as reports it still owns; any other shape is kept and never authorizes deletion.
 
 ## Offline resolver (topic 4)
 

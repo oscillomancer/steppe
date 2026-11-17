@@ -383,6 +383,49 @@ std::vector<const BridgeEntry*> Inventory::bridges() const {
     return all;  // a std::map: ascending ids
 }
 
+bool Inventory::admitBridgeReport(std::uint16_t bridge) {
+    const auto found = bridges_.find(bridge);
+    if (found == bridges_.end()) return false;
+    BridgeEntry& entry = found->second;
+    if (!entry.ended || entry.considered) return false;
+    entry.considered = true;
+    if (entry.how != diagctx::BridgeHow::Signal && entry.how != diagctx::BridgeHow::Exception)
+        return false;  // the host's own kill, or an exit: no report, and nothing to count
+    std::vector<std::string> members;
+    for (const PluginEntry* plugin : entries())
+        if (plugin->bridge == bridge && plugin->state != diagctx::InstanceState::Destroyed)
+            members.push_back(plugin->text[3] + '\x1f' + plugin->text[2] + '\x1f' +
+                              (plugin->text[3].empty() ? plugin->text[0] : std::string()));
+    std::sort(members.begin(), members.end());
+    std::string key;
+    for (const auto& member : members) key += member + '\x1e';
+    key += std::string(diagctx::bridgeHowName(entry.how)) + ':' + std::to_string(entry.status);
+    if (bridgeReports_ >= kMaxBridgeReports ||
+        std::find(bridgeReportKeys_.begin(), bridgeReportKeys_.end(), key) !=
+            bridgeReportKeys_.end()) {
+        ++bridgeReportsSuppressed_;
+        return false;
+    }
+    bridgeReportKeys_.push_back(std::move(key));
+    ++bridgeReports_;
+    return true;
+}
+
+json::Value Inventory::bridgeExitAttributionJson(std::uint16_t bridge) const {
+    std::optional<std::uint32_t> only;
+    std::size_t live = 0;
+    for (const PluginEntry* plugin : entries())
+        if (plugin->bridge == bridge && plugin->state != diagctx::InstanceState::Destroyed) {
+            ++live;
+            only = plugin->ordinal;
+        }
+    auto result = json::Value::object();
+    result["confidence"] = "bridge_exit";
+    result["plugin"] =
+        live == 1 && only ? json::Value(static_cast<long long>(*only)) : json::Value();
+    return result;
+}
+
 json::Value Inventory::bridgesJson() const {
     auto list = json::Value::array();
     const auto plugins = entries();
@@ -558,6 +601,7 @@ json::Value Inventory::droppedJson(const TraceSnapshot* trace) const {
     dropped["messages"] = count(workerDropped_ + rejected_);
     dropped["untracked"] = count(trace ? trace->tableUntracked : 0);
     dropped["bridges"] = count(bridgesLost_);
+    dropped["bridge_reports"] = count(bridgeReportsSuppressed_);
     return dropped;
 }
 
@@ -574,6 +618,10 @@ std::vector<std::string> Inventory::limits() const {
     if (retiredLost_ != 0)
         limits.push_back("destroyed plug-in instances beyond the last 64 are not listed");
     if (bridgesLost_ != 0) limits.push_back("bridge processes beyond the last 256 are not listed");
+    if (bridgeReportsSuppressed_ != 0)
+        limits.push_back(
+            "some bridge processes that died were not reported separately: a run writes at most 3, "
+            "and none for a bridge that repeats one already reported");
     return limits;
 }
 
@@ -661,10 +709,11 @@ bool droppedShape(const json::Value& dropped) {
         if (!v || !v->isInt() || v->asInt() < 0) return false;
     }
     for (const auto& member : dropped.asObject()) {
-        const std::string_view known[]{"threads",   "unregistered_threads",
-                                       "plugins",   "commands",
-                                       "cells",     "messages",
-                                       "untracked", "bridges"};
+        const std::string_view known[]{"threads",       "unregistered_threads",
+                                       "plugins",       "commands",
+                                       "cells",         "messages",
+                                       "untracked",     "bridges",
+                                       "bridge_reports"};
         if (std::find(std::begin(known), std::end(known), member.key) == std::end(known))
             return false;
         if (!member.value.isInt() || member.value.asInt() < 0) return false;
@@ -693,15 +742,17 @@ static const std::string* faultModuleId(const json::Value& threads, const json::
 
 bool attributionShape(const json::Value& attribution, const json::Value& plugins,
                       const json::Value& commands, const json::Value& threads,
-                      const json::Value* modules) {
+                      const json::Value* modules, std::int64_t bridge) {
     if (!attribution.isObject() || attribution.size() != 2) return false;
     const auto* confidence = attribution.find("confidence");
     const auto* plugin = attribution.find("plugin");
     if (!confidence || !confidence->isString() || !plugin) return false;
     const std::string_view how = confidence->asString();
     if (how != "fault_in_image" && how != "active_token" && how != "concurrent_activity" &&
-        how != "recent_command" && how != "unknown")
+        how != "recent_command" && how != "unknown" && how != "bridge_exit")
         return false;
+    // A bridge's end names no instruction: it belongs to a bridge_exit report and only to one.
+    if ((how == "bridge_exit") != (bridge != 0)) return false;
     // A fault in a plug-in's binary needs the fault thread's first frame in a module whose id
     // is the build of a plug-in the report lists; the plug-in named, if any, is held to it below.
     const std::string* faultId = nullptr;
@@ -737,6 +788,13 @@ bool attributionShape(const json::Value& attribution, const json::Value& plugins
                         return true;
             return false;
         };
+        if (how == "bridge_exit") {
+            // A member of that bridge that was still there when it ended.
+            const auto* member = item.find("bridge");
+            const auto* state = item.find("state");
+            return member && member->isInt() && member->asInt() == bridge && state &&
+                   state->isString() && state->asString() != "destroyed";
+        }
         if (how == "active_token") return matched("thread");
         if (how == "concurrent_activity") return matched("other_thread");
         const auto* build = item.find("build");
@@ -893,6 +951,21 @@ bool bridgesShape(const json::Value& bridges, const json::Value& plugins,
         }
     }
     return true;
+}
+
+bool bridgeExitShape(const json::Value& bridges, std::int64_t bridge, std::int64_t code) {
+    if (!bridges.isArray()) return false;
+    for (const auto& item : bridges.asArray()) {
+        const auto* id = item.find("id");
+        if (!id || !id->isInt() || id->asInt() != bridge) continue;
+        const auto* ended = item.find("ended");
+        const auto* how = ended ? ended->find("how") : nullptr;
+        const auto* endCode = ended ? ended->find("code") : nullptr;
+        return how && how->isString() &&
+               (how->asString() == "signal" || how->asString() == "exception") && endCode &&
+               endCode->isInt() && endCode->asInt() == code;
+    }
+    return false;
 }
 
 }  // namespace supple::diagnostics::detail

@@ -167,12 +167,12 @@ TEST_CASE("a report of a newer build is listed, never hidden or refused") {
     report(root, 3);
     // A kind and a top-level field this build does not know.
     rewrite(root, 1, [](json::Value& v) {
-        v["kind"] = "bridge_exit";
-        v["bridges"] = json::Value::array();
+        v["kind"] = "from_the_future";
+        v["bridges_of_the_future"] = json::Value::array();
     });
     // An attribution level it does not know.
     rewrite(root, 2, [](json::Value& v) {
-        v["attribution"]["confidence"] = "bridge_exit";
+        v["attribution"]["confidence"] = "from_the_future";
         v["attribution"]["plugin"] = json::Value();
     });
     auto listing = listReports(root.path);
@@ -604,7 +604,7 @@ TEST_CASE("the newest incident leads, the earlier ones are counted, and dismissi
 TEST_CASE("an unexpected report a newer build wrote still counts for the notice") {
     Root root;
     report(root, 1);
-    rewrite(root, 1, [](json::Value& v) { v["kind"] = "bridge_exit"; });
+    rewrite(root, 1, [](json::Value& v) { v["kind"] = "from_the_future"; });
     auto notice = noticeFor(root);
     REQUIRE(notice);
     CHECK(notice->kind == RestartNotice::Kind::Report);
@@ -1173,4 +1173,103 @@ TEST_CASE("a pruned unreported run takes its settlement and acknowledgement") {
     CHECK_FALSE(fs::exists(file(root, 1, ".run")));
     CHECK_FALSE(fs::exists(file(root, 1, ".ack")));
     CHECK_FALSE(fs::exists(file(root, 1, ".settled")));
+}
+
+namespace {
+// The report of a bridge that died while its program lived (topic 6a), as the supervisor writes
+// it, under the incident `id` and the age given: an ordinary sample report with the parts of that
+// kind swapped in, so the reader sees what it would see.
+void bridgeDeath(const Root& root, unsigned id, int hoursAgo = 0) {
+    report(root, id);
+    rewrite(root, id, [](json::Value& v) {
+        v["kind"] = "bridge_exit";
+        v["bridge"] = 1;
+        v["code"] = 11;
+        auto ended = json::Value::object();
+        ended["how"] = "signal";
+        ended["code"] = 11;
+        auto bridge = json::Value::object();
+        bridge["id"] = 1;
+        bridge["state"] = "ended";
+        bridge["ended"] = std::move(ended);
+        bridge["instances"] = json::Value::array();
+        auto bridges = json::Value::array();
+        bridges.push_back(std::move(bridge));
+        v["bridges"] = std::move(bridges);
+        v["attribution"]["confidence"] = "bridge_exit";
+        v["attribution"]["plugin"] = json::Value();
+    });
+    age(root, id, hoursAgo);
+}
+}  // namespace
+
+TEST_CASE("a bridge's death is listed as its own kind, and is a report like any other") {
+    Root root;
+    bridgeDeath(root, 1);
+    report(root, 2);
+    auto listing = listReports(root.path);
+    REQUIRE(listing);
+    CHECK(listing->ignored == 0);
+    REQUIRE(listing->reports.size() == 2);
+    CHECK(find(*listing, 1)->kind == ReportKind::BridgeExit);
+    CHECK(find(*listing, 1)->attribution == "bridge_exit");
+    CHECK(find(*listing, 2)->kind == ReportKind::UnexpectedExit);
+    CHECK(readReport(name(1), root.path));
+    REQUIRE(acknowledge(name(1), root.path));
+    REQUIRE(deleteReport(name(1), root.path));
+    CHECK_FALSE(readReport(name(1), root.path));
+}
+
+TEST_CASE("a bridge's death is not the application closing: no restart notice for it") {
+    Root root;
+    bridgeDeath(root, 1);
+    // Unfiltered and by role: nothing to say, since the program itself ended well.
+    CHECK_FALSE(noticeFor(root));
+    auto byRole = lastRunNotice(root.path, diagnostics::Role::Fixture);
+    REQUIRE(byRole);
+    CHECK_FALSE(byRole->has_value());
+    // Beside a real unexpected close it is neither the headline nor counted among the earlier
+    // ones, and acknowledging the notice leaves it alone.
+    report(root, 2);
+    age(root, 2, 5);
+    bridgeDeath(root, 3, 1);
+    for (const auto role :
+         {std::optional<diagnostics::Role>(), std::optional(diagnostics::Role::Fixture)}) {
+        auto notice = lastRunNotice(root.path, role);
+        REQUIRE(notice);
+        REQUIRE(notice->has_value());
+        CHECK((*notice)->kind == RestartNotice::Kind::Report);
+        CHECK((*notice)->incidents == std::vector<std::string>{name(2)});
+        CHECK((*notice)->earlier == 0);
+    }
+    auto notice = lastRunNotice(root.path, diagnostics::Role::Fixture);
+    REQUIRE(notice);
+    REQUIRE(acknowledgeNotice(**notice, root.path));
+    CHECK(fs::exists(file(root, 2, ".ack")));
+    CHECK_FALSE(fs::exists(file(root, 1, ".ack")));
+    CHECK_FALSE(fs::exists(file(root, 3, ".ack")));
+}
+
+TEST_CASE(
+    "bridge deaths do not use up the notice's reads: a real close behind them is still found") {
+    Root root;
+    report(root, 1);
+    age(root, 1, 40);
+    for (unsigned id = 2; id < 14; ++id) bridgeDeath(root, id, static_cast<int>(30 - id));
+    auto notice = lastRunNotice(root.path, diagnostics::Role::Fixture);
+    REQUIRE(notice);
+    REQUIRE(notice->has_value());
+    CHECK((*notice)->incidents == std::vector<std::string>{name(1)});
+}
+
+TEST_CASE("bridge deaths take no place in the window of reports that decides who is a suspect") {
+    Root root;
+    crashing(root, 1, {}, 50);
+    // Five newer bridge deaths: if they counted as reports, the window of three would hold only
+    // them and the plug-in's crash would drop out of it.
+    for (unsigned id = 2; id < 7; ++id) bridgeDeath(root, id, static_cast<int>(40 - id));
+    const auto found = suspectsOf(root);
+    REQUIRE(found.size() == 1);
+    CHECK(found[0].pluginId == "com.acme.canary");
+    CHECK(found[0].incidents == std::vector<std::string>{name(1)});
 }

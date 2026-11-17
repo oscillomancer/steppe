@@ -23,6 +23,11 @@ void removePublishHold(const std::filesystem::path& root, const Packet& boot, st
 Status publishReport(const std::filesystem::path& root, const Packet& boot, const Packet* terminal,
                      int code, bool fatal, const TraceSnapshot* trace = nullptr,
                      const Inventory* inventory = nullptr);
+// A report of a bridge process that died while the worker lives (topic 6a): kind `bridge_exit`,
+// under an incident of its own with no run marker, written by the supervisor from the inventory
+// alone. `bridge` must be an ended one in `inventory`.
+Status publishBridgeReport(const std::filesystem::path& root, const Packet& boot,
+                           const Inventory& inventory, std::uint16_t bridge);
 void removeMarker(const std::filesystem::path& root, const Packet& boot);
 // The worker removes its own marker, which it still holds open and locked, when no supervisor
 // is left to do it (ADR-0091). POSIX unlinks the file while the lock is still held, so there is

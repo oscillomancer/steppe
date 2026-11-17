@@ -7,6 +7,7 @@
 #include <cstring>
 #include <functional>
 #include <thread>
+#include <vector>
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -223,6 +224,128 @@ TEST_CASE("a report with bridges is published, validated, pruned, and kept when 
     older.asObject().erase("bridges");
     older["dropped"].asObject().erase("bridges");
     CHECK(reportShape(older));
+}
+namespace {
+// A bridge whose one plug-in lived in it, and which then ended by `how`.
+Inventory bridgeThatEnded(supple::diagctx::BridgeHow how, std::int32_t status) {
+    using namespace supple::diagctx;
+    Inventory inventory;
+    const auto apply = [&](auto&& change) {
+        Packet p = boot(0);
+        p.kind = Message::Instance;
+        change(p.instance);
+        REQUIRE(inventory.apply(p));
+    };
+    apply([](InstanceRecord& r) {
+        r.event = static_cast<std::uint8_t>(EventKind::Bridge);
+        r.bridge = 1;
+    });
+    apply([](InstanceRecord& r) {
+        r.cell = 3;
+        r.event = static_cast<std::uint8_t>(EventKind::Add);
+        r.kind = static_cast<std::uint8_t>(InstanceKind::Clap);
+        r.origin = static_cast<std::uint8_t>(InstanceOrigin::Foreign);
+        r.mode = static_cast<std::uint8_t>(InstanceMode::Bridged);
+        r.state = static_cast<std::uint8_t>(InstanceState::Active);
+        r.bridge = 1;
+        std::memcpy(r.text[0], "Canary", 6);
+        r.length[0] = 6;
+    });
+    apply([&](InstanceRecord& r) {
+        r.event = static_cast<std::uint8_t>(EventKind::Bridge);
+        r.bridge = 1;
+        r.how = static_cast<std::uint8_t>(how);
+        r.status = status;
+    });
+    return inventory;
+}
+std::vector<fs::path> jsonFiles(const fs::path& root) {
+    std::vector<fs::path> found;
+    for (const auto& e : fs::directory_iterator(root))
+        if (e.path().extension() == ".json") found.push_back(e.path());
+    return found;
+}
+}  // namespace
+TEST_CASE("a bridge's death is published as a report of its own, valid, with no run marker") {
+    Root root;
+    const auto inventory = bridgeThatEnded(supple::diagctx::BridgeHow::Signal, 11);
+    REQUIRE(publishBridgeReport(root.path, boot(0), inventory, 1));
+    const auto files = jsonFiles(root.path);
+    REQUIRE(files.size() == 1);
+    // Its own incident, not the run's, and nothing but the report is written for it.
+    CHECK(files[0].stem().string() != std::string(boot(0).incident.data(), 32));
+    for (const auto& e : fs::directory_iterator(root.path)) CHECK(e.path().extension() == ".json");
+    const auto text = readTextFile(files[0]);
+    REQUIRE(text);
+    const auto parsed = json::parse(*text);
+    REQUIRE(parsed);
+    CHECK(parsed->find("incident")->asString() == files[0].stem().string());
+    CHECK(parsed->find("kind")->asString() == "bridge_exit");
+    CHECK(parsed->find("bridge")->asInt() == 1);
+    CHECK(parsed->find("code")->asInt() == 11);
+    CHECK(parsed->find("complete")->asBool() == false);
+    CHECK(parsed->find("terminal_context")->asBool() == false);
+    CHECK(parsed->find("threads")->size() == 0);
+    CHECK(parsed->find("attribution")->find("confidence")->asString() == "bridge_exit");
+    CHECK(parsed->find("attribution")->find("plugin")->asInt() == 0);
+    CHECK(reportShape(*parsed));
+    CHECK(reportShape(*parsed, true));
+    // Retention keeps it like any report and removes it as the oldest when the time comes.
+    fs::last_write_time(files[0], fs::file_time_type::clock::now() - std::chrono::hours(48));
+    for (unsigned i = 1; i < 21; ++i)
+        REQUIRE(publishReport(root.path, boot(i), nullptr, 31, false));
+    CHECK(reports(root.path) == 20);
+    CHECK_FALSE(fs::exists(files[0]));
+}
+TEST_CASE("a bridge_exit report is valid only as the report of a bridge that died on its own") {
+    Root root;
+    const auto inventory = bridgeThatEnded(supple::diagctx::BridgeHow::Exception, -1073741819);
+    REQUIRE(publishBridgeReport(root.path, boot(0), inventory, 1));
+    const auto files = jsonFiles(root.path);
+    REQUIRE(files.size() == 1);
+    const auto good = *json::parse(*readTextFile(files[0]));
+    REQUIRE(reportShape(good));
+    const auto altered = [&](auto&& change) {
+        auto v = good;
+        change(v);
+        return reportShape(v) || reportShape(v, true);
+    };
+    CHECK_FALSE(altered([](json::Value& v) { v["kind"] = "crash"; }));  // it has a bridge field
+    CHECK_FALSE(altered([](json::Value& v) { v.asObject().erase("bridge"); }));
+    CHECK_FALSE(altered([](json::Value& v) { v["bridge"] = 2; }));  // not a listed bridge
+    CHECK_FALSE(altered([](json::Value& v) { v["bridge"] = 0; }));
+    CHECK_FALSE(altered([](json::Value& v) { v["bridge"] = "1"; }));
+    CHECK_FALSE(altered([](json::Value& v) { v["code"] = 12; }));  // not the bridge's code
+    CHECK_FALSE(altered([](json::Value& v) { v["terminal_context"] = true; }));
+    CHECK_FALSE(altered([](json::Value& v) { v["native_fatal_status"] = true; }));
+    CHECK_FALSE(altered([](json::Value& v) { v.asObject().erase("bridges"); }));
+    CHECK_FALSE(altered([](json::Value& v) { v.asObject().erase("attribution"); }));
+    CHECK_FALSE(altered([](json::Value& v) { v["attribution"]["confidence"] = "unknown"; }));
+    CHECK_FALSE(altered([](json::Value& v) { v["attribution"]["plugin"] = 5; }));
+    CHECK_FALSE(altered([](json::Value& v) {  // the host's kill is not a death
+        v["bridges"].asArray()[0]["ended"]["how"] = "host";
+    }));
+    CHECK_FALSE(
+        altered([](json::Value& v) { v["bridges"].asArray()[0]["ended"]["how"] = "exit"; }));
+    // A crash report is not one of these either: it may not name a bridge or claim the level.
+    auto crash = good;
+    crash["kind"] = "unexpected_exit";
+    crash.asObject().erase("bridge");
+    CHECK_FALSE(reportShape(crash));  // its attribution still says bridge_exit
+    crash["attribution"]["confidence"] = "unknown";
+    crash["attribution"]["plugin"] = json::Value();
+    CHECK(reportShape(crash));
+    // Only a bridge that is over, and ended, is published; nothing is written otherwise.
+    Inventory running;
+    Packet start = boot(0);
+    start.kind = Message::Instance;
+    start.instance.event = static_cast<std::uint8_t>(supple::diagctx::EventKind::Bridge);
+    start.instance.bridge = 1;
+    REQUIRE(running.apply(start));
+    const auto before = jsonFiles(root.path).size();
+    CHECK_FALSE(publishBridgeReport(root.path, boot(0), running, 1));
+    CHECK_FALSE(publishBridgeReport(root.path, boot(0), inventory, 9));
+    CHECK(jsonFiles(root.path).size() == before);
 }
 TEST_CASE("a report with command entries is published, validated, pruned, and kept when altered") {
     namespace dc = supple::diagctx;

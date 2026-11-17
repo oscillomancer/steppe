@@ -561,8 +561,10 @@ TEST_CASE("the bridges validator accepts what the writer makes and refuses every
 TEST_CASE("the dropped counts accept an older report's seven and refuse anything unknown") {
     Inventory inventory;
     auto dropped = inventory.droppedJson(nullptr);
-    CHECK(dropped.size() == 8);
+    CHECK(dropped.size() == 9);
     CHECK(droppedShape(dropped));
+    dropped.asObject().erase("bridge_reports");
+    CHECK(droppedShape(dropped));  // the commit that added only `bridges`
     dropped.asObject().erase("bridges");
     CHECK(droppedShape(dropped));  // what builds before topic 6 wrote
     dropped["bridges"] = -1;
@@ -573,6 +575,139 @@ TEST_CASE("the dropped counts accept an older report's seven and refuse anything
     auto missing = inventory.droppedJson(nullptr);
     missing.asObject().erase("cells");
     CHECK_FALSE(droppedShape(missing));
+}
+
+namespace {
+// A bridge with one member that has ended the way `how` says.
+Inventory withEnded(std::uint16_t bridge, diagctx::BridgeHow how, std::int32_t status,
+                    std::string_view name = "Reverb") {
+    Inventory inventory;
+    REQUIRE(inventory.apply(bridgeEvent(bridge)));
+    REQUIRE(inventory.apply(addIn(bridge, 0, bridge, name)));
+    REQUIRE(inventory.apply(bridgeEvent(bridge, how, status)));
+    return inventory;
+}
+}  // namespace
+
+TEST_CASE("only a bridge that died of a signal or an exception is reported, and only once") {
+    using diagctx::BridgeHow;
+    for (const auto how : {BridgeHow::Exit, BridgeHow::Host}) {
+        auto inventory = withEnded(1, how, 9);
+        CHECK_FALSE(inventory.admitBridgeReport(1));
+        CHECK(inventory.bridgeReportsSuppressed() == 0);  // not turned away: never a candidate
+    }
+    auto inventory = withEnded(1, BridgeHow::Signal, 11);
+    CHECK(inventory.admitBridgeReport(1));
+    CHECK_FALSE(inventory.admitBridgeReport(1));  // decided on already
+    CHECK(inventory.bridgeReportsSuppressed() == 0);
+    CHECK_FALSE(inventory.admitBridgeReport(2));  // no such bridge
+    // A bridge that is still running is not a candidate, and stays one for later.
+    Inventory running;
+    REQUIRE(running.apply(bridgeEvent(1)));
+    CHECK_FALSE(running.admitBridgeReport(1));
+    REQUIRE(running.apply(bridgeEvent(1, BridgeHow::Exception, -1073741819)));
+    CHECK(running.admitBridgeReport(1));
+}
+
+TEST_CASE("a run writes at most three bridge reports, none that repeats one, and counts the rest") {
+    using diagctx::BridgeHow;
+    Inventory inventory;
+    // The same plug-in dying the same way, over and over, is one report.
+    for (std::uint16_t id = 1; id <= 4; ++id) {
+        REQUIRE(inventory.apply(bridgeEvent(id)));
+        REQUIRE(inventory.apply(addIn(id, 0, id, "Reverb")));
+        REQUIRE(inventory.apply(bridgeEvent(id, BridgeHow::Signal, 11)));
+        CHECK(inventory.admitBridgeReport(id) == (id == 1));
+    }
+    CHECK(inventory.bridgeReportsSuppressed() == 3);
+    // Another status, or another plug-in, is a different death.
+    REQUIRE(inventory.apply(bridgeEvent(5)));
+    REQUIRE(inventory.apply(addIn(5, 0, 5, "Reverb")));
+    REQUIRE(inventory.apply(bridgeEvent(5, BridgeHow::Signal, 6)));
+    CHECK(inventory.admitBridgeReport(5));
+    REQUIRE(inventory.apply(bridgeEvent(6)));
+    auto delay = addIn(6, 0, 6, "Delay");
+    setText(delay, 3, "com.acme.delay");
+    REQUIRE(inventory.apply(delay));
+    REQUIRE(inventory.apply(bridgeEvent(6, BridgeHow::Signal, 11)));
+    CHECK(inventory.admitBridgeReport(6));
+    CHECK(inventory.bridgeReportsSuppressed() == 3);
+    // The limit: three were written, so every further kind of death is only counted.
+    REQUIRE(inventory.apply(bridgeEvent(7)));
+    auto chorus = addIn(7, 0, 7, "Chorus");
+    setText(chorus, 3, "com.acme.chorus");
+    REQUIRE(inventory.apply(chorus));
+    REQUIRE(inventory.apply(bridgeEvent(7, BridgeHow::Exception, 3)));
+    CHECK_FALSE(inventory.admitBridgeReport(7));
+    CHECK(inventory.bridgeReportsSuppressed() == 4);
+    CHECK(inventory.droppedJson(nullptr).find("bridge_reports")->asInt() == 4);
+    CHECK_FALSE(inventory.limits().empty());
+}
+
+TEST_CASE("a bridge_exit attribution names the one member that was still there, or nobody") {
+    using diagctx::BridgeHow;
+    auto inventory = withEnded(1, BridgeHow::Signal, 11);
+    auto one = inventory.bridgeExitAttributionJson(1);
+    CHECK(one.find("confidence")->asString() == "bridge_exit");
+    CHECK(one.find("plugin")->asInt() == 0);
+    // A second live member: several remain, none is named.
+    REQUIRE(inventory.apply(addIn(2, 0, 1, "Delay")));
+    CHECK(inventory.bridgeExitAttributionJson(1).find("plugin")->isNull());
+    // One of the two destroyed before the end: the other is the one.
+    REQUIRE(inventory.apply(change(1, 0, EventKind::Remove, InstanceState::Destroyed)));
+    CHECK(inventory.bridgeExitAttributionJson(1).find("plugin")->asInt() == 1);
+    // A bridge with no member names nobody.
+    Inventory empty;
+    REQUIRE(empty.apply(bridgeEvent(3, BridgeHow::Signal, 9)));
+    CHECK(empty.bridgeExitAttributionJson(3).find("plugin")->isNull());
+}
+
+TEST_CASE("the attribution validator holds bridge_exit to the report's own bridge") {
+    using diagctx::BridgeHow;
+    auto inventory = withEnded(2, BridgeHow::Signal, 11);
+    REQUIRE(inventory.apply(addIn(5, 0, 2, "Delay")));  // two live members: nobody is named
+    const auto plugins = inventory.pluginsJson(nullptr);
+    const auto none = json::Value::array();
+    const auto attribution = [](const json::Value& plugin) {
+        auto a = json::Value::object();
+        a["confidence"] = "bridge_exit";
+        a["plugin"] = plugin;
+        return a;
+    };
+    const auto valid = [&](const json::Value& a, std::int64_t bridge) {
+        return attributionShape(a, plugins, none, none, nullptr, bridge);
+    };
+    CHECK(valid(attribution(json::Value()), 2));
+    CHECK(valid(attribution(json::Value(0LL)), 2));        // a member of bridge 2
+    CHECK_FALSE(valid(attribution(json::Value(0LL)), 3));  // not of bridge 3
+    CHECK_FALSE(valid(attribution(json::Value(9LL)), 2));  // not listed
+    CHECK_FALSE(valid(attribution(json::Value()), 0));     // only a bridge_exit report has it
+    // And no other level belongs to a bridge_exit report.
+    auto token = json::Value::object();
+    token["confidence"] = "unknown";
+    token["plugin"] = json::Value();
+    CHECK_FALSE(valid(token, 2));
+    CHECK(valid(token, 0));
+    // A destroyed member is not one that was there when it ended.
+    REQUIRE(inventory.apply(change(2, 0, EventKind::Remove, InstanceState::Destroyed)));
+    CHECK_FALSE(attributionShape(attribution(json::Value(0LL)), inventory.pluginsJson(nullptr),
+                                 none, none, nullptr, 2));
+}
+
+TEST_CASE("a bridge_exit report's bridge is one listed as ended by a signal or an exception") {
+    using diagctx::BridgeHow;
+    for (const auto how : {BridgeHow::Signal, BridgeHow::Exception}) {
+        const auto inventory = withEnded(4, how, -7);
+        CHECK(bridgeExitShape(inventory.bridgesJson(), 4, -7));
+        CHECK_FALSE(bridgeExitShape(inventory.bridgesJson(), 4, 7));   // not the code it says
+        CHECK_FALSE(bridgeExitShape(inventory.bridgesJson(), 5, -7));  // not listed
+    }
+    CHECK_FALSE(bridgeExitShape(withEnded(4, BridgeHow::Host, 9).bridgesJson(), 4, 9));
+    CHECK_FALSE(bridgeExitShape(withEnded(4, BridgeHow::Exit, 0).bridgesJson(), 4, 0));
+    Inventory running;
+    REQUIRE(running.apply(bridgeEvent(4)));
+    CHECK_FALSE(bridgeExitShape(running.bridgesJson(), 4, 0));
+    CHECK_FALSE(bridgeExitShape(json::Value("x"), 4, 0));
 }
 
 TEST_CASE("the channel accepts inventory packets and refuses what it did not write") {

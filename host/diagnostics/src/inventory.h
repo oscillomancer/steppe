@@ -53,6 +53,9 @@ constexpr std::size_t kRetiredPlugins = 64;                  // destroyed, kept 
 // Bridge processes a report lists (topic 6a). One that is gone is kept as long as there is room;
 // past this the oldest ended one falls out and is counted in `dropped.bridges`.
 constexpr std::size_t kMaxBridges = 256;
+// A worker run gets at most this many reports of bridge processes that died while it lived
+// (topic 6a), so a plug-in that crashes its bridge in a loop cannot evict the reports that matter.
+constexpr std::size_t kMaxBridgeReports = 3;
 
 struct PluginEntry {
     std::uint32_t ordinal = 0;  // the report's id: order of first announcement
@@ -74,6 +77,7 @@ struct BridgeEntry {
     bool ended = false;
     diagctx::BridgeHow how = diagctx::BridgeHow::None;  // when ended
     std::int32_t status = 0;                            // when ended: the native status
+    bool considered = false;                            // a report was decided on (written or not)
 };
 
 // The text a report may show for a plug-in's string: at most `kMaxText` bytes, valid UTF-8,
@@ -109,6 +113,20 @@ class Inventory {
     // The report's "bridges" array: id, state, how it ended, and the plug-ins it ran.
     json::Value bridgesJson() const;
 
+    // Whether a bridge that just ended deserves a report of its own while the worker lives
+    // (topic 6a): it ended by a signal or an exception (not by the host's doing, not by an exit),
+    // it has not been decided on before, fewer than kMaxBridgeReports were written in this run,
+    // and no bridge with the same members and the same native status was reported already (the
+    // plug-ins' ids and versions stand in for a build until the bridge's own modules are read).
+    // A bridge turned away for the limit or for repeating is counted in `dropped.bridge_reports`.
+    // True means "write one": the caller then calls publishBridgeReport.
+    bool admitBridgeReport(std::uint16_t bridge);
+    std::size_t bridgeReportsSuppressed() const noexcept { return bridgeReportsSuppressed_; }
+    // The attribution of a bridge_exit report: `{confidence: "bridge_exit", plugin}`, the plug-in
+    // being the only one of the bridge that had not been destroyed, or null when there are none
+    // or several.
+    json::Value bridgeExitAttributionJson(std::uint16_t bridge) const;
+
     // The report's "plugins" array. `trace`, when there is one, supplies the module each
     // instance came from (`build`) and which thread was inside which instance (`executing`).
     json::Value pluginsJson(const TraceSnapshot* trace) const;
@@ -139,7 +157,8 @@ class Inventory {
     std::vector<std::string> names_;  // by command id; empty: not received
     std::deque<PluginEntry> retired_;
     std::map<std::uint16_t, BridgeEntry> bridges_;
-    std::size_t bridgesLost_ = 0;
+    std::size_t bridgesLost_ = 0, bridgeReports_ = 0, bridgeReportsSuppressed_ = 0;
+    std::vector<std::string> bridgeReportKeys_;
     std::uint32_t nextOrdinal_ = 0;
     std::size_t announced_ = 0, rejected_ = 0, workerDropped_ = 0, retiredLost_ = 0;
 };
@@ -157,13 +176,17 @@ bool commandsShape(const json::Value& commands);
 // the `build` of the plug-in named, or of a listed one when none is).
 bool attributionShape(const json::Value& attribution, const json::Value& plugins,
                       const json::Value& commands, const json::Value& threads,
-                      const json::Value* modules);  // null when the report has none
+                      const json::Value* modules,  // null when the report has none
+                      std::int64_t bridge = 0);    // the bridge of a bridge_exit report, else 0
 // Strict validation of a report's "bridges" against its "plugins": ids rising from 1, a state
 // from the closed set, `ended` exactly for an ended bridge (a `how` from the set and an integer
 // code), every listed instance a listed plug-in whose `bridge` is that id, and every plug-in's
 // `bridge` a listed one unless the report says bridges were dropped (`droppedBridges` > 0).
 bool bridgesShape(const json::Value& bridges, const json::Value& plugins,
                   std::int64_t droppedBridges);
+// The bridge a bridge_exit report is about must be listed as ended by a signal or an exception,
+// with the report's own `code`: true when `bridges` lists `bridge` so, and `code` is its code.
+bool bridgeExitShape(const json::Value& bridges, std::int64_t bridge, std::int64_t code);
 // "dropped": the object this build writes, or the plain count older reports hold.
 bool droppedShape(const json::Value& dropped);
 

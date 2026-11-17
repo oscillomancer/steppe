@@ -34,6 +34,7 @@ json::Value reportJson(const diag::ReportSummary& r) {
     o["role"] = r.role;
     o["kind"] = r.kind == diag::ReportKind::Crash            ? "crash"
                 : r.kind == diag::ReportKind::UnexpectedExit ? "unexpected_exit"
+                : r.kind == diag::ReportKind::BridgeExit     ? "bridge_exit"
                                                              : "other";
     o["platform"] = r.platform;
     o["build"] = json::Value::object();
@@ -81,9 +82,12 @@ void registerCrashReportCommands(cmd::Registry& registry) {
         c.summary = "The crash reports earlier runs left, newest first.";
         c.description =
             "Each report says when it was written, which build and role, how the run ended "
-            "(kind: crash, unexpected_exit, or other for a kind this build does not know), the "
+            "(kind: crash, unexpected_exit, bridge_exit for a plug-in bridge process that died "
+            "while "
+            "the app lived, or other for a kind this build does not know), the "
             "attribution level (fault_in_image, active_token, concurrent_activity, "
-            "recent_command, unknown; a stated confidence, not a verdict) and the plug-in it "
+            "recent_command, bridge_exit, unknown; a stated confidence, not a verdict) and the "
+            "plug-in it "
             "names, if any, as the plug-in described itself. unreported lists runs that ended "
             "and left no report (the supervisor died or could not write). A report counts once "
             "its run has ended: reports_pending are still being written; live_runs are running "

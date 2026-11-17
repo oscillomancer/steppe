@@ -42,4 +42,57 @@ with tempfile.TemporaryDirectory(prefix="host-inventory-") as folder:
             if module is not None: assert p["build"]["id"]!=report["modules"][module]["id"],p
     # No path of the plug-in, and no address, reaches the report.
     assert "test-fixtures" not in raw and "\"image\"" not in raw and str(pathlib.Path(binary).parent) not in raw
+
+# Bridge processes (ADR-0083, topic 6a), from the real host and the real bridge. The fixture
+# program bridges the crash plug-in and the host observes each bridge's end.
+def run_bridged(mode):
+    with tempfile.TemporaryDirectory(prefix="host-bridges-") as folder:
+        root=pathlib.Path(folder)/"app"/"diagnostics"
+        run=subprocess.run([binary,str(root),mode],capture_output=True,timeout=180)
+        assert run.returncode!=0,run  # the program itself faults at the end
+        reports=[json.loads(p.read_text()) for p in sorted(root.glob("*.json"))]
+        leftovers=[p.name for p in root.iterdir() if p.suffix in (".run",".pub")]
+        assert not leftovers,leftovers
+        return reports,run
+
+# A bridge the host kills is a `host` end and gets no report of its own; the program's own report
+# still lists it.
+reports,run=run_bridged("bridged-hang")
+assert len(reports)==1,(len(reports),run.stderr)
+crash=reports[0]
+assert crash["kind"]=="crash" and "bridge" not in crash,crash["kind"]
+assert len(crash["bridges"])==1,crash["bridges"]
+bridge=crash["bridges"][0]
+assert bridge["state"]=="ended" and bridge["ended"]["how"]=="host",bridge
+member=[p for p in crash["plugins"] if p.get("bridge")==bridge["id"]]
+assert [p["plugin_id"] for p in member]==["com.suppleaudio.test.crash"] and member[0]["mode"]=="bridged",member
+assert bridge["instances"]==[member[0]["id"]],(bridge,member)
+assert crash["dropped"]["bridges"]==0 and crash["dropped"]["bridge_reports"]==0,crash["dropped"]
+
+if not sanitized:
+    # A bridge that dies by itself while the program lives gets a report of its own, once: the
+    # four deaths after the first repeat it, and are only counted.
+    reports,run=run_bridged("bridged-crash")
+    assert len(reports)==2,(len(reports),run.stderr)
+    exit_report=[r for r in reports if r["kind"]=="bridge_exit"]
+    program=[r for r in reports if r["kind"]=="crash"]
+    assert len(exit_report)==1 and len(program)==1,[r["kind"] for r in reports]
+    e=exit_report[0]
+    assert e["incident"]!=program[0]["incident"],e["incident"]
+    assert e["bridge"]==1 and e["complete"] is False and e["terminal_context"] is False,e
+    assert e["threads"]==[] and e["commands"]==[],e
+    ended=[b for b in e["bridges"] if b["id"]==e["bridge"]][0]
+    assert ended["state"]=="ended" and ended["ended"]["how"] in ("signal","exception"),ended
+    assert ended["ended"]["code"]==e["code"],(ended,e["code"])
+    member=[p for p in e["plugins"] if p.get("bridge")==e["bridge"]]
+    assert [p["plugin_id"] for p in member]==["com.suppleaudio.test.crash"],member
+    assert e["attribution"]=={"confidence":"bridge_exit","plugin":member[0]["id"]},e["attribution"]
+    assert any("not collected" in u for u in e["unavailable"]),e["unavailable"]
+    # The program's own report knows all five bridges, and that four reports were not written.
+    crash=program[0]
+    assert [b["id"] for b in crash["bridges"]]==[1,2,3,4,5],crash["bridges"]
+    assert all(b["state"]=="ended" and b["ended"]["how"] in ("signal","exception") for b in crash["bridges"]),crash["bridges"]
+    assert crash["dropped"]["bridge_reports"]==4 and crash["dropped"]["bridges"]==0,crash["dropped"]
+    assert any("not reported separately" in u for u in crash["unavailable"]),crash["unavailable"]
+    assert "bridge" not in crash and crash["attribution"]["confidence"]!="bridge_exit",crash["attribution"]
 print("host inventory passed")

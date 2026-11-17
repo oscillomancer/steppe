@@ -240,3 +240,11 @@ compares the installed plug-in file's build id with the report's before anyone i
 how a plug-in loads by itself, and settles what a run that ended well loaded normally in process.
 `plugin.override` (ADR-0081 note) is how a run bridges or disables a plug-in. Contracts:
 `docs/specs/diagnostics.md` "Safe-load in the engine", `docs/specs/engine.md` §5.
+
+*Note, 2026-11-17 (topic 6a, bridge processes):* a report says which bridge process each plug-in ran
+in and how each bridge ended (`exit`, `signal`, `exception`, or `host` when the host killed it, which
+the host records before every kill), and a bridge that dies by a signal or an exception while the
+application lives gets a report of its own, kind `bridge_exit`, under an incident with no run marker:
+at most 3 per run, none that repeats one already reported. It is the host's account of the death, not
+a capture of the bridge, and it is not a restart notice or a place in the suspect window. No protocol
+change, no change to the bridge. Contracts: `docs/specs/diagnostics.md` "Bridge processes (topic 6a)".

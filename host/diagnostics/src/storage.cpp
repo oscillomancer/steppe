@@ -155,7 +155,8 @@ bool reportShape(const json::Value& value, bool tolerant) {
                                          "unavailable", "modules",
                                          "threads",     "plugins",
                                          "commands",    "dropped",
-                                         "attribution", "bridges"};
+                                         "attribution", "bridges",
+                                         "bridge"};
         if (std::find(std::begin(allowed), std::end(allowed), field.key) == std::end(allowed))
             return false;
     }
@@ -173,8 +174,19 @@ bool reportShape(const json::Value& value, bool tolerant) {
         !oneOf("platform", {"linux", "macos", "windows"}) ||
         !oneOf("architecture", {"arm64", "x86_64", "unknown"}) ||
         !(tolerant ? text("kind", 32) && !value.find("kind")->asString().empty()
-                   : oneOf("kind", {"crash", "unexpected_exit"})))
+                   : oneOf("kind", {"crash", "unexpected_exit", "bridge_exit"})))
         return false;
+    // A bridge_exit report (topic 6a) is about one bridge process that died while the worker
+    // lived; no other kind names one.
+    const bool bridgeExit = value.find("kind")->asString() == "bridge_exit";
+    std::int64_t bridgeOrdinal = 0;
+    if (const auto* bridge = value.find("bridge")) {
+        if (!bridgeExit || !bridge->isInt() || bridge->asInt() < 1 || bridge->asInt() > UINT16_MAX)
+            return false;
+        bridgeOrdinal = bridge->asInt();
+    } else if (bridgeExit) {
+        return false;
+    }
     auto integer = [&](const char* key, std::int64_t min, std::int64_t max) {
         const auto* v = value.find(key);
         return v && v->isInt() && v->asInt() >= min && v->asInt() <= max;
@@ -188,6 +200,12 @@ bool reportShape(const json::Value& value, bool tolerant) {
         if (!v || !v->isBool()) return false;
     }
     if (value.find("complete")->asBool()) return false;
+    // It has no capsule, no thread and no fault: only the inventory's account of the bridge.
+    if (bridgeExit &&
+        (value.find("terminal_context")->asBool() || value.find("native_fatal_status")->asBool() ||
+         !value.find("bridges") || !value.find("attribution") ||
+         !bridgeExitShape(*value.find("bridges"), bridgeOrdinal, value.find("code")->asInt())))
+        return false;
     // Thread traces, the plug-in inventory and the command entries have a validated nested
     // schema: a report whose array has another shape is kept, never authority to delete.
     {
@@ -215,10 +233,12 @@ bool reportShape(const json::Value& value, bool tolerant) {
             level && level->isString() &&
             (level->asString() == "fault_in_image" || level->asString() == "active_token" ||
              level->asString() == "concurrent_activity" || level->asString() == "recent_command" ||
-             level->asString() == "unknown");
+             level->asString() == "unknown" || level->asString() == "bridge_exit");
         if ((known || !tolerant || !level || !level->isString()) &&
             !attributionShape(*attribution, *value.find("plugins"), *value.find("commands"),
-                              *threads, value.find("modules")))
+                              *threads, value.find("modules"), bridgeOrdinal))
+            return false;
+        if (bridgeExit && (!level || !level->isString() || level->asString() != "bridge_exit"))
             return false;
     }
     const auto* unavailable = value.find("unavailable");
@@ -448,6 +468,40 @@ Status publishReport(const fs::path& root, const Packet& boot, const Packet* ter
     const auto text = json::writeCanonical(v) + "\n";
     if (text.size() > 4 * 1024 * 1024) return failure();
     SUPPLE_TRY(privatePublish(root / (std::string(boot.incident.data(), 32) + ".json"), text));
+    return pruneReports(root);
+}
+Status publishBridgeReport(const fs::path& root, const Packet& boot, const Inventory& inventory,
+                           std::uint16_t bridge) {
+    const BridgeEntry* entry = inventory.bridge(bridge);
+    if (!entry || !entry->ended) return failure();
+    auto id = incidentId();
+    if (!id) return failure();
+    // Its own incident: the worker's run goes on under the id it has, and no marker belongs to
+    // this one, so a reader counts it the moment it is there.
+    Packet own = boot;
+    std::copy(id->begin(), id->end(), own.incident.begin());
+    auto v = base(own);
+    v["schema"] = "supple.crash-report/1.0";
+    v["kind"] = "bridge_exit";
+    v["bridge"] = static_cast<long long>(bridge);
+    v["native_fatal_status"] = false;
+    v["code"] = static_cast<long long>(entry->status);
+    v["cause"] = 0;
+    v["complete"] = false;
+    v["terminal_context"] = false;
+    v["unavailable"] = json::Value::array();
+    v["unavailable"].asArray().push_back(
+        "the bridge process's threads were not collected: the report is the host's account of it");
+    for (auto& limit : inventory.limits()) v["unavailable"].asArray().push_back(limit);
+    v["threads"] = json::Value::array();
+    v["plugins"] = inventory.pluginsJson(nullptr);
+    v["bridges"] = inventory.bridgesJson();
+    v["commands"] = json::Value::array();
+    v["attribution"] = inventory.bridgeExitAttributionJson(bridge);
+    v["dropped"] = inventory.droppedJson(nullptr);
+    const auto text = json::writeCanonical(v) + "\n";
+    if (text.size() > 4 * 1024 * 1024) return failure();
+    SUPPLE_TRY(privatePublish(root / (std::string(own.incident.data(), 32) + ".json"), text));
     return pruneReports(root);
 }
 // Private overload lets storage tests control filesystem interleavings without

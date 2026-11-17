@@ -73,6 +73,7 @@ ReportSummary summarise(const json::Value& report, const fs::path& path,
     const std::string kind = textOf(report, "kind");
     s.kind = kind == "crash"             ? ReportKind::Crash
              : kind == "unexpected_exit" ? ReportKind::UnexpectedExit
+             : kind == "bridge_exit"     ? ReportKind::BridgeExit
                                          : ReportKind::Other;
     s.platform = textOf(report, "platform");
     if (const auto* build = report.find("build"); build && build->isObject()) {
@@ -87,7 +88,8 @@ ReportSummary summarise(const json::Value& report, const fs::path& path,
         attribution && attribution->isObject()) {
         const std::string level = textOf(*attribution, "confidence");
         static constexpr std::string_view known[]{
-            "fault_in_image", "active_token", "concurrent_activity", "recent_command", "unknown"};
+            "fault_in_image", "active_token", "concurrent_activity",
+            "recent_command", "unknown",      "bridge_exit"};
         s.attribution = std::find(std::begin(known), std::end(known), level) != std::end(known)
                             ? level
                             : "other";
@@ -343,6 +345,9 @@ Result<std::vector<Suspect>> suspects(const fs::path& directory) {
         ++attempts;
         auto loaded = loadReport(c.path);
         if (!loaded) continue;
+        // A bridge's death is not a run that closed: it neither names a suspect nor takes a
+        // place in the window of the last few reports.
+        if (textOf(loaded->value, "kind") == "bridge_exit") continue;
         ++valid;
         if (isSettled(root, c.incident)) continue;
         const auto summary = summarise(loaded->value, c.path, loaded->written);
@@ -587,9 +592,12 @@ Result<std::optional<RestartNotice>> lastRunNotice(const fs::path& directory,
             // A report's role is known by reading it: the newest few are read, and the ones
             // that are another app's, or cannot be read, are nobody's here.
             if (reads >= kNoticeRoleReads) continue;
-            ++reads;
             const auto path = scanned->reportFiles.at(c.incident);
             auto loaded = loadReport(path);
+            // A bridge's death is not the application closing, and does not use up a read: the
+            // folder holds at most 20 reports, so the parsing it costs is bounded anyway.
+            if (loaded && textOf(loaded->value, "kind") == "bridge_exit") continue;
+            ++reads;
             if (!loaded || textOf(loaded->value, "role") != wanted) continue;
             if (!anyHead) {
                 anyHead = true;
@@ -605,7 +613,7 @@ Result<std::optional<RestartNotice>> lastRunNotice(const fs::path& directory,
         ++parsed;
         const auto path = scanned->reportFiles.at(c.incident);
         auto loaded = loadReport(path);
-        if (!loaded) continue;
+        if (!loaded || textOf(loaded->value, "kind") == "bridge_exit") continue;
         if (!anyHead) {
             anyHead = true;
             head = summarise(loaded->value, path, loaded->written);

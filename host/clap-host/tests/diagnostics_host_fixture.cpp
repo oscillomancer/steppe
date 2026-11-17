@@ -4,16 +4,55 @@
 // loads the fixture plug-ins through host::Instance, as the engine does, then faults. The
 // report must list what the host announced, not what a test announced by hand.
 //   argv: <diagnostics directory> loaded
+//         <diagnostics directory> bridged-crash   a bridged plug-in kills its bridge, five times,
+//                                                 then the program faults (topic 6a)
+//         <diagnostics directory> bridged-hang    the host kills a hung bridge, then the
+//                                                 program faults
 #include <supple/diagnostics/frontend.h>
 #include <supple/host/clap_host.h>
+#include <array>
+#include <chrono>
+#include <cstring>
 #include <span>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
 [[gnu::noinline]] void fault() { *reinterpret_cast<volatile int*>(8) = 1; }
 
-int body(int, char**) {
+// A bridged crash plug-in is made to misbehave in its next process(), and the host then makes a
+// main-thread request, which is where it observes the bridge's end.
+bool misbehave(const supple::host::PluginInfo& info, double mode) {
+    auto made = supple::host::Instance::create(info, {}, true);
+    if (!made) return false;
+    supple::host::Instance& instance = **made;
+    if (!instance.activate(48000.0, 1, 64) || !instance.startProcessing()) return false;
+    if (!instance.setParam(1, mode)) return false;
+    std::array<float, 64> in{}, out{};
+    const float* inputs[1]{in.data()};
+    float* outputs[1]{out.data()};
+    supple::host::ProcessBlock block;
+    block.inputs = inputs;
+    block.outputs = outputs;
+    block.inputChannels = block.outputChannels = 1;
+    block.frames = 64;
+    (void)instance.process(block);
+    (void)instance.paramValue(1);  // fails: the bridge is gone, and this is where it is reaped
+    return instance.failed();
+}
+// Waits until the supervisor has written a report, so that what follows cannot overtake it.
+bool awaitReport(const std::filesystem::path& directory) {
+    for (int i = 0; i < 30000; ++i) {
+        std::error_code ec;
+        for (const auto& entry : std::filesystem::directory_iterator(directory, ec))
+            if (entry.path().extension() == ".json") return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
+}
+
+int body(int argc, char** argv) {
     const std::filesystem::path path = FIXTURE_CLAP_PATH;
     auto found = supple::host::scan(std::span<const std::filesystem::path>(&path, 1));
     if (!found) return 2;
@@ -22,6 +61,22 @@ int body(int, char**) {
             if (info.id == id) return info;
         return supple::host::PluginInfo{};
     };
+    const std::string mode = argc >= 3 ? argv[2] : "loaded";
+    if (mode == "bridged-crash" || mode == "bridged-hang") {
+        supple::host::setBridgeExecutable(BRIDGE_PATH);
+        const auto crash = find("com.suppleaudio.test.crash");
+        if (mode == "bridged-hang") {
+            supple::host::setBridgeDeadlineMs(200);
+            if (!misbehave(crash, 2.0)) return 6;
+        } else {
+            for (int i = 0; i < 5; ++i)
+                if (!misbehave(crash, 1.0)) return 7;
+            // The first death has a report of its own; the other four repeat it.
+            if (!awaitReport(argv[1])) return 8;
+        }
+        fault();
+        return 0;
+    }
     // One active, one only created, one that was created and destroyed before the fault.
     auto gain = supple::host::Instance::create(find("com.suppleaudio.test.gain"), {});
     auto crash = supple::host::Instance::create(find("com.suppleaudio.test.crash"), {});

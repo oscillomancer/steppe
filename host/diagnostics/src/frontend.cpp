@@ -156,7 +156,15 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
         if (packet.kind == Message::Expected) expected = packet.code;
         if (const auto hook = supervisorHook()) hook(packet);  // tests only
         if (packet.kind == Message::Instance) {
-            (void)inventory.apply(packet);  // damage is counted inside, never fatal
+            // Damage is counted inside, never fatal. A bridge process that died while the worker
+            // lives gets a report of its own, within the run's limit (topic 6a); the worker's run
+            // and its marker are untouched.
+            const bool applied = inventory.apply(packet);
+            if (applied &&
+                packet.instance.event == static_cast<std::uint8_t>(diagctx::EventKind::Bridge) &&
+                inventory.admitBridgeReport(packet.instance.bridge) && storage &&
+                !publishBridgeReport(options.directory, boot, inventory, packet.instance.bridge))
+                std::fputs("a plug-in bridge died; its local report could not be saved\n", stderr);
             continue;
         }
         if (packet.kind == Message::Terminal) {
