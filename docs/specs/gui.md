@@ -2128,7 +2128,8 @@ pyramid; golden images for widgets and each view in fixed states (offscreen,
 tolerance-aware); scripted UI tests that drive views by node id and assert
 on the resulting session (through the bus) — the same commands the agent
 uses, so a UI test can also be an agent workflow test. TSan for the
-worker/UI handoffs. Plugin GUI embedding keeps the template's host probe
+worker/UI handoffs (not in place: the sanitizer presets build without the
+GUI; `STATUS.md`, Known limits). Plugin GUI embedding keeps the template's host probe
 tests (`*-linux-host-probe`).
 
 ## Platform directory roots (2026-10-14, ADR-0035)
