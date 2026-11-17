@@ -24,6 +24,13 @@ enum class ReportKind { Crash, UnexpectedExit, Other };
 struct ReportPlugin {
     std::string name, vendor, version;
     std::string buildId;  // module identity (ELF build id, Mach-O UUID, PE debug id); may be empty
+    // What lets a project's plug-in be matched to it (topic 7d). `pluginId` is the id the plug-in
+    // gave itself (the report's `plugin_id`; the report's own `id` is only an ordinal), empty
+    // when it was not sent. `kind` is the entry's kind as written (`clap`, `vst3`,
+    // `clap_library`, `vst3_library`, or one this build does not know) and `format` the plug-in
+    // format it stands for (`clap`, `vst3`), empty for a kind this build does not know.
+    // `origin` is as written (`foreign`, `host`, `stock`, `library`, `project`).
+    std::string pluginId, kind, format, origin;
 };
 
 struct ReportSummary {
@@ -92,8 +99,8 @@ Status writeSampleCrash(const std::string& incident, const std::string& plugin,
 // has crashed.
 Status writeSampleReport(const std::string& incident, const std::filesystem::path& directory);
 
-// Deletes one incident whose run is over: its report, its acknowledgement and, when nobody holds
-// it, its run marker (an unreported run is deleted by this too). Errors carry
+// Deletes one incident whose run is over: its report, its acknowledgement, its settlement and, when
+// nobody holds it, its run marker (an unreported run is deleted by this too). Errors carry
 // `diagnostics.no_report` when there is no such finished incident. Idempotent per file.
 Status deleteReport(const std::string& incident, const std::filesystem::path& directory = {});
 
@@ -101,6 +108,43 @@ Status deleteReport(const std::string& incident, const std::filesystem::path& di
 // how many. A run still live, a report still being published and a file that is not a valid
 // report are left alone.
 Result<std::size_t> deleteAllReports(const std::filesystem::path& directory = {});
+
+// Plug-ins the last reports point at (topic 7d, P4-P8). The *window* is the newest
+// `kSuspectReports` valid reports whose run is over, by file time, whether or not they were
+// acknowledged: acknowledging means the user has seen a report, not that the suspicion is
+// resolved. A report in the window yields a suspect when its attribution is `fault_in_image` or
+// `active_token`, it names a plug-in, that plug-in has a format this build knows and an id
+// (otherwise a project's plug-in cannot be matched to it), and it is not *settled*. Everything
+// is derived from the files; nothing is kept in memory.
+inline constexpr std::size_t kSuspectReports = 3;
+// How many report files `suspects` opens at most while it looks for `kSuspectReports` valid
+// ones; files behind that are not read.
+inline constexpr std::size_t kSuspectAttempts = 8;
+struct Suspect {
+    // The key. `buildId` is empty for a report that recorded none (an `active_token` attribution,
+    // every VST3); such a suspect is matched on the version too and is never an exact build.
+    std::string format, pluginId, buildId;
+    // From the newest report that yields it.
+    std::string name, vendor, version, origin;
+    std::string attribution;  // the strongest level among its reports
+    // The reports in the window that yield it, newest first: what `settle` marks.
+    std::vector<std::string> incidents;
+    std::filesystem::file_time_type newest;
+};
+// The suspects, the one with the newest report first. A missing folder gives none; one that is not
+// private to the user is an error. A report that is still being published (T8), one that is not
+// valid and one a newer build wrote with a kind or level this build does not know never yield.
+Result<std::vector<Suspect>> suspects(const std::filesystem::path& directory = {});
+// Marks that the suspicion a report raised is resolved (the user chose to load the plug-in
+// normally, or a run loaded it normally and ended well): a small file beside the report,
+// `<incident>.settled`, that is removed with the report. A report is never rewritten and the
+// acknowledgement is untouched. Idempotent. Only a valid report whose run is over can be settled
+// (`diagnostics.no_report` otherwise), so a settlement never outlives its report except by a race
+// that retention cleans up.
+Status settle(const std::string& incident, const std::filesystem::path& directory = {});
+// Settles every report of the suspect's `incidents`; keeps going past a failure and returns the
+// first.
+Status settle(const Suspect& suspect, const std::filesystem::path& directory = {});
 
 // What a restart shows the user (topic 7b, P1): one plain statement that the last run ended
 // unexpectedly, for the newest incident nobody has acknowledged, and how many earlier ones the

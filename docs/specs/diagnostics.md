@@ -180,8 +180,9 @@ for it. Nothing here changes a report: a report is never rewritten.
 counts `liveRuns`, `pending` and `ignored`. A missing folder is an empty listing; one that is a
 link or not the user's own is an error (`diagnostics.storage`). A report is summarised by incident,
 role, kind (`crash`, `unexpected_exit`, or `other`), platform, the build that wrote it, file time,
-`acknowledged`, the attribution level, the plug-in the attribution names (its own strings and
-build id, any of them possibly empty) and the plug-in count. Reading is tolerant where a newer
+`acknowledged`, the attribution level, the plug-in the attribution names (its own strings, its
+own `plugin_id`, its `kind` and `origin` as written, the plug-in `format` the kind stands for
+(`clap`, `vst3`) and its build id, any of them possibly empty) and the plug-in count. Reading is tolerant where a newer
 build writes more: a kind this build does not know is `other`, an attribution level it does not
 know is `other`, and top-level fields it does not know are ignored; nested parts it does know
 must still validate. Retention keeps the strict check, so a report it cannot fully read is kept
@@ -199,16 +200,46 @@ POSIX probes with a shared `flock` that is released at once, Windows with a shar
 lock (`LockFileEx`) on the byte the holder locked exclusively; a Windows marker being removed by
 its own worker is briefly free, so a reader started at that instant can list that run as
 unreported. Report retention never touches markers. Markers of runs that ended without a report are bounded
-on their own: the newest 20 (by file time) are kept and older ones removed with their `.ack`, when a
+on their own: the newest 20 (by file time) are kept and older ones removed with their `.ack` and
+`.settled`, when a
 report is published and when a run creates its own marker (a supervisor that died publishes
 nothing, so the next start is the moment). A held marker and a marker beside a report are never
-removed by it; deleting a run (P11) still removes its marker.
+removed by it; deleting a run (P11) still removes its marker. The same pass removes an `.ack` or a
+`.settled` whose report and run marker are both gone, which only a write that raced a deletion
+leaves behind.
 
 *Acknowledgement (T2).* `acknowledge(incident)` writes `<incident>.ack`, canonical JSON
 `{"schema":"supple.crash-ack/1.0","incident":…}`, beside the report or the unreported run's
 marker, for an incident that exists and whose run is over; it is idempotent, and a file there
 that is not a valid acknowledgement does not count and is replaced. Retention removes a report's
 `.ack` with it. An acknowledgement of an unreported run stays with its marker.
+
+*Suspects and settling (topic 7d, P4-P8, Q1).* `suspects(directory)` answers which plug-ins the last
+reports point at, derived from the files alone. The *window* is the newest `kSuspectReports` (3)
+valid reports whose run is over (T8), by file time, acknowledged or not: acknowledging means the
+user has seen a report, not that the suspicion is resolved, so a Dismiss never ends one. Files
+are ordered by name and time first and opened newest first until three valid ones are found, at
+most `kSuspectAttempts` (8) of them, so a folder of damaged files costs a bounded read. A report
+in the window yields a suspect when its attribution is `fault_in_image` or `active_token`, it
+names a plug-in with an own `plugin_id` and a format this build knows, and it is not settled;
+every other level, a plug-in with no id, an unreadable report and a report still being published
+yield none, but those that are valid still occupy a place in the window. A suspect is keyed on
+`(format, plugin_id, build id)`; a report with no build id (an `active_token` attribution, every
+VST3) is keyed on the version too, so two versions are two suspects and none is an exact build.
+The suspect carries the name, vendor, version and `origin` of its newest report (P8 decides on
+`origin`: a `stock` plug-in is a Steppe fault, for which the caller offers no bridge), the
+strongest level among its reports, and its `incidents`, newest first.
+`settle(incident)` records that the suspicion a report raised is resolved (the user chose to load
+the plug-in normally, or a run loaded it normally and ended well): `<incident>.settled`, canonical
+JSON `{"schema":"supple.crash-settled/1.0","incident":…}`, written like `.ack` (idempotent; one that
+is not valid does not count and is replaced). It needs a valid report whose run is over
+(`diagnostics.no_report` otherwise), so nothing is settled for a run that left no report, and a
+settled report keeps its place in the window: an older report does not slide back in. The report is
+never rewritten and the acknowledgement is not touched. `settle(suspect)` settles each of the
+suspect's incidents and keeps going past a failure. Retention, deleting a report and
+`deleteAllReports` remove the `.settled` with the report; deleting the reports is how a user clears
+the evidence (P11). The engine that offers the choice, the headless warning and the
+clean-run settlement are the later steps of 7d.
 
 *Commands.* The engine exposes the reader to agents (P9) as `crash.list {limit?}` (the listing:
 reports, unreported runs, `live_runs`, `reports_pending`, `ignored`, each list capped by `limit`,
@@ -238,7 +269,7 @@ or the RPC server, never a one-shot `exec`) writes the same text, plus how to re
 (`crash.list`, `crash.acknowledge`), once to stderr at start, never to a protocol stream, never a
 prompt; the agent decides what to do. Nothing in it acknowledges by itself.
 
-*Deleting (P11).* `deleteReport(incident)` removes a finished incident's report, its `.ack` and,
+*Deleting (P11).* `deleteReport(incident)` removes a finished incident's report, its `.ack`, its `.settled` and,
 when nobody holds it, its run marker (that is how an unreported run is dismissed); the marker goes
 last, so a deletion that stopped half way can be repeated. `deleteAllReports()` does that for every
 incident the listing shows as over and returns the count. A live run, a report still being

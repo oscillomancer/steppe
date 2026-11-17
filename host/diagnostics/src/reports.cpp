@@ -38,15 +38,26 @@ bool incidentName(const std::string& text) {
                return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
            });
 }
-bool isAcknowledged(const fs::path& root, const std::string& incident) {
-    auto text = privateRead(pathFor(root, incident, ".ack"));
+// The small files beside an incident (`<incident>.ack`, `<incident>.settled`): canonical JSON
+// with a schema and the incident id. One that is there but is not that does not count.
+constexpr const char* kAckSchema = "supple.crash-ack/1.0";
+constexpr const char* kSettledSchema = "supple.crash-settled/1.0";
+bool hasMark(const fs::path& root, const std::string& incident, const char* extension,
+             const char* wanted) {
+    auto text = privateRead(pathFor(root, incident, extension));
     if (!text) return false;
     auto value = json::parse(*text);
     if (!value || !value->isObject()) return false;
     const auto* schema = value->find("schema");
     const auto* id = value->find("incident");
-    return schema && schema->isString() && schema->asString() == "supple.crash-ack/1.0" && id &&
-           id->isString() && id->asString() == incident;
+    return schema && schema->isString() && schema->asString() == wanted && id && id->isString() &&
+           id->asString() == incident;
+}
+bool isAcknowledged(const fs::path& root, const std::string& incident) {
+    return hasMark(root, incident, ".ack", kAckSchema);
+}
+bool isSettled(const fs::path& root, const std::string& incident) {
+    return hasMark(root, incident, ".settled", kSettledSchema);
 }
 std::string textOf(const json::Value& object, const char* key) {
     const auto* v = object.find(key);
@@ -89,6 +100,13 @@ ReportSummary summarise(const json::Value& report, const fs::path& path,
                 plugin.name = textOf(item, "name");
                 plugin.vendor = textOf(item, "vendor");
                 plugin.version = textOf(item, "version");
+                plugin.pluginId = textOf(item, "plugin_id");
+                plugin.kind = textOf(item, "kind");
+                plugin.origin = textOf(item, "origin");
+                if (plugin.kind == "clap" || plugin.kind == "clap_library")
+                    plugin.format = "clap";
+                else if (plugin.kind == "vst3" || plugin.kind == "vst3_library")
+                    plugin.format = "vst3";
                 if (const auto* build = item.find("build"); build && build->isObject())
                     plugin.buildId = textOf(*build, "id");
                 s.culprit = std::move(plugin);
@@ -146,15 +164,20 @@ bool isHeld(const Scan& scan, const std::string& incident) {
     const auto marker = scan.markers.find(incident);
     return marker != scan.markers.end() && marker->second == MarkerState::Held;
 }
-// Records the sighting. A file that is there but is not an acknowledgement is replaced:
-// publishing does not overwrite on Windows.
-Status writeAck(const fs::path& root, const std::string& incident) {
-    if (isAcknowledged(root, incident)) return okStatus();
-    if (!privateRemove(pathFor(root, incident, ".ack"))) return storageFailure();
+// Writes the small file `<incident><extension>`. One that is there but is not what it should
+// be is replaced: publishing does not overwrite on Windows.
+Status writeMark(const fs::path& root, const std::string& incident, const char* extension,
+                 const char* schema) {
+    if (hasMark(root, incident, extension, schema)) return okStatus();
+    if (!privateRemove(pathFor(root, incident, extension))) return storageFailure();
     auto value = json::Value::object();
-    value["schema"] = "supple.crash-ack/1.0";
+    value["schema"] = schema;
     value["incident"] = incident;
-    return privatePublish(pathFor(root, incident, ".ack"), json::writeCanonical(value) + "\n");
+    return privatePublish(pathFor(root, incident, extension), json::writeCanonical(value) + "\n");
+}
+// Records the sighting.
+Status writeAck(const fs::path& root, const std::string& incident) {
+    return writeMark(root, incident, ".ack", kAckSchema);
 }
 }  // namespace
 fs::path defaultDirectory() {
@@ -241,12 +264,99 @@ Status acknowledge(const std::string& incident, const fs::path& directory) {
         return noReport(incident);
     return writeAck(root, incident);
 }
+Status settle(const std::string& incident, const fs::path& directory) {
+    const fs::path root = directory.empty() ? defaultDirectory() : directory;
+    if (root.empty() || !incidentName(incident)) return noReport(incident);
+    SUPPLE_TRY(checkDirectoryForReading(root));
+    // Only a report that exists and whose run is over (T8): a settlement is about what a report
+    // said, so there is nothing to settle for a run that left no report.
+    if (probeMarker(pathFor(root, incident, ".run")) == MarkerState::Held)
+        return noReport(incident);
+    if (!loadReport(pathFor(root, incident, ".json"))) return noReport(incident);
+    return writeMark(root, incident, ".settled", kSettledSchema);
+}
+Status settle(const Suspect& suspect, const fs::path& directory) {
+    Status first = okStatus();
+    for (const auto& incident : suspect.incidents) {
+        Status st = settle(incident, directory);
+        if (!st && first) first = st;
+    }
+    return first;
+}
+Result<std::vector<Suspect>> suspects(const fs::path& directory) {
+    const fs::path root = directory.empty() ? defaultDirectory() : directory;
+    if (root.empty()) return std::vector<Suspect>();
+    SUPPLE_TRY(checkDirectoryForReading(root));
+    std::error_code ec;
+    if (!fs::exists(fs::symlink_status(root, ec))) return std::vector<Suspect>();
+    auto scanned = scanFolder(root);
+    if (!scanned) return scanned.error();
+    // Names and file times first, newest first, as the notice orders them; only then are the
+    // newest few opened. A report whose run is still live is not part of the window.
+    struct Candidate {
+        std::string incident;
+        fs::path path;
+        fs::file_time_type time;
+    };
+    std::vector<Candidate> found;
+    for (const auto& [incident, path] : scanned->reportFiles) {
+        if (isHeld(*scanned, incident)) continue;
+        std::error_code e;
+        const auto time = fs::last_write_time(path, e);
+        if (!e) found.push_back({incident, path, time});
+    }
+    std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) {
+        return a.time == b.time ? a.incident > b.incident : a.time > b.time;
+    });
+    std::vector<Suspect> out;
+    std::size_t valid = 0, attempts = 0;
+    for (const auto& c : found) {
+        if (valid >= kSuspectReports || attempts >= kSuspectAttempts) break;
+        ++attempts;
+        auto loaded = loadReport(c.path);
+        if (!loaded) continue;
+        ++valid;
+        if (isSettled(root, c.incident)) continue;
+        const auto summary = summarise(loaded->value, c.path, loaded->written);
+        const bool named =
+            summary.attribution == "fault_in_image" || summary.attribution == "active_token";
+        if (!named || !summary.culprit) continue;
+        const ReportPlugin& plugin = *summary.culprit;
+        if (plugin.format.empty() || plugin.pluginId.empty()) continue;
+        // Without a build id the version stands in for it, so two versions are two suspects.
+        const auto same = [&](const Suspect& s) {
+            return s.format == plugin.format && s.pluginId == plugin.pluginId &&
+                   s.buildId == plugin.buildId &&
+                   (!s.buildId.empty() || s.version == plugin.version);
+        };
+        auto it = std::find_if(out.begin(), out.end(), same);
+        if (it == out.end()) {
+            Suspect s;
+            s.format = plugin.format;
+            s.pluginId = plugin.pluginId;
+            s.buildId = plugin.buildId;
+            s.name = plugin.name;
+            s.vendor = plugin.vendor;
+            s.version = plugin.version;
+            s.origin = plugin.origin;
+            s.attribution = summary.attribution;
+            s.newest = c.time;
+            out.push_back(std::move(s));
+            it = out.end() - 1;
+        }
+        if (summary.attribution == "fault_in_image") it->attribution = "fault_in_image";
+        it->incidents.push_back(c.incident);
+    }
+    return out;
+}
+
 namespace {
 // The files of an incident whose run is over. The marker goes last: while it is there the
 // incident is still found, so a deletion that stops half way can be repeated.
 Status removeIncident(const fs::path& root, const std::string& incident) {
     if (!privateRemove(pathFor(root, incident, ".json")) ||
-        !privateRemove(pathFor(root, incident, ".ack")))
+        !privateRemove(pathFor(root, incident, ".ack")) ||
+        !privateRemove(pathFor(root, incident, ".settled")))
         return storageFailure();
     if (probeMarker(pathFor(root, incident, ".run")) == MarkerState::Free &&
         !privateRemove(pathFor(root, incident, ".run")))

@@ -461,6 +461,7 @@ Status pruneReports(const fs::path& root,
         if (!privateRemove(report.path)) return failure();
         privateRemove(
             fs::path(report.path).replace_extension(".ack"));  // its acknowledgement, if any
+        privateRemove(fs::path(report.path).replace_extension(".settled"));  // and settlement
         --count;
         total -= report.bytes;
     }
@@ -474,7 +475,7 @@ Status pruneMarkers(const fs::path& root) {
     std::vector<Entry> stale;
     std::error_code ec;
     std::set<std::string> reported;
-    std::vector<fs::path> markers;
+    std::vector<fs::path> markers, marks;
     for (auto it = fs::directory_iterator(root, ec); !ec && it != fs::directory_iterator();
          it.increment(ec)) {
         const auto path = it->path();
@@ -482,9 +483,12 @@ Status pruneMarkers(const fs::path& root) {
         if (stem.empty()) continue;
         if (path.extension() == ".json") reported.insert(stem);
         if (path.extension() == ".run") markers.push_back(path);
+        if (path.extension() == ".ack" || path.extension() == ".settled") marks.push_back(path);
     }
     if (ec) return failure();
+    std::set<std::string> running;
     for (const auto& path : markers) {
+        running.insert(reportStem(path));
         // Only a run that ended and left no report counts: a held marker is a live run, and a
         // marker beside a report is that report's business.
         if (reported.count(reportStem(path)) || probeMarker(path) != MarkerState::Free) continue;
@@ -492,6 +496,11 @@ Status pruneMarkers(const fs::path& root) {
         const auto time = fs::last_write_time(path, e);
         if (!e) stale.push_back({path, time});
     }
+    // An acknowledgement or a settlement whose report and run marker are both gone belongs to
+    // nothing: a deletion or retention raced with the write. It is removed.
+    for (const auto& path : marks)
+        if (!reported.count(reportStem(path)) && !running.count(reportStem(path)))
+            privateRemove(path);
     if (stale.size() <= kKeepUnreportedRuns) return okStatus();
     std::sort(stale.begin(), stale.end(), [](const auto& a, const auto& b) {
         return a.time == b.time ? a.path > b.path : a.time > b.time;
@@ -499,6 +508,7 @@ Status pruneMarkers(const fs::path& root) {
     for (std::size_t i = kKeepUnreportedRuns; i < stale.size(); ++i) {
         if (!privateRemove(stale[i].path)) return failure();
         privateRemove(fs::path(stale[i].path).replace_extension(".ack"));
+        privateRemove(fs::path(stale[i].path).replace_extension(".settled"));
     }
     return okStatus();
 }
