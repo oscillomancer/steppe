@@ -9,14 +9,15 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "supple/engine/app.h"
+#include "supple/ui/list.h"
 #include "supple/ui/node.h"
 
 namespace supple::ui {
 class Root;
-class List;
 class TextField;
 class Label;
 }  // namespace supple::ui
@@ -53,6 +54,12 @@ class PluginBrowser {
                                             std::function<void(const std::string&)> onAdd);
     void reload();       // re-reads the favourites file and the scan cache
     void focusSearch();  // typing searches
+    // A row dragged out of the list (ui::List::onDrag): the plugin's id and
+    // name, the phase and the pointer. Set before the browser is built; the
+    // owner draws the feedback and takes the drop.
+    std::function<void(const std::string& id, const std::string& name, ui::DragPhase phase,
+                       ui::Point at)>
+        onDrag;
 
     // Frame pass: runs a rescan that was requested last frame (never inside the
     // click that asked for it, so "Scanning…" paints first).
@@ -111,7 +118,8 @@ class PluginBrowser {
     ui::Label* detailLabel_ = nullptr;
     ui::Label* title_ = nullptr;
     std::string titleText_ = "Add plugin";
-    std::string prefix_ = "browser";  // of its node ids
+    std::pair<std::string, std::string> dragged_;  // the plugin in a drag: id, name
+    std::string prefix_ = "browser";               // of its node ids
     bool embedded_ = false;
     std::string detail_;
     std::string scanJob_;  // the background scan being followed

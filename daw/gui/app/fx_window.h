@@ -71,7 +71,11 @@ class FxWindow {
     // every track selected in `ui` (which must outlive the window) as one
     // undo step, the browser stays, and its status line says what happened.
     // Built once.
-    std::unique_ptr<ui::Node> buildSideBrowser(const UiState& ui);
+    // `drag`, when given, hears a row dragged out of its list.
+    std::unique_ptr<ui::Node> buildSideBrowser(
+        const UiState& ui, std::function<void(const std::string& plugin, const std::string& name,
+                                              ui::DragPhase, ui::Point)>
+                               drag = {});
     PluginBrowser& sideBrowser() { return *sideBrowser_; }
     // Adds a plugin to every selected track, as one undo step. Says which
     // tracks it went on.

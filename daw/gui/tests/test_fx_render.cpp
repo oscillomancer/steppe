@@ -984,7 +984,14 @@ TEST_CASE("the side panel's browser adds to the selected tracks, and stays") {
     const model::Id one = f.addTrack("One"), two = f.addTrack("Two");
     gui::SidePanel side(*f.root);
     int shown = 0;
-    side.addTab("browser", "Browser", f.fx->buildSideBrowser(f.ui), [&](bool on) {
+    struct Dragged {
+        std::string plugin, name;
+        ui::DragPhase phase;
+    };
+    std::vector<Dragged> dragged;
+    auto hear = [&](const std::string& plugin, const std::string& name, ui::DragPhase phase,
+                    ui::Point) { dragged.push_back({plugin, name, phase}); };
+    side.addTab("browser", "Browser", f.fx->buildSideBrowser(f.ui, hear), [&](bool on) {
         if (on) {
             ++shown;
             f.fx->sideBrowser().reload();
@@ -1071,6 +1078,27 @@ TEST_CASE("the side panel's browser adds to the selected tracks, and stays") {
     CHECK(f.app->head().tracks.find(one)->chain.size() == 3);
     CHECK(f.app->head().tracks.find(two)->chain.size() == 2);
     CHECK(f.historyCount() == before + 3);
+
+    // A row dragged out is told to the owner with the plugin's id and name;
+    // the browser itself adds nothing. The plugin is the one the drag began
+    // on, even when the rows change under it.
+    before = f.historyCount();
+    const std::string plugin = f.fx->sideBrowser().shown().front();
+    f.root->pointer({ui::PointerEvent::Type::Down, first, 1, 1});
+    f.root->pointer({ui::PointerEvent::Type::Move, {first.x - 40, first.y}, 1, 1});
+    REQUIRE(dragged.size() == 1);
+    CHECK(dragged[0].phase == ui::DragPhase::Begin);
+    CHECK(dragged[0].plugin == plugin);
+    CHECK(dragged[0].name.find("Hickory") != std::string::npos);
+    typed("no such plugin");
+    CHECK(f.fx->sideBrowser().rowCount() == 0);
+    f.root->pointer({ui::PointerEvent::Type::Move, {first.x - 300, first.y}, 1, 1});
+    f.root->pointer({ui::PointerEvent::Type::Up, {first.x - 300, first.y}, 1, 1});
+    REQUIRE(dragged.size() == 3);
+    CHECK(dragged[2].phase == ui::DragPhase::End);
+    CHECK(dragged[2].plugin == plugin);
+    CHECK(f.historyCount() == before);
+    typed("Hickory");
 
     // The strip's popup browser opens beside it; each keeps its own search.
     REQUIRE(f.fx->openToAdd(f.ui, json::Value(two.str())));

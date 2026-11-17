@@ -254,6 +254,25 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
     return shell;
 }
 
+std::optional<TrackTarget> Shell::trackTargetAt(ui::Point p) const {
+    if (!arrange_ || !arrange_->tcpPanel().visibleInTree()) return std::nullopt;
+    // The rows as shown: the control panel and the lanes side by side,
+    // without the band at the panel's foot, which rows pass under.
+    const ui::Rect tcp = arrange_->tcpPanel().bounds(), lanes = arrange_->lanesRect();
+    const ui::Rect area{tcp.x, tcp.y, lanes.right() - tcp.x, tcp.h};
+    if (!area.contains(p)) return std::nullopt;
+    if (p.x < tcp.right() && p.y >= tcp.bottom() - views::TcpPanel::kFootHeight)
+        return std::nullopt;
+    const auto& rows = arrange_->trackLayout().rows();
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        const ui::Rect row = arrange_->tcpRowRect(i);
+        if (p.y < row.y || p.y >= row.bottom()) continue;
+        if (rows[i].env || !app_.head().tracks.find(rows[i].track)) return std::nullopt;
+        return TrackTarget{rows[i].track, ui::Rect{area.x, row.y, area.w, row.h}.intersect(area)};
+    }
+    return std::nullopt;
+}
+
 void Shell::installOverlay(ui::Root& root) {
     if (arrange_) arrange_->installOverlay(root);
 }

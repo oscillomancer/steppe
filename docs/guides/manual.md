@@ -379,7 +379,9 @@ and the **History**. It stays closed until you ask for it:
   your plug-ins, with the stock ones and your favourites first. Type to
   search by name, maker or kind ("reverb"). Select one or more tracks, then
   press Enter, double-click a plug-in or click **Add** to put it on them.
-  The Browser stays open, so you can add another. **Favourite** keeps a
+  The Browser stays open, so you can add another. You can also drag a
+  plug-in from the list onto a track, in the arrangement or on its mixer
+  strip; the track it will land on is outlined. **Favourite** keeps a
   plug-in at the top; **Rescan** looks for newly installed ones.
 - **View > History and command log**, or **Ctrl+H**, opens it on the History:
   the versions you can step back to, the branches, and every command with who

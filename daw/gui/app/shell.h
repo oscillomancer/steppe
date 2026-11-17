@@ -13,6 +13,7 @@
 
 #include "app_actions.h"
 #include "meter_feed.h"
+#include "plugin_drag.h"
 #include "selection_edit.h"
 #include "supple/engine/app.h"
 #include "supple/json/value.h"
@@ -54,6 +55,10 @@ class Shell {
     void sync(bool event = true);
     std::optional<std::chrono::steady_clock::time_point> nextDeadline() const;
     views::ArrangeView* arrange() const { return arrange_; }
+    // The track row under `p`, its control panel and its lane together, as
+    // a place to drop something on the track (a plugin from the side
+    // panel's browser). An automation lane is not one.
+    std::optional<TrackTarget> trackTargetAt(ui::Point p) const;
     json::Value saveTransportLayout() const;
     void loadTransportLayout(const json::Value& value);
     // The meters the TCP shows; the app sets the source (EngineApp::meters())

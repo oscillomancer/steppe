@@ -171,7 +171,10 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   its subtree (`Root::releaseWithin`), sending `Cancel` to the captured
   control. Continuous edits end as one undo step; uncommitted drag previews
   and pending button clicks are discarded. Focus and capture outside the
-  subtree are preserved. A press outside the topmost popup closes every
+  subtree are preserved. A `List` reports a row dragged out of it
+  (`onDrag`: Begin once a left press has moved more than `kDragSlop`, 4
+  units, then Move, then End at the release or Cancel) for its owner to
+  draw and to take the drop; with no listener a press only selects. A press outside the topmost popup closes every
   popup above the one it lands in (all of them when it lands in none) and
   reaches nothing else, so a dialog's menu button, or any other spot in the
   dialog, closes the open menu rather than opening a second one. A closing
@@ -1807,8 +1810,22 @@ browser stays open with its search as typed, and its status line
 *N* tracks", "Select a track first" when no track is selected, or the
 command's message. `ui.browser` puts the keyboard in the search field; a
 panel restored on this tab does not take it. The popup browser of a
-strip's "+" (§4.5) is unchanged and may be open at the same time. Patches,
-media, files and dragging onto a track are not there yet.
+strip's "+" (§4.5) is unchanged and may be open at the same time.
+
+A row **drags onto a track**. A left press on a row that moves more than
+four units (`ui::List::onDrag`, `List::kDragSlop`) starts the drag
+(`PluginDrag`): a chip with the plugin's name follows the pointer on the
+overlay layer (`plugin.drag`), and the track under it is outlined in the
+focus colour. A track is under the pointer on its row of the arrange view,
+the control panel and the lane together (`Shell::trackTargetAt`; not an
+automation lane, the ruler or the band at the panel's foot), or on its
+strip while the mixer is shown (`Mixer::trackTargetAt`), the strip first.
+The release runs one `fx.add {track, plugin}` on that track only, whatever
+is selected: one undo step, and the status line says "Added to *track*" or
+the command's message. A release anywhere else, and a cancelled gesture,
+do nothing. The plugin is the one the drag began on, even when the list
+changes under it (a search, a rescan that finishes). Patches, media and
+files are not there yet.
 
 **Inspector.** What is selected, read from the selection and the session
 each pass (`inspectorSubject`), and for one item the fields that edit it.

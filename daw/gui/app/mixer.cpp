@@ -1331,6 +1331,16 @@ const Mixer::Strip* Mixer::stripAt(ui::Point p) const {
     return nullptr;
 }
 
+std::optional<TrackTarget> Mixer::trackTargetAt(ui::Point p) const {
+    if (!visible() || !panel_->visibleInTree()) return std::nullopt;
+    const Strip* strip = stripAt(p);
+    const auto id = strip ? model::Id::parse(strip->track) : std::nullopt;
+    if (!id || !app_.head().tracks.find(*id)) return std::nullopt;
+    const ui::Rect clip =
+        strip->node->parent() ? strip->node->parent()->bounds() : strip->node->bounds();
+    return TrackTarget{*id, strip->node->bounds().intersect(clip)};
+}
+
 void Mixer::dragStrip(const std::string& track, DragPhase phase, ui::Point p) {
     DragView& d = *drag_;
     if (phase == DragPhase::Cancel) return endDrag(false);

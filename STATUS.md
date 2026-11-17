@@ -592,8 +592,9 @@ instructions are in `docs/guides/installing.md`.
   the fields they share, edited as one undo step; for tracks their name,
   colour, volume and pan through `track.set`), the Browser (the plugin
   browser as a tab: a chosen plugin goes on every selected track as one
-  undo step, and the browser stays; patches, media, files and dragging onto
-  a track are not there yet) and the History as tabs; its tab,
+  undo step, and the browser stays; a row drags onto a track's row or
+  mixer strip; patches, media and files are not there yet) and the History
+  as tabs; its tab,
   width and open state are saved per project. Help exports the bundled
   skill as a copy or link, shows this copy's MCP commands and JSON, and registers
   its running-app server with Claude Code, Codex or Hermes on a background

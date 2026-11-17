@@ -168,6 +168,19 @@ std::unique_ptr<ui::Node> PluginBrowser::buildPage() {
     search_->onOtherKey = [this](const ui::KeyEvent& e) { return list_->onKey(e); };
     list_->onActivate = [this](std::size_t row) { activate(row); };
     list_->onSelect = [this](std::size_t) { updateDetail(); };
+    if (onDrag)
+        list_->onDrag = [this](std::size_t row, ui::DragPhase phase, ui::Point at) {
+            // The plugin is the one the drag began on, whatever the rows
+            // have become since (a search, a rescan).
+            if (phase == ui::DragPhase::Begin) {
+                if (row >= rows_.size()) return;
+                dragged_ = {rows_[row].entry->id, rows_[row].entry->name};
+            }
+            if (dragged_.first.empty()) return;
+            const auto [plugin, name] = dragged_;
+            if (phase == ui::DragPhase::End || phase == ui::DragPhase::Cancel) dragged_ = {};
+            if (auto drag = onDrag) drag(plugin, name, phase, at);
+        };
     auto& footer = page->emplace<ui::Node>(id("footer"));
     footer.layout.dir = ui::Layout::Dir::Row;
     footer.layout.height = ui::SizeRule::fixed(28);

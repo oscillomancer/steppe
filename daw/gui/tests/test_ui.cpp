@@ -469,6 +469,80 @@ TEST_CASE("a text field edits by UTF-8 character and word, with selection and cl
     CHECK(field.text() == "hello hello 日本");
 }
 
+TEST_CASE("a list row dragged past the slop reports its drag; a click does not") {
+    REQUIRE_GL();
+    Root root(*fixture().window, fixture().fonts, Theme::dark());
+    auto content = std::make_unique<Node>("root");
+    content->layout.dir = Layout::Dir::Column;
+    auto& list = content->emplace<List>("list");
+    list.rowHeight = 20;
+    list.setCount(50);
+    struct Heard {
+        std::size_t row;
+        DragPhase phase;
+        Point at;
+    };
+    std::vector<Heard> heard;
+    std::size_t activated = 0;
+    list.onActivate = [&](std::size_t) { ++activated; };
+    root.setContent(std::move(content));
+    root.frame(false);
+    const Rect b = list.bounds();
+    const Point press{b.x + 30, b.y + 2 * 20 + 10};  // the third row
+    auto send = [&](PointerEvent::Type type, Point at, int clicks = 1) {
+        root.pointer({type, at, 1, clicks});
+    };
+    // No listener: a press and a move only select.
+    send(PointerEvent::Type::Down, press);
+    send(PointerEvent::Type::Move, {press.x + 40, press.y + 40});
+    send(PointerEvent::Type::Up, {press.x + 40, press.y + 40});
+    CHECK(list.selected() == std::optional<std::size_t>(2));
+
+    list.onDrag = [&](std::size_t row, DragPhase phase, Point at) {
+        heard.push_back({row, phase, at});
+    };
+    // A click, and a press that stays within the slop: no drag.
+    send(PointerEvent::Type::Down, press);
+    send(PointerEvent::Type::Move, {press.x + List::kDragSlop, press.y - List::kDragSlop});
+    send(PointerEvent::Type::Up, {press.x + List::kDragSlop, press.y});
+    CHECK(heard.empty());
+    // Past it: Begin once, then Move, then End where it was released, far
+    // outside the list; the row is the one pressed throughout.
+    send(PointerEvent::Type::Down, press);
+    send(PointerEvent::Type::Move, {press.x + 6, press.y});
+    send(PointerEvent::Type::Move, {press.x - 200, press.y + 300});
+    send(PointerEvent::Type::Up, {press.x - 210, press.y + 310});
+    REQUIRE(heard.size() == 3);
+    CHECK(heard[0].phase == DragPhase::Begin);
+    CHECK(heard[1].phase == DragPhase::Move);
+    CHECK(heard[2].phase == DragPhase::End);
+    for (const Heard& h : heard) CHECK(h.row == 2);
+    CHECK(heard[2].at.x == press.x - 210);
+    CHECK(heard[2].at.y == press.y + 310);
+    CHECK(list.selected() == std::optional<std::size_t>(2));
+    // Motion after the release is not a drag.
+    send(PointerEvent::Type::Move, {press.x + 50, press.y});
+    CHECK(heard.size() == 3);
+    // A gesture taken away ends it with Cancel.
+    heard.clear();
+    send(PointerEvent::Type::Down, press);
+    send(PointerEvent::Type::Move, {press.x + 20, press.y});
+    root.releaseWithin(&list);
+    REQUIRE(heard.size() == 2);
+    CHECK(heard[1].phase == DragPhase::Cancel);
+    send(PointerEvent::Type::Up, press);
+    CHECK(heard.size() == 2);
+    // A double click still activates, and its second press starts no drag.
+    heard.clear();
+    send(PointerEvent::Type::Down, press);
+    send(PointerEvent::Type::Up, press);
+    send(PointerEvent::Type::Down, press, 2);
+    send(PointerEvent::Type::Move, {press.x + 30, press.y});
+    send(PointerEvent::Type::Up, {press.x + 30, press.y}, 2);
+    CHECK(activated == 1);
+    CHECK(heard.empty());
+}
+
 TEST_CASE("a list paints only visible rows and navigates by keys") {
     REQUIRE_GL();
     Root root(*fixture().window, fixture().fonts, Theme::dark());

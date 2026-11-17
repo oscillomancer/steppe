@@ -671,7 +671,10 @@ Status FxWindow::openToAdd(const UiState& ui, const json::Value& prompt) {
     return {};
 }
 
-std::unique_ptr<ui::Node> FxWindow::buildSideBrowser(const UiState& ui) {
+std::unique_ptr<ui::Node> FxWindow::buildSideBrowser(
+    const UiState& ui,
+    std::function<void(const std::string&, const std::string&, ui::DragPhase, ui::Point)> drag) {
+    sideBrowser_->onDrag = std::move(drag);
     return sideBrowser_->buildEmbedded("side.browser", [this, &ui](const std::string& plugin) {
         const auto added = addToSelection(ui, plugin);
         std::string status;

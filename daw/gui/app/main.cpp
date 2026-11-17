@@ -527,6 +527,16 @@ int main(int argc, char** argv) {
             },
             [&](model::Id rack) { racks.open(rack); }},
         gui::Favourites::defaultFile(product::kSlug));
+    // A plugin dragged out of the browser lands on the strip or the track
+    // row under the pointer (gui.md §4.14).
+    gui::PluginDrag pluginDrag(root, dispatcher);
+    pluginDrag.addTargets([&mixer](ui::Point p) { return mixer.trackTargetAt(p); });
+    pluginDrag.addTargets([&shell](ui::Point p) { return shell.trackTargetAt(p); });
+    pluginDrag.onDrop = [&](const model::Id& track, const Status& added) {
+        fxWindow.sideBrowser().setStatus(
+            added ? "Added to " + model::trackLabel((*app)->head(), track) : added.error().message);
+        if (!added && appActions.onError) appActions.onError("fx.add: " + added.error().message);
+    };
     appActions.addUi("ui.browser", "View: browser", [&] {
         side.toggle("browser");
         if (side.showing("browser")) fxWindow.sideBrowser().focusSearch();
@@ -612,9 +622,15 @@ int main(int argc, char** argv) {
         center.add(mixer.build());
         side.addTab("inspector", "Inspector", inspector.build(),
                     [&inspector](bool on) { inspector.setVisible(on); });
-        side.addTab("browser", "Browser", fxWindow.buildSideBrowser(uiState), [&fxWindow](bool on) {
-            if (on) fxWindow.sideBrowser().reload();
-        });
+        side.addTab(
+            "browser", "Browser",
+            fxWindow.buildSideBrowser(
+                uiState, [&pluginDrag](const std::string& plugin, const std::string& name,
+                                       ui::DragPhase phase,
+                                       ui::Point at) { pluginDrag.drag(plugin, name, phase, at); }),
+            [&fxWindow](bool on) {
+                if (on) fxWindow.sideBrowser().reload();
+            });
         side.addTab("history", "History", history.build(),
                     [&history](bool on) { history.setVisible(on); });
         body.add(side.build());
