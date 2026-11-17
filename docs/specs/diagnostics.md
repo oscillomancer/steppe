@@ -318,6 +318,9 @@ that covers none of them is `no_symbols`, with the reason stated.
 A report may name one image in many module entries; its symbol table is loaded once per
 distinct id and shared, and the functions held across all modules of one report are limited
 to 16 million (a module read after that is `unreadable` and says so).
+The scan only reads headers and may be long past when a file is read, so each file's identity
+is read again from the handle its symbols are read from; one that no longer holds the module's
+image (a rebuild rewrote it) is `unreadable`, "the file changed after it was scanned".
 
 Function names only: no DWARF, no line tables, no PDB. ELF reads `.symtab`, else `.dynsym`
 (function and indirect-function symbols in executable sections); Mach-O reads `LC_SYMTAB`

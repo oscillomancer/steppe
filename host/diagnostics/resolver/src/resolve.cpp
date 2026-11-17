@@ -335,9 +335,24 @@ Resolution resolve(const Report& report, const std::vector<Candidate>& candidate
                 continue;
             if (++tried > kMaxFilesPerId) break;
             const FileSource source(candidate.path);
-            auto table = source.ok() ? readSymbols(source, candidate.image, limits)
-                                     : Result<SymbolTable>(Error("symbols.read_failed",
-                                                                 "the file can no longer be read"));
+            // The scan may be long past: a rebuild can have rewritten the file since. Its
+            // identity is read again from the handle the symbols are read from, and must
+            // still be the one the report names, at the same place.
+            const auto same = [&] {
+                for (const auto& image : identify(source, limits))
+                    if (image.format == candidate.image.format && image.id == candidate.image.id &&
+                        image.offset == candidate.image.offset &&
+                        image.length == candidate.image.length)
+                        return true;
+                return false;
+            };
+            auto table = !source.ok() ? Result<SymbolTable>(Error("symbols.read_failed",
+                                                                  "the file can no longer be read"))
+                         : !same() ? Result<SymbolTable>(
+                                         Error("symbols.changed",
+                                               "the file changed after it was scanned, so it is no "
+                                               "longer the build the report names"))
+                                   : readSymbols(source, candidate.image, limits);
             if (!table) {
                 fail(candidate,
                      table.error().code == "symbols.no_symbols" ? ModuleState::NoSymbols

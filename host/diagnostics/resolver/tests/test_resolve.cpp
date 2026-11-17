@@ -368,6 +368,31 @@ TEST_CASE("a module named many times is loaded once, and the total is bounded") 
     CHECK(resolve(two, both).modules[1].state == ModuleState::Resolved);
 }
 
+TEST_CASE("a file replaced after the scan is not read under the old identity") {
+    Dir dir("crash-resolver-swap");
+    write(dir.path / "app", elfWith(kIdBytes));
+    ScanStats stats;
+    const auto candidates = scan({dir.path}, stats);
+    const auto report = parseReport(reportText("elf", kId));
+    REQUIRE(report);
+    REQUIRE(resolve(*report, candidates).modules[0].state == ModuleState::Resolved);
+    // A rebuild rewrites the binary between the scan and the read: another id, larger.
+    images::ElfSpec other;
+    other.buildId = {9, 9, 9, 9, 9, 9, 9, 9};
+    other.functions = {{"from_the_wrong_build", 0x1100, 0x40},
+                       {"also_wrong", 0x1200, 0x20},
+                       {"more", 0x1300, 0x20}};
+    write(dir.path / "app", images::elf(other));
+    const auto swapped = resolve(*report, candidates);
+    CHECK(swapped.modules[0].state == ModuleState::Unreadable);
+    CHECK(swapped.modules[0].error.find("changed") != std::string::npos);
+    CHECK_FALSE(swapped.modules[0].table);
+    CHECK_FALSE(swapped.name(report->threads[0].frames[0]));
+    // The same image written again is still the file that was scanned.
+    write(dir.path / "app", elfWith(kIdBytes));
+    CHECK(resolve(*report, candidates).modules[0].state == ModuleState::Resolved);
+}
+
 TEST_CASE("a return address at offset zero has no call before it") {
     Report report;
     report.modules.push_back({Format::Elf, kId});
