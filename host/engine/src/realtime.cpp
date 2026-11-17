@@ -105,6 +105,7 @@ Status DummyBackend::start(const BackendConfig& config, Callback callback) {
         return Error("backend.running", "the backend is already running", {},
                      "stop this backend before starting it again or changing its configuration");
     config_ = config;
+    if (options_.grantedRate > 0) config_.sampleRate = options_.grantedRate;
     callback_ = std::move(callback);
     outputs_.assign(config.outputs, std::vector<float>(config.blockSize, 0.0f));
     outPtrs_.clear();

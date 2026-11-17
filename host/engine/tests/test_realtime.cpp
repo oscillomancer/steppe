@@ -3341,6 +3341,46 @@ TEST_CASE("meters show a monitored input while the transport is stopped" *
     engine.stop();
 }
 
+TEST_CASE("the audio path runs at the rate the device granted, not the one requested" *
+          doctest::description("rt")) {
+    // The device grants 44.1 kHz for a 48 kHz request: the count-in's clicks
+    // (synthesised on the audio thread at the engine's device rate) must be
+    // those of a device asked for 44.1 kHz in the first place.
+    constexpr std::uint32_t kBlock = 256;
+    constexpr std::int64_t kBar = 88200, kCycles = kBar / kBlock + 8;
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        auto runOnce = [&](double requested, double granted) {
+            auto pool = makePool();
+            MediaCache media;
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual,
+                                  .captureFrames = kCycles * kBlock,
+                                  .grantedRate = granted});
+            Engine engine(pool, media, options);
+            REQUIRE(engine.start(backend, {.sampleRate = requested, .blockSize = kBlock}));
+            CHECK(engine.config().sampleRate == 44100.0);
+            REQUIRE(engine.load(synthSession(0.0)));
+            engine.setMetronome(false, 0.0);  // the count clicks regardless
+            engine.playCountIn(kBar, kBar / 4, 4);
+            if (options.anticipative)
+                runAhead(engine, backend, kCycles, kBlock);
+            else
+                backend.run(kCycles);
+            engine.stop();
+            return backend.capture().channels[0];
+        };
+        const auto asked = runOnce(44100.0, 0.0);
+        const auto granted = runOnce(48000.0, 44100.0);
+        REQUIRE(asked.size() == granted.size());
+        REQUIRE(std::any_of(asked.begin(), asked.begin() + kBar,
+                            [](float v) { return std::fabs(v) > 0.05f; }));
+        std::size_t differ = 0;
+        for (std::size_t i = 0; i < static_cast<std::size_t>(kBar); ++i)
+            differ += asked[i] != granted[i];
+        CHECK(differ == 0);
+    }
+}
+
 TEST_CASE("a count-in clicks a bar while the position holds, then plays and records on time" *
           doctest::description("rt")) {
     // 120 BPM 4/4 at 48 kHz: a beat is 24000 frames, the bar 96000. Block 333

@@ -384,6 +384,9 @@ class DummyBackend : public Backend {
         Mode mode = Mode::Manual;
         bool paced = false;              // Thread mode: sleep one block period per cycle
         std::int64_t captureFrames = 0;  // frames of output to keep
+        // Tests: the rate start() grants, as a device may, instead of the
+        // one requested (0: the requested rate).
+        double grantedRate = 0;
         // Tests: fills the input channels before each cycle (on the audio
         // thread; `frame` counts input frames since start). Null: silence.
         std::function<void(float* const* in, std::uint32_t channels, std::uint32_t frames,
