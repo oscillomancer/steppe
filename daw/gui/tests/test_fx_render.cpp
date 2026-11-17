@@ -2108,6 +2108,7 @@ TEST_CASE(
             auto run = item.run;
             f.panel->root().closePopups();
             run();
+            break;  // closing the popup freed the menu and its items
         }
     bool automated = false;
     for (const auto& e : f.app->head().envelopes)
