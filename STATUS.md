@@ -1477,7 +1477,8 @@ Plugins:
   `/clang:-ffp-contract=off` and `/clang:-fwrapv` (they had neither); native
   Windows CI has not run since.
 - Scripts need a JIT: there is no fallback for hosts that forbid executable
-  memory (MIR's interpreter is a test backend, not real-time safe).
+  memory (MIR's interpreter is a test backend, not real-time safe; only Debug
+  builds of the Script Player honour `SUPPLE_SCRIPT_INTERPRET`).
 - A script save that redefines the plugin while an editor drag is under way
   can leave that gesture open in the host until it rescans.
 - Stock CLAP builds and product/conformance/reset checks run on Linux, macOS
