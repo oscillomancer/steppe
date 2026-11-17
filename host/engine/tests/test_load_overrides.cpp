@@ -148,6 +148,21 @@ TEST_CASE(
     CHECK_FALSE((*again)->isolated());
 }
 
+TEST_CASE("an instance in the pool that was never activated is not a plug-in that ran (Q8)") {
+    const model::Id id{model::Kind::Fx, 1};
+    model::FxInstance fx;
+    fx.plugin.id = kGain;
+    const auto session = model::Session::create();
+    InstancePool pool(fixtureResolve);
+    auto made = pool.get(id, fx, session);
+    REQUIRE(made);
+    // It exists, in process, and nothing has asked it to process, so it is not active: a clean
+    // end must not count it as evidence that the plug-in is safe.
+    CHECK_FALSE((*made)->active());
+    CHECK(pool.effectiveIsolation(id, fx) == model::Isolation::InProcess);
+    CHECK(pool.ranInProcess().empty());
+}
+
 TEST_CASE("a pool refuses a disabled plug-in and makes nothing of it") {
     const model::Id id{model::Kind::Fx, 1}, other{model::Kind::Fx, 2};
     const auto session = model::Session::create();
