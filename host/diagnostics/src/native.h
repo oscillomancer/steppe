@@ -19,9 +19,15 @@ struct Packet {
     std::uint64_t pid = 0, pc = 0, frame = 0, tid = 0, sp = 0;
     std::array<char, 33> incident{};
 };
-// Ready packets carry the address of the worker's execution table in `pc` (topic 5): the
-// supervisor keeps it and reads the table from the worker only when a terminal packet
-// arrives. It is the worker's own address, meaningful only to a bounded remote read.
+// A Ready packet reuses the `pc` field for the address of the worker's execution table
+// (topic 5); it is not a program counter. Use these two, never `pc`, for that address.
+// The supervisor keeps it and reads the table from the worker only when a terminal packet
+// arrives. It is the worker's own address, meaningful only to a bounded remote read. If a
+// later topic adds a Table message, the address moves there.
+inline void setTableAddress(Packet& ready, const void* table) noexcept {
+    ready.pc = reinterpret_cast<std::uintptr_t>(table);
+}
+inline std::uint64_t tableAddress(const Packet& ready) noexcept { return ready.pc; }
 static_assert(sizeof(Packet) <= 128);
 struct Native {
     std::intptr_t channel = -1, process = -1, event = -1, ack = -1;

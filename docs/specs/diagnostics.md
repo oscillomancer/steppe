@@ -277,7 +277,10 @@ say something, and retention validates them: `registered` only on the fault thre
 only a registrable role, `worker` only on a thread with a role.
 
 How the supervisor gets the table: the worker's `ready` packet carries the table's address
-(`pc` field; the private channel is not a place for anything else secret). When the terminal
+(in the packet's `pc` field, which a Ready packet reuses: it is an address, not a program
+counter, and the code reaches it only through `setTableAddress` and `tableAddress`; the
+private channel is not a place for anything else secret). A later `Table` message would take
+over that role. When the terminal
 packet arrives, Linux and Windows read the table with the same bounded remote read the stack
 walk uses (`process_vm_readv`, `ReadMemory` on Windows), once, right after the faulting
 thread's walk and before any other thread is stopped. It is read even if the walk spent the
