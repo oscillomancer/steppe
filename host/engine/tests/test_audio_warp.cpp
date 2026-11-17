@@ -464,20 +464,43 @@ TEST_CASE("variable audio warp retains pitch and places drum attacks near anchor
 
 TEST_CASE("pending hit detection does not overwrite newer manual candidates") {
     std::mutex mutex;
-    std::condition_variable done;
-    bool finished = false;
-    WarpHost h([&] {
-        {
+    std::condition_variable wake;
+    bool entered = false, released = false, finished = false;
+    WarpHost h(
+        [&] {
             std::lock_guard lock(mutex);
             finished = true;
+            wake.notify_all();
+        },
+        [&] {
+            std::unique_lock lock(mutex);
+            entered = true;
+            wake.notify_all();
+            wake.wait(lock, [&] { return released; });
+        });
+    // Do not strand the worker if a REQUIRE unwinds before release.
+    struct Release {
+        std::mutex& mutex;
+        std::condition_variable& wake;
+        bool& released;
+        ~Release() {
+            std::lock_guard lock(mutex);
+            released = true;
+            wake.notify_all();
         }
-        done.notify_one();
-    });
+    } release{mutex, wake, released};
     auto job = h.run("take.hits.detect", R"({"takes":["tk_1"]})");
+    // execute() flushes posted work before returning: a worker that finished
+    // by then had its result applied before the manual edit below (seen on
+    // macOS CI). Hold it until that flush has passed, as the test above does.
     {
         std::unique_lock lock(mutex);
-        done.wait(lock, [&] { return finished; });
+        wake.wait(lock, [&] { return entered; });
+        released = true;
+        wake.notify_all();
+        wake.wait(lock, [&] { return finished; });
     }
+    REQUIRE_FALSE(h.app->head().takes.find({model::Kind::Take, 1})->transients);
     // An explicit edit before draining the posted worker result wins.
     auto transaction =
         h.app->beginTransaction({cmd::Origin::Type::Test, "warp", {}}, "Manual hits");

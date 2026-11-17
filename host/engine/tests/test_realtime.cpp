@@ -167,6 +167,7 @@ struct EngineTestAccess {
         e.wakeRendererConsumed();
     }
     static auto event(const Engine& e) { return e.rendererEvent_.load(); }
+    static detail::Recorder& recorder(Engine& e) { return *e.recorderOwned_; }
 };
 }  // namespace supple::engine
 using model::Id;
@@ -174,6 +175,16 @@ using model::kMaster;
 
 namespace supple::engine::detail {
 struct RecorderTestAccess {
+    // Waits until the writer has begun and ended `count` passes from now:
+    // the last of them drained everything published before the call.
+    static void passes(Recorder& recorder, unsigned count = 2) {
+        const auto target = recorder.writerPasses_.load() + count;
+        for (;;) {
+            const auto at = recorder.writerPasses_.load(std::memory_order_acquire);
+            if (at >= target) return;
+            recorder.writerPasses_.wait(at);
+        }
+    }
     static void stall(Recorder& recorder) { recorder.writerStalled_.store(true); }
     static bool stalled(const Recorder& recorder) { return recorder.writerStallAck_.load(); }
     static void resume(Recorder& recorder) { recorder.writerStalled_.store(false); }
@@ -2687,13 +2698,14 @@ TEST_CASE("wet and bypass edits retarget an active ramp without a step" *
 
 TEST_CASE("a long, dense MIDI performance records without overflow (the writer drains)" *
           doctest::description("rt")) {
-    // A controller sweep every 8 frames (6000 events/s) for over a second:
-    // more than one ring holds, drained while recording.
+    // A controller sweep every 8 frames (6000 events/s) for 1.2 s of audio:
+    // more than one ring (4096 events) holds, drained while recording. The
+    // test runs the cycles itself, a ring's worth at most between writer
+    // passes, so how busy the machine is cannot decide it.
     auto pool = makePool();
     MediaCache media;
     DummyBackend backend(
-        {.mode = DummyBackend::Mode::Thread,
-         .paced = true,
+        {.mode = DummyBackend::Mode::Manual,
          .midiPorts = {"Keyboard"},
          .midi = [](std::vector<MidiInputEvent>& out, std::uint32_t n, std::int64_t frame) {
              for (std::uint32_t i = 0; i < n; i += 8) {
@@ -2719,7 +2731,13 @@ TEST_CASE("a long, dense MIDI performance records without overflow (the writer d
     target.midi = RecordTarget::Midi{midiPortMask(engine.midiPorts(), "*"), 0, 0};
     REQUIRE(engine.startRecording({target}));
     engine.play();
-    std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+    // 225 cycles of 256 frames: 1.2 s, 32 events each. 64 cycles (2048
+    // events) between passes stay well inside the ring.
+    auto& recorder = EngineTestAccess::recorder(engine);
+    for (int done = 0; done < 225; done += 64) {
+        backend.run(std::min(64, 225 - done));
+        detail::RecorderTestAccess::passes(recorder);
+    }
     auto takes = engine.stopRecording();
     REQUIRE(takes);
     const RecordedTake& t = (*takes)[0];
@@ -3713,9 +3731,16 @@ TEST_CASE("a bridged start answered after its live deadline is not taken for a r
             });
         }
     const auto session = t.commit().value();
+    // The product's live deadline, not patient(): the first cycle must pass
+    // its deadline with the start unanswered. So any later cycle may be late
+    // too on a loaded machine. A late block is silent by design and a late
+    // start leaves the stage passing audio through for that cycle; both are
+    // counted in bridgeLateCycles(), which bounds them here (CI 44147509934:
+    // the third cycle was late and silent).
+    constexpr int kCycles = 2048;  // a guard against a bridge that never answers
     auto pool = makePool();
     MediaCache media;
-    DummyBackend backend(constantInput(64 * 128));
+    DummyBackend backend(constantInput(kCycles * 128));
     Engine engine(pool, media, kInCallback);
     REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128, .inputs = 2}));
     REQUIRE(engine.load(session));
@@ -3724,16 +3749,38 @@ TEST_CASE("a bridged start answered after its live deadline is not taken for a r
     REQUIRE(reached(0));                   // the bridge is in the plug-in's start
     gate[1].store(1, std::memory_order_release);
     REQUIRE(reached(2));
-    backend.run(16);
+    const auto& out = backend.capture().channels[0];
+    CHECK(double(out[0]) == 0.5);  // not started yet: passed through, as a refused one is
+    const auto lateBefore = engine.bridgeLateCycles();
+    const double processed = .5 * 0.2511886;  // -12 dB on the 0.5 input
+    const auto at = [&](int cycle) {
+        return double(out[static_cast<std::size_t>(cycle) * 128 + 64]);
+    };
+    // Each cycle after the first until one is processed: passed through
+    // (a late start) or silent (a late block), never anything else.
+    int cycle = 1, unprocessed = 0;
+    for (; cycle < kCycles / 2; ++cycle) {
+        backend.run(1);
+        if (at(cycle) == doctest::Approx(processed).epsilon(1e-4)) break;
+        CHECK((at(cycle) == 0.5 || at(cycle) == 0.0));
+        ++unprocessed;
+    }
+    REQUIRE_MESSAGE(cycle < kCycles / 2, "the started bridge never processed a block");
+    // Once started, a cycle is processed or, late, silent: never passed through.
+    for (int more = 0; more < 16; ++more) {
+        backend.run(1);
+        ++cycle;
+        if (at(cycle) == doctest::Approx(processed).epsilon(1e-4)) continue;
+        CHECK(at(cycle) == 0.0);
+        ++unprocessed;
+    }
+    // Every cycle that was not processed was a late one.
+    CHECK(unprocessed <= static_cast<int>(engine.bridgeLateCycles() - lateBefore));
     host::Instance* instance = pool.find(fxId);
     REQUIRE(instance);
     CHECK_FALSE(instance->failed());
     CHECK(instance->processing());
     CHECK(engine.processErrors() == 0);
-    // Processed from the second cycle on: -12 dB on the 0.5 input.
-    const auto& out = backend.capture().channels[0];
-    CHECK(double(out[0]) == 0.5);  // not started yet: passed through, as a refused one is
-    CHECK(double(out[300]) == doctest::Approx(.5 * 0.2511886).epsilon(1e-4));
     engine.stop();
     ::munmap(words, 4096);
     std::filesystem::remove(file);
