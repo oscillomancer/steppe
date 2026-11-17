@@ -581,7 +581,10 @@ instructions are in `docs/guides/installing.md`.
   gets the palette colour the fewest tracks carry (`track.add`, for agents
   and the GUI alike). Track rows and mixer
   strips are quiet at rest (mute, solo, polarity and mono show their colour
-  only when on) and each row has a meter 8 units wide. Help exports the bundled
+  only when on) and each row has a meter 8 units wide. The transport bar's
+  engine readout is in words ("48 kHz · 256 samples") and warns in colour
+  only of a stopped engine, dropouts, render gaps or plug-in errors; the
+  toolbar's buttons are quiet at rest. Help exports the bundled
   skill as a copy or link, shows this copy's MCP commands and JSON, and registers
   its running-app server with Claude Code, Codex or Hermes on a background
   worker, linking the skill into that agent's user skills folder unless one of
