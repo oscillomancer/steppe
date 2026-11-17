@@ -856,7 +856,7 @@ TEST_CASE(
         host::Instance* gain = *found;
         REQUIRE(engine.load(synthSession(0.0)));  // the gain leaves; the callback has not adopted
         struct Hook {
-            decltype(adopt)& adopt;
+            decltype(adopt)& step;
             int runs = 0;
         } hook{adopt};
         EngineTestAccess::afterCollect(
@@ -864,7 +864,7 @@ TEST_CASE(
             [](void* context) {
                 auto* h = static_cast<Hook*>(context);
                 ++h->runs;
-                h->adopt();  // every executor adopts the newest plan here
+                h->step();  // every executor adopts the newest plan here
             },
             &hook);
         engine.service();
