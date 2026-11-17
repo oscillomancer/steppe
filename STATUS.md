@@ -184,10 +184,10 @@ instructions are in `docs/guides/installing.md`.
   Optional null is accepted as omission for caller leniency; exported argument
   schemas deliberately remain narrower on this point (ADR-0087).
   The skill's command reference is generated and drift-tested.
-  Control admission globally bounds posted work to1,024 requests/64 MiB, including
+  Control admission globally bounds posted work to 1,024 requests/64 MiB, including
   disconnected owners; excess gets rpc.busy and admitted edits still run. Each
-  peer permits64 subscriptions and retains its16-request limit (ADR-0087).
-  Production fd-backed MCP uses a joined writer with a64 MiB packet reservation;
+  peer permits 64 subscriptions and retains its 16-request limit (ADR-0087).
+  Production fd-backed MCP uses a joined writer with a 64 MiB packet reservation;
   input admission pauses under backpressure while ticks/watches keep model service
   alive. Enqueue publishes through atomic ownership, never a writer-held lock.
   Oversized replies produce explicit bounded errors rather than being dropped.

@@ -1265,12 +1265,12 @@ and how many messages went out.
 
 ### Agent transport limits
 
-Control/MCP are local same-user endpoints. RPC queues at most1,024 pending
-requests and64 MiB globally; excess calls receive `rpc.busy` and should be
-retried later. Each peer permits64 subscriptions. Request IDs are at most1,024
-serialized bytes, and untrusted frames at most1,000,000 JSON values.
+Control/MCP are local same-user endpoints. RPC queues at most 1,024 pending
+requests and 64 MiB globally; excess calls receive `rpc.busy` and should be
+retried later. Each peer permits 64 subscriptions. Request IDs are at most 1,024
+serialized bytes, and untrusted frames at most 1,000,000 JSON values.
 
-MCP stdio uses a64 MiB writer reservation: keep reading replies even after
+MCP stdio uses a 64 MiB writer reservation: keep reading replies even after
 closing stdin. Output backpressure pauses new commands while model service
 continues. EOF drains replies before finishing capture/shutdown; an open consumer
 that stops reading can defer that completion. Oversized replies return an explicit
