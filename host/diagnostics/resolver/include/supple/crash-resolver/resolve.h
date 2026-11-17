@@ -9,6 +9,7 @@
 #include <supple/crash-resolver/image.h>
 #include <supple/json/value.h>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -72,7 +73,8 @@ struct ModuleResolution {
     ModuleState state = ModuleState::NotFound;
     std::filesystem::path file;  // the matched file, when there is one
     std::string error;           // why NoSymbols or Unreadable
-    std::optional<SymbolTable> table;
+    // Shared by every module of the report that has this id: a table is loaded once.
+    std::shared_ptr<const SymbolTable> table;
 };
 struct Resolution {
     std::vector<ModuleResolution> modules;

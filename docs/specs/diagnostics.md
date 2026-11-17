@@ -315,6 +315,9 @@ order. So up to eight files with the id are read, and the one that names the mos
 report's frames in that module wins, the earlier one on a tie. A module is `resolved` only if
 it named at least one of those frames (or no frame of the report is in it); a file with names
 that covers none of them is `no_symbols`, with the reason stated.
+A report may name one image in many module entries; its symbol table is loaded once per
+distinct id and shared, and the functions held across all modules of one report are limited
+to 16 million (a module read after that is `unreadable` and says so).
 
 Function names only: no DWARF, no line tables, no PDB. ELF reads `.symtab`, else `.dynsym`
 (function and indirect-function symbols in executable sections); Mach-O reads `LC_SYMTAB`

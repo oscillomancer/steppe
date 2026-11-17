@@ -339,6 +339,35 @@ TEST_CASE("a module is resolved only if it names something in the report") {
     CHECK(resolve(bare, candidates).modules[0].state == ModuleState::Resolved);
 }
 
+TEST_CASE("a module named many times is loaded once, and the total is bounded") {
+    Dir dir("crash-resolver-many");
+    write(dir.path / "app", elfWith(kIdBytes));
+    ScanStats stats;
+    const auto candidates = scan({dir.path}, stats);
+    // A report may name one image in all of its 256 module entries: one table serves them all.
+    Report many;
+    for (int i = 0; i < 256; ++i) many.modules.push_back({Format::Elf, kId});
+    const auto resolution = resolve(many, candidates);
+    REQUIRE(resolution.modules.size() == 256);
+    for (const auto& module : resolution.modules) {
+        CHECK(module.state == ModuleState::Resolved);
+        CHECK(module.table.get() == resolution.modules[0].table.get());
+    }
+    // Different images each load their own, until the total of functions held is spent.
+    write(dir.path / "other", elfWith({1, 2, 3, 4}));
+    const auto both = scan({dir.path}, stats);
+    Report two;
+    two.modules.push_back({Format::Elf, kId});
+    two.modules.push_back({Format::Elf, "01020304"});
+    Limits budget;
+    budget.maxTotalSymbols = 3;  // each image has two functions
+    const auto limited = resolve(two, both, budget);
+    CHECK(limited.modules[0].state == ModuleState::Resolved);
+    CHECK(limited.modules[1].state == ModuleState::Unreadable);
+    CHECK(limited.modules[1].error.find("total") != std::string::npos);
+    CHECK(resolve(two, both).modules[1].state == ModuleState::Resolved);
+}
+
 TEST_CASE("a return address at offset zero has no call before it") {
     Report report;
     report.modules.push_back({Format::Elf, kId});

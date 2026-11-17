@@ -71,6 +71,9 @@ struct Limits {
     std::size_t maxCommandBytes = 1u << 20;     // Mach-O load commands, together
     std::size_t maxSlices = 8;                  // Mach-O universal binary
     std::size_t maxNames = 1u << 17;            // PE exports
+    // Functions held at once for one report, across all its modules; a module read after
+    // the budget is spent is unreadable. One module is bounded by maxSymbols alone.
+    std::uint64_t maxTotalSymbols = 16u << 20;
 };
 
 // One image inside a file: a whole ELF or PE file, or one slice of a Mach-O universal one.

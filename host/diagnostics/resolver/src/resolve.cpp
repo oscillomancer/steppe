@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <sstream>
 #include <system_error>
 
@@ -298,11 +299,20 @@ std::size_t named(const SymbolTable& table, const std::vector<ReportFrame>& fram
 Resolution resolve(const Report& report, const std::vector<Candidate>& candidates,
                    const Limits& limits) {
     Resolution out;
+    // One answer per distinct (format, id): a report can name an image in every one of its
+    // 256 module entries, and loading its symbol table that many times would take gigabytes.
+    std::map<std::pair<Format, std::string>, ModuleResolution> answers;
+    std::uint64_t held = 0;  // functions in the tables kept so far
     for (const auto& module : report.modules) {
         ModuleResolution r;
         if (module.id.empty()) {
             r.state = ModuleState::NoIdentity;
             out.modules.push_back(std::move(r));
+            continue;
+        }
+        const auto key = std::make_pair(module.format, module.id);
+        if (const auto known = answers.find(key); known != answers.end()) {
+            out.modules.push_back(known->second);
             continue;
         }
         // Every file that carries the module's id is a candidate, not only the first: a
@@ -313,6 +323,13 @@ Resolution resolve(const Report& report, const std::vector<Candidate>& candidate
         std::size_t tried = 0, best = 0;
         std::optional<ModuleResolution> chosen;
         ModuleResolution failed;  // the first file's reason, if none could be read
+        const auto fail = [&](const Candidate& candidate, ModuleState state, std::string why) {
+            if (failed.error.empty()) {
+                failed.file = candidate.path;
+                failed.state = state;
+                failed.error = std::move(why);
+            }
+        };
         for (const auto& candidate : candidates) {
             if (candidate.image.format != module.format || candidate.image.id != module.id)
                 continue;
@@ -322,13 +339,16 @@ Resolution resolve(const Report& report, const std::vector<Candidate>& candidate
                                      : Result<SymbolTable>(Error("symbols.read_failed",
                                                                  "the file can no longer be read"));
             if (!table) {
-                if (tried == 1) {
-                    failed.file = candidate.path;
-                    failed.state = table.error().code == "symbols.no_symbols"
-                                       ? ModuleState::NoSymbols
-                                       : ModuleState::Unreadable;
-                    failed.error = table.error().message;
-                }
+                fail(candidate,
+                     table.error().code == "symbols.no_symbols" ? ModuleState::NoSymbols
+                                                                : ModuleState::Unreadable,
+                     table.error().message);
+                continue;
+            }
+            if (held + table.value().symbols.size() > limits.maxTotalSymbols) {
+                fail(candidate, ModuleState::Unreadable,
+                     "the total of functions loaded for this report would pass " +
+                         std::to_string(limits.maxTotalSymbols));
                 continue;
             }
             const std::size_t score = named(table.value(), frames);
@@ -336,29 +356,29 @@ Resolution resolve(const Report& report, const std::vector<Candidate>& candidate
                 best = score;
                 chosen.emplace();
                 chosen->file = candidate.path;
-                chosen->table = std::move(table.value());
+                chosen->table = std::make_shared<const SymbolTable>(std::move(table.value()));
             }
         }
         if (tried == 0) {
-            out.modules.push_back(std::move(r));  // not found
-            continue;
-        }
-        if (!chosen) {
-            out.modules.push_back(std::move(failed));
-            continue;
-        }
-        r = std::move(*chosen);
-        if (frames.empty() || best > 0) {
-            r.state = ModuleState::Resolved;
+            r = ModuleResolution{};  // not found
+        } else if (!chosen) {
+            r = std::move(failed);
         } else {
-            // A file with this id was read and has names, none of them for this report's
-            // addresses (a stripped binary with no debug file beside it, typically).
-            r.state = ModuleState::NoSymbols;
-            r.error = "the file has " + std::to_string(r.table->symbols.size()) +
-                      " functions but none of the report's frames in this module is in one; "
-                      "a stripped binary's separate symbol file may be missing";
-            r.table.reset();
+            r = std::move(*chosen);
+            if (frames.empty() || best > 0) {
+                r.state = ModuleState::Resolved;
+                held += r.table->symbols.size();
+            } else {
+                // A file with this id was read and has names, none of them for this report's
+                // addresses (a stripped binary with no debug file beside it, typically).
+                r.state = ModuleState::NoSymbols;
+                r.error = "the file has " + std::to_string(r.table->symbols.size()) +
+                          " functions but none of the report's frames in this module is in one; "
+                          "a stripped binary's separate symbol file may be missing";
+                r.table.reset();
+            }
         }
+        answers.emplace(key, r);
         out.modules.push_back(std::move(r));
     }
     return out;
