@@ -393,6 +393,66 @@ TEST_CASE("a file replaced after the scan is not read under the old identity") {
     CHECK(resolve(*report, candidates).modules[0].state == ModuleState::Resolved);
 }
 
+namespace {
+// Whether text output could drive a terminal: a control byte other than the newline that
+// ends a line, DEL, or a C1 control (U+0080 to U+009F, which some terminals obey).
+bool drivesTerminal(const std::string& text) {
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        const auto c = static_cast<unsigned char>(text[i]);
+        if ((c < 0x20 && c != '\n') || c == 0x7f) return true;
+        if (c == 0xc2 && i + 1 < text.size()) {
+            const auto next = static_cast<unsigned char>(text[i + 1]);
+            if (next >= 0x80 && next <= 0x9f) return true;
+        }
+    }
+    return false;
+}
+}  // namespace
+
+TEST_CASE("text output never carries control bytes from symbol files or reports") {
+    Dir dir("crash-resolver-escape");
+    images::ElfSpec spec;
+    spec.buildId = kIdBytes;
+    // Window title, clear screen, a bell, a C1 control-sequence introducer (U+009B), DEL.
+    spec.functions = {{std::string("evil\x1b]0;title\x07\x1b[2J\xc2\x9b"
+                                   "31m\x7f"
+                                   "end"),
+                       0x1100, 0x40},
+                      {"plain_bar", 0x1200, 0x20}};
+    write(dir.path / "app", images::elf(spec));
+    ScanStats stats;
+    const auto candidates = scan({dir.path}, stats);
+    std::string text = reportText("elf", kId);
+    const auto at = text.find("\"kind\":\"crash\"");
+    REQUIRE(at != std::string::npos);
+    text.replace(at, 14, "\"kind\":\"cr\\u001b[2Jash\"");
+    const auto report = parseReport(text);
+    REQUIRE(report);
+    REQUIRE(report->kind.find('\x1b') != std::string::npos);  // the report really holds it
+    const auto resolution = resolve(*report, candidates);
+    REQUIRE(resolution.modules[0].state == ModuleState::Resolved);
+    REQUIRE(resolution.name(report->threads[0].frames[0]).value().find('\x1b') !=
+            std::string::npos);  // and so does the name
+    const auto out = formatText(*report, resolution);
+    CHECK_FALSE(drivesTerminal(out));
+    CHECK(out.find("evil\\x1b]0;title\\x07\\x1b[2J\\xc2\\x9b"
+                   "31m\\x7f"
+                   "end") != std::string::npos);
+    CHECK(out.find("cr\\x1b[2Jash") != std::string::npos);
+    CHECK(out.find("plain_bar") != std::string::npos);  // ordinary names are untouched
+#if !defined(_WIN32)
+    // A file name is as hostile as the contents.
+    write(dir.path / "odd\x1b]0;x\x07name", images::elf(spec));
+    ScanStats more;
+    const auto both = scan({dir.path / "odd\x1b]0;x\x07name"}, more);
+    const auto odd = resolve(*report, both);
+    CHECK_FALSE(drivesTerminal(formatText(*report, odd)));
+#endif
+    // JSON keeps its own escaping.
+    const auto json = supple::json::writeCanonical(formatJson(*report, resolution));
+    CHECK(json.find('\x1b') == std::string::npos);
+}
+
 TEST_CASE("a return address at offset zero has no call before it") {
     Report report;
     report.modules.push_back({Format::Elf, kId});

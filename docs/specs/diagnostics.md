@@ -345,6 +345,9 @@ use are ignored. Tests build images in memory and run the reader over every pref
 every byte replaced by extreme values and over reads that fail part way, under the
 sanitizers.
 
+Text output escapes every control byte, DEL and C1 control (U+0080 to U+009F) in what it
+prints, function names, file names and report strings alike, as `\xNN`, since a hostile symbol
+file or report must not be able to drive the terminal of the person running the tool.
 Output is text, or with `--json` `supple.crash-symbols/1.0`: `{incident, kind, role, platform,
 modules: [{format, id|null, state, file?, functions?, truncated?, error?}], threads:
 [{ordinal, role, registered?, worker?, state, stop|reason, frames: [{module|null, offset?, return, function?,

@@ -419,32 +419,63 @@ std::optional<std::string> Resolution::name(const ReportFrame& frame) const {
     return std::move(found->first);
 }
 
+namespace {
+// Text for a terminal: a control byte, DEL or a C1 control (U+0080 to U+009F, two bytes in
+// UTF-8, which some terminals obey) becomes \xNN, so a hostile symbol file, report or file
+// name cannot set a window title, clear the screen or write the clipboard. JSON output has
+// its own escaping.
+std::string printable(std::string_view text) {
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string out;
+    out.reserve(text.size());
+    const auto escape = [&](unsigned char c) {
+        out += "\\x";
+        out += kHex[c >> 4];
+        out += kHex[c & 15];
+    };
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        const auto c = static_cast<unsigned char>(text[i]);
+        if (c < 0x20 || c == 0x7f) {
+            escape(c);
+        } else if (c == 0xc2 && i + 1 < text.size() &&
+                   static_cast<unsigned char>(text[i + 1]) >= 0x80 &&
+                   static_cast<unsigned char>(text[i + 1]) <= 0x9f) {
+            escape(c);
+            escape(static_cast<unsigned char>(text[++i]));
+        } else {
+            out += text[i];
+        }
+    }
+    return out;
+}
+}  // namespace
+
 std::string formatText(const Report& report, const Resolution& resolution) {
     std::ostringstream out;
-    out << "incident " << report.incident << ": " << report.kind << " in " << report.role << " ("
-        << report.platform << ")\nmodules:\n";
+    out << "incident " << printable(report.incident) << ": " << printable(report.kind) << " in "
+        << printable(report.role) << " (" << printable(report.platform) << ")\nmodules:\n";
     const auto label = [&](std::size_t i) {
         const auto& r = resolution.modules[i];
-        return r.file.empty() ? "module " + std::to_string(i) : utf8(r.file.filename());
+        return r.file.empty() ? "module " + std::to_string(i) : printable(utf8(r.file.filename()));
     };
     for (std::size_t i = 0; i < report.modules.size(); ++i) {
         const auto& m = report.modules[i];
         const auto& r = resolution.modules[i];
-        out << "  " << i << "  " << formatName(m.format) << "  " << (m.id.empty() ? "-" : m.id)
-            << "  " << stateName(r.state);
-        if (!r.file.empty()) out << "  " << utf8(r.file);
+        out << "  " << i << "  " << formatName(m.format) << "  "
+            << (m.id.empty() ? "-" : printable(m.id)) << "  " << stateName(r.state);
+        if (!r.file.empty()) out << "  " << printable(utf8(r.file));
         if (r.table)
             out << "  (" << r.table->symbols.size() << " functions"
                 << (r.table->truncated ? ", truncated" : "") << ")";
-        if (!r.error.empty()) out << "  (" << r.error << ")";
+        if (!r.error.empty()) out << "  (" << printable(r.error) << ")";
         out << "\n";
     }
     for (std::size_t t = 0; t < report.threads.size(); ++t) {
         const auto& thread = report.threads[t];
-        out << "thread " << t << " " << thread.role;
-        if (!thread.registered.empty()) out << " (" << thread.registered << ")";
-        out << ": " << thread.state << " (" << (thread.state == "walked" ? "stop: " : "reason: ")
-            << thread.why << ")\n";
+        out << "thread " << t << " " << printable(thread.role);
+        if (!thread.registered.empty()) out << " (" << printable(thread.registered) << ")";
+        out << ": " << printable(thread.state) << " ("
+            << (thread.state == "walked" ? "stop: " : "reason: ") << printable(thread.why) << ")\n";
         for (std::size_t f = 0; f < thread.frames.size(); ++f) {
             const auto& frame = thread.frames[f];
             out << "  #" << f << "  ";
@@ -454,7 +485,7 @@ std::string formatText(const Report& report, const Resolution& resolution) {
             }
             out << label(static_cast<std::size_t>(frame.module)) << "+" << hexOffset(frame.offset);
             if (const auto found = resolution.locate(frame)) {
-                out << "  " << found->first;
+                out << "  " << printable(found->first);
                 if (found->second != 0) out << " + " << hexOffset(found->second);
             } else {
                 out << "  (no symbol)";
