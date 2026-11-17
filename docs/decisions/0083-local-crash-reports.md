@@ -200,3 +200,10 @@ not kill a healthy worker narrows to a supervisor that failed as a collector. A 
 that ends without saying so, as a launcher's hard kill leaves it, is a stop request: the
 worker stops as `SIGTERM` stops it and ends hard after ten seconds. See
 `0091-supervisor-end-and-launcher-stop.md` and `docs/specs/diagnostics.md`, "Supervisor end".
+
+*Note, 2026-11-17, review round 35 (Windows):* the terminate hook is also installed on each
+thread that registers with the diagnostics, since the MSVC runtime keeps the handler per
+thread, and an exception with the code `0xE06D7363` that the prior filter returns without
+handling is captured as a fault instead of being lost. Both are in `docs/specs/diagnostics.md`
+and rest on native CI to run them.
+

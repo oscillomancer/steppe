@@ -31,6 +31,7 @@
 #include <cstring>
 #include <fstream>
 #else
+#include <pthread.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
@@ -225,6 +226,35 @@ LONG WINAPI priorFilter(EXCEPTION_POINTERS*) {
 // The supervisor watch (ADR-0091). The program's stop is a SIGTERM handler that sets a flag,
 // as the model loop's does; the body reports what the watcher concluded, in lines a test
 // can read, and then either takes the stop or carries on.
+// A thread whose body throws out of it: the exception reaches std::terminate on that thread.
+// A std::thread's entry and a raw one (CreateThread, pthread_create) differ in how the
+// runtime gets there, and the terminate handler is per thread under the MSVC runtime, so
+// both are tried, with and without the thread having registered (review round 35, F1).
+void throwOut(bool registered) {
+    if (registered) (void)supple::diagnostics::registerCurrentThread();
+    throw std::runtime_error("thread body");
+}
+#if defined(_WIN32)
+DWORD WINAPI rawThreadMain(LPVOID argument) {
+    throwOut(argument != nullptr);
+    return 0;
+}
+void runRawThread(bool registered) {
+    HANDLE thread =
+        CreateThread(nullptr, 0, rawThreadMain, registered ? &registered : nullptr, 0, nullptr);
+    if (thread) WaitForSingleObject(thread, INFINITE);
+}
+#else
+void* rawThreadMain(void* argument) {
+    throwOut(argument != nullptr);
+    return nullptr;
+}
+void runRawThread(bool registered) {
+    pthread_t thread;
+    if (::pthread_create(&thread, nullptr, rawThreadMain, registered ? &registered : nullptr) == 0)
+        ::pthread_join(thread, nullptr);
+}
+#endif
 std::atomic<bool> stopRequested{false};
 void onStop(int) { stopRequested.store(true); }
 int watchBody(const std::string& mode, int channel = -1) {
@@ -328,6 +358,19 @@ int body(int argc, char** argv) {
         });
         worker.join();
     }
+    if (mode == "thread-throw" || mode == "thread-throw-registered") {
+        std::thread thrower(
+            [registered = mode == "thread-throw-registered"] { throwOut(registered); });
+        thrower.join();
+    }
+    if (mode == "raw-thread-throw") runRawThread(false);
+    if (mode == "raw-thread-throw-registered") runRawThread(true);
+#if defined(_WIN32)
+    // The code 0xE06D7363 raised by hand, which the prior filter does not turn into
+    // std::terminate: nobody handles it, so it is a fault like any other (review round 35, F2).
+    if (mode == "prior-filter-cpp-code")
+        RaiseException(0xE06D7363, EXCEPTION_NONCONTINUABLE, 0, nullptr);
+#endif
 #if defined(__linux__) || defined(_WIN32)
     if (mode == "trace" || mode == "trace-nondumpable") {
         if (argc != 4) return 4;
@@ -599,7 +642,8 @@ int main(int argc, char** argv) {
         std::set_terminate(priorTerminate);
 #if defined(_WIN32)
     if (std::string_view(argv[2]) == "prior-filter" ||
-        std::string_view(argv[2]) == "prior-filter-resume") {
+        std::string_view(argv[2]) == "prior-filter-resume" ||
+        std::string_view(argv[2]) == "prior-filter-cpp-code") {
         filterResumes = std::string_view(argv[2]) == "prior-filter-resume";
         SetUnhandledExceptionFilter(priorFilter);
     }

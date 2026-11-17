@@ -590,9 +590,18 @@ them). On Windows the last-chance filter is always installed, replacing whatever
 filter was there, and chains to it after the handoff, returning what it returns, except
 that `EXCEPTION_CONTINUE_EXECUTION` becomes `EXCEPTION_CONTINUE_SEARCH`: the terminal packet
 has gone out, so the fault stays fatal and is never resumed. An exception code `0xE06D7363`
-(a C++ exception nobody caught) is not claimed at all: the filter hands it to the prior one
+(a C++ exception nobody caught) is not claimed at first: the filter hands it to the prior one
 untouched, so the runtime turns it into `std::terminate`, which is recorded as terminate
-(cause 3) and chains the program's handler, as on Linux and macOS. An EXE
+(cause 3) and chains the program's handler, as on Linux and macOS. If the prior filter
+returns instead (the code is raised by something that is not a C++ throw, or the prior
+filter is not the runtime's, or there is none), nobody is handling it and it is captured
+as a fault (cause 2) like any other exception, with the prior filter's answer used once,
+not asked for again. The MSVC runtime keeps the terminate handler per thread, so on
+Windows every thread that registers with the diagnostics (the execution table's thread
+hook) gets the hook too, after the worker's main thread has installed it, and says
+terminate (cause 3); a thread that never registers keeps what the runtime gives it, which
+the `thread-throw` and `raw-thread-throw` fixtures record on native CI (cause 3 if the
+handler is process-wide, cause 4, abort, if it is per thread). An EXE
 linked with the MSVC runtime always has such a filter (the runtime's own, which turns an
 uncaught C++ exception into `std::terminate`), so declining to replace an existing one
 would never have installed in the product; chaining keeps both that filter and any other

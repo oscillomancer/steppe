@@ -57,6 +57,9 @@ Packet initial;
 std::atomic<unsigned> claimed{0};
 [[maybe_unused]] std::terminate_handler priorTerminate = nullptr;
 std::atomic<bool> active{false};
+// Set once the worker's main thread has put the terminate hook in and kept what it replaced:
+// threads registered after that get the hook too (Windows keeps it per thread).
+[[maybe_unused]] std::atomic<bool> terminateHooked{false};
 static_assert(std::atomic<bool>::is_always_lock_free);
 // One terminal producer wins. No pointer/model lookup, TLS, allocation or
 // formatting. Raw PC/frame/SP and the thread id stay solely in the private native channel.
@@ -99,10 +102,19 @@ constexpr DWORD kCppExceptionCode = 0xE06D7363;
     // An exception nobody caught is not a fault: the runtime's filter, which is the prior
     // one here, turns it into std::terminate, and our terminate hook records it (cause 3)
     // and chains the program's terminate handler, as on Linux and macOS. Claiming it here
-    // would record a different cause and skip that handler.
+    // would record a different cause and skip that handler. The runtime's filter never
+    // returns for a real C++ exception. If it does return (the record carries the code but
+    // is not a C++ throw, as when a foreign runtime or a program raises the number itself,
+    // or the prior filter is not the runtime's, or there is none), nobody is handling it:
+    // it falls through to the fault path below as any other exception does (review round
+    // 35, F2), and the filter's answer is not asked for a second time.
+    bool chainedAlready = false;
+    LONG early = EXCEPTION_CONTINUE_SEARCH;
     if (exception && exception->ExceptionRecord &&
-        exception->ExceptionRecord->ExceptionCode == kCppExceptionCode)
-        return priorFilter ? priorFilter(exception) : EXCEPTION_CONTINUE_SEARCH;
+        exception->ExceptionRecord->ExceptionCode == kCppExceptionCode && priorFilter) {
+        early = priorFilter(exception);
+        chainedAlready = true;
+    }
     if (claimed.exchange(1, std::memory_order_relaxed)) return EXCEPTION_CONTINUE_SEARCH;
     Packet packet = initial;
     packet.cause = 2;
@@ -127,7 +139,9 @@ constexpr DWORD kCppExceptionCode = 0xE06D7363;
     // the supervisor will report a crash, so a chained filter that asks to resume the
     // faulting code (EXCEPTION_CONTINUE_EXECUTION) is answered with CONTINUE_SEARCH, which
     // ends the process through the system's own reporting.
-    const LONG chained = priorFilter ? priorFilter(exception) : EXCEPTION_CONTINUE_SEARCH;
+    const LONG chained = chainedAlready ? early
+                         : priorFilter  ? priorFilter(exception)
+                                        : EXCEPTION_CONTINUE_SEARCH;
     return chained == EXCEPTION_CONTINUE_EXECUTION ? EXCEPTION_CONTINUE_SEARCH : chained;
 }
 [[maybe_unused]] void abortSignal(int signal) {
@@ -241,6 +255,13 @@ struct SignalStack {
 bool registerCurrentThread() noexcept {
     if (!active.load(std::memory_order_acquire)) return false;
 #if defined(_WIN32)
+    // The MSVC runtime keeps the terminate handler per thread, so each thread that is
+    // registered gets ours too (review round 35, F1); without it an escaping exception
+    // or a broken noexcept on that thread would find none and end in abort (cause 4).
+    // The program's own handler the hook chains to is still the one the worker's main
+    // thread had, as on Linux and macOS, where the handler is process-wide. A thread
+    // that is never registered keeps whatever the runtime gives it.
+    if (terminateHooked.load(std::memory_order_acquire)) (void)std::set_terminate(terminate);
     ULONG bytes = 64 * 1024;
     return SetThreadStackGuarantee(&bytes) != FALSE;
 #else
@@ -293,7 +314,10 @@ bool installTerminal(Native native, const Packet& boot) {
         installed |= ::sigaction(signal, &action, nullptr) == 0;
     }
 #endif
-    if (installed) priorTerminate = std::set_terminate(terminate);
+    if (installed) {
+        priorTerminate = std::set_terminate(terminate);
+        terminateHooked.store(true, std::memory_order_release);
+    }
     active.store(installed, std::memory_order_release);
     return installed;
 #endif

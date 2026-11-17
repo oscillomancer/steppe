@@ -102,6 +102,28 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
             prior_report=json.loads(prior_reports[0].read_text())
             assert prior_report["cause"]==(0 if sanitized else 3),(mode,prior_report)
             if not sanitized: assert prior_report["kind"]=="crash",(mode,prior_report)
+    # An exception out of a thread's body (a std::thread or a raw one) or a broken noexcept on
+    # it reaches std::terminate on that thread, and the report says terminate (cause 3) on
+    # every platform. The MSVC runtime keeps the terminate handler per thread (review round
+    # 35, F1): a thread that registered with the diagnostics gets ours and must say 3 there
+    # too; one that never registered may say 3 or, if the handler is per thread and missing,
+    # 4 (abort), which the run prints so the answer is on record.
+    for mode in ("thread-throw","raw-thread-throw","thread-throw-registered","raw-thread-throw-registered"):
+        with check(mode):
+            root=base/mode/"app"/"diagnostics"
+            thrown=subprocess.run([binary,str(root),mode],capture_output=True,timeout=30)
+            assert thrown.returncode!=0,(mode,thrown)
+            thrown_reports=list(root.glob("*.json"))
+            assert len(thrown_reports)==1,(mode,thrown_reports,thrown.stderr)
+            thrown_report=json.loads(thrown_reports[0].read_text())
+            if sanitized: assert thrown_report["cause"]==0,(mode,thrown_report)
+            else:
+                assert thrown_report["kind"]=="crash",(mode,thrown_report)
+                unregistered_on_windows=os.name=="nt" and not mode.endswith("registered")
+                allowed=(3,4) if unregistered_on_windows else (3,)
+                assert thrown_report["cause"] in allowed,(mode,thrown_report)
+                if unregistered_on_windows:
+                    print("%s: terminate hook on a thread that never registered: cause %d (%s)"%(mode,thrown_report["cause"],"per-process" if thrown_report["cause"]==3 else "per-thread"),flush=True)
     if os.name=="nt" and not sanitized:
         with check("prior-filter"):
             # A top-level filter already in place (the MSVC runtime always has one) must not
@@ -124,6 +146,18 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
             assert run.returncode!=0,run
             assert b"prior filter ran" in run.stderr,run.stderr
             assert b"resumed after the fault" not in run.stderr,run.stderr
+            found=list(root.glob("*.json"))
+            assert len(found)==1,(found,run.stderr)
+            report=json.loads(found[0].read_text())
+            assert report["kind"]=="crash" and report["terminal_context"] and report["cause"]==2,report
+        with check("prior-filter-cpp-code"):
+            # The code the runtime gives a C++ exception, raised by hand: the prior filter
+            # (the fixture's, which does not turn it into std::terminate) returns, so nobody
+            # is handling it and it is captured as a fault, not lost (review round 35, F2).
+            root=base/"prior-filter-cpp-code"/"app"/"diagnostics"
+            run=subprocess.run([binary,str(root),"prior-filter-cpp-code"],capture_output=True,timeout=30)
+            assert run.returncode!=0,run
+            assert b"prior filter ran" in run.stderr,run.stderr
             found=list(root.glob("*.json"))
             assert len(found)==1,(found,run.stderr)
             report=json.loads(found[0].read_text())
