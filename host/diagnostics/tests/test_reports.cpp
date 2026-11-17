@@ -378,6 +378,12 @@ TEST_CASE("acknowledging records the sighting and changes nothing else") {
     listing = listReports(root.path);
     REQUIRE(listing);
     CHECK_FALSE(find(*listing, 2)->acknowledged);
+    // Acknowledging replaces such a file (the only way it is replaced on Windows, where
+    // publishing never overwrites): the incident is acknowledged afterwards.
+    REQUIRE(acknowledge(name(2), root.path));
+    listing = listReports(root.path);
+    REQUIRE(listing);
+    CHECK(find(*listing, 2)->acknowledged);
 }
 TEST_CASE("retention removes a report's acknowledgement with it") {
     Root root;

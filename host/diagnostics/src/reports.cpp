@@ -173,7 +173,13 @@ Status writeMark(const fs::path& root, const std::string& incident, const char* 
     auto value = json::Value::object();
     value["schema"] = schema;
     value["incident"] = incident;
-    return privatePublish(pathFor(root, incident, extension), json::writeCanonical(value) + "\n");
+    Status published =
+        privatePublish(pathFor(root, incident, extension), json::writeCanonical(value) + "\n");
+    // Publishing never replaces, so a second writer that removed the same stray file meets the
+    // first one's new file here (the GUI's Dismiss and an agent's crash.acknowledge at once). The
+    // mark is there and valid: that is what was asked for.
+    if (!published && hasMark(root, incident, extension, schema)) return okStatus();
+    return published;
 }
 // Records the sighting.
 Status writeAck(const fs::path& root, const std::string& incident) {
