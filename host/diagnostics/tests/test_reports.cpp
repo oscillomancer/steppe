@@ -11,6 +11,7 @@
 #include "supple/base/files.h"
 #include "supple/diagnostics/reports.h"
 #include "supple/json/json.h"
+#include "supple/product.h"
 using namespace supple;
 using namespace supple::diagnostics;
 using namespace supple::diagnostics::detail;
@@ -360,4 +361,97 @@ TEST_CASE("deleting all leaves live runs, reports in the making and files it can
     CHECK_FALSE(fs::exists(file(root, 6, ".json")));
     releaseMarker(*live);
     releaseMarker(*making);
+}
+namespace {
+std::optional<RestartNotice> noticeFor(const Root& root) {
+    auto listing = listReports(root.path);
+    REQUIRE(listing);
+    return restartNotice(*listing);
+}
+}  // namespace
+TEST_CASE("a restart says nothing when there is nothing unacknowledged") {
+    Root root;
+    CHECK_FALSE(noticeFor(root));
+    report(root, 1);
+    REQUIRE(acknowledge(name(1), root.path));
+    staleMarker(root, 2);
+    REQUIRE(acknowledge(name(2), root.path));
+    auto live = createMarker(root.path, boot(3));  // this run: not an ended one
+    REQUIRE(live);
+    CHECK_FALSE(noticeFor(root));
+    releaseMarker(*live);
+}
+TEST_CASE("a restart notice names the report, the plug-in it points at, or the missing report") {
+    Root root;
+    report(root, 1);
+    auto notice = noticeFor(root);
+    REQUIRE(notice);
+    CHECK(notice->kind == RestartNotice::Kind::Report);
+    CHECK(notice->incidents == std::vector<std::string>{name(1)});
+    CHECK(notice->earlier == 0);
+    CHECK(notice->plugin.empty());
+    CHECK(notice->headline.find("closed unexpectedly") != std::string::npos);
+    CHECK(notice->headline.find("last time") != std::string::npos);
+    CHECK(notice->detail.find("not sent anywhere") != std::string::npos);
+    REQUIRE(acknowledge(name(1), root.path));
+    // A crash inside a plug-in's binary names it.
+    REQUIRE(writeSampleCrash(name(2), "Canary", "Acme", root.path));
+    notice = noticeFor(root);
+    REQUIRE(notice);
+    CHECK(notice->plugin == "Canary");
+    CHECK(notice->headline.find("Canary by Acme was running when") == 0);
+    CHECK(notice->detail.find("cannot prove") != std::string::npos);
+    CHECK(noticeText(*notice).find(notice->headline) == 0);
+    REQUIRE(acknowledge(name(2), root.path));
+    // A run that left no report says so.
+    staleMarker(root, 3);
+    notice = noticeFor(root);
+    REQUIRE(notice);
+    CHECK(notice->kind == RestartNotice::Kind::NoReport);
+    CHECK(notice->headline.find("no crash report was written") != std::string::npos);
+    CHECK(notice->incidents == std::vector<std::string>{name(3)});
+}
+TEST_CASE("the product's own name is in the notice, whatever it is called") {
+    Root root;
+    report(root, 1);
+    auto notice = noticeFor(root);
+    REQUIRE(notice);
+    CHECK(notice->headline.starts_with(std::string(supple::product::kName)));
+}
+TEST_CASE("the newest incident leads, the earlier ones are counted, and dismissing covers all") {
+    Root root;
+    report(root, 1);
+    report(root, 2);
+    staleMarker(root, 3);
+    age(root, 1, 5);
+    age(root, 2, 3);
+    fs::last_write_time(file(root, 3, ".run"),
+                        fs::file_time_type::clock::now() - std::chrono::hours(1));
+    auto notice = noticeFor(root);
+    REQUIRE(notice);
+    CHECK(notice->kind == RestartNotice::Kind::NoReport);  // the run without a report is newest
+    CHECK(notice->incidents == std::vector<std::string>{name(3), name(2), name(1)});
+    CHECK(notice->earlier == 2);
+    CHECK(notice->detail.find("2 earlier unexpected closes") != std::string::npos);
+    REQUIRE(acknowledgeNotice(*notice, root.path));
+    CHECK_FALSE(noticeFor(root));
+    // Nothing was deleted or changed by it.
+    CHECK(fs::exists(file(root, 1, ".json")));
+    CHECK(fs::exists(file(root, 3, ".run")));
+    // One earlier reads in the singular.
+    report(root, 4);
+    report(root, 5);
+    age(root, 4, 2);
+    notice = noticeFor(root);
+    REQUIRE(notice);
+    CHECK(notice->earlier == 1);
+    CHECK(notice->detail.find("One earlier unexpected close") != std::string::npos);
+}
+TEST_CASE("an unexpected report a newer build wrote still counts for the notice") {
+    Root root;
+    report(root, 1);
+    rewrite(root, 1, [](json::Value& v) { v["kind"] = "bridge_exit"; });
+    auto notice = noticeFor(root);
+    REQUIRE(notice);
+    CHECK(notice->kind == RestartNotice::Kind::Report);
 }

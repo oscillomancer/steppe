@@ -2,8 +2,12 @@
 // Copyright (c) 2026 Supple Audio
 #include "supple/diagnostics/reports.h"
 #include <algorithm>
+#include <cstring>
 #include <map>
 #include <system_error>
+#include <vector>
+#include "inventory.h"
+#include "native.h"
 #include "private_files.h"
 #include "storage.h"
 #include "supple/base/files.h"
@@ -11,6 +15,7 @@
 #include "supple/diagnostics/frontend.h"
 #include "supple/json/json.h"
 #include "supple/product.h"
+#include "trace.h"
 namespace supple::diagnostics {
 namespace fs = std::filesystem;
 using namespace detail;
@@ -166,6 +171,8 @@ Result<ReportListing> listReports(const fs::path& directory) {
             if (auto value = json::parse(*text); value && value->isObject())
                 run.role = textOf(*value, "role");
         run.acknowledged = isAcknowledged(root, incident);
+        std::error_code e;
+        run.started = fs::last_write_time(run.marker, e);
         listing.unreported.push_back(std::move(run));
     }
     std::sort(listing.reports.begin(), listing.reports.end(), [](const auto& a, const auto& b) {
@@ -259,5 +266,118 @@ Result<std::size_t> deleteAllReports(const fs::path& directory) {
         ++removed;
     }
     return removed;
+}
+Status writeSampleUnreportedRun(const std::string& incident, const fs::path& directory) {
+    if (!incidentName(incident)) return noReport(incident);
+    Packet boot;
+    boot.role = static_cast<std::uint32_t>(diagnostics::Role::Fixture);
+    std::copy(incident.begin(), incident.end(), boot.incident.begin());
+    SUPPLE_TRY(prepareDirectory(directory));
+    auto marker = createMarker(directory, boot);
+    if (!marker) return marker.error();
+    releaseMarker(*marker);  // the holder is gone, the marker stays: a run that ended
+    return okStatus();
+}
+Status writeSampleCrash(const std::string& incident, const std::string& plugin,
+                        const std::string& vendor, const fs::path& directory) {
+    if (!incidentName(incident) || plugin.size() > 64 || vendor.size() > 64)
+        return noReport(incident);
+    Packet boot;
+    boot.role = static_cast<std::uint32_t>(diagnostics::Role::Fixture);
+    std::copy(incident.begin(), incident.end(), boot.incident.begin());
+    Packet announce = boot;
+    announce.kind = Message::Instance;
+    auto& r = announce.instance;
+    r.cell = 4;
+    r.event = static_cast<std::uint8_t>(diagctx::EventKind::Add);
+    r.kind = static_cast<std::uint8_t>(diagctx::InstanceKind::Clap);
+    r.origin = static_cast<std::uint8_t>(diagctx::InstanceOrigin::Foreign);
+    r.mode = static_cast<std::uint8_t>(diagctx::InstanceMode::InProcess);
+    r.state = static_cast<std::uint8_t>(diagctx::InstanceState::Active);
+    r.image = 0x5100;
+    std::memcpy(r.text[0], plugin.data(), plugin.size());
+    r.length[0] = static_cast<std::uint8_t>(plugin.size());
+    std::memcpy(r.text[1], vendor.data(), vendor.size());
+    r.length[1] = static_cast<std::uint8_t>(vendor.size());
+    Inventory inventory;
+    if (!inventory.apply(announce)) return noReport(incident);
+    TraceSnapshot trace;
+    trace.table = TableState::Read;
+    trace.modules.resize(1);
+    trace.modules[0].id = "0123456789abcdef";
+    trace.regions = {{0x5000, 0x6000, 0}};
+    trace.threads.resize(1);
+    trace.threads[0].role = detail::Role::Fault;
+    trace.threads[0].missing = Missing::None;
+    Frame frame;
+    frame.module = 0;
+    trace.threads[0].walk.frames.push_back(frame);
+    Packet terminal = boot;
+    terminal.code = 11;
+    terminal.pc = 0x5100;
+    SUPPLE_TRY(prepareDirectory(directory));
+    return publishReport(directory, boot, &terminal, 11, true, &trace, &inventory);
+}
+namespace {
+std::string who(const ReportPlugin& p) {
+    return p.vendor.empty() ? p.name : p.name + " by " + p.vendor;
+}
+}  // namespace
+std::optional<RestartNotice> restartNotice(const ReportListing& listing) {
+    // The newest unacknowledged incident, report or run without one, and the rest behind it.
+    struct Candidate {
+        std::filesystem::file_time_type time;
+        const ReportSummary* report;
+        const UnreportedRun* run;
+    };
+    std::vector<Candidate> found;
+    for (const auto& r : listing.reports)
+        if (!r.acknowledged) found.push_back({r.written, &r, nullptr});
+    for (const auto& r : listing.unreported)
+        if (!r.acknowledged) found.push_back({r.started, nullptr, &r});
+    if (found.empty()) return std::nullopt;
+    std::stable_sort(found.begin(), found.end(),
+                     [](const auto& a, const auto& b) { return a.time > b.time; });
+    RestartNotice notice;
+    for (const auto& c : found)
+        notice.incidents.push_back(c.report ? c.report->incident : c.run->incident);
+    notice.earlier = found.size() - 1;
+    const std::string app(product::kName);
+    const Candidate& newest = found.front();
+    if (newest.report) {
+        notice.kind = RestartNotice::Kind::Report;
+        const auto& r = *newest.report;
+        const bool points =
+            (r.attribution == "fault_in_image" || r.attribution == "active_token") && r.culprit &&
+            !r.culprit->name.empty();
+        notice.headline = points ? who(*r.culprit) + " was running when " + app +
+                                       " closed unexpectedly last time."
+                                 : app + " closed unexpectedly last time.";
+        notice.detail = "A crash report was saved on this computer; it was not sent anywhere.";
+        if (points) {
+            notice.plugin = r.culprit->name;
+            notice.detail += " It points at that plug-in but cannot prove it was the cause.";
+        }
+    } else {
+        notice.kind = RestartNotice::Kind::NoReport;
+        notice.headline = app + " closed unexpectedly last time, and no crash report was written.";
+        notice.detail =
+            "That happens when the program that watches it stopped too, or could not save one.";
+    }
+    if (notice.earlier == 1)
+        notice.detail += " One earlier unexpected close was not looked at.";
+    else if (notice.earlier > 1)
+        notice.detail +=
+            " " + std::to_string(notice.earlier) + " earlier unexpected closes were not looked at.";
+    return notice;
+}
+std::string noticeText(const RestartNotice& notice) {
+    return notice.headline + " " + notice.detail;
+}
+Status acknowledgeNotice(const RestartNotice& notice, const fs::path& directory) {
+    Status first = okStatus();
+    for (const auto& incident : notice.incidents)
+        if (auto st = acknowledge(incident, directory); !st && first) first = st;
+    return first;
 }
 }  // namespace supple::diagnostics

@@ -49,6 +49,8 @@ struct UnreportedRun {
     std::string incident;
     std::string role;  // from the marker; empty when it cannot be read
     bool acknowledged = false;
+    // When the marker was written, which is when that run started (file time).
+    std::filesystem::file_time_type started;
     std::filesystem::path marker;
 };
 
@@ -76,6 +78,15 @@ Result<std::string> readReport(const std::string& incident,
 // else is touched; deleting a report is not part of this.
 Status acknowledge(const std::string& incident, const std::filesystem::path& directory = {});
 
+// Writes the files of a run that ended without a report (a run marker nobody holds), for tests.
+Status writeSampleUnreportedRun(const std::string& incident,
+                                const std::filesystem::path& directory);
+
+// Writes a crash report that names `plugin` (and its `vendor`) as the plug-in the faulting
+// instruction was in (attribution fault_in_image), for tests and examples.
+Status writeSampleCrash(const std::string& incident, const std::string& plugin,
+                        const std::string& vendor, const std::filesystem::path& directory);
+
 // Writes one small, valid report (an unexpected exit of a fixture run, no capture) under
 // `incident`: for command examples and tests of whatever reads reports. Not for use by a run that
 // has crashed.
@@ -90,4 +101,23 @@ Status deleteReport(const std::string& incident, const std::filesystem::path& di
 // how many. A run still live, a report still being published and a file that is not a valid
 // report are left alone.
 Result<std::size_t> deleteAllReports(const std::filesystem::path& directory = {});
+
+// What a restart shows the user (topic 7b, P1): one plain statement that the last run ended
+// unexpectedly, for the newest incident nobody has acknowledged, and how many earlier ones the
+// same dismissal covers. Wording is provisional (P12). Only incidents whose run is over count
+// (`listReports`), so a report still being written is never announced half done.
+struct RestartNotice {
+    enum class Kind { Report, NoReport } kind = Kind::Report;
+    std::string headline;                // the sentence the user reads first
+    std::string detail;                  // what to know next
+    std::vector<std::string> incidents;  // newest first: the ones dismissing this acknowledges
+    std::size_t earlier = 0;             // incidents.size() - 1
+    std::string plugin;                  // the plug-in the report points at, when it points at one
+};
+// Empty when every ended run is acknowledged (or there were none).
+std::optional<RestartNotice> restartNotice(const ReportListing& listing);
+// The headline and detail as one text, for a place with no layout (a terminal).
+std::string noticeText(const RestartNotice& notice);
+// Acknowledges every incident the notice covers; keeps going past a failure and returns the first.
+Status acknowledgeNotice(const RestartNotice& notice, const std::filesystem::path& directory = {});
 }  // namespace supple::diagnostics
