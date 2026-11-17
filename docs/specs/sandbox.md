@@ -268,7 +268,9 @@ instance id 0, exactly one dedicated nonblocking eventfd via SCM_RIGHTS, and
 for eventfd type, read/write access and O_NONBLOCK; received copies are CLOEXEC.
 Missing, wrong-type, extra or duplicate descriptors, duplicate subscriptions,
 wrong versions/instance ids and trailing payloads are rejected with structured
-errors; rejected descriptors are closed. A host/bridge mismatch is detected
+errors; rejected descriptors are closed. A wrong version's error names both
+protocols ("bridge protocol 25, host 24"); a refusal from a bridge older than
+protocol 25, which names neither, is reported with the host's. A host/bridge mismatch is detected
 even when no instance is activated. Existing operation numbers are preserved;
 SubscribeNotifications and AckNotifications are appended after TakeIdleOutputs.
 `AckNotifications` uses instance 0 and no payload/fd; since protocol 25 (26 on

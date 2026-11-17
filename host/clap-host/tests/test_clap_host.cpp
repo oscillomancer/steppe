@@ -83,6 +83,7 @@ struct BridgeTestAccess {
         process->child_ = std::move(child);
         return process;
     }
+    static Status subscribe(BridgeProcess& process) { return process.initializeNotifications(); }
     static std::shared_ptr<BridgeProcess> adopt(int socket, pid_t pid) {
         std::shared_ptr<BridgeProcess> process(new BridgeProcess);
         process->sock_ = socket;
@@ -1237,6 +1238,7 @@ TEST_CASE("bridge rejects undersized shared memory and unexpected descriptors wi
         const auto detail = error.error();
         CHECK_FALSE(detail.code.empty());
         CHECK_FALSE(detail.hint.empty());
+        return detail;
     };
     rejected(bridge::Op::AckNotifications, {});
     rejected(bridge::Op::SubscribeNotifications, subscription);  // missing fd
@@ -1246,7 +1248,9 @@ TEST_CASE("bridge rejects undersized shared memory and unexpected descriptors wi
     rejected(bridge::Op::SubscribeNotifications, trailing, notifications);
     bridge::Writer wrongVersion;
     wrongVersion.u32(bridge::kVersion - 1);
-    rejected(bridge::Op::SubscribeNotifications, wrongVersion, notifications);
+    const auto mismatch = rejected(bridge::Op::SubscribeNotifications, wrongVersion, notifications);
+    CHECK(mismatch.message == "bridge protocol " + std::to_string(bridge::kVersion) + ", host " +
+                                  std::to_string(bridge::kVersion - 1));  // review round 26
     const int blocking = ::eventfd(0, EFD_CLOEXEC);
     REQUIRE(blocking >= 0);
     rejected(bridge::Op::SubscribeNotifications, subscription, blocking);
@@ -2215,6 +2219,32 @@ TEST_CASE("an ACK's named instances are pulled once each, in order, and a long l
     const auto all = servicedAfterAck(std::vector<std::uint32_t>(readable + 1, 2), failed);
     CHECK(all == std::vector<std::uint32_t>{1, 2, 3});  // unreadable: every member
     CHECK_FALSE(failed);
+}
+
+TEST_CASE("a bridge too old to name protocol versions is refused naming the host's") {
+    // Review round 26: a protocol-24 bridge's refusal named neither version.
+    int sockets[2];
+    REQUIRE(::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets) == 0);
+    auto process = BridgeTestAccess::adopt(sockets[0], -1);
+    std::thread peer([s = sockets[1]] {
+        std::uint32_t op = 0, id = 0;
+        std::vector<std::uint8_t> payload;
+        if (!bridge::recvFrame(s, op, id, payload)) return;
+        bridge::Writer reply;
+        reply.error(Error("bridge.subscription", "invalid notification subscription", "/version",
+                          "subscribe once with instance 0, matching protocol version and a "
+                          "native wake source"));
+        (void)bridge::sendFrame(s, static_cast<std::uint32_t>(bridge::Reply::Error), id,
+                                reply.bytes);
+    });
+    const auto status = BridgeTestAccess::subscribe(*process);
+    peer.join();
+    ::close(sockets[1]);
+    REQUIRE_FALSE(status);
+    CHECK(status.error().code == "bridge.subscription");
+    CHECK(status.error().message == "invalid notification subscription (host protocol " +
+                                        std::to_string(bridge::kVersion) + ")");
+    CHECK(status.error().hint == "use matching host and bridge builds");
 }
 
 TEST_CASE(

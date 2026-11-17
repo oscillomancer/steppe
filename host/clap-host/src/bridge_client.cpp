@@ -153,7 +153,17 @@ Status BridgeProcess::initializeNotifications() {
     Writer w;
     w.u32(kVersion);
     auto subscribed = call(Op::SubscribeNotifications, 0, w, notificationTarget(notification_));
-    if (!subscribed) return subscribed.error();
+    if (!subscribed) {
+        Error error = std::move(subscribed).error();
+        if (error.code == "bridge.subscription" &&
+            error.message == "invalid notification subscription") {
+            // A bridge older than protocol 25 does not name the versions.
+            error.message = "invalid notification subscription (host protocol " +
+                            std::to_string(kVersion) + ")";
+            error.hint = "use matching host and bridge builds";
+        }
+        return error;
+    }
     notificationsReady_ = true;
     try {
         watcher_ = std::thread([this] { watch(); });

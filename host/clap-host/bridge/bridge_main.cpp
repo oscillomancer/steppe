@@ -504,6 +504,13 @@ struct Bridge {
         }
         if (op == Op::SubscribeNotifications) {
             const auto version = r.u32();
+            if (version != kVersion && !instanceId && outward < 0) {
+                if (fd >= 0) closeResource(fd);
+                return fail(Error("bridge.subscription",
+                                  "bridge protocol " + std::to_string(kVersion) + ", host " +
+                                      std::to_string(version),
+                                  "/version", "use matching host and bridge builds"));
+            }
             if (instanceId || outward >= 0 || version != kVersion || fd < 0) {
                 if (fd >= 0) closeResource(fd);
                 return fail(Error("bridge.subscription", "invalid notification subscription",
