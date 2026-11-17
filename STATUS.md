@@ -1609,5 +1609,5 @@ only once its run's marker is released; a run that ended with no report is liste
 Agents reach it through the `crash.*` commands (list, read, acknowledge, delete, clear). The GUI shows a restart
 notice (a banner under the transport, Dismiss acknowledges; wording provisional) and a headless service says the same
 on stderr at start; the viewer and safe-load are the next steps of topic 7. The notice reads the reports once at
-start, synchronously (up to 20 reports of at most 4 MiB each). Stale run markers stay until the user deletes the run. Native macOS/Windows CI and
+start, synchronously (up to 20 reports of at most 4 MiB each). Markers of runs that left no report are capped at the newest 20. Native macOS/Windows CI and
 signed Mach capability/collector-loss tests are due before merge/release.

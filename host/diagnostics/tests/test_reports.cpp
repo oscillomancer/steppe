@@ -459,3 +459,53 @@ TEST_CASE("an unexpected report a newer build wrote still counts for the notice"
     REQUIRE(notice);
     CHECK(notice->kind == RestartNotice::Kind::Report);
 }
+
+namespace {
+// A marker nobody holds, written without `createMarker` (which prunes as it goes).
+void rawMarker(const Root& root, unsigned id) {
+    REQUIRE(privatePublish(file(root, id, ".run"), "{\"schema\":\"supple.crash-run/1.0\"}\n"));
+}
+}  // namespace
+TEST_CASE("only the newest twenty unreported runs keep their markers") {
+    Root root;
+    // A marker beside a report and a marker held by a live run are not unreported runs. They are
+    // made first: creating a marker prunes.
+    report(root, 100);
+    auto beside = createMarker(root.path, boot(100));
+    REQUIRE(beside);
+    releaseMarker(*beside);
+    auto live = createMarker(root.path, boot(101));
+    REQUIRE(live);
+    constexpr unsigned kRuns = 24;
+    for (unsigned id = 1; id <= kRuns; ++id) {
+        rawMarker(root, id);
+        fs::last_write_time(file(root, id, ".run"),
+                            fs::file_time_type::clock::now() - std::chrono::hours(100 - id));
+    }
+    REQUIRE(acknowledge(name(1), root.path));
+    REQUIRE(pruneMarkers(root.path));
+    for (unsigned id = 1; id <= kRuns; ++id) {
+        CAPTURE(id);
+        CHECK(fs::exists(file(root, id, ".run")) == (id > kRuns - kKeepUnreportedRuns));
+    }
+    CHECK_FALSE(fs::exists(file(root, 1, ".ack")));  // goes with its marker
+    CHECK(fs::exists(file(root, 100, ".run")));
+    CHECK(fs::exists(file(root, 101, ".run")));
+    CHECK(fs::exists(file(root, 100, ".json")));
+    releaseMarker(*live);
+}
+TEST_CASE("starting a run prunes the runs that ended without a report") {
+    Root root;
+    for (unsigned id = 1; id <= kKeepUnreportedRuns + 3; ++id) {
+        rawMarker(root, id);
+        fs::last_write_time(file(root, id, ".run"),
+                            fs::file_time_type::clock::now() - std::chrono::hours(100 - id));
+    }
+    auto mine = createMarker(root.path, boot(200));
+    REQUIRE(mine);
+    std::size_t markers = 0;
+    for (const auto& entry : fs::directory_iterator(root.path))
+        if (entry.path().extension() == ".run") ++markers;
+    CHECK(markers == kKeepUnreportedRuns + 1);  // the newest twenty and this run's own
+    releaseMarker(*mine);
+}

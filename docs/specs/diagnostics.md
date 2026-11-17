@@ -198,7 +198,11 @@ so with the role the marker recorded. Held markers are `liveRuns` (this process'
 POSIX probes with a shared `flock` that is released at once, Windows with a shared byte-range
 lock (`LockFileEx`) on the byte the holder locked exclusively; a Windows marker being removed by
 its own worker is briefly free, so a reader started at that instant can list that run as
-unreported. Retention never touches markers; a stale marker goes only when the user deletes its run.
+unreported. Report retention never touches markers. Markers of runs that ended without a report are bounded
+on their own: the newest 20 (by file time) are kept and older ones removed with their `.ack`, when a
+report is published and when a run creates its own marker (a supervisor that died publishes
+nothing, so the next start is the moment). A held marker and a marker beside a report are never
+removed by it; deleting a run (P11) still removes its marker.
 
 *Acknowledgement (T2).* `acknowledge(incident)` writes `<incident>.ack`, canonical JSON
 `{"schema":"supple.crash-ack/1.0","incident":…}`, beside the report or the unreported run's

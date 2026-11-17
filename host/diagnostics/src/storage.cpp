@@ -7,6 +7,8 @@
 #include <cstdio>
 #include <functional>
 #include <initializer_list>
+#include <set>
+#include <vector>
 #include "diagnostics_build.h"
 #include "inventory.h"
 #include "private_files.h"
@@ -237,7 +239,8 @@ Status prepareDirectory(const fs::path& root) {
         return failure();
     return okStatus();
 }
-Result<std::intptr_t> createMarker(const fs::path& root, const Packet& boot) {
+namespace {
+Result<std::intptr_t> createMarkerFile(const fs::path& root, const Packet& boot) {
     auto value = base(boot);
     value["schema"] = "supple.crash-run/1.0";
     const std::string text = json::writeCanonical(value) + "\n";
@@ -270,6 +273,15 @@ Result<std::intptr_t> createMarker(const fs::path& root, const Packet& boot) {
     }
     return static_cast<std::intptr_t>(fd);
 #endif
+}
+}  // namespace
+Result<std::intptr_t> createMarker(const fs::path& root, const Packet& boot) {
+    auto marker = createMarkerFile(root, boot);
+    // A run whose supervisor died leaves its marker and nothing prunes it; starting a run is the
+    // one moment every platform's code passes through. Best effort: a failure here never stops
+    // the run.
+    if (marker) (void)pruneMarkers(root);
+    return marker;
 }
 void releaseMarker(std::intptr_t file) {
     if (file < 0) return;
@@ -454,5 +466,46 @@ Status pruneReports(const fs::path& root,
     }
     return okStatus();
 }
-Status pruneReports(const fs::path& root) { return pruneReports(root, {}); }
+Status pruneMarkers(const fs::path& root) {
+    struct Entry {
+        fs::path path;
+        fs::file_time_type time;
+    };
+    std::vector<Entry> stale;
+    std::error_code ec;
+    std::set<std::string> reported;
+    std::vector<fs::path> markers;
+    for (auto it = fs::directory_iterator(root, ec); !ec && it != fs::directory_iterator();
+         it.increment(ec)) {
+        const auto path = it->path();
+        const std::string stem = reportStem(path);
+        if (stem.empty()) continue;
+        if (path.extension() == ".json") reported.insert(stem);
+        if (path.extension() == ".run") markers.push_back(path);
+    }
+    if (ec) return failure();
+    for (const auto& path : markers) {
+        // Only a run that ended and left no report counts: a held marker is a live run, and a
+        // marker beside a report is that report's business.
+        if (reported.count(reportStem(path)) || probeMarker(path) != MarkerState::Free) continue;
+        std::error_code e;
+        const auto time = fs::last_write_time(path, e);
+        if (!e) stale.push_back({path, time});
+    }
+    if (stale.size() <= kKeepUnreportedRuns) return okStatus();
+    std::sort(stale.begin(), stale.end(), [](const auto& a, const auto& b) {
+        return a.time == b.time ? a.path > b.path : a.time > b.time;
+    });
+    for (std::size_t i = kKeepUnreportedRuns; i < stale.size(); ++i) {
+        if (!privateRemove(stale[i].path)) return failure();
+        privateRemove(fs::path(stale[i].path).replace_extension(".ack"));
+    }
+    return okStatus();
+}
+Status pruneReports(const fs::path& root) {
+    auto status = pruneReports(root, {});
+    // Both are bounded and neither depends on the other: markers are pruned whatever reports did.
+    auto markers = pruneMarkers(root);
+    return status ? markers : status;
+}
 }  // namespace supple::diagnostics::detail

@@ -22,6 +22,12 @@ void removeMarker(const std::filesystem::path& root, const Packet& boot);
 // handle first (the file is not opened for deletion), then removes the file.
 void removeOwnMarker(const std::filesystem::path& root, const Packet& boot, std::intptr_t file);
 Status pruneReports(const std::filesystem::path& root);
+// Runs that ended and left no report keep their marker so the next start can say so; the newest
+// `kKeepUnreportedRuns` are kept and older ones removed with their acknowledgements. Held markers
+// (live runs) and markers beside a report are never touched. Runs after a report is published
+// and whenever a run creates its own marker.
+inline constexpr std::size_t kKeepUnreportedRuns = 20;
+Status pruneMarkers(const std::filesystem::path& root);
 // Reading what earlier runs left (reports.h). A report-named file is `<32 hex>.json`; its stem is
 // the incident, empty for any other name.
 std::string reportStem(const std::filesystem::path& path);
