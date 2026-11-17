@@ -35,8 +35,8 @@
 #include <supple/engine/realtime.h>
 #include <supple/host/clap_host.h>
 
-#include "../../clap-host/tests/scope_probe.h"
 #include "../../clap-host/tests/lifecycle_gate.h"
+#include "../../clap-host/tests/scope_probe.h"
 #include "bridge_patience.h"
 #include "fake_jack.h"
 #include "live_workers.h"
