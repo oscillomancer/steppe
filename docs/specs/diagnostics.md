@@ -309,7 +309,12 @@ PE CodeView GUID and age, computed exactly as the collectors compute them), so t
 must be the build's own, or a separate symbol file carrying the same id (an ELF debug file,
 a dSYM's DWARF file). A module with no `id`, or no file with its id, is reported as
 `no_identity` or `not_found`; a matched file without symbols is `no_symbols`; none of them is
-guessed at. The first matching file in search order wins.
+guessed at. Several files can carry one id: a stripped binary and its separate debug file
+do, and the stripped one, which keeps a few exported names, usually comes first in search
+order. So up to eight files with the id are read, and the one that names the most of the
+report's frames in that module wins, the earlier one on a tie. A module is `resolved` only if
+it named at least one of those frames (or no frame of the report is in it); a file with names
+that covers none of them is `no_symbols`, with the reason stated.
 
 Function names only: no DWARF, no line tables, no PDB. ELF reads `.symtab`, else `.dynsym`
 (function and indirect-function symbols in executable sections); Mach-O reads `LC_SYMTAB`

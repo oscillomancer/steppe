@@ -81,8 +81,10 @@ struct Resolution {
     // Same, with the distance from the function's start.
     std::optional<std::pair<std::string, std::uint64_t>> locate(const ReportFrame& frame) const;
 };
-// Matches each module to the first candidate with its format and id (candidates in the order
-// given) and loads that file's symbols.
+// Matches each module to the candidates with its format and id (in the order given, at most
+// eight files per id) and loads the symbols of the one that names the most of the report's
+// frames in that module, the earlier on a tie. A module is Resolved only if it named a frame
+// (or none is in it): a stripped binary's few exported names do not hide its debug file.
 Resolution resolve(const Report& report, const std::vector<Candidate>& candidates,
                    const Limits& limits = {});
 

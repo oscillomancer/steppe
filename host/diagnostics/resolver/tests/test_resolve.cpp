@@ -4,6 +4,7 @@
 #include <supple/crash-resolver/resolve.h>
 #include <supple/json/parse.h>
 #include <supple/json/write.h>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include "images.h"
@@ -274,6 +275,68 @@ TEST_CASE("a module with no file, no id or no symbols is reported as such, never
     REQUIRE(report);
     fs::remove(dir.path / "app");
     CHECK(resolve(*report, candidates).modules[0].state == ModuleState::Unreadable);
+}
+
+namespace {
+// What a stripped release binary keeps: a few exported names in .dynsym and none of the
+// functions the report's frames are in. Same build id as `elfWith`'s images.
+std::vector<std::uint8_t> strippedWith(std::vector<std::uint8_t> id) {
+    images::ElfSpec spec;
+    spec.buildId = std::move(id);
+    spec.symtab = false;
+    spec.functions = {{"exported_entry", 0x1800, 0x10}};
+    return images::elf(spec);
+}
+const std::vector<std::uint8_t> kIdBytes{0xde, 0xad, 0xbe, 0xef, 1, 2, 3, 4};
+}  // namespace
+
+TEST_CASE("a stripped binary does not hide its own debug file") {
+    // The stripped file sorts first, as `app` before `app.debug` and as an install folder
+    // before a symbols folder do; the debug file carries the same build id.
+    Dir dir("crash-resolver-shadow");
+    write(dir.path / "app", strippedWith(kIdBytes));
+    write(dir.path / "app.debug", elfWith(kIdBytes));
+    const auto report = parseReport(reportText("elf", kId));
+    REQUIRE(report);
+    ScanStats stats;
+    const auto inFolder = scan({dir.path}, stats);
+    REQUIRE(inFolder.size() == 2);
+    CHECK(inFolder[0].path.filename() == "app");
+    // Across two --symbols arguments, in either order, the file that names the frames wins.
+    std::vector<Candidate> twoRoots = scan({dir.path / "app"}, stats);
+    for (auto& c : scan({dir.path / "app.debug"}, stats)) twoRoots.push_back(std::move(c));
+    auto reversed = twoRoots;
+    std::reverse(reversed.begin(), reversed.end());
+    for (const std::vector<Candidate>* candidates :
+         std::initializer_list<const std::vector<Candidate>*>{&inFolder, &twoRoots, &reversed}) {
+        const auto resolution = resolve(*report, *candidates);
+        REQUIRE(resolution.modules.size() == 1);
+        CHECK(resolution.modules[0].state == ModuleState::Resolved);
+        CHECK(resolution.modules[0].file.filename() == "app.debug");
+        CHECK(resolution.name(report->threads[0].frames[0]) == "plain_main");
+        CHECK(resolution.name(report->threads[0].frames[1]) == "plain_bar");
+    }
+}
+
+TEST_CASE("a module is resolved only if it names something in the report") {
+    Dir dir("crash-resolver-unnamed");
+    write(dir.path / "app", strippedWith(kIdBytes));  // names a function the frames are not in
+    ScanStats stats;
+    const auto candidates = scan({dir.path}, stats);
+    const auto report = parseReport(reportText("elf", kId));
+    REQUIRE(report);
+    const auto resolution = resolve(*report, candidates);
+    REQUIRE(resolution.modules.size() == 1);
+    // The file matched and has names, but none of this report's frames got one: not "resolved".
+    CHECK(resolution.modules[0].state == ModuleState::NoSymbols);
+    CHECK(resolution.modules[0].file.filename() == "app");
+    CHECK(resolution.modules[0].error.find("none of the") != std::string::npos);
+    CHECK_FALSE(resolution.name(report->threads[0].frames[0]));
+    CHECK(formatText(*report, resolution).find("no_symbols") != std::string::npos);
+    // A module that no frame is in cannot be judged by its frames: its names are enough.
+    Report bare;
+    bare.modules.push_back({Format::Elf, kId});
+    CHECK(resolve(bare, candidates).modules[0].state == ModuleState::Resolved);
 }
 
 TEST_CASE("a return address at offset zero has no call before it") {

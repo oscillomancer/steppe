@@ -268,6 +268,33 @@ std::string_view stateName(ModuleState state) {
     return "not_found";
 }
 
+namespace {
+// How many files with one id are read, at most, to find the one that has names.
+constexpr std::size_t kMaxFilesPerId = 8;
+
+// The frames of the report that are in a module with this format and id.
+std::vector<ReportFrame> framesIn(const Report& report, Format format, const std::string& id) {
+    std::vector<ReportFrame> frames;
+    for (const auto& thread : report.threads)
+        for (const auto& frame : thread.frames) {
+            if (frame.module < 0 || static_cast<std::size_t>(frame.module) >= report.modules.size())
+                continue;
+            const auto& module = report.modules[static_cast<std::size_t>(frame.module)];
+            if (module.format == format && module.id == id) frames.push_back(frame);
+        }
+    return frames;
+}
+// How many of `frames` the table names, counting a return address by the call before it.
+std::size_t named(const SymbolTable& table, const std::vector<ReportFrame>& frames) {
+    std::size_t count = 0;
+    for (const auto& frame : frames) {
+        const std::uint64_t back = frame.isReturn ? 1 : 0;
+        if (frame.offset >= back && lookup(table, frame.offset - back)) ++count;
+    }
+    return count;
+}
+}  // namespace
+
 Resolution resolve(const Report& report, const std::vector<Candidate>& candidates,
                    const Limits& limits) {
     Resolution out;
@@ -278,26 +305,59 @@ Resolution resolve(const Report& report, const std::vector<Candidate>& candidate
             out.modules.push_back(std::move(r));
             continue;
         }
-        const auto match =
-            std::find_if(candidates.begin(), candidates.end(), [&](const Candidate& c) {
-                return c.image.format == module.format && c.image.id == module.id;
-            });
-        if (match == candidates.end()) {
-            out.modules.push_back(std::move(r));
+        // Every file that carries the module's id is a candidate, not only the first: a
+        // stripped binary and its separate debug file have the same build id, and the
+        // stripped one, which still has a few exported names, usually comes first. The
+        // file that names the most of this report's frames wins; the earlier one on a tie.
+        const auto frames = framesIn(report, module.format, module.id);
+        std::size_t tried = 0, best = 0;
+        std::optional<ModuleResolution> chosen;
+        ModuleResolution failed;  // the first file's reason, if none could be read
+        for (const auto& candidate : candidates) {
+            if (candidate.image.format != module.format || candidate.image.id != module.id)
+                continue;
+            if (++tried > kMaxFilesPerId) break;
+            const FileSource source(candidate.path);
+            auto table = source.ok() ? readSymbols(source, candidate.image, limits)
+                                     : Result<SymbolTable>(Error("symbols.read_failed",
+                                                                 "the file can no longer be read"));
+            if (!table) {
+                if (tried == 1) {
+                    failed.file = candidate.path;
+                    failed.state = table.error().code == "symbols.no_symbols"
+                                       ? ModuleState::NoSymbols
+                                       : ModuleState::Unreadable;
+                    failed.error = table.error().message;
+                }
+                continue;
+            }
+            const std::size_t score = named(table.value(), frames);
+            if (!chosen || score > best) {
+                best = score;
+                chosen.emplace();
+                chosen->file = candidate.path;
+                chosen->table = std::move(table.value());
+            }
+        }
+        if (tried == 0) {
+            out.modules.push_back(std::move(r));  // not found
             continue;
         }
-        r.file = match->path;
-        const FileSource source(match->path);
-        auto table = source.ok() ? readSymbols(source, match->image, limits)
-                                 : Result<SymbolTable>(Error("symbols.read_failed",
-                                                             "the file can no longer be read"));
-        if (table) {
+        if (!chosen) {
+            out.modules.push_back(std::move(failed));
+            continue;
+        }
+        r = std::move(*chosen);
+        if (frames.empty() || best > 0) {
             r.state = ModuleState::Resolved;
-            r.table = std::move(table.value());
         } else {
-            r.state = table.error().code == "symbols.no_symbols" ? ModuleState::NoSymbols
-                                                                 : ModuleState::Unreadable;
-            r.error = table.error().message;
+            // A file with this id was read and has names, none of them for this report's
+            // addresses (a stripped binary with no debug file beside it, typically).
+            r.state = ModuleState::NoSymbols;
+            r.error = "the file has " + std::to_string(r.table->symbols.size()) +
+                      " functions but none of the report's frames in this module is in one; "
+                      "a stripped binary's separate symbol file may be missing";
+            r.table.reset();
         }
         out.modules.push_back(std::move(r));
     }
