@@ -6,7 +6,14 @@
 // (supple_fixture_set_observer). The observer here records, for each call, which words of
 // the execution table are not idle at that moment: the scopes the host holds open around
 // the call. It is called from process() too, so it allocates nothing and takes no lock: a
-// fixed array and one atomic counter.
+// fixed array of slots and one atomic counter.
+//
+// A slot is written by the thread that reserved it and read by take() only after that thread
+// has published it (a release store of the slot's `ready` flag, an acquire load in take()), so
+// reading never races writing even while plug-in threads are still calling the observer. Slots
+// are never reused within an Observer's life: `gCount` only grows and take() has a cursor of
+// its own, so a slot that was reserved before a take() and finished after it is simply
+// returned by the next one.
 #pragma once
 #include <doctest/doctest.h>
 
@@ -35,7 +42,9 @@ struct Sighting {
 };
 constexpr std::size_t kSightings = std::size_t{1} << 15;
 inline Sighting gSightings[kSightings];
+inline std::atomic<bool> gReady[kSightings];
 inline std::atomic<std::size_t> gCount{0};
+inline std::size_t gTaken = 0;  // the first slot take() has not returned; the test thread's
 
 [[gnu::noinline]] inline void observe(const char* phase) {
     const std::size_t at = gCount.fetch_add(1, std::memory_order_relaxed);
@@ -57,6 +66,7 @@ inline std::atomic<std::size_t> gCount{0};
                 ++sighting.more;
         }
     }
+    gReady[at].store(true, std::memory_order_release);
 }
 
 // Installs the observer in the fixture module for as long as it lives. Every sighting
@@ -68,6 +78,8 @@ class Observer {
         const auto set = reinterpret_cast<void (*)(void (*)(const char*))>(
             plugin::test::symbol(module_, "supple_fixture_set_observer"));
         REQUIRE(set);
+        for (auto& ready : gReady) ready.store(false, std::memory_order_relaxed);
+        gTaken = 0;
         gCount.store(0);
         set(&observe);
     }
@@ -80,9 +92,15 @@ class Observer {
     Observer(const Observer&) = delete;
     Observer& operator=(const Observer&) = delete;
 
+    // The sightings that are complete and have not been returned yet, in the order their
+    // slots were reserved. One that a thread has reserved and not finished (and any after
+    // it) waits for the next call.
     std::vector<Sighting> take() {
-        const std::size_t n = std::min(gCount.exchange(0), kSightings);
-        return std::vector<Sighting>(gSightings, gSightings + n);
+        const std::size_t end = std::min(gCount.load(std::memory_order_acquire), kSightings);
+        std::vector<Sighting> taken;
+        while (gTaken < end && gReady[gTaken].load(std::memory_order_acquire))
+            taken.push_back(gSightings[gTaken++]);
+        return taken;
     }
 
   private:
