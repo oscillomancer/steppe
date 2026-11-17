@@ -636,6 +636,14 @@ std::optional<TraceSnapshot> parseCapsule(const std::uint8_t* bytes, std::size_t
         (header.flags & ~(kCapsuleModulesTruncated | kCapsuleThreadsDropped)) != 0 ||
         header.reserved != 0)
         return std::nullopt;
+    // The worker always records the fault entry first, so a capsule with no thread is not
+    // one it wrote. Threads beyond the cap are counted together with their flag; the count
+    // cannot exceed what a process could have (a damaged capsule must not report billions).
+    constexpr std::uint32_t kMaxDropped = 1U << 20;
+    if (header.threadCount == 0 ||
+        (header.dropped != 0) != ((header.flags & kCapsuleThreadsDropped) != 0) ||
+        header.dropped > kMaxDropped)
+        return std::nullopt;
     TraceSnapshot snapshot;
     snapshot.dropped = header.dropped;
     snapshot.truncatedModules = (header.flags & kCapsuleModulesTruncated) != 0;
@@ -678,6 +686,8 @@ std::optional<TraceSnapshot> parseCapsule(const std::uint8_t* bytes, std::size_t
         if (walked != (head.frameCount > 0)) return std::nullopt;
         ThreadTrace trace;
         trace.role = static_cast<Role>(head.role);
+        // The fault entry is the first thread and the only one.
+        if ((i == 0) != (trace.role == Role::Fault)) return std::nullopt;
         trace.missing = static_cast<Missing>(head.missing);
         trace.walk.stop = static_cast<Stop>(head.stop);
         for (std::uint32_t f = 0; f < head.frameCount; ++f) {

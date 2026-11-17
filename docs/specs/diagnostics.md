@@ -212,7 +212,8 @@ header is read once, and what it said is kept, so a stack of addresses outside e
 cannot make the handler read the same headers repeatedly. The supervisor reads the
 capsule for 600 ms from when it starts collecting, which is after the worker's clock starts, so the
 send ends with a margin of at least 50 ms before the supervisor gives up (a compile-time
-check ties the two). It validates it strictly (counts, roles, reasons and ranges, the bytes consumed
+check ties the two). It validates it strictly (counts, roles, reasons and ranges, the fault entry first
+and only once, the dropped-thread count agreeing with its flag and plausible, the bytes consumed
 exactly); a capsule that is missing, late, truncated or malformed leaves the fault thread
 `unavailable` with `not_collected`, and the report is otherwise unchanged. The addresses
 in the capsule never leave the supervisor's parser: a frame is reported as an index into

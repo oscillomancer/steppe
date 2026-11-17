@@ -147,9 +147,9 @@ TEST_CASE("a capsule becomes module identity and offsets, fault first") {
     auto data = fresh();
     addModule(*data, 0x100000, 0x100000, 0x180000, 0x10);
     addModule(*data, 0x7ff000000000, 0x7ff000000000, 0x7ff000100000);  // no UUID
+    addThread(*data, Role::Fault, Missing::None, Stop::Cycle, {0x100300, 0xdead0000, 0x100310});
     addThread(*data, Role::Other, Missing::None, Stop::End, {0x100200, 0x7ff000000040, 0x100210});
     addThread(*data, Role::Main, Missing::Deadline, Stop::End, {});
-    addThread(*data, Role::Fault, Missing::None, Stop::Cycle, {0x100300, 0xdead0000, 0x100310});
     const auto bytes = encode(*data);
     const auto snapshot = parseCapsule(bytes.data(), bytes.size());
     REQUIRE(snapshot);
@@ -188,12 +188,20 @@ TEST_CASE("a capsule becomes module identity and offsets, fault first") {
     REQUIRE(oddSnapshot->threads[0].walk.frames.size() == 2);
     CHECK(oddSnapshot->threads[0].walk.frames[0].module == -1);
     CHECK(oddSnapshot->threads[0].walk.frames[1].module == 0);
-    // An empty capsule is valid: nothing was recorded.
+    // Threads beyond the cap are counted with their flag, and the count survives.
+    auto counted = fresh();
+    addThread(*counted, Role::Fault, Missing::None, Stop::End, {0x1000});
+    counted->header.flags = kCapsuleThreadsDropped;
+    counted->header.dropped = 3;
+    const auto countedBytes = encode(*counted);
+    const auto countedSnapshot = parseCapsule(countedBytes.data(), countedBytes.size());
+    REQUIRE(countedSnapshot);
+    CHECK(countedSnapshot->dropped == 3);
+    // A capsule with no thread records nothing, not even the fault entry every capsule
+    // starts with: it is refused (review round 29, F3).
     CapsuleHeader header{};
     header.magic = kCapsuleMagic;
-    const auto empty = parseCapsule(reinterpret_cast<const std::uint8_t*>(&header), sizeof(header));
-    REQUIRE(empty);
-    CHECK(empty->threads.empty());
+    CHECK_FALSE(parseCapsule(reinterpret_cast<const std::uint8_t*>(&header), sizeof(header)));
 }
 
 TEST_CASE("overlapping module ranges cannot make an address ambiguous") {
@@ -245,6 +253,20 @@ TEST_CASE("a malformed or truncated capsule yields nothing") {
     mutate("too many frames", [](CapsuleData& d) { d.threads[0].head.frameCount = 129; });
     mutate("walked without frames", [](CapsuleData& d) { d.threads[0].head.frameCount = 0; });
     mutate("unavailable with frames", [](CapsuleData& d) { d.threads[1].head.frameCount = 1; });
+    // The fault entry comes first, exactly once (review round 29, F3).
+    mutate("no threads", [](CapsuleData& d) { d.header.threadCount = 0; });
+    mutate("no fault entry",
+           [](CapsuleData& d) { d.threads[0].head.role = static_cast<std::uint8_t>(Role::Main); });
+    mutate("fault entry second", [](CapsuleData& d) { std::swap(d.threads[0], d.threads[1]); });
+    mutate("two fault entries",
+           [](CapsuleData& d) { d.threads[1].head.role = static_cast<std::uint8_t>(Role::Fault); });
+    // The dropped count and its flag agree, and the count is plausible.
+    mutate("dropped without its flag", [](CapsuleData& d) { d.header.dropped = 1; });
+    mutate("flag without dropped", [](CapsuleData& d) { d.header.flags = kCapsuleThreadsDropped; });
+    mutate("absurd dropped", [](CapsuleData& d) {
+        d.header.flags = kCapsuleThreadsDropped;
+        d.header.dropped = 4294967295U;
+    });
 }
 
 #if !defined(_WIN32)
