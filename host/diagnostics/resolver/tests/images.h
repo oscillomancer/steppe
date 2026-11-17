@@ -60,6 +60,8 @@ struct ElfSpec {
     bool symtab = true;   // else the symbols go in .dynsym
     bool symbols = true;  // false: neither table
     bool programNote = true;
+    // A descsz that disagrees with the bytes the note really holds (0: the true size).
+    std::uint32_t noteDescsz = 0;
 };
 // Sections: 1 .text (exec, 0x1000..0x2000), 2 .data (0x3000..0x3100), 3 .symtab, 4 .strtab,
 // 5 .note.gnu.build-id.
@@ -71,7 +73,7 @@ inline std::vector<std::uint8_t> elf(const ElfSpec& spec) {
     {
         Bytes n;
         n.u32(0, 4);
-        n.u32(4, spec.buildId.size());
+        n.u32(4, spec.noteDescsz != 0 ? spec.noteDescsz : spec.buildId.size());
         n.u32(8, 3);
         n.text(12, "GNU");
         n.bytes(16, spec.buildId);

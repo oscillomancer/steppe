@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include "images.h"
+#include "temp_dir.h"
 #if __has_include(<cxxabi.h>)
 #define HAVE_DEMANGLER 1
 #endif
@@ -363,6 +364,37 @@ TEST_CASE("a name with no terminator inside the string table is skipped, not rea
     CHECK(table.skipped == 1);
 }
 
+TEST_CASE("a build-id note whose size runs past its segment gives no id, not the bytes beyond") {
+    // descsz 40 is a plausible build-id length (the limit is 64), but the note holds 8 bytes
+    // and ends there: reading 40 would take the heap's bytes for the id. A check that the
+    // note's end is inside its segment is what refuses it; without that check this id is
+    // nonempty.
+    for (const std::uint32_t descsz : {9u, 21u, 40u, 64u}) {
+        images::ElfSpec spec;
+        spec.functions = {{"f", 0x1100, 0x10}};
+        spec.noteDescsz = descsz;
+        const auto bytes = images::elf(spec);
+        const MemorySource source(bytes);
+        const auto found = identify(source);
+        REQUIRE(found.size() == 1);
+        CHECK(found[0].id.empty());
+    }
+    // The same image with the true size has its id.
+    images::ElfSpec spec;
+    spec.functions = {{"f", 0x1100, 0x10}};
+    const auto bytes = images::elf(spec);
+    const MemorySource source(bytes);
+    CHECK(identify(source)[0].id == "deadbeef01020304");
+    // Sizes the limit refuses outright, and zero, give none either.
+    for (const std::uint32_t descsz : {65u, 1000000u, 0xffffffffu}) {
+        images::ElfSpec odd;
+        odd.noteDescsz = descsz;
+        const auto oddBytes = images::elf(odd);
+        const MemorySource oddSource(oddBytes);
+        CHECK(identify(oddSource)[0].id.empty());
+    }
+}
+
 TEST_CASE("names are demangled where the platform can") {
     CHECK(demangle("plain") == "plain");
     CHECK(demangle("_Zbroken") == "_Zbroken");
@@ -372,10 +404,8 @@ TEST_CASE("names are demangled where the platform can") {
 }
 
 TEST_CASE("a file source reads ranges and refuses everything else") {
-    const auto dir = fs::temp_directory_path() / "crash-resolver-source";
-    std::error_code ec;
-    fs::remove_all(dir, ec);
-    fs::create_directories(dir);
+    const tempdir::Dir scratch("crash-resolver-source");
+    const auto& dir = scratch.path;
     const auto path = dir / "bytes.bin";
     {
         std::ofstream out(path, std::ios::binary);
@@ -404,5 +434,4 @@ TEST_CASE("a file source reads ranges and refuses everything else") {
     const auto table = readSymbols(image, found.front());
     REQUIRE(table);
     CHECK(nameOf(*table, 0x1100) == "main");
-    fs::remove_all(dir, ec);
 }

@@ -8,24 +8,14 @@
 #include <filesystem>
 #include <fstream>
 #include "images.h"
+#include "temp_dir.h"
 
 using namespace supple::diagnostics::resolver;
 namespace fs = std::filesystem;
 
 namespace {
 
-struct Dir {
-    fs::path path;
-    explicit Dir(const char* name) : path(fs::temp_directory_path() / name) {
-        std::error_code ec;
-        fs::remove_all(path, ec);
-        fs::create_directories(path);
-    }
-    ~Dir() {
-        std::error_code ec;
-        fs::remove_all(path, ec);
-    }
-};
+using tempdir::Dir;
 void write(const fs::path& path, const std::vector<std::uint8_t>& bytes) {
     fs::create_directories(path.parent_path());
     std::ofstream out(path, std::ios::binary);
@@ -451,6 +441,18 @@ TEST_CASE("text output never carries control bytes from symbol files or reports"
     // JSON keeps its own escaping.
     const auto json = supple::json::writeCanonical(formatJson(*report, resolution));
     CHECK(json.find('\x1b') == std::string::npos);
+}
+
+TEST_CASE("scratch folders are unique to a run") {
+    // Two suites sharing a TMPDIR must never share a folder name.
+    const auto first = tempdir::uniquePath("crash-resolver-x");
+    const auto second = tempdir::uniquePath("crash-resolver-x");
+    CHECK(first != second);
+    CHECK(first.filename().string().rfind("crash-resolver-x-", 0) == 0);
+    Dir one("crash-resolver-x"), two("crash-resolver-x");
+    CHECK(one.path != two.path);
+    write(one.path / "file", std::string("a"));
+    CHECK_FALSE(fs::exists(two.path / "file"));
 }
 
 TEST_CASE("a return address at offset zero has no call before it") {
