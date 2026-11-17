@@ -1016,12 +1016,15 @@ is said on standard error.
 What an image is (the `Source` reader, `Limits`, `Identity` and `identify`, and the ELF, Mach-O
 and PE header parsers that compute an id) is the GPL library `image-identity`
 (`libs/image-identity/`, header `supple/imageid/image.h`, still namespace
-`supple::diagnostics::resolver`), moved out of the resolver unchanged so that the application
+`supple::diagnostics::resolver`), moved out of the resolver so that the application
 can compare an installed plug-in file with a report's `build.id` (topic 7d) without linking the
 resolver, its symbol readers or its search. `crash-resolver` links it and keeps the symbol
 tables, `lookup`, `demangle` and the report resolution. Like `diagnostics-capture` it is
 DAW-only: `tools/license-check` and `cmake/LicenseIsolation.cmake` reject its use from
-`plugins/`, `modules/` and the MIT libraries.
+`plugins/`, `modules/` and the MIT libraries. The code is moved as it was, but the ELF, Mach-O and PE
+helpers that were local to one file are now `resolver::detail` functions with external linkage,
+declared in `supple/imageid/parse.h` so that the resolver can reuse them. That header is internal
+to the library and the resolver, not an interface: nothing else includes it.
 
 A report module is matched to a file by format and `id` (ELF build ID, Mach-O `LC_UUID`,
 PE CodeView GUID and age, computed exactly as the collectors compute them), so the file
