@@ -16,7 +16,9 @@
 #include <cstdio>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 #include "trace.h"
 // Windows collector, run by the supervisor inside the worker's terminal hold. The
@@ -38,6 +40,8 @@ namespace {
 constexpr std::chrono::milliseconds kBudget{600};
 constexpr std::size_t kMaxListedThreads = 4096;
 constexpr std::size_t kMaxQueries = 65536;
+// A thread's stack is one allocation of a few regions (committed, guard, reserved).
+constexpr std::size_t kMaxStackRegions = 64;
 constexpr DWORD kExecutable =
     PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
 
@@ -146,6 +150,33 @@ class Collector {
         }
         if (!queried) return std::nullopt;
         return layout;
+    }
+    // The stack allocation that holds `sp`: from its allocation base to the end of the last
+    // region with that base. Used for a thread that registered no stack of its own (the
+    // audio driver's callback thread). At most kMaxStackRegions queries; none if `sp` is not
+    // in committed private memory.
+    std::optional<std::pair<std::uint64_t, std::uint64_t>> stackRegion(std::uint64_t sp) {
+        MEMORY_BASIC_INFORMATION page{};
+        if (VirtualQueryEx(process_, reinterpret_cast<LPCVOID>(static_cast<std::uintptr_t>(sp)),
+                           &page, sizeof(page)) != sizeof(page) ||
+            page.State != MEM_COMMIT || page.Type != MEM_PRIVATE || page.AllocationBase == nullptr)
+            return std::nullopt;
+        const auto base = reinterpret_cast<std::uintptr_t>(page.AllocationBase);
+        std::uint64_t address = base, end = base;
+        for (std::size_t queries = 0; queries < kMaxStackRegions; ++queries) {
+            MEMORY_BASIC_INFORMATION part{};
+            if (VirtualQueryEx(process_,
+                               reinterpret_cast<LPCVOID>(static_cast<std::uintptr_t>(address)),
+                               &part, sizeof(part)) != sizeof(part) ||
+                reinterpret_cast<std::uintptr_t>(part.AllocationBase) != base)
+                break;
+            const std::uint64_t next =
+                std::uint64_t{reinterpret_cast<std::uintptr_t>(part.BaseAddress)} + part.RegionSize;
+            if (next <= address) break;  // no progress: never loop
+            address = end = next;
+        }
+        if (end <= sp) return std::nullopt;
+        return std::make_pair(std::uint64_t{base}, end);
     }
     std::vector<std::uint64_t> threads() const {
         std::vector<std::uint64_t> tids;
@@ -380,6 +411,7 @@ TraceSnapshot collectProcessTrace(Native& native, const Packet& terminal) {
     ops.walk = [&](std::uint64_t tid, const Regs& regs, const Layout& layout) {
         return collector.walk(tid, regs, layout);
     };
+    ops.stackRegion = [&](std::uint64_t sp) { return collector.stackRegion(sp); };
     return collectTrace(ops, terminal.tid, Regs{terminal.pc, terminal.sp, terminal.frame},
                         collector.mainThread(tids), hostArch(), native.table);
 }

@@ -13,6 +13,7 @@
 #include "../src/terminal.h"
 #include "../src/trace.h"
 #include "supple/base/rt.h"
+#include "supple/diagctx/scope.h"
 #include "supple/diagctx/table.h"
 #include "supple/diagnostics/frontend.h"
 #if defined(_WIN32)
@@ -297,6 +298,66 @@ int body(int argc, char** argv) {
         faulting.join();
         first.join();
         second.join();
+    }
+#endif
+#if defined(__linux__) || defined(_WIN32)
+    // Execution scopes (topic 5b): every thread of the trace fixture is inside a different
+    // entry of some instance when the fault comes, as plug-in code would be, and the report
+    // must name the entry each one is in. One thread is not registered, as the audio
+    // driver's callback thread is, and is found by the stack it stands on; one is inside two
+    // nested scopes and is reported in the inner. The cells are claimed here, cold, as
+    // an instance's would be.
+    if (mode == "trace-scopes") {
+        if (argc != 4) return 4;
+        writeExpected(argv[3]);
+        using supple::diagctx::acquireCell;
+        using supple::diagctx::AudioScope;
+        using supple::diagctx::Entry;
+        using supple::diagctx::MainScope;
+        using supple::diagctx::ThreadRole;
+        const auto cellFault = acquireCell(), cellModel = acquireCell(), cellLive = acquireCell(),
+                   cellOuter = acquireCell(), cellInner = acquireCell(), cellOther = acquireCell();
+        std::thread live([=] {
+            (void)supple::diagctx::registerThread(ThreadRole::AudioLive, 2);
+            AudioScope scope(cellLive, Entry::Reset);
+            parkOuter();
+        });
+        // Nested scopes belong to different frames, as the host's do (a scope in create(),
+        // another in the library open it calls): one frame's scopes share an address.
+        static const auto parkInnerScope = [](std::uint32_t cell) {
+            struct Frame {
+                [[gnu::noinline]] static void run(std::uint32_t cell) {
+                    MainScope inner(cell, Entry::LibraryOpen);
+                    parkOuter();
+                    asm volatile("" ::: "memory");
+                }
+            };
+            Frame::run(cell);
+        };
+        std::thread background([=] {
+            (void)supple::diagctx::registerThread(ThreadRole::AudioBackground, 1);
+            MainScope outer(cellOuter, Entry::State);
+            parkInnerScope(cellInner);
+        });
+        std::thread unregistered([=] {
+            MainScope scope(cellOther, Entry::Gui);
+            parkOuter();
+        });
+        std::thread faulting([=] {
+            (void)supple::diagctx::registerThread(ThreadRole::AudioRender);
+            (void)supple::diagnostics::registerCurrentThread();
+            while (parked.load() != 4) supple::rt::relax();  // three threads plus main
+            AudioScope scope(cellFault, Entry::Process);
+            faultOuter();
+        });
+        {
+            MainScope scope(cellModel, Entry::Params);
+            parkOuter();  // the main thread parks too; the fault ends the process
+        }
+        faulting.join();
+        live.join();
+        background.join();
+        unregistered.join();
     }
 #endif
 #if defined(__linux__)

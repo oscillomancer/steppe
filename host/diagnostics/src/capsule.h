@@ -21,7 +21,7 @@
 #include <vector>
 #include "native.h"
 namespace supple::diagnostics::detail {
-constexpr std::uint32_t kCapsuleMagic = 0x32435443;  // "CTC2": v2 adds thread roles
+constexpr std::uint32_t kCapsuleMagic = 0x33435443;  // "CTC3": v3 adds roles and open entries
 constexpr std::size_t kCapsuleThreads = 128, kCapsuleFrames = 128, kCapsuleModules = 256;
 constexpr std::uint32_t kCapsuleModulesTruncated = 1, kCapsuleThreadsDropped = 2;
 
@@ -30,6 +30,10 @@ constexpr std::uint32_t kCapsuleModulesTruncated = 1, kCapsuleThreadsDropped = 2
 struct CapsuleHeader {
     std::uint32_t magic, moduleCount, threadCount, flags;
     std::uint32_t dropped, reserved;  // threads not recorded beyond the cap
+    // The worker's execution table counters as it read them (threads and instances the
+    // table turned away, scopes whose address did not fit a word), and the number of open
+    // entries no captured thread claimed.
+    std::uint32_t tableThreadsDropped, tableUntracked, tableScopeOverflow, unplaced;
 };
 // An image the frames fall in: [start, end) is its executable text at run time and
 // `bias` is the load address minus its link address (the slide), so an address minus
@@ -43,11 +47,15 @@ struct CapsuleModule {
 // parser validates all three. `registered` is the diagctx::ThreadRole the process
 // registered the thread as (0: none) and `worker` its number for audio-live-N and
 // audio-bg-N; the worker reads both from its own execution table. Frame 0 is the exact
-// pc, the rest return addresses.
+// pc, the rest return addresses. `entry` is the diagctx::Entry the thread was inside (0:
+// none), with the instance's cell and the cell's generation; the worker works it out from
+// its own table while the thread is stopped.
 struct CapsuleThread {
     std::uint8_t role, missing, stop, registered;
-    std::uint16_t worker, reserved;
+    std::uint16_t worker;
+    std::uint8_t entry, reserved;
     std::uint32_t frameCount;
+    std::uint16_t entryCell, entryGeneration;
 };
 struct CapsuleThreadData {
     CapsuleThread head;

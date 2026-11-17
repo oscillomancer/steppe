@@ -485,6 +485,37 @@ TEST_CASE("text output escapes every byte that is not part of valid UTF-8") {
     }
 }
 
+TEST_CASE("the entry a thread was inside is read, shown, kept in JSON and checked") {
+    const auto with = [](const std::string& kind) {
+        std::string text = reportText("elf", kId);
+        const auto at = text.find("\"worker\":2,");
+        REQUIRE(at != std::string::npos);
+        text.insert(at + 11, "\"entry\":\"" + kind + "\",");
+        return text;
+    };
+    const auto report = parseReport(with("process"));
+    REQUIRE(report);
+    CHECK(report->threads[0].entry == "process");
+    CHECK(report->threads[1].entry.empty());
+    Resolution resolution;
+    resolution.modules.resize(1);
+    const auto text = formatText(*report, resolution);
+    CHECK(text.find("thread 0 fault (audio_live) in process:") != std::string::npos);
+    CHECK(text.find("thread 1 main:") != std::string::npos);  // no entry, nothing said
+    const auto json = supple::json::writeCanonical(formatJson(*report, resolution));
+    CHECK(json.find("\"entry\": \"process\"") != std::string::npos);
+    // Every kind a scope records is accepted, and nothing else.
+    for (const char* kind :
+         {"create", "destroy", "activate", "deactivate", "start_processing", "stop_processing",
+          "process", "flush", "reset", "params", "state", "semantic", "editor_picture", "trace",
+          "gui", "main_thread", "library_open", "library_close", "bridge_call"})
+        CHECK(static_cast<bool>(parseReport(with(kind))));
+    for (const char* kind : {"none", "", "Process", "run", "process\\n"})
+        CHECK_FALSE(static_cast<bool>(parseReport(with(kind))));
+    // The entry is escaped like every other text taken from a report.
+    CHECK_FALSE(static_cast<bool>(parseReport(with("pro\\u001bcess"))));
+}
+
 TEST_CASE("scratch folders are unique to a run") {
     // Two suites sharing a TMPDIR must never share a folder name.
     const auto first = tempdir::uniquePath("crash-resolver-x");

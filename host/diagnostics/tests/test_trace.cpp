@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <vector>
 #include "../src/private_files.h"
@@ -312,6 +313,7 @@ struct FakeProcess {
     std::map<std::uint64_t, Missing> refuse;
     int stops = 0, releases = 0, stopped = 0, maxStopped = 0;
     unsigned expireAfter = ~0U, checks = 0;
+    std::function<void(std::uint64_t)> onStop;  // runs as a thread is stopped, before it reads
     TraceOps ops() {
         TraceOps ops;
         ops.expired = [this] { return ++checks > expireAfter; };
@@ -325,6 +327,7 @@ struct FakeProcess {
             if (auto it = refuse.find(tid); it != refuse.end()) return it->second;
             ++stops;
             maxStopped = std::max(maxStopped, ++stopped);
+            if (onStop) onStop(tid);
             out = regs[tid];
             return Missing::None;
         };
@@ -1008,4 +1011,208 @@ TEST_CASE("access_denied is a valid reason and validates strictly") {
     CHECK(traceShape(&modules, threads));
     CHECK(json::writeCanonical(threads).find("\"access_denied\"") != std::string::npos);
     CHECK(p.releases == 1);  // only the thread that was stopped is released
+}
+
+namespace {
+using supple::diagctx::Entry;
+using supple::diagctx::packWord;
+// A word written into the table image: `audio` or `main` of `cell`.
+void setWord(supple::diagctx::TableImage& image, std::uint32_t cell, bool audio,
+             std::uint64_t word) {
+    (audio ? image.instances[cell].audio : image.instances[cell].main) = word;
+}
+// Where a word lives in the fake process, as the second read looks for it.
+std::uint64_t wordAddress(std::uint32_t cell, bool audio) {
+    return kTableAt + offsetof(supple::diagctx::TableImage, instances) +
+           cell * sizeof(supple::diagctx::TableImage::InstanceCell) + (audio ? 0 : 8);
+}
+// Three threads on three stacks: 11 faults (stack 0x6000-0x7100, sp 0x6ff0), 10 is registered
+// (stack 0xa000-0xc000 in its slot, sp 0xa800, no mapping), 12 is not (stack 0xe000-0x10000
+// in the maps, sp 0xe800).
+FakeProcess scoped(supple::diagctx::TableImage& image) {
+    auto p = process();
+    p.maps += "6000-7100 rw-p 00000000 00:00 0\ne000-10000 rw-p 00000000 00:00 0 [stack]\n";
+    p.regs[11] = {0x400200, 0x6ff0, 0x7000};
+    p.regs[10] = {0x400100, 0xa800, 0xa900};
+    p.regs[12] = {0x400100, 0xe800, 0xe900};
+    p.image.frame(0xa900, 0, 0x401000);
+    p.image.frame(0xe900, 0, 0x401000);
+    claim(image, 0, 10, ThreadRole::AudioLive, 1);
+    image.threads[0].stackLow = 0xa000;
+    image.threads[0].stackHigh = 0xc000;
+    return p;
+}
+// Overwrites a word of the table in the fake process, as a running thread would.
+void patchWord(FakeProcess& p, std::uint64_t address, std::uint64_t word) {
+    auto& part = p.image.parts[kTableAt];
+    REQUIRE(address >= kTableAt);
+    REQUIRE(address - kTableAt + sizeof(word) <= part.size());
+    std::memcpy(part.data() + (address - kTableAt), &word, sizeof(word));
+}
+TraceSnapshot collectScoped(FakeProcess& p, const supple::diagctx::TableImage& image) {
+    put(p, image);
+    return collectTrace(p.ops(), 11, {0x400200, 0x6ff0, 0x7000}, 10, Arch::X86_64, kTableAt);
+}
+const ThreadTrace& threadOf(const TraceSnapshot& snapshot, Role role, ThreadRole registered) {
+    for (const auto& t : snapshot.threads)
+        if (t.role == role && t.registered == registered) return t;
+    FAIL("no such thread");
+    return snapshot.threads[0];
+}
+}  // namespace
+
+TEST_CASE("an open entry is tied to the thread whose stack holds its address") {
+    auto image = tableImage();
+    auto p = scoped(image);
+    setWord(image, 5, true, packWord(Entry::Process, 3, 0x7000));  // fault thread, own stack
+    setWord(image, 7, true, packWord(Entry::Reset, 9, 0xb000));    // thread 10, by its slot
+    setWord(image, 8, false, packWord(Entry::State, 2, 0xf000));   // thread 12, by the maps
+    const auto snapshot = collectScoped(p, image);
+    REQUIRE(snapshot.table == TableState::Read);
+    REQUIRE(snapshot.threads.size() == 3);
+    const auto& fault = snapshot.threads[0];
+    CHECK(fault.entry == Entry::Process);
+    CHECK(fault.entryCell == 5);
+    CHECK(fault.entryGeneration == 3);
+    const auto& registered = threadOf(snapshot, Role::Main, ThreadRole::AudioLive);
+    CHECK(registered.entry == Entry::Reset);
+    CHECK(registered.entryCell == 7);
+    CHECK(registered.entryGeneration == 9);
+    const auto& other = snapshot.threads[2];
+    CHECK(other.registered == ThreadRole::None);
+    CHECK(other.entry == Entry::State);
+    CHECK(other.entryCell == 8);
+    CHECK(snapshot.unplacedEntries == 0);
+    const auto limits = traceLimits(snapshot);
+    for (const auto& limit : limits) CHECK(limit.find("plug-in entries") == std::string::npos);
+}
+
+TEST_CASE("of nested entries the thread is in the innermost, and the outer ones are still placed") {
+    auto image = tableImage();
+    auto p = scoped(image);
+    setWord(image, 6, false, packWord(Entry::Params, 1, 0x7080));  // outer: higher address
+    setWord(image, 5, true, packWord(Entry::Process, 3, 0x7000));  // inner: lower address
+    setWord(image, 9, true, packWord(Entry::Flush, 4, 0x70a0));    // between the two
+    const auto snapshot = collectScoped(p, image);
+    CHECK(snapshot.threads[0].entry == Entry::Process);
+    CHECK(snapshot.threads[0].entryCell == 5);
+    CHECK(snapshot.unplacedEntries == 0);
+}
+
+TEST_CASE("an entry above the stack pointer's frame, or on no stack, is not claimed") {
+    auto image = tableImage();
+    auto p = scoped(image);
+    // Below the stack pointer: a stale word from a frame that has returned.
+    setWord(image, 1, true, packWord(Entry::Process, 1, 0x6f00));
+    // A forged address beyond any real stack, and one the table could not hold at all.
+    setWord(image, 2, true, packWord(Entry::Process, 1, supple::diagctx::kWordStackLimit - 16));
+    setWord(image, 3, true, packWord(Entry::Process, 1, ~std::uint64_t{0}));  // recorded as none
+    // Inside the thread's mapping but past its end.
+    setWord(image, 4, false, packWord(Entry::Params, 1, 0x7100));
+    const auto snapshot = collectScoped(p, image);
+    for (const auto& t : snapshot.threads) CHECK(t.entry == Entry::None);
+    CHECK(snapshot.unplacedEntries == 4);
+    bool said = false;
+    for (const auto& limit : traceLimits(snapshot))
+        said = said || limit.find("no thread read could be tied to") != std::string::npos;
+    CHECK(said);
+}
+
+TEST_CASE("a thread that is stopped is read again, and only an entry both reads agree on counts") {
+    auto image = tableImage();
+    auto p = scoped(image);
+    setWord(image, 7, true, packWord(Entry::Reset, 9, 0xb000));    // thread 10
+    setWord(image, 8, false, packWord(Entry::State, 2, 0xf000));   // thread 12
+    setWord(image, 5, true, packWord(Entry::Process, 3, 0x7000));  // the fault thread
+    // Thread 10 leaves its entry between the copy and its stop; thread 12 stays in its own.
+    p.onStop = [&](std::uint64_t tid) {
+        if (tid == 10) patchWord(p, wordAddress(7, true), packWord(Entry::None, 9, 0));
+    };
+    const auto snapshot = collectScoped(p, image);
+    const auto& left = threadOf(snapshot, Role::Main, ThreadRole::AudioLive);
+    CHECK(left.entry == Entry::None);
+    CHECK(snapshot.threads[2].entry == Entry::State);
+    CHECK(snapshot.threads[0].entry == Entry::Process);  // parked in its handler: no second read
+    CHECK(snapshot.unplacedEntries == 1);                // the entry that was left, as copied
+}
+
+TEST_CASE("an entry changed to another by the second read is not trusted either") {
+    auto image = tableImage();
+    auto p = scoped(image);
+    setWord(image, 7, true, packWord(Entry::Reset, 9, 0xb000));
+    p.onStop = [&](std::uint64_t tid) {
+        if (tid == 10)  // left and re-entered: a different entry at the same address
+            patchWord(p, wordAddress(7, true), packWord(Entry::Process, 9, 0xb000));
+    };
+    const auto snapshot = collectScoped(p, image);
+    CHECK(threadOf(snapshot, Role::Main, ThreadRole::AudioLive).entry == Entry::None);
+    CHECK(snapshot.unplacedEntries == 1);
+}
+
+TEST_CASE("a thread whose stack is unknown gets no entry, and the entry is unplaced") {
+    auto image = tableImage();
+    auto p = scoped(image);
+    p.maps = "400000-500000 r-xp 00000000 08:01 7 /secret/path/app\n";  // no stacks at all
+    // Thread 10's slot still names its stack, thread 12 and the fault thread have nothing.
+    setWord(image, 8, false, packWord(Entry::State, 2, 0xf000));
+    setWord(image, 5, true, packWord(Entry::Process, 3, 0x7000));
+    const auto snapshot = collectScoped(p, image);
+    CHECK(snapshot.threads[0].entry == Entry::None);
+    CHECK(snapshot.threads[2].entry == Entry::None);
+    CHECK(snapshot.unplacedEntries == 2);
+}
+
+TEST_CASE("entries without a table, or from a table that is not ours, are not read") {
+    auto image = tableImage();
+    auto p = scoped(image);
+    setWord(image, 5, true, packWord(Entry::Process, 3, 0x7000));
+    image.header.magic ^= 1;
+    const auto snapshot = collectScoped(p, image);
+    CHECK(snapshot.table == TableState::Invalid);
+    for (const auto& t : snapshot.threads) CHECK(t.entry == Entry::None);
+    CHECK(snapshot.unplacedEntries == 0);
+}
+
+TEST_CASE("the table's counters become report limits") {
+    auto image = tableImage();
+    auto p = scoped(image);
+    auto limitFor = [](const TraceSnapshot& snapshot, const char* text) {
+        for (const auto& limit : traceLimits(snapshot))
+            if (limit.find(text) != std::string::npos) return true;
+        return false;
+    };
+    auto clean = collectScoped(p, image);
+    CHECK_FALSE(limitFor(clean, "beyond the execution table's capacity are not attributed"));
+    CHECK_FALSE(limitFor(clean, "stack address the table cannot hold"));
+    image.header.untracked = 2;
+    image.header.scopeOverflow = 1;
+    const auto counted = collectScoped(p, image);
+    CHECK(counted.tableUntracked == 2);
+    CHECK(counted.tableScopeOverflow == 1);
+    CHECK(limitFor(counted, "instances beyond the execution table's capacity are not attributed"));
+    CHECK(limitFor(counted, "stack address the table cannot hold"));
+}
+
+TEST_CASE("an entry reaches the report only as a name from the closed set") {
+    auto image = tableImage();
+    auto p = scoped(image);
+    setWord(image, 5, true, packWord(Entry::StartProcessing, 3, 0x7000));
+    const auto snapshot = collectScoped(p, image);
+    const auto modules = modulesJson(snapshot);
+    auto threads = threadsJson(snapshot);
+    REQUIRE(traceShape(&modules, threads));
+    CHECK(threads.at(0).find("entry")->asString() == "start_processing");
+    CHECK(threads.at(1).find("entry") == nullptr);  // a thread in no entry says nothing
+    // The cell and generation stay in the process: nothing numeric about them is reported.
+    const auto text = json::writeCanonical(threads);
+    CHECK(text.find("\"cell\"") == std::string::npos);
+    CHECK(text.find("generation") == std::string::npos);
+    for (const char* bad : {"none", "", "Process", "run", "process "}) {
+        auto changed = threads;
+        changed.asArray()[0]["entry"] = bad;
+        CHECK_FALSE(traceShape(&modules, changed));
+    }
+    auto number = threads;
+    number.asArray()[0]["entry"] = 7;
+    CHECK_FALSE(traceShape(&modules, number));
 }

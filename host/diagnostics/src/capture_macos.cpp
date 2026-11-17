@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstring>
 #include "capsule.h"
+#include "supple/diagctx/scope.h"
 #include "trace.h"
 // macOS in-process capture (ADR-0083, topic 4). The failing process reads its own
 // threads and images through Mach calls on its own task: no task_for_pid, no entitlement,
@@ -53,6 +54,8 @@ struct ImageText {
     bool examined, hasUuid;
 };
 ImageText images[kMaxImages];
+// Which table words some captured thread has claimed (execution scopes), one byte per word.
+std::uint8_t placedWords[diagctx::kMaxInstances * 2];
 
 bool readOwn(void*, std::uint64_t address, void* out, std::size_t bytes) {
     mach_vm_size_t got = 0;
@@ -217,6 +220,81 @@ CapsuleThreadData* newThread(Role role, std::uint64_t id) {
     thread.head.worker = slot.ordinal;
     return &thread;
 }
+// The stack that holds `sp`, [low, high), from the kernel's map of the own task; false when
+// the address is in no readable and writable region.
+bool stackAround(std::uint64_t sp, std::uint64_t& low, std::uint64_t& high) {
+    mach_vm_address_t address = sp;
+    mach_vm_size_t size = 0;
+    vm_region_basic_info_data_64_t info{};
+    mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+    mach_port_t object = MACH_PORT_NULL;
+    if (mach_vm_region(mach_task_self(), &address, &size, VM_REGION_BASIC_INFO_64,
+                       reinterpret_cast<vm_region_info_t>(&info), &count, &object) != KERN_SUCCESS)
+        return false;
+    if (address > sp || sp - address >= size || !(info.protection & VM_PROT_READ) ||
+        !(info.protection & VM_PROT_WRITE) || (info.protection & VM_PROT_EXECUTE))
+        return false;
+    low = address;
+    high = address + size;
+    return true;
+}
+
+// Which entry the thread is inside: the same rule as the supervisor's collector
+// (trace.cpp), over the live table. The thread is suspended or is the calling thread, parked
+// in the handler, so the words it owns cannot change while they are read, and one read
+// does the work of the supervisor's two. The innermost (lowest address) of the entries
+// whose stack address lies on the thread's stack, at or above its stack pointer, is recorded.
+void attribute(CapsuleThreadData& thread, std::uint64_t id, std::uint64_t sp) {
+    if (sp == 0) return;
+    std::uint64_t low = 0, high = 0;
+    const diagctx::SlotInfo slot = diagctx::findThread(id);
+    if (slot.stackLow != 0 && slot.stackHigh > slot.stackLow && sp >= slot.stackLow &&
+        sp < slot.stackHigh) {
+        low = slot.stackLow;
+        high = slot.stackHigh;
+    } else if (!stackAround(sp, low, high)) {
+        return;
+    }
+    bool found = false;
+    std::uint64_t best = 0;
+    auto& cells = diagctx::table().instances;
+    for (std::uint32_t cell = 0; cell < diagctx::kMaxInstances; ++cell) {
+        for (const bool audio : {true, false}) {
+            const auto fields = diagctx::unpackWord(
+                (audio ? cells[cell].audio : cells[cell].main).load(std::memory_order_acquire));
+            if (fields.kind == diagctx::Entry::None || fields.stack == 0) continue;
+            if (fields.stack + 16 <= sp || fields.stack < low || fields.stack >= high) continue;
+            placedWords[cell * 2 + (audio ? 0 : 1)] = 1;
+            if (!found || fields.stack < best) {
+                found = true;
+                best = fields.stack;
+                thread.head.entry = static_cast<std::uint8_t>(fields.kind);
+                thread.head.entryCell = static_cast<std::uint16_t>(cell);
+                thread.head.entryGeneration = fields.generation;
+            }
+        }
+    }
+}
+
+// The table's counters, and the open entries that no captured thread claimed.
+void summarizeTable() {
+    const auto& table = diagctx::table();
+    capsule.header.tableThreadsDropped =
+        table.header.threadsDropped.load(std::memory_order_relaxed);
+    capsule.header.tableUntracked = table.header.untracked.load(std::memory_order_relaxed);
+    capsule.header.tableScopeOverflow = table.header.scopeOverflow.load(std::memory_order_relaxed);
+    std::uint32_t unplaced = 0;
+    for (std::uint32_t cell = 0; cell < diagctx::kMaxInstances; ++cell)
+        for (const bool audio : {true, false}) {
+            const auto fields = diagctx::unpackWord(
+                (audio ? table.instances[cell].audio : table.instances[cell].main)
+                    .load(std::memory_order_acquire));
+            if (fields.kind != diagctx::Entry::None && !placedWords[cell * 2 + (audio ? 0 : 1)])
+                ++unplaced;
+        }
+    capsule.header.unplaced = unplaced;
+}
+
 void unavailable(CapsuleThreadData& thread, Missing why) {
     thread.head.missing = static_cast<std::uint8_t>(why);
     thread.head.frameCount = 0;
@@ -237,6 +315,7 @@ void captureSelf(const Packet& terminal, std::uint64_t deadline) {
         if (kArm64) regs.pc &= 0x0000ffffffffffffULL;
     }
     walkStack(kReader, regs, kArm64, *thread, deadline);
+    attribute(*thread, diagctx::currentThreadId(), regs.sp);
 }
 
 void captureOthers(std::uint64_t deadline) {
@@ -258,9 +337,10 @@ void captureOthers(std::uint64_t deadline) {
                 } else {
                     CapsuleRegs regs;
                     const kern_return_t got = registersOf(port, regs);
-                    if (got == KERN_SUCCESS)
+                    if (got == KERN_SUCCESS) {
                         walkStack(kReader, regs, kArm64, *thread, deadline);
-                    else
+                        attribute(*thread, port, regs.sp);  // while it is still suspended
+                    } else
                         unavailable(*thread, got == KERN_NOT_SUPPORTED ? Missing::Unsupported
                                                                        : missingFor(got, false));
                     (void)thread_resume(port);  // on every path once suspended
@@ -293,6 +373,7 @@ void captureAndHold(Native& endpoint, const Packet& terminal, std::uint64_t star
     capsule.header.magic = kCapsuleMagic;
     captureSelf(terminal, start + kThreadBudget);
     captureOthers(start + kThreadBudget);
+    summarizeTable();
     listImages(start + kImageBudget);
     resolveModules(start + kImageBudget);
     const int fd = static_cast<int>(endpoint.channel);

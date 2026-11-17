@@ -441,6 +441,7 @@ TraceSnapshot collectTrace(const TraceOps& ops, std::uint64_t faultTid, const Re
         order.resize(kMaxThreads);
     }
     Layout layout;
+    std::vector<Mapping> mappings;
     bool haveMaps = false;
     if (ops.layout) {
         if (auto found = ops.layout()) {
@@ -450,7 +451,10 @@ TraceSnapshot collectTrace(const TraceOps& ops, std::uint64_t faultTid, const Re
     } else {
         const auto text = ops.maps ? ops.maps() : std::nullopt;
         haveMaps = text && !text->empty();
-        if (haveMaps) layout = buildLayout(parseMaps(*text), ops.read);
+        if (haveMaps) {
+            mappings = parseMaps(*text);
+            layout = buildLayout(mappings, ops.read);
+        }
     }
     const auto walkThread = [&](std::uint64_t tid, const Regs& regs) {
         return ops.walk ? ops.walk(tid, regs, layout)
@@ -465,7 +469,72 @@ TraceSnapshot collectTrace(const TraceOps& ops, std::uint64_t faultTid, const Re
         else
             snapshot.table = diagctx::imageValid(table) ? TableState::Read : TableState::Invalid;
     };
+    // Execution scopes: which entry each stopped thread is inside. A word is tied to a
+    // thread when its recorded stack address lies on that thread's stack, at or above the
+    // thread's stack pointer; of several (nested scopes) the lowest address is the
+    // innermost, and that is the entry reported. The words were copied with the table, before
+    // the thread was stopped, so for a thread other than the faulting one each candidate is
+    // read again once the thread is stopped and accepted only if both reads agree: a
+    // stopped thread cannot be in the middle of changing it. The faulting thread is parked in
+    // its handler and needs no second read.
+    constexpr std::size_t kWords = diagctx::kMaxInstances * 2;
+    std::vector<std::uint8_t> placed(kWords, 0);
+    const auto stackOf =
+        [&](std::uint64_t sp) -> std::optional<std::pair<std::uint64_t, std::uint64_t>> {
+        if (ops.stackRegion) return ops.stackRegion(sp);
+        for (const auto& mapping : mappings)
+            if (mapping.read && mapping.write && !mapping.execute && sp >= mapping.start &&
+                sp < mapping.end)
+                return std::make_pair(mapping.start, mapping.end);
+        return std::nullopt;
+    };
+    const auto attribute = [&](ThreadTrace& trace, std::uint64_t tid, const Regs& regs,
+                               bool reread) {
+        if (snapshot.table != TableState::Read || regs.sp == 0) return;
+        std::uint64_t low = 0, high = 0;
+        const auto slot = diagctx::findThread(table, tid);
+        if (slot.stackLow != 0 && slot.stackHigh > slot.stackLow && regs.sp >= slot.stackLow &&
+            regs.sp < slot.stackHigh) {
+            low = slot.stackLow;
+            high = slot.stackHigh;
+        } else if (const auto region = stackOf(regs.sp)) {
+            low = region->first;
+            high = region->second;
+        } else {
+            return;
+        }
+        bool found = false;
+        std::uint64_t best = 0;
+        for (std::uint32_t cell = 0; cell < diagctx::kMaxInstances; ++cell) {
+            for (const bool audio : {true, false}) {
+                const std::uint64_t word =
+                    audio ? table.instances[cell].audio : table.instances[cell].main;
+                const auto fields = diagctx::unpackWord(word);
+                if (fields.kind == diagctx::Entry::None || fields.stack == 0) continue;
+                // The address is kept to 16 bytes, rounding down.
+                if (fields.stack + 16 <= regs.sp || fields.stack < low || fields.stack >= high)
+                    continue;
+                if (reread) {
+                    std::uint64_t now = 0;
+                    const std::uint64_t at = tableAddress +
+                                             offsetof(diagctx::TableImage, instances) +
+                                             cell * sizeof(diagctx::TableImage::InstanceCell) +
+                                             (audio ? 0 : sizeof(std::uint64_t));
+                    if (!ops.read || !ops.read(at, &now, sizeof(now)) || now != word) continue;
+                }
+                placed[cell * 2 + (audio ? 0 : 1)] = 1;
+                if (!found || fields.stack < best) {
+                    found = true;
+                    best = fields.stack;
+                    trace.entry = fields.kind;
+                    trace.entryCell = cell;
+                    trace.entryGeneration = fields.generation;
+                }
+            }
+        }
+    };
     std::vector<std::uint64_t> tidOf;
+    std::optional<Regs> firstRegs;  // the fault thread's registers, for its attribution
     for (const auto& [tid, role] : order) {
         ThreadTrace trace;
         trace.role = role;
@@ -474,6 +543,7 @@ TraceSnapshot collectTrace(const TraceOps& ops, std::uint64_t faultTid, const Re
         } else if (role == Role::Fault && faultRegs.pc != 0) {
             trace.walk = walkThread(tid, faultRegs);
             trace.missing = Missing::None;
+            firstRegs = faultRegs;
         } else if (role == Role::Fault && tid == 0) {
             // terminate and abort capture no registers; without a thread id either
             // there is nothing to read the thread from.
@@ -486,6 +556,10 @@ TraceSnapshot collectTrace(const TraceOps& ops, std::uint64_t faultTid, const Re
             if (why == Missing::None) {
                 trace.walk = walkThread(tid, regs);
                 trace.missing = Missing::None;
+                if (role == Role::Fault)
+                    firstRegs = regs;
+                else
+                    attribute(trace, tid, regs, true);  // still stopped: the second read
                 if (ops.release) ops.release(tid);
             } else {
                 trace.missing = why;
@@ -493,10 +567,20 @@ TraceSnapshot collectTrace(const TraceOps& ops, std::uint64_t faultTid, const Re
         }
         snapshot.threads.push_back(std::move(trace));
         tidOf.push_back(tid);
-        if (snapshot.threads.size() == 1) readTable();
+        if (snapshot.threads.size() == 1) {
+            readTable();
+            if (firstRegs) attribute(snapshot.threads[0], tid, *firstRegs, false);
+        }
     }
     if (snapshot.table == TableState::Read) {
         snapshot.tableThreadsDropped = table.header.threadsDropped;
+        snapshot.tableUntracked = table.header.untracked;
+        snapshot.tableScopeOverflow = table.header.scopeOverflow;
+        for (std::size_t w = 0; w < kWords; ++w) {
+            const auto& cell = table.instances[w / 2];
+            const auto word = diagctx::unpackWord(w % 2 == 0 ? cell.audio : cell.main);
+            if (word.kind != diagctx::Entry::None && !placed[w]) ++snapshot.unplacedEntries;
+        }
         for (std::size_t i = 0; i < snapshot.threads.size(); ++i) {
             const auto found = diagctx::findThread(table, tidOf[i]);
             snapshot.threads[i].registered = found.role;
@@ -530,6 +614,7 @@ json::Value threadsJson(const TraceSnapshot& trace) {
             if (thread.role == Role::Fault) entry["registered"] = registered;
             if (thread.worker != 0) entry["worker"] = static_cast<long long>(thread.worker);
         }
+        if (const char* name = diagctx::entryName(thread.entry)) entry["entry"] = name;
         const bool walked = thread.missing == Missing::None;
         entry["state"] = walked ? "walked" : "unavailable";
         if (walked)
@@ -575,6 +660,14 @@ std::vector<std::string> traceLimits(const TraceSnapshot& trace) {
         limits.push_back("modules beyond the report limit have no identity");
     if (trace.table == TableState::Unreadable || trace.table == TableState::Invalid)
         limits.push_back("the execution table could not be read, so threads have no roles");
+    if (trace.tableUntracked != 0)
+        limits.push_back("instances beyond the execution table's capacity are not attributed");
+    if (trace.tableScopeOverflow != 0)
+        limits.push_back("entries whose stack address the table cannot hold are not attributed");
+    if (trace.unplacedEntries != 0)
+        limits.push_back(
+            "some plug-in entries were open that no thread read could be tied to: their thread "
+            "was not read, or the entry names no stack address");
     if (trace.tableThreadsDropped != 0)
         limits.push_back(
             "threads beyond the execution table's capacity have no role and may show as other");
@@ -622,9 +715,18 @@ bool traceShape(const json::Value* modules, const json::Value& threads) {
     if (!threads.isArray() || threads.size() > kMaxThreads) return false;
     std::size_t index = 0;
     for (const auto& thread : threads.asArray()) {
-        if (!onlyKeys(thread, {"ordinal", "role", "registered", "worker", "state", "reason", "stop",
-                               "frames"}))
+        if (!onlyKeys(thread, {"ordinal", "role", "registered", "worker", "entry", "state",
+                               "reason", "stop", "frames"}))
             return false;
+        if (const auto* entry = thread.find("entry")) {
+            // The closed set of entry kinds a scope records; never "none".
+            if (!entry->isString()) return false;
+            bool known = false;
+            for (std::uint8_t kind = 1; kind < diagctx::kEntryCount; ++kind)
+                known = known ||
+                        entry->asString() == diagctx::entryName(static_cast<diagctx::Entry>(kind));
+            if (!known) return false;
+        }
         const auto* ordinal = thread.find("ordinal");
         if (!ordinal || !ordinal->isInt() || ordinal->asInt() != static_cast<std::int64_t>(index++))
             return false;
@@ -708,9 +810,15 @@ std::optional<TraceSnapshot> parseCapsule(const std::uint8_t* bytes, std::size_t
         (header.dropped != 0) != ((header.flags & kCapsuleThreadsDropped) != 0) ||
         header.dropped > kMaxDropped)
         return std::nullopt;
+    // At most one word per cell side can be unplaced.
+    if (header.unplaced > 2 * diagctx::kMaxInstances) return std::nullopt;
     TraceSnapshot snapshot;
     snapshot.dropped = header.dropped;
     snapshot.truncatedModules = (header.flags & kCapsuleModulesTruncated) != 0;
+    snapshot.tableThreadsDropped = header.tableThreadsDropped;
+    snapshot.tableUntracked = header.tableUntracked;
+    snapshot.tableScopeOverflow = header.tableScopeOverflow;
+    snapshot.unplacedEntries = header.unplaced;
     Layout layout;
     for (std::uint32_t i = 0; i < header.moduleCount; ++i) {
         CapsuleModule module;
@@ -745,14 +853,26 @@ std::optional<TraceSnapshot> parseCapsule(const std::uint8_t* bytes, std::size_t
             head.missing > static_cast<std::uint8_t>(Missing::AccessDenied) ||
             head.stop > static_cast<std::uint8_t>(Stop::Deadline) || head.reserved != 0 ||
             head.registered >= diagctx::kThreadRoleCount ||
-            (head.worker != 0 && head.registered == 0) || head.frameCount > kCapsuleFrames)
+            (head.worker != 0 && head.registered == 0) || head.frameCount > kCapsuleFrames ||
+            head.entry >= diagctx::kEntryCount)
             return std::nullopt;
         const bool walked = head.missing == static_cast<std::uint8_t>(Missing::None);
         if (walked != (head.frameCount > 0)) return std::nullopt;
+        // An entry is only ever found for a thread that was read, with a cell the table has
+        // and a generation a word holds; without one the cell and generation are zero.
+        if (head.entry == 0 ? (head.entryCell != 0 || head.entryGeneration != 0)
+                            : (!walked || head.entryCell >= diagctx::kMaxInstances ||
+                               head.entryGeneration > diagctx::kGenerationMask))
+            return std::nullopt;
         ThreadTrace trace;
         trace.role = static_cast<Role>(head.role);
         trace.registered = static_cast<diagctx::ThreadRole>(head.registered);
         trace.worker = head.worker;
+        if (head.entry != 0) {
+            trace.entry = static_cast<diagctx::Entry>(head.entry);
+            trace.entryCell = head.entryCell;
+            trace.entryGeneration = head.entryGeneration;
+        }
         // The fault entry is the first thread and the only one.
         if ((i == 0) != (trace.role == Role::Fault)) return std::nullopt;
         trace.missing = static_cast<Missing>(head.missing);

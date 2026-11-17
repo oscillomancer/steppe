@@ -31,6 +31,7 @@ struct ReportThread {
     // recorder | midi_output | other, or main in reports written before thread roles
     std::string role;
     std::string registered;  // the fault thread's own registered role, else empty
+    std::string entry;       // the plug-in or module entry the thread was inside, else empty
     unsigned worker = 0;     // the N of audio-live-N and audio-bg-N, else 0
     std::string state;       // walked | unavailable
     std::string why;         // `stop` when walked, `reason` when unavailable

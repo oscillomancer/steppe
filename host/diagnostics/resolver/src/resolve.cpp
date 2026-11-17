@@ -133,12 +133,20 @@ Result<Report> parseReport(std::string_view text) {
         const auto* worker = member(thread, "worker");
         if (worker && (!worker->isInt() || worker->asInt() < 1 || worker->asInt() > 65535))
             return bad(at + "/worker", "worker is not a number from 1 to 65535");
+        const auto* entryKind = member(thread, "entry");
+        if (entryKind &&
+            !oneOf(entryKind, {"create", "destroy", "activate", "deactivate", "start_processing",
+                               "stop_processing", "process", "flush", "reset", "params", "state",
+                               "semantic", "editor_picture", "trace", "gui", "main_thread",
+                               "library_open", "library_close", "bridge_call"}))
+            return bad(at + "/entry", "unknown entry kind");
         if (!oneOf(state, {"walked", "unavailable"})) return bad(at + "/state", "unknown state");
         if (!frames || !frames->isArray() || frames->size() > kMaxFrames)
             return bad(at + "/frames", "frames is missing or too long");
         ReportThread out;
         out.role = role->asString();
         if (registered) out.registered = registered->asString();
+        if (entryKind) out.entry = entryKind->asString();
         if (worker) out.worker = static_cast<unsigned>(worker->asInt());
         out.state = state->asString();
         const auto* why = member(thread, out.state == "walked" ? "stop" : "reason");
@@ -509,6 +517,7 @@ std::string formatText(const Report& report, const Resolution& resolution) {
         const auto& thread = report.threads[t];
         out << "thread " << t << " " << printable(thread.role);
         if (!thread.registered.empty()) out << " (" << printable(thread.registered) << ")";
+        if (!thread.entry.empty()) out << " in " << printable(thread.entry);
         out << ": " << printable(thread.state) << " ("
             << (thread.state == "walked" ? "stop: " : "reason: ") << printable(thread.why) << ")\n";
         for (std::size_t f = 0; f < thread.frames.size(); ++f) {
@@ -563,6 +572,7 @@ json::Value formatJson(const Report& report, const Resolution& resolution) {
         entry["role"] = thread.role;
         if (!thread.registered.empty()) entry["registered"] = thread.registered;
         if (thread.worker != 0) entry["worker"] = thread.worker;
+        if (!thread.entry.empty()) entry["entry"] = thread.entry;
         entry["state"] = thread.state;
         entry[thread.state == "walked" ? "stop" : "reason"] = thread.why;
         json::Array frames;

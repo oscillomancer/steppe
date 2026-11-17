@@ -304,6 +304,24 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
                 for t in report["threads"]: by_role.setdefault(t["role"],[]).append(t)
                 assert by_role["fault"][0]["state"]=="walked",report["threads"]
                 assert [t.get("reason") for t in report["threads"] if t["state"]=="unavailable"]==["deadline"],report["threads"]
+            # Execution scopes (topic 5b): each thread of the fixture is inside an entry of an
+            # instance of its own when the fault comes, and the report names it. One thread is
+            # unregistered (found by the stack it stands on) and one is in two nested scopes
+            # (reported in the inner). No cell or address is in the report.
+            expected,raw,report=trace_run("trace-scopes")
+            assert report["kind"]=="crash" and report["terminal_context"],report
+            threads=report["threads"]
+            assert len(threads)==5,threads
+            assert [t["role"] for t in threads[:2]]==["fault","model"],threads
+            assert threads[0]["registered"]=="audio_render" and threads[0]["entry"]=="process",threads[0]
+            restricted=yama_scope()>=2 and os.geteuid()!=0
+            if not restricted:
+                assert threads[1]["entry"]=="params",threads[1]
+                entries={(t["role"],t.get("worker")):t.get("entry") for t in threads[2:]}
+                assert entries=={("audio_live",2):"reset",("audio_background",1):"library_open",("other",None):"gui"},threads
+                assert "plug-in entries" not in raw and "no thread read could be tied" not in raw,raw
+            for forbidden in ("\"cell\"","generation","\"stack\""):
+                assert forbidden not in raw,forbidden
             if os.geteuid()!=0:
                 # A non-dumpable worker refuses every external read: all threads unavailable.
                 expected,raw,report=trace_run("trace-nondumpable")
@@ -365,6 +383,19 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
             for t in threads:
                 assert len(t["frames"])<=128
                 if t["state"]=="unavailable": assert t["reason"] in ("access_denied","thread_exited","deadline","registers_unreadable"),t
+            # Execution scopes (topic 5b), as on Linux: the fault thread and the registered ones
+            # by their slots' stack bounds, the unregistered one by its allocation.
+            run=subprocess.run([binary,str(root),"trace-scopes",str(base/"scopes-expected.json")],capture_output=True,timeout=120)
+            assert run.returncode!=0,run
+            found=sorted(root.glob("*.json"),key=lambda p:p.stat().st_mtime)
+            assert len(found)==2,(found,run.stderr)
+            scoped=json.loads(found[-1].read_text())
+            threads=scoped["threads"]
+            assert threads[0]["registered"]=="audio_render" and threads[0]["entry"]=="process",threads[0]
+            assert threads[1]["entry"]=="params",threads[1]
+            entries={(t["role"],t.get("worker")):t.get("entry") for t in threads[2:] if "entry" in t}
+            assert entries.get(("audio_live",2))=="reset" and entries.get(("audio_background",1))=="library_open",threads
+            assert entries.get(("other",None))=="gui",threads
 
 if failures:
     print("%d section(s) failed: %s"%(len(failures),", ".join(failures)),file=sys.stderr)

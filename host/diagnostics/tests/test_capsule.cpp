@@ -279,6 +279,82 @@ TEST_CASE("a capsule carries the role each thread registered as") {
     CHECK(parseCapsule(cut.data(), cut.size())->threads[3].registered == ThreadRole::Recorder);
 }
 
+TEST_CASE("a capsule carries the entry each thread was inside, and the table's counters") {
+    using supple::diagctx::Entry;
+    auto data = fresh();
+    addModule(*data, 0x100000, 0x100000, 0x180000, 0x10);
+    addThread(*data, Role::Fault, Missing::None, Stop::End, {0x100300});
+    addThread(*data, Role::Other, Missing::None, Stop::End, {0x100100});
+    addThread(*data, Role::Other, Missing::Deadline, Stop::End, {});
+    data->threads[0].head.entry = static_cast<std::uint8_t>(Entry::Process);
+    data->threads[0].head.entryCell = 1023;
+    data->threads[0].head.entryGeneration = 0xfff;
+    data->threads[1].head.entry = static_cast<std::uint8_t>(Entry::LibraryOpen);
+    data->threads[1].head.entryCell = 0;
+    data->threads[1].head.entryGeneration = 1;
+    data->header.tableThreadsDropped = 3;
+    data->header.tableUntracked = 2;
+    data->header.tableScopeOverflow = 1;
+    data->header.unplaced = 4;
+    const auto bytes = encode(*data);
+    const auto snapshot = parseCapsule(bytes.data(), bytes.size());
+    REQUIRE(snapshot);
+    CHECK(snapshot->threads[0].entry == Entry::Process);
+    CHECK(snapshot->threads[0].entryCell == 1023);
+    CHECK(snapshot->threads[0].entryGeneration == 0xfff);
+    CHECK(snapshot->threads[1].entry == Entry::LibraryOpen);
+    CHECK(snapshot->threads[1].entryCell == 0);
+    CHECK(snapshot->threads[2].entry == Entry::None);
+    CHECK(snapshot->tableThreadsDropped == 3);
+    CHECK(snapshot->tableUntracked == 2);
+    CHECK(snapshot->tableScopeOverflow == 1);
+    CHECK(snapshot->unplacedEntries == 4);
+    const auto threads = threadsJson(*snapshot);
+    const auto modules = modulesJson(*snapshot);
+    REQUIRE(traceShape(&modules, threads));
+    CHECK(threads.at(0).find("entry")->asString() == "process");
+    CHECK(threads.at(1).find("entry")->asString() == "library_open");
+    CHECK(threads.at(2).find("entry") == nullptr);
+}
+
+TEST_CASE("a capsule with an impossible entry, or impossible counters, is refused") {
+    using supple::diagctx::Entry;
+    const auto refused = [](auto change) {
+        auto data = fresh();
+        addModule(*data, 0x100000, 0x100000, 0x180000, 0x10);
+        addThread(*data, Role::Fault, Missing::None, Stop::End, {0x100300});
+        addThread(*data, Role::Other, Missing::Deadline, Stop::End, {});
+        change(*data);
+        const auto bytes = encode(*data);
+        return !parseCapsule(bytes.data(), bytes.size()).has_value();
+    };
+    CHECK_FALSE(refused([](CapsuleData&) {}));
+    // An entry kind outside the closed set.
+    CHECK(refused([](CapsuleData& d) { d.threads[0].head.entry = supple::diagctx::kEntryCount; }));
+    CHECK(refused([](CapsuleData& d) { d.threads[0].head.entry = 255; }));
+    // A cell the table does not have, a generation a word cannot hold.
+    CHECK(refused([](CapsuleData& d) {
+        d.threads[0].head.entry = 1;
+        d.threads[0].head.entryCell = supple::diagctx::kMaxInstances;
+    }));
+    CHECK(refused([](CapsuleData& d) {
+        d.threads[0].head.entry = 1;
+        d.threads[0].head.entryGeneration = 0x1000;
+    }));
+    // A cell or generation with no entry to go with it.
+    CHECK(refused([](CapsuleData& d) { d.threads[0].head.entryCell = 4; }));
+    CHECK(refused([](CapsuleData& d) { d.threads[0].head.entryGeneration = 4; }));
+    // An entry on a thread that was never read.
+    CHECK(refused([](CapsuleData& d) { d.threads[1].head.entry = 1; }));
+    // More unplaced entries than the table has words.
+    CHECK_FALSE(
+        refused([](CapsuleData& d) { d.header.unplaced = 2 * supple::diagctx::kMaxInstances; }));
+    CHECK(refused(
+        [](CapsuleData& d) { d.header.unplaced = 2 * supple::diagctx::kMaxInstances + 1; }));
+    // The reserved byte stays zero.
+    CHECK(refused([](CapsuleData& d) { d.threads[0].head.reserved = 1; }));
+}
+
 TEST_CASE("overlapping module ranges cannot make an address ambiguous") {
     auto data = fresh();
     addModule(*data, 0, 0x1000, 0x3000);

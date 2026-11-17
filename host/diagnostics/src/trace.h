@@ -18,7 +18,7 @@
 #include <string_view>
 #include <vector>
 #include "native.h"
-#include "supple/diagctx/table.h"
+#include "supple/diagctx/scope.h"
 #include "supple/json/json.h"
 namespace supple::diagnostics::detail {
 constexpr std::size_t kMaxThreads = 128, kMaxFrames = 128, kMaxModules = 256;
@@ -112,6 +112,12 @@ struct ThreadTrace {
     // thread nobody registered: a driver's callback thread, a plug-in's own threads.
     diagctx::ThreadRole registered = diagctx::ThreadRole::None;
     std::uint16_t worker = 0;  // the N of audio-live-N and audio-bg-N, else 0
+    // The innermost plug-in or module entry the thread was inside when it was stopped
+    // (execution scopes, topic 5b); None when it was inside none, or none could be tied to
+    // it. `entryCell` and `entryGeneration` say which instance's cell, for the inventory.
+    diagctx::Entry entry = diagctx::Entry::None;
+    std::uint32_t entryCell = diagctx::kNoCell;
+    std::uint16_t entryGeneration = 0;
 };
 // Whether the execution table was found and usable.
 enum class TableState : std::uint8_t {
@@ -129,6 +135,10 @@ struct TraceSnapshot {
     // Threads that tried to register and found the table full (its own count); their
     // roles are unknown.
     std::uint32_t tableThreadsDropped = 0;
+    // The table's other counters, as read: instances that found no cell, and scopes whose
+    // stack address did not fit a word. Entries open in the table that no stopped thread
+    // claimed (its thread was not read, or the word names no address) are `unplacedEntries`.
+    std::uint32_t tableUntracked = 0, tableScopeOverflow = 0, unplacedEntries = 0;
 };
 
 // What a platform provides. `stop` interrupts a thread and returns its registers,
@@ -147,6 +157,11 @@ struct TraceOps {
     std::function<std::vector<std::uint64_t>()> threads;  // ascending thread ids
     std::function<Missing(std::uint64_t tid, Regs& regs)> stop;
     std::function<void(std::uint64_t tid)> release;
+    // The stack that holds `sp`, [low, high), for a thread that registered none. Optional:
+    // without it the mappings list is used (`maps`); with neither, an unregistered thread
+    // is attributed nothing.
+    std::function<std::optional<std::pair<std::uint64_t, std::uint64_t>>(std::uint64_t sp)>
+        stackRegion;
 };
 // Collects the fault thread (registers supplied by the capsule), the main thread
 // (`mainTid`) and the others. Stops at `expired` with the rest marked unavailable.
