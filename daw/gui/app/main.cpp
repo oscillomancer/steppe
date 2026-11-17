@@ -1369,7 +1369,7 @@ int main(int argc, char** argv) {
             }
         }
         (*window)->forceCurrent();
-        auto written = gui::writePng(o.snapshot, root.readBack());
+        auto written = gui::writePng(o.snapshot, gui::opaque(root.readBack()));
         if (!written) {
             std::fprintf(stderr, "%s\n", written.error().toString().c_str());
             return 1;

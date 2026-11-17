@@ -2114,7 +2114,9 @@ Tests use dummy/none and never enable hardware opt-ins.
 SDL drivers are forced to X11/Cocoa/Windows respectively. Layout uses design
 units; SDL pixel density and Windows per-monitor display scale determine the
 framebuffer ratio. Pointer, file-drop and IME-caret coordinates use that same
-mapping. PNG snapshots contain framebuffer pixels (design size times ratio).
+mapping. PNG snapshots contain framebuffer pixels (design size times ratio)
+and are opaque (`gui::opaque`): the alpha that blending leaves in the
+framebuffer is not written, so a snapshot shows the colours the screen shows.
 Native `--offscreen` uses hidden desktop windows; Linux retains the EGL
 offscreen driver. Offscreen and finite-frame runs close without an interactive
 discard prompt, completing normal cleanup and any requested final snapshot.
