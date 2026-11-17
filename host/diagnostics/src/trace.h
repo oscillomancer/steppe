@@ -151,6 +151,9 @@ enum class TableState : std::uint8_t {
 };
 struct TraceSnapshot {
     std::vector<Module> modules;
+    // The executable regions the modules were found from (sorted, disjoint): what turns an
+    // address inside a plug-in's binary into the module that holds it (the inventory's build).
+    std::vector<Region> regions;
     std::vector<ThreadTrace> threads;  // fault first, then main, then by thread id
     std::size_t dropped = 0;           // threads omitted beyond kMaxThreads
     bool truncatedModules = false;

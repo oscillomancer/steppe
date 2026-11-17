@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include "inventory.h"
 #include "supple/diagctx/table.h"
 #include "supple/diagnostics/frontend.h"
 #if defined(__APPLE__)
@@ -65,6 +66,11 @@ static_assert(std::atomic<bool>::is_always_lock_free);
 // formatting. Raw PC/frame/SP and the thread id stay solely in the private native channel.
 void handoff(Packet packet) noexcept {
     packet.kind = Message::Terminal;
+    // No inventory event goes out from here on: on macOS the channel carries the capsule
+    // right after this packet, and another thread's packet inside it would corrupt it. The
+    // count of events that were not sent travels with this packet.
+    detail::closeInventory();
+    packet.dropped = detail::inventoryDropped();
 #if defined(__APPLE__)
     // The hold's clock starts before the packet goes out. The supervisor's own budget
     // starts when it receives that packet, so it can never start before this one, however

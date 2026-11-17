@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include "inventory.h"
 #include "native.h"
 #include "storage.h"
 #include "supple/base/paths.h"
@@ -15,8 +16,8 @@
 namespace supple::diagnostics {
 namespace detail {
 bool valid(const Packet& p) {
-    return p.magic == 0x43525348 && p.version == 1 && p.role >= 1 && p.role <= 3 &&
-           p.kind >= Message::Boot && p.kind <= Message::Trace && p.incident[32] == 0 &&
+    return p.magic == 0x43525348 && p.version == kProtocolVersion && p.role >= 1 && p.role <= 3 &&
+           p.kind >= Message::Boot && p.kind <= Message::Instance && p.incident[32] == 0 &&
            std::all_of(p.incident.begin(), p.incident.begin() + 32,
                        [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
 }
@@ -51,6 +52,8 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
         ready.code = marker && *marker >= 0 ? 0U : 1U;
         if (ready.code) std::fputs("local diagnostic marker unavailable\n", stderr);
         (void)publish(native, ready);
+        // The inventory goes over the same channel, so only where the channel is trusted.
+        if (native.trusted) installInventory(native, boot);
         // From here a supervisor that disappears without the "collector failed" notice is a
         // launcher's stop, and the program stops as if it had been sent SIGTERM (ADR-0091).
         startSupervisorWatch(native);
@@ -86,6 +89,7 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
     auto native = *child;
     closeProtocolStdio();
     bool hasTerminal = false, markerUnavailable = false, ownsMarker = false;
+    Inventory inventory;
     std::optional<std::uint32_t> expected;
     Packet packet, terminal;
     TraceSnapshot trace;
@@ -98,7 +102,12 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
         }
         if (packet.kind == Message::Expected) expected = packet.code;
         if (const auto hook = supervisorHook()) hook(packet);  // tests only
+        if (packet.kind == Message::Instance) {
+            (void)inventory.apply(packet);  // damage is counted inside, never fatal
+            continue;
+        }
         if (packet.kind == Message::Terminal) {
+            inventory.noteDropped(packet.dropped);
             terminal = packet;
             hasTerminal = true;
             // Read the other threads inside the worker's terminal hold: the collector
@@ -114,7 +123,7 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
     if (markerUnavailable) std::fputs("diagnostic coverage was partial\n", stderr);
     if (hasTerminal || fatal || !expected) {
         if (!storage || !publishReport(options.directory, boot, hasTerminal ? &terminal : nullptr,
-                                       code, fatal, hasTerminal ? &trace : nullptr))
+                                       code, fatal, hasTerminal ? &trace : nullptr, &inventory))
             std::fputs(
                 "the app closed unexpectedly; local report publication or retention failed\n",
                 stderr);

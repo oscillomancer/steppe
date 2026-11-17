@@ -142,8 +142,9 @@ Atomic private publication uses native wide Windows paths and existing atomic
 write/durability primitives. Retention prunes oldest validated owned reports until
 count <=20 and total <=50 MiB. Validation checks the implemented role/kind/platform/architecture
 enums, native code/cause bounds, nonnegative drop counters and incomplete-report
-reasons. Thread/plugin/command arrays must be empty until their later-topic nested
-schemas are implemented; nonempty arrays do not authorize retention deletion.
+reasons. The thread and plug-in arrays have nested schemas (topics 4 and 5c) that are
+validated field by field; the command array must be empty until its nested schema is
+implemented, and a nonempty one does not authorize retention deletion.
 Malformed/link/foreign entries are neither followed
 nor treated as authority to delete another file. Run markers/locks and recovery
 are not report-retention inputs. Concurrent pruning tolerates entries disappearing
@@ -400,7 +401,8 @@ capture labels each thread from the live table's slots (atomic loads, no lock or
 allocation) and the capsule carries the result in each thread's header (`registered`,
 `worker`, `entry`, with the cell and generation of the entry) and the table's counters in the
 capsule header. The capsule wire format is version 3 for that (magic `CTC3`); it carries no
-copy of the table yet, which the step that records the inventory adds.
+copy of the table: what the cells are comes from the inventory messages (topic 5c), which
+are sent as they happen and need nothing from the failing process at the crash.
 
 ### Execution scopes (topic 5b)
 
@@ -482,8 +484,9 @@ thread read could be tied to". The report also says, as limits, when instances f
 (`untracked`) and when scopes could not record an address (`scopeOverflow`).
 
 The report shows only `entry`, the kind, in the thread's object. The cell and generation stay
-in the process and the supervisor (they identify nothing until the inventory, a later step,
-says what each cell is), and no address or stack bound reaches a report.
+in the process and the supervisor (the inventory, below, says what each cell is, and the
+report refers to an instance by an id of its own), and no address or stack bound reaches a
+report.
 
 Threads other than the faulting one keep running while the table is read, so a later
 step's instance cells describe the moment of the read, not the moment of the fault, and a
@@ -493,6 +496,83 @@ therefore reads a cell again after the thread it matches is stopped and accepts 
 entry both reads agree on; a generation or an ordinal in a cell is a hint checked against
 the inventory, never an identity. Only the faulting thread is parked, and the thread slots
 do not have this problem: they change only when a thread starts or ends.
+
+### Plug-in inventory (topic 5c)
+
+A cell says that a thread is inside an entry of some instance; the inventory says what the
+instance is. `host::Instance` and the two library loaders announce each CLAP or VST3 instance,
+and each loaded library, through `supple/diagctx/inventory.h` (`announce`, `announceState`,
+`announceRemove`; cold calls that do nothing while no sink is installed, which is the case in
+every process that runs no supervisor). An instance is announced `loading`, with its descriptor
+strings, before any code of the plug-in runs (a crash in the library's load or in the plug-in's
+constructor still finds it); again, with the module it came from, once its library is open;
+`inactive` when its creation ends; `active` and `inactive` as it is activated and deactivated;
+and removed, just before its cell is given back. A library has an entry of its own
+(`clap_library`, `vst3_library`: `loading` while its code is being loaded, `active` once open,
+removed when it is unloaded), so a crash inside a plug-in's load that has not yet said what
+plug-in it is still shows as a library being loaded. Rack modules have no cell yet, so none are
+announced; their identity rules (allowlisted ids for host and stock modules, an ordinal only
+for library and project modules, never a name, source, parameter or port) are in the origin
+field's closed set and applied when modules get cells.
+
+*Transport.* The diagnostics frontend installs the sink after it has sent Ready, and only on a
+trusted channel. Each announcement becomes one `Instance` packet (protocol version 2: the
+packet grew by the `InstanceRecord`, fixed-size plain fields, and by the worker's count of
+events dropped so far; 392 bytes, under 512). The send never waits for the supervisor. POSIX
+writes it to the stream socket in one non-blocking send; a stream socket may take part of a
+message (macOS does), so the rest of a part-sent packet is finished with a bounded wait
+(250 ms, `poll`), since a stream cannot take a part back; if even that fails the stream is torn
+and the supervisor treats the next packet as damaged, as it does for any. The Windows channel
+keeps `Instance` packets in a ring of 256 whole packets next to its one-slot-per-kind
+hand-over: the worker advances `head` after it filled a slot, the supervisor `tail` after it
+copied one out, and the supervisor drains the ring before it takes a slot, so that the
+terminal packet is handled after every event sent before it. A full ring or socket drops the
+event and counts it. One send runs at a time. Once a terminal handoff begins, no further event
+is sent (`closeInventory`: a flag and a counter of sends in progress, waited out for at most
+100 ms): on macOS the capsule follows the terminal packet on the same stream, and another
+thread's packet inside it would corrupt it. The count of dropped events rides on every
+`Instance` packet and on the terminal packet; the supervisor keeps the largest it saw.
+
+*Supervisor.* `Inventory` applies each packet. Every field is untrusted: a record whose cell
+is not in the table, whose generation does not fit 12 bits, whose enums are outside their
+closed sets, or whose lengths exceed 64, and an event for an instance it was never told about
+(its announcement was lost, or the generation is not the cell's), is counted and changes
+nothing, so nothing is invented from half a description. A cell announced again in the same
+generation replaces the description (same id); in the next generation it first retires
+whoever held it, whether or not that one said it left. There is one live entry per cell (1,024)
+and a ring of the last 64 retired entries, which stay in the report marked `destroyed`; older
+ones are counted. The ids in the report are the order in which instances were first announced,
+a number of the report's own that says nothing about a cell.
+
+*Plug-in strings* (name, vendor, version, id) are cut to 64 bytes by the sender and cleaned by
+the supervisor: text that is not valid UTF-8, and every control character (C0, DEL, C1), each
+become one `?`. They are untrusted, readable names ADR-0083 allows; they are not proof of
+anything, and the validator checks them again before a report counts as one the product wrote.
+No path, project name, parameter, preset or anything typed by a user is ever announced.
+
+*Module of an instance.* Each announcement of an open library or instance carries an address
+inside the plug-in's binary (the CLAP entry's `init` function). It never reaches a report; the
+supervisor finds the executable region that holds it among those it read for the module list
+and reports that module's id and format as `build`, so a fault in that image can be matched to
+the instance. Without a terminal capsule there are no regions and `build` is absent; VST3
+instances and bridged instances (their code is in the child, or in a module the SDK loads
+without telling the host its image) carry no address, so they have no `build`.
+
+*Report.* `plugins` is an array in id order, each entry an object with `id`, `kind` (`clap`,
+`vst3`, `clap_library`, `vst3_library`), `origin` (`foreign`; `host`, `stock`, `library` and
+`project` are for modules), `mode` (`in_process`, `bridged`), `state` (`loading`, `active`,
+`inactive`, `destroyed`), optionally `build` (`{format, id}`), `name`, `vendor`, `version` and
+`plugin_id` (each at most 64 bytes, only when sent), and `executing` when a thread was inside
+the instance: one `{entry, thread, match}` for each thread whose innermost entry (tied by the
+rule above) is in this instance, `thread` being the thread's ordinal in the report and `match`
+`thread` for the faulting thread and `other_thread` for any other. What the report concludes
+from this (which instance to blame, with what confidence) is the attribution of a later step;
+`plugins` is the evidence. The `unavailable` list says when events were lost (damaged or
+unmatched, dropped by the worker, or beyond the last 64 destroyed instances), so the list is
+never taken for complete without that being said. The strict validator checks every key,
+enum, string (length, UTF-8, no control character), the ids (strictly increasing), `build`
+(a known format and lowercase hex) and each `executing` entry (a known entry name, a thread
+of the report, a known match).
 
 ## Offline resolver (topic 4)
 

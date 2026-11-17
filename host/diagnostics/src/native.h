@@ -8,16 +8,43 @@
 #include <vector>
 #include "supple/base/result.h"
 namespace supple::diagnostics::detail {
-enum class Message : std::uint32_t { Boot = 1, Ready = 2, Expected = 3, Terminal = 4, Trace = 5 };
+enum class Message : std::uint32_t {
+    Boot = 1,
+    Ready = 2,
+    Expected = 3,
+    Terminal = 4,
+    Trace = 5,
+    Instance = 6  // one inventory event (topic 5c), carried in `Packet::instance`
+};
+// Version 2 added `dropped` and `instance` (topic 5c) and the Instance message. Both ends are
+// the same executable, so a mismatch is only a damaged or foreign packet.
+constexpr std::uint32_t kProtocolVersion = 2;
+// One inventory event as it travels (topic 5c): the whole of what an announcement says, in
+// fixed-size plain fields so a packet stays one fixed-size record. Everything in it is
+// untrusted on receipt (the supervisor checks every field before use; see inventory.h).
+struct InstanceRecord {
+    std::uint32_t cell = 0;
+    std::uint16_t generation = 0;
+    std::uint8_t event = 0;  // diagctx::EventKind
+    std::uint8_t kind = 0, origin = 0, mode = 0, state = 0;
+    std::uint8_t length[4]{};  // bytes used of each text field: name, vendor, version, id
+    std::uint64_t image = 0;   // private: an address inside the plug-in's binary
+    char text[4][64]{};
+};
 struct Packet {
-    std::uint32_t magic = 0x43525348, version = 1;
+    std::uint32_t magic = 0x43525348, version = kProtocolVersion;
     Message kind = Message::Boot;
     std::uint32_t role = 0, code = 0, cause = 0;
+    // How many inventory events the worker could not send so far (a full channel, a closed
+    // gate). Meaningful on Instance and Terminal packets; the supervisor keeps the largest
+    // value it saw.
+    std::uint32_t dropped = 0;
     // Terminal packets also carry the faulting thread's id and stack pointer. They are
     // private to the channel; the collector reads memory with them and the report
     // never records them.
     std::uint64_t pid = 0, pc = 0, frame = 0, tid = 0, sp = 0;
     std::array<char, 33> incident{};
+    InstanceRecord instance;
 };
 // A Ready packet reuses the `pc` field for the address of the worker's execution table
 // (topic 5); it is not a program counter. Use these two, never `pc`, for that address.
@@ -28,7 +55,9 @@ inline void setTableAddress(Packet& ready, const void* table) noexcept {
     ready.pc = reinterpret_cast<std::uintptr_t>(table);
 }
 inline std::uint64_t tableAddress(const Packet& ready) noexcept { return ready.pc; }
-static_assert(sizeof(Packet) <= 128);
+// A packet is written to a stream socket in one non-blocking send; it stays well under the
+// smallest atomic pipe write (512 bytes, macOS) so one send takes it or none of it.
+static_assert(sizeof(Packet) <= 512);
 // The Windows channel keeps one shared slot per message kind and a bit mask of the ones
 // published and not yet taken. The slot of a kind, and which pending slot the supervisor
 // takes next, live here so a portable test can pin the order.
@@ -46,6 +75,18 @@ inline int nextSharedSlot(std::uint32_t pending) noexcept {
         if (pending & (1U << slot)) return static_cast<int>(slot);
     return -1;
 }
+// Inventory events (topic 5c) are many and in order, so the Windows channel keeps them in a ring
+// of whole packets, apart from the three one-per-kind slots above: the worker advances `head`
+// after it has filled a slot (release), the supervisor advances `tail` after it has copied one
+// out (release). A full ring drops the event (the worker counts it). The ring has one producer
+// at a time: callers of publish() serialize Instance packets themselves.
+constexpr std::uint32_t kInventoryRing = 256;
+inline bool ringHasRoom(std::uint32_t head, std::uint32_t tail) noexcept {
+    return head - tail < kInventoryRing;  // unsigned: the counters wrap
+}
+inline bool ringHasData(std::uint32_t head, std::uint32_t tail) noexcept { return head != tail; }
+inline std::uint32_t ringSlot(std::uint32_t counter) noexcept { return counter % kInventoryRing; }
+
 struct Native {
     std::intptr_t channel = -1, process = -1, event = -1, ack = -1;
     void* shared = nullptr;

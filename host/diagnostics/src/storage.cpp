@@ -8,6 +8,7 @@
 #include <functional>
 #include <initializer_list>
 #include "diagnostics_build.h"
+#include "inventory.h"
 #include "private_files.h"
 #include "supple/base/files.h"
 #include "supple/product.h"
@@ -180,15 +181,19 @@ bool reportShape(const json::Value& value) {
         if (!v || !v->isBool()) return false;
     }
     if (value.find("complete")->asBool()) return false;
-    // Thread traces have a validated nested schema. Inventory and command arrays
-    // have none yet, so nonempty ones cannot be validated and must not authorize
+    // Thread traces and the plug-in inventory have a validated nested schema. The command
+    // array has none yet, so a nonempty one cannot be validated and must not authorize
     // deletion.
-    for (const auto* key : {"plugins", "commands"}) {
-        const auto* v = value.find(key);
+    {
+        const auto* v = value.find("commands");
         if (!v || !v->isArray() || v->size() != 0) return false;
     }
     const auto* threads = value.find("threads");
     if (!threads || !traceShape(value.find("modules"), *threads)) return false;
+    {
+        const auto* plugins = value.find("plugins");
+        if (!plugins || !pluginsShape(*plugins, threads->size())) return false;
+    }
     const auto* unavailable = value.find("unavailable");
     if (!unavailable || !unavailable->isArray() || unavailable->size() == 0 ||
         unavailable->size() > 128)
@@ -273,7 +278,7 @@ void removeOwnMarker(const fs::path& root, const Packet& boot, std::intptr_t fil
 #endif
 }
 Status publishReport(const fs::path& root, const Packet& boot, const Packet* terminal, int code,
-                     bool fatal, const TraceSnapshot* trace) {
+                     bool fatal, const TraceSnapshot* trace, const Inventory* inventory) {
     auto v = base(boot);
     v["schema"] = "supple.crash-report/1.0";
     v["kind"] = terminal ? "crash" : "unexpected_exit";
@@ -283,8 +288,7 @@ Status publishReport(const fs::path& root, const Packet& boot, const Packet* ter
     v["complete"] = false;
     v["terminal_context"] = terminal && terminal->pc != 0;
     v["unavailable"] = json::Value::array();
-    v["unavailable"].asArray().push_back(
-        "engine inventory and execution breadcrumbs are not implemented in this stage");
+    v["unavailable"].asArray().push_back("recent commands are not implemented in this stage");
     if (!terminal)
         v["unavailable"].asArray().push_back("no terminal capsule; cause may be unknown");
     if (trace) {
@@ -294,7 +298,12 @@ Status publishReport(const fs::path& root, const Packet& boot, const Packet* ter
     } else {
         v["threads"] = json::Value::array();
     }
-    v["plugins"] = json::Value::array();
+    if (inventory) {
+        for (auto& limit : inventory->limits()) v["unavailable"].asArray().push_back(limit);
+        v["plugins"] = inventory->pluginsJson(trace);
+    } else {
+        v["plugins"] = json::Value::array();
+    }
     v["commands"] = json::Value::array();
     v["dropped"] = trace ? static_cast<long long>(trace->dropped) : 0LL;
     // Deliberately never serialize pc/frame/sp, thread or process ids, paths, args,

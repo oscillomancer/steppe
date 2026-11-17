@@ -267,8 +267,31 @@ bool receive(Native& native, Packet& packet) {
     }
 }
 bool publish(Native& native, const Packet& packet) noexcept {
-    return ::send(static_cast<int>(native.channel), &packet, sizeof(packet),
-                  noSignal() | MSG_DONTWAIT) == static_cast<ssize_t>(sizeof(packet));
+    const int fd = static_cast<int>(native.channel);
+    const auto* bytes = reinterpret_cast<const char*>(&packet);
+    ssize_t sent = ::send(fd, bytes, sizeof(packet), noSignal() | MSG_DONTWAIT);
+    if (sent == static_cast<ssize_t>(sizeof(packet))) return true;
+    if (sent <= 0) return false;  // nothing went out: the stream is as it was
+    // A stream socket may take part of a message when its buffer is nearly full (macOS does;
+    // Linux's unix sockets take a message this small whole or not at all). The part already
+    // sent cannot be taken back, and the supervisor reads fixed-size packets, so the rest
+    // goes out now: the wait is bounded (the supervisor is draining, or a terminal hold is on
+    // and nothing else is being sent) and uses only async-signal-safe calls. If it cannot be
+    // finished the stream is torn, the supervisor's next packet fails its checks and it stops
+    // reading, as it does for any damaged packet.
+    std::size_t at = static_cast<std::size_t>(sent);
+    for (int attempts = 0; at < sizeof(packet) && attempts < 250; ++attempts) {
+        pollfd item{fd, POLLOUT, 0};
+        const int ready = ::poll(&item, 1, 1);
+        if (ready < 0 && errno != EINTR) return false;
+        if (ready <= 0) continue;
+        sent = ::send(fd, bytes + at, sizeof(packet) - at, noSignal() | MSG_DONTWAIT);
+        if (sent > 0)
+            at += static_cast<std::size_t>(sent);
+        else if (sent < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+            return false;
+    }
+    return at == sizeof(packet);
 }
 void acknowledge(Native& native) noexcept {
     const char ack = 'A';

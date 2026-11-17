@@ -645,6 +645,7 @@ TraceSnapshot collectTrace(const TraceOps& ops, std::uint64_t faultTid, const Re
         }
     }
     snapshot.modules = std::move(layout.modules);
+    snapshot.regions = std::move(layout.regions);
     snapshot.truncatedModules = layout.truncatedModules;
     return snapshot;
 }
@@ -959,6 +960,7 @@ std::optional<TraceSnapshot> parseCapsule(const std::uint8_t* bytes, std::size_t
         for (auto& thread : threads)
             if (thread.role == role) snapshot.threads.push_back(std::move(thread));
     snapshot.modules = std::move(layout.modules);
+    snapshot.regions = std::move(layout.regions);
     return snapshot;
 }
 }  // namespace supple::diagnostics::detail

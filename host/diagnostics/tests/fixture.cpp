@@ -17,6 +17,7 @@
 #include "../src/trace.h"
 #include "../src/watch.h"
 #include "supple/base/rt.h"
+#include "supple/diagctx/inventory.h"
 #include "supple/diagctx/scope.h"
 #include "supple/diagctx/table.h"
 #include "supple/diagnostics/frontend.h"
@@ -371,6 +372,64 @@ int body(int argc, char** argv) {
     if (mode == "prior-filter-cpp-code")
         RaiseException(0xE06D7363, EXCEPTION_NONCONTINUABLE, 0, nullptr);
 #endif
+    // The plug-in inventory (topic 5c). The host announces its plug-ins as it creates them; the
+    // fixture does the same by hand with strings that must reach the report only bounded and
+    // clean, then faults while a thread is inside an entry of one of them.
+    //   inventory-process      a registered helper thread faults inside `process`
+    //   inventory-state        the main thread faults inside `state`
+    //   inventory-constructor  the main thread faults inside `create`, the instance still loading
+    //   inventory-other        the main thread faults inside `params` while a helper is inside
+    //                          `process` of the same instance
+    if (mode.rfind("inventory-", 0) == 0) {
+        namespace dc = supple::diagctx;
+        const auto image = reinterpret_cast<std::uint64_t>(&actualFault);
+        const auto describe = [image](dc::InstanceState state, std::uint32_t cell,
+                                      std::string_view name) {
+            dc::announce(cell, dc::InstanceKind::Clap, dc::InstanceOrigin::Foreign,
+                         dc::InstanceMode::InProcess, state, image,
+                         {name, std::string(100, 'V'), "1.0\x01\x7f", "com.canary.reverb"});
+        };
+        // An instance that came and went before the fault: it is listed as destroyed, and its
+        // cell, handed out again below, is what the next one's description replaces.
+        const auto gone = dc::acquireCell();
+        describe(dc::InstanceState::Active, gone, "Retired Canary");
+        dc::announceRemove(gone);
+        dc::releaseCell(gone);
+        const auto cell = dc::acquireCell();
+        describe(dc::InstanceState::Loading, cell, "Canary Reverb\x1b[31m");
+        if (mode == "inventory-constructor") {
+            dc::MainScope scope(cell, dc::Entry::Create);
+            actualFault();
+        }
+        dc::announceState(cell, dc::InstanceState::Inactive);
+        dc::announceState(cell, dc::InstanceState::Active);
+        if (mode == "inventory-state") {
+            dc::MainScope scope(cell, dc::Entry::State);
+            actualFault();
+        }
+        if (mode == "inventory-process") {
+            std::thread worker([cell] {
+                (void)supple::diagctx::registerThread(supple::diagctx::ThreadRole::AudioRender);
+                (void)supple::diagnostics::registerCurrentThread();
+                supple::diagctx::AudioScope scope(cell, supple::diagctx::Entry::Process);
+                actualFault();
+            });
+            worker.join();
+        }
+        if (mode == "inventory-other") {
+            static std::atomic<bool> inside{false};
+            std::thread helper([cell] {
+                (void)supple::diagctx::registerThread(supple::diagctx::ThreadRole::AudioLive, 1);
+                supple::diagctx::AudioScope scope(cell, supple::diagctx::Entry::Process);
+                inside.store(true);
+                for (;;) supple::rt::relax();
+            });
+            helper.detach();
+            while (!inside.load()) supple::rt::relax();
+            dc::MainScope scope(cell, dc::Entry::Params);
+            actualFault();
+        }
+    }
 #if defined(__linux__) || defined(_WIN32)
     if (mode == "trace" || mode == "trace-nondumpable") {
         if (argc != 4) return 4;

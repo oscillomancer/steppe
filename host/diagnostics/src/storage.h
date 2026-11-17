@@ -7,11 +7,13 @@
 #include "supple/json/json.h"
 #include "trace.h"
 namespace supple::diagnostics::detail {
+class Inventory;
 Status prepareDirectory(const std::filesystem::path& root);
 Result<std::intptr_t> createMarker(const std::filesystem::path& root, const Packet& boot);
 void releaseMarker(std::intptr_t handle);
 Status publishReport(const std::filesystem::path& root, const Packet& boot, const Packet* terminal,
-                     int code, bool fatal, const TraceSnapshot* trace = nullptr);
+                     int code, bool fatal, const TraceSnapshot* trace = nullptr,
+                     const Inventory* inventory = nullptr);
 void removeMarker(const std::filesystem::path& root, const Packet& boot);
 // The worker removes its own marker, which it still holds open and locked, when no supervisor
 // is left to do it (ADR-0091). POSIX unlinks the file while the lock is still held, so there is

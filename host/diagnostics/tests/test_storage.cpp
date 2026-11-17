@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <barrier>
+#include <cstring>
 #include <functional>
 #include <thread>
 #if defined(_WIN32)
@@ -15,6 +16,7 @@
 #endif
 #include <windows.h>
 #endif
+#include "../src/inventory.h"
 #include "../src/private_files.h"
 #include "../src/storage.h"
 #include "supple/base/files.h"
@@ -79,7 +81,7 @@ TEST_CASE("diagnostics rejects malformed bootstrap and never serializes raw cont
     auto p = boot(0);
     CHECK(valid(p));
     auto bad = p;
-    bad.version = 2;
+    bad.version = kProtocolVersion + 1;
     CHECK_FALSE(valid(bad));
     bad = p;
     bad.incident[4] = '/';
@@ -100,6 +102,39 @@ TEST_CASE("diagnostics rejects malformed bootstrap and never serializes raw cont
     REQUIRE(value);
     CHECK(value->find("terminal_context")->asBool());
     CHECK(value->find("threads")->size() == 0);
+}
+TEST_CASE("a report with an inventory is published, validated and pruned like any other") {
+    Root root;
+    Inventory inventory;
+    Packet add = boot(0);
+    add.kind = Message::Instance;
+    add.instance.cell = 3;
+    add.instance.event = static_cast<std::uint8_t>(supple::diagctx::EventKind::Add);
+    add.instance.kind = static_cast<std::uint8_t>(supple::diagctx::InstanceKind::Clap);
+    add.instance.origin = static_cast<std::uint8_t>(supple::diagctx::InstanceOrigin::Foreign);
+    add.instance.mode = static_cast<std::uint8_t>(supple::diagctx::InstanceMode::InProcess);
+    add.instance.state = static_cast<std::uint8_t>(supple::diagctx::InstanceState::Loading);
+    std::memcpy(add.instance.text[0], "Canary", 6);
+    add.instance.length[0] = 6;
+    REQUIRE(inventory.apply(add));
+    REQUIRE(publishReport(root.path, boot(0), nullptr, 31, false, nullptr, &inventory));
+    const auto text = readTextFile(root.path / (std::string(boot(0).incident.data()) + ".json"));
+    REQUIRE(text);
+    const auto parsed = json::parse(*text);
+    REQUIRE(parsed);
+    const auto* plugins = parsed->find("plugins");
+    REQUIRE(plugins);
+    REQUIRE(plugins->size() == 1);
+    CHECK(plugins->asArray()[0].find("name")->asString() == "Canary");
+    CHECK(plugins->asArray()[0].find("state")->asString() == "loading");
+    // Retention recognises it as an owned report: the oldest of 22 is pruned, which it only
+    // does for a report whose every field it can validate.
+    const auto oldest = fs::file_time_type::clock::now() - std::chrono::hours(48);
+    fs::last_write_time(root.path / (std::string(boot(0).incident.data()) + ".json"), oldest);
+    for (unsigned i = 1; i < 22; ++i)
+        REQUIRE(publishReport(root.path, boot(i), nullptr, 31, false, nullptr, &inventory));
+    CHECK(reports(root.path) == 20);
+    CHECK_FALSE(fs::exists(root.path / (std::string(boot(0).incident.data()) + ".json")));
 }
 TEST_CASE("diagnostic byte retention applies independently of report count") {
     Root root;

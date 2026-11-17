@@ -334,6 +334,52 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
             finally:
                 parent.close();child.close()
 
+    with check('inventory'):
+        # The plug-in inventory (ADR-0083, topic 5c). The fixture announces a retired instance
+        # and a live one, with strings that must arrive bounded and clean, then faults while a
+        # thread is inside an entry of the live one. What names the entry (the execution table)
+        # needs the collector to read the process; what names the instance travels the
+        # channel, so the list itself is checked on every platform and in every build.
+        def inventory_run(mode):
+            root=base/mode/"app"/"diagnostics"
+            run=subprocess.run([binary,str(root),mode],capture_output=True,timeout=60)
+            assert run.returncode!=0,(mode,run)
+            found=list(root.glob("*.json"))
+            assert len(found)==1,(mode,found,run.stderr)
+            raw=found[0].read_text()
+            return raw,json.loads(raw)
+        for mode,state,entry in (("inventory-process","active","process"),("inventory-state","active","state"),
+                                 ("inventory-constructor","loading","create"),("inventory-other","active","params")):
+            raw,report=inventory_run(mode)
+            plugins=report["plugins"]
+            assert len(plugins)==2,(mode,plugins)
+            retired,live=plugins
+            assert retired["state"]=="destroyed" and retired["name"]=="Retired Canary",retired
+            assert [p["id"] for p in plugins]==[0,1],plugins
+            assert live["state"]==state,(mode,live)
+            assert (live["kind"],live["origin"],live["mode"])==("clap","foreign","in_process"),live
+            # Bounded (64 bytes) and clean: a control character became "?", the vendor was cut.
+            assert live["name"]=="Canary Reverb?[31m" and live["vendor"]=="V"*64,live
+            assert live["version"]=="1.0??" and live["plugin_id"]=="com.canary.reverb",live
+            for forbidden in ("\\u001b","\x1b","\"image\"","\"cell\"","\"generation\""):
+                assert forbidden not in raw,(mode,forbidden)
+            assert not any("inventory messages" in u for u in report["unavailable"]),report["unavailable"]
+            threads=report["threads"]
+            tied=bool(threads) and threads[0].get("state")=="walked" and "entry" in threads[0]
+            if sanitized or not tied: continue  # the collector read nothing it could tie
+            assert threads[0]["role"]=="fault" and threads[0]["entry"]==entry,(mode,threads[0])
+            executing=live.get("executing")
+            assert executing and executing[0]=={"entry":entry,"thread":0,"match":"thread"},(mode,live)
+            if mode=="inventory-other":
+                assert len(executing)==2 and executing[1]["entry"]=="process" and executing[1]["match"]=="other_thread" and executing[1]["thread"]>0,executing
+            else:
+                assert len(executing)==1,executing
+            assert "executing" not in retired,retired
+            # The binary the instance came from is the module the fault is in.
+            module=threads[0]["frames"][0].get("module")
+            if module is not None and report["modules"][module]["id"]:
+                assert live.get("build")=={"format":report["modules"][module]["format"],"id":report["modules"][module]["id"]},(live,report["modules"][module])
+
     with check('linux traces'):
         if sys.platform.startswith("linux") and not sanitized:
             # Thread traces (ADR-0083, topic 4). The fixture parks three threads in marked

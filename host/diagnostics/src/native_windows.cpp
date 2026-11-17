@@ -22,6 +22,10 @@ struct Shared {
     Packet boot;
     std::atomic<std::uint32_t> ready{0};
     Packet messages[3];  // immutable after each release publication
+    // Inventory events (topic 5c): a ring of whole packets. `head` counts the ones the worker
+    // has published, `tail` the ones the supervisor has taken (native.h).
+    Packet inventory[kInventoryRing];
+    std::atomic<std::uint32_t> inventoryHead{0}, inventoryTail{0};
     // Set by the supervisor's own fatal handlers before it dies (ADR-0091). The worker reads
     // it after the supervisor's process handle signals: set means collector loss, clear
     // means the supervisor was ended from outside.
@@ -213,8 +217,16 @@ Result<Native> adopt(std::string_view text, Packet& boot) {
     return n;
 }
 bool publish(Native& n, const Packet& packet) noexcept {
-    const unsigned index = sharedSlot(packet.kind);
     auto& shared = *static_cast<Shared*>(n.shared);
+    if (packet.kind == Message::Instance) {
+        const auto head = shared.inventoryHead.load(std::memory_order_relaxed);
+        if (!ringHasRoom(head, shared.inventoryTail.load(std::memory_order_acquire)))
+            return false;  // full: the worker counts the event as dropped
+        shared.inventory[ringSlot(head)] = packet;
+        shared.inventoryHead.store(head + 1, std::memory_order_release);
+        return SetEvent(handle(n.event)) != FALSE;
+    }
+    const unsigned index = sharedSlot(packet.kind);
     shared.messages[index] = packet;
     shared.ready.fetch_or(1U << index, std::memory_order_release);
     return SetEvent(handle(n.event)) != FALSE;
@@ -222,6 +234,14 @@ bool publish(Native& n, const Packet& packet) noexcept {
 bool receive(Native& n, Packet& packet) {
     auto& shared = *static_cast<Shared*>(n.shared);
     for (;;) {
+        // Inventory events first: they are older than anything in the slots, and the terminal
+        // packet's handling should find them already applied.
+        const auto tail = shared.inventoryTail.load(std::memory_order_relaxed);
+        if (ringHasData(shared.inventoryHead.load(std::memory_order_acquire), tail)) {
+            packet = shared.inventory[ringSlot(tail)];
+            shared.inventoryTail.store(tail + 1, std::memory_order_release);
+            return valid(packet);
+        }
         const auto ready = shared.ready.load(std::memory_order_acquire) & ~n.seen;
         if (const int index = nextSharedSlot(ready); index >= 0) {
             packet = shared.messages[index];
@@ -231,7 +251,9 @@ bool receive(Native& n, Packet& packet) {
         const HANDLE waits[]{handle(n.event), handle(n.process)};
         if (WaitForMultipleObjects(2, waits, FALSE, INFINITE) != WAIT_OBJECT_0) {
             const auto final = shared.ready.load(std::memory_order_acquire) & ~n.seen;
-            if (!final) return false;
+            const bool queued = ringHasData(shared.inventoryHead.load(std::memory_order_acquire),
+                                            shared.inventoryTail.load(std::memory_order_relaxed));
+            if (!final && !queued) return false;
         }
     }
 }
