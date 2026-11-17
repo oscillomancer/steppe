@@ -6,6 +6,7 @@
 #include "midi_output.h"
 #include "pending_edits.h"
 #include "platform.h"
+#include "supple/diagctx/inventory.h"
 #include "supple/diagctx/scope.h"
 #include "unicode.h"
 
@@ -230,16 +231,21 @@ std::shared_ptr<VST3::Hosting::Module> moduleFor(const fs::path& path) {
     // Loading runs the module's own code. Its cell in the execution table is kept for as
     // long as the module is, which is the life of the process.
     const std::uint32_t cell = diagctx::acquireCell();
+    diagctx::announce(cell, diagctx::InstanceKind::Vst3Library, diagctx::InstanceOrigin::Foreign,
+                      diagctx::InstanceMode::InProcess, diagctx::InstanceState::Loading, 0, {});
     std::string error;
     std::shared_ptr<VST3::Hosting::Module> module;
     {
         diagctx::MainScope opening(cell, diagctx::Entry::LibraryOpen);
         module = VST3::Hosting::Module::create(key, error);
     }
-    if (module)
+    if (module) {
         cache[key] = module;
-    else
+        diagctx::announceState(cell, diagctx::InstanceState::Active);
+    } else {
+        diagctx::announceRemove(cell);
         diagctx::releaseCell(cell);
+    }
     return module;
 }
 

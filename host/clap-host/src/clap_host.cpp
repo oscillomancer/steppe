@@ -25,6 +25,7 @@
 #include <utility>
 
 #include "supple/clap/semantic_params.h"
+#include "supple/diagctx/inventory.h"
 #include "supple/diagctx/scope.h"
 #include "supple/json/json.h"
 #include "supple/product.h"
@@ -41,13 +42,25 @@ namespace fs = std::filesystem;
 // kept for as long as it stays loaded, given back after the library is gone.
 class LibraryCell {
   public:
-    LibraryCell() : id_(diagctx::acquireCell()) {}
+    LibraryCell() : id_(diagctx::acquireCell()) {
+        diagctx::announce(id_, diagctx::InstanceKind::ClapLibrary, diagctx::InstanceOrigin::Foreign,
+                          diagctx::InstanceMode::InProcess, diagctx::InstanceState::Loading, 0, {});
+    }
     LibraryCell(LibraryCell&& other) noexcept : id_(std::exchange(other.id_, diagctx::kNoCell)) {}
     LibraryCell(const LibraryCell&) = delete;
     LibraryCell& operator=(const LibraryCell&) = delete;
     LibraryCell& operator=(LibraryCell&&) = delete;
-    ~LibraryCell() { diagctx::releaseCell(id_); }
+    ~LibraryCell() {
+        diagctx::announceRemove(id_);
+        diagctx::releaseCell(id_);
+    }
     std::uint32_t id() const noexcept { return id_; }
+    // The library is open: `image` is an address inside its binary (inventory.h).
+    void opened(std::uint64_t image) const noexcept {
+        diagctx::announce(id_, diagctx::InstanceKind::ClapLibrary, diagctx::InstanceOrigin::Foreign,
+                          diagctx::InstanceMode::InProcess, diagctx::InstanceState::Active, image,
+                          {});
+    }
 
   private:
     std::uint32_t id_;
@@ -95,8 +108,11 @@ class Library {
             platform::closeLibrary(handle);
             return Error("host.load", key + " provides no plugin factory");
         }
-        auto lib =
-            std::shared_ptr<Library>(new Library(std::move(cell), handle, entry, factory, key));
+        // An address in the plug-in's own code, so the supervisor can say which module this is.
+        const auto image = reinterpret_cast<std::uintptr_t>(entry->init);
+        cell.opened(image);
+        auto lib = std::shared_ptr<Library>(
+            new Library(std::move(cell), handle, entry, factory, key, image));
         cache[key] = lib;
         return lib;
     }
@@ -109,16 +125,23 @@ class Library {
 
     const clap_plugin_factory_t* factory() const { return factory_; }
     const std::string& path() const { return path_; }
+    std::uint64_t image() const { return image_; }
 
   private:
     Library(LibraryCell cell, void* h, const clap_plugin_entry_t* e, const clap_plugin_factory_t* f,
-            std::string p)
-        : cell_(std::move(cell)), handle_(h), entry_(e), factory_(f), path_(std::move(p)) {}
+            std::string p, std::uint64_t image)
+        : cell_(std::move(cell)),
+          handle_(h),
+          entry_(e),
+          factory_(f),
+          path_(std::move(p)),
+          image_(image) {}
     LibraryCell cell_;  // first: given back last
     void* handle_;
     const clap_plugin_entry_t* entry_;
     const clap_plugin_factory_t* factory_;
     std::string path_;
+    std::uint64_t image_;
 };
 
 // ---------------------------------------------------------------------------
@@ -143,7 +166,10 @@ struct AudioEntry : diagctx::AudioScope {
 static_assert(sizeof(std::uint32_t) == sizeof(diagctx::kNoCell) && diagctx::kNoCell == 0xffffffffu);
 }  // namespace
 
-Instance::Cell::~Cell() { diagctx::releaseCell(id_); }
+Instance::Cell::~Cell() {
+    diagctx::announceRemove(id_);
+    diagctx::releaseCell(id_);
+}
 void Instance::Cell::acquire() noexcept { id_ = diagctx::acquireCell(); }
 
 // ---------------------------------------------------------------------------
@@ -770,6 +796,19 @@ Result<std::vector<PluginInfo>> scanModuleInProcess(const fs::path& file) {
 // Instance
 // ---------------------------------------------------------------------------
 
+namespace {
+// Tells the inventory (ADR-0083, topic 5c) what the instance in `cell` is. Only the plug-in's
+// own descriptor strings go: never its path, a project name or anything the user typed.
+void announceInstance(std::uint32_t cell, const PluginInfo& info, bool isolated,
+                      diagctx::InstanceState state, std::uint64_t image) noexcept {
+    const bool vst3 = info.format == "vst3" || info.id.rfind("vst3:", 0) == 0;
+    diagctx::announce(cell, vst3 ? diagctx::InstanceKind::Vst3 : diagctx::InstanceKind::Clap,
+                      diagctx::InstanceOrigin::Foreign,
+                      isolated ? diagctx::InstanceMode::Bridged : diagctx::InstanceMode::InProcess,
+                      state, image, {info.name, info.vendor, info.version, info.id});
+}
+}  // namespace
+
 Result<std::unique_ptr<Instance>> Instance::create(const PluginInfo& info,
                                                    const HostIdentity& identity, bool isolated,
                                                    std::shared_ptr<BridgeProcess> bridge) {
@@ -777,6 +816,9 @@ Result<std::unique_ptr<Instance>> Instance::create(const PluginInfo& info,
     // included, happens inside its Create entry. A failure destroys it, and its cell with it.
     std::unique_ptr<Instance> self(new Instance());
     self->cell_.acquire();
+    // Announced before anything of the plug-in's runs, so a crash in its library or its
+    // constructor still finds it in the report.
+    announceInstance(self->cell_.id(), info, isolated, diagctx::InstanceState::Loading, 0);
     MainEntry creating(self->cell_.id(), isolated, diagctx::Entry::Create);
     if (isolated) {
         RemotePorts ports;
@@ -793,6 +835,7 @@ Result<std::unique_ptr<Instance>> Instance::create(const PluginInfo& info,
         self->remoteEditor_ = ports.editor;
         self->hostState_ = std::make_unique<HostState>();
         self->remote_ = std::move(*remote);
+        diagctx::announceState(self->cell_.id(), diagctx::InstanceState::Inactive);
         return self;
     }
     if (info.format == "vst3" || info.id.rfind("vst3:", 0) == 0) {
@@ -808,11 +851,15 @@ Result<std::unique_ptr<Instance>> Instance::create(const PluginInfo& info,
         self->acceptsNotes_ = (*backing)->acceptsNotes();
         self->outputsNotes_ = (*backing)->outputsNotes();
         self->vst3_ = std::move(*backing);
+        diagctx::announceState(self->cell_.id(), diagctx::InstanceState::Inactive);
         return self;
     }
     auto lib = Library::open(info.path);
     if (!lib) return std::move(lib).error();
 
+    // The library is open: say which binary this instance comes from before its factory runs.
+    announceInstance(self->cell_.id(), info, false, diagctx::InstanceState::Loading,
+                     (*lib)->image());
     self->info_ = info;
     self->library_ = *lib;
     self->hostState_ = std::make_unique<HostState>();
@@ -963,6 +1010,7 @@ Result<std::unique_ptr<Instance>> Instance::create(const PluginInfo& info,
         }
         self->outputsNotes_ = notes->count(self->plugin_, false) > 0;
     }
+    diagctx::announceState(self->cell_.id(), diagctx::InstanceState::Inactive);
     return self;
 }
 
@@ -1017,6 +1065,7 @@ Status Instance::activate(double sampleRate, std::uint32_t minFrames, std::uint3
         keyChannels_ = vst3_->sidechainChannels();
         auxOutPorts_ = vst3_->auxOutputPorts();
         active_ = true;
+        diagctx::announceState(cell_.id(), diagctx::InstanceState::Active);
         sampleRate_ = sampleRate;
         maxFrames_ = maxFrames;
         return okStatus();
@@ -1048,6 +1097,7 @@ Status Instance::activate(double sampleRate, std::uint32_t minFrames, std::uint3
         }
         remote_->refreshLatency();
         active_ = true;
+        diagctx::announceState(cell_.id(), diagctx::InstanceState::Active);
         sampleRate_ = sampleRate;
         maxFrames_ = maxFrames;
         return okStatus();
@@ -1086,6 +1136,7 @@ Status Instance::activate(double sampleRate, std::uint32_t minFrames, std::uint3
             "\"" + info_.id + "\" refused to activate at " + std::to_string(sampleRate) + " Hz", {},
             "try another sample rate or block size");
     active_ = true;
+    diagctx::announceState(cell_.id(), diagctx::InstanceState::Active);
     sampleRate_ = sampleRate;
     maxFrames_ = maxFrames;
     return okStatus();
@@ -1097,12 +1148,14 @@ void Instance::deactivate() {
         if (active_ && !processing_) {
             vst3_->deactivate();
             active_ = false;
+            diagctx::announceState(cell_.id(), diagctx::InstanceState::Inactive);
         }
         return;
     }
     if (remote_ && active_ && !processing_) {
         remote_->deactivate();
         active_ = false;
+        diagctx::announceState(cell_.id(), diagctx::InstanceState::Inactive);
         return;
     }
     if (!active_) return;
@@ -1115,6 +1168,7 @@ void Instance::deactivate() {
     }
     plugin_->deactivate(plugin_);
     active_ = false;
+    diagctx::announceState(cell_.id(), diagctx::InstanceState::Inactive);
 }
 
 std::uint32_t Instance::latency() const {
