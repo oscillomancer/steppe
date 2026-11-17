@@ -813,6 +813,16 @@ reads no environment symbol path. A folder is searched in sorted order, without 
 links, to 8 levels, 20000 files and 100000 entries per folder; a limit that stops the search
 is said on standard error.
 
+What an image is (the `Source` reader, `Limits`, `Identity` and `identify`, and the ELF, Mach-O
+and PE header parsers that compute an id) is the GPL library `image-identity`
+(`libs/image-identity/`, header `supple/imageid/image.h`, still namespace
+`supple::diagnostics::resolver`), moved out of the resolver unchanged so that the application
+can compare an installed plug-in file with a report's `build.id` (topic 7d) without linking the
+resolver, its symbol readers or its search. `crash-resolver` links it and keeps the symbol
+tables, `lookup`, `demangle` and the report resolution. Like `diagnostics-capture` it is
+DAW-only: `tools/license-check` and `cmake/LicenseIsolation.cmake` reject its use from
+`plugins/`, `modules/` and the MIT libraries.
+
 A report module is matched to a file by format and `id` (ELF build ID, Mach-O `LC_UUID`,
 PE CodeView GUID and age, computed exactly as the collectors compute them), so the file
 must be the build's own, or a separate symbol file carrying the same id (an ELF debug file,

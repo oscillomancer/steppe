@@ -4,7 +4,7 @@
 # symbol files on this machine. Separate from the diagnostics library on purpose: the
 # application never links it.
 supple_add_library(crash-resolver SOURCES src/image.cpp src/resolve.cpp
-  DEPS supple::core-base supple::core-json)
+  DEPS supple::core-base supple::core-json supple::image-identity)
 add_executable(resolve-crash tools/resolve_crash.cpp)
 target_link_libraries(resolve-crash PRIVATE supple::crash-resolver)
 supple_target_defaults(resolve-crash)

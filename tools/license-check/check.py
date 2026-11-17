@@ -42,6 +42,7 @@ MIT_LIBRARIES = {"core-base", "core-json", "core-schema", "core-params",
 GPL_ONLY_LIBRARIES = {
     "diagnostics-context": re.compile(r"supple/diagctx/|diagctx::|\bdiagnostics-context\b"),
     "diagnostics-capture": re.compile(r"supple/diagcap/|\bdiagnostics-capture\b"),
+    "image-identity": re.compile(r"supple/imageid/|\bimage-identity\b"),
 }
 SPDX_RE = re.compile("SPDX-License-" + r"Identifier:[ \t]*([^\n]+)")
 

@@ -143,6 +143,23 @@ class GplOnlyLibraries(BuildFiles):
                 result, errors = self.check_fixture(filename, '#include "supple/diagcap/trace.h"\n')
                 self.assertEqual(result, 0, errors)
 
+    def test_the_image_identity_library_is_closed_too(self):
+        for filename, text in (
+            ("libs/core-base/src/thread.cpp", '#include "supple/imageid/image.h"\n'),
+            ("libs/core-json/CMakeLists.txt", "supple_add_library(core-json DEPS supple::image-identity)\n"),
+            ("plugins/common/example.cpp", '#include <supple/imageid/parse.h>\n'),
+            ("modules/rack/example.cpp", '#include "supple/imageid/image.h"\n'),
+        ):
+            with self.subTest(filename=filename):
+                result, errors = self.check_fixture(filename, text)
+                self.assertEqual(result, 1, errors)
+                self.assertIn("GPL-only library image-identity", errors)
+        for filename in ("host/engine/src/app.cpp", "libs/image-identity/src/image.cpp",
+                         "host/diagnostics/resolver/src/image.cpp"):
+            with self.subTest(filename=filename):
+                result, errors = self.check_fixture(filename, '#include "supple/imageid/image.h"\n')
+                self.assertEqual(result, 0, errors)
+
     def test_gpl_code_may_use_it(self):
         for filename in ("host/engine/src/realtime.cpp", "libs/command-bus/src/bus.cpp",
                          "libs/diagnostics-context/src/table.cpp", "daw/example.cpp"):
