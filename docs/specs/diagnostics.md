@@ -417,8 +417,8 @@ linked with the MSVC runtime always has such a filter (the runtime's own, which 
 uncaught C++ exception into `std::terminate`), so declining to replace an existing one
 would never have installed in the product; chaining keeps both that filter and any other
 that would have run, and with them the user's own OS crash reporting. `installed` (the
-worker's terminal coverage) is true on Windows only when the filter really is the
-process's top-level filter. After capture POSIX restores/re-raises the fatal default.
+worker's terminal coverage) is true on Windows once the filter is set (setting it cannot
+fail; it is not read back, because reading means clearing it for a moment). After capture POSIX restores/re-raises the fatal default.
 A plug-in that later replaces the top-level filter without chaining still takes the
 capture away; that is a stated limit. Terminate records only an enum, then chains the previously installed handler;
 its deliberate message/exit behavior survives. A subsequent native fatal signal

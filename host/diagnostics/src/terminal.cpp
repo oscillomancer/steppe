@@ -267,10 +267,12 @@ bool installTerminal(Native native, const Packet& boot) {
 #if defined(_WIN32)
     // Always ours, whatever was there before: the MSVC runtime's startup has set its own
     // filter long before this runs, so declining to replace an existing one meant never
-    // installing in a real executable. "Installed" means the filter really is the
-    // process's top-level filter, which covers faults; abort has its own hook below.
+    // installing in a real executable. SetUnhandledExceptionFilter cannot fail, so the
+    // filter is the process's top-level one from here on; it is not probed (reading it
+    // means briefly clearing it, which a faulting thread could hit). abort has its own
+    // hook below. lastChanceFilterInstalled() is evidence for the test fixture only.
     priorFilter = SetUnhandledExceptionFilter(lastChance);
-    installed = lastChanceFilterInstalled();
+    installed = true;
     if (installed) {
         const auto old = std::signal(SIGABRT, abortSignal);
         if (old != SIG_DFL) std::signal(SIGABRT, old);
