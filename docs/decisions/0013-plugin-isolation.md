@@ -78,6 +78,15 @@ renderer and worker threads, not in the device callback.
    in-process backing, and PDC is unchanged. Live nodes pass bridged stages through with a warning;
    synchronous bridge calls never run in the device callback. A pipelined
    live mode remains deferred.
+   *Note 2026-11-16:* "never" does not hold. Under memory pressure (two test
+   suites at once, zram swap) a healthy bridge stalled past 2 s; it was
+   killed, its node went silent, and an offline render succeeded with
+   different audio. Pausing a bridge for 2.3 s reproduces this. The deadline
+   is now process-wide (`host::setBridgeDeadlineMs`), and the engine tests
+   raise it so that load cannot decide a comparison. Two questions are open
+   for the product: whether the 2 s default should stand, offline renders
+   especially, and whether a render that loses a plug-in this way should
+   still report success (STATUS).
 6. **Failure.** The parent watches each bridge with a `pidfd` and the control
    socket. A bridge that dies, or misses the deadline and is then found dead
    or killed, turns its instances *failed*: `process()` outputs silence and

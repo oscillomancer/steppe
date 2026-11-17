@@ -5,12 +5,15 @@
 #include <supple/engine/realtime.h>
 #include <algorithm>
 #include <array>
+#include "bridge_patience.h"
 
 using namespace supple;
 using namespace supple::engine;
 
 TEST_CASE("engine bridge failures retain scope, structured errors and restart ownership") {
     host::setBridgeExecutable(BRIDGE_PATH);
+    // Mode 2 hangs: the product's deadline kills it (ADR-0013).
+    const test::BridgeDeadline productDefault(2000);
     for (double mode : {1.0, 2.0}) {
         CAPTURE(mode);
         model::EditTxn edit(model::Session::create({.console9 = false}), 1);

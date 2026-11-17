@@ -373,6 +373,7 @@ TEST_CASE("pan modes and laws: real-time output equals the offline render (ADR-0
         auto pool = makePool();
         auto offline =
             renderOffline(isolated, pool, {.startSeconds = 0, .endSeconds = 2.0}).value();
+        CHECK(pool.failedErrors().empty());  // a killed bridge fails as killed, not as audio
         // Bridged plug-ins run in the callback too (ADR-0081).
         for (const EngineOptions& options : {patient(kInCallback), patient({.workers = 2})}) {
             INFO("anticipative " << options.anticipative);
@@ -391,6 +392,7 @@ TEST_CASE("pan modes and laws: real-time output equals the offline render (ADR-0
             CHECK(engine.bridgeLateCycles() == 0);
             engine.stop();
             CHECK(engine.processErrors() == 0);
+            CHECK(rtPool.failedErrors().empty());
             const auto& cap = backend.capture();
             const std::uint32_t L = engine.outputLatency();
             CHECK(maxDiff(cap.channels[0], L, offline.audio.channels[0], 96000) == 0.0);
@@ -5691,6 +5693,7 @@ TEST_CASE("MIDI bus: plug-in note output nulls offline in both executors and all
             const auto offline =
                 renderOffline(*isolated, pool, {.startSeconds = 0, .endSeconds = 2.0});
             REQUIRE(offline);
+            CHECK(pool.failedErrors().empty());  // a killed bridge fails as killed, not as audio
             CHECK(offline->audio.channels == reference->audio.channels);
             // Bridged plug-ins run in the callback too (ADR-0081).
             for (const auto& options : {patient(kInCallback), patient({.workers = 2})}) {
@@ -5709,6 +5712,7 @@ TEST_CASE("MIDI bus: plug-in note output nulls offline in both executors and all
                 CHECK(engine.bridgeLateCycles() == 0);
                 engine.stop();
                 CHECK(engine.processErrors() == 0);
+                CHECK(rtPool.failedErrors().empty());
                 for (int c = 0; c < 2; ++c)
                     CHECK(maxDiff(backend.capture().channels[static_cast<std::size_t>(c)],
                                   engine.outputLatency(),

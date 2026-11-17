@@ -1,0 +1,24 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 Supple Audio
+// The engine tests compare bridged renders bit for bit. A bridged call made
+// off the device callback (an offline render, a renderer, the main thread)
+// fails at its deadline, and the failed node is silent (ADR-0013): on a
+// loaded machine a 2 s stall of a healthy bridge, as memory pressure can
+// cause, made such a render differ (review round 26, item 2). Every test in
+// this binary gets a deadline no healthy plug-in misses; a test of the
+// deadline itself sets the default back (BridgeDeadline in bridge_patience.h).
+#include <doctest/doctest.h>
+
+#include "bridge_patience.h"
+
+namespace {
+const bool kPatient = [] {
+    supple::host::setBridgeDeadlineMs(supple::engine::test::kPatientBridgeMs);
+    return true;
+}();
+}  // namespace
+
+TEST_CASE("engine tests wait for bridged calls past any stall of a loaded machine") {
+    CHECK(kPatient);
+    CHECK(supple::host::bridgeDeadlineMs() == supple::engine::test::kPatientBridgeMs);
+}
