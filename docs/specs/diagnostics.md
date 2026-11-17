@@ -4,7 +4,8 @@
 
 The approved nine-topic sequence is delivered in steps with a review stop after each.
 Topic 4 (thread traces) has landed for Linux and is written for Windows, which native CI
-has yet to prove; macOS in-process capture and the offline resolver follow. Until later topics land, engine inventory, bridge
+has yet to prove. macOS in-process capture is written and unproven until native CI runs
+it; the offline resolver follows. Until later topics land, engine inventory, bridge
 correlation, restart UI, hang diagnostics and final release packaging are contracts,
 not working features.
 No crash path attempts a save or normal teardown. No automatic upload exists.
@@ -186,6 +187,37 @@ and `offset` is the address minus the load bias (load address minus the image's
 preferred base), the link-time address a symbolizer expects, as for ELF. The PDB path is
 never read. Stack-overflow and fail-fast faults keep the limits stated for the terminal hook:
 fail-fast bypasses the last-chance filter and yields no trace.
+
+macOS has no external collector: reading another process needs `task_for_pid` and an
+entitlement, neither of which is used. The worker reads its own threads in the terminal
+handler, after the terminal packet has gone out, with Mach calls on its own task only
+(`task_threads`, `thread_suspend`, `thread_get_state` and `thread_resume` on its own
+threads, `mach_vm_read_overwrite` on its own memory). It allocates nothing on the heap,
+takes no lock and formats nothing: the capsule is static storage of fixed size (128 threads,
+128 frames, 256 modules), memory that cannot be read fails the read and ends the walk
+(`unreadable`), and dyld's image list is read as plain memory, never through a dyld
+call. `task_threads` returns its list in kernel-mapped memory that is given back with
+`vm_deallocate`; that is the only allocation and it is not the heap. Each other thread is
+suspended only while its registers and stack are read and is resumed before the next, on every
+path; a thread whose suspension or state call failed is `unavailable` with `thread_exited`,
+`access_denied` or `registers_unreadable`, and threads left when the budget ends are
+`deadline`. The calling thread is the `fault` entry: from the signal's registers, or from
+its own frame for terminate and abort, which carry none. The worker keeps to its one
+second: thread reads end at 400 ms, the capsule is sent by 700 ms (a `Message::Trace`
+packet carrying the byte count, then the bytes, each wait bounded) and the wait for the
+acknowledgement gets the rest. The supervisor reads the capsule within the same 600 ms
+budget and validates it strictly (counts, roles, reasons and ranges, the bytes consumed
+exactly); a capsule that is missing, late, truncated or malformed leaves the fault thread
+`unavailable` with `not_collected`, and the report is otherwise unchanged. The addresses
+in the capsule never leave the supervisor's parser: a frame is reported as an index into
+`modules` and an offset, the address minus the image's slide (its link-time address).
+Module identity is the Mach-O `LC_UUID` of each image dyld lists, found from the
+image's header in the worker's memory. System libraries in the dyld shared cache, if dyld
+does not list them, are in no module: their frames carry no identity, and because the
+chain was validated in the worker, a return address outside every module is kept as such
+and the walk goes on. Frames need frame pointers: the first-party code and the stock plug-ins
+have them (see Frame pointers), system frames are best effort. On arm64 pointer-authentication
+bits are stripped from return addresses.
 
 ## Frame pointers
 

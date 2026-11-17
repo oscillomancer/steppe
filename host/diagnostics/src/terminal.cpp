@@ -6,6 +6,9 @@
 #include <cstring>
 #include <exception>
 #include "supple/diagnostics/frontend.h"
+#if defined(__APPLE__)
+#include "capsule.h"
+#endif
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -58,7 +61,14 @@ static_assert(std::atomic<bool>::is_always_lock_free);
 // formatting. Raw PC/frame/SP and the thread id stay solely in the private native channel.
 void handoff(Packet packet) noexcept {
     packet.kind = Message::Terminal;
-    if (detail::publish(endpoint, packet)) detail::awaitAcknowledgement(endpoint);
+    if (!detail::publish(endpoint, packet)) return;
+#if defined(__APPLE__)
+    // No external collector on macOS: the process reads its own threads, sends them,
+    // and waits out the rest of the one-second hold (capture_macos.cpp).
+    detail::captureAndHold(endpoint, packet);
+#else
+    detail::awaitAcknowledgement(endpoint);
+#endif
 }
 // The calling thread's id, for the private channel only. Async-signal-safe.
 [[maybe_unused]] std::uint64_t currentThread() noexcept {
@@ -222,6 +232,9 @@ bool installTerminal(Native native, const Packet& boot) {
     initial = boot;
     active.store(true, std::memory_order_release);
     (void)registerCurrentThread();
+#if defined(__APPLE__)
+    rememberMainThread();  // installed by the main thread, before frontend code
+#endif
     bool installed = false;
 #if defined(_WIN32)
     const auto prior = SetUnhandledExceptionFilter(lastChance);

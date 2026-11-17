@@ -1491,9 +1491,14 @@ module-relative offsets for the faulting, main and other threads (at most 128 th
 non-dumpable worker or a deadline). Foreign frames are best effort and frames of
 frameless code can be missing. The Windows collector (suspend, `StackWalk64` under
 one DbgHelp lock without symbol paths or servers, PE CodeView GUID and age) is
-written but unproven until native CI runs it. macOS in-process capture and the offline
-symbol resolver are the remaining steps of topic 4 and are not delivered; macOS
-reports list their fault thread as unavailable (`unsupported`).
+written but unproven until native CI runs it. On macOS the worker reads its own
+threads and images inside its terminal hold with Mach calls on its own task (no
+`task_for_pid`, no entitlement), and the supervisor validates and reports the capsule; this
+is written and its portable parts (walker, framing, parser) are tested, but the Mach calls are
+unproven until native CI runs them, and system frames in the dyld shared cache carry no
+module identity. The offline symbol resolver is the remaining step of topic 4 and is not
+delivered. A macOS report whose capsule never arrives lists its fault thread as
+unavailable (`not_collected`).
 Inventory, other owned-thread registration, bridge correlation, restart UI/hangs and
 release package verification remain later topics. Native macOS/Windows CI and
 signed Mach capability/collector-loss tests are due before merge/release.
