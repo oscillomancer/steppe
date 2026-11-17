@@ -2791,7 +2791,9 @@ load always compiles: neither the scalar nor the mix shortcut takes it, even
 when a playrate move is still pending from a full queue (the compile carries
 the pending value). If that compile fails, the edit never played. The engine then keeps the session
 it plays as its latest, for later reloads, the mix and scalar shortcuts and
-the instance prune, and adds a warning. `takeUnplayedEdit()` returns the error
+the instance prune, with a playrate move that a full queue refused before
+the deferral still pending (it is published once the queue has room), and
+adds a warning. `takeUnplayedEdit()` returns the error
 once; `EngineApp` emits it as `engine.error` and reports the version that
 plays as `prepared_version`. The project's head keeps the edit: undoing or
 changing it reloads. Whatever the engine names as latest, the instance pool

@@ -767,6 +767,7 @@ class Engine {
     friend struct EngineTestAccess;  // defined by the tests alone
     friend struct OutputTestAccess;  // likewise (test_app.cpp)
     friend struct RecordingErrorTestAccess;
+    friend struct RateTestAccess;  // likewise (test_module_library.cpp)
     void cycle(const float* const* in, float* const* out, std::uint32_t frames) SUPPLE_RT;
     // cycle() after its bookkeeping: count-in, then the transport's work.
     void cycleTransport(const float* const* in, float* const* out, std::uint32_t frames) SUPPLE_RT;
@@ -972,6 +973,9 @@ class Engine {
     // puts back if the deferred edit fails to compile (review 37 F1).
     std::shared_ptr<const model::Session> latest_;
     std::optional<std::shared_ptr<const model::Session>> rateDeferredFrom_;
+    // Whether a refused playrate move was pending when the deferral began:
+    // the restore puts it back with rateDeferredFrom_ (review 37c F1).
+    bool rateDeferredScalarPending_ = false;
     std::optional<Error> unplayedEdit_;  // takeUnplayedEdit()
     // The session the newest published plan was compiled from: what the
     // prune keeps, whatever latest_ names.
