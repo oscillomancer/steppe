@@ -200,7 +200,9 @@ LoadMode EngineApp::loadModeOf(const model::PluginRef& ref) const {
 Result<std::unique_ptr<host::Instance>> EngineApp::makeInstance(const host::PluginInfo& info) {
     const LoadMode mode = overrides_.mode(info);
     if (mode == LoadMode::Disable) return LoadOverrides::disabled(info);
-    return host::Instance::create(info, options_.identity, mode == LoadMode::Bridge);
+    auto made = host::Instance::create(info, options_.identity, mode == LoadMode::Bridge);
+    if (made) ++instancesMade_;
+    return made;
 }
 
 Result<bool> EngineApp::setLoadOverride(const host::PluginInfo& info, LoadMode mode) {
@@ -480,21 +482,68 @@ Status EngineApp::validatePluginMod(model::Id id, const model::FxInstance& fx,
     };
     if (!validation)
         if (auto* live = instanceOf(id)) return check(*live);
+    // The fx's own state and parameters, put on `probe` (which must then be checked at once).
+    auto prepare = [&](host::Instance& probe) -> Status {
+        auto state = validation ? validation->session : view();
+        if (blob && fx.state) state.blobs[*fx.state] = blob;
+        SUPPLE_TRY(restoreFx(probe, fx, state));
+        if (!fx.params.empty()) {
+            if (probe.active()) probe.deactivate();  // a borrowed probe may have been used
+            SUPPLE_TRY(probe.activate(state.project->sampleRate, 1, 1));
+            probe.flushParams();
+        }
+        return {};
+    };
     auto makeProbe = [&]() -> Result<std::unique_ptr<host::Instance>> {
         auto info = findPlugin(fx.plugin.id);
         if (!info) return std::move(info).error();
         auto probe = makeInstance(*info);
         if (!probe) return std::move(probe).error();
-        auto state = validation ? validation->session : view();
-        if (blob && fx.state) state.blobs[*fx.state] = blob;
-        SUPPLE_TRY(restoreFx(**probe, fx, state));
-        if (!fx.params.empty()) {
-            SUPPLE_TRY((*probe)->activate(state.project->sampleRate, 1, 1));
-            (*probe)->flushParams();
-        }
+        SUPPLE_TRY(prepare(**probe));
         return std::move(*probe);
     };
     if (validation) {
+        // Under a bridge override a probe is a process: a load with many cables to the same
+        // plug-in must not start one per fx. A fx with state borrows the plug-in's one cached
+        // scratch probe and restores its own state onto it for each check; one with none (and
+        // no parameters) shares a pristine probe of the load.
+        if (auto info = findPlugin(fx.plugin.id);
+            info && overrides_.mode(*info) == LoadMode::Bridge) {
+            const std::string pluginKey = fx.plugin.id;
+            if (const auto failed = validation->failures.find(&fx);
+                failed != validation->failures.end())
+                return Error(failed->second).at(path);
+            const bool stateful = fx.patch || fx.state;
+            if (stateful || fx.params.empty()) {
+                host::Instance* use = nullptr;
+                if (stateful) {
+                    auto borrowed = scratch(*info, pluginKey);
+                    if (!borrowed) return std::move(borrowed).error().at(path);
+                    use = *borrowed;
+                    if (validation->restoredFor[pluginKey] != &fx) {
+                        validation->restoredFor[pluginKey] =
+                            nullptr;  // unknown while it is half done
+                        if (Status st = prepare(*use); !st) {
+                            validation->failures.emplace(&fx, st.error());
+                            return std::move(st).error().at(path);
+                        }
+                        validation->restoredFor[pluginKey] = &fx;
+                    }
+                } else {
+                    auto& slot = validation->pristine[pluginKey];
+                    if (!slot) {
+                        auto made = makeInstance(*info);
+                        if (!made) {
+                            validation->failures.emplace(&fx, made.error());
+                            return std::move(made).error().at(path);
+                        }
+                        slot = std::move(*made);
+                    }
+                    use = slot.get();
+                }
+                return check(*use);
+            }
+        }
         auto found = validation->probes.find(&fx);
         if (found == validation->probes.end())
             found = validation->probes.emplace(&fx, makeProbe()).first;

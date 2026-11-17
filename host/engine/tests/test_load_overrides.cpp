@@ -387,3 +387,36 @@ TEST_CASE("changing an override while playing swaps the instance in both executo
         f.call("engine.stop", "{}");
     }
 }
+
+TEST_CASE("opening a project with cables into plug-in modules starts one bridge, not one per fx") {
+    Bus f;
+    f.call("track.add", R"({"name": "Synth"})");
+    f.call("rack.add", R"({"track": "tr_1"})");                                         // mo_1 Out
+    f.call("module.add", R"({"rack": "rk_1", "type": "lfo", "params": {"rate": 3}})");  // mo_2
+    const char* amounts[] = {"-9", "-6", "-3"};
+    for (int i = 0; i < 3; ++i) {  // mo_3..mo_5, fx_1..fx_3, each with a state of its own
+        f.call("module.add", R"({"rack": "rk_1", "plugin": "com.suppleaudio.test.gain"})");
+        f.call("fx.patch.merge", std::string(R"({"fx": "fx_)") + std::to_string(i + 1) +
+                                     R"(", "patch": {"params": {"gain": )" + amounts[i] + "}}}");
+        f.call("cable.add", std::string(R"({"from": "mo_2.out", "to": "fx_)") +
+                                std::to_string(i + 1) + R"(.gain", "amount": 0.3})");
+    }
+    const fs::path song = f.root.path / "song.json";
+    REQUIRE(f.app->save(song));
+    f.call("project.new", "{}");
+
+    auto open = [&](LoadMode mode) {
+        f.call("plugin.override", std::string(R"({"plugin":")") + kGain + R"(","mode":")" +
+                                      std::string(loadModeName(mode)) + "\"}");
+        std::vector<schema::Warning> warnings;
+        const auto before = f.app->instancesMade();
+        REQUIRE(f.app->open(song, &warnings));
+        CHECK(warnings.empty());
+        CHECK(f.app->head().fx.size() == 3);
+        return f.app->instancesMade() - before;
+    };
+    CHECK(open(LoadMode::Normal) == 3);  // in process: a probe per fx, as always
+    f.call("project.new", "{}");
+    // Under a bridge each probe is a process: the plug-in's one cached probe serves all three.
+    CHECK(open(LoadMode::Bridge) == 1);  // (the project that loads replaces the cached probe)
+}

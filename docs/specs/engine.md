@@ -1138,6 +1138,10 @@ project saved without it, byte for byte.
   both executors have adopted a newer plan) and recompiles. Whatever state
   was never saved is lost and held notes end. Setting the mode a plug-in
   already has changes nothing.
+- **Probes at load.** Opening a project validates each cable into a plug-in module with a probe
+  restored from that fx's state. Under a bridge override a probe is a process, so a plug-in's fx
+  with a state share its one cached scratch probe (each fx's state is restored onto it before its
+  check) and those with none share one pristine probe of the load, instead of one process per fx.
 - **Which plug-ins to protect.** `project.plugins`, `project.open`'s
   `project.suspect_plugin` warning, `crash.settle` and the clean-run settlement that
   decide it are in `docs/specs/diagnostics.md` "Safe-load in the engine".

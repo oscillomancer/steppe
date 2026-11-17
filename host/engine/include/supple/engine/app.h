@@ -459,6 +459,9 @@ class EngineApp : public cmd::Host {
         const auto it = scratch_.find(std::string(fxPluginId));
         return it == scratch_.end() ? nullptr : it->second.get();
     }
+    // How many probes makeInstance has made, so a test can tell that a load made one
+    // process where it once made one per fx.
+    std::size_t instancesMade() const { return instancesMade_; }
     InstancePool& instances() { return *pool_; }
     MediaCache& media() { return media_; }
     // The plugin's semantic schema (null for plugins without the extension).
@@ -482,6 +485,11 @@ class EngineApp : public cmd::Host {
     struct PluginModValidation {
         const model::Session& session;
         std::map<const model::FxInstance*, Result<std::unique_ptr<host::Instance>>> probes;
+        // Under a bridge override (one process per probe): the shared probes, see
+        // validatePluginMod. restoredFor: which fx's state a plug-in's scratch probe holds.
+        std::map<std::string, std::unique_ptr<host::Instance>> pristine = {};
+        std::map<std::string, const model::FxInstance*> restoredFor = {};
+        std::map<const model::FxInstance*, Error> failures = {};
     };
     // Cable checks use the live FX or a private probe restored from its saved state.
     Status validatePluginMod(model::Id id, const model::FxInstance& fx, const std::string& key,
@@ -996,6 +1004,7 @@ class EngineApp : public cmd::Host {
     std::mutex recordingFinalizeMutex_;  // sidecar publication vs scratch relocation, never RT
     std::map<std::string, std::unique_ptr<host::Instance>> scratch_;
     LoadOverrides overrides_;
+    std::size_t instancesMade_ = 0;
     // Topic 7d. The plug-ins earlier projects of this run ran in process (the pool that made
     // them is replaced with the project), and the ones this run already said it suspects.
     std::vector<host::PluginInfo> ranBefore_;
