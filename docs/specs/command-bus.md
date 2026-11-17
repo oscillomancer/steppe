@@ -310,7 +310,7 @@ transaction-safe inside a batch), `rpc.*` (§3), `mcp.*` (§4).
   inherited directory ACLs (ADR-0035). A refusal returns `rpc.path`, names the
   directory and explains how to choose a private owned directory without aliases.
   This checks the product directory, not every ancestor or arbitrary explicit
-  socket parent. Endpoint-lock acquisition can still wait without a deadline.
+  socket parent. Endpoint-lock acquisition never waits (ADR-0089).
   Accepted connection descriptors are nonblocking and close-on-exec.
   Framing: one JSON value per line (UTF-8, `\n`-terminated, compact JSON; no
   embedded newlines), max 16 MiB per message.

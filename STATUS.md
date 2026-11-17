@@ -1067,8 +1067,9 @@ Library boundaries:
   POSIX (no-follow open, owner check, handle-based 0700); Windows refuses reparse
   points and keeps inherited directory ACLs (ADR-0035), not a named-pipe DACL.
   Ancestors and arbitrary explicit socket parents retain their native policy.
-  Endpoint lock acquisition can still wait on another holder without a deadline,
-  independently of the nonblocking collision probe. Native macOS/Windows CI is due.
+  A server holds its endpoint lock while it runs and takes it without waiting
+  (ADR-0089); on macOS a foreign listener that holds no lock is protected only
+  while its backlog has room.
 
 Engine and hosting:
 - Sync (ADR-0070, ADR-0071, ADR-0073): sync input, LTC output and MIDI
