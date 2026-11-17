@@ -2516,16 +2516,24 @@ TEST_CASE("bridged calls report where their time went") {
     REQUIRE(h.startProcessing());
     REQUIRE(h.setParam(1, 2.0));  // hang in the next process()
     resetBridgeTiming();
-    const std::int64_t span = 20'000'000;
+    // The wait is timed from when the call was posted, a little after the
+    // deadline was set, so it can fall short of the span; what holds is
+    // that the call gave up only once the deadline passed, and that its
+    // wait lies within the call.
+    const std::int64_t before = steadyNanoseconds();
+    const std::int64_t due = before + 20'000'000;
     {
-        LiveBridgeDeadline deadline(steadyNanoseconds() + span);
+        LiveBridgeDeadline deadline(due);
         CHECK(h.process(buf.block(256)));  // silent for the block, not failed
     }
+    const std::int64_t after = steadyNanoseconds();
     t = bridgeTiming();
     CHECK(t.live.calls == 1);
     CHECK(t.live.late == 1);
     CHECK(t.live.pastDeadline == 0);
-    CHECK(t.live.waitMaxNs >= span);  // it gives up only once the deadline passed
+    CHECK(after >= due);
+    CHECK(t.live.waitMaxNs > 0);
+    CHECK(t.live.waitMaxNs <= after - before);
     h.stopProcessing();
 }
 

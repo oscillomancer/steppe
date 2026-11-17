@@ -17,11 +17,16 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <optional>
 #include <ostream>
 #include <thread>
 #include <vector>
 #include "../src/bridge_client.h"
 #include "../src/bridge_protocol.h"
+#include "lifecycle_gate.h"
+#include "process_pause.h"
 using namespace supple;
 using namespace supple::host;
 namespace {
@@ -225,6 +230,59 @@ TEST_CASE("native bridge deadlines kill a hung audio worker and return silence")
     CHECK((*remote)->failure().find("stopped responding") != std::string::npos);
     CHECK(std::all_of(audio.outLeft.begin(), audio.outLeft.end(), [](float v) { return v == 0; }));
 }
+TEST_CASE("a bridged instance's own call deadline outlasts a stall the process-wide one fails") {
+    // An instance's own deadline replaces the process-wide one. The bridge
+    // stops for 1.5 s, three times the process-wide deadline here and far
+    // inside the instance's own; the outcome decides.
+    setBridgeExecutable(BRIDGE_PATH);
+    const int previous = bridgeDeadlineMs();
+    struct Restore {
+        int ms;
+        ~Restore() { setBridgeDeadlineMs(ms); }
+    } restore{previous};
+    for (const bool own : {false, true}) {
+        CAPTURE(own);
+        setBridgeDeadlineMs(previous);
+        auto remote = Instance::create(
+            nativePlugin(FIXTURE_CLAP_PATH, "com.suppleaudio.test.crash"), {}, true);
+        REQUIRE(remote);
+        Instance& c = **remote;
+        REQUIRE(c.activate(48000, 1, 64));
+        REQUIRE(c.startProcessing());
+        if (own) c.setCallDeadlineMs(60'000);
+        setBridgeDeadlineMs(500);
+        Audio audio;
+        audio.left.fill(0.25f);
+        audio.right.fill(0.25f);
+        const int pid = c.bridgePid();
+        REQUIRE(pid > 0);
+        std::mutex lock;
+        std::condition_variable answered;
+        bool done = false;
+        REQUIRE(supple::test::pauseProcess(pid));
+        // Resumed after 1.5 s, unless the call came back first: then the
+        // bridge was killed, and its pid is not signalled again.
+        std::thread resume([&] {
+            std::unique_lock held(lock);
+            if (!answered.wait_for(held, std::chrono::milliseconds(1500), [&] { return done; }))
+                supple::test::resumeProcess(pid);
+        });
+        const bool processed = c.process(audio.block());
+        {
+            std::lock_guard held(lock);
+            done = true;
+        }
+        answered.notify_all();
+        resume.join();
+        REQUIRE(processed);
+        CHECK(c.failed() == !own);
+        if (own) {
+            CHECK(audio.outLeft[0] == doctest::Approx(0.25));
+            c.stopProcessing();
+            c.deactivate();
+        }
+    }
+}
 TEST_CASE("a bridged plug-in late for the callback's deadline is silent for that block only") {
     // ADR-0081: a block not answered by the live deadline is silence, the
     // request stays outstanding and is answered before the next one; the
@@ -336,6 +394,39 @@ TEST_CASE("native bridge notifications ACK and rearm without periodic parent pol
     (*remote)->deactivate();
 }
 
+TEST_CASE("removing one plug-in from a stalled shared bridge leaves the others alive") {
+    // Review round 30 (F3): Destroy waited 2 s for its reply, then killed the
+    // bridge and every plug-in in it. The bridge stops for 3 s while one of
+    // its two instances is destroyed; the other must still play.
+    setBridgeExecutable(BRIDGE_PATH);
+    auto process = createBridgeProcess();
+    REQUIRE(process);
+    const auto info = nativePlugin(FIXTURE_CLAP_PATH, "com.suppleaudio.test.crash");
+    auto x = Instance::create(info, {}, true, *process);
+    auto y = Instance::create(info, {}, true, *process);
+    REQUIRE(x);
+    REQUIRE(y);
+    Instance& kept = **y;
+    const int pid = kept.bridgePid();
+    REQUIRE(pid > 0);
+    REQUIRE(supple::test::pauseProcess(pid));
+    std::thread resume([&kept, pid] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+        if (!kept.failed()) supple::test::resumeProcess(pid);  // a killed one stays killed
+    });
+    x->reset();  // Destroy, answered once the bridge goes on
+    resume.join();
+    CHECK_FALSE(kept.failed());
+    REQUIRE(kept.activate(48000, 1, 64));
+    REQUIRE(kept.startProcessing());
+    Audio audio;
+    audio.left.fill(0.25f);
+    audio.right.fill(0.25f);
+    REQUIRE(kept.process(audio.block()));
+    CHECK(audio.outLeft[0] == doctest::Approx(0.25));
+    kept.stopProcessing();
+    kept.deactivate();
+}
 TEST_CASE("a publication from a bridged audio thread reaches its instance through the named ACK") {
     // Review round 26 (F1): every other test that sees a bridge-side
     // publication also holds a pull of the same instance's own, which carries
@@ -491,4 +582,49 @@ TEST_CASE("native missing bridge executable preserves the structured host error"
     REQUIRE_FALSE(remote);
     CHECK(remote.error().code == "host.bridge");
     CHECK_FALSE(remote.error().hint.empty());
+}
+
+TEST_CASE("abandoning a bridge returns a call waiting on it from another thread") {
+    // ADR-0090 (review round 34): a stopped offline render kills its own
+    // bridges from a watch thread. The gain holds the call at a gate; the
+    // instance's deadline is 60 s, so only the abandonment can end the wait
+    // within the test, and the failure says which did.
+    setBridgeExecutable(BRIDGE_PATH);
+    using supple::test::GatedCall;
+    for (const GatedCall call : {GatedCall::Activate, GatedCall::Process}) {
+        const bool activating = call == GatedCall::Activate;
+        CAPTURE(activating);
+        std::optional<supple::test::LifecycleGate> gate(std::in_place, call);
+        REQUIRE(gate->mapped());
+        auto remote = Instance::create(nativePlugin(FIXTURE_CLAP_PATH, "com.suppleaudio.test.gain"),
+                                       {}, true);
+        REQUIRE(remote);
+        gate->hide();
+        Instance& gain = **remote;
+        gain.setCallDeadlineMs(60'000);
+        std::thread watch([&] {
+            if (gate->entered()) gain.abandonBridge();
+        });
+        Audio audio;
+        audio.left.fill(0.25f);
+        audio.right.fill(0.25f);
+        if (activating) {
+            // A control request: its socket closes.
+            CHECK_FALSE(gain.activate(48000, 1, 64));
+        } else {
+            // A data-plane wait: it sees the bridge failed at its next step.
+            REQUIRE(gain.activate(48000, 1, 64));
+            REQUIRE(gain.startProcessing());
+            CHECK(gain.process(audio.block()));
+            CHECK(std::all_of(audio.outLeft.begin(), audio.outLeft.end(),
+                              [](float v) { return v == 0; }));
+        }
+        watch.join();
+        REQUIRE(gate->entered());
+        CHECK_FALSE(gate->passed());
+        CHECK(gain.failed());
+        CHECK(gain.failure().find("the host abandoned the plugin's bridge") != std::string::npos);
+        CHECK(gain.callDeadlineMs() == 60'000);
+        gate.reset();
+    }
 }
