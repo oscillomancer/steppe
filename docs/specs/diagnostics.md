@@ -567,7 +567,11 @@ a number of the report's own that says nothing about a cell.
 the supervisor: text that is not valid UTF-8, and every control character (C0, DEL, C1), each
 become one `?`. They are untrusted, readable names ADR-0083 allows; they are not proof of
 anything, and the validator checks them again before a report counts as one the product wrote.
-No path, project name, parameter, preset or anything typed by a user is ever announced.
+What is announced is a plug-in's own descriptor strings and nothing else of the user's: no
+path, project name, parameter, preset or text typed into Steppe. For a plug-in the user
+exported (`dsp.export` builds a CLAP plug-in from their script) the descriptor is text the user
+or their agent chose, so a name given to such a plug-in appears in a report when it was loaded
+at the crash; it is the plug-in's name, not a project's, and is cut and cleaned like any other.
 
 *Module of an instance.* Each announcement of an open library or instance carries an address
 inside the plug-in's binary (the CLAP entry's `init` function). It never reaches a report; the

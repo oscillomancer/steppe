@@ -1561,7 +1561,8 @@ Each plug-in instance and plug-in library announces itself from the host (create
 changes, destroyed), and a report's `plugins` array lists the live and the last 64 destroyed
 ones with their kind, origin, mode, state, readable name, vendor, version and id (at most 64
 bytes each, validated again by the supervisor) and, for CLAP, which module the plug-in's code
-is (`build`); no path or project name is recorded. The sink is closed for good if the
+is (`build`); the strings are the plug-in's own descriptor (for a plug-in the user exported,
+text they chose), and no path, project name, parameter or preset is recorded. The sink is closed for good if the
 supervisor stalls with a packet half sent, and events lost are counted. Tested on Linux; the
 Windows ring and the macOS part-sent path are unproven until native CI runs them. Known limits:
 rack modules are not announced and have no cell, so a crash inside a rack module is reported
