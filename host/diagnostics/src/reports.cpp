@@ -157,7 +157,7 @@ Result<Scan> scanFolder(const fs::path& root) {
     }
     if (ec) return storageFailure();
     for (const auto& [incident, path] : scan.markerFiles)
-        scan.markers.emplace(incident, probeMarker(path));
+        scan.markers.emplace(incident, probeRun(root, incident));
     return scan;
 }
 bool isHeld(const Scan& scan, const std::string& incident) {
@@ -245,8 +245,7 @@ Result<std::string> readReport(const std::string& incident, const fs::path& dire
     const fs::path root = directory.empty() ? defaultDirectory() : directory;
     if (root.empty() || !incidentName(incident)) return noReport(incident);
     SUPPLE_TRY(checkDirectoryForReading(root));
-    if (probeMarker(pathFor(root, incident, ".run")) == MarkerState::Held)
-        return noReport(incident);
+    if (probeRun(root, incident) == MarkerState::Held) return noReport(incident);
     const auto path = pathFor(root, incident, ".json");
     auto loaded = loadReport(path);
     if (!loaded) return noReport(incident);
@@ -256,7 +255,7 @@ Status acknowledge(const std::string& incident, const fs::path& directory) {
     const fs::path root = directory.empty() ? defaultDirectory() : directory;
     if (root.empty() || !incidentName(incident)) return noReport(incident);
     SUPPLE_TRY(checkDirectoryForReading(root));
-    const auto state = probeMarker(pathFor(root, incident, ".run"));
+    const auto state = probeRun(root, incident);
     if (state == MarkerState::Held) return noReport(incident);
     // Only an incident that exists can be acknowledged: a report that is valid, or a run that
     // ended and left its marker.
@@ -270,8 +269,7 @@ Status settle(const std::string& incident, const fs::path& directory) {
     SUPPLE_TRY(checkDirectoryForReading(root));
     // Only a report that exists and whose run is over (T8): a settlement is about what a report
     // said, so there is nothing to settle for a run that left no report.
-    if (probeMarker(pathFor(root, incident, ".run")) == MarkerState::Held)
-        return noReport(incident);
+    if (probeRun(root, incident) == MarkerState::Held) return noReport(incident);
     if (!loadReport(pathFor(root, incident, ".json"))) return noReport(incident);
     return writeMark(root, incident, ".settled", kSettledSchema);
 }
@@ -358,6 +356,10 @@ Status removeIncident(const fs::path& root, const std::string& incident) {
         !privateRemove(pathFor(root, incident, ".ack")) ||
         !privateRemove(pathFor(root, incident, ".settled")))
         return storageFailure();
+    // The supervisor's hold, which a supervisor that is gone left, then the marker.
+    if (probeMarker(pathFor(root, incident, ".pub")) == MarkerState::Free &&
+        !privateRemove(pathFor(root, incident, ".pub")))
+        return storageFailure();
     if (probeMarker(pathFor(root, incident, ".run")) == MarkerState::Free &&
         !privateRemove(pathFor(root, incident, ".run")))
         return storageFailure();
@@ -376,7 +378,7 @@ Status deleteReport(const std::string& incident, const fs::path& directory) {
     const fs::path root = directory.empty() ? defaultDirectory() : directory;
     if (root.empty() || !incidentName(incident)) return noReport(incident);
     SUPPLE_TRY(checkDirectoryForReading(root));
-    const auto state = probeMarker(pathFor(root, incident, ".run"));
+    const auto state = probeRun(root, incident);
     if (state == MarkerState::Held) return noReport(incident);
     if (!loadReport(pathFor(root, incident, ".json")) && state != MarkerState::Free)
         return noReport(incident);
@@ -571,7 +573,7 @@ Status acknowledgeNotice(const RestartNotice& notice, const fs::path& directory)
     Status first = okStatus();
     for (const auto& incident : notice.incidents) {
         Status st = okStatus();
-        const auto state = probeMarker(pathFor(root, incident, ".run"));
+        const auto state = probeRun(root, incident);
         std::error_code ec;
         const bool hasReport =
             fs::is_regular_file(fs::symlink_status(pathFor(root, incident, ".json"), ec));

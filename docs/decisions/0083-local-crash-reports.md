@@ -226,6 +226,12 @@ different things); a report of an earlier build with a plain count, or none of `
 still a report the validator recognises. (7) Rack modules are not announced yet and have no
 cell; a crash inside one reports no module entry, a stated limit in `STATUS.md`.
 
+*Note, 2026-11-17 (review 38b, F1):* the worker's marker is released when the worker dies, before the
+supervisor publishes the report, so the supervisor also holds a lock of its own on the incident
+(`<incident>.pub`) from before the worker starts until the report is published and the marker removed. A
+reader counts a run as live while either is held. Contract: `docs/specs/diagnostics.md` "When a report
+counts (T8)".
+
 *Note, 2026-11-17 (topic 7d, safe-load):* a suspicion of a plug-in ends by *settling* a report
 (`<incident>.settled`, `crash.settle`), not by acknowledging it: seen is not resolved. The engine
 compares the installed plug-in file's build id with the report's before anyone is asked

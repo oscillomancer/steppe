@@ -1616,7 +1616,7 @@ what was built later than the frontend's setup: a crash in the teardown that fol
 recorded at all, and one before it leaves the marker with no report. The watcher and the supervisor's handlers are unproven on macOS and Windows until native CI runs
 them. An application can list and read earlier runs' reports, acknowledge them and delete them
 (`supple/diagnostics/reports.h`, tolerant of kinds and fields of a newer build; a report counts
-only once its run's marker is released; a run that ended with no report is listed as unreported).
+only once its run's marker and its supervisor's hold are released; a run that ended with no report is listed as unreported).
 Agents reach it through the `crash.*` commands (list, read, acknowledge, delete, clear). The GUI shows a restart
 notice (a banner under the transport, Dismiss acknowledges; wording provisional) and a headless service says the same
 on stderr at start; the viewer and safe-load are the next steps of topic 7. The notice reads the folder once at

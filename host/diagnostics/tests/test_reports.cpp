@@ -203,27 +203,103 @@ TEST_CASE("a damaged report is counted and left alone; its known parts must hold
     CHECK_FALSE(acknowledge(name(1), root.path));
     CHECK(fs::exists(file(root, 1, ".json")));
 }
-TEST_CASE("a report counts only once its run's marker is released") {
+TEST_CASE("a report counts only once its run is over, in the order the product publishes") {
+    Root root;
+    // The worker makes its marker; the supervisor took its own hold before the worker started.
+    auto hold = createPublishHold(root.path, boot(1));
+    REQUIRE(hold);
+    auto handle = createMarker(root.path, boot(1));
+    REQUIRE(handle);
+    releaseMarker(*handle);  // the worker dies: its marker is free, the supervisor is publishing
+
+    SUBCASE("before the report exists, the run is live, not one that wrote nothing (F1)") {
+        auto listing = listReports(root.path);
+        REQUIRE(listing);
+        CHECK(listing->liveRuns == 1);
+        CHECK(listing->unreported.empty());
+        auto notice = lastRunNotice(root.path);
+        REQUIRE(notice);
+        CHECK_FALSE(notice->has_value());  // nothing to say yet, certainly not "no report"
+        // A Dismiss or crash.acknowledge now is refused, so the report does not arrive
+        // acknowledged; and a deletion does not take the marker from under the supervisor.
+        CHECK_FALSE(acknowledge(name(1), root.path));
+        CHECK_FALSE(deleteReport(name(1), root.path));
+        auto cleared = deleteAllReports(root.path);
+        REQUIRE(cleared);
+        CHECK(*cleared == 0);
+        CHECK(fs::exists(file(root, 1, ".run")));
+        CHECK(fs::exists(file(root, 1, ".pub")));
+    }
+    SUBCASE("the report is published while the hold is still there") {
+        report(root, 1);
+        auto listing = listReports(root.path);
+        REQUIRE(listing);
+        CHECK(listing->reports.empty());
+        CHECK(listing->pending == 1);
+        CHECK(listing->liveRuns == 1);
+        CHECK(listing->unreported.empty());
+        CHECK_FALSE(readReport(name(1), root.path));
+        CHECK_FALSE(acknowledge(name(1), root.path));
+        CHECK_FALSE(settle(name(1), root.path));
+        CHECK_FALSE(deleteReport(name(1), root.path));
+        auto notice = lastRunNotice(root.path);
+        REQUIRE(notice);
+        CHECK_FALSE(notice->has_value());
+        auto found = suspects(root.path);
+        REQUIRE(found);
+        CHECK(found->empty());
+        // The supervisor finishes: it removes the worker's marker, then its own hold.
+        removeMarker(root.path, boot(1));
+        removePublishHold(root.path, boot(1), *hold);
+        hold = Result<std::intptr_t>(std::intptr_t{-1});
+        listing = listReports(root.path);
+        REQUIRE(listing);
+        CHECK(listing->reports.size() == 1);
+        CHECK(listing->pending == 0);
+        CHECK(listing->liveRuns == 0);
+        CHECK(listing->unreported.empty());
+        CHECK(readReport(name(1), root.path));
+        CHECK_FALSE(fs::exists(file(root, 1, ".pub")));
+    }
+    SUBCASE("a supervisor that died holds nothing: the run left no report") {
+        releaseMarker(*hold);  // dead, with the files still there
+        auto listing = listReports(root.path);
+        REQUIRE(listing);
+        CHECK(listing->liveRuns == 0);
+        REQUIRE(listing->unreported.size() == 1);
+        CHECK(listing->unreported[0].incident == name(1));
+        CHECK(deleteReport(name(1), root.path));
+        CHECK_FALSE(fs::exists(file(root, 1, ".run")));
+        CHECK_FALSE(fs::exists(file(root, 1, ".pub")));  // nothing left of it
+        hold = Result<std::intptr_t>(std::intptr_t{-1});
+    }
+    SUBCASE("a hold with no marker, its supervisor gone, is cleaned up at the next start") {
+        releaseMarker(*hold);
+        hold = Result<std::intptr_t>(std::intptr_t{-1});
+        REQUIRE(privateRemove(file(root, 1, ".run")));
+        REQUIRE(fs::exists(file(root, 1, ".pub")));
+        auto next = createMarker(root.path, boot(2));  // a later run starts
+        REQUIRE(next);
+        CHECK_FALSE(fs::exists(file(root, 1, ".pub")));
+        releaseMarker(*next);
+    }
+    if (hold && *hold >= 0) removePublishHold(root.path, boot(1), *hold);
+}
+TEST_CASE("a report counts once its run's marker is gone, or released when no one else holds") {
     Root root;
     auto handle = createMarker(root.path, boot(1));
     REQUIRE(handle);
-    report(root, 1);  // published by the supervisor while the run's marker is still held
+    report(root, 1);  // the marker is still held (no supervisor hold: one that could not be made)
     auto listing = listReports(root.path);
     REQUIRE(listing);
     CHECK(listing->reports.empty());
     CHECK(listing->pending == 1);
-    CHECK(listing->liveRuns == 1);
-    CHECK(listing->unreported.empty());
-    CHECK_FALSE(readReport(name(1), root.path));
-    CHECK_FALSE(acknowledge(name(1), root.path));
     releaseMarker(*handle);  // the holder lets go, the marker is still there
     listing = listReports(root.path);
     REQUIRE(listing);
     CHECK(listing->reports.size() == 1);
     CHECK(listing->pending == 0);
-    CHECK(listing->liveRuns == 0);
     CHECK(listing->unreported.empty());  // it has a report
-    CHECK(readReport(name(1), root.path));
     // Or the marker is gone.
     report(root, 2);
     removeMarker(root.path, boot(1));

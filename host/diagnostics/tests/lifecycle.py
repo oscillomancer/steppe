@@ -44,10 +44,12 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
                 assert run.returncode==expected_code,(mode,run)
                 assert not found,(mode,found)
                 assert not list(root.glob("*.run")),mode
+                assert not list(root.glob("*.pub")),mode
                 if mode=="echo": assert run.stdout==b"private-project-sentinel\n",run
             else:
                 assert run.returncode!=0,(mode,run)
                 assert len(found)==1,(mode,found,run.stderr)
+                assert not list(root.glob("*.pub")),(mode,"supervisor hold left behind")
                 raw=found[0].read_text();report=json.loads(raw)
                 assert report["schema"]=="supple.crash-report/1.0"
                 assert not report["complete"]
@@ -185,6 +187,7 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
             assert run.returncode==7,run
             assert not list(root.glob("*.json"))
             assert not list(root.glob("*.run"))
+            assert not list(root.glob("*.pub"))
     with check('bad-bootstrap'):
         # Invalid/partial bootstrap degrades to ordinary operation, with a watchdog
         # only to abort a hung fixture. No elapsed-time assertion.
@@ -284,6 +287,9 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
                     assert output==lines,(output,errors)
                     assert worker_gone(worker),worker
                     assert len(list((base/mode/"app"/"diagnostics").glob("*.run")))==markers,(name,"run markers")
+                    # The dead supervisor's hold goes with a marker the worker removed, and stays
+                    # with one it left (both free: the run reads as one that wrote no report).
+                    assert len(list((base/mode/"app"/"diagnostics").glob("*.pub")))==markers,(name,"holds")
             finally:
                 p.stdout.close();p.stderr.close()
     with check('watch-channel'):
@@ -536,6 +542,7 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
                 found=list(root.glob("*.json"))
                 assert len(found)==1,(found,run.stderr)
                 assert not list(root.glob("*.run")),"run marker left behind"
+                assert not list(root.glob("*.pub")),"supervisor hold left behind"
                 report=json.loads(found[0].read_text())
                 assert report["kind"]=="crash" and report["terminal_context"],report
                 assert report["native_fatal_status"] and report["code"]==signal.SIGSEGV,report

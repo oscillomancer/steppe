@@ -45,6 +45,21 @@ void removeOwnMarkerAtExit() {
         detail::supervisorEnd() == detail::SupervisorEnd::Launcher)
         detail::removeOwnMarker(marker.directory, marker.boot, marker.file);
 }
+// The supervisor's lock on its incident (storage.h, createPublishHold): from before the worker
+// starts to the end of the supervisor, after the report is published and the worker's marker
+// removed. Taken best effort: without it a reader may call the window after the worker's death a
+// run that left no report.
+struct PublishHold {
+    std::filesystem::path directory;
+    detail::Packet boot;
+    std::intptr_t file = -1;
+    PublishHold() = default;
+    PublishHold(const PublishHold&) = delete;
+    PublishHold& operator=(const PublishHold&) = delete;
+    ~PublishHold() {
+        if (file >= 0) detail::removePublishHold(directory, boot, file);
+    }
+};
 }  // namespace
 
 int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
@@ -112,6 +127,13 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
     boot.role = static_cast<unsigned>(role);
     boot.pid = pid();
     std::copy(id->begin(), id->end(), boot.incident.begin());
+    PublishHold hold;
+    if (storage)
+        if (auto taken = createPublishHold(options.directory, boot)) {
+            hold.directory = options.directory;
+            hold.boot = boot;
+            hold.file = *taken;
+        }
     auto child = launch(argc, argv, boot);
     if (!child) {
         std::fputs("local diagnostics unavailable\n", stderr);

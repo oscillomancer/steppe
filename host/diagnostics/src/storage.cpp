@@ -240,11 +240,12 @@ Status prepareDirectory(const fs::path& root) {
     return okStatus();
 }
 namespace {
-Result<std::intptr_t> createMarkerFile(const fs::path& root, const Packet& boot) {
+Result<std::intptr_t> createMarkerFile(const fs::path& root, const Packet& boot,
+                                       const char* extension) {
     auto value = base(boot);
     value["schema"] = "supple.crash-run/1.0";
     const std::string text = json::writeCanonical(value) + "\n";
-    const auto path = root / (std::string(boot.incident.data(), 32) + ".run");
+    const auto path = root / (std::string(boot.incident.data(), 32) + extension);
 #if defined(_WIN32)
     PrivateSecurity security;
     if (!security.ready) return failure();
@@ -276,12 +277,15 @@ Result<std::intptr_t> createMarkerFile(const fs::path& root, const Packet& boot)
 }
 }  // namespace
 Result<std::intptr_t> createMarker(const fs::path& root, const Packet& boot) {
-    auto marker = createMarkerFile(root, boot);
+    auto marker = createMarkerFile(root, boot, ".run");
     // A run whose supervisor died leaves its marker and nothing prunes it; starting a run is the
     // one moment every platform's code passes through. Best effort: a failure here never stops
     // the run.
     if (marker) (void)pruneMarkers(root);
     return marker;
+}
+Result<std::intptr_t> createPublishHold(const fs::path& root, const Packet& boot) {
+    return createMarkerFile(root, boot, ".pub");
 }
 void releaseMarker(std::intptr_t file) {
     if (file < 0) return;
@@ -295,12 +299,29 @@ void removeMarker(const fs::path& root, const Packet& boot) {
     std::error_code ec;
     fs::remove(root / (std::string(boot.incident.data(), 32) + ".run"), ec);
 }
+namespace {
+void removeHoldFile(const fs::path& root, const Packet& boot) {
+    std::error_code ec;
+    fs::remove(root / (std::string(boot.incident.data(), 32) + ".pub"), ec);
+}
+}  // namespace
 void removeOwnMarker(const fs::path& root, const Packet& boot, std::intptr_t file) {
 #if defined(_WIN32)
     releaseMarker(file);
     removeMarker(root, boot);
 #else
     removeMarker(root, boot);
+    releaseMarker(file);
+#endif
+    // Only called when no supervisor is left (ADR-0091): its hold, if it made one, has no holder.
+    removeHoldFile(root, boot);
+}
+void removePublishHold(const fs::path& root, const Packet& boot, std::intptr_t file) {
+#if defined(_WIN32)
+    releaseMarker(file);
+    removeHoldFile(root, boot);
+#else
+    removeHoldFile(root, boot);
     releaseMarker(file);
 #endif
 }
@@ -358,6 +379,12 @@ MarkerState probeMarker(const fs::path& path) {
     ::close(fd);
     return result;
 #endif
+}
+MarkerState probeRun(const fs::path& root, const std::string& incident) {
+    const auto hold = probeMarker(root / (incident + ".pub"));
+    const auto run = probeMarker(root / (incident + ".run"));
+    if (run == MarkerState::Gone) return run;
+    return hold == MarkerState::Held ? MarkerState::Held : run;
 }
 Status publishReport(const fs::path& root, const Packet& boot, const Packet* terminal, int code,
                      bool fatal, const TraceSnapshot* trace, const Inventory* inventory) {
@@ -475,7 +502,7 @@ Status pruneMarkers(const fs::path& root) {
     std::vector<Entry> stale;
     std::error_code ec;
     std::set<std::string> reported;
-    std::vector<fs::path> markers, marks;
+    std::vector<fs::path> markers, marks, holds;
     for (auto it = fs::directory_iterator(root, ec); !ec && it != fs::directory_iterator();
          it.increment(ec)) {
         const auto path = it->path();
@@ -483,6 +510,7 @@ Status pruneMarkers(const fs::path& root) {
         if (stem.empty()) continue;
         if (path.extension() == ".json") reported.insert(stem);
         if (path.extension() == ".run") markers.push_back(path);
+        if (path.extension() == ".pub") holds.push_back(path);
         if (path.extension() == ".ack" || path.extension() == ".settled") marks.push_back(path);
     }
     if (ec) return failure();
@@ -491,11 +519,18 @@ Status pruneMarkers(const fs::path& root) {
         running.insert(reportStem(path));
         // Only a run that ended and left no report counts: a held marker is a live run, and a
         // marker beside a report is that report's business.
-        if (reported.count(reportStem(path)) || probeMarker(path) != MarkerState::Free) continue;
+        if (reported.count(reportStem(path)) ||
+            probeRun(root, reportStem(path)) != MarkerState::Free)
+            continue;
         std::error_code e;
         const auto time = fs::last_write_time(path, e);
         if (!e) stale.push_back({path, time});
     }
+    // A supervisor's hold with no run marker beside it (the worker never made one, or the
+    // supervisor died) says nothing: removed once nobody holds it.
+    for (const auto& path : holds)
+        if (!running.count(reportStem(path)) && probeMarker(path) == MarkerState::Free)
+            privateRemove(path);
     // An acknowledgement or a settlement whose report and run marker are both gone belongs to
     // nothing: a deletion or retention raced with the write. It is removed.
     for (const auto& path : marks)
@@ -509,6 +544,7 @@ Status pruneMarkers(const fs::path& root) {
         if (!privateRemove(stale[i].path)) return failure();
         privateRemove(fs::path(stale[i].path).replace_extension(".ack"));
         privateRemove(fs::path(stale[i].path).replace_extension(".settled"));
+        privateRemove(fs::path(stale[i].path).replace_extension(".pub"));
     }
     return okStatus();
 }

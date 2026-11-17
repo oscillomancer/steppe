@@ -196,10 +196,22 @@ still being published and counts in `pending`, not in `reports`; `readReport` an
 refuse it (`diagnostics.no_report`). A report with no marker, or a free one, counts. A free marker
 with no report is an `unreported` run: the supervisor died or could not write, and the list says
 so with the role the marker recorded. Held markers are `liveRuns` (this process's own among them).
+*The supervisor's hold.* The worker's marker is released when the worker dies, which is before
+the supervisor has formatted and published the report. The supervisor therefore takes a lock of
+its own, `<incident>.pub` (the same file shape and probe), before it starts the worker, and holds
+it until the report is published and the worker's marker removed, in that order. A run is held
+when its marker or its hold is held, unless the marker is already gone; the reader probes the
+hold first, so a run that just ended cannot read as free. Between the worker's death and the
+report's publication a run is therefore live (no unreported run, no "no report was written"
+notice, `acknowledge`, `settle` and `delete` refused), and from publication to the end of the
+supervisor its report is `pending`. A supervisor that dies leaves both files, free: the run is
+unreported, deleting it removes both, and a hold with no marker is removed by the next start. A
+worker that finds no supervisor left (ADR-0091) removes the hold with its own marker. A hold that
+could not be made leaves the older, narrower guarantee.
 POSIX probes with a shared `flock` that is released at once, Windows with a shared byte-range
 lock (`LockFileEx`) on the byte the holder locked exclusively; a Windows marker being removed by
 its own worker is briefly free, so a reader started at that instant can list that run as
-unreported. Report retention never touches markers. Markers of runs that ended without a report are bounded
+unreported (when a supervisor is alive its hold covers that instant). Report retention never touches markers. Markers of runs that ended without a report are bounded
 on their own: the newest 20 (by file time) are kept and older ones removed with their `.ack` and
 `.settled`, when a
 report is published and when a run creates its own marker (a supervisor that died publishes
