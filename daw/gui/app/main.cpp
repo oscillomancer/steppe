@@ -47,6 +47,7 @@
 #include "generate.h"
 #include "help_actions.h"
 #include "history_panel.h"
+#include "inspector.h"
 #include "learn_dialog.h"
 #include "meter_feed.h"
 #include "midi_editor.h"
@@ -59,6 +60,7 @@
 #include "routing_matrix.h"
 #include "screensets.h"
 #include "shell.h"
+#include "side_panel.h"
 #include "supple/base/files.h"
 #include "supple/cmd/bus.h"
 #include "supple/engine/app.h"
@@ -487,6 +489,12 @@ int main(int argc, char** argv) {
         shell.openEnvelopeMenu(id, anchor);
     };
     gui::HistoryPanel history(root, appActions, dispatcher, **app);
+    // The side panel (gui.md §4.14): the inspector and the history as tabs at
+    // the window's right edge, shown only when asked.
+    gui::SidePanel side(root);
+    gui::Inspector inspector(root, **app, uiState);
+    history.host = [&side] { side.toggle("history"); };
+    appActions.addUi("ui.inspector", "View: inspector", [&side] { side.toggle("inspector"); });
     gui::FileActions fileActions(root, appActions, dispatcher, **app, uiState, (*window)->sdl(),
                                  [&](std::function<void()> f) { loop.post(std::move(f)); });
     fileActions.registerQuit([&] { quit = true; }, !o.offscreen && o.frames <= 0);
@@ -595,7 +603,11 @@ int main(int argc, char** argv) {
         center.add(shell.build(root, appActions));
         center.add(midiEditor.build());
         center.add(mixer.build());
-        body.add(history.build());
+        side.addTab("inspector", "Inspector", inspector.build(),
+                    [&inspector](bool on) { inspector.setVisible(on); });
+        side.addTab("history", "History", history.build(),
+                    [&history](bool on) { history.setVisible(on); });
+        body.add(side.build());
         root.setContent(std::move(frame));
     }
     // Arrange editing gestures (P5.6): one transaction per gesture; a later
@@ -984,12 +996,20 @@ int main(int argc, char** argv) {
         json::Value v = json::Value::object();
         v["mixer"] = mixer.visible();
         v["history"] = history.visible();
+        v["side"] = side.save();
         return v;
     };
     auto panelsLoad = [&](const json::Value& v) {
         if (const json::Value* m = v.find("mixer"); m && m->isBool()) mixer.setVisible(m->asBool());
-        if (const json::Value* h = v.find("history"); h && h->isBool())
-            history.setVisible(h->asBool());
+        if (const json::Value* state = v.find("side")) {
+            side.load(*state);
+        } else if (const json::Value* h = v.find("history"); h && h->isBool()) {
+            // A file from before the side panel: the history dock was its own.
+            if (h->asBool())
+                side.show("history");
+            else
+                side.hide();
+        }
     };
     uiFile.add("panels", panelsSave, panelsLoad);
     uiFile.add(
@@ -1168,6 +1188,7 @@ int main(int argc, char** argv) {
             racks.tick();
             mixer.sync();
             history.sync();
+            inspector.sync();
             const auto now = Clock::now();
             const auto activity = (*app)->meterActivitySequence();
             // Observe before reading; arm/recheck after the visible meters rest.
@@ -1355,6 +1376,7 @@ int main(int argc, char** argv) {
         racks.tick();
         mixer.sync();
         history.sync();
+        inspector.sync();
         meterFeed.poll();
         root.damageAll();
         root.frame(false);

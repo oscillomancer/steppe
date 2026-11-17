@@ -137,7 +137,7 @@ Missing sections preserve first-open defaults. Invalid fields are ignored,
 sizes clamp to the panel minimum and 8192 units, and a position with no visible
 48-unit corner on a current display is discarded. Open panels adopt the new
 project's placement on project replacement. Screensets continue to store the
-mixer/history docks and arrange layout; floating panels are not screenset entries.
+mixer dock, the side panel (§4.14) and the arrange layout; floating panels are not screenset entries.
 
 Screenset names trim leading and trailing spaces and tabs. Import skips
 empty names and silently keeps the first entry when trimmed names collide.
@@ -303,7 +303,8 @@ readouts share one centre line);
 toolbar (actions, §6: only what the transport bar does not already have —
 undo, redo, add channel, racks and the actions list by default; set off
 from the menus by an upright rule, its buttons quiet at rest, §7); the arrange area (track control panel + timeline);
-bottom docks for the mixer and MIDI editor, and a history dock; separate
+bottom docks for the mixer and MIDI editor, and the side panel at the right
+edge (§4.14: the inspector and the history); separate
 floating windows for the FX chain, routing matrix and plugin GUIs. Render and
 other dialogs remain popups. Window layout is UI state (§1.2).
 
@@ -1333,7 +1334,9 @@ loop takes, ADR-0014/0015) in the transport.
 
 ### 4.10 Command log and history
 
-A dock showing the command log (every command with origin — GUI, agent,
+The side panel's History tab (§4.14; `ui.history`, Ctrl+H, opens the panel
+on it and closes the panel when it is in view), showing the command log
+(every command with origin — GUI, agent,
 Lua, MCP — arguments, result/error) and the version history per branch
 (undo/redo, jump to version, branch list). Agent commands are visibly
 attributed.
@@ -1742,6 +1745,51 @@ the app applies at start. The MIDI outputs' clock and MTC settings
 mtc, clock_while_stopped}}`), which the engine writes on every
 `midi.outputs.set` and reads at start; a GUI save keeps them as they are
 on disk.
+
+### 4.14 Side panel and inspector
+
+A dock at the window's right edge (`SidePanel`, node `side`). It runs the
+window's height under the menu row; the transport bar, the arrange area and
+the bottom docks keep to its left. It holds one tab per tool, in this order:
+**Inspector** (`side.tab.inspector`) and **History** (`side.tab.history`,
+§4.10); a browser tab is planned. One tab is in view at a time; the tab in
+view has ink text and an accent line under it, the others quiet ink. A click
+on a tab shows it. **Close** (`side.close`, a quiet button at the bar's right)
+closes the panel.
+
+The panel is **closed until asked** and never opens by itself, a selection
+included. `ui.inspector` (View > Inspector, key I) and `ui.history` (View >
+History and command log, Ctrl+H) each open the panel on their tab, swap to
+it when another tab is in view, and close the panel when their tab is in
+view. A tab that is not in view reads nothing: the history reloads and the
+inspector reads the selection when they come into view.
+
+Its left edge (`side.grip`) drags to set the width, 240 to 560 units, 300 by
+default; a double-click restores the default. Whether the panel is open,
+which tab is in view (remembered while closed) and the width are UI state:
+`panels.side` in the sidecar, `{"visible", "tab", "width"}`, and so part of
+a screenset. A field of the wrong type or a tab the panel does not have is
+ignored. `panels.history` is still written (true while the History tab is
+in view); a sidecar from before the side panel, with `panels.history` and
+no `panels.side`, opens the panel on History when it was true.
+
+**Inspector.** What is selected, read from the selection and the session
+each pass (`inspectorSubject`); it executes no command by itself. A header:
+a bar in the thing's colour (an item's as the arrange view draws it, §4.3;
+a track's own; none without one), its name in the title size
+(`inspector.title`) and a line under it (`inspector.detail`):
+
+| Selection | Title | Line |
+|---|---|---|
+| One item | Its name as the arrange view shows it (§4.3), else its id | "Audio item on *track*", "MIDI item on *track*" or "Empty item on *track*" |
+| Several items | "*N* items" | "On *track*", or "On *M* tracks" |
+| One track | Its label | "Channel", "Buss" or "Master" |
+| Several tracks | "*N* tracks" | "Selected together" |
+| Nothing | "Nothing selected" | "Click an item or a track to see it here." |
+
+Tracks are shown when they were selected last or no item is selected, else
+items. Ids the session no longer holds are left out. Fields that edit the
+selection (each through an existing command) follow in later steps.
 
 ## 5. Agent panel (removed)
 

@@ -188,7 +188,8 @@ hand-edited file uses another factor, loading reports the field and allowed valu
 
 A project file keeps every branch, not just the one you are on: an agent's
 branch you have not merged yet is still there after quitting and reopening,
-with each of its steps (History panel), and it can be undone step by step or
+with each of its steps (**View > History and command log**, a tab of the
+side panel), and it can be undone step by step or
 merged into main as before. The file opens on the branch that was current when
 it was saved. Main's own undo history is not kept: after reopening, undo on
 main starts from the saved state. (Agents can keep it with
@@ -349,6 +350,22 @@ item made from an audio file that has no name of its own shows the file's
 name. Where an item fades in or out, the faded part is shaded and the fade's
 curve is drawn over it. A selected item is brighter and has an outline in the
 accent colour.
+
+### The side panel
+
+A panel at the right of the window holds the **Inspector** and the
+**History**. It stays closed until you ask for it:
+
+- **View > Inspector**, or the **I** key, opens it on the Inspector. The
+  Inspector names what is selected: an item with its track, a track with its
+  kind, or how many of each. Press **I** again to close the panel.
+- **View > History and command log**, or **Ctrl+H**, opens it on the History:
+  the versions you can step back to, the branches, and every command with who
+  ran it.
+
+Click a tab to switch, **Close** to put the panel away, and drag the panel's
+left edge to make it wider or narrower. Steppe remembers per project whether
+the panel was open, which tab it showed and how wide it was.
 
 ## Rendering
 

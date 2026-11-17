@@ -572,7 +572,7 @@ instructions are in `docs/guides/installing.md`.
   the plugin browser, routing matrix, MIDI editor, render dialog (the
   project's render settings with dropdowns, foldable sections, presets, a
   user default, up to four outputs, delivery checks in its results, and
-  File → Mix as a job), history dock with
+  File → Mix as a job), history (a tab of the side panel) with
   branches, actions list with key bindings and macros, editable
   menus, toolbar and mouse modifiers, screensets, two palettes in dark and
   light, preferences, and tap tempo in the tempo form. Items in the arrange
@@ -584,7 +584,10 @@ instructions are in `docs/guides/installing.md`.
   only when on) and each row has a meter 8 units wide. The transport bar's
   engine readout is in words ("48 kHz · 256 samples") and warns in colour
   only of a stopped engine, dropouts, render gaps or plug-in errors; the
-  toolbar's buttons are quiet at rest. Help exports the bundled
+  toolbar's buttons are quiet at rest. A side panel at the right edge,
+  closed until asked, holds the Inspector (what is selected: so far its name,
+  kind, track and colour; no fields yet) and the History as tabs; its tab,
+  width and open state are saved per project. Help exports the bundled
   skill as a copy or link, shows this copy's MCP commands and JSON, and registers
   its running-app server with Claude Code, Codex or Hermes on a background
   worker, linking the skill into that agent's user skills folder unless one of

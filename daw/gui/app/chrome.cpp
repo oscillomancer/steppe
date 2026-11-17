@@ -104,8 +104,8 @@ ChromeLayout ChromeLayout::defaults() {
          {"history.undo", "history.redo", "-", "ui.actions", "ui.mouse", "-", "ui.preferences",
           "ui.audio.device"}},
         {"View",
-         {"ui.actions", "ui.mixer", "ui.routing", "ui.rack", "ui.history", "-", "ui.theme.mode",
-          "ui.theme.palette", "-", "ui.screenset.save", "ui.screenset.load",
+         {"ui.actions", "ui.mixer", "ui.routing", "ui.rack", "ui.inspector", "ui.history", "-",
+          "ui.theme.mode", "ui.theme.palette", "-", "ui.screenset.save", "ui.screenset.load",
           "ui.screenset.delete"}},
         // Adding strips and templates only: a track's own edits are in its
         // right-click menu (track_menu.cpp), and no entry is in both.

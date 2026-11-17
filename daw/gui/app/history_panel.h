@@ -6,6 +6,7 @@
 // its origin, arguments and outcome, agent commands visibly attributed.
 #pragma once
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -25,6 +26,11 @@ class HistoryPanel {
   public:
     HistoryPanel(ui::Root& root, AppActions& actions, cmd::Dispatcher& dispatcher,
                  engine::EngineApp& app);
+    // Set before build() when the side panel holds this panel as a tab
+    // (gui.md §4.14): `toggle` then asks the host, which shows and hides the
+    // panel with setVisible, and the panel leaves out its own title row and
+    // width.
+    std::function<void()> host;
     std::unique_ptr<ui::Node> build();  // hidden until toggled
     void toggle();
     void setVisible(bool visible);
