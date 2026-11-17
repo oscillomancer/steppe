@@ -68,14 +68,38 @@ bool validCommandName(std::string_view name) noexcept {
 
 bool claimCommands() noexcept { return !gClaimed.exchange(true); }
 
+namespace {
+// Whether some thread has registered as the model thread (cold: only a thread that is not the
+// ring's owner asks).
+bool modelThreadRegistered() noexcept {
+    for (const auto& slot : table().threads) {
+        const auto id = slot.id.load(std::memory_order_acquire);
+        if (id != 0 && id != kClaiming &&
+            slotInfo(slot.info.load(std::memory_order_relaxed)).role == ThreadRole::Model)
+            return true;
+    }
+    return false;
+}
+}  // namespace
+
 std::uint64_t beginCommand(std::uint32_t nameId, CommandOrigin origin) noexcept {
     auto& t = table();
     const auto token = threadToken();
     if (gOwner.load(std::memory_order_relaxed) != token) {
-        std::uintptr_t none = 0;
-        if (!gOwner.compare_exchange_strong(none, token, std::memory_order_relaxed)) {
-            t.header.commandsDropped.fetch_add(1, std::memory_order_relaxed);
-            return 0;
+        // The ring belongs to the thread registered as Model. Until one has registered the first
+        // thread to begin a command stands in (a program or a test that dispatches off the model
+        // thread, as the registration may come later); the Model thread takes the ring from a
+        // stand-in, and while one is registered nobody else is given it.
+        const bool model = findThread(currentThreadId()).role == ThreadRole::Model;
+        if (model) {
+            gOwner.store(token, std::memory_order_relaxed);
+        } else {
+            std::uintptr_t none = 0;
+            if (modelThreadRegistered() ||
+                !gOwner.compare_exchange_strong(none, token, std::memory_order_relaxed)) {
+                t.header.commandsDropped.fetch_add(1, std::memory_order_relaxed);
+                return 0;
+            }
         }
     }
     // One writer: the sequence is read and written by this thread alone. The slot is emptied,

@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include <doctest/doctest.h>
 
+#include <atomic>
 #include <string>
 #include <thread>
 #include <vector>
@@ -115,6 +116,41 @@ TEST_CASE("only the thread that began the first command may write the ring") {
     REQUIRE(read.count == 1);
     CHECK(read.crumbs[0].nameId == 1);
     CHECK(beginCommand(3, CommandOrigin::Ui) == 2);  // the owner goes on
+}
+
+TEST_CASE("the Model thread owns the ring, whoever began a command first") {
+    Fresh fresh;
+    // A thread that dispatches before the model thread has registered stands in. It stays
+    // alive: a finished thread's token (the address of its thread-local) can be reused.
+    std::atomic<bool> begun{false}, done{false};
+    std::uint64_t standIn = 0, standInAgain = 99;
+    std::thread stand([&] {
+        standIn = beginCommand(1, CommandOrigin::Test);
+        begun.store(true);
+        while (!done.load()) std::this_thread::yield();
+        standInAgain = beginCommand(5, CommandOrigin::Test);  // the Model thread has the ring now
+    });
+    while (!begun.load()) std::this_thread::yield();
+    CHECK(standIn == 1);
+    // The Model thread, when it comes, is not locked out for the life of the process.
+    std::uint64_t model = 0, again = 0, other = 99;
+    std::thread([&] {
+        REQUIRE(registerThread(ThreadRole::Model));
+        model = beginCommand(2, CommandOrigin::Ui);
+        again = beginCommand(3, CommandOrigin::Ui);
+        // While it is registered nobody else is given the ring.
+        std::thread([&] { other = beginCommand(4, CommandOrigin::Ui); }).join();
+    }).join();
+    done.store(true);
+    stand.join();
+    CHECK(model == 2);
+    CHECK(again == 3);
+    CHECK(other == 0);
+    CHECK(standInAgain == 0);
+    CHECK(table().header.commandsDropped.load() == 2);
+    const auto read = readCommands();
+    REQUIRE(read.count == 3);
+    CHECK(read.crumbs[2].nameId == 3);
 }
 
 TEST_CASE("the reader keeps only entries that agree with the ring") {

@@ -12,10 +12,13 @@
 // names, durations. A name the dispatcher never registered never enters, so a caller cannot
 // put text of its own into a report through here.
 //
-// One writer: the model thread. The first thread to begin a command owns the ring; a
-// command begun on another thread is not recorded and is counted in the table's
-// `commandsDropped`. Process-wide, one dispatcher owns the ring (`claimCommands`): a second
-// registry's ids would mean other names than the table the supervisor holds.
+// One writer: the thread registered as Model. Until one has registered, the first thread to
+// begin a command stands in as the owner; the Model thread takes the ring from it when it
+// begins its first command, and from then on a command begun on any other thread is not
+// recorded and is counted in the table's `commandsDropped` (so a dispatch off the model thread
+// at startup cannot lock the model thread out). Process-wide, one dispatcher owns the ring
+// (`claimCommands`): a second registry's ids would mean other names than the table the supervisor
+// holds.
 //
 // Writing is a few relaxed and release stores on the model thread: no lock, no call, no
 // allocation, no message. Reading is for the supervisor after the stop phase, from a copy of
@@ -66,7 +69,7 @@ bool claimCommands() noexcept;
 void announceCommandNames(std::span<const std::string_view> names) noexcept;
 
 // Records that command `nameId` begins; returns its sequence number, or 0 when the entry was
-// not recorded (another thread owns the ring).
+// not recorded (another thread owns the ring; the Model thread always may).
 std::uint64_t beginCommand(std::uint32_t nameId, CommandOrigin origin) noexcept;
 // Marks the entry of `seq` ended, if the ring still holds it (a command that nests more than
 // 64 deep or wide overwrites its own entry, which is then simply left as it was).

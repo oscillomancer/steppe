@@ -638,9 +638,13 @@ dispatcher.
 
 *One recorder, one writer.* The first dispatcher built in a process claims the ring
 (`claimCommands`); later ones neither announce nor record, since their ids would mean other
-names than the table the supervisor holds. The first thread to begin a command owns the ring;
-a command begun on another thread is not recorded and is counted in the table's
-`commandsDropped`. Writing an entry is four release stores on the model thread (empty the
+names than the table the supervisor holds. The ring belongs to the thread registered as
+`Model`. Until one has registered, the first thread to begin a command stands in; the Model
+thread takes the ring from it when it begins its first command (so a dispatch off the model
+thread at startup cannot lock it out for the life of the process), and from then on a command
+begun on another thread is not recorded and is counted in the table's `commandsDropped`. A
+stand-in that was mid-write at the hand-over can leave one damaged entry, which the reader
+counts. Writing an entry is four release stores on the model thread (empty the
 slot, fill it, label it with its sequence, count it); no lock, call, allocation or message.
 A thread stopped between two of them leaves a slot the reader skips, or one past the count that
 it accepts whole. A parsed capsule counts as a table that was read: the worker took its
