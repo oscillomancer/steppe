@@ -135,9 +135,10 @@ for every preset above except `linux-package`, which has no test or workflow
 preset. `tools/ci/run-all.sh` runs the license check, the format check and the
 six Linux test presets (`dev`, `release`, `gcc`, `asan`, `tsan`, `rtsan`), about
 half an hour in all. Pass `-DSUPPLE_BUILD_TESTS=OFF` at configure time to omit
-tests; the app, helpers and stock plugins still build. The sanitizer presets
-disable the GUI; `gcc` and `asan` exclude the nested source-export test, and
-`tsan`/`rtsan` exclude slow tests (`tsan` also excludes `tsan-skip`).
+tests; the app, helpers and stock plugins still build. `tsan` and `rtsan`
+disable the GUI (`asan` builds and tests it); `gcc` and `asan` exclude the
+nested source-export test, and `tsan`/`rtsan` exclude slow tests (`tsan`
+also excludes `tsan-skip`).
 `asan` also runs LeakSanitizer: a test fails when a process it starts exits
 with memory nothing points to any more.
 

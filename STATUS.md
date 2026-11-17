@@ -1418,11 +1418,13 @@ Session and editing:
   macOS/Windows CI has not run on it yet.
 
 GUI:
-- No sanitizer runs the GUI. The `asan`, `tsan` and `rtsan` presets build
-  with `SUPPLE_BUILD_GUI=OFF`, so `daw/gui` and its tests are compiled and
-  run only in `dev`, `gcc` and `release` (and natively on macOS and Windows).
-  The TSan coverage of the worker/UI handoffs that `gui.md` §10 calls for is
-  therefore not in place.
+- ThreadSanitizer does not run the GUI. The `tsan` and `rtsan` presets
+  build with `SUPPLE_BUILD_GUI=OFF`; `asan` (AddressSanitizer and UBSan)
+  builds `daw/gui` and runs its tests. The TSan coverage of the worker/UI
+  handoffs that `gui.md` §10 calls for is therefore not in place: the GUI
+  tests run clean under TSan only with the software renderer on one
+  thread, Mesa's shader cache off and a suppression for libdbus, which
+  the test setup does not have yet.
 - Automation-item point editing requires an amplitude magnitude above 0.000000001; restore
   the amplitude before editing a flattened item.
 - Plan compilation (including media decoding/resampling), Lua execution and

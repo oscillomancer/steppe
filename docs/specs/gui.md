@@ -2265,9 +2265,11 @@ Unit tests for layout, input routing, damage, theme loading and the peak
 pyramid; golden images for widgets and each view in fixed states (offscreen,
 tolerance-aware); scripted UI tests that drive views by node id and assert
 on the resulting session (through the bus) — the same commands the agent
-uses, so a UI test can also be an agent workflow test. TSan for the
-worker/UI handoffs (not in place: the sanitizer presets build without the
-GUI; `STATUS.md`, Known limits). Plugin GUI embedding keeps the template's host probe
+uses, so a UI test can also be an agent workflow test. The `asan` preset
+builds the GUI and runs these tests under AddressSanitizer and UBSan (leak
+checks off where a test opens GL: the driver's allocations outlive the
+process). TSan for the worker/UI handoffs (not in place: the `tsan` preset
+builds without the GUI; `STATUS.md`, Known limits). Plugin GUI embedding keeps the template's host probe
 tests (`*-linux-host-probe`).
 
 ## Platform directory roots (2026-10-14, ADR-0035)
