@@ -115,10 +115,14 @@ class InstancePool {
     void acknowledgeOutputState(model::Id id, const std::string& hash);
 
     std::size_t retired() const { return retired_.size(); }
+    // FX patches get() has serialized to compare or apply them (route E
+    // stage 2 counts them).
+    std::size_t patchSerializations() const { return patchSerializations_; }
     std::size_t size() const { return instances_.size(); }
 
   private:
     std::unique_ptr<detail::RackPool> racks_;
+    std::size_t patchSerializations_ = 0;
     struct Entry {
         std::unique_ptr<host::Instance> instance;
         std::string pluginId;
@@ -131,6 +135,9 @@ class InstancePool {
         std::optional<Error> failure;
         std::vector<std::uint32_t> clearedAutomation;
         std::string appliedState;  // canonical patch text or blob hash last applied
+        // The model's object it was applied from, while that is the
+        // session's own (kept, so its address cannot be reused).
+        std::shared_ptr<const model::FxInstance> appliedFx;
     };
     void retire(std::unique_ptr<host::Instance> instance);
     model::Isolation resolveIsolation(const model::FxInstance& fx, const host::PluginInfo& info,

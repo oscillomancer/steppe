@@ -898,6 +898,13 @@ class Engine {
     // generation an executor may use, as read for that decision.
     std::uint64_t collectPlans();
     Status loadNow(const model::Session& session, const std::filesystem::path& projectDir);
+    // The oldest plan generation an executor may still be using.
+    std::uint64_t oldestInUse() const;
+    // Route E stage 1: the rings of plans older than `oldest` (one reading
+    // of oldestInUse()) go to the pool, from which load() takes a ring of
+    // the shape it needs.
+    void recycleRings(std::uint64_t oldest);
+    std::unique_ptr<detail::ChunkRing> takeRing(std::size_t capacity, std::uint32_t frames);
     void publishPluginOutputs(detail::Plan& plan, bool renderer, std::uint64_t epoch,
                               std::int64_t pos, std::int64_t stream) SUPPLE_RT;
 
@@ -940,6 +947,7 @@ class Engine {
     // Plans: published by the main thread, freed once no executor can use
     // them (both acknowledged a newer generation).
     std::vector<std::unique_ptr<detail::Plan>> plans_;
+    std::vector<std::unique_ptr<detail::ChunkRing>> ringPool_;  // main thread (recycleRings)
     std::atomic<detail::Plan*> latestPlan_{nullptr};
     std::atomic<detail::Plan*> handPlan_{nullptr};  // renderer -> callback (ADR-0014)
     std::atomic<std::uint64_t> callbackGen_{0};     // the callback's plan generation

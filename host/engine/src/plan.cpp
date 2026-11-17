@@ -22,6 +22,12 @@
 namespace supple::engine::detail {
 
 namespace {
+std::atomic<std::uint64_t> gChunkRings{0};
+}
+std::uint64_t chunkRingAllocations() { return gChunkRings.load(std::memory_order_relaxed); }
+void countChunkRing() { gChunkRings.fetch_add(1, std::memory_order_relaxed); }
+
+namespace {
 // A strip's pan controls (ADR-0066); a master's pan is a balance.
 PanSettings stripPan(const model::Project& project, const model::Track& t) {
     if (t.type == model::StripType::Master) return {model::PanMode::Pan, t.pan, 100, -100, 100, {}};

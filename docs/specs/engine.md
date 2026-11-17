@@ -18,7 +18,8 @@ processing, flexible isolation).
 
 The model thread (or a worker it delegates to) compiles a version into a
 `RenderPlan` whose graph and setup are immutable: a structural change means a
-new plan (built incrementally from the previous one where possible, §1.6).
+new plan, compiled complete from the session; instances, recycled rings and
+state carry over from the previous one (§1.6).
 Its DSP state belongs to the executors, and strip, send and VCA levels and
 pans arrive through its mix slots (ADR-0060, §1.6) without a new plan.
 
@@ -277,16 +278,49 @@ beat zero). Callers must still validate finite positions and leave room for
 block and latency arithmetic. JACK validates requested rates in 1..768000 Hz
 before constructing its latency request.
 
-### 1.6 Incremental rebuild and plan swap
+### 1.6 Plan rebuild and swap
 
-The compiler diffs the new version against the one the current plan was built
-from (session-model §4). Unchanged nodes keep their plugin instances and
-state (their DSP objects are moved into the new plan). Held timeline notes
-carry only when the receiving instrument instance is retained. Route and parent
-edge delay histories carry when source, destination, tap, kind and delay length
-match; changed lengths start empty. New plugins are
-instantiated and activated on the main thread before the swap; parameter
-changes on existing instances become param events rather than rebuilds.
+Every compile is complete: `Engine::load` builds a whole new plan from the
+session, every node, stage, buffer and event list, except for the edits that
+publish values instead (mix values below, ADR-0060, and the playrate scalar,
+ADR-0046). Plugin instances are not rebuilt: the instance pool keeps each
+FX's instance while its plug-in and isolation stay the same, and applies a
+changed patch or state to it on the main thread during the compile
+(`InstancePool::get`). State crosses the swap when the executor adopts the
+new plan, matching nodes by id: fader, wet and Console 9 ramps
+(`carryMix`), held notes (`carryLiveNotes`, `carryRackMidi`), and delay
+histories. Held timeline notes carry only when the receiving instrument
+instance is retained. Route and parent edge delay histories carry when
+source, destination, tap, kind and delay length match; changed lengths start
+empty. New plugins are instantiated and activated on the main thread before
+the swap. Edits are being made cheaper in stages (route E: rings, then the
+FX identity test, then patch edits without a plan swap, each stage
+specified here as it lands); so far:
+
+- **Rings are recycled** (stage 1). A frontier or record ring of a plan
+  both executors have left goes to a main-thread pool when plans are
+  collected, and the next compile takes a ring of the shape it needs from
+  there, resetting its indices; old chunk contents are never read, since
+  the producer writes every field of a chunk before publishing it. A ring
+  of a plan an executor may still adopt or play is never reused. The pool
+  keeps as many rings as the plans still in use hold. Every ring has room
+  for the render-ahead time at 192 kHz in chunks of the render quantum,
+  plus two. At lower rates that room is the slack for short chunks: no
+  chunk crosses a loop wrap, so a loop shorter than the quantum makes every
+  chunk that short. The renderer still gets its whole lead with a loop down
+  to the render-ahead time divided by the ring's chunk count (about 3 ms
+  with the defaults, at any rate); a shorter loop holds it closer to the
+  callback. A recycled ring is not zero-filled again: its pages were
+  committed when it was first built.
+- **An unchanged FX is not serialized** (stage 2). `InstancePool::get`
+  remembers the session's FX object it last configured an instance from
+  (and keeps it, so the address is not reused). Given that same object
+  again it knows the patch and state are unchanged; given another, or a
+  copy that is not the session's, it compares the patch's canonical text
+  as before, and applies that text when it differs. It forgets the object
+  when it recreates the instance and when the app acknowledges a patch or
+  state the plug-in produced, since the object then no longer describes
+  the instance.
 Returning to a version with neither patch nor state after applying saved FX
 settings recreates the factory-default instance. The old instance remains alive
 until both executors release its plan, as with a changed opaque state.
@@ -673,7 +707,9 @@ is not required; per-platform executor equivalence remains required.
 
 Audio sample buffers (node and stage buffers, delays, the render-ahead and
 frontier rings) are zero-filled on the main thread when a plan or ring is
-built, which commits their pages before any callback uses them. Owned audio
+built, which commits their pages before any callback uses them. A recycled
+ring (§1.6) is not zero-filled again; its pages were committed when it was
+first built. Owned audio
 threads (live helpers, background workers, including an offline render's, the
 renderer and the bridge's audio threads) call `rt::prefaultStack()` once
 before their first job: it touches the 128 KiB of stack below the caller and
