@@ -8,6 +8,7 @@
 
 #include "supple/diagctx/commands.h"
 #include "supple/diagctx/inventory.h"
+#include "supple/diagctx/scope.h"
 
 using namespace supple::diagctx;
 
@@ -205,4 +206,24 @@ TEST_CASE("the name table goes out four to a chunk and skips invalid names") {
     CHECK(gNames[8] == "c.1");
     // With no sink nothing is sent and nothing breaks.
     announceCommandNames(names);
+}
+
+TEST_CASE("the image announced for a cell is kept for a handler to read, sink or none") {
+    CHECK(announcedImage(kMaxInstances) == 0);  // out of range: none, never a read past the array
+    CHECK(announcedImage(kNoCell) == 0);
+    setInventorySink(nullptr);
+    CHECK(announcedImage(7) == 0);
+    announce(7, InstanceKind::Clap, InstanceOrigin::Foreign, InstanceMode::InProcess,
+             InstanceState::Active, 0x1234, Identity{});
+    CHECK(announcedImage(7) == 0x1234);  // recorded although nobody was listening
+    announceRemove(7);
+    CHECK(announcedImage(7) == 0x1234);  // a retired instance's module is still named
+    announce(7, InstanceKind::Clap, InstanceOrigin::Foreign, InstanceMode::InProcess,
+             InstanceState::Active, 0x5678, Identity{});
+    CHECK(announcedImage(7) == 0x5678);  // the cell's next occupant replaces it
+    announce(kMaxInstances, InstanceKind::Clap, InstanceOrigin::Foreign, InstanceMode::InProcess,
+             InstanceState::Active, 0x9, Identity{});  // ignored, and harmless
+    announce(7, InstanceKind::Clap, InstanceOrigin::Foreign, InstanceMode::InProcess,
+             InstanceState::Active, 0, Identity{});
+    CHECK(announcedImage(7) == 0);
 }

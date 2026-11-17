@@ -15,6 +15,11 @@ namespace {
 std::atomic<InventorySink> gSink{nullptr};
 static_assert(std::atomic<InventorySink>::is_always_lock_free);
 
+// The image each cell was last announced with, kept whether or not a sink is set, so a
+// terminal handler can read them without a lock (announcedImage). Zero: none.
+std::atomic<std::uint64_t> gImages[kMaxInstances];
+static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
+
 // Every announcement passes through this lock, sink or none. It orders the sink's calls and,
 // more to the point, makes an announcement reached from a SUPPLE_RT function abort under
 // RealtimeSanitizer even in a process that has no sink (a test, a tool): announcements are
@@ -104,6 +109,7 @@ void announce(std::uint32_t cell, InstanceKind kind, InstanceOrigin origin, Inst
               InstanceState state, std::uint64_t image, const Identity& identity) noexcept {
     std::unique_lock<std::mutex> lock;
     const auto sink = enter(lock);
+    if (cell < kMaxInstances) gImages[cell].store(image, std::memory_order_relaxed);
     if (!sink || cell >= kMaxInstances) return;
     Event event;
     event.event = EventKind::Add;
@@ -116,6 +122,10 @@ void announce(std::uint32_t cell, InstanceKind kind, InstanceOrigin origin, Inst
     event.image = image;
     event.identity = identity;
     sink(event);
+}
+
+std::uint64_t announcedImage(std::uint32_t cell) noexcept {
+    return cell < kMaxInstances ? gImages[cell].load(std::memory_order_relaxed) : 0;
 }
 
 void announceState(std::uint32_t cell, InstanceState state) noexcept {

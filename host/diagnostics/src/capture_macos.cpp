@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstring>
 #include "capsule.h"
+#include "supple/diagctx/inventory.h"
 #include "supple/diagctx/scope.h"
 #include "trace.h"
 // macOS in-process capture (ADR-0083, topic 4). The failing process reads its own
@@ -365,7 +366,11 @@ void captureOthers(std::uint64_t deadline) {
 }
 
 // Modules for every frame address found, added as they are met, until `deadline`; frames
-// met after it carry no identity, which the parser accepts.
+// met after it carry no identity, which the parser accepts. Then the module of each image the
+// process announced for a plug-in instance: the supervisor names an instance's build from the
+// module its image falls in, and a loaded plug-in that is on no stack would otherwise have
+// none (the other platforms' collectors read every module of the process). Frames come first,
+// so the module cap and the deadline cost the inventory's builds before they cost a frame.
 void resolveModules(std::uint64_t deadline) {
     for (std::uint32_t t = 0; t < capsule.header.threadCount; ++t) {
         const CapsuleThreadData& thread = capsule.threads[t];
@@ -373,6 +378,12 @@ void resolveModules(std::uint64_t deadline) {
             if (monotonicNanoseconds() >= deadline) return;
             addImageFor(thread.frames[f]);
         }
+    }
+    for (std::uint32_t cell = 0; cell < diagctx::kMaxInstances; ++cell) {
+        const std::uint64_t image = diagctx::announcedImage(cell);
+        if (image == 0) continue;
+        if (monotonicNanoseconds() >= deadline) return;
+        addImageFor(image);
     }
 }
 }  // namespace

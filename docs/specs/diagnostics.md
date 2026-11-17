@@ -297,7 +297,9 @@ path; a thread whose suspension or state call failed is `unavailable` with `thre
 its own frame for terminate and abort, which carry none. The worker keeps to its one
 second: thread reads end at 400 ms; listing dyld's images and finding the module of each
 frame end at 450 ms (after that, frames carry no identity, which the parser accepts); the
-capsule is sent by 500 ms (a `Message::Trace` packet carrying the byte count, then the
+modules are those the frames fall in, then those of the images the process announced for plug-in
+instances (`announcedImage`, kept per cell with or without a sink), so a loaded plug-in on no
+stack still has a build; the capsule is sent by 500 ms (a `Message::Trace` packet carrying the byte count, then the
 bytes, each wait bounded; both ends put the descriptor in non-blocking mode for the
 transfer and restore its flags, because `MSG_DONTWAIT` alone does not make every kernel
 refuse to wait for buffer space, and a send to a supervisor that is not reading must end

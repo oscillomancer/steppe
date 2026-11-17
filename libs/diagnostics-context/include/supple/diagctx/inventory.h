@@ -101,6 +101,12 @@ void setInventorySink(InventorySink sink) noexcept;
 void announce(std::uint32_t cell, InstanceKind kind, InstanceOrigin origin, InstanceMode mode,
               InstanceState state, std::uint64_t image, const Identity& identity) noexcept;
 void announceState(std::uint32_t cell, InstanceState state) noexcept;
+// The image `announce` last gave for `cell` (0: none, or a cell out of range). It stays after
+// the instance is removed, until the cell is announced again: a retired instance's module is
+// still one the report names. Atomic loads only, so a terminal handler may call it. macOS,
+// whose handler lists the process's images itself, adds the module of each of these to its
+// capsule so a loaded plug-in that is on no stack still has a build.
+std::uint64_t announcedImage(std::uint32_t cell) noexcept;
 // The instance is gone; call before the cell is given back.
 void announceRemove(std::uint32_t cell) noexcept;
 
