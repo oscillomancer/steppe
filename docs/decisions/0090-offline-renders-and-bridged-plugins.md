@@ -140,7 +140,8 @@ with `engine.fx_failed`.
 | Command | What it does with a render error |
 |---|---|
 | `render.mix` | The job fails; no file is written. (`render.dry-run` renders nothing.) |
-| `render.stems`, `render.regions`, `render.queue.run`, `branch.render-ab` | The job fails at the failing task. Files written for earlier tasks of the same job stay on disk with their render ids, and the failed or cancelled job's `result` lists them (see Consequences). |
+| `render.stems`, `render.regions`, `render.queue.run` | The job fails at the failing task. Files written for earlier tasks of the same job stay on disk with their render ids, and the failed or cancelled job's `result` lists them (see Consequences). |
+| `branch.render-ab` | Fails, returning only the error: it renders both branches synchronously, without a job. If branch B fails after A was written, A's file stays on disk and is listed nowhere, as for any call made without `job`. |
 | `track.freeze` | Fails; its pending file is removed (`Artifact`). It already refused any render warning. |
 | `track.unfreeze`, and `track.freeze`'s schedule check before it commits | Not affected: these probes return before processing. |
 | `item.consolidate` | Fails; pending files are removed. It already refused warnings. |
