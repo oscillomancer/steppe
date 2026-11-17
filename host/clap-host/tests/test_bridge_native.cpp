@@ -201,20 +201,24 @@ TEST_CASE("native bridge deadlines kill a hung audio worker and return silence")
     // The deadline is process-wide (review round 26: tests that compare
     // bridged renders raise it); a hang fails at whatever it is set to.
     const int previous = bridgeDeadlineMs();
-    CHECK(previous >= 1);
-    setBridgeDeadlineMs(0);
-    CHECK(bridgeDeadlineMs() == 1);
-    setBridgeDeadlineMs(100);
     struct Restore {
         int ms;
         ~Restore() { setBridgeDeadlineMs(ms); }
     } restore{previous};
+    CHECK(previous >= 1);
+    setBridgeDeadlineMs(0);
+    CHECK(bridgeDeadlineMs() == 1);
+    setBridgeDeadlineMs(previous);
     auto remote =
         Instance::create(nativePlugin(FIXTURE_CLAP_PATH, "com.suppleaudio.test.crash"), {}, true);
     REQUIRE(remote);
     REQUIRE((*remote)->activate(48000, 1, 64));
     REQUIRE((*remote)->startProcessing());
     REQUIRE((*remote)->setParam(1, 2));
+    // Only the call that hangs meets the short deadline: the lifecycle
+    // commands before it keep theirs, so a stall cannot fail them (review
+    // round 30).
+    setBridgeDeadlineMs(100);
     Audio audio;
     REQUIRE((*remote)->process(audio.block()));
     CHECK((*remote)->failed());
