@@ -1,12 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
-// Progress for the diagnostics tests. Doctest prints nothing until the run ends, so a test
+// Progress for the diagnostics tests (diagnostics.tests and diagnostics-context.tests, which
+// name themselves with the compile definition PROGRESS_SUITE). Doctest prints nothing until
+// the run ends, so a test
 // that blocks leaves a CI log with no clue where. This names each test case on stderr as it
 // starts, and says on stderr, naming the case, when one has run longer than a minute and a
 // half. It never ends the run or decides a result: whether a slow case is stuck depends on
 // the runner and the sanitizer, and ctest's timeout is what ends a case that never returns.
 // The per-call deadlines in the code under test are the first bound.
 #include <doctest/doctest.h>
+#ifndef PROGRESS_SUITE
+#error "PROGRESS_SUITE names the test executable in the progress lines"
+#endif
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -16,6 +21,17 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#if defined(_WIN32)
+#include <crtdbg.h>
+#include <stdlib.h>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace {
 // The seconds after which a running case is reported: DIAGNOSTICS_TEST_LIMIT_SECONDS if it
@@ -47,9 +63,10 @@ struct Guard {
                 if (running && !reported && std::chrono::steady_clock::now() - started > limit) {
                     reported = true;  // once for each case; the run carries on
                     std::fprintf(stderr,
-                                 "diagnostics.tests: \"%s\" has run longer than %lld s and may "
+                                 "%s: \"%s\" has run longer than %lld s and may "
                                  "be stuck; still waiting (ctest's timeout decides)\n",
-                                 name.c_str(), static_cast<long long>(limit.count()));
+                                 PROGRESS_SUITE, name.c_str(),
+                                 static_cast<long long>(limit.count()));
                     std::fflush(stderr);
                 }
             }
@@ -66,6 +83,20 @@ struct Progress : doctest::IReporter {
     void report_query(const doctest::QueryData&) override {}
     void test_run_start() override {
         std::call_once(guard.once, [] { guard.watch(); });
+        // A failed check is written as it happens, not when the run ends: if a later case
+        // blocks, the log still has everything that came before it.
+        std::setvbuf(stdout, nullptr, _IONBF, 0);
+#if defined(_WIN32)
+        // A crash or an abort ends the program with its code at once. Without this a runner
+        // can leave it waiting on an error dialog or a reporting service until the timeout,
+        // with nothing in the log.
+        (void)SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+        _set_abort_behavior(_WRITE_ABORT_MSG, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+        for (const int kind : {_CRT_WARN, _CRT_ERROR, _CRT_ASSERT}) {
+            _CrtSetReportMode(kind, _CRTDBG_MODE_FILE);
+            _CrtSetReportFile(kind, _CRTDBG_FILE_STDERR);
+        }
+#endif
     }
     void test_run_end(const doctest::TestRunStats&) override {}
     void test_case_start(const doctest::TestCaseData& test) override {
@@ -76,7 +107,7 @@ struct Progress : doctest::IReporter {
             guard.running = true;
             guard.reported = false;
         }
-        std::fprintf(stderr, "[diagnostics.tests] %s\n", test.m_name);
+        std::fprintf(stderr, "[%s] %s\n", PROGRESS_SUITE, test.m_name);
         std::fflush(stderr);
     }
     void test_case_reenter(const doctest::TestCaseData&) override {}

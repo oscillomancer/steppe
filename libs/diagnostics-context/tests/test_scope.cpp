@@ -13,6 +13,7 @@
 #include <thread>
 #include <vector>
 
+#include "bounded.h"
 #include "supple/diagctx/scope.h"
 
 using namespace supple::diagctx;
@@ -239,9 +240,9 @@ TEST_CASE("two threads in main-thread entries of one instance cannot corrupt its
         MainScope scope(cell, Entry::Gui);
         whileInside = mainWord(cell);
         state.store(1);
-        while (state.load() != 3) std::this_thread::yield();
+        testing::waitFor([&] { return state.load() == 3; }, "state == 3");
     });
-    while (state.load() != 1) std::this_thread::yield();
+    testing::waitFor([&] { return state.load() == 1; }, "state == 1");
     CHECK(owner.load() != 0);
     std::thread b([&] {
         {
@@ -315,7 +316,7 @@ TEST_CASE("scopes on different cells in different threads do not disturb one ano
     for (int i = 0; i < kThreads; ++i)
         threads.emplace_back([&, i] {
             ready.fetch_add(1);
-            while (!go.load()) std::this_thread::yield();
+            testing::waitFor([&] { return go.load(); }, "go");
             const Entry kind = i % 2 ? Entry::Process : Entry::Reset;
             for (int round = 0; round < 2000; ++round) {
                 AudioScope scope(cells[i], kind);
@@ -325,7 +326,7 @@ TEST_CASE("scopes on different cells in different threads do not disturb one ano
                         wrong.fetch_add(1);
             }
         });
-    while (ready.load() < kThreads) std::this_thread::yield();
+    testing::waitFor([&] { return ready.load() >= kThreads; }, "ready >= kThreads");
     go.store(true);
     for (auto& thread : threads) thread.join();
     CHECK(wrong.load() == 0);
@@ -398,10 +399,10 @@ double concurrently(unsigned workers, std::uint64_t count, Work work) {
     for (unsigned i = 0; i < workers; ++i)
         threads.emplace_back([&, i] {
             ready.fetch_add(1);
-            while (!go.load()) std::this_thread::yield();
+            testing::waitFor([&] { return go.load(); }, "go");
             sums[i] = work(i, count);
         });
-    while (ready.load() < workers) std::this_thread::yield();
+    testing::waitFor([&] { return ready.load() >= workers; }, "ready >= workers");
     const auto start = Clock::now();
     go.store(true);
     for (auto& thread : threads) thread.join();

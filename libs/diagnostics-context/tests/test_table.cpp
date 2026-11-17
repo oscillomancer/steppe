@@ -3,10 +3,12 @@
 #include <doctest/doctest.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <thread>
 #include <vector>
 
+#include "bounded.h"
 #include "supple/diagctx/table.h"
 
 using namespace supple::diagctx;
@@ -70,9 +72,9 @@ TEST_CASE("a registered thread is found by its id until it exits") {
         registered = registerThread(ThreadRole::AudioLive, 3);
         again = registerThread(ThreadRole::Recorder, 9);  // the first role stays
         ready.store(true);
-        while (!release.load()) std::this_thread::yield();
+        testing::waitFor([&] { return release.load(); }, "release");
     });
-    while (!ready.load()) std::this_thread::yield();
+    testing::waitFor([&] { return ready.load(); }, "ready");
     CHECK(registered);
     CHECK(again);
     CHECK(id != 0);
@@ -105,9 +107,9 @@ TEST_CASE("the table holds 256 threads and counts the ones it cannot hold") {
             // A second call on a thread without a slot retries but is not counted again.
             (void)registerThread(ThreadRole::AudioBackground, 1);
             started.fetch_add(1);
-            while (!release.load()) std::this_thread::yield();
+            testing::waitFor([&] { return release.load(); }, "release");
         });
-    while (started.load() < kThreads) std::this_thread::yield();
+    testing::waitFor([&] { return started.load() >= kThreads; }, "started >= kThreads");
     setThreadHook(nullptr);
     const auto image = copyOut();
     std::size_t used = 0;
@@ -134,9 +136,9 @@ TEST_CASE("a slot records the thread's stack, and an exited thread leaves none b
         local = reinterpret_cast<std::uint64_t>(__builtin_frame_address(0));
         (void)registerThread(ThreadRole::Model);
         ready.store(true);
-        while (!release.load()) std::this_thread::yield();
+        testing::waitFor([&] { return release.load(); }, "release");
     });
-    while (!ready.load()) std::this_thread::yield();
+    testing::waitFor([&] { return ready.load(); }, "ready");
     const auto found = findThread(copyOut(), id);
     CHECK(found.role == ThreadRole::Model);
     CHECK(found.stackLow != 0);
@@ -159,18 +161,18 @@ TEST_CASE("a slot being released cannot be claimed over, so the next thread keep
     state = 0;
     detail::setReleaseHook([]() noexcept {
         state.store(1);
-        while (state.load() != 2) std::this_thread::yield();
+        testing::waitFor([&] { return state.load() == 2; }, "state == 2");
     });
     std::thread a([] { (void)registerThread(ThreadRole::Recorder, 1); });
     std::uint64_t idB = 0;
     std::atomic<bool> release{false}, bRegistered{false};
     std::thread b([&] {
-        while (state.load() != 1) std::this_thread::yield();
+        testing::waitFor([&] { return state.load() == 1; }, "state == 1");
         idB = currentThreadId();
         (void)registerThread(ThreadRole::AudioLive, 2);
         bRegistered.store(true);
         state.store(2);
-        while (!release.load()) std::this_thread::yield();
+        testing::waitFor([&] { return release.load(); }, "release");
     });
     a.join();  // A returns once B has registered and its release has finished
     detail::setReleaseHook(nullptr);
@@ -207,4 +209,16 @@ TEST_CASE("an invalid role registers nothing") {
         CHECK(findThread(currentThreadId()).role == ThreadRole::None);
     });
     worker.join();
+}
+
+// A wait that is never satisfied must end in a failed check naming the wait, not block the run.
+// The case is expected to fail, and it ends in about a second.
+TEST_CASE("a wait that never comes gives up and says what it waited for" * doctest::should_fail()) {
+    std::atomic<bool> never{false};
+    const auto start = std::chrono::steady_clock::now();
+    const bool done = testing::waitFor([&] { return never.load(); }, "a flag nobody sets",
+                                       std::chrono::seconds(1));
+    CHECK_FALSE(done);
+    CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(20));
+    CHECK(testing::waitFor([] { return true; }, "something already true"));
 }
