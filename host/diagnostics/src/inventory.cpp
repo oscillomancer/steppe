@@ -569,8 +569,27 @@ bool droppedShape(const json::Value& dropped) {
     return true;
 }
 
+// The id of the module the fault thread's first frame is in, as the report's own threads and
+// modules say, or null when the report does not say.
+static const std::string* faultModuleId(const json::Value& threads, const json::Value& modules) {
+    if (!threads.isArray() || threads.size() == 0 || !modules.isArray()) return nullptr;
+    const auto& fault = threads.asArray()[0];
+    const auto* role = fault.find("role");
+    const auto* frames = fault.find("frames");
+    if (!role || !role->isString() || role->asString() != "fault" || !frames ||
+        !frames->isArray() || frames->size() == 0)
+        return nullptr;
+    const auto* index = frames->asArray()[0].find("module");
+    if (!index || !index->isInt() || index->asInt() < 0 ||
+        static_cast<std::uint64_t>(index->asInt()) >= modules.size())
+        return nullptr;
+    const auto* id = modules.asArray()[static_cast<std::size_t>(index->asInt())].find("id");
+    return id && id->isString() ? &id->asString() : nullptr;
+}
+
 bool attributionShape(const json::Value& attribution, const json::Value& plugins,
-                      const json::Value& commands) {
+                      const json::Value& commands, const json::Value& threads,
+                      const json::Value& modules) {
     if (!attribution.isObject() || attribution.size() != 2) return false;
     const auto* confidence = attribution.find("confidence");
     const auto* plugin = attribution.find("plugin");
@@ -579,6 +598,20 @@ bool attributionShape(const json::Value& attribution, const json::Value& plugins
     if (how != "fault_in_image" && how != "active_token" && how != "concurrent_activity" &&
         how != "recent_command" && how != "unknown")
         return false;
+    // A fault in a plug-in's binary needs the fault thread's first frame in a module whose id
+    // is the build of a plug-in the report lists; the plug-in named, if any, is held to it below.
+    const std::string* faultId = nullptr;
+    if (how == "fault_in_image") {
+        faultId = faultModuleId(threads, modules);
+        if (!faultId || !plugins.isArray()) return false;
+        bool listed = false;
+        for (const auto& item : plugins.asArray()) {
+            const auto* build = item.find("build");
+            const auto* id = build ? build->find("id") : nullptr;
+            if (id && id->isString() && id->asString() == *faultId) listed = true;
+        }
+        if (!listed) return false;
+    }
     if (plugin->isNull()) {
         // A token names an instance by definition.
         if (how == "active_token") return false;
@@ -602,7 +635,9 @@ bool attributionShape(const json::Value& attribution, const json::Value& plugins
         };
         if (how == "active_token") return matched("thread");
         if (how == "concurrent_activity") return matched("other_thread");
-        return item.find("build") != nullptr || how == "fault_in_image";
+        const auto* build = item.find("build");
+        const auto* buildId = build ? build->find("id") : nullptr;
+        return buildId && buildId->isString() && buildId->asString() == *faultId;
     }
     return false;
 }

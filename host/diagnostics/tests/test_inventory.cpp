@@ -676,6 +676,7 @@ TraceSnapshot faultTrace(int faultModule) {
     trace.regions = {{0x1000, 0x2000, 0}, {0x5000, 0x6000, 1}};
     trace.threads.resize(3);
     trace.threads[0].role = Role::Fault;
+    trace.threads[0].missing = Missing::None;  // walked: the report lists its frames
     trace.threads[1].role = Role::Main;
     trace.threads[2].role = Role::Other;
     Frame frame;
@@ -700,7 +701,7 @@ std::pair<std::string, long long> attributed(const Inventory& inventory,
                                              const TraceSnapshot& trace) {
     const auto attribution = inventory.attributionJson(&trace);
     CHECK(attributionShape(attribution, inventory.pluginsJson(&trace),
-                           inventory.commandsJson(&trace)));
+                           inventory.commandsJson(&trace), threadsJson(trace), modulesJson(trace)));
     return {attribution.find("confidence")->asString(),
             attribution.find("plugin")->isNull() ? -1 : attribution.find("plugin")->asInt()};
 }
@@ -786,8 +787,10 @@ TEST_CASE("the attribution validator refuses a claim the report's own evidence d
     const auto plugins = inventory.pluginsJson(&trace);
     auto commands = inventory.commandsJson(&trace);
     const auto parse = [](std::string_view text) { return json::parse(text).value(); };
+    const auto threads = threadsJson(trace);
+    const auto modules = modulesJson(trace);
     const auto accepts = [&](const char* text) {
-        return attributionShape(parse(text), plugins, commands);
+        return attributionShape(parse(text), plugins, commands, threads, modules);
     };
     CHECK(accepts(R"({"confidence":"fault_in_image","plugin":0})"));
     CHECK(accepts(R"({"confidence":"fault_in_image","plugin":null})"));
@@ -811,10 +814,49 @@ TEST_CASE("the attribution validator refuses a claim the report's own evidence d
     auto owned = faultTrace(-1);
     inside(owned, 0, 4);
     const auto ownedPlugins = inventory.pluginsJson(&owned);
+    const auto ownedThreads = threadsJson(owned);
     CHECK(attributionShape(parse(R"({"confidence":"active_token","plugin":0})"), ownedPlugins,
-                           commands));
+                           commands, ownedThreads, modules));
     CHECK_FALSE(attributionShape(parse(R"({"confidence":"concurrent_activity","plugin":0})"),
-                                 ownedPlugins, commands));
+                                 ownedPlugins, commands, ownedThreads, modules));
+}
+
+TEST_CASE("the attribution validator holds fault_in_image to the plug-in's build and the fault") {
+    Inventory inventory;
+    REQUIRE(inventory.apply(addAt(4, 0x5100)));  // id 0: in module 1, which has an id
+    REQUIRE(inventory.apply(addAt(5, 0x1100)));  // id 1: in module 0
+    REQUIRE(inventory.apply(addAt(6, 0x9100)));  // id 2: in no module, so no build
+    const auto parse = [](std::string_view text) { return json::parse(text).value(); };
+    const auto check = [&](const TraceSnapshot& trace, const char* claim) {
+        return attributionShape(parse(claim), inventory.pluginsJson(&trace),
+                                inventory.commandsJson(&trace), threadsJson(trace),
+                                modulesJson(trace));
+    };
+    const auto fault1 = faultTrace(1);
+    CHECK(check(fault1, R"({"confidence":"fault_in_image","plugin":0})"));
+    // A plug-in with no build cannot have been where the fault was (round 38, F4).
+    CHECK_FALSE(check(fault1, R"({"confidence":"fault_in_image","plugin":2})"));
+    // Nor one whose build is another module than the fault's.
+    CHECK_FALSE(check(fault1, R"({"confidence":"fault_in_image","plugin":1})"));
+    // The fault thread's first frame must be in a module with an id...
+    auto unnamed = faultTrace(1);
+    unnamed.modules[1].id.reset();
+    CHECK_FALSE(check(unnamed, R"({"confidence":"fault_in_image","plugin":0})"));
+    CHECK_FALSE(check(unnamed, R"({"confidence":"fault_in_image","plugin":null})"));
+    // ...and in some module at all, and a report without its fault thread says nothing.
+    CHECK_FALSE(check(faultTrace(-1), R"({"confidence":"fault_in_image","plugin":null})"));
+    auto noFrames = faultTrace(1);
+    noFrames.threads[0].walk.frames.clear();
+    CHECK_FALSE(check(noFrames, R"({"confidence":"fault_in_image","plugin":0})"));
+    // With no plug-in named it is enough that a listed plug-in has the fault's module as its
+    // build; with none that does, it is not.
+    CHECK(check(fault1, R"({"confidence":"fault_in_image","plugin":null})"));
+    CHECK(check(faultTrace(0), R"({"confidence":"fault_in_image","plugin":1})"));
+    Inventory elsewhere;
+    REQUIRE(elsewhere.apply(addAt(6, 0x9100)));  // the only plug-in has no build
+    CHECK_FALSE(attributionShape(parse(R"({"confidence":"fault_in_image","plugin":null})"),
+                                 elsewhere.pluginsJson(&fault1), elsewhere.commandsJson(&fault1),
+                                 threadsJson(fault1), modulesJson(fault1)));
 }
 
 TEST_CASE(

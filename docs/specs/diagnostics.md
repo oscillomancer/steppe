@@ -678,6 +678,10 @@ has no cell for, can still be the cause. The validator holds a report to its own
 the confidence is one of the five, `plugin` is `null` or a listed id, `active_token` needs a
 plug-in with an `executing` entry matched to the fault thread, `concurrent_activity` one matched
 to another thread, `recent_command` a non-empty `commands` and no plug-in, and `unknown` none.
+`fault_in_image` needs the first frame of the fault thread (`threads[0]`, role `fault`) in a
+module of `modules` whose id is the `build.id` of the plug-in named, or of a listed plug-in
+when `plugin` is `null`: a plug-in without a `build` is never blamed for being where the fault
+was.
 
 `dropped` is an object of non-negative counts of what was left out: `threads` (omitted from the
 report beyond its limit), `unregistered_threads` (threads the execution table had no slot for,

@@ -197,7 +197,8 @@ bool reportShape(const json::Value& value) {
     // Attribution is optional (reports of earlier builds have none); when present it must be
     // one the report's own plug-ins and commands support.
     if (const auto* attribution = value.find("attribution"))
-        if (!attributionShape(*attribution, *value.find("plugins"), *value.find("commands")))
+        if (!attributionShape(*attribution, *value.find("plugins"), *value.find("commands"),
+                              *threads, *value.find("modules")))
             return false;
     const auto* unavailable = value.find("unavailable");
     if (!unavailable || !unavailable->isArray() || unavailable->size() == 0 ||

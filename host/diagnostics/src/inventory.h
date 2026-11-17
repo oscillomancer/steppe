@@ -128,9 +128,11 @@ bool commandsShape(const json::Value& commands);
 // Strict validation of "attribution" against the report's own "plugins" and "commands": the
 // confidence is one of the closed set, `plugin` is null or the id of a listed plug-in, and the
 // claim is one the listed evidence supports (a token needs an entry on the fault thread, and so
-// on).
+// on; `fault_in_image` needs the fault thread's first frame in a module of `modules` whose id is
+// the `build` of the plug-in named, or of a listed one when none is).
 bool attributionShape(const json::Value& attribution, const json::Value& plugins,
-                      const json::Value& commands);
+                      const json::Value& commands, const json::Value& threads,
+                      const json::Value& modules);
 // "dropped": the object this build writes, or the plain count older reports hold.
 bool droppedShape(const json::Value& dropped);
 
