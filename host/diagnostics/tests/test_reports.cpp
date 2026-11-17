@@ -412,6 +412,28 @@ TEST_CASE("deleting an incident removes its report, acknowledgement and idle mar
     CHECK(fs::exists(file(root, 2, ".json")));
     releaseMarker(*live);
 }
+TEST_CASE("deleting a report file this build cannot read removes nothing, whatever its marker") {
+    // A newer build's report this one cannot validate, whose run ended and left its marker (a
+    // crash during teardown leaves it): not this build's to remove (P11, review 38b F3).
+    Root root;
+    staleMarker(root, 7);
+    REQUIRE(privatePublish(file(root, 7, ".json"), "{\"not\":\"a report\"}"));
+    auto listing = listReports(root.path);
+    REQUIRE(listing);
+    CHECK(listing->ignored == 1);
+    CHECK(listing->unreported.empty());
+    CHECK_FALSE(deleteReport(name(7), root.path));
+    CHECK(fs::exists(file(root, 7, ".json")));
+    CHECK(fs::exists(file(root, 7, ".run")));
+    auto cleared = deleteAllReports(root.path);
+    REQUIRE(cleared);
+    CHECK(*cleared == 0);
+    CHECK(fs::exists(file(root, 7, ".json")));
+    // The dismissal of an unreported run, with no report file at all, still works.
+    staleMarker(root, 8);
+    CHECK(deleteReport(name(8), root.path));
+    CHECK_FALSE(fs::exists(file(root, 8, ".run")));
+}
 TEST_CASE("deleting all leaves live runs, reports in the making and files it cannot read") {
     Root root;
     report(root, 1);

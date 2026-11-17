@@ -251,6 +251,23 @@ Result<std::string> readReport(const std::string& incident, const fs::path& dire
     if (!loaded) return noReport(incident);
     return json::writeCanonical(loaded->value) + "\n";
 }
+namespace {
+// Whether `incident` is something that has ended: a valid report, or, when there is no report file
+// at all, a run that ended and left its marker (`state` is its run's, probeRun). A report-named
+// file this build cannot read is neither: it is not this build's to acknowledge or remove, whatever
+// its marker says.
+bool finishedIncident(const fs::path& root, const std::string& incident, MarkerState state) {
+    const auto json = pathFor(root, incident, ".json");
+    if (loadReport(json)) return true;
+    std::error_code ec;
+    const auto status = fs::symlink_status(json, ec);
+    // A missing file reports not_found, with an error code; any other error leaves it unknown,
+    // which is treated as present.
+    const bool present = status.type() != fs::file_type::not_found &&
+                         !(ec && ec == std::errc::no_such_file_or_directory);
+    return !present && state == MarkerState::Free;
+}
+}  // namespace
 Status acknowledge(const std::string& incident, const fs::path& directory) {
     const fs::path root = directory.empty() ? defaultDirectory() : directory;
     if (root.empty() || !incidentName(incident)) return noReport(incident);
@@ -259,8 +276,7 @@ Status acknowledge(const std::string& incident, const fs::path& directory) {
     if (state == MarkerState::Held) return noReport(incident);
     // Only an incident that exists can be acknowledged: a report that is valid, or a run that
     // ended and left its marker.
-    if (!loadReport(pathFor(root, incident, ".json")) && state != MarkerState::Free)
-        return noReport(incident);
+    if (!finishedIncident(root, incident, state)) return noReport(incident);
     return writeAck(root, incident);
 }
 Status settle(const std::string& incident, const fs::path& directory) {
@@ -380,8 +396,7 @@ Status deleteReport(const std::string& incident, const fs::path& directory) {
     SUPPLE_TRY(checkDirectoryForReading(root));
     const auto state = probeRun(root, incident);
     if (state == MarkerState::Held) return noReport(incident);
-    if (!loadReport(pathFor(root, incident, ".json")) && state != MarkerState::Free)
-        return noReport(incident);
+    if (!finishedIncident(root, incident, state)) return noReport(incident);
     return removeIncident(root, incident);
 }
 Result<std::size_t> deleteAllReports(const fs::path& directory) {
