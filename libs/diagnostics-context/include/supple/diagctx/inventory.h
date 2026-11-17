@@ -11,7 +11,13 @@
 //
 // Everything here is cold: it runs on whatever thread creates, activates or destroys an
 // instance, never on an audio path, and it may allocate, lock and write to a socket. Nothing
-// here is marked SUPPLE_RT, and no real-time code may call it.
+// here is marked SUPPLE_RT, and no real-time code may call it. The threads that announce are
+// the ones that create, activate, deactivate and destroy: the model thread, the plan compiler,
+// a scan or sandbox session thread; never `process`, `reset`, `flush` or start/stop
+// processing. Two checks hold that: clang's function-effects analysis rejects a SUPPLE_RT
+// function that calls these (they carry no `nonblocking`), and every call takes a lock,
+// sink or none, so the `rtsan` preset aborts one reached from an audio path even in a process
+// with no sink (tests/rt-safety/rtsan_announce_check.cpp).
 //
 // What an announcement may carry. The plug-in's own strings (name, vendor, version, id) are
 // untrusted text: the sink bounds them to `kMaxText` bytes and the supervisor checks them

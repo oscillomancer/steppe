@@ -3,6 +3,7 @@
 #include "supple/diagctx/inventory.h"
 
 #include <atomic>
+#include <mutex>
 
 #include "supple/diagctx/scope.h"
 
@@ -10,6 +11,19 @@ namespace supple::diagctx {
 namespace {
 std::atomic<InventorySink> gSink{nullptr};
 static_assert(std::atomic<InventorySink>::is_always_lock_free);
+
+// Every announcement passes through this lock, sink or none. It orders the sink's calls and,
+// more to the point, makes an announcement reached from a SUPPLE_RT function abort under
+// RealtimeSanitizer even in a process that has no sink (a test, a tool): announcements are
+// cold, and the lock is how the rtsan preset proves none is made on an audio path.
+std::mutex gGate;
+
+// The sink in force, and the lock held while it runs; null when there is none or the cell
+// has no word.
+InventorySink enter(std::unique_lock<std::mutex>& lock, std::uint32_t cell) noexcept {
+    lock = std::unique_lock(gGate);
+    return cell < kMaxInstances ? gSink.load(std::memory_order_acquire) : nullptr;
+}
 
 std::uint16_t generationOfCell(std::uint32_t cell) noexcept {
     return unpackWord(table().instances[cell].audio.load(std::memory_order_relaxed)).generation;
@@ -79,12 +93,16 @@ const char* instanceStateName(InstanceState state) noexcept {
     return nullptr;
 }
 
-void setInventorySink(InventorySink sink) noexcept { gSink.store(sink, std::memory_order_release); }
+void setInventorySink(InventorySink sink) noexcept {
+    std::lock_guard lock(gGate);  // returns once no announcement is still running the old sink
+    gSink.store(sink, std::memory_order_release);
+}
 
 void announce(std::uint32_t cell, InstanceKind kind, InstanceOrigin origin, InstanceMode mode,
               InstanceState state, std::uint64_t image, const Identity& identity) noexcept {
-    const auto sink = gSink.load(std::memory_order_acquire);
-    if (!sink || cell >= kMaxInstances) return;
+    std::unique_lock<std::mutex> lock;
+    const auto sink = enter(lock, cell);
+    if (!sink) return;
     Event event;
     event.event = EventKind::Add;
     event.cell = cell;
@@ -99,8 +117,9 @@ void announce(std::uint32_t cell, InstanceKind kind, InstanceOrigin origin, Inst
 }
 
 void announceState(std::uint32_t cell, InstanceState state) noexcept {
-    const auto sink = gSink.load(std::memory_order_acquire);
-    if (!sink || cell >= kMaxInstances) return;
+    std::unique_lock<std::mutex> lock;
+    const auto sink = enter(lock, cell);
+    if (!sink) return;
     Event event;
     event.event = EventKind::State;
     event.cell = cell;
@@ -110,8 +129,9 @@ void announceState(std::uint32_t cell, InstanceState state) noexcept {
 }
 
 void announceRemove(std::uint32_t cell) noexcept {
-    const auto sink = gSink.load(std::memory_order_acquire);
-    if (!sink || cell >= kMaxInstances) return;
+    std::unique_lock<std::mutex> lock;
+    const auto sink = enter(lock, cell);
+    if (!sink) return;
     Event event;
     event.event = EventKind::Remove;
     event.cell = cell;

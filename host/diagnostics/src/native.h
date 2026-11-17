@@ -101,6 +101,9 @@ struct Native {
     bool traced = false;
     // The worker's execution table (diagctx), from its Ready packet; 0 until then.
     std::uint64_t table = 0;
+    // Worker, POSIX: a publish() sent part of a packet and could not send the rest, so the
+    // stream no longer holds whole packets. The caller must stop sending on it.
+    bool torn = false;
 };
 Result<Native> launch(int argc, char** argv, const Packet& boot);
 Result<Native> adopt(std::string_view value, Packet& boot);

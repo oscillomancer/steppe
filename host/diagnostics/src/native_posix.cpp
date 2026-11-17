@@ -283,15 +283,17 @@ bool publish(Native& native, const Packet& packet) noexcept {
     for (int attempts = 0; at < sizeof(packet) && attempts < 250; ++attempts) {
         pollfd item{fd, POLLOUT, 0};
         const int ready = ::poll(&item, 1, 1);
-        if (ready < 0 && errno != EINTR) return false;
+        if (ready < 0 && errno != EINTR) break;
         if (ready <= 0) continue;
         sent = ::send(fd, bytes + at, sizeof(packet) - at, noSignal() | MSG_DONTWAIT);
         if (sent > 0)
             at += static_cast<std::size_t>(sent);
         else if (sent < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
-            return false;
+            break;
     }
-    return at == sizeof(packet);
+    if (at == sizeof(packet)) return true;
+    native.torn = true;  // the part sent stays in the stream: nothing more may follow it
+    return false;
 }
 void acknowledge(Native& native) noexcept {
     const char ack = 'A';

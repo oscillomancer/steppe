@@ -34,6 +34,9 @@ void installInventory(const Native& native, const Packet& boot);
 // A terminal handoff is about to use the channel: no further event is sent, and the ones
 // being sent are given a moment (bounded) to finish. Async-signal-safe.
 void closeInventory() noexcept;
+// Tests only: forgets the installed sink, the closed gate and the drop count, and replaces the
+// function that sends a packet (null restores publish()).
+void resetInventoryForTests(bool (*publishFn)(Native&, const Packet&) noexcept);
 // Events dropped so far. Async-signal-safe.
 std::uint32_t inventoryDropped() noexcept;
 

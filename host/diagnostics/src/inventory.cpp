@@ -26,6 +26,7 @@ Packet gBoot;
 std::mutex gSendMutex;  // one inventory send at a time (the Windows ring has one producer)
 std::atomic<bool> gInstalled{false}, gClosed{false};
 std::atomic<std::uint32_t> gSenders{0}, gDropped{0};
+bool (*gPublish)(Native&, const Packet&) noexcept = &publish;  // a test replaces it
 static_assert(std::atomic<std::uint32_t>::is_always_lock_free &&
               std::atomic<bool>::is_always_lock_free);
 
@@ -68,7 +69,18 @@ void send(const diagctx::Event& event) noexcept {
         record.length[i] = static_cast<std::uint8_t>(n);
     }
     std::lock_guard lock(gSendMutex);
-    if (!publish(gNative, packet)) gDropped.fetch_add(1, std::memory_order_relaxed);
+    // The gate may have closed while this call waited for the lock (the send ahead of it
+    // timed out finishing a part-sent packet): it must not wait that long again.
+    if (gClosed.load()) {
+        gDropped.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    if (!gPublish(gNative, packet)) {
+        gDropped.fetch_add(1, std::memory_order_relaxed);
+        // A packet part sent and not finished leaves the stream torn: close the sink for good,
+        // so the process waits for the supervisor at most once, not once per announcement.
+        if (gNative.torn) gClosed.store(true);
+    }
 }
 
 // ---- supervisor side --------------------------------------------------------------------
@@ -98,6 +110,14 @@ void installInventory(const Native& native, const Packet& boot) {
     gBoot = boot;
     gClosed.store(false);
     diagctx::setInventorySink(&send);
+}
+
+void resetInventoryForTests(bool (*publishFn)(Native&, const Packet&) noexcept) {
+    diagctx::setInventorySink(nullptr);
+    gPublish = publishFn ? publishFn : &publish;
+    gInstalled.store(false);
+    gClosed.store(false);
+    gDropped.store(0);
 }
 
 void closeInventory() noexcept {

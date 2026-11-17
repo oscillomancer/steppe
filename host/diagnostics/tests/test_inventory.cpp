@@ -427,3 +427,36 @@ TEST_CASE("a full channel drops whole packets and never tears one") {
     ::close(pair[1]);
 }
 #endif
+
+namespace {
+int gHookCalls = 0;
+bool gHookTears = false;
+bool hookPublish(Native& native, const Packet&) noexcept {
+    ++gHookCalls;
+    if (gHookTears) native.torn = true;  // what publish() says when a part-sent packet is stuck
+    return false;
+}
+}  // namespace
+
+TEST_CASE("a torn stream closes the sink for good; a merely full one does not") {
+    Native native;
+    Packet boot = base();
+    resetInventoryForTests(&hookPublish);
+    installInventory(native, boot);
+    gHookCalls = 0;
+
+    gHookTears = false;  // a full channel: this event is lost, the next may still go
+    diagctx::announceState(1, diagctx::InstanceState::Active);
+    diagctx::announceState(1, diagctx::InstanceState::Inactive);
+    CHECK(gHookCalls == 2);
+    CHECK(inventoryDropped() == 2);
+
+    gHookTears = true;  // a packet stuck half sent: the process waited once, never again
+    diagctx::announceState(1, diagctx::InstanceState::Active);
+    CHECK(gHookCalls == 3);
+    for (int i = 0; i < 5; ++i) diagctx::announceState(1, diagctx::InstanceState::Inactive);
+    diagctx::announceRemove(1);
+    CHECK(gHookCalls == 3);  // nothing was sent, nothing waited
+    CHECK(inventoryDropped() == 2 + 1 + 5 + 1);
+    resetInventoryForTests(nullptr);
+}
