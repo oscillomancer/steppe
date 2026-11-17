@@ -1069,6 +1069,25 @@ void EngineApp::warnSuspects(const std::vector<ProjectPlugin>& plugins,
     }
 }
 
+void EngineApp::warnStoreSuspects(const model::VersionStore& store,
+                                  std::vector<schema::Warning>* out) {
+    auto suspected = diagnostics::suspects(diagnosticsDir());
+    if (!suspected || suspected->empty()) return;
+    std::vector<NamedHead> heads;
+    bool holdsPlugins = false;
+    for (const auto& name : store.branches())
+        if (auto head = store.head(name)) {
+            holdsPlugins = holdsPlugins || !head->fx.empty();
+            heads.emplace_back(name, std::move(head));
+        }
+    if (!holdsPlugins) return;
+    // The load scans the catalogue for these plug-ins anyway; the check needs it first.
+    if (!catalogue_) (void)plugins();
+    auto list = gatherPlugins(heads, store.branch());
+    annotateSuspects(list);
+    warnSuspects(list, out);
+}
+
 Result<EngineApp::ProjectPlugins> EngineApp::projectPlugins(
     const fs::path& where, bool asTemplate, std::vector<schema::Warning>* warnings) {
     const fs::path path = resolve(where);
@@ -1079,6 +1098,7 @@ Result<EngineApp::ProjectPlugins> EngineApp::projectPlugins(
     ProjectPlugins out;
     out.path = file.string();
     out.hash = "sha256:" + sha256Hex(*text);
+    out.source = asTemplate ? "template" : "file";
     std::vector<NamedHead> heads;
     std::string current = "main";
     if (asTemplate) {
@@ -1141,23 +1161,7 @@ Status EngineApp::open(const fs::path& where, std::vector<schema::Warning>* warn
     // A plug-in an earlier crash report points at is warned of, never refused or changed here:
     // the engine does not prompt and does not override itself (the frontend or the agent asked
     // first with project.plugins, and plugin.override).
-    if (auto suspected = diagnostics::suspects(diagnosticsDir());
-        suspected && !suspected->empty()) {
-        std::vector<NamedHead> heads;
-        bool holdsPlugins = false;
-        for (const auto& name : opened->store.branches())
-            if (auto head = opened->store.head(name)) {
-                holdsPlugins = holdsPlugins || !head->fx.empty();
-                heads.emplace_back(name, std::move(head));
-            }
-        if (holdsPlugins) {
-            // The load scans the catalogue for these plug-ins anyway; the check needs it first.
-            if (!catalogue_) (void)plugins();
-            auto list = gatherPlugins(heads, opened->store.branch());
-            annotateSuspects(list);
-            warnSuspects(list, warnings);
-        }
-    }
+    warnStoreSuspects(opened->store, warnings);
     if (opened->branchesDropped && warnings) {
         const Error& why = *opened->branchesDropped;
         warnings->push_back({"project.history",
@@ -3930,7 +3934,7 @@ Status EngineApp::publishRecoveryKeeps(const fs::path& file,
     return okStatus();
 }
 
-Result<SessionRecovery> EngineApp::recoverAutosave(const std::string& name) {
+Result<std::vector<fs::path>> EngineApp::autosaveCandidates(const std::string& name) const {
     auto none = [] {
         return Error("recover.no_autosave", "there is no autosave newer than the saved file",
                      "/autosave", "open the project as saved; nothing was lost");
@@ -3951,7 +3955,6 @@ Result<SessionRecovery> EngineApp::recoverAutosave(const std::string& name) {
         const auto t = fs::last_write_time(file, timeError);
         return !timeError && t > time;
     };
-    SessionRecovery out;
     const fs::path folder = autosaveDir();
     // A named one is the one that was offered: it must be newer than the
     // file as this project was opened, so a save since (the question before
@@ -3977,13 +3980,26 @@ Result<SessionRecovery> EngineApp::recoverAutosave(const std::string& name) {
                          "autosave newer than the file");
         candidates.push_back(file);
     } else {
-        candidates = autosavesIn(folder);  // newest first
+        for (const fs::path& file : autosavesIn(folder))  // newest first
+            if (newer(file, autosavedThrough_, written)) candidates.push_back(file);
     }
+    return candidates;
+}
+
+Result<SessionRecovery> EngineApp::recoverAutosave(const std::string& name) {
+    auto none = [] {
+        return Error("recover.no_autosave", "there is no autosave newer than the saved file",
+                     "/autosave", "open the project as saved; nothing was lost");
+    };
+    auto listed = autosaveCandidates(name);
+    if (!listed) return std::move(listed).error();
+    const std::vector<fs::path> candidates = std::move(*listed);
+    const fs::path folder = autosaveDir();
+    SessionRecovery out;
     // The same rule as a session's (ADR-0078): what this recovery cannot
     // fully restore is kept for the first save to publish beside the file.
     std::vector<RawAutosave> keep;
     for (const fs::path& file : candidates) {
-        if (name.empty() && !newer(file, autosavedThrough_, written)) continue;
         std::vector<schema::Warning> parsed;
         auto text = detail::readRecoveryText(folder, file, std::size_t(1) << 30);
         auto opened = text ? model::parseProjectFile(*text, &parsed, replayableStep)
@@ -4012,6 +4028,13 @@ Result<SessionRecovery> EngineApp::recoverAutosave(const std::string& name) {
                                     "/branches", "", "", file.filename().string()});
         if (opened->branchesDropped)
             keep.emplace_back(file.filename().string(), *text, ".pre-branches");
+        {  // a plug-in a crash report points at, before anything of it loads
+            std::vector<schema::Warning> suspect;
+            warnStoreSuspects(opened->store, &suspect);
+            for (auto& w : suspect)
+                out.warnings.push_back(
+                    {w.code, w.message, w.path, "", "", file.filename().string()});
+        }
         // Kept before anything is replaced: without the copies, the first
         // save would delete the only source of what this cannot restore.
         auto kept = keepForFirstSave(folder, keep, "/autosave");
@@ -4075,6 +4098,13 @@ Result<SessionRecovery> EngineApp::recoverSession(const std::string& session) {
                                     "/branches", "", "", file.filename().string()});
         if (opened->branchesDropped)
             keep.emplace_back(file.filename().string(), *text, ".pre-branches");
+        {
+            std::vector<schema::Warning> suspect;
+            warnStoreSuspects(opened->store, &suspect);
+            for (auto& w : suspect)
+                out.warnings.push_back(
+                    {w.code, w.message, w.path, "", "", file.filename().string()});
+        }
         store = std::move(opened->store);
         out.autosave = file.filename().string();
         break;
@@ -4150,6 +4180,64 @@ Result<SessionRecovery> EngineApp::recoverSession(const std::string& session) {
             out.warnings.push_back(
                 {r.error().code, r.error().message + "; the recordings stay recoverable",
                  r.error().path, "use project.recover with files and track to place them", "", ""});
+    }
+    return out;
+}
+
+Result<EngineApp::ProjectPlugins> EngineApp::recoverPlugins(
+    const std::string& session, const std::string& autosaveFile,
+    std::vector<schema::Warning>* warnings) {
+    fs::path folder;
+    std::vector<fs::path> candidates;
+    ProjectPlugins out;
+    if (!session.empty()) {
+        // What recoverSession reads: the folder's autosaves, newest first, the first that opens.
+        auto found = sessionFolder(session);
+        if (!found) return std::move(found).error();
+        folder = *found;
+        if (!sessionContent(folder))
+            return Error("recover.unknown_session",
+                         "there is nothing in " + session + " to recover", "/session",
+                         "use a session project.recoverable lists");
+        candidates = autosavesIn(folder);
+        out.source = "session";
+    } else {
+        auto listed = autosaveCandidates(autosaveFile);
+        if (!listed) return std::move(listed).error();
+        folder = autosaveDir();
+        candidates = std::move(*listed);
+        if (candidates.empty())
+            return Error("recover.no_autosave", "there is no autosave newer than the saved file",
+                         "/autosave", "open the project as saved; nothing was lost");
+        out.source = "autosave";
+    }
+    out.catalogueEmpty = !catalogue_ || catalogue_->empty();
+    for (const fs::path& file : candidates) {
+        auto text = detail::readRecoveryText(folder, file, std::size_t(1) << 30);
+        if (!text) continue;
+        std::vector<schema::Warning> parsed;
+        auto opened = model::parseProjectFile(*text, &parsed, replayableStep);
+        if (!opened) continue;  // recover tries the next older one, so does this
+        if (warnings)
+            for (auto& w : parsed) warnings->push_back(std::move(w));
+        out.path = file.string();
+        out.autosave = file.filename().string();
+        out.hash = "sha256:" + sha256Hex(*text);
+        std::vector<NamedHead> heads;
+        for (const auto& name : opened->store.branches())
+            if (auto head = opened->store.head(name)) heads.emplace_back(name, std::move(head));
+        out.plugins = gatherPlugins(heads, opened->store.branch());
+        annotateSuspects(out.plugins);
+        return out;
+    }
+    // As project.recover answers: an autosave nothing could read is "no autosave"; a session
+    // with nothing readable puts back recordings only, which name no plug-in.
+    if (out.source == "autosave") {
+        if (!autosaveFile.empty())
+            return Error("recover.no_autosave", autosaveFile + " cannot be read", "/autosave_file",
+                         "open the project as saved, or omit autosave_file to try the others");
+        return Error("recover.no_autosave", "there is no autosave newer than the saved file",
+                     "/autosave", "open the project as saved; nothing was lost");
     }
     return out;
 }

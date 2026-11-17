@@ -1187,8 +1187,11 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.project_plugins_args
----@field path string
+---@field path? string
 ---@field template? boolean
+---@field session? string A session project.recoverable lists
+---@field autosave? boolean The open project's newer autosave
+---@field autosave_file? string With autosave: which one, as offered
 
 ---@class Steppe.project_recover_args
 ---@field files? string[]
@@ -2417,7 +2420,7 @@ q = nil
 ---@field get fun(): Steppe.project_get_result Show the project: name, rate, tempo, meter, file, version and branch.
 ---@field new fun(args?: Steppe.project_new_args): Steppe.project_new_result Start a new, empty project (replaces the current one and its history).
 ---@field open fun(args?: Steppe.project_open_args): Steppe.project_open_result Open a project file and its branches (replaces the current project).
----@field plugins fun(args: Steppe.project_plugins_args): table The plug-ins a project file names, and any a crash report suspects.
+---@field plugins fun(args?: Steppe.project_plugins_args): table The plug-ins a project, or a recovery, names, and any a crash report suspects.
 ---@field recover fun(args?: Steppe.project_recover_args): Steppe.project_recover_result Put back what a crash left behind: recordings, or an unsaved project.
 ---@field recoverable fun(): Steppe.project_recoverable_result List recordings and unsaved projects a crash left behind.
 ---@field save fun(args?: Steppe.project_save_args): Steppe.project_save_result Save the project (canonical JSON) to its file or a new path.

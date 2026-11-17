@@ -11725,9 +11725,9 @@ Result:
 
 ## `project.plugins@1`
 
-The plug-ins a project file names, and any a crash report suspects.
+The plug-ins a project, or a recovery, names, and any a crash report suspects.
 
-Reads the file as project.open would and loads nothing: no plug-in, no probe. Every branch's head is read, not the history steps behind them. plugins lists each (format, id) once with the name, vendor and version the file saves, uses (its fx in the saved branch), branches, mode (this run's plugin.override), stock and bridgeable, and resolved: the installed plug-in (id, name, vendor, version, path) from the catalogue as it stands, or null (not installed, or the catalogue is empty: catalogue_empty says it is, and no scan was started; plugin.scan first). suspect is null, or says that a crash report points at it and the installed file is that build (build same), that version when the report names no build (version), or could not be checked against it (unreadable): attribution (fault_in_image or active_token) and the incidents, newest first. A plug-in is never loaded to find out. hash is the SHA-256 of the file's bytes: pass it to project.open as expect_hash so the check and the load read the same file. template: true reads a project template (a folder or file) instead.
+Reads the file as project.open would and loads nothing: no plug-in, no probe. Every branch's head is read, not the history steps behind them. plugins lists each (format, id) once with the name, vendor and version the file saves, uses (its fx in the saved branch), branches, mode (this run's plugin.override), stock and bridgeable, and resolved: the installed plug-in (id, name, vendor, version, path) from the catalogue as it stands, or null (not installed, or the catalogue is empty: catalogue_empty says it is, and no scan was started; plugin.scan first). suspect is null, or says that a crash report points at it and the installed file is that build (build same), that version when the report names no build (version), or could not be checked against it (unreadable): attribution (fault_in_image or active_token) and the incidents, newest first. A plug-in is never loaded to find out. hash is the SHA-256 of the file's bytes: pass it to project.open as expect_hash so the check and the load read the same file. template: true reads a project template (a folder or file) instead. Recovery is checked the same way, before it opens anything: session reads the autosave project.recover {session} would open, autosave: true the one project.recover {autosave: true} would (autosave_file names one, as there). The result's source says which, and autosave names the file read: pass it to project.recover as autosave_file so the check and the load read one file. Give exactly one of path, session and autosave. project.open and project.recover also warn (project.suspect_plugin) of a plug-in still on the normal load.
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -11737,6 +11737,9 @@ Kind: `query`. Exposure: `mcp-exec`.
 | --- | --- | --- | --- | --- | --- |
 | `path` | string |  |  |  |  |
 | `template` | boolean |  |  |  |  |
+| `session` | string |  |  |  | A session project.recoverable lists |
+| `autosave` | boolean |  |  |  | The open project's newer autosave |
+| `autosave_file` | string |  |  |  | With autosave: which one, as offered |
 
 ### Result
 
@@ -11749,6 +11752,9 @@ Kind: `query`. Exposure: `mcp-exec`.
 
 - `file.open`: the file cannot be read Hint: check the path
 - `schema.invalid`: the file has problems Hint: details list each with its path
+- `project.plugins_args`: the source is not exactly one of path, session, autosave Hint: give one
+- `recover.unknown_session`: no unsaved project of that name was left behind Hint: project.recoverable lists them
+- `recover.no_autosave`: no autosave is newer than the saved file Hint: open the project as saved
 
 ### Examples
 
@@ -11777,7 +11783,7 @@ Result:
 
 Put back what a crash left behind: recordings, or an unsaved project.
 
-files: as project.recoverable lists them (omit for all). Each becomes an item on the track it was recorded on (or track) at the position it was recorded, in one undo step. session: instead opens that unsaved project from its newest readable autosave in place of the current one (unsaved changes are lost: save first), still unsaved, and puts back its leftover recordings as one more undo step. autosave: instead opens the saved project's autosave newer than its file (project.get autosave_available) in place of what is open, keeping its path: it is unsaved until saved over the file. autosave_file names the autosave to open (as project.recover returned or a client offered it); it must be newer than the file as this project was opened.
+files: as project.recoverable lists them (omit for all). Each becomes an item on the track it was recorded on (or track) at the position it was recorded, in one undo step. session: instead opens that unsaved project from its newest readable autosave in place of the current one (unsaved changes are lost: save first), still unsaved, and puts back its leftover recordings as one more undo step. autosave: instead opens the saved project's autosave newer than its file (project.get autosave_available) in place of what is open, keeping its path: it is unsaved until saved over the file. autosave_file names the autosave to open (as project.recover returned or a client offered it); it must be newer than the file as this project was opened. A plug-in an earlier crash report points at raises project.suspect_plugin among the result's warnings (project.plugins session or autosave says so before the call), and loads normally.
 
 Kind: `action`. Exposure: `mcp-exec`.
 

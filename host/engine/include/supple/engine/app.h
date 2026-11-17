@@ -412,6 +412,9 @@ class EngineApp : public cmd::Host {
     };
     struct ProjectPlugins {
         std::string path, hash;  // hash: "sha256:" of the bytes read, for open's expectHash
+        // What was read: "file", "template", "session" or "autosave" (project.recover's two
+        // sources); `autosave` is the autosave file it read ("" when a session has none).
+        std::string source = "file", autosave;
         bool catalogueEmpty = false;
         std::vector<ProjectPlugin> plugins;
     };
@@ -419,6 +422,13 @@ class EngineApp : public cmd::Host {
     // history steps behind them, de-duplicated by (format, id) as the catalogue resolves it.
     // `asTemplate`: a template (folder or file) rather than a project file.
     Result<ProjectPlugins> projectPlugins(const std::filesystem::path& file, bool asTemplate,
+                                          std::vector<schema::Warning>* warnings = nullptr);
+    // The same for what project.recover would open, without opening it: a left-behind
+    // `session` (empty: the open project's own autosave newer than its file, `autosaveFile`
+    // naming one as recoverAutosave does). Reads the autosave recover would, so a crash's
+    // likeliest next step is checked before anything is instantiated.
+    Result<ProjectPlugins> recoverPlugins(const std::string& session,
+                                          const std::string& autosaveFile,
                                           std::vector<schema::Warning>* warnings = nullptr);
     // At a clean end of the run: the plug-ins that ran in this process, activated, loaded
     // normally (this project's and earlier ones'), settle the reports that suspected exactly
@@ -994,6 +1004,9 @@ class EngineApp : public cmd::Host {
     std::vector<ProjectPlugin> gatherPlugins(const std::vector<NamedHead>& heads,
                                              const std::string& current) const;
     void annotateSuspects(std::vector<ProjectPlugin>& plugins);
+    // The suspect warnings for a project about to be loaded (open and both recoveries).
+    void warnStoreSuspects(const model::VersionStore& store, std::vector<schema::Warning>* out);
+    Result<std::vector<std::filesystem::path>> autosaveCandidates(const std::string& name) const;
     void warnSuspects(const std::vector<ProjectPlugin>& plugins,
                       std::vector<schema::Warning>* warnings);
     void harvestRan();

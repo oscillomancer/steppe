@@ -254,19 +254,29 @@ reports alone; the engine decides whether the suspicion applies to the plug-in i
   macOS bundle's executable (`host::pluginImageFile`); a VST3 has no build id to compare. The
   parsers are `libs/image-identity`'s, tested on synthetic ELF, Mach-O (also universal) and PE
   bytes on every platform.
-- *`project.plugins {path, template?}`* reads a project file (or, with `template`, a template
-  folder or file) with the parser `project.open` uses and loads nothing: every branch's head, not
+- *`project.plugins {path | session | autosave, template?, autosave_file?}`* reads a project file
+  (or, with `template`, a template folder or file) with the parser `project.open` uses and loads
+  nothing: every branch's head, not
   the history steps behind them, each `(format, id)` once, as the catalogue resolves it, with
   `uses`, `branches`, `mode`, `stock`, `bridgeable`, `resolved` (null when not installed or the
   catalogue is empty: it answers from the catalogue as it stands and never scans,
   `catalogue_empty` says so), and `suspect` (`build` same, version or unreadable, `attribution`,
   `incidents`) when the check above says a report applies. Its `hash` is the SHA-256 of the bytes
   read; `project.open {expect_hash}` refuses other bytes with `project.changed`, so the check and
-  the load read one file. An autosave source is not read here: an autosave belongs to a project
-  already open.
+  the load read one file. Recovery is checked the same way, before it opens anything, because
+  after a crash the likeliest next step is `project.recover`: `session` reads the autosave
+  `project.recover {session}` would open (the newest in the left-behind folder that parses, none
+  meaning recordings only and so no plug-ins), `autosave: true` the one `project.recover
+  {autosave: true}` would (`autosave_file` names one, validated as there, errors
+  `recover.no_autosave` and `recover.unknown_session` as there). The result's `source` says
+  which (`file`, `template`, `session`, `autosave`) and `autosave` names the file read: passed to
+  `project.recover` as `autosave_file`, the check and the load read one file; a session has no
+  such argument, and its folder is not written by anyone while it waits. Exactly one of `path`,
+  `session` and `autosave` is given (`project.plugins_args` otherwise).
 - *`project.open`* adds the warning `project.suspect_plugin` (path `/plugins/<id>`) for each
   suspect still on the normal load and loads normally. A suspect already bridged or disabled
-  this run raises none, and a settled one is not a suspect. A stock plug-in's warning says it looks
+  this run raises none, and a settled one is not a suspect. `project.recover` (both sources) adds the same warning to its result's `warnings`, from the
+  autosave it is about to load. A stock plug-in's warning says it looks
   like a product fault and offers disable only. The check costs no scan unless a suspect exists
   and the project holds plug-ins. A service (`--mcp`, `serve`, never a one-shot `exec`) writes the
   same text once per plug-in per run on standard error. Remembered rules do not apply headless,

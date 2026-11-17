@@ -128,8 +128,11 @@ struct PathArgs {
 };
 
 struct PluginsArgs {
-    std::string path;
+    std::optional<std::string> path;
     std::optional<bool> templateProject;  // path is a project template (folder or file)
+    std::optional<std::string> session;   // what project.recover {session} would open
+    std::optional<bool> autosave;         // what project.recover {autosave} would open
+    std::optional<std::string> autosaveFile;
 };
 
 struct SaveArgs {
@@ -445,7 +448,8 @@ void registerProjectCommands(cmd::Registry& registry) {
         c.name = "project.plugins";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "The plug-ins a project file names, and any a crash report suspects.";
+        c.summary =
+            "The plug-ins a project, or a recovery, names, and any a crash report suspects.";
         c.description =
             "Reads the file as project.open would and loads nothing: no plug-in, no probe. Every "
             "branch's head is read, not the history steps behind them. plugins lists each "
@@ -460,15 +464,33 @@ void registerProjectCommands(cmd::Registry& registry) {
             "the incidents, newest first. A plug-in is never loaded to find out. hash is the "
             "SHA-256 of the file's bytes: pass it to project.open as expect_hash so the check and "
             "the load read the same file. template: true reads a project template (a folder or "
-            "file) instead.";
+            "file) instead. Recovery is checked the same way, before it opens anything: session "
+            "reads the autosave project.recover {session} would open, autosave: true the one "
+            "project.recover {autosave: true} would (autosave_file names one, as there). The "
+            "result's source says which, and autosave names the file read: pass it to "
+            "project.recover as autosave_file so the check and the load read one file. Give "
+            "exactly one of path, session and autosave. project.open and project.recover also "
+            "warn (project.suspect_plugin) of a plug-in still on the normal load.";
         c.tags = {"project"};
         c.args = schema::object<PluginsArgs>("project_plugins_args")
                      .field("path", &PluginsArgs::path, schema::string())
                      .field("template", &PluginsArgs::templateProject, schema::boolean())
+                     .field("session", &PluginsArgs::session,
+                            schema::string().doc("A session project.recoverable lists"))
+                     .field("autosave", &PluginsArgs::autosave,
+                            schema::boolean().doc("The open project's newer autosave"))
+                     .field("autosave_file", &PluginsArgs::autosaveFile,
+                            schema::string().doc("With autosave: which one, as offered"))
                      .build();
         c.result = schema::any();
         c.errors = {{"file.open", "the file cannot be read", "check the path"},
-                    {"schema.invalid", "the file has problems", "details list each with its path"}};
+                    {"schema.invalid", "the file has problems", "details list each with its path"},
+                    {"project.plugins_args",
+                     "the source is not exactly one of path, session, autosave", "give one"},
+                    {"recover.unknown_session", "no unsaved project of that name was left behind",
+                     "project.recoverable lists them"},
+                    {"recover.no_autosave", "no autosave is newer than the saved file",
+                     "open the project as saved"}};
         c.examples = {
             {"Which plug-ins", j(R"({"path": "example-project.json"})"),
              j(R"({"path": "<any>", "hash": "<any>", "catalogue_empty": "<any>", "plugins": "<any>"})"),
@@ -476,10 +498,29 @@ void registerProjectCommands(cmd::Registry& registry) {
         c.run = [](const PluginsArgs& a, Context& ctx) -> Result<json::Value> {
             EngineApp& app = engine::app(ctx);
             std::vector<schema::Warning> warnings;
-            auto found = app.projectPlugins(a.path, a.templateProject.value_or(false), &warnings);
-            if (!found) return std::move(found).error().at("/path");
+            const int sources = int(a.path.has_value()) + int(a.session.has_value()) +
+                                int(a.autosave.value_or(false));
+            if (sources != 1)
+                return Error("project.plugins_args",
+                             "give exactly one of path, session and autosave: true", "/path",
+                             "path for a project file, session or autosave for a recovery");
+            if ((a.autosaveFile && !a.autosave.value_or(false)) ||
+                (a.templateProject.value_or(false) && !a.path))
+                return Error(
+                    "project.plugins_args",
+                    a.autosaveFile ? "autosave_file needs autosave: true" : "template needs path",
+                    a.autosaveFile ? "/autosave_file" : "/template",
+                    a.autosaveFile ? "add autosave: true" : "give path");
+            auto found =
+                a.path ? app.projectPlugins(*a.path, a.templateProject.value_or(false), &warnings)
+                       : app.recoverPlugins(a.session.value_or(""), a.autosaveFile.value_or(""),
+                                            &warnings);
+            if (!found)
+                return a.path ? std::move(found).error().at("/path") : std::move(found).error();
             for (const auto& w : warnings) ctx.warn(w.code, w.message, w.path);
             json::Value out = json::Value::object();
+            out["source"] = found->source;
+            if (!found->autosave.empty()) out["autosave"] = found->autosave;
             out["path"] = found->path;
             out["hash"] = found->hash;
             out["catalogue_empty"] = found->catalogueEmpty;
@@ -659,7 +700,9 @@ void registerProjectCommands(cmd::Registry& registry) {
             "(project.get autosave_available) in place of what is open, keeping its path: it "
             "is unsaved until saved over the file. autosave_file names the autosave to open "
             "(as project.recover returned or a client offered it); it must be newer than the "
-            "file as this project was opened.";
+            "file as this project was opened. A plug-in an earlier crash report points at raises "
+            "project.suspect_plugin among the result's warnings (project.plugins session or "
+            "autosave says so before the call), and loads normally.";
         c.tags = {"project", "recording"};
         c.args = schema::object<RecoverArgs>("recover_args")
                      .field("files", &RecoverArgs::files, schema::arrayOf(schema::string()))

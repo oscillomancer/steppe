@@ -1275,10 +1275,11 @@ points at one, or saying no report was written); Dismiss hides it for good. It i
 not a question, and project recovery is offered separately. An agent connected over MCP can list, read,
 acknowledge, settle and delete these reports (`crash.list`, `crash.read`, `crash.acknowledge`,
 `crash.settle`, `crash.delete`, `crash.clear`); a report names plug-ins and commands, never project
-content. Before opening a project, `project.plugins` says which of its plug-ins a recent
+content. Before opening a project, or recovering one (`project.plugins` with `session` or `autosave`),
+`project.plugins` says which of its plug-ins a recent
 report points at, and `plugin.override` loads a plug-in on a bridge or not at all for the
-run (`bridge`, `disable`), so the project can be opened safely; `project.open` warns of such a plug-in
-and loads it normally unless one of those was set first. Safe-load and next-start notices arrive in a later topic; the current delivery
+run (`bridge`, `disable`), so the project can be opened safely; `project.open` and `project.recover` warn of such a plug-in
+and load it normally unless one of those was set first. Safe-load and next-start notices arrive in a later topic; the current delivery
 scope is listed in STATUS.md.
 
 #### Stopping Steppe from a script or a service

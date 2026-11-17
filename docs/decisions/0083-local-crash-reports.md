@@ -229,7 +229,8 @@ cell; a crash inside one reports no module entry, a stated limit in `STATUS.md`.
 *Note, 2026-11-17 (topic 7d, safe-load):* a suspicion of a plug-in ends by *settling* a report
 (`<incident>.settled`, `crash.settle`), not by acknowledging it: seen is not resolved. The engine
 compares the installed plug-in file's build id with the report's before anyone is asked
-(`project.plugins`, `project.open`'s `project.suspect_plugin` warning), never prompts, never changes
+(`project.plugins`, also for what `project.recover` would open; the `project.suspect_plugin` warning of
+`project.open` and `project.recover`), never prompts, never changes
 how a plug-in loads by itself, and settles what a run that ended well loaded normally in process.
 `plugin.override` (ADR-0081 note) is how a run bridges or disables a plug-in. Contracts:
 `docs/specs/diagnostics.md` "Safe-load in the engine", `docs/specs/engine.md` §5.

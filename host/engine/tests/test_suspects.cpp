@@ -33,10 +33,10 @@ constexpr const char* kGain = "com.suppleaudio.test.gain";
 
 struct Root {
     fs::path path;
-    explicit Root(const std::string& tag = "a")
+    explicit Root(const std::string& tag = "a", bool keep = false)
         : path(fs::temp_directory_path() /
                ("supple-suspects-" + std::to_string(::getpid()) + "-" + tag)) {
-        fs::remove_all(path);
+        if (!keep) fs::remove_all(path);
     }
     ~Root() { fs::remove_all(path); }
 };
@@ -254,8 +254,11 @@ struct Bus {
     cmd::Registry registry;
     std::unique_ptr<EngineApp> app;
     std::unique_ptr<cmd::Dispatcher> bus;
-    explicit Bus(bool scan = true, const std::string& tag = "a", bool saysOnStderr = false)
-        : root(tag) {
+    // `session`: an unsaved project kept in unsaved/<session>, as the GUI keeps its own;
+    // `keep`: the root already holds an earlier run's files.
+    explicit Bus(bool scan = true, const std::string& tag = "a", bool saysOnStderr = false,
+                 const std::string& session = {}, bool keep = false)
+        : root(tag, keep) {
         host::setBridgeExecutable(BRIDGE_PATH);
         registerEngineCommands(registry);
         AppOptions o;
@@ -266,11 +269,21 @@ struct Bus {
         o.projectTemplateDir = root.path / "project-templates";
         o.pluginPath = {kFixture};
         o.warnSuspectsOnStderr = saysOnStderr;
+        if (!session.empty()) o.scratchDir = root.path / "unsaved" / session;
         auto made = EngineApp::create(o, {.console9 = false});
         REQUIRE(made);
         app = std::move(*made);
+        if (!session.empty()) {
+            app->setFixedClock(1'000'000);
+            REQUIRE(app->newProject({}));  // its autosave interval starts on that clock
+        }
         bus = std::make_unique<cmd::Dispatcher>(registry, *app);
         if (scan) REQUIRE(app->plugins());
+    }
+    // The run ends without discarding its project, as a crash does.
+    void die() {
+        bus.reset();
+        app.reset();
     }
     Result<json::Value> run(std::string command, std::string args) {
         return bus->execute({std::move(command), j(args), kTest});
@@ -651,4 +664,114 @@ TEST_CASE("a run that ended well settles what it loaded normally, and nothing it
         f.app->settleCleanSuspects();
         CHECK(unsettled() == 1);  // the installed build is not the one that crashed
     }
+}
+
+TEST_CASE("recovery is checked before it opens: project.plugins reads the autosave recover would") {
+    Bus f;
+    f.app->setFixedClock(1'000'000);
+    const fs::path dll = f.root.path / "installed" / "gain.clap";
+    const auto image = imageWithId(1);
+    putFile(dll, image);
+    f.installAt(dll);
+    // The saved file holds the sine alone; the autosave after it also holds the gain.
+    const std::string track = f.call("track.add", R"({"name": "Lead"})")["track"].asString();
+    f.call("fx.add", R"({"track": ")" + track + R"(", "plugin": "Test Sine"})");
+    const fs::path song = f.root.path / "song.json";
+    REQUIRE(f.app->save(song));
+    f.call("fx.add", R"({"track": ")" + track + R"(", "plugin": ")" + kGain + R"("})");
+    f.app->setFixedClock(1'060'000);
+    f.app->tick();
+    REQUIRE(fs::exists(f.root.path / "song.json-data" / "autosave-1.json"));
+    REQUIRE(f.app->open(song));
+    const std::string recoverOnly = R"({"autosave": true})";
+
+    auto before = f.call("project.plugins", recoverOnly);
+    CHECK(before["source"].asString() == "autosave");
+    CHECK(before["autosave"].asString() == "autosave-1.json");
+    CHECK(before["plugins"].size() == 2);
+    CHECK(f.gainEntry(before)["suspect"].isNull());
+    CHECK(f.call("project.plugins", R"({"path": )" + f.quoted(song) + "}")["plugins"].size() == 1);
+
+    const auto incident = f.crash("00000000000000000000000000000001", idOfImage(image));
+    SUBCASE("the autosave names a plug-in the file does not: it is the one asked about") {
+        auto file = f.call("project.plugins", R"({"path": )" + f.quoted(song) + "}");
+        CHECK(file["plugins"].size() == 1);  // the file names no suspect
+        auto listing = f.call("project.plugins", recoverOnly);
+        auto entry = f.gainEntry(listing);
+        REQUIRE_FALSE(entry["suspect"].isNull());
+        CHECK(entry["suspect"]["build"].asString() == "same");
+        CHECK(entry["suspect"]["incidents"].at(0).asString() == incident);
+        // Nothing was instantiated or opened to find out.
+        CHECK(f.app->head().fx.size() == 1);
+        CHECK(f.app->instances().size() == 0);
+    }
+    SUBCASE("project.recover itself warns, and loads the autosave normally") {
+        auto r =
+            f.call("project.recover", R"({"autosave": true, "autosave_file": "autosave-1.json"})");
+        CHECK(hasWarning(r, "project.suspect_plugin"));
+        CHECK(f.app->head().fx.size() == 2);
+    }
+    SUBCASE("a protected plug-in is not warned of again") {
+        f.call("plugin.override",
+               std::string(R"({"plugin": ")") + kGain + R"(", "mode": "disable"})");
+        CHECK(f.gainEntry(f.call("project.plugins", recoverOnly))["mode"].asString() == "disable");
+        auto r = f.call("project.recover", recoverOnly);
+        CHECK_FALSE(hasWarning(r, "project.suspect_plugin"));
+    }
+    SUBCASE("a settled report is no longer a suspect") {
+        f.call("crash.settle", R"({"incident": ")" + incident + "\"}");
+        CHECK(f.gainEntry(f.call("project.plugins", recoverOnly))["suspect"].isNull());
+        CHECK_FALSE(hasWarning(f.call("project.recover", recoverOnly), "project.suspect_plugin"));
+    }
+    SUBCASE("the source is exactly one, and a recovery that is not there says so") {
+        for (const char* bad : {"{}", R"({"autosave": true, "session": "x"})",
+                                R"({"path": "a.json", "autosave": true})",
+                                R"({"autosave_file": "autosave-1.json", "path": "a.json"})",
+                                R"({"session": "x", "template": true})"})
+            CHECK(f.run("project.plugins", bad).error().code == "project.plugins_args");
+        CHECK(f.run("project.plugins", R"({"autosave": true, "autosave_file": "autosave-9.json"})")
+                  .error()
+                  .code == "recover.no_autosave");
+        CHECK(f.run("project.plugins", R"({"session": "nope"})").error().code ==
+              "recover.unknown_session");
+        // Once the project is as saved there is nothing newer to recover.
+        REQUIRE(f.app->save(song));
+        CHECK(f.run("project.plugins", recoverOnly).error().code == "recover.no_autosave");
+    }
+}
+
+TEST_CASE("a left-behind unsaved project is checked before project.recover {session} opens it") {
+    const std::string left = "20261114-090000-4242";
+    const auto image = imageWithId(1);
+    Bus earlier(true, "s", false, left);
+    {
+        const fs::path dll = earlier.root.path / "installed" / "gain.clap";
+        putFile(dll, image);
+        earlier.installAt(dll);
+        const std::string track =
+            earlier.call("track.add", R"({"name": "Vocal"})")["track"].asString();
+        earlier.call("fx.add", R"({"track": ")" + track + R"(", "plugin": ")" + kGain + R"("})");
+        earlier.app->setFixedClock(1'060'000);
+        earlier.app->tick();
+        REQUIRE(fs::exists(earlier.root.path / "unsaved" / left / "autosave-1.json"));
+    }
+    earlier.die();
+    Bus f(true, "s", false, "20261114-100000-1", true);
+    f.installAt(earlier.root.path / "installed" / "gain.clap");
+    const auto incident = f.crash("00000000000000000000000000000001", idOfImage(image));
+    const std::string args = R"({"session": ")" + left + "\"}";
+
+    auto listing = f.call("project.plugins", args);
+    CHECK(listing["source"].asString() == "session");
+    CHECK(listing["autosave"].asString() == "autosave-1.json");
+    auto entry = f.gainEntry(listing);
+    REQUIRE_FALSE(entry["suspect"].isNull());
+    CHECK(entry["suspect"]["incidents"].at(0).asString() == incident);
+    CHECK(f.app->head().fx.empty());  // nothing opened
+    CHECK(f.run("project.plugins", R"({"session": "nope"})").error().code ==
+          "recover.unknown_session");
+
+    auto r = f.call("project.recover", args);
+    CHECK(hasWarning(r, "project.suspect_plugin"));
+    CHECK(f.app->head().fx.size() == 1);
 }

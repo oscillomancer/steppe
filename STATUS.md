@@ -253,7 +253,8 @@ instructions are in `docs/guides/installing.md`.
   in racks; it is in no project and no save, a live bridge can drop blocks
   under load, and a changed override plays a fresh instance. Known gap: a
   rack module (not a plug-in) that a crash report points at has no disable.
-  `project.plugins` and `project.open`'s `project.suspect_plugin` warning tell an agent which
+  `project.plugins` (a file, a template, or what `project.recover` would open) and the
+  `project.suspect_plugin` warning of `project.open` and `project.recover` tell an agent which
   plug-ins of a project a recent crash report points at (the installed build id compared with the
   report's, within 250 ms), `crash.settle` ends a suspicion and a service settles what it ran
   normally on a clean exit; the app's own choice dialog is the next step. The check has run only
