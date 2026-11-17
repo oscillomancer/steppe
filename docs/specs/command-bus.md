@@ -756,7 +756,7 @@ runs after disconnect; stop/destruction retains its existing lifecycle rules.
 Excess work is not posted or executed: a live peer receives structured rpc.busy
 with its bounded ID and a retry-later hint. A bounded, serialized I/O preflight
 extracts the ID without model dispatch. Existing per-peer16 limits remain; no
-additional fairness scheme is added. Each peer admits at most64 subscriptions;
+additional fairness scheme is added. Each peer admits at most 64 subscriptions;
 excess returns rpc.subscriptions with an unsubscribe hint.
 
 ### FD-backed output (ADR-0087 D2)
