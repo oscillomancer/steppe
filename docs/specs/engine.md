@@ -310,7 +310,8 @@ specified here as it lands); so far:
   chunk that short. The renderer still gets its whole lead with a loop down
   to the render-ahead time divided by the ring's chunk count (about 3 ms
   with the defaults, at any rate); a shorter loop holds it closer to the
-  callback.
+  callback. A recycled ring is not zero-filled again: its pages were
+  committed when it was first built.
 - **An unchanged FX is not serialized** (stage 2). `InstancePool::get`
   remembers the session's FX object it last configured an instance from
   (and keeps it, so the address is not reused). Given that same object
@@ -703,7 +704,9 @@ is not required; per-platform executor equivalence remains required.
 
 Audio sample buffers (node and stage buffers, delays, the render-ahead and
 frontier rings) are zero-filled on the main thread when a plan or ring is
-built, which commits their pages before any callback uses them. Owned audio
+built, which commits their pages before any callback uses them. A recycled
+ring (§1.6) is not zero-filled again; its pages were committed when it was
+first built. Owned audio
 threads (live helpers, background workers, including an offline render's, the
 renderer and the bridge's audio threads) call `rt::prefaultStack()` once
 before their first job: it touches the 128 KiB of stack below the caller and
