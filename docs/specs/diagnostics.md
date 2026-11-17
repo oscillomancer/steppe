@@ -621,7 +621,8 @@ a command begun on another thread is not recorded and is counted in the table's
 `commandsDropped`. Writing an entry is four release stores on the model thread (empty the
 slot, fill it, label it with its sequence, count it); no lock, call, allocation or message.
 A thread stopped between two of them leaves a slot the reader skips, or one past the count that
-it accepts whole.
+it accepts whole. A parsed capsule counts as a table that was read: the worker took its
+counters and commands from its own table.
 
 *Reading.* The supervisor reads the ring with the rest of the table (Linux and Windows: the
 bounded remote read; macOS: the worker copies the entries into the capsule, whose version is

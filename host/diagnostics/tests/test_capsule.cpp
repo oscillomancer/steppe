@@ -13,6 +13,7 @@
 #include <thread>
 #include <vector>
 #include "../src/capsule.h"
+#include "../src/inventory.h"
 #include "../src/trace.h"
 #if !defined(_WIN32)
 #include <fcntl.h>
@@ -389,6 +390,18 @@ TEST_CASE("a capsule carries the command ring, oldest first, and its counts") {
     CHECK(snapshot->commands[2].state == CommandState::Begun);
     CHECK(snapshot->commandsDamaged == 2);
     CHECK(snapshot->commandsRefused == 5);
+    // The worker wrote it from its own table, so the table counts as read: the report then
+    // says what the listed commands are, not that no table could be read (macOS, in CI,
+    // listed commands under that second limit and without the first).
+    CHECK(snapshot->table == TableState::Read);
+    {
+        const Inventory inventory;
+        const auto limits = inventory.commandLimits(&*snapshot);
+        REQUIRE(!limits.empty());
+        CHECK(limits[0].find("last 64 the model thread began") != std::string::npos);
+        for (const auto& limit : limits)
+            CHECK(limit.find("could not be read") == std::string::npos);
+    }
     // A capsule with none carries none.
     auto empty = fresh();
     addModule(*empty, 0x100000, 0x100000, 0x180000, 0x10);

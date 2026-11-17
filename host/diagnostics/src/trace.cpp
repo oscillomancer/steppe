@@ -880,6 +880,10 @@ std::optional<TraceSnapshot> parseCapsule(const std::uint8_t* bytes, std::size_t
         header.commandsDamaged > diagctx::kMaxCommandEntries || header.reserved2 != 0)
         return std::nullopt;
     TraceSnapshot snapshot;
+    // A capsule is written by the worker from its own execution table, which a process always
+    // has: the counters and the command ring below are what it read, so the table counts as
+    // read (the report's limits say what the commands are, not that the table was missing).
+    snapshot.table = TableState::Read;
     snapshot.dropped = header.dropped;
     snapshot.truncatedModules = (header.flags & kCapsuleModulesTruncated) != 0;
     snapshot.tableThreadsDropped = header.tableThreadsDropped;
