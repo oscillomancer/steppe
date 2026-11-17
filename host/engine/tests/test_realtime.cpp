@@ -103,6 +103,30 @@ struct EngineTestAccess {
     }
     static std::int64_t aheadFrames(const Engine& e) { return e.aheadFrames_; }
     static std::size_t pooledRings(const Engine& e) { return e.ringPool_.size(); }
+    // Whether the plan the callback plays is still held (manual backends).
+    static bool livePlanKept(const Engine& e) {
+        return !e.livePlan_ || std::any_of(e.plans_.begin(), e.plans_.end(),
+                                           [&](const auto& p) { return p.get() == e.livePlan_; });
+    }
+    // Whether every plan an executor may still be using (from the oldest
+    // generation either has acknowledged) keeps all its rings.
+    static bool ringsInUseKept(const Engine& e) {
+        const std::uint64_t oldest = std::min(e.stoppedGen_.load(), e.callbackGen_.load());
+        for (const auto& p : e.plans_)
+            if (p->generation >= oldest)
+                for (const auto* rings : {&p->frontierRings, &p->recordRings})
+                    for (const auto& ring : *rings)
+                        if (!ring) return false;
+        return true;
+    }
+    // The frontier rings of the plan the callback plays (manual backends run
+    // the callback on the test's thread).
+    static std::vector<const detail::ChunkRing*> liveRings(const Engine& e) {
+        std::vector<const detail::ChunkRing*> out;
+        if (e.livePlan_)
+            for (const auto& ring : e.livePlan_->frontierRings) out.push_back(ring.get());
+        return out;
+    }
     static std::vector<const detail::ChunkRing*> planRings(const Engine& e) {
         std::vector<const detail::ChunkRing*> out;
         for (const auto& plan : e.plans_) {
@@ -4082,6 +4106,17 @@ model::Session frontierSession() {
     });
     return t.commit().value();
 }
+// The callback's plan is still held, no plan an executor may still use
+// gave up a ring, and the newest plan's are none the callback plays:
+// checked after each edit, so a plan freed or a ring reused too early fails
+// here rather than as a crash in the cycles that follow.
+void requirePlansKept(const Engine& engine) {
+    REQUIRE(EngineTestAccess::livePlanKept(engine));
+    REQUIRE(EngineTestAccess::ringsInUseKept(engine));
+    const auto live = EngineTestAccess::liveRings(engine);  // none before a cycle
+    for (const auto& ring : EngineTestAccess::latestPlan(engine).frontierRings)
+        REQUIRE(std::find(live.begin(), live.end(), ring.get()) == live.end());
+}
 // The same session, needing a compile (a marker), at `version`.
 model::Session recompiled(const model::Session& s, std::uint64_t version) {
     model::EditTxn t(s, version);
@@ -4112,6 +4147,7 @@ TEST_CASE("plan swaps reuse retired plans' frontier rings: none is allocated per
     std::uint64_t version = 10;
     const auto edit = [&](int cycles) {
         REQUIRE(engine.load(recompiled(session, version++)));
+        requirePlansKept(engine);
         runAhead(engine, backend, cycles, 256);
     };
     edit(64);
@@ -4145,6 +4181,7 @@ TEST_CASE("a frontier ring is reused only once both executors have left its plan
     for (int edit = 0; edit < 4; ++edit) {
         const auto before = detail::chunkRingAllocations();
         REQUIRE(engine.load(recompiled(session, version++)));
+        requirePlansKept(engine);
         CHECK(detail::chunkRingAllocations() == before + 2);
         auto rings = EngineTestAccess::planRings(engine);
         std::sort(rings.begin(), rings.end());
@@ -4160,6 +4197,7 @@ TEST_CASE("a frontier ring is reused only once both executors have left its plan
         current.push_back(ring.get());
     const auto before = detail::chunkRingAllocations();
     REQUIRE(engine.load(recompiled(session, version++)));
+    requirePlansKept(engine);
     CHECK(detail::chunkRingAllocations() == before);
     for (const auto& ring : EngineTestAccess::latestPlan(engine).frontierRings) {
         CHECK(std::find(current.begin(), current.end(), ring.get()) == current.end());
