@@ -842,9 +842,22 @@ struct PeOptions {
     std::uint32_t entryType = 2, dataSize = 0x40, dataRva = 0x2100;
     const char* signature = "RSDS";
     std::uint32_t imageSize = 0x3000;
+    // The exception directory: `exceptionRva` of 0 leaves it out. The table at 0x2180 has
+    // five sorted entries (see kPeFunctions); `exceptionSize` can be set to cover fewer.
+    std::uint32_t exceptionRva = 0x2180, exceptionSize = 60;
+    bool sortedTable = true;
 };
+struct PeFunction {
+    std::uint32_t begin, end, unwind;
+};
+// Five functions with gaps between them; the unwind data lies inside the image.
+constexpr PeFunction kPeFunctions[5] = {{0x1000, 0x1080, 0x2200},
+                                        {0x1080, 0x10c0, 0x2210},
+                                        {0x1200, 0x1210, 0x2220},
+                                        {0x1400, 0x1500, 0x2230},
+                                        {0x1800, 0x1801, 0x2240}};
 std::vector<unsigned char> pe(const PeOptions& o = {}) {
-    std::vector<unsigned char> bytes(0x2200, 0);
+    std::vector<unsigned char> bytes(0x2300, 0);
     poke<std::uint16_t>(bytes, 0, 0x5a4d);
     poke<std::uint32_t>(bytes, 0x3c, o.peOffset);
     if (o.peOffset + 24 + 240 <= bytes.size()) {
@@ -857,6 +870,17 @@ std::vector<unsigned char> pe(const PeOptions& o = {}) {
         poke<std::uint32_t>(bytes, opt + 108, o.directories);
         poke<std::uint32_t>(bytes, opt + 112 + 6 * 8, o.debugRva);
         poke<std::uint32_t>(bytes, opt + 112 + 6 * 8 + 4, o.debugSize);
+        poke<std::uint32_t>(bytes, opt + 112 + 3 * 8, o.exceptionRva);
+        poke<std::uint32_t>(bytes, opt + 112 + 3 * 8 + 4, o.exceptionSize);
+    }
+    if (o.exceptionRva == 0x2180) {
+        for (std::size_t i = 0; i < 5; ++i) {
+            const std::size_t at = 0x2180 + i * 12;
+            const PeFunction& f = kPeFunctions[o.sortedTable ? i : 4 - i];
+            poke<std::uint32_t>(bytes, at, f.begin);
+            poke<std::uint32_t>(bytes, at + 4, f.end);
+            poke<std::uint32_t>(bytes, at + 8, f.unwind);
+        }
     }
     if (o.debugRva >= 0x200 && o.debugRva + 28 <= bytes.size()) {
         poke<std::uint32_t>(bytes, o.debugRva + 12, o.entryType);
@@ -890,6 +914,125 @@ TEST_CASE("a PE image yields its CodeView GUID and age, symbol-server ordered, a
     for (const auto& [at, size] : image.reads) {
         CHECK(size <= 1024);
         CHECK(at < kPeBase + 0x2118);
+    }
+}
+
+TEST_CASE(
+    "a PE image's function table is searched through the reader, for the entry that holds an "
+    "address") {
+    Image image;
+    image.put(kPeBase, pe());
+    const auto read = image.reader();
+    const auto table = PeFunctionTable::open(read, kPeBase);
+    REQUIRE(table);
+    image.reads.clear();
+    for (const auto& f : kPeFunctions) {
+        // The first byte, the last byte and a byte in the middle all find the entry; the byte
+        // after the end does not (unless it begins the next one).
+        for (const std::uint32_t at : {f.begin, f.end - 1, f.begin + (f.end - f.begin) / 2}) {
+            const auto found = table->find(read, kPeBase + at);
+            REQUIRE(found);
+            CHECK(found->begin == f.begin);
+            CHECK(found->end == f.end);
+            CHECK(found->unwind == f.unwind);
+        }
+    }
+    // Gaps, before the first entry, after the last and outside the image find nothing.
+    for (const std::uint32_t at : {0u, 0xfffu, 0x10c0u, 0x1100u, 0x11ffu, 0x1210u, 0x13ffu, 0x1500u,
+                                   0x17ffu, 0x1801u, 0x2000u, 0x2fffu})
+        CHECK_FALSE(table->find(read, kPeBase + at).has_value());
+    CHECK_FALSE(table->find(read, kPeBase - 1).has_value());
+    CHECK_FALSE(table->find(read, kPeBase + 0x3000).has_value());  // SizeOfImage
+    CHECK_FALSE(table->find(read, ~std::uint64_t{0}).has_value());
+    // Each search reads a few 12-byte entries and nothing else.
+    for (const auto& [at, size] : image.reads) {
+        CHECK(size == 12);
+        CHECK(at >= kPeBase + 0x2180);
+        CHECK(at < kPeBase + 0x2180 + 60);
+    }
+    CHECK(image.reads.size() <= (15 + 12 + 3) * 3);
+}
+
+TEST_CASE(
+    "a function table that is missing, malformed, unreadable or unsorted finds nothing it should "
+    "not") {
+    const auto opens = [](const PeOptions& o) {
+        Image image;
+        image.put(kPeBase, pe(o));
+        return PeFunctionTable::open(image.reader(), kPeBase).has_value();
+    };
+    CHECK(opens({}));
+    PeOptions o;
+    o = {};
+    o.exceptionRva = 0;  // no exception directory
+    CHECK_FALSE(opens(o));
+    o = {};
+    o.exceptionSize = 8;  // less than one entry
+    CHECK_FALSE(opens(o));
+    o = {};
+    o.exceptionSize = 0xf00000;  // runs past SizeOfImage
+    CHECK_FALSE(opens(o));
+    o = {};
+    o.directories = 3;  // the directory is not there
+    CHECK_FALSE(opens(o));
+    o = {};
+    o.optionalSize = 100;
+    CHECK_FALSE(opens(o));
+    o = {};
+    o.magic = 0x10b;
+    CHECK_FALSE(opens(o));
+    o = {};
+    o.imageSize = 0;
+    CHECK_FALSE(opens(o));
+    // A table that stops being readable midway gives none, never a partial answer.
+    {
+        Image image;
+        image.put(kPeBase, pe());
+        const auto table = PeFunctionTable::open(image.reader(), kPeBase);
+        REQUIRE(table);
+        const ReadMemory failing = [](std::uint64_t, void*, std::size_t) { return false; };
+        CHECK_FALSE(table->find(failing, kPeBase + 0x1000).has_value());
+    }
+    // An entry whose unwind data lies outside the image is refused.
+    {
+        Image image;
+        auto bytes = pe();
+        poke<std::uint32_t>(bytes, 0x2180 + 8, 0x5000);  // first entry's unwind
+        image.put(kPeBase, bytes);
+        const auto table = PeFunctionTable::open(image.reader(), kPeBase);
+        REQUIRE(table);
+        CHECK_FALSE(table->find(image.reader(), kPeBase + 0x1000).has_value());
+        CHECK(table->find(image.reader(), kPeBase + 0x1080).has_value());  // others still found
+    }
+    // An entry that claims to reach past the image never answers for an address beyond it.
+    {
+        Image image;
+        auto bytes = pe();
+        poke<std::uint32_t>(bytes, 0x2180 + 4 * 12 + 4, 0x9000);  // last entry ends far past it
+        image.put(kPeBase, bytes);
+        const auto table = PeFunctionTable::open(image.reader(), kPeBase);
+        REQUIRE(table);
+        CHECK(table->find(image.reader(), kPeBase + 0x1800).has_value());
+        CHECK_FALSE(table->find(image.reader(), kPeBase + 0x3500).has_value());
+    }
+    // A table in the wrong order may hide entries but terminates, in few reads, and never
+    // returns an entry that does not hold the address.
+    {
+        PeOptions unsorted;
+        unsorted.sortedTable = false;
+        Image image;
+        image.put(kPeBase, pe(unsorted));
+        const auto table = PeFunctionTable::open(image.reader(), kPeBase);
+        REQUIRE(table);
+        image.reads.clear();
+        for (std::uint32_t at = 0x1000; at < 0x1900; at += 0x40) {
+            const auto found = table->find(image.reader(), kPeBase + at);
+            if (found) {
+                CHECK(found->begin <= at);
+                CHECK(at < found->end);
+            }
+        }
+        CHECK(image.reads.size() <= 0x900 / 0x40 * 4);
     }
 }
 

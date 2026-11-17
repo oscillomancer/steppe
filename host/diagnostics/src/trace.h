@@ -64,6 +64,29 @@ Layout buildLayout(const std::vector<Mapping>& mappings, const ReadMemory& read)
 std::optional<std::string> peDebugId(const ReadMemory& read, std::uint64_t base,
                                      std::uint64_t* bias = nullptr);
 
+// The x64 function table of a PE image (its exception directory, `.pdata`): sorted
+// RUNTIME_FUNCTION entries of three RVAs. The Windows collector hands these to the OS
+// unwinder instead of asking DbgHelp, whose lookup answered nothing for any module it had
+// loaded without symbols; everything here is read through the fault-proof reader, with
+// every size checked against the image and every search bounded.
+struct RuntimeFunction {
+    std::uint32_t begin = 0, end = 0, unwind = 0;  // RVAs; unwind is the UNWIND_INFO's
+};
+class PeFunctionTable {
+  public:
+    // The table of the 64-bit image whose headers are at `base`; none when the image has no
+    // exception directory or its headers are not what the loader would accept.
+    static std::optional<PeFunctionTable> open(const ReadMemory& read, std::uint64_t base);
+    // The entry whose [begin, end) holds `address`, by binary search (at most 32 reads of
+    // 12 bytes); none when no entry does or one cannot be read. An unsorted table can hide an
+    // entry from the search; it cannot make it invent one.
+    std::optional<RuntimeFunction> find(const ReadMemory& read, std::uint64_t address) const;
+
+  private:
+    std::uint64_t base_ = 0;
+    std::uint32_t imageSize_ = 0, rva_ = 0, count_ = 0;
+};
+
 struct Frame {
     int module = -1;  // -1: unavailable, only its kind is recorded
     std::uint64_t offset = 0;

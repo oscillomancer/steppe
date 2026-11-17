@@ -282,6 +282,63 @@ std::optional<std::string> peDebugId(const ReadMemory& read, std::uint64_t base,
     return std::nullopt;
 }
 
+std::optional<PeFunctionTable> PeFunctionTable::open(const ReadMemory& read, std::uint64_t base) {
+    std::array<unsigned char, 64> dos{};
+    if (!read(base, dos.data(), dos.size()) || load<std::uint16_t>(dos.data()) != 0x5a4d)
+        return std::nullopt;
+    const auto peOffset = load<std::uint32_t>(&dos[0x3c]);
+    if (peOffset < 64 || peOffset > 0x10000) return std::nullopt;
+    std::array<unsigned char, 24> coff{};
+    if (!read(base + peOffset, coff.data(), coff.size()) ||
+        std::memcmp(coff.data(), "PE\0\0", 4) != 0)
+        return std::nullopt;
+    const auto optionalSize = load<std::uint16_t>(&coff[20]);
+    constexpr std::size_t kExceptionEntry = 112 + 3 * 8;  // data directory 3
+    if (optionalSize < kExceptionEntry + 8 || optionalSize > 1024) return std::nullopt;
+    std::vector<unsigned char> optional(optionalSize);
+    if (!read(base + peOffset + 24, optional.data(), optional.size())) return std::nullopt;
+    if (load<std::uint16_t>(optional.data()) != 0x20b) return std::nullopt;  // PE32+
+    const auto imageSize = load<std::uint32_t>(&optional[56]);
+    const auto directories = load<std::uint32_t>(&optional[108]);
+    if (directories < 4 || imageSize == 0) return std::nullopt;
+    const auto rva = load<std::uint32_t>(&optional[kExceptionEntry]);
+    const auto size = load<std::uint32_t>(&optional[kExceptionEntry + 4]);
+    constexpr std::uint32_t kEntry = 12;
+    if (rva == 0 || size < kEntry || rva % 4 != 0 || std::uint64_t{rva} + size > imageSize)
+        return std::nullopt;
+    PeFunctionTable table;
+    table.base_ = base;
+    table.imageSize_ = imageSize;
+    table.rva_ = rva;
+    table.count_ = size / kEntry;
+    return table;
+}
+
+std::optional<RuntimeFunction> PeFunctionTable::find(const ReadMemory& read,
+                                                     std::uint64_t address) const {
+    if (count_ == 0 || address < base_ || address - base_ >= imageSize_) return std::nullopt;
+    const auto target = static_cast<std::uint32_t>(address - base_);
+    std::uint32_t low = 0, high = count_;
+    while (low < high) {
+        const std::uint32_t middle = low + (high - low) / 2;
+        std::array<unsigned char, 12> entry{};
+        if (!read(base_ + rva_ + std::uint64_t{middle} * entry.size(), entry.data(), entry.size()))
+            return std::nullopt;
+        const auto begin = load<std::uint32_t>(&entry[0]);
+        const auto end = load<std::uint32_t>(&entry[4]);
+        const auto unwind = load<std::uint32_t>(&entry[8]);
+        if (target < begin)
+            high = middle;
+        else if (target >= end)
+            low = middle + 1;
+        else
+            return unwind != 0 && unwind < imageSize_
+                       ? std::optional<RuntimeFunction>(RuntimeFunction{begin, end, unwind})
+                       : std::nullopt;
+    }
+    return std::nullopt;
+}
+
 Layout buildLayout(const std::vector<Mapping>& mappings, const ReadMemory& read) {
     Layout layout;
     // Group file-backed mappings by (device, inode): one module per file.

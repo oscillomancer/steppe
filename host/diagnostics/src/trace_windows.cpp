@@ -27,11 +27,12 @@
 // suspended one at a time, only while their context is read, and resumed before
 // the next; every suspended thread is resumed on every exit path. The stack walk is
 // the OS unwinder (StackWalk64 over each image's unwind data) with memory read
-// through ReadProcessMemory. DbgHelp is process-global state, so all of it runs
-// under one lock, with no symbol path, no environment symbol path and no symbol
-// server: it loads module images from their local files without symbols, and a
-// module's file path never leaves this process. Reports carry the PE CodeView
-// GUID and age and module-relative offsets only. x64 only; other Windows
+// through ReadProcessMemory, and with the function table (each image's exception
+// directory) read from the worker's own memory through the same reader: no module file
+// is opened, so nothing here depends on the supervisor's disk. DbgHelp is
+// process-global state, so all of it runs under one lock, with no symbol path, no
+// environment symbol path and no symbol server. Reports carry the PE CodeView GUID and
+// age and module-relative offsets only. x64 only; other Windows
 // architectures report the faulting thread as unsupported.
 namespace supple::diagnostics::detail {
 #if defined(_M_X64) || defined(__x86_64__)
@@ -50,7 +51,7 @@ constexpr DWORD kExecutable =
 template <class... Args>
 void note(const char* format, Args... args) {
     static int lines = 0;
-    if (!traceEvidenceEnabled() || lines >= 200) return;
+    if (!traceEvidenceEnabled() || lines >= 600) return;
     ++lines;
     char line[256];
     std::snprintf(line, sizeof(line), format, args...);
@@ -326,10 +327,10 @@ class Collector {
         HANDLE thread = nullptr;
         CONTEXT context{};
     };
-    // DbgHelp wants image base addresses it has loaded. Load a module the first time
-    // a walk needs it, from its local file, without symbols.
-    DWORD64 baseOf(DWORD64 address) {
-        if (!symbols_ || !layout_) return 0;
+    // The image base of the module that holds `address`, from the layout (the executable
+    // regions grouped by image); 0 for generated code and anything else with no image.
+    DWORD64 baseOf(DWORD64 address) const {
+        if (!layout_) return 0;
         const auto region =
             std::upper_bound(layout_->regions.begin(), layout_->regions.end(), address,
                              [](std::uint64_t a, const Region& r) { return a < r.start; });
@@ -338,34 +339,44 @@ class Collector {
         if (address >= found.end || found.module < 0 ||
             static_cast<std::size_t>(found.module) >= bases_.size())
             return 0;
-        const std::uint64_t base = bases_[static_cast<std::size_t>(found.module)];
-        auto loaded = loaded_.find(base);
-        if (loaded == loaded_.end()) {
-            // Reading a module's file can be slow (a cold disk, a virus scan, a share):
-            // new modules load only while the hold's budget remains. A single load
-            // cannot be interrupted, so the bound is "no new load after the deadline".
-            if (expired()) {
-                note("evidence: module at %llx not loaded, hold budget spent\n", ull(base));
-                return 0;
-            }
-            std::wstring path(32768, L'\0');
-            const DWORD length = GetModuleFileNameExW(
-                process_, reinterpret_cast<HMODULE>(static_cast<std::uintptr_t>(base)), path.data(),
-                static_cast<DWORD>(path.size()));
-            bool ok = false;
-            if (length > 0 && length < path.size()) {
-                path.resize(length);
-                SetLastError(ERROR_SUCCESS);
-                ok = SymLoadModuleExW(process_, nullptr, path.c_str(), nullptr, base, 0, nullptr,
-                                      SLMFLAG_NO_SYMBOLS) != 0 ||
-                     GetLastError() == ERROR_SUCCESS;  // zero with no error: already loaded
-            }
-            note("evidence: module at %llx %s (name length %lu, error %lu)\n", ull(base),
-                 ok ? "loaded for unwinding" : "NOT LOADED", static_cast<unsigned long>(length),
-                 static_cast<unsigned long>(GetLastError()));
-            loaded = loaded_.emplace(base, ok).first;
+        return bases_[static_cast<std::size_t>(found.module)];
+    }
+    // The unwinder's function-table lookup, answered from the image's own exception
+    // directory read through the reader. DbgHelp's SymFunctionTableAccess64 found nothing for
+    // any module it had loaded with SLMFLAG_NO_SYMBOLS (the first CI run that walked threads
+    // showed "no function table" for every address, the fixture's own image included), and
+    // StackWalk64 then took every frame for a leaf and walked into data. The entry is copied
+    // into one of a few slots that live as long as the collector: StackWalk64 reads it at
+    // once, and the next lookup may come before it has finished with this one.
+    PVOID functionEntry(DWORD64 address) {
+        const auto base = baseOf(address);
+        if (base == 0) {
+            note("evidence: no module for unwind data at %llx\n", ull(address));
+            return nullptr;
         }
-        return loaded->second ? base : 0;
+        auto found = tables_.find(base);
+        if (found == tables_.end()) {
+            auto table = PeFunctionTable::open(readFunction(), base);
+            note("evidence: exception directory of the module at %llx %s\n", ull(base),
+                 table ? "found" : "NOT FOUND");
+            found = tables_.emplace(base, std::move(table)).first;
+        }
+        if (!found->second) return nullptr;
+        const auto entry = found->second->find(readFunction(), address);
+        if (!entry) {
+            note("evidence: no function table at %llx\n", ull(address));
+            return nullptr;
+        }
+        RUNTIME_FUNCTION& slot = entries_[nextEntry_++ % kEntrySlots];
+        slot.BeginAddress = entry->begin;
+        slot.EndAddress = entry->end;
+        slot.UnwindData = entry->unwind;
+        note("evidence: function at %llx is %x..%x, unwind data %x\n", ull(address), entry->begin,
+             entry->end, entry->unwind);
+        return &slot;
+    }
+    ReadMemory readFunction() const {
+        return [this](std::uint64_t a, void* out, std::size_t n) { return read(a, out, n); };
     }
     static BOOL CALLBACK readThunk(HANDLE, DWORD64 address, PVOID buffer, DWORD size, LPDWORD got) {
         SIZE_T count = 0;
@@ -374,14 +385,8 @@ class Collector {
         if (got) *got = static_cast<DWORD>(count);
         return ok ? TRUE : FALSE;
     }
-    static PVOID CALLBACK tableThunk(HANDLE process, DWORD64 address) {
-        if (!active || active->baseOf(address) == 0) {
-            note("evidence: no module for unwind data at %llx\n", ull(address));
-            return nullptr;
-        }
-        PVOID table = SymFunctionTableAccess64(process, address);
-        if (!table) note("evidence: no function table at %llx\n", ull(address));
-        return table;
+    static PVOID CALLBACK tableThunk(HANDLE, DWORD64 address) {
+        return active ? active->functionEntry(address) : nullptr;
     }
     static DWORD64 CALLBACK baseThunk(HANDLE, DWORD64 address) {
         return active ? active->baseOf(address) : 0;
@@ -392,7 +397,12 @@ class Collector {
     std::chrono::steady_clock::time_point deadline_;
     bool symbols_ = false;
     std::vector<std::uint64_t> bases_;  // image base of each layout module, by index
-    std::map<std::uint64_t, bool> loaded_;
+    // Each module's function table, opened the first time a walk needs it (none when its
+    // image has no usable exception directory).
+    std::map<std::uint64_t, std::optional<PeFunctionTable>> tables_;
+    static constexpr std::size_t kEntrySlots = 8;
+    RUNTIME_FUNCTION entries_[kEntrySlots]{};
+    std::size_t nextEntry_ = 0;
     const Layout* layout_ = nullptr;
     std::map<std::uint64_t, Stopped> stopped_;
 };

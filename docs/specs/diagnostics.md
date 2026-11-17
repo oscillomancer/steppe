@@ -192,14 +192,17 @@ since it is parked in its last-chance filter, and is walked from the pc, stack a
 pointers in the capsule. A terminate or abort capsule has none, only the calling thread's
 id, and that thread is suspended and read like any other, as the `fault` entry.
 A thread the OS refuses reports `access_denied`; one that exited, `thread_exited`.
-Module images load lazily, as a walk meets them, and only while the budget remains: after
-the deadline no new module file is opened, and a load already started (a slow disk, a virus
-scan, a network share) cannot be interrupted, which can cut a trace short but never holds
-the worker longer than its one-second wait.
 Frames come from the OS unwinder (`StackWalk64` over each image's unwind data, x64 only;
 other Windows architectures report the faulting thread `unsupported`), with memory read
-through `ReadProcessMemory`. All DbgHelp work is serialized under one lock and loads
-module images from their local files without symbols: no symbol path, no environment
+through `ReadProcessMemory`. The unwinder's function-table lookup is answered by the
+collector itself: it reads the image's exception directory (`.pdata`, the sorted
+`RUNTIME_FUNCTION` entries) from the worker's memory through the same reader, validating
+every offset against `SizeOfImage` and searching with at most 32 reads of 12 bytes, and
+hands the unwinder the entry. No module file is opened and nothing is loaded into DbgHelp
+(the first run that walked threads showed DbgHelp's own lookup finding no function table
+for any module it had loaded without symbols, so every frame was taken for a leaf and the
+walk ended in data). An address with no image, or with no entry, ends the walk as before.
+All DbgHelp work is serialized under one lock, with no symbol path, no environment
 symbol path, no symbol server, no network. A module's file path stays inside the
 supervisor and is never recorded. Executable regions come from the worker's committed
 executable pages; a region with no image is generated code. Module identity is the PE
