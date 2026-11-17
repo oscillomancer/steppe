@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cstring>
 #include <ctime>
+#include "capsule.h"
 #include "native.h"
 #if defined(__linux__)
 #include <sys/ptrace.h>
@@ -256,26 +257,31 @@ void acknowledge(Native& native) noexcept {
     (void)::send(static_cast<int>(native.channel), &ack, 1, noSignal() | MSG_DONTWAIT);
 }
 void awaitAcknowledgement(Native& native) noexcept {
+    awaitAcknowledgementFor(native, 1'000'000'000ULL);
+}
+void awaitAcknowledgementFor(Native& native, std::uint64_t nanoseconds) noexcept {
     const int fd = static_cast<int>(native.channel);
     if (fd < 0 || fd >= FD_SETSIZE) return;
     fd_set ready;
     FD_ZERO(&ready);
     FD_SET(fd, &ready);
-    // The wait is one second in total. A ptrace interrupt from the collector (the worker
-    // may be the very thread it stops) or any signal ends pselect early with EINTR; the
-    // remainder is waited out rather than letting the worker die mid-collection.
-    // clock_gettime and pselect are async-signal-safe.
+    // The wait is `nanoseconds` in total, a second at most in the terminal hold. A ptrace
+    // interrupt from the collector (the worker may be the very thread it stops) or any
+    // signal ends pselect early with EINTR; the remainder is waited out rather than
+    // letting the worker die mid-collection. clock_gettime and pselect are
+    // async-signal-safe.
     timespec start{};
     if (::clock_gettime(CLOCK_MONOTONIC, &start) != 0) {
         const timespec timeout{1, 0};
         (void)::pselect(fd + 1, &ready, nullptr, nullptr, &timeout, nullptr);
         return;
     }
+    const long long total = static_cast<long long>(nanoseconds);
     for (;;) {
         timespec now{};
         if (::clock_gettime(CLOCK_MONOTONIC, &now) != 0) return;
-        long long left = 1'000'000'000LL - ((now.tv_sec - start.tv_sec) * 1'000'000'000LL +
-                                            (now.tv_nsec - start.tv_nsec));
+        const long long left =
+            total - ((now.tv_sec - start.tv_sec) * 1'000'000'000LL + (now.tv_nsec - start.tv_nsec));
         if (left <= 0) return;
         const timespec timeout{static_cast<time_t>(left / 1'000'000'000LL),
                                static_cast<long>(left % 1'000'000'000LL)};

@@ -146,6 +146,13 @@ std::vector<std::string> traceLimits(const TraceSnapshot& trace);
 // Strict nested validation of a report's "modules" and "threads" values.
 bool traceShape(const json::Value* modules, const json::Value& threads);
 
+// A macOS trace capsule (capsule.h) as a snapshot. The capsule comes from the failing
+// process, so it is untrusted: every count, role, reason and range is validated, and
+// the bytes must be consumed exactly. Addresses become module-relative offsets here, and
+// an address outside every module is kept as a frame without identity. Fault first, then
+// main, then the rest in capsule order. Nothing for a malformed capsule.
+std::optional<TraceSnapshot> parseCapsule(const std::uint8_t* bytes, std::size_t size);
+
 // The platform collector, run by the supervisor on the terminal packet inside the
 // terminal hold; it must return well before the worker's one-second wait ends.
 TraceSnapshot collectProcessTrace(Native& native, const Packet& terminal);

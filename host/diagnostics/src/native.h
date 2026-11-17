@@ -8,7 +8,7 @@
 #include <vector>
 #include "supple/base/result.h"
 namespace supple::diagnostics::detail {
-enum class Message : std::uint32_t { Boot = 1, Ready = 2, Expected = 3, Terminal = 4 };
+enum class Message : std::uint32_t { Boot = 1, Ready = 2, Expected = 3, Terminal = 4, Trace = 5 };
 struct Packet {
     std::uint32_t magic = 0x43525348, version = 1;
     Message kind = Message::Boot;

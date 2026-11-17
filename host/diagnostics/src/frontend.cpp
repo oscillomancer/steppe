@@ -14,7 +14,7 @@ namespace supple::diagnostics {
 namespace detail {
 bool valid(const Packet& p) {
     return p.magic == 0x43525348 && p.version == 1 && p.role >= 1 && p.role <= 3 &&
-           p.kind >= Message::Boot && p.kind <= Message::Terminal && p.incident[32] == 0 &&
+           p.kind >= Message::Boot && p.kind <= Message::Trace && p.incident[32] == 0 &&
            std::all_of(p.incident.begin(), p.incident.begin() + 32,
                        [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
 }

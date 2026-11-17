@@ -8,6 +8,7 @@
 #include <initializer_list>
 #include <map>
 #include <utility>
+#include "capsule.h"
 namespace supple::diagnostics::detail {
 namespace {
 constexpr std::uint64_t kMaxStep = std::uint64_t{1} << 30;  // largest frame-to-frame jump
@@ -619,5 +620,91 @@ bool traceShape(const json::Value* modules, const json::Value& threads) {
         }
     }
     return true;
+}
+
+std::optional<TraceSnapshot> parseCapsule(const std::uint8_t* bytes, std::size_t size) {
+    std::size_t at = 0;
+    const auto take = [&](void* out, std::size_t n) {
+        if (n > size - at) return false;  // at <= size always
+        if (n > 0) std::memcpy(out, bytes + at, n);
+        at += n;
+        return true;
+    };
+    CapsuleHeader header;
+    if (!bytes || !take(&header, sizeof(header)) || header.magic != kCapsuleMagic ||
+        header.moduleCount > kCapsuleModules || header.threadCount > kCapsuleThreads ||
+        (header.flags & ~(kCapsuleModulesTruncated | kCapsuleThreadsDropped)) != 0 ||
+        header.reserved != 0)
+        return std::nullopt;
+    TraceSnapshot snapshot;
+    snapshot.dropped = header.dropped;
+    snapshot.truncatedModules = (header.flags & kCapsuleModulesTruncated) != 0;
+    Layout layout;
+    for (std::uint32_t i = 0; i < header.moduleCount; ++i) {
+        CapsuleModule module;
+        if (!take(&module, sizeof(module)) || module.start >= module.end || module.hasUuid > 1 ||
+            module.reserved != 0)
+            return std::nullopt;
+        Module entry;
+        entry.bias = module.bias;
+        if (module.hasUuid) {
+            std::string id;
+            for (auto byte : module.uuid) {
+                id += "0123456789abcdef"[byte >> 4];
+                id += "0123456789abcdef"[byte & 15];
+            }
+            entry.id = std::move(id);
+        }
+        layout.modules.push_back(std::move(entry));
+        layout.regions.push_back(Region{module.start, module.end, static_cast<int>(i)});
+    }
+    std::sort(layout.regions.begin(), layout.regions.end(),
+              [](const Region& a, const Region& b) { return a.start < b.start; });
+    {  // overlapping ranges would make lookups ambiguous: later ones are dropped
+        std::vector<Region> clean;
+        for (const auto& r : layout.regions)
+            if (clean.empty() || r.start >= clean.back().end) clean.push_back(r);
+        layout.regions = std::move(clean);
+    }
+    std::vector<ThreadTrace> threads;
+    for (std::uint32_t i = 0; i < header.threadCount; ++i) {
+        CapsuleThread head;
+        if (!take(&head, sizeof(head)) || head.role > static_cast<std::uint8_t>(Role::Other) ||
+            head.missing > static_cast<std::uint8_t>(Missing::AccessDenied) ||
+            head.stop > static_cast<std::uint8_t>(Stop::Deadline) || head.reserved != 0 ||
+            head.frameCount > kCapsuleFrames)
+            return std::nullopt;
+        const bool walked = head.missing == static_cast<std::uint8_t>(Missing::None);
+        if (walked != (head.frameCount > 0)) return std::nullopt;
+        ThreadTrace trace;
+        trace.role = static_cast<Role>(head.role);
+        trace.missing = static_cast<Missing>(head.missing);
+        trace.walk.stop = static_cast<Stop>(head.stop);
+        for (std::uint32_t f = 0; f < head.frameCount; ++f) {
+            std::uint64_t address = 0;
+            if (!take(&address, sizeof(address))) return std::nullopt;
+            if (f == 0) {
+                // The pc itself: outside every module it is recorded without identity.
+                const auto frame = frameAt(layout, address, false);
+                trace.walk.frames.push_back(frame ? *frame : Frame{});
+            } else {
+                // Later frames are return addresses. One outside every module is kept
+                // without identity and the walk goes on: the system libraries of the dyld
+                // shared cache are in no module, and the chain was validated in process.
+                const auto frame = frameAt(layout, address, true);
+                Frame item = frame ? *frame : Frame{};
+                item.returnAddress = true;
+                trace.walk.frames.push_back(item);
+            }
+        }
+        threads.push_back(std::move(trace));
+    }
+    if (at != size) return std::nullopt;  // trailing bytes: not a capsule we wrote
+    // Fault first, then main, then the rest in the order they came.
+    for (const Role role : {Role::Fault, Role::Main, Role::Other})
+        for (auto& thread : threads)
+            if (thread.role == role) snapshot.threads.push_back(std::move(thread));
+    snapshot.modules = std::move(layout.modules);
+    return snapshot;
 }
 }  // namespace supple::diagnostics::detail
