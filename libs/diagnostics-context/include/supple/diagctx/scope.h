@@ -40,13 +40,14 @@
 //
 // Cost on the audio path: two release stores per entry, one on entry and one on exit, each
 // a plain store on x86-64 and a store-release on arm64; no loop, no lock, no allocation, no
-// call. A word has one writer at a time (the thread inside the entry), and the reader only
-// looks after that thread has been stopped, so release ordering is all the writer owes: a
-// reader that sees a word sees what the thread did before writing it, and a thread that is
+// system call. The one call is `table()`, which returns the address of a constant-initialised
+// global (no guard, no lock). A word has one writer at a time (the thread inside the entry), and
+// the reader only looks after that thread has been stopped, so release ordering is all the writer
+// owes: a reader that sees a word sees what the thread did before writing it, and a thread that is
 // stopped cannot be halfway through writing one.
 //
-// The header is inline so the audio path calls nothing it cannot see; the cold parts
-// (cells, naming) are in the library.
+// The header is inline so the audio path's own code is visible to the compiler; the cold
+// parts (cells, naming) are in the library.
 #include <atomic>
 #include <cstdint>
 

@@ -1528,8 +1528,8 @@ module-relative offsets for the faulting, main and other threads (at most 128 th
 128 frames), with a reason for any thread it could not read (Yama scope 2+, a
 non-dumpable worker or a deadline). Foreign frames are best effort and frames of
 frameless code can be missing. The Windows collector (suspend, `StackWalk64` under
-one DbgHelp lock without symbol paths or servers, PE CodeView GUID and age) is
-written but unproven until native CI runs it. On macOS the worker reads its own
+one DbgHelp lock without symbol paths or servers, PE CodeView GUID and age) passed native CI
+44056590141 (Windows, 413 of 413). On macOS the worker reads its own
 threads and images inside its terminal hold with Mach calls on its own task (no
 `task_for_pid`, no entitlement), and the supervisor validates and reports the capsule; this
 is written and its portable parts (walker, framing, parser) are tested, but the Mach calls are
@@ -1545,18 +1545,18 @@ Owned threads register in an execution table (`libs/diagnostics-context`, 256 sl
 its role and stack bounds) and reports label each thread with its role; a thread beyond the
 256, the audio driver's callback thread, the dummy backend's thread and the sandbox render
 thread are unregistered and show as `other`, and a report says when the table turned threads
-away. This is tested on Linux only: the macOS in-process labels and the Windows table read are
-written and unproven until native CI runs them. Each in-process plug-in instance and loaded
+away. This is tested on Linux, and the Windows table read passed native CI 44056590141; the
+macOS in-process labels are unproven until native CI runs them. Each in-process plug-in instance and loaded
 plug-in library marks the entry a thread is inside in its table cell (scopes in `host::Instance`,
 `Library::open` and the VST3 module load: two release stores on the audio path), and a report
 names the entry each thread was in (`entry`, a kind such as `process`), tying it to the thread
 by stack address. Tested on Linux, including the real-time and offline equivalence under the
-scopes; the Windows stack lookup and the macOS in-process attribution are written and
-unproven until native CI runs them. Limits: an isolated (bridged) instance records
+scopes; the Windows stack lookup passed native CI 44056590141, and the macOS in-process
+attribution is unproven until native CI runs it. Limits: an isolated (bridged) instance records
 `bridge_call` only and the bridge child has no table of its own yet; an entry says which kind
 but the report's `plugins` array says which plug-in (below); two scopes in one function cannot
 be told apart; the audio driver's callback thread is found by its stack mapping, which a thread with
-no readable map defeats (the report then says an entry could not be tied to a thread). The
+no readable map defeats (the report then says an entry could not be tied to a thread).
 Each plug-in instance and plug-in library announces itself from the host (created, state
 changes, destroyed), and a report's `plugins` array lists the live and the last 64 destroyed
 ones with their kind, origin, mode, state, readable name, vendor, version and id (at most 64
@@ -1564,21 +1564,26 @@ bytes each, validated again by the supervisor) and, for CLAP, which module the p
 is (`build`); the strings are the plug-in's own descriptor (for a plug-in the user exported,
 text they chose), and no path, project name, parameter or preset is recorded. The sink is closed for good if the
 supervisor stalls with a packet half sent, and events lost are counted. Tested on Linux; the
-Windows ring and the macOS part-sent path are unproven until native CI runs them. Known limits:
+Windows ring passed native CI 44056590141, and the macOS part-sent path and the capsule's
+module list for announced instances (which gives every plug-in its `build`) are unproven until
+native CI on the commits that fixed them (the first run, 44056590141, failed three macOS
+tests) passes. Known limits:
 rack modules are not announced and have no cell, so a crash inside a rack module is reported
 without a module entry (it is planned as a later change at the engine's call sites); VST3 and
 bridged instances carry no `build`. The model thread's last 64 registered commands reach the
 report's `commands` (name, origin category such as `mcp` or `script`, and `begun` or `ended`;
 never arguments, results or labels): the process's command dispatcher writes them into the
 execution table and the supervisor names them from a table of command names sent once at
-startup. Only the first dispatcher built in a process records, and only its model thread; on
+startup. Only the first dispatcher built in a process records, and only the thread registered as the
+model thread (the first thread to dispatch stands in until it registers); on
 macOS the capsule (now version 4) copies the ring after the other threads were read, so the
 newest command can be missing or still `begun`. A report concludes which plug-in its evidence
 points to (`attribution`, with a confidence from `fault_in_image` down to `unknown`; the rules
 are in `docs/specs/diagnostics.md`) and counts what it left out (`dropped`, by kind). It never
 claims a crash was not a plug-in's: a plug-in's own thread has no cell. The command ring, the
-capsule copy and the attribution are tested on Linux; the macOS capsule and the Windows ring
-and table read are written and unproven until native CI runs them. Bridge correlation,
+capsule copy and the attribution are tested on Linux, and the Windows ring and table read
+passed native CI 44056590141; the macOS capsule is unproven until native CI passes on the
+fixes after it. Bridge correlation,
 restart UI/hangs and release package verification remain later topics.
 Supervisor end (ADR-0091): a supervisor that crashes tells the worker first and the worker keeps
 running without crash capture; a supervisor ended with no notice (`SIGKILL`, `TerminateProcess`,
