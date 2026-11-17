@@ -588,6 +588,28 @@ TEST_CASE("the execution table labels threads by the role they registered") {
     CHECK(traceLimits(snapshot).size() == 1);  // best-effort frames only
 }
 
+TEST_CASE("a table that turned threads away says so, and only then") {
+    auto limitCount = [](const TraceSnapshot& snapshot) {
+        std::size_t found = 0;
+        for (const auto& limit : traceLimits(snapshot))
+            if (limit.find("execution table's capacity") != std::string::npos) ++found;
+        return found;
+    };
+    auto p = process();
+    auto image = tableImage();
+    claim(image, 0, 10, ThreadRole::Model);
+    put(p, image);
+    auto snapshot =
+        collectTrace(p.ops(), 11, {0x400200, 0x6ff0, 0x7000}, 10, Arch::X86_64, kTableAt);
+    CHECK(snapshot.tableThreadsDropped == 0);
+    CHECK(limitCount(snapshot) == 0);
+    image.header.threadsDropped = 3;
+    put(p, image);
+    snapshot = collectTrace(p.ops(), 11, {0x400200, 0x6ff0, 0x7000}, 10, Arch::X86_64, kTableAt);
+    CHECK(snapshot.tableThreadsDropped == 3);
+    CHECK(limitCount(snapshot) == 1);
+}
+
 TEST_CASE("without a table every thread keeps its position as its role") {
     auto p = process();
     const auto snapshot = collectTrace(p.ops(), 11, {0x400200, 0x6ff0, 0x7000}, 10, Arch::X86_64);

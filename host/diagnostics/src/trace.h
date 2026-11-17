@@ -126,6 +126,9 @@ struct TraceSnapshot {
     std::size_t dropped = 0;           // threads omitted beyond kMaxThreads
     bool truncatedModules = false;
     TableState table = TableState::NotOffered;
+    // Threads that tried to register and found the table full (its own count); their
+    // roles are unknown.
+    std::uint32_t tableThreadsDropped = 0;
 };
 
 // What a platform provides. `stop` interrupts a thread and returns its registers,

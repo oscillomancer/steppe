@@ -496,6 +496,7 @@ TraceSnapshot collectTrace(const TraceOps& ops, std::uint64_t faultTid, const Re
         if (snapshot.threads.size() == 1) readTable();
     }
     if (snapshot.table == TableState::Read) {
+        snapshot.tableThreadsDropped = table.header.threadsDropped;
         for (std::size_t i = 0; i < snapshot.threads.size(); ++i) {
             const auto found = diagctx::findThread(table, tidOf[i]);
             snapshot.threads[i].registered = found.role;
@@ -574,6 +575,9 @@ std::vector<std::string> traceLimits(const TraceSnapshot& trace) {
         limits.push_back("modules beyond the report limit have no identity");
     if (trace.table == TableState::Unreadable || trace.table == TableState::Invalid)
         limits.push_back("the execution table could not be read, so threads have no roles");
+    if (trace.tableThreadsDropped != 0)
+        limits.push_back(
+            "threads beyond the execution table's capacity have no role and may show as other");
     return limits;
 }
 
