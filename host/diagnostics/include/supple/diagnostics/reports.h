@@ -75,4 +75,14 @@ Result<std::string> readReport(const std::string& incident,
 // beside the report, `<incident>.ack`, that is removed with the report. Idempotent. Nothing
 // else is touched; deleting a report is not part of this.
 Status acknowledge(const std::string& incident, const std::filesystem::path& directory = {});
+
+// Deletes one incident whose run is over: its report, its acknowledgement and, when nobody holds
+// it, its run marker (an unreported run is deleted by this too). Errors carry
+// `diagnostics.no_report` when there is no such finished incident. Idempotent per file.
+Status deleteReport(const std::string& incident, const std::filesystem::path& directory = {});
+
+// Deletes every incident `listReports` lists as over (reports and unreported runs) and returns
+// how many. A run still live, a report still being published and a file that is not a valid
+// report are left alone.
+Result<std::size_t> deleteAllReports(const std::filesystem::path& directory = {});
 }  // namespace supple::diagnostics

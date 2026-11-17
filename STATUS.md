@@ -1603,9 +1603,9 @@ packet no watcher exists; the watcher thread shows in a report as an `other` thr
 launcher's stop the worker removes its run marker from an exit handler, after the teardown of
 what was built later than the frontend's setup: a crash in the teardown that follows it is not
 recorded at all, and one before it leaves the marker with no report. The watcher and the supervisor's handlers are unproven on macOS and Windows until native CI runs
-them. An application can list and read earlier runs' reports and acknowledge them
+them. An application can list and read earlier runs' reports acknowledge and delete them
 (`supple/diagnostics/reports.h`, tolerant of kinds and fields of a newer build; a report counts
 only once its run's marker is released; a run that ended with no report is listed as unreported).
 Nothing calls it yet: the restart notice, the agent commands, the viewer and safe-load are the next
-steps of topic 7. Stale run markers stay until something removes them. Native macOS/Windows CI and
+steps of topic 7. Stale run markers stay until the user deletes the run. Native macOS/Windows CI and
 signed Mach capability/collector-loss tests are due before merge/release.

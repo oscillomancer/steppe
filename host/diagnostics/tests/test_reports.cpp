@@ -311,3 +311,53 @@ TEST_CASE("a folder that is not the user's own is refused") {
     CHECK_FALSE(acknowledge(name(1), link));
 #endif
 }
+TEST_CASE("deleting an incident removes its report, acknowledgement and idle marker only") {
+    Root root;
+    report(root, 1);
+    report(root, 2);
+    staleMarker(root, 1);  // a run that left both
+    staleMarker(root, 3);
+    auto live = createMarker(root.path, boot(4));
+    REQUIRE(live);
+    REQUIRE(acknowledge(name(1), root.path));
+    REQUIRE(deleteReport(name(1), root.path));
+    CHECK_FALSE(fs::exists(file(root, 1, ".json")));
+    CHECK_FALSE(fs::exists(file(root, 1, ".ack")));
+    CHECK_FALSE(fs::exists(file(root, 1, ".run")));
+    CHECK(fs::exists(file(root, 2, ".json")));
+    CHECK_FALSE(deleteReport(name(1), root.path));  // gone: no such incident now
+    REQUIRE(deleteReport(name(3), root.path));      // an unreported run
+    CHECK_FALSE(fs::exists(file(root, 3, ".run")));
+    CHECK_FALSE(deleteReport(name(4), root.path));  // live
+    CHECK(fs::exists(file(root, 4, ".run")));
+    CHECK_FALSE(deleteReport(name(9), root.path));
+    CHECK_FALSE(deleteReport("../" + name(2), root.path));
+    CHECK(fs::exists(file(root, 2, ".json")));
+    releaseMarker(*live);
+}
+TEST_CASE("deleting all leaves live runs, reports in the making and files it cannot read") {
+    Root root;
+    report(root, 1);
+    report(root, 2);
+    REQUIRE(acknowledge(name(2), root.path));
+    staleMarker(root, 3);
+    auto live = createMarker(root.path, boot(4));
+    REQUIRE(live);
+    auto making = createMarker(root.path, boot(5));
+    REQUIRE(making);
+    report(root, 5);
+    rewrite(root, 1, [](json::Value& v) { v["role"] = "toaster"; });  // damaged: not ours to delete
+    report(root, 6);
+    auto removed = deleteAllReports(root.path);
+    REQUIRE(removed);
+    CHECK(*removed == 3);  // 2, 3 and 6
+    CHECK(fs::exists(file(root, 1, ".json")));
+    CHECK_FALSE(fs::exists(file(root, 2, ".json")));
+    CHECK_FALSE(fs::exists(file(root, 2, ".ack")));
+    CHECK_FALSE(fs::exists(file(root, 3, ".run")));
+    CHECK(fs::exists(file(root, 4, ".run")));
+    CHECK(fs::exists(file(root, 5, ".json")));
+    CHECK_FALSE(fs::exists(file(root, 6, ".json")));
+    releaseMarker(*live);
+    releaseMarker(*making);
+}

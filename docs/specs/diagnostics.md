@@ -198,13 +198,20 @@ so with the role the marker recorded. Held markers are `liveRuns` (this process'
 POSIX probes with a shared `flock` that is released at once, Windows with a shared byte-range
 lock (`LockFileEx`) on the byte the holder locked exclusively; a Windows marker being removed by
 its own worker is briefly free, so a reader started at that instant can list that run as
-unreported. Stale markers are not removed by anything (retention never touches markers).
+unreported. Retention never touches markers; a stale marker goes only when the user deletes its run.
 
 *Acknowledgement (T2).* `acknowledge(incident)` writes `<incident>.ack`, canonical JSON
 `{"schema":"supple.crash-ack/1.0","incident":…}`, beside the report or the unreported run's
 marker, for an incident that exists and whose run is over; it is idempotent, and a file there
 that is not a valid acknowledgement does not count and is replaced. Retention removes a report's
 `.ack` with it. An acknowledgement of an unreported run stays with its marker.
+
+*Deleting (P11).* `deleteReport(incident)` removes a finished incident's report, its `.ack` and,
+when nobody holds it, its run marker (that is how an unreported run is dismissed); the marker goes
+last, so a deletion that stopped half way can be repeated. `deleteAllReports()` does that for every
+incident the listing shows as over and returns the count. A live run, a report still being
+published and a file that is not a valid report are never deleted by either: a file this build
+cannot read is not its to remove.
 
 ## Terminal behavior
 

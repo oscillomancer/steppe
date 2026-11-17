@@ -213,4 +213,42 @@ Status acknowledge(const std::string& incident, const fs::path& directory) {
     value["incident"] = incident;
     return privatePublish(pathFor(root, incident, ".ack"), json::writeCanonical(value) + "\n");
 }
+namespace {
+// The files of an incident whose run is over. The marker goes last: while it is there the
+// incident is still found, so a deletion that stops half way can be repeated.
+Status removeIncident(const fs::path& root, const std::string& incident) {
+    if (!privateRemove(pathFor(root, incident, ".json")) ||
+        !privateRemove(pathFor(root, incident, ".ack")))
+        return storageFailure();
+    if (probeMarker(pathFor(root, incident, ".run")) == MarkerState::Free &&
+        !privateRemove(pathFor(root, incident, ".run")))
+        return storageFailure();
+    return okStatus();
+}
+}  // namespace
+Status deleteReport(const std::string& incident, const fs::path& directory) {
+    const fs::path root = directory.empty() ? defaultDirectory() : directory;
+    if (root.empty() || !incidentName(incident)) return noReport(incident);
+    SUPPLE_TRY(checkDirectoryForReading(root));
+    const auto state = probeMarker(pathFor(root, incident, ".run"));
+    if (state == MarkerState::Held) return noReport(incident);
+    if (!loadReport(pathFor(root, incident, ".json")) && state != MarkerState::Free)
+        return noReport(incident);
+    return removeIncident(root, incident);
+}
+Result<std::size_t> deleteAllReports(const fs::path& directory) {
+    auto listing = listReports(directory);
+    if (!listing) return listing.error();
+    const fs::path root = directory.empty() ? defaultDirectory() : directory;
+    std::size_t removed = 0;
+    for (const auto& report : listing->reports) {
+        SUPPLE_TRY(removeIncident(root, report.incident));
+        ++removed;
+    }
+    for (const auto& run : listing->unreported) {
+        SUPPLE_TRY(removeIncident(root, run.incident));
+        ++removed;
+    }
+    return removed;
+}
 }  // namespace supple::diagnostics
