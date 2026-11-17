@@ -1094,9 +1094,12 @@ void Engine::recycleRings() {
             for (auto& ring : *rings)
                 if (ring) ringPool_.push_back(std::move(ring));
     }
-    // Keep about what the next plan will take: the newest plan's count.
-    const std::size_t keep =
-        plans_.back()->frontierRings.size() + plans_.back()->recordRings.size();
+    // Keep as many as the plans still in use hold: what edits at this pace
+    // have needed at once.
+    std::size_t keep = 0;
+    for (const auto& p : plans_)
+        if (p->generation >= oldest || p.get() == plans_.back().get())
+            keep += p->frontierRings.size() + p->recordRings.size();
     if (ringPool_.size() > keep)
         ringPool_.erase(ringPool_.begin(),
                         ringPool_.begin() + static_cast<std::ptrdiff_t>(ringPool_.size() - keep));

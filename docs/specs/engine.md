@@ -301,7 +301,7 @@ stage; so far:
   there, resetting its indices; old chunk contents are never read, since
   the producer writes every field of a chunk before publishing it. A ring
   of a plan an executor may still adopt or play is never reused. The pool
-  keeps as many rings as the newest plan has. Frontier and record rings
+  keeps as many rings as the plans still in use hold. Frontier and record rings
   hold what the renderer is ahead at the device's rate (its render-ahead
   frames in chunks of the render quantum, plus two), no longer room for
   192 kHz.

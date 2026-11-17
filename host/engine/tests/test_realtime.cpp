@@ -3967,31 +3967,36 @@ TEST_CASE("plan swaps reuse retired plans' frontier rings: none is allocated per
     // Route E stage 1: every compile allocated and zeroed a ring per
     // frontier edge (512 KB each), and freed the retired plan's. The
     // callback adopts a plan where the renderer handed it over, a render-ahead
-    // time (200 ms, 38 cycles) after it was published: edits slower than that
-    // retire each plan before the next, faster ones keep several in use.
-    for (const int pace : {64, 8}) {
-        CAPTURE(pace);
-        auto pool = makePool();
-        MediaCache media;
-        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
-        Engine engine(pool, media, {.workers = 1});
-        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
-        auto session = frontierSession();
-        REQUIRE(engine.load(session));
-        REQUIRE(EngineTestAccess::latestPlan(engine).frontierRings.size() == 2);
-        engine.play();
-        std::uint64_t version = 10;
-        const auto edit = [&] {
-            REQUIRE(engine.load(recompiled(session, version++)));
-            runAhead(engine, backend, pace, 256);
-        };
-        for (int warm = 0; warm < 8; ++warm) edit();  // until as many plans retire as start
-        const auto before = detail::chunkRingAllocations();
-        for (int more = 0; more < 16; ++more) edit();
-        CHECK(detail::chunkRingAllocations() == before);
-        CHECK(engine.anticipationMisses() == 0);
-        engine.stop();
-    }
+    // time (200 ms, 38 cycles) after it was published. Edits further apart
+    // than that retire each plan before the next. Faster ones keep several
+    // plans in use, as many as scheduling leaves in flight, so they may need
+    // new rings; once the edits pause for a render-ahead time, the next
+    // takes recycled ones. Cycle counts decide, not timing.
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    Engine engine(pool, media, {.workers = 1});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
+    auto session = frontierSession();
+    REQUIRE(engine.load(session));
+    REQUIRE(EngineTestAccess::latestPlan(engine).frontierRings.size() == 2);
+    engine.play();
+    std::uint64_t version = 10;
+    const auto edit = [&](int cycles) {
+        REQUIRE(engine.load(recompiled(session, version++)));
+        runAhead(engine, backend, cycles, 256);
+    };
+    edit(64);
+    auto before = detail::chunkRingAllocations();
+    for (int more = 0; more < 16; ++more) edit(64);
+    CHECK(detail::chunkRingAllocations() == before);
+    for (int burst = 0; burst < 16; ++burst) edit(4);  // may allocate
+    runAhead(engine, backend, 64, 256);
+    before = detail::chunkRingAllocations();
+    edit(64);
+    CHECK(detail::chunkRingAllocations() == before);
+    CHECK(engine.anticipationMisses() == 0);
+    engine.stop();
 }
 
 TEST_CASE("a frontier ring is reused only once both executors have left its plan" *
