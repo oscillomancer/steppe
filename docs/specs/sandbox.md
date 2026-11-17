@@ -343,12 +343,14 @@ reading cmd. This covers shutdown before/during parking, including control
 HUP/EOF, without fabricating a processing command. Parent request/done safety
 deadlines and bounded in-flight failure checks are unchanged.
 
-A call made off the device callback (ADR-0013) fails at a process-wide
-deadline, `host::setBridgeDeadlineMs` (2000 ms by default, at least 1):
-`process` waits that long, lifecycle commands 5/2 of it plus 2 s. The engine
-tests raise it to 60 s for the whole binary (`bridge_patience.cpp`), so a
-stall of a loaded machine never decides a bit-identity comparison; the tests
-of the deadline itself set it explicitly.
+A call made off the device callback (ADR-0013) fails at a deadline:
+`process` waits that long, lifecycle commands 5/2 of it plus 2 s. It is the
+instance's own, `Instance::setCallDeadlineMs`, when set, and otherwise the
+process-wide `host::setBridgeDeadlineMs` (2000 ms by default, at least 1).
+The engine tests raise the process-wide one to 60 s for the whole binary
+(`bridge_patience.cpp`), so a stall of a loaded machine never decides a
+bit-identity comparison of live renders; the tests of the deadline itself
+set it explicitly.
 
 Thread discipline follows CLAP: create/activate/params-info/state/GUI on the
 main thread; `process` on one audio thread. The sandbox's audio thread is

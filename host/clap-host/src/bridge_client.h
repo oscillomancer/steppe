@@ -128,6 +128,10 @@ class RemoteInstance {
         return needsAudioFlush_.load(std::memory_order_acquire);
     }
     bool restartPending() const { return restartPending_; }  // as of the last service()
+    // This instance's deadline off the callback; 0: bridgeDeadlineMs().
+    void setCallDeadlineMs(int ms) {
+        callDeadlineMs_.store(std::max(ms, 0), std::memory_order_relaxed);
+    }
     bool processRequested() const SUPPLE_RT {
         return processRequested_.load(std::memory_order_acquire);
     }
@@ -234,6 +238,7 @@ class RemoteInstance {
     std::atomic<bool> needsAudioFlush_{false};
     std::atomic<bool> processRequested_{false};
     std::atomic<bool> classRefused_{false};
+    std::atomic<int> callDeadlineMs_{0};  // 0: the process-wide deadline
 };
 
 std::filesystem::path bridgeExecutable();

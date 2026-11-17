@@ -1007,7 +1007,8 @@ bool RemoteInstance::answered(std::uint32_t req, Cmd cmd) SUPPLE_RT {
     // Lifecycle commands may page in a plugin's code; a block must not stall
     // the renderer long, but a loaded machine must not get a healthy plugin
     // killed either.
-    const int deadlineMs = bridgeDeadlineMs();
+    const int own = callDeadlineMs_.load(std::memory_order_relaxed);
+    const int deadlineMs = own > 0 ? own : bridgeDeadlineMs();
     const int limitMs = cmd == Cmd::Process
                             ? deadlineMs
                             : static_cast<int>(std::min<std::int64_t>(

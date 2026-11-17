@@ -17,11 +17,14 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <ostream>
 #include <thread>
 #include <vector>
 #include "../src/bridge_client.h"
 #include "../src/bridge_protocol.h"
+#include "process_pause.h"
 using namespace supple;
 using namespace supple::host;
 namespace {
@@ -224,6 +227,59 @@ TEST_CASE("native bridge deadlines kill a hung audio worker and return silence")
     CHECK((*remote)->failed());
     CHECK((*remote)->failure().find("stopped responding") != std::string::npos);
     CHECK(std::all_of(audio.outLeft.begin(), audio.outLeft.end(), [](float v) { return v == 0; }));
+}
+TEST_CASE("a bridged instance's own call deadline outlasts a stall the process-wide one fails") {
+    // An instance's own deadline replaces the process-wide one. The bridge
+    // stops for 1.5 s, three times the process-wide deadline here and far
+    // inside the instance's own; the outcome decides.
+    setBridgeExecutable(BRIDGE_PATH);
+    const int previous = bridgeDeadlineMs();
+    struct Restore {
+        int ms;
+        ~Restore() { setBridgeDeadlineMs(ms); }
+    } restore{previous};
+    for (const bool own : {false, true}) {
+        CAPTURE(own);
+        setBridgeDeadlineMs(previous);
+        auto remote = Instance::create(
+            nativePlugin(FIXTURE_CLAP_PATH, "com.suppleaudio.test.crash"), {}, true);
+        REQUIRE(remote);
+        Instance& c = **remote;
+        REQUIRE(c.activate(48000, 1, 64));
+        REQUIRE(c.startProcessing());
+        if (own) c.setCallDeadlineMs(60'000);
+        setBridgeDeadlineMs(500);
+        Audio audio;
+        audio.left.fill(0.25f);
+        audio.right.fill(0.25f);
+        const int pid = c.bridgePid();
+        REQUIRE(pid > 0);
+        std::mutex lock;
+        std::condition_variable answered;
+        bool done = false;
+        REQUIRE(supple::test::pauseProcess(pid));
+        // Resumed after 1.5 s, unless the call came back first: then the
+        // bridge was killed, and its pid is not signalled again.
+        std::thread resume([&] {
+            std::unique_lock held(lock);
+            if (!answered.wait_for(held, std::chrono::milliseconds(1500), [&] { return done; }))
+                supple::test::resumeProcess(pid);
+        });
+        const bool processed = c.process(audio.block());
+        {
+            std::lock_guard held(lock);
+            done = true;
+        }
+        answered.notify_all();
+        resume.join();
+        REQUIRE(processed);
+        CHECK(c.failed() == !own);
+        if (own) {
+            CHECK(audio.outLeft[0] == doctest::Approx(0.25));
+            c.stopProcessing();
+            c.deactivate();
+        }
+    }
 }
 TEST_CASE("a bridged plug-in late for the callback's deadline is silent for that block only") {
     // ADR-0081: a block not answered by the live deadline is silence, the

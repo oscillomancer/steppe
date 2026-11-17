@@ -263,7 +263,8 @@ ThreadPolicy bridgeAudioPolicy() SUPPLE_RT;
 // The failure deadline of a bridged call made off the device callback
 // (ADR-0013): `process` waits this long, lifecycle commands 5/2 of it plus
 // 2 s; a bridge that has not answered by then is killed and its instances
-// fail (silent). Process-wide; 2000 ms by default, at least 1. A test that
+// fail (silent). Process-wide, for instances without their own
+// (Instance::setCallDeadlineMs); 2000 ms by default, at least 1. A test that
 // compares bridged renders bit for bit raises it, so a stalled machine
 // fails no healthy plug-in (see bridge_patience.cpp in the engine tests).
 void setBridgeDeadlineMs(int ms);
@@ -417,6 +418,11 @@ class Instance {
     std::string failure() const;
     bool isolated() const { return remote_ != nullptr; }
     int bridgePid() const;  // -1 for in-process
+    // Bridged: this instance's failure deadline off the callback, in place
+    // of bridgeDeadlineMs() (0, the default, uses that); lifecycle commands
+    // get 5/2 of it plus 2 s. Set it while nothing processes; no effect in
+    // process.
+    void setCallDeadlineMs(int ms);
     // Bridged: its bridge's audio thread was refused the scheduling class the
     // last audio-thread call asked for (ADR-0026, ADR-0081); false in process.
     bool bridgeThreadRefused() const;
