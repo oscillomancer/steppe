@@ -2,6 +2,8 @@
 // Copyright (c) 2026 Supple Audio
 #include "inspector.h"
 
+#include <SDL3/SDL_keycode.h>
+
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -38,7 +40,48 @@ class ColorRow : public ui::Node {
   public:
     explicit ColorRow(std::string id) : Node(std::move(id), ui::Role::Button) {
         interactive = true;
+        focusable = true;  // Tab reaches it; Left and Right move, Enter or Space picks
         layout.height = ui::SizeRule::fixed(kSize);
+    }
+    static constexpr std::size_t kCount = model::kTrackColors.size() + 1;  // and "none"
+    static std::string nameOf(std::size_t i) {
+        return i < model::kTrackColors.size() ? std::string(model::kTrackColors[i]) : std::string();
+    }
+    std::size_t cursor() const { return cursor_; }
+    void onFocus(bool focused) override {
+        if (focused) {
+            // Start on the colour the tracks have, else on the first.
+            cursor_ = 0;
+            for (std::size_t i = 0; current && i < kCount; ++i)
+                if (nameOf(i) == *current) cursor_ = i;
+        }
+        invalidate();
+    }
+    bool onKey(const ui::KeyEvent& e) override {
+        if (!enabled) return false;
+        switch (e.key) {
+            case SDLK_LEFT:
+                cursor_ = cursor_ == 0 ? 0 : cursor_ - 1;
+                break;
+            case SDLK_RIGHT:
+                cursor_ = std::min(kCount - 1, cursor_ + 1);
+                break;
+            case SDLK_HOME:
+                cursor_ = 0;
+                break;
+            case SDLK_END:
+                cursor_ = kCount - 1;
+                break;
+            case SDLK_RETURN:
+            case SDLK_KP_ENTER:
+            case SDLK_SPACE:
+                if (auto chosen = pick) chosen(nameOf(cursor_));
+                return true;
+            default:
+                return false;
+        }
+        invalidate();
+        return true;
     }
     static constexpr float kSize = 18, kGap = 4;
     std::function<void(const std::string&)> pick;
@@ -57,16 +100,18 @@ class ColorRow : public ui::Node {
             else if (const auto colour = t.trackColor(name))
                 c.fillRound(r.inset(1), t.radius("s"), *colour);
             if (current && *current == name) c.strokeRound(r, t.radius("s"), t.color("ink"), 2);
+            // The keyboard's place, while the row has the focus.
+            if (focused() && i == cursor_)
+                c.strokeRound(r.inset(-2), t.radius("s"), t.color("focus"), 1);
         }
     }
     bool onPointer(const ui::PointerEvent& e) override {
         if (e.type != ui::PointerEvent::Type::Down || e.button != 1)
             return e.type == ui::PointerEvent::Type::Up;
-        for (std::size_t i = 0; i <= model::kTrackColors.size(); ++i)
+        for (std::size_t i = 0; i < kCount; ++i)
             if (swatch(bounds(), i).contains(e.pos)) {
-                if (pick)
-                    pick(i == model::kTrackColors.size() ? std::string()
-                                                         : std::string(model::kTrackColors[i]));
+                cursor_ = i;
+                if (auto chosen = pick) chosen(nameOf(i));
                 return true;
             }
         return true;
@@ -74,6 +119,9 @@ class ColorRow : public ui::Node {
     std::string valueText() const override {
         return !current ? "mixed" : current->empty() ? "none" : *current;
     }
+
+  private:
+    std::size_t cursor_ = 0;
 };
 
 // The value every one of `things` has, or nothing when they differ.

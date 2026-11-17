@@ -373,7 +373,8 @@ and the **History**. It stays closed until you ask for it:
   share. A field is empty and says "mixed" when they differ; what you type
   goes to all of them as one step for Undo.
   With a track selected it shows the track's **Name**, **Colour** (click a
-  swatch, or the empty square for none), **Volume** and **Pan** (`-30` is
+  swatch, or the empty square for none; from the keyboard, Tab to the row,
+  Left and Right to move, Enter to pick), **Volume** and **Pan** (`-30` is
   30% left). With several tracks selected, a change goes to all of them.
 - **View > Browser**, or the **B** key, opens it on the Browser: the list of
   your plug-ins, with the stock ones and your favourites first. Type to

@@ -8,6 +8,7 @@
 
 #include <SDL3/SDL_keycode.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -784,4 +785,58 @@ TEST_CASE("inspector: a track's name, colour, volume and pan; several tracks as 
     f.pass();
     CHECK(f.inView("inspector.track"));
     CHECK_FALSE(f.inView("inspector.item"));
+}
+
+TEST_CASE("inspector: the colour swatches are chosen from the keyboard") {
+    Fixture f;
+    if (!f.ok) return;
+    const std::string bass = f.exec("track.add", R"({"name":"Bass"})")["track"].asString();
+    auto track = [&](const std::string& id) -> const model::Track& {
+        return *f.app->head().tracks.find(*model::Id::parse(id));
+    };
+    f.side->show("inspector");
+    f.ui.selectedTracks = {bass};
+    f.ui.tracksFocused = true;
+    f.pass();
+    // The focus starts on the colour the track has; Left and Right move,
+    // Enter or Space picks.
+    ui::Node* row = f.node("inspector.track.color");
+    CHECK(row->focusable);
+    CHECK(track(bass).color == "red");
+    const auto before = f.steps();
+    f.root->focus(row);
+    f.root->key(SDLK_RIGHT, 0);
+    f.root->key(SDLK_RIGHT, 0);
+    f.pass();
+    CHECK(track(bass).color == "red");  // moving picks nothing
+    f.root->key(SDLK_RETURN, 0);
+    f.pass();
+    CHECK(track(bass).color == model::kTrackColors[2]);
+    f.root->key(SDLK_LEFT, 0);
+    f.root->key(SDLK_SPACE, 0);
+    f.pass();
+    CHECK(track(bass).color == model::kTrackColors[1]);
+    f.root->key(SDLK_END, 0);
+    f.root->key(SDLK_RIGHT, 0);  // stays on the last, "none"
+    f.root->key(SDLK_RETURN, 0);
+    f.pass();
+    CHECK(track(bass).color.empty());
+    f.root->key(SDLK_HOME, 0);
+    f.root->key(SDLK_LEFT, 0);  // stays on the first
+    f.root->key(SDLK_RETURN, 0);
+    f.pass();
+    CHECK(track(bass).color == "red");
+    CHECK(f.steps() == before + 4);
+    CHECK(f.root->focused() == row);
+    // Focus given again starts where the colour is.
+    f.exec("track.set", R"({"track":")" + bass + R"(","color":"blue"})");
+    f.pass();
+    f.root->focus(nullptr);
+    f.root->focus(row);
+    f.root->key(SDLK_RIGHT, 0);
+    f.root->key(SDLK_RETURN, 0);
+    f.pass();
+    const auto blue = std::find(model::kTrackColors.begin(), model::kTrackColors.end(), "blue");
+    REQUIRE(blue + 1 != model::kTrackColors.end());
+    CHECK(track(bass).color == *(blue + 1));
 }
