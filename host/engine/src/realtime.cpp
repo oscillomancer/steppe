@@ -584,7 +584,8 @@ void Engine::stop() {
     timelineEpoch_.store(0);
     rateClockSequence_.store(0);
     for (auto& word : rateClockWords_) word.store(0);
-    plans_.clear();  // nothing runs a plan now
+    plans_.clear();     // nothing runs a plan now
+    ringPool_.clear();  // nor holds a ring for the next edit
     hardwareMidi_->releaseHistory(true);
     callbackGen_.store(0);
     workers_.reset();

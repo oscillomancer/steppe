@@ -102,6 +102,7 @@ struct EngineTestAccess {
         return e.renderedStream_.load() - e.playedStream(e.epochDone_.load());
     }
     static std::int64_t aheadFrames(const Engine& e) { return e.aheadFrames_; }
+    static std::size_t pooledRings(const Engine& e) { return e.ringPool_.size(); }
     static std::vector<const detail::ChunkRing*> planRings(const Engine& e) {
         std::vector<const detail::ChunkRing*> out;
         for (const auto& plan : e.plans_) {
@@ -4164,7 +4165,12 @@ TEST_CASE("a frontier ring is reused only once both executors have left its plan
         CHECK(std::find(current.begin(), current.end(), ring.get()) == current.end());
         CHECK(std::find(older.begin(), older.end(), ring.get()) != older.end());
     }
+    runAhead(engine, backend, 64, 256);
+    engine.service();  // collects the plans before the newest: their rings wait
+    // A stopped engine holds no plan, nor rings pooled for one.
+    REQUIRE(EngineTestAccess::pooledRings(engine) > 0);
     engine.stop();
+    CHECK(EngineTestAccess::pooledRings(engine) == 0);
 }
 
 TEST_CASE("a loop shorter than a render block still lets the renderer get its lead" *
