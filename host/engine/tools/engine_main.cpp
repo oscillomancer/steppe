@@ -307,7 +307,9 @@ int frontendMain(int argc, char** argv) {
         if (auto listing = supple::diagnostics::listReports((*app)->diagnosticsDir()))
             if (auto notice = supple::diagnostics::restartNotice(*listing))
                 std::fprintf(
-                    stderr, "%s Use crash.list to read it and crash.acknowledge to dismiss this.\n",
+                    stderr,
+                    "%s Use crash.list to read it, and crash.acknowledge with an incident id to "
+                    "dismiss it.\n",
                     supple::diagnostics::noticeText(*notice).c_str());
         cmd::Dispatcher dispatcher(registry, **app);
         rpc::Server* activeServer = nullptr;

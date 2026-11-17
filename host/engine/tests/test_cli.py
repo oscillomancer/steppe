@@ -158,7 +158,7 @@ class LastRunNotice(unittest.TestCase):
             first = self.serve(root)
             self.assertIn("closed unexpectedly last time", first.stderr)
             self.assertIn("no crash report was written", first.stderr)
-            self.assertIn("crash.acknowledge", first.stderr)
+            self.assertIn("crash.acknowledge with an incident id", first.stderr)
             self.assertEqual(first.stdout, "")  # the protocol stream carries nothing of it
             # A one-shot call does not repeat it, and can read and dismiss it.
             listed = subprocess.run(
