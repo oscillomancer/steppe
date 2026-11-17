@@ -7,15 +7,15 @@
 #include <system_error>
 #include <vector>
 #include "inventory.h"
-#include "native.h"
 #include "private_files.h"
 #include "storage.h"
 #include "supple/base/files.h"
 #include "supple/base/paths.h"
+#include "supple/diagcap/native.h"
+#include "supple/diagcap/trace.h"
 #include "supple/diagnostics/frontend.h"
 #include "supple/json/json.h"
 #include "supple/product.h"
-#include "trace.h"
 namespace supple::diagnostics {
 namespace fs = std::filesystem;
 using namespace detail;

@@ -3,10 +3,10 @@
 #pragma once
 #include <filesystem>
 #include <string>
-#include "native.h"
 #include "supple/base/result.h"
+#include "supple/diagcap/native.h"
+#include "supple/diagcap/trace.h"
 #include "supple/json/json.h"
-#include "trace.h"
 namespace supple::diagnostics::detail {
 class Inventory;
 Status prepareDirectory(const std::filesystem::path& root);

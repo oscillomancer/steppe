@@ -127,6 +127,22 @@ class GplOnlyLibraries(BuildFiles):
                 self.assertEqual(result, 1, errors)
                 self.assertIn("GPL-only library diagnostics-context", errors)
 
+    def test_the_capture_library_is_just_as_closed(self):
+        for filename, text in (
+            ("libs/core-base/src/thread.cpp", '#include "supple/diagcap/capsule.h"\n'),
+            ("libs/core-json/CMakeLists.txt", "supple_add_library(core-json DEPS supple::diagnostics-capture)\n"),
+            ("plugins/common/example.cpp", '#include <supple/diagcap/trace.h>\n'),
+            ("modules/rack/example.cpp", '#include "supple/diagcap/native.h"\n'),
+        ):
+            with self.subTest(filename=filename):
+                result, errors = self.check_fixture(filename, text)
+                self.assertEqual(result, 1, errors)
+                self.assertIn("GPL-only library diagnostics-capture", errors)
+        for filename in ("host/diagnostics/src/terminal.cpp", "libs/diagnostics-capture/src/trace.cpp"):
+            with self.subTest(filename=filename):
+                result, errors = self.check_fixture(filename, '#include "supple/diagcap/trace.h"\n')
+                self.assertEqual(result, 0, errors)
+
     def test_gpl_code_may_use_it(self):
         for filename in ("host/engine/src/realtime.cpp", "libs/command-bus/src/bus.cpp",
                          "libs/diagnostics-context/src/table.cpp", "daw/example.cpp"):

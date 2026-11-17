@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #pragma once
 #include <chrono>
-#include "native.h"
+#include "supple/diagcap/native.h"
 // The worker's watch on its supervisor (ADR-0091): tells a collector's crash from a
 // launcher's stop, and gives the second the program's own normal stop.
 namespace supple::diagnostics::detail {

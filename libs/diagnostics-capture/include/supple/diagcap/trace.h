@@ -17,7 +17,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
-#include "native.h"
+#include "supple/diagcap/native.h"
 #include "supple/diagctx/commands.h"
 #include "supple/diagctx/scope.h"
 #include "supple/json/json.h"

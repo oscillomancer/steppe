@@ -413,6 +413,18 @@ bits are stripped from return addresses.
 
 ## Thread roles and the execution table (topic 5)
 
+Library placement of the capture code (topic 6): the wire packets (`native.h`), the trace capsule
+and its parser (`capsule.h`, `trace.h`, `trace.cpp`), the frame-pointer walker and the
+per-platform stack readers (`trace_linux.cpp`, `trace_windows.cpp`, `trace_other.cpp`,
+`capsule_posix.cpp`, `capture_macos.cpp`) are the GPL library `diagnostics-capture`
+(`libs/diagnostics-capture/`, headers `supple/diagcap/`, still namespace
+`supple::diagnostics::detail`). They moved there from `host/diagnostics` unchanged, so that a
+process that only has to capture its own failure can link them without the supervisor, the
+frontend or the report store; `host/diagnostics` links the library and keeps the frontend, the
+channel (`native_posix.cpp`, `native_windows.cpp`), the inventory, the storage and the reader. The
+library is closed to the permissive tree by the same two checks as `diagnostics-context` (below),
+with `supple/diagcap/` as the include to reject.
+
 Library placement: the table lives in the GPL library `diagnostics-context`
 (`libs/diagnostics-context/`, header `supple/diagctx/table.h`). It is under `libs/` because
 command-bus, also there, links it and a `libs/` library does not depend on host products;

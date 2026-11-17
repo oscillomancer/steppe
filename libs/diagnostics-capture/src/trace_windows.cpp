@@ -20,7 +20,7 @@
 #include <string>
 #include <utility>
 #include <vector>
-#include "trace.h"
+#include "supple/diagcap/trace.h"
 // Windows collector, run by the supervisor inside the worker's terminal hold. The
 // supervisor created the worker, so its process handle already carries every right
 // needed: nothing is raised and no privilege or policy changes. Threads are

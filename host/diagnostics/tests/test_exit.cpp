@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include <doctest/doctest.h>
 #include <vector>
-#include "../src/native.h"
+#include "supple/diagcap/native.h"
 using namespace supple::diagnostics::detail;
 TEST_CASE("Windows acknowledged return values are not exception evidence") {
     CHECK_FALSE(windowsFatalStatus(0xffffffffU, 0xffffffffU));

@@ -5,8 +5,8 @@
 #include <sys/socket.h>
 #include <cerrno>
 #include <ctime>
-#include "capsule.h"
-#include "nonblocking.h"
+#include "supple/diagcap/capsule.h"
+#include "supple/diagcap/nonblocking.h"
 // Everything the worker runs here is reachable from its terminal handler: fixed storage,
 // system calls and arithmetic only.
 namespace supple::diagnostics::detail {

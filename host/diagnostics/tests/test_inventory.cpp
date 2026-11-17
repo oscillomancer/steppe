@@ -9,7 +9,7 @@
 #include <string>
 #include <thread>
 #include "../src/inventory.h"
-#include "../src/native.h"
+#include "supple/diagcap/native.h"
 #if !defined(_WIN32)
 #include <fcntl.h>
 #include <sys/socket.h>

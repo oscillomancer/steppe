@@ -12,9 +12,9 @@
 #include <memory>
 #include <thread>
 #include <vector>
-#include "../src/capsule.h"
 #include "../src/inventory.h"
-#include "../src/trace.h"
+#include "supple/diagcap/capsule.h"
+#include "supple/diagcap/trace.h"
 #if !defined(_WIN32)
 #include <fcntl.h>
 #include <sys/socket.h>

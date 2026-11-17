@@ -13,7 +13,7 @@
 #include <vector>
 #include "../src/private_files.h"
 #include "../src/storage.h"
-#include "../src/trace.h"
+#include "supple/diagcap/trace.h"
 using namespace supple;
 using namespace supple::diagnostics::detail;
 namespace fs = std::filesystem;

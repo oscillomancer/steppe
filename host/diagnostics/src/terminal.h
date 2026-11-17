@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #pragma once
-#include "native.h"
+#include "supple/diagcap/native.h"
 namespace supple::diagnostics::detail {
 bool installTerminal(Native native, const Packet& boot);
 // Whether a terminal handler has begun on any thread. The supervisor watch (watch.cpp)

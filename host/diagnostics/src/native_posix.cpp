@@ -14,9 +14,9 @@
 #include <chrono>
 #include <cstring>
 #include <ctime>
-#include "capsule.h"
-#include "native.h"
-#include "nonblocking.h"
+#include "supple/diagcap/capsule.h"
+#include "supple/diagcap/native.h"
+#include "supple/diagcap/nonblocking.h"
 #if defined(__linux__)
 #include <sys/ptrace.h>
 #endif

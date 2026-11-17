@@ -9,7 +9,7 @@
 #include "supple/diagctx/table.h"
 #include "supple/diagnostics/frontend.h"
 #if defined(__APPLE__)
-#include "capsule.h"
+#include "supple/diagcap/capsule.h"
 #endif
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN

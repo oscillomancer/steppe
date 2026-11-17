@@ -14,7 +14,7 @@
 # SUPPLE_GPL_ONLY_TARGETS when it is created.
 set(SUPPLE_MIT_LIBRARIES core-base core-json core-schema core-params core-patch core-dsp
                          core-analysis)
-set(SUPPLE_GPL_ONLY_TARGETS diagnostics-context)
+set(SUPPLE_GPL_ONLY_TARGETS diagnostics-context diagnostics-capture)
 
 # Every target created in `directory` and below.
 function(supple_directory_targets directory result)

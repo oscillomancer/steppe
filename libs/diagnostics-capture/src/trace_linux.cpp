@@ -13,7 +13,7 @@
 #include <csignal>
 #include <ctime>
 #include <map>
-#include "trace.h"
+#include "supple/diagcap/trace.h"
 // Linux collector. The supervisor is the worker's parent, so Yama's default
 // restricted policy (ptrace_scope 1) lets it trace the worker as an ancestor:
 // nothing is raised, no sysctl changes, no PR_SET_PTRACER_ANY. Stricter policies

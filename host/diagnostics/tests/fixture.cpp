@@ -17,9 +17,9 @@
 #include <system_error>
 #include <thread>
 #include "../src/terminal.h"
-#include "../src/trace.h"
 #include "../src/watch.h"
 #include "supple/base/rt.h"
+#include "supple/diagcap/trace.h"
 #include "supple/diagctx/inventory.h"
 #include "supple/diagctx/scope.h"
 #include "supple/diagctx/table.h"

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
-#include "native.h"
+#include "supple/diagcap/native.h"
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif

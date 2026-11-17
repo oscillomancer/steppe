@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
-#include "trace.h"
+#include "supple/diagcap/trace.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -9,7 +9,7 @@
 #include <initializer_list>
 #include <map>
 #include <utility>
-#include "capsule.h"
+#include "supple/diagcap/capsule.h"
 namespace supple::diagnostics::detail {
 namespace {
 constexpr std::uint64_t kMaxStep = std::uint64_t{1} << 30;  // largest frame-to-frame jump

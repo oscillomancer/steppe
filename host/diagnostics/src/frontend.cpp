@@ -7,14 +7,14 @@
 #include <cstdlib>
 #include <cstring>
 #include "inventory.h"
-#include "native.h"
 #include "storage.h"
 #include "supple/base/paths.h"
+#include "supple/diagcap/native.h"
+#include "supple/diagcap/trace.h"
 #include "supple/diagctx/table.h"
 #include "supple/diagnostics/reports.h"
 #include "supple/product.h"
 #include "terminal.h"
-#include "trace.h"
 #include "watch.h"
 namespace supple::diagnostics {
 namespace detail {

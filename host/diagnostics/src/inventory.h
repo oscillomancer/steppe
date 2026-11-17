@@ -20,10 +20,10 @@
 #include <optional>
 #include <string>
 #include <vector>
-#include "native.h"
+#include "supple/diagcap/native.h"
+#include "supple/diagcap/trace.h"
 #include "supple/diagctx/inventory.h"
 #include "supple/json/json.h"
-#include "trace.h"
 namespace supple::diagnostics::detail {
 
 // ---- worker side -------------------------------------------------------------------------

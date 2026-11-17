@@ -39,7 +39,10 @@ MIT_LIBRARIES = {"core-base", "core-json", "core-schema", "core-params",
 # (mit_component) may include their headers or name them. cmake/LicenseIsolation.cmake
 # checks the link graph of the targets it can see; this checks the files, which also covers
 # a plug-in built in isolation. Keep the target names there equal to these.
-GPL_ONLY_LIBRARIES = {"diagnostics-context": re.compile(r"supple/diagctx/|diagctx::|\bdiagnostics-context\b")}
+GPL_ONLY_LIBRARIES = {
+    "diagnostics-context": re.compile(r"supple/diagctx/|diagctx::|\bdiagnostics-context\b"),
+    "diagnostics-capture": re.compile(r"supple/diagcap/|\bdiagnostics-capture\b"),
+}
 SPDX_RE = re.compile("SPDX-License-" + r"Identifier:[ \t]*([^\n]+)")
 
 

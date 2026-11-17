@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
-#include "trace.h"
+#include "supple/diagcap/trace.h"
 #if defined(__APPLE__)
-#include "capsule.h"
+#include "supple/diagcap/capsule.h"
 #endif
 // Platforms without an external collector. macOS reads nothing of the worker itself:
 // the worker captures its own threads inside its terminal hold (capture_macos.cpp) and

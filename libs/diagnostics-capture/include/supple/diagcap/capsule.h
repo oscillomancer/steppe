@@ -19,7 +19,7 @@
 #include <cstdint>
 #include <optional>
 #include <vector>
-#include "native.h"
+#include "supple/diagcap/native.h"
 #include "supple/diagctx/commands.h"
 namespace supple::diagnostics::detail {
 constexpr std::uint32_t kCapsuleMagic =

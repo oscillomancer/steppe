@@ -7,10 +7,10 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
-#include "capsule.h"
+#include "supple/diagcap/capsule.h"
+#include "supple/diagcap/trace.h"
 #include "supple/diagctx/inventory.h"
 #include "supple/diagctx/scope.h"
-#include "trace.h"
 // macOS in-process capture (ADR-0083, topic 4). The failing process reads its own
 // threads and images through Mach calls on its own task: no task_for_pid, no entitlement,
 // no other process touched. It runs in the terminal handler, so it allocates nothing on
