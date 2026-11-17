@@ -3,6 +3,7 @@
 #include "trace.h"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <initializer_list>
@@ -333,6 +334,15 @@ Layout buildLayout(const std::vector<Mapping>& mappings, const ReadMemory& read)
 
 std::optional<Frame> layoutFrame(const Layout& layout, std::uint64_t address, bool returnAddress) {
     return frameAt(layout, address, returnAddress);
+}
+
+namespace {
+std::atomic<EvidenceSink> evidenceSink{nullptr};
+}
+void setTraceEvidence(EvidenceSink sink) noexcept { evidenceSink.store(sink); }
+bool traceEvidenceEnabled() noexcept { return evidenceSink.load() != nullptr; }
+void traceEvidence(const char* line) {
+    if (const auto sink = evidenceSink.load()) sink(line);
 }
 
 Arch hostArch() {

@@ -11,6 +11,7 @@
 #include <string>
 #include <thread>
 #include "../src/terminal.h"
+#include "../src/trace.h"
 #include "supple/base/rt.h"
 #include "supple/diagctx/table.h"
 #include "supple/diagnostics/frontend.h"
@@ -458,6 +459,12 @@ int main(int argc, char** argv) {
         filterResumes = std::string_view(argv[2]) == "prior-filter-resume";
         SetUnhandledExceptionFilter(priorFilter);
     }
+#endif
+#if defined(_WIN32)
+    // The Windows collector cannot be tried on the machines this is written on: it says
+    // what it saw on the supervisor's stderr, where the lifecycle test shows it.
+    supple::diagnostics::detail::setTraceEvidence(
+        [](const char* line) { std::fputs(line, stderr); });
 #endif
     return supple::diagnostics::runFrontend(argc, argv, supple::diagnostics::Role::Fixture, body,
                                             {std::filesystem::path(argv[1])});

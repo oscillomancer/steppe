@@ -13,6 +13,7 @@
 #include <tlhelp32.h>
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <map>
 #include <mutex>
 #include <string>
@@ -39,6 +40,19 @@ constexpr std::size_t kMaxListedThreads = 4096;
 constexpr std::size_t kMaxQueries = 65536;
 constexpr DWORD kExecutable =
     PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+
+// Evidence for the test fixture's sink (trace.h); formats nothing without one, and stops
+// after a fixed number of lines so a long stack cannot flood a log.
+template <class... Args>
+void note(const char* format, Args... args) {
+    static int lines = 0;
+    if (!traceEvidenceEnabled() || lines >= 200) return;
+    ++lines;
+    char line[256];
+    std::snprintf(line, sizeof(line), format, args...);
+    traceEvidence(line);
+}
+unsigned long long ull(std::uint64_t value) { return static_cast<unsigned long long>(value); }
 
 std::mutex& dbghelpLock() {
     static std::mutex lock;
@@ -189,6 +203,8 @@ class Collector {
             release(id);
             return Missing::RegistersUnreadable;
         }
+        note("evidence: thread stopped rip=%llx rsp=%llx rbp=%llx\n", ull(entry.context.Rip),
+             ull(entry.context.Rsp), ull(entry.context.Rbp));
         regs = {entry.context.Rip, entry.context.Rsp, entry.context.Rbp};
         return Missing::None;
     }
@@ -236,10 +252,15 @@ class Collector {
             // callbacks.
             if (!StackWalk64(IMAGE_FILE_MACHINE_AMD64, process_, nullptr, &frame, &context,
                              &readThunk, &tableThunk, &baseThunk, nullptr)) {
+                note("evidence: StackWalk64 ended after %zu frames, error %lu\n",
+                     result.frames.size(), static_cast<unsigned long>(GetLastError()));
                 result.stop = Stop::End;
                 break;
             }
             const std::uint64_t pc = frame.AddrPC.Offset;
+            note("evidence: step pc=%llx sp=%llx initial=%d executable=%d\n", ull(pc),
+                 ull(frame.AddrStack.Offset), initial ? 1 : 0,
+                 layoutFrame(layout, pc, true) ? 1 : 0);
             if (pc == 0) {
                 result.stop = Stop::End;
                 break;
@@ -292,7 +313,10 @@ class Collector {
             // Reading a module's file can be slow (a cold disk, a virus scan, a share):
             // new modules load only while the hold's budget remains. A single load
             // cannot be interrupted, so the bound is "no new load after the deadline".
-            if (expired()) return 0;
+            if (expired()) {
+                note("evidence: module at %llx not loaded, hold budget spent\n", ull(base));
+                return 0;
+            }
             std::wstring path(32768, L'\0');
             const DWORD length = GetModuleFileNameExW(
                 process_, reinterpret_cast<HMODULE>(static_cast<std::uintptr_t>(base)), path.data(),
@@ -305,6 +329,9 @@ class Collector {
                                       SLMFLAG_NO_SYMBOLS) != 0 ||
                      GetLastError() == ERROR_SUCCESS;  // zero with no error: already loaded
             }
+            note("evidence: module at %llx %s (name length %lu, error %lu)\n", ull(base),
+                 ok ? "loaded for unwinding" : "NOT LOADED", static_cast<unsigned long>(length),
+                 static_cast<unsigned long>(GetLastError()));
             loaded = loaded_.emplace(base, ok).first;
         }
         return loaded->second ? base : 0;
@@ -317,8 +344,13 @@ class Collector {
         return ok ? TRUE : FALSE;
     }
     static PVOID CALLBACK tableThunk(HANDLE process, DWORD64 address) {
-        if (!active || active->baseOf(address) == 0) return nullptr;
-        return SymFunctionTableAccess64(process, address);
+        if (!active || active->baseOf(address) == 0) {
+            note("evidence: no module for unwind data at %llx\n", ull(address));
+            return nullptr;
+        }
+        PVOID table = SymFunctionTableAccess64(process, address);
+        if (!table) note("evidence: no function table at %llx\n", ull(address));
+        return table;
     }
     static DWORD64 CALLBACK baseThunk(HANDLE, DWORD64 address) {
         return active ? active->baseOf(address) : 0;

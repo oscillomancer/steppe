@@ -175,6 +175,14 @@ bool traceShape(const json::Value* modules, const json::Value& threads);
 // main, then the rest in capsule order. Nothing for a malformed capsule.
 std::optional<TraceSnapshot> parseCapsule(const std::uint8_t* bytes, std::size_t size);
 
+// Test evidence only. A collector that cannot be tried locally (Windows) writes what it
+// saw, one line at a time, to the sink a test installed in the supervisor process; with
+// no sink nothing is formatted or written. Never set in the product.
+using EvidenceSink = void (*)(const char* line);
+void setTraceEvidence(EvidenceSink sink) noexcept;
+bool traceEvidenceEnabled() noexcept;
+void traceEvidence(const char* line);
+
 // The platform collector, run by the supervisor on the terminal packet inside the
 // terminal hold; it must return well before the worker's one-second wait ends.
 TraceSnapshot collectProcessTrace(Native& native, const Packet& terminal);

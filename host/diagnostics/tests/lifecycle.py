@@ -83,7 +83,7 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
                     # one-frame fault entry with the stack filed under main.
                     fault=report["threads"][0]
                     assert fault["role"]=="fault" and fault["state"]=="walked",(mode,fault)
-                    assert len(fault["frames"])>=3,(mode,fault)
+                    assert len(fault["frames"])>=3,(mode,fault,run.stderr)
                     assert all(t["role"] not in ("main","model") for t in report["threads"]),(mode,report["threads"])
                 if sanitized: assert report["cause"]==0,(mode,report)
                 assert "private-project-sentinel" not in raw
