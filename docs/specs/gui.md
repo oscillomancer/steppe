@@ -1765,18 +1765,20 @@ on disk.
 A dock at the window's right edge (`SidePanel`, node `side`). It runs the
 window's height under the menu row; the transport bar, the arrange area and
 the bottom docks keep to its left. It holds one tab per tool, in this order:
-**Inspector** (`side.tab.inspector`) and **History** (`side.tab.history`,
-§4.10); a browser tab is planned. One tab is in view at a time; the tab in
+**Inspector** (`side.tab.inspector`), **Browser** (`side.tab.browser`) and
+**History** (`side.tab.history`, §4.10). One tab is in view at a time; the tab in
 view has ink text and an accent line under it, the others quiet ink. A click
 on a tab shows it. **Close** (`side.close`, a quiet button at the bar's right)
 closes the panel.
 
 The panel is **closed until asked** and never opens by itself, a selection
-included. `ui.inspector` (View > Inspector, key I) and `ui.history` (View >
-History and command log, Ctrl+H) each open the panel on their tab, swap to
-it when another tab is in view, and close the panel when their tab is in
-view. A tab that is not in view reads nothing: the history reloads and the
-inspector reads the selection when they come into view.
+included. `ui.inspector` (View > Inspector, key I), `ui.browser` (View >
+Browser, key B) and `ui.history` (View > History and command log, Ctrl+H)
+each open the panel on their tab, swap to it when another tab is in view,
+and close the panel when their tab is in view. A tab that is not in view
+reads nothing: the history reloads, the inspector reads the selection and
+the browser reads the scan cache and the favourites file when they come
+into view.
 
 Its left edge (`side.grip`) drags to set the width, 240 to 560 units, 300 by
 default; a double-click restores the default. Whether the panel is open,
@@ -1786,6 +1788,27 @@ a screenset. A field of the wrong type or a tab the panel does not have is
 ignored. `panels.history` is still written (true while the History tab is
 in view); a sidecar from before the side panel, with `panels.history` and
 no `panels.side`, opens the panel on History when it was true.
+
+**Browser.** The plugin browser (§4.5) as the tab's content
+(`PluginBrowser::buildEmbedded`, node ids under `side.browser`): the same
+search (`side.browser.search`), list (`side.browser.results`), favourites
+(`side.browser.fav`), rescan (`side.browser.rescan`) and ordering, over the
+same scan cache and favourites file. It has no title and no Close of its
+own. A row is the plugin's name with what a stock plugin is, and at the
+right "stock", the vendor or "shadowed", followed by "· VST3" for a VST3
+plugin (the popup's id column tells the formats apart; a panel's row has
+no room for it); the line under the list
+(`side.browser.detail`) gives the selected plugin's id, as `fx.add` takes
+it. Enter in the search, a double-click on a row or **Add**
+(`side.browser.add`) adds the plugin to every selected track: one `fx.add`
+each, inside one transaction for several ("Add FX"), so one undo step. The
+browser stays open with its search as typed, and its status line
+(`side.browser.status`) says what happened: "Added to *track*", "Added to
+*N* tracks", "Select a track first" when no track is selected, or the
+command's message. `ui.browser` puts the keyboard in the search field; a
+panel restored on this tab does not take it. The popup browser of a
+strip's "+" (§4.5) is unchanged and may be open at the same time. Patches,
+media, files and dragging onto a track are not there yet.
 
 **Inspector.** What is selected, read from the selection and the session
 each pass (`inspectorSubject`), and for one item the fields that edit it.

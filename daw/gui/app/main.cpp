@@ -527,6 +527,10 @@ int main(int argc, char** argv) {
             },
             [&](model::Id rack) { racks.open(rack); }},
         gui::Favourites::defaultFile(product::kSlug));
+    appActions.addUi("ui.browser", "View: browser", [&] {
+        side.toggle("browser");
+        if (side.showing("browser")) fxWindow.sideBrowser().focusSearch();
+    });
     // A strip's rack slot opens the rack window on it.
     mixer.openRack = [&](const model::Id& rack) { racks.open(rack); };
     // MIDI learn (ADR-0027): the devices' messages reach the actions bound to
@@ -608,6 +612,9 @@ int main(int argc, char** argv) {
         center.add(mixer.build());
         side.addTab("inspector", "Inspector", inspector.build(),
                     [&inspector](bool on) { inspector.setVisible(on); });
+        side.addTab("browser", "Browser", fxWindow.buildSideBrowser(uiState), [&fxWindow](bool on) {
+            if (on) fxWindow.sideBrowser().reload();
+        });
         side.addTab("history", "History", history.build(),
                     [&history](bool on) { history.setVisible(on); });
         body.add(side.build());

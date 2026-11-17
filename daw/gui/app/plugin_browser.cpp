@@ -117,30 +117,45 @@ PluginBrowser::PluginBrowser(engine::EngineApp&, cmd::Dispatcher& dispatcher, ui
 }
 
 std::unique_ptr<ui::Node> PluginBrowser::buildPage() {
-    auto page = std::make_unique<ui::Node>("browser");
+    auto id = [this](const char* name) { return prefix_ + "." + name; };
+    auto page = std::make_unique<ui::Node>(prefix_);
     page_ = page.get();
     page->layout.dir = ui::Layout::Dir::Column;
-    page->layout.width = ui::SizeRule::fixed(560);
-    page->layout.height = ui::SizeRule::fixed(440);
     page->layout.padding = ui::Insets::all(12);
     page->layout.gap = 8;
-    auto& header = page->emplace<ui::Node>("browser.header");
-    header.layout.dir = ui::Layout::Dir::Row;
-    header.layout.height = ui::SizeRule::fixed(28);
-    header.layout.align = ui::Layout::Align::Center;
-    title_ = &header.emplace<ui::Label>("browser.title", titleText_, ui::Font::UiBold, "body");
-    title_->layout.width = ui::SizeRule::fraction();
-    header.emplace<ui::Button>("browser.close", "Close", [this] { close(); });
-    search_ = &page->emplace<ui::TextField>("browser.search", "", "Search plugins…");
+    if (!embedded_) {  // a popup has its own size, title and Close
+        page->layout.width = ui::SizeRule::fixed(560);
+        page->layout.height = ui::SizeRule::fixed(440);
+        auto& header = page->emplace<ui::Node>(id("header"));
+        header.layout.dir = ui::Layout::Dir::Row;
+        header.layout.height = ui::SizeRule::fixed(28);
+        header.layout.align = ui::Layout::Align::Center;
+        title_ = &header.emplace<ui::Label>(id("title"), titleText_, ui::Font::UiBold, "body");
+        title_->layout.width = ui::SizeRule::fraction();
+        header.emplace<ui::Button>(id("close"), "Close", [this] { close(); });
+    }
+    search_ = &page->emplace<ui::TextField>(id("search"), "", "Search plugins…");
     search_->layout.height = ui::SizeRule::fixed(26);
-    list_ = &page->emplace<ui::List>("browser.results");
-    list_->rowHeight = 30;
+    list_ = &page->emplace<ui::List>(id("results"));
+    list_->rowHeight = embedded_ ? 24 : 30;
     list_->paintRow = [this](ui::Canvas& c, std::size_t i, const ui::Rect& r, bool) {
         if (i >= rows_.size()) return;
         const ui::Theme& t = c.theme();
         const RowText text = rowText(i);
-        const float w = c.textWidth(text.name, ui::Font::Ui, t.type("small"));
         const bool shadowed = rows_[i].entry->shadowed;
+        if (embedded_) {
+            // A narrow column: the name, and whose it is at the right. The
+            // id is in the line under the list.
+            const std::string whose =
+                text.format.empty() ? text.vendor : text.vendor + " · " + text.format;
+            const float vendor = c.textWidth(whose, ui::Font::Ui, t.type("caption"));
+            c.text({r.x + 8, r.y, std::max(0.0f, r.w - 28 - vendor), r.h}, text.name, ui::Font::Ui,
+                   t.type("small"), shadowed ? t.color("ink-quiet") : t.color("ink"));
+            c.text({r.x, r.y, r.w - 10, r.h}, whose, ui::Font::Ui, t.type("caption"),
+                   shadowed ? t.color("clip") : t.color("ink-faint"), ui::kRight | ui::kMiddle);
+            return;
+        }
+        const float w = c.textWidth(text.name, ui::Font::Ui, t.type("small"));
         c.text({r.x + 10, r.y, r.w - 20, r.h}, text.name, ui::Font::Ui, t.type("small"),
                shadowed ? t.color("ink-quiet") : t.color("ink"));
         c.text({r.x + 20 + w, r.y, std::max(0.0f, r.w - 32 - w), r.h}, text.vendor, ui::Font::Mono,
@@ -153,18 +168,19 @@ std::unique_ptr<ui::Node> PluginBrowser::buildPage() {
     search_->onOtherKey = [this](const ui::KeyEvent& e) { return list_->onKey(e); };
     list_->onActivate = [this](std::size_t row) { activate(row); };
     list_->onSelect = [this](std::size_t) { updateDetail(); };
-    auto& footer = page->emplace<ui::Node>("browser.footer");
+    auto& footer = page->emplace<ui::Node>(id("footer"));
     footer.layout.dir = ui::Layout::Dir::Row;
     footer.layout.height = ui::SizeRule::fixed(28);
     footer.layout.gap = 6;
-    footer.emplace<ui::Button>("browser.rescan", "Rescan", [this] {
+    footer.layout.align = ui::Layout::Align::Center;
+    auto& rescan = footer.emplace<ui::Button>(id("rescan"), "Rescan", [this] {
         runScan();
         root_.damageAll();
     });
-    footer.emplace<ui::Button>("browser.fav", "Favourite", [this] {
+    auto& favourite = footer.emplace<ui::Button>(id("fav"), "Favourite", [this] {
         const auto row = list_->selected();
         if (!row || *row >= rows_.size()) return;
-        const std::string id = rows_[*row].entry->id;
+        const std::string plugin = rows_[*row].entry->id;
         // Another open browser may have saved since this one was opened.
         auto latest = Favourites::load(favouritesFile_);
         if (!latest) {
@@ -172,7 +188,7 @@ std::unique_ptr<ui::Node> PluginBrowser::buildPage() {
             return;
         }
         favourites_ = std::move(*latest);
-        const bool now = favourites_.toggle(id);
+        const bool now = favourites_.toggle(plugin);
         if (auto saved = favourites_.save(favouritesFile_); !saved)
             setStatus("favourites: " + saved.error().message);
         else
@@ -180,16 +196,44 @@ std::unique_ptr<ui::Node> PluginBrowser::buildPage() {
         sortAndFilter();
         root_.damageAll();
     });
-    footer.emplace<ui::Button>("browser.add", "Add",
+    // In a panel the secondary buttons are quiet (§7) and Add is at the right.
+    rescan.quiet = favourite.quiet = embedded_;
+    if (embedded_)
+        footer.emplace<ui::Node>(id("footer.rest")).layout.width = ui::SizeRule::fraction();
+    footer.emplace<ui::Button>(id("add"), "Add",
                                [this] { activate(list_->selected().value_or(0)); });
-    status_ =
-        &footer.emplace<ui::Label>("browser.status", "", ui::Font::Ui, "caption", "ink-quiet");
-    status_->layout.width = ui::SizeRule::fixed(120);
+    if (embedded_) {
+        // The status has a line of its own: the footer is three buttons wide.
+        status_ = &page->emplace<ui::Label>(id("status"), "", ui::Font::Ui, "caption", "ink-quiet");
+        status_->layout.height = ui::SizeRule::fixed(16);
+    } else {
+        status_ =
+            &footer.emplace<ui::Label>(id("status"), "", ui::Font::Ui, "caption", "ink-quiet");
+        status_->layout.width = ui::SizeRule::fixed(120);
+    }
     detailLabel_ =
-        &page->emplace<ui::Label>("browser.detail", "", ui::Font::Mono, "caption", "ink-quiet");
+        &page->emplace<ui::Label>(id("detail"), "", ui::Font::Mono, "caption", "ink-quiet");
     detailLabel_->layout.width = ui::SizeRule::fraction();
+    if (embedded_) detailLabel_->layout.height = ui::SizeRule::fixed(16);
     refresh();
     return page;
+}
+
+std::unique_ptr<ui::Node> PluginBrowser::buildEmbedded(
+    std::string prefix, std::function<void(const std::string&)> onAdd) {
+    prefix_ = std::move(prefix);
+    embedded_ = true;
+    onAdd_ = std::move(onAdd);
+    return buildPage();
+}
+
+void PluginBrowser::reload() {
+    if (auto loaded = Favourites::load(favouritesFile_)) favourites_ = std::move(*loaded);
+    refresh();
+}
+
+void PluginBrowser::focusSearch() {
+    if (search_) root_.focus(search_);
 }
 
 PluginBrowser::RowText PluginBrowser::rowText(std::size_t row) const {
@@ -202,6 +246,7 @@ PluginBrowser::RowText PluginBrowser::rowText(std::size_t row) const {
                   : lower(entry.vendor) == lower(product::kVendor) ? "stock"
                                                                    : entry.vendor;
     text.id = entry.id;
+    if (entry.format == "vst3") text.format = "VST3";
     return text;
 }
 
@@ -215,7 +260,12 @@ void PluginBrowser::updateDetail() {
         if (entry.shadowed) text += "  — shadowed: the first copy on the plugin path wins";
     }
     detail_ = text;
-    if (detailLabel_) detailLabel_->setText(detail_);
+    if (!detailLabel_) return;
+    // A panel's line is too short for a path: it names the plugin as a
+    // command would (`fx.add {plugin}`).
+    const auto row = list_ ? list_->selected() : std::nullopt;
+    detailLabel_->setText(
+        embedded_ ? (row && *row < rows_.size() ? rows_[*row].entry->id : std::string()) : detail_);
 }
 
 void PluginBrowser::open(std::function<void(const std::string&)> onAdd, std::string title) {
@@ -241,7 +291,7 @@ void PluginBrowser::open(std::function<void(const std::string&)> onAdd, std::str
 }
 
 void PluginBrowser::close() {
-    if (page_) root_.closePopup();
+    if (page_ && !embedded_) root_.closePopup();
 }
 
 void PluginBrowser::setStatus(std::string message) {
@@ -349,7 +399,7 @@ void PluginBrowser::activate(std::size_t row) {
     if (row >= rows_.size()) return;
     const std::string id = rows_[row].entry->id;
     auto add = onAdd_;
-    close();  // the popup is destroyed here
+    if (!embedded_) close();  // the popup is destroyed here; a panel's browser stays
     if (add) add(id);
 }
 

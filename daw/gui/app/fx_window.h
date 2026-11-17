@@ -66,6 +66,16 @@ class FxWindow {
     // The plugin browser alone, adding to that track's chain, or with no
     // track given to every selected track's (ui.fx.add).
     Status openToAdd(const UiState& ui, const json::Value& prompt);
+    // The side panel's Browser tab (gui.md §4.14): the plugin browser as a
+    // panel's content, node ids under `side.browser`. What is chosen goes on
+    // every track selected in `ui` (which must outlive the window) as one
+    // undo step, the browser stays, and its status line says what happened.
+    // Built once.
+    std::unique_ptr<ui::Node> buildSideBrowser(const UiState& ui);
+    PluginBrowser& sideBrowser() { return *sideBrowser_; }
+    // Adds a plugin to every selected track, as one undo step. Says which
+    // tracks it went on.
+    Result<std::vector<model::Id>> addToSelection(const UiState& ui, const std::string& pluginId);
     void close();
     bool isOpen() const { return page_ != nullptr; }
 
@@ -144,7 +154,7 @@ class FxWindow {
     void dragRow(model::Id fx, int phase, ui::Point p);  // phase: Row::Phase
     void openBrowser(bool input = false);
     void addFx(const std::string& pluginId);
-    void addFxTo(const std::vector<model::Id>& tracks, const std::string& pluginId);
+    Status addFxTo(const std::vector<model::Id>& tracks, const std::string& pluginId);
     void promptSaveChain();
     void hideSavePrompt();
     void saveChain();
@@ -171,6 +181,7 @@ class FxWindow {
     Hooks hooks_;
     std::unique_ptr<PluginBrowser> browser_;
     std::unique_ptr<PluginBrowser> mainBrowser_;
+    std::unique_ptr<PluginBrowser> sideBrowser_;
     std::unique_ptr<ParamPanel> params_;
 
     model::Id track_, selected_;

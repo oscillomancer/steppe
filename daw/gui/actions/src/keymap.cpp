@@ -125,6 +125,7 @@ Keymap Keymap::defaults() {
     add({"Alt+D"}, "global", "ui.mixer");
     add({"Alt+E"}, "global", "ui.midi.toggle");
     add({"Ctrl+H"}, "global", "ui.history");
+    add({"B"}, "global", "ui.browser");
     add({"I"}, "global", "ui.inspector");
     add({"Ctrl+Alt+R"}, "global", "ui.render");
     add({"Ctrl+T"}, "global", "track.add:channel");

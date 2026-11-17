@@ -353,8 +353,8 @@ accent colour.
 
 ### The side panel
 
-A panel at the right of the window holds the **Inspector** and the
-**History**. It stays closed until you ask for it:
+A panel at the right of the window holds the **Inspector**, the **Browser**
+and the **History**. It stays closed until you ask for it:
 
 - **View > Inspector**, or the **I** key, opens it on the Inspector. The
   Inspector names what is selected: an item with its track, a track with its
@@ -375,6 +375,12 @@ A panel at the right of the window holds the **Inspector** and the
   With a track selected it shows the track's **Name**, **Colour** (click a
   swatch, or the empty square for none), **Volume** and **Pan** (`-30` is
   30% left). With several tracks selected, a change goes to all of them.
+- **View > Browser**, or the **B** key, opens it on the Browser: the list of
+  your plug-ins, with the stock ones and your favourites first. Type to
+  search by name, maker or kind ("reverb"). Select one or more tracks, then
+  press Enter, double-click a plug-in or click **Add** to put it on them.
+  The Browser stays open, so you can add another. **Favourite** keeps a
+  plug-in at the top; **Rescan** looks for newly installed ones.
 - **View > History and command log**, or **Ctrl+H**, opens it on the History:
   the versions you can step back to, the branches, and every command with who
   ran it.

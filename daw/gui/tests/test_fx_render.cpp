@@ -2,6 +2,8 @@
 // Copyright (c) 2026 Supple Audio
 // The FX chain window, the plugin browser and the parameter panel, and the
 // render dialog: driven by keys and clicks through the bus (gui.md §10).
+#include <SDL3/SDL_keycode.h>
+
 #include <SDL3/SDL.h>
 #include <doctest/doctest.h>
 #include <stb_image.h>
@@ -21,6 +23,7 @@
 #include "learn_dialog.h"
 #include "plugin_browser.h"
 #include "render_dialog.h"
+#include "side_panel.h"
 #include "supple/audio/audio_file.h"
 #include "supple/engine/app.h"
 #include "supple/gui/png.h"
@@ -969,6 +972,133 @@ TEST_CASE("the plugin browser with no track given adds to every selected track")
     f.key("Return");
     CHECK(f.app->head().tracks.find(one)->chain.size() == 1);
     CHECK(f.app->head().tracks.find(two)->chain.size() == 2);
+}
+
+TEST_CASE("the side panel's browser adds to the selected tracks, and stays") {
+    Fixture f;
+    if (!f.ok) return;
+    if (!f.stockPlugins()) {
+        MESSAGE("skipped: no stock plugins (a partial build)");
+        return;
+    }
+    const model::Id one = f.addTrack("One"), two = f.addTrack("Two");
+    gui::SidePanel side(*f.root);
+    int shown = 0;
+    side.addTab("browser", "Browser", f.fx->buildSideBrowser(f.ui), [&](bool on) {
+        if (on) {
+            ++shown;
+            f.fx->sideBrowser().reload();
+        }
+    });
+    f.root->find("window")->add(side.build());
+    side.show("browser");
+    f.root->frame(false);
+    CHECK(shown == 1);
+    auto* search = dynamic_cast<ui::TextField*>(f.root->find("side.browser.search"));
+    auto* list = dynamic_cast<ui::List*>(f.root->find("side.browser.results"));
+    auto* status = f.root->find("side.browser.status");
+    REQUIRE(search);
+    REQUIRE(list);
+    REQUIRE(status);
+    CHECK(search->visibleInTree());
+    // A panel has its own tab and Close: the browser brings no title.
+    CHECK_FALSE(f.root->find("side.browser.title"));
+    CHECK_FALSE(f.root->find("side.browser.close"));
+    CHECK(f.fx->sideBrowser().rowCount() > 0);
+    // A row says which format it is when it is not CLAP.
+    {
+        std::size_t vst3 = 0, marked = 0;
+        auto listed = f.run("plugin.list", json::Value::object());
+        REQUIRE(listed);
+        for (const json::Value& p : (*listed)["plugins"].asArray())
+            if (const json::Value* format = p.find("format")) vst3 += format->asString() == "vst3";
+        for (std::size_t i = 0; i < f.fx->sideBrowser().rowCount(); ++i)
+            marked += f.fx->sideBrowser().rowText(i).format == "VST3";
+        CHECK(marked == vst3);
+    }
+    // It fits the panel: nothing is wider than it.
+    const ui::Rect panel = f.root->find("side")->bounds();
+    for (const char* id : {"side.browser.search", "side.browser.results", "side.browser.footer",
+                           "side.browser.add"}) {
+        const ui::Rect r = f.root->find(id)->bounds();
+        CHECK_MESSAGE(r.x >= panel.x, id);
+        CHECK_MESSAGE(r.right() <= panel.right(), id);
+    }
+
+    auto typed = [&](const std::string& text) {
+        f.root->focus(search);
+        search->setText("");
+        f.root->text(text);
+        f.root->frame(false);
+    };
+    // Nothing selected: nothing is added, and the status line says why.
+    auto before = f.historyCount();
+    typed("Hickory");
+    REQUIRE(f.fx->sideBrowser().rowCount() >= 1);
+    CHECK(f.fx->sideBrowser().rowText(0).name.find("Hickory") != std::string::npos);
+    f.root->key(SDLK_RETURN, 0);
+    f.root->frame(false);
+    CHECK(status->valueText() == "Select a track first");
+    CHECK(f.historyCount() == before);
+
+    // One track: Enter adds there; the browser and its search stay.
+    f.ui.selectedTracks = {one.str()};
+    f.root->key(SDLK_RETURN, 0);
+    f.root->frame(false);
+    CHECK(f.app->head().tracks.find(one)->chain.size() == 1);
+    CHECK(f.app->head().tracks.find(two)->chain.empty());
+    CHECK(status->valueText() == "Added to One");
+    CHECK(search->visibleInTree());
+    CHECK(search->text() == "Hickory");
+    CHECK(f.historyCount() == before + 1);
+
+    // Two tracks: the Add button puts it on both, as one undo step.
+    f.ui.selectedTracks = {one.str(), two.str()};
+    REQUIRE(f.root->click("side.browser.add"));
+    f.root->frame(false);
+    CHECK(f.app->head().tracks.find(one)->chain.size() == 2);
+    CHECK(f.app->head().tracks.find(two)->chain.size() == 1);
+    CHECK(status->valueText() == "Added to 2 tracks");
+    CHECK(f.historyCount() == before + 2);
+    // A double click on a row adds it too.
+    const ui::Rect rows = list->bounds();
+    const ui::Point first{rows.x + 20, rows.y + list->rowHeight / 2};
+    f.root->pointer({ui::PointerEvent::Type::Down, first, 1, 1});
+    f.root->pointer({ui::PointerEvent::Type::Up, first, 1, 1});
+    f.root->pointer({ui::PointerEvent::Type::Down, first, 1, 2});
+    f.root->pointer({ui::PointerEvent::Type::Up, first, 1, 2});
+    f.root->frame(false);
+    CHECK(f.app->head().tracks.find(one)->chain.size() == 3);
+    CHECK(f.app->head().tracks.find(two)->chain.size() == 2);
+    CHECK(f.historyCount() == before + 3);
+
+    // The strip's popup browser opens beside it; each keeps its own search.
+    REQUIRE(f.fx->openToAdd(f.ui, json::Value(two.str())));
+    f.root->frame(false);
+    REQUIRE(f.root->find("browser.search"));
+    CHECK(f.root->find("browser.title")->valueText() == "Add plugin to Two");
+    f.root->text("Hickory");
+    f.root->key(SDLK_RETURN, 0);
+    f.root->frame(false);
+    CHECK_FALSE(f.root->find("browser.search"));  // the popup closed
+    CHECK(f.app->head().tracks.find(two)->chain.size() == 3);
+    CHECK(f.app->head().tracks.find(one)->chain.size() == 3);
+    CHECK(search->text() == "Hickory");
+
+    // A favourite set in one is first in the other when it comes into view.
+    typed("");
+    const std::string last = f.fx->sideBrowser().shown().back();
+    list->select(f.fx->sideBrowser().rowCount() - 1, true);
+    REQUIRE(f.root->click("side.browser.fav"));
+    f.root->frame(false);
+    CHECK(f.fx->sideBrowser().shown().front() == last);
+    side.hide();
+    f.root->frame(false);
+    CHECK_FALSE(search->visibleInTree());
+    side.show("browser");
+    f.root->frame(false);
+    CHECK(shown == 2);
+    CHECK(f.fx->sideBrowser().shown().front() == last);
 }
 
 TEST_CASE("the plugin browser finds a stock plugin by what it is") {

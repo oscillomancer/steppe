@@ -458,6 +458,7 @@ FxWindow::FxWindow(engine::EngineApp& app, cmd::Dispatcher& dispatcher, ui::Root
       favouritesFile_(std::move(favouritesFile)),
       hooks_(std::move(hooks)),
       mainBrowser_(std::make_unique<PluginBrowser>(app, dispatcher, mainRoot, favouritesFile_)),
+      sideBrowser_(std::make_unique<PluginBrowser>(app, dispatcher, mainRoot, favouritesFile_)),
       watchers_(app),
       pluginParams_(app) {}
 
@@ -662,15 +663,44 @@ Status FxWindow::openToAdd(const UiState& ui, const json::Value& prompt) {
         if (tracks.empty())
             return Error("gui.track", "nothing is selected", "/track", "select a track first");
     }
-    mainBrowser_->open([this, tracks](const std::string& pluginId) { addFxTo(tracks, pluginId); },
-                       tracks.size() == 1
-                           ? "Add plugin to " + model::trackLabel(s, tracks.front())
+    // A failure is reported where it happens (the status line, the hook).
+    mainBrowser_->open(
+        [this, tracks](const std::string& pluginId) { (void)addFxTo(tracks, pluginId); },
+        tracks.size() == 1 ? "Add plugin to " + model::trackLabel(s, tracks.front())
                            : "Add plugin to " + std::to_string(tracks.size()) + " tracks");
     return {};
 }
 
+std::unique_ptr<ui::Node> FxWindow::buildSideBrowser(const UiState& ui) {
+    return sideBrowser_->buildEmbedded("side.browser", [this, &ui](const std::string& plugin) {
+        const auto added = addToSelection(ui, plugin);
+        std::string status;
+        if (!added)
+            status = added.error().code == "gui.track" ? std::string("Select a track first")
+                                                       : added.error().message;
+        else if (added->size() == 1)
+            status = "Added to " + model::trackLabel(app_.head(), added->front());
+        else
+            status = "Added to " + std::to_string(added->size()) + " tracks";
+        sideBrowser_->setStatus(std::move(status));
+    });
+}
+
+Result<std::vector<model::Id>> FxWindow::addToSelection(const UiState& ui,
+                                                        const std::string& pluginId) {
+    const model::Session& s = app_.head();
+    std::vector<model::Id> tracks;
+    for (const std::string& selected : ui.selectedTracks)
+        if (const auto id = model::Id::parse(selected); id && s.tracks.find(*id))
+            tracks.push_back(*id);
+    if (tracks.empty())
+        return Error("gui.track", "nothing is selected", "/track", "select a track first");
+    if (auto added = addFxTo(tracks, pluginId); !added) return added.error();
+    return tracks;
+}
+
 // One undo step however many tracks it goes on.
-void FxWindow::addFxTo(const std::vector<model::Id>& tracks, const std::string& pluginId) {
+Status FxWindow::addFxTo(const std::vector<model::Id>& tracks, const std::string& pluginId) {
     std::optional<model::Id> shown;  // the new instance on the track the window shows
     auto add = [&]() -> Result<json::Value> {
         for (const model::Id& track : tracks) {
@@ -689,15 +719,17 @@ void FxWindow::addFxTo(const std::vector<model::Id>& tracks, const std::string& 
         const std::string message = "fx.add: " + result.error().message;
         if (page_) setStatus(message);
         if (hooks_.onError) hooks_.onError(message);
-        return;
+        return result.error();
     }
-    if (!page_ || take_ || std::find(tracks.begin(), tracks.end(), track_) == tracks.end()) return;
+    if (!page_ || take_ || std::find(tracks.begin(), tracks.end(), track_) == tracks.end())
+        return {};
     if (shown) {
         selected_ = *shown;
         picked_.clear();
     }
     setStatus("added " + pluginId);
     refresh();
+    return {};
 }
 
 void FxWindow::close() { panel_.close(); }
@@ -884,6 +916,7 @@ void FxWindow::tick(bool event) {
         projectGeneration_ = app_.projectGeneration();
     }
     mainBrowser_->tick();
+    sideBrowser_->tick();
     if (browser_) browser_->tick();
     if (event) checkFailures();
     if (page_ && touched_) {
