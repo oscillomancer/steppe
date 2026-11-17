@@ -1516,11 +1516,21 @@ by stack address. Tested on Linux, including the real-time and offline equivalen
 scopes; the Windows stack lookup and the macOS in-process attribution are written and
 unproven until native CI runs them. Limits: an isolated (bridged) instance records
 `bridge_call` only and the bridge child has no table of its own yet; an entry says which kind
-but not which plug-in until the inventory lands; two scopes in one function cannot be told
-apart; the audio driver's callback thread is found by its stack mapping, which a thread with
+but the report's `plugins` array says which plug-in (below); two scopes in one function cannot
+be told apart; the audio driver's callback thread is found by its stack mapping, which a thread with
 no readable map defeats (the report then says an entry could not be tied to a thread). The
-instance inventory, command entries and plug-in names (the later steps of topic 5), bridge
-correlation, restart UI/hangs and release package verification remain later topics.
+Each plug-in instance and plug-in library announces itself from the host (created, state
+changes, destroyed), and a report's `plugins` array lists the live and the last 64 destroyed
+ones with their kind, origin, mode, state, readable name, vendor, version and id (at most 64
+bytes each, validated again by the supervisor) and, for CLAP, which module the plug-in's code
+is (`build`); no path or project name is recorded. The sink is closed for good if the
+supervisor stalls with a packet half sent, and events lost are counted. Tested on Linux; the
+Windows ring and the macOS part-sent path are unproven until native CI runs them. Known limits:
+rack modules are not announced and have no cell, so a crash inside a rack module is reported
+without a module entry (it is planned as a later change at the engine's call sites); VST3 and
+bridged instances carry no `build`. Command entries, attribution and the `dropped` counts (the
+later steps of topic 5), bridge correlation, restart UI/hangs and release package verification
+remain later topics.
 Supervisor end (ADR-0091): a supervisor that crashes tells the worker first and the worker keeps
 running without crash capture; a supervisor ended with no notice (`SIGKILL`, `TerminateProcess`,
 a launcher's hard kill) stops the worker as `SIGTERM` does and ends it hard after ten seconds,
