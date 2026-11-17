@@ -167,7 +167,8 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   pans the rack window); key presses say whether they repeat. Text input through SDL3 text-input events (IME composition shown
   inline). Replacing multiline editor text preserves the caret's line and
   code-point column (clamped to the new text); diagnostic columns remain byte
-  offsets. Hiding a dock or panel releases focus and pointer capture within
+  offsets. The multiline editor's line-number gutter can be left out
+  (`TextArea::lineNumbers`) where it holds prose (a track's notes, §4.14). Hiding a dock or panel releases focus and pointer capture within
   its subtree (`Root::releaseWithin`), sending `Cancel` to the captured
   control. Continuous edits end as one undo step; uncommitted drag previews
   and pending button clicks are discarded. Focus and capture outside the
@@ -1904,6 +1905,7 @@ tracks), each one `track.set` per track, several in one transaction:
 | Colour (`inspector.track.color`) | The eight track colours as swatches and an empty square for none; the colour all of them have is ringed | A click; or, with the row focused (Tab), Left and Right (Home, End) to move a focus ring that starts on the tracks' colour, and Enter or Space to pick | `color` |
 | Volume (`inspector.track.volume_db`) | "-6.0 dB", or empty and "mixed" | A number, with or without "dB" | `volume_db` |
 | Pan (`inspector.track.pan`) | "-30 %" (negative is left), or empty and "mixed" | A number, with or without "%" | `pan` |
+| Notes (`inspector.track.notes`), one track only | The track's notes, five lines in view, under its label and as wide as the panel, with a rule around it | Any text over several lines (a `TextArea` without line numbers: Enter is a new line, long lines scroll, they do not wrap). Ctrl+Enter or leaving the field applies it; Escape puts back the track's | `notes` |
 
 Inputs, outputs, sends and record settings stay where they are (the track
 row, the mixer strip and the routing matrix).

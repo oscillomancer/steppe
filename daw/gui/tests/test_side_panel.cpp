@@ -29,6 +29,7 @@
 #include "supple/ui/list.h"
 #include "supple/ui/root.h"
 #include "supple/ui/scroll_view.h"
+#include "supple/ui/text_area.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
 
@@ -839,4 +840,72 @@ TEST_CASE("inspector: the colour swatches are chosen from the keyboard") {
     const auto blue = std::find(model::kTrackColors.begin(), model::kTrackColors.end(), "blue");
     REQUIRE(blue + 1 != model::kTrackColors.end());
     CHECK(track(bass).color == *(blue + 1));
+}
+
+TEST_CASE("inspector: a track's notes are typed over several lines and applied on leaving") {
+    Fixture f;
+    if (!f.ok) return;
+    const std::string bass = f.exec("track.add", R"({"name":"Bass"})")["track"].asString();
+    const std::string keys = f.exec("track.add", R"({"name":"Keys"})")["track"].asString();
+    auto track = [&](const std::string& id) -> const model::Track& {
+        return *f.app->head().tracks.find(*model::Id::parse(id));
+    };
+    f.exec("track.set", R"({"track":")" + keys + R"(","notes":"Rhodes, take the DI"})");
+    f.side->show("inspector");
+    f.ui.selectedTracks = {bass};
+    f.ui.tracksFocused = true;
+    f.pass();
+    auto* notes = dynamic_cast<ui::TextArea*>(f.node("inspector.track.notes"));
+    REQUIRE(notes);
+    REQUIRE(f.inView("inspector.track.notes"));
+    CHECK(notes->text().empty());
+    CHECK_FALSE(notes->lineNumbers);
+
+    // Enter starts a new line; Ctrl+Enter applies the notes as one step.
+    auto before = f.steps();
+    REQUIRE(f.root->click("inspector.track.notes"));
+    f.root->text("P-bass, flats");
+    f.root->key(SDLK_RETURN, 0);
+    f.root->text("retake bar 9");
+    f.pass();
+    CHECK(track(bass).notes.empty());
+    CHECK(f.steps() == before);
+    f.root->key(SDLK_RETURN, ui::kCtrl);
+    f.pass();
+    CHECK(track(bass).notes == "P-bass, flats\nretake bar 9");
+    CHECK(f.steps() == before + 1);
+    // Applying what is already there runs nothing.
+    f.root->key(SDLK_RETURN, ui::kCtrl);
+    f.pass();
+    CHECK(f.steps() == before + 1);
+    // Escape puts back what the track has.
+    f.root->text(" and more");
+    f.root->key(SDLK_ESCAPE, 0);
+    f.pass();
+    CHECK(notes->text() == "P-bass, flats\nretake bar 9");
+    CHECK(f.steps() == before + 1);
+    // Leaving the field applies it; an edit elsewhere meanwhile does not
+    // take the typing away.
+    f.root->text("!");
+    f.exec("track.set", R"({"track":")" + bass + R"(","pan":10})");
+    f.pass();
+    CHECK(notes->text().find('!') != std::string::npos);
+    REQUIRE(f.root->click("inspector.track.pan"));
+    f.pass();
+    CHECK(track(bass).notes.find('!') != std::string::npos);
+
+    // Another track selected while typing: the notes go to the track they
+    // were typed for, and the field shows the new track's.
+    const std::string typed = track(bass).notes;
+    REQUIRE(f.root->click("inspector.track.notes"));
+    f.root->text("?");
+    f.ui.selectedTracks = {keys};
+    f.pass();
+    CHECK(track(bass).notes.size() == typed.size() + 1);
+    CHECK(track(keys).notes == "Rhodes, take the DI");
+    CHECK(notes->text() == "Rhodes, take the DI");
+    // Several tracks have no notes field.
+    f.ui.selectedTracks = {bass, keys};
+    f.pass();
+    CHECK_FALSE(f.inView("inspector.track.notes"));
 }

@@ -27,6 +27,7 @@ class Dropdown;
 class Label;
 class List;
 class TextBlock;
+class TextArea;
 class TextField;
 class Toggle;
 }  // namespace supple::ui
@@ -85,6 +86,7 @@ class Inspector {
     void read(bool force);
     void readItems(bool force);
     void readTracks(bool force);
+    void commitNotes(const std::string& text);  // one track's notes, when they changed
     ui::Root& root_;
     engine::EngineApp& app_;
     const UiState& selection_;
@@ -93,6 +95,8 @@ class Inspector {
     ui::Node* itemBox_ = nullptr;            // the item fields; hidden otherwise
     ui::Node* trackBox_ = nullptr;           // the track fields
     ui::Node* colors_ = nullptr;             // the track colour swatches
+    ui::TextArea* notes_ = nullptr;          // one track's notes
+    std::string notesShown_;                 // as the session has them
     std::map<std::string, ui::Node*> rows_;  // a field's row, to hide with it
     std::map<std::string, Field> fields_;
     std::map<std::string, ui::Toggle*> states_;

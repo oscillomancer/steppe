@@ -17,6 +17,7 @@
 #include "supple/ui/forms.h"
 #include "supple/ui/list.h"
 #include "supple/ui/scroll_view.h"
+#include "supple/ui/text_area.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
 #include "supple/views/lanes.h"
@@ -124,6 +125,16 @@ class ColorRow : public ui::Node {
     std::size_t cursor_ = 0;
 };
 
+// A rule around its one child, as a text field has (the multi-line editor
+// draws none of its own).
+class Framed : public ui::Node {
+  public:
+    using ui::Node::Node;
+    void paint(ui::Canvas& c) override {
+        c.strokeRect(bounds().inset(0.5f), c.theme().color("rule"), 1);
+    }
+};
+
 // The value every one of `things` has, or nothing when they differ.
 template <class T, class F>
 auto common(const std::vector<const T*>& things, F get)
@@ -139,19 +150,12 @@ auto common(const std::vector<const T*>& things, F get)
 
 // What an edit is called in the history.
 std::string editLabel(bool tracks, const std::string& key) {
-    static const std::map<std::string, const char*> names{{"name", "name"},
-                                                          {"position", "start"},
-                                                          {"length", "length"},
-                                                          {"timebase", "timebase"},
-                                                          {"gain_db", "gain"},
-                                                          {"fade_in", "fade in"},
-                                                          {"fade_out", "fade out"},
-                                                          {"mute", "mute"},
-                                                          {"loop", "loop"},
-                                                          {"locked", "lock"},
-                                                          {"color", "color"},
-                                                          {"volume_db", "volume"},
-                                                          {"pan", "pan"}};
+    static const std::map<std::string, const char*> names{
+        {"name", "name"},         {"position", "start"}, {"length", "length"},
+        {"timebase", "timebase"}, {"gain_db", "gain"},   {"fade_in", "fade in"},
+        {"fade_out", "fade out"}, {"mute", "mute"},      {"loop", "loop"},
+        {"locked", "lock"},       {"color", "color"},    {"volume_db", "volume"},
+        {"pan", "pan"},           {"notes", "notes"}};
     const auto found = names.find(key);
     return std::string(tracks ? "Track " : "Item ") +
            (found == names.end() ? key.c_str() : found->second);
@@ -513,6 +517,32 @@ std::unique_ptr<ui::Node> Inspector::build() {
     colors_ = &swatches;
     field(tracks, "track.volume_db", "Volume");
     field(tracks, "track.pan", "Pan");
+    // Notes: several lines, for one track. Leaving the field or Ctrl+Enter
+    // applies them; Escape puts back what the track has.
+    // The label is above the field, which takes the panel's width: lines
+    // do not wrap, so every unit of width counts.
+    auto& notesRow = tracks.emplace<ui::Node>("inspector.row.track.notes");
+    rows_["track.notes"] = &notesRow;
+    notesRow.layout.dir = ui::Layout::Dir::Column;
+    notesRow.layout.height = ui::SizeRule::content();
+    notesRow.layout.gap = 4;
+    notesRow
+        .emplace<ui::Label>("inspector.label.track.notes", "Notes", ui::Font::Ui, "small",
+                            "ink-quiet")
+        .layout.height = ui::SizeRule::fixed(18);
+    auto& frame = notesRow.emplace<Framed>("inspector.track.notes.frame");
+    frame.layout.height = ui::SizeRule::fixed(98);
+    frame.layout.dir = ui::Layout::Dir::Row;
+    frame.layout.padding = ui::Insets::all(1);
+    auto& notes = frame.emplace<ui::TextArea>("inspector.track.notes");
+    notes.lineNumbers = false;
+    notes.layout.width = ui::SizeRule::fraction();
+    notes.onSubmit = [this](const std::string& text) { commitNotes(text); };
+    notes.onFocusChange = [this](bool focused) {
+        if (!focused && notes_) commitNotes(notes_->text());
+    };
+    notes.onCancel = [this] { notes_->setText(notesShown_); };
+    notes_ = &notes;
     return panel;
 }
 
@@ -648,6 +678,18 @@ void Inspector::readTracks(bool force) {
     auto* row = static_cast<ColorRow*>(colors_);
     row->current = common(tracks, [](const model::Track& t) { return t.color; });
     row->invalidate();
+    rows_["track.notes"]->visible = one;
+    if (one) {
+        notesShown_ = tracks.front()->notes;
+        // What is being typed stays, as in the one-line fields.
+        if ((force || root_.focused() != notes_) && notes_->text() != notesShown_)
+            notes_->setText(notesShown_);
+    }
+}
+
+void Inspector::commitNotes(const std::string& text) {
+    if (kind_ != InspectorSubject::Kind::Track || text == notesShown_) return;
+    set("notes", text);
 }
 
 void Inspector::fail(const std::string& message) {

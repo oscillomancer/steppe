@@ -590,7 +590,7 @@ instructions are in `docs/guides/installing.md`.
   fields, each one `item.set`, an audio take's speed, pitch and keep-pitch
   through `take.set`, and the choice of the take heard; for several items
   the fields they share, edited as one undo step; for tracks their name,
-  colour, volume and pan through `track.set`), the Browser (the plugin
+  colour, volume, pan and notes through `track.set`), the Browser (the plugin
   browser as a tab: a chosen plugin goes on every selected track as one
   undo step, and the browser stays; a row drags onto a track's row or
   mixer strip; patches, media and files are not there yet) and the History
