@@ -357,7 +357,10 @@ RemoteInstance::~RemoteInstance() {
         std::erase(process_->members_, this);
         std::erase(process_->refreshOnly_, this);
     }
-    if (process_ && instanceId_ && !failed()) (void)call(Op::Destroy, Writer{}, -1, 2000);
+    // The control plane's own timeout, as for every main-thread request: a
+    // shorter one killed the bridge, and every plug-in sharing it, when a
+    // stalled machine was slow to answer (ADR-0090, review round 30).
+    if (process_ && instanceId_ && !failed()) (void)call(Op::Destroy, Writer{});
     unmap();
 }
 
@@ -776,7 +779,7 @@ std::optional<Instance::EditorFrame> RemoteInstance::closeEditor() {
     editorOpen_ = false;
     pendingEditor_ = {};
     if (failed()) return {};
-    auto reply = call(Op::EditorClose, Writer{}, -1, 2000);
+    auto reply = call(Op::EditorClose, Writer{});  // as Destroy: the control plane's timeout
     if (!reply) return {};
     Reader r(reply->data(), reply->size());
     auto frame = readFrame(r);

@@ -392,6 +392,39 @@ TEST_CASE("native bridge notifications ACK and rearm without periodic parent pol
     (*remote)->deactivate();
 }
 
+TEST_CASE("removing one plug-in from a stalled shared bridge leaves the others alive") {
+    // Review round 30 (F3): Destroy waited 2 s for its reply, then killed the
+    // bridge and every plug-in in it. The bridge stops for 3 s while one of
+    // its two instances is destroyed; the other must still play.
+    setBridgeExecutable(BRIDGE_PATH);
+    auto process = createBridgeProcess();
+    REQUIRE(process);
+    const auto info = nativePlugin(FIXTURE_CLAP_PATH, "com.suppleaudio.test.crash");
+    auto x = Instance::create(info, {}, true, *process);
+    auto y = Instance::create(info, {}, true, *process);
+    REQUIRE(x);
+    REQUIRE(y);
+    Instance& kept = **y;
+    const int pid = kept.bridgePid();
+    REQUIRE(pid > 0);
+    REQUIRE(supple::test::pauseProcess(pid));
+    std::thread resume([&kept, pid] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+        if (!kept.failed()) supple::test::resumeProcess(pid);  // a killed one stays killed
+    });
+    x->reset();  // Destroy, answered once the bridge goes on
+    resume.join();
+    CHECK_FALSE(kept.failed());
+    REQUIRE(kept.activate(48000, 1, 64));
+    REQUIRE(kept.startProcessing());
+    Audio audio;
+    audio.left.fill(0.25f);
+    audio.right.fill(0.25f);
+    REQUIRE(kept.process(audio.block()));
+    CHECK(audio.outLeft[0] == doctest::Approx(0.25));
+    kept.stopProcessing();
+    kept.deactivate();
+}
 TEST_CASE("a publication from a bridged audio thread reaches its instance through the named ACK") {
     // Review round 26 (F1): every other test that sees a bridge-side
     // publication also holds a pull of the same instance's own, which carries

@@ -94,12 +94,17 @@ deadline does not replace to be listed with its reason. In the host
 | 50 ms of consecutive late calls (ADR-0081) | The same | The instance fails; main kills the bridge | A plug-in that never catches up must not cost every cycle its deadline. |
 | 2 s for `process`, 5/2 of it plus 2 s (7 s) for lifecycle commands, process-wide (`host::setBridgeDeadlineMs`) | Data-plane calls off the callback outside offline renders: the anticipative renderer, workers, the main thread | The bridge is killed; its instances fail (ADR-0013 §6) | The live session plays from what these produce, so a longer wait stalls playback behind one plug-in. |
 | 20 s (`kCreateTimeoutMs`) | `Create`, the control request that loads a plug-in | The bridge is killed | Loading may page in a large binary. It runs before any render, while instances are made. |
-| 10 s, the control plane's default | Every other control request: activate, parameters, state, patches, editors, service, notifications | The bridge is killed: an unanswered request leaves the socket stream out of step | They run on the main thread, which they block; 10 s bounds how long a hung bridge can freeze it. |
-| 2 s | `Destroy` (`~RemoteInstance`) and `EditorClose` | The bridge is killed, and with it every member of a shared bridge | None worth the cost: under memory pressure, removing one effect or closing its editor kills its healthy neighbours. To be raised to the 10 s default (review round 30, F3). |
+| 10 s, the control plane's default | Every other control request: activate, parameters, state, patches, editors, service, notifications, and `Destroy` and `EditorClose` | The bridge is killed: an unanswered request leaves the socket stream out of step | They run on the main thread, which they block; 10 s bounds how long a hung bridge can freeze it. |
 | 2 s | `~BridgeProcess`: the child's exit after its control socket closes | The child is killed | The process is going away and no instance uses it any more. |
 
 The bridge itself has no fixed timeout: its main loop waits for requests
 and for its plug-ins' timers.
+
+`Destroy` and `EditorClose` had 2 s. On a shared bridge, a stall past that
+while one plug-in was removed, or its editor closed, killed every other
+plug-in in the bridge, live sessions included. They now have the 10 s
+default like every other main-thread request; a test destroys one of two
+instances while their bridge is stopped for 3 s and plays the other.
 
 ## Commands that render offline
 

@@ -353,6 +353,12 @@ The engine tests raise the process-wide one to 60 s for the whole binary
 bit-identity comparison of live renders; the tests of the deadline itself
 set it explicitly.
 
+A control-plane request has one deadline for its send and reply: 20 s for
+`Create`, 10 s for every other, `Destroy` and `EditorClose` included. A
+bridge that misses it is killed, with every instance in it, since its
+stream is out of step. ADR-0090 lists every bridge timeout and why it is
+what it is.
+
 Thread discipline follows CLAP: create/activate/params-info/state/GUI on the
 main thread; `process` on one audio thread. The sandbox's audio thread is
 simply the render thread (offline), but the RT rules still hold and the
