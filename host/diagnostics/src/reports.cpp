@@ -409,8 +409,10 @@ Status writeSampleUnreportedRun(const std::string& incident, const fs::path& dir
     return okStatus();
 }
 Status writeSampleCrash(const std::string& incident, const std::string& plugin,
-                        const std::string& vendor, const fs::path& directory) {
-    if (!incidentName(incident) || plugin.size() > 64 || vendor.size() > 64)
+                        const std::string& vendor, const fs::path& directory,
+                        const SampleCrashPlugin& extra) {
+    if (!incidentName(incident) || plugin.size() > 64 || vendor.size() > 64 ||
+        extra.id.size() > 64 || extra.version.size() > 64)
         return noReport(incident);
     Packet boot;
     boot.role = static_cast<std::uint32_t>(diagnostics::Role::Fixture);
@@ -429,12 +431,16 @@ Status writeSampleCrash(const std::string& incident, const std::string& plugin,
     r.length[0] = static_cast<std::uint8_t>(plugin.size());
     std::memcpy(r.text[1], vendor.data(), vendor.size());
     r.length[1] = static_cast<std::uint8_t>(vendor.size());
+    std::memcpy(r.text[2], extra.version.data(), extra.version.size());
+    r.length[2] = static_cast<std::uint8_t>(extra.version.size());
+    std::memcpy(r.text[3], extra.id.data(), extra.id.size());
+    r.length[3] = static_cast<std::uint8_t>(extra.id.size());
     Inventory inventory;
     if (!inventory.apply(announce)) return noReport(incident);
     TraceSnapshot trace;
     trace.table = TableState::Read;
     trace.modules.resize(1);
-    trace.modules[0].id = "0123456789abcdef";
+    trace.modules[0].id = extra.buildId;
     trace.regions = {{0x5000, 0x6000, 0}};
     trace.threads.resize(1);
     trace.threads[0].role = detail::Role::Fault;

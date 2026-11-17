@@ -89,10 +89,17 @@ Status acknowledge(const std::string& incident, const std::filesystem::path& dir
 Status writeSampleUnreportedRun(const std::string& incident,
                                 const std::filesystem::path& directory);
 
+// What else a sample crash says of its plug-in: its own id and version (without an id it is no
+// suspect, topic 7d) and the build id of the binary the fault was in, as the report records it.
+struct SampleCrashPlugin {
+    std::string id, version;
+    std::string buildId = "0123456789abcdef";
+};
 // Writes a crash report that names `plugin` (and its `vendor`) as the plug-in the faulting
 // instruction was in (attribution fault_in_image), for tests and examples.
 Status writeSampleCrash(const std::string& incident, const std::string& plugin,
-                        const std::string& vendor, const std::filesystem::path& directory);
+                        const std::string& vendor, const std::filesystem::path& directory,
+                        const SampleCrashPlugin& extra = {});
 
 // Writes one small, valid report (an unexpected exit of a fixture run, no capture) under
 // `incident`: for command examples and tests of whatever reads reports. Not for use by a run that
