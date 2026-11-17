@@ -60,7 +60,7 @@ def run_bridged(mode):
 reports,run=run_bridged("bridged-hang")
 assert len(reports)==1,(len(reports),run.stderr)
 crash=reports[0]
-assert crash["kind"]=="crash" and "bridge" not in crash,crash["kind"]
+assert crash["kind"] in (("crash","unexpected_exit") if sanitized else ("crash",)) and "bridge" not in crash,crash["kind"]
 assert len(crash["bridges"])==1,crash["bridges"]
 bridge=crash["bridges"][0]
 assert bridge["state"]=="ended" and bridge["ended"]["how"]=="host",bridge

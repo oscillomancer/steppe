@@ -24,8 +24,11 @@ void collect(const diagctx::Event& event) noexcept {
 // Collects what the host announces for the length of a test.
 struct Sink {
     Sink() {
-        std::lock_guard lock(gEventsMutex);
-        gEvents.clear();
+        {
+            std::lock_guard lock(gEventsMutex);
+            gEvents.clear();
+        }
+        // Not under the events lock: the sink runs under the announcement lock and then takes it.
         diagctx::setInventorySink(&collect);
     }
     ~Sink() { diagctx::setInventorySink(nullptr); }
