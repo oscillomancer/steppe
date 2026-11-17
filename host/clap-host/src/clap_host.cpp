@@ -722,6 +722,11 @@ std::optional<fs::path> resourceDir(const fs::path& installed, const fs::path& b
 }
 }  // namespace
 
+fs::path pluginImageFile(const PluginInfo& info) {
+    if (info.format == "vst3" || info.path.empty()) return {};
+    return platform::bundleExecutable(info.path);
+}
+
 std::optional<fs::path> stockPluginDir() {
 #if defined(_WIN32)
     const fs::path installed = fs::path("plugins") / "clap";

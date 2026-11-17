@@ -40,30 +40,35 @@ fs::path executablePath() {
     return fs::read_symlink("/proc/self/exe", ec);
 #endif
 }
-Result<void*> openLibrary(const fs::path& path) {
-    fs::path binary = path;
+fs::path bundleExecutable(const fs::path& path) {
 #if defined(__APPLE__)
     std::error_code ec;
-    if (fs::is_directory(path, ec)) {
-        const auto text = pathText(path);
-        auto url = CFURLCreateFromFileSystemRepresentation(
-            nullptr, reinterpret_cast<const UInt8*>(text.data()), static_cast<CFIndex>(text.size()),
-            true);
-        auto bundle = url ? CFBundleCreate(nullptr, url) : nullptr;
-        auto executable = bundle ? CFBundleCopyExecutableURL(bundle) : nullptr;
-        std::vector<UInt8> buffer(32768);
-        const bool ok =
-            executable && CFURLGetFileSystemRepresentation(executable, true, buffer.data(),
-                                                           static_cast<CFIndex>(buffer.size()));
-        if (ok) binary = reinterpret_cast<const char*>(buffer.data());
-        if (executable) CFRelease(executable);
-        if (bundle) CFRelease(bundle);
-        if (url) CFRelease(url);
-        if (!ok)
-            return Error("host.load", "CLAP bundle has no executable", "/path",
-                         "check Contents/Info.plist and Contents/MacOS");
-    }
+    if (!fs::is_directory(path, ec)) return path;
+    const auto text = pathText(path);
+    auto url = CFURLCreateFromFileSystemRepresentation(nullptr,
+                                                       reinterpret_cast<const UInt8*>(text.data()),
+                                                       static_cast<CFIndex>(text.size()), true);
+    auto bundle = url ? CFBundleCreate(nullptr, url) : nullptr;
+    auto executable = bundle ? CFBundleCopyExecutableURL(bundle) : nullptr;
+    std::vector<UInt8> buffer(32768);
+    const bool ok =
+        executable && CFURLGetFileSystemRepresentation(executable, true, buffer.data(),
+                                                       static_cast<CFIndex>(buffer.size()));
+    fs::path binary;
+    if (ok) binary = reinterpret_cast<const char*>(buffer.data());
+    if (executable) CFRelease(executable);
+    if (bundle) CFRelease(bundle);
+    if (url) CFRelease(url);
+    return binary;
+#else
+    return path;  // a CLAP is the file itself (a shared library)
 #endif
+}
+Result<void*> openLibrary(const fs::path& path) {
+    const fs::path binary = bundleExecutable(path);
+    if (binary.empty())
+        return Error("host.load", "CLAP bundle has no executable", "/path",
+                     "check Contents/Info.plist and Contents/MacOS");
 #if defined(_WIN32)
     auto handle = LoadLibraryW(binary.c_str());
     if (handle) return static_cast<void*>(handle);

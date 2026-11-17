@@ -99,6 +99,11 @@ std::vector<std::filesystem::path> defaultSearchPath();
 // two folders above daw/gui/ and host/engine/. The apps search it before
 // defaultSearchPath(), so an older stock copy in ~/.clap never wins.
 std::optional<std::filesystem::path> stockPluginDir();
+// The executable image file of a scanned CLAP: its path, or for a macOS bundle the
+// executable inside it. Empty for a VST3 (a folder bundle whose reports carry no build
+// id) and when a bundle names none. Read-only; for comparing a build id with a crash
+// report's (topic 7d).
+std::filesystem::path pluginImageFile(const PluginInfo& info);
 // The agent skill (the folder holding SKILL.md) that ships with the running
 // binary, found as stockPluginDir() is: skill beside it (Windows),
 // ../Resources/skill (macOS bundle), ../share/<slug>/skill (Linux), or
