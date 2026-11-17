@@ -7,10 +7,10 @@
 #include <supple/engine/app.h>
 #include <supple/engine/offline.h>
 #include <supple/engine/realtime.h>
-#include <unistd.h>
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <random>
 #include <sstream>
 #include <thread>
 #include "bridge_patience.h"
@@ -24,9 +24,17 @@ namespace {
 const fs::path kFixture = FIXTURE_CLAP_PATH;
 constexpr const char* kGain = "com.suppleaudio.test.gain";
 
+// A name no other run of this test shares, without any one platform's process-id call.
+std::string runId() {
+    static const std::string id = [] {
+        std::random_device device;
+        return std::to_string(device()) + std::to_string(device());
+    }();
+    return id;
+}
+
 struct Root {
-    fs::path path =
-        fs::temp_directory_path() / ("supple-load-overrides-" + std::to_string(::getpid()));
+    fs::path path = fs::temp_directory_path() / ("supple-load-overrides-" + runId());
     Root() { fs::remove_all(path); }
     ~Root() { fs::remove_all(path); }
 };

@@ -4,15 +4,23 @@
 // installed plug-in, project.plugins, the project.suspect_plugin warning, project.open's
 // expect_hash, settling by a clean run. No test waits for a clock: time is injected.
 #include <doctest/doctest.h>
-#include <fcntl.h>
 #include <supple/base/files.h>
 #include <supple/diagnostics/reports.h>
 #include <supple/engine/app.h>
 #include <supple/engine/realtime.h>
 #include <supple/imageid/image.h>
-#include <unistd.h>
 #include <filesystem>
 #include <fstream>
+#include <random>
+#include <string>
+#if defined(_WIN32)
+#include <fcntl.h>
+#include <io.h>
+#include <sys/stat.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 #include "../../diagnostics/resolver/tests/images.h"
 #include "bridge_patience.h"
 #include "suspects.h"
@@ -31,11 +39,19 @@ namespace {
 const fs::path kFixture = FIXTURE_CLAP_PATH;
 constexpr const char* kGain = "com.suppleaudio.test.gain";
 
+// A name no other run of this test shares, without any one platform's process-id call.
+const std::string& runId() {
+    static const std::string id = [] {
+        std::random_device device;
+        return std::to_string(device()) + std::to_string(device());
+    }();
+    return id;
+}
+
 struct Root {
     fs::path path;
     explicit Root(const std::string& tag = "a", bool keep = false)
-        : path(fs::temp_directory_path() /
-               ("supple-suspects-" + std::to_string(::getpid()) + "-" + tag)) {
+        : path(fs::temp_directory_path() / ("supple-suspects-" + runId() + "-" + tag)) {
         if (!keep) fs::remove_all(path);
     }
     ~Root() { fs::remove_all(path); }
@@ -507,22 +523,38 @@ TEST_CASE("project.open warns of a suspect and loads it normally, unless the run
     CHECK_FALSE(hasWarning(f.call("project.open", open), "project.suspect_plugin"));
 }
 
-#if !defined(_WIN32)
 namespace {
-// What standard error receives while `body` runs.
+// What standard error receives while `body` runs: the descriptor is pointed at a file for the
+// length of the call (the engine writes with the C library's stderr, on every platform).
+#if defined(_WIN32)
+int dupFd(int fd) { return _dup(fd); }
+void dup2Fd(int from, int to) { (void)_dup2(from, to); }
+void closeFd(int fd) { (void)_close(fd); }
+int openForWrite(const fs::path& path) {
+    return _open(path.string().c_str(), _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY,
+                 _S_IREAD | _S_IWRITE);
+}
+#else
+int dupFd(int fd) { return ::dup(fd); }
+void dup2Fd(int from, int to) { (void)::dup2(from, to); }
+void closeFd(int fd) { (void)::close(fd); }
+int openForWrite(const fs::path& path) {
+    return ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+}
+#endif
 template <class Body>
 std::string standardError(const fs::path& scratch, Body body) {
     std::fflush(stderr);
-    const int saved = ::dup(2);
-    const int file = ::open(scratch.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    const int saved = dupFd(2);
+    const int file = openForWrite(scratch);
     REQUIRE(saved >= 0);
     REQUIRE(file >= 0);
-    ::dup2(file, 2);
-    ::close(file);
+    dup2Fd(file, 2);
+    closeFd(file);
     body();
     std::fflush(stderr);
-    ::dup2(saved, 2);
-    ::close(saved);
+    dup2Fd(saved, 2);
+    closeFd(saved);
     std::ifstream in(scratch);
     return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
 }
@@ -554,7 +586,6 @@ TEST_CASE(
         }
     }
 }
-#endif
 
 TEST_CASE("a stock plug-in that is a suspect is offered no bridge") {
     Bus f;
