@@ -2248,7 +2248,8 @@ TEST_CASE("a bridge too old to name protocol versions is refused naming the host
 }
 
 TEST_CASE(
-    "remote wake subscriptions snapshot all shared members and deliver callback GUI requests") {
+    "remote wake subscriptions pull the members an ACK names and deliver callback GUI "
+    "requests") {
     setBridgeExecutable(BRIDGE_PATH);
     MainThreadWake wake;
     REQUIRE(wake.fd() >= 0);
@@ -2287,7 +2288,7 @@ TEST_CASE(
         if (editor.resize) width = editor.width;
     }
     CHECK(tail);
-    CHECK(BridgeTestAccess::pendingDirty(*process, 1));  // other member already snapshotted
+    CHECK(BridgeTestAccess::pendingDirty(*process, 1));  // the ACK named it in the same pass
     (*second)->serviceMainThread();
     CHECK((*second)->takeNotifications().stateDirty);
     CHECK((*second)->nextTimerMs() == -1);  // closed-editor timer stayed in child
