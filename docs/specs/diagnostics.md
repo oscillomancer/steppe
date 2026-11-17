@@ -161,7 +161,12 @@ therefore not that nothing stays attached but that nothing can block the worker'
 once the worker dies, the supervisor's wait reaps every thread it still traces (a traced
 thread is not reaped by anyone else, and the worker is not reported until it is) and
 detaches any that stops, handing a pending signal back. If the worker's exit is observed
-during collection, its real status is kept for the report. Module identity is
+during collection, its real status is kept for the report. The `diagnostics.ptrace-faults`
+test (Linux, skipped in sanitized builds and under restricted tracing) preloads a shim
+that makes the supervisor's ptrace calls fail or wait on process state: a refused
+`PTRACE_INTERRUPT`, a thread that dies while held stopped, and a main thread that exits
+while attached. In each the supervisor must finish and the report must say what was not
+read. Module identity is
 read from the ELF headers in the target's memory through `process_vm_readv`, so a deleted
 or replaced file cannot mislead it. Formatting, JSON and file work happen after the
 acknowledgement.

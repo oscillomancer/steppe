@@ -36,4 +36,13 @@ if(SUPPLE_BUILD_TESTS)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   add_test(NAME diagnostics.lifecycle COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/lifecycle.py" "$<TARGET_FILE:diagnostics-fixture>" "${SUPPLE_SANITIZE}" "$<TARGET_FILE:resolve-crash>")
   set_tests_properties(diagnostics.lifecycle PROPERTIES LABELS rt)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Fault injection for the collector's ptrace calls (review round 29): the fixture runs
+    # with this library preloaded. Skipped (77) in sanitized builds and under restricted tracing.
+    add_library(diagnostics-ptrace-shim MODULE tests/ptrace_shim.cpp)
+    target_link_libraries(diagnostics-ptrace-shim PRIVATE ${CMAKE_DL_LIBS})
+    supple_target_defaults(diagnostics-ptrace-shim)
+    add_test(NAME diagnostics.ptrace-faults COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ptrace_faults.py" "$<TARGET_FILE:diagnostics-fixture>" "$<TARGET_FILE:diagnostics-ptrace-shim>" "${SUPPLE_SANITIZE}")
+    set_tests_properties(diagnostics.ptrace-faults PROPERTIES LABELS rt SKIP_RETURN_CODE 77)
+  endif()
 endif()
