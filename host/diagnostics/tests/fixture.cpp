@@ -19,6 +19,8 @@
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <crtdbg.h>
+#include <fcntl.h>
+#include <io.h>
 #include <windows.h>
 
 #include <chrono>
@@ -464,6 +466,15 @@ int body(int argc, char** argv) {
             std::abort();
         });
         return 0;
+    }
+    // The product passes stdin and stdout through byte for byte, and these modes are how a
+    // test shows it, so they read and write in binary: the Windows C runtime's text mode
+    // would turn every "\n" written into "\r\n" and say nothing about the supervisor.
+    if (mode == "echo" || mode == "collector-loss" || mode == "fault-after-loss") {
+#if defined(_WIN32)
+        (void)_setmode(_fileno(stdin), _O_BINARY);
+        (void)_setmode(_fileno(stdout), _O_BINARY);
+#endif
     }
     if (mode == "echo") {
         if (argc != 4 || std::string(argv[3]) != "argument with spaces \" and slash\\") return 4;
