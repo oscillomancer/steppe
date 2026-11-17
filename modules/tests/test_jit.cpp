@@ -305,7 +305,9 @@ std::vector<double> songPhase(const std::string& body, int block, bool feedback,
         // MIR's interpreter is a test backend that builds each function's
         // code and its shims into C on the first call (ADR-0032): one block
         // through the harness, off the audio path, does that before the
-        // schedule plays the same program there.
+        // schedule plays the same program there. It covers the functions
+        // and call signatures one block reaches: a body with a branch taken
+        // only later would make rtsan report that inside the schedule.
         ModuleHarness first(*code);
         first.run(32);
     }

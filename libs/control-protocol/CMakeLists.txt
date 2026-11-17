@@ -6,4 +6,4 @@ if(WIN32)
   target_link_libraries(control-protocol PRIVATE ws2_32)
 endif()
 
-supple_add_tests(control-protocol SOURCES tests/test_protocol.cpp tests/test_platform.cpp)
+supple_add_tests(control-protocol SOURCES tests/test_protocol.cpp tests/test_platform.cpp tests/test_limits.cpp)

@@ -384,6 +384,9 @@ class DummyBackend : public Backend {
         Mode mode = Mode::Manual;
         bool paced = false;              // Thread mode: sleep one block period per cycle
         std::int64_t captureFrames = 0;  // frames of output to keep
+        // Tests: the rate start() grants, as a device may, instead of the
+        // one requested (0: the requested rate).
+        double grantedRate = 0;
         // Tests: fills the input channels before each cycle (on the audio
         // thread; `frame` counts input frames since start). Null: silence.
         std::function<void(float* const* in, std::uint32_t channels, std::uint32_t frames,
@@ -560,6 +563,13 @@ class Engine {
     // pans (and in the points of envelopes a write pass holds) updates the
     // running plan instead, without compiling (ADR-0060).
     Status load(const model::Session& session, const std::filesystem::path& projectDir = {});
+    // A load() that playrate scheduling deferred returned success before
+    // compiling. If the edit then fails to compile (in whichever load() takes
+    // it up), it never played: the engine goes back to the session it plays,
+    // and this returns that failure, once. Main thread.
+    std::optional<Error> takeUnplayedEdit() { return std::exchange(unplayedEdit_, std::nullopt); }
+    // The session the engine plays or, while an edit is deferred, will play.
+    const std::shared_ptr<const model::Session>& latestSession() const { return latest_; }
     // Automation writing (ADR-0061): the volume/pan targets a write pass
     // holds at their static value instead of their envelope. Returns true
     // when releasing a hold needs a load() of the current session to restore
@@ -884,12 +894,16 @@ class Engine {
     void startFree(std::vector<host::Instance*>& owned, const std::vector<host::Instance*>* next,
                    const void* self) SUPPLE_RT;
     static void resetOwned(const std::vector<host::Instance*>& owned, detail::Plan* plan) SUPPLE_RT;
-    void collectPlans();
+    // Frees the plans no executor can still use; returns the oldest
+    // generation an executor may use, as read for that decision.
+    std::uint64_t collectPlans();
+    Status loadNow(const model::Session& session, const std::filesystem::path& projectDir);
     // The oldest plan generation an executor may still be using.
     std::uint64_t oldestInUse() const;
-    // Route E stage 1: retired plans' frontier and record rings go to the
-    // pool, from which load() takes a ring of the shape it needs.
-    void recycleRings();
+    // Route E stage 1: the rings of plans older than `oldest` (one reading
+    // of oldestInUse()) go to the pool, from which load() takes a ring of
+    // the shape it needs.
+    void recycleRings(std::uint64_t oldest);
     std::unique_ptr<detail::ChunkRing> takeRing(std::size_t capacity, std::uint32_t frames);
     void publishPluginOutputs(detail::Plan& plan, bool renderer, std::uint64_t epoch,
                               std::int64_t pos, std::int64_t stream) SUPPLE_RT;
@@ -927,6 +941,8 @@ class Engine {
     std::uint64_t outputWakeSeen_ = 0;  // callback only
     EngineOptions options_;
     Backend* backend_ = nullptr;
+    // What the device granted, set once start() has returned: the main
+    // thread's. The audio path reads deviceRate_ instead.
     BackendConfig config_;
     // Plans: published by the main thread, freed once no executor can use
     // them (both acknowledged a newer generation).
@@ -952,9 +968,22 @@ class Engine {
     // Plans carry a generation; the audio thread stores it here after adopt()
     // has stopped the instances the plan dropped. service() prunes only then.
     std::uint64_t publishedGen_ = 0;
+    // Tests only (EngineTestAccess): runs inside service() right after the
+    // old plans are collected, where an executor may adopt a newer plan.
+    void (*afterCollectForTests_)(void*) = nullptr;
+    void* afterCollectContext_ = nullptr;
     bool bridgedLive_ = false;  // main thread (bridgedLive())
     std::atomic<std::uint64_t> stoppedGen_{0};
+    // The session the engine plays: the newest published plan's, or a mix or
+    // scalar edit of it. A playrate-deferred edit sets it before any plan
+    // exists; rateDeferredFrom_ then holds the one it replaced, which load()
+    // puts back if the deferred edit fails to compile (review 37 F1).
     std::shared_ptr<const model::Session> latest_;
+    std::optional<std::shared_ptr<const model::Session>> rateDeferredFrom_;
+    std::optional<Error> unplayedEdit_;  // takeUnplayedEdit()
+    // The session the newest published plan was compiled from: what the
+    // prune keeps, whatever latest_ names.
+    std::shared_ptr<const model::Session> compiled_;
     bool prunePending_ = false;
     std::uint32_t outputLatency_ = 0;
     std::vector<std::string> warnings_;
@@ -1075,7 +1104,13 @@ class Engine {
     // it owns, and where it plays live nodes.
     std::uint32_t deviceInputs_ = 0;   // written before the backend starts
     std::uint32_t deviceOutputs_ = 2;  // the callback's out channels (at most 64), likewise
-    Backend* midiSource_ = nullptr;    // the backend, for the callback: set before it starts
+    // The device's rate for the audio path. Atomic, unlike the copies above:
+    // the requested rate is stored before the backend starts, and the granted
+    // one only once start() returns, while callbacks may already run. Nothing
+    // that depends on the rate (a plan, a sync runtime, a count-in) runs
+    // before the granted rate is stored.
+    std::atomic<double> deviceRate_{48000.0};
+    Backend* midiSource_ = nullptr;  // the backend, for the callback: set before it starts
     detail::Plan* livePlan_ = nullptr;
     std::vector<host::Instance*> liveProcessing_;
     std::int64_t livePos_ = 0;

@@ -84,7 +84,12 @@ std::shared_ptr<const ScriptDefinition> compileScript(const std::filesystem::pat
                                                       std::string* problems,
                                                       scriptc::Message* firstError) {
     scriptc::Options options;
+#ifndef NDEBUG
+    // A diagnostic for Debug builds only: MIR's interpreter allocates on the
+    // audio thread (each function's first call, each new call into C), so a
+    // shipped (release) player never honours it (ADR-0032).
     options.interpret = std::getenv("SUPPLE_SCRIPT_INTERPRET") != nullptr;
+#endif
     scriptc::Result result = scriptc::compile(source, options);
     if (!result.program) {
         if (firstError)

@@ -60,3 +60,7 @@ Retry only requests known not to have been sent, after rerouting against fresh
 kinds and tool mappings. Never replay a sent-but-unanswered edit. A regression
 restarts the peer with a Query changed to Edit, a new query and different tools;
 another drops an edit's committed reply and proves it executes only once.
+
+**2026-11-16 note:** [ADR-0087](0087-control-boundary-budgets.md) replaces
+error-code-based retry eligibility with explicit local RPC delivery provenance.
+Remote structured errors never establish that a command was unsent.

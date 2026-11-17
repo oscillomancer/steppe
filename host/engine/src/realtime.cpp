@@ -105,6 +105,7 @@ Status DummyBackend::start(const BackendConfig& config, Callback callback) {
         return Error("backend.running", "the backend is already running", {},
                      "stop this backend before starting it again or changing its configuration");
     config_ = config;
+    if (options_.grantedRate > 0) config_.sampleRate = options_.grantedRate;
     callback_ = std::move(callback);
     outputs_.assign(config.outputs, std::vector<float>(config.blockSize, 0.0f));
     outPtrs_.clear();
@@ -304,6 +305,7 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
     outputWakeSerial_.fetch_add(1);
     outputWakeSeen_ = 0;
     midiSource_ = &backend;  // before any callback (backend_ is set after start returns)
+    deviceRate_.store(config.sampleRate, std::memory_order_relaxed);
     syncDevice_ = 0;
     syncRt_ = nullptr;
     for (auto& n : syncOutSent_) n.store(0, std::memory_order_relaxed);
@@ -316,6 +318,10 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
         return started;
     }
     config_ = backend.config();  // what the device granted (e.g. its rate)
+    // Before any plan or sync runtime is published, so their release orders
+    // it for every reader that loads it after acquiring one. BridgeCycle
+    // loads it at the top of a cycle, before the plan: see there.
+    deviceRate_.store(config_.sampleRate, std::memory_order_relaxed);
     hardwareMidi_->prepare(config_.sampleRate, config_.outputs);
     backend_ = &backend;
     startWarnings_.clear();
@@ -562,6 +568,9 @@ void Engine::stop() {
     rateReseekGeneration_.store(0);
     rateReseekServiced_ = 0;
     rateDeferred_ = false;
+    // A deferred edit dropped here never played either; the engine is
+    // stopped, so the app's next start loads its head anyway.
+    if (rateDeferredFrom_) latest_ = *std::exchange(rateDeferredFrom_, std::nullopt);
     scalarPending_ = false;
     scalarHeardEpoch_ = UINT64_MAX;
     ratePreparationSeconds_ = 0;
@@ -586,6 +595,20 @@ void Engine::stop() {
 }
 
 Status Engine::load(const model::Session& session, const std::filesystem::path& projectDir) {
+    auto loaded = loadNow(session, projectDir);
+    // A deferred edit compiles in the first load() past its deferral, whoever
+    // calls it. If that failed, the edit never played: latest_ goes back to
+    // the session that did, so the prune, the mix and scalar shortcuts and
+    // later reloads do not act on it, and the app learns it (review 37 F1).
+    // A failure before the deferral is decided leaves the edit deferred.
+    if (!loaded && rateDeferredFrom_ && !rateDeferred_) {
+        latest_ = *std::exchange(rateDeferredFrom_, std::nullopt);
+        unplayedEdit_ = loaded.error();
+    }
+    return loaded;
+}
+
+Status Engine::loadNow(const model::Session& session, const std::filesystem::path& projectDir) {
     if (recording()) SUPPLE_TRY(model::validateRecordingPlayrate(session));
     // Neither shortcut may release a hold whose compiled curve is stale; the
     // scalar one publishes no mix values, so it carries pending holds after.
@@ -603,6 +626,7 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
     if (!rateSeekTarget_ && wantPlaying_.load(std::memory_order_acquire) &&
         rateSafeEpoch_.load(std::memory_order_acquire) == controlEpoch &&
         playedStream(controlEpoch) + lead < rateSafeStream_.load(std::memory_order_acquire)) {
+        if (!rateDeferredFrom_) rateDeferredFrom_ = latest_;  // what keeps playing meanwhile
         latest_ = std::make_shared<const model::Session>(session);
         rateDeferredDir_ = projectDir;
         rateDeferred_ = true;
@@ -713,7 +737,7 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
             static_cast<std::size_t>(std::ceil(options_.renderAheadMs / 1000. * 192000. / quantum));
         const auto ahead = static_cast<std::size_t>(
             std::ceil(static_cast<double>(aheadFrames_) / static_cast<double>(quantum)));
-        recycleRings();
+        recycleRings(oldestInUse());
         if (plan->anyLive) {
             plan->split = true;
             for (std::size_t i = 0; i < plan->frontier.size(); ++i)
@@ -813,6 +837,8 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
         rateScheduling_.store(true, std::memory_order_release);
     }
     latest_ = std::make_shared<const model::Session>(session);
+    compiled_ = latest_;
+    rateDeferredFrom_.reset();  // the deferred edit compiled with this one
     prunePending_ = true;
     if (options_.anticipative)
         for (auto* instance : plan->instances) instance->setAudioWake(&rendererEvent_);
@@ -1084,9 +1110,8 @@ std::uint64_t Engine::oldestInUse() const {
                                  : rendered;
 }
 
-void Engine::recycleRings() {
+void Engine::recycleRings(std::uint64_t oldest) {
     if (plans_.empty()) return;
-    const std::uint64_t oldest = oldestInUse();
     for (const auto& p : plans_) {
         // As collectPlans retires plans: no executor reaches these rings again.
         if (p->generation >= oldest || p.get() == plans_.back().get()) continue;
@@ -1116,9 +1141,10 @@ std::unique_ptr<detail::ChunkRing> Engine::takeRing(std::size_t capacity, std::u
     return std::make_unique<detail::ChunkRing>(capacity, frames);
 }
 
-void Engine::collectPlans() {
+std::uint64_t Engine::collectPlans() {
+    // One reading decides both the rings recycled and the plans freed.
     const std::uint64_t oldest = oldestInUse();
-    recycleRings();
+    recycleRings(oldest);
     // The newest plan always stays (an executor may be about to adopt it).
     const auto retired = [&](const auto& p) {
         return p->generation < oldest && p.get() != plans_.back().get();
@@ -1136,6 +1162,7 @@ void Engine::collectPlans() {
     std::erase_if(plans_, retired);
     if (std::none_of(plans_.begin(), plans_.end(), [](const auto& p) { return p->hardwareLead; }))
         (void)hardwareMidi_->releaseHistory();
+    return oldest;
 }
 
 std::vector<model::Id> Engine::takeDirtyStates() { return std::exchange(dirtyStates_, {}); }
@@ -1227,7 +1254,8 @@ void Engine::service() {
             rateDeferred_ = false;
             const auto loaded = load(session, dir);
             if (!loaded)
-                warnings_.push_back("deferred playrate edit: " + loaded.error().toString());
+                warnings_.push_back("deferred playrate edit: " + loaded.error().toString() +
+                                    "; it never played: the engine plays the session before it");
         }
     }
     if (latest_) {
@@ -1303,14 +1331,17 @@ void Engine::service() {
         if (!loaded)
             warnings_.push_back("plugin notification reload: " + loaded.error().toString());
     }
-    collectPlans();
-    const std::uint64_t rendered = stoppedGen_.load(std::memory_order_acquire);
-    const std::uint64_t live =
-        options_.anticipative ? std::min(rendered, callbackGen_.load(std::memory_order_acquire))
-                              : rendered;
-    if (prunePending_ && !rateDeferred_ && latest_ && live >= publishedGen_) {
-        // Every executor has adopted the newest plan and stopped what it dropped.
-        plugins_.prune(*latest_, live);
+    // The pool is pruned at the generation the plans were collected at: a
+    // newer reading may let an executor's adoption since then free an
+    // instance that a plan kept above still names (the next service()
+    // walks those plans).
+    const std::uint64_t live = collectPlans();
+    if (afterCollectForTests_) afterCollectForTests_(afterCollectContext_);
+    if (prunePending_ && !rateDeferred_ && compiled_ && live >= publishedGen_) {
+        // Every executor has adopted the newest plan and stopped what it
+        // dropped. Pruned against that plan's own session: latest_ may name
+        // one that never compiled.
+        plugins_.prune(*compiled_, live);
         prunePending_ = false;
     }
 }
@@ -1536,6 +1567,12 @@ void Engine::cycle(const float* const* in, float* const* out, std::uint32_t fram
     // ADR-0081: bridged calls on this thread, and on the live helpers serving
     // this cycle, wait no later than the cycle's start plus its period or
     // 2 ms, whichever is larger. A cycle with a late call ran past its period.
+    // The period is fixed here, before any bridged call (the final callback
+    // below stops plug-ins), so before the cycle acquires its plan: in the
+    // one cycle that first adopts a plan, a callback preempted between here
+    // and that acquire for longer than the rest of start() and a whole load()
+    // may still read the requested rate, and that cycle's deadline is off by
+    // the requested-to-granted ratio. Later cycles read the granted rate.
     struct BridgeCycle {
         Engine& engine;
         std::uint64_t late = host::bridgeLateCalls();
@@ -1545,7 +1582,8 @@ void Engine::cycle(const float* const* in, float* const* out, std::uint32_t fram
         host::LiveBridgeDeadline deadline;
         BridgeCycle(Engine& e, std::uint32_t count)
             : engine(e),
-              period(static_cast<std::int64_t>(count * 1e9 / e.config_.sampleRate)),
+              period(static_cast<std::int64_t>(count * 1e9 /
+                                               e.deviceRate_.load(std::memory_order_relaxed))),
               deadline(start + std::max<std::int64_t>(
                                    static_cast<std::int64_t>(e.options_.liveBridgeDeadlineMs * 1e6),
                                    period)) {}
@@ -1669,7 +1707,7 @@ void Engine::runSync(const float* const* in, float* const* out, std::uint32_t fr
                      bool playingBefore) SUPPLE_RT {
     detail::SyncRuntime* rt = syncRt_;
     if (!rt) return;
-    const double rate = config_.sampleRate;
+    const double rate = deviceRate_.load(std::memory_order_relaxed);
     const double after = rtTimeline_.load(std::memory_order_relaxed);
     const auto epochAfter = timelineEpoch_.load(std::memory_order_acquire);
     // The timeline is published only for a cycle that played.
@@ -1716,6 +1754,7 @@ void Engine::runSync(const float* const* in, float* const* out, std::uint32_t fr
 
 // The status travels as words; copying it bytewise is sound.
 static_assert(std::is_trivially_copyable_v<SyncStatus>);
+static_assert(std::atomic<double>::is_always_lock_free);  // deviceRate_, read by the callback
 
 void Engine::publishSyncStatus(const SyncStatus& status) SUPPLE_RT {
     std::array<std::uint64_t, kSyncWords> words{};
@@ -2079,7 +2118,8 @@ void Engine::countClicks(float* const* out, std::uint32_t k) SUPPLE_RT {
     const float gain = metroGain_.load(std::memory_order_relaxed);
     for (std::uint32_t i = 0; i < k; ++i, ++countPos_) {
         if (countPos_ % countBeatA_ == 0)
-            startClick((countPos_ / countBeatA_) % countBarA_ == 0, config_.sampleRate);
+            startClick((countPos_ / countBeatA_) % countBarA_ == 0,
+                       deviceRate_.load(std::memory_order_relaxed));
         const float v = gain * clickSample();
         out[0][i] += v;
         out[1][i] += v;

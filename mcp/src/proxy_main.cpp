@@ -64,7 +64,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "%s\n", server.error().toString().c_str());
         return 1;
     }
-    auto status = (*server)->serve(std::cin, std::cout);
+    auto status = (*server)->serve(fileno(stdin), fileno(stdout));
     if (!status) {
         std::fprintf(stderr, "%s\n", status.error().toString().c_str());
         return 1;
