@@ -45,6 +45,9 @@ D2, D6. Specs and STATUS describe the implemented stage in each commit.
   Errors name the path and give corrective instructions. EndpointLock may still
   wait indefinitely; this is distinct from the nonblocking collision probe.
 
+  *Note, 2026-11-16:* the endpoint lock no longer waits, and a server now holds
+  it for as long as it runs. See [ADR-0089](0089-endpoint-lock-ownership.md).
+
 ## Consequences
 
 These are off-RT transport/model operations; no audio callback allocates, locks,

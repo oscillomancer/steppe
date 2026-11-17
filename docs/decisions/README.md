@@ -99,3 +99,4 @@ current state.
 | [0082](0082-audio-media-durability.md) | Audio takes and published media survive a crash | Accepted |
 | [0083](0083-local-crash-reports.md) | Local crash reports and external supervision | Accepted |
 | [0087](0087-control-boundary-budgets.md) | Bounded local control input and output | Accepted |
+| [0089](0089-endpoint-lock-ownership.md) | A server owns its control endpoint by holding its lock | Accepted |

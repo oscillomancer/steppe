@@ -44,6 +44,7 @@ struct NativeWriter::Impl {
     HANDLE output = INVALID_HANDLE_VALUE;
 #else
     int output = -1, originalFlags = -1;
+    int originalNoSigpipe = -1;  // macOS: the descriptor's own SIGPIPE opt-out before setup
 #endif
     ~Impl() {
         stopping.store(true);
@@ -66,6 +67,9 @@ struct NativeWriter::Impl {
             if (flags >= 0 && originalFlags >= 0)
                 (void)::fcntl(output, F_SETFL,
                               (flags & ~O_NONBLOCK) | (originalFlags & O_NONBLOCK));
+#if defined(F_SETNOSIGPIPE)
+            if (originalNoSigpipe == 0) (void)::fcntl(output, F_SETNOSIGPIPE, 0);
+#endif
             ::close(output);
         }
 #endif
@@ -185,6 +189,17 @@ Result<std::unique_ptr<NativeWriter>> NativeWriter::create(int fd) {
     if (impl->originalFlags < 0 || (impl->originalFlags & O_ACCMODE) == O_RDONLY ||
         ::fcntl(impl->output, F_SETFL, impl->originalFlags | O_NONBLOCK) != 0)
         return outputError();
+#if defined(F_SETNOSIGPIPE)
+    // macOS raises SIGPIPE for the process, not for the writing thread, so the
+    // writer thread's signal mask does not hold it there. Opt this descriptor
+    // out for the writer's lifetime; like the nonblocking bit, the setting is
+    // shared with the owner's descriptor and restored after join.
+    impl->originalNoSigpipe = ::fcntl(impl->output, F_GETNOSIGPIPE);
+    if (impl->originalNoSigpipe < 0 || ::fcntl(impl->output, F_SETNOSIGPIPE, 1) != 0) {
+        impl->originalNoSigpipe = -1;
+        return outputError();
+    }
+#endif
 #endif
     auto* state = impl.get();
     impl->thread = std::thread([state] { state->run(); });
