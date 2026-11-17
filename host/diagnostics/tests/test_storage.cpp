@@ -372,6 +372,14 @@ TEST_CASE("diagnostic pruning preserves genuine metadata errors") {
             REQUIRE(fs::create_directory(path));
         }
     });
+#if defined(_WIN32)
+    // MSVC's directory_entry answers size and time from the enumeration, so the entry
+    // replaced after it was listed raises no error there; the directory is then not a
+    // readable report and is skipped. A genuine refusal on Windows is the removal case
+    // ("a genuine removal refusal still fails storage").
+    CHECK(result);
+#else
     CHECK_FALSE(result);
+#endif
     CHECK(fs::is_directory(root.path / (std::string(boot(0).incident.data()) + ".json")));
 }
