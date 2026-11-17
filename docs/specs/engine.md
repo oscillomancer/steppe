@@ -686,6 +686,19 @@ first use, and no plug-in code runs early to warm it.
 - Runs a **separate plan instance** with its **own plugin instances**
   (created from the version's state/patches), so rendering never disturbs
   playback and A/B renders of two branches can run side by side.
+- **Bridged plug-ins (ADR-0090).** While it runs, a render gives each
+  bridged instance it processes a call deadline of its own,
+  `OfflineSettings::bridgeDeadlineMs` (`kOfflineBridgeDeadlineMs`, 60 s;
+  lifecycle commands 5/2 of it plus 2 s), in place of the live paths'
+  process-wide 2 s, and restores that after. An instance that fails while
+  the render runs (starting, processing or stopping: missed deadline,
+  crash, exit) stops the block loop and fails the render with
+  `engine.fx_failed`: message naming the plug-in, its fx id and the reason
+  (and any others that failed with it), path `/fx/<id>`, a hint to render
+  again or bypass or replace the FX. No caller then has audio to write. An
+  instance already failed when the render begins keeps its behaviour: a
+  restart failure is a warned, compensated pass-through; a failed bridged
+  instance refuses to start (`engine.start_failed`).
 - As a render ends, each plugin's read-only parameters (meters, readouts)
   are read from its instance (`OfflineResult::meters`, by FX id); a
   `render.mix` keeps them on the main thread for `fx.meters {from:
@@ -1088,8 +1101,9 @@ set runs it in process and `engine.status.warnings` says so. An instance
 keeps its process until it is made again (fx.restart, the plug-in replaced,
 a project opened), so changing the default never reloads a running
 plug-in. `fx.describe isolation_effective` says where it runs. Offline
-renders, render snapshots and rack probes make their own instances in
-process, as before; isolation does not change the output.
+renders, render snapshots and rack probes make their own instances: one on
+`inherit` runs in process there, one set to `shared_bridge` or `dedicated`
+runs bridged; isolation does not change the output.
 
 The bridge is native on Linux, macOS and Windows (ADR-0037). Linux retains
 memfd, SCM_RIGHTS, shared futexes and pidfd behavior. macOS uses unlinked
@@ -1321,6 +1335,8 @@ instance).
   instance becomes a **failed node** (silence; `fx.failed` event with the
   signal and last known state kept in the model), the rest of the session
   keeps playing, and `fx.restart` re-creates it from the last known state.
+  In an offline render, a node that fails this way fails the render instead
+  (§3, ADR-0090).
 - Acceptance: a deliberately crashing test plugin (a CLAP that segfaults on
   a given parameter value) in `dedicated` mode does not stop the engine; a
   real-time capture around the crash shows only that node going silent.

@@ -345,7 +345,8 @@ deadlines and bounded in-flight failure checks are unchanged.
 
 A call made off the device callback (ADR-0013) fails at a deadline:
 `process` waits that long, lifecycle commands 5/2 of it plus 2 s. It is the
-instance's own, `Instance::setCallDeadlineMs`, when set, and otherwise the
+instance's own, `Instance::setCallDeadlineMs`, when set (an offline render
+sets 60 s on its instances while it runs, ADR-0090), and otherwise the
 process-wide `host::setBridgeDeadlineMs` (2000 ms by default, at least 1).
 The engine tests raise the process-wide one to 60 s for the whole binary
 (`bridge_patience.cpp`), so a stall of a loaded machine never decides a

@@ -626,6 +626,45 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
     if (!sources) return sources.error();
     p.preparedSources = *sources;
     SUPPLE_TRY(prepare(p, selectedSession));
+    // ADR-0090: an offline render loses only time by waiting, so its bridged
+    // calls have a deadline of their own, far past the live path's, for as
+    // long as it runs. And a plug-in that fails while it runs fails the
+    // render; one that had failed before keeps its behaviour.
+    struct Watched {
+        host::Instance* instance;
+        Id fx;
+        bool failedBefore;
+    };
+    std::vector<Watched> watched;
+    for (const Node& node : p.nodes)
+        forEachStage(node, [&](const Stage& st) {
+            if (st.instance) watched.push_back({st.instance, st.fx, st.instance->failed()});
+        });
+    struct RenderDeadlines {
+        const std::vector<host::Instance*>& instances;
+        RenderDeadlines(const std::vector<host::Instance*>& list, int ms) : instances(list) {
+            for (host::Instance* in : instances) in->setCallDeadlineMs(std::max(ms, 1));
+        }
+        ~RenderDeadlines() {
+            for (host::Instance* in : instances) in->setCallDeadlineMs(0);
+        }
+        RenderDeadlines(const RenderDeadlines&) = delete;
+        RenderDeadlines& operator=(const RenderDeadlines&) = delete;
+    } deadlines(p.instances, opt.bridgeDeadlineMs);
+    const auto failing = [&] {
+        return std::any_of(watched.begin(), watched.end(), [](const Watched& w) {
+            return !w.failedBefore && w.instance->failed();
+        });
+    };
+    const auto failedNow = [&] {
+        std::vector<const Watched*> out;
+        for (const Watched& w : watched)
+            if (!w.failedBefore && w.instance->failed() &&
+                std::none_of(out.begin(), out.end(),
+                             [&](const Watched* seen) { return seen->instance == w.instance; }))
+                out.push_back(&w);
+        return out;
+    };
     auto master = std::find_if(p.nodes.begin(), p.nodes.end(),
                                [&](const Node& node) { return node.id == opt.master; });
     if (master == p.nodes.end() || !master->master)
@@ -769,6 +808,9 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                     failed = true;
                     break;
                 }
+                // A failed plug-in's output went silent (ADR-0013 §6): the
+                // render fails below.
+                if (failing()) break;
                 const Stereo& tap = opt.tap == model::Tap::PreFx      ? selected->preFx
                                     : opt.tap == model::Tap::PreFader ? selected->preFader
                                                                       : selected->post;
@@ -835,6 +877,19 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
             if (auto readouts = instanceReadouts(*in); readouts && readouts->size() > 0)
                 r.meters[fx.id.str()] = std::move(*readouts);
     if (preparationError) return *preparationError;
+    // Failed starting, processing or stopping: the render's audio is not
+    // what the session plays (ADR-0090).
+    if (const auto lost = failedNow(); !lost.empty()) {
+        const Watched& first = *lost.front();
+        std::string message = first.instance->info().name + " (" + first.fx.str() +
+                              ") failed during the render: " + first.instance->failure();
+        for (std::size_t i = 1; i < lost.size(); ++i)
+            message += (i == 1 ? "; so did " : ", ") + lost[i]->instance->info().name + " (" +
+                       lost[i]->fx.str() + ")";
+        return Error("engine.fx_failed", message, "/fx/" + first.fx.str(),
+                     "render again: an offline render starts its own plug-in instances; if the "
+                     "FX fails again, bypass or replace it");
+    }
     if (startFailed)
         return Error("engine.start_failed", "a plugin refused to start processing", {},
                      "restart or replace the FX that refused processing with a plugin supporting "

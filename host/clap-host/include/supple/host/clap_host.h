@@ -420,8 +420,8 @@ class Instance {
     int bridgePid() const;  // -1 for in-process
     // Bridged: this instance's failure deadline off the callback, in place
     // of bridgeDeadlineMs() (0, the default, uses that); lifecycle commands
-    // get 5/2 of it plus 2 s. Set it while nothing processes; no effect in
-    // process.
+    // get 5/2 of it plus 2 s. An offline render sets it while it runs
+    // (ADR-0090). Set it while nothing processes; no effect in process.
     void setCallDeadlineMs(int ms);
     // Bridged: its bridge's audio thread was refused the scheduling class the
     // last audio-thread call asked for (ADR-0026, ADR-0081); false in process.

@@ -102,3 +102,4 @@ current state.
 | [0085](0085-live-helpers-park-while-bridged.md) | Live helpers park while a bridged call blocks | Accepted |
 | [0086](0086-idle-hold-for-live-bridged-plugins.md) | The idle-latency request is held while a bridged plug-in plays live | Accepted |
 | [0088](0088-lost-bridged-output-ends-held-notes.md) | A bridged block's lost output ends the notes it held | Accepted |
+| [0090](0090-offline-renders-and-bridged-plugins.md) | Offline renders wait for bridged plug-ins, and fail when one fails | Accepted |
