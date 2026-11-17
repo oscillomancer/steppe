@@ -59,7 +59,9 @@ void addThread(CapsuleData& data, Role role, Missing missing, Stop stop,
     t.head.frameCount = static_cast<std::uint32_t>(frames.size());
     std::copy(frames.begin(), frames.end(), t.frames);
 }
-// A sparse fake stack of frame records {previous fp, return address}.
+#if !defined(_WIN32)
+// A sparse fake stack of frame records {previous fp, return address}. The in-process walker
+// that reads it exists only where the capsule layer does (not on Windows).
 struct Stack {
     std::map<std::uint64_t, std::pair<std::uint64_t, std::uint64_t>> records;
     static bool read(void* context, std::uint64_t at, void* out, std::size_t n) {
@@ -71,6 +73,7 @@ struct Stack {
     }
     StackReader reader() { return StackReader{&Stack::read, this}; }
 };
+#endif
 }  // namespace
 
 #if !defined(_WIN32)
