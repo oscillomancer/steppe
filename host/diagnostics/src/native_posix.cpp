@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cstring>
 #include <ctime>
+#include "inventory.h"
 #include "supple/diagcap/capsule.h"
 #include "supple/diagcap/native.h"
 #include "supple/diagcap/nonblocking.h"
@@ -283,10 +284,10 @@ bool publish(Native& native, const Packet& packet) noexcept {
     // and nothing else is being sent) and uses only async-signal-safe calls. If it cannot be
     // finished the stream is torn, the supervisor's next packet fails its checks and it stops
     // reading, as it does for any damaged packet.
-    // The bound is time: kPartSendPolls ms from here by the monotonic clock, which is what
-    // closeInventory waits out (a count of 1 ms polls would take longer under load or timer
-    // slack, and the terminal packet could then land inside this one). Only without a clock does
-    // it count polls.
+    // The bound is time: kPartSendPolls ms from here by the monotonic clock, or the deadline
+    // closeInventory published (partSendCutoffNs), whichever is earlier: that is what the close
+    // waits out (a count of 1 ms polls would take longer under load or timer slack, and the
+    // terminal packet could then land inside this one). Only without a clock does it count polls.
     std::size_t at = static_cast<std::size_t>(sent);
     timespec begin{};
     const bool clocked = ::clock_gettime(CLOCK_MONOTONIC, &begin) == 0;
@@ -297,6 +298,11 @@ bool publish(Native& native, const Packet& packet) noexcept {
             const long long elapsed =
                 (now.tv_sec - begin.tv_sec) * 1'000'000'000LL + (now.tv_nsec - begin.tv_nsec);
             if (elapsed >= static_cast<long long>(kPartSendPolls) * 1'000'000LL) break;
+            const std::uint64_t cutoff = partSendCutoffNs();
+            if (cutoff != 0 && static_cast<std::uint64_t>(now.tv_sec) * 1'000'000'000ULL +
+                                       static_cast<std::uint64_t>(now.tv_nsec) >=
+                                   cutoff)
+                break;
         } else if (attempts >= kPartSendPolls) {
             break;
         }

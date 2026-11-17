@@ -838,6 +838,43 @@ TEST_CASE("closing the inventory waits out a send as long as a part-sent packet 
     resetInventoryForTests(nullptr);
 }
 
+namespace {
+std::atomic<bool> gCutStarted{false};
+std::atomic<std::uint64_t> gCutSeen{0};
+// A send in progress that waits to be told when it must stop, as publish() does while it
+// finishes a part-sent packet: it reads the deadline the close publishes.
+bool cutoffPublish(Native&, const Packet&) noexcept {
+    gCutStarted.store(true);
+    for (int i = 0; i < 5000 && partSendCutoffNs() == 0; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    gCutSeen.store(partSendCutoffNs());
+    return true;
+}
+}  // namespace
+
+TEST_CASE("closing the inventory publishes one deadline for the sends it waits out") {
+    Native native;
+    Packet boot = base();
+    resetInventoryForTests(&cutoffPublish);
+    installInventory(native, boot);
+    CHECK(partSendCutoffNs() == 0);  // nothing is closing
+    gCutStarted.store(false);
+    gCutSeen.store(0);
+    std::thread announcer([] { diagctx::announceState(1, diagctx::InstanceState::Active); });
+    while (!gCutStarted.load()) std::this_thread::yield();
+    const std::uint64_t before = monotonicNs();
+    REQUIRE(before != 0);
+    CHECK(closeInventory());
+    announcer.join();
+    // The send saw the deadline while the close was waiting for it: kPartSendPolls ms after the
+    // close began, by the clock publish() reads, and the close did not return before the send did.
+    const std::uint64_t seen = gCutSeen.load();
+    CHECK(seen >= before + static_cast<std::uint64_t>(kPartSendPolls) * 1'000'000ULL);
+    CHECK(seen <= monotonicNs() + static_cast<std::uint64_t>(kPartSendPolls) * 1'000'000ULL);
+    resetInventoryForTests(nullptr);
+    CHECK(partSendCutoffNs() == 0);  // a reset forgets it
+}
+
 TEST_CASE("closing the inventory says when a send left the stream torn") {
     Native native;
     Packet boot = base();

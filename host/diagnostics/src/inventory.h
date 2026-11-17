@@ -40,6 +40,15 @@ void installInventory(const Native& native, const Packet& boot);
 // nothing. A send still running when the bound ends is not known to be torn: true.
 // Async-signal-safe.
 bool closeInventory() noexcept;
+// The one deadline of a close, for the senders it waits out: CLOCK_MONOTONIC nanoseconds
+// (`monotonicNs`), set by closeInventory before it closes the gate (kPartSendPolls ms after it
+// starts) and 0 until then. A part-sent packet is finished until the sender's own bound or this
+// time, whichever is earlier, so a sender that was preempted between passing the gate and starting
+// its send cannot go on after the close has given up. Async-signal-safe.
+std::uint64_t partSendCutoffNs() noexcept;
+// CLOCK_MONOTONIC in nanoseconds on POSIX (what publish() times its wait by), the steady clock
+// elsewhere. 0 when there is no clock. Async-signal-safe.
+std::uint64_t monotonicNs() noexcept;
 // Tests only: forgets the installed sink, the closed gate and the drop count, and replaces the
 // function that sends a packet (null restores publish()).
 void resetInventoryForTests(bool (*publishFn)(Native&, const Packet&) noexcept);

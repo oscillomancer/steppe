@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <ctime>
 #include <mutex>
 #include <thread>
 #include "supple/diagctx/commands.h"
@@ -28,6 +29,7 @@ Packet gBoot;
 std::mutex gSendMutex;  // one inventory send at a time (the Windows ring has one producer)
 std::atomic<bool> gInstalled{false}, gClosed{false};
 std::atomic<std::uint32_t> gSenders{0}, gDropped{0};
+std::atomic<std::uint64_t> gCutoffNs{0};  // closeInventory's deadline for the senders in flight
 bool (*gPublish)(Native&, const Packet&) noexcept = &publish;  // a test replaces it
 // The command names go out in one burst when the registry is built; a small socket buffer
 // (macOS) can fill before the supervisor wakes, so a name chunk waits for room, but the
@@ -147,19 +149,43 @@ void resetInventoryForTests(bool (*publishFn)(Native&, const Packet&) noexcept) 
     gPublish = publishFn ? publishFn : &publish;
     gInstalled.store(false);
     gClosed.store(false);
+    gCutoffNs.store(0);
     gDropped.store(0);
     gNamesStarted = false;
     gNamesGivenUp.store(false);
 }
 
+std::uint64_t partSendCutoffNs() noexcept { return gCutoffNs.load(); }
+
+std::uint64_t monotonicNs() noexcept {
+#if defined(_WIN32)
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                          std::chrono::steady_clock::now().time_since_epoch())
+                                          .count());
+#else
+    timespec now{};
+    if (::clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
+    return static_cast<std::uint64_t>(now.tv_sec) * 1'000'000'000ULL +
+           static_cast<std::uint64_t>(now.tv_nsec);
+#endif
+}
+
 bool closeInventory() noexcept {
-    gClosed.store(true);  // seq_cst
-    // As long as publish() may spend finishing a part-sent packet, and a little more for the
-    // thread that is doing it to be scheduled: a shorter wait could write this process's
-    // terminal packet into the middle of that one (macOS takes part of a packet).
-    const auto deadline = std::chrono::steady_clock::now() +
-                          std::chrono::milliseconds(kPartSendPolls) + std::chrono::milliseconds(50);
-    while (gSenders.load() != 0 && std::chrono::steady_clock::now() < deadline) yieldThread();
+    // One deadline for everyone: a sender finishing a part-sent packet (publish) stops at it, and
+    // this call waits for it, and a little more for the thread to be scheduled and leave, so a
+    // shorter wait could write this process's terminal packet into the middle of that packet
+    // (macOS takes part of a packet). The deadline is published before the gate closes, so a
+    // sender that has passed the gate and is preempted before it starts its send finds it set.
+    constexpr std::uint64_t kGraceNs = 50'000'000ULL;
+    const std::uint64_t begin = monotonicNs();
+    const std::uint64_t cutoff = begin + static_cast<std::uint64_t>(kPartSendPolls) * 1'000'000ULL;
+    gCutoffNs.store(begin == 0 ? 1 : cutoff);  // without a clock: 1, already past, to stop at once
+    gClosed.store(true);                       // seq_cst
+    if (begin == 0) {  // no clock to wait by (cannot happen on a working system): a count
+        for (int i = 0; i < 1'000'000 && gSenders.load() != 0; ++i) yieldThread();
+    } else {
+        while (gSenders.load() != 0 && monotonicNs() < cutoff + kGraceNs) yieldThread();
+    }
     // Every sender has left, so what it wrote to gNative is visible (its decrement released it).
     return gSenders.load() != 0 || !gNative.torn;
 }
