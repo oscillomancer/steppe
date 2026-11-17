@@ -260,6 +260,14 @@ Result<std::shared_ptr<BridgeProcess>> createBridgeProcess();
 // does not wait behind a lower-priority thread (ADR-0026).
 void setBridgeAudioPolicy(ThreadPolicy policy);
 ThreadPolicy bridgeAudioPolicy() SUPPLE_RT;
+// The failure deadline of a bridged call made off the device callback
+// (ADR-0013): `process` waits this long, lifecycle commands 5/2 of it plus
+// 2 s; a bridge that has not answered by then is killed and its instances
+// fail (silent). Process-wide; 2000 ms by default, at least 1. A test that
+// compares bridged renders bit for bit raises it, so a stalled machine
+// fails no healthy plug-in (see bridge_patience.cpp in the engine tests).
+void setBridgeDeadlineMs(int ms);
+int bridgeDeadlineMs() SUPPLE_RT;
 // The class a bridged instance's audio thread takes while it runs under a
 // live deadline (ADR-0081): the device callback's (process-wide; Normal by
 // default). On Linux this policy and priority; macOS and Windows apply their

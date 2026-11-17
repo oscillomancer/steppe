@@ -56,6 +56,14 @@ ThreadPolicy bridgeAudioPolicy() SUPPLE_RT {
     return unpack(gBridgeAudioPolicy.load(std::memory_order_relaxed));
 }
 
+namespace {
+std::atomic<int> gBridgeDeadlineMs{2000};
+}
+void setBridgeDeadlineMs(int ms) {
+    gBridgeDeadlineMs.store(std::max(ms, 1), std::memory_order_relaxed);
+}
+int bridgeDeadlineMs() SUPPLE_RT { return gBridgeDeadlineMs.load(std::memory_order_relaxed); }
+
 void setLiveBridgeAudioPolicy(ThreadPolicy policy, std::uint32_t periodFrames, double sampleRate) {
     gLiveBridgeAudioPolicy.store(pack(policy), std::memory_order_relaxed);
     // A duration, not frames: an oversampled plug-in runs at another rate
@@ -999,7 +1007,11 @@ bool RemoteInstance::answered(std::uint32_t req, Cmd cmd) SUPPLE_RT {
     // Lifecycle commands may page in a plugin's code; a block must not stall
     // the renderer long, but a loaded machine must not get a healthy plugin
     // killed either.
-    const int limitMs = cmd == Cmd::Process ? deadlineMs_ : 5 * deadlineMs_ / 2 + 2000;
+    const int deadlineMs = bridgeDeadlineMs();
+    const int limitMs = cmd == Cmd::Process
+                            ? deadlineMs
+                            : static_cast<int>(std::min<std::int64_t>(
+                                  5 * std::int64_t(deadlineMs) / 2 + 2000, INT32_MAX));
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(limitMs);
     for (;;) {
         const std::uint32_t seen = hdr_->done.load(std::memory_order_acquire);

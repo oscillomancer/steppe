@@ -198,6 +198,17 @@ TEST_CASE("native bridge crashes isolate shared members and preserve a dedicated
 }
 TEST_CASE("native bridge deadlines kill a hung audio worker and return silence") {
     setBridgeExecutable(BRIDGE_PATH);
+    // The deadline is process-wide (review round 26: tests that compare
+    // bridged renders raise it); a hang fails at whatever it is set to.
+    const int previous = bridgeDeadlineMs();
+    CHECK(previous >= 1);
+    setBridgeDeadlineMs(0);
+    CHECK(bridgeDeadlineMs() == 1);
+    setBridgeDeadlineMs(100);
+    struct Restore {
+        int ms;
+        ~Restore() { setBridgeDeadlineMs(ms); }
+    } restore{previous};
     auto remote =
         Instance::create(nativePlugin(FIXTURE_CLAP_PATH, "com.suppleaudio.test.crash"), {}, true);
     REQUIRE(remote);

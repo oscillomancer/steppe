@@ -164,7 +164,6 @@ class RemoteInstance {
     // The bridge's audio thread did not get the class its last command asked for.
     bool classRefused() const { return classRefused_.load(std::memory_order_relaxed); }
     std::string failure() const;
-    void setDeadlineMs(int ms) { deadlineMs_ = ms; }
     int bridgePid() const { return process_->pid(); }
 
   private:
@@ -229,7 +228,6 @@ class RemoteInstance {
     std::int64_t lateSince_ = 0;            // steady ns of the first of consecutive late calls
     std::int64_t lateFailNs_ = 50'000'000;  // consecutive late calls fail it after this
     bool spun_ = false;                     // the last answer came while spinning, before a wait
-    int deadlineMs_ = 2000;                 // for process(); lifecycle commands get longer
     std::uint32_t latency_ = 0, tail_ = 0;
     bool reportsTail_ = false, restartPending_ = false;
     // Control servicing publishes this flag while audio checks for idle work.
