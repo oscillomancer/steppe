@@ -64,7 +64,7 @@ void send(const diagctx::Event& event) noexcept {
                                                         event.identity.version, event.identity.id};
     for (std::size_t i = 0; i < diagctx::kTextFields; ++i) {
         const auto n = std::min(fields[i].size(), diagctx::kMaxText);
-        std::memcpy(record.text[i], fields[i].data(), n);
+        if (n != 0) std::memcpy(record.text[i], fields[i].data(), n);  // data() may be null
         record.length[i] = static_cast<std::uint8_t>(n);
     }
     std::lock_guard lock(gSendMutex);
