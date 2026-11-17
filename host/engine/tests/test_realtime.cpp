@@ -830,48 +830,61 @@ TEST_CASE(
     // the pool with a second, newer reading of the executors' generation. An
     // adoption in between freed an instance that a kept plan still named;
     // the next service() called it (a gcc-preset assertion in the plan soak).
-    auto pool = makePool();
-    MediaCache media;
-    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
-    Engine engine(pool, media, kInCallback);
-    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256}));
-    REQUIRE(engine.load(synthSession(0.0, "com.suppleaudio.test.gain")));
-    backend.run(2);
-    engine.service();
-    const auto withGain = pool.instances();
-    const auto found = std::find_if(withGain.begin(), withGain.end(), [](host::Instance* in) {
-        return in->info().id == "com.suppleaudio.test.gain";
-    });
-    REQUIRE(found != withGain.end());
-    host::Instance* gain = *found;
-    REQUIRE(engine.load(synthSession(0.0)));  // the gain leaves; the callback has not adopted
-    struct Adopt {
-        DummyBackend& backend;
-        int runs = 0;
-    } adopt{backend};
-    EngineTestAccess::afterCollect(
-        engine,
-        [](void* context) {
-            auto* a = static_cast<Adopt*>(context);
-            ++a->runs;
-            a->backend.run(1);  // the callback adopts the newest plan here
-        },
-        &adopt);
-    engine.service();
-    EngineTestAccess::afterCollect(engine, nullptr, nullptr);
-    REQUIRE(adopt.runs == 1);
-    const auto alive = pool.instances();
-    for (host::Instance* named : EngineTestAccess::planInstances(engine)) {
-        CAPTURE(named == gain);
-        CHECK(std::find(alive.begin(), alive.end(), named) != alive.end());
+    for (bool anticipative : {false, true}) {
+        CAPTURE(anticipative);
+        auto pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+        Engine engine(
+            pool, media,
+            anticipative ? EngineOptions{.anticipative = true, .workers = 0} : kInCallback);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256}));
+        // Every executor adopts the newest plan: the renderer by itself, the
+        // callback at its next cycle.
+        const auto adopt = [&] {
+            REQUIRE(engine.awaitPlan());
+            backend.run(1);
+        };
+        REQUIRE(engine.load(synthSession(0.0, "com.suppleaudio.test.gain")));
+        adopt();
+        engine.service();
+        const auto withGain = pool.instances();
+        const auto found = std::find_if(withGain.begin(), withGain.end(), [](host::Instance* in) {
+            return in->info().id == "com.suppleaudio.test.gain";
+        });
+        REQUIRE(found != withGain.end());
+        host::Instance* gain = *found;
+        REQUIRE(engine.load(synthSession(0.0)));  // the gain leaves; the callback has not adopted
+        struct Hook {
+            decltype(adopt)& adopt;
+            int runs = 0;
+        } hook{adopt};
+        EngineTestAccess::afterCollect(
+            engine,
+            [](void* context) {
+                auto* h = static_cast<Hook*>(context);
+                ++h->runs;
+                h->adopt();  // every executor adopts the newest plan here
+            },
+            &hook);
+        engine.service();
+        EngineTestAccess::afterCollect(engine, nullptr, nullptr);
+        REQUIRE(hook.runs == 1);
+        // A kept plan naming a destroyed instance ends the test here, before
+        // the next service() would call it.
+        const auto alive = pool.instances();
+        for (host::Instance* named : EngineTestAccess::planInstances(engine)) {
+            CAPTURE(named == gain);
+            REQUIRE(std::find(alive.begin(), alive.end(), named) != alive.end());
+        }
+        // The next service() retires the old plan, then the gain.
+        engine.service();
+        CHECK(EngineTestAccess::plans(engine) == 1);
+        const auto after = pool.instances();
+        CHECK(after.size() == withGain.size() - 1);
+        CHECK(std::find(after.begin(), after.end(), gain) == after.end());
+        engine.stop();
     }
-    // The next service() retires the old plan, then the gain.
-    engine.service();
-    CHECK(EngineTestAccess::plans(engine) == 1);
-    const auto after = pool.instances();
-    CHECK(after.size() == withGain.size() - 1);
-    CHECK(std::find(after.begin(), after.end(), gain) == after.end());
-    engine.stop();
 }
 
 TEST_CASE(
