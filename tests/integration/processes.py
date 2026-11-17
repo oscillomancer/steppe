@@ -17,6 +17,35 @@ def end_tree(process):
                    capture_output=True, timeout=30)
 
 
+def children(pid):
+    """POSIX: the live children of `pid` (a supervisor's program). Linux lists them under
+    /proc; elsewhere pgrep does. Empty when neither can say."""
+    found = []
+    try:
+        for task in os.listdir(f"/proc/{pid}/task"):
+            with open(f"/proc/{pid}/task/{task}/children") as handle:
+                found += [int(value) for value in handle.read().split()]
+        return found
+    except (OSError, ValueError):
+        pass
+    try:
+        listed = subprocess.run(["pgrep", "-P", str(pid)], capture_output=True, text=True,
+                                timeout=10).stdout
+        return [int(value) for value in listed.split()]
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return []
+
+
+def kill_children(pid):
+    """POSIX: SIGKILL to each child of `pid`, so a program whose supervisor is ending hard
+    does not outlive the test and leak into the next one (its endpoint lock and socket)."""
+    for child in children(pid):
+        try:
+            os.kill(child, 9)
+        except OSError:
+            pass
+
+
 def remove_tree(path, patience=60):
     """shutil.rmtree that, on Windows, retries while a file is still held open by a
     process that is on its way out. The retry only paces: removal either succeeds or
@@ -48,9 +77,12 @@ def stop(process, timeout=10, graceful=True):
             elif graceful:
                 process.terminate()
             else:
+                kill_children(process.pid)
                 process.kill()
             process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
+            if os.name != "nt":
+                kill_children(process.pid)  # a hung program must not outlive the supervisor
             process.kill()
             process.wait()
         except OSError:
