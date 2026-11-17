@@ -918,6 +918,19 @@ TEST_CASE("the zoom keys' step keeps the playhead's time in place") {
     CHECK(arrange->viewport().pixelsPerSecond == doctest::Approx(40));
 }
 
+TEST_CASE("the generated session builds past its first locked item with two takes") {
+    // Track 18 is the first whose audio item is both locked (every seventh
+    // from the fourth) and given a second take (every third from the third);
+    // the benchmark's session has 64 tracks.
+    Session s;
+    REQUIRE(s.build(24));
+    const model::Session head = s.app->head();
+    std::size_t lockedWithTakes = 0;
+    for (const auto& e : head.items)
+        if (e.value->locked && e.value->takes.size() == 2) ++lockedWithTakes;
+    CHECK(lockedWithTakes == 1);  // of 24 tracks, only the 18th
+}
+
 TEST_CASE("the arrangement renders a frame with 1000 generated tracks") {
     Gl& g = gl();
     if (!g.ok) return;
