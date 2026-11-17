@@ -1161,6 +1161,12 @@ Engine and hosting:
   plug-in changes compile the session, and with playrate scheduling started
   each also prepares a rate plan, which costs several milliseconds per edit in
   a session of a few dozen tracks.
+- A structural edit that playrate scheduling defers is accepted before it
+  compiles. If it then fails to compile (for example over the hardware MIDI
+  route budget), it never plays. The engine keeps playing the version before
+  it and the app gets an `engine.error`, but the edit stays in the project's
+  head and history until it is undone or changed. While it waits,
+  `prepared_version` already names it.
 - A touch-mode write hold ends 500 ms after the last move, not when the
   control is let go (ADR-0061): nothing reports a strip control's release to
   the engine, so a fader held still longer than that hears its old curve.

@@ -560,6 +560,13 @@ class Engine {
     // pans (and in the points of envelopes a write pass holds) updates the
     // running plan instead, without compiling (ADR-0060).
     Status load(const model::Session& session, const std::filesystem::path& projectDir = {});
+    // A load() that playrate scheduling deferred returned success before
+    // compiling. If the edit then fails to compile (in whichever load() takes
+    // it up), it never played: the engine goes back to the session it plays,
+    // and this returns that failure, once. Main thread.
+    std::optional<Error> takeUnplayedEdit() { return std::exchange(unplayedEdit_, std::nullopt); }
+    // The session the engine plays or, while an edit is deferred, will play.
+    const std::shared_ptr<const model::Session>& latestSession() const { return latest_; }
     // Automation writing (ADR-0061): the volume/pan targets a write pass
     // holds at their static value instead of their envelope. Returns true
     // when releasing a hold needs a load() of the current session to restore
@@ -887,6 +894,7 @@ class Engine {
     // Frees the plans no executor can still use; returns the oldest
     // generation an executor may use, as read for that decision.
     std::uint64_t collectPlans();
+    Status loadNow(const model::Session& session, const std::filesystem::path& projectDir);
     void publishPluginOutputs(detail::Plan& plan, bool renderer, std::uint64_t epoch,
                               std::int64_t pos, std::int64_t stream) SUPPLE_RT;
 
@@ -955,7 +963,16 @@ class Engine {
     void* afterCollectContext_ = nullptr;
     bool bridgedLive_ = false;  // main thread (bridgedLive())
     std::atomic<std::uint64_t> stoppedGen_{0};
+    // The session the engine plays: the newest published plan's, or a mix or
+    // scalar edit of it. A playrate-deferred edit sets it before any plan
+    // exists; rateDeferredFrom_ then holds the one it replaced, which load()
+    // puts back if the deferred edit fails to compile (review 37 F1).
     std::shared_ptr<const model::Session> latest_;
+    std::optional<std::shared_ptr<const model::Session>> rateDeferredFrom_;
+    std::optional<Error> unplayedEdit_;  // takeUnplayedEdit()
+    // The session the newest published plan was compiled from: what the
+    // prune keeps, whatever latest_ names.
+    std::shared_ptr<const model::Session> compiled_;
     bool prunePending_ = false;
     std::uint32_t outputLatency_ = 0;
     std::vector<std::string> warnings_;

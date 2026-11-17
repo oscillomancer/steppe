@@ -2784,6 +2784,17 @@ compiled with; once rate scheduling has started the engine keeps rate-enabled
 plans until it stops, and tape reads at exactly 1.0 are the original samples.
 Each structural edit then prepares a rate plan; level and pan edits do not
 (ADR-0060, §1.6).
+While a prepared rate plan covers audio not yet played, `load()` defers a
+structural edit: it returns success at once, and the edit compiles once that
+span has played (in `service()`, or in whichever `load()` comes first). If
+that compile fails, the edit never played. The engine then keeps the session
+it plays as its latest, for later reloads, the mix and scalar shortcuts and
+the instance prune, and adds a warning. `takeUnplayedEdit()` returns the error
+once; `EngineApp` emits it as `engine.error` and reports the version that
+plays as `prepared_version`. The project's head keeps the edit: undoing or
+changing it reloads. Whatever the engine names as latest, the instance pool
+is pruned against the session the newest published plan was compiled from,
+so no instance a running plan uses is destroyed.
 Two cases prepare a plan instead: leaving the unity bypass (no rate plan yet),
 and leaving 1.0 on a preserve-pitch plan compiled at 1.0, whose sources read as
 tape and need the stretch converter. When that prepared transition only changes

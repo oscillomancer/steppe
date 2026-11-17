@@ -565,6 +565,9 @@ void Engine::stop() {
     rateReseekGeneration_.store(0);
     rateReseekServiced_ = 0;
     rateDeferred_ = false;
+    // A deferred edit dropped here never played either; the engine is
+    // stopped, so the app's next start loads its head anyway.
+    if (rateDeferredFrom_) latest_ = *std::exchange(rateDeferredFrom_, std::nullopt);
     scalarPending_ = false;
     scalarHeardEpoch_ = UINT64_MAX;
     ratePreparationSeconds_ = 0;
@@ -589,6 +592,20 @@ void Engine::stop() {
 }
 
 Status Engine::load(const model::Session& session, const std::filesystem::path& projectDir) {
+    auto loaded = loadNow(session, projectDir);
+    // A deferred edit compiles in the first load() past its deferral, whoever
+    // calls it. If that failed, the edit never played: latest_ goes back to
+    // the session that did, so the prune, the mix and scalar shortcuts and
+    // later reloads do not act on it, and the app learns it (review 37 F1).
+    // A failure before the deferral is decided leaves the edit deferred.
+    if (!loaded && rateDeferredFrom_ && !rateDeferred_) {
+        latest_ = *std::exchange(rateDeferredFrom_, std::nullopt);
+        unplayedEdit_ = loaded.error();
+    }
+    return loaded;
+}
+
+Status Engine::loadNow(const model::Session& session, const std::filesystem::path& projectDir) {
     if (recording()) SUPPLE_TRY(model::validateRecordingPlayrate(session));
     // Neither shortcut may release a hold whose compiled curve is stale; the
     // scalar one publishes no mix values, so it carries pending holds after.
@@ -606,6 +623,7 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
     if (!rateSeekTarget_ && wantPlaying_.load(std::memory_order_acquire) &&
         rateSafeEpoch_.load(std::memory_order_acquire) == controlEpoch &&
         playedStream(controlEpoch) + lead < rateSafeStream_.load(std::memory_order_acquire)) {
+        if (!rateDeferredFrom_) rateDeferredFrom_ = latest_;  // what keeps playing meanwhile
         latest_ = std::make_shared<const model::Session>(session);
         rateDeferredDir_ = projectDir;
         rateDeferred_ = true;
@@ -811,6 +829,8 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
         rateScheduling_.store(true, std::memory_order_release);
     }
     latest_ = std::make_shared<const model::Session>(session);
+    compiled_ = latest_;
+    rateDeferredFrom_.reset();  // the deferred edit compiled with this one
     prunePending_ = true;
     if (options_.anticipative)
         for (auto* instance : plan->instances) instance->setAudioWake(&rendererEvent_);
@@ -1191,7 +1211,8 @@ void Engine::service() {
             rateDeferred_ = false;
             const auto loaded = load(session, dir);
             if (!loaded)
-                warnings_.push_back("deferred playrate edit: " + loaded.error().toString());
+                warnings_.push_back("deferred playrate edit: " + loaded.error().toString() +
+                                    "; it never played: the engine plays the session before it");
         }
     }
     if (latest_) {
@@ -1273,9 +1294,11 @@ void Engine::service() {
     // walks those plans).
     const std::uint64_t live = collectPlans();
     if (afterCollectForTests_) afterCollectForTests_(afterCollectContext_);
-    if (prunePending_ && !rateDeferred_ && latest_ && live >= publishedGen_) {
-        // Every executor has adopted the newest plan and stopped what it dropped.
-        plugins_.prune(*latest_, live);
+    if (prunePending_ && !rateDeferred_ && compiled_ && live >= publishedGen_) {
+        // Every executor has adopted the newest plan and stopped what it
+        // dropped. Pruned against that plan's own session: latest_ may name
+        // one that never compiled.
+        plugins_.prune(*compiled_, live);
         prunePending_ = false;
     }
 }

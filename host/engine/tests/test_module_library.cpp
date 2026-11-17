@@ -1934,6 +1934,93 @@ TEST_CASE("rack.get: a deferred structural edit cannot use the older prepared pl
     }
 }
 
+TEST_CASE("a deferred playrate edit whose reload fails never frees what the playing plan runs") {
+    // Review 37 F1. A structural edit inside a prepared playrate span is
+    // deferred; when its reload failed before taking a generation, the engine
+    // went on naming the unplayed session as its latest, and the prune freed
+    // the instances it dropped while the playing plan still ran them.
+    for (bool anticipative : {false, true}) {
+        CAPTURE(anticipative);
+        Fixture f;
+        f.run("transport.playrate.set", R"({"rate":0.8})");
+        const auto track = f.run("track.add", R"({"name":"Src"})")["track"].asString();
+        const auto fxText =
+            f.run("fx.add",
+                  "{\"track\":\"" + track + "\",\"plugin\":\"com.suppleaudio.test.gain\"}")["fx"]
+                .asString();
+        const auto fx = *model::Id::parse(fxText);
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        REQUIRE(f.app->startEngine(backend, {.sampleRate = 8000, .blockSize = 128},
+                                   {.anticipative = anticipative, .workers = 0}));
+        auto& engine = *f.app->engine();
+        const auto cycle = [&] {
+            if (anticipative) REQUIRE(engine.awaitRendered(1024));
+            backend.run(1);
+            f.app->tick();  // services the engine, and reports an unplayed edit
+        };
+        engine.play();
+        for (int i = 0; i < 32; ++i) cycle();
+        REQUIRE(f.app->instances().find(fx) != nullptr);
+        // A future non-unity plan: edits inside its span are deferred.
+        f.run("env.add", R"({"track":"tr_0","param":"playrate",
+                             "points":[{"seconds":0,"value":1.25}]})");
+        const auto generation = engine.planGeneration();
+        f.run("fx.remove", "{\"fx\":\"" + fxText + "\"}");  // deferred: the gain leaves
+        REQUIRE(engine.planGeneration() == generation);
+        // A second deferred edit that cannot compile: 257 hardware MIDI sends,
+        // over the engine's budget of 256 (engine.midi_budget).
+        auto tx = f.app->beginTransaction(origin, "Too many hardware MIDI sends");
+        REQUIRE(tx);
+        for (int i = 0; i < 257; ++i) {
+            model::Route send;
+            send.from.track = *model::Id::parse(track);
+            send.to.midiDevice = "nowhere";
+            send.midi = model::MidiRouting{};
+            f.app->txn().create(send);
+        }
+        REQUIRE(f.app->commitTransaction(*tx));
+        REQUIRE(engine.planGeneration() == generation);
+        const auto withSends = f.app->head().version;
+        (void)f.app->takeEvents();
+        const auto errors = engine.processErrors();
+        // Through the span, the failed reload, and long after: the playing
+        // plan still has the gain, so the pool keeps it. Checked before every
+        // cycle, so a regression stops here rather than in a freed instance.
+        bool failed = false;
+        for (int i = 0; i < 400; ++i) {
+            cycle();
+            REQUIRE(f.app->instances().find(fx) != nullptr);
+            REQUIRE(engine.processErrors() == errors);
+            for (const auto& warning : engine.warnings())
+                failed |= warning.find("deferred playrate edit") != std::string::npos;
+        }
+        REQUIRE(failed);
+        CHECK(engine.planGeneration() == generation);
+        const auto& warnings = engine.warnings();
+        CHECK(std::any_of(warnings.begin(), warnings.end(), [](const std::string& w) {
+            return w.find("never played") != std::string::npos;
+        }));
+        // The app learns it as it learns a failed load: an engine.error, and
+        // a prepared version that is the one playing, before both edits.
+        int reported = 0;
+        for (const auto& [topic, value] : f.app->takeEvents())
+            if (topic == "engine.error" && value.isString() &&
+                value.asString().find("never played") != std::string::npos &&
+                value.asString().find("engine.midi_budget") != std::string::npos)
+                ++reported;
+        CHECK(reported == 1);
+        CHECK(f.app->engineStatus().preparedVersion < withSends - 1);
+        // Undoing the sends leaves the removal, which compiles and plays; the
+        // gain goes only once a plan without it is running.
+        REQUIRE(f.app->undo());
+        for (int i = 0; i < 400 && f.app->instances().find(fx) != nullptr; ++i) cycle();
+        CHECK(engine.planGeneration() > generation);
+        CHECK(f.app->instances().find(fx) == nullptr);
+        CHECK(engine.processErrors() == errors);
+        f.app->stopEngine();
+    }
+}
+
 TEST_CASE(
     "rack.capture: sync does not scan unused plugins and snapshot lookup keeps name fallback") {
     host::setBridgeExecutable(std::filesystem::temp_directory_path() / "no-such-plugin-scanner");
