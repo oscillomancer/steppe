@@ -349,6 +349,7 @@ q = nil
 ---@field audio_page_faults table
 ---@field meter_drops table
 ---@field failed_fx string[]
+---@field disabled_fx string[] fx whose plug-in this run has disabled (plugin.override): the strip passes audio through
 ---@field bridge_threads_refused string[]
 ---@field dropped integer
 ---@field voice_dropped integer
@@ -395,6 +396,7 @@ q = nil
 ---@field audio_page_faults table
 ---@field meter_drops table
 ---@field failed_fx string[]
+---@field disabled_fx string[] fx whose plug-in this run has disabled (plugin.override): the strip passes audio through
 ---@field bridge_threads_refused string[]
 ---@field dropped integer
 ---@field voice_dropped integer
@@ -535,6 +537,7 @@ q = nil
 ---@field sidechain_channels? integer The plug-in's key input: route.add {fx} feeds it
 ---@field latency_samples? integer The instance's reported latency, in samples
 ---@field isolation_effective? string Where the instance runs: in_process, shared_bridge or dedicated; inherit resolves to the plug-in isolation preference (stock plug-ins in process), as the instance is made
+---@field override? string This run's plugin.override for the plug-in, when it is not normal: bridge (it runs on a dedicated bridge) or disable (it is not loaded: the strip passes audio through, a rack module is silent, and there is no isolation_effective or parameter section)
 ---@field outputs_notes? boolean The loaded plug-in sends notes or MIDI: fx.set midi_output chooses replace or merge
 ---@field params_total? integer Plain parameters matching; at most 512 are listed.
 ---@field warnings? table[]
@@ -1095,6 +1098,24 @@ q = nil
 ---@class Steppe.plugin_list_result
 ---@field plugins table[]
 ---@field scan table
+---@field warnings? table[]
+
+---@class Steppe.plugin_override_args
+---@field plugin string id or name, as plugin.list shows it
+---@field mode "normal"|"bridge"|"disable"
+
+---@class Steppe.plugin_override_result
+---@field plugin string
+---@field name string
+---@field format string
+---@field mode "normal"|"bridge"|"disable"
+---@field changed boolean false: it was set that way already
+---@field fx string[] the fx of this plug-in in the project now
+---@field warnings? table[]
+
+---@class Steppe.plugin_overrides_result
+---@field overrides table[]
+---@field bridge_available boolean
 ---@field warnings? table[]
 
 ---@class Steppe.plugin_scan_args
@@ -2379,6 +2400,8 @@ q = nil
 
 ---@class Steppe.plugin
 ---@field list fun(args?: Steppe.plugin_list_args): Steppe.plugin_list_result List scanned plugins; filter matches id, name, or vendor.
+---@field override fun(args: Steppe.plugin_override_args): Steppe.plugin_override_result Load a plug-in normally, on a bridge, or not at all for this run.
+---@field overrides fun(): Steppe.plugin_overrides_result List the plug-ins this run bridges or has disabled.
 ---@field scan fun(args?: Steppe.plugin_scan_args): Steppe.plugin_scan_result Rescan configured plugin paths and return the available plugins.
 
 ---@class Steppe.project

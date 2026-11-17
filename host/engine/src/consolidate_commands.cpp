@@ -101,8 +101,8 @@ Result<std::map<fs::path, std::string>> inputHashes(const Work& work) {
 }
 
 Status render(Work& work, const std::vector<host::PluginInfo>& catalogue,
-              const host::HostIdentity& identity, cmd::JobManager& jobs, const std::string& job,
-              StopToken stop) {
+              const host::HostIdentity& identity, const LoadOverrides& overrides,
+              cmd::JobManager& jobs, const std::string& job, StopToken stop) {
     auto hashes = inputHashes(work);
     if (!hashes) return hashes.error();
     std::error_code ec;
@@ -180,7 +180,7 @@ Status render(Work& work, const std::vector<host::PluginInfo>& catalogue,
         settings.progress = [&jobs, &job](double progress) {
             (void)jobs.progress(job, progress, "Consolidating items");
         };
-        auto audio = renderSnapshot(*snapshot, settings, catalogue, identity);
+        auto audio = renderSnapshot(*snapshot, settings, catalogue, identity, overrides);
         if (!audio) return audio.error();
         if (!audio->warnings.empty())
             return Error("item.consolidate_render", audio->warnings.front(), "/items",
@@ -369,8 +369,9 @@ void registerConsolidateCommands(cmd::Registry& registry) {
         std::vector<host::PluginInfo> catalogue(plugins->begin(), plugins->end());
         app.startJob([&app, &dispatcher, &jobs, job, work = std::move(work),
                       catalogue = std::move(catalogue), identity = app.options().identity,
+                      overrides = app.loadOverrides(),
                       origin = ctx.origin()](StopToken stop) mutable {
-            auto rendered = render(work, catalogue, identity, jobs, job, stop);
+            auto rendered = render(work, catalogue, identity, overrides, jobs, job, stop);
             if (!rendered) {
                 if (!jobs.cancelled(job)) (void)jobs.fail(job, rendered.error());
                 return;

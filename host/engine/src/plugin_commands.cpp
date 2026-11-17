@@ -96,6 +96,50 @@ struct ScanArgs {
     std::optional<bool> wait;
 };
 
+struct OverrideArgs {
+    std::string plugin;
+    LoadMode mode = LoadMode::Normal;
+};
+
+struct OverrideResult {
+    std::string plugin, name, format;
+    LoadMode mode = LoadMode::Normal;
+    bool changed = false;
+    std::vector<std::string> fx;  // the fx of this plug-in in the head session
+};
+
+struct OverrideEntry {
+    std::string plugin, name, format;
+    LoadMode mode = LoadMode::Bridge;
+    std::vector<std::string> fx;
+};
+
+struct OverrideList {
+    std::vector<OverrideEntry> overrides;
+    bool bridgeAvailable = false;
+};
+
+auto loadModeSchema() {
+    return schema::enumeration<LoadMode>({{LoadMode::Normal, "normal"},
+                                          {LoadMode::Bridge, "bridge"},
+                                          {LoadMode::Disable, "disable"}});
+}
+
+// The fx of the head session that load `info`.
+std::vector<std::string> fxOf(EngineApp& app, const host::PluginInfo& info) {
+    std::vector<std::string> out;
+    auto plugins = app.plugins();
+    for (const auto& entry : app.head().fx) {
+        const auto& ref = entry.value->plugin;
+        bool same = ref.id == info.id;
+        if (!same && plugins)
+            if (auto found = EngineApp::findPlugin(*plugins, ref.id))
+                same = found->id == info.id && found->format == info.format;
+        if (same) out.push_back(entry.id.str());
+    }
+    return out;
+}
+
 }  // namespace
 
 void registerPluginCommands(cmd::Registry& registry) {
@@ -240,6 +284,107 @@ void registerPluginCommands(cmd::Registry& registry) {
                 out.plugins.push_back(std::move(e));
             }
             out.job = std::move(job);
+            return out;
+        };
+        addChecked(registry, std::move(c));
+    }();
+    [&] {
+        Command<OverrideArgs, OverrideResult> c;
+        c.name = "plugin.override";
+        c.kind = Kind::Action;
+        c.exposure = cmd::Exposure::McpExec;
+        c.summary = "Load a plug-in normally, on a bridge, or not at all for this run.";
+        c.description =
+            "A safety choice for a plug-in suspected of crashing: mode bridge runs it in a "
+            "dedicated bridge process (a crash then stays there; a live bridge can drop blocks "
+            "under load), disable does not load it (its strips pass audio through and a rack "
+            "module of it is silent), normal loads it as the project says. It holds until the "
+            "app quits, is not in the project or its history, and is not saved: a project saved "
+            "while it holds is byte-for-byte the one saved without. Instances of the plug-in "
+            "restart, so state that was never saved is lost and held notes end. Stock plug-ins "
+            "cannot be bridged, and bridge needs the bridge executable; both are refused with "
+            "plugin.override_unavailable.";
+        c.tags = {"plugin"};
+        c.args = schema::object<OverrideArgs>("plugin_override_args")
+                     .field("plugin", &OverrideArgs::plugin,
+                            schema::string().doc("id or name, as plugin.list shows it"))
+                     .field("mode", &OverrideArgs::mode, loadModeSchema())
+                     .build();
+        c.result = schema::object<OverrideResult>("plugin_override_result")
+                       .field("plugin", &OverrideResult::plugin, schema::string())
+                       .field("name", &OverrideResult::name, schema::string())
+                       .field("format", &OverrideResult::format, schema::string())
+                       .field("mode", &OverrideResult::mode, loadModeSchema())
+                       .field("changed", &OverrideResult::changed,
+                              schema::boolean().doc("false: it was set that way already"))
+                       .field("fx", &OverrideResult::fx,
+                              schema::arrayOf(schema::string())
+                                  .doc("the fx of this plug-in in the project now"))
+                       .build();
+        c.examples = {
+            {"Load normally", j(R"({"plugin":"com.suppleaudio.test.gain","mode":"normal"})"),
+             j(R"({"plugin":"com.suppleaudio.test.gain","name":"<any>","format":"clap","mode":"normal","changed":false,"fx":[]})"),
+             "empty"}};
+        c.run = [](const OverrideArgs& a, Context& ctx) -> Result<OverrideResult> {
+            EngineApp& engine = app(ctx);
+            auto info = engine.lookupPlugin(a.plugin);
+            if (!info) return std::move(info).error().at("/plugin");
+            auto changed = engine.setLoadOverride(*info, a.mode);
+            if (!changed) return std::move(changed).error();
+            OverrideResult r;
+            r.plugin = info->id;
+            r.name = info->name;
+            r.format = info->format;
+            r.mode = a.mode;
+            r.changed = *changed;
+            r.fx = fxOf(engine, *info);
+            return r;
+        };
+        addChecked(registry, std::move(c));
+    }();
+    [&] {
+        Command<NoArgs, OverrideList> c;
+        c.name = "plugin.overrides";
+        c.kind = Kind::Query;
+        c.exposure = cmd::Exposure::McpExec;
+        c.summary = "List the plug-ins this run bridges or has disabled.";
+        c.description =
+            "What plugin.override set, with the fx of each plug-in in the project now. "
+            "bridge_available: a bridge executable was found, so mode bridge can be set.";
+        c.tags = {"plugin"};
+        c.args = schema::object<NoArgs>("plugin_overrides_args").build();
+        auto entry = schema::object<OverrideEntry>("plugin_override_entry")
+                         .field("plugin", &OverrideEntry::plugin, schema::string())
+                         .field("name", &OverrideEntry::name, schema::string())
+                         .field("format", &OverrideEntry::format, schema::string())
+                         .field("mode", &OverrideEntry::mode, loadModeSchema())
+                         .field("fx", &OverrideEntry::fx, schema::arrayOf(schema::string()))
+                         .build();
+        c.result = schema::object<OverrideList>("plugin_override_list")
+                       .field("overrides", &OverrideList::overrides, schema::arrayOf(entry))
+                       .field("bridge_available", &OverrideList::bridgeAvailable, schema::boolean())
+                       .build();
+        c.examples = {
+            {"None set", j("{}"), j(R"({"overrides":[],"bridge_available":"<any>"})"), "empty"}};
+        c.run = [](const NoArgs&, Context& ctx) -> Result<OverrideList> {
+            EngineApp& engine = app(ctx);
+            OverrideList out;
+            out.bridgeAvailable = !host::bridgeExecutable().empty();
+            auto plugins = engine.plugins();
+            for (const auto& [key, mode] : engine.loadOverrides().all()) {
+                OverrideEntry e;
+                e.plugin = key.second;
+                e.format = key.first;
+                e.mode = mode;
+                if (plugins)
+                    for (const auto& p : *plugins)
+                        if (p.id == key.second && p.format == key.first) {
+                            e.name = p.name;
+                            e.fx = fxOf(engine, p);
+                            break;
+                        }
+                out.overrides.push_back(std::move(e));
+            }
             return out;
         };
         addChecked(registry, std::move(c));

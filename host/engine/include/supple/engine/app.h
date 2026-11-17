@@ -222,6 +222,8 @@ struct EngineStatus {
     } audioPageFaults;
     MeterDrops meterDrops;              // meter entries dropped by a full ring
     std::vector<std::string> failedFx;  // isolated instances whose bridge crashed or hung
+    // fx of a plug-in this run has disabled (plugin.override): placeholders now.
+    std::vector<std::string> disabledFx;
     // Isolated instances whose bridge audio thread was refused its scheduling
     // class (ADR-0026, ADR-0081).
     std::vector<std::string> bridgeThreadsRefused;
@@ -385,7 +387,34 @@ class EngineApp : public cmd::Host {
     // The same id/name fallback for immutable render-job catalogues.
     static Result<host::PluginInfo> findPlugin(std::span<const host::PluginInfo> catalogue,
                                                std::string_view idOrName);
+    // Refuses a plug-in this run has disabled (plugin.disabled); lookupPlugin
+    // finds it all the same, for the commands that manage overrides.
     Result<host::PluginInfo> findPlugin(std::string_view idOrName);
+    Result<host::PluginInfo> lookupPlugin(std::string_view idOrName);
+    // --- load overrides (topic 7d): how this run loads a named plug-in, whatever
+    // the project says. Main thread; not in the project, not in history, kept
+    // across open and new; every pool made takes a copy. ------------------------
+    const LoadOverrides& loadOverrides() const { return overrides_; }
+    // How a plug-in reference loads now: by the key it carries, else by the
+    // catalogue entry it names (the catalogue as it stands, never a scan).
+    LoadMode loadModeOf(const model::PluginRef& ref) const;
+    // Sets one plug-in's mode. Bridge is refused with plugin.override_unavailable
+    // when there is no bridge executable or the plug-in is a stock one. A change
+    // drops the probes made for that plug-in and retires its instances: the next
+    // plan plays fresh ones (a disabled one a pass-through placeholder, in a rack
+    // silence). Returns whether anything changed.
+    Result<bool> setLoadOverride(const host::PluginInfo& info, LoadMode mode);
+    // Where a probe of `info` is made: on a dedicated bridge under Bridge, else in
+    // this process; a disabled plug-in is refused. Every probe, scratch or
+    // per-call, is made here.
+    Result<std::unique_ptr<host::Instance>> makeInstance(const host::PluginInfo& info);
+    // The cached probe fx.describe and the like use for a plug-in named as an fx
+    // names it (null before any): whether it runs on a bridge is what an override
+    // decides. For tests and diagnostics.
+    const host::Instance* scratchProbe(std::string_view fxPluginId) const {
+        const auto it = scratch_.find(std::string(fxPluginId));
+        return it == scratch_.end() ? nullptr : it->second.get();
+    }
     InstancePool& instances() { return *pool_; }
     MediaCache& media() { return media_; }
     // The plugin's semantic schema (null for plugins without the extension).
@@ -849,6 +878,16 @@ class EngineApp : public cmd::Host {
     void startPlaying(int countInBars);  // engine play(), after a count-in when > 0
     explicit EngineApp(AppOptions options);
     Result<host::Instance*> scratch(const model::FxInstance& fx);
+    Result<host::Instance*> scratch(const host::PluginInfo& info, std::string key);
+    // A probe for a one-off job on `fx`: a fresh instance, except under Bridge when
+    // the fx carries a saved state or patch (loading it replaces everything), where
+    // the cached bridged scratch probe is borrowed so that a call does not spawn a
+    // process of its own.
+    struct Probe {
+        std::unique_ptr<host::Instance> own;
+        host::Instance* use = nullptr;
+    };
+    Result<Probe> probeFor(const host::PluginInfo& info, const model::FxInstance& fx);
     bool inRecordDir(const std::filesystem::path& file) const;
     void headChanged();         // reload the real-time engine
     void noteUnplayedEdit();    // a deferred edit failed to compile: engine.error
@@ -910,6 +949,7 @@ class EngineApp : public cmd::Host {
     std::vector<JobThread> jobs_;
     std::mutex recordingFinalizeMutex_;  // sidecar publication vs scratch relocation, never RT
     std::map<std::string, std::unique_ptr<host::Instance>> scratch_;
+    LoadOverrides overrides_;
     Status moveScratchMedia(const std::filesystem::path& dest,
                             const std::function<Status()>& publish);
     std::unique_ptr<SourcePreparation> sourcePreparation_;

@@ -172,12 +172,7 @@ void InstancePool::setStockDir(std::filesystem::path dir) {
     stockDir_ = std::optional<std::filesystem::path>(ec ? std::move(dir) : std::move(canonical));
 }
 
-model::Isolation InstancePool::resolveIsolation(const model::FxInstance& fx,
-                                                const host::PluginInfo& info,
-                                                bool* fallback) const {
-    if (fallback) *fallback = false;
-    if (fx.isolation != model::Isolation::Inherit) return fx.isolation;
-    if (defaultIsolation_ == model::Isolation::InProcess) return model::Isolation::InProcess;
+bool InstancePool::isStock(const host::PluginInfo& info) const {
     if (!stockDir_) {
         std::error_code ec;
         auto dir = host::stockPluginDir();
@@ -187,12 +182,25 @@ model::Isolation InstancePool::resolveIsolation(const model::FxInstance& fx,
         }
         stockDir_ = std::move(dir);
     }
-    if (*stockDir_ && !info.path.empty()) {
-        std::error_code ec;
-        const auto path = std::filesystem::weakly_canonical(info.path, ec);
-        const auto inside = (ec ? info.path : path).lexically_relative(**stockDir_);
-        if (!inside.empty() && *inside.begin() != "..") return model::Isolation::InProcess;
-    }
+    if (!*stockDir_ || info.path.empty()) return false;
+    std::error_code ec;
+    const auto path = std::filesystem::weakly_canonical(info.path, ec);
+    const auto inside = (ec ? info.path : path).lexically_relative(**stockDir_);
+    return !inside.empty() && *inside.begin() != "..";
+}
+
+model::Isolation InstancePool::resolveIsolation(const model::FxInstance& fx,
+                                                const host::PluginInfo& info,
+                                                bool* fallback) const {
+    if (fallback) *fallback = false;
+    // The run's override first: a plug-in the user chose to bridge is bridged
+    // whatever its fx or the preference says. With no bridge executable the
+    // instance is refused at creation rather than loaded in process; the
+    // command that sets the override has already said so.
+    if (overrides_.mode(info) == LoadMode::Bridge) return model::Isolation::Dedicated;
+    if (fx.isolation != model::Isolation::Inherit) return fx.isolation;
+    if (defaultIsolation_ == model::Isolation::InProcess) return model::Isolation::InProcess;
+    if (isStock(info)) return model::Isolation::InProcess;
     if (host::bridgeExecutable().empty()) {
         if (fallback) *fallback = true;
         return model::Isolation::InProcess;
@@ -203,11 +211,33 @@ model::Isolation InstancePool::resolveIsolation(const model::FxInstance& fx,
 model::Isolation InstancePool::effectiveIsolation(Id id, const model::FxInstance& fx) const {
     if (auto it = instances_.find(id); it != instances_.end() && it->second.instance)
         return it->second.effective;
-    if (fx.isolation != model::Isolation::Inherit) return fx.isolation;
-    if (defaultIsolation_ == model::Isolation::InProcess) return model::Isolation::InProcess;
+    if (fx.isolation != model::Isolation::Inherit && overrides_.empty()) return fx.isolation;
+    if (defaultIsolation_ == model::Isolation::InProcess && overrides_.empty() &&
+        fx.isolation == model::Isolation::Inherit)
+        return model::Isolation::InProcess;
     auto info = resolve_(fx.plugin);
     if (!info) return model::Isolation::InProcess;  // nothing to make: nothing bridged
     return resolveIsolation(fx, *info, nullptr);
+}
+
+void InstancePool::restartPlugin(std::string_view format, std::string_view id) {
+    for (auto it = instances_.begin(); it != instances_.end();) {
+        if (it->second.instance && it->second.instance->info().format == format &&
+            it->second.instance->info().id == id) {
+            retire(std::move(it->second.instance));
+            it = instances_.erase(it);
+        } else
+            ++it;
+    }
+}
+
+std::vector<LoadOverrides::Key> InstancePool::ranInProcess() const {
+    std::set<LoadOverrides::Key> keys;
+    for (const auto& [id, e] : instances_)
+        if (e.instance && e.activated && e.effective == model::Isolation::InProcess && !e.failure &&
+            !e.instance->failed())
+            keys.emplace(e.instance->info().format, e.instance->info().id);
+    return {keys.begin(), keys.end()};
 }
 
 std::vector<model::Id> InstancePool::isolationFallbacks() const {
@@ -244,6 +274,10 @@ Result<host::Instance*> InstancePool::get(Id id, const model::FxInstance& fx,
         if (!info) {
             instances_.erase(id);
             return std::move(info).error();
+        }
+        if (overrides_.mode(*info) == LoadMode::Disable) {
+            instances_.erase(id);
+            return LoadOverrides::disabled(*info);
         }
         bool fallback = false;
         const model::Isolation effective = resolveIsolation(fx, *info, &fallback);
@@ -342,6 +376,7 @@ host::Instance::Notifications InstancePool::service(Id id) {
     auto notes = entry.instance->takeNotifications();
     entry.restarting = entry.instance->restartPending();
     if (entry.instance->active()) {
+        entry.activated = true;
         const std::uint32_t latency = entry.instance->latency();
         notes.latencyChanged |= latency != entry.rawLatency;
         entry.rawLatency = latency;

@@ -385,6 +385,74 @@ TEST_CASE("racks: a plugin module runs its effect in the patch") {
     CHECK(l == renderLeft(s, 0.5, 37));
 }
 
+// Lead's read of the 7d design: a plug-in module's plug-in goes through the
+// pool like an fx's, so a bridge override reaches it; before the app offers
+// "bridge" for a plug-in that sits in a rack, the rack must play it as it does
+// in process, rendered and live, in both executors.
+TEST_CASE("racks: a plugin module on a bridge plays as in process, offline and live" *
+          doctest::description("rt")) {
+    host::setBridgeExecutable(BRIDGE_PATH);
+    model::Project project;
+    project.console9 = false;
+    model::EditTxn t(model::Session::create(project), 1);
+    const Id channel = addChannel(t);
+    const Id rack = t.create(model::Rack{channel, ""});
+    const Id transport = addModule(t, rack, "com.suppleaudio.rack.transport");
+    const Id gain = addPlugin(
+        t, rack, "com.suppleaudio.test.gain",
+        json::parse(R"({"schema":"supple.test-gain-patch/1.0","params":{"gain":-6}})").value());
+    const Id out = addModule(t, rack, "com.suppleaudio.rack.out");
+    cable(t, transport, "playing", gain, "in_l");
+    cable(t, gain, "out_l", out, "l");
+    listen(t, out, channel);
+    const auto s = commit(t);
+    const auto inProcess = renderLeft(s, 0.5, 37);
+    CHECK(double(inProcess[12000]) == doctest::Approx(std::pow(10.0, -6.0 / 20.0)).epsilon(1e-3));
+
+    LoadOverrides overrides;
+    overrides.set("clap", "com.suppleaudio.test.gain", LoadMode::Bridge);
+    {
+        InstancePool pool = makePool();
+        pool.setOverrides(overrides);
+        OfflineSettings settings;
+        settings.endSeconds = 0.5;
+        settings.blockSize = 37;
+        auto bridged = renderOffline(s, pool, settings);
+        REQUIRE_MESSAGE(bridged, (bridged ? std::string() : bridged.error().toString()));
+        CHECK(bridged->audio.channels[0] == inProcess);
+        for (const auto* instance : pool.instances()) CHECK(instance->isolated());
+        CHECK_FALSE(pool.instances().empty());
+    }
+    for (bool anticipative : {false, true})
+        for (int workers : {0, 2}) {
+            CAPTURE(anticipative);
+            CAPTURE(workers);
+            InstancePool livePool = makePool();
+            livePool.setOverrides(overrides);
+            MediaCache liveMedia;
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 25000});
+            Engine engine(
+                livePool, liveMedia,
+                engine::test::patient({.anticipative = anticipative, .workers = workers}));
+            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 37}));
+            REQUIRE(engine.load(s));
+            engine.play();
+            for (int i = 0; i < 660; ++i) {
+                if (anticipative) REQUIRE(engine.awaitRendered(37));
+                backend.run(1);
+            }
+            CHECK(engine.bridgeLateCycles() == 0);
+            engine.stop();
+            CHECK(engine.processErrors() == 0);
+            REQUIRE_FALSE(livePool.instances().empty());
+            for (const auto* instance : livePool.instances()) CHECK(instance->isolated());
+            const auto latency = engine.outputLatency();
+            const auto& cap = backend.capture().channels[0];
+            REQUIRE(cap.size() >= latency + inProcess.size());
+            CHECK(std::equal(inProcess.begin(), inProcess.end(), cap.begin() + latency));
+        }
+}
+
 TEST_CASE("racks: Notes' pitch and gate play a plugin module's instrument") {
     // A4 (key 69) on beats 1..2 into the sine fixture: 440 Hz at velocity * 0.25.
     model::Project project;

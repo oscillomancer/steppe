@@ -1,0 +1,389 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 Supple Audio
+// How a run loads a named plug-in whatever the project says (topic 7d): the
+// override map every pool takes, the commands that set it, and what a
+// disabled or bridged plug-in does to renders, playback and saves.
+#include <doctest/doctest.h>
+#include <supple/engine/app.h>
+#include <supple/engine/offline.h>
+#include <supple/engine/realtime.h>
+#include <unistd.h>
+#include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <thread>
+#include "bridge_patience.h"
+
+using namespace supple;
+using namespace supple::engine;
+namespace fs = std::filesystem;
+
+namespace {
+
+const fs::path kFixture = FIXTURE_CLAP_PATH;
+constexpr const char* kGain = "com.suppleaudio.test.gain";
+
+struct Root {
+    fs::path path =
+        fs::temp_directory_path() / ("supple-load-overrides-" + std::to_string(::getpid()));
+    Root() { fs::remove_all(path); }
+    ~Root() { fs::remove_all(path); }
+};
+
+std::unique_ptr<EngineApp> makeApp(const fs::path& dir) {
+    AppOptions o;
+    o.workdir = dir;
+    o.chainDir = dir / "chains";  // never the user's config
+    o.presetDir = dir / "presets";
+    o.templateDir = dir / "templates";
+    o.projectTemplateDir = dir / "project-templates";
+    o.pluginPath = {kFixture};
+    auto app = EngineApp::create(o, {.console9 = false});
+    REQUIRE(app);
+    return std::move(*app);
+}
+
+json::Value j(std::string_view text) { return json::parse(text).value(); }
+const cmd::Origin kTest{cmd::Origin::Type::Test, "unit", ""};
+
+Result<host::PluginInfo> fixtureResolve(const model::PluginRef& ref) {
+    host::ScanOptions options;
+    options.forceInProcess = true;
+    auto plugins = host::scan(std::span(&kFixture, 1), options);
+    if (!plugins) return plugins.error();
+    for (const auto& plugin : *plugins)
+        if (plugin.id == ref.id) return plugin;
+    return Error("engine.plugin_missing", "fixture " + ref.id + " not found");
+}
+
+std::string fileText(const fs::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    std::ostringstream out;
+    out << in.rdbuf();
+    return out.str();
+}
+
+struct Bus {
+    Root root;
+    cmd::Registry registry;
+    std::unique_ptr<EngineApp> app;
+    std::unique_ptr<cmd::Dispatcher> bus;
+    Bus() {
+        host::setBridgeExecutable(BRIDGE_PATH);
+        registerEngineCommands(registry);
+        app = makeApp(root.path);
+        bus = std::make_unique<cmd::Dispatcher>(registry, *app);
+    }
+    Result<json::Value> run(std::string command, std::string_view args) {
+        return bus->execute({std::move(command), j(args), kTest});
+    }
+    json::Value call(std::string command, std::string_view args) {
+        auto r = run(std::move(command), args);
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return *r;
+    }
+    // A track with the sine instrument and a gain at -12 dB playing a note.
+    void song() {
+        call("batch", R"({"steps": [
+            {"command": "track.add", "args": {"name": "Lead"}, "as": "t"},
+            {"command": "fx.add", "args": {"track": "${t.track}", "plugin": "Test Sine"}},
+            {"command": "fx.add", "args": {"track": "${t.track}", "plugin": "com.suppleaudio.test.gain"}},
+            {"command": "fx.patch.merge", "args": {"fx": "fx_2", "patch": {"params": {"gain": -12}}}},
+            {"command": "item.add", "args": {"track": "${t.track}", "bar": 1, "notation": "voice lead; 1: C4:w"}}]})");
+    }
+};
+
+}  // namespace
+
+TEST_CASE(
+    "a pool makes a bridged plug-in on a dedicated bridge whatever its fx and the default say") {
+    host::setBridgeExecutable(BRIDGE_PATH);
+    const model::Id id{model::Kind::Fx, 1};
+    model::FxInstance fx;
+    fx.plugin.id = kGain;
+    fx.isolation = model::Isolation::InProcess;  // the fx names in process
+    const auto session = model::Session::create();
+    InstancePool pool(fixtureResolve);
+    pool.setStockDir(kFixture.parent_path());  // and it is a stock plug-in at that
+    auto first = pool.get(id, fx, session);
+    REQUIRE(first);
+    CHECK_FALSE((*first)->isolated());
+    CHECK(pool.effectiveIsolation(id, fx) == model::Isolation::InProcess);
+
+    LoadOverrides overrides;
+    CHECK(overrides.set("clap", kGain, LoadMode::Bridge));
+    CHECK_FALSE(overrides.set("clap", kGain, LoadMode::Bridge));
+    pool.setOverrides(overrides);
+    // The instance made before stays until it is retired, and nothing says it moved.
+    CHECK(pool.get(id, fx, session).value() == *first);
+    CHECK(pool.effectiveIsolation(id, fx) == model::Isolation::InProcess);
+    pool.restartPlugin("clap", kGain);
+    CHECK(pool.retired() == 1);
+    auto bridged = pool.get(id, fx, session);
+    REQUIRE(bridged);
+    CHECK((*bridged)->isolated());
+    CHECK(pool.effectiveIsolation(id, fx) == model::Isolation::Dedicated);
+    // Another plug-in is not touched, nor is the same id in another format.
+    CHECK(overrides.mode("vst3", kGain) == LoadMode::Normal);
+    CHECK(overrides.mode("clap", "com.suppleaudio.test.edge") == LoadMode::Normal);
+
+    // Back to normal: the next instance is in process again.
+    pool.setOverrides({});
+    pool.restartPlugin("clap", kGain);
+    auto again = pool.get(id, fx, session);
+    REQUIRE(again);
+    CHECK_FALSE((*again)->isolated());
+}
+
+TEST_CASE("a pool refuses a disabled plug-in and makes nothing of it") {
+    const model::Id id{model::Kind::Fx, 1}, other{model::Kind::Fx, 2};
+    const auto session = model::Session::create();
+    InstancePool pool(fixtureResolve);
+    LoadOverrides overrides;
+    overrides.set("clap", kGain, LoadMode::Disable);
+    pool.setOverrides(overrides);
+    model::FxInstance gain;
+    gain.plugin.id = kGain;
+    auto refused = pool.get(id, gain, session);
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "plugin.disabled");
+    CHECK(refused.error().hint.find("plugin.override") != std::string::npos);
+    CHECK(pool.size() == 0);
+    model::FxInstance edge;
+    edge.plugin.id = "com.suppleaudio.test.edge";
+    CHECK(pool.get(other, edge, session));
+}
+
+TEST_CASE("the override commands, and what they do to a project that is playing") {
+    Bus f;
+    f.song();
+    const model::Id fx = *model::Id::parse("fx_2");
+    auto listed = f.call("plugin.overrides", "{}");
+    CHECK(listed["overrides"].size() == 0);
+    CHECK(listed["bridge_available"].asBool());
+
+    f.call("engine.start", R"({"backend": "dummy"})");
+    f.call("transport.play", "{}");
+    host::Instance* original = f.app->instanceOf(fx);
+    REQUIRE(original);
+    CHECK_FALSE(original->isolated());
+    // A probe made now is in process, and goes with the override.
+    f.call("fx.describe", R"({"fx": "fx_2"})");
+    REQUIRE(f.app->scratchProbe(kGain));
+    CHECK_FALSE(f.app->scratchProbe(kGain)->isolated());
+
+    SUBCASE("bridge") {
+        auto set = f.call("plugin.override",
+                          std::string(R"({"plugin":")") + kGain + R"(","mode":"bridge"})");
+        CHECK(set["changed"].asBool());
+        CHECK(set["mode"].asString() == "bridge");
+        CHECK(set["fx"].size() == 1);
+        CHECK(set["fx"].at(0).asString() == "fx_2");
+        // The next plan plays a new instance on a bridge of its own.
+        host::Instance* now = f.app->instanceOf(fx);
+        for (int i = 0; i < 400 && (!now || now == original); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            f.app->tick();
+            now = f.app->instanceOf(fx);
+        }
+        REQUIRE(now);
+        CHECK(now != original);
+        CHECK(now->isolated());
+        CHECK(f.app->scratchProbe(kGain) == nullptr);
+        auto described = f.call("fx.describe", R"({"fx": "fx_2"})");
+        CHECK(described["isolation_effective"].asString() == "dedicated");
+        CHECK(described["override"].asString() == "bridge");
+        REQUIRE(f.app->scratchProbe(kGain));
+        CHECK(f.app->scratchProbe(kGain)->isolated());
+        // The project keeps what it said.
+        CHECK(f.app->head().fx.find(fx)->isolation == model::Isolation::Inherit);
+        CHECK(f.call("plugin.overrides", "{}")["overrides"].size() == 1);
+        // Setting it again changes nothing.
+        CHECK_FALSE(f.call("plugin.override", std::string(R"({"plugin":")") + kGain +
+                                                  R"(","mode":"bridge"})")["changed"]
+                        .asBool());
+        // The latency probe borrows the bridged probe: no process of its own per call.
+        const auto pid = f.app->scratchProbe(kGain)->bridgePid();
+        f.call("engine.stop", "{}");
+        for (int i = 0; i < 3; ++i)
+            REQUIRE(f.app->fxLatencySamples(fx, *f.app->head().fx.find(fx)));
+        CHECK(f.app->scratchProbe(kGain)->bridgePid() == pid);
+        // Normal again.
+        f.call("plugin.override", std::string(R"({"plugin":")") + kGain + R"(","mode":"normal"})");
+        CHECK(f.app->scratchProbe(kGain) == nullptr);
+        CHECK(f.call("plugin.overrides", "{}")["overrides"].size() == 0);
+    }
+
+    SUBCASE("disable") {
+        // A save captures what plug-ins are running (the sine's state): the
+        // comparison is between two saves of the same playing project.
+        const auto before = f.root.path / "before.json";
+        REQUIRE(f.app->save(before));
+        f.call("plugin.override", std::string(R"({"plugin":")") + kGain + R"(","mode":"disable"})");
+        for (int i = 0; i < 400 && f.app->instanceOf(fx); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            f.app->tick();
+        }
+        CHECK(f.app->instanceOf(fx) == nullptr);
+        CHECK(f.app->scratchProbe(kGain) == nullptr);
+        auto status = f.call("engine.status", "{}");
+        REQUIRE(status["disabled_fx"].size() == 1);
+        CHECK(status["disabled_fx"].at(0).asString() == "fx_2");
+        CHECK(status["running"].asBool());
+        // It still describes: from the session and the override alone.
+        auto described = f.call("fx.describe", R"({"fx": "fx_2"})");
+        CHECK(described["override"].asString() == "disable");
+        CHECK(described.find("isolation_effective") == nullptr);
+        CHECK(described.find("params") == nullptr);
+        CHECK(described["description"].asString().find("Disabled") != std::string::npos);
+        CHECK(described.find("patch") != nullptr);
+        // Nothing can add it, or ask it for parameters.
+        auto added = f.run("fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.gain"})");
+        REQUIRE_FALSE(added);
+        CHECK(added.error().code == "plugin.disabled");
+        // Disabled or not, the saved project is the same bytes.
+        const auto after = f.root.path / "after.json";
+        REQUIRE(f.app->save(after));
+        CHECK(fileText(after) == fileText(before));
+        // The override survives a new project; the project itself is untouched.
+        REQUIRE(f.app->newProject({.console9 = false}));
+        CHECK(f.call("plugin.overrides", "{}")["overrides"].size() == 1);
+        f.call("plugin.override", std::string(R"({"plugin":")") + kGain + R"(","mode":"normal"})");
+        CHECK(f.call("engine.status", "{}")["disabled_fx"].size() == 0);
+    }
+    f.call("engine.stop", "{}");
+}
+
+TEST_CASE("bridge is refused without a bridge executable and for a stock plug-in, naming the fix") {
+    struct Restore {
+        ~Restore() { host::setBridgeExecutable(BRIDGE_PATH); }
+    } restore;
+    Bus f;
+    f.song();
+    REQUIRE(f.app->plugins());
+    host::setBridgeExecutable({});
+    CHECK_FALSE(f.call("plugin.overrides", "{}")["bridge_available"].asBool());
+    auto refused =
+        f.run("plugin.override", std::string(R"({"plugin":")") + kGain + R"(","mode":"bridge"})");
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "plugin.override_unavailable");
+    CHECK_FALSE(refused.error().hint.empty());
+    CHECK(f.call("plugin.overrides", "{}")["overrides"].size() == 0);  // nothing was set
+    // Disabling needs no bridge.
+    f.call("plugin.override", std::string(R"({"plugin":")") + kGain + R"(","mode":"disable"})");
+    auto unknown = f.run("plugin.override", R"({"plugin":"com.example.nothing","mode":"disable"})");
+    REQUIRE_FALSE(unknown);
+    CHECK(unknown.error().code == "plugin.unknown");
+    auto badMode =
+        f.run("plugin.override", std::string(R"({"plugin":")") + kGain + R"(","mode":"later"})");
+    CHECK_FALSE(badMode);
+    // The pool's own check, for a plug-in in the stock directory.
+    InstancePool pool(fixtureResolve);
+    auto info = fixtureResolve({.id = kGain});
+    REQUIRE(info);
+    CHECK_FALSE(pool.isStock(*info));
+    pool.setStockDir(kFixture.parent_path());
+    CHECK(pool.isStock(*info));
+}
+
+TEST_CASE("an offline render of a disabled plug-in is the render with that plug-in missing") {
+    Bus f;
+    f.song();
+    OfflineSettings settings;
+    settings.endSeconds = 1.0;
+    auto rendered = [&](const model::Session& s) {
+        auto r = f.app->renderSession(s, settings);
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return std::move(*r);
+    };
+    const model::Id fx = *model::Id::parse("fx_2");
+    const auto normal = rendered(f.app->head());
+    model::EditTxn edit(f.app->head(), 99);
+    edit.modify<model::FxInstance>(
+        fx, [](model::FxInstance& x) { x.plugin.id = "com.example.missing"; });
+    auto missingSession = edit.commit();
+    REQUIRE(missingSession);
+    const auto missing = rendered(*missingSession);
+    f.call("plugin.override", std::string(R"({"plugin":")") + kGain + R"(","mode":"disable"})");
+    const auto disabled = rendered(f.app->head());
+    // The gain at -12 dB would change the level; the placeholder passes audio through.
+    REQUIRE(normal.audio.channels[0].size() == disabled.audio.channels[0].size());
+    CHECK(normal.audio.channels[0] != disabled.audio.channels[0]);
+    CHECK(disabled.audio.channels[0] == missing.audio.channels[0]);
+    CHECK(disabled.audio.channels[1] == missing.audio.channels[1]);
+    CHECK(*std::max_element(disabled.audio.channels[0].begin(), disabled.audio.channels[0].end()) >
+          0.01f);
+    bool said = false;
+    for (const auto& w : disabled.warnings) said = said || w.find("disabled") != std::string::npos;
+    CHECK(said);
+    // Normal again renders as before, bit for bit.
+    f.call("plugin.override", std::string(R"({"plugin":")") + kGain + R"(","mode":"normal"})");
+    CHECK(rendered(f.app->head()).audio.channels[0] == normal.audio.channels[0]);
+}
+
+TEST_CASE("an offline render of a bridged plug-in is the in-process render, bit for bit") {
+    Bus f;
+    f.song();
+    OfflineSettings settings;
+    settings.endSeconds = 1.0;
+    auto render = [&] {
+        auto r = f.app->renderSession(f.app->head(), settings);
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return std::move(*r);
+    };
+    const test::BridgeDeadline patient(test::kPatientBridgeMs);
+    const auto inProcess = render();
+    f.call("plugin.override", std::string(R"({"plugin":")") + kGain + R"(","mode":"bridge"})");
+    const auto bridged = render();  // the render's own pool took the override too
+    CHECK(bridged.audio.channels[0] == inProcess.audio.channels[0]);
+    CHECK(bridged.audio.channels[1] == inProcess.audio.channels[1]);
+    CHECK(*std::max_element(bridged.audio.channels[0].begin(), bridged.audio.channels[0].end()) >
+          0.01f);
+}
+
+TEST_CASE("changing an override while playing swaps the instance in both executors" *
+          doctest::description("rt")) {
+    for (bool anticipative : {false, true}) {
+        CAPTURE(anticipative);
+        Bus f;
+        f.song();
+        const model::Id fx = *model::Id::parse("fx_2");
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 1 << 16});
+        REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 64},
+                                   test::patient({.anticipative = anticipative})));
+        f.call("transport.play", "{}");
+        auto cycles = [&](int n) {
+            for (int i = 0; i < n; ++i) {
+                if (anticipative) REQUIRE(f.app->engine()->awaitRendered(64));
+                backend.run(1);
+                f.app->tick();
+            }
+        };
+        cycles(40);
+        host::Instance* first = f.app->instanceOf(fx);
+        REQUIRE(first);
+        CHECK_FALSE(first->isolated());
+        const std::string gain = std::string(R"({"plugin":")") + kGain;
+        // Bridge: a new instance, on a bridge, once a plan with it is adopted.
+        f.call("plugin.override", gain + R"(","mode":"bridge"})");
+        cycles(80);
+        host::Instance* bridged = f.app->instanceOf(fx);
+        REQUIRE(bridged);
+        CHECK(bridged != first);
+        CHECK(bridged->isolated());
+        // Disable: no instance; the strip passes audio through and the engine plays on.
+        f.call("plugin.override", gain + R"(","mode":"disable"})");
+        cycles(80);
+        CHECK(f.app->instanceOf(fx) == nullptr);
+        // Normal: a fresh in-process instance.
+        f.call("plugin.override", gain + R"(","mode":"normal"})");
+        cycles(80);
+        host::Instance* last = f.app->instanceOf(fx);
+        REQUIRE(last);
+        CHECK_FALSE(last->isolated());
+        CHECK(f.app->engine()->processErrors() == 0);
+        CHECK(f.app->engine()->bridgeLateCycles() == 0);
+        f.call("engine.stop", "{}");
+    }
+}

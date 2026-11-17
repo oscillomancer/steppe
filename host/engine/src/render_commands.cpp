@@ -1113,13 +1113,20 @@ struct RunContext {
     explicit RunContext(EngineApp& a) : app(a) {}
     RunContext(EngineApp& a, cmd::JobManager* j, std::string id,
                const std::vector<host::PluginInfo>* c, const host::HostIdentity* i,
-               supple::StopToken s)
-        : app(a), jobs(j), job(std::move(id)), catalogue(c), identity(i), stop(std::move(s)) {}
+               const LoadOverrides* o, supple::StopToken s)
+        : app(a),
+          jobs(j),
+          job(std::move(id)),
+          catalogue(c),
+          identity(i),
+          overrides(o),
+          stop(std::move(s)) {}
     EngineApp& app;
     cmd::JobManager* jobs = nullptr;
     std::string job;
     const std::vector<host::PluginInfo>* catalogue = nullptr;
     const host::HostIdentity* identity = nullptr;
+    const LoadOverrides* overrides = nullptr;  // a copy taken on the main thread
     supple::StopToken stop;
 };
 
@@ -1144,9 +1151,10 @@ Result<Rendered> renderSteps(RunContext& run, const RenderPlan& p, const RenderT
         settings.progressScale = 0.8 / static_cast<double>(count);
     }
     settings.stopToken = run.stop;
-    auto offline = run.catalogue && run.identity
-                       ? renderSnapshot(task.session, settings, *run.catalogue, *run.identity)
-                       : run.app.renderSession(task.session, settings);
+    auto offline =
+        run.catalogue && run.identity && run.overrides
+            ? renderSnapshot(task.session, settings, *run.catalogue, *run.identity, *run.overrides)
+            : run.app.renderSession(task.session, settings);
     if (!offline) return std::move(offline).error();
     Rendered r;
     r.audio = std::move(offline->audio);
@@ -1477,7 +1485,8 @@ Status checkRenderRange(const model::Session& s, const OfflineSettings& settings
 
 Result<OfflineResult> renderSnapshot(const model::Session& session, OfflineSettings settings,
                                      const std::vector<host::PluginInfo>& catalogue,
-                                     const host::HostIdentity& identity) {
+                                     const host::HostIdentity& identity,
+                                     const LoadOverrides& overrides) {
     SUPPLE_TRY(checkRenderRange(session, settings));
     InstancePool pool(
         [&catalogue](const model::PluginRef& ref) -> Result<host::PluginInfo> {
@@ -1488,6 +1497,7 @@ Result<OfflineResult> renderSnapshot(const model::Session& session, OfflineSetti
                 "select an installed plugin from plugin.list before queuing the render snapshot");
         },
         identity);
+    pool.setOverrides(overrides);
     return renderOffline(session, pool, settings);
 }
 
@@ -1817,16 +1827,17 @@ void registerQueueCommands(cmd::Registry& registry) {
             if (!available) return std::move(available).error();
             std::vector<host::PluginInfo> catalogue(available->begin(), available->end());
             const auto identity = app.options().identity;
+            const auto overrides = app.loadOverrides();
             auto& jobs = ctx.service<cmd::JobManager>();
             const std::string id = jobs.create();
             app.startJob([&app, &jobs, &dispatcher, origin, target, id, work = std::move(work),
-                          catalogue = std::move(catalogue), identity,
+                          catalogue = std::move(catalogue), identity, overrides,
                           entryOf](supple::StopToken stop) {
                 json::Value renders = json::Value::array();
                 std::vector<std::string> done;
                 for (const auto& w : work) {
                     if (stop.stop_requested() || jobs.cancelled(id)) return;
-                    RunContext run{app, &jobs, id, &catalogue, &identity, stop};
+                    RunContext run{app, &jobs, id, &catalogue, &identity, &overrides, stop};
                     auto result = runTasks(run, w.plan);
                     if (!result) {
                         if (!jobs.cancelled(id)) (void)jobs.fail(id, std::move(result).error());
@@ -2148,13 +2159,15 @@ void registerRenderCommands(cmd::Registry& registry) {
             if (!available) return std::move(available).error();
             std::vector<host::PluginInfo> catalogue(available->begin(), available->end());
             const auto identity = app.options().identity;
+            const auto overrides = app.loadOverrides();
             auto& jobs = ctx.service<cmd::JobManager>();
             const std::string id = jobs.create();
             app.startJob([&app, &jobs, &dispatcher, origin, target, id,
                           planned = std::move(*planned), mix, addToProject,
-                          catalogue = std::move(catalogue), identity](supple::StopToken stop) {
+                          catalogue = std::move(catalogue), identity,
+                          overrides](supple::StopToken stop) {
                 if (stop.stop_requested() || jobs.cancelled(id)) return;
-                RunContext run{app, &jobs, id, &catalogue, &identity, stop};
+                RunContext run{app, &jobs, id, &catalogue, &identity, &overrides, stop};
                 auto meters = std::make_shared<std::map<std::string, json::Value>>();
                 auto result = runTasks(run, planned, meters.get());
                 if (result) {

@@ -128,6 +128,13 @@ The device period that sizes §5's macOS class is carried as a duration
 (protocol POSIX 24 / Windows 25), so an oversampled plug-in, activated at
 2 or 4 times the device's rate, still asks for the device's period.
 
+*Amended 2026-11-17 (topic 7d, ADR-0083):* a run may bridge a named
+plug-in whatever its fx and the preference say (`plugin.override`, mode
+`bridge`): every instance of it is made `dedicated`, offline pools and rack
+modules included, and the choice is refused rather than falling back to in
+process when no bridge executable exists. `docs/specs/engine.md` §5, "Load
+overrides".
+
 ## Alternatives considered
 
 - **Pipelined live bridging:** never waits, but adds a block of latency per

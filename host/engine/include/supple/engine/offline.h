@@ -30,6 +30,7 @@
 
 #include "supple/audio/audio_file.h"
 #include "supple/base/result.h"
+#include "supple/engine/load_overrides.h"
 #include "supple/host/clap_host.h"
 #include "supple/model/session.h"
 
@@ -84,6 +85,23 @@ class InstancePool {
     model::Isolation defaultIsolation() const { return defaultIsolation_; }
     // The stock plug-ins' directory; host::stockPluginDir() unless set.
     void setStockDir(std::filesystem::path dir);
+    // Whether `info` is one of the stock plug-ins (in the stock directory).
+    bool isStock(const host::PluginInfo& info) const;
+    // How this run loads named plug-ins (topic 7d). A pool takes its own copy
+    // on the main thread, when it is made; a disabled plug-in is refused by
+    // get() with plugin.disabled, a bridged one is made on a dedicated bridge
+    // whatever its fx asked, and neither the pool's default nor a stock
+    // directory changes that. A changed override reaches instances already made
+    // only through restartPlugin().
+    void setOverrides(LoadOverrides overrides) { overrides_ = std::move(overrides); }
+    const LoadOverrides& overrides() const { return overrides_; }
+    // Retires the instances of one plug-in (every fx of it): the next get()
+    // makes new ones, and the old stay until prune() like a restart().
+    void restartPlugin(std::string_view format, std::string_view id);
+    // The plug-ins (format, id) with an instance in this process that was
+    // active at some point and has not failed: a run that ended cleanly with
+    // them loaded normally (topic 7d, E12).
+    std::vector<LoadOverrides::Key> ranInProcess() const;
     // Where `id`'s instance runs, or would if it were made now.
     model::Isolation effectiveIsolation(model::Id id, const model::FxInstance& fx) const;
     // Instances on inherit made in process because no bridge was set.
@@ -128,6 +146,7 @@ class InstancePool {
         std::uint32_t latency = 0;     // prepared stage frames
         std::uint32_t rawLatency = 0;  // plug-in frames at its activation rate
         bool restarting = false;       // a restart the plug-in asked for waits on processing
+        bool activated = false;        // it was active when last serviced, at some point
         std::optional<Error> failure;
         std::vector<std::uint32_t> clearedAutomation;
         std::string appliedState;  // canonical patch text or blob hash last applied
@@ -136,6 +155,7 @@ class InstancePool {
     model::Isolation resolveIsolation(const model::FxInstance& fx, const host::PluginInfo& info,
                                       bool* fallback) const;
     model::Isolation defaultIsolation_ = model::Isolation::InProcess;
+    LoadOverrides overrides_;
     mutable std::optional<std::optional<std::filesystem::path>> stockDir_;  // found when needed
     MainThreadWake* mainWake_ = nullptr;
     Resolver resolve_;

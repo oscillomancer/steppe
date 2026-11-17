@@ -3643,6 +3643,13 @@ Kind: `action`. Exposure: `mcp-tool`.
         "type": "string"
       }
     },
+    "disabled_fx": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "fx whose plug-in this run has disabled (plugin.override): the strip passes audio through"
+    },
     "bridge_threads_refused": {
       "type": "array",
       "items": {
@@ -3765,6 +3772,7 @@ Kind: `action`. Exposure: `mcp-tool`.
     "audio_page_faults",
     "meter_drops",
     "failed_fx",
+    "disabled_fx",
     "bridge_threads_refused",
     "dropped",
     "voice_dropped",
@@ -3889,6 +3897,7 @@ Result:
     "callback": 0
   },
   "failed_fx": [],
+  "disabled_fx": [],
   "bridge_threads_refused": [],
   "dropped": 0,
   "voice_dropped": 0,
@@ -4412,6 +4421,13 @@ Kind: `query`. Exposure: `mcp-exec`.
         "type": "string"
       }
     },
+    "disabled_fx": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "fx whose plug-in this run has disabled (plugin.override): the strip passes audio through"
+    },
     "bridge_threads_refused": {
       "type": "array",
       "items": {
@@ -4534,6 +4550,7 @@ Kind: `query`. Exposure: `mcp-exec`.
     "audio_page_faults",
     "meter_drops",
     "failed_fx",
+    "disabled_fx",
     "bridge_threads_refused",
     "dropped",
     "voice_dropped",
@@ -4662,6 +4679,7 @@ Result:
     "callback": 0
   },
   "failed_fx": [],
+  "disabled_fx": [],
   "bridge_threads_refused": [],
   "dropped": 0,
   "voice_dropped": 0,
@@ -5760,6 +5778,10 @@ Kind: `query`. Exposure: `mcp-tool`.
     "isolation_effective": {
       "type": "string",
       "description": "Where the instance runs: in_process, shared_bridge or dedicated; inherit resolves to the plug-in isolation preference (stock plug-ins in process), as the instance is made"
+    },
+    "override": {
+      "type": "string",
+      "description": "This run's plugin.override for the plug-in, when it is not normal: bridge (it runs on a dedicated bridge) or disable (it is not loaded: the strip passes audio through, a rack module is silent, and there is no isolation_effective or parameter section)"
     },
     "outputs_notes": {
       "type": "boolean",
@@ -10887,6 +10909,176 @@ Result:
 {
   "plugins": "<any>",
   "scan": "<any>"
+}
+
+```
+
+## `plugin.override@1`
+
+Load a plug-in normally, on a bridge, or not at all for this run.
+
+A safety choice for a plug-in suspected of crashing: mode bridge runs it in a dedicated bridge process (a crash then stays there; a live bridge can drop blocks under load), disable does not load it (its strips pass audio through and a rack module of it is silent), normal loads it as the project says. It holds until the app quits, is not in the project or its history, and is not saved: a project saved while it holds is byte-for-byte the one saved without. Instances of the plug-in restart, so state that was never saved is lost and held notes end. Stock plug-ins cannot be bridged, and bridge needs the bridge executable; both are refused with plugin.override_unavailable.
+
+Kind: `action`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `plugin` | string |  |  |  | id or name, as plugin.list shows it |
+| `mode` | string |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "plugin_override_result",
+  "properties": {
+    "plugin": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "format": {
+      "type": "string"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["normal", "bridge", "disable"]
+    },
+    "changed": {
+      "type": "boolean",
+      "description": "false: it was set that way already"
+    },
+    "fx": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "the fx of this plug-in in the project now"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["plugin", "name", "format", "mode", "changed", "fx"],
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**Load normally** (`empty`)
+
+```json
+{
+  "plugin": "com.suppleaudio.test.gain",
+  "mode": "normal"
+}
+
+```
+
+Result:
+
+```json
+{
+  "plugin": "com.suppleaudio.test.gain",
+  "name": "<any>",
+  "format": "clap",
+  "mode": "normal",
+  "changed": false,
+  "fx": []
+}
+
+```
+
+## `plugin.overrides@1`
+
+List the plug-ins this run bridges or has disabled.
+
+What plugin.override set, with the fx of each plug-in in the project now. bridge_available: a bridge executable was found, so mode bridge can be set.
+
+Kind: `query`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "plugin_override_list",
+  "properties": {
+    "overrides": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "plugin_override_entry",
+        "properties": {
+          "plugin": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["normal", "bridge", "disable"]
+          },
+          "fx": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": ["plugin", "name", "format", "mode", "fx"],
+        "additionalProperties": false
+      }
+    },
+    "bridge_available": {
+      "type": "boolean"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["overrides", "bridge_available"],
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**None set** (`empty`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "overrides": [],
+  "bridge_available": "<any>"
 }
 
 ```

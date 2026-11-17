@@ -137,6 +137,7 @@ Result<std::unique_ptr<EngineApp>> EngineApp::create(AppOptions options, model::
         app->options_.identity);
     app->pool_->setMainThreadWake(app->mainWake_);
     app->pool_->setDefaultIsolation(app->pluginIsolation_);
+    app->pool_->setOverrides(app->overrides_);
     app->modules_ = detail::loadModuleLibrary(detail::builtinModuleCatalog(), app->moduleDir());
     app->pool_->racks().setCatalog(app->modules_);
     SUPPLE_TRY(app->newProject(std::move(project)));
@@ -173,10 +174,67 @@ void EngineApp::installPlugins(std::vector<host::PluginInfo> list, host::ScanRep
     scanReport_ = std::move(report);
 }
 
-Result<host::PluginInfo> EngineApp::findPlugin(std::string_view idOrName) {
+Result<host::PluginInfo> EngineApp::lookupPlugin(std::string_view idOrName) {
     auto all = plugins();
     if (!all) return std::move(all).error();
     return findPlugin(*all, idOrName);
+}
+
+Result<host::PluginInfo> EngineApp::findPlugin(std::string_view idOrName) {
+    auto info = lookupPlugin(idOrName);
+    if (info && overrides_.mode(*info) == LoadMode::Disable) return LoadOverrides::disabled(*info);
+    return info;
+}
+
+LoadMode EngineApp::loadModeOf(const model::PluginRef& ref) const {
+    if (overrides_.empty()) return LoadMode::Normal;
+    if (const auto direct = overrides_.mode(ref.format, ref.id); direct != LoadMode::Normal)
+        return direct;
+    if (catalogue_)
+        if (auto info = findPlugin(std::span<const host::PluginInfo>(*catalogue_), ref.id))
+            return overrides_.mode(*info);
+    return LoadMode::Normal;
+}
+
+Result<std::unique_ptr<host::Instance>> EngineApp::makeInstance(const host::PluginInfo& info) {
+    const LoadMode mode = overrides_.mode(info);
+    if (mode == LoadMode::Disable) return LoadOverrides::disabled(info);
+    return host::Instance::create(info, options_.identity, mode == LoadMode::Bridge);
+}
+
+Result<bool> EngineApp::setLoadOverride(const host::PluginInfo& info, LoadMode mode) {
+    if (mode == LoadMode::Bridge) {
+        if (host::bridgeExecutable().empty())
+            return Error("plugin.override_unavailable",
+                         "no plug-in bridge executable was found, so \"" + info.name +
+                             "\" cannot be bridged",
+                         "/mode",
+                         "reinstall so that the bridge sits beside the app, or use mode "
+                         "\"disable\" or \"normal\"");
+        if (pool_->isStock(info))
+            return Error("plugin.override_unavailable",
+                         "\"" + info.name + "\" is a stock plug-in; stock plug-ins are not bridged",
+                         "/mode", "use mode \"disable\" or \"normal\"");
+    }
+    if (!overrides_.set(info.format, info.id, mode)) return false;
+    pool_->setOverrides(overrides_);
+    // A probe made before is of the wrong kind now (in process, or bridged).
+    std::erase_if(scratch_, [&](const auto& entry) {
+        return entry.second && entry.second->info().format == info.format &&
+               entry.second->info().id == info.id;
+    });
+    pool_->restartPlugin(info.format, info.id);
+    for (const auto& entry : head().fx) {
+        const auto& ref = entry.value->plugin;
+        const bool same =
+            ref.id == info.id || (catalogue_ && [&] {
+                auto found = findPlugin(std::span<const host::PluginInfo>(*catalogue_), ref.id);
+                return found && found->id == info.id && found->format == info.format;
+            }());
+        if (same) reportedFailures_.erase(entry.id);
+    }
+    headChanged();  // a running engine plays fresh instances from its next plan
+    return true;
 }
 
 Result<host::PluginInfo> EngineApp::findPlugin(std::span<const host::PluginInfo> catalogue,
@@ -206,15 +264,40 @@ Result<host::Instance*> EngineApp::scratch(const model::FxInstance& fx) {
             scratch_.erase(fx.plugin.id);
             return std::move(info).error();
         }
-        auto made = host::Instance::create(*info, options_.identity);
+        return scratch(*info, fx.plugin.id);
+    }
+    return slot.get();
+}
+
+Result<host::Instance*> EngineApp::scratch(const host::PluginInfo& info, std::string key) {
+    auto& slot = scratch_[key];
+    if (!slot) {
+        auto made = makeInstance(info);
         if (!made) {
-            scratch_.erase(fx.plugin.id);
+            scratch_.erase(key);
             return std::move(made).error();
         }
         slot = std::move(*made);
         slot->setMainThreadWake(mainWake_);
     }
     return slot.get();
+}
+
+Result<EngineApp::Probe> EngineApp::probeFor(const host::PluginInfo& info,
+                                             const model::FxInstance& fx) {
+    Probe probe;
+    if (overrides_.mode(info) == LoadMode::Bridge && (fx.patch || fx.state)) {
+        auto borrowed = scratch(info, fx.plugin.id);
+        if (!borrowed) return std::move(borrowed).error();
+        probe.use = *borrowed;
+        return probe;
+    }
+    auto made = makeInstance(info);
+    if (!made) return std::move(made).error();
+    probe.own = std::move(*made);
+    probe.use = probe.own.get();
+    probe.use->setMainThreadWake(mainWake_);
+    return probe;
 }
 
 Result<json::Value> EngineApp::fxSchema(const model::FxInstance& fx) {
@@ -295,10 +378,9 @@ Result<json::Value> EngineApp::setPlainParams(model::Id id, const json::Value& v
                      "use an fx id returned by fx.add, fx.copy or fx.chain.load");
     auto info = findPlugin(fx->plugin.id);
     if (!info) return info.error();
-    auto made = host::Instance::create(*info, options_.identity);
-    if (!made) return made.error();
-    auto& instance = **made;
-    instance.setMainThreadWake(mainWake_);
+    auto probe = probeFor(*info, *fx);
+    if (!probe) return probe.error();
+    auto& instance = *probe->use;
     SUPPLE_TRY(restoreFx(instance, *fx, s));
     const auto params = instance.params();
     std::map<std::uint32_t, double> pending;
@@ -400,7 +482,7 @@ Status EngineApp::validatePluginMod(model::Id id, const model::FxInstance& fx,
     auto makeProbe = [&]() -> Result<std::unique_ptr<host::Instance>> {
         auto info = findPlugin(fx.plugin.id);
         if (!info) return std::move(info).error();
-        auto probe = host::Instance::create(*info, options_.identity);
+        auto probe = makeInstance(*info);
         if (!probe) return std::move(probe).error();
         auto state = validation ? validation->session : view();
         if (blob && fx.state) state.blobs[*fx.state] = blob;
@@ -447,10 +529,9 @@ Result<std::uint32_t> EngineApp::fxLatencySamples(model::Id id, const model::FxI
     if (host::Instance* live = instanceOf(id); live && live->active()) return measured(*live);
     auto info = findPlugin(fx.plugin.id);
     if (!info) return std::move(info).error();
-    auto made = host::Instance::create(*info, options_.identity);
-    if (!made) return std::move(made).error();
-    host::Instance& probe = **made;
-    probe.setMainThreadWake(mainWake_);
+    auto lease = probeFor(*info, fx);
+    if (!lease) return std::move(lease).error();
+    host::Instance& probe = *lease->use;
     SUPPLE_TRY(restoreFx(probe, fx, view()));
     constexpr std::uint32_t kProbeBlock = 512;  // OfflineSettings' default block
     const auto rate =
@@ -679,6 +760,7 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
         [this](const model::PluginRef& ref) { return findPlugin(ref.id); }, options_.identity);
     pool_->setMainThreadWake(mainWake_);
     pool_->setDefaultIsolation(pluginIsolation_);
+    pool_->setOverrides(overrides_);
     pool_->racks().setCatalog(modules_);
     pendingDirtyStates_.clear();
     if (scripts_) {
@@ -1206,6 +1288,7 @@ Result<OfflineResult> EngineApp::renderSession(const model::Session& session,
     // is never disturbed and state is deterministic.
     InstancePool offlinePool([this](const model::PluginRef& ref) { return findPlugin(ref.id); },
                              options_.identity);
+    offlinePool.setOverrides(overrides_);
     if (!s.modules) s.modules = modules_;
     return renderOffline(session, offlinePool, s);
 }
@@ -2077,6 +2160,9 @@ EngineStatus EngineApp::engineStatus() {
                               st.cpuIdleLatency.error->hint);
     if (st.memoryLock.error)
         st.warnings.push_back(st.memoryLock.error->message + "; " + st.memoryLock.error->hint);
+    for (const auto& entry : head().fx)
+        if (loadModeOf(entry.value->plugin) == LoadMode::Disable)
+            st.disabledFx.push_back(entry.id.str());
     for (model::Id id : pool_->isolationFallbacks()) {
         const model::FxInstance* fx = head().fx.find(id);
         st.warnings.push_back((fx ? fx->plugin.name : id.str()) + " (" + id.str() +

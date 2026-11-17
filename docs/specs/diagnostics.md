@@ -238,8 +238,9 @@ settled report keeps its place in the window: an older report does not slide bac
 never rewritten and the acknowledgement is not touched. `settle(suspect)` settles each of the
 suspect's incidents and keeps going past a failure. Retention, deleting a report and
 `deleteAllReports` remove the `.settled` with the report; deleting the reports is how a user clears
-the evidence (P11). The engine that offers the choice, the headless warning and the
-clean-run settlement are the later steps of 7d.
+the evidence (P11). The load overrides that act on a suspect (`plugin.override`) are in
+`docs/specs/engine.md` §5; the pre-scan of a project's plug-ins, the headless warning and the
+clean-run settlement come after them in 7d.
 
 *Commands.* The engine exposes the reader to agents (P9) as `crash.list {limit?}` (the listing:
 reports, unreported runs, `live_runs`, `reports_pending`, `ignored`, each list capped by `limit`,

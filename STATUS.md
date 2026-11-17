@@ -248,7 +248,12 @@ instructions are in `docs/guides/installing.md`.
   their time and why a cycle overran. Where a third-party plug-in left on `inherit` runs is an app
   preference (Edit > Preferences, `plugin_isolation`), still in process by
   default until the bridging measurements decide; stock plug-ins stay in
-  process. A
+  process. `plugin.override` (normal, bridge or disable) loads a named
+  plug-in on a bridge or not at all for the run, in every pool and probe and
+  in racks; it is in no project and no save, a live bridge can drop blocks
+  under load, and a changed override plays a fresh instance. Known gap: a
+  rack module (not a plug-in) that a crash report points at has no disable.
+  A
   DAG worker pool with graph-bounded participation and idle parking
   (ADR-0023), a separate live callback fork-join pool (ADR-0024) with FIFO
   JACK helpers, a claim-based lifetime join that does not wait for unclaimed
