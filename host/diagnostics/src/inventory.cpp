@@ -337,6 +337,10 @@ const std::string* buildIdOf(const TraceSnapshot& trace, const PluginEntry& entr
     const auto& id = trace.modules[static_cast<std::size_t>(module)].id;
     return id ? &*id : nullptr;
 }
+bool isLibrary(const PluginEntry& entry) {
+    return entry.kind == diagctx::InstanceKind::ClapLibrary ||
+           entry.kind == diagctx::InstanceKind::Vst3Library;
+}
 }  // namespace
 
 json::Value Inventory::pluginsJson(const TraceSnapshot* trace) const {
@@ -377,6 +381,87 @@ json::Value Inventory::pluginsJson(const TraceSnapshot* trace) const {
         plugins.push_back(std::move(item));
     }
     return plugins;
+}
+
+json::Value Inventory::attributionJson(const TraceSnapshot* trace) const {
+    const char* confidence = "unknown";
+    std::optional<std::uint32_t> plugin;
+    const auto thread = [&](std::size_t i) -> const PluginEntry* {
+        const auto& t = trace->threads[i];
+        return t.entry == diagctx::Entry::None ? nullptr : find(t.entryCell, t.entryGeneration);
+    };
+    if (trace && !trace->threads.empty() && trace->threads[0].role == Role::Fault) {
+        const auto& fault = trace->threads[0];
+        const PluginEntry* byToken = thread(0);
+        // 1. The faulting instruction is in a module that is the build of a listed instance:
+        // plug-in code was running, whatever the table says. Several instances of one binary
+        // are told apart by the token, then by there being only one that is still alive.
+        const std::string* faultModule = nullptr;
+        if (!fault.walk.frames.empty() && fault.walk.frames[0].module >= 0 &&
+            static_cast<std::size_t>(fault.walk.frames[0].module) < trace->modules.size() &&
+            trace->modules[static_cast<std::size_t>(fault.walk.frames[0].module)].id)
+            faultModule =
+                &*trace->modules[static_cast<std::size_t>(fault.walk.frames[0].module)].id;
+        std::vector<const PluginEntry*> inImage;
+        if (faultModule)
+            for (const PluginEntry* entry : entries())
+                if (const std::string* id = buildIdOf(*trace, *entry); id && *id == *faultModule)
+                    inImage.push_back(entry);
+        if (!inImage.empty()) {
+            confidence = "fault_in_image";
+            std::vector<const PluginEntry*> live, instances;
+            for (const PluginEntry* entry : inImage) {
+                if (entry == byToken) plugin = entry->ordinal;
+                if (entry->state != diagctx::InstanceState::Destroyed && !isLibrary(*entry))
+                    live.push_back(entry);
+                if (!isLibrary(*entry)) instances.push_back(entry);
+            }
+            if (!plugin) {
+                if (live.size() == 1)
+                    plugin = live[0]->ordinal;
+                else if (live.empty() && instances.size() == 1)
+                    plugin = instances[0]->ordinal;
+                else if (live.empty() && instances.empty() && inImage.size() == 1)
+                    plugin = inImage[0]->ordinal;
+            }
+        } else if (byToken) {
+            // 2. The host says this thread was inside the entry of that instance.
+            confidence = "active_token";
+            plugin = byToken->ordinal;
+        } else {
+            // 3. Some other thread was inside an entry of an instance: activity, not blame.
+            std::vector<std::uint32_t> others;
+            for (std::size_t i = 1; i < trace->threads.size(); ++i)
+                if (const PluginEntry* entry = thread(i))
+                    if (std::find(others.begin(), others.end(), entry->ordinal) == others.end())
+                        others.push_back(entry->ordinal);
+            if (!others.empty()) {
+                confidence = "concurrent_activity";
+                if (others.size() == 1) plugin = others[0];
+            } else if (!trace->commands.empty()) {
+                confidence = "recent_command";  // 4. the model had been running commands
+            }
+        }
+    }
+    auto result = json::Value::object();
+    result["confidence"] = confidence;
+    result["plugin"] = plugin ? json::Value(static_cast<long long>(*plugin)) : json::Value();
+    return result;
+}
+
+json::Value Inventory::droppedJson(const TraceSnapshot* trace) const {
+    const auto count = [](std::size_t n) { return static_cast<long long>(n); };
+    auto dropped = json::Value::object();
+    dropped["threads"] = count(trace ? trace->dropped : 0);
+    dropped["unregistered_threads"] = count(trace ? trace->tableThreadsDropped : 0);
+    dropped["plugins"] = count(retiredLost_);
+    dropped["commands"] =
+        count(trace ? std::size_t{trace->commandsDamaged} + trace->commandsRefused : 0);
+    dropped["cells"] =
+        count(trace ? std::size_t{trace->unplacedEntries} + trace->tableScopeOverflow : 0);
+    dropped["messages"] = count(workerDropped_ + rejected_);
+    dropped["untracked"] = count(trace ? trace->tableUntracked : 0);
+    return dropped;
 }
 
 std::vector<std::string> Inventory::limits() const {
@@ -465,6 +550,55 @@ bool commandsShape(const json::Value& commands) {
         if (!known) return false;
     }
     return true;
+}
+
+bool droppedShape(const json::Value& dropped) {
+    if (dropped.isInt()) return dropped.asInt() >= 0;  // reports of older builds
+    if (!dropped.isObject() || dropped.size() != 7) return false;
+    for (const char* key : {"threads", "unregistered_threads", "plugins", "commands", "cells",
+                            "messages", "untracked"}) {
+        const auto* v = dropped.find(key);
+        if (!v || !v->isInt() || v->asInt() < 0) return false;
+    }
+    return true;
+}
+
+bool attributionShape(const json::Value& attribution, const json::Value& plugins,
+                      const json::Value& commands) {
+    if (!attribution.isObject() || attribution.size() != 2) return false;
+    const auto* confidence = attribution.find("confidence");
+    const auto* plugin = attribution.find("plugin");
+    if (!confidence || !confidence->isString() || !plugin) return false;
+    const std::string_view how = confidence->asString();
+    if (how != "fault_in_image" && how != "active_token" && how != "concurrent_activity" &&
+        how != "recent_command" && how != "unknown")
+        return false;
+    if (plugin->isNull()) {
+        // A token names an instance by definition.
+        if (how == "active_token") return false;
+        if (how == "recent_command") return commands.isArray() && commands.size() != 0;
+        return true;
+    }
+    if (!plugin->isInt() || how == "recent_command" || how == "unknown") return false;
+    // The plug-in is one the report lists, and its own entry supports what is claimed.
+    if (!plugins.isArray()) return false;
+    for (const auto& item : plugins.asArray()) {
+        const auto* id = item.find("id");
+        if (!id || !id->isInt() || id->asInt() != plugin->asInt()) continue;
+        const auto* executing = item.find("executing");
+        const auto matched = [&](std::string_view match) {
+            if (executing && executing->isArray())
+                for (const auto& active : executing->asArray())
+                    if (const auto* m = active.find("match");
+                        m && m->isString() && m->asString() == match)
+                        return true;
+            return false;
+        };
+        if (how == "active_token") return matched("thread");
+        if (how == "concurrent_activity") return matched("other_thread");
+        return item.find("build") != nullptr || how == "fault_in_image";
+    }
+    return false;
 }
 
 bool pluginsShape(const json::Value& plugins, std::size_t threadCount) {

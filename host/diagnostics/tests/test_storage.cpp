@@ -136,6 +136,29 @@ TEST_CASE("a report with an inventory is published, validated and pruned like an
     CHECK(reports(root.path) == 20);
     CHECK_FALSE(fs::exists(root.path / (std::string(boot(0).incident.data()) + ".json")));
 }
+TEST_CASE(
+    "a report of an earlier build, with a plain dropped count and no attribution, is still owned") {
+    Root root;
+    REQUIRE(publishReport(root.path, boot(0), nullptr, 31, false));
+    const auto oldest = fs::file_time_type::clock::now() - std::chrono::hours(48);
+    const auto seed = root.path / (std::string(boot(0).incident.data()) + ".json");
+    auto text = privateRead(seed);
+    REQUIRE(text);
+    auto report = json::parse(*text).value();
+    REQUIRE(report.find("attribution"));
+    CHECK(report.find("attribution")->find("confidence")->asString() == "unknown");
+    CHECK(report.find("dropped")->isObject());
+    report["dropped"] = 0;
+    REQUIRE(report.asObject().erase("attribution"));
+    REQUIRE(privateRemove(seed));
+    REQUIRE(privatePublish(seed, json::writeCanonical(report)));
+    fs::last_write_time(seed, oldest);
+    for (unsigned i = 1; i < 22; ++i)
+        REQUIRE(publishReport(root.path, boot(i), nullptr, 31, false));
+    CHECK_FALSE(fs::exists(seed));  // pruned: the validator knows that shape
+    CHECK(reports(root.path) == 20);
+}
+
 TEST_CASE("a report with command entries is published, validated, pruned, and kept when altered") {
     namespace dc = supple::diagctx;
     Root root;
@@ -268,6 +291,13 @@ TEST_CASE("diagnostic retention preserves malformed report-shaped entries") {
         {"cause", -1},
         {"cause", 4294967296LL},
         {"dropped", -1},
+        {"dropped", objectItem},
+        {"dropped", "3"},
+        // Attribution must be one the report's own plug-ins and commands support.
+        {"attribution", item},
+        {"attribution", objectItem},
+        {"attribution", json::parse(R"({"confidence":"active_token","plugin":0})").value()},
+        {"attribution", json::parse(R"({"confidence":"sure","plugin":null})").value()},
         {"complete", true},
         {"unavailable", json::Value::array()},
         {"unavailable", objectItem},

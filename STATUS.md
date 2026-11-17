@@ -1534,11 +1534,13 @@ never arguments, results or labels): the process's command dispatcher writes the
 execution table and the supervisor names them from a table of command names sent once at
 startup. Only the first dispatcher built in a process records, and only its model thread; on
 macOS the capsule (now version 4) copies the ring after the other threads were read, so the
-newest command can be missing or still `begun`. The command ring and the capsule copy are tested
-on Linux; the macOS capsule and the Windows ring and table read are written and unproven until
-native CI runs them. Attribution, the
-`dropped` counts, bridge correlation, restart UI/hangs and release package verification remain
-later topics.
+newest command can be missing or still `begun`. A report concludes which plug-in its evidence
+points to (`attribution`, with a confidence from `fault_in_image` down to `unknown`; the rules
+are in `docs/specs/diagnostics.md`) and counts what it left out (`dropped`, by kind). It never
+claims a crash was not a plug-in's: a plug-in's own thread has no cell. The command ring, the
+capsule copy and the attribution are tested on Linux; the macOS capsule and the Windows ring
+and table read are written and unproven until native CI runs them. Bridge correlation,
+restart UI/hangs and release package verification remain later topics.
 Supervisor end (ADR-0091): a supervisor that crashes tells the worker first and the worker keeps
 running without crash capture; a supervisor ended with no notice (`SIGKILL`, `TerminateProcess`,
 a launcher's hard kill) stops the worker as `SIGTERM` does and ends it hard after ten seconds,

@@ -27,6 +27,10 @@ with tempfile.TemporaryDirectory(prefix="host-inventory-") as folder:
         if p["kind"]=="clap": assert p.get("name") and p.get("vendor"),p
     assert [p["id"] for p in plugins]==sorted(p["id"] for p in plugins),plugins
     assert not any("inventory messages" in u for u in report["unavailable"]),report["unavailable"]
+    # The fault is in the program, not in a plug-in's binary, and no thread is inside a plug-in
+    # entry: the report names no plug-in, and everything it left out is counted by kind.
+    assert report["attribution"]=={"confidence":"unknown","plugin":None},report["attribution"]
+    assert report["dropped"]["messages"]==0 and report["dropped"]["plugins"]==0,report["dropped"]
     # The module each instance came from is a module of the report that is not the program's.
     threads=report["threads"]
     if not sanitized and threads and threads[0].get("state")=="walked" and sys.platform!="win32":

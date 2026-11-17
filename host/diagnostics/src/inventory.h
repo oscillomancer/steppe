@@ -98,6 +98,12 @@ class Inventory {
     // Limit strings about the commands, for "unavailable".
     std::vector<std::string> commandLimits(const TraceSnapshot* trace) const;
 
+    // The report's "attribution" (topic 5e): what the evidence in this report says about which
+    // plug-in, if any, the crash belongs to, and how strongly. The single place the policy is.
+    json::Value attributionJson(const TraceSnapshot* trace) const;
+    // The report's "dropped" object: everything that was left out, by kind.
+    json::Value droppedJson(const TraceSnapshot* trace) const;
+
   private:
     void retire(PluginEntry entry);
     bool applyNames(const InstanceRecord& record);
@@ -114,4 +120,13 @@ bool pluginsShape(const json::Value& plugins, std::size_t threadCount);
 // Strict validation of a report's "commands" value: at most 64 entries, ascending `seq`, a
 // name that is "unknown" or a valid command name, an origin and a state from the closed sets.
 bool commandsShape(const json::Value& commands);
+// Strict validation of "attribution" against the report's own "plugins" and "commands": the
+// confidence is one of the closed set, `plugin` is null or the id of a listed plug-in, and the
+// claim is one the listed evidence supports (a token needs an entry on the fault thread, and so
+// on).
+bool attributionShape(const json::Value& attribution, const json::Value& plugins,
+                      const json::Value& commands);
+// "dropped": the object this build writes, or the plain count older reports hold.
+bool droppedShape(const json::Value& dropped);
+
 }  // namespace supple::diagnostics::detail

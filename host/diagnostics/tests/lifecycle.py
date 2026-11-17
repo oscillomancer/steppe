@@ -334,6 +334,13 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
             finally:
                 parent.close();child.close()
 
+    def check_dropped(report,mode):
+        # Everything left out is counted, by kind; a clean run leaves nothing out.
+        dropped=report["dropped"]
+        assert sorted(dropped)==sorted(["threads","unregistered_threads","plugins","commands","cells","messages","untracked"]),(mode,dropped)
+        assert all(isinstance(v,int) and v>=0 for v in dropped.values()),(mode,dropped)
+        assert dropped["plugins"]==0 and dropped["messages"]==0 and dropped["untracked"]==0,(mode,dropped)
+
     with check('inventory'):
         # The plug-in inventory (ADR-0083, topic 5c). The fixture announces a retired instance
         # and a live one, with strings that must arrive bounded and clean, then faults while a
@@ -364,6 +371,8 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
             for forbidden in ("\\u001b","\x1b","\"image\"","\"cell\"","\"generation\""):
                 assert forbidden not in raw,(mode,forbidden)
             assert not any("inventory messages" in u for u in report["unavailable"]),report["unavailable"]
+            check_dropped(report,mode)
+            assert report["attribution"]["confidence"] in ("unknown","fault_in_image","active_token"),report["attribution"]
             threads=report["threads"]
             tied=bool(threads) and threads[0].get("state")=="walked" and "entry" in threads[0]
             if sanitized or not tied: continue  # the collector read nothing it could tie
@@ -375,6 +384,11 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
             else:
                 assert len(executing)==1,executing
             assert "executing" not in retired,retired
+            # What the report concludes: the fault is in the instance's own binary when the
+            # module has an identity, and otherwise the table's token on the fault thread says it.
+            fault_module=threads[0]["frames"][0].get("module")
+            has_id=fault_module is not None and bool(report["modules"][fault_module]["id"])
+            assert report["attribution"]=={"confidence":"fault_in_image" if has_id else "active_token","plugin":live["id"]},(mode,report["attribution"])
             # The binary the instance came from is the module the fault is in.
             module=threads[0]["frames"][0].get("module")
             if module is not None and report["modules"][module]["id"]:
@@ -410,6 +424,10 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
                 assert sanitized or restricted,(mode,"no commands where the table is readable",report["unavailable"])
                 continue
             assert named(report)==before+after,(mode,named(report))
+            check_dropped(report,mode)
+            # No plug-in is involved: what the model had been doing is all there is to go on.
+            assert report["attribution"]=={"confidence":"recent_command","plugin":None},(mode,report["attribution"])
+            assert report["dropped"]["commands"]==(1 if mode=="commands-other" else 0),(mode,report["dropped"])
             assert [c["seq"] for c in report["commands"]]==sorted(c["seq"] for c in report["commands"])
             # Only names, categories and states reach the file: no argument, client, agent,
             # label, or name the registry never held.

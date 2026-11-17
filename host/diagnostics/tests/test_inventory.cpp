@@ -608,3 +608,197 @@ TEST_CASE("the report's commands array names each entry, or says unknown, and va
     CHECK_FALSE(commandsShape(parse(many + "]")));
     CHECK_FALSE(commandsShape(parse("{}")));
 }
+
+namespace {
+// A snapshot whose fault thread is at `faultModule` (-1: nowhere) and which holds two modules.
+TraceSnapshot faultTrace(int faultModule) {
+    TraceSnapshot trace;
+    trace.table = TableState::Read;
+    trace.modules.resize(2);
+    trace.modules[0].id = "aaaa";
+    trace.modules[1].id = "0123456789abcdef";
+    trace.regions = {{0x1000, 0x2000, 0}, {0x5000, 0x6000, 1}};
+    trace.threads.resize(3);
+    trace.threads[0].role = Role::Fault;
+    trace.threads[1].role = Role::Main;
+    trace.threads[2].role = Role::Other;
+    Frame frame;
+    frame.module = faultModule;
+    trace.threads[0].walk.frames.push_back(frame);
+    return trace;
+}
+Packet addAt(std::uint32_t cell, std::uint64_t image, InstanceState state = InstanceState::Active,
+             std::uint8_t kind = static_cast<std::uint8_t>(diagctx::InstanceKind::Clap)) {
+    auto p = add(cell, 0, state);
+    p.instance.image = image;
+    p.instance.kind = kind;
+    return p;
+}
+void inside(TraceSnapshot& trace, std::size_t thread, std::uint32_t cell) {
+    trace.threads[thread].entry = diagctx::Entry::Process;
+    trace.threads[thread].entryCell = cell;
+    trace.threads[thread].entryGeneration = 0;
+}
+// The attribution of a trace, checked for the validator's agreement on the way.
+std::pair<std::string, long long> attributed(const Inventory& inventory,
+                                             const TraceSnapshot& trace) {
+    const auto attribution = inventory.attributionJson(&trace);
+    CHECK(attributionShape(attribution, inventory.pluginsJson(&trace),
+                           inventory.commandsJson(&trace)));
+    return {attribution.find("confidence")->asString(),
+            attribution.find("plugin")->isNull() ? -1 : attribution.find("plugin")->asInt()};
+}
+}  // namespace
+
+TEST_CASE("attribution: the faulting instruction in a plug-in's binary names that plug-in") {
+    Inventory inventory;
+    REQUIRE(inventory.apply(addAt(4, 0x5100)));  // id 0
+    REQUIRE(inventory.apply(addAt(5, 0x1100)));  // id 1, in the other module
+    const auto trace = faultTrace(1);
+    CHECK(attributed(inventory, trace) == std::pair<std::string, long long>{"fault_in_image", 0});
+    // The program's own module, or none at all, is not a plug-in's.
+    CHECK(attributed(inventory, faultTrace(-1)).first == "unknown");
+    CHECK(attributed(inventory, faultTrace(0)) ==
+          std::pair<std::string, long long>{"fault_in_image", 1});
+}
+
+TEST_CASE(
+    "attribution: several instances of one binary are told apart by the token, then by being "
+    "alive") {
+    Inventory inventory;
+    REQUIRE(inventory.apply(addAt(4, 0x5100)));  // id 0
+    REQUIRE(inventory.apply(addAt(5, 0x5200)));  // id 1, the same binary
+    auto trace = faultTrace(1);
+    // Two alive and nothing to choose between them: the image is the evidence, no plug-in named.
+    CHECK(attributed(inventory, trace) == std::pair<std::string, long long>{"fault_in_image", -1});
+    inside(trace, 0, 5);  // the faulting thread is inside the second one
+    CHECK(attributed(inventory, trace) == std::pair<std::string, long long>{"fault_in_image", 1});
+    // One gone: the one left alive.
+    Packet remove = base();
+    remove.instance.event = static_cast<std::uint8_t>(diagctx::EventKind::Remove);
+    remove.instance.cell = 4;
+    REQUIRE(inventory.apply(remove));
+    CHECK(attributed(inventory, faultTrace(1)) ==
+          std::pair<std::string, long long>{"fault_in_image", 1});
+}
+
+TEST_CASE("attribution: a library entry is blamed only when no instance can be") {
+    Inventory inventory;
+    const auto library = static_cast<std::uint8_t>(diagctx::InstanceKind::ClapLibrary);
+    REQUIRE(inventory.apply(addAt(1, 0x5100, InstanceState::Active, library)));  // id 0
+    CHECK(attributed(inventory, faultTrace(1)) ==
+          std::pair<std::string, long long>{"fault_in_image", 0});
+    REQUIRE(inventory.apply(addAt(2, 0x5100)));  // id 1: an instance from it
+    CHECK(attributed(inventory, faultTrace(1)) ==
+          std::pair<std::string, long long>{"fault_in_image", 1});
+}
+
+TEST_CASE("attribution: a token, concurrent activity, a recent command, or nothing") {
+    Inventory inventory;
+    REQUIRE(inventory.apply(addAt(4, 0x1100)));  // id 0: in no plug-in module the fault is in
+    REQUIRE(inventory.apply(addAt(5, 0x1200)));  // id 1
+    auto trace = faultTrace(0);
+    trace.modules[0].id.reset();  // the fault is in a module with no identity
+    CHECK(attributed(inventory, trace).first == "unknown");
+    trace.commands = {{3, 0, diagctx::CommandOrigin::Mcp, diagctx::CommandState::Begun}};
+    CHECK(attributed(inventory, trace) == std::pair<std::string, long long>{"recent_command", -1});
+    inside(trace, 2, 5);  // another thread is inside instance 1
+    CHECK(attributed(inventory, trace) ==
+          std::pair<std::string, long long>{"concurrent_activity", 1});
+    inside(trace, 1, 4);  // and a second thread inside instance 0: activity, nobody blamed
+    CHECK(attributed(inventory, trace) ==
+          std::pair<std::string, long long>{"concurrent_activity", -1});
+    inside(trace, 0, 4);  // the faulting thread itself
+    CHECK(attributed(inventory, trace) == std::pair<std::string, long long>{"active_token", 0});
+    // A token for an instance the inventory never heard of names nobody.
+    inside(trace, 0, 900);
+    trace.threads[1].entry = diagctx::Entry::None;
+    trace.threads[2].entry = diagctx::Entry::None;
+    CHECK(attributed(inventory, trace) == std::pair<std::string, long long>{"recent_command", -1});
+    // No capsule, or one that does not start with the fault thread: nothing is concluded.
+    CHECK(inventory.attributionJson(nullptr).find("confidence")->asString() == "unknown");
+    TraceSnapshot odd = trace;
+    odd.threads[0].role = Role::Main;
+    CHECK(attributed(inventory, odd).first == "unknown");
+}
+
+TEST_CASE("the attribution validator refuses a claim the report's own evidence does not support") {
+    Inventory inventory;
+    REQUIRE(inventory.apply(addAt(4, 0x5100)));
+    auto trace = faultTrace(1);
+    inside(trace, 2, 4);  // another thread is inside it
+    const auto plugins = inventory.pluginsJson(&trace);
+    auto commands = inventory.commandsJson(&trace);
+    const auto parse = [](std::string_view text) { return json::parse(text).value(); };
+    const auto accepts = [&](const char* text) {
+        return attributionShape(parse(text), plugins, commands);
+    };
+    CHECK(accepts(R"({"confidence":"fault_in_image","plugin":0})"));
+    CHECK(accepts(R"({"confidence":"fault_in_image","plugin":null})"));
+    CHECK(accepts(R"({"confidence":"concurrent_activity","plugin":0})"));
+    CHECK(accepts(R"({"confidence":"unknown","plugin":null})"));
+    CHECK_FALSE(
+        accepts(R"({"confidence":"active_token","plugin":0})"));  // no entry on the fault thread
+    CHECK_FALSE(accepts(R"({"confidence":"active_token","plugin":null})"));
+    CHECK_FALSE(accepts(R"({"confidence":"fault_in_image","plugin":7})"));  // not a plug-in listed
+    CHECK_FALSE(accepts(R"({"confidence":"fault_in_image","plugin":"0"})"));
+    CHECK_FALSE(accepts(R"({"confidence":"unknown","plugin":0})"));
+    CHECK_FALSE(accepts(R"({"confidence":"recent_command","plugin":null})"));  // no commands listed
+    CHECK_FALSE(accepts(R"({"confidence":"certain","plugin":0})"));
+    CHECK_FALSE(accepts(R"({"confidence":"unknown"})"));
+    CHECK_FALSE(accepts(R"({"confidence":"unknown","plugin":null,"why":"x"})"));
+    CHECK_FALSE(accepts(R"(["unknown"])"));
+    commands = parse(R"([{"seq":1,"name":"a.b","origin":"ui","state":"begun"}])");
+    CHECK(accepts(R"({"confidence":"recent_command","plugin":null})"));
+    CHECK_FALSE(accepts(R"({"confidence":"recent_command","plugin":0})"));
+    // A token needs the fault thread's own entry in that plug-in.
+    auto owned = faultTrace(-1);
+    inside(owned, 0, 4);
+    const auto ownedPlugins = inventory.pluginsJson(&owned);
+    CHECK(attributionShape(parse(R"({"confidence":"active_token","plugin":0})"), ownedPlugins,
+                           commands));
+    CHECK_FALSE(attributionShape(parse(R"({"confidence":"concurrent_activity","plugin":0})"),
+                                 ownedPlugins, commands));
+}
+
+TEST_CASE(
+    "dropped counts what was left out, by kind, and the validator takes the old integer too") {
+    Inventory inventory;
+    auto trace = faultTrace(-1);
+    trace.dropped = 5;
+    trace.tableThreadsDropped = 2;
+    trace.commandsDamaged = 1;
+    trace.commandsRefused = 3;
+    trace.unplacedEntries = 4;
+    trace.tableScopeOverflow = 6;
+    trace.tableUntracked = 7;
+    inventory.noteDropped(8);
+    CHECK_FALSE(
+        inventory.apply(nameChunk(2, {"a.b"})));  // a rejected packet: one more message lost
+    const auto dropped = inventory.droppedJson(&trace);
+    CHECK(droppedShape(dropped));
+    CHECK(dropped.find("threads")->asInt() == 5);
+    CHECK(dropped.find("unregistered_threads")->asInt() == 2);
+    CHECK(dropped.find("plugins")->asInt() == 0);
+    CHECK(dropped.find("commands")->asInt() == 4);
+    CHECK(dropped.find("cells")->asInt() == 10);
+    CHECK(dropped.find("messages")->asInt() == 9);
+    CHECK(dropped.find("untracked")->asInt() == 7);
+    const auto none = inventory.droppedJson(nullptr);
+    CHECK(none.find("threads")->asInt() == 0);
+    CHECK(none.find("messages")->asInt() == 9);
+    const auto parse = [](std::string_view text) { return json::parse(text).value(); };
+    CHECK(droppedShape(parse("0")));
+    CHECK(droppedShape(parse("12")));
+    CHECK_FALSE(droppedShape(parse("-1")));
+    CHECK_FALSE(droppedShape(parse("\"3\"")));
+    CHECK_FALSE(droppedShape(parse("{}")));
+    CHECK_FALSE(droppedShape(parse(
+        R"({"threads":0,"unregistered_threads":0,"plugins":0,"commands":0,"cells":0,"messages":0})")));
+    CHECK_FALSE(droppedShape(parse(
+        R"({"threads":0,"unregistered_threads":0,"plugins":0,"commands":0,"cells":0,"messages":0,"untracked":-1})")));
+    CHECK_FALSE(droppedShape(parse(
+        R"({"threads":0,"unregistered_threads":0,"plugins":0,"commands":0,"cells":0,"messages":0,"untracked":"0"})")));
+    CHECK_FALSE(droppedShape(parse(
+        R"({"threads":0,"unregistered_threads":0,"plugins":0,"commands":0,"cells":0,"messages":0,"untracked":0,"extra":0})")));
+}

@@ -149,7 +149,8 @@ bool reportShape(const json::Value& value) {
                                          "complete",    "terminal_context",
                                          "unavailable", "modules",
                                          "threads",     "plugins",
-                                         "commands",    "dropped"};
+                                         "commands",    "dropped",
+                                         "attribution"};
         if (std::find(std::begin(allowed), std::end(allowed), field.key) == std::end(allowed))
             return false;
     }
@@ -174,7 +175,7 @@ bool reportShape(const json::Value& value) {
     };
     // Normal returns are signed ints; native capsule codes/causes are uint32_t.
     if (!integer("code", INT32_MIN, UINT32_MAX) || !integer("cause", 0, UINT32_MAX) ||
-        !integer("dropped", 0, INT64_MAX))
+        !value.find("dropped") || !droppedShape(*value.find("dropped")))
         return false;
     for (const auto* key : {"complete", "terminal_context", "native_fatal_status"}) {
         const auto* v = value.find(key);
@@ -193,6 +194,11 @@ bool reportShape(const json::Value& value) {
         const auto* plugins = value.find("plugins");
         if (!plugins || !pluginsShape(*plugins, threads->size())) return false;
     }
+    // Attribution is optional (reports of earlier builds have none); when present it must be
+    // one the report's own plug-ins and commands support.
+    if (const auto* attribution = value.find("attribution"))
+        if (!attributionShape(*attribution, *value.find("plugins"), *value.find("commands")))
+            return false;
     const auto* unavailable = value.find("unavailable");
     if (!unavailable || !unavailable->isArray() || unavailable->size() == 0 ||
         unavailable->size() > 128)
@@ -305,8 +311,9 @@ Status publishReport(const fs::path& root, const Packet& boot, const Packet* ter
         for (auto& limit : known.commandLimits(trace)) v["unavailable"].asArray().push_back(limit);
         v["plugins"] = known.pluginsJson(trace);
         v["commands"] = known.commandsJson(trace);
+        v["attribution"] = known.attributionJson(trace);
+        v["dropped"] = known.droppedJson(trace);
     }
-    v["dropped"] = trace ? static_cast<long long>(trace->dropped) : 0LL;
     // Deliberately never serialize pc/frame/sp, thread or process ids, paths, args,
     // exception or console text. Frames are module identity plus relative offsets.
     const auto text = json::writeCanonical(v) + "\n";

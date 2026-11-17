@@ -641,6 +641,45 @@ validator checks the shape (four keys, a valid name or `unknown`, closed sets, r
 at most 64). A listed command is evidence about what the model was doing, not about the
 cause: a crash in a plug-in's audio thread has the model's last commands too.
 
+### Attribution and dropped counts (topic 5e)
+
+`attribution` is `{"confidence", "plugin"}`: what the report's own evidence says about which
+plug-in the crash belongs to, and how strongly. The rules below are the one place the policy
+lives (`Inventory::attributionJson`); they are tried in order and the first that holds decides.
+`plugin` is the `id` of a listed plug-in, or `null`.
+
+1. `fault_in_image`: the faulting instruction (the first frame of the fault thread) is in a
+   module that is the `build` of a listed plug-in: plug-in code was running, whatever the table
+   says. `plugin` is the one the fault thread was inside by token if that is among them;
+   otherwise the only one still alive, or the only instance if none is, or the only entry; with
+   several instances of one binary and nothing to choose between them it is `null` (the image
+   is the evidence, no instance is named). An instance is preferred to its library entry.
+2. `active_token`: the fault thread was inside an entry of a listed plug-in (the host marked
+   it), and the fault is not in a plug-in's image: the fault is likely in host code the plug-in
+   called, or in a binary this report could not identify. `plugin` is that plug-in.
+3. `concurrent_activity`: only other threads were inside entries of listed plug-ins. This is
+   activity, not blame: `plugin` is the one when exactly one plug-in was active, `null` when
+   several were.
+4. `recent_command`: no plug-in is implicated and `commands` is not empty. `plugin` is `null`.
+5. `unknown`: none of the above, or no terminal capsule to conclude from. `plugin` is `null`.
+
+A fault in the program's own code with no plug-in involved is therefore `recent_command` or
+`unknown`; the report does not say "not a plug-in", since a plug-in's own thread, one the host
+has no cell for, can still be the cause. The validator holds a report to its own evidence:
+the confidence is one of the five, `plugin` is `null` or a listed id, `active_token` needs a
+plug-in with an `executing` entry matched to the fault thread, `concurrent_activity` one matched
+to another thread, `recent_command` a non-empty `commands` and no plug-in, and `unknown` none.
+
+`dropped` is an object of non-negative counts of what was left out: `threads` (omitted from the
+report beyond its limit), `unregistered_threads` (threads the execution table had no slot for,
+which appear with the role `other`), `plugins` (destroyed instances beyond the last 64),
+`commands` (ring entries that were damaged, and commands begun on a thread that did not own the
+ring), `cells` (entries open in the table that no thread read could be tied to, and scopes whose
+stack address the table cannot hold), `messages` (inventory and name packets the worker could not
+send, or the supervisor refused) and `untracked` (instances that found no cell). The validator
+takes the plain integer older reports hold, and a report without `attribution`, as reports it
+still owns; any other shape is kept and never authorizes deletion.
+
 ## Offline resolver (topic 4)
 
 `resolve-crash [--json] --symbols PATH... REPORT.json` names the functions in a local
