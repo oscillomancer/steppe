@@ -492,7 +492,7 @@ int main(int argc, char** argv) {
     // The side panel (gui.md §4.14): the inspector and the history as tabs at
     // the window's right edge, shown only when asked.
     gui::SidePanel side(root);
-    gui::Inspector inspector(root, **app, uiState);
+    gui::Inspector inspector(root, **app, uiState, dispatcher, appActions);
     history.host = [&side] { side.toggle("history"); };
     appActions.addUi("ui.inspector", "View: inspector", [&side] { side.toggle("inspector"); });
     gui::FileActions fileActions(root, appActions, dispatcher, **app, uiState, (*window)->sdl(),

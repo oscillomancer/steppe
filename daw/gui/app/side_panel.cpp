@@ -172,6 +172,8 @@ void SidePanel::apply(bool visible, const std::string& tab) {
     panel_->visible = visible;
     for (Tab& t : tabs_) {
         const bool on = visible && t.id == tab_;
+        // A tab out of view keeps no focus or drag: keys must not reach it.
+        if (!on && t.content->visible) root_.releaseWithin(t.content);
         if (t.shown && t.content->visible != on) t.shown(on);
         t.content->visible = on;
         static_cast<TabButton*>(t.button)->active = t.id == tab_;

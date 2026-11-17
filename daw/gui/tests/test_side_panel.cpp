@@ -6,6 +6,8 @@
 #include "product_fixture.h"
 #include "test_support.h"
 
+#include <SDL3/SDL_keycode.h>
+
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -19,9 +21,12 @@
 #include "supple/gui/window.h"
 #include "supple/json/parse.h"
 #include "supple/json/write.h"
+#include "supple/ui/controls.h"
+#include "supple/ui/forms.h"
 #include "supple/ui/gl.h"
 #include "supple/ui/root.h"
 #include "supple/ui/scroll_view.h"
+#include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
 
 using namespace supple;
@@ -84,7 +89,7 @@ struct Fixture {
         actions = std::make_unique<gui::AppActions>(
             registry, *dispatcher, *app, ui, actions::Keymap::defaultFile(gui::test::slug()));
         history = std::make_unique<gui::HistoryPanel>(*root, *actions, *dispatcher, *app);
-        inspector = std::make_unique<gui::Inspector>(*root, *app, ui);
+        inspector = std::make_unique<gui::Inspector>(*root, *app, ui, *dispatcher, *actions);
         side = std::make_unique<gui::SidePanel>(*root);
         history->host = [this] { side->toggle("history"); };
         auto frame = std::make_unique<ui::Node>("window");
@@ -130,6 +135,24 @@ struct Fixture {
         history->sync();
         root->frame(false);
     }
+    ui::TextField& field(const std::string& id) {
+        auto* f = dynamic_cast<ui::TextField*>(node(id));
+        REQUIRE_MESSAGE(f, id);
+        return *f;
+    }
+    // Replaces a field's text as a person would: click it, type, and leave
+    // it with `key` (Enter applies, Escape gives up); 0 leaves it focused.
+    void type(const std::string& id, const std::string& text, int key = SDLK_RETURN) {
+        REQUIRE(root->click(id));
+        field(id).setText("");
+        root->text(text);
+        if (key) root->key(key, 0);
+        pass();
+    }
+    const model::Item& item(const std::string& id) {
+        return *app->head().items.find(*model::Id::parse(id));
+    }
+    std::size_t steps() { return exec("history.list", "{}")["versions"].size(); }
 };
 
 }  // namespace
@@ -338,4 +361,169 @@ TEST_CASE("inspector: it says what is selected, and follows the selection and th
     f.side->show("inspector");
     f.pass();
     CHECK(f.text("inspector.title") == "buss_1");
+}
+
+TEST_CASE("inspector: positions read and write as bar.beat.thousandths, in the bar's meter") {
+    time::TimeMap four;  // 4/4 throughout
+    CHECK(gui::inspectorBarsText(0, four) == "1.1.000");
+    CHECK(gui::inspectorBarsText(9.5, four) == "3.2.500");
+    CHECK(gui::inspectorBarsText(3.9996, four) == "1.4.999");  // never a fourth digit
+    CHECK(*gui::inspectorParseBars("3", four) == 8);
+    CHECK(*gui::inspectorParseBars(" 3.2 ", four) == 9);
+    CHECK(*gui::inspectorParseBars("3.2.500", four) == 9.5);
+    for (const double beat : {0.0, 1.0, 7.25, 123.456})
+        CHECK(*gui::inspectorParseBars(gui::inspectorBarsText(beat, four), four) ==
+              doctest::Approx(beat).epsilon(1e-9));
+    for (const char* bad : {"", "x", "0", "3.0", "3.5", "3.2.1000", "3..2", "3.2.5.1", "-1", "3."})
+        CHECK_MESSAGE(!gui::inspectorParseBars(bad, four), bad);
+    CHECK(gui::inspectorParseBars("3.5", four).error().message == "bar 3 has 4 beats");
+
+    CHECK(*gui::inspectorParseNumber("-3", "dB") == -3);
+    CHECK(*gui::inspectorParseNumber("-3 dB", "dB") == -3);
+    CHECK(*gui::inspectorParseNumber("+1.5db", "dB") == 1.5);
+    CHECK(*gui::inspectorParseNumber("0.4s", "s") == 0.4);
+    CHECK(*gui::inspectorParseNumber("12 beats", "beats") == 12);
+    for (const char* bad : {"", "dB", "three", "1,5", "1.5 Hz", "nan", "inf"})
+        CHECK_MESSAGE(!gui::inspectorParseNumber(bad, "dB"), bad);
+}
+
+TEST_CASE("inspector: one item's fields each run item.set, one undo step each") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::string> errors;
+    f.actions->onError = [&](const std::string& e) { errors.push_back(e); };
+    const std::string track = f.exec("track.add", R"({"name":"Bass"})")["track"].asString();
+    const std::string it =
+        f.exec("item.add",
+               R"({"track":")" + track +
+                   R"(","bar":2,"notation":"voice bass; 1: C2:q r:q C2:q r:q"})")["item"]
+            .asString();
+    // In 6/8 from bar 3 a beat is an eighth: half a quarter note.
+    f.exec("timesig.set", R"({"bar":3,"meter":"6/8"})");
+    f.side->show("inspector");
+    f.pass();
+    CHECK_FALSE(f.inView("inspector.item"));  // nothing selected: no fields
+    f.ui.selectedItems = {it};
+    f.pass();
+    REQUIRE(f.inView("inspector.item"));
+    CHECK(f.field("inspector.start").text() == "2.1.000");
+    CHECK(f.field("inspector.length").text() == "4 beats");
+    CHECK(f.field("inspector.gain_db").text() == "0.0 dB");
+    CHECK(f.field("inspector.fade_in").text() == "0.000 s");
+    CHECK(f.text("inspector.timebase") == "Its track's setting");
+    CHECK_FALSE(f.inView("inspector.locked.note"));
+    CHECK_FALSE(f.inView("inspector.file"));  // a MIDI item plays no file
+
+    auto before = f.steps();
+    f.type("inspector.name", "Bass riff");
+    CHECK(f.app->head().takes.find(*f.item(it).activeTake)->name == "Bass riff");
+    CHECK(f.text("inspector.title") == "Bass riff");
+    CHECK(f.steps() == before + 1);
+
+    f.type("inspector.start", "3.4");  // bar 3 is 6/8: its fourth eighth
+    CHECK(model::itemSpan(f.app->head(), f.item(it)).startBeat == doctest::Approx(8 + 1.5));
+    CHECK(f.field("inspector.start").text() == "3.4.000");
+    f.type("inspector.length", "6");
+    CHECK(model::itemLengthBeats(f.app->head(), f.item(it)) == doctest::Approx(6));
+    CHECK(f.field("inspector.length").text() == "6 beats");
+    f.type("inspector.gain_db", "-4.5 dB");
+    CHECK(f.item(it).gainDb == -4.5);
+    f.type("inspector.fade_in", "0.25");
+    f.type("inspector.fade_out", "1.5 s");
+    CHECK(f.item(it).fadeIn.length == 0.25);
+    CHECK(f.item(it).fadeOut.length == 1.5);
+    CHECK(f.field("inspector.fade_out").text() == "1.500 s");
+    dynamic_cast<ui::Dropdown*>(f.node("inspector.timebase"))->choose("time");
+    f.pass();
+    CHECK(f.item(it).timebase == model::ItemTimebase::Time);
+    REQUIRE(f.root->click("inspector.mute"));
+    REQUIRE(f.root->click("inspector.loop"));
+    f.pass();
+    CHECK(f.item(it).mute);
+    CHECK(f.item(it).loop);
+    CHECK(f.text("inspector.mute") == "on");
+    CHECK(f.steps() == before + 9);  // nine edits, nine steps
+    CHECK(errors.empty());
+
+    // Leaving a field applies it too; Escape gives the edit up; the same
+    // text again is no edit.
+    before = f.steps();
+    f.type("inspector.gain_db", "-6", 0);
+    REQUIRE(f.root->click("inspector.start"));
+    f.pass();
+    CHECK(f.item(it).gainDb == -6);
+    f.type("inspector.gain_db", "-60", SDLK_ESCAPE);
+    CHECK(f.item(it).gainDb == -6);
+    CHECK(f.field("inspector.gain_db").text() == "-6.0 dB");
+    f.type("inspector.gain_db", "-6.0 dB");
+    CHECK(f.steps() == before + 1);
+
+    // What cannot be meant, and what the command refuses, is said and the
+    // field shows the session again.
+    f.type("inspector.start", "soon");
+    REQUIRE(errors.size() == 1);
+    CHECK(errors.back().find("3.2.500") != std::string::npos);
+    CHECK(f.field("inspector.start").text() == "3.4.000");
+    f.type("inspector.gain_db", "99");
+    REQUIRE(errors.size() == 2);
+    CHECK(f.item(it).gainDb == -6);
+    CHECK(f.field("inspector.gain_db").text() == "-6.0 dB");
+    f.type("inspector.length", "0");
+    REQUIRE(errors.size() == 3);
+    CHECK(errors.back().find("greater than 0") != std::string::npos);
+    CHECK(f.steps() == before + 1);
+
+    // An agent's edit shows at the next pass, but not over what is being typed.
+    f.type("inspector.fade_in", "0.5", 0);
+    f.exec("item.set", R"({"item":")" + it + R"(","gain_db":-12,"fade_in":2})");
+    f.pass();
+    CHECK(f.field("inspector.gain_db").text() == "-12.0 dB");
+    CHECK(f.field("inspector.fade_in").text() == "0.5");
+    f.root->key(SDLK_RETURN, 0);
+    f.pass();
+    CHECK(f.item(it).fadeIn.length == 0.5);
+
+    // Locked: every field but Lock is off; unlocking brings them back.
+    REQUIRE(f.root->click("inspector.locked"));
+    f.pass();
+    CHECK(f.item(it).locked);
+    CHECK(f.inView("inspector.locked.note"));
+    CHECK_FALSE(f.field("inspector.name").enabled);
+    CHECK_FALSE(f.node("inspector.mute")->enabled);
+    CHECK_FALSE(f.root->click("inspector.mute"));
+    REQUIRE(f.root->click("inspector.locked"));
+    f.pass();
+    CHECK_FALSE(f.item(it).locked);
+    CHECK(f.field("inspector.name").enabled);
+
+    // Another item: its own values. What was half typed is applied to the
+    // item it was typed for (leaving a field applies it), never to the next.
+    const std::string empty =
+        f.exec("item.add", R"({"track":")" + track + R"(","position":40,"length":2})")["item"]
+            .asString();
+    f.type("inspector.gain_db", "-30", 0);
+    f.ui.selectedItems = {empty};
+    f.pass();
+    CHECK(f.field("inspector.gain_db").text() == "0.0 dB");
+    CHECK(f.item(it).gainDb == -30);
+    CHECK(f.item(empty).gainDb == 0);
+    // An empty item has an empty take, which can carry a name.
+    f.type("inspector.name", "Gap");
+    CHECK(f.app->head().takes.find(*f.item(empty).activeTake)->name == "Gap");
+    CHECK(f.text("inspector.title") == "Gap");
+    CHECK(f.text("inspector.detail") == "Empty item on Bass");
+    // A tab out of view keeps no focus: what was half typed is applied as
+    // the field is left, and keys no longer reach it.
+    f.type("inspector.fade_in", "0.75", 0);
+    CHECK(f.root->focused() == f.node("inspector.fade_in"));
+    f.side->show("history");
+    f.pass();
+    CHECK(f.root->focused() == nullptr);
+    CHECK(f.item(empty).fadeIn.length == 0.75);
+    f.side->show("inspector");
+    f.pass();
+    // Removed under the inspector: the fields go.
+    f.exec("item.remove", R"({"item":")" + empty + R"("})");
+    f.pass();
+    CHECK_FALSE(f.inView("inspector.item"));
 }

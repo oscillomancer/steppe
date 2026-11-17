@@ -359,6 +359,13 @@ A panel at the right of the window holds the **Inspector** and the
 - **View > Inspector**, or the **I** key, opens it on the Inspector. The
   Inspector names what is selected: an item with its track, a track with its
   kind, or how many of each. Press **I** again to close the panel.
+  With one item selected it also shows the item's settings, and you can
+  change them there: its **Name**, where it **starts** (bar.beat, for
+  example `3.2`), its **length** in beats, whether it **follows** the beats
+  or the clock when the tempo changes, its **gain**, its **fades** in
+  seconds, and **Mute**, **Loop** and **Lock**. Type a value and press
+  Enter, or click elsewhere; Escape leaves it as it was. Each change is one
+  step for Undo. A locked item cannot be changed until you turn Lock off.
 - **View > History and command log**, or **Ctrl+H**, opens it on the History:
   the versions you can step back to, the branches, and every command with who
   ran it.

@@ -1774,7 +1774,8 @@ in view); a sidecar from before the side panel, with `panels.history` and
 no `panels.side`, opens the panel on History when it was true.
 
 **Inspector.** What is selected, read from the selection and the session
-each pass (`inspectorSubject`); it executes no command by itself. A header:
+each pass (`inspectorSubject`), and for one item the fields that edit it.
+It executes a command only when a field is changed. A header:
 a bar in the thing's colour (an item's as the arrange view draws it, §4.3;
 a track's own; none without one), its name in the title size
 (`inspector.title`) and a line under it (`inspector.detail`):
@@ -1788,8 +1789,34 @@ a track's own; none without one), its name in the title size
 | Nothing | "Nothing selected" | "Click an item or a track to see it here." |
 
 Tracks are shown when they were selected last or no item is selected, else
-items. Ids the session no longer holds are left out. Fields that edit the
-selection (each through an existing command) follow in later steps.
+items. Ids the session no longer holds are left out.
+
+**One item's fields** (`inspector.item`, shown for one selected item only).
+Each change is one `item.set` and one undo step; the inspector adds no
+command:
+
+| Field (node) | Shows | Accepts | `item.set` |
+|---|---|---|---|
+| Name (`inspector.name`) | The active take's name; unnamed, the file's name as a placeholder | Any text | `name` |
+| Start (`inspector.start`) | "3.1.000": bar, beat of that bar's meter, thousandths of the beat, each from 1 | "3", "3.2" or "3.2.500" (`inspectorParseBars`) | `position` (beats) |
+| Length (`inspector.length`) | "32 beats" | A number, with or without "beats" | `length` |
+| Follows (`inspector.timebase`) | Its track's setting, Beats, Time, or Beats, start only | A choice | `timebase` |
+| Gain (`inspector.gain_db`) | "-3.0 dB" | A number, with or without "dB" | `gain_db` |
+| Fade in, Fade out (`inspector.fade_in`, `inspector.fade_out`) | "0.400 s" | A number, with or without "s" | `fade_in`, `fade_out` |
+| Mute, Loop, Lock (`inspector.mute`, `.loop`, `.locked`) | Pills, lit when on | A click | `mute`, `loop`, `locked` |
+| File (`inspector.file`) | An audio item's file path, then its rate, channels and length | Read only | |
+
+A text field applies on Enter and when it is left (a click elsewhere, a
+change of selection, the tab or the panel going out of view): to the item
+it showed, never to the next. Escape restores it, and unchanged text runs
+nothing. Text that cannot be meant ("soon" for a start) and an edit the
+command refuses (a gain above +24 dB) are reported through the status line
+with the command's hint, and the field shows the session's value again.
+Edits made elsewhere, an agent's included, show at the next pass, except
+in the field being typed in. A locked item's fields are disabled, all but
+Lock, under a line that says so. An item with no take cannot be named.
+Take settings (pitch, speed, the take list), several items and tracks
+follow in later steps.
 
 ## 5. Agent panel (removed)
 
