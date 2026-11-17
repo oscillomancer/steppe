@@ -205,7 +205,8 @@ TEST_CASE("a stopped or cancelled offline render does not wait for a bridged cal
     };
     for (const auto& [call, name] : calls)
         for (const bool cancel : {true, false}) {
-            CAPTURE(name);
+            const std::string named = name;  // a pointer would print as 1
+            CAPTURE(named);
             CAPTURE(cancel);
             const auto session = isolated(model::Isolation::Dedicated);
             const Id gain = gainOf(session);

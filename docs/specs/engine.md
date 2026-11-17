@@ -709,7 +709,10 @@ first use, and no plug-in code runs early to warm it.
   (activation, reset, flush, start, a block, stop, a readout) returns at
   once. Every caller gives a render its own instance pool, so no other
   user shares those bridges. A render stopped or cancelled either way
-  returns `job.cancelled`, ahead of any failure of the instances it killed.
+  returns `job.cancelled`, ahead of any failure of the instances it killed:
+  a render with a failure first ends the watch (a call ended by its kill can
+  return before the watch has recorded the kill), and a stop or cancel asked
+  for by the time the outcome is decided is the outcome.
   Instance creation, before that point, keeps its control-plane timeouts
   (20 s for `Create`).
 - Once a render has succeeded, each plugin's read-only parameters (meters,

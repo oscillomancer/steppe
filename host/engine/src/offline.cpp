@@ -952,12 +952,18 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
         for (auto& line : in->takeLog()) r.log.push_back(in->info().name + ": " + line);
     }
     if (preparationError) return *preparationError;
+    // A call the watch's kill ended can return before the watch has said it
+    // killed: a failed render waits for the watch to end first (the join
+    // orders its kills before abandoned()), and a stop or cancel asked for
+    // by then is the outcome too.
+    const auto lost = failedNow();
+    if (startFailed || failed || !lost.empty()) watch.finish();
     // Cancelled between blocks, or stopped while a bridged call waited: the
     // job's outcome, whatever the abandoned bridges' instances say.
-    if (cancelled || watch.abandoned()) return renderCancelled();
+    if (cancelled || watch.abandoned() || RenderWatch::requested(opt)) return renderCancelled();
     // Failed starting, processing or stopping: the render's audio is not
     // what the session plays (ADR-0090).
-    if (const auto lost = failedNow(); !lost.empty()) {
+    if (!lost.empty()) {
         const Watched& first = *lost.front();
         std::string message = first.instance->info().name + " (" + first.fx.str() +
                               ") failed during the render: " + first.instance->failure();
