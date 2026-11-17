@@ -586,7 +586,8 @@ void Engine::stop() {
     timelineEpoch_.store(0);
     rateClockSequence_.store(0);
     for (auto& word : rateClockWords_) word.store(0);
-    plans_.clear();  // nothing runs a plan now
+    plans_.clear();     // nothing runs a plan now
+    ringPool_.clear();  // nor holds a ring for the next edit
     hardwareMidi_->releaseHistory(true);
     callbackGen_.store(0);
     workers_.reset();
@@ -605,6 +606,9 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
     // A failure before the deferral is decided leaves the edit deferred.
     if (!loaded && rateDeferredFrom_ && !rateDeferred_) {
         latest_ = *std::exchange(rateDeferredFrom_, std::nullopt);
+        // A refused playrate move in that session is pending again: the
+        // compile that cleared it never published it (review 37c F1).
+        scalarPending_ = rateDeferredScalarPending_;
         unplayedEdit_ = loaded.error();
     }
     return loaded;
@@ -628,7 +632,10 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
     if (!rateSeekTarget_ && wantPlaying_.load(std::memory_order_acquire) &&
         rateSafeEpoch_.load(std::memory_order_acquire) == controlEpoch &&
         playedStream(controlEpoch) + lead < rateSafeStream_.load(std::memory_order_acquire)) {
-        if (!rateDeferredFrom_) rateDeferredFrom_ = latest_;  // what keeps playing meanwhile
+        if (!rateDeferredFrom_) {
+            rateDeferredFrom_ = latest_;  // what keeps playing meanwhile
+            rateDeferredScalarPending_ = scalarPending_;
+        }
         latest_ = std::make_shared<const model::Session>(session);
         rateDeferredDir_ = projectDir;
         rateDeferred_ = true;
@@ -731,13 +738,20 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
             "live plugin instances");
     if (options_.anticipative) {
         const auto quantum = plan->rateEnabled ? 64u : options_.renderBlock;
+        // Every ring keeps room for the render-ahead time in whole chunks at
+        // up to 192 kHz. At lower rates that is the slack for short chunks:
+        // no chunk crosses a loop wrap, so a loop shorter than a chunk fills
+        // a ring with chunks that short, and a ring sized to the lead at the
+        // device's rate would fill first (round 36 F1). Frontier and record
+        // rings come from retired plans when their shape fits (route E
+        // stage 1), so their size costs only when one is first built.
         const auto chunks =
             static_cast<std::size_t>(std::ceil(options_.renderAheadMs / 1000. * 192000. / quantum));
+        recycleRings(oldestInUse());
         if (plan->anyLive) {
             plan->split = true;
             for (std::size_t i = 0; i < plan->frontier.size(); ++i)
-                plan->frontierRings.push_back(
-                    std::make_unique<detail::ChunkRing>(chunks + 2, quantum));
+                plan->frontierRings.push_back(takeRing(chunks + 2, quantum));
         } else if (plan->rateEnabled) {
             plan->rateOutput =
                 std::make_unique<detail::ChunkRing>(chunks + 2, quantum, true, deviceOutputs_);
@@ -747,8 +761,7 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
         for (detail::RecordTap& tap : plan->recordTaps)
             if (!plan->split || !plan->nodes[tap.node].live) {
                 tap.ring = static_cast<int>(plan->recordRings.size());
-                plan->recordRings.push_back(
-                    std::make_unique<detail::ChunkRing>(chunks + 2, quantum));
+                plan->recordRings.push_back(takeRing(chunks + 2, quantum));
             }
     }
     // What the recorder takes for each recorded master: the node the callback
@@ -1101,12 +1114,47 @@ bool Engine::awaitRendererHeld(double timeoutSeconds) {
     return true;
 }
 
-std::uint64_t Engine::collectPlans() {
-    // The oldest generation an executor may still be using.
+std::uint64_t Engine::oldestInUse() const {
     const std::uint64_t rendered = stoppedGen_.load(std::memory_order_acquire);
-    const std::uint64_t oldest =
-        options_.anticipative ? std::min(rendered, callbackGen_.load(std::memory_order_acquire))
-                              : rendered;
+    return options_.anticipative ? std::min(rendered, callbackGen_.load(std::memory_order_acquire))
+                                 : rendered;
+}
+
+void Engine::recycleRings(std::uint64_t oldest) {
+    if (plans_.empty()) return;
+    for (const auto& p : plans_) {
+        // As collectPlans retires plans: no executor reaches these rings again.
+        if (p->generation >= oldest || p.get() == plans_.back().get()) continue;
+        for (auto* rings : {&p->frontierRings, &p->recordRings})
+            for (auto& ring : *rings)
+                if (ring) ringPool_.push_back(std::move(ring));
+    }
+    // Keep as many as the plans still in use hold: what edits at this pace
+    // have needed at once.
+    std::size_t keep = 0;
+    for (const auto& p : plans_)
+        if (p->generation >= oldest || p.get() == plans_.back().get())
+            keep += p->frontierRings.size() + p->recordRings.size();
+    if (ringPool_.size() > keep)
+        ringPool_.erase(ringPool_.begin(),
+                        ringPool_.begin() + static_cast<std::ptrdiff_t>(ringPool_.size() - keep));
+}
+
+std::unique_ptr<detail::ChunkRing> Engine::takeRing(std::size_t capacity, std::uint32_t frames) {
+    for (auto it = ringPool_.rbegin(); it != ringPool_.rend(); ++it)
+        if ((*it)->fits(capacity, frames)) {
+            auto ring = std::move(*it);
+            ringPool_.erase(std::next(it).base());
+            ring->restart();
+            return ring;
+        }
+    return std::make_unique<detail::ChunkRing>(capacity, frames);
+}
+
+std::uint64_t Engine::collectPlans() {
+    // One reading decides both the rings recycled and the plans freed.
+    const std::uint64_t oldest = oldestInUse();
+    recycleRings(oldest);
     // The newest plan always stays (an executor may be about to adopt it).
     const auto retired = [&](const auto& p) {
         return p->generation < oldest && p.get() != plans_.back().get();

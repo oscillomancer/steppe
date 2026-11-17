@@ -97,6 +97,45 @@ struct EngineTestAccess {
     static std::uint64_t rendererEpoch(const Engine& e) { return e.epochDone_.load(); }
     static LoopRange rendererLoop(const Engine& e) { return e.loopR_; }  // after rendererEpoch
     static const detail::Plan& latestPlan(const Engine& e) { return *e.latestPlan_.load(); }
+    // Every ring of every plan an executor may still use.
+    // How far the renderer is ahead of what the callback played.
+    static std::int64_t lead(const Engine& e) {
+        return e.renderedStream_.load() - e.playedStream(e.epochDone_.load());
+    }
+    static std::int64_t aheadFrames(const Engine& e) { return e.aheadFrames_; }
+    static std::size_t pooledRings(const Engine& e) { return e.ringPool_.size(); }
+    // Whether the plan the callback plays is still held (manual backends).
+    static bool livePlanKept(const Engine& e) {
+        return !e.livePlan_ || std::any_of(e.plans_.begin(), e.plans_.end(),
+                                           [&](const auto& p) { return p.get() == e.livePlan_; });
+    }
+    // Whether every plan an executor may still be using (from the oldest
+    // generation either has acknowledged) keeps all its rings.
+    static bool ringsInUseKept(const Engine& e) {
+        const std::uint64_t oldest = std::min(e.stoppedGen_.load(), e.callbackGen_.load());
+        for (const auto& p : e.plans_)
+            if (p->generation >= oldest)
+                for (const auto* rings : {&p->frontierRings, &p->recordRings})
+                    for (const auto& ring : *rings)
+                        if (!ring) return false;
+        return true;
+    }
+    // The frontier rings of the plan the callback plays (manual backends run
+    // the callback on the test's thread).
+    static std::vector<const detail::ChunkRing*> liveRings(const Engine& e) {
+        std::vector<const detail::ChunkRing*> out;
+        if (e.livePlan_)
+            for (const auto& ring : e.livePlan_->frontierRings) out.push_back(ring.get());
+        return out;
+    }
+    static std::vector<const detail::ChunkRing*> planRings(const Engine& e) {
+        std::vector<const detail::ChunkRing*> out;
+        for (const auto& plan : e.plans_) {
+            for (const auto& ring : plan->frontierRings) out.push_back(ring.get());
+            for (const auto& ring : plan->recordRings) out.push_back(ring.get());
+        }
+        return out;
+    }
     static auto deadline(std::chrono::steady_clock::time_point now,
                          std::chrono::steady_clock::time_point next, bool idleWork,
                          std::chrono::steady_clock::duration safety = std::chrono::seconds(1)) {
@@ -128,6 +167,7 @@ struct EngineTestAccess {
         e.wakeRendererConsumed();
     }
     static auto event(const Engine& e) { return e.rendererEvent_.load(); }
+    static detail::Recorder& recorder(Engine& e) { return *e.recorderOwned_; }
 };
 }  // namespace supple::engine
 using model::Id;
@@ -135,6 +175,16 @@ using model::kMaster;
 
 namespace supple::engine::detail {
 struct RecorderTestAccess {
+    // Waits until the writer has begun and ended `count` passes from now:
+    // the last of them drained everything published before the call.
+    static void passes(Recorder& recorder, unsigned count = 2) {
+        const auto target = recorder.writerPasses_.load() + count;
+        for (;;) {
+            const auto at = recorder.writerPasses_.load(std::memory_order_acquire);
+            if (at >= target) return;
+            recorder.writerPasses_.wait(at);
+        }
+    }
     static void stall(Recorder& recorder) { recorder.writerStalled_.store(true); }
     static bool stalled(const Recorder& recorder) { return recorder.writerStallAck_.load(); }
     static void resume(Recorder& recorder) { recorder.writerStalled_.store(false); }
@@ -2715,13 +2765,14 @@ TEST_CASE("wet and bypass edits retarget an active ramp without a step" *
 
 TEST_CASE("a long, dense MIDI performance records without overflow (the writer drains)" *
           doctest::description("rt")) {
-    // A controller sweep every 8 frames (6000 events/s) for over a second:
-    // more than one ring holds, drained while recording.
+    // A controller sweep every 8 frames (6000 events/s) for 1.2 s of audio:
+    // more than one ring (4096 events) holds, drained while recording. The
+    // test runs the cycles itself, a ring's worth at most between writer
+    // passes, so how busy the machine is cannot decide it.
     auto pool = makePool();
     MediaCache media;
     DummyBackend backend(
-        {.mode = DummyBackend::Mode::Thread,
-         .paced = true,
+        {.mode = DummyBackend::Mode::Manual,
          .midiPorts = {"Keyboard"},
          .midi = [](std::vector<MidiInputEvent>& out, std::uint32_t n, std::int64_t frame) {
              for (std::uint32_t i = 0; i < n; i += 8) {
@@ -2747,7 +2798,13 @@ TEST_CASE("a long, dense MIDI performance records without overflow (the writer d
     target.midi = RecordTarget::Midi{midiPortMask(engine.midiPorts(), "*"), 0, 0};
     REQUIRE(engine.startRecording({target}));
     engine.play();
-    std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+    // 225 cycles of 256 frames: 1.2 s, 32 events each. 64 cycles (2048
+    // events) between passes stay well inside the ring.
+    auto& recorder = EngineTestAccess::recorder(engine);
+    for (int done = 0; done < 225; done += 64) {
+        backend.run(std::min(64, 225 - done));
+        detail::RecorderTestAccess::passes(recorder);
+    }
     auto takes = engine.stopRecording();
     REQUIRE(takes);
     const RecordedTake& t = (*takes)[0];
@@ -3741,9 +3798,16 @@ TEST_CASE("a bridged start answered after its live deadline is not taken for a r
             });
         }
     const auto session = t.commit().value();
+    // The product's live deadline, not patient(): the first cycle must pass
+    // its deadline with the start unanswered. So any later cycle may be late
+    // too on a loaded machine. A late block is silent by design and a late
+    // start leaves the stage passing audio through for that cycle; both are
+    // counted in bridgeLateCycles(), which bounds them here (CI 44147509934:
+    // the third cycle was late and silent).
+    constexpr int kCycles = 2048;  // a guard against a bridge that never answers
     auto pool = makePool();
     MediaCache media;
-    DummyBackend backend(constantInput(64 * 128));
+    DummyBackend backend(constantInput(kCycles * 128));
     Engine engine(pool, media, kInCallback);
     REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128, .inputs = 2}));
     REQUIRE(engine.load(session));
@@ -3752,16 +3816,38 @@ TEST_CASE("a bridged start answered after its live deadline is not taken for a r
     REQUIRE(reached(0));                   // the bridge is in the plug-in's start
     gate[1].store(1, std::memory_order_release);
     REQUIRE(reached(2));
-    backend.run(16);
+    const auto& out = backend.capture().channels[0];
+    CHECK(double(out[0]) == 0.5);  // not started yet: passed through, as a refused one is
+    const auto lateBefore = engine.bridgeLateCycles();
+    const double processed = .5 * 0.2511886;  // -12 dB on the 0.5 input
+    const auto at = [&](int cycle) {
+        return double(out[static_cast<std::size_t>(cycle) * 128 + 64]);
+    };
+    // Each cycle after the first until one is processed: passed through
+    // (a late start) or silent (a late block), never anything else.
+    int cycle = 1, unprocessed = 0;
+    for (; cycle < kCycles / 2; ++cycle) {
+        backend.run(1);
+        if (at(cycle) == doctest::Approx(processed).epsilon(1e-4)) break;
+        CHECK((at(cycle) == 0.5 || at(cycle) == 0.0));
+        ++unprocessed;
+    }
+    REQUIRE_MESSAGE(cycle < kCycles / 2, "the started bridge never processed a block");
+    // Once started, a cycle is processed or, late, silent: never passed through.
+    for (int more = 0; more < 16; ++more) {
+        backend.run(1);
+        ++cycle;
+        if (at(cycle) == doctest::Approx(processed).epsilon(1e-4)) continue;
+        CHECK(at(cycle) == 0.0);
+        ++unprocessed;
+    }
+    // Every cycle that was not processed was a late one.
+    CHECK(unprocessed <= static_cast<int>(engine.bridgeLateCycles() - lateBefore));
     host::Instance* instance = pool.find(fxId);
     REQUIRE(instance);
     CHECK_FALSE(instance->failed());
     CHECK(instance->processing());
     CHECK(engine.processErrors() == 0);
-    // Processed from the second cycle on: -12 dB on the 0.5 input.
-    const auto& out = backend.capture().channels[0];
-    CHECK(double(out[0]) == 0.5);  // not started yet: passed through, as a refused one is
-    CHECK(double(out[300]) == doctest::Approx(.5 * 0.2511886).epsilon(1e-4));
     engine.stop();
     ::munmap(words, 4096);
     std::filesystem::remove(file);
@@ -4112,6 +4198,166 @@ TEST_CASE("callback wakes renderer once at the consumption threshold") {
     plan.split = true;
     CHECK(Access::target(engine) == INT64_MAX);
     CHECK_FALSE(Access::room(engine));
+}
+
+namespace {
+// Two sine tracks the renderer runs, and a monitored input that makes the
+// master live: both tracks reach it through frontier rings.
+model::Session frontierSession() {
+    const auto base = synthSession(-12.0, nullptr, 2);
+    model::EditTxn t(base, 2);
+    model::Track vocal;
+    vocal.parent = kMaster;
+    const Id track = t.create(vocal);
+    t.modify<model::Track>(kMaster, [&](auto& m) { m.children.push_back(track); });
+    model::Route in;
+    in.from.hwChannels = std::vector<int>{1, 2};
+    in.to.track = track;
+    const Id input = t.create(in);
+    t.modify<model::Track>(track, [&](auto& x) {
+        x.record.input = input;
+        x.record.monitor = model::Monitor::On;
+        x.record.armed = true;
+    });
+    return t.commit().value();
+}
+// The callback's plan is still held, no plan an executor may still use
+// gave up a ring, and the newest plan's are none the callback plays:
+// checked after each edit, so a plan freed or a ring reused too early fails
+// here rather than as a crash in the cycles that follow.
+void requirePlansKept(const Engine& engine) {
+    REQUIRE(EngineTestAccess::livePlanKept(engine));
+    REQUIRE(EngineTestAccess::ringsInUseKept(engine));
+    const auto live = EngineTestAccess::liveRings(engine);  // none before a cycle
+    for (const auto& ring : EngineTestAccess::latestPlan(engine).frontierRings)
+        REQUIRE(std::find(live.begin(), live.end(), ring.get()) == live.end());
+}
+// The same session, needing a compile (a marker), at `version`.
+model::Session recompiled(const model::Session& s, std::uint64_t version) {
+    model::EditTxn t(s, version);
+    t.create(model::Marker{});
+    return t.commit().value();
+}
+}  // namespace
+
+TEST_CASE("plan swaps reuse retired plans' frontier rings: none is allocated per edit" *
+          doctest::description("rt")) {
+    // Route E stage 1: every compile allocated and zeroed a ring per
+    // frontier edge (512 KB each), and freed the retired plan's. The
+    // callback adopts a plan where the renderer handed it over, a render-ahead
+    // time (200 ms, 38 cycles) after it was published. Edits further apart
+    // than that retire each plan before the next. Faster ones keep several
+    // plans in use, as many as scheduling leaves in flight, so they may need
+    // new rings; once the edits pause for a render-ahead time, the next
+    // takes recycled ones. Cycle counts decide, not timing.
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    Engine engine(pool, media, {.workers = 1});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
+    auto session = frontierSession();
+    REQUIRE(engine.load(session));
+    REQUIRE(EngineTestAccess::latestPlan(engine).frontierRings.size() == 2);
+    engine.play();
+    std::uint64_t version = 10;
+    const auto edit = [&](int cycles) {
+        REQUIRE(engine.load(recompiled(session, version++)));
+        requirePlansKept(engine);
+        runAhead(engine, backend, cycles, 256);
+    };
+    edit(64);
+    auto before = detail::chunkRingAllocations();
+    for (int more = 0; more < 16; ++more) edit(64);
+    CHECK(detail::chunkRingAllocations() == before);
+    for (int burst = 0; burst < 16; ++burst) edit(4);  // may allocate
+    runAhead(engine, backend, 64, 256);
+    before = detail::chunkRingAllocations();
+    edit(64);
+    CHECK(detail::chunkRingAllocations() == before);
+    CHECK(engine.anticipationMisses() == 0);
+    engine.stop();
+}
+
+TEST_CASE("a frontier ring is reused only once both executors have left its plan" *
+          doctest::description("rt")) {
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    Engine engine(pool, media, {.workers = 1});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
+    auto session = frontierSession();
+    REQUIRE(engine.load(session));
+    engine.play();
+    runAhead(engine, backend, 16, 256);
+    std::uint64_t version = 10;
+    // The callback holds on to the plan it plays: no cycle runs, so every
+    // plan published meanwhile may still be adopted, and none is retired.
+    // Each gets rings of its own.
+    for (int edit = 0; edit < 4; ++edit) {
+        const auto before = detail::chunkRingAllocations();
+        REQUIRE(engine.load(recompiled(session, version++)));
+        requirePlansKept(engine);
+        CHECK(detail::chunkRingAllocations() == before + 2);
+        auto rings = EngineTestAccess::planRings(engine);
+        std::sort(rings.begin(), rings.end());
+        CHECK(std::adjacent_find(rings.begin(), rings.end()) == rings.end());
+    }
+    // Once the callback has moved on to the newest plan (past the render-ahead
+    // time), the next one takes the rings of the plans before it, never the
+    // newest's.
+    runAhead(engine, backend, 64, 256);
+    const auto older = EngineTestAccess::planRings(engine);
+    std::vector<const detail::ChunkRing*> current;
+    for (const auto& ring : EngineTestAccess::latestPlan(engine).frontierRings)
+        current.push_back(ring.get());
+    const auto before = detail::chunkRingAllocations();
+    REQUIRE(engine.load(recompiled(session, version++)));
+    requirePlansKept(engine);
+    CHECK(detail::chunkRingAllocations() == before);
+    for (const auto& ring : EngineTestAccess::latestPlan(engine).frontierRings) {
+        CHECK(std::find(current.begin(), current.end(), ring.get()) == current.end());
+        CHECK(std::find(older.begin(), older.end(), ring.get()) != older.end());
+    }
+    runAhead(engine, backend, 64, 256);
+    engine.service();  // collects the plans before the newest: their rings wait
+    // A stopped engine holds no plan, nor rings pooled for one.
+    REQUIRE(EngineTestAccess::pooledRings(engine) > 0);
+    engine.stop();
+    CHECK(EngineTestAccess::pooledRings(engine) == 0);
+}
+
+TEST_CASE("a loop shorter than a render block still lets the renderer get its lead" *
+          doctest::description("rt")) {
+    // No chunk crosses a loop wrap, so with a 300-frame loop every chunk
+    // holds at most 300 frames: rings counted in whole render blocks fill
+    // before the renderer is its render-ahead time ahead (round 36 F1).
+    // The renderer stops by itself either way; the check is why it stopped.
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    Engine engine(pool, media, {.workers = 1});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
+    REQUIRE(engine.load(frontierSession()));
+    engine.setLoop(0.0, 300.0 / 48000.0, true);
+    engine.play();
+    runAhead(engine, backend, 64, 256);
+    const auto& plan = EngineTestAccess::latestPlan(engine);
+    REQUIRE(plan.frontierRings.size() == 2);
+    const auto full = [&] {
+        for (const auto& ring : plan.frontierRings)
+            if (ring->write.load() - ring->read.load() == ring->chunks.size()) return true;
+        return false;
+    };
+    // Bounded only against a hang: one of the two always comes.
+    for (int i = 0; i < 100000; ++i) {
+        if (EngineTestAccess::lead(engine) >= EngineTestAccess::aheadFrames(engine) || full())
+            break;
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
+    CHECK(EngineTestAccess::lead(engine) >= EngineTestAccess::aheadFrames(engine));
+    CHECK_FALSE(full());
+    CHECK(engine.anticipationMisses() == 0);
+    engine.stop();
 }
 
 TEST_CASE("renderer waits for full master and frontier rings to release a chunk") {

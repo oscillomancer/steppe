@@ -84,6 +84,14 @@ struct BridgeTestAccess {
         return process;
     }
     static Status subscribe(BridgeProcess& process) { return process.initializeNotifications(); }
+    // A child the test spawned itself, watched by its pid (no owner: the
+    // test reaps it), so BridgeProcess::alive() tells a slow bridge from a
+    // dead one, as for a bridge the product launched.
+    static std::unique_ptr<bridge::NativeChild> watch(pid_t pid) {
+        std::unique_ptr<bridge::NativeChild> child(new bridge::NativeChild);
+        child->pid_ = pid;
+        return child;
+    }
     static std::shared_ptr<BridgeProcess> adopt(int socket, pid_t pid) {
         std::shared_ptr<BridgeProcess> process(new BridgeProcess);
         process->sock_ = socket;
@@ -1939,6 +1947,15 @@ TEST_CASE("CLAP main-thread requests publish before waking and deferred restart 
 
 TEST_CASE("bridge services audio callbacks and closed-editor timers without a Service request") {
     const auto info = find("com.suppleaudio.test.edge");
+    // The product's failure deadline (ADR-0013: 7 s for a lifecycle command)
+    // fails a bridge that a loaded machine stalls. This test is about
+    // servicing, not that deadline: it waits as long as any healthy bridge
+    // needs (as the engine tests do, bridge_patience.cpp).
+    struct Patience {
+        int previous = bridgeDeadlineMs();
+        Patience() { setBridgeDeadlineMs(60'000); }
+        ~Patience() { setBridgeDeadlineMs(previous); }
+    } patience;
     for (std::uint8_t mode : {42, 43}) {
         int sockets[2], receipts[2];
         REQUIRE(::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets) == 0);
@@ -1966,7 +1983,10 @@ TEST_CASE("bridge services audio callbacks and closed-editor timers without a Se
         pid_t pid;
         REQUIRE(::posix_spawn(&pid, executable.c_str(), &actions, nullptr, argv, environ) == 0);
         ScriptedChild child{pid};
-        auto process = BridgeTestAccess::adopt(sockets[0], pid);
+        // Adopted with no child, alive() was always false: any call the
+        // bridge answered after one 10 ms wait counted as a dead bridge, so
+        // a loaded machine failed startProcessing (tsan, load 28).
+        auto process = BridgeTestAccess::adopt(sockets[0], BridgeTestAccess::watch(pid));
         close.socket = -1;
         ::close(close.child);
         close.child = -1;

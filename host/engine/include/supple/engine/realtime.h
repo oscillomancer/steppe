@@ -767,6 +767,7 @@ class Engine {
     friend struct EngineTestAccess;  // defined by the tests alone
     friend struct OutputTestAccess;  // likewise (test_app.cpp)
     friend struct RecordingErrorTestAccess;
+    friend struct RateTestAccess;  // likewise (test_module_library.cpp)
     void cycle(const float* const* in, float* const* out, std::uint32_t frames) SUPPLE_RT;
     // cycle() after its bookkeeping: count-in, then the transport's work.
     void cycleTransport(const float* const* in, float* const* out, std::uint32_t frames) SUPPLE_RT;
@@ -898,6 +899,13 @@ class Engine {
     // generation an executor may use, as read for that decision.
     std::uint64_t collectPlans();
     Status loadNow(const model::Session& session, const std::filesystem::path& projectDir);
+    // The oldest plan generation an executor may still be using.
+    std::uint64_t oldestInUse() const;
+    // Route E stage 1: the rings of plans older than `oldest` (one reading
+    // of oldestInUse()) go to the pool, from which load() takes a ring of
+    // the shape it needs.
+    void recycleRings(std::uint64_t oldest);
+    std::unique_ptr<detail::ChunkRing> takeRing(std::size_t capacity, std::uint32_t frames);
     void publishPluginOutputs(detail::Plan& plan, bool renderer, std::uint64_t epoch,
                               std::int64_t pos, std::int64_t stream) SUPPLE_RT;
 
@@ -940,6 +948,7 @@ class Engine {
     // Plans: published by the main thread, freed once no executor can use
     // them (both acknowledged a newer generation).
     std::vector<std::unique_ptr<detail::Plan>> plans_;
+    std::vector<std::unique_ptr<detail::ChunkRing>> ringPool_;  // main thread (recycleRings)
     std::atomic<detail::Plan*> latestPlan_{nullptr};
     std::atomic<detail::Plan*> handPlan_{nullptr};  // renderer -> callback (ADR-0014)
     std::atomic<std::uint64_t> callbackGen_{0};     // the callback's plan generation
@@ -972,6 +981,9 @@ class Engine {
     // puts back if the deferred edit fails to compile (review 37 F1).
     std::shared_ptr<const model::Session> latest_;
     std::optional<std::shared_ptr<const model::Session>> rateDeferredFrom_;
+    // Whether a refused playrate move was pending when the deferral began:
+    // the restore puts it back with rateDeferredFrom_ (review 37c F1).
+    bool rateDeferredScalarPending_ = false;
     std::optional<Error> unplayedEdit_;  // takeUnplayedEdit()
     // The session the newest published plan was compiled from: what the
     // prune keeps, whatever latest_ names.

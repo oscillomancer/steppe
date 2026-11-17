@@ -1391,6 +1391,10 @@ Session and editing:
   background preparation is pending on macOS/Windows.
 - Loop recording passes that span a change of the loop range are not
   handled; a MIDI take's journal keeps the loop in effect at its start.
+- A loop shorter than the render-ahead time divided by a render-ahead
+  ring's chunk count (about 3 ms with the defaults) keeps the anticipative
+  renderer short of its render-ahead time, since no rendered chunk crosses a
+  loop wrap; it then has less margin against a stall (engine spec §1.6).
 - Master recording (ADR-0057): a plan change that moves a master's latency
   while it records shifts the rest of the take, as output-latency changes do
   for channel takes. Starting a recording while already playing lets an

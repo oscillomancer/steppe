@@ -4741,6 +4741,9 @@ void EngineApp::headChanged() {
                     before && (before->patch || before->state))
                     pool_->restart(e.id);
     (void)engine_->setWriteHolds(writeHolds(), false);  // the load takes them
+    // An edit that a reload since the last tick found would never play (a
+    // seek's, say) is reported first: a failure of this load would take it.
+    noteUnplayedEdit();
     auto st = engine_->load(head(), projectDir());
     if (st) loadedHead_ = versions_->head();
     if (!st) {
