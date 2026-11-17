@@ -619,6 +619,10 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
         return {};
     }
     if (!compile && loadMixValues(session, projectDir)) return {};
+    if (!compile && loadPatches(session, projectDir)) {
+        applyPendingHolds();
+        return {};
+    }
     const auto controlEpoch = epoch_.load(std::memory_order_acquire);
     const auto lead =
         options_.anticipative
@@ -1277,6 +1281,7 @@ void Engine::service() {
                 output.fx = fx;
                 output.planGeneration = generation;
                 output.epoch = epoch_.load(std::memory_order_acquire);
+                output.patchSequence = patchSeq_.load(std::memory_order_relaxed);
                 output.timelineSample = clock.sample;
                 output.event = event;
                 output.idle = true;
@@ -1391,7 +1396,8 @@ void Engine::noteDroppedFx(model::Id fx) SUPPLE_RT {
 }
 
 void Engine::publishPluginOutputs(detail::Plan& p, bool renderer, std::uint64_t epoch,
-                                  std::int64_t pos, std::int64_t stream) SUPPLE_RT {
+                                  std::int64_t pos, std::int64_t stream,
+                                  std::uint64_t patchSequence) SUPPLE_RT {
     auto& queue = renderer ? *rendererOutputs_ : *callbackOutputs_;
     bool changed = false;
     for (auto& node : p.nodes) {
@@ -1418,6 +1424,7 @@ void Engine::publishPluginOutputs(detail::Plan& p, bool renderer, std::uint64_t 
                 output.fx = st.fx;
                 output.planGeneration = p.generation;
                 output.epoch = epoch;
+                output.patchSequence = patchSequence;
                 output.timelineSample = time::samplesAt(p.startSeconds, p.rate) +
                                         static_cast<std::int64_t>(std::llround(p.rateSample(
                                             pos + event.time - st.inputLatency, node.live)));
@@ -1967,10 +1974,11 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
         // Stopped: plugins keep running (monitored input is heard, editors
         // answer, a sampler loads what its editor picked: it does so only in
         // process()), nothing plays.
+        const auto patchSequence = patchSeq_.load(std::memory_order_acquire);
         if (detail::processCallbackBlock(liveWorkersReady_.load(std::memory_order_acquire), *plan,
                                          pos_, frames, false, false, &processing_)) {
             hardwareMidi_->collect(*plan, pos_, frames, midiBase, false, rtEpoch_);
-            publishPluginOutputs(*plan, false, rtEpoch_, pos_, rtStream_.load());
+            publishPluginOutputs(*plan, false, rtEpoch_, pos_, rtStream_.load(), patchSequence);
             writeDevice(*plan, out, 0, frames);
             // Metering (P5.3c): monitored input is heard as it is produced —
             // there is no play position ahead of it to wait for.
@@ -2000,13 +2008,14 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
         const float* const* ins = in ? inAt.data() : nullptr;
         plan->deviceIn = ins;  // monitored input for this part of the cycle
         plan->deviceMidiOffset = midiBase + done;
+        const auto patchSequence = patchSeq_.load(std::memory_order_acquire);
         if (!detail::processCallbackBlock(liveWorkersReady_.load(std::memory_order_acquire), *plan,
                                           pos_, k, true, false, &processing_, &loopC_)) {
             ok = false;
             break;
         }
         hardwareMidi_->collect(*plan, pos_, k, midiBase + done, true, rtEpoch_);
-        publishPluginOutputs(*plan, false, rtEpoch_, pos_, meterStream);
+        publishPluginOutputs(*plan, false, rtEpoch_, pos_, meterStream, patchSequence);
         writeDevice(*plan, out, done, k);
         addClicks(*plan, out, done, pos_, k);
         if (detail::Recorder* r = recorder_.load()) {
@@ -2702,13 +2711,14 @@ void Engine::rendererLoop(std::uint64_t seen) {
         if (idleWork) {
             const auto now = std::chrono::steady_clock::now();
             if (now >= stoppedRenderDeadline(idleNext, idleLast, requested())) {
+                const auto patchSequence = patchSeq_.load(std::memory_order_acquire);
                 const bool ok = detail::processRendererBlock(workers_.get(), *plan_, pos_, block,
                                                              self, &loopR_, false);
                 if (!ok) {
                     processErrors_.fetch_add(1);
                     notifyMain();
                 }
-                publishPluginOutputs(*plan_, true, seen, pos_, streamLocal_);
+                publishPluginOutputs(*plan_, true, seen, pos_, streamLocal_, patchSequence);
                 // An early block replaces the next regular block; repeated
                 // requests must not push its deadline ever farther ahead.
                 idleNext = now < idleNext ? now + blockTime
@@ -2745,6 +2755,7 @@ void Engine::rendererLoop(std::uint64_t seen) {
                 std::min(renderFrames, static_cast<std::uint32_t>(64 - streamLocal_ % 64));
         const std::uint32_t n = detail::rateUntil(*plan_, pos_, renderFrames, loopR_,
                                                   0);  // no chunk crosses a loop wrap
+        const auto patchSequence = patchSeq_.load(std::memory_order_acquire);
         const bool ok = [&] {
             BenchProbe::Timer timer(options_.benchProbe, false, n);
             return detail::processRendererBlock(workers_.get(), *plan_, pos_, n, self, &loopR_);
@@ -2753,7 +2764,7 @@ void Engine::rendererLoop(std::uint64_t seen) {
             processErrors_.fetch_add(1);
             notifyMain();
         }
-        publishPluginOutputs(*plan_, true, seen, pos_, streamLocal_);
+        publishPluginOutputs(*plan_, true, seen, pos_, streamLocal_, patchSequence);
         auto fill = [&](detail::Chunk* c, const detail::Stereo& from) {
             if (ok) {
                 std::copy_n(from.l.begin(), n, c->l.begin());
@@ -3046,6 +3057,7 @@ std::uint32_t Engine::liveRender(const float* const* in, float* const* out, std:
     p.deviceRecording = recorder_.load() != nullptr;
     p.deviceMidi = deviceMidi_;
     p.deviceMidiOffset = offset;
+    const auto patchSequence = patchSeq_.load(std::memory_order_acquire);
     const bool ok = detail::processCallbackBlock(liveWorkersReady_.load(std::memory_order_acquire),
                                                  p, livePos_, k, playing, true, self, &loopC_);
     if (!ok) {
@@ -3053,7 +3065,7 @@ std::uint32_t Engine::liveRender(const float* const* in, float* const* out, std:
         notifyMain();
     }
     if (ok) hardwareMidi_->collect(p, livePos_, k, offset, playing, rtEpoch_);
-    publishPluginOutputs(p, false, rtEpoch_, livePos_, liveStream_);
+    publishPluginOutputs(p, false, rtEpoch_, livePos_, liveStream_, patchSequence);
     // Metering (P5.3c): the callback measures the live nodes it just played, at
     // the position it played them from. While the transport is stopped nothing
     // is rendered ahead, so a monitored input is heard as it is produced.

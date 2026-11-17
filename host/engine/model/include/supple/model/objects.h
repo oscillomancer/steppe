@@ -324,6 +324,7 @@ enum class MidiOutputMode : std::uint8_t { Replace, Merge };
 struct PluginRef {
     std::string format = "clap";  // clap | vst3 | lv2 | container
     std::string id, name, vendor, version;
+    bool operator==(const PluginRef&) const = default;
 };
 
 // Which of its track's channels (1-based, ADR-0020) a plug-in reads and
@@ -335,6 +336,7 @@ struct PluginRef {
 struct PinMap {
     std::vector<int> in, out, key;
     bool empty() const { return in.empty() && out.empty() && key.empty(); }
+    bool operator==(const PinMap&) const = default;
 };
 
 struct ParamLearn : ControlBinding {
@@ -364,6 +366,7 @@ struct FxInstance {
     std::optional<std::string> state;  // "sha256:<hex>" into Session::blobs
     std::map<std::uint32_t, double> params;
     std::vector<ParamLearn> learn;  // MIDI learn, one per parameter (ADR-0027)
+    bool operator==(const FxInstance&) const = default;
 };
 
 enum class Tap : std::uint8_t { PostFader, PreFader, PreFx };

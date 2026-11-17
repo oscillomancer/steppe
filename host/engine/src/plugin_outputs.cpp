@@ -219,6 +219,7 @@ void EngineApp::consumePluginOutputs() {
                 }
             }
     const auto generation = engine_ ? engine_->planGeneration() : 0;
+    const auto patches = engine_ ? engine_->patchSequence() : 0;  // ADR-0092
     const auto epoch = engine_ ? engine_->meterClock().epoch : 0;
     // Re-arm after all exits, including a transaction deferral. No time poll is
     // used for rendered outputs; callback consumption makes them eligible.
@@ -235,10 +236,11 @@ void EngineApp::consumePluginOutputs() {
             app.engine_->armOutputWake(epoch, target);
         }
     } arm{*this};
-    if (generation != outputGeneration_ || epoch != outputEpoch_) {
+    if (generation != outputGeneration_ || patches != outputPatches_ || epoch != outputEpoch_) {
         outputGestures_.clear();
         pendingOutputs_.clear();
         outputGeneration_ = generation;
+        outputPatches_ = patches;
         outputEpoch_ = epoch;
     }
     bool overflow =
@@ -264,8 +266,8 @@ void EngineApp::consumePluginOutputs() {
         return;
     }
     for (const auto& output : taken.events) {
-        if (output.planGeneration != generation || output.epoch != epoch ||
-            !head().fx.contains(output.fx))
+        if (output.planGeneration != generation || output.patchSequence != patches ||
+            output.epoch != epoch || !head().fx.contains(output.fx))
             continue;
         if (pendingOutputs_.size() == kPendingOutputs) {
             ++consumerDrops_;
@@ -284,6 +286,7 @@ void EngineApp::consumePluginOutputs() {
         // Our own rebuild does not make the rest of this drain stale. External
         // changes are detected at the next entry, before another drain is used.
         outputGeneration_ = engine_ ? engine_->planGeneration() : 0;
+        outputPatches_ = engine_ ? engine_->patchSequence() : 0;
     };
     if (overflow) {
         outputOverflow_ = false;

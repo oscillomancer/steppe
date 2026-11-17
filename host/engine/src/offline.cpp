@@ -308,6 +308,37 @@ Result<host::Instance*> InstancePool::get(Id id, const model::FxInstance& fx,
     return e.instance.get();
 }
 
+bool InstancePool::patchable(Id id, const model::FxInstance& fx) const {
+    const auto it = instances_.find(id);
+    if (it == instances_.end()) return false;
+    const Entry& e = it->second;
+    return e.instance && !e.instance->failed() && !e.failure && !e.restarting && fx.patch &&
+           e.pluginId == fx.plugin.id && e.isolation == fx.isolation &&
+           e.appliedState.starts_with("patch:");
+}
+
+Result<host::Instance::Notifications> InstancePool::applyPatch(Id id, const model::FxInstance& fx,
+                                                               const Session& session) {
+    if (!patchable(id, fx))
+        return Error("engine.patch_unpatchable", id.str() + " needs a compile for its patch",
+                     "/fx/" + id.str(), "reload the session");
+    Entry& e = instances_[id];
+    const auto* stored = session.fx.entry(id);
+    const std::shared_ptr<const model::FxInstance> own =
+        stored && stored->value.get() == &fx ? stored->value : nullptr;
+    if (!own || e.appliedFx != own) {
+        auto desired = "patch:" + json::writeCompact(*fx.patch);
+        ++patchSerializations_;
+        if (desired != e.appliedState) {
+            SUPPLE_TRY(e.instance->setPatch(std::string_view(desired).substr(6),  // "patch:"
+                                            CLAP_SUPPLE_SET_REPLACE));
+            e.appliedState = std::move(desired);
+        }
+    }
+    e.appliedFx = own;
+    return service(id);
+}
+
 void InstancePool::prune(const Session& session, std::uint64_t liveGeneration) {
     for (auto it = instances_.begin(); it != instances_.end();)
         it = session.fx.contains(it->first) && !model::frozenOwner(session, it->first)
@@ -451,6 +482,11 @@ void InstancePool::acknowledgeOutputState(Id id, const std::string& hash) {
         it->second.appliedState = "blob:" + hash;
         it->second.appliedFx.reset();
     }
+}
+
+bool InstancePool::anyAutomationCleared() const {
+    return std::any_of(instances_.begin(), instances_.end(),
+                       [](const auto& entry) { return !entry.second.clearedAutomation.empty(); });
 }
 
 void InstancePool::resetAutomation(Id id) {
