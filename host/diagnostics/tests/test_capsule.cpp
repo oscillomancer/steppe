@@ -6,6 +6,7 @@
 // on macOS, and native CI covers them.
 #include <doctest/doctest.h>
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -14,6 +15,7 @@
 #include "../src/capsule.h"
 #include "../src/trace.h"
 #if !defined(_WIN32)
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
@@ -412,11 +414,15 @@ TEST_CASE("a capsule crosses the channel intact, however large") {
 TEST_CASE("an empty marker, a stranger and a short capsule are all refused") {
     const Packet base = terminalPacket();
     {  // The worker had nothing to send: a packet with no bytes.
+        // One line per block, so a run that hangs shows which block it was in.
+        std::fprintf(stderr, "capsule refusal block 1: an empty packet\n");
         Pair pair;
         REQUIRE(sendCapsule(pair.fds[0], base, nullptr, soon()));
         CHECK_FALSE(receiveCapsule(pair.fds[1], base, soon()));
     }
     {  // Another incident's capsule is not ours.
+        // One line per block, so a run that hangs shows which block it was in.
+        std::fprintf(stderr, "capsule refusal block 2: another incident's capsule\n");
         Pair pair;
         auto data = fresh();
         addThread(*data, Role::Fault, Missing::None, Stop::End, {0x1000});
@@ -426,6 +432,8 @@ TEST_CASE("an empty marker, a stranger and a short capsule are all refused") {
         CHECK_FALSE(receiveCapsule(pair.fds[1], base, soon()));
     }
     {  // An oversized byte count is refused before anything is allocated.
+        // One line per block, so a run that hangs shows which block it was in.
+        std::fprintf(stderr, "capsule refusal block 3: an oversized byte count\n");
         Pair pair;
         Packet huge = base;
         huge.kind = Message::Trace;
@@ -434,6 +442,8 @@ TEST_CASE("an empty marker, a stranger and a short capsule are all refused") {
         CHECK_FALSE(receiveCapsule(pair.fds[1], base, soon()));
     }
     {  // The worker dies mid-capsule: the supervisor gets end of file, not a hang.
+        // One line per block, so a run that hangs shows which block it was in.
+        std::fprintf(stderr, "capsule refusal block 4: a worker that dies mid-capsule\n");
         Pair pair;
         Packet cut = base;
         cut.kind = Message::Trace;
@@ -445,15 +455,23 @@ TEST_CASE("an empty marker, a stranger and a short capsule are all refused") {
         CHECK_FALSE(receiveCapsule(pair.fds[1], base, soon()));
     }
     {  // A silent worker: the receiver gives up at its deadline instead of waiting.
+        // One line per block, so a run that hangs shows which block it was in.
+        std::fprintf(stderr, "capsule refusal block 5: a silent worker\n");
         Pair pair;
         CHECK_FALSE(receiveCapsule(pair.fds[1], base, monotonicNanoseconds() + 20'000'000ULL));
     }
     {  // A deadline already spent: nothing is read, and a full buffer is not waited on.
+        // One line per block, so a run that hangs shows which block it was in.
+        std::fprintf(stderr, "capsule refusal block 6: a full buffer and a spent deadline\n");
         Pair pair;
         auto data = fresh();
         addThread(*data, Role::Fault, Missing::None, Stop::End, {0x1000});
         CHECK_FALSE(receiveCapsule(pair.fds[1], base, 1));
         std::vector<char> filler(4096, 'x');
+        // Non-blocking for real, not only per call: where the kernel reads the socket's own
+        // flag to decide whether to wait for buffer space, MSG_DONTWAIT alone would block
+        // on the first send that finds the socket full.
+        REQUIRE(::fcntl(pair.fds[0], F_SETFL, ::fcntl(pair.fds[0], F_GETFL) | O_NONBLOCK) == 0);
         // Bounded by construction: a socket buffer is never 256 MiB, so if a platform's
         // sends never report "full" this stops anyway and the check below fails, rather
         // than the test running on until the harness gives up.
@@ -462,6 +480,29 @@ TEST_CASE("an empty marker, a stranger and a short capsule are all refused") {
              ++sends) {
         }
         CHECK_FALSE(sendCapsule(pair.fds[0], base, data.get(), 1));
+    }
+}
+
+TEST_CASE("a send or receive leaves the descriptor's blocking mode as it found it") {
+    const Packet base = terminalPacket();
+    auto data = fresh();
+    addThread(*data, Role::Fault, Missing::None, Stop::End, {0x1000});
+    for (const bool startNonBlocking : {false, true}) {
+        Pair pair;
+        for (int fd : pair.fds) {
+            const int flags = ::fcntl(fd, F_GETFL);
+            REQUIRE(::fcntl(fd, F_SETFL,
+                            startNonBlocking ? flags | O_NONBLOCK : flags & ~O_NONBLOCK) == 0);
+        }
+        const int before = ::fcntl(pair.fds[0], F_GETFL) & O_NONBLOCK;
+        REQUIRE(sendCapsule(pair.fds[0], base, data.get(), soon()));
+        CHECK((::fcntl(pair.fds[0], F_GETFL) & O_NONBLOCK) == before);
+        CHECK(receiveCapsule(pair.fds[1], base, soon()));
+        CHECK((::fcntl(pair.fds[1], F_GETFL) & O_NONBLOCK) == before);
+        // And while it runs, a blocking descriptor does not make a full socket wait: the
+        // refusal comes from the deadline. Checked on the receive side, which is empty.
+        CHECK_FALSE(receiveCapsule(pair.fds[1], base, monotonicNanoseconds() + 10'000'000ULL));
+        CHECK((::fcntl(pair.fds[1], F_GETFL) & O_NONBLOCK) == before);
     }
 }
 #endif

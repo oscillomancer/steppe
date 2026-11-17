@@ -21,11 +21,12 @@ TableImage copyOut() {
 }  // namespace
 
 TEST_CASE("the table has the documented size and a stable layout") {
-    CHECK(kTableBytes == 18464);
+    CHECK(kTableBytes == 25632);
     CHECK(sizeof(Table) == sizeof(TableImage));
+    CHECK(kMaxThreadSlots == 256);
     CHECK(offsetof(TableImage, threads) == 32);
-    CHECK(offsetof(TableImage, instances) == 32 + 64 * 16);
-    CHECK(offsetof(TableImage, commands) == 32 + (64 + 1024) * 16);
+    CHECK(offsetof(TableImage, instances) == 32 + 256 * 32);
+    CHECK(offsetof(TableImage, commands) == 32 + 256 * 32 + 1024 * 16);
 }
 
 TEST_CASE("an untouched or foreign image is not valid") {
@@ -86,25 +87,33 @@ TEST_CASE("a registered thread is found by its id until it exits") {
     CHECK(findThread(copyOut(), id).role == ThreadRole::None);
 }
 
-TEST_CASE("the table holds 64 threads and counts the ones it cannot hold") {
+TEST_CASE("the table holds 256 threads and counts the ones it cannot hold") {
     const std::uint32_t before = table().header.threadsDropped.load();
+    static std::atomic<int> hooked;
+    hooked = 0;
+    setThreadHook([]() noexcept { hooked.fetch_add(1); });
     std::atomic<bool> release{false};
     std::atomic<int> started{0}, accepted{0};
     std::vector<std::thread> threads;
-    constexpr int kThreads = 70;
+    constexpr int kThreads = static_cast<int>(kMaxThreadSlots) + 6;
     for (int i = 0; i < kThreads; ++i)
         threads.emplace_back([&] {
             if (registerThread(ThreadRole::AudioBackground, 1)) accepted.fetch_add(1);
+            // A second call on a thread without a slot retries but is not counted again.
+            (void)registerThread(ThreadRole::AudioBackground, 1);
             started.fetch_add(1);
             while (!release.load()) std::this_thread::yield();
         });
     while (started.load() < kThreads) std::this_thread::yield();
+    setThreadHook(nullptr);
     const auto image = copyOut();
     std::size_t used = 0;
     for (const auto& slot : image.threads) used += slot.id != 0 ? 1 : 0;
     CHECK(used == kMaxThreadSlots);
     CHECK(accepted.load() == static_cast<int>(kMaxThreadSlots));
     CHECK(table().header.threadsDropped.load() - before == kThreads - kMaxThreadSlots);
+    // The hook ran for every thread, the six without a slot included.
+    CHECK(hooked.load() == kThreads);
     release.store(true);
     for (auto& thread : threads) thread.join();
     std::size_t left = 0;
@@ -112,7 +121,65 @@ TEST_CASE("the table holds 64 threads and counts the ones it cannot hold") {
     CHECK(left == 0);
 }
 
-TEST_CASE("a hook runs once for each newly registered thread, after its slot is claimed") {
+TEST_CASE("a slot records the thread's stack, and an exited thread leaves none behind") {
+    std::uint64_t id = 0, local = 0;
+    std::atomic<bool> release{false}, ready{false};
+    std::thread worker([&] {
+        id = currentThreadId();
+        int marker = 0;
+        local = reinterpret_cast<std::uint64_t>(&marker);
+        (void)registerThread(ThreadRole::Model);
+        ready.store(true);
+        while (!release.load()) std::this_thread::yield();
+    });
+    while (!ready.load()) std::this_thread::yield();
+    const auto found = findThread(copyOut(), id);
+    CHECK(found.role == ThreadRole::Model);
+    CHECK(found.stackLow != 0);
+    CHECK(found.stackLow < found.stackHigh);
+    CHECK(local >= found.stackLow);  // a local of the thread lies inside what it recorded
+    CHECK(local < found.stackHigh);
+    CHECK(findThread(id).stackLow == found.stackLow);
+    release.store(true);
+    worker.join();
+    // The free slot is wiped whole.
+    for (const auto& slot : copyOut().threads)
+        if (slot.id == 0) CHECK((slot.info | slot.stackLow | slot.stackHigh) == 0);
+}
+
+TEST_CASE("a slot being released cannot be claimed over, so the next thread keeps its role") {
+    // Thread A leaves a slot and pauses between the two steps of the release; thread B
+    // registers meanwhile. B must not end up in A's slot half-wiped: whatever B claims,
+    // it must still carry its own role once A has finished.
+    static std::atomic<int> state{0};  // 0 idle, 1 A is releasing, 2 B has registered
+    state = 0;
+    detail::setReleaseHook([]() noexcept {
+        state.store(1);
+        while (state.load() != 2) std::this_thread::yield();
+    });
+    std::thread a([] { (void)registerThread(ThreadRole::Recorder, 1); });
+    std::uint64_t idB = 0;
+    std::atomic<bool> release{false}, bRegistered{false};
+    std::thread b([&] {
+        while (state.load() != 1) std::this_thread::yield();
+        idB = currentThreadId();
+        (void)registerThread(ThreadRole::AudioLive, 2);
+        bRegistered.store(true);
+        state.store(2);
+        while (!release.load()) std::this_thread::yield();
+    });
+    a.join();  // A returns once B has registered and its release has finished
+    detail::setReleaseHook(nullptr);
+    CHECK(bRegistered.load());
+    const auto found = findThread(copyOut(), idB);
+    CHECK(found.role == ThreadRole::AudioLive);
+    CHECK(found.ordinal == 2);
+    CHECK(found.stackLow != 0);  // its stack bounds were not wiped either
+    release.store(true);
+    b.join();
+}
+
+TEST_CASE("a hook runs once for each registering thread, after its slot is claimed") {
     static std::atomic<int> calls{0};
     static std::atomic<std::uint64_t> seen{0};
     setThreadHook([]() noexcept {

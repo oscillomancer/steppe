@@ -217,7 +217,10 @@ its own frame for terminate and abort, which carry none. The worker keeps to its
 second: thread reads end at 400 ms; listing dyld's images and finding the module of each
 frame end at 450 ms (after that, frames carry no identity, which the parser accepts); the
 capsule is sent by 500 ms (a `Message::Trace` packet carrying the byte count, then the
-bytes, each wait bounded) and the wait for the acknowledgement gets the rest. An image's
+bytes, each wait bounded; both ends put the descriptor in non-blocking mode for the
+transfer and restore its flags, because `MSG_DONTWAIT` alone does not make every kernel
+refuse to wait for buffer space, and a send to a supervisor that is not reading must end
+at its deadline) and the wait for the acknowledgement gets the rest. An image's
 header is read once, and what it said is kept, so a stack of addresses outside every image
 cannot make the handler read the same headers repeatedly. The supervisor reads the
 capsule for 600 ms from when it receives the terminal packet, and the worker takes its own

@@ -28,7 +28,11 @@ namespace supple::diagctx {
 
 constexpr std::uint32_t kTableMagic = 0x58435453;  // "STCX"
 constexpr std::uint32_t kTableVersion = 1;
-constexpr std::size_t kMaxThreadSlots = 64, kMaxInstances = 1024, kMaxCommandEntries = 64;
+// Slots are sized for the real maximum of owned threads: the fixed ones (model, render,
+// MIDI output, recorder, one offline render), a live pool and a background pool of up to
+// 64 helpers each, and an export's own pool of up to 63. A machine with 32 CPUs runs 92 of
+// them while it exports; 256 leaves room for a second concurrent render.
+constexpr std::size_t kMaxThreadSlots = 256, kMaxInstances = 1024, kMaxCommandEntries = 64;
 
 // What an owned thread does. The values are the report's contract (closed set, parsed
 // strictly); None is an unclaimed slot. Threads nobody registered (a driver's device
@@ -57,11 +61,15 @@ struct TableT {
         W64 commandHead;
     };
     // A registered thread. `id` is the operating system's id for the thread (Linux and
-    // Windows thread id, macOS Mach thread port name) and is written last, so a slot
-    // with id 0 is free or still being claimed. `info` packs role (bits 0-7) and an
-    // ordinal (bits 8-23) for numbered workers such as audio-live-2.
+    // Windows thread id, macOS Mach thread port name) and is written last when a slot is
+    // claimed and cleared last when it is released, so a slot with id 0 is free or still
+    // being claimed and everything else in it belongs to `id`. `info` packs role (bits
+    // 0-7) and an ordinal (bits 8-23) for numbered workers such as audio-live-2.
+    // `stackLow` and `stackHigh` are the thread's stack, recorded while cold, so that a
+    // stack address finds the thread without the mapping list; 0 when the system would
+    // not say.
     struct ThreadSlot {
-        W64 id, info;
+        W64 id, info, stackLow, stackHigh;
     };
     // Two words per instance, each with one writer: `audio` for the audio-thread entries
     // and `main` for everything else (step 5b).
@@ -83,10 +91,10 @@ using TableImage = TableT<std::uint32_t, std::uint64_t>;
 static_assert(std::atomic<std::uint32_t>::is_always_lock_free &&
               std::atomic<std::uint64_t>::is_always_lock_free);
 static_assert(sizeof(Table) == sizeof(TableImage) && alignof(Table) == alignof(TableImage));
-static_assert(sizeof(Table::Header) == 32 && sizeof(Table::ThreadSlot) == 16 &&
+static_assert(sizeof(Table::Header) == 32 && sizeof(Table::ThreadSlot) == 32 &&
               sizeof(Table::InstanceCell) == 16 && sizeof(Table::CommandEntry) == 16);
 static_assert(sizeof(TableImage) ==
-              32 + 16 * (kMaxThreadSlots + kMaxInstances + kMaxCommandEntries));
+              32 + 32 * kMaxThreadSlots + 16 * (kMaxInstances + kMaxCommandEntries));
 static_assert(std::is_trivially_copyable_v<TableImage> && std::is_standard_layout_v<TableImage>);
 constexpr std::size_t kTableBytes = sizeof(TableImage);
 
@@ -98,10 +106,12 @@ void initTable() noexcept;
 // Whether a copy of a table is one this build wrote.
 bool imageValid(const TableImage& image) noexcept;
 
-// A slot's role and ordinal, None for a free slot or an out-of-range role.
+// A slot's role and ordinal, None for a free slot or an out-of-range role. `stackLow` and
+// `stackHigh` are the stack the thread recorded, 0 and 0 when it recorded none.
 struct SlotInfo {
     ThreadRole role = ThreadRole::None;
     std::uint16_t ordinal = 0;
+    std::uint64_t stackLow = 0, stackHigh = 0;
 };
 SlotInfo slotInfo(std::uint64_t info) noexcept;
 // The slot of the thread with operating-system id `id`, in a copy of the table or in the
@@ -114,14 +124,24 @@ SlotInfo findThread(std::uint64_t id) noexcept;
 
 // Registers the calling thread; cold, owned threads only, never from an audio path.
 // Idempotent per thread (a second call keeps the first role). The slot is released when
-// the thread exits. False if the table is full (counted in `threadsDropped`) or the
-// thread id is unavailable.
+// the thread exits. False if the table is full (counted once per thread in
+// `threadsDropped`) or the thread id is unavailable. The thread hook runs once for the
+// thread either way, so a thread without a slot still gets its alternate stack.
 bool registerThread(ThreadRole role, std::uint16_t ordinal = 0) noexcept;
 // The id registerThread records for the calling thread, 0 if unavailable.
 std::uint64_t currentThreadId() noexcept;
-// Called once on each newly registered thread, after its slot is claimed; the diagnostics
-// library installs the alternate signal stack through it. Set while cold.
+// Called once on each thread that registers, after its slot is claimed (or found
+// unavailable); the diagnostics library installs the alternate signal stack through it.
+// Set while cold.
 using ThreadHook = void (*)() noexcept;
 void setThreadHook(ThreadHook hook) noexcept;
+
+namespace detail {
+// A test seam: called on a thread that is releasing its slot, after the first of the two
+// release steps and before the second. Null in production; costs one relaxed load at
+// thread exit.
+using ReleaseHook = void (*)() noexcept;
+void setReleaseHook(ReleaseHook hook) noexcept;
+}  // namespace detail
 
 }  // namespace supple::diagctx

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
+#include <fcntl.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <cerrno>
@@ -18,6 +19,29 @@ int noSignal() noexcept {
     return 0;
 #endif
 }
+// Puts a descriptor in non-blocking mode for the duration of a send or receive and puts
+// the flags back. MSG_DONTWAIT alone is not enough everywhere: where the kernel looks at
+// the socket's own non-blocking state to decide whether to wait for buffer space, a
+// full socket would block the caller past its deadline, and the caller is a crash
+// handler. fcntl is async-signal-safe. Failure to set the flag is not fatal: the
+// per-call flag still applies where it works.
+class NonBlocking {
+  public:
+    explicit NonBlocking(int fd) noexcept : fd_(fd) {
+        const int flags = ::fcntl(fd, F_GETFL);
+        if (flags >= 0 && !(flags & O_NONBLOCK) && ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0)
+            restore_ = flags;
+    }
+    ~NonBlocking() {
+        if (restore_ >= 0) (void)::fcntl(fd_, F_SETFL, restore_);
+    }
+    NonBlocking(const NonBlocking&) = delete;
+    NonBlocking& operator=(const NonBlocking&) = delete;
+
+  private:
+    int fd_;
+    int restore_ = -1;  // the flags to put back; -1 when nothing was changed
+};
 // Waits until `fd` is ready for `events`, at most until `deadline`, which must be a real
 // time on the monotonic clock. False at the deadline or on a hard error.
 bool waitFor(int fd, short events, std::uint64_t deadline) noexcept {
@@ -130,6 +154,7 @@ void walkStack(const StackReader& reader, const CapsuleRegs& regs, bool arm64,
 
 bool sendCapsule(int fd, const Packet& base, const CapsuleData* data,
                  std::uint64_t deadline) noexcept {
+    const NonBlocking nonBlocking(fd);
 #if defined(SO_NOSIGPIPE)
     const int on = 1;
     (void)::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on));
@@ -155,6 +180,7 @@ bool sendCapsule(int fd, const Packet& base, const CapsuleData* data,
 
 std::optional<std::vector<std::uint8_t>> receiveCapsule(int fd, const Packet& terminal,
                                                         std::uint64_t deadline) {
+    const NonBlocking nonBlocking(fd);
     Packet packet;
     if (!receiveAll(fd, &packet, sizeof(packet), deadline)) return std::nullopt;
     if (packet.magic != terminal.magic || packet.version != terminal.version ||

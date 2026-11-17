@@ -27,16 +27,55 @@ namespace {
 // binary.
 alignas(4096) Table gTable;
 std::atomic<ThreadHook> gHook{nullptr};
+std::atomic<detail::ReleaseHook> gReleaseHook{nullptr};
+
+// The calling thread's stack as the system reports it, [low, high); 0, 0 when it will not
+// say. Cold only: some systems allocate or read files to answer.
+void stackBounds(std::uint64_t& low, std::uint64_t& high) noexcept {
+    low = high = 0;
+#if defined(_WIN32)
+    ULONG_PTR l = 0, h = 0;
+    ::GetCurrentThreadStackLimits(&l, &h);
+    low = l;
+    high = h;
+#elif defined(__linux__)
+    pthread_attr_t attributes;
+    if (::pthread_getattr_np(::pthread_self(), &attributes) != 0) return;
+    void* base = nullptr;
+    std::size_t size = 0;
+    if (::pthread_attr_getstack(&attributes, &base, &size) == 0 && base && size) {
+        low = reinterpret_cast<std::uint64_t>(base);
+        high = low + size;
+    }
+    ::pthread_attr_destroy(&attributes);
+#elif defined(__APPLE__)
+    const auto top = reinterpret_cast<std::uint64_t>(::pthread_get_stackaddr_np(::pthread_self()));
+    const std::size_t size = ::pthread_get_stacksize_np(::pthread_self());
+    if (top && size && top >= size) {
+        high = top;
+        low = top - size;
+    }
+#endif
+}
 
 // Releases the thread's slot when the thread ends, so a later thread that reuses the id
 // is not labelled with this one's role.
 struct Registration {
     int slot = -1;
+    bool counted = false;  // a full table was counted for this thread
+    bool hooked = false;   // the thread hook has run for this thread
     ~Registration() {
         if (slot < 0) return;
         auto& entry = gTable.threads[slot];
-        entry.id.store(0, std::memory_order_release);
+        // Contents first, id last: the slot is claimable only once its id is 0, and the
+        // claimant's CAS acquires that release, so nothing written here can land after
+        // the claimant's own stores. (The other order let a late wipe erase the next
+        // thread's role.)
         entry.info.store(0, std::memory_order_relaxed);
+        entry.stackLow.store(0, std::memory_order_relaxed);
+        entry.stackHigh.store(0, std::memory_order_relaxed);
+        if (const auto hook = gReleaseHook.load(std::memory_order_relaxed)) hook();
+        entry.id.store(0, std::memory_order_release);
     }
 };
 }  // namespace
@@ -87,16 +126,25 @@ SlotInfo slotInfo(std::uint64_t info) noexcept {
 
 SlotInfo findThread(const TableImage& image, std::uint64_t id) noexcept {
     if (id == 0 || id == kClaiming) return {};
-    for (const auto& slot : image.threads)
-        if (slot.id == id) return slotInfo(slot.info);
+    for (const auto& slot : image.threads) {
+        if (slot.id != id) continue;
+        SlotInfo found = slotInfo(slot.info);
+        found.stackLow = slot.stackLow;
+        found.stackHigh = slot.stackHigh;
+        return found;
+    }
     return {};
 }
 
 SlotInfo findThread(std::uint64_t id) noexcept {
     if (id == 0 || id == kClaiming) return {};
-    for (const auto& slot : gTable.threads)
-        if (slot.id.load(std::memory_order_acquire) == id)
-            return slotInfo(slot.info.load(std::memory_order_relaxed));
+    for (const auto& slot : gTable.threads) {
+        if (slot.id.load(std::memory_order_acquire) != id) continue;
+        SlotInfo found = slotInfo(slot.info.load(std::memory_order_relaxed));
+        found.stackLow = slot.stackLow.load(std::memory_order_relaxed);
+        found.stackHigh = slot.stackHigh.load(std::memory_order_relaxed);
+        return found;
+    }
     return {};
 }
 
@@ -120,28 +168,49 @@ bool registerThread(ThreadRole role, std::uint16_t ordinal) noexcept {
     if (mine.slot >= 0) return true;
     initTable();
     const std::uint64_t id = currentThreadId();
-    if (id == 0) return false;
-    const std::uint64_t info = static_cast<std::uint64_t>(role) | std::uint64_t{ordinal} << 8;
-    for (std::size_t i = 0; i < kMaxThreadSlots; ++i) {
-        auto& slot = gTable.threads[i];
-        // Claim a free slot (id 0). The role goes in before the id is published, so a
-        // reader never pairs a new id with an old role.
-        std::uint64_t expected = 0;
-        if (slot.id.load(std::memory_order_relaxed) != 0) continue;
-        // Reserve with a sentinel nobody uses as an id, then publish.
-        if (!slot.id.compare_exchange_strong(expected, kClaiming, std::memory_order_acquire,
-                                             std::memory_order_relaxed))
-            continue;
-        slot.info.store(info, std::memory_order_relaxed);
-        slot.id.store(id, std::memory_order_release);
-        mine.slot = static_cast<int>(i);
-        if (const ThreadHook hook = gHook.load(std::memory_order_acquire)) hook();
-        return true;
+    bool claimed = false;
+    if (id != 0) {
+        const std::uint64_t info =
+            static_cast<std::uint64_t>(role) | std::uint64_t{ordinal} << 8;
+        std::uint64_t low = 0, high = 0;
+        stackBounds(low, high);
+        for (std::size_t i = 0; i < kMaxThreadSlots && !claimed; ++i) {
+            auto& slot = gTable.threads[i];
+            // Claim a free slot (id 0). Everything else goes in before the id is
+            // published, so a reader never pairs a new id with an old role.
+            std::uint64_t expected = 0;
+            if (slot.id.load(std::memory_order_relaxed) != 0) continue;
+            // Reserve with a sentinel nobody uses as an id, then publish.
+            if (!slot.id.compare_exchange_strong(expected, kClaiming, std::memory_order_acquire,
+                                                 std::memory_order_relaxed))
+                continue;
+            slot.info.store(info, std::memory_order_relaxed);
+            slot.stackLow.store(low, std::memory_order_relaxed);
+            slot.stackHigh.store(high, std::memory_order_relaxed);
+            slot.id.store(id, std::memory_order_release);
+            mine.slot = static_cast<int>(i);
+            claimed = true;
+        }
+        if (!claimed && !mine.counted) {
+            mine.counted = true;
+            gTable.header.threadsDropped.fetch_add(1, std::memory_order_relaxed);
+        }
     }
-    gTable.header.threadsDropped.fetch_add(1, std::memory_order_relaxed);
-    return false;
+    // The hook does not depend on the slot: a thread the table could not hold still gets
+    // the alternate stack, so a stack overflow on it is still reported.
+    if (!mine.hooked) {
+        mine.hooked = true;
+        if (const ThreadHook hook = gHook.load(std::memory_order_acquire)) hook();
+    }
+    return claimed;
 }
 
 void setThreadHook(ThreadHook hook) noexcept { gHook.store(hook, std::memory_order_release); }
+
+namespace detail {
+void setReleaseHook(ReleaseHook hook) noexcept {
+    gReleaseHook.store(hook, std::memory_order_release);
+}
+}  // namespace detail
 
 }  // namespace supple::diagctx
