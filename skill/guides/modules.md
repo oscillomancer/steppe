@@ -240,7 +240,7 @@ The runtime calls hooks; scripts do not call them. `sampleRate()`,
 `playing`, `tempo`, `beats`, `barStart`, `timeSigNumerator`,
 `timeSigDenominator` and `offset`, the frames from where they were read to
 the block's first frame. `transport()` is read at the block's start
-(offset 0), as it always was; `gridTransport()` at the start of the block's
+(offset 0), and computed, as it always was; `gridTransport()` at the start of the block's
 grid interval (offset 0 unless a host block split the interval).
 `offline()` exists; making sound depend on it defeats
 the same-render guarantee.

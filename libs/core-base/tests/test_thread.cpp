@@ -1,16 +1,22 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Supple Audio
 #include <doctest/doctest.h>
+#include <limits>
 
 #if !defined(_WIN32)
 #include <pthread.h>
 #endif
 #if defined(__linux__)
 #include <sys/resource.h>
+#include <unistd.h>
 #endif
 
 #include <algorithm>
 #include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <thread>
@@ -160,3 +166,66 @@ TEST_CASE("macOS QoS is applied and verified by the owning thread") {
     CHECK_MESSAGE(normal, (normal ? "" : normal.error().toString()));
 }
 #endif
+
+TEST_CASE("page faults are counted for a thread on Linux and for the process everywhere") {
+    // Memory nothing has touched yet: each page's first write faults.
+    constexpr std::size_t kPages = 256, kStride = 4096;
+    const auto touch = [] {
+        std::unique_ptr<char[]> fresh(new char[kPages * kStride]);
+        auto* bytes = reinterpret_cast<volatile char*>(fresh.get());
+        for (std::size_t i = 0; i < kPages * kStride; i += kStride) bytes[i] = 1;
+    };
+    const supple::PageFaults before = supple::processPageFaults();
+    std::int64_t seen = 0;
+#if defined(__linux__)
+    std::int64_t own = 0;
+#endif
+    std::optional<supple::PageFaults> first, last;
+    std::thread worker([&] {
+#if defined(__linux__)
+        own = static_cast<std::int64_t>(::gettid());
+#endif
+        seen = supple::kernelThreadId(supple::currentThreadHandle());
+        first = supple::threadPageFaults(seen);
+        touch();
+        last = supple::threadPageFaults(seen);
+    });
+    const std::int64_t outside = supple::kernelThreadId(worker.native_handle());
+    worker.join();
+    const supple::PageFaults after = supple::processPageFaults();
+    // macOS maps fresh anonymous memory in clusters (and Apple silicon pages
+    // are 16 KB), so touching kPages pages may count only a few faults there:
+    // native CI saw 2. Its count only has to be the process's and not fall.
+#if defined(__APPLE__)
+    CHECK(after.minor + after.major >= before.minor + before.major);
+#else
+    CHECK(after.minor + std::max<std::int64_t>(after.major, 0) >=
+          before.minor + std::max<std::int64_t>(before.major, 0) + kPages / 2);
+#endif
+#if defined(__linux__)
+    CHECK(seen == own);
+    CHECK(outside == own);
+    REQUIRE(first);
+    REQUIRE(last);
+    CHECK(last->minor >= first->minor + static_cast<std::int64_t>(kPages / 2));
+    // No such thread (above any pid_max). A joined thread's id may still read
+    // until the kernel releases it, so that is not checked.
+    CHECK_FALSE(supple::threadPageFaults(std::int64_t{1} << 40));
+#else
+    CHECK(seen == 0);
+    CHECK(outside == 0);
+    CHECK_FALSE(first);
+#endif
+}
+
+TEST_CASE("macOS task counts that reached their limit are saturated, not counts") {
+    // Round 23: TASK_EVENTS_INFO's 32-bit counts stop at INT32_MAX, which gave
+    // negative deltas; the conversion says so instead.
+    const auto normal = supple::pageFaultsFromTaskCounts(100, 5);
+    CHECK(normal.minor == 95);
+    CHECK(normal.major == 5);
+    CHECK_FALSE(normal.saturated);
+    constexpr auto kLimit = std::numeric_limits<std::int32_t>::max();
+    CHECK(supple::pageFaultsFromTaskCounts(kLimit, 5).saturated);
+    CHECK(supple::pageFaultsFromTaskCounts(100, kLimit).saturated);
+}

@@ -99,7 +99,34 @@ Scheduling and isolation (B1 only, engine.md §2.2, ADR-0026):
 
 A background scheduling fallback is a warning, so it invalidates the run.
 
-B1 run schema **`supple.capacity-run/2.2`** retains the 2.1 fields and adds
+B1 run schema **`supple.capacity-run/2.5`** adds `cpu_idle_latency`, the
+20 µs idle-latency request at the interval's end (`active`, `requested`,
+`automatic`: held because a bridged plug-in plays live, ADR-0086, and
+`errno`, null unless refused), and on Linux `thp_inherited` (the process
+already had its huge-page setting, ADR-0084). Schema 2.4 added page faults over the
+interval: `audio_page_faults` as `engine.status` counts them (`scope`, `minor`,
+`major`, `threads`; on Linux the callback's and the live helpers'),
+`thp_opt_out` (`advised_only`, `all` or `off`, ADR-0084), and on Linux each
+listed thread's `minor_faults` and `major_faults` (a thread that took any is
+listed). `minor_faults` and `major_faults` at the top level stay the whole
+process's. Schema 2.3 added `bridge_timing`, the
+interval's live bridged calls and overrun classes as in
+`engine.status.bridge_timing` (ADR-0081), and on Linux `threads`: for each
+real-time thread of the bench and its bridge processes (and any other thread
+that waited over 1 ms for a CPU), the kernel's view over the interval: `policy`
+and kernel `prio`, `cpu_ms`, `run_delay_ms` (runnable but waiting for a CPU,
+from `/proc/<tid>/schedstat`), `slices`, `voluntary` and `involuntary` switches
+and `migrations`. With `kernel.sched_schedstats=1` each thread's statistics
+are reset at the interval's start and it also reports `wait_max_ms` (the
+longest single wait runnable for a CPU), `wait_sum_ms`, `wait_count` and
+`exec_max_ms` (the longest run without a switch) over the interval. A
+thread whose `wait_max_ms` or `wait_sum_ms` exceeds the interval, which
+cannot be the interval's (one reset while it waited reported about the
+machine's uptime), has both null and `wait_stale: true`.
+`bridge_timing` also carries `wake_buckets` and `return_buckets`: how many
+answered live bridged calls took under 10, 20, 50, 100, 200, 500, 1000 and
+2000 µs, and at or over 2 ms, from post to the bridge seeing the call, and
+from the bridge finishing to the host seeing the answer. Schema 2.2 retains the 2.1 fields and adds
 `isolation`, the requested `background`, `background_priority` and
 `callback_priority`, and `scheduling`: the engine's applied policy per thread
 class (`callback`, `live`, `renderer`, `background`, each `policy` and

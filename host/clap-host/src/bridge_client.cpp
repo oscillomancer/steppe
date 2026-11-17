@@ -23,6 +23,7 @@ namespace supple::host {
 using namespace bridge;
 
 namespace {
+std::atomic<std::uint64_t> gRequests{0};  // bridgeRequests()
 
 std::mutex gBridgeMutex;
 std::filesystem::path gBridgeExecutable;
@@ -32,18 +33,53 @@ constexpr int kCreateTimeoutMs = 20000;
 // ThreadPolicy as kind << 8 | priority, read on audio threads.
 std::atomic<std::uint32_t> gBridgeAudioPolicy{static_cast<std::uint32_t>(ThreadPolicy::Kind::Normal)
                                               << 8};
+std::atomic<std::uint32_t> gLiveBridgeAudioPolicy{
+    static_cast<std::uint32_t>(ThreadPolicy::Kind::Normal) << 8};
+// The device period in nanoseconds while an engine runs (0: none).
+std::atomic<std::uint32_t> gLiveBridgePeriodNs{0};
+
+std::uint32_t pack(ThreadPolicy policy) {
+    return static_cast<std::uint32_t>(policy.kind) << 8 |
+           static_cast<std::uint32_t>(std::clamp(policy.priority, 0, 99));
+}
+ThreadPolicy unpack(std::uint32_t packed) SUPPLE_RT {
+    return {static_cast<ThreadPolicy::Kind>(packed >> 8), static_cast<int>(packed & 0xff)};
+}
 
 }  // namespace
 
 void setBridgeAudioPolicy(ThreadPolicy policy) {
-    gBridgeAudioPolicy.store(static_cast<std::uint32_t>(policy.kind) << 8 |
-                                 static_cast<std::uint32_t>(std::clamp(policy.priority, 0, 99)),
-                             std::memory_order_relaxed);
+    gBridgeAudioPolicy.store(pack(policy), std::memory_order_relaxed);
 }
 
 ThreadPolicy bridgeAudioPolicy() SUPPLE_RT {
-    const std::uint32_t packed = gBridgeAudioPolicy.load(std::memory_order_relaxed);
-    return {static_cast<ThreadPolicy::Kind>(packed >> 8), static_cast<int>(packed & 0xff)};
+    return unpack(gBridgeAudioPolicy.load(std::memory_order_relaxed));
+}
+
+namespace {
+std::atomic<int> gBridgeDeadlineMs{2000};
+}
+void setBridgeDeadlineMs(int ms) {
+    gBridgeDeadlineMs.store(std::max(ms, 1), std::memory_order_relaxed);
+}
+int bridgeDeadlineMs() SUPPLE_RT { return gBridgeDeadlineMs.load(std::memory_order_relaxed); }
+
+void setLiveBridgeAudioPolicy(ThreadPolicy policy, std::uint32_t periodFrames, double sampleRate) {
+    gLiveBridgeAudioPolicy.store(pack(policy), std::memory_order_relaxed);
+    // A duration, not frames: an oversampled plug-in runs at another rate
+    // than the device whose period this is.
+    const double ns = periodFrames && sampleRate > 0 ? periodFrames * 1e9 / sampleRate : 0.0;
+    gLiveBridgePeriodNs.store(static_cast<std::uint32_t>(std::clamp(
+                                  std::llround(ns), 0LL, static_cast<long long>(UINT32_MAX))),
+                              std::memory_order_relaxed);
+}
+
+ThreadPolicy liveBridgeAudioPolicy() SUPPLE_RT {
+    return unpack(gLiveBridgeAudioPolicy.load(std::memory_order_relaxed));
+}
+
+std::uint32_t liveBridgePeriodNs() SUPPLE_RT {
+    return gLiveBridgePeriodNs.load(std::memory_order_relaxed);
 }
 
 void setBridgeExecutable(std::filesystem::path path) {
@@ -125,7 +161,17 @@ Status BridgeProcess::initializeNotifications() {
     Writer w;
     w.u32(kVersion);
     auto subscribed = call(Op::SubscribeNotifications, 0, w, notificationTarget(notification_));
-    if (!subscribed) return subscribed.error();
+    if (!subscribed) {
+        Error error = std::move(subscribed).error();
+        if (error.code == "bridge.subscription" &&
+            error.message == "invalid notification subscription") {
+            // A bridge older than protocol 25 does not name the versions.
+            error.message = "invalid notification subscription (host protocol " +
+                            std::to_string(kVersion) + ")";
+            error.hint = "use matching host and bridge builds";
+        }
+        return error;
+    }
     notificationsReady_ = true;
     try {
         watcher_ = std::thread([this] { watch(); });
@@ -155,8 +201,8 @@ void BridgeProcess::subscribe(RemoteInstance& instance, MainThreadWake& wake) {
     if (instance.wake_ && --subscribers_[instance.wake_] == 0) subscribers_.erase(instance.wake_);
     instance.wake_ = &wake;
     ++subscribers_[&wake];
-    refreshNeeded_ = true;
-    wake.notify();  // retained pre-subscription work and already-failed processes
+    queueRefresh(&instance);  // its own snapshot: the others' are unaffected
+    wake.notify();            // retained pre-subscription work and already-failed processes
 }
 
 void BridgeProcess::unsubscribe(RemoteInstance& instance) {
@@ -213,15 +259,43 @@ void BridgeProcess::watch() {
     }
 }
 
-bool BridgeProcess::refresh() {
+bool BridgeProcess::refresh(const RemoteInstance* self) {
     const auto delivery = delivery_.load(std::memory_order_acquire);
-    if (!refreshNeeded_ && delivery == servedDelivery_) return false;
-    refreshNeeded_ = false;
-    servedDelivery_ = delivery;  // a delivery during pulls needs another pass
-    if (ackPending_.exchange(false, std::memory_order_acq_rel) && !failed())
-        (void)call(Op::AckNotifications, 0, Writer{});
-    for (auto* member : members_) member->pullSnapshot();
-    return true;
+    const bool delivered = delivery != servedDelivery_;
+    if (!refreshNeeded_ && !delivered && refreshOnly_.empty()) return false;
+    auto only = std::exchange(refreshOnly_, {});
+    bool all = std::exchange(refreshNeeded_, false);
+    if (delivered) {
+        servedDelivery_ = delivery;  // a delivery during pulls needs another pass
+        // The ACK names the instances with new captures: only those are
+        // pulled. A delivery with no ACK (a failure or death) names none.
+        bool named = false;
+        if (ackPending_.exchange(false, std::memory_order_acq_rel) && !failed()) {
+            if (auto reply = call(Op::AckNotifications, 0, Writer{})) {
+                Reader r(reply->data(), reply->size());
+                const std::uint32_t count = r.u32();
+                // The bridge names each of its instances at most once; a
+                // longer list is unreadable, and refreshes every member.
+                if (count <= members_.size() + kAckSlack) {
+                    for (std::uint32_t i = 0; i < count && r.ok(); ++i) {
+                        const std::uint32_t id = r.u32();
+                        for (auto* member : members_)
+                            if (member->instanceId_ == id &&
+                                std::find(only.begin(), only.end(), member) == only.end())
+                                only.push_back(member);
+                    }
+                    named = r.done();
+                }
+            }
+        }
+        all = all || !named;
+    }
+    if (all) {
+        for (auto* member : members_) member->pullSnapshot();
+        return true;
+    }
+    for (auto* member : only) member->pullSnapshot();  // queued, then named, each once
+    return std::find(only.begin(), only.end(), self) != only.end();
 }
 
 Result<std::shared_ptr<BridgeProcess>> createBridgeProcess() { return BridgeProcess::spawn(); }
@@ -273,7 +347,7 @@ Result<std::unique_ptr<RemoteInstance>> RemoteInstance::spawn(
         return Error("host.layout", "bridge layout exceeds 16 channels", {},
                      "select a layout with at most 16 main and key channels");
     self->process_->members_.push_back(self.get());
-    self->process_->refreshNeeded_ = true;
+    self->process_->queueRefresh(self.get());  // item D: not every member's
     return self;
 }
 
@@ -281,6 +355,7 @@ RemoteInstance::~RemoteInstance() {
     if (process_) {
         process_->unsubscribe(*this);
         std::erase(process_->members_, this);
+        std::erase(process_->refreshOnly_, this);
     }
     if (process_ && instanceId_ && !failed()) (void)call(Op::Destroy, Writer{}, -1, 2000);
     unmap();
@@ -309,6 +384,14 @@ void RemoteInstance::unmap() {
     signals_.clear();
     map_ = nullptr;
     hdr_ = nullptr;
+    // A new region starts with nothing outstanding (its sequence restarts),
+    // kept or carried.
+    outstanding_ = 0;
+    pending_ = false;
+    startUnanswered_ = false;
+    lifecycle_ = 0;
+    carriedCount_ = 0;
+    lateSince_ = 0;
 }
 
 void BridgeProcess::killBridge() {
@@ -319,6 +402,8 @@ void BridgeProcess::killBridge() {
 // Main thread: observes exit without reaping the helper-owned leader.
 void BridgeProcess::reap() {
     if (pid_ <= 0) return;
+    // A live block may fail a hung bridge but never kills it (ADR-0081).
+    if (failed_.load() && failSignal_.load() == kHung && child_ && child_->alive()) killBridge();
     if (!child_ || child_->alive()) return;
     const int why = child_->exitStatus();
     pid_ = -1;
@@ -360,6 +445,7 @@ std::string RemoteInstance::failure() const { return process_->failure(); }
 Result<std::vector<std::uint8_t>> BridgeProcess::call(Op op, std::uint32_t instance,
                                                       const Writer& w, Resource fd, int timeoutMs) {
     std::lock_guard lock(requests_);
+    gRequests.fetch_add(1, std::memory_order_relaxed);
     if (failed()) {
         reap();
         return Error("host.bridge_failed", failure(), {}, "fx.restart re-creates it");
@@ -433,7 +519,7 @@ Result<std::vector<std::uint8_t>> RemoteInstance::call(Op op, const Writer& w, R
         case Op::EditorResize:
         case Op::EditorScale:
         case Op::EditorClose:
-            process_->refreshNeeded_ = true;
+            process_->queueRefresh(this);
             break;
         default:
             break;
@@ -791,7 +877,7 @@ void RemoteInstance::pullSnapshot() {
 }
 
 bool RemoteInstance::service(Instance::Notifications& notes, std::vector<std::string>& log) {
-    if (!process_->refresh() && !wake_) pendingWork_ |= pullService();
+    if (!process_->refresh(this) && !wake_) pendingWork_ |= pullService();
     auto pending = std::exchange(pendingNotes_, {});
     if (!mergeNotifications(notes, pending)) {
         notes.restartError =
@@ -805,7 +891,7 @@ bool RemoteInstance::service(Instance::Notifications& notes, std::vector<std::st
 }
 
 Instance::IdleOutputs RemoteInstance::takeIdleOutputs() {
-    if (!process_->refresh() && !wake_) mergeIdleOutputs(pendingIdle_, pullIdleOutputs());
+    if (!process_->refresh(this) && !wake_) mergeIdleOutputs(pendingIdle_, pullIdleOutputs());
     return std::exchange(pendingIdle_, {});
 }
 
@@ -815,31 +901,117 @@ Instance::EditorRequests RemoteInstance::editorRequests() {
         q.closed = true;
         return q;
     }
-    if (!process_->refresh() && !wake_) mergeEditorRequests(pendingEditor_, pullEditorRequests());
+    if (!process_->refresh(this) && !wake_)
+        mergeEditorRequests(pendingEditor_, pullEditorRequests());
     return std::exchange(pendingEditor_, {});
 }
 
 // --- data plane (audio thread) ----------------------------------------------------------
 
-bool RemoteInstance::command(Cmd cmd) SUPPLE_RT {
-    if (!hdr_ || process_->failed()) return false;
-    // The sanctioned exception to the audio thread's no-syscall rule
-    // (ADR-0013): waking the bridge and waiting for it, with a deadline.
-    rt::ScopedSanctionedSyscall syscalls;
-    hdr_->cmd = static_cast<std::uint32_t>(cmd);
-    const std::uint32_t req = ++seq_;
-    hdr_->request.store(req, std::memory_order_release);
-#if defined(__linux__)
-    futexWake(hdr_->request);
-#else
-    signals_.wake(hdr_->request);
-#endif
+namespace {
+thread_local std::int64_t tLiveDeadline = 0;             // ADR-0081; 0: none
+thread_local LiveBridgeWaiters* tLiveWaiters = nullptr;  // ADR-0085
+std::atomic<std::uint64_t> gLateCalls{0};
+
+// Bridged calls' timing (BridgeTiming), live and background apart.
+struct TimingCounters {
+    std::atomic<std::uint64_t> calls{0}, late{0}, pastDeadline{0}, spun{0};
+    std::atomic<std::uint64_t> settles{0}, lateSettles{0};
+    std::atomic<std::int64_t> waitMax{0}, waitSum{0}, wakeMax{0}, wakeSum{0};
+    std::atomic<std::int64_t> workMax{0}, workSum{0}, returnMax{0}, returnSum{0};
+    std::atomic<std::uint64_t> wakesOver200us{0}, wakesOver1ms{0}, bridgeCpus{0};
+    std::atomic<std::uint64_t> classMismatches{0};
+    std::atomic<std::uint32_t> migrations{0};
+    std::array<std::atomic<std::uint64_t>, 9> wakeBuckets{}, returnBuckets{};
+};
+TimingCounters gTiming[2];  // 0: background, 1: live
+
+void raise(std::atomic<std::int64_t>& to, std::int64_t value) SUPPLE_RT {
+    std::int64_t now = to.load(std::memory_order_relaxed);
+    while (value > now && !to.compare_exchange_weak(now, value, std::memory_order_relaxed)) {
+    }
+}
+void add(std::atomic<std::int64_t>& max, std::atomic<std::int64_t>& sum,
+         std::int64_t value) SUPPLE_RT {
+    value = std::max<std::int64_t>(value, 0);
+    raise(max, value);
+    sum.fetch_add(value, std::memory_order_relaxed);
+}
+// Counts a duration under the first of BridgeTiming::kTimingBucketsUs it is
+// below, or in the last bucket.
+void bucket(std::array<std::atomic<std::uint64_t>, 9>& buckets, std::int64_t ns) SUPPLE_RT {
+    std::size_t b = 0;
+    while (b < BridgeTiming::kTimingBucketsUs.size() &&
+           ns >= std::int64_t{BridgeTiming::kTimingBucketsUs[b]} * 1000)
+        ++b;
+    buckets[b].fetch_add(1, std::memory_order_relaxed);
+}
+}  // namespace
+
+LiveBridgeDeadline::LiveBridgeDeadline(std::int64_t steadyNs) SUPPLE_RT : previous_(tLiveDeadline) {
+    tLiveDeadline = steadyNs > 0 ? steadyNs : 0;
+}
+std::int64_t currentLiveBridgeDeadline() SUPPLE_RT { return tLiveDeadline; }
+LiveBridgeDeadline::~LiveBridgeDeadline() SUPPLE_RT { tLiveDeadline = previous_; }
+LiveBridgeWaitScope::LiveBridgeWaitScope(LiveBridgeWaiters* waiters) SUPPLE_RT
+    : previous_(tLiveWaiters) {
+    tLiveWaiters = waiters;
+}
+LiveBridgeWaitScope::~LiveBridgeWaitScope() SUPPLE_RT { tLiveWaiters = previous_; }
+LiveBridgeBlocked::LiveBridgeBlocked() SUPPLE_RT : waiters_(tLiveWaiters) {
+    if (waiters_) waiters_->blocked.fetch_add(1, std::memory_order_seq_cst);
+}
+LiveBridgeBlocked::~LiveBridgeBlocked() SUPPLE_RT {
+    if (!waiters_) return;
+    // The decrement, then a fence, then ended() reads who parked: a helper
+    // sets its parked bit, fences and reads `blocked` before it waits, so
+    // either it sees this wait over or ended() sees it parked.
+    waiters_->blocked.fetch_sub(1, std::memory_order_seq_cst);
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    if (waiters_->ended) waiters_->ended(waiters_->context);
+}
+std::int64_t steadyNanoseconds() SUPPLE_RT {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+std::uint64_t bridgeLateCalls() SUPPLE_RT { return gLateCalls.load(std::memory_order_relaxed); }
+
+bool RemoteInstance::answered(std::uint32_t req, Cmd cmd) SUPPLE_RT {
+    spun_ = true;
     for (int spin = 0; spin < 4000; ++spin)
         if (hdr_->done.load(std::memory_order_acquire) == req) return true;
+    spun_ = false;
+    if (const std::int64_t live = tLiveDeadline) {
+        // The callback's wait (ADR-0081): timed waits on the done word up to
+        // the cycle's deadline, and nothing else. Only the wait itself is
+        // sanctioned, so RealtimeSanitizer checks the rest of this path.
+        // While it blocks, its pool's idle helpers park (ADR-0085).
+        const LiveBridgeBlocked blocked;
+        for (;;) {
+            const std::uint32_t seen = hdr_->done.load(std::memory_order_acquire);
+            if (seen == req) return true;
+            const std::int64_t left = live - steadyNanoseconds();
+            if (left <= 0) return false;
+            rt::ScopedSanctionedSyscall wait;
+#if defined(__linux__)
+            futexWaitNs(hdr_->done, seen, left);
+#else
+            signals_.waitNs(hdr_->done, seen, left, true);
+#endif
+        }
+    }
+    // Off the callback (ADR-0013): waits with a failure deadline, checking
+    // the bridge is alive and killing a hung one, all sanctioned there.
+    rt::ScopedSanctionedSyscall background;
     // Lifecycle commands may page in a plugin's code; a block must not stall
     // the renderer long, but a loaded machine must not get a healthy plugin
     // killed either.
-    const int limitMs = cmd == Cmd::Process ? deadlineMs_ : 5 * deadlineMs_ / 2 + 2000;
+    const int deadlineMs = bridgeDeadlineMs();
+    const int limitMs = cmd == Cmd::Process
+                            ? deadlineMs
+                            : static_cast<int>(std::min<std::int64_t>(
+                                  5 * std::int64_t(deadlineMs) / 2 + 2000, INT32_MAX));
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(limitMs);
     for (;;) {
         const std::uint32_t seen = hdr_->done.load(std::memory_order_acquire);
@@ -855,26 +1027,293 @@ bool RemoteInstance::command(Cmd cmd) SUPPLE_RT {
             return false;
         }
         if (std::chrono::steady_clock::now() > deadline) {
-            process_->fail(-2);
+            process_->fail(BridgeProcess::kHung);
             process_->killBridge();
             return false;
         }
     }
 }
 
-bool RemoteInstance::startProcessing() SUPPLE_RT {
-    if (hdr_) {  // published with the command's request
-        const ThreadPolicy policy = bridgeAudioPolicy();
-        hdr_->audioPolicy = static_cast<std::uint32_t>(policy.kind);
-        hdr_->audioPriority = static_cast<std::uint32_t>(policy.priority);
-    }
-    if (!command(Cmd::StartProcessing)) return false;
-    return hdr_->processing != 0;
+void RemoteInstance::late() SUPPLE_RT {
+    gLateCalls.fetch_add(1, std::memory_order_relaxed);
+    const std::int64_t now = steadyNanoseconds();
+    if (!lateSince_)
+        lateSince_ = now;
+    else if (now - lateSince_ >= lateFailNs_)  // 50 ms (ADR-0081)
+        process_->fail(BridgeProcess::kHung);  // main kills it when it reaps (ADR-0081)
 }
 
-void RemoteInstance::stopProcessing() SUPPLE_RT { command(Cmd::StopProcessing); }
-void RemoteInstance::reset() SUPPLE_RT { command(Cmd::Reset); }
-void RemoteInstance::flush() SUPPLE_RT { command(Cmd::Flush); }
+namespace {
+// Lifecycle commands kept while a late request is outstanding, sent in this
+// order: a reset before a stop, as the engine asks for them, and a flush
+// last, since it runs only while not processing.
+constexpr std::uint8_t kKeepReset = 1, kKeepStop = 2, kKeepFlush = 4;
+std::uint8_t keepBit(Cmd cmd) SUPPLE_RT {
+    return cmd == Cmd::Reset            ? kKeepReset
+           : cmd == Cmd::StopProcessing ? kKeepStop
+           : cmd == Cmd::Flush          ? kKeepFlush
+                                        : 0;
+}
+bool isParam(const Event& e) SUPPLE_RT {
+    return e.kind == Event::Kind::Param || e.kind == Event::Kind::ParamMod;
+}
+// The same parameter of the same voice (CLAP's wildcards included as such).
+bool sameTarget(const Event& a, const Event& b) SUPPLE_RT {
+    return a.kind == b.kind && a.paramId == b.paramId && a.port == b.port &&
+           a.channel == b.channel && a.key == b.key && a.noteId == b.noteId;
+}
+}  // namespace
+
+bool RemoteInstance::settle() SUPPLE_RT {
+    if (pending_) {
+        TimingCounters& timing = gTiming[tLiveDeadline ? 1 : 0];
+        const std::int64_t from = steadyNanoseconds();
+        const bool ok = answered(outstanding_, Cmd::Process);
+        timing.settles.fetch_add(1, std::memory_order_relaxed);
+        add(timing.waitMax, timing.waitSum, steadyNanoseconds() - from);
+        if (!ok) {
+            if (tLiveDeadline) {
+                timing.lateSettles.fetch_add(1, std::memory_order_relaxed);
+                late();
+            }
+            return false;
+        }
+        pending_ = false;  // that late request's output is not used
+    }
+    while (lifecycle_) {
+        const Cmd cmd = lifecycle_ & kKeepReset  ? Cmd::Reset
+                        : lifecycle_ & kKeepStop ? Cmd::StopProcessing
+                                                 : Cmd::Flush;
+        lifecycle_ = static_cast<std::uint8_t>(lifecycle_ & ~keepBit(cmd));
+        if (post(cmd) != Sent::Answered) return false;
+    }
+    return true;
+}
+
+void RemoteInstance::lifecycle(Cmd cmd) SUPPLE_RT {
+    if (cmd == Cmd::Reset) dropCarriedNotes();  // they came before it
+    if (cmd == Cmd::StopProcessing) startUnanswered_ = false;
+    if (!hdr_ || process_->failed()) return;
+    if (settle()) {
+        (void)post(cmd);  // answered, or outstanding: either way the bridge has it
+        return;
+    }
+    if (!process_->failed()) lifecycle_ = static_cast<std::uint8_t>(lifecycle_ | keepBit(cmd));
+}
+
+void RemoteInstance::dropCarriedNotes() SUPPLE_RT {
+    std::uint32_t kept = 0;
+    for (std::uint32_t i = 0; i < carriedCount_; ++i)
+        if (isParam(carried_[i])) carried_[kept++] = carried_[i];
+    carriedCount_ = kept;
+}
+
+void RemoteInstance::overflow() SUPPLE_RT {
+    std::uint32_t kept = 0;
+    bool dropped = false;
+    for (std::uint32_t i = 0; i < carriedCount_; ++i) {
+        if (!isParam(carried_[i])) {
+            dropped = true;
+            continue;
+        }
+        bool later = false;
+        for (std::uint32_t j = i + 1; j < carriedCount_ && !later; ++j)
+            later = sameTarget(carried_[i], carried_[j]);
+        if (!later) carried_[kept++] = carried_[i];
+    }
+    carriedCount_ = kept;
+    // A dropped note's end may be among what was dropped: a reset, sent
+    // before the next block, means none can hang.
+    if (dropped) lifecycle_ = static_cast<std::uint8_t>(lifecycle_ | kKeepReset);
+}
+
+void RemoteInstance::carry(std::span<const Event> events) SUPPLE_RT {
+    for (const Event& e : events) {
+        if (carriedCount_ == kMaxCarried) overflow();
+        if (carriedCount_ < kMaxCarried) {
+            Event& kept = carried_[carriedCount_++];
+            kept = e;
+            kept.time = 0;
+            continue;
+        }
+        // Still full, of parameters with distinct targets: a later value of
+        // one of them replaces it, since only the latest counts. A value for
+        // another target is lost; anything else is lost behind a reset.
+        if (!isParam(e)) {
+            lifecycle_ = static_cast<std::uint8_t>(lifecycle_ | kKeepReset);
+            continue;
+        }
+        for (std::uint32_t i = 0; i < carriedCount_; ++i)
+            if (sameTarget(carried_[i], e)) {
+                carried_[i] = e;
+                carried_[i].time = 0;
+                break;
+            }
+    }
+}
+
+void RemoteInstance::supersede(std::span<const Event> events) SUPPLE_RT {
+    std::uint32_t kept = 0;
+    for (std::uint32_t i = 0; i < carriedCount_; ++i) {
+        bool later = false;
+        for (std::size_t j = 0; j < events.size() && !later; ++j)
+            later = sameTarget(carried_[i], events[j]);
+        if (!later) carried_[kept++] = carried_[i];
+    }
+    carriedCount_ = kept;
+}
+
+bool RemoteInstance::command(Cmd cmd) SUPPLE_RT {
+    if (!hdr_ || process_->failed()) return false;
+    if (!settle()) return false;
+    return post(cmd) == Sent::Answered;
+}
+
+RemoteInstance::Sent RemoteInstance::post(Cmd cmd) SUPPLE_RT {
+    if (!hdr_ || process_->failed()) return Sent::Unsent;
+    // The sanctioned exception to the audio thread's no-syscall rule is
+    // waking the bridge and waiting for it (ADR-0013, and in the callback
+    // ADR-0081): each scoped where it happens, here and in answered().
+    // The class the bridge's thread runs this in: live under a live deadline
+    // (ADR-0081), else the background class (ADR-0026).
+    const ThreadPolicy background = bridgeAudioPolicy(), live = liveBridgeAudioPolicy();
+    hdr_->audioClass = tLiveDeadline ? 2 : 1;
+    hdr_->audioPolicy = static_cast<std::uint32_t>(background.kind);
+    hdr_->audioPriority = static_cast<std::uint32_t>(background.priority);
+    hdr_->livePolicy = static_cast<std::uint32_t>(live.kind);
+    hdr_->livePriority = static_cast<std::uint32_t>(live.priority);
+    hdr_->livePeriodNs = liveBridgePeriodNs();
+    hdr_->cmd = static_cast<std::uint32_t>(cmd);
+    TimingCounters& timing = gTiming[tLiveDeadline ? 1 : 0];
+    const std::int64_t posted = steadyNanoseconds();
+    if (tLiveDeadline && posted >= tLiveDeadline)
+        timing.pastDeadline.fetch_add(1, std::memory_order_relaxed);
+    hdr_->postedNs = posted;
+    const std::uint32_t req = ++seq_;
+    hdr_->request.store(req, std::memory_order_release);
+    {
+        rt::ScopedSanctionedSyscall wake;
+#if defined(__linux__)
+        futexWake(hdr_->request);
+#else
+        signals_.wake(hdr_->request);
+#endif
+    }
+    const bool ok = answered(req, cmd);
+    const std::int64_t back = steadyNanoseconds();
+    timing.calls.fetch_add(1, std::memory_order_relaxed);
+    add(timing.waitMax, timing.waitSum, back - posted);
+    if (ok) {
+        if (spun_) timing.spun.fetch_add(1, std::memory_order_relaxed);
+        const std::int64_t wake = hdr_->seenNs - posted;
+        add(timing.wakeMax, timing.wakeSum, wake);
+        add(timing.workMax, timing.workSum, hdr_->finishedNs - hdr_->seenNs);
+        add(timing.returnMax, timing.returnSum, back - hdr_->finishedNs);
+        bucket(timing.wakeBuckets, wake);
+        bucket(timing.returnBuckets, back - hdr_->finishedNs);
+        if (wake > 200'000) timing.wakesOver200us.fetch_add(1, std::memory_order_relaxed);
+        if (wake > 1'000'000) timing.wakesOver1ms.fetch_add(1, std::memory_order_relaxed);
+        if (hdr_->cpu >= 0 && hdr_->cpu < 64)
+            timing.bridgeCpus.fetch_or(std::uint64_t{1} << hdr_->cpu, std::memory_order_relaxed);
+        std::uint32_t most = timing.migrations.load(std::memory_order_relaxed);
+        while (hdr_->migrations > most && !timing.migrations.compare_exchange_weak(
+                                              most, hdr_->migrations, std::memory_order_relaxed)) {
+        }
+#if defined(__linux__)
+        // The class asked for, as the thread reads it back (Linux applies the
+        // policy itself; macOS and Windows map it to their audio classes).
+        const ThreadPolicy asked = hdr_->audioClass == 2 ? live : background;
+        if (asked.kind != ThreadPolicy::Kind::None &&
+            (hdr_->appliedPolicy != static_cast<std::uint32_t>(asked.kind) ||
+             hdr_->appliedPriority != static_cast<std::uint32_t>(asked.priority)))
+            timing.classMismatches.fetch_add(1, std::memory_order_relaxed);
+#endif
+        lateSince_ = 0;
+        classRefused_.store(hdr_->classRefused != 0, std::memory_order_relaxed);
+        return Sent::Answered;
+    }
+    if (!tLiveDeadline) return Sent::Unsent;  // answered() failed the bridge
+    timing.late.fetch_add(1, std::memory_order_relaxed);
+    outstanding_ = req;
+    pending_ = true;
+    late();
+    return Sent::Late;
+}
+
+BridgeWaits bridgeLiveWaits() SUPPLE_RT {
+    return {gTiming[1].calls.load(std::memory_order_relaxed) +
+                gTiming[1].settles.load(std::memory_order_relaxed),
+            gTiming[1].waitSum.load(std::memory_order_relaxed)};
+}
+
+BridgeTiming bridgeTiming() {
+    BridgeTiming out;
+    for (int k = 0; k < 2; ++k) {
+        const TimingCounters& t = gTiming[k];
+        BridgeTiming::Calls& c = k ? out.live : out.background;
+        auto get = [](const auto& a) { return a.load(std::memory_order_relaxed); };
+        c.calls = get(t.calls);
+        c.late = get(t.late);
+        c.pastDeadline = get(t.pastDeadline);
+        c.settles = get(t.settles);
+        c.lateSettles = get(t.lateSettles);
+        c.spun = get(t.spun);
+        c.waitMaxNs = get(t.waitMax);
+        c.waitSumNs = get(t.waitSum);
+        c.wakeMaxNs = get(t.wakeMax);
+        c.wakeSumNs = get(t.wakeSum);
+        c.workMaxNs = get(t.workMax);
+        c.workSumNs = get(t.workSum);
+        c.returnMaxNs = get(t.returnMax);
+        c.returnSumNs = get(t.returnSum);
+        c.wakesOver200us = get(t.wakesOver200us);
+        c.wakesOver1ms = get(t.wakesOver1ms);
+        c.bridgeCpus = get(t.bridgeCpus);
+        c.classMismatches = get(t.classMismatches);
+        c.migrations = get(t.migrations);
+        for (std::size_t b = 0; b < c.wakeBuckets.size(); ++b) {
+            c.wakeBuckets[b] = get(t.wakeBuckets[b]);
+            c.returnBuckets[b] = get(t.returnBuckets[b]);
+        }
+    }
+    return out;
+}
+
+std::uint64_t bridgeRequests() { return gRequests.load(std::memory_order_relaxed); }
+
+void resetBridgeTiming() {
+    for (TimingCounters& t : gTiming) {
+        for (auto* a : {&t.calls, &t.late, &t.pastDeadline, &t.spun, &t.settles, &t.lateSettles,
+                        &t.wakesOver200us, &t.wakesOver1ms, &t.bridgeCpus, &t.classMismatches})
+            a->store(0, std::memory_order_relaxed);
+        for (auto* a : {&t.waitMax, &t.waitSum, &t.wakeMax, &t.wakeSum, &t.workMax, &t.workSum,
+                        &t.returnMax, &t.returnSum})
+            a->store(0, std::memory_order_relaxed);
+        t.migrations.store(0, std::memory_order_relaxed);
+        for (std::size_t b = 0; b < t.wakeBuckets.size(); ++b) {
+            t.wakeBuckets[b].store(0, std::memory_order_relaxed);
+            t.returnBuckets[b].store(0, std::memory_order_relaxed);
+        }
+    }
+}
+
+bool RemoteInstance::startProcessing() SUPPLE_RT {
+    startUnanswered_ = false;
+    if (!hdr_ || process_->failed()) return false;
+    if (!settle()) {
+        startUnanswered_ = pending_ && !process_->failed();
+        return false;
+    }
+    // A start left outstanding by a late call may have been answered since.
+    if (hdr_->processing != 0) return true;
+    const Sent sent = post(Cmd::StartProcessing);
+    startUnanswered_ = sent == Sent::Late;
+    return sent == Sent::Answered && hdr_->processing != 0;
+}
+
+void RemoteInstance::stopProcessing() SUPPLE_RT { lifecycle(Cmd::StopProcessing); }
+void RemoteInstance::reset() SUPPLE_RT { lifecycle(Cmd::Reset); }
+void RemoteInstance::flush() SUPPLE_RT { lifecycle(Cmd::Flush); }
 
 bool RemoteInstance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT {
     const std::uint32_t frames = std::min(b.frames, layout_.maxFrames);
@@ -884,8 +1323,23 @@ bool RemoteInstance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT
         for (std::uint32_t c = 0; b.auxOutputs && c < b.auxOutputChannels; ++c)
             std::fill_n(b.auxOutputs[c], b.frames, 0.0f);
     };
+    // Its output never arrives (ADR-0088): the engine ends what it held.
+    auto lose = [&] {
+        silence();
+        if (out) out->lost = true;
+    };
     if (!hdr_ || process_->failed()) {
-        silence();  // a failed node is silent; the session plays on
+        lose();  // a failed node is silent; the session plays on
+        return true;
+    }
+    const auto own = static_cast<std::uint32_t>(std::min<std::size_t>(b.events.size(), kMaxEvents));
+    if (carriedCount_ && carriedCount_ + own > kMaxEvents) overflow();
+    if (!settle()) {
+        // Still busy with a late request: this block is skipped too. Its
+        // output is silence and its audio is lost, but what it tells the
+        // plug-in reaches it with the next block it processes (ADR-0081 §4).
+        carry(b.events);
+        lose();
         return true;
     }
     auto* base = static_cast<std::uint8_t*>(map_);
@@ -908,10 +1362,17 @@ bool RemoteInstance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT
             else
                 std::fill_n(dst, frames, 0.0f);
         }
+    // Events carried from skipped blocks first, at its start, then its own,
+    // every one of them (a legal block loses nothing to the carry). When the
+    // carry does not fit beside them, overflow() above left only parameters:
+    // those this block sets again go (it sends the later value), as many of
+    // the rest as fit go first, and the others wait for the next block.
     auto* events = reinterpret_cast<Event*>(base + layout_.events);
-    const auto n = static_cast<std::uint32_t>(std::min<std::size_t>(b.events.size(), kMaxEvents));
-    std::copy_n(b.events.begin(), n, events);
-    hdr_->eventCount = n;
+    if (carriedCount_ + own > kMaxEvents) supersede(b.events.first(own));
+    const std::uint32_t lead = std::min(carriedCount_, kMaxEvents - own);
+    std::copy_n(carried_.get(), lead, events);
+    std::copy_n(b.events.begin(), own, events + lead);
+    hdr_->eventCount = lead + own;
     hdr_->frames = frames;
     hdr_->steadyTime = b.steadyTime;
     hdr_->hasTransport = b.transport ? 1 : 0;
@@ -921,8 +1382,12 @@ bool RemoteInstance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT
                                    : 0;
     hdr_->outSink = out ? 1 : 0;
     hdr_->outEventCapacity = room;
-    if (!command(Cmd::Process)) {
-        silence();
+    const Sent sent = post(Cmd::Process);
+    // The bridge has those it sent, whether it answers in time or not.
+    std::copy(carried_.get() + lead, carried_.get() + carriedCount_, carried_.get());
+    carriedCount_ -= lead;
+    if (sent != Sent::Answered) {
+        lose();
         return true;
     }
     // The acknowledged arena is untrusted. Snapshot once, before copying any
@@ -935,7 +1400,7 @@ bool RemoteInstance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT
                       static_cast<std::uint8_t>(OutputEvent::Kind::Midi);
     if (outEventCount > room || !kindsValid) {
         process_->fail(BridgeProcess::kProtocolViolation);
-        silence();
+        lose();
         return true;
     }
     for (std::uint32_t c = 0; c < b.outputChannels; ++c) {

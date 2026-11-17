@@ -6,6 +6,10 @@
 **Amendment, 2026-10-07:** [ADR-0024](0024-live-multiprocessing.md) defines
 live callback fork-join, helper scheduling and the nonblocking wake exception.
 
+**Amendment, 2026-11-14:** [ADR-0081](0081-live-bridged-plugins.md) lets
+the callback process bridged plug-ins on live nodes, with one bounded wait
+per cycle; it states the exception to the callback's no-wait rule.
+
 **Amendment, 2026-11-10:** [ADR-0068](0068-plugin-midi-output.md) carries
 plug-in note and MIDI output through the data plane and passes the host
 sink's room to the bridge (protocol POSIX 20 / Windows 21).
@@ -74,6 +78,15 @@ renderer and worker threads, not in the device callback.
    in-process backing, and PDC is unchanged. Live nodes pass bridged stages through with a warning;
    synchronous bridge calls never run in the device callback. A pipelined
    live mode remains deferred.
+   *Note 2026-11-16:* "never" does not hold. Under memory pressure (two test
+   suites at once, zram swap) a healthy bridge stalled past 2 s; it was
+   killed, its node went silent, and an offline render succeeded with
+   different audio. Pausing a bridge for 2.3 s reproduces this. The deadline
+   is now process-wide (`host::setBridgeDeadlineMs`), and the engine tests
+   raise it so that load cannot decide a comparison. Two questions are open
+   for the product: whether the 2 s default should stand, offline renders
+   especially, and whether a render that loses a plug-in this way should
+   still report success (STATUS).
 6. **Failure.** The parent watches each bridge with a `pidfd` and the control
    socket. A bridge that dies, or misses the deadline and is then found dead
    or killed, turns its instances *failed*: `process()` outputs silence and
@@ -88,6 +101,9 @@ renderer and worker threads, not in the device callback.
    parameter is on (and can hang instead, for the deadline path).
 8. **Defaults.** `inherit` resolves to the project's default isolation
    (`in_process` until the bridge has shipped a release of testing).
+   *Note 2026-11-14:* the default is an app preference rather than the
+   project's, and stock plug-ins stay in process; see
+   [ADR-0081](0081-live-bridged-plugins.md).
 
 ## Consequences
 

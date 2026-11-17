@@ -310,6 +310,8 @@ q = nil
 ---@field plan_latency integer
 ---@field device_latency integer
 ---@field xruns integer
+---@field bridge_late integer
+---@field bridge_timing table
 ---@field midi_dropped integer
 ---@field midi_inputs any
 ---@field midi_outputs any
@@ -331,8 +333,11 @@ q = nil
 ---@field warnings (string|table)[]
 ---@field memory_lock table
 ---@field cpu_idle_latency table
+---@field thp_opt_out table
+---@field audio_page_faults table
 ---@field meter_drops table
 ---@field failed_fx string[]
+---@field bridge_threads_refused string[]
 ---@field dropped integer
 ---@field voice_dropped integer
 ---@field failed_errors any
@@ -351,6 +356,8 @@ q = nil
 ---@field plan_latency integer
 ---@field device_latency integer
 ---@field xruns integer
+---@field bridge_late integer
+---@field bridge_timing table
 ---@field midi_dropped integer
 ---@field midi_inputs any
 ---@field midi_outputs any
@@ -372,8 +379,11 @@ q = nil
 ---@field warnings (string|table)[]
 ---@field memory_lock table
 ---@field cpu_idle_latency table
+---@field thp_opt_out table
+---@field audio_page_faults table
 ---@field meter_drops table
 ---@field failed_fx string[]
+---@field bridge_threads_refused string[]
 ---@field dropped integer
 ---@field voice_dropped integer
 ---@field failed_errors any
@@ -512,6 +522,7 @@ q = nil
 ---@field problems? any Current plugin problems: code, message, scope, line when known, hint, silent; scope host when unreadable
 ---@field sidechain_channels? integer The plug-in's key input: route.add {fx} feeds it
 ---@field latency_samples? integer The instance's reported latency, in samples
+---@field isolation_effective? string Where the instance runs: in_process, shared_bridge or dedicated; inherit resolves to the plug-in isolation preference (stock plug-ins in process), as the instance is made
 ---@field outputs_notes? boolean The loaded plug-in sends notes or MIDI: fx.set midi_output chooses replace or merge
 ---@field params_total? integer Plain parameters matching; at most 512 are listed.
 ---@field warnings? table[]

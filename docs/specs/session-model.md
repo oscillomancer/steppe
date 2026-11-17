@@ -235,7 +235,10 @@ it is allowed.
 **Instance** `fx_*`: `plugin` `{format: clap|vst3|lv2, id, name, vendor,
 version}`, `label` (instance name), `bypass` (processing skipped, latency
 kept), `offline` (unloaded; audio passes through), `wet` % (dry/wet),
-`isolation` (`inherit|in_process|shared_bridge|dedicated`), `oversampling`
+`isolation` (`inherit|in_process|shared_bridge|dedicated`; `inherit` runs
+a stock plug-in in process and any other where the app's plug-in isolation
+preference says, as its instance is made, and stays `inherit` in the file,
+ADR-0081), `oversampling`
 (integer 1, 2, 4 or 8 only), `pins` `{in: [l, r], out: [l, r], key: [l, r]}` — the track
 channels (1-based) a track-chain plug-in reads, writes and keys from (a
 detector on 3/4); one entry feeds both pins (in, key) or takes the left output

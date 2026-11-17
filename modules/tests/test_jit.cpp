@@ -280,7 +280,10 @@ namespace {
 // A project module's song phase from 3217 on, in calls of `block` frames,
 // through the production schedule: `body` is its process() loop's
 // expression; `feedback` puts it in a feedback group (a cable into itself).
-std::vector<double> songPhase(const std::string& body, int block, bool feedback, bool interpret) {
+// `callShift`: how far the clock's callTransport() beats are from its
+// transport()'s.
+std::vector<double> songPhase(const std::string& body, int block, bool feedback, bool interpret,
+                              double callShift = 0) {
     using namespace supple::rack;
     const std::string source =
         "#include <supple/script.h>\n"
@@ -298,6 +301,14 @@ std::vector<double> songPhase(const std::string& body, int block, bool feedback,
     REQUIRE_MESSAGE(result.program, supple::scriptc::toText(result.diagnostics));
     auto code = supple::scriptc::moduleCode(std::move(result.program));
     REQUIRE(code);
+    if (interpret) {
+        // MIR's interpreter is a test backend that builds each function's
+        // code and its shims into C on the first call (ADR-0032): one block
+        // through the harness, off the audio path, does that before the
+        // schedule plays the same program there.
+        ModuleHarness first(*code);
+        first.run(32);
+    }
     const auto type = ModuleType::fromCode(std::move(code), Origin::Project);
     REQUIRE(type);
     Instance::Setup setup;
@@ -318,7 +329,14 @@ std::vector<double> songPhase(const std::string& body, int block, bool feedback,
             t.beats = 0.25 + static_cast<double>(position - 3217) * 128.0 / 60.0 / 48000.0;
             return t;
         }
+        supple::script::Transport callTransport(std::int64_t position) override {
+            auto t = transport(position);
+            t.beats += shift;
+            return t;
+        }
+        double shift = 0;
     } clock;
+    clock.shift = callShift;
     std::vector<double> samples;
     for (int at = 0; at < 512;) {
         const int n = std::min(block, 512 - at);
@@ -351,6 +369,22 @@ TEST_CASE("module source reading transport() plays as it did however host blocks
         CAPTURE(worst);
         CHECK(worst < 1e-7);  // the last bits, as before d82c9569
         CHECK(whole.front() == doctest::Approx(0.25));
+    }
+}
+
+TEST_CASE("transport() reads the clock's call transport, gridTransport() its exact one") {
+    // Review round 20: the host computes transport() as it always did, which
+    // can round apart from the exact grid arithmetic in the last bit.
+    const std::string call =
+        "        for (int i = 0; i < frames; ++i) phase[0][i] = transport().beats;\n";
+    const std::string grid =
+        "        for (int i = 0; i < frames; ++i) phase[0][i] = gridTransport().beats;\n";
+    for (const bool interpret : {false, true}) {
+        CAPTURE(interpret);
+        CHECK(songPhase(call, 32, false, interpret, 1000.0).front() == 1000.25);
+        // The grid interval's start: 3217 is 17 frames into it.
+        CHECK(songPhase(grid, 32, false, interpret, 1000.0).front() ==
+              doctest::Approx(0.25 - 17 * 128.0 / 60.0 / 48000.0));
     }
 }
 

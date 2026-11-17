@@ -10,17 +10,24 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+
+// After windows.h, whose types it uses (tools/ci/windows_includes.py).
+#include <psapi.h>
 #else
 #include <pthread.h>
 #include <sched.h>
-#if defined(__linux__)
 #include <sys/resource.h>
+#include <time.h>
 #endif
+#if defined(__APPLE__)
+#include <mach/mach.h>
 #endif
 
 #include <algorithm>
 #include <bit>
+#include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 
 namespace supple {
@@ -185,5 +192,77 @@ int realtimePriorityLimit(int requested) {
         return static_cast<int>(std::min<rlim_t>(static_cast<rlim_t>(requested), limit.rlim_cur));
 #endif
     return requested;
+}
+
+std::thread::native_handle_type currentThreadHandle() {
+#if defined(_WIN32)
+    return GetCurrentThread();  // a pseudo handle: the calls below do not use it
+#else
+    return ::pthread_self();
+#endif
+}
+
+std::int64_t kernelThreadId(std::thread::native_handle_type thread) {
+#if defined(__linux__)
+    // glibc and musl encode the tid in the thread's CPU clock, as the kernel
+    // defines per-thread CPU clocks: (~tid << 3) | 6.
+    clockid_t clock{};
+    if (::pthread_getcpuclockid(thread, &clock) != 0) return 0;
+    return ~(static_cast<std::int64_t>(clock) >> 3);
+#else
+    (void)thread;
+    return 0;
+#endif
+}
+
+std::optional<PageFaults> threadPageFaults(std::int64_t kernelId) {
+#if defined(__linux__)
+    if (kernelId <= 0) return std::nullopt;
+    const std::string path = "/proc/self/task/" + std::to_string(kernelId) + "/stat";
+    std::FILE* file = std::fopen(path.c_str(), "re");
+    if (!file) return std::nullopt;
+    char line[1024] = {};
+    const bool read = std::fgets(line, sizeof(line), file) != nullptr;
+    std::fclose(file);
+    if (!read) return std::nullopt;
+    // "pid (comm) state ppid ...": the name may hold spaces and parentheses.
+    const char* close = std::strrchr(line, ')');
+    long long minor = 0, major = 0;
+    if (!close ||
+        std::sscanf(close + 1, " %*c %*d %*d %*d %*d %*d %*u %lld %*u %lld", &minor, &major) != 2)
+        return std::nullopt;
+    return PageFaults{minor, major};
+#else
+    (void)kernelId;
+    return std::nullopt;
+#endif
+}
+
+PageFaults pageFaultsFromTaskCounts(std::int32_t faults, std::int32_t pageins) {
+    constexpr auto kLimit = std::numeric_limits<std::int32_t>::max();
+    if (faults >= kLimit || pageins >= kLimit) return {0, 0, true};
+    return {std::max<std::int64_t>(std::int64_t{faults} - pageins, 0), std::max(pageins, 0)};
+}
+
+PageFaults processPageFaults() {
+#if defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS counters{};
+    if (!GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters))) return {0, -1};
+    return {static_cast<std::int64_t>(counters.PageFaultCount), -1};
+#elif defined(__APPLE__)
+    // getrusage's ru_minflt there counts page reclaims only, not the
+    // zero-fill faults of fresh pages; the task's event counts have every
+    // fault and the page-ins (32-bit counters, which wrap after 2^31).
+    task_events_info_data_t events{};
+    mach_msg_type_number_t count = TASK_EVENTS_INFO_COUNT;
+    if (::task_info(::mach_task_self(), TASK_EVENTS_INFO, reinterpret_cast<task_info_t>(&events),
+                    &count) != KERN_SUCCESS)
+        return {};
+    return pageFaultsFromTaskCounts(events.faults, events.pageins);
+#else
+    rusage usage{};
+    if (::getrusage(RUSAGE_SELF, &usage) != 0) return {};
+    return {usage.ru_minflt, usage.ru_majflt};
+#endif
 }
 }  // namespace supple

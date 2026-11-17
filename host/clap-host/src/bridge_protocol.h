@@ -52,10 +52,20 @@ inline constexpr std::uint32_t kMagic = 0x31474253;  // "SBG1"
 // 20/21: plug-in note and MIDI output (ADR-0068): the Create reply says whether
 // the plug-in outputs notes; the Header carries the host sink's capacity and
 // the unsupported-output count; OutputEvent gains its MIDI kinds and bytes.
+// 21/22: every command carries the audio thread's class, background or live
+// (ADR-0081), and the bridge reports whether it got it.
+// 22/23: every command carries its timing, the bridge thread's CPU and
+// migrations, and the class it read back (ADR-0081 diagnostics).
+// 23/24: every command carries the device period, which sizes the live class
+// on macOS (ADR-0081 §5).
+// 24/25: that period is a duration (ns), not device frames, which the bridge
+// read at an oversampled plug-in's rate.
+// 25/26: the AckNotifications reply names the instances with new captures,
+// so the parent pulls only those.
 #if defined(_WIN32)
-inline constexpr std::uint32_t kVersion = 21;  // Windows runs one ahead: native control handles
+inline constexpr std::uint32_t kVersion = 26;  // Windows runs one ahead: native control handles
 #else
-inline constexpr std::uint32_t kVersion = 20;
+inline constexpr std::uint32_t kVersion = 25;
 #endif
 inline constexpr int kControlFd = 3;  // the bridge's end of the socketpair
 inline constexpr std::uint32_t kMaxChannels = 16;
@@ -67,6 +77,15 @@ inline constexpr std::uint32_t kMaxEvents = 2048;
 inline constexpr std::uint32_t kMaxOutEvents = 1024;
 inline constexpr std::uint32_t kMaxParamClears = 4096;
 inline constexpr std::uint32_t kMaxMessage = 64u << 20;
+
+// The period the live class is sized for (macOS's time constraint), in ns:
+// the device's, as the header carries it, whatever rate the plug-in was
+// activated at (oversampling makes it 2 or 4 times the device's); without
+// one, a block of `frames` at the activation's `rate`.
+inline double liveClassPeriodNs(std::uint32_t livePeriodNs, std::uint32_t frames, double rate) {
+    if (livePeriodNs) return livePeriodNs;
+    return rate > 0 ? frames / rate * 1e9 : 0.0;
+}
 
 // --- control plane -----------------------------------------------------------------
 
@@ -101,7 +120,7 @@ enum class Op : std::uint32_t {
     EditorRequests,   // → u8 resize, u8 closed, u32 width, u32 height, u8 show, u8 hide, frame
     TakeIdleOutputs,  // → u64 dropped, u32 count, [OutputEvent]
     SubscribeNotifications,  // process id 0: u32 version (+ eventfd) → u32 version
-    AckNotifications,        // process id 0: no payload → ok
+    AckNotifications,        // process id 0: no payload → u32 count, [u32 instance]
     PluginStatus,            // no payload → JSON text (null if unsupported)
     FactoryPatches,          // no payload → canonical patch array JSON text
     EditorScale,             // f64 scale → the size for the window (as EditorOpen)
@@ -326,9 +345,33 @@ struct Header {
     std::uint32_t outSink, outEventCapacity;
     std::uint32_t outEventCount, outEventsDropped, outEventsUnsupported;
     std::uint32_t processing;  // the plugin's processing state after the command
-    // StartProcessing: the scheduling the audio thread takes (ThreadPolicy's
-    // kind and priority; kind 0, None, keeps the current one).
+    // Every command: the class the audio thread runs it in (ADR-0026,
+    // ADR-0081). audioClass 1: background, ThreadPolicy kind and priority in
+    // audioPolicy/audioPriority (kind 0, None, keeps the current one); 2: live,
+    // the callback's class (Linux: livePolicy/livePriority; macOS: a
+    // time-constraint policy for livePeriodNs; Windows: MMCSS Pro Audio); 0:
+    // unchanged.
     std::uint32_t audioPolicy, audioPriority;
+    std::uint32_t audioClass, livePolicy, livePriority;
+    // The device period in nanoseconds while an engine runs (0: none, the
+    // live class then takes the command's block at the activation rate). A
+    // duration: an oversampled plug-in's rate is not the device's.
+    std::uint32_t livePeriodNs;
+    // The bridge, with each answer: 1 when the thread did not get the class
+    // last asked for (it keeps what it had), else 0.
+    std::uint32_t classRefused;
+    // The command's timing (ADR-0081 diagnostics), steady-clock nanoseconds,
+    // one clock for both processes: posted by the host just before its wake,
+    // seen and finished by the bridge's audio thread.
+    std::int64_t postedNs, seenNs, finishedNs;
+    // The bridge's audio thread with each answer: the CPU it ran the command
+    // on (-1 unknown), how often it has changed CPU since it started, and
+    // its class as read back after it last took one (ThreadPolicy kind and
+    // priority; on macOS and Windows the kind the platform class maps to:
+    // High for a time-constraint policy or MMCSS).
+    std::int32_t cpu;
+    std::uint32_t migrations;
+    std::uint32_t appliedPolicy, appliedPriority;
 };
 static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
 
@@ -355,19 +398,25 @@ struct Layout {
 };
 
 #if !defined(_WIN32)
-inline long futexWait(std::atomic<std::uint32_t>& word, std::uint32_t expected, int timeoutMs) {
+// `timeoutNs` < 0: no timeout.
+inline long futexWaitNs(std::atomic<std::uint32_t>& word, std::uint32_t expected,
+                        long long timeoutNs) {
 #if defined(__linux__)
-    timespec ts{timeoutMs / 1000, static_cast<long>(timeoutMs % 1000) * 1000000L};
+    timespec ts{static_cast<time_t>(timeoutNs / 1'000'000'000),
+                static_cast<long>(timeoutNs % 1'000'000'000)};
     return ::syscall(SYS_futex, reinterpret_cast<std::uint32_t*>(&word), FUTEX_WAIT, expected,
-                     timeoutMs < 0 ? nullptr : &ts, nullptr, 0);
+                     timeoutNs < 0 ? nullptr : &ts, nullptr, 0);
 #elif defined(__APPLE__)
-    if (timeoutMs < 0)
+    if (timeoutNs < 0)
         return os_sync_wait_on_address(&word, expected, sizeof(expected),
                                        OS_SYNC_WAIT_ON_ADDRESS_SHARED);
     return os_sync_wait_on_address_with_timeout(
         &word, expected, sizeof(expected), OS_SYNC_WAIT_ON_ADDRESS_SHARED,
-        OS_CLOCK_MACH_ABSOLUTE_TIME, static_cast<std::uint64_t>(timeoutMs) * 1'000'000);
+        OS_CLOCK_MACH_ABSOLUTE_TIME, static_cast<std::uint64_t>(timeoutNs));
 #endif
+}
+inline long futexWait(std::atomic<std::uint32_t>& word, std::uint32_t expected, int timeoutMs) {
+    return futexWaitNs(word, expected, timeoutMs < 0 ? -1 : timeoutMs * 1'000'000LL);
 }
 inline void futexWake(std::atomic<std::uint32_t>& word) {
 #if defined(__linux__)
@@ -428,14 +477,20 @@ class SharedSignals {
 #endif
     long wait(std::atomic<std::uint32_t>& word, std::uint32_t seen, int timeoutMs,
               bool completion = false) {
+        return waitNs(word, seen, timeoutMs < 0 ? -1 : timeoutMs * 1'000'000LL, completion);
+    }
+    // Windows waits in whole milliseconds, rounded down: under one, it only
+    // checks the event, and the caller's loop rechecks its deadline.
+    long waitNs(std::atomic<std::uint32_t>& word, std::uint32_t seen, long long timeoutNs,
+                bool completion = false) {
 #if defined(_WIN32)
         if (word.load(std::memory_order_acquire) != seen) {
             errno = EAGAIN;
             return -1;
         }
-        const auto result =
-            WaitForSingleObject(completion ? done_ : request_,
-                                timeoutMs < 0 ? INFINITE : static_cast<DWORD>(timeoutMs));
+        const auto result = WaitForSingleObject(
+            completion ? done_ : request_,
+            timeoutNs < 0 ? INFINITE : static_cast<DWORD>(timeoutNs / 1'000'000));
         if (result == WAIT_OBJECT_0) return 0;
         errno = result == WAIT_TIMEOUT ? ETIMEDOUT : EIO;
         return -1;
@@ -447,7 +502,7 @@ class SharedSignals {
             return -1;
         }
 #endif
-        return futexWait(word, seen, timeoutMs);
+        return futexWaitNs(word, seen, timeoutNs);
 #endif
     }
     void wake(std::atomic<std::uint32_t>& word, bool completion = false) SUPPLE_RT {

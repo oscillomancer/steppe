@@ -52,9 +52,12 @@ current state.
 | [0031](0031-bridge-parent-notifications.md) | Bridge-to-parent notifications and idle audio parking | Accepted |
 | [0032](0032-dsp-scripting.md) | DSP scripting: a checked C++ subset, a JIT player and exports | Accepted |
 | [0033](0033-daw-and-plugin-licensing.md) | DAW and plugin licensing | Accepted |
+| [0034](0034-port-toolchains-and-ci.md) | Port toolchains and on-demand CI | Accepted |
+| [0035](0035-headless-platform-layer.md) | Platform mechanisms for the headless core | Accepted |
 | [0036](0036-native-plugin-hosting.md) | Native plugin hosting and supervised scanning | Accepted |
 | [0037](0037-native-plugin-bridge.md) | Native out-of-process plugin bridge | Accepted |
 | [0038](0038-native-device-audio.md) | Native device audio through PortAudio | Accepted |
+| [0039](0039-native-gui.md) | Native DAW windowing and agent panel | Accepted |
 | [0040](0040-native-plugin-editors.md) | Native plugin editors | Accepted |
 | [0041](0041-cocoa-editor-ordering.md) | Cocoa bridged editor ordering | Accepted |
 | [0042](0042-native-midi-input.md) | Native MIDI input | Accepted |
@@ -96,8 +99,13 @@ current state.
 | [0078](0078-unsaved-recovery.md) | Unsaved projects autosave and come back after a crash | Accepted |
 | [0079](0079-registry-index-exposure.md) | Exposure metadata in the registry index | Accepted |
 | [0080](0080-midi-recording-recovery.md) | MIDI takes survive a crash through a journal | Accepted |
+| [0081](0081-live-bridged-plugins.md) | Bridged plug-ins run on live nodes, with a bounded wait | Accepted |
 | [0082](0082-audio-media-durability.md) | Audio takes and published media survive a crash | Accepted |
 | [0083](0083-local-crash-reports.md) | Local crash reports and external supervision | Accepted |
+| [0084](0084-audio-thread-page-faults.md) | Audio threads take no page faults the app can prevent | Accepted |
+| [0085](0085-live-helpers-park-while-bridged.md) | Live helpers park while a bridged call blocks | Accepted |
+| [0086](0086-idle-hold-for-live-bridged-plugins.md) | The idle-latency request is held while a bridged plug-in plays live | Accepted |
 | [0087](0087-control-boundary-budgets.md) | Bounded local control input and output | Accepted |
+| [0088](0088-lost-bridged-output-ends-held-notes.md) | A bridged block's lost output ends the notes it held | Accepted |
 | [0089](0089-endpoint-lock-ownership.md) | A server owns its control endpoint by holding its lock | Accepted |
 | [0091](0091-supervisor-end-and-launcher-stop.md) | A supervisor that ends without saying so is the launcher's stop | Accepted |

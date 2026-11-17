@@ -184,10 +184,10 @@ instructions are in `docs/guides/installing.md`.
   Optional null is accepted as omission for caller leniency; exported argument
   schemas deliberately remain narrower on this point (ADR-0087).
   The skill's command reference is generated and drift-tested.
-  Control admission globally bounds posted work to1,024 requests/64 MiB, including
+  Control admission globally bounds posted work to 1,024 requests/64 MiB, including
   disconnected owners; excess gets rpc.busy and admitted edits still run. Each
-  peer permits64 subscriptions and retains its16-request limit (ADR-0087).
-  Production fd-backed MCP uses a joined writer with a64 MiB packet reservation;
+  peer permits 64 subscriptions and retains its 16-request limit (ADR-0087).
+  Production fd-backed MCP uses a joined writer with a 64 MiB packet reservation;
   input admission pauses under backpressure while ticks/watches keep model service
   alive. Enqueue publishes through atomic ownership, never a writer-held lock.
   Oversized replies produce explicit bounded errors rather than being dropped.
@@ -231,8 +231,24 @@ instructions are in `docs/guides/installing.md`.
   ending monitoring, or changing the monitor mode, ends only the keyboard's
   notes. Known limits: the first change since audio started that turns a
   playrate on while playing restarts the strips it moves into the live
-  region, so a held note cuts; a bridged plug-in passes through on a live
-  strip (engine.md §2.1), so a bridged instrument falls silent when armed. A
+  region, so a held note cuts. Bridged plug-ins play on live strips too, in
+  the callback under a bounded wait (ADR-0081; while a bridged call blocks,
+  the job's idle live helpers park instead of spinning, ADR-0085), with their
+  in-process output in both executors (tested with device MIDI, effects, note output and
+  input FX); a late block is silent and counted in `bridge_late` and
+  `xruns`, its output is lost, so the notes a note plug-in's output held end
+  and the controllers it moved are reset (ADR-0088; its regression test
+  gates the late block in shared memory, POSIX only, so Windows does not run
+  it), blocks skipped while
+  it is outstanding lose their audio but pass
+  their events and lifecycle commands on when it answers (bounded: beyond
+  512 events notes go behind a reset and each parameter keeps its latest
+  value; a block's own events are never crowded out), a start answered late is asked again, not taken
+  for a refusal, and `engine.status.bridge_timing` says where bridged calls spent
+  their time and why a cycle overran. Where a third-party plug-in left on `inherit` runs is an app
+  preference (Edit > Preferences, `plugin_isolation`), still in process by
+  default until the bridging measurements decide; stock plug-ins stay in
+  process. A
   DAG worker pool with graph-bounded participation and idle parking
   (ADR-0023), a separate live callback fork-join pool (ADR-0024) with FIFO
   JACK helpers, a claim-based lifetime join that does not wait for unclaimed
@@ -240,7 +256,15 @@ instructions are in `docs/guides/installing.md`.
   an opt-in host-process memory-lock preference with effective status and
   actionable OS failures (bridges excluded; cleanup also drops plug-in locks);
   a separate default-off 20 µs CPU idle-latency request with close-based
-  cleanup and permission diagnostics (real-device validation is user-only);
+  cleanup and permission diagnostics, held automatically on Linux while a
+  bridged plug-in plays live (ADR-0086; a refusal is reported in
+  `engine.status`, not warned) (real-device validation is user-only);
+  on Linux the process, and each bridge, kept out of transparent huge pages
+  while the engine runs, so khugepaged collapsing the heap cannot stall an
+  audio thread (ADR-0084; regions a plug-in advised keep them on kernels from
+  6.18), and the audio threads' page faults counted in
+  `engine.status.audio_page_faults` (per thread on Linux, the whole process's
+  on macOS and Windows); script buffers are in memory when prepare() returns;
   audio threads named by role (`audio-render`, `audio-bg-N` and others);
   the renderer, background helpers and bridge audio threads at SCHED_FIFO 10
   below a real-time callback when permitted, with a warning and normal
@@ -468,9 +492,9 @@ instructions are in `docs/guides/installing.md`.
   host blocks split the grid, which a seek off it does, song positions
   included (`gridTransport()` and `Transport::offset`; checked for every
   stock module, and in both executors after seeks off the grid). A module's
-  `transport()` keeps its meaning, the call's start, so a project's or the
-  library's module source computing positions from it plays as it did,
-  positions differing in the last bits between renders that split the
+  `transport()` keeps its meaning, the call's start, and its arithmetic, so a
+  project's or the library's module source computing positions from it plays
+  as it did, to the bit, positions differing in the last bits between renders that split the
   grid differently. Getting there changed the
   sound of some saved patches, on the grid too, since projects play the
   current stock modules: in a feedback group, Harmonic, Resonator, Delay,
@@ -1156,15 +1180,29 @@ Engine and hosting:
   `RLIMIT_RTTIME` and a pool that leaves two allowed CPUs free; without them
   the renderer and pool run at normal priority (with a warning) and compete
   with desktop load.
-- A bridged plug-in's audio thread that cannot take the engine's background
-  policy stays at normal priority with no warning or status: nothing reports
-  it to the host. The bridge inherits the host's limits, so this needs a
-  limit or policy change made to the bridge process from outside; such a
-  thread's plug-in can then fall behind under load like an unelevated
-  renderer.
-- There is no pipelined bridge mode, so a bridged plugin on a live
-  (monitored) track is passed through with a warning; set its isolation to
-  in-process to hear it while monitoring.
+- A bridged plug-in's audio thread that cannot take the scheduling class it
+  asks for (the engine's background policy, or the callback's while live,
+  ADR-0081) keeps what it had; `engine.status.bridge_threads_refused` names
+  its FX. The bridge inherits the host's limits, so this needs a limit or
+  policy change for the user; such a thread's plug-in can then fall behind
+  under load like an unelevated renderer. On macOS the live class's time
+  constraint is sized by the device period and read back; that path has not
+  run natively yet.
+- A bridged plug-in on a live (monitored) track costs the callback a round
+  trip to its bridge per block (about 10 µs more than in process at the
+  median in B6, `docs/benchmarks/b6.md`, serially along a chain); one that
+  does not answer by the cycle's bridge deadline (its period or 2 ms,
+  whichever is larger) is silent for that block, which counts as an xrun.
+  There is no pipelined bridge mode. macOS and Windows timing is unmeasured,
+  and the macOS bridge does not join the device's audio workgroup.
+- A bridged call made off the callback, in an offline render, the renderer or
+  on the main thread, fails if the bridge has not answered within 2 s
+  (lifecycle commands 7 s; ADR-0013). The plug-in is then killed and silent,
+  and an offline render still succeeds, with no warning. A healthy plug-in
+  can miss this under memory pressure: two test suites at once did it, and
+  pausing a bridge for 2.3 s reproduces it. The engine tests raise the
+  deadline (`host::setBridgeDeadlineMs`), but the product default and the
+  silent success are open questions.
 - Audio backends: Linux JACK, dummy, and native PortAudio (CoreAudio on macOS;
   WASAPI/ASIO on Windows), with selection, latency/xruns and restart notifications.
   Fake-device output equals offline in both executors, with native CI coverage.

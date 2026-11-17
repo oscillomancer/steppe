@@ -1193,6 +1193,7 @@ bool Instance::reportsTail() const {
 bool Instance::failed() const { return remote_ && remote_->failed(); }
 
 int Instance::bridgePid() const { return remote_ ? remote_->bridgePid() : -1; }
+bool Instance::bridgeThreadRefused() const { return remote_ && remote_->classRefused(); }
 
 std::string Instance::failure() const { return remote_ ? remote_->failure() : std::string(); }
 
@@ -1398,6 +1399,8 @@ bool Instance::startProcessing() SUPPLE_RT {
     return processing_;
 }
 
+bool Instance::startUnanswered() const SUPPLE_RT { return remote_ && remote_->startUnanswered(); }
+
 void Instance::stopProcessing() SUPPLE_RT {
     AudioEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::StopProcessing);
     if (vst3_) {
@@ -1407,7 +1410,8 @@ void Instance::stopProcessing() SUPPLE_RT {
         return;
     }
     if (remote_) {
-        if (processing_) remote_->stopProcessing();
+        // A start the bridge has not answered may yet have succeeded there.
+        if (processing_ || remote_->startUnanswered()) remote_->stopProcessing();
         processing_ = false;
         return;
     }

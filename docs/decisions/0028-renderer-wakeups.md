@@ -3,6 +3,10 @@
 **Status:** Accepted, 2026-10-08. Amends ADR-0012 §5 and ADR-0024 §4.
 Spec: `docs/specs/engine.md` §2.1.
 
+**Amendment, 2026-11-14:** [ADR-0081](0081-live-bridged-plugins.md) lets
+the callback process bridged plug-ins on live nodes, with one bounded wait
+per cycle; it states the exception to the callback's no-wait rule.
+
 **Platform amendment, 2026-10-14:** [ADR-0035](0035-headless-platform-layer.md)
 adds macOS/Windows mechanisms while retaining these Linux semantics.
 

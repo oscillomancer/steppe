@@ -308,3 +308,71 @@ TEST_CASE("a late handoff starts the newly live strip afresh: no note hangs" *
                 CHECK(after == 0.0);
             }
 }
+
+// ADR-0081: on an armed, monitored track a bridged instrument hears the
+// keyboard and plays its timeline note, and a bridged echo plays its tail,
+// in both executors: the output is the in-process output, sample for sample
+// (they used to pass through, so the armed instrument was silent).
+TEST_CASE("bridged plug-ins on an armed track play the keyboard as in-process ones do" *
+          doctest::description("rt")) {
+    host::setBridgeExecutable(BRIDGE_PATH);
+    // Past the echo, which the effect alone outputs, 1 s after the note.
+    constexpr std::int64_t kFrames = 60000;
+    auto isolate = [](model::Session s, model::Isolation isolation) {
+        model::EditTxn t(s, 3);
+        for (const auto& fx : s.fx)
+            t.modify<model::FxInstance>(fx.id, [&](auto& f) { f.isolation = isolation; });
+        return t.commit().value();
+    };
+    struct Case {
+        const char* name;
+        model::Session session;
+    };
+    const Case cases[] = {
+        {"instrument", heldNoteSession(true, model::Monitor::On, "com.suppleaudio.test.sine")},
+        {"effect", echoSession(true, model::Monitor::On)}};
+    for (const Case& c : cases)
+        for (const std::uint32_t block : {256u, 37u})
+            for (EngineOptions options : kBothExecutors) {
+                // No healthy plug-in is late, however loaded the machine.
+                options.liveBridgeDeadlineMs = 60'000;
+                auto run = [&](model::Isolation isolation) {
+                    auto pool = makePool();
+                    MediaCache media;
+                    DummyBackend backend(
+                        keyboard({{4000, 0x90, 76, 100}, {30000, 0x80, 76, 0}}, kFrames + 4096));
+                    Engine engine(pool, media, options);
+                    REQUIRE(
+                        engine
+                            .start(backend,
+                                   {.sampleRate = 48000, .blockSize = block, .midiInputs = true})
+                            .ok());
+                    REQUIRE(engine.load(isolate(c.session, isolation)));
+                    REQUIRE(engine.awaitPlan());
+                    engine.play();
+                    runFrames(engine, backend, options, kFrames, block);
+                    engine.service();
+                    CHECK(engine.processErrors() == 0);
+                    CHECK(engine.bridgeLateCycles() == 0);
+                    for (const auto& fx : pool.instances())
+                        if (isolation != model::Isolation::InProcess) CHECK(fx->isolated());
+                    engine.stop();
+                    return backend.capture().channels[0];
+                };
+                INFO(c.name << ", block " << block << ", anticipative " << options.anticipative
+                            << ", workers " << options.workers);
+                const auto local = run(model::Isolation::InProcess);
+                double peak = 0;
+                for (std::int64_t i = 0; i < kFrames; ++i)
+                    peak = std::max(peak, std::fabs(double(local[static_cast<std::size_t>(i)])));
+                REQUIRE(peak > 0.01);  // the instrument, or the echo, is heard
+                for (auto isolation :
+                     {model::Isolation::SharedBridge, model::Isolation::Dedicated}) {
+                    INFO(c.name << ", block " << block << ", anticipative " << options.anticipative
+                                << ", workers " << options.workers << ", isolation "
+                                << static_cast<int>(isolation));
+                    const auto bridged = run(isolation);
+                    CHECK(maxDiff(bridged, 0, local, static_cast<std::size_t>(kFrames)) == 0.0);
+                }
+            }
+}

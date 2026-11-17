@@ -839,6 +839,11 @@ its Chain tab, above the input chain, as a Rack device (`RackDevice`,
 `daw/gui/app/rack_device.h`): the rack's name, "rack", and Open (the rack
 window on that rack; a double-click anywhere on the device its knobs leave
 does the same, as a double-click on a plug-in's row opens its editor).
+Each row's second line starts with a badge saying where the plug-in runs:
+`in-process`, `shared bridge` or `isolated` (its own process); for an fx on
+`inherit`, where the plug-in isolation preference placed it when its
+instance was made, with `(default)` (`fx.describe isolation_effective`,
+ADR-0081). `· offline` and `· failed` follow when they apply.
 Below come the knobs of its Macro modules
 (`com.suppleaudio.rack.macro`), grouped under each Macro's label (else
 "Macro"). Only a knob whose output (`macro_N` out of `out_N`) is cabled
@@ -1939,7 +1944,9 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   file. Missing fields (including in 1.0/1.1 files) mean false; invalid
   types report `preferences.prevent_deep_idle` at `/prevent_deep_idle` with
   "use true or false". It uses the same save/intent/effective-state pattern
-  as memory locking. The active note says "Requested: 20 µs"; failures show
+  as memory locking. The active note says "Requested: 20 µs", or "Held while a
+  bridged plug-in plays live: 20 µs" when the request is held without the
+  option (ADR-0086, Linux); failures show
   errno and a corrective hint; Off has no status note. This row uses the same
   label/button columns as the others. Its single small caution line says the
   request affects system idle while the engine runs and may increase power,
@@ -1965,6 +1972,15 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   other types report `preferences.copy_imported_media`) and applied to
   `EngineApp::setCopyImportedMedia` at once. A note says the project then
   keeps working if the original file moves or is deleted.
+  **Third-party plug-ins run** (1.9, ADR-0081): In the app (default), In a
+  shared bridge process, or Each in its own process; saved as
+  `plugin_isolation` (`in_process`, `shared_bridge` or `dedicated`; absent,
+  and in older files, means `in_process`; other values report
+  `preferences.plugin_isolation`) and applied to
+  `EngineApp::setPluginIsolation` at once. It places a plug-in left on
+  `inherit` as its instance is made (adding it, opening a project,
+  `fx.restart`): one already running stays where it is. Stock plug-ins stay
+  in the app, and a plug-in's own isolation wins. A note says so.
   **Audio device** (1.5): the row shows the audio system, output device,
   rate and buffer, and opens the audio device dialog (also Edit > Audio
   device…, action `ui.audio.device`). Saved as the `audio` object:

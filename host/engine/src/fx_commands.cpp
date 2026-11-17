@@ -68,6 +68,7 @@ struct FxDescription {
     std::optional<std::int64_t> sidechainChannels;  // a key input (ADR-0018)
     std::optional<std::int64_t> latencySamples;     // the instance's reported latency
     std::optional<bool> outputsNotes;               // note output ports (ADR-0068)
+    std::optional<std::string> isolationEffective;  // where it runs (ADR-0081)
 };
 
 constexpr std::size_t kMaxListedParams = 512;
@@ -658,6 +659,11 @@ void registerFxCommands(cmd::Registry& registry) {
                        schema::integer().doc("The plug-in's key input: route.add {fx} feeds it"))
                 .field("latency_samples", &FxDescription::latencySamples,
                        schema::integer().doc("The instance's reported latency, in samples"))
+                .field("isolation_effective", &FxDescription::isolationEffective,
+                       schema::string().doc(
+                           "Where the instance runs: in_process, shared_bridge or dedicated; "
+                           "inherit resolves to the plug-in isolation preference (stock plug-ins "
+                           "in process), as the instance is made"))
                 .field("outputs_notes", &FxDescription::outputsNotes,
                        schema::boolean().doc("The loaded plug-in sends notes or MIDI: fx.set "
                                              "midi_output chooses replace or merge"))
@@ -667,7 +673,7 @@ void registerFxCommands(cmd::Registry& registry) {
                 .build();
         c.examples = {
             {"Describe", j(R"({"fx": "fx_2"})"),
-             j(R"({"plugin": "com.suppleaudio.test.gain", "name": "<any>", "description": "<any>", "latency_samples": "<any>", "status_available": false})"),
+             j(R"({"plugin": "com.suppleaudio.test.gain", "name": "<any>", "description": "<any>", "latency_samples": "<any>", "isolation_effective": "in_process", "status_available": false})"),
              "song_with_fx"}};
         c.run = [](const FxDescribeArgs& a, Context& ctx) -> Result<FxDescription> {
             EngineApp& app = engine::app(ctx);
@@ -709,6 +715,18 @@ void registerFxCommands(cmd::Registry& registry) {
             if (auto key = app.fxSidechainChannels(fx); key && *key > 0) r.sidechainChannels = *key;
             if (auto latency = app.fxLatencySamples(*id, fx)) r.latencySamples = *latency;
             if (auto notes = app.fxOutputsNotes(*id, fx); notes && *notes) r.outputsNotes = true;
+            switch (app.effectiveIsolation(*id)) {
+                case model::Isolation::SharedBridge:
+                    r.isolationEffective = "shared_bridge";
+                    break;
+                case model::Isolation::Dedicated:
+                    r.isolationEffective = "dedicated";
+                    break;
+                case model::Isolation::InProcess:
+                case model::Isolation::Inherit:
+                    r.isolationEffective = "in_process";
+                    break;
+            }
             if (a.full) {
                 auto schema = app.fxSchema(fx);
                 if (!schema && live) schema = live->semanticSchema();

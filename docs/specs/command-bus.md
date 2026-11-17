@@ -748,7 +748,7 @@ semantics. No bad_alloc catch is introduced.
 
 ### Global admission (ADR-0087 D1)
 
-A server admits at most1,024 posted-but-unexecuted requests and64 MiB of frame
+A server admits at most 1,024 posted-but-unexecuted requests and 64 MiB of frame
 bytes globally, including disconnected peers. Credits return when execution
 begins or the last unexecuted closure is destroyed; per-peer credits also return
 on destruction. Closure copies share frame/credit ownership. Admitted work still
@@ -756,7 +756,7 @@ runs after disconnect; stop/destruction retains its existing lifecycle rules.
 Excess work is not posted or executed: a live peer receives structured rpc.busy
 with its bounded ID and a retry-later hint. A bounded, serialized I/O preflight
 extracts the ID without model dispatch. Existing per-peer16 limits remain; no
-additional fairness scheme is added. Each peer admits at most64 subscriptions;
+additional fairness scheme is added. Each peer admits at most 64 subscriptions;
 excess returns rpc.subscriptions with an unsubscribe hint.
 
 ### FD-backed output (ADR-0087 D2)
@@ -765,7 +765,7 @@ Production engine, sandbox and proxy stdio use `serve(inputFd, outputFd, Tick)`.
 A joined native writer owns a noninheritable output duplicate. The single producer
 reserves one complete packet's worst-case capacity before dispatch: queued plus
 in-flight serialized bytes (notifications followed by reply, including newlines)
-never exceed64 MiB. This conservative full-packet reservation pauses even buffered
+never exceed 64 MiB. This conservative full-packet reservation pauses even buffered
 stdin admission while output is pending; it does not wait for a consumer or take
 a writer-held mutex in enqueue. Packet ownership uses an atomic SPSC publication
 and native wakes; storage is freed before capacity returns.

@@ -56,6 +56,14 @@ restarts the running engine at once.
   rates. ASIO uses one device for input and output, and its driver may round
   the buffer size.
 
+On Linux, while the engine runs, Steppe keeps its own memory out of
+transparent huge pages, except where a plug-in asks for them. With the
+system set to `always`, the kernel otherwise merges memory in the
+background, and audio can stop for a fraction of a second while it does. This
+applies to Steppe and its plug-in bridges only: it changes no system setting,
+and ends when Steppe stops the engine. macOS and Windows do not merge memory
+this way, and nothing changes there.
+
 If the device is missing or busy when Steppe starts, the app still opens. The
 Audio device dialog then opens and says why. Choose another device, or
 **Restart audio** once the device is ready. The dialog's status lines show
@@ -856,6 +864,31 @@ In the chain window, Ctrl-click (Cmd-click on macOS) toggles a row in the
 selection, including the active row. Effects moved to another track leave
 that window’s selection.
 
+Each row in the chain window says where its plugin runs: in-process (inside
+Steppe), shared bridge (in a helper process shared with other plugins) or
+isolated (in a process of its own). A plugin that crashes in a bridge
+process goes silent and can be restarted, and Steppe keeps playing; one
+that crashes in-process takes Steppe down with it. **Edit > Preferences… >
+Third-party plug-ins run** sets where plugins you have not set yourself
+run: in the app (the default), in a shared bridge process, or each in its
+own process. Those rows say "(default)". The choice applies as plugins
+load (adding one, opening a project, restarting one); Steppe's own plugins
+always run in the app.
+
+On Linux, while a plugin in a bridge process plays live, for example on a
+monitored track, Steppe keeps the CPUs out of deep idle, as **Edit > Preferences… > Keep CPUs out of deep idle** does whenever
+the engine runs. A bridged plugin waits for its bridge to wake, and a CPU in
+deep idle wakes late. This is a request Steppe's process holds, not a system
+setting: it ends when no bridged plugin plays live, when the engine stops or
+when Steppe quits, and nothing changes after. While held, the computer may
+use more power and run warmer. Many systems let only administrators make the
+request; the preference's note then says it was refused, audio plays
+without it, and the preference's caution line says how to allow it. With the
+preference on, the request is held whenever the engine runs. macOS and
+Windows have no such per-process request (Windows' power plan is
+system-wide, and Steppe leaves it alone); there Steppe's audio threads and
+its bridges' ask for the system's audio class instead, as they always have.
+
 ## Agents (MCP)
 
 Steppe is built to be driven by an AI agent as well as by hand. `steppe-mcp`
@@ -1253,12 +1286,12 @@ keeps running without crash capture.
 
 ### Agent transport limits
 
-Control/MCP are local same-user endpoints. RPC queues at most1,024 pending
-requests and64 MiB globally; excess calls receive `rpc.busy` and should be
-retried later. Each peer permits64 subscriptions. Request IDs are at most1,024
-serialized bytes, and untrusted frames at most1,000,000 JSON values.
+Control/MCP are local same-user endpoints. RPC queues at most 1,024 pending
+requests and 64 MiB globally; excess calls receive `rpc.busy` and should be
+retried later. Each peer permits 64 subscriptions. Request IDs are at most 1,024
+serialized bytes, and untrusted frames at most 1,000,000 JSON values.
 
-MCP stdio uses a64 MiB writer reservation: keep reading replies even after
+MCP stdio uses a 64 MiB writer reservation: keep reading replies even after
 closing stdin. Output backpressure pauses new commands while model service
 continues. EOF drains replies before finishing capture/shutdown; an open consumer
 that stops reading can defer that completion. Oversized replies return an explicit

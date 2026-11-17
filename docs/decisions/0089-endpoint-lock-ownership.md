@@ -39,4 +39,9 @@ On macOS a listener that does not hold the lock is protected only while its
 backlog has room. Every product server holds the lock, so this concerns
 foreign listeners on a product socket path only.
 
+On Windows the system drops a dead process's lock promptly but not at a
+guaranteed moment, so a start made the instant after a crash can be refused
+with `rpc.address_in_use`; a retry succeeds. Linux and macOS release it as the
+process dies.
+
 A lock file remains beside each socket path after the server stops.

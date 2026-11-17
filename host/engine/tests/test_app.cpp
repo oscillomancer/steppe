@@ -17,6 +17,7 @@
 #include <supple/engine/app.h>
 #include <supple/engine/jack.h>
 #include <supple/host/clap_host.h>
+#include <supple/model/project_file.h>
 #include <supple/model/schemas.h>
 
 #include <supple/analysis/analysis.h>
@@ -402,6 +403,87 @@ TEST_CASE("an LLM plays the song in real time over the bus (a stand-in libjack)"
     CHECK(std::string(fake.propsEnv()) == "{ node.force-quantum=128 node.force-rate=96000 }");
     call("engine.stop", "{}");
     fake.reset();
+}
+
+TEST_CASE("the plug-in isolation preference places inherit plug-ins as they load") {
+    // ADR-0081 commit 7: a third-party plug-in left on inherit runs where
+    // the preference says; the project keeps inherit, fx.describe says where.
+    host::setBridgeExecutable(BRIDGE_PATH);
+    Root root;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    auto app = makeApp(root.path);
+    cmd::Dispatcher d(registry, *app);
+    auto call = [&](std::string command, std::string_view args) {
+        auto r = d.execute({std::move(command), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return *r;
+    };
+    CHECK(app->pluginIsolation() == model::Isolation::InProcess);  // as shipped
+    CHECK_FALSE(app->setPluginIsolation(model::Isolation::Inherit));
+    REQUIRE(app->setPluginIsolation(model::Isolation::SharedBridge));
+    call("batch", R"({"steps": [
+        {"command": "track.add", "args": {"name": "Lead"}, "as": "t"},
+        {"command": "fx.add", "args": {"track": "${t.track}", "plugin": "com.suppleaudio.test.gain"}}]})");
+    const model::Id fx = *model::Id::parse("fx_1");
+    call("engine.start", R"({"backend": "dummy"})");
+    host::Instance* instance = app->instanceOf(fx);
+    REQUIRE(instance);
+    CHECK(instance->isolated());
+    auto described = call("fx.describe", R"({"fx": "fx_1"})");
+    CHECK(described["isolation_effective"].asString() == "shared_bridge");
+    CHECK(app->head().fx.find(fx)->isolation == model::Isolation::Inherit);
+    // A new preference applies as plug-ins load: this one stays until then.
+    REQUIRE(app->setPluginIsolation(model::Isolation::InProcess));
+    CHECK(call("fx.describe", R"({"fx": "fx_1"})")["isolation_effective"].asString() ==
+          "shared_bridge");
+    call("fx.restart", R"({"fx": "fx_1"})");
+    instance = app->instanceOf(fx);
+    REQUIRE(instance);
+    CHECK_FALSE(instance->isolated());
+    CHECK(call("fx.describe", R"({"fx": "fx_1"})")["isolation_effective"].asString() ==
+          "in_process");
+    call("engine.stop", "{}");
+    REQUIRE(app->save(root.path / "song.json"));
+    auto saved = model::parseProjectFile(*readTextFile(root.path / "song.json"));
+    REQUIRE(saved);
+    CHECK(saved->store.head()->fx.find(fx)->isolation == model::Isolation::Inherit);
+}
+
+TEST_CASE(
+    "without a plug-in bridge, the isolation preference runs plug-ins in process, and says so") {
+    struct Restore {
+        ~Restore() { host::setBridgeExecutable(BRIDGE_PATH); }
+    } restore;
+    Root root;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    auto app = makeApp(root.path);
+    REQUIRE(app->plugins());  // a scan finds the bridge again: as when none is installed
+    host::setBridgeExecutable({});
+    cmd::Dispatcher d(registry, *app);
+    auto call = [&](std::string command, std::string_view args) {
+        auto r = d.execute({std::move(command), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return *r;
+    };
+    REQUIRE(app->setPluginIsolation(model::Isolation::Dedicated));
+    call("batch", R"({"steps": [
+        {"command": "track.add", "args": {"name": "Lead"}, "as": "t"},
+        {"command": "fx.add", "args": {"track": "${t.track}", "plugin": "com.suppleaudio.test.gain"}}]})");
+    call("engine.start", R"({"backend": "dummy"})");
+    host::Instance* instance = app->instanceOf(*model::Id::parse("fx_1"));
+    REQUIRE(instance);
+    CHECK_FALSE(instance->isolated());
+    CHECK(call("fx.describe", R"({"fx": "fx_1"})")["isolation_effective"].asString() ==
+          "in_process");
+    auto status = call("engine.status", "{}");
+    bool said = false;
+    for (std::size_t i = 0; i < status["warnings"].size(); ++i)
+        said = said ||
+               status["warnings"].at(i).asString().find("no plug-in bridge") != std::string::npos;
+    CHECK(said);
+    call("engine.stop", "{}");
 }
 
 TEST_CASE("an isolated plugin that crashes is reported and restarted over the bus") {
@@ -3097,6 +3179,86 @@ TEST_CASE("app converts semantic output values to physical patches without sette
     }
 }
 
+TEST_CASE("a semantic plug-in's output equal to its patch value is not an edit") {
+    // A semantic FX keeps its values in its patch, not in raw params: an
+    // output reporting the value the patch already holds (as the overflow
+    // recovery re-reads every parameter) must not commit. It did, for each
+    // parameter, because raw params gained the id (item D, 96 bridged tracks).
+    struct Control {
+        void (*edit)(const clap_plugin_t*, double, std::uint32_t);
+        std::uint32_t (*deliveries)(const clap_plugin_t*);
+    };
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    REQUIRE(bus.execute({"track.add", j(R"({"name":"Gain"})"), kTest}));
+    REQUIRE(bus.execute({"fx.add", j(R"({"track":"tr_1","plugin":"Test Gain"})"), kTest}));
+    REQUIRE(bus.execute(
+        {"fx.patch.merge", j(R"({"fx":"fx_1","patch":{"params":{"gain":-12}}})"), kTest}));
+    const auto fx = *model::Id::parse("fx_1");
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(
+        app->startEngine(backend, {.sampleRate = 48000, .blockSize = 64}, {.anticipative = false}));
+    backend.run(1);
+    app->tick();
+    auto* instance = app->instanceOf(fx);
+    const auto* plugin = instance->raw();
+    const auto* control =
+        static_cast<const Control*>(plugin->get_extension(plugin, "supple.test.gain-control"));
+    REQUIRE(control);
+    const auto history = app->versions().history().size();
+    control->edit(plugin, -12, host::OutputEvent::IsLive | host::OutputEvent::DontRecord);
+    backend.run(1);
+    app->tick();
+    for (const auto& [topic, payload] : app->takeEvents())
+        if (topic == "engine.error") MESSAGE(json::writeCompact(payload));
+    CHECK(app->head().fx.find(fx)->patch->find("params")->find("gain")->asDouble() ==
+          doctest::Approx(-12));
+    CHECK(app->versions().history().size() == history);
+    app->stopEngine();
+}
+
+TEST_CASE("an output overflow recovers only the FX whose outputs were dropped") {
+    // Item D: an overflow re-read every parameter of every FX, so at 96
+    // bridged tracks one FX's dropped meters cost a read of all of them. The
+    // gain's value is set host-side (no output, no edit): only a recovery
+    // that reads the gain, which dropped nothing, would commit it.
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    REQUIRE(bus.execute({"track.add", j(R"({"name":"Gain"})"), kTest}));
+    REQUIRE(bus.execute({"fx.add", j(R"({"track":"tr_1","plugin":"Test Gain"})"), kTest}));
+    REQUIRE(bus.execute({"track.add", j(R"({"name":"Edge"})"), kTest}));
+    REQUIRE(bus.execute(
+        {"fx.add", j(R"({"track":"tr_2","plugin":"com.suppleaudio.test.edge"})"), kTest}));
+    const auto gainFx = *model::Id::parse("fx_1");
+    const auto edgeFx = *model::Id::parse("fx_2");
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(
+        app->startEngine(backend, {.sampleRate = 48000, .blockSize = 64}, {.anticipative = false}));
+    auto* gain = app->instanceOf(gainFx);
+    REQUIRE(gain);
+    REQUIRE_FALSE(gain->params().empty());
+    const auto gainParam = gain->params().front().id;
+    const auto before = *app->head().fx.find(gainFx);
+    REQUIRE(gain->setParam(gainParam, gain->params().front().min));
+    REQUIRE(app->instanceOf(edgeFx)->loadState(std::array<std::uint8_t, 4>{13, 0, 0, 0}));
+    REQUIRE(app->transport("play"));
+    for (int i = 0; i < 4; ++i) {
+        backend.run(2);  // the edge emits 900 outputs a block: most are dropped
+        app->tick();
+    }
+    app->takeEvents();
+    const auto& after = *app->head().fx.find(gainFx);
+    CHECK(after.params == before.params);
+    CHECK(after.patch == before.patch);
+    app->stopEngine();
+}
+
 TEST_CASE("app rejects plug-in outputs from a replaced plan and a removed FX") {
     Root root;
     auto app = makeApp(root.path);
@@ -3519,4 +3681,144 @@ TEST_CASE("app service subscriptions keep local instance callbacks alive after e
     CHECK_FALSE(instance->serviceMainThread());
     ::close(fds[0]);
     ::close(fds[1]);
+}
+
+// Round 23 reproductions (review-builds/round23/sweep_probe.cpp).
+namespace supple::engine {
+struct OutputTestAccess {
+    static void enqueue(Engine& e, model::Id fx, std::uint32_t param, host::OutputEvent::Kind kind,
+                        double value = 0) {
+        PluginOutput p;
+        p.fx = fx;
+        p.planGeneration = e.planGeneration();
+        p.epoch = e.meterClock().epoch;
+        p.idle = true;
+        p.event.kind = kind;
+        p.event.paramId = param;
+        p.event.value = value;
+        REQUIRE(e.callbackOutputs_->push(p));
+    }
+    // The two halves of a counted, named drop, to order them as a preempted
+    // callback could (round 23).
+    static void countDrop(Engine& e) { e.outputDrops_.fetch_add(1, std::memory_order_relaxed); }
+    static void nameDrop(Engine& e, model::Id fx) { e.noteDroppedFx(fx); }
+};
+}  // namespace supple::engine
+namespace {
+void addGains(cmd::Dispatcher& bus, unsigned n) {
+    REQUIRE(bus.execute({"track.add", j(R"({"name":"Gains"})"), kTest}));
+    for (unsigned i = 0; i < n; ++i) {
+        REQUIRE(bus.execute({"fx.add", j(R"({"track":"tr_1","plugin":"Test Gain"})"), kTest}));
+        auto args = json::Value::object();
+        args["fx"] = "fx_" + std::to_string(i + 1);
+        args["patch"] = j(R"({"params":{"gain":0}})");
+        REQUIRE(bus.execute({"fx.patch.merge", std::move(args), kTest}));
+    }
+}
+double savedGain(EngineApp& app, model::Id fx) {
+    const auto* p = app.head().fx.find(fx);
+    REQUIRE(p);
+    REQUIRE(p->patch);
+    return p->patch->find("params")->find("gain")->asDouble();
+}
+void lowerGain(EngineApp& app, DummyBackend& backend, model::Id fx) {
+    auto* p = app.instanceOf(fx);
+    REQUIRE(p);
+    REQUIRE(p->setParam(0, 0));
+    backend.run(1);
+    REQUIRE(p->paramValue(0));
+    REQUIRE(*p->paramValue(0) == 0);
+}
+}  // namespace
+TEST_CASE("round 23: a drop counted before its FX is named still recovers the writable value") {
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry r;
+    registerEngineCommands(r);
+    cmd::Dispatcher bus(r, *app);
+    addGains(bus, 1);
+    const auto fx = *model::Id::parse("fx_1");
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(app->startEngine(backend, {.sampleRate = 48000, .blockSize = 64},
+                             {.anticipative = false, .workers = 0}));
+    backend.run(1);
+    app->tick();
+    lowerGain(*app, backend, fx);
+    OutputTestAccess::countDrop(*app->engine());  // callback is preempted here
+    app->tick();
+    OutputTestAccess::nameDrop(*app->engine(), fx);  // callback finishes publication
+    app->tick();
+    app->tick();
+    CHECK(savedGain(*app, fx) == -60);
+    // The missing value becomes recoverable only after another counted loss.
+    OutputTestAccess::countDrop(*app->engine());
+    app->tick();
+    CHECK(savedGain(*app, fx) == -60);
+    app->stopEngine();
+}
+TEST_CASE("round 23: a consumer gesture-capacity overflow recovers the FX it dropped") {
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry r;
+    registerEngineCommands(r);
+    cmd::Dispatcher bus(r, *app);
+    addGains(bus, 65);
+    const auto target = *model::Id::parse("fx_65");
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(app->startEngine(backend, {.sampleRate = 48000, .blockSize = 64},
+                             {.anticipative = false, .workers = 0}));
+    backend.run(1);
+    app->tick();
+    lowerGain(*app, backend, target);
+    for (unsigned n = 1; n <= 64; ++n)
+        for (unsigned param = 0; param < 2; ++param)
+            OutputTestAccess::enqueue(*app->engine(), {model::Kind::Fx, n}, param,
+                                      host::OutputEvent::Kind::GestureBegin);
+    OutputTestAccess::enqueue(*app->engine(), target, 0, host::OutputEvent::Kind::GestureBegin);
+    OutputTestAccess::enqueue(*app->engine(), target, 0, host::OutputEvent::Kind::ParamValue, 0);
+    app->tick();
+    app->tick();
+    app->tick();
+    CHECK(savedGain(*app, target) == -60);
+    // A full identity table is the documented conservative fallback.
+    for (unsigned n = 1; n <= 513; ++n) {
+        OutputTestAccess::countDrop(*app->engine());
+        OutputTestAccess::nameDrop(*app->engine(), {model::Kind::Fx, n});
+    }
+    app->tick();
+    CHECK(savedGain(*app, target) == -60);
+    app->stopEngine();
+}
+TEST_CASE("round 23: another FX's overflow keeps a healthy writable output") {
+    struct Control {
+        void (*edit)(const clap_plugin_t*, double, std::uint32_t);
+        std::uint32_t (*deliveries)(const clap_plugin_t*);
+    };
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry r;
+    registerEngineCommands(r);
+    cmd::Dispatcher bus(r, *app);
+    addGains(bus, 1);
+    REQUIRE(bus.execute({"track.add", j(R"({"name":"Edge"})"), kTest}));
+    REQUIRE(bus.execute(
+        {"fx.add", j(R"({"track":"tr_2","plugin":"com.suppleaudio.test.edge"})"), kTest}));
+    const auto gainId = *model::Id::parse("fx_1"), edgeId = *model::Id::parse("fx_2");
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(app->startEngine(backend, {.sampleRate = 48000, .blockSize = 64},
+                             {.anticipative = false, .workers = 0}));
+    backend.run(1);
+    app->tick();
+    auto* gain = app->instanceOf(gainId);
+    const auto* plugin = gain->raw();
+    const auto* control =
+        static_cast<const Control*>(plugin->get_extension(plugin, "supple.test.gain-control"));
+    REQUIRE(control);
+    REQUIRE(app->instanceOf(edgeId)->loadState(std::array<std::uint8_t, 4>{13, 0, 0, 0}));
+    control->edit(plugin, -12, host::OutputEvent::IsLive | host::OutputEvent::DontRecord);
+    backend.run(1);
+    app->tick();
+    CHECK(app->engine()->pluginOutputDrops() > 0);
+    CHECK(savedGain(*app, gainId) == doctest::Approx(-12));
+    app->stopEngine();
 }

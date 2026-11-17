@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string_view>
 #include <thread>
 
@@ -42,4 +43,29 @@ unsigned availableCpus();
 unsigned allowedCpuCount();
 // Linux process RT limit; other platforms leave the requested value unchanged.
 int realtimePriorityLimit(int requested);
+
+// Page faults taken: minor ones the kernel served from memory (a first
+// touch, a page it moved or merged), major ones that waited for storage.
+// `major` is -1 where the platform does not tell them apart (Windows).
+struct PageFaults {
+    std::int64_t minor = 0, major = 0;
+    // A counter reached its limit and stopped (macOS keeps 32-bit counts that
+    // stay at INT32_MAX): minor and major no longer count what follows.
+    bool saturated = false;
+};
+// macOS's task event counts (every fault, page-ins), as PageFaults: minor is
+// faults less page-ins; either at INT32_MAX is saturated. Pure, for tests.
+PageFaults pageFaultsFromTaskCounts(std::int32_t faults, std::int32_t pageins);
+// The calling thread's native handle, without a system call: callable on an
+// audio path, to name the thread for the calls below.
+std::thread::native_handle_type currentThreadHandle();
+// Linux: the kernel's id of a live thread (its tid); 0 elsewhere.
+std::int64_t kernelThreadId(std::thread::native_handle_type thread);
+// Linux: the faults the thread with that kernel id took since it started;
+// nullopt for an id no thread has, and on macOS and Windows, which keep no
+// count per thread. A thread that has ended reads until the kernel releases
+// it, which can be after a join returns, and its id can then be reused.
+std::optional<PageFaults> threadPageFaults(std::int64_t kernelId);
+// The whole process's since it started.
+PageFaults processPageFaults();
 }  // namespace supple

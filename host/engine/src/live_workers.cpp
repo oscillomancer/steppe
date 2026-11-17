@@ -2,7 +2,10 @@
 // Copyright (c) 2026 Supple Audio
 #include "live_workers.h"
 
+#include "supple/host/clap_host.h"
+
 #include <algorithm>
+#include <bit>
 #include <string>
 
 #include "supple/base/thread.h"
@@ -68,18 +71,72 @@ ThreadPolicy LiveWorkers::policy() {
                                               : threadPolicy(threads_.front().native_handle());
 }
 
-void LiveWorkers::help(TaskGraph& g, Fn fn, void* context) SUPPLE_RT {
+void LiveWorkers::help(TaskGraph& g, Fn fn, void* context, int self) SUPPLE_RT {
+    // ADR-0085: an idle helper parks only while one of the job's bridged
+    // calls blocks; otherwise (and always in-process) it spins, as before.
+    const bool mayPark = self >= 0 && self < 64;
     while (g.remaining.load(std::memory_order_acquire) != 0) {
         std::uint32_t task = 0;
         if (!g.ready.pop(task)) {
+            if (mayPark && waiters_.blocked.load(std::memory_order_relaxed) != 0) {
+                park(g, self);
+                continue;
+            }
             rt::relax();
             continue;
         }
         fn(context, task);
+        int pushed = 0;
         for (std::uint32_t next : g.succ[task])
-            if (g.pending[next].fetch_sub(1, std::memory_order_acq_rel) == 1) g.ready.push(next);
+            if (g.pending[next].fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                g.ready.push(next);
+                ++pushed;
+            }
+        // Best effort: a push may miss a helper parking at that moment, which
+        // then runs no later than the blocked wait's end (bridgeWaitEnded),
+        // while this thread runs what it pushed. In-process, parked_ is never
+        // written, and this is one load of an unshared line.
+        if (pushed > 0 && parked_.load(std::memory_order_relaxed) != 0) unpark(pushed, false);
         g.remaining.fetch_sub(1, std::memory_order_acq_rel);
     }
+}
+
+// A helper parks only while a bridged call blocks, and every blocked call's
+// end wakes every parked helper: the helper sets its bit, fences, then reads
+// `blocked`; the call decrements `blocked`, fences, then reads the bits
+// (LiveBridgeBlocked). Either the helper sees no call blocking and does not
+// wait, or the call's end sees its bit. The last task of a job finishes after
+// every bridged wait in it has ended, so no helper is parked past the job.
+void LiveWorkers::park(TaskGraph& g, int self) SUPPLE_RT {
+    const std::uint64_t bit = std::uint64_t{1} << self;
+    std::atomic<std::uint32_t>& word = slots_[static_cast<std::size_t>(self)].park;
+    parked_.fetch_or(bit, std::memory_order_seq_cst);
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    const std::uint32_t seen = word.load(std::memory_order_acquire);
+    if (waiters_.blocked.load(std::memory_order_seq_cst) != 0 && g.ready.empty() &&
+        g.remaining.load(std::memory_order_acquire) != 0) {
+        event(Event::Park);
+        // ADR-0085: a helper's wait within a job, only while a bridged call
+        // in the job blocks; woken by a push or by that call's end.
+        rt::ScopedSanctionedSyscall wait;
+        rt::wait(word, seen);
+    }
+    parked_.fetch_and(~bit, std::memory_order_seq_cst);
+}
+
+void LiveWorkers::unpark(int count, bool all) SUPPLE_RT {
+    std::uint64_t waiting = parked_.load(std::memory_order_seq_cst);
+    while (waiting != 0 && (all || count-- > 0)) {
+        const int i = std::countr_zero(waiting);
+        waiting &= waiting - 1;
+        std::atomic<std::uint32_t>& word = slots_[static_cast<std::size_t>(i)].park;
+        word.fetch_add(1, std::memory_order_release);
+        rt::wake(word);
+    }
+}
+
+void LiveWorkers::bridgeWaitEnded(void* self) SUPPLE_RT {
+    static_cast<LiveWorkers*>(self)->unpark(0, true);
 }
 
 void LiveWorkers::run(TaskGraph& g, Fn fn, void* context) SUPPLE_RT {
@@ -97,6 +154,7 @@ void LiveWorkers::run(TaskGraph& g, Fn fn, void* context) SUPPLE_RT {
     job_ = &g;
     fn_ = fn;
     context_ = context;
+    deadline_ = host::currentLiveBridgeDeadline();
     // The preceding close/join excludes readers of the old job. A late claim
     // either sees closed and reads no fields, or acquires this publication.
     open_.store(true, std::memory_order_seq_cst);
@@ -105,7 +163,10 @@ void LiveWorkers::run(TaskGraph& g, Fn fn, void* context) SUPPLE_RT {
         rt::wake(slots_[i].sequence);
     }
     event(Event::Published);
-    help(g, fn, context);
+    {
+        const host::LiveBridgeWaitScope waits(&waiters_);
+        help(g, fn, context, -1);
+    }
     // This store/load and the helper's increment/open check form a Dekker
     // handshake: either we see its claim, or it sees closed. Acquire/release
     // alone would let both sides miss each other and retire a job still read.
@@ -129,7 +190,9 @@ void LiveWorkers::loop(unsigned index) {
         event(Event::Claimed);
         if (open_.load(std::memory_order_seq_cst)) {
             event(Event::Entered);
-            help(*job_, fn_, context_);
+            const host::LiveBridgeDeadline deadline(deadline_);
+            const host::LiveBridgeWaitScope waits(&waiters_);
+            help(*job_, fn_, context_, static_cast<int>(index));
             event(Event::Leave);
         } else {
             // The graph and context may already be gone. An old notification
