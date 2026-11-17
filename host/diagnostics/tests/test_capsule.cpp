@@ -33,7 +33,8 @@ std::vector<std::uint8_t> encode(const CapsuleData& data) {
         bytes.insert(bytes.end(), b, b + n);
     };
     // A mutated header can claim more than the arrays hold; the claim is written as it
-    // stands and only what exists is copied, since the parser refuses the claim anyway.
+    // stands and only what exists is copied. Cases that must be refused by a count guard
+    // alone use `claimed` below instead, which holds every entry the header claims.
     put(&data.header, sizeof(CapsuleHeader));
     put(data.modules,
         std::min<std::size_t>(data.header.moduleCount, kCapsuleModules) * sizeof(CapsuleModule));
@@ -43,6 +44,42 @@ std::vector<std::uint8_t> encode(const CapsuleData& data) {
         put(data.threads[i].frames,
             std::min<std::size_t>(data.threads[i].head.frameCount, kCapsuleFrames) *
                 sizeof(std::uint64_t));
+    }
+    return bytes;
+}
+// A capsule whose header claims `modules` modules and `threads` threads, followed by exactly
+// that many valid entries: non-overlapping modules, a walked fault entry with `faultFrames`
+// frames first, then exited threads. Nothing in it is wrong except, when a count is above its
+// limit, that count, so only the parser's count guard can refuse it.
+std::vector<std::uint8_t> claimed(std::uint32_t modules, std::uint32_t threads,
+                                  std::uint32_t faultFrames) {
+    std::vector<std::uint8_t> bytes;
+    const auto put = [&](const void* p, std::size_t n) {
+        const auto* b = static_cast<const std::uint8_t*>(p);
+        bytes.insert(bytes.end(), b, b + n);
+    };
+    CapsuleHeader header{};
+    header.magic = kCapsuleMagic;
+    header.moduleCount = modules;
+    header.threadCount = threads;
+    put(&header, sizeof header);
+    for (std::uint32_t i = 0; i < modules; ++i) {
+        CapsuleModule m{};
+        m.start = 0x10000 + std::uint64_t{i} * 0x1000;
+        m.end = m.start + 0x800;
+        put(&m, sizeof m);
+    }
+    for (std::uint32_t t = 0; t < threads; ++t) {
+        CapsuleThread head{};
+        head.role = static_cast<std::uint8_t>(t == 0 ? Role::Fault : Role::Other);
+        head.missing = static_cast<std::uint8_t>(t == 0 ? Missing::None : Missing::ThreadExited);
+        head.stop = static_cast<std::uint8_t>(Stop::End);
+        head.frameCount = t == 0 ? faultFrames : 0;
+        put(&head, sizeof head);
+        for (std::uint32_t f = 0; f < head.frameCount; ++f) {
+            const std::uint64_t frame = 0x10100 + f;
+            put(&frame, sizeof frame);
+        }
     }
     return bytes;
 }
@@ -253,6 +290,20 @@ TEST_CASE("overlapping module ranges cannot make an address ambiguous") {
     CHECK(snapshot->threads[0].walk.frames[1].module == -1);  // 0x3800 only in the dropped one
 }
 
+TEST_CASE("a capsule at each count limit parses and one entry more is refused by the guard") {
+    // Each capsule below holds every entry its header claims, all of them valid, so the only
+    // thing that can refuse the "one more" cases is the guard on that count (review round 31, F4).
+    const auto parses = [](const std::vector<std::uint8_t>& bytes) {
+        return parseCapsule(bytes.data(), bytes.size()).has_value();
+    };
+    CHECK(parses(claimed(kCapsuleModules, 1, 1)));
+    CHECK(parses(claimed(1, kCapsuleThreads, 1)));
+    CHECK(parses(claimed(1, 1, kCapsuleFrames)));
+    CHECK_FALSE(parses(claimed(kCapsuleModules + 1, 1, 1)));  // module count
+    CHECK_FALSE(parses(claimed(1, kCapsuleThreads + 1, 1)));  // thread count
+    CHECK_FALSE(parses(claimed(1, 1, kCapsuleFrames + 1)));   // too many frames
+}
+
 TEST_CASE("a malformed or truncated capsule yields nothing") {
     auto good = fresh();
     addModule(*good, 0x1000, 0x1000, 0x2000, 1);
@@ -274,8 +325,6 @@ TEST_CASE("a malformed or truncated capsule yields nothing") {
         CHECK_FALSE(parseCapsule(mutated.data(), mutated.size()));
     };
     mutate("magic", [](CapsuleData& d) { d.header.magic = 0; });
-    mutate("module count", [](CapsuleData& d) { d.header.moduleCount = kCapsuleModules + 1; });
-    mutate("thread count", [](CapsuleData& d) { d.header.threadCount = kCapsuleThreads + 1; });
     mutate("flags", [](CapsuleData& d) { d.header.flags = 4; });
     mutate("reserved", [](CapsuleData& d) { d.header.reserved = 1; });
     mutate("empty range", [](CapsuleData& d) { d.modules[0].end = d.modules[0].start; });
@@ -292,7 +341,6 @@ TEST_CASE("a malformed or truncated capsule yields nothing") {
     mutate("registered role out of range",
            [](CapsuleData& d) { d.threads[1].head.registered = 255; });
     mutate("worker number without a role", [](CapsuleData& d) { d.threads[0].head.worker = 1; });
-    mutate("too many frames", [](CapsuleData& d) { d.threads[0].head.frameCount = 129; });
     mutate("walked without frames", [](CapsuleData& d) { d.threads[0].head.frameCount = 0; });
     mutate("unavailable with frames", [](CapsuleData& d) { d.threads[1].head.frameCount = 1; });
     // The fault entry comes first, exactly once (review round 29, F3).
