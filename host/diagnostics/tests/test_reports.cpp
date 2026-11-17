@@ -400,7 +400,9 @@ TEST_CASE("a restart notice names the report, the plug-in it points at, or the m
     REQUIRE(notice);
     CHECK(notice->plugin == "Canary");
     CHECK(notice->headline.find("Canary by Acme was running when") == 0);
-    CHECK(notice->detail.find("cannot prove") != std::string::npos);
+    CHECK(notice->detail.find(
+              "The report points at that plug-in but cannot prove it was the cause.") !=
+          std::string::npos);
     CHECK(noticeText(*notice).find(notice->headline) == 0);
     REQUIRE(acknowledge(name(2), root.path));
     // A run that left no report says so.
@@ -432,7 +434,8 @@ TEST_CASE("the newest incident leads, the earlier ones are counted, and dismissi
     CHECK(notice->kind == RestartNotice::Kind::NoReport);  // the run without a report is newest
     CHECK(notice->incidents == std::vector<std::string>{name(3), name(2), name(1)});
     CHECK(notice->earlier == 2);
-    CHECK(notice->detail.find("2 earlier unexpected closes") != std::string::npos);
+    CHECK(notice->detail.find("Steppe also closed unexpectedly 2 times before that.") !=
+          std::string::npos);
     REQUIRE(acknowledgeNotice(*notice, root.path));
     CHECK_FALSE(noticeFor(root));
     // Nothing was deleted or changed by it.
@@ -445,7 +448,8 @@ TEST_CASE("the newest incident leads, the earlier ones are counted, and dismissi
     notice = noticeFor(root);
     REQUIRE(notice);
     CHECK(notice->earlier == 1);
-    CHECK(notice->detail.find("One earlier unexpected close") != std::string::npos);
+    CHECK(notice->detail.find("Steppe also closed unexpectedly once before that.") !=
+          std::string::npos);
 }
 TEST_CASE("an unexpected report a newer build wrote still counts for the notice") {
     Root root;

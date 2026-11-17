@@ -3642,7 +3642,9 @@ TEST_CASE("the restart notice sits under the transport and Dismiss acknowledges 
         REQUIRE(diagnostics::writeSampleCrash(kNoticeOne, "Canary Verb", "Acme", dir));
         NoticeShell s(a);
         CHECK(noticeText(a).find("Canary Verb by Acme was running when") == 0);
-        CHECK(noticeText(a).find("cannot prove it was the cause") != std::string::npos);
+        CHECK(noticeText(a).find(
+                  "The report points at that plug-in but cannot prove it was the cause.") !=
+              std::string::npos);
         a.snapshot("crash-notice-plugin.png");
     }
     SUBCASE("a run that left no report says that, and why that can be") {
@@ -3664,7 +3666,8 @@ TEST_CASE("the restart notice sits under the transport and Dismiss acknowledges 
         ageFile(dir / (std::string(kNoticeTwo) + ".run"), 5);
         NoticeShell s(a);
         CHECK(noticeText(a).find("Canary Verb by Acme") == 0);
-        CHECK(noticeText(a).find("2 earlier unexpected closes were not looked at") !=
+        CHECK(noticeText(a).find(std::string(product::kName) +
+                                 " also closed unexpectedly 2 times before that.") !=
               std::string::npos);
         a.snapshot("crash-notice-earlier.png");
         REQUIRE(a.root->click("crash.notice.dismiss"));

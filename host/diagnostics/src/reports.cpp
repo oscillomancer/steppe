@@ -356,7 +356,8 @@ std::optional<RestartNotice> restartNotice(const ReportListing& listing) {
         notice.detail = "A crash report was saved on this computer; it was not sent anywhere.";
         if (points) {
             notice.plugin = r.culprit->name;
-            notice.detail += " It points at that plug-in but cannot prove it was the cause.";
+            notice.detail +=
+                " The report points at that plug-in but cannot prove it was the cause.";
         }
     } else {
         notice.kind = RestartNotice::Kind::NoReport;
@@ -365,10 +366,10 @@ std::optional<RestartNotice> restartNotice(const ReportListing& listing) {
             "That happens when the program that watches it stopped too, or could not save one.";
     }
     if (notice.earlier == 1)
-        notice.detail += " One earlier unexpected close was not looked at.";
+        notice.detail += " " + app + " also closed unexpectedly once before that.";
     else if (notice.earlier > 1)
-        notice.detail +=
-            " " + std::to_string(notice.earlier) + " earlier unexpected closes were not looked at.";
+        notice.detail += " " + app + " also closed unexpectedly " + std::to_string(notice.earlier) +
+                         " times before that.";
     return notice;
 }
 std::string noticeText(const RestartNotice& notice) {
