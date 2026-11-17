@@ -267,7 +267,9 @@ one nonlooping pass, as playback does.
 
 Meters read the engine's lossy telemetry rings (peak, RMS, and for masters
 momentary/short-term LUFS from core-analysis) at 30 Hz, with peak hold and
-clip latches as view state. The playhead reads the transport telemetry. No
+clip latches as view state. A meter is drawn in a well (the `well` token,
+darker than every surface a meter stands on), so an idle meter still shows
+where the level will be. The playhead reads the transport telemetry. No
 meter ever forces a full repaint.
 
 ## 4. Views
@@ -371,8 +373,9 @@ moves the rate ten cents a step. Like the on-screen knob it runs
 Per strip: name (rename in place: a double-click; Enter or a click anywhere
 else keeps the edit, Escape drops it), **strip-type badge** (Channel / Buss /
 Master: colour, shape and label differ — clear at a glance, ADR-0019),
-mute/solo (rounded pills in their own colours), arm (a red disc: faded off,
-solid armed), monitor (a speaker: an outline off, solid on, green auto),
+mute/solo (rounded pills: an ink outline and letter off, filled with their
+own colour on, the colour showing under the pointer), arm (a disc: a red ring
+off, solid red armed), monitor (a speaker: an outline off, solid on, green auto),
 input (channels only for these three), polarity ("Ø") and mono pills at the
 start of the level row (ADR-0022), volume fader and pan
 (Console 9 Channel's controls on channels and busses; plain gain and
@@ -382,7 +385,12 @@ alone, adding last in the chain; no count, to save room), the "out" button
 (a click opens the routing matrix; drag onto another strip to create a
 route; drop rules follow `route.strip_type`, invalid targets show why before
 the drop; a strip the track already sends to is not a target, since the
-matrix shows one send per pair), meters. The mixer's strips carry the same controls in the same
+matrix shows one send per pair), and a meter: 8 units wide
+(`TcpRowGeometry::kMeterWidth`), at the row's right edge for the row's whole
+height, with the controls ending before it. "fx", "+", "env" and "out" are
+quiet buttons (`ui::Button::quiet`): their text alone in quiet ink, a box
+under the pointer; "fx" is in full ink when the track's chain or input chain
+holds a plug-in. The input stays a boxed field, since it shows a value. The mixer's strips carry the same controls in the same
 looks (§4.4). The button row starts at the TCP's left edge with mute and
 solo (over polarity and mono) and ends at its right edge with "env" and
 "out", at any depth; a channel's input button takes the room between.
@@ -2069,7 +2077,11 @@ Steppe's own character, not a REAPER clone or a generic dark theme
 - **Calm by default:** colour reserved for state (armed, clipping, selected,
   agent-changed) and for the user's own organizing (track colours, which
   tint a track's items); meters and waveforms in ink tones; motion only for
-  feedback. The TCP keeps its boxed toggles.
+  feedback. Controls that repeat on every track row and mixer strip are
+  quiet at rest: an off toggle is an ink outline and letter, a secondary
+  button its text alone. The state's colour and the button's box appear
+  under the pointer, so at rest the only colour in a row is a state that is
+  on, the strip's badge and the track's own colour.
 
 ## 8. Commands and UI state
 

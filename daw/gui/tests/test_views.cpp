@@ -1543,6 +1543,34 @@ TEST_CASE("TCP selection follows click, Ctrl+click and Shift+click") {
     CHECK(tcp.error.empty());
 }
 
+TEST_CASE("a TCP row's meter stands at its right edge, clear of the controls") {
+    Gl& g = gl();
+    if (!g.ok) return;
+    Session s;
+    REQUIRE(s.build(3));
+    ui::Root root(*g.window, g.fonts, ui::Theme::dark());
+    TcpHarness tcp;
+    views::ArrangeView* arrange = tcp.mount(root, s);
+    arrange->setViewport({0, 40, 0});
+    root.frame(false);
+    auto* panel = &arrange->tcpPanel();
+    const model::Id tr1 = *model::Id::parse("tr_1");
+    REQUIRE(panel->rowNode(tr1));
+    const ui::Rect row = panel->rowNode(tr1)->bounds();
+    const ui::Rect meter = panel->controlNode(tr1, "meter")->bounds();
+    CHECK(meter.w == views::TcpRowGeometry::kMeterWidth);
+    CHECK(meter.right() <= row.right());
+    CHECK(meter.right() >= row.right() - 3);
+    CHECK(meter.h >= row.h - 8);  // the row's whole height, less a margin
+    for (const char* what : {"fx", "addfx", "env", "out", "pan", "fader", "input", "name"}) {
+        INFO(what);
+        const ui::Node* node = panel->controlNode(tr1, what);
+        REQUIRE(node);
+        CHECK(node->visible);
+        CHECK(node->bounds().right() < meter.x);
+    }
+}
+
 TEST_CASE("golden: the TCP with one strip of each type") {
     Gl& g = gl();
     if (!g.ok) return;

@@ -599,7 +599,9 @@ bool Meter::moving() const {
 void Meter::paint(Canvas& c) {
     const Theme& t = c.theme();
     const Rect b = bounds();
-    c.fillRect(b, t.color("ground"));
+    // A well, darker than any surface a meter stands on, so an idle meter
+    // still shows where the level will be.
+    c.fillRect(b, t.color("well"));
     const float gap = 1;
     for (int ch = 0; ch < 2; ++ch) {
         Rect lane =
@@ -627,7 +629,7 @@ void Meter::paint(Canvas& c) {
                            t.color(holdDb_[ch] > 0 ? "clip" : "ink"));
         }
         // Clip indicator at the top (or end).
-        const Color clipCol = clip_[ch] ? t.color("clip") : t.color("panel");
+        const Color clipCol = clip_[ch] ? t.color("clip") : t.color("rule");
         if (vertical_)
             c.fillRect({lane.x, b.y, lane.w, 3}, clipCol);
         else
@@ -681,16 +683,22 @@ void Toggle::paint(Canvas& c) {
     if (pill) {
         const float r = std::min(b.w, b.h) / 2;
         const Color colour = t.color(onColor_);
+        // Colour is the state: an off pill is quiet ink, and shows its colour
+        // only under the pointer (gui.md §7).
+        const bool hot = !on_ && (hovered() || pressed_);
         if (on_) {
             c.fillRound(b, r, colour);
         } else {
             c.fillRound(b, r, pressed_ ? t.color("selection") : t.color("ground"));
-            if (hovered()) c.fillRound(b, r, colour.withAlpha(0.15f));
-            c.strokeRound(b, r, colour.withAlpha(0.55f));
+            if (hot) c.fillRound(b, r, colour.withAlpha(0.15f));
+            c.strokeRound(b, r, hot ? colour.withAlpha(0.7f) : t.color("ink-faint"));
         }
         if (focused()) c.strokeRound(b.inset(-1), r + 1, t.color("focus"));
         c.text(b, text_, Font::UiBold, t.type("caption"),
-               on_ ? t.color("ground") : colour.withAlpha(0.9f), kCenter | kMiddle);
+               on_   ? t.color("ground")
+               : hot ? colour
+                     : t.color("ink-quiet"),
+               kCenter | kMiddle);
         return;
     }
     const Color face = on_         ? t.color(onColor_)
@@ -761,8 +769,11 @@ void ArmButton::paint(Canvas& c) {
         c.fillCircle({centre.x - r * 0.3f, centre.y - r * 0.3f}, r * 0.3f,
                      Color{1, 1, 1, 0.25f});  // a little shine
     } else {
-        c.fillCircle(centre, r, red.withAlpha(pressed() ? 0.5f : hovered() ? 0.4f : 0.28f));
-        c.strokeCircle(centre, r, red.withAlpha(0.6f));
+        // Off: a ring that keeps a little of the red, since the disc has no
+        // letter to say what it is; it fills under the pointer.
+        c.fillCircle(centre, r, t.color("ground"));
+        if (pressed() || hovered()) c.fillCircle(centre, r, red.withAlpha(pressed() ? 0.5f : 0.3f));
+        c.strokeCircle(centre, r, red.withAlpha(0.55f));
     }
     if (focused()) c.strokeCircle(centre, r + 2, t.color("focus"));
 }

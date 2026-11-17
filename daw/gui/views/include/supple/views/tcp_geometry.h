@@ -12,6 +12,7 @@ struct TcpRowGeometry {
     static constexpr float kFxTop = 3, kFxHeight = 15;
     static constexpr float kBadgeTop = 4, kBadgeSize = 16;
     static constexpr float kResizeGrip = 4;
+    static constexpr float kMeterWidth = 8;  // the row's meter, at its right edge
     static constexpr float kTopLineBottom =
         std::max({kNameTop + kNameHeight, kFxTop + kFxHeight, kBadgeTop + kBadgeSize});
     static constexpr float kMinHeight = kTopLineBottom + kResizeGrip;

@@ -4,6 +4,8 @@
 #include <doctest/doctest.h>
 #include <stb_image.h>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -718,6 +720,81 @@ TEST_CASE("mixer controls: fader taper and gestures, pan, meter hold and clip, t
     CHECK(root.click("solo"));
     CHECK(soloed);
     CHECK(solo.on());
+}
+
+TEST_CASE("colour is state: an off pill and a quiet button at rest are ink alone") {
+    REQUIRE_GL();
+    const Theme theme = Theme::dark();
+    Root root(*fixture().window, fixture().fonts, theme);
+    auto content = std::make_unique<Node>("root");
+    content->layout.dir = Layout::Dir::Row;
+    content->layout.padding = Insets::all(16);
+    content->layout.gap = 16;
+    auto pill = [&](const char* id, bool on) -> Toggle& {
+        auto& t = content->emplace<Toggle>(id, "S", "solo");
+        t.pill = true;
+        t.layout.width = SizeRule::fixed(24);
+        t.layout.height = SizeRule::fixed(16);
+        t.setOn(on);
+        return t;
+    };
+    Toggle& off = pill("off", false);
+    Toggle& on = pill("on", true);
+    auto& quiet = content->emplace<Button>("quiet", "fx");
+    quiet.quiet = true;
+    auto& boxed = content->emplace<Button>("boxed", "fx");
+    root.setContent(std::move(content));
+    root.frame(false);
+    const gui::Image image = root.readBack();
+    const float ratio = root.pixelRatio();
+    auto at = [&](float x, float y) {
+        const auto i =
+            (static_cast<std::size_t>(y * ratio) * static_cast<std::size_t>(image.width) +
+             static_cast<std::size_t>(x * ratio)) *
+            4;
+        return std::array<int, 3>{image.rgba[i], image.rgba[i + 1], image.rgba[i + 2]};
+    };
+    // The share of a node's pixels that are plainly coloured: the theme's inks
+    // and grounds are warm greys, their channels within 24 of each other.
+    auto coloured = [&](const Node& node) {
+        const Rect b = node.bounds();
+        int n = 0, all = 0;
+        for (float y = b.y; y < b.bottom(); y += 1 / ratio)
+            for (float x = b.x; x < b.right(); x += 1 / ratio) {
+                const auto p = at(x, y);
+                ++all;
+                if (std::max({p[0], p[1], p[2]}) - std::min({p[0], p[1], p[2]}) > 60) ++n;
+            }
+        return static_cast<double>(n) / all;
+    };
+    CHECK(coloured(off) == 0.0);  // neither its outline nor its letter
+    CHECK(coloured(on) > 0.5);    // filled with the state's colour
+    // A quiet button has no box at rest: its edge is the surface it lies on.
+    const Rect q = quiet.bounds(), b = boxed.bounds();
+    const auto surface = at(q.x - 4, q.y + q.h / 2);
+    CHECK(at(q.x + 0.5f, q.y + q.h / 2) == surface);
+    CHECK(at(b.x + 0.5f, b.y + b.h / 2) != surface);
+    // Its text is quiet ink at rest and full ink with emphasis: more light.
+    auto light = [&](const Node& node) {
+        const Rect r = node.bounds();
+        long sum = 0;
+        for (float y = r.y; y < r.bottom(); y += 1 / ratio)
+            for (float x = r.x; x < r.right(); x += 1 / ratio) sum += at(x, y)[0];
+        return sum;
+    };
+    const long rest = light(quiet);
+    CHECK_FALSE(quiet.emphasis());
+    quiet.setEmphasis(true);
+    root.frame(false);
+    const gui::Image lit = root.readBack();
+    long sum = 0;
+    for (float y = q.y; y < q.bottom(); y += 1 / ratio)
+        for (float x = q.x; x < q.right(); x += 1 / ratio)
+            sum += lit.rgba[(static_cast<std::size_t>(y * ratio) *
+                                 static_cast<std::size_t>(lit.width) +
+                             static_cast<std::size_t>(x * ratio)) *
+                            4];
+    CHECK(sum > rest);
 }
 
 TEST_CASE("a split pan control: two bars, each its own value and home (ADR-0066)") {

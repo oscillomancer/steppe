@@ -577,7 +577,9 @@ instructions are in `docs/guides/installing.md`.
   menus, toolbar and mouse modifiers, screensets, two palettes in dark and
   light, preferences, and tap tempo in the tempo form. Items in the arrange
   view take their track's colour and carry their name on a bar across the
-  top; an unnamed audio item shows its file's name. Help exports the bundled
+  top; an unnamed audio item shows its file's name. Track rows and mixer
+  strips are quiet at rest (mute, solo, polarity and mono show their colour
+  only when on) and each row has a meter 8 units wide. Help exports the bundled
   skill as a copy or link, shows this copy's MCP commands and JSON, and registers
   its running-app server with Claude Code, Codex or Hermes on a background
   worker, linking the skill into that agent's user skills folder unless one of

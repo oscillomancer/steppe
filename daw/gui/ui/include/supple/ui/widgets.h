@@ -38,13 +38,21 @@ class Button : public Node {
     bool onPointer(const PointerEvent& e) override;
     bool onKey(const KeyEvent& e) override;
     std::string valueText() const override { return text_; }
+    // A quiet button has no box at rest: its text alone, in quiet ink; the
+    // box appears under the pointer. For the secondary buttons that repeat
+    // on every track row and mixer strip (gui.md §7).
+    bool quiet = false;
+    // A quiet button whose text is in full ink at rest, to say that what it
+    // opens is not empty (a track's "fx" with plug-ins in its chain).
+    void setEmphasis(bool on);
+    bool emphasis() const { return emphasis_; }
 
   protected:
     bool pressed() const { return pressed_; }
 
   private:
     std::string text_;
-    bool pressed_ = false;
+    bool pressed_ = false, emphasis_ = false;
 };
 
 }  // namespace supple::ui

@@ -970,6 +970,9 @@ void Mixer::rebuild() {
         });
         st.addFx->layout.width = ui::SizeRule::fixed(16);
         st.addFx->layout.height = ui::SizeRule::fixed(15);
+        // As in the TCP: text alone at rest, "fx" in full ink over a chain.
+        st.fx->quiet = st.addFx->quiet = true;
+        st.fx->setEmphasis(!t.chain.empty() || !t.inputChain.empty());
         frame->emplace<ColorStripe>("mixer.color." + tid, t.color);
         if (t.freeze) frame->emplace<FrozenMark>("mixer.frozen." + tid);
         // The plug-in chain (a click opens or closes the plug-in's editor); the
@@ -1685,6 +1688,7 @@ void Mixer::update() {
         st.solo->setOn(t->solo != model::Solo::Off);
         st.polarity->enabled = st.mono->enabled = !t->freeze;
         st.addFx->enabled = !t->freeze;
+        st.fx->setEmphasis(!t->chain.empty() || !t->inputChain.empty());
         if (st.arm) st.arm->enabled = !t->freeze;
         if (st.monitor) st.monitor->enabled = !t->freeze;
         st.polarity->setOn(t->phaseInvert);
