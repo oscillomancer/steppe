@@ -101,11 +101,14 @@ void awaitAcknowledgementFor(Native& native, std::uint64_t nanoseconds) noexcept
 // Worker side, from the terminal handler after the terminal packet went out: reads this
 // process's own threads and images with Mach calls on its own task (no task_for_pid, no
 // entitlement), sends the capsule, then waits for the acknowledgement. The whole of it,
-// wait included, ends one second after entry. `terminal` carries the faulting thread's
+// wait included, ends one second after `start`, a monotonicNanoseconds() reading the
+// handler took BEFORE it published the terminal packet: the supervisor starts its own
+// budget when it receives that packet, so its clock can only start after this one.
+// `terminal` carries the faulting thread's
 // registers when the handler had them; without a pc (terminate, abort) the calling
 // thread is walked from the handler's own frame. Allocates nothing on the heap, takes
 // no lock and formats nothing.
-void captureAndHold(Native& endpoint, const Packet& terminal) noexcept;
+void captureAndHold(Native& endpoint, const Packet& terminal, std::uint64_t start) noexcept;
 // Records the calling thread as the main thread; called once, on it, at install.
 void rememberMainThread() noexcept;
 #endif

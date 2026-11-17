@@ -62,11 +62,17 @@ static_assert(std::atomic<bool>::is_always_lock_free);
 // formatting. Raw PC/frame/SP and the thread id stay solely in the private native channel.
 void handoff(Packet packet) noexcept {
     packet.kind = Message::Terminal;
+#if defined(__APPLE__)
+    // The hold's clock starts before the packet goes out. The supervisor's own budget
+    // starts when it receives that packet, so it can never start before this one, however
+    // long this thread is descheduled after the write (review round 31, F3).
+    const std::uint64_t start = detail::monotonicNanoseconds();
+#endif
     if (!detail::publish(endpoint, packet)) return;
 #if defined(__APPLE__)
     // No external collector on macOS: the process reads its own threads, sends them,
     // and waits out the rest of the one-second hold (capture_macos.cpp).
-    detail::captureAndHold(endpoint, packet);
+    detail::captureAndHold(endpoint, packet, start);
 #else
     detail::awaitAcknowledgement(endpoint);
 #endif

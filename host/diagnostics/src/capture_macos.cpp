@@ -25,8 +25,10 @@ namespace {
 // Of the worker's one second: thread reads end at 400 ms, listing the images and finding
 // the module of each frame at 450 ms, sending at 500 ms, and the wait for the supervisor's
 // acknowledgement gets what is left. The supervisor reads for kCollectionBudget (600 ms)
-// from when it starts, which is after the worker's clock does, so the send must end with
-// a margin before that; a late capsule is lost and the fault thread is not_collected.
+// from when it receives the terminal packet, which the worker published after it took its
+// own clock (the handler passes that reading in), so the supervisor's deadline always falls
+// after the worker's and the send must end with a margin before it; a late capsule is lost and the
+// fault thread is not_collected.
 constexpr std::uint64_t kThreadBudget = 400'000'000ULL, kImageBudget = 450'000'000ULL,
                         kSendBudget = 500'000'000ULL, kHold = 1'000'000'000ULL;
 static_assert(kThreadBudget < kImageBudget && kImageBudget < kSendBudget &&
@@ -287,8 +289,7 @@ void resolveModules(std::uint64_t deadline) {
 
 void rememberMainThread() noexcept { mainThread = mach_thread_self(); }
 
-void captureAndHold(Native& endpoint, const Packet& terminal) noexcept {
-    const std::uint64_t start = monotonicNanoseconds();
+void captureAndHold(Native& endpoint, const Packet& terminal, std::uint64_t start) noexcept {
     capsule.header.magic = kCapsuleMagic;
     captureSelf(terminal, start + kThreadBudget);
     captureOthers(start + kThreadBudget);
