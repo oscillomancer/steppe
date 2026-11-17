@@ -1554,6 +1554,7 @@ void EngineApp::tick() {
     }
     if (engine_) {
         engine_->service();
+        noteUnplayedEdit();
         watchFaults();  // a callback thread seen for the first time
         // ADR-0086: the idle-latency request is held while a bridged plug-in
         // plays live (acts on a change only).
@@ -4348,8 +4349,26 @@ void EngineApp::headChanged() {
     (void)engine_->setWriteHolds(writeHolds(), false);  // the load takes them
     auto st = engine_->load(head(), projectDir());
     if (st) loadedHead_ = versions_->head();
-    if (!st) emit("engine.error", json::Value(st.error().toString()));
+    if (!st) {
+        // This failure also ends an edit deferred before it: neither played.
+        if (engine_->takeUnplayedEdit()) loadedHead_ = engine_->latestSession();
+        emit("engine.error", json::Value(st.error().toString()));
+    }
     engine_->service();
+    noteUnplayedEdit();
+}
+
+void EngineApp::noteUnplayedEdit() {
+    // An edit that playrate scheduling deferred (load() returned success, so
+    // loadedHead_ took it) and that then failed to compile never played: say
+    // so as a failed load does, and report the version that plays.
+    auto unplayed = engine_ ? engine_->takeUnplayedEdit() : std::nullopt;
+    if (!unplayed) return;
+    loadedHead_ = engine_->latestSession();
+    emit("engine.error", json::Value("an edit deferred by playrate scheduling never played: " +
+                                     unplayed->toString() + "; the engine plays version " +
+                                     std::to_string(loadedHead_ ? loadedHead_->version : 0) +
+                                     " (undo or change the edit)"));
 }
 
 // --- cmd::Host ------------------------------------------------------------------------------

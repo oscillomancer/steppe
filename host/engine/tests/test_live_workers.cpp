@@ -53,8 +53,9 @@ void task(void* ctx, std::uint32_t t) SUPPLE_RT {
     auto* r = static_cast<Run*>(ctx);
     for (std::uint32_t d : r->deps[t])
         if (r->done[d].load(std::memory_order_acquire) != 1) r->violations.fetch_add(1);
-    volatile int sink = 0;
-    for (int i = 0; i < r->spin; ++i) sink = sink + i;  // overlap tasks a little
+    // Unsigned, so the sum wraps: a long spin overflows an int (UBSan).
+    volatile unsigned sink = 0;
+    for (int i = 0; i < r->spin; ++i) sink = sink + static_cast<unsigned>(i);  // overlap tasks
     r->done[t].fetch_add(1, std::memory_order_release);
 }
 

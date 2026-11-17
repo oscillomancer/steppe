@@ -73,6 +73,12 @@ if(SUPPLE_BUILD_TESTS)
   # The tests read the execution table from inside the fixture plug-in (tests/scope_probe.h).
   target_link_libraries(clap-host.tests PRIVATE supple::diagnostics-context)
   add_dependencies(clap-host.tests ${PRODUCT_SLUG}-scanner host-child-fixture)
+  # The agent skill beside the binary (test_scan.cpp) and, with the stock
+  # plugins, the script player in their folder (review round 33).
+  add_dependencies(clap-host.tests skill-tree)
+  if(TARGET plugin-player)
+    add_dependencies(clap-host.tests plugin-player)
+  endif()
   target_compile_definitions(clap-host.tests PRIVATE CHILD_FIXTURE_PATH="$<TARGET_FILE:host-child-fixture>")
   target_compile_definitions(clap-host.tests PRIVATE SCANNER_PATH="$<TARGET_FILE:${PRODUCT_SLUG}-scanner>")
   target_compile_definitions(clap-host.tests PRIVATE SUPPLE_TEST_STOCK_EDITORS=$<BOOL:${SUPPLE_BUILD_GUI}>)

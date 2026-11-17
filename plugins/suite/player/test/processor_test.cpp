@@ -32,6 +32,7 @@
 #include "runner.h"
 #include "supple/script_export.hpp"
 #include "supple/script_native.h"
+#include "supple/script_program.hpp"
 
 // Example scripts compiled as C++, as a source export builds them.
 namespace supple::script::native_synth {
@@ -208,6 +209,30 @@ TEST(native_container_bounds_report_runtime_status_without_a_source_line) {
     CHECK(instance.status.outOfRange.load() == 7);
     CHECK(instance.status.outOfRangeLine.load() == 0);
     CHECK(!instance.status.silent.load());
+}
+
+// Review round 33: MIR's interpreter allocates on the audio thread, so only a
+// Debug player honours SUPPLE_SCRIPT_INTERPRET; a shipped one compiles to
+// machine code whatever the environment says.
+TEST(only_a_debug_player_runs_scripts_in_the_interpreter) {
+#if defined(_WIN32)
+    _putenv_s("SUPPLE_SCRIPT_INTERPRET", "1");
+#else
+    setenv("SUPPLE_SCRIPT_INTERPRET", "1", 1);
+#endif
+    const auto d = compileText(libraryScript("tilt"));
+#if defined(_WIN32)
+    _putenv_s("SUPPLE_SCRIPT_INTERPRET", "");
+#else
+    unsetenv("SUPPLE_SCRIPT_INTERPRET");
+#endif
+    const auto* program = dynamic_cast<const scriptc::Program*>(d->code().get());
+    CHECK(program != nullptr);
+#ifdef NDEBUG
+    CHECK(program && !program->interpreted());
+#else
+    CHECK(program && program->interpreted());
+#endif
 }
 
 TEST(a_script_becomes_a_definition_with_its_keys_units_and_ids) {
