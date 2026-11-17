@@ -101,7 +101,18 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
         found=list(root.glob("*.json"))
         assert len(found)==1,(found,run.stderr)
         report=json.loads(found[0].read_text())
-        assert report["kind"]=="crash" and report["terminal_context"] and report["cause"]!=0,report
+        assert report["kind"]=="crash" and report["terminal_context"] and report["cause"]==2,report
+        # A chained filter that asks to resume the faulting code is not obeyed: the fault
+        # stays fatal and the code after it never runs (review round 31, F2).
+        root=base/"prior-filter-resume"/"app"/"diagnostics"
+        run=subprocess.run([binary,str(root),"prior-filter-resume"],capture_output=True,timeout=30)
+        assert run.returncode!=0,run
+        assert b"prior filter ran" in run.stderr,run.stderr
+        assert b"resumed after the fault" not in run.stderr,run.stderr
+        found=list(root.glob("*.json"))
+        assert len(found)==1,(found,run.stderr)
+        report=json.loads(found[0].read_text())
+        assert report["kind"]=="crash" and report["terminal_context"] and report["cause"]==2,report
     if os.name != "nt":
         # The worker exits while its fork helper retains the channel. The
         # supervisor must finish before we release that helper. Timeout only

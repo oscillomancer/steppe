@@ -407,7 +407,9 @@ builds retain their handlers and emit exit-only summaries.
 
 Existing non-default POSIX fatal handlers are preserved (ours is not installed over
 them). On Windows the last-chance filter is always installed, replacing whatever top-level
-filter was there, and chains to it after the handoff, returning what it returns. An exception code `0xE06D7363`
+filter was there, and chains to it after the handoff, returning what it returns, except
+that `EXCEPTION_CONTINUE_EXECUTION` becomes `EXCEPTION_CONTINUE_SEARCH`: the terminal packet
+has gone out, so the fault stays fatal and is never resumed. An exception code `0xE06D7363`
 (a C++ exception nobody caught) is not claimed at all: the filter hands it to the prior one
 untouched, so the runtime turns it into `std::terminate`, which is recorded as terminate
 (cause 3) and chains the program's handler, as on Linux and macOS. An EXE

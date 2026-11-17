@@ -207,9 +207,10 @@ void priorTerminate() {
 #if defined(_WIN32)
 // A top-level filter that was already in place when the worker installed its own, as the
 // MSVC runtime's always is. The last-chance filter must chain to it after its handoff.
+bool filterResumes = false;
 LONG WINAPI priorFilter(EXCEPTION_POINTERS*) {
     std::fputs("prior filter ran\n", stderr);
-    return EXCEPTION_CONTINUE_SEARCH;
+    return filterResumes ? EXCEPTION_CONTINUE_EXECUTION : EXCEPTION_CONTINUE_SEARCH;
 }
 #endif
 int body(int argc, char** argv) {
@@ -245,9 +246,16 @@ int body(int argc, char** argv) {
     if (mode == "prior-terminate-throw") throw std::runtime_error("uncaught");
 #if defined(_WIN32)
     // Evidence for a failed capture: whether the last-chance filter is in place.
-    if (mode == "fault" || mode == "prior-filter")
+    if (mode == "fault" || mode == "prior-filter" || mode == "prior-filter-resume")
         std::fprintf(stderr, "last-chance filter installed: %s\n",
                      supple::diagnostics::detail::lastChanceFilterInstalled() ? "yes" : "no");
+    // A continuable exception whose chained filter asks to resume: the fault must stay
+    // fatal, so the code after it must never run.
+    if (mode == "prior-filter-resume") {
+        RaiseException(0xE0000001, 0, 0, nullptr);
+        std::fputs("resumed after the fault\n", stderr);
+        return 0;
+    }
 #endif
     if (mode == "fault" || mode == "prior-filter") actualFault();
     if (mode == "thread-fault") {
@@ -445,7 +453,11 @@ int main(int argc, char** argv) {
         std::string_view(argv[2]) == "prior-terminate-throw")
         std::set_terminate(priorTerminate);
 #if defined(_WIN32)
-    if (std::string_view(argv[2]) == "prior-filter") SetUnhandledExceptionFilter(priorFilter);
+    if (std::string_view(argv[2]) == "prior-filter" ||
+        std::string_view(argv[2]) == "prior-filter-resume") {
+        filterResumes = std::string_view(argv[2]) == "prior-filter-resume";
+        SetUnhandledExceptionFilter(priorFilter);
+    }
 #endif
     return supple::diagnostics::runFrontend(argc, argv, supple::diagnostics::Role::Fixture, body,
                                             {std::filesystem::path(argv[1])});

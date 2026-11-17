@@ -145,7 +145,9 @@ fault stays fatal; "installed" now means the filter is really in place.
 
 *Note, 2026-11-16, review round 31:* the filter leaves an escaping C++ exception
 (`0xE06D7363`) to the runtime's filter, so it is recorded as terminate and the program's
-terminate handler runs, as on the other platforms.
+terminate handler runs, as on the other platforms; a chained filter's
+`EXCEPTION_CONTINUE_EXECUTION` is returned as `EXCEPTION_CONTINUE_SEARCH`, so the fault
+stays fatal.
 
 *Maintainer decisions, 2026-11-16, topic 4 (thread traces):* (1) External thread reads
 happen inside the existing terminal hold; the bound does not grow, and an expired budget

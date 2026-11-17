@@ -117,8 +117,12 @@ constexpr DWORD kCppExceptionCode = 0xE06D7363;
     handoff(packet);
     // Chain to the filter we replaced (ADR-0083 clarification, 2026-11-16): the runtime's
     // and any other that would have run anyway, so independently configured crash
-    // reporting is preserved. Never continue DSP: whatever it returns, the fault is fatal.
-    return priorFilter ? priorFilter(exception) : EXCEPTION_CONTINUE_SEARCH;
+    // reporting is preserved. The fault stays fatal: the terminal packet has gone out and
+    // the supervisor will report a crash, so a chained filter that asks to resume the
+    // faulting code (EXCEPTION_CONTINUE_EXECUTION) is answered with CONTINUE_SEARCH, which
+    // ends the process through the system's own reporting.
+    const LONG chained = priorFilter ? priorFilter(exception) : EXCEPTION_CONTINUE_SEARCH;
+    return chained == EXCEPTION_CONTINUE_EXECUTION ? EXCEPTION_CONTINUE_SEARCH : chained;
 }
 [[maybe_unused]] void abortSignal(int signal) {
     if (!claimed.exchange(1, std::memory_order_relaxed)) {
