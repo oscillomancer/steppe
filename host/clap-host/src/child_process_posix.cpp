@@ -10,6 +10,7 @@
 #include <cerrno>
 #include <cstring>
 #include <vector>
+#include "child_status.h"
 #include "supple/base/waitable.h"
 #include "supple/host/child_process.h"
 extern char** environ;
@@ -167,7 +168,7 @@ Result<ChildProcess::Output> ChildProcess::collect(std::chrono::steady_clock::ti
                 0 &&
             errno != EINTR)
             return failure("child.wait", "cannot observe child exit");
-        if (exit.si_pid != 0) {
+        if (childEnded(exit)) {
             output.exitCode = static_cast<std::uint32_t>(exit.si_status);
             output.crashed = exit.si_code == CLD_KILLED || exit.si_code == CLD_DUMPED;
             if (output.crashed || eof) return output;

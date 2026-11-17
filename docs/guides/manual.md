@@ -941,7 +941,10 @@ Each row in the chain window says where its plugin runs: in-process (inside
 Steppe), shared bridge (in a helper process shared with other plugins) or
 isolated (in a process of its own). A plugin that crashes in a bridge
 process goes silent and can be restarted, and Steppe keeps playing; one
-that crashes in-process takes Steppe down with it. **Edit > Preferences… >
+that crashes in-process takes Steppe down with it. If a bridged plugin
+crashes or stops responding (for a minute) while you export, freeze or
+apply FX, that operation fails and names the plugin rather than leaving it
+silent in the result; try again, or bypass or replace the plugin. **Edit > Preferences… >
 Third-party plug-ins run** sets where plugins you have not set yourself
 run: in the app (the default), in a shared bridge process, or each in its
 own process. Those rows say "(default)". The choice applies as plugins

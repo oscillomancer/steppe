@@ -722,10 +722,40 @@ first use, and no plug-in code runs early to warm it.
 - Runs a **separate plan instance** with its **own plugin instances**
   (created from the version's state/patches), so rendering never disturbs
   playback and A/B renders of two branches can run side by side.
-- As a render ends, each plugin's read-only parameters (meters, readouts)
-  are read from its instance (`OfflineResult::meters`, by FX id); a
-  `render.mix` keeps them on the main thread for `fx.meters {from:
-  "render"}` until the next one. Other renders keep none.
+- **Bridged plug-ins (ADR-0090).** Once it has made its instances, a
+  render gives each bridged one a call deadline of its own,
+  `OfflineSettings::bridgeDeadlineMs` (`kOfflineBridgeDeadlineMs`, 60 s;
+  lifecycle commands 5/2 of it plus 2 s), in place of the live paths'
+  process-wide 2 s, and restores that when it returns, whatever it
+  returns. Its control requests (activation, the readouts below) get at
+  least the lifecycle value. An instance that fails while the render runs
+  (starting, processing or stopping: missed deadline, crash, exit) stops
+  the block loop and fails the render with `engine.fx_failed`: message
+  naming the plug-in, its fx id and the reason (and any others that
+  failed with it), path `/fx/<id>`, a hint to render again or bypass or
+  replace the FX. No caller then has audio to write. An instance already
+  failed when the render begins keeps its behaviour: a restart failure is
+  a warned, compensated pass-through; a failed bridged instance refuses to
+  start (`engine.start_failed`).
+- **Stop and cancel.** The block loop checks `OfflineSettings::cancelFlag`
+  and `stopToken` between blocks. From the same point as the deadline, a
+  watch thread also checks them every 10 ms while the render has bridged
+  instances; on either it kills the render's own bridges
+  (`host::Instance::abandonBridge`), so a render waiting in a bridged call
+  (activation, reset, flush, start, a block, stop, a readout) returns at
+  once. Every caller gives a render its own instance pool, so no other
+  user shares those bridges. A render stopped or cancelled either way
+  returns `job.cancelled`, ahead of any failure of the instances it killed:
+  a render with a failure first ends the watch (a call ended by its kill can
+  return before the watch has recorded the kill), and a stop or cancel asked
+  for by the time the outcome is decided is the outcome.
+  Instance creation, before that point, keeps its control-plane timeouts
+  (20 s for `Create`).
+- Once a render has succeeded, each plugin's read-only parameters (meters,
+  readouts) are read from its instance (`OfflineResult::meters`, by FX id);
+  a failed or cancelled render reads none. A `render.mix` keeps them on the
+  main thread for `fx.meters {from: "render"}` until the next one. Other
+  renders keep none.
 - Fixed block size (default 512; setting), no anticipative split, all nodes
   in topological order, optionally parallel across independent nodes —
   results must be **bit-identical for any worker count** (fixed summation
@@ -741,6 +771,16 @@ first use, and no plug-in code runs early to warm it.
   queue; results reported as files + analysis summaries. `render.mix`,
   `render.stems`, `render.regions` and `render.dry-run` share one
   implementation and one argument set (ADR-0055).
+- **A job that stops early** (`render.mix`, `render.stems`,
+  `render.regions` and `render.queue.run` with `job: true`) keeps the files
+  it has written, and its snapshot lists them in `result` beside `error`
+  (failed) or alone (cancelled): `files` holds the entry of every task it
+  finished, as a finished job's `files` does (path, outputs, render id,
+  …; across all queued renders for `render.queue.run`), and
+  `unfinished_task_files` the paths a task that did not finish had already
+  written (an output or a loudness report before a later one failed). With
+  nothing written there is no `result`. A call without `job` returns only
+  the error.
 - **Settings** (ADR-0055, session-model §1.10). Every member of
   `project.render` is also a command argument of the same name. The legacy
   arguments `format`, `bit_depth` and `secondary` remain:
@@ -1124,8 +1164,9 @@ set runs it in process and `engine.status.warnings` says so. An instance
 keeps its process until it is made again (fx.restart, the plug-in replaced,
 a project opened), so changing the default never reloads a running
 plug-in. `fx.describe isolation_effective` says where it runs. Offline
-renders, render snapshots and rack probes make their own instances in
-process, as before; isolation does not change the output.
+renders, render snapshots and rack probes make their own instances: one on
+`inherit` runs in process there, one set to `shared_bridge` or `dedicated`
+runs bridged; isolation does not change the output.
 
 The bridge is native on Linux, macOS and Windows (ADR-0037). Linux retains
 memfd, SCM_RIGHTS, shared futexes and pidfd behavior. macOS uses unlinked
@@ -1357,6 +1398,8 @@ instance).
   instance becomes a **failed node** (silence; `fx.failed` event with the
   signal and last known state kept in the model), the rest of the session
   keeps playing, and `fx.restart` re-creates it from the last known state.
+  In an offline render, a node that fails this way fails the render instead
+  (§3, ADR-0090).
 - Acceptance: a deliberately crashing test plugin (a CLAP that segfaults on
   a given parameter value) in `dedicated` mode does not stop the engine; a
   real-time capture around the crash shows only that node going silent.

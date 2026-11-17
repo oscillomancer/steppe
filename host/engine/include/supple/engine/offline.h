@@ -223,6 +223,11 @@ class MediaCache {
     std::shared_ptr<const PreparedSources> prepared_;
 };
 
+// The deadline of a bridged call in an offline render (ADR-0090): a minute,
+// thirty times the live path's 2 s, since an offline render loses only time
+// by waiting; a hung plug-in still fails the render within it.
+inline constexpr int kOfflineBridgeDeadlineMs = 60'000;
+
 struct OfflineSettings {
     // Playback/stems apply master rate; analysis and item-FX renders opt out.
     bool applyMasterPlayrate = true;
@@ -257,6 +262,10 @@ struct OfflineSettings {
     std::function<void(double)> progress;
     double progressBase = 0.0, progressScale = 1.0;
     supple::StopToken stopToken;
+    // How long a bridged call may go unanswered before the render fails its
+    // plug-in (ADR-0090); lifecycle commands get 5/2 of it plus 2 s. Tests
+    // shorten it; the product keeps the default.
+    int bridgeDeadlineMs = kOfflineBridgeDeadlineMs;
 };
 
 struct OfflineResult {

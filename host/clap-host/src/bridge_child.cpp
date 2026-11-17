@@ -3,6 +3,7 @@
 #include "bridge_child.h"
 #include <string>
 #include <vector>
+#include "child_status.h"
 #include "platform.h"
 #if defined(__APPLE__)
 #include <fcntl.h>
@@ -80,7 +81,7 @@ bool NativeChild::alive() const {
     siginfo_t status{};
     return pid_ > 0 &&
            waitid(P_PID, static_cast<id_t>(pid_), &status, WEXITED | WNOHANG | WNOWAIT) == 0 &&
-           status.si_pid == 0;
+           !childEnded(status);
 #endif
 }
 void NativeChild::kill() const {
@@ -93,7 +94,9 @@ int NativeChild::exitStatus() const {
     return static_cast<int>(status);
 #else
     siginfo_t status{};
-    if (waitid(P_PID, static_cast<id_t>(pid_), &status, WEXITED | WNOHANG | WNOWAIT) != 0) return 0;
+    if (waitid(P_PID, static_cast<id_t>(pid_), &status, WEXITED | WNOHANG | WNOWAIT) != 0 ||
+        !childEnded(status))
+        return 0;
     return status.si_code == CLD_EXITED ? 0 : status.si_status;
 #endif
 }
