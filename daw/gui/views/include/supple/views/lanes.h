@@ -60,6 +60,21 @@ class Lanes : public ui::Node {
     static double autoItemValue(const model::AutomationItem& ai, double value) {
         return ai.baseline + ai.amplitude * (value - ai.baseline);
     }
+    // An item's name bar (gui.md §4.3): the band across its top, in the item's
+    // colour, that carries its label and marks. An item too short for one
+    // keeps its label over the body.
+    static constexpr float kNameBar = 15;
+    static bool hasNameBar(const ui::Rect& item) { return item.h >= 2 * kNameBar; }
+    // Where an item's fades are drawn: its body, under the name bar.
+    static ui::Rect fadeArea(const ui::Rect& item);
+    // The colour an item is drawn in: its track's own colour (§7), or its
+    // strip type's when the track has none.
+    static ui::Color itemColor(const ui::Theme& theme, const model::Track* track,
+                               model::StripType type);
+    // What an item is called: its heard take's name, or an unnamed audio
+    // take's media file. Empty when it has neither (the view then shows the
+    // item's id).
+    static std::string itemLabel(const model::Session& session, const model::Item& item);
     // Take lanes (comping): an item with several takes, tall enough, shows
     // each take in its own lane under its label; the heard one is lit.
     static bool showsTakeLanes(const ui::Rect& item, std::size_t takes);
@@ -85,7 +100,8 @@ class Lanes : public ui::Node {
                    const model::Take& take, const model::MediaSource& source, std::uint32_t rgba);
     void drawMidi(const ui::Rect& r, const model::Item& item, const model::Take& take,
                   const model::MidiSource& source, std::uint32_t rgba, std::uint32_t border);
-    void drawFades(const ui::Rect& r, const model::Item& item, std::uint32_t rgba);
+    void drawFades(const ui::Rect& r, const model::Item& item, std::uint32_t rgba,
+                   std::uint32_t shade);
     void drawEnvelope(ui::Canvas& c, std::size_t row, const ui::Rect& r);
 
     peaks::PeakService& peaks_;

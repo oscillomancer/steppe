@@ -318,6 +318,21 @@ silent while the transport is stopped.
 
 Real devices' timing has not been measured on every system yet.
 
+## Tracks and items
+
+### Colours and names
+
+Right-click a track in the track list or the mixer and choose **Color…** to
+give it one of eight colours. The colour marks the track's left edge, its
+mixer strip and every item on the track, so you can find a part in the
+arrangement by its colour. A track without a colour has blue items.
+
+An item shows its name on a bar across its top. The name is its take's. An
+item made from an audio file that has no name of its own shows the file's
+name. Where an item fades in or out, the faded part is shaded and the fade's
+curve is drawn over it. A selected item is brighter and has an outline in the
+accent colour.
+
 ## Rendering
 
 **File > Render…** opens the render dialog; **File > Mix** renders the mix

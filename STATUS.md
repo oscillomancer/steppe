@@ -575,7 +575,9 @@ instructions are in `docs/guides/installing.md`.
   File → Mix as a job), history dock with
   branches, actions list with key bindings and macros, editable
   menus, toolbar and mouse modifiers, screensets, two palettes in dark and
-  light, preferences, and tap tempo in the tempo form. Help exports the bundled
+  light, preferences, and tap tempo in the tempo form. Items in the arrange
+  view take their track's colour and carry their name on a bar across the
+  top; an unnamed audio item shows its file's name. Help exports the bundled
   skill as a copy or link, shows this copy's MCP commands and JSON, and registers
   its running-app server with Claude Code, Codex or Hermes on a background
   worker, linking the skill into that agent's user skills folder unless one of

@@ -500,6 +500,25 @@ move and resize drags also compare the press-time amplitude, baseline, position,
 length, source length, loop state, envelope and pool. A change cancels the drag
 with `env.changed`; it does not rebase the draft onto the changed item.
 
+**Item appearance.** An item is drawn in its track's colour (§7), or in its
+strip type's colour when the track has none (`Lanes::itemColor`): a body at
+about a quarter of the colour's strength, an outline, and across its top a
+15-unit **name bar** at about twice the body's strength. The bar carries the
+label in bold ink and the item's marks (padlock, snowflake, timebase badge,
+take count). The label is the heard take's name; an unnamed audio take is
+called by its media file, without the folder and the extension; an item with
+neither shows its id (`Lanes::itemLabel`). A stretched take adds its rate. An
+item that begins before the view keeps its label at the view's left edge. An
+item under 30 units high (a compact row) has no bar and its label sits on the
+body. Waveforms are ink; MIDI notes are the item's colour at full strength. A
+fade is drawn over the body, under the name bar (`Lanes::fadeArea`): its gain
+curve, and a shade over the part of the body above the curve, so the waveform
+dims where the fade takes it away. The fade handles stay at the item's top
+corners. A muted item, an item of a lane-muted master and a frozen track's
+items are dimmed. A selected item is lit by a wash of its own colour and
+outlined in the focus colour, two units wide; both are drawn on the overlay
+with the drag ghosts, so selecting repaints no lane.
+
 Gestures (P0, `reaper-ux.md` 8–13): drop files onto tracks/timeline, move,
 trim edges, split (S), duplicate, slip (Alt-drag), stretch (with the rate
 and pitch-preservation mode visible), fade/crossfade handles, take switch.
@@ -2035,7 +2054,8 @@ Steppe's own character, not a REAPER clone or a generic dark theme
   rule from the proposal is not drawn.)
 - **Track colours, for organizing:** a small set (red, orange, yellow, green,
   teal, blue, violet, grey; `track.set {color}` also takes "#rrggbb") drawn as
-  a stripe down the TCP row's left edge and under the mixer strip's name.
+  a stripe down the TCP row's left edge, under the mixer strip's name, and
+  as the colour of the track's items in the arrange view (§4.3).
   Picked from the track's right-click menu (Rename, Color…, Duplicate,
   Delete; the same in the TCP and the mixer) or the `ui.track.color` action.
   A pick colours every selected track when the track is one of them (the
@@ -2047,7 +2067,8 @@ Steppe's own character, not a REAPER clone or a generic dark theme
   state colour. Module faces have their own tokens (`module`,
   `module-title`, `module-well`, `jack-hole`).
 - **Calm by default:** colour reserved for state (armed, clipping, selected,
-  agent-changed), meters and waveforms in ink tones; motion only for
+  agent-changed) and for the user's own organizing (track colours, which
+  tint a track's items); meters and waveforms in ink tones; motion only for
   feedback. The TCP keeps its boxed toggles.
 
 ## 8. Commands and UI state

@@ -9,6 +9,7 @@
 #include <stb_image.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -305,9 +306,11 @@ TEST_CASE("smooth following moves the picture in whole pixels, so nothing in it 
     const gui::Image first = shot(from);
     const double firstStart = arrange->viewport().startSeconds;
     REQUIRE(firstStart > 0);
-    // The ruler and the lanes, less a margin at each side for what scrolls in.
+    // The ruler and the lanes, less a margin at each side for what scrolls in
+    // and for what does not scroll: an item that begins before the view keeps
+    // its label at the view's left edge.
     const ui::Rect ruler = arrange->ruler().bounds(), lanes = arrange->lanesRect();
-    const int x0 = static_cast<int>((lanes.x + 60) * root.pixelRatio());
+    const int x0 = static_cast<int>((lanes.x + 120) * root.pixelRatio());
     const int x1 = static_cast<int>((lanes.right() - 60) * root.pixelRatio());
     const int y0 = static_cast<int>(ruler.y * root.pixelRatio());
     const int y1 = static_cast<int>(lanes.bottom() * root.pixelRatio());
@@ -1021,6 +1024,135 @@ TEST_CASE("locked items are marked") {
     for (std::size_t i = 0; i < plain.rgba.size(); i += 4)
         if (std::abs(int(plain.rgba[i]) - int(marked.rgba[i])) > 8) ++diff;
     CHECK(diff > 0);  // the padlock paints somewhere
+}
+
+namespace {
+// One channel with one item of one take: the track's colour, the take's
+// name and its media path are the test's to choose.
+struct OneItem {
+    model::Session session;
+    model::Id track, item;
+};
+OneItem oneItem(const std::string& trackColor, const std::string& takeName,
+                const std::string& mediaPath) {
+    model::Session s = model::Session::create();
+    model::EditTxn txn(s, 1);
+    model::Track track;
+    track.type = model::StripType::Channel;
+    track.parent = model::kMaster;
+    track.name = "T";
+    track.color = trackColor;
+    const model::Id tid = txn.create(track);
+    txn.modify<model::Track>(model::kMaster, [&](model::Track& m) { m.children.push_back(tid); });
+    model::Take take;
+    take.name = takeName;
+    if (!mediaPath.empty()) {
+        model::MediaSource media;
+        media.path = mediaPath;
+        media.format = "wav";
+        media.sampleRate = 48000;
+        media.channels = 1;
+        media.frames = 48000;
+        take.source = txn.create(media);
+    }
+    const model::Id takeId = txn.create(take);
+    model::Item item;
+    item.track = tid;
+    item.length = 8;
+    const model::Id iid = txn.create(item);
+    txn.modify<model::Item>(iid, [&](model::Item& i) {
+        i.takes.push_back(takeId);
+        i.activeTake = takeId;
+    });
+    auto committed = txn.commit();
+    REQUIRE(committed);
+    return {*committed, tid, iid};
+}
+}  // namespace
+
+TEST_CASE("an item is called by its take, else by its audio file") {
+    const OneItem named = oneItem("", "Verse 1", "audio/vox take 3.wav");
+    CHECK(views::Lanes::itemLabel(named.session, *named.session.items.find(named.item)) ==
+          "Verse 1");
+    const OneItem unnamed = oneItem("", "", "audio/vox take 3.wav");
+    CHECK(views::Lanes::itemLabel(unnamed.session, *unnamed.session.items.find(unnamed.item)) ==
+          "vox take 3");
+    // Either separator ends the folder, on every platform; a leading dot is
+    // not an extension.
+    const OneItem windows = oneItem("", "", "C:\\Audio\\kick.01.wav");
+    CHECK(views::Lanes::itemLabel(windows.session, *windows.session.items.find(windows.item)) ==
+          "kick.01");
+    const OneItem hidden = oneItem("", "", "media/.take");
+    CHECK(views::Lanes::itemLabel(hidden.session, *hidden.session.items.find(hidden.item)) ==
+          ".take");
+    // Nothing to call it by: the view falls back to the item's id.
+    const OneItem bare = oneItem("", "", "");
+    CHECK(views::Lanes::itemLabel(bare.session, *bare.session.items.find(bare.item)).empty());
+}
+
+TEST_CASE("an item's fades are drawn under its name bar, when it has one") {
+    const ui::Rect tall{10, 20, 100, 70};
+    CHECK(views::Lanes::hasNameBar(tall));
+    const ui::Rect body = views::Lanes::fadeArea(tall);
+    CHECK(body.x == tall.x);
+    CHECK(body.w == tall.w);
+    CHECK(body.y == tall.y + views::Lanes::kNameBar);
+    CHECK(body.bottom() == tall.bottom());
+    const ui::Rect compact{10, 20, 100, 22};  // a 24-unit row: no room for a bar
+    CHECK_FALSE(views::Lanes::hasNameBar(compact));
+    CHECK(views::Lanes::fadeArea(compact).y == compact.y);
+    CHECK(views::Lanes::fadeArea(compact).h == compact.h);
+}
+
+TEST_CASE("an item takes its track's colour, or its strip type's without one") {
+    const ui::Theme theme = ui::Theme::dark();
+    const OneItem green = oneItem("green", "", "");
+    const OneItem custom = oneItem("#102030", "", "");
+    const OneItem plain = oneItem("", "", "");
+    auto colorOf = [&](const OneItem& o) {
+        return ui::packRgba(views::Lanes::itemColor(theme, o.session.tracks.find(o.track),
+                                                    model::StripType::Channel));
+    };
+    CHECK(colorOf(green) == ui::packRgba(theme.color("track-green")));
+    CHECK(colorOf(custom) == ui::packRgba(ui::Color::hex(0x102030)));
+    CHECK(colorOf(plain) == ui::packRgba(theme.color("channel")));
+    CHECK(ui::packRgba(views::Lanes::itemColor(theme, nullptr, model::StripType::Master)) ==
+          ui::packRgba(theme.color("master")));
+
+    // And the picture follows: the name bar of an item on a green track is
+    // green, on an uncoloured channel the channels' blue.
+    Gl& g = gl();
+    if (!g.ok) return;
+    peaks::PeakService peaks(std::filesystem::temp_directory_path() / "supple-arrange-color-cache",
+                             [](std::function<void()>) {});
+    auto nameBarPixel = [&](const OneItem& o) {
+        ui::Root root(*g.window, g.fonts, theme);
+        auto arrange = std::make_unique<views::ArrangeView>(
+            peaks, [](const model::MediaSource&) { return std::filesystem::path{}; },
+            views::TransportSource{});
+        views::ArrangeView* view = arrange.get();
+        arrange->show(o.session);
+        arrange->setViewport({0, 60, 0});
+        arrange->setFollow(views::Follow::Off);
+        root.setContent(std::move(arrange));
+        root.damageAll();
+        root.frame(false);
+        const ui::Rect r = view->lanes().itemRect(0, *o.session.items.find(o.item));
+        REQUIRE(views::Lanes::hasNameBar(r));
+        const gui::Image image = root.readBack();
+        const float ratio = static_cast<float>(image.width) / g.window->width();
+        // Right of the label, in the middle of the bar.
+        const auto x = static_cast<std::size_t>((r.x + r.w * 0.75f) * ratio);
+        const auto y = static_cast<std::size_t>((r.y + views::Lanes::kNameBar / 2) * ratio);
+        const std::size_t i = (y * static_cast<std::size_t>(image.width) + x) * 4;
+        return std::array<int, 3>{image.rgba[i], image.rgba[i + 1], image.rgba[i + 2]};
+    };
+    const auto onGreen = nameBarPixel(green);
+    const auto onPlain = nameBarPixel(plain);
+    CHECK(onGreen[1] > onGreen[0]);  // green over red and blue
+    CHECK(onGreen[1] > onGreen[2]);
+    CHECK(onPlain[2] > onPlain[1]);  // blue over green and red
+    CHECK(onPlain[2] > onPlain[0]);
 }
 
 // --- golden images ------------------------------------------------------------------
