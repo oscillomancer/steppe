@@ -1,0 +1,88 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 Supple Audio
+// Reads a local crash report (`supple.crash-report/1.0`), finds the symbol files its modules
+// came from by build id, and names the functions in its frames. Offline and read-only: it
+// opens only the report and the files and directories it is told to search, writes nothing
+// and uses no network, symbol server or environment symbol path.
+#pragma once
+#include <supple/base/result.h>
+#include <supple/crash-resolver/image.h>
+#include <supple/json/value.h>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace supple::diagnostics::resolver {
+
+struct ReportModule {
+    Format format = Format::Elf;
+    std::string id;  // empty: the image had no identity, so no file can be matched to it
+};
+struct ReportFrame {
+    int module = -1;  // index into modules; -1 for generated code or an unknown image
+    std::uint64_t offset = 0;
+    bool isReturn = false;
+};
+struct ReportThread {
+    std::string role;   // fault | main | other
+    std::string state;  // walked | unavailable
+    std::string why;    // `stop` when walked, `reason` when unavailable
+    std::vector<ReportFrame> frames;
+};
+struct Report {
+    std::string incident, role, platform, kind;
+    std::vector<ReportModule> modules;
+    std::vector<ReportThread> threads;
+};
+
+constexpr std::size_t kMaxReportBytes = 4u << 20;
+// Parses and strictly validates the parts of a report the resolver uses; anything else in
+// it is ignored. Errors carry `report.*` codes with a JSON pointer to the offending value.
+Result<Report> parseReport(std::string_view text);
+Result<Report> readReport(const std::filesystem::path& path);
+
+// A file that holds an image, found by `scan`.
+struct Candidate {
+    std::filesystem::path path;
+    Identity image;
+};
+struct ScanLimits {
+    std::size_t maxFiles = 20000;  // files examined across all roots
+    std::size_t maxDepth = 8;
+    std::size_t maxDirectoryEntries = 100000;  // a folder with more is skipped, whole
+};
+struct ScanStats {
+    std::size_t examined = 0;
+    bool truncated = false;  // a limit stopped the scan
+};
+// Images in the given files and directories (directories are walked in sorted order, links
+// are not followed). Only headers are read.
+std::vector<Candidate> scan(const std::vector<std::filesystem::path>& roots, ScanStats& stats,
+                            const ScanLimits& limits = {}, const Limits& reader = {});
+
+enum class ModuleState { Resolved, NoSymbols, Unreadable, NoIdentity, NotFound };
+std::string_view stateName(ModuleState state);
+struct ModuleResolution {
+    ModuleState state = ModuleState::NotFound;
+    std::filesystem::path file;  // the matched file, when there is one
+    std::string error;           // why NoSymbols or Unreadable
+    std::optional<SymbolTable> table;
+};
+struct Resolution {
+    std::vector<ModuleResolution> modules;
+    // The function for a frame, or nothing: no module, no match, no symbols.
+    std::optional<std::string> name(const ReportFrame& frame) const;
+    // Same, with the distance from the function's start.
+    std::optional<std::pair<std::string, std::uint64_t>> locate(const ReportFrame& frame) const;
+};
+// Matches each module to the first candidate with its format and id (candidates in the order
+// given) and loads that file's symbols.
+Resolution resolve(const Report& report, const std::vector<Candidate>& candidates,
+                   const Limits& limits = {});
+
+std::string formatText(const Report& report, const Resolution& resolution);
+json::Value formatJson(const Report& report, const Resolution& resolution);
+
+}  // namespace supple::diagnostics::resolver

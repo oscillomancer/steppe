@@ -4,6 +4,21 @@
 import json, os, pathlib, re, subprocess, sys, tempfile, signal
 binary=sys.argv[1]
 sanitized=len(sys.argv)>2 and bool(sys.argv[2])
+resolver=sys.argv[3] if len(sys.argv)>3 and sys.argv[3] else None
+def norm(path): return os.path.normcase(os.path.normpath(path))
+def resolve_json(report_file,symbols=None):
+    # The offline resolver (ADR-0083, topic 4) over a report this run produced, with the
+    # fixture binary as the only place to look for symbols.
+    run=subprocess.run([resolver,"--json","--symbols",str(symbols or binary),str(report_file)],capture_output=True,timeout=60)
+    assert run.returncode==0,(run.returncode,run.stderr)
+    out=json.loads(run.stdout)
+    assert out["schema"]=="supple.crash-symbols/1.0",out
+    return out
+def fixture_module(resolved):
+    matched=[m for m in resolved["modules"] if m.get("file") and norm(m["file"])==norm(binary)]
+    assert len(matched)==1,(resolved["modules"],binary)
+    return matched[0]
+def function_names(thread): return [f.get("function","") for f in thread["frames"]]
 with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
     base=pathlib.Path(folder)
     for mode in ("normal","negative-return","exit","abort","terminate","fault","thread-fault","stack","concurrent","teardown","echo","handled","killed") + (("failfast",) if os.name=="nt" else ()):
@@ -45,6 +60,11 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
                 for t in threads:
                     assert len(t["frames"])<=128
                     if t["state"]=="unavailable": assert t["reason"] in ("thread_exited","access_denied","registers_unreadable","deadline","unsupported"),t
+                if resolver and mode=="fault":
+                    resolved=resolve_json(found[0])
+                    module=fixture_module(resolved)
+                    assert module["state"]=="resolved" and module["functions"]>0,module
+                    assert any(function_names(resolved["threads"][0])),resolved["threads"][0]
             if mode in ("terminate","abort") and not sanitized and (sys.platform.startswith("linux") or os.name=="nt"):
                 # The calling thread is the fault entry and is read from the live thread
                 # (terminate and abort capture no registers): its real stack, not a
@@ -188,6 +208,31 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
             assert all(t["stop"] in ("end","not_executable","bad_frame_pointer","depth","unreadable","cycle") for t in threads),threads
             for t in threads:
                 assert len(t["frames"])<=128
+            if resolver:
+                # Offline resolution names the marked functions from the binary's own symbols.
+                report_file=list((base/"trace"/"app"/"diagnostics").glob("*.json"))[0]
+                resolved=resolve_json(report_file)
+                module=fixture_module(resolved)
+                assert module["state"]=="resolved" and module["functions"]>0,module
+                fault=" ".join(function_names(resolved["threads"][0]))
+                assert "faultMiddle" in fault and "faultOuter" in fault and fault.index("faultMiddle")<fault.index("faultOuter"),fault
+                assert "parkOuter" in " ".join(function_names(resolved["threads"][1])),resolved["threads"][1]
+                for t in resolved["threads"]:
+                    for f in t["frames"]:
+                        if f["return"] and "function" in f: assert f["displacement"]>=1,f
+                text=subprocess.run([resolver,"--symbols",binary,str(report_file)],capture_output=True,timeout=60)
+                assert text.returncode==0 and b"faultOuter" in text.stdout and b"thread 0 fault: walked" in text.stdout,text
+                # Without the build's files nothing is guessed: modules are not found, frames unnamed.
+                empty=base/"no-symbols"; empty.mkdir()
+                lost=resolve_json(report_file,empty)
+                assert all(m["state"]=="not_found" for m in lost["modules"]),lost["modules"]
+                assert not any("function" in f for t in lost["threads"] for f in t["frames"]),lost
+                # Refusals: unreadable report, damaged report, no symbol location.
+                assert subprocess.run([resolver,"--symbols",binary,str(base/"missing.json")],capture_output=True,timeout=60).returncode==1
+                cut=base/"cut.json"; cut.write_text(report_file.read_text()[:200])
+                bad=subprocess.run([resolver,"--symbols",binary,str(cut)],capture_output=True,timeout=60)
+                assert bad.returncode==1 and bad.stderr,bad
+                assert subprocess.run([resolver,str(report_file)],capture_output=True,timeout=60).returncode==2
         if yama_scope()<2 or os.geteuid()==0:
             # A thread in a killable kernel wait cannot be stopped: the collector gives
             # up at its deadline, and the supervisor must still see the worker exit and
@@ -242,6 +287,11 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
         exe=[i for i,m in enumerate(report["modules"]) if m["id"]==expected["build_id"]]
         assert len(exe)==1,(report["modules"],expected)
         assert all(m["format"]=="pe" for m in report["modules"]),report["modules"]
+        if resolver:
+            # The resolver matches the image by its CodeView id. Windows images give exported
+            # names only (the PDB is not read), so a fixture with no exports has no names.
+            resolved=resolve_json(found[0])
+            assert fixture_module(resolved)["state"] in ("resolved","no_symbols"),resolved["modules"]
         names=("parkOuter","faultMiddle","faultOuter")
         def owner(frame):
             if frame["module"]!=exe[0]: return None

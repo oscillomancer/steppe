@@ -5,7 +5,8 @@
 The approved nine-topic sequence is delivered in steps with a review stop after each.
 Topic 4 (thread traces) has landed for Linux and is written for Windows, which native CI
 has yet to prove. macOS in-process capture is written and unproven until native CI runs
-it; the offline resolver follows. Until later topics land, engine inventory, bridge
+it. The offline resolver is delivered and tested on Linux; its Windows and macOS builds are
+unproven until native CI runs them. Until later topics land, engine inventory, bridge
 correlation, restart UI, hang diagnostics and final release packaging are contracts,
 not working features.
 No crash path attempts a save or normal teardown. No automatic upload exists.
@@ -218,6 +219,56 @@ chain was validated in the worker, a return address outside every module is kept
 and the walk goes on. Frames need frame pointers: the first-party code and the stock plug-ins
 have them (see Frame pointers), system frames are best effort. On arm64 pointer-authentication
 bits are stripped from return addresses.
+
+## Offline resolver (topic 4)
+
+`resolve-crash [--json] --symbols PATH... REPORT.json` names the functions in a local
+report's thread traces. It is a separate library (`crash-resolver`, `host/diagnostics/resolver`)
+and a command line tool that the application never links, runs or ships with a crash path:
+reports stay free of names, and naming happens afterwards, on a machine that has the files
+of the build that crashed. It reads the report and the files and folders it is given and
+nothing else: it writes no file, opens no network connection, consults no symbol server and
+reads no environment symbol path. A folder is searched in sorted order, without following
+links, to 8 levels, 20000 files and 100000 entries per folder; a limit that stops the search
+is said on standard error.
+
+A report module is matched to a file by format and `id` (ELF build ID, Mach-O `LC_UUID`,
+PE CodeView GUID and age, computed exactly as the collectors compute them), so the file
+must be the build's own, or a separate symbol file carrying the same id (an ELF debug file,
+a dSYM's DWARF file). A module with no `id`, or no file with its id, is reported as
+`no_identity` or `not_found`; a matched file without symbols is `no_symbols`; none of them is
+guessed at. The first matching file in search order wins.
+
+Function names only: no DWARF, no line tables, no PDB. ELF reads `.symtab`, else `.dynsym`
+(function and indirect-function symbols in executable sections); Mach-O reads `LC_SYMTAB`
+entries defined in `__TEXT` code sections, dropping the C underscore, from a thin 64-bit
+image or from each slice of a universal file; PE reads exported names, so a Windows image
+without exports resolves no names until a later topic adds PDB support. Only 64-bit
+little-endian images are read, as the collectors read them. A symbol's extent is its size
+where the format has one and otherwise runs to the next symbol or the end of its section; an
+address outside every extent has no name rather than the nearest one. Itanium names are
+demangled where the platform has a demangler, others are shown as stored. A frame with
+`return` true is looked up at offset-1 and shown at its own offset, as the report specifies.
+
+Every file is hostile input. All reads go through a source that refuses any range outside the
+file; counts, sizes and offsets from headers are checked against the file size and fixed limits
+before they allocate or read (files to 16 GiB, 4M functions, one string table 256 MiB, 4096
+bytes per name, 65535 ELF sections, 4096 Mach-O load commands and 1 MiB of them, 8 universal
+slices, 131072 exports); a file over a limit is refused with `symbols.too_large`, except that
+more than 4M functions is read up to the limit and marked `truncated`. The report is parsed
+with a size limit of 4 MiB, a depth and value limit, and validated field by field
+(`report.invalid` with a JSON pointer, `report.unreadable` for the file); fields it does not
+use are ignored. Tests build images in memory and run the reader over every prefix of each, over
+every byte replaced by extreme values and over reads that fail part way, under the
+sanitizers.
+
+Output is text, or with `--json` `supple.crash-symbols/1.0`: `{incident, kind, role, platform,
+modules: [{format, id|null, state, file?, functions?, truncated?, error?}], threads:
+[{ordinal, role, state, stop|reason, frames: [{module|null, offset?, return, function?,
+displacement?}]}]}` (`state`: resolved, no_symbols, unreadable, no_identity, not_found). It
+carries local file paths, since the person running it supplied them, and is never stored in
+the crash folder. Exit status: 0 when the report was read (unresolved modules included), 1
+for an unreadable or invalid report, 2 for a bad command line.
 
 ## Frame pointers
 
