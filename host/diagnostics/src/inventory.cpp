@@ -70,6 +70,9 @@ void send(const diagctx::Event& event) noexcept {
     record.mode = static_cast<std::uint8_t>(event.mode);
     record.state = static_cast<std::uint8_t>(event.state);
     record.image = event.image;
+    record.bridge = event.bridge;
+    record.how = static_cast<std::uint8_t>(event.how);
+    record.status = event.status;
     const std::string_view fields[diagctx::kTextFields]{event.identity.name, event.identity.vendor,
                                                         event.identity.version, event.identity.id};
     for (std::size_t i = 0; i < diagctx::kTextFields; ++i) {
@@ -203,7 +206,7 @@ void Inventory::retire(PluginEntry entry) {
 bool Inventory::applyNames(const InstanceRecord& r) {
     if (r.cell % diagctx::kNamesPerChunk != 0 || r.cell >= diagctx::kMaxCommandNames ||
         r.generation != 0 || r.kind != 0 || r.origin != 0 || r.mode != 0 || r.state != 0 ||
-        r.image != 0)
+        r.image != 0 || r.bridge != 0 || r.how != 0 || r.status != 0)
         return false;
     bool any = false;
     for (std::size_t i = 0; i < diagctx::kNamesPerChunk; ++i) {
@@ -229,6 +232,51 @@ bool Inventory::applyNames(const InstanceRecord& r) {
     return true;
 }
 
+// The entry of bridge `id`, made when it is not there yet (an instance or an end named a bridge
+// whose start was lost); null when the list is full of bridges that are still running. Keeps at
+// most kMaxBridges: the oldest ended one falls out, counted.
+BridgeEntry* Inventory::touchBridge(std::uint16_t id) {
+    if (const auto found = bridges_.find(id); found != bridges_.end()) return &found->second;
+    if (bridges_.size() >= kMaxBridges) {
+        const auto ended = std::find_if(bridges_.begin(), bridges_.end(),
+                                        [](const auto& item) { return item.second.ended; });
+        if (ended == bridges_.end()) {
+            ++bridgesLost_;
+            return nullptr;
+        }
+        // A newer bridge never pushes out an even newer one that has ended.
+        if (ended->first > id) {
+            ++bridgesLost_;
+            return nullptr;
+        }
+        bridges_.erase(ended);
+        ++bridgesLost_;
+    }
+    auto& entry = bridges_[id];
+    entry.id = id;
+    return &entry;
+}
+
+// A Bridge event: ordinal 1 or more, nothing else in the record but how and status, which only
+// an end has. A bridge never started is made by an end that names it (the start was lost); an
+// end after an end changes nothing.
+bool Inventory::applyBridge(const InstanceRecord& r) {
+    if (r.bridge == 0 || r.cell != 0 || r.generation != 0 || r.kind != 0 || r.origin != 0 ||
+        r.mode != 0 || r.state != 0 || r.image != 0 || r.how >= diagctx::kBridgeHowCount ||
+        (r.how == 0 && r.status != 0))
+        return false;
+    for (const auto length : r.length)
+        if (length != 0) return false;
+    BridgeEntry* entry = touchBridge(r.bridge);
+    if (!entry) return true;  // counted in bridgesLost_: valid, but there is no room for it
+    if (r.how != 0 && !entry->ended) {
+        entry->ended = true;
+        entry->how = static_cast<diagctx::BridgeHow>(r.how);
+        entry->status = r.status;
+    }
+    return true;
+}
+
 bool Inventory::apply(const Packet& packet) {
     noteDropped(packet.dropped);
     const auto& r = packet.instance;
@@ -239,6 +287,9 @@ bool Inventory::apply(const Packet& packet) {
     if (packet.kind == Message::Instance &&
         r.event == static_cast<std::uint8_t>(diagctx::EventKind::Names))
         return applyNames(r) || reject();
+    if (packet.kind == Message::Instance &&
+        r.event == static_cast<std::uint8_t>(diagctx::EventKind::Bridge))
+        return applyBridge(r) || reject();
     if (packet.kind != Message::Instance || r.cell >= kMaxPlugins ||
         r.generation > diagctx::kGenerationMask)
         return reject();
@@ -254,6 +305,7 @@ bool Inventory::apply(const Packet& packet) {
                 return reject();
             for (const auto length : r.length)
                 if (length > diagctx::kMaxText) return reject();
+            if (r.how != 0 || r.status != 0) return reject();  // only a Bridge event has them
             PluginEntry entry;
             entry.cell = r.cell;
             entry.generation = r.generation;
@@ -262,6 +314,8 @@ bool Inventory::apply(const Packet& packet) {
             entry.mode = static_cast<diagctx::InstanceMode>(r.mode);
             entry.state = static_cast<diagctx::InstanceState>(r.state);
             entry.image = r.image;
+            entry.bridge = r.bridge;
+            if (r.bridge != 0) (void)touchBridge(r.bridge);  // it exists: an instance runs in it
             for (std::size_t i = 0; i < diagctx::kTextFields; ++i)
                 entry.text[i] = cleanText(r.text[i], r.length[i]);
             if (slot && slot->generation == r.generation) {
@@ -294,6 +348,7 @@ bool Inventory::apply(const Packet& packet) {
             return true;
         }
         case diagctx::EventKind::Names:
+        case diagctx::EventKind::Bridge:
             break;  // handled above, before the cell checks
     }
     return reject();
@@ -315,6 +370,40 @@ std::vector<const PluginEntry*> Inventory::entries() const {
     std::sort(all.begin(), all.end(),
               [](const PluginEntry* a, const PluginEntry* b) { return a->ordinal < b->ordinal; });
     return all;
+}
+
+const BridgeEntry* Inventory::bridge(std::uint16_t id) const {
+    const auto found = bridges_.find(id);
+    return found == bridges_.end() ? nullptr : &found->second;
+}
+
+std::vector<const BridgeEntry*> Inventory::bridges() const {
+    std::vector<const BridgeEntry*> all;
+    for (const auto& item : bridges_) all.push_back(&item.second);
+    return all;  // a std::map: ascending ids
+}
+
+json::Value Inventory::bridgesJson() const {
+    auto list = json::Value::array();
+    const auto plugins = entries();
+    for (const BridgeEntry* entry : bridges()) {
+        auto item = json::Value::object();
+        item["id"] = static_cast<long long>(entry->id);
+        item["state"] = entry->ended ? "ended" : "running";
+        if (entry->ended) {
+            auto ended = json::Value::object();
+            ended["how"] = diagctx::bridgeHowName(entry->how);
+            ended["code"] = static_cast<long long>(entry->status);
+            item["ended"] = std::move(ended);
+        }
+        auto instances = json::Value::array();
+        for (const PluginEntry* plugin : plugins)
+            if (plugin->bridge == entry->id)
+                instances.push_back(static_cast<long long>(plugin->ordinal));
+        item["instances"] = std::move(instances);
+        list.push_back(std::move(item));
+    }
+    return list;
 }
 
 namespace {
@@ -358,6 +447,7 @@ json::Value Inventory::pluginsJson(const TraceSnapshot* trace) const {
         item["origin"] = diagctx::instanceOriginName(entry->origin);
         item["mode"] = diagctx::instanceModeName(entry->mode);
         item["state"] = diagctx::instanceStateName(entry->state);
+        if (entry->bridge != 0) item["bridge"] = static_cast<long long>(entry->bridge);
         if (trace)
             if (const std::string* id = buildIdOf(*trace, *entry)) {
                 auto build = json::Value::object();
@@ -467,6 +557,7 @@ json::Value Inventory::droppedJson(const TraceSnapshot* trace) const {
         count(trace ? std::size_t{trace->unplacedEntries} + trace->tableScopeOverflow : 0);
     dropped["messages"] = count(workerDropped_ + rejected_);
     dropped["untracked"] = count(trace ? trace->tableUntracked : 0);
+    dropped["bridges"] = count(bridgesLost_);
     return dropped;
 }
 
@@ -482,6 +573,7 @@ std::vector<std::string> Inventory::limits() const {
             "show an old state");
     if (retiredLost_ != 0)
         limits.push_back("destroyed plug-in instances beyond the last 64 are not listed");
+    if (bridgesLost_ != 0) limits.push_back("bridge processes beyond the last 256 are not listed");
     return limits;
 }
 
@@ -560,11 +652,22 @@ bool commandsShape(const json::Value& commands) {
 
 bool droppedShape(const json::Value& dropped) {
     if (dropped.isInt()) return dropped.asInt() >= 0;  // reports of older builds
-    if (!dropped.isObject() || dropped.size() != 7) return false;
+    if (!dropped.isObject()) return false;
+    // The seven counts of topic 5 are always there; the bridge counts (topic 6) are there from
+    // the build that wrote them on.
     for (const char* key : {"threads", "unregistered_threads", "plugins", "commands", "cells",
                             "messages", "untracked"}) {
         const auto* v = dropped.find(key);
         if (!v || !v->isInt() || v->asInt() < 0) return false;
+    }
+    for (const auto& member : dropped.asObject()) {
+        const std::string_view known[]{"threads",   "unregistered_threads",
+                                       "plugins",   "commands",
+                                       "cells",     "messages",
+                                       "untracked", "bridges"};
+        if (std::find(std::begin(known), std::end(known), member.key) == std::end(known))
+            return false;
+        if (!member.value.isInt() || member.value.asInt() < 0) return false;
     }
     return true;
 }
@@ -655,9 +758,9 @@ bool pluginsShape(const json::Value& plugins, std::size_t threadCount) {
     for (const auto& item : plugins.asArray()) {
         if (!item.isObject()) return false;
         for (const auto& member : item.asObject()) {
-            const std::string_view allowed[]{"id",      "kind",      "origin",   "mode",
-                                             "state",   "build",     "name",     "vendor",
-                                             "version", "plugin_id", "executing"};
+            const std::string_view allowed[]{"id",      "kind",      "origin",    "mode",
+                                             "state",   "build",     "name",      "vendor",
+                                             "version", "plugin_id", "executing", "bridge"};
             if (std::find(std::begin(allowed), std::end(allowed), member.key) == std::end(allowed))
                 return false;
         }
@@ -675,6 +778,9 @@ bool pluginsShape(const json::Value& plugins, std::size_t threadCount) {
             return false;
         for (const char* key : {"name", "vendor", "version", "plugin_id"})
             if (const auto* text = item.find(key); text && !reportText(text)) return false;
+        if (const auto* bridge = item.find("bridge");
+            bridge && (!bridge->isInt() || bridge->asInt() < 1 || bridge->asInt() > UINT16_MAX))
+            return false;
         if (const auto* build = item.find("build")) {
             if (!build->isObject() || build->size() != 2) return false;
             const auto* format = build->find("format");
@@ -711,6 +817,79 @@ bool pluginsShape(const json::Value& plugins, std::size_t threadCount) {
                                 diagctx::entryName(static_cast<diagctx::Entry>(k));
                 if (!known) return false;
             }
+        }
+    }
+    return true;
+}
+
+bool bridgesShape(const json::Value& bridges, const json::Value& plugins,
+                  std::int64_t droppedBridges) {
+    if (!bridges.isArray() || bridges.size() > kMaxBridges || !plugins.isArray()) return false;
+    std::int64_t previous = 0;
+    std::vector<std::int64_t> listed;
+    for (const auto& item : bridges.asArray()) {
+        if (!item.isObject()) return false;
+        for (const auto& member : item.asObject()) {
+            const std::string_view allowed[]{"id", "state", "ended", "instances"};
+            if (std::find(std::begin(allowed), std::end(allowed), member.key) == std::end(allowed))
+                return false;
+        }
+        const auto* id = item.find("id");
+        const auto* state = item.find("state");
+        const auto* ended = item.find("ended");
+        const auto* instances = item.find("instances");
+        if (!id || !id->isInt() || id->asInt() <= previous || id->asInt() > UINT16_MAX)
+            return false;
+        previous = id->asInt();
+        listed.push_back(previous);
+        if (!state || !state->isString() ||
+            (state->asString() != "running" && state->asString() != "ended"))
+            return false;
+        const bool isEnded = state->asString() == "ended";
+        if (isEnded != (ended != nullptr)) return false;
+        if (ended) {
+            if (!ended->isObject() || ended->size() != 2) return false;
+            const auto* how = ended->find("how");
+            const auto* code = ended->find("code");
+            if (!how || !how->isString() || !code || !code->isInt() || code->asInt() < INT32_MIN ||
+                code->asInt() > INT32_MAX)
+                return false;
+            bool known = false;
+            for (std::uint8_t i = 1; i < diagctx::kBridgeHowCount && !known; ++i)
+                known =
+                    how->asString() == diagctx::bridgeHowName(static_cast<diagctx::BridgeHow>(i));
+            if (!known) return false;
+        }
+        if (!instances || !instances->isArray() || instances->size() > plugins.size()) return false;
+        std::int64_t last = -1;
+        for (const auto& instance : instances->asArray()) {
+            if (!instance.isInt() || instance.asInt() <= last) return false;
+            last = instance.asInt();
+            bool found = false;
+            for (const auto& plugin : plugins.asArray()) {
+                const auto* pluginId = plugin.find("id");
+                if (!pluginId || !pluginId->isInt() || pluginId->asInt() != last) continue;
+                const auto* bridge = plugin.find("bridge");
+                found = bridge && bridge->isInt() && bridge->asInt() == previous;
+                break;
+            }
+            if (!found) return false;
+        }
+    }
+    // Every plug-in that says it runs in a bridge is listed by one, unless bridges were dropped.
+    for (const auto& plugin : plugins.asArray()) {
+        const auto* bridge = plugin.find("bridge");
+        if (!bridge || !bridge->isInt()) continue;
+        if (std::find(listed.begin(), listed.end(), bridge->asInt()) != listed.end()) {
+            const auto* id = plugin.find("id");
+            bool inList = false;
+            for (const auto& item : bridges.asArray())
+                if (item.find("id")->asInt() == bridge->asInt())
+                    for (const auto& instance : item.find("instances")->asArray())
+                        inList = inList || (id && id->isInt() && instance.asInt() == id->asInt());
+            if (!inList) return false;
+        } else if (droppedBridges <= 0) {
+            return false;
         }
     }
     return true;

@@ -159,6 +159,71 @@ TEST_CASE(
     CHECK(reports(root.path) == 20);
 }
 
+TEST_CASE("a report with bridges is published, validated, pruned, and kept when altered") {
+    Root root;
+    Inventory inventory;
+    const auto apply = [&](auto&& change) {
+        Packet p = boot(0);
+        p.kind = Message::Instance;
+        change(p.instance);
+        REQUIRE(inventory.apply(p));
+    };
+    apply([](InstanceRecord& r) {
+        r.event = static_cast<std::uint8_t>(supple::diagctx::EventKind::Bridge);
+        r.bridge = 1;
+    });
+    apply([](InstanceRecord& r) {
+        r.cell = 3;
+        r.event = static_cast<std::uint8_t>(supple::diagctx::EventKind::Add);
+        r.kind = static_cast<std::uint8_t>(supple::diagctx::InstanceKind::Clap);
+        r.origin = static_cast<std::uint8_t>(supple::diagctx::InstanceOrigin::Foreign);
+        r.mode = static_cast<std::uint8_t>(supple::diagctx::InstanceMode::Bridged);
+        r.state = static_cast<std::uint8_t>(supple::diagctx::InstanceState::Active);
+        r.bridge = 1;
+    });
+    apply([](InstanceRecord& r) {
+        r.event = static_cast<std::uint8_t>(supple::diagctx::EventKind::Bridge);
+        r.bridge = 1;
+        r.how = static_cast<std::uint8_t>(supple::diagctx::BridgeHow::Signal);
+        r.status = 11;
+    });
+    const auto path = [&](unsigned i) {
+        return root.path / (std::string(boot(i).incident.data()) + ".json");
+    };
+    REQUIRE(publishReport(root.path, boot(0), nullptr, 31, false, nullptr, &inventory));
+    const auto text = readTextFile(path(0));
+    REQUIRE(text);
+    const auto parsed = json::parse(*text);
+    REQUIRE(parsed);
+    const auto* bridges = parsed->find("bridges");
+    REQUIRE(bridges);
+    REQUIRE(bridges->size() == 1);
+    CHECK(bridges->asArray()[0].find("ended")->find("how")->asString() == "signal");
+    CHECK(parsed->find("plugins")->asArray()[0].find("bridge")->asInt() == 1);
+    CHECK(parsed->find("dropped")->find("bridges")->asInt() == 0);
+    CHECK(reportShape(*parsed));
+    // Retention only removes a report it can validate in full: this one is the oldest of 22.
+    fs::last_write_time(path(0), fs::file_time_type::clock::now() - std::chrono::hours(48));
+    for (unsigned i = 1; i < 22; ++i)
+        REQUIRE(publishReport(root.path, boot(i), nullptr, 31, false, nullptr, &inventory));
+    CHECK(reports(root.path) == 20);
+    CHECK_FALSE(fs::exists(path(0)));
+    // A report whose bridges disagree with its plug-ins is not one retention may delete, and the
+    // reader's tolerant check still reads it (it is only a section it does not understand).
+    for (const auto& edit :
+         {+[](json::Value& v) { v["bridges"].asArray()[0]["id"] = 2; },
+          +[](json::Value& v) { v["bridges"].asArray()[0]["state"] = "running"; },
+          +[](json::Value& v) { v["plugins"].asArray()[0]["bridge"] = 9; }}) {
+        auto altered = *parsed;
+        edit(altered);
+        CHECK_FALSE(reportShape(altered));
+    }
+    // A report of an earlier build (no bridges, seven counts) is still a valid report.
+    auto older = *parsed;
+    older.asObject().erase("bridges");
+    older["dropped"].asObject().erase("bridges");
+    CHECK(reportShape(older));
+}
 TEST_CASE("a report with command entries is published, validated, pruned, and kept when altered") {
     namespace dc = supple::diagctx;
     Root root;

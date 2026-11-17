@@ -100,13 +100,31 @@ const char* instanceStateName(InstanceState state) noexcept {
     return nullptr;
 }
 
+const char* bridgeHowName(BridgeHow how) noexcept {
+    switch (how) {
+        case BridgeHow::Exit:
+            return "exit";
+        case BridgeHow::Signal:
+            return "signal";
+        case BridgeHow::Exception:
+            return "exception";
+        case BridgeHow::Host:
+            return "host";
+        case BridgeHow::None:
+        case BridgeHow::Count_:
+            break;
+    }
+    return nullptr;
+}
+
 void setInventorySink(InventorySink sink) noexcept {
     std::lock_guard lock(gGate);  // returns once no announcement is still running the old sink
     gSink.store(sink, std::memory_order_release);
 }
 
 void announce(std::uint32_t cell, InstanceKind kind, InstanceOrigin origin, InstanceMode mode,
-              InstanceState state, std::uint64_t image, const Identity& identity) noexcept {
+              InstanceState state, std::uint64_t image, const Identity& identity,
+              std::uint16_t bridge) noexcept {
     std::unique_lock<std::mutex> lock;
     const auto sink = enter(lock);
     if (cell < kMaxInstances) gImages[cell].store(image, std::memory_order_relaxed);
@@ -120,7 +138,20 @@ void announce(std::uint32_t cell, InstanceKind kind, InstanceOrigin origin, Inst
     event.mode = mode;
     event.state = state;
     event.image = image;
+    event.bridge = bridge;
     event.identity = identity;
+    sink(event);
+}
+
+void announceBridge(std::uint16_t bridge, BridgeHow how, std::int32_t status) noexcept {
+    std::unique_lock<std::mutex> lock;
+    const auto sink = enter(lock);
+    if (!sink || bridge == 0) return;
+    Event event;
+    event.event = EventKind::Bridge;
+    event.bridge = bridge;
+    event.how = how;
+    event.status = how == BridgeHow::None ? 0 : status;
     sink(event);
 }
 

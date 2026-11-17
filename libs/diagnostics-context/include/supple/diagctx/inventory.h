@@ -77,7 +77,18 @@ enum class EventKind : std::uint8_t {
     State,    // its state changed
     Remove,   // it is gone
     Names,    // four command names (topic 5d): `cell` is the id of the first, `identity` holds them
+    Bridge,   // a bridge process started or ended (topic 6a): `bridge`, and for an end
+              // `how`/`status`
 };
+// How a bridge process ended, as the host classified it when it observed the end (topic 6a).
+// None is the other event: the bridge started. Host: the host killed it (a hung or abandoned
+// bridge, a protocol violation, a teardown), so its status says nothing about the plug-in.
+// Exit: it ended by itself with an exit status. Signal and Exception: the operating system
+// ended it (POSIX signal; Windows exception status).
+enum class BridgeHow : std::uint8_t { None = 0, Exit, Signal, Exception, Host, Count_ };
+constexpr std::uint8_t kBridgeHowCount = static_cast<std::uint8_t>(BridgeHow::Count_);
+// The report strings ("exit", "signal", "exception", "host"); nullptr for None or out of range.
+const char* bridgeHowName(BridgeHow how) noexcept;
 struct Event {
     EventKind event = EventKind::Add;
     std::uint32_t cell = 0;
@@ -87,6 +98,11 @@ struct Event {
     InstanceMode mode = InstanceMode::None;
     InstanceState state = InstanceState::None;
     std::uint64_t image = 0;
+    // The bridge process the instance runs in: 0 is this process, n >= 1 the n-th bridge process
+    // the host started, never reused (topic 6a). For a Bridge event, the bridge it is about.
+    std::uint16_t bridge = 0;
+    BridgeHow how = BridgeHow::None;  // Bridge events: None = started, else how it ended
+    std::int32_t status = 0;          // Bridge events, an end: the native status (signal, code)
     Identity identity;
 };
 
@@ -99,7 +115,14 @@ void setInventorySink(InventorySink sink) noexcept;
 // no word for a crash to find, so the report has nothing to match it with. The generation is
 // read from the cell here, so a caller says nothing about it.
 void announce(std::uint32_t cell, InstanceKind kind, InstanceOrigin origin, InstanceMode mode,
-              InstanceState state, std::uint64_t image, const Identity& identity) noexcept;
+              InstanceState state, std::uint64_t image, const Identity& identity,
+              std::uint16_t bridge = 0) noexcept;
+// A bridge process started (`how` None) or ended (anything else, with its native `status`).
+// `bridge` is an ordinal of 1 or more; an announcement of 0 is ignored. Called from the thread
+// that spawns the bridge and from the main thread that observes its end, never from an audio
+// path (it takes the same lock every announcement does).
+void announceBridge(std::uint16_t bridge, BridgeHow how = BridgeHow::None,
+                    std::int32_t status = 0) noexcept;
 void announceState(std::uint32_t cell, InstanceState state) noexcept;
 // The image `announce` last gave for `cell` (0: none, or a cell out of range). It stays after
 // the instance is removed, until the cell is announced again: a retired instance's module is

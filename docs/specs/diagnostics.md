@@ -736,7 +736,8 @@ sink: `rtsan-announce-check` (a program that announces inside a `SUPPLE_RT` func
 *Transport.* The diagnostics frontend installs the sink after it has sent Ready, and only on a
 trusted channel. Each announcement becomes one `Instance` packet (protocol version 2: the
 packet grew by the `InstanceRecord`, fixed-size plain fields, and by the worker's count of
-events dropped so far; 392 bytes, under 512). The send never waits for the supervisor. POSIX
+events dropped so far; the `InstanceRecord` later gained the bridge fields of topic 6a, with no
+change of version since both ends are one executable; 400 bytes, under 512). The send never waits for the supervisor. POSIX
 writes it to the stream socket in one non-blocking send (the descriptor is put in non-blocking
 mode for the call and its flags restored, as for the capsule: `MSG_DONTWAIT` alone does not make
 macOS refuse a full buffer instead of waiting); a stream socket may take part of a
@@ -803,6 +804,37 @@ never taken for complete without that being said. The strict validator checks ev
 enum, string (length, UTF-8, no control character), the ids (strictly increasing), `build`
 (a known format and lowercase hex) and each `executing` entry (a known entry name, a thread
 of the report, a known match).
+
+### Bridge processes (topic 6a)
+
+A bridged plug-in runs in a child process the host started (ADR-0013). A report says which
+child each instance ran in, and whether that child was still there.
+
+*Announcing.* `diagctx::Event` and the packet's `InstanceRecord` carry `bridge`: 0 is this
+process, n >= 1 is the n-th bridge process the worker started, never reused within a run. An
+instance's `Add` carries the bridge it runs in. A new event kind `Bridge` says a bridge started
+(`how` none, no status) or ended (`how` `exit`, `signal`, `exception` or `host`, and the native
+`status`: the POSIX signal or exit code, the Windows status). `announceBridge` takes the same
+lock as every announcement, so none can run on an audio path (the `rtsan` check covers it); the
+host calls it only from the thread that spawns a bridge and the main thread that observes its
+end.
+
+*Supervisor.* `Inventory` keeps a list of bridges by ordinal, at most 256: a bridge is made by
+its start, or by an instance or an end that names it when the start was lost, and an end after
+an end changes nothing. A record that has a `how` or `status` where only a `Bridge` event may
+(an `Add`, a name chunk), or a `Bridge` event with anything else set, is damaged: counted and
+ignored. Past 256, the oldest bridge that has ended falls out and is counted in
+`dropped.bridges`.
+
+*Report.* `plugins[].bridge` is the ordinal, present only for an instance that ran in a bridge.
+`bridges` is an array in ordinal order of `{id, state, ended?, instances}`: `state` is `running`
+or `ended`; `ended` (exactly when ended) is `{how, code}`; `instances` is the ids of the
+`plugins` that ran in it. Without a bridge it is an empty array. Reports of earlier builds have
+neither key, and the reader treats a report without them as one with no bridges. The strict
+validator holds the two sections to each other: ordinals strictly increasing from 1, the closed
+sets, an integer code in 32 bits, every listed instance a listed plug-in whose `bridge` is that
+ordinal, and every plug-in's `bridge` a listed one unless `dropped.bridges` says some were left
+out.
 
 ### Command breadcrumbs (topic 5d)
 
@@ -904,8 +936,9 @@ which appear with the role `other`), `plugins` (destroyed instances beyond the l
 `commands` (ring entries that were damaged, and commands begun on a thread that did not own the
 ring), `cells` (entries open in the table that no thread read could be tied to, and scopes whose
 stack address the table cannot hold), `messages` (inventory and name packets the worker could not
-send, or the supervisor refused) and `untracked` (instances that found no cell). The validator
-takes the plain integer older reports hold, and a report without `attribution`, as reports it
+send, or the supervisor refused), `untracked` (instances that found no cell) and, from topic 6a,
+`bridges` (bridge processes beyond the last 256). The validator takes the plain integer older
+reports hold, an object without `bridges`, and a report without `attribution`, as reports it
 still owns; any other shape is kept and never authorizes deletion.
 
 ## Offline resolver (topic 4)

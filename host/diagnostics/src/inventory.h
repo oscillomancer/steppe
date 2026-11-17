@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -49,6 +50,9 @@ std::uint32_t inventoryDropped() noexcept;
 
 constexpr std::size_t kMaxPlugins = diagctx::kMaxInstances;  // live: one per cell
 constexpr std::size_t kRetiredPlugins = 64;                  // destroyed, kept for the report
+// Bridge processes a report lists (topic 6a). One that is gone is kept as long as there is room;
+// past this the oldest ended one falls out and is counted in `dropped.bridges`.
+constexpr std::size_t kMaxBridges = 256;
 
 struct PluginEntry {
     std::uint32_t ordinal = 0;  // the report's id: order of first announcement
@@ -58,8 +62,18 @@ struct PluginEntry {
     diagctx::InstanceOrigin origin = diagctx::InstanceOrigin::None;
     diagctx::InstanceMode mode = diagctx::InstanceMode::None;
     diagctx::InstanceState state = diagctx::InstanceState::None;
+    std::uint16_t bridge = 0;                            // 0: this process, n: bridge n
     std::uint64_t image = 0;                             // never reported
     std::array<std::string, diagctx::kTextFields> text;  // name, vendor, version, id; checked
+};
+
+// A bridge process the worker started (topic 6a), as the worker announced it. Never invented: an
+// entry exists because a Bridge event named it or an instance said it runs there.
+struct BridgeEntry {
+    std::uint16_t id = 0;  // the ordinal: the n-th bridge process of the run, from 1
+    bool ended = false;
+    diagctx::BridgeHow how = diagctx::BridgeHow::None;  // when ended
+    std::int32_t status = 0;                            // when ended: the native status
 };
 
 // The text a report may show for a plug-in's string: at most `kMaxText` bytes, valid UTF-8,
@@ -88,6 +102,13 @@ class Inventory {
     // Live and retired entries by ordinal.
     std::vector<const PluginEntry*> entries() const;
 
+    // The bridge processes (topic 6a), by id, and the ones that fell out of the list.
+    const BridgeEntry* bridge(std::uint16_t id) const;
+    std::vector<const BridgeEntry*> bridges() const;
+    std::size_t bridgesLost() const noexcept { return bridgesLost_; }
+    // The report's "bridges" array: id, state, how it ended, and the plug-ins it ran.
+    json::Value bridgesJson() const;
+
     // The report's "plugins" array. `trace`, when there is one, supplies the module each
     // instance came from (`build`) and which thread was inside which instance (`executing`).
     json::Value pluginsJson(const TraceSnapshot* trace) const;
@@ -112,9 +133,13 @@ class Inventory {
   private:
     void retire(PluginEntry entry);
     bool applyNames(const InstanceRecord& record);
+    bool applyBridge(const InstanceRecord& record);
+    BridgeEntry* touchBridge(std::uint16_t id);
     std::vector<std::optional<PluginEntry>> live_;
     std::vector<std::string> names_;  // by command id; empty: not received
     std::deque<PluginEntry> retired_;
+    std::map<std::uint16_t, BridgeEntry> bridges_;
+    std::size_t bridgesLost_ = 0;
     std::uint32_t nextOrdinal_ = 0;
     std::size_t announced_ = 0, rejected_ = 0, workerDropped_ = 0, retiredLost_ = 0;
 };
@@ -133,6 +158,12 @@ bool commandsShape(const json::Value& commands);
 bool attributionShape(const json::Value& attribution, const json::Value& plugins,
                       const json::Value& commands, const json::Value& threads,
                       const json::Value* modules);  // null when the report has none
+// Strict validation of a report's "bridges" against its "plugins": ids rising from 1, a state
+// from the closed set, `ended` exactly for an ended bridge (a `how` from the set and an integer
+// code), every listed instance a listed plug-in whose `bridge` is that id, and every plug-in's
+// `bridge` a listed one unless the report says bridges were dropped (`droppedBridges` > 0).
+bool bridgesShape(const json::Value& bridges, const json::Value& plugins,
+                  std::int64_t droppedBridges);
 // "dropped": the object this build writes, or the plain count older reports hold.
 bool droppedShape(const json::Value& dropped);
 

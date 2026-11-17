@@ -8,6 +8,7 @@
 #include <initializer_list>
 #include <string>
 #include <thread>
+#include <vector>
 #include "../src/inventory.h"
 #include "supple/diagcap/native.h"
 #if !defined(_WIN32)
@@ -56,6 +57,22 @@ Packet change(std::uint32_t cell, std::uint16_t generation, diagctx::EventKind e
     p.instance.generation = generation;
     p.instance.event = static_cast<std::uint8_t>(event);
     p.instance.state = static_cast<std::uint8_t>(state);
+    return p;
+}
+Packet addIn(std::uint32_t cell, std::uint16_t generation, std::uint16_t bridge,
+             std::string_view name = "Gain") {
+    Packet p = add(cell, generation, diagctx::InstanceState::Active, name);
+    p.instance.bridge = bridge;
+    p.instance.mode = static_cast<std::uint8_t>(diagctx::InstanceMode::Bridged);
+    return p;
+}
+Packet bridgeEvent(std::uint16_t bridge, diagctx::BridgeHow how = diagctx::BridgeHow::None,
+                   std::int32_t status = 0) {
+    Packet p = base();
+    p.instance.event = static_cast<std::uint8_t>(diagctx::EventKind::Bridge);
+    p.instance.bridge = bridge;
+    p.instance.how = static_cast<std::uint8_t>(how);
+    p.instance.status = status;
     return p;
 }
 using diagctx::EventKind;
@@ -373,6 +390,191 @@ TEST_CASE("the report validator accepts what the writer makes and refuses every 
     CHECK_FALSE(pluginsShape(many, 0));
 }
 
+TEST_CASE("a bridge's start, its instances and its end are kept, and the report lists them") {
+    Inventory inventory;
+    REQUIRE(inventory.apply(bridgeEvent(1)));
+    REQUIRE(inventory.apply(addIn(1, 0, 1, "Reverb")));
+    REQUIRE(inventory.apply(add(2, 0, InstanceState::Active, "Local")));  // in this process
+    REQUIRE(inventory.apply(bridgeEvent(2)));
+    REQUIRE(inventory.apply(addIn(3, 0, 2, "Delay")));
+    REQUIRE(inventory.apply(addIn(4, 0, 1, "Chorus")));
+    REQUIRE(inventory.apply(bridgeEvent(1, diagctx::BridgeHow::Signal, 11)));
+    CHECK(inventory.rejected() == 0);
+    const auto first = inventory.bridge(1);
+    REQUIRE(first);
+    CHECK(first->ended);
+    CHECK(first->how == diagctx::BridgeHow::Signal);
+    CHECK(first->status == 11);
+    CHECK_FALSE(inventory.bridge(2)->ended);
+    const auto plugins = inventory.pluginsJson(nullptr);
+    CHECK(plugins.asArray()[0].find("bridge")->asInt() == 1);
+    CHECK(plugins.asArray()[1].find("bridge") == nullptr);  // this process: no key
+    CHECK(plugins.asArray()[2].find("bridge")->asInt() == 2);
+    const auto bridges = inventory.bridgesJson();
+    REQUIRE(bridges.size() == 2);
+    const auto& one = bridges.asArray()[0];
+    CHECK(one.find("id")->asInt() == 1);
+    CHECK(one.find("state")->asString() == "ended");
+    CHECK(one.find("ended")->find("how")->asString() == "signal");
+    CHECK(one.find("ended")->find("code")->asInt() == 11);
+    REQUIRE(one.find("instances")->size() == 2);  // Reverb (0) and Chorus (3), by id
+    CHECK(one.find("instances")->asArray()[0].asInt() == 0);
+    CHECK(one.find("instances")->asArray()[1].asInt() == 3);
+    const auto& two = bridges.asArray()[1];
+    CHECK(two.find("state")->asString() == "running");
+    CHECK(two.find("ended") == nullptr);
+    CHECK(pluginsShape(plugins, 0));
+    CHECK(bridgesShape(bridges, plugins, 0));
+    CHECK(inventory.droppedJson(nullptr).find("bridges")->asInt() == 0);
+}
+
+TEST_CASE("a bridge that was never announced is made by what names it, and an end is final") {
+    Inventory inventory;
+    // The start was lost: an instance in bridge 5, and an end for bridge 7, still say so.
+    REQUIRE(inventory.apply(addIn(1, 0, 5)));
+    REQUIRE(inventory.bridge(5));
+    CHECK_FALSE(inventory.bridge(5)->ended);
+    REQUIRE(inventory.apply(bridgeEvent(7, diagctx::BridgeHow::Exception, -1073741819)));
+    REQUIRE(inventory.bridge(7));
+    CHECK(inventory.bridge(7)->how == diagctx::BridgeHow::Exception);
+    CHECK(inventory.bridge(7)->status == -1073741819);
+    // A second start changes nothing; a second end does not overwrite the first.
+    REQUIRE(inventory.apply(bridgeEvent(5)));
+    CHECK_FALSE(inventory.bridge(5)->ended);
+    REQUIRE(inventory.apply(bridgeEvent(7, diagctx::BridgeHow::Host, 0)));
+    CHECK(inventory.bridge(7)->how == diagctx::BridgeHow::Exception);
+    const auto ids = inventory.bridges();
+    REQUIRE(ids.size() == 2);
+    CHECK(ids[0]->id == 5);  // ascending, however they arrived
+    CHECK(ids[1]->id == 7);
+    CHECK(bridgesShape(inventory.bridgesJson(), inventory.pluginsJson(nullptr), 0));
+}
+
+TEST_CASE("a damaged bridge record is refused and changes nothing") {
+    const Packet good = bridgeEvent(3, diagctx::BridgeHow::Exit, 1);
+    {
+        Inventory inventory;
+        REQUIRE(inventory.apply(good));
+    }
+    const auto refused = [&](auto&& change) {
+        Packet damaged = good;
+        change(damaged.instance);
+        Inventory inventory;
+        const bool applied = inventory.apply(damaged);
+        return !applied && inventory.bridges().empty() && inventory.rejected() == 1;
+    };
+    CHECK(refused([](InstanceRecord& r) { r.bridge = 0; }));
+    CHECK(refused([](InstanceRecord& r) { r.cell = 1; }));
+    CHECK(refused([](InstanceRecord& r) { r.generation = 1; }));
+    CHECK(refused([](InstanceRecord& r) { r.kind = 1; }));
+    CHECK(refused([](InstanceRecord& r) { r.state = 1; }));
+    CHECK(refused([](InstanceRecord& r) { r.image = 1; }));
+    CHECK(refused([](InstanceRecord& r) { r.length[2] = 1; }));
+    CHECK(refused([](InstanceRecord& r) { r.how = diagctx::kBridgeHowCount; }));
+    CHECK(refused([](InstanceRecord& r) { r.how = 0xff; }));
+    CHECK(refused([](InstanceRecord& r) {  // a start has no status
+        r.how = 0;
+        r.status = 5;
+    }));
+    // The bridge fields have no meaning in the other events: an Add or a name chunk carrying
+    // them is damaged, a bridge ordinal on an Add is not.
+    Inventory inventory;
+    auto withHow = add(1, 0, InstanceState::Active);
+    withHow.instance.how = 2;
+    CHECK_FALSE(inventory.apply(withHow));
+    auto withStatus = add(1, 0, InstanceState::Active);
+    withStatus.instance.status = 2;
+    CHECK_FALSE(inventory.apply(withStatus));
+    CHECK(inventory.apply(addIn(1, 0, 65535)));
+    CHECK(inventory.bridge(65535));
+}
+
+TEST_CASE("a report lists at most 256 bridges: the oldest ended one falls out, counted") {
+    Inventory inventory;
+    for (std::uint16_t id = 1; id <= kMaxBridges; ++id) {
+        REQUIRE(inventory.apply(bridgeEvent(id)));
+        REQUIRE(inventory.apply(bridgeEvent(
+            id, id == 1 || id == 2 ? diagctx::BridgeHow::Exit : diagctx::BridgeHow::None, 0)));
+    }
+    CHECK(inventory.bridges().size() == kMaxBridges);
+    CHECK(inventory.bridgesLost() == 0);
+    // Bridge 257 pushes out bridge 1 (the oldest that has ended); bridge 2 stays.
+    REQUIRE(inventory.apply(bridgeEvent(kMaxBridges + 1)));
+    CHECK(inventory.bridges().size() == kMaxBridges);
+    CHECK(inventory.bridge(1) == nullptr);
+    CHECK(inventory.bridge(2) != nullptr);
+    CHECK(inventory.bridgesLost() == 1);
+    CHECK(inventory.droppedJson(nullptr).find("bridges")->asInt() == 1);
+    CHECK_FALSE(inventory.limits().empty());
+    // An instance that names the lost bridge is still listed, and the report is still valid.
+    REQUIRE(inventory.apply(addIn(1, 0, 1)));
+    const auto plugins = inventory.pluginsJson(nullptr);
+    CHECK(plugins.asArray()[0].find("bridge")->asInt() == 1);
+    CHECK(bridgesShape(inventory.bridgesJson(), plugins, 0) == false);
+    CHECK(bridgesShape(inventory.bridgesJson(), plugins,
+                       inventory.droppedJson(nullptr).find("bridges")->asInt()));
+}
+
+TEST_CASE("the bridges validator accepts what the writer makes and refuses every other shape") {
+    Inventory inventory;
+    REQUIRE(inventory.apply(bridgeEvent(1)));
+    REQUIRE(inventory.apply(addIn(1, 0, 1)));
+    REQUIRE(inventory.apply(bridgeEvent(2, diagctx::BridgeHow::Host, 9)));
+    const auto plugins = inventory.pluginsJson(nullptr);
+    const auto bridges = inventory.bridgesJson();
+    REQUIRE(bridgesShape(bridges, plugins, 0));
+    REQUIRE(bridgesShape(json::Value::array(), json::Value::array(), 0));
+    const auto mutated = [&](auto&& change) {
+        auto value = bridges;
+        change(value.asArray());
+        return bridgesShape(value, plugins, 0);
+    };
+    using Items = json::Array;
+    CHECK_FALSE(mutated([](Items& v) { v[0]["extra"] = 1; }));
+    CHECK_FALSE(mutated([](Items& v) { v[0]["id"] = 0; }));
+    CHECK_FALSE(mutated([](Items& v) { v[1]["id"] = 1; }));  // not rising
+    CHECK_FALSE(mutated([](Items& v) { v[0]["id"] = 70000; }));
+    CHECK_FALSE(mutated([](Items& v) { v[0]["state"] = "dead"; }));
+    CHECK_FALSE(mutated([](Items& v) { v[0]["state"] = "ended"; }));    // ended needs `ended`
+    CHECK_FALSE(mutated([](Items& v) { v[1]["state"] = "running"; }));  // running has none
+    CHECK_FALSE(mutated([](Items& v) { v[1]["ended"]["how"] = "crashed"; }));
+    CHECK_FALSE(mutated([](Items& v) { v[1]["ended"]["how"] = 3; }));
+    CHECK_FALSE(mutated([](Items& v) { v[1]["ended"]["code"] = "9"; }));
+    CHECK_FALSE(mutated([](Items& v) { v[1]["ended"]["code"] = 5000000000LL; }));
+    CHECK_FALSE(mutated([](Items& v) { v[1]["ended"]["extra"] = 1; }));
+    CHECK_FALSE(mutated([](Items& v) { v[0]["instances"] = json::Value::array(); }));  // unlisted
+    CHECK_FALSE(mutated([](Items& v) { v[1]["instances"].asArray().push_back(0); }));  // not its
+    CHECK_FALSE(mutated([](Items& v) { v[0]["instances"].asArray().push_back(9); }));  // absent
+    CHECK_FALSE(mutated([](Items& v) { v[0]["instances"] = 4; }));
+    CHECK_FALSE(mutated([](Items& v) { v[0].asObject().erase("instances"); }));
+    CHECK_FALSE(mutated([](Items& v) { v.erase(v.begin()); }));  // the plug-in's bridge unlisted
+    CHECK_FALSE(bridgesShape(json::Value("x"), plugins, 0));
+    auto badPlugins = plugins;
+    badPlugins.asArray()[0]["bridge"] = 0;
+    CHECK_FALSE(pluginsShape(badPlugins, 0));
+    badPlugins.asArray()[0]["bridge"] = 70000;
+    CHECK_FALSE(pluginsShape(badPlugins, 0));
+    badPlugins.asArray()[0]["bridge"] = "1";
+    CHECK_FALSE(pluginsShape(badPlugins, 0));
+}
+
+TEST_CASE("the dropped counts accept an older report's seven and refuse anything unknown") {
+    Inventory inventory;
+    auto dropped = inventory.droppedJson(nullptr);
+    CHECK(dropped.size() == 8);
+    CHECK(droppedShape(dropped));
+    dropped.asObject().erase("bridges");
+    CHECK(droppedShape(dropped));  // what builds before topic 6 wrote
+    dropped["bridges"] = -1;
+    CHECK_FALSE(droppedShape(dropped));
+    dropped["bridges"] = 0;
+    dropped["mystery"] = 0;
+    CHECK_FALSE(droppedShape(dropped));
+    auto missing = inventory.droppedJson(nullptr);
+    missing.asObject().erase("cells");
+    CHECK_FALSE(droppedShape(missing));
+}
+
 TEST_CASE("the channel accepts inventory packets and refuses what it did not write") {
     Packet packet = base();
     packet.incident[32] = 0;
@@ -516,6 +718,51 @@ TEST_CASE("closing the inventory says when a send left the stream torn") {
     CHECK_FALSE(closeInventory());  // the terminal packet must not be sent into it
     gHookTears = false;
     resetInventoryForTests(nullptr);
+}
+
+namespace {
+std::vector<Packet> gSent;
+bool capturePublish(Native&, const Packet& packet) noexcept {
+    gSent.push_back(packet);
+    return true;
+}
+}  // namespace
+
+TEST_CASE("the worker sends a bridge's start, its end and the bridge each instance runs in") {
+    Native native;
+    Packet boot = base();
+    resetInventoryForTests(&capturePublish);
+    installInventory(native, boot);
+    gSent.clear();
+    diagctx::announceBridge(1);
+    diagctx::announce(4, diagctx::InstanceKind::Clap, diagctx::InstanceOrigin::Foreign,
+                      diagctx::InstanceMode::Bridged, InstanceState::Active, 0,
+                      {"Reverb", {}, {}, {}}, 1);
+    diagctx::announce(5, diagctx::InstanceKind::Clap, diagctx::InstanceOrigin::Foreign,
+                      diagctx::InstanceMode::InProcess, InstanceState::Active, 0,
+                      {"Local", {}, {}, {}});
+    diagctx::announceBridge(1, diagctx::BridgeHow::Signal, 11);
+    diagctx::announceBridge(0);                                // not a bridge: ignored
+    diagctx::announceBridge(2, diagctx::BridgeHow::None, 99);  // a start carries no status
+    resetInventoryForTests(nullptr);
+    REQUIRE(gSent.size() == 5);
+    CHECK(gSent[0].instance.event == static_cast<std::uint8_t>(EventKind::Bridge));
+    CHECK(gSent[0].instance.bridge == 1);
+    CHECK(gSent[0].instance.how == 0);
+    CHECK(gSent[1].instance.bridge == 1);
+    CHECK(gSent[2].instance.bridge == 0);
+    CHECK(gSent[3].instance.how == static_cast<std::uint8_t>(diagctx::BridgeHow::Signal));
+    CHECK(gSent[3].instance.status == 11);
+    CHECK(gSent[4].instance.bridge == 2);
+    CHECK(gSent[4].instance.status == 0);
+    // What the worker sent is what the supervisor's inventory accepts, whole.
+    Inventory inventory;
+    for (const auto& packet : gSent) CHECK(inventory.apply(packet));
+    CHECK(inventory.rejected() == 0);
+    CHECK(inventory.bridge(1)->ended);
+    CHECK(inventory.find(4, 0)->bridge == 1);
+    CHECK(inventory.find(5, 0)->bridge == 0);
+    CHECK(bridgesShape(inventory.bridgesJson(), inventory.pluginsJson(nullptr), 0));
 }
 
 namespace {

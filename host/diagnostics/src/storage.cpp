@@ -155,7 +155,7 @@ bool reportShape(const json::Value& value, bool tolerant) {
                                          "unavailable", "modules",
                                          "threads",     "plugins",
                                          "commands",    "dropped",
-                                         "attribution"};
+                                         "attribution", "bridges"};
         if (std::find(std::begin(allowed), std::end(allowed), field.key) == std::end(allowed))
             return false;
     }
@@ -199,6 +199,13 @@ bool reportShape(const json::Value& value, bool tolerant) {
     {
         const auto* plugins = value.find("plugins");
         if (!plugins || !pluginsShape(*plugins, threads->size())) return false;
+        // The bridge processes (topic 6a) are optional: reports of earlier builds have none.
+        if (const auto* bridges = value.find("bridges")) {
+            const auto* dropped = value.find("dropped");
+            const auto* lost = dropped && dropped->isObject() ? dropped->find("bridges") : nullptr;
+            if (!bridgesShape(*bridges, *plugins, lost && lost->isInt() ? lost->asInt() : 0))
+                return false;
+        }
     }
     // Attribution is optional (reports of earlier builds have none); when present it must be
     // one the report's own plug-ins and commands support.
@@ -431,6 +438,7 @@ Status publishReport(const fs::path& root, const Packet& boot, const Packet* ter
         for (auto& limit : known.limits()) v["unavailable"].asArray().push_back(limit);
         for (auto& limit : known.commandLimits(trace)) v["unavailable"].asArray().push_back(limit);
         v["plugins"] = known.pluginsJson(trace);
+        v["bridges"] = known.bridgesJson();
         v["commands"] = known.commandsJson(trace);
         v["attribution"] = known.attributionJson(trace);
         v["dropped"] = known.droppedJson(trace);

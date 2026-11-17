@@ -28,7 +28,13 @@ struct InstanceRecord {
     std::uint8_t event = 0;  // diagctx::EventKind
     std::uint8_t kind = 0, origin = 0, mode = 0, state = 0;
     std::uint8_t length[4]{};  // bytes used of each text field: name, vendor, version, id
-    std::uint64_t image = 0;   // private: an address inside the plug-in's binary
+    // Topic 6a. `bridge`: the bridge process the instance runs in (0: this process). A Bridge
+    // event (`event` = diagctx::EventKind::Bridge) is about bridge `bridge`; `how` is
+    // diagctx::BridgeHow (0 = started) and `status` the native status of an end.
+    std::uint16_t bridge = 0;
+    std::uint8_t how = 0;
+    std::int32_t status = 0;
+    std::uint64_t image = 0;  // private: an address inside the plug-in's binary
     char text[4][64]{};
 };
 struct Packet {
