@@ -24,6 +24,8 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "supple/base/rt.h"
+
 namespace supple::diagctx {
 
 constexpr std::uint32_t kTableMagic = 0x58435453;  // "STCX"
@@ -99,7 +101,7 @@ static_assert(std::is_trivially_copyable_v<TableImage> && std::is_standard_layou
 constexpr std::size_t kTableBytes = sizeof(TableImage);
 
 // The process's table: static storage, zero-filled, so it costs the binary nothing.
-Table& table() noexcept;
+Table& table() noexcept SUPPLE_RT;
 // Writes the magic and version (release); idempotent. Cold. Nothing reads the table
 // before the supervisor has been told its address, which happens after this.
 void initTable() noexcept;

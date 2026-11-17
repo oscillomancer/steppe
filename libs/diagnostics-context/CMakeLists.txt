@@ -4,5 +4,5 @@
 # plugins/, modules/ or the MIT libraries may link it: tools/license-check rejects any
 # mention of it in their files, and cmake/LicenseIsolation.cmake fails configuration when
 # one of their targets reaches it (add a new GPL-only library to both).
-supple_add_library(diagnostics-context SOURCES src/table.cpp)
-supple_add_tests(diagnostics-context SOURCES tests/test_table.cpp LABELS rt)
+supple_add_library(diagnostics-context SOURCES src/table.cpp src/scope.cpp DEPS supple::core-base)
+supple_add_tests(diagnostics-context SOURCES tests/test_table.cpp tests/test_scope.cpp LABELS rt)

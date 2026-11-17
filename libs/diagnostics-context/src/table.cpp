@@ -103,7 +103,7 @@ const char* threadRoleName(ThreadRole role) noexcept {
     return nullptr;
 }
 
-Table& table() noexcept { return gTable; }
+Table& table() noexcept SUPPLE_RT { return gTable; }
 
 void initTable() noexcept {
     // Version first, magic last: a reader that sees the magic sees a complete header.
