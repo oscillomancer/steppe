@@ -170,8 +170,7 @@ bool registerThread(ThreadRole role, std::uint16_t ordinal) noexcept {
     const std::uint64_t id = currentThreadId();
     bool claimed = false;
     if (id != 0) {
-        const std::uint64_t info =
-            static_cast<std::uint64_t>(role) | std::uint64_t{ordinal} << 8;
+        const std::uint64_t info = static_cast<std::uint64_t>(role) | std::uint64_t{ordinal} << 8;
         std::uint64_t low = 0, high = 0;
         stackBounds(low, high);
         for (std::size_t i = 0; i < kMaxThreadSlots && !claimed; ++i) {
