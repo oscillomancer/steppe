@@ -560,8 +560,8 @@ a send can take, the 250 ms a part-sent packet is given plus 50 ms for schedulin
 capsule follows the terminal packet on the same stream, and another thread's packet inside it
 would corrupt it, as would the terminal packet written into the rest of a part-sent one. If a
 send left the stream torn, the terminal packet is not sent at all, since the supervisor would read
-it as the end of the torn packet and stop: the process then dies with no terminal packet and
-the supervisor reports it from its exit status alone. The count of dropped events rides on every
+it as the end of the torn packet and stop: the process then dies with no terminal packet and no
+hold (on macOS no capsule either), and the supervisor reports it from its exit status alone. The count of dropped events rides on every
 `Instance` packet and on the terminal packet; the supervisor keeps the largest it saw.
 
 *Supervisor.* `Inventory` applies each packet. Every field is untrusted: a record whose cell
