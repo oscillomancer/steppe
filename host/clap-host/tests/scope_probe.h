@@ -28,7 +28,7 @@ struct Open {
 };
 struct Sighting {
     const char* phase = nullptr;      // the callback, as the fixture names it
-    std::uint64_t observerFrame = 0;  // the observer's own frame address: below every scope
+    std::uint64_t observerFrame = 0;  // the observer's frame address: strictly below every scope
     std::uint8_t count = 0;           // how many of `open` are filled
     Open open[4];
     std::uint8_t more = 0;  // words past the fourth, not recorded

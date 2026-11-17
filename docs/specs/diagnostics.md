@@ -453,9 +453,20 @@ driver's callback thread, which stays unregistered) is the mapping that holds it
 pointer (`/proc/<pid>/maps` on Linux, the allocation `VirtualQueryEx` finds on Windows, the
 region `mach_vm_region` finds on macOS). Of several entries on one stack the one with the lowest
 address is the innermost, and that is the entry the thread is reported in; the outer ones are
-still counted as tied. The address is the frame's of the function that holds the scope, so two
-scopes in one function cannot be told apart; the host's scopes each sit in a function of their
-own. Another thread's word is not quiescent while the table is read, so Linux and Windows read
+still counted as tied. The address is the frame address (`__builtin_frame_address(0)`) of the function that
+declares the scope, taken in that function and passed to the scope's constructor as a defaulted
+argument, never taken inside the constructor: a constructor that is not inlined (a Debug
+build) has a frame of its own that is gone when it returns and that the entry's calls reuse. On
+every architecture the frame address is the function's frame-pointer register (x86-64: the slot
+holding the saved rbp; arm64: the frame record), which stays at or above the function's stack
+pointer while it runs, and every frame of a function it calls lies wholly below the caller's
+stack pointer. So a thread inside an entry has its stack pointer at or below the recorded
+address, and a scope in a called function has a strictly lower address than the scope that calls
+it, which is why the lowest is the innermost. Nothing else is promised: where the frame address
+sits among the function's locals is the compiler's choice (arm64 compilers differ), so nothing
+compares it with a local's address, and two scopes in one function share an address and cannot
+be told apart; the host's scopes each sit in a function of their own. A scope that is not a
+local records an address on no stack, and a reader does not tie it to a thread. Another thread's word is not quiescent while the table is read, so Linux and Windows read
 each candidate word again once the thread is stopped and accept it only if both reads agree
 (the fault thread is parked in its handler and needs no second read); macOS stops the thread
 before it reads, and one read does the work of two. An entry left out is one the thread entered

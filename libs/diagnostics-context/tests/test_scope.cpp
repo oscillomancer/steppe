@@ -144,8 +144,8 @@ TEST_CASE("a scope marks its word for its length and puts back what it found") {
         CHECK(inside.kind == Entry::Process);
         CHECK(inside.generation == generation);
         CHECK(inside.stack != 0);
-        // The recorded address is this frame's, above anything a call from here uses.
-        CHECK(deeper() < inside.stack + 16);
+        // The recorded address is this function's frame, above every frame of a call from here.
+        CHECK(deeper() < inside.stack);
         // The other word is its own.
         CHECK(unpackWord(mainWord(cell)).kind == Entry::None);
     }
@@ -158,6 +158,50 @@ TEST_CASE("a scope marks its word for its length and puts back what it found") {
     }
     CHECK(unpackWord(mainWord(cell)).kind == Entry::None);
     releaseCell(cell);
+}
+
+// A function that holds a scope and then calls something, as a host entry does. Noinline, so
+// it has a frame of its own: the scope's recorded address must be that frame's, whether or not
+// the compiler inlines the scope's constructor into it (a Debug build does not).
+[[gnu::noinline]] std::uint64_t holdsScope(std::uint32_t cell, std::uint64_t& callee) {
+    AudioScope scope(cell, Entry::Process);
+    callee = deeper();
+    return unpackWord(audioWord(cell)).stack;
+}
+
+TEST_CASE("the recorded address is the frame of the function that holds the scope") {
+    const auto cell = acquireCell();
+    REQUIRE(cell != kNoCell);
+    // The rule, on every architecture: the address is the function's frame address, which is
+    // at or above the function's stack pointer for as long as the scope lives, so every frame
+    // of a function it calls lies strictly below it. Where it sits among the function's own
+    // locals is the compiler's choice (the arm64 frame record may be above or below them), so
+    // nothing here compares it with a local.
+    std::uint64_t callee = 0;
+    const auto recorded = holdsScope(cell, callee);
+    CHECK(recorded != 0);
+    CHECK(callee < recorded);
+    {
+        AudioScope scope(cell, Entry::Process);
+        const auto frame = reinterpret_cast<std::uint64_t>(__builtin_frame_address(0));
+        CHECK(unpackWord(audioWord(cell)).stack == (frame & ~std::uint64_t{15}));
+    }
+    releaseCell(cell);
+}
+
+TEST_CASE("a scope in a called function has a lower address than the scope that calls it") {
+    const auto cell = acquireCell();
+    const auto other = acquireCell();
+    REQUIRE(cell != kNoCell);
+    REQUIRE(other != kNoCell);
+    {
+        MainScope outer(cell, Entry::Params);
+        std::uint64_t callee = 0;
+        const auto inner = holdsScope(other, callee);
+        CHECK(inner < unpackWord(mainWord(cell)).stack);
+    }
+    releaseCell(cell);
+    releaseCell(other);
 }
 
 TEST_CASE("scopes nest and each exit restores the scope outside it") {

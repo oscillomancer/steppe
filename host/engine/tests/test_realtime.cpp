@@ -1354,7 +1354,7 @@ TEST_CASE(
             CHECK(call.count >= 1);
             CHECK(call.more == 0);
             for (std::size_t i = 0; i < call.count; ++i)
-                CHECK(call.open[i].word.stack + 16 > call.observerFrame);
+                CHECK(call.open[i].word.stack > call.observerFrame);
         }
         // Nothing is left open when the run is over.
         for (std::uint32_t cell = 0; cell < diagctx::kMaxInstances; ++cell) {

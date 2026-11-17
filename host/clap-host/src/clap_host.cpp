@@ -130,13 +130,15 @@ namespace {
 // the end of the scope. An isolated instance forwards its entries to its bridge child, so
 // they are recorded as bridge calls.
 struct MainEntry : diagctx::MainScope {
-    MainEntry(std::uint32_t cell, bool isolated, diagctx::Entry kind) noexcept
-        : diagctx::MainScope(cell, isolated ? diagctx::Entry::BridgeCall : kind) {}
+    MainEntry(std::uint32_t cell, bool isolated, diagctx::Entry kind,
+              const void* frame = __builtin_frame_address(0)) noexcept
+        : diagctx::MainScope(cell, isolated ? diagctx::Entry::BridgeCall : kind, frame) {}
 };
 // The same for the entries the audio thread makes.
 struct AudioEntry : diagctx::AudioScope {
-    AudioEntry(std::uint32_t cell, bool isolated, diagctx::Entry kind) noexcept SUPPLE_RT
-        : diagctx::AudioScope(cell, isolated ? diagctx::Entry::BridgeCall : kind) {}
+    AudioEntry(std::uint32_t cell, bool isolated, diagctx::Entry kind,
+               const void* frame = __builtin_frame_address(0)) noexcept SUPPLE_RT
+        : diagctx::AudioScope(cell, isolated ? diagctx::Entry::BridgeCall : kind, frame) {}
 };
 static_assert(sizeof(std::uint32_t) == sizeof(diagctx::kNoCell) && diagctx::kNoCell == 0xffffffffu);
 }  // namespace

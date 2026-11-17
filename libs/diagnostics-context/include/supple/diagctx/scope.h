@@ -12,11 +12,31 @@
 // A word packs, from the top: the entry kind (8 bits), a generation (12 bits) and the
 // scope's stack address divided by 16 (44 bits, so addresses below 2^48). The stack address
 // is what ties the word to a thread from outside the process: the thread whose stack holds
-// it, and whose stack pointer lies below it, is inside the entry; of several, the innermost
-// (the lowest address) is the one it is in. The address is the frame's, so two scopes of
-// different cells in one function cannot be told apart; nested scopes sit in different frames
-// (a scope in create(), another in the library open it calls). The generation counts the cell's
+// it, and whose stack pointer lies at or below it, is inside the entry; of several, the
+// innermost (the lowest address) is the one it is in. The generation counts the cell's
 // reuses and is a hint for a reader, never an identity: it repeats after 4,096 of them.
+//
+// What the stack address is (the same on every architecture). It is the frame address
+// (`__builtin_frame_address(0)`) of the function that declares the scope, taken in that
+// function and not in the constructor: a constructor that is not inlined (every Debug build,
+// and any wrapper class that is not) has a frame of its own, which is gone when it returns
+// and which the calls the entry makes then reuse, so its address would sit among the
+// callees' and not above them. That is why the address is a defaulted argument of the
+// constructor, evaluated at the declaration; a class that wraps a scope forwards it the same
+// way. The frame address is the frame-pointer register of the function (x86-64: the slot
+// that holds the saved rbp; arm64: the frame record, the saved x29 and x30), which stays at
+// or above the function's stack pointer for as long as the function runs, and every frame
+// of a function it calls lies wholly below the caller's stack pointer. So, for a scope that
+// is a local of a function that has its own frame:
+//   - the thread's stack pointer is at or below the recorded address while the scope lives;
+//   - a scope in a called function (not inlined into the caller) has a strictly lower
+//     address than the scope of the caller, which is what makes "the lowest" the innermost.
+// Nothing else is promised. Where the frame address sits among the function's locals is the
+// compiler's choice (the frame record is above them in one compiler's arm64 layout and
+// below them in another's), so no code compares it with the address of a local. Two scopes
+// declared in one function have the same address and cannot be told apart. A scope that is
+// not a local (a member of a heap object) records an address on no stack, which a reader
+// does not tie to a thread.
 //
 // Cost on the audio path: two release stores per entry, one on entry and one on exit, each
 // a plain store on x86-64 and a store-release on arm64; no loop, no lock, no allocation, no
@@ -134,7 +154,11 @@ inline std::uint64_t threadToken() noexcept {
 template <Word W>
 class Scope {
   public:
-    Scope(std::uint32_t cell, Entry kind) noexcept SUPPLE_RT {
+    // `frame` is the frame address of the declaring function: leave it to the default, which
+    // is evaluated there (see the top of this file). A wrapper takes the same default and
+    // passes it on.
+    Scope(std::uint32_t cell, Entry kind,
+          const void* frame = __builtin_frame_address(0)) noexcept SUPPLE_RT {
         if (cell >= kMaxInstances) return;
         auto& cells = table().instances[cell];
         if constexpr (W == Word::Main) {
@@ -148,9 +172,7 @@ class Scope {
         }
         word_ = W == Word::Audio ? &cells.audio : &cells.main;
         previous_ = word_->load(std::memory_order_relaxed);
-        // The address of a local of this frame: the scope's own place on the stack. The
-        // thread's stack pointer is below it for as long as the scope lives.
-        const auto here = reinterpret_cast<std::uintptr_t>(__builtin_frame_address(0));
+        const auto here = reinterpret_cast<std::uintptr_t>(frame);
         if (here >= kWordStackLimit) countScopeOverflow();
         word_->store(packWord(kind, unpackWord(previous_).generation, here),
                      std::memory_order_release);

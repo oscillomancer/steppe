@@ -760,7 +760,7 @@ TEST_CASE("every call into an in-process plug-in runs inside a scope for its ins
     CHECK_FALSE(outer.audio);
     CHECK_FALSE(inner.audio);
     CHECK(inner.word.stack < outer.word.stack);  // deeper
-    CHECK(outer.word.stack + 16 > init[0].observerFrame);
+    CHECK(outer.word.stack > init[0].observerFrame);
     const std::uint32_t cell = outer.cell;
     const std::uint16_t generation = outer.word.generation;
     CHECK(probe::onlyOpen(seen, "init", Entry::Create, false));
@@ -798,7 +798,7 @@ TEST_CASE("every call into an in-process plug-in runs inside a scope for its ins
         for (const auto& s : probe::phase(seen, e.phase)) {
             CHECK(s.open[0].cell == cell);
             CHECK(s.open[0].word.generation == generation);
-            CHECK(s.open[0].word.stack + 16 > s.observerFrame);
+            CHECK(s.open[0].word.stack > s.observerFrame);
         }
     }
     // Nothing is left open between calls.
