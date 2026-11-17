@@ -545,7 +545,10 @@ process that only has to capture its own failure can link them without the super
 frontend or the report store; `host/diagnostics` links the library and keeps the frontend, the
 channel (`native_posix.cpp`, `native_windows.cpp`), the inventory, the storage and the reader. The
 library is closed to the permissive tree by the same two checks as `diagnostics-context` (below),
-with `supple/diagcap/` as the include to reject.
+with `supple/diagcap/` as the include to reject. Its tests are its own executable,
+`diagnostics-capture.tests` (the walker, module identity, the capsule and its parser, under
+`libs/diagnostics-capture/tests/`); what the supervisor does with a trace (publishing, retention,
+the inventory's limits) stays in `diagnostics.tests`.
 
 Library placement: the table lives in the GPL library `diagnostics-context`
 (`libs/diagnostics-context/`, header `supple/diagctx/table.h`). It is under `libs/` because
@@ -1024,7 +1027,9 @@ DAW-only: `tools/license-check` and `cmake/LicenseIsolation.cmake` reject its us
 `plugins/`, `modules/` and the MIT libraries. The code is moved as it was, but the ELF, Mach-O and PE
 helpers that were local to one file are now `resolver::detail` functions with external linkage,
 declared in `supple/imageid/parse.h` so that the resolver can reuse them. That header is internal
-to the library and the resolver, not an interface: nothing else includes it.
+to the library and the resolver, not an interface: nothing else includes it. The library's tests are
+its own executable, `image-identity.tests`; the synthetic ELF, Mach-O and PE image builders they use
+(`libs/image-identity/tests/images.h`) are shared with `crash-resolver.tests` and `engine.tests`.
 
 A report module is matched to a file by format and `id` (ELF build ID, Mach-O `LC_UUID`,
 PE CodeView GUID and age, computed exactly as the collectors compute them), so the file

@@ -12,7 +12,6 @@
 #include <memory>
 #include <thread>
 #include <vector>
-#include "../src/inventory.h"
 #include "supple/diagcap/capsule.h"
 #include "supple/diagcap/trace.h"
 #if !defined(_WIN32)
@@ -392,16 +391,9 @@ TEST_CASE("a capsule carries the command ring, oldest first, and its counts") {
     CHECK(snapshot->commandsRefused == 5);
     // The worker wrote it from its own table, so the table counts as read: the report then
     // says what the listed commands are, not that no table could be read (macOS, in CI,
-    // listed commands under that second limit and without the first).
+    // listed commands under that second limit and without the first). What the report says
+    // of that is tested with the inventory.
     CHECK(snapshot->table == TableState::Read);
-    {
-        const Inventory inventory;
-        const auto limits = inventory.commandLimits(&*snapshot);
-        REQUIRE(!limits.empty());
-        CHECK(limits[0].find("last 64 the model thread began") != std::string::npos);
-        for (const auto& limit : limits)
-            CHECK(limit.find("could not be read") == std::string::npos);
-    }
     // A capsule with none carries none.
     auto empty = fresh();
     addModule(*empty, 0x100000, 0x100000, 0x180000, 0x10);

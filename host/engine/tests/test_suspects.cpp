@@ -29,7 +29,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #endif
-#include "../../diagnostics/resolver/tests/images.h"
+#include "../../../libs/image-identity/tests/images.h"
 #include "bridge_patience.h"
 #include "suspects.h"
 

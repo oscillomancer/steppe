@@ -11,8 +11,6 @@
 #include <functional>
 #include <map>
 #include <vector>
-#include "../src/private_files.h"
-#include "../src/storage.h"
 #include "supple/diagcap/trace.h"
 using namespace supple;
 using namespace supple::diagnostics::detail;
@@ -760,74 +758,6 @@ TEST_CASE("role fields in a report are validated strictly") {
     CHECK_FALSE(traceShape(&modules, numbered));
     numbered.asArray()[0]["registered"] = "audio_live";
     CHECK(traceShape(&modules, numbered));
-}
-
-namespace {
-fs::path rootFor(const char* name) { return fs::temp_directory_path() / name; }
-Packet bootFor(unsigned id) {
-    Packet p;
-    p.role = 3;
-    std::fill(p.incident.begin(), p.incident.begin() + 32, '0');
-    p.incident[30] = "0123456789abcdef"[(id >> 4) & 15];
-    p.incident[31] = "0123456789abcdef"[id & 15];
-    return p;
-}
-}  // namespace
-
-TEST_CASE("a report with a trace is published, validated and retained like any other") {
-    auto id = incidentId();
-    REQUIRE(id);
-    const auto root = rootFor(id->c_str()) / "app" / "diagnostics";
-    REQUIRE(prepareDirectory(root));
-    auto p = process();
-    const auto snapshot = collectTrace(p.ops(), 11, {0x400200, 0x6ff0, 0x7000}, 10, Arch::X86_64);
-    Packet terminal = bootFor(1);
-    terminal.kind = Message::Terminal;
-    terminal.pc = 0x400200;
-    REQUIRE(publishReport(root, bootFor(1), &terminal, 11, true, &snapshot));
-    const auto file = root / (std::string(bootFor(1).incident.data()) + ".json");
-    auto text = privateRead(file);
-    REQUIRE(text);
-    auto value = json::parse(*text);
-    REQUIRE(value);
-    CHECK(value->find("threads")->size() == 3);
-    CHECK(value->find("modules")->size() == 1);
-    CHECK_FALSE(value->find("complete")->asBool());
-    CHECK(text->find("secret") == std::string::npos);
-    // Validated reports take part in retention: the oldest of 22 goes. Each report is
-    // aged into the past right after it is published, so the one being published is
-    // always the newest and report 1 the oldest.
-    const auto age = [&](unsigned i) {
-        fs::last_write_time(root / (std::string(bootFor(i).incident.data()) + ".json"),
-                            fs::file_time_type::clock::now() - std::chrono::seconds(1000 - i));
-    };
-    age(1);
-    for (unsigned i = 2; i < 23; ++i) {
-        REQUIRE(publishReport(root, bootFor(i), &terminal, 11, true, &snapshot));
-        age(i);
-    }
-    unsigned count = 0;
-    for (const auto& entry : fs::directory_iterator(root))
-        if (entry.path().extension() == ".json") ++count;
-    CHECK(count == 20);
-    // A report whose nested trace is malformed is never authority to delete itself.
-    auto bad = *value;
-    bad["incident"] = std::string(bootFor(200).incident.data());
-    bad["threads"].asArray()[0]["frames"].asArray()[0]["module"] = 77;
-    const auto badFile = root / (std::string(bootFor(200).incident.data()) + ".json");
-    REQUIRE(privatePublish(badFile, json::writeCanonical(bad)));
-    fs::last_write_time(badFile, fs::file_time_type::clock::now() - std::chrono::hours(48));
-    // Over the limit again, with the malformed report the oldest entry of all.
-    for (unsigned i = 23; i < 25; ++i)
-        REQUIRE(publishReport(root, bootFor(i), &terminal, 11, true, &snapshot));
-    REQUIRE(pruneReports(root));
-    CHECK(fs::exists(badFile));
-    count = 0;
-    for (const auto& entry : fs::directory_iterator(root))
-        if (entry.path().extension() == ".json") ++count;
-    CHECK(count == 21);  // 20 validated reports plus the preserved malformed one
-    std::error_code ec;
-    fs::remove_all(rootFor(id->c_str()), ec);
 }
 
 namespace {

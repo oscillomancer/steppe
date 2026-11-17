@@ -1058,6 +1058,17 @@ TEST_CASE("the report's commands array names each entry, or says unknown, and va
     CHECK(inventory.commandLimits(&unread).size() == 1);
     CHECK(inventory.commandLimits(nullptr).size() == 1);
 
+    // A capsule's table counts as read (the worker wrote it from its own), so the report says what
+    // the listed commands are, and never that no table could be read.
+    TraceSnapshot capsule;
+    capsule.table = TableState::Read;
+    capsule.commands = trace.commands;
+    const auto readLimits = Inventory().commandLimits(&capsule);
+    REQUIRE_FALSE(readLimits.empty());
+    CHECK(readLimits[0].find("last 64 the model thread began") != std::string::npos);
+    for (const auto& limit : readLimits)
+        CHECK(limit.find("could not be read") == std::string::npos);
+
     // Shapes the writer never makes.
     const auto parse = [](std::string_view text) { return json::parse(text).value(); };
     const char* good = R"({"seq":1,"name":"a.b","origin":"ui","state":"begun"})";

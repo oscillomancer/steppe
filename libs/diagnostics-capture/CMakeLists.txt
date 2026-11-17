@@ -22,3 +22,10 @@ supple_add_library(diagnostics-capture SOURCES src/trace.cpp ${capture_source}
 if(WIN32)
   target_link_libraries(diagnostics-capture PRIVATE dbghelp psapi)
 endif()
+# The capture code's own tests: the walker, module identity, the capsule and its strict parser.
+# The progress listener names each case as it starts, as the diagnostics tests do.
+supple_add_tests(diagnostics-capture SOURCES tests/test_trace.cpp tests/test_capsule.cpp
+  "${PROJECT_SOURCE_DIR}/tests/progress_listener.cpp")
+if(SUPPLE_BUILD_TESTS)
+  target_compile_definitions(diagnostics-capture.tests PRIVATE PROGRESS_SUITE="diagnostics-capture.tests")
+endif()

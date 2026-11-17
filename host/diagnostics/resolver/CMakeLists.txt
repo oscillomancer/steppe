@@ -9,3 +9,8 @@ add_executable(resolve-crash tools/resolve_crash.cpp)
 target_link_libraries(resolve-crash PRIVATE supple::crash-resolver)
 supple_target_defaults(resolve-crash)
 supple_add_tests(crash-resolver SOURCES tests/test_image.cpp tests/test_resolve.cpp)
+if(SUPPLE_BUILD_TESTS)
+  # The synthetic ELF, Mach-O and PE builders and the scratch folder are image-identity's test
+  # helpers, shared with these tests.
+  target_include_directories(crash-resolver.tests PRIVATE "${PROJECT_SOURCE_DIR}/libs/image-identity/tests")
+endif()

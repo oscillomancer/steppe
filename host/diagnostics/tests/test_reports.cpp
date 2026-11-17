@@ -920,6 +920,57 @@ TEST_CASE("a report that points at a plug-in makes it a suspect, keyed on its bu
     CHECK(listing->reports[0].culprit->format == "clap");
     CHECK(listing->reports[0].culprit->origin == "foreign");
 }
+TEST_CASE("a report with a trace is published, validated and retained like any other") {
+    Root root;
+    TraceSnapshot snapshot = faultIn("deadbeef01020304");
+    snapshot.threads.resize(3, snapshot.threads[0]);
+    snapshot.threads[1].role = detail::Role::Main;
+    snapshot.threads[2].role = detail::Role::Other;
+    Packet terminal = boot(1);
+    terminal.kind = Message::Terminal;
+    terminal.pc = 0x400200;
+    REQUIRE(publishReport(root.path, boot(1), &terminal, 11, true, &snapshot));
+    auto text = privateRead(file(root, 1, ".json"));
+    REQUIRE(text);
+    auto value = json::parse(*text);
+    REQUIRE(value);
+    CHECK(value->find("threads")->size() == 3);
+    CHECK(value->find("modules")->size() == 1);
+    CHECK_FALSE(value->find("complete")->asBool());
+    CHECK(text->find("secret") == std::string::npos);
+    // Validated reports take part in retention: the oldest of 22 goes. Each report is
+    // aged into the past right after it is published, so the one being published is
+    // always the newest and report 1 the oldest.
+    const auto aged = [&](unsigned i) {
+        fs::last_write_time(file(root, i, ".json"),
+                            fs::file_time_type::clock::now() - std::chrono::seconds(1000 - i));
+    };
+    aged(1);
+    for (unsigned i = 2; i < 23; ++i) {
+        REQUIRE(publishReport(root.path, boot(i), &terminal, 11, true, &snapshot));
+        aged(i);
+    }
+    const auto count = [&] {
+        unsigned n = 0;
+        for (const auto& entry : fs::directory_iterator(root.path))
+            if (entry.path().extension() == ".json") ++n;
+        return n;
+    };
+    CHECK(count() == 20);
+    // A report whose nested trace is malformed is never authority to delete itself.
+    auto bad = *value;
+    bad["incident"] = name(200);
+    bad["threads"].asArray()[0]["frames"].asArray()[0]["module"] = 77;
+    const auto badFile = file(root, 200, ".json");
+    REQUIRE(privatePublish(badFile, json::writeCanonical(bad)));
+    fs::last_write_time(badFile, fs::file_time_type::clock::now() - std::chrono::hours(48));
+    // Over the limit again, with the malformed report the oldest entry of all.
+    for (unsigned i = 23; i < 25; ++i)
+        REQUIRE(publishReport(root.path, boot(i), &terminal, 11, true, &snapshot));
+    REQUIRE(pruneReports(root.path));
+    CHECK(fs::exists(badFile));
+    CHECK(count() == 21);  // 20 validated reports plus the preserved malformed one
+}
 TEST_CASE("a missing folder, or one that is not the user's own, has no suspects or an error") {
     const auto none = suspects(fs::temp_directory_path() / "supple-no-such-diagnostics-folder");
     REQUIRE(none);

@@ -8,3 +8,6 @@
 # cmake/LicenseIsolation.cmake fails configuration when one of their targets reaches it.
 # `supple/imageid/parse.h` is internal to this library and the crash resolver.
 supple_add_library(image-identity SOURCES src/image.cpp DEPS supple::core-base)
+# The reader's own tests. The synthetic ELF, Mach-O and PE builders (tests/images.h) are shared
+# with the crash resolver's and the engine's tests.
+supple_add_tests(image-identity SOURCES tests/test_identity.cpp)

@@ -166,15 +166,6 @@ TEST_CASE("an ELF image reads .dynsym when there is no .symtab, and fails plainl
     CHECK_FALSE(table.error().hint.empty());
 }
 
-TEST_CASE("an ELF build id comes from a section when there are no program headers") {
-    images::ElfSpec spec;
-    spec.functions = elfFunctions();
-    spec.programNote = false;
-    const auto bytes = images::elf(spec);
-    const MemorySource source(bytes);
-    CHECK(only(source).id == "deadbeef01020304");
-}
-
 TEST_CASE("a Mach-O image gives its UUID and the functions of its code sections") {
     const auto bytes = sampleMacho();
     const MemorySource source(bytes);
@@ -268,28 +259,6 @@ TEST_CASE("damaged and cut-short Mach-O images never crash the reader") {
 }
 TEST_CASE("damaged and cut-short PE images never crash the reader") { damage(samplePe()); }
 
-TEST_CASE("files that are not supported images are not identified") {
-    const auto empty = std::vector<std::uint8_t>{};
-    CHECK(identify(MemorySource(empty)).empty());
-    const std::vector<std::uint8_t> text{'h', 'e', 'l', 'l', 'o'};
-    CHECK(identify(MemorySource(text)).empty());
-    // A Java class file starts like a universal Mach-O file but counts far too many images.
-    std::vector<std::uint8_t> java{0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 52};
-    java.resize(256, 0);
-    CHECK(identify(MemorySource(java)).empty());
-    // 32-bit and big-endian ELF are not read.
-    auto elf32 = sampleElf();
-    elf32[4] = 1;
-    CHECK(identify(MemorySource(elf32)).empty());
-    auto big = sampleElf();
-    big[5] = 2;
-    CHECK(identify(MemorySource(big)).empty());
-    // An object file is neither an executable nor a library.
-    auto object = sampleElf();
-    object[16] = 1;
-    CHECK(identify(MemorySource(object)).empty());
-}
-
 TEST_CASE("an image read as the wrong format fails with a structured error") {
     const auto bytes = sampleElf();
     const MemorySource source(bytes);
@@ -362,37 +331,6 @@ TEST_CASE("a name with no terminator inside the string table is skipped, not rea
     const auto table = read(bytes);
     CHECK(table.symbols.empty());
     CHECK(table.skipped == 1);
-}
-
-TEST_CASE("a build-id note whose size runs past its segment gives no id, not the bytes beyond") {
-    // descsz 40 is a plausible build-id length (the limit is 64), but the note holds 8 bytes
-    // and ends there: reading 40 would take the heap's bytes for the id. A check that the
-    // note's end is inside its segment is what refuses it; without that check this id is
-    // nonempty.
-    for (const std::uint32_t descsz : {9u, 21u, 40u, 64u}) {
-        images::ElfSpec spec;
-        spec.functions = {{"f", 0x1100, 0x10}};
-        spec.noteDescsz = descsz;
-        const auto bytes = images::elf(spec);
-        const MemorySource source(bytes);
-        const auto found = identify(source);
-        REQUIRE(found.size() == 1);
-        CHECK(found[0].id.empty());
-    }
-    // The same image with the true size has its id.
-    images::ElfSpec spec;
-    spec.functions = {{"f", 0x1100, 0x10}};
-    const auto bytes = images::elf(spec);
-    const MemorySource source(bytes);
-    CHECK(identify(source)[0].id == "deadbeef01020304");
-    // Sizes the limit refuses outright, and zero, give none either.
-    for (const std::uint32_t descsz : {65u, 1000000u, 0xffffffffu}) {
-        images::ElfSpec odd;
-        odd.noteDescsz = descsz;
-        const auto oddBytes = images::elf(odd);
-        const MemorySource oddSource(oddBytes);
-        CHECK(identify(oddSource)[0].id.empty());
-    }
 }
 
 TEST_CASE("names are demangled where the platform can") {
