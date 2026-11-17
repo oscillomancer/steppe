@@ -3,7 +3,7 @@
 supple_add_library(clap-host
   SOURCES src/clap_host.cpp src/vst3_host.cpp src/platform.cpp src/scan.cpp
   DEPS supple::core-base supple::core-json supple::clap supple::semantic-params-abi supple::vst3-host
-  PRIVATE_DEPS ${CMAKE_DL_LIBS} supple::product-info)
+  PRIVATE_DEPS ${CMAKE_DL_LIBS} supple::product-info supple::diagnostics-context)
 target_sources(clap-host PRIVATE src/bridge_client.cpp src/bridge_protocol.cpp src/bridge_platform.cpp src/bridge_child.cpp)
 if(WIN32)
   target_sources(clap-host PRIVATE src/child_process_windows.cpp src/editor_platform_windows.cpp)
@@ -67,6 +67,8 @@ if(SUPPLE_BUILD_TESTS)
                                COMPILE_OPTIONS "${_bridge_objcxx_options};-fobjc-arc")
     target_link_libraries(clap-host.tests PRIVATE "-framework CoreGraphics")
   endif()
+  # The tests read the execution table from inside the fixture plug-in (tests/scope_probe.h).
+  target_link_libraries(clap-host.tests PRIVATE supple::diagnostics-context)
   add_dependencies(clap-host.tests ${PRODUCT_SLUG}-scanner host-child-fixture)
   target_compile_definitions(clap-host.tests PRIVATE CHILD_FIXTURE_PATH="$<TARGET_FILE:host-child-fixture>")
   target_compile_definitions(clap-host.tests PRIVATE SCANNER_PATH="$<TARGET_FILE:${PRODUCT_SLUG}-scanner>")

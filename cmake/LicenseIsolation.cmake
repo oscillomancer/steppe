@@ -6,7 +6,8 @@
 # an include of such a library's headers or a mention of its target in those files;
 # this is the other half: at configure time it walks the link graph of every target built
 # from those directories and fails when one reaches a GPL-only library, directly or through
-# another target.
+# another target. Executables are not checked: a program that links the GPL host (the test
+# tools under plugins/common do) is a GPL combined work, not an MIT library.
 #
 # SUPPLE_MIT_LIBRARIES is the same list as MIT_LIBRARIES in tools/license-check/check.py
 # (a test there keeps them equal). Add a GPL-only library's target name to
@@ -71,7 +72,11 @@ function(supple_check_license_isolation)
   endforeach()
   foreach(target IN LISTS all_targets)
     get_target_property(type "${target}" TYPE)
-    if(type STREQUAL "UTILITY")
+    # Executables are built programs, not libraries or plug-ins that something else links:
+    # the test tools under plugins/ already link the GPL host (clap-host) and so are
+    # GPL combined works, which MIT sources allow. A plug-in is a module or shared
+    # library; a library any plug-in links is a static or shared one: both are checked.
+    if(type STREQUAL "UTILITY" OR type STREQUAL "EXECUTABLE")
       continue()
     endif()
     get_target_property(source_dir "${target}" SOURCE_DIR)

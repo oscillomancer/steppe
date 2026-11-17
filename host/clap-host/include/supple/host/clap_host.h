@@ -507,6 +507,23 @@ class Instance {
     struct HostState;  // opaque host-side state (callbacks, queues, event arena)
 
   private:
+    // The instance's cell in the execution table (diagnostics-context, ADR-0083): claimed
+    // in create(), given back when the instance's own members are gone. The first member,
+    // so the last destroyed.
+    class Cell {
+      public:
+        Cell() = default;
+        Cell(const Cell&) = delete;
+        Cell& operator=(const Cell&) = delete;
+        ~Cell();
+        void acquire() noexcept;
+        std::uint32_t id() const noexcept SUPPLE_RT { return id_; }
+
+      private:
+        std::uint32_t id_ = 0xffffffffu;  // diagctx::kNoCell
+    };
+    Cell cell_;
+
     Instance() = default;
     friend struct HostCallbacks;
     bool processBackend(const ProcessBlock& block, OutputEvents* out) SUPPLE_RT;

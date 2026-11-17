@@ -25,6 +25,7 @@
 #include <utility>
 
 #include "supple/clap/semantic_params.h"
+#include "supple/diagctx/scope.h"
 #include "supple/json/json.h"
 #include "supple/product.h"
 
@@ -35,6 +36,22 @@ namespace fs = std::filesystem;
 // ---------------------------------------------------------------------------
 // Library: one dlopen'ed .clap binary, shared by every instance created from it.
 // ---------------------------------------------------------------------------
+
+// A library's cell in the execution table (ADR-0083): claimed while the library is opened,
+// kept for as long as it stays loaded, given back after the library is gone.
+class LibraryCell {
+  public:
+    LibraryCell() : id_(diagctx::acquireCell()) {}
+    LibraryCell(LibraryCell&& other) noexcept : id_(std::exchange(other.id_, diagctx::kNoCell)) {}
+    LibraryCell(const LibraryCell&) = delete;
+    LibraryCell& operator=(const LibraryCell&) = delete;
+    LibraryCell& operator=(LibraryCell&&) = delete;
+    ~LibraryCell() { diagctx::releaseCell(id_); }
+    std::uint32_t id() const noexcept { return id_; }
+
+  private:
+    std::uint32_t id_;
+};
 
 class Library {
   public:
@@ -50,6 +67,9 @@ class Library {
         const std::string key = platform::pathText(canonical);
         if (auto existing = cache[key].lock()) return existing;
 
+        // Loading runs the plug-in's own code (static initializers, clap_entry.init).
+        LibraryCell cell;
+        diagctx::MainScope opening(cell.id(), diagctx::Entry::LibraryOpen);
         auto opened = platform::openLibrary(canonical);
         if (!opened) return opened.error();
         void* handle = *opened;
@@ -75,12 +95,14 @@ class Library {
             platform::closeLibrary(handle);
             return Error("host.load", key + " provides no plugin factory");
         }
-        auto lib = std::shared_ptr<Library>(new Library(handle, entry, factory, key));
+        auto lib =
+            std::shared_ptr<Library>(new Library(std::move(cell), handle, entry, factory, key));
         cache[key] = lib;
         return lib;
     }
 
     ~Library() {
+        diagctx::MainScope closing(cell_.id(), diagctx::Entry::LibraryClose);
         entry_->deinit();
         platform::closeLibrary(handle_);
     }
@@ -89,13 +111,38 @@ class Library {
     const std::string& path() const { return path_; }
 
   private:
-    Library(void* h, const clap_plugin_entry_t* e, const clap_plugin_factory_t* f, std::string p)
-        : handle_(h), entry_(e), factory_(f), path_(std::move(p)) {}
+    Library(LibraryCell cell, void* h, const clap_plugin_entry_t* e, const clap_plugin_factory_t* f,
+            std::string p)
+        : cell_(std::move(cell)), handle_(h), entry_(e), factory_(f), path_(std::move(p)) {}
+    LibraryCell cell_;  // first: given back last
     void* handle_;
     const clap_plugin_entry_t* entry_;
     const clap_plugin_factory_t* factory_;
     std::string path_;
 };
+
+// ---------------------------------------------------------------------------
+// Execution scopes (ADR-0083, topic 5b)
+// ---------------------------------------------------------------------------
+
+namespace {
+// Marks the calling thread as inside an entry of an instance in the execution table until
+// the end of the scope. An isolated instance forwards its entries to its bridge child, so
+// they are recorded as bridge calls.
+struct MainEntry : diagctx::MainScope {
+    MainEntry(std::uint32_t cell, bool isolated, diagctx::Entry kind) noexcept
+        : diagctx::MainScope(cell, isolated ? diagctx::Entry::BridgeCall : kind) {}
+};
+// The same for the entries the audio thread makes.
+struct AudioEntry : diagctx::AudioScope {
+    AudioEntry(std::uint32_t cell, bool isolated, diagctx::Entry kind) noexcept SUPPLE_RT
+        : diagctx::AudioScope(cell, isolated ? diagctx::Entry::BridgeCall : kind) {}
+};
+static_assert(sizeof(std::uint32_t) == sizeof(diagctx::kNoCell) && diagctx::kNoCell == 0xffffffffu);
+}  // namespace
+
+Instance::Cell::~Cell() { diagctx::releaseCell(id_); }
+void Instance::Cell::acquire() noexcept { id_ = diagctx::acquireCell(); }
 
 // ---------------------------------------------------------------------------
 // Host state and callbacks
@@ -724,11 +771,15 @@ Result<std::vector<PluginInfo>> scanModuleInProcess(const fs::path& file) {
 Result<std::unique_ptr<Instance>> Instance::create(const PluginInfo& info,
                                                    const HostIdentity& identity, bool isolated,
                                                    std::shared_ptr<BridgeProcess> bridge) {
+    // The instance exists first so that everything create() does, the plug-in's init
+    // included, happens inside its Create entry. A failure destroys it, and its cell with it.
+    std::unique_ptr<Instance> self(new Instance());
+    self->cell_.acquire();
+    MainEntry creating(self->cell_.id(), isolated, diagctx::Entry::Create);
     if (isolated) {
         RemotePorts ports;
         auto remote = RemoteInstance::spawn(info, identity, ports, std::move(bridge));
         if (!remote) return std::move(remote).error();
-        std::unique_ptr<Instance> self(new Instance());
         self->info_ = info;
         self->info_.semantic = ports.semantic;
         self->inChannels_ = ports.inChannels;
@@ -745,7 +796,6 @@ Result<std::unique_ptr<Instance>> Instance::create(const PluginInfo& info,
     if (info.format == "vst3" || info.id.rfind("vst3:", 0) == 0) {
         auto backing = Vst3Instance::create(info, identity);
         if (!backing) return std::move(backing).error();
-        std::unique_ptr<Instance> self(new Instance());
         self->info_ = info;
         self->info_.format = "vst3";
         self->info_.semantic = false;
@@ -761,7 +811,6 @@ Result<std::unique_ptr<Instance>> Instance::create(const PluginInfo& info,
     auto lib = Library::open(info.path);
     if (!lib) return std::move(lib).error();
 
-    std::unique_ptr<Instance> self(new Instance());
     self->info_ = info;
     self->library_ = *lib;
     self->hostState_ = std::make_unique<HostState>();
@@ -916,6 +965,7 @@ Result<std::unique_ptr<Instance>> Instance::create(const PluginInfo& info,
 }
 
 Instance::~Instance() {
+    MainEntry destroying(cell_.id(), remote_ != nullptr, diagctx::Entry::Destroy);
     setAudioWake(nullptr);
     if (vst3_) {
         if (processing_) stopProcessing();
@@ -952,6 +1002,7 @@ Status Instance::setSidechainActive(bool on) {
 }
 
 Status Instance::activate(double sampleRate, std::uint32_t minFrames, std::uint32_t maxFrames) {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Activate);
     if (!std::isfinite(sampleRate) || sampleRate <= 0 || minFrames == 0 || minFrames > maxFrames)
         return Error("host.activate", "invalid sample rate or block-size range", {},
                      "use a finite positive rate and 0 < minFrames <= maxFrames");
@@ -1039,6 +1090,7 @@ Status Instance::activate(double sampleRate, std::uint32_t minFrames, std::uint3
 }
 
 void Instance::deactivate() {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Deactivate);
     if (vst3_) {
         if (active_ && !processing_) {
             vst3_->deactivate();
@@ -1064,12 +1116,14 @@ void Instance::deactivate() {
 }
 
 std::uint32_t Instance::latency() const {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Params);
     if (vst3_) return vst3_->latency();
     if (remote_) return active_ ? remote_->latency() : 0;
     return active_ && extLatency_ ? extLatency_->get(plugin_) : 0;
 }
 
 std::uint32_t Instance::tail() const {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Params);
     if (vst3_) return vst3_->tail();
     if (remote_) return remote_->tail();
     return extTail_ ? extTail_->get(plugin_) : 0;
@@ -1087,6 +1141,7 @@ int Instance::bridgePid() const { return remote_ ? remote_->bridgePid() : -1; }
 std::string Instance::failure() const { return remote_ ? remote_->failure() : std::string(); }
 
 std::vector<ParamInfo> Instance::params() const {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Params);
     if (vst3_) return vst3_->params();
     if (remote_) return remote_->params();
     std::vector<ParamInfo> out;
@@ -1103,6 +1158,7 @@ std::vector<ParamInfo> Instance::params() const {
 }
 
 Result<double> Instance::paramValue(std::uint32_t id) const {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Params);
     if (vst3_) return vst3_->paramValue(id);
     if (remote_) return remote_->paramValue(id);
     double v = 0;
@@ -1112,6 +1168,7 @@ Result<double> Instance::paramValue(std::uint32_t id) const {
 }
 
 Result<std::string> Instance::paramText(std::uint32_t id, double clapValue) const {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Params);
     if (vst3_) return vst3_->paramText(id, clapValue);
     if (remote_) return remote_->paramText(id, clapValue);
     char buf[256] = {};
@@ -1121,6 +1178,7 @@ Result<std::string> Instance::paramText(std::uint32_t id, double clapValue) cons
 }
 
 Result<double> Instance::paramFromText(std::uint32_t id, std::string_view text) const {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Params);
     if (vst3_) return vst3_->paramFromText(id, text);
     if (remote_) return remote_->paramFromText(id, text);
     double v = 0;
@@ -1135,12 +1193,14 @@ Result<double> Instance::paramFromText(std::uint32_t id, std::string_view text) 
 bool Instance::paramsNormalized() const { return info_.format == "vst3"; }
 
 Result<double> Instance::normalizedParam(std::uint32_t id, double plain) const {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Params);
     if (vst3_) return vst3_->normalizedParam(id, plain);
     if (remote_) return remote_->normalizedParam(id, plain);
     return plain;  // CLAP: the host value is the value the plug-in is given
 }
 
 Result<double> Instance::plainParam(std::uint32_t id, double normalized) const {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Params);
     if (vst3_) return vst3_->plainParam(id, normalized);
     if (remote_) return remote_->plainParam(id, normalized);
     return normalized;
@@ -1176,6 +1236,7 @@ void flushInactiveEdits(Instance::HostState& h, const clap_plugin_t* plugin,
 }  // namespace
 
 Status Instance::setParam(std::uint32_t id, double clapValue) {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Params);
     if (vst3_ || remote_) {
         auto result = vst3_ ? vst3_->setParam(id, clapValue) : remote_->setParam(id, clapValue);
         if (result) {
@@ -1241,6 +1302,7 @@ void drainParamQueue(Instance::HostState& h, std::size_t reserve) SUPPLE_RT {
 }  // namespace
 
 void Instance::flushParams() SUPPLE_RT {
+    AudioEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Flush);
     if (vst3_) {
         vst3_->flushParams();
         return;
@@ -1261,6 +1323,7 @@ void Instance::flushParams() SUPPLE_RT {
 }
 
 bool Instance::startProcessing() SUPPLE_RT {
+    AudioEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::StartProcessing);
     if (vst3_) {
         if (processing_) return true;
         processing_ = active_ && vst3_->startProcessing();
@@ -1280,6 +1343,7 @@ bool Instance::startProcessing() SUPPLE_RT {
 }
 
 void Instance::stopProcessing() SUPPLE_RT {
+    AudioEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::StopProcessing);
     if (vst3_) {
         if (processing_) vst3_->stopProcessing();
         processing_ = false;
@@ -1299,6 +1363,7 @@ void Instance::stopProcessing() SUPPLE_RT {
 }
 
 void Instance::reset() SUPPLE_RT {
+    AudioEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Reset);
     resets_.fetch_add(1, std::memory_order_relaxed);
     if (vst3_) {
         vst3_->reset();
@@ -1313,6 +1378,7 @@ void Instance::reset() SUPPLE_RT {
 }
 
 bool Instance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT {
+    AudioEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Process);
     if (b.frames == 0 || b.frames > maxFrames_) return false;
     const std::size_t first = out ? out->count : 0;
     const bool ok = processBackend(b, out);
@@ -1510,6 +1576,7 @@ bool Instance::processBackend(const ProcessBlock& b, OutputEvents* out) SUPPLE_R
 }
 
 Result<json::Value> Instance::semanticSchema() {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Semantic);
     if (remote_) {
         auto text = remote_->text(bridge::Op::SemanticSchema);
         if (!text) return std::move(text).error();
@@ -1573,6 +1640,7 @@ Result<json::Value> Instance::semanticSchema() {
 }
 
 Result<std::string> Instance::getPatch(bool changedOnly) {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Semantic);
     if (remote_) return remote_->text(bridge::Op::GetPatch, changedOnly);
     if (!extSemantic_)
         return Error("host.semantic.unsupported", info_.id + " has no semantic-params extension");
@@ -1585,6 +1653,7 @@ Result<std::string> Instance::getPatch(bool changedOnly) {
 }
 
 Status Instance::setPatch(std::string_view text, std::uint32_t mode) {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Semantic);
     if (remote_) return remote_->setPatch(text, mode);
     if (!extSemantic_)
         return Error("host.semantic.unsupported", info_.id + " has no semantic-params extension");
@@ -1597,6 +1666,7 @@ Status Instance::setPatch(std::string_view text, std::uint32_t mode) {
 }
 
 Result<std::string> Instance::describe(bool changedOnly) {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Semantic);
     if (remote_) return remote_->text(bridge::Op::Describe, changedOnly);
     if (!extSemantic_)
         return Error("host.semantic.unsupported", info_.id + " has no semantic-params extension");
@@ -1609,6 +1679,7 @@ Result<std::string> Instance::describe(bool changedOnly) {
 }
 
 Result<json::Value> Instance::pluginStatus() {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Semantic);
     Result<std::string> text = std::string();
     if (remote_) {
         text = remote_->text(bridge::Op::PluginStatus);
@@ -1661,6 +1732,7 @@ json::Value statusFailure(const Error& error) {
 }
 
 Result<json::Value> Instance::factoryPatches() {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Semantic);
     if (remote_) {
         auto text = remote_->text(bridge::Op::FactoryPatches);
         if (!text) return std::move(text).error();
@@ -1700,6 +1772,7 @@ Result<json::Value> Instance::factoryPatches() {
 }
 
 Status Instance::startTrace(std::uint32_t interval, std::uint32_t bins) {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Trace);
     if (!traces())
         return Error("host.trace.unsupported", info_.id + " offers no traces here", {},
                      "it needs com.suppleaudio.trace/1, in process");
@@ -1715,6 +1788,7 @@ Status Instance::startTrace(std::uint32_t interval, std::uint32_t bins) {
 }
 
 Result<json::Value> Instance::readTrace() {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Trace);
     if (!traces())
         return Error("host.trace.unsupported", info_.id + " offers no traces here", {},
                      "it needs com.suppleaudio.trace/1, in process");
@@ -1736,6 +1810,7 @@ Result<json::Value> Instance::readTrace() {
 }
 
 Status Instance::watchEditor(bool on) {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::EditorPicture);
     if (remote_ || !extPicture_)
         return Error("host.picture.unsupported",
                      info_.id + " cannot draw its editor without a window here", {},
@@ -1746,6 +1821,7 @@ Status Instance::watchEditor(bool on) {
 
 Result<Instance::Picture> Instance::drawEditor(double scale,
                                                std::span<const clap_supple_pointer_input_t> input) {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::EditorPicture);
     if (remote_ || !extPicture_)
         return Error("host.picture.unsupported",
                      info_.id + " cannot draw its editor without a window here", {},
@@ -1775,6 +1851,7 @@ Result<Instance::Picture> Instance::drawEditor(double scale,
 }
 
 Result<std::vector<std::uint8_t>> Instance::saveState() {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::State);
     if (vst3_) return vst3_->saveState();
     if (remote_) return remote_->saveState();
     if (!extState_) return Error("host.state", info_.id + " has no state extension");
@@ -1786,6 +1863,7 @@ Result<std::vector<std::uint8_t>> Instance::saveState() {
 }
 
 Status Instance::loadState(std::span<const std::uint8_t> bytes) {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::State);
     if (vst3_) return vst3_->loadState(bytes);
     if (remote_) return remote_->loadState(bytes);
     if (!extState_) return Error("host.state", info_.id + " has no state extension");
@@ -1817,6 +1895,7 @@ void Instance::setMainThreadWake(MainThreadWake& wake) {
 }
 
 bool Instance::serviceMainThread() {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::MainThread);
     if (vst3_) {
         bool did = vst3_->serviceMainThread();
         // kLatencyChanged: reactivate once processing has stopped.
@@ -1880,6 +1959,7 @@ bool Instance::serviceMainThread() {
 }
 
 bool Instance::hasEditor() const {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Gui);
     if (vst3_) return vst3_->hasEditor();
     if (remote_) return remoteEditor_ && !remote_->failed();
     return plugin_ && !remote_ && extGui_ &&
@@ -1888,6 +1968,7 @@ bool Instance::hasEditor() const {
 
 Result<Instance::EditorSize> Instance::openEditor(NativeWindow parent, double scale,
                                                   std::optional<EditorFrame> frame) {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Gui);
     const bool floating = remote_ && nativeWindowKind() == NativeWindow::Kind::Cocoa &&
                           validFloatingEditorParent(parent);
     if ((!floating && (parent.kind != nativeWindowKind() || !parent.valid())) ||
@@ -1951,6 +2032,7 @@ Result<Instance::EditorSize> Instance::openEditor(NativeWindow parent, double sc
 }
 
 Result<Instance::EditorSize> Instance::resizeEditor(std::uint32_t width, std::uint32_t height) {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Gui);
     if (!editorOpen_) return Error("host.editor", "no editor is open");
     if (vst3_) return vst3_->resizeEditor(width, height);
     if (remote_) return remote_->resizeEditor(width, height);
@@ -1964,6 +2046,7 @@ Result<Instance::EditorSize> Instance::resizeEditor(std::uint32_t width, std::ui
 }
 
 Result<Instance::EditorSize> Instance::setEditorScale(double scale) {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Gui);
     if (!validEditorScale(scale))
         return Error("host.editor.scale", "invalid editor scale", "/editor/scale",
                      "pass a positive finite scale factor");
@@ -1992,6 +2075,7 @@ Result<Instance::EditorSize> Instance::setEditorScale(double scale) {
 }
 
 void Instance::closeEditor() {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Gui);
     if (!editorOpen_) return;
     if (vst3_) {
         vst3_->closeEditor();
@@ -2009,6 +2093,7 @@ void Instance::closeEditor() {
 }
 
 Instance::EditorRequests Instance::takeEditorRequests() {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Gui);
     if (vst3_) return vst3_->takeEditorRequests();
     if (remote_) {
         if (!editorOpen_) return {};
@@ -2043,6 +2128,7 @@ std::vector<std::pair<int, std::uint32_t>> Instance::watchedFds() const {
 }
 
 void Instance::onFd(int fd, std::uint32_t flags) {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::MainThread);
     if (vst3_) return vst3_->onFd(fd);
     if (!extFd_ || !plugin_) return;
     // Another callback from the same readiness snapshot may have unregistered
@@ -2053,6 +2139,7 @@ void Instance::onFd(int fd, std::uint32_t flags) {
 }
 
 int Instance::nextTimerMs() const {
+    MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::MainThread);
     if (vst3_) return vst3_->nextTimerMs();
     if (remote_) return -1;  // child deadlines and requests wake the parent relay
     if (!hostState_ || !extTimer_ || hostState_->timers.empty()) return -1;

@@ -56,6 +56,15 @@
 #include "supple/patch/patch.h"
 
 namespace {
+// A test can ask to be told, from inside the plug-in, which callback is running
+// (supple_fixture_set_observer): the host tests use it to look at the execution table from
+// where a plug-in's own code runs. The observer must be real-time safe; it is called from
+// process() too. Null by default, and then one relaxed load.
+std::atomic<void (*)(const char*)> gObserver{nullptr};
+void observe(const char* phase) {
+    if (const auto call = gObserver.load(std::memory_order_relaxed)) call(phase);
+}
+
 void fixtureWrite(int fd, const void* bytes, unsigned count) {
 #if defined(_WIN32)
     (void)::_write(fd, bytes, count);
@@ -282,6 +291,7 @@ bool CLAP_ABI gainParamInfo(const clap_plugin_t*, uint32_t index, clap_param_inf
     return true;
 }
 bool CLAP_ABI gainParamValue(const clap_plugin_t* pl, clap_id id, double* out) {
+    observe("param_value");
     auto* g = G(pl);
     if (g->missingValue && id == 0) return false;
     if (id == 0)
@@ -344,12 +354,14 @@ uint32_t CLAP_ABI gainLatency(const clap_plugin_t* pl) {
 const clap_plugin_latency_t kGainLatency = {gainLatency};
 
 bool CLAP_ABI gainStateSave(const clap_plugin_t* pl, const clap_ostream_t* os) {
+    observe("state_save");
     const std::string doc = gainPatchType().serialize(G(pl)->current());
     auto bytes = patch::encodeState(doc, 0x54474e31);  // "TGN1"
     if (!bytes) return false;
     return os->write(os, bytes->data(), bytes->size()) == static_cast<int64_t>(bytes->size());
 }
 bool CLAP_ABI gainStateLoad(const clap_plugin_t* pl, const clap_istream_t* is) {
+    observe("state_load");
     std::vector<std::uint8_t> buf;
     std::uint8_t tmp[512];
     for (;;) {
@@ -514,6 +526,7 @@ const void* CLAP_ABI gainExt(const clap_plugin_t* pl, const char* id) {
 }
 
 bool CLAP_ABI gainActivate(const clap_plugin_t* pl, double, uint32_t, uint32_t) {
+    observe("activate");
     if (!checkGainMain(pl)) return false;
     auto* g = G(pl);
     g->activeLatency = g->latencyChoice ? 64 : 0;
@@ -525,6 +538,7 @@ bool CLAP_ABI gainActivate(const clap_plugin_t* pl, double, uint32_t, uint32_t) 
 }
 
 clap_process_status CLAP_ABI gainProcess(const clap_plugin_t* pl, const clap_process_t* p) {
+    observe("process");
     auto* g = G(pl);
     gainEditorOutput(pl, p->out_events);
     const uint32_t n = p->frames_count;
@@ -1448,15 +1462,22 @@ void CLAP_ABI checkedGainDestroy(const clap_plugin_t* p) {
     delete G(p);
 }
 
-bool CLAP_ABI initOk(const clap_plugin_t*) { return true; }
-void CLAP_ABI deactivateNop(const clap_plugin_t*) {}
-bool CLAP_ABI startOk(const clap_plugin_t*) { return true; }
-void CLAP_ABI stopNop(const clap_plugin_t*) {}
-void CLAP_ABI resetNop(const clap_plugin_t*) {}
-void CLAP_ABI mainNop(const clap_plugin_t*) {}
+bool CLAP_ABI initOk(const clap_plugin_t*) {
+    observe("init");
+    return true;
+}
+void CLAP_ABI deactivateNop(const clap_plugin_t*) { observe("deactivate"); }
+bool CLAP_ABI startOk(const clap_plugin_t*) {
+    observe("start");
+    return true;
+}
+void CLAP_ABI stopNop(const clap_plugin_t*) { observe("stop"); }
+void CLAP_ABI resetNop(const clap_plugin_t*) { observe("reset"); }
+void CLAP_ABI mainNop(const clap_plugin_t*) { observe("main_thread"); }
 
 template <class T>
 void CLAP_ABI destroyT(const clap_plugin_t* p) {
+    observe("destroy");
     delete static_cast<T*>(p->plugin_data);
 }
 
@@ -1709,6 +1730,7 @@ const clap_plugin_t* CLAP_ABI factoryCreate(const clap_plugin_factory_t*, const 
         auto* plugin = const_cast<clap_plugin_t*>(
             make<Gain>(host, gainDescriptor(), gainActivate, gainProcess, gainExt));
         plugin->reset = [](const clap_plugin_t* pl) {
+            observe("reset");
             // A seek must clear latency history just as activation does.
             std::memset(G(pl)->delay, 0, sizeof(G(pl)->delay));
             G(pl)->delayPos = 0;
@@ -1796,14 +1818,20 @@ const clap_plugin_t* CLAP_ABI factoryCreate(const clap_plugin_factory_t*, const 
 }
 const clap_plugin_factory_t kFactory = {factoryCount, factoryDesc, factoryCreate};
 
-bool CLAP_ABI entryInit(const char*) { return true; }
-void CLAP_ABI entryDeinit() {}
+bool CLAP_ABI entryInit(const char*) {
+    observe("library_init");
+    return true;
+}
+void CLAP_ABI entryDeinit() { observe("library_deinit"); }
 const void* CLAP_ABI entryFactory(const char* id) {
     return !std::strcmp(id, CLAP_PLUGIN_FACTORY_ID) ? &kFactory : nullptr;
 }
 
 }  // namespace
 
+extern "C" CLAP_EXPORT void supple_fixture_set_observer(void (*observer)(const char*)) {
+    gObserver.store(observer, std::memory_order_release);
+}
 extern "C" CLAP_EXPORT int supple_fixture_thread_failures() {
     return gThreadFailures.load(std::memory_order_relaxed);
 }
