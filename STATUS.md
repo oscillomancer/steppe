@@ -1587,7 +1587,9 @@ so the endpoint lock and control socket are released and a restart succeeds. Kno
 a GUI stopped this way is not asked about unsaved changes (as `SIGTERM` does today). Known
 limits: on Windows a fast-fail or a stack overflow too deep for the filter reads as the
 launcher's stop, as does a supervisor ended by the kernel on any platform; before the Ready
-packet no watcher exists; the watcher thread shows in a report as an `other` thread. The
-watcher and the supervisor's handlers are unproven on macOS and Windows until native CI runs
+packet no watcher exists; the watcher thread shows in a report as an `other` thread. After a
+launcher's stop the worker removes its run marker from an exit handler, after the teardown of
+what was built later than the frontend's setup: a crash in the teardown that follows it is not
+recorded at all, and one before it leaves the marker with no report. The watcher and the supervisor's handlers are unproven on macOS and Windows until native CI runs
 them. Native macOS/Windows CI and
 signed Mach capability/collector-loss tests are due before merge/release.

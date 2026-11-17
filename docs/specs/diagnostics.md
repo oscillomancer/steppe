@@ -83,10 +83,22 @@ released by the system when the process ends (POSIX `flock`; Windows closes the 
 process rundown, a moment the system chooses, so a restart that races it can still be
 refused once, as ADR-0089 notes). The run marker follows the same split: when the worker's
 normal stop completes (the program returns and the frontend resumes), the worker removes its
-own marker, which the dead supervisor cannot, so a later start does not read the run as an
+own marker (from an exit handler, below), which the dead supervisor cannot, so a later start does not read the run as an
 unexpected end (POSIX unlinks the file while still holding its lock; Windows closes the
 handle, which was not opened for deletion, and then removes the file); on the hard-exit path
 nothing runs and the marker stays, as the end it is.
+
+*Marker removal and teardown.* The worker removes its own marker, after a launcher's stop, from
+an exit handler registered when the marker is created (and only once `main` has returned: an
+`exit()` from elsewhere removes nothing). Exit handlers and static destructors run in the reverse
+of the order they were set up, so the handler runs after the destructors of everything built
+later than that point (the engine, the program's own statics) and before those of statics built
+earlier (global objects constructed before `main`, handlers registered before the frontend ran).
+What is still not recorded: after a launcher's stop there is no supervisor, so a crash in the
+teardown that runs after the handler leaves no report and no marker, and a crash in the teardown
+before it leaves the marker and no report (a later start reads it as an unexpected end, with no
+stack). A teardown that runs past the stop's bound is ended by the hard exit, which runs no
+handler, so the marker stays and it reads as the end it is.
 
 *Known limits.* A fast-fail or a stack overflow too deep for the filter to run (Windows) sets
 no flag and reads as the launcher's stop; a supervisor ended by the kernel (the out-of-memory

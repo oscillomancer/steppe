@@ -51,6 +51,11 @@ When the worker's stop completes it removes its own `.run` marker, which the dea
 cannot (decided on review, 2026-11-17), so that a later start does not read an orderly stop as an
 unexpected end. On the hard-exit path the marker stays.
 
+*Note, 2026-11-17 (review round 38):* "when the worker's stop completes" is the process's exit
+handler, registered as the marker is created, not the return from `main`: it removes the marker
+after the static destruction of everything built later than the frontend's setup, so a crash in
+that teardown still leaves it (`docs/specs/diagnostics.md`, "Marker removal and teardown").
+
 The program that is stopped this way ends as `SIGTERM` ends it today. A GUI session does not
 ask about unsaved changes and does not offer a save, exactly as when `SIGTERM` stops it
 today; the maintainer accepted that and it is recorded in `STATUS.md` as known behaviour.

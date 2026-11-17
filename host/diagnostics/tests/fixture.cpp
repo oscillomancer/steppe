@@ -9,10 +9,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <filesystem>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include "../src/terminal.h"
 #include "../src/trace.h"
@@ -259,6 +261,19 @@ void runRawThread(bool registered) {
 #endif
 std::atomic<bool> stopRequested{false};
 void onStop(int) { stopRequested.store(true); }
+std::filesystem::path gMarkerRoot;  // where the run marker is, for supervisor-killed-teardown
+// A static of the program, built after the frontend set up its exit handling: its destructor is
+// teardown, and says how many run markers there still are when it runs.
+struct TeardownProbe {
+    ~TeardownProbe() {
+        std::error_code ignored;
+        int markers = 0;
+        for (const auto& entry : std::filesystem::directory_iterator(gMarkerRoot, ignored))
+            if (entry.path().extension() == ".run") ++markers;
+        std::printf("teardown markers %d\n", markers);
+        std::fflush(stdout);
+    }
+};
 int watchBody(const std::string& mode, int channel = -1) {
     namespace detail = supple::diagnostics::detail;
     std::signal(SIGTERM, onStop);
@@ -278,6 +293,10 @@ int watchBody(const std::string& mode, int channel = -1) {
         if (mode == "supervisor-killed-hung")
             for (;;) std::this_thread::sleep_for(std::chrono::seconds(1));
         std::cout << "stopped" << std::endl;
+        if (mode == "supervisor-killed-teardown") {
+            static TeardownProbe probe;
+            (void)probe;
+        }
         return 0;
     }
 #if !defined(_WIN32)
@@ -710,7 +729,8 @@ int body(int argc, char** argv) {
     // would turn every "\n" written into "\r\n" and say nothing about the supervisor.
     const bool watching = mode == "collector-loss" || mode == "collector-loss-abort" ||
                           mode == "collector-loss-stack" || mode == "fault-after-loss" ||
-                          mode == "supervisor-killed" || mode == "supervisor-killed-hung";
+                          mode == "supervisor-killed" || mode == "supervisor-killed-hung" ||
+                          mode == "supervisor-killed-teardown";
     if (mode == "echo" || watching) {
 #if defined(_WIN32)
         (void)_setmode(_fileno(stdin), _O_BINARY);
@@ -761,6 +781,7 @@ int main(int argc, char** argv) {
 #endif
     {
         const std::string_view mode = argv[2];
+        gMarkerRoot = argv[1];
         if (mode == "collector-loss" || mode == "fault-after-loss")
             supple::diagnostics::detail::setSupervisorHook(crashSupervisorByFault);
         if (mode == "collector-loss-stack")

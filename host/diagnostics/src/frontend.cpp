@@ -2,7 +2,9 @@
 // Copyright (c) 2026 Supple Audio
 #include "supple/diagnostics/frontend.h"
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include "inventory.h"
 #include "native.h"
@@ -22,6 +24,28 @@ bool valid(const Packet& p) {
                        [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
 }
 }  // namespace detail
+namespace {
+// What the worker's exit handler needs to remove its run marker once the process is truly
+// going: a launcher's stop leaves no supervisor to do it (ADR-0091). Built before the handler is
+// registered, so that it outlives the handler (which runs first of the two).
+struct OwnMarker {
+    std::filesystem::path directory;
+    detail::Packet boot;
+    std::intptr_t file = -1;
+    std::atomic<bool> mainReturned{false};  // the orderly end; an exit() from elsewhere is not
+};
+OwnMarker& ownMarker() {
+    static OwnMarker marker;
+    return marker;
+}
+void removeOwnMarkerAtExit() {
+    auto& marker = ownMarker();
+    if (marker.mainReturned.load() && marker.file >= 0 &&
+        detail::supervisorEnd() == detail::SupervisorEnd::Launcher)
+        detail::removeOwnMarker(marker.directory, marker.boot, marker.file);
+}
+}  // namespace
+
 int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
     using namespace detail;
     if (options.directory.empty()) {
@@ -43,6 +67,18 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
         argv[argc] = nullptr;
         const auto marker = storage && native.trusted ? createMarker(options.directory, boot)
                                                       : Result<std::intptr_t>(std::intptr_t{-1});
+        // The marker's removal on a launcher's stop runs from an exit handler registered here,
+        // as early as there is a marker: handlers and static destructors run in the reverse of
+        // the order they were set up, so it runs after the destructors of everything built
+        // later (the engine, the program's own statics) and removes the marker as late as this
+        // code can. A crash in that teardown then still leaves it, as the end it is.
+        if (marker && *marker >= 0) {
+            auto& own = ownMarker();
+            own.directory = options.directory;
+            own.boot = boot;
+            own.file = *marker;
+            (void)std::atexit(&removeOwnMarkerAtExit);
+        }
         const bool terminal = native.trusted && installTerminal(native, boot);
         Packet ready = boot;
         ready.kind = Message::Ready;
@@ -62,14 +98,11 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
         expected.kind = Message::Expected;
         expected.code = static_cast<std::uint32_t>(code);
         (void)publish(native, expected);
-        // The launcher's stop (ADR-0091): the supervisor is gone and cannot remove the marker
-        // for this orderly end, so the worker does, and a later start does not read it as an
-        // unexpected exit. On the hard-exit path this line is never reached and the marker stays.
-        if (supervisorEnd() == SupervisorEnd::Launcher && marker && *marker >= 0)
-            removeOwnMarker(options.directory, boot, *marker);
-        // Keep marker and channel until actual process exit, including static
-        // teardown: returning from main is not yet a clean process exit.
-        (void)marker;
+        // The orderly end. On a launcher's stop (ADR-0091) the supervisor is gone and cannot
+        // remove the marker, so the exit handler registered above does, once the process is
+        // really ending (after static teardown); on the hard-exit path no handler runs and the
+        // marker stays. Where a supervisor is alive it removes the marker itself.
+        ownMarker().mainReturned.store(true);
         return code;
     }
     auto id = incidentId();

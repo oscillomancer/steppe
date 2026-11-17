@@ -264,7 +264,10 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
                     p.stdout.close();p.stderr.close()
     for name,mode,lines,markers in (
             ("supervisor-killed","supervisor-killed",b"decision launcher\nstop requested\nstopped\n",0),
-            ("supervisor-killed-hung","supervisor-killed-hung",b"decision launcher\nstop requested\n",1)):
+            ("supervisor-killed-hung","supervisor-killed-hung",b"decision launcher\nstop requested\n",1),
+            # The marker goes after the program's own static teardown, not before it: a crash
+            # there leaves it (the probe's destructor counts the markers it still finds).
+            ("supervisor-killed-teardown","supervisor-killed-teardown",b"decision launcher\nstop requested\nstopped\nteardown markers 1\n",0)):
         with check(name):
             # The supervisor ends with no notice, as a launcher's hard kill leaves it (SIGKILL;
             # TerminateProcess on Windows, which is what p.kill() does there): the worker takes
