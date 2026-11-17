@@ -272,7 +272,10 @@ void awaitAcknowledgementFor(Native& native, std::uint64_t nanoseconds) noexcept
     // async-signal-safe.
     timespec start{};
     if (::clock_gettime(CLOCK_MONOTONIC, &start) != 0) {
-        const timespec timeout{1, 0};
+        // No clock: wait the stated time once, not a fixed second (macOS passes the
+        // remainder of its hold here).
+        const timespec timeout{static_cast<time_t>(nanoseconds / 1'000'000'000ULL),
+                               static_cast<long>(nanoseconds % 1'000'000'000ULL)};
         (void)::pselect(fd + 1, &ready, nullptr, nullptr, &timeout, nullptr);
         return;
     }

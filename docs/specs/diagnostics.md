@@ -147,8 +147,9 @@ other, so its real stack is reported as the fault entry and not under `main` or 
 Its hold therefore waits out interruptions: the one-second wait for the acknowledgement
 resumes after `EINTR` for the time that remains. When even the thread id is unknown, the
 fault entry is `unavailable` with `registers_unreadable`. Interrupting a thread makes a
-blocking call in it (`epoll_wait`, `read`, `nanosleep`) return `EINTR` once, during the
-hold; code that treats `EINTR` as fatal misbehaves there. A thread that cannot reach its
+blocking call in it that the kernel does not restart by itself return `EINTR` once, during the
+hold: `epoll_wait`, and `read` on an inotify descriptor (ptrace(2), BUGS), where most other
+calls are restarted transparently; code that treats `EINTR` as fatal misbehaves there. A thread that cannot reach its
 stop by the deadline (a killable or uninterruptible kernel wait, such as the vfork wait
 inside `posix_spawn`) stays attached,
 reported `deadline`, and is never stopped by the collector afterwards. The guarantee is
