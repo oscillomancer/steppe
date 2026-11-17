@@ -729,19 +729,20 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
             "live plugin instances");
     if (options_.anticipative) {
         const auto quantum = plan->rateEnabled ? 64u : options_.renderBlock;
-        // The rate path's root ring keeps room for the render-ahead time at
-        // up to 192 kHz; frontier and record rings hold what the renderer is
-        // ahead at this device's rate, and come from retired plans when
-        // their shape fits (route E stage 1).
+        // Every ring keeps room for the render-ahead time in whole chunks at
+        // up to 192 kHz. At lower rates that is the slack for short chunks:
+        // no chunk crosses a loop wrap, so a loop shorter than a chunk fills
+        // a ring with chunks that short, and a ring sized to the lead at the
+        // device's rate would fill first (round 36 F1). Frontier and record
+        // rings come from retired plans when their shape fits (route E
+        // stage 1), so their size costs only when one is first built.
         const auto chunks =
             static_cast<std::size_t>(std::ceil(options_.renderAheadMs / 1000. * 192000. / quantum));
-        const auto ahead = static_cast<std::size_t>(
-            std::ceil(static_cast<double>(aheadFrames_) / static_cast<double>(quantum)));
         recycleRings(oldestInUse());
         if (plan->anyLive) {
             plan->split = true;
             for (std::size_t i = 0; i < plan->frontier.size(); ++i)
-                plan->frontierRings.push_back(takeRing(ahead + 2, quantum));
+                plan->frontierRings.push_back(takeRing(chunks + 2, quantum));
         } else if (plan->rateEnabled) {
             plan->rateOutput =
                 std::make_unique<detail::ChunkRing>(chunks + 2, quantum, true, deviceOutputs_);
@@ -751,7 +752,7 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
         for (detail::RecordTap& tap : plan->recordTaps)
             if (!plan->split || !plan->nodes[tap.node].live) {
                 tap.ring = static_cast<int>(plan->recordRings.size());
-                plan->recordRings.push_back(takeRing(ahead + 2, quantum));
+                plan->recordRings.push_back(takeRing(chunks + 2, quantum));
             }
     }
     // What the recorder takes for each recorded master: the node the callback

@@ -301,10 +301,14 @@ stage; so far:
   there, resetting its indices; old chunk contents are never read, since
   the producer writes every field of a chunk before publishing it. A ring
   of a plan an executor may still adopt or play is never reused. The pool
-  keeps as many rings as the plans still in use hold. Frontier and record rings
-  hold what the renderer is ahead at the device's rate (its render-ahead
-  frames in chunks of the render quantum, plus two), no longer room for
-  192 kHz.
+  keeps as many rings as the plans still in use hold. Every ring has room
+  for the render-ahead time at 192 kHz in chunks of the render quantum,
+  plus two. At lower rates that room is the slack for short chunks: no
+  chunk crosses a loop wrap, so a loop shorter than the quantum makes every
+  chunk that short. The renderer still gets its whole lead with a loop down
+  to the render-ahead time divided by the ring's chunk count (about 3 ms
+  with the defaults, at any rate); a shorter loop holds it closer to the
+  callback.
 - **An unchanged FX is not serialized** (stage 2). `InstancePool::get`
   remembers the session's FX object it last configured an instance from
   (and keeps it, so the address is not reused). Given that same object

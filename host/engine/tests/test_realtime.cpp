@@ -97,6 +97,11 @@ struct EngineTestAccess {
     static LoopRange rendererLoop(const Engine& e) { return e.loopR_; }  // after rendererEpoch
     static const detail::Plan& latestPlan(const Engine& e) { return *e.latestPlan_.load(); }
     // Every ring of every plan an executor may still use.
+    // How far the renderer is ahead of what the callback played.
+    static std::int64_t lead(const Engine& e) {
+        return e.renderedStream_.load() - e.playedStream(e.epochDone_.load());
+    }
+    static std::int64_t aheadFrames(const Engine& e) { return e.aheadFrames_; }
     static std::vector<const detail::ChunkRing*> planRings(const Engine& e) {
         std::vector<const detail::ChunkRing*> out;
         for (const auto& plan : e.plans_) {
@@ -4159,6 +4164,40 @@ TEST_CASE("a frontier ring is reused only once both executors have left its plan
         CHECK(std::find(current.begin(), current.end(), ring.get()) == current.end());
         CHECK(std::find(older.begin(), older.end(), ring.get()) != older.end());
     }
+    engine.stop();
+}
+
+TEST_CASE("a loop shorter than a render block still lets the renderer get its lead" *
+          doctest::description("rt")) {
+    // No chunk crosses a loop wrap, so with a 300-frame loop every chunk
+    // holds at most 300 frames: rings counted in whole render blocks fill
+    // before the renderer is its render-ahead time ahead (round 36 F1).
+    // The renderer stops by itself either way; the check is why it stopped.
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    Engine engine(pool, media, {.workers = 1});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
+    REQUIRE(engine.load(frontierSession()));
+    engine.setLoop(0.0, 300.0 / 48000.0, true);
+    engine.play();
+    runAhead(engine, backend, 64, 256);
+    const auto& plan = EngineTestAccess::latestPlan(engine);
+    REQUIRE(plan.frontierRings.size() == 2);
+    const auto full = [&] {
+        for (const auto& ring : plan.frontierRings)
+            if (ring->write.load() - ring->read.load() == ring->chunks.size()) return true;
+        return false;
+    };
+    // Bounded only against a hang: one of the two always comes.
+    for (int i = 0; i < 100000; ++i) {
+        if (EngineTestAccess::lead(engine) >= EngineTestAccess::aheadFrames(engine) || full())
+            break;
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
+    CHECK(EngineTestAccess::lead(engine) >= EngineTestAccess::aheadFrames(engine));
+    CHECK_FALSE(full());
+    CHECK(engine.anticipationMisses() == 0);
     engine.stop();
 }
 
