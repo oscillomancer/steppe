@@ -301,6 +301,14 @@ std::vector<double> songPhase(const std::string& body, int block, bool feedback,
     REQUIRE_MESSAGE(result.program, supple::scriptc::toText(result.diagnostics));
     auto code = supple::scriptc::moduleCode(std::move(result.program));
     REQUIRE(code);
+    if (interpret) {
+        // MIR's interpreter is a test backend that builds each function's
+        // code and its shims into C on the first call (ADR-0032): one block
+        // through the harness, off the audio path, does that before the
+        // schedule plays the same program there.
+        ModuleHarness first(*code);
+        first.run(32);
+    }
     const auto type = ModuleType::fromCode(std::move(code), Origin::Project);
     REQUIRE(type);
     Instance::Setup setup;
