@@ -2080,6 +2080,58 @@ TEST_CASE("a deferred structural edit compiles even while a playrate move waits 
     }
 }
 
+TEST_CASE("a deferred edit that never played is reported even when a later load fails first") {
+    // Review 37b suggestion 1. A seek's reload ends a deferral in failure,
+    // which queues the "never played" error for the app's next tick. An
+    // unrelated edit whose own load fails before that tick took the queued
+    // error and emitted only its own.
+    Fixture f;
+    f.run("transport.playrate.set", R"({"rate":0.8})");
+    const auto track = f.run("track.add", R"({"name":"Src"})")["track"].asString();
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(f.app->startEngine(backend, {.sampleRate = 8000, .blockSize = 128},
+                               {.anticipative = false, .workers = 0}));
+    auto& engine = *f.app->engine();
+    engine.play();
+    for (int i = 0; i < 32; ++i) {
+        backend.run(1);
+        f.app->tick();
+    }
+    f.run("env.add", R"({"track":"tr_0","param":"playrate",
+                         "points":[{"seconds":0,"value":1.25}]})");
+    const auto generation = engine.planGeneration();
+    // A deferred edit that cannot compile: 257 hardware MIDI sends, over the
+    // engine's budget of 256 (engine.midi_budget).
+    auto tx = f.app->beginTransaction(origin, "Too many hardware MIDI sends");
+    REQUIRE(tx);
+    for (int i = 0; i < 257; ++i) {
+        model::Route send;
+        send.from.track = *model::Id::parse(track);
+        send.to.midiDevice = "nowhere";
+        send.midi = model::MidiRouting{};
+        f.app->txn().create(send);
+    }
+    REQUIRE(f.app->commitTransaction(*tx));
+    REQUIRE(engine.planGeneration() == generation);
+    (void)f.app->takeEvents();
+    engine.seek(0.5);                           // compiles the deferred edit, which fails
+    engine.pause();                             // nothing defers now
+    f.run("track.add", R"({"name":"Other"})");  // the sends fail its compile too
+    REQUIRE(engine.planGeneration() == generation);
+    int unplayed = 0, own = 0;
+    for (const auto& [topic, value] : f.app->takeEvents()) {
+        if (topic != "engine.error" || !value.isString()) continue;
+        const auto& text = value.asString();
+        CHECK(text.find("engine.midi_budget") != std::string::npos);
+        ++(text.find("never played") != std::string::npos ? unplayed : own);
+    }
+    CHECK(unplayed == 1);
+    CHECK(own == 1);
+    f.app->tick();  // nothing is reported twice
+    for (const auto& [topic, value] : f.app->takeEvents()) CHECK(topic != "engine.error");
+    f.app->stopEngine();
+}
+
 TEST_CASE(
     "rack.capture: sync does not scan unused plugins and snapshot lookup keeps name fallback") {
     host::setBridgeExecutable(std::filesystem::temp_directory_path() / "no-such-plugin-scanner");
