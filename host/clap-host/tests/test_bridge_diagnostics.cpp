@@ -7,6 +7,7 @@
 #endif
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <map>
@@ -234,12 +235,11 @@ TEST_CASE("only a death that may be reported names a report") {
 // without killing it, so the instance is never destroyed by a request: the bridge destroys it when
 // the socket closes, and the fixture faults in its destructor. No timing decides this: the bridge
 // is alive when the host lets go, and what it did next is what the end reads as.
-// What a bridge ended by abort() reads as. POSIX ends it with SIGABRT, a signal. On Windows the C
-// runtime's abort() either fast-fails (an exception status, which is reported) or ends the process
-// with exit code 3 (an exit, which is not): it depends on the runtime's abort behaviour, and the
-// spec says "may" until this case has run there. On Windows it expects the fast-fail (an exception)
-// and, if the runtime gives an exit instead, fails naming the status it got, so a native run
-// settles it (the spec, STATUS and this expectation then follow); on POSIX it requires the signal.
+// What a bridge ended by abort() reads as. POSIX ends it with SIGABRT, a signal. On Windows the
+// bridge sets its runtime at start (no dialog, no report to wait on, a SIGABRT handler) so that
+// abort() ends it at once with a fast-fail's status, an exception. The first native run
+// (CI 44242073297) had the debug runtime's abort wait until the host's deadline killed the bridge,
+// which reads as the host's end with status 1; this case fails naming that if it happens again.
 TEST_CASE("a bridge ended by abort() is told as the system ended it, and the result is recorded") {
     setBridgeExecutable(BRIDGE_PATH);
     Sink sink;
@@ -274,7 +274,8 @@ TEST_CASE("a bridge ended by abort() is told as the system ended it, and the res
         end.how == diagctx::BridgeHow::Exception,
         "abort() ended the bridge as "
             << (diagctx::bridgeHowName(end.how) ? diagctx::bridgeHowName(end.how) : "none")
-            << ", status " << end.status);
+            << ", status " << end.status << " (host, status 1: it hung until the host killed it)");
+    CHECK(static_cast<std::uint32_t>(end.status) == 0xC0000409u);
 #else
     CHECK(end.how == diagctx::BridgeHow::Signal);
     CHECK(end.status == SIGABRT);

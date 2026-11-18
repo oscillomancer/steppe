@@ -876,12 +876,22 @@ host's kill, not by an exit: the exit code is not read on POSIX) while the worke
 report of its own, `kind` `bridge_exit`. (On Windows an `exit` includes a bridge ended by `raise(SIGSEGV)`,
 and may include one ended by `abort()` or an uncaught `std::terminate`: the C runtime ends such a
 process with exit code 3 and no exception, so the host cannot tell it from an orderly exit and
-writes no report. Whether `abort()` does that depends on the runtime's abort behaviour (the
-release UCRT's default fast-fails, which is an exception and is reported); it is unproven until
-the `abort()` case of `test_bridge_diagnostics.cpp` (the crash fixture's mode 6) has run on Windows CI:
-it expects the exception there and names the status if it gets an exit. A bridge ended by an access
-violation, a stack overflow or `__fastfail` ends with an exception status and is reported. This
-is a known gap on Windows, in STATUS.md.) The supervisor writes it from its inventory when it
+writes no report. Left to the runtime, `abort()` does not end a bridge at once on Windows: the first native run
+(CI 44242073297, the Debug runtime) read an `abort()` as `host`, status 1, which is the host's own kill:
+the bridge had not ended when the host's deadline killed it, and the likeliest cause (the log has no
+more than the status; the build flags and the other test programs' own settings point the same way) is the
+debug runtime's "abort() has been called" dialog or an error-reporting wait, which nobody answers on a
+runner. So the bridge sets its runtime at start (`wmain`): no abort message, no report on abort, runtime errors and
+assertions to standard error, `SetErrorMode` for the system's own boxes, and a `SIGABRT` handler that ends the process
+at once with `0xC0000409`, a fast-fail's status, which is fatal by its severity bits and so is read as the
+bridge's own fault (exception, with a report). A plug-in's `abort()` and an uncaught `std::terminate`
+(which calls `abort()`) therefore read as an exception. This reaches the runtime the bridge shares with its
+plug-ins (the DLL one); a plug-in with a static runtime has an `abort()` of its own that the bridge's
+settings do not reach, and `raise(SIGSEGV)` is not an abort (the runtime ends the process with code 3, an exit,
+no report: a known gap, STATUS.md). The settings are unproven until the `abort()` case of
+`test_bridge_diagnostics.cpp` (the crash fixture's mode 6) has run on Windows CI: it expects the exception and
+the status `0xC0000409` there, and names what it got otherwise. A bridge ended by an access
+violation, a stack overflow or `__fastfail` ends with an exception status and is reported.) The supervisor writes it from its inventory when it
 applies the `Bridge` end event, under a new incident id, with no run marker or hold, so a reader
 counts it the moment it is there. The worker's own run, marker and eventual report are untouched.
 The report has `bridge` (the ordinal), `code` (the native status, the same as `bridges[].ended.code`),

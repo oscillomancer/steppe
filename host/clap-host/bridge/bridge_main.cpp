@@ -6,6 +6,7 @@
 // commands arrive in per-instance shared memory sent with Activate and run on
 // that instance's audio thread. Exits when the host closes the control socket.
 #if defined(_WIN32)
+#include <crtdbg.h>
 #include <fcntl.h>
 #include <io.h>
 #include <windows.h>
@@ -32,6 +33,7 @@
 #include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
@@ -1124,8 +1126,30 @@ int main(int argc, char** argv) {
 }
 
 #if defined(_WIN32)
+namespace {
+// What a plug-in's abort() ends the bridge with (topic 6b): a fast-fail's status, at once. The
+// debug runtime otherwise shows a dialog nobody answers on a runner, and any runtime may wait on
+// error reporting, until the host's deadline kills the bridge and the end is read as the host's
+// (CI 44242073297). 0xC0000409 is STATUS_FAIL_FAST_EXCEPTION, which is fatal by its severity bits,
+// so the host reads the end as the bridge's own fault.
+void endOnAbort(int) { TerminateProcess(GetCurrentProcess(), 0xC0000409u); }
+// Nothing the bridge's runtime would ask or report may stop it ending: no dialog from an error,
+// an assertion or abort(), no report to wait on. Reaches the runtime the bridge shares with its
+// plug-ins (the DLL one); a plug-in with a static runtime has its own abort() and its own state.
+void endWithoutAsking() {
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+    _set_abort_behavior(
+        0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);  // if the handler is replaced: _exit(3)
+    _set_error_mode(_OUT_TO_STDERR);
+    for (const int kind : {_CRT_WARN, _CRT_ERROR, _CRT_ASSERT}) {
+        _CrtSetReportMode(kind, _CRTDBG_MODE_FILE);
+        _CrtSetReportFile(kind, _CRTDBG_FILE_STDERR);
+    }
+    std::signal(SIGABRT, endOnAbort);
+}
+}  // namespace
 int wmain(int argc, wchar_t** argv) {
-    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+    endWithoutAsking();
     std::vector<std::string> text;
     text.reserve(static_cast<std::size_t>(argc));
     for (int i = 0; i < argc; ++i)

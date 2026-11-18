@@ -1652,12 +1652,12 @@ and was never reaped) are not compiled: the classification of an exception and a
 tested as a pure function, the host-kill and orderly-end cases run, and a bridge that really dies
 by an exception is exercised only by `clap-host.diagnostics-inventory` there, which has not run
 on Windows yet. The case that a bridge faulting as the host lets go is its own end (the crash fixture's
-teardown mode) is compiled on every platform and unproven on Windows and macOS until native CI runs. A known gap on Windows: a bridge that a plug-in ends with `raise(SIGSEGV)`, and
-may be one it ends with `abort()` or an uncaught `std::terminate` (the release UCRT's default
-fast-fails, which is reported; the case `a bridge ended by abort()` in `test_bridge_diagnostics.cpp` expects that on Windows and
-fails naming the status if the runtime gives an exit, so the next native run settles it), exits with
-the C runtime's code 3 and no exception, so it is read as an exit and gets no report of its own (on POSIX the same plug-in dies by a signal and does);
-a real access violation or `__fastfail` is an exception and does.
+teardown mode) is compiled on every platform and unproven on Windows and macOS until native CI runs. A known gap on Windows: a bridge that a plug-in ends with `raise(SIGSEGV)` exits with the C runtime's code 3 and no exception,
+so it is read as an exit and gets no report of its own (on POSIX the same plug-in dies by a signal and does); a real access violation or `__fastfail`
+is an exception and does. `abort()` and an uncaught `std::terminate` were read as the host's end on the first native run (CI 44242073297: the bridge
+did not end until the host's deadline killed it, probably on the debug runtime's abort dialog); the bridge now sets its runtime at start so that
+`abort()` ends it at once with `0xC0000409` (a `SIGABRT` handler, no dialog, no report to wait on) and the case `a bridge ended by abort()` expects the exception and
+that status; that is unproven until the next native Windows run, and does not reach a plug-in with a static runtime.
 The bridge's `Create` reply now carries the instance's cell and generation in the bridge's own execution table and
 an address in the plug-in's binary there (bridge protocol 26, Windows 27; topic 6b), which the host announces and
 the supervisor keeps as private matching data (`Inventory::findInBridge`); nothing reads it yet (6c matches the
