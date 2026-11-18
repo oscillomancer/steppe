@@ -280,7 +280,8 @@ instructions are in `docs/guides/installing.md`.
   deadlines (ADR-0030), including MIDI controls, plug-in subscriptions,
   render-ahead output consumption, jobs, restart and autosave; smooth plan swaps (10 ms ramps,
   a rack's plug-in stages carried as a chain's, nodes and edges matched by
-  lookup by id rather than by scanning every pair);
+  lookup by id rather than by scanning every pair; a compiled plan has a
+  canonical dump that tests compare with a second compile);
   strip, send and VCA level and pan edits applied to the running plan without
   compiling, also once playrate scheduling has started (ADR-0060), FX wet and
   bypass, mute and solo edits applied the same way (ADR-0093), patch-only FX

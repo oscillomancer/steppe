@@ -326,6 +326,21 @@ specified here as it lands); so far:
   the instance.
 - **A patch-only edit publishes no plan** (stage 3, ADR-0092): see
   "Patch-only FX edits" below.
+- **A plan has a canonical dump** (stage 5; `plan_dump.h`). `dumpPlan`
+  (main thread, before publication) writes every field of a prepared plan
+  that compile and prepare decide, one per line in plan order: nodes and
+  their stages, lanes, latencies, pins, delay lengths and buffer sizes,
+  events, clips and take chains, edges, racks, the live and frontier sets,
+  the task graphs, the instances (named by FX or module, never by address)
+  and the mix slots. Runtime state (cursors, ramps, voices, held notes,
+  queues, buffer contents, meters, the executors' handoff fields) is left
+  out. Each struct it walks is first decomposed into all its fields by name,
+  so a field added to `Plan`, `Node`, `Stage`, `Edge` or the others stops
+  the file compiling until it is dumped or named as runtime state. With
+  `EngineOptions::verifyPlans` (tests; off by default) the engine compiles
+  each plan a second time and fails the load with `engine.plan_differs` and
+  the first differing line when the two dumps differ. This is the check a
+  partial compile (stage 7) will be held to.
 - **Carries look nodes and edges up by id** (stage 6). The compile indexes
   each plan last (`indexForCarry`, main thread): its nodes sorted by id,
   each edge's source id, each node's in-edges sorted by source id (ties in

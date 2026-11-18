@@ -25,6 +25,7 @@
 #include "midi_output.h"
 
 #include "plan.h"
+#include "plan_dump.h"
 #include "rack_runtime.h"
 #include "recording.h"
 #include "sync_runtime.h"
@@ -718,6 +719,19 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
             if (!again) return std::move(again).error();
             plan = std::move(*again);
         }
+    }
+    if (options_.verifyPlans) {
+        // Route E stage 5: the same session compiled again gives the same plan.
+        auto again = build();
+        if (!again) return std::move(again).error();
+        const auto difference =
+            detail::firstDifference(detail::dumpPlan(*plan), detail::dumpPlan(**again));
+        if (!difference.empty())
+            return Error(
+                "engine.plan_differs",
+                "a second compile of the same session gave a different plan: " + difference, {},
+                "an engine fault, not the session's: report it with the project");
+        ++verifiedPlans_;
     }
     // Bridged FX on live nodes run in the callback under its bridge deadline
     // (ADR-0081): no stage is passed through for being isolated.
