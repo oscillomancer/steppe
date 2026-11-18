@@ -838,6 +838,7 @@ struct Node {
     UtilityControl utility;
     bool soloSilenced = false;
     bool postKeyed = false;
+    std::uint32_t stageSlot = 0;  // its first stage's MixSlots::stages entry (forEachStage order)
     ConsoleStage<console9::Buss> decoder;
     ConsoleStage<console9::Channel> encoder;
     FaderControl fader;
@@ -917,6 +918,7 @@ struct MixSlots {
         std::atomic<double> volumeDb{0}, pan{0};  // a route's pan resolved against its source
         std::atomic<double> width{100}, panLeft{-100}, panRight{100};  // strips (ADR-0066)
         std::atomic<bool> mute{false};
+        std::atomic<bool> soloSilenced{false};  // strips (ADR-0093)
         std::atomic<bool> holdVolume{false}, holdPan{false};
         std::atomic<bool> holdWidth{false}, holdPanLeft{false}, holdPanRight{false},
             holdPanBoost{false};
@@ -926,6 +928,14 @@ struct MixSlots {
     std::unique_ptr<Value[]> vcas;      // per VCA group (pan unused)
     std::unique_ptr<Value[]> hardware;  // per hardware MIDI route
     std::vector<Id> vcaIds;             // main thread: the group of each VCA slot
+    // FX wet and bypass (ADR-0093), per stage, node by node in forEachStage
+    // order from Node::stageSlot; stageFx is each slot's FX (main thread).
+    struct StageValue {
+        std::atomic<double> wet{1};
+        std::atomic<bool> bypass{false};
+    };
+    std::unique_ptr<StageValue[]> stages;
+    std::vector<Id> stageFx;
     std::atomic<std::uint64_t> sequence{0};
     std::array<std::uint64_t, 2> seen{};  // per executor class (0: renderer or all, 1: live)
 };
@@ -1193,6 +1203,18 @@ double sendGain(double routeDb, model::Tap tap, double sourceDb) SUPPLE_RT;
 // Mix-value publication (ADR-0060). `holds`: the volume/pan targets a write
 // pass holds (ADR-0061). Main thread, before or after the plan is published.
 void publishMix(Plan& p, const model::Session& s, std::span<const model::EnvTarget> holds);
+// Main thread (ADR-0093): whether publishing `s` into a split plan would
+// change a mute, solo, route mute, wet or bypass that the callback reads, and
+// one that the renderer reads. The callback takes values at its next block
+// and the renderer at its own position, up to the render-ahead later in the
+// stream, so an edit that changes both compiles (Engine::loadMixValues): in
+// between the output would be neither session's. Compared with the values
+// the slots hold, which only the main thread writes. Both false outside a
+// split plan.
+struct ExecutorChanges {
+    bool live = false, rendered = false;
+};
+ExecutorChanges changedExecutors(const Plan& p, const model::Session& s);
 // An executor's copy of the published values into the nodes and edges its
 // class reads (`liveClass` as for wrapTo), at the start of a block.
 void syncMix(Plan& p, int liveClass) SUPPLE_RT;

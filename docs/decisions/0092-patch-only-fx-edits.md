@@ -74,11 +74,14 @@ plan.
   is not the published one. That way, values a plug-in reported before an
   edit are never committed over it. A patch-only edit moves no generation,
   so it moves a patch sequence instead.
-  - The sequence is odd while patches are being applied. Each executor
-    reads it before processing a block, one atomic load, and stamps the
-    block's outputs with it.
-  - The app drops outputs whose stamp is not the current value, as it drops
-    a replaced plan's.
+  - It moves by one before the patches are applied and by one after. Each
+    executor reads it before processing a block, one atomic load, and
+    stamps the block's outputs with it.
+  - The app drops outputs whose stamp is any value other than the current
+    one, as it drops a replaced plan's. A block that read the sequence
+    before the edit finished therefore never commits its outputs. That the
+    sequence is odd in between is only a marker; the drop does not depend
+    on it.
   - Without this, a value the plug-in reported just before the edit was
     committed to the model and acknowledged, while the instance played the
     edit's value.

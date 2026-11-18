@@ -4,13 +4,18 @@
 // stage 3, ADR-0092): dummy devices and the fixture plug-ins only.
 #include <doctest/doctest.h>
 
+#include <filesystem>
+#include <limits>
 #include <string>
 #include <vector>
 
+#include "bridge_patience.h"
 #include "realtime_common.h"
 #include "supple/engine/offline.h"
 #include "supple/host/clap_host.h"
 #include "supple/model/session.h"
+
+using supple::engine::test::patient;
 
 namespace {
 
@@ -38,13 +43,13 @@ struct Patched {
     model::Session session;
     Id track, trackGain, masterGain;
 };
-Patched patchedSession(bool live) {
+Patched patchedSession(bool live, model::Isolation isolation = model::Isolation::Inherit) {
     Patched p;
     const auto base = synthSession(-6.0);
     model::EditTxn t(base, 2);
     p.track = base.tracks.find(kMaster)->children.front();
-    p.trackGain = patchedGain(t, p.track, -3);
-    p.masterGain = patchedGain(t, kMaster, -2);
+    p.trackGain = patchedGain(t, p.track, -3, isolation);
+    p.masterGain = patchedGain(t, kMaster, -2, isolation);
     if (live) {
         model::Track vocal;
         vocal.parent = kMaster;
@@ -128,46 +133,60 @@ TEST_CASE("a patch-only edit while playing sounds exactly like a compiled reload
     // When the new patch is heard does not change: get() applied it on the
     // main thread inside the compile, and applies it there now. A live node
     // plays it from the next callback; a node the renderer runs plays it
-    // after the chunks it had already rendered, plan swap or not.
-    for (bool live : {false, true})
-        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 1}}) {
-            if (live && !options.anticipative) continue;  // no renderer: nothing to split
-            INFO("live master " << live << ", anticipative " << options.anticipative);
-            const Patched p = patchedSession(live);
-            const model::Session next = repatched(p, 3);
-            std::vector<std::vector<float>> outputs;
-            for (int run = 0; run < 3; ++run) {  // patch-only, compiled, unedited
-                auto pool = makePool();
-                MediaCache media;
-                DummyBackend backend(
-                    {.mode = DummyBackend::Mode::Manual, .captureFrames = 300 * 128});
-                Engine engine(pool, media, options);
-                REQUIRE(
-                    engine.start(backend, {.sampleRate = 48000, .blockSize = 128, .inputs = 2}));
-                REQUIRE(engine.load(p.session));
-                engine.play();
-                const auto cycles = [&](int n) {
+    // after the chunks it had already rendered, plan swap or not. Through a
+    // shared bridge too: there the patch reaches the instance by a SetPatch
+    // request, answered before load() returns, as in a compile.
+    host::setBridgeExecutable(BRIDGE_PATH);
+    for (const auto isolation : {model::Isolation::Inherit, model::Isolation::SharedBridge})
+        for (bool live : {false, true})
+            for (const EngineOptions& options :
+                 {patient(kInCallback), patient(EngineOptions{.workers = 1})}) {
+                if (live && !options.anticipative) continue;  // no renderer: nothing to split
+                INFO("isolation " << int(isolation) << ", live master " << live << ", anticipative "
+                                  << options.anticipative);
+                const Patched p = patchedSession(live, isolation);
+                const model::Session next = repatched(p, 3);
+                std::vector<std::vector<float>> outputs;
+                for (int run = 0; run < 3; ++run) {  // patch-only, compiled, unedited
+                    auto pool = makePool();
+                    MediaCache media;
+                    DummyBackend backend(
+                        {.mode = DummyBackend::Mode::Manual, .captureFrames = 300 * 128});
+                    Engine engine(pool, media, options);
+                    REQUIRE(engine.start(backend,
+                                         {.sampleRate = 48000, .blockSize = 128, .inputs = 2}));
+                    REQUIRE(engine.load(p.session));
+                    engine.play();
+                    const auto cycles = [&](int n) {
+                        if (options.anticipative)
+                            runAhead(engine, backend, n, 128);
+                        else
+                            backend.run(n);
+                    };
+                    cycles(100);
+                    // A full renderer waiting for the callback: every run takes
+                    // the edit from the same renderer position.
                     if (options.anticipative)
-                        runAhead(engine, backend, n, 128);
-                    else
-                        backend.run(n);
-                };
-                cycles(100);
-                const auto generation = engine.planGeneration();
-                if (run == 0) REQUIRE(engine.load(next));
-                if (run == 1) REQUIRE(engine.load(withMarker(next, 4)));
-                CHECK(engine.planGeneration() == generation + (run == 1 ? 1 : 0));
-                CHECK(engine.patchEdits() == (run == 0 ? 1u : 0u));
-                cycles(200);
-                engine.stop();
-                CHECK(engine.anticipationMisses() == 0);
-                outputs.push_back(backend.capture().channels[0]);
+                        REQUIRE(engine.awaitRendered(std::numeric_limits<std::int64_t>::max()));
+                    const auto generation = engine.planGeneration();
+                    if (run == 0) REQUIRE(engine.load(next));
+                    if (run == 1) REQUIRE(engine.load(withMarker(next, 4)));
+                    CHECK(engine.planGeneration() == generation + (run == 1 ? 1 : 0));
+                    CHECK(engine.patchEdits() == (run == 0 ? 1u : 0u));
+                    cycles(200);
+                    // A late bridged block is silent by design: fail it as late.
+                    CHECK(engine.bridgeLateCycles() == 0);
+                    engine.stop();
+                    CHECK(engine.anticipationMisses() == 0);
+                    CHECK(engine.processErrors() == 0);
+                    CHECK(pool.failedErrors().empty());
+                    outputs.push_back(backend.capture().channels[0]);
+                }
+                CHECK(peakOf(outputs[0], 0, 300 * 128) > 0.001);
+                CHECK(maxDiff(outputs[0], 0, outputs[1], 300 * 128) == 0.0);
+                // The edit is heard: the unedited run differs after it.
+                CHECK(maxDiff(outputs[0], 200 * 128, outputs[2], 100 * 128) > 0.0);
             }
-            CHECK(peakOf(outputs[0], 0, 300 * 128) > 0.001);
-            CHECK(maxDiff(outputs[0], 0, outputs[1], 300 * 128) == 0.0);
-            // The edit is heard: the unedited run differs after it.
-            CHECK(maxDiff(outputs[0], 200 * 128, outputs[2], 100 * 128) > 0.0);
-        }
 }
 
 TEST_CASE("a plug-in that rescans its values after a patch keeps the edit off the compile") {
@@ -366,6 +385,63 @@ TEST_CASE("a patch-only edit while stopped compiles no plan either") {
     // The gain's value is normalized over -60..12 dB (ADR-0010).
     CHECK(pool.find(p.trackGain)->paramValue(0).value() == doctest::Approx((-14 + 60) / 72.0));
     engine.stop();
+}
+
+TEST_CASE("whatever a patch changes that a plan holds makes the edit a compile (ADR-0092)") {
+    // Each case trips one guard of loadPatches alone. The gain's test control
+    // makes the next patch do something besides its values. Two guards have
+    // no case: a frozen owner (a commit never changes what a frozen track
+    // depends on, validateFrozenTransition) and changed ports (an instance's
+    // ports change only with a restart or an activation, guarded here).
+    struct Control {
+        void (*edit)(const clap_plugin_t*, double, std::uint32_t);
+        std::uint32_t (*deliveries)(const clap_plugin_t*);
+        void (*latency)(const clap_plugin_t*, bool);
+        std::uint32_t (*creates)();
+        void (*patchRescan)(const clap_plugin_t*, std::uint32_t);
+        void (*patchEffect)(const clap_plugin_t*, std::uint32_t);
+    };
+    enum class Trip { Latency = 1, Clear, Activation, RestartError, ProjectFolder };
+    const Patched p = patchedSession(false);
+    const model::Session next = [&] {
+        model::EditTxn t(p.session, 3);
+        t.modify<model::FxInstance>(p.trackGain, [](auto& fx) { fx.patch = gainPatch(-14); });
+        return t.commit().value();
+    }();
+    const std::filesystem::path dir = "project", elsewhere = "elsewhere";  // never read
+    for (const auto& [name, trip] : std::vector<std::pair<std::string, Trip>>{
+             {"the latency changes without a restart", Trip::Latency},
+             {"the plug-in clears its automation", Trip::Clear},
+             {"an inactive instance is activated", Trip::Activation},
+             {"that activation fails", Trip::RestartError},
+             {"another project folder", Trip::ProjectFolder}}) {
+        CAPTURE(name);
+        auto pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        Engine engine(pool, media, kInCallback);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        REQUIRE(engine.load(p.session, dir));
+        host::Instance* gain = pool.find(p.trackGain);
+        REQUIRE(gain);
+        const clap_plugin_t* plugin = gain->raw();
+        const auto* control =
+            static_cast<const Control*>(plugin->get_extension(plugin, "supple.test.gain-control"));
+        REQUIRE(control);
+        if (trip <= Trip::RestartError) control->patchEffect(plugin, std::uint32_t(trip));
+        if (trip == Trip::Activation || trip == Trip::RestartError) {
+            gain->deactivate();  // nothing processes: the engine never ran a cycle
+            REQUIRE_FALSE(gain->active());
+        }
+        const auto generation = engine.planGeneration();
+        (void)engine.load(next, trip == Trip::ProjectFolder ? elsewhere : dir);
+        CHECK(engine.patchEdits() == 0);
+        CHECK(engine.planGeneration() == generation + 1);
+        // The trip happened.
+        if (trip == Trip::Activation) CHECK(pool.find(p.trackGain)->active());
+        if (trip == Trip::RestartError) CHECK_FALSE(pool.failed().empty());
+        engine.stop();
+    }
 }
 
 TEST_CASE("a bridged FX's patch-only edit costs no more bridge requests than its compile") {

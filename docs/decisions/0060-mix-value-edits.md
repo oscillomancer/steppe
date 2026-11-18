@@ -8,6 +8,10 @@ Contracts: `specs/engine.md` §1.6, `specs/gui.md` §2.
 edits that skip a compile: an edit of FX patches alone reaches the running
 instances, detected by the same whole-object comparison.
 
+**Amendment, 2026-11-18:** [ADR-0093](0093-wet-bypass-mute-solo-on-a-running-plan.md)
+adds FX wet and bypass, track mute and solo, VCA mute and solo, and route
+mute where the send stays encoded.
+
 ## Context
 
 A fader or pan drag sends one `track.set` per pointer motion event, and every

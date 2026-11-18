@@ -385,3 +385,81 @@ TEST_CASE("read-ahead PDC: unity plugin transport follows its stage input" *
     CHECK(plan.nodes[plan.mainMaster].post.l[0] == doctest::Approx(.12).epsilon(1e-6));
     for (auto* instance : plan.instances) instance->stopProcessing();
 }
+
+TEST_CASE("no compile-time decision depends on an FX's bypass or wet (ADR-0093)") {
+    // A running plan takes wet and bypass without compiling, so a compile must
+    // not decide anything from them: latencies, the latency solve, edge
+    // delays, the live region, MIDI bus slots and note targets come out the
+    // same with every FX bypassed and its wet moved. Only the stages' own
+    // bypass and wet differ.
+    model::EditTxn edit(model::Session::create({.console9 = false}), 1);
+    const Id playback = track(edit), live = track(edit);
+    const Id bus = track(edit, model::StripType::Buss);
+    delay(edit, playback, 1000);
+    delay(edit, live, 37);
+    delay(edit, bus, 300);
+    delay(edit, kMaster, 11);
+    monitor(edit, live);
+    model::Route send;
+    send.from.track = playback;
+    send.to.track = bus;
+    send.volumeDb = -3;
+    edit.create(send);
+    // A note generator on a MIDI-bus chain, ahead of an instrument.
+    edit.modify<model::Track>(playback, [](auto& t) { t.chainMidi = model::ChainMidi::Bus; });
+    for (const char* plugin : {"com.suppleaudio.test.note-gen", "com.suppleaudio.test.sine"}) {
+        model::FxInstance fx;
+        fx.plugin.id = plugin;
+        const Id id = edit.create(fx);
+        edit.modify<model::Track>(playback, [&](auto& t) { t.chain.push_back(id); });
+    }
+    const auto session = commit(edit);
+    model::EditTxn change(session, 2);
+    for (const auto& fx : session.fx)
+        change.modify<model::FxInstance>(fx.id, [](auto& f) {
+            f.bypass = true;
+            f.wet = 35;
+        });
+    const auto bypassed = commit(change);
+    auto pool = fixturePool(), otherPool = fixturePool();
+    MediaCache media;
+    const detail::Plan a = prepared(session, pool, media);
+    const detail::Plan b = prepared(bypassed, otherPool, media);
+    CHECK(a.outputLatency == b.outputLatency);
+    CHECK(a.outputLatency >= 1000 + 300 + 11);  // the delays do count
+    REQUIRE(a.nodes.size() == b.nodes.size());
+    std::size_t stages = 0;
+    for (std::size_t i = 0; i < a.nodes.size(); ++i) {
+        const detail::Node &x = a.nodes[i], &y = b.nodes[i];
+        CAPTURE(x.id.str());
+        CHECK(x.id == y.id);
+        CHECK(x.live == y.live);
+        CHECK(x.latIn == y.latIn);
+        CHECK(x.latChain == y.latChain);
+        CHECK(x.timelineShift == y.timelineShift);
+        CHECK(x.noteTarget == y.noteTarget);
+        CHECK(x.midiBusStages == y.midiBusStages);
+        std::vector<const detail::Stage*> sx, sy;
+        detail::forEachStage(x, [&](const detail::Stage& st) { sx.push_back(&st); });
+        detail::forEachStage(y, [&](const detail::Stage& st) { sy.push_back(&st); });
+        REQUIRE(sx.size() == sy.size());
+        for (std::size_t k = 0; k < sx.size(); ++k) {
+            CHECK(sx[k]->fx == sy[k]->fx);
+            CHECK(sx[k]->latency == sy[k]->latency);
+            CHECK(sx[k]->inputLatency == sy[k]->inputLatency);
+            CHECK(sx[k]->busPart == sy[k]->busPart);
+            CHECK(sx[k]->dry.length == sy[k]->dry.length);
+            CHECK_FALSE(sx[k]->bypass);
+            CHECK(sy[k]->bypass);
+            CHECK(sx[k]->wet == 1.0);
+            CHECK(sy[k]->wet == doctest::Approx(0.35));
+            ++stages;
+        }
+    }
+    CHECK(stages == session.fx.size());
+    REQUIRE(a.edges.size() == b.edges.size());
+    for (std::size_t i = 0; i < a.edges.size(); ++i) {
+        CHECK(a.edges[i].delay.length == b.edges[i].delay.length);
+        CHECK(a.edges[i].encode == b.edges[i].encode);
+    }
+}
