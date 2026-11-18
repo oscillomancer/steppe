@@ -304,6 +304,7 @@ void PluginBrowser::open(std::function<void(const std::string&)> onAdd, std::str
         page_ = nullptr;
         search_ = nullptr;
         list_ = nullptr;
+        add_ = nullptr;
         status_ = nullptr;
         detailLabel_ = nullptr;
         title_ = nullptr;
