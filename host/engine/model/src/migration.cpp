@@ -76,7 +76,7 @@ Result<json::Value> migrateProject1(json::Value doc, std::vector<schema::Warning
                  {"width", 100.0}, {"trim", 0.0}, {"trim_db", 0.0}}) {
             if (const auto* value = tr.find(key)) {
                 if (*value != def)
-                    warn("dropped strip " + std::string(key) + "; use a utility insert",
+                    warn("dropped track " + std::string(key) + "; use a utility insert",
                          "/tracks/" + name + "/" + key);
                 erase(tr, key);
             }
@@ -157,7 +157,7 @@ Result<json::Value> migrateProject1(json::Value doc, std::vector<schema::Warning
             if (invalid) {
                 erase(routes, id);
                 droppedRoutes.insert(id);
-                warn("dropped route incompatible with strip types", "/routes/" + id);
+                warn("dropped route incompatible with track types", "/routes/" + id);
             } else {
                 // The legacy default was numeric centre, not follow.
                 if (!r.find("pan")) r["pan"] = 0.0;
@@ -180,7 +180,7 @@ Result<json::Value> migrateProject1(json::Value doc, std::vector<schema::Warning
                  (param == "trim" || param == "width" || param == "phase_invert"))) {
                 erase(envelopes, id);
                 droppedEnvelopes.insert(id);
-                warn("dropped envelope on a removed strip parameter or route", "/envelopes/" + id);
+                warn("dropped envelope on a removed track parameter or route", "/envelopes/" + id);
             }
         }
     }
@@ -196,7 +196,7 @@ Result<json::Value> migrateProject1(json::Value doc, std::vector<schema::Warning
     }
     for (const char* key : {"pan_law", "pan_law_db"}) {
         if (project.find(key))
-            warn("dropped project pan law; strips use Console 9's law",
+            warn("dropped project pan law; tracks use Console 9's law",
                  "/project/" + std::string(key));
         erase(project, key);
     }

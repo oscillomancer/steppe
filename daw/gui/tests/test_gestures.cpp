@@ -1477,6 +1477,168 @@ TEST_CASE("arrange gestures: take FX and a take envelope drawn and edited on its
     CHECK_FALSE(g.takeEnvelopeAt(audio, {mid.x, lineY}));
 }
 
+TEST_CASE("cursors: an item's ends and fade corners, a locked item, a move, a row's lower edge") {
+    Fixture f;
+    if (!f.ok) return;
+    using C = ui::Cursor;
+    const model::Id a = f.itemOnRow(0);
+    const ui::Rect r = f.rectOf(a);
+    REQUIRE(r.w > 60);
+    auto over = [&](ui::Point p) {
+        f.pointer(ui::PointerEvent::Type::Move, p);
+        return f.root->cursor();
+    };
+    const ui::Point body{r.x + r.w / 2, r.y + r.h / 2};
+    const ui::Point right{r.right() - 2, r.y + r.h / 2}, left{r.x + 2, r.y + r.h / 2};
+    const ui::Point fadeIn{r.x + 3, r.y + 3}, fadeOut{r.right() - 3, r.y + 3};
+    CHECK(over(body) == C::Arrow);
+    CHECK(over(right) == C::ResizeHorizontal);
+    CHECK(over(left) == C::ResizeHorizontal);
+    CHECK(over(fadeIn) == C::ResizeHorizontal);
+    CHECK(over(fadeOut) == C::ResizeHorizontal);
+    CHECK(over({r.x + r.w / 2, f.view->lanesRect().bottom() - 2}) == C::Arrow);  // empty lanes
+    // A locked item is not trimmed or faded, and says so.
+    auto lock = [&](bool on) {
+        REQUIRE(f.dispatcher->execute({"item.set",
+                                       json::parse(R"({"item":")" + a.str() + R"(","locked":)" +
+                                                   (on ? "true" : "false") + "}")
+                                           .value(),
+                                       kUi}));
+        f.sync();
+    };
+    lock(true);
+    CHECK(over(right) == C::Arrow);
+    CHECK(over(fadeIn) == C::Arrow);
+    lock(false);
+    CHECK(over(right) == C::ResizeHorizontal);
+    // A press on the body is still a click; once it moves, the item moves.
+    // (A drag given up, as when the window loses the pointer: the gesture is
+    // cancelled and the root lets go of it.)
+    auto cancel = [&](ui::Point at) {
+        f.pointer(ui::PointerEvent::Type::Cancel, at);
+        f.root->capture(nullptr);
+        f.sync();
+    };
+    const auto steps = f.steps();
+    f.pointer(ui::PointerEvent::Type::Down, body);
+    CHECK(f.root->cursor() == C::Arrow);
+    f.pointer(ui::PointerEvent::Type::Move, {body.x + 30, body.y});
+    CHECK(f.root->cursor() == C::Move);
+    cancel({body.x + 30, body.y});
+    CHECK(f.steps() == steps);
+    CHECK(over(body) == C::Arrow);
+    // A trim keeps its cursor while the pointer is away from the edge.
+    f.pointer(ui::PointerEvent::Type::Down, right);
+    f.pointer(ui::PointerEvent::Type::Move, {right.x - 40, right.y + 50});
+    CHECK(f.root->cursor() == C::ResizeHorizontal);
+    cancel({right.x - 40, right.y + 50});
+    CHECK(f.steps() == steps);
+    // The track panel: a row's lower edge sets its height.
+    const ui::Node* row = f.view->tcpPanel().rowNode(f.view->trackLayout().rows()[0].track);
+    REQUIRE(row);
+    const ui::Rect rb = row->bounds();
+    using G = views::TcpRowGeometry;
+    CHECK(over({rb.x + 100, rb.bottom() - 2}) == C::ResizeVertical);
+    CHECK(over({rb.x + 100, rb.y + (G::kMixTop + G::kCellHeight + G::kLinkTop) / 2}) == C::Arrow);
+}
+
+TEST_CASE("a drag held at the lanes' edge scrolls the view and takes the item with it") {
+    Fixture f;
+    if (!f.ok) return;
+    using T = ui::PointerEvent::Type;
+    using views::ArrangeView;
+    auto& g = f.view->gestures();
+    const model::Id a = f.itemOnRow(0);
+    const ui::Rect r = f.rectOf(a);
+    const ui::Rect lanes = f.view->lanesRect();
+    const ui::Point body{r.x + r.w / 2, r.y + r.h / 2};
+    const double position = f.item(a).position;
+    const double start = f.view->viewport().startSeconds;
+    // In the middle of the lanes a drag scrolls nothing, however long it waits.
+    f.pointer(T::Down, body);
+    f.pointer(T::Move, {body.x + 40, body.y});
+    CHECK_FALSE(f.view->autoScrolling());
+    CHECK_FALSE(f.view->autoScroll(1.0));
+    CHECK(f.view->viewport().startSeconds == start);
+    // Held in the zone at the right edge it scrolls on, and the item, still
+    // under the pointer, is further along the timeline each time.
+    const ui::Point edge{lanes.right() - 4, body.y};
+    f.pointer(T::Move, edge);
+    REQUIRE(f.view->autoScrolling());
+    const double before = g.state().deltaBeats;
+    CHECK(f.view->autoScroll(0.5));
+    const double once = f.view->viewport().startSeconds;
+    CHECK(once > start);
+    CHECK(g.state().deltaBeats > before);
+    CHECK(f.view->autoScroll(0.5));
+    CHECK(f.view->viewport().startSeconds > once);
+    // Further out is faster: the same time scrolls more.
+    const double near = f.view->viewport().startSeconds;
+    f.pointer(T::Move, {lanes.right() + 60, body.y});
+    CHECK(f.view->autoScroll(0.5));
+    CHECK(f.view->viewport().startSeconds - near > near - once);
+    // Back inside, it stops; the drop lands where the pointer is.
+    f.pointer(T::Move, {lanes.x + lanes.w / 2, body.y});
+    CHECK_FALSE(f.view->autoScrolling());
+    const double held = f.view->viewport().startSeconds;
+    CHECK_FALSE(f.view->autoScroll(1.0));
+    CHECK(f.view->viewport().startSeconds == held);
+    const double delta = g.state().deltaBeats;
+    const auto steps = f.steps();
+    f.pointer(T::Up, {lanes.x + lanes.w / 2, body.y});
+    f.sync();
+    CHECK(f.steps() == steps + 1);
+    CHECK(f.item(a).position == doctest::Approx(position + delta));
+    CHECK(f.view->timeAt(lanes.x + lanes.w / 2) >
+          f.app->head().timeMap->secondsAt(position) + 1.0);  // it went past the old view
+    CHECK_FALSE(f.view->autoScrolling());
+
+    // At the left edge of a view already at the project's start there is
+    // nothing to scroll: no move, and no frames asked for.
+    views::Viewport home = f.view->viewport();
+    home.startSeconds = 0;
+    f.view->setViewport(home);
+    f.root->frame(false);
+    const model::Id other = f.itemOnRow(1);  // still near the start
+    const ui::Rect r2 = f.rectOf(other);
+    REQUIRE(f.view->lanesRect().contains({r2.x + r2.w / 2, r2.y + r2.h / 2}));
+    f.pointer(T::Down, {r2.x + r2.w / 2, r2.y + r2.h / 2});
+    f.pointer(T::Move, {lanes.x + 3, r2.y + r2.h / 2});
+    CHECK(f.view->autoScrolling());
+    CHECK_FALSE(f.view->autoScroll(1.0));
+    CHECK(f.view->viewport().startSeconds == 0);
+    f.pointer(T::Cancel, {lanes.x + 3, r2.y + r2.h / 2});
+    f.root->capture(nullptr);
+    CHECK_FALSE(f.view->autoScrolling());  // a drag given up scrolls no more
+
+    // Rows: with more tracks than fit, a move held at the bottom scrolls
+    // down; a trim, which stays on its row, does not.
+    f.view->trackLayout().setGlobalHeight(200);
+    f.root->frame(false);
+    const ui::Rect tall = f.rectOf(other);
+    const ui::Rect lanes2 = f.view->lanesRect();
+    const ui::Point mid{tall.x + tall.w / 2, tall.y + tall.h / 2};
+    REQUIRE(f.view->viewport().scrollY == 0);
+    f.pointer(T::Down, mid);
+    f.pointer(T::Move, {mid.x, lanes2.bottom() - 3});
+    REQUIRE(f.view->autoScrolling());
+    CHECK(f.view->autoScroll(0.25));
+    CHECK(f.view->viewport().scrollY > 0);
+    f.pointer(T::Cancel, {mid.x, lanes2.bottom() - 3});
+    f.root->capture(nullptr);
+    f.sync();
+    views::Viewport top = f.view->viewport();
+    top.scrollY = 0;
+    f.view->setViewport(top);
+    f.root->frame(false);
+    const ui::Rect again = f.rectOf(other);
+    f.pointer(T::Down, {again.right() - 2, again.y + again.h / 2});
+    f.pointer(T::Move, {again.right() - 30, lanes2.bottom() - 3});
+    CHECK_FALSE(f.view->autoScrolling());
+    f.pointer(T::Cancel, {again.right() - 30, lanes2.bottom() - 3});
+    f.root->capture(nullptr);
+}
+
 TEST_CASE("left trim moves every take offset at its own play rate in one undo step") {
     Fixture f;
     REQUIRE(f.ok);
@@ -1703,7 +1865,8 @@ TEST_CASE("automation points: select, move together, marquee, menu, clipboard, s
     f.click(at(3), ui::kCtrl);
     REQUIRE(g.selectedPoints().size() == 2);
     // Dragging one of them moves both, in one step; the others stay.
-    f.drag(at(1), {at(1).x, at(1).y - area.h * 0.1f});
+    // (A quarter of the lane: far enough to be a drag in a lane of any height.)
+    f.drag(at(1), {at(1).x, at(1).y - area.h * 0.25f});
     CHECK(f.steps() == steps + 1);
     REQUIRE(points().size() == 4);
     CHECK(points()[1].value > -6);

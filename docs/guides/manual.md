@@ -9,6 +9,25 @@ routing and actions list will feel familiar from it. The actions list includes
 the public commands and GUI actions (`Shift+/` or `Ctrl+Shift+P`,
 `Cmd+Shift+P` on macOS).
 
+## Contents
+
+- [Starting Steppe](#starting-steppe)
+- [Audio](#audio)
+- [Projects](#projects)
+- [Tracks and items](#tracks-and-items)
+- [Editing items](#editing-items)
+- [The MIDI editor](#the-midi-editor)
+- [Plugins](#plugins)
+- [Mixing](#mixing)
+- [Routing](#routing)
+- [Automation](#automation)
+- [Timing audio with hits and stretch markers](#timing-audio-with-hits-and-stretch-markers)
+- [Racks](#racks)
+- [MIDI controllers](#midi-controllers)
+- [Sync](#sync)
+- [Rendering](#rendering)
+- [Agents (MCP)](#agents-mcp)
+
 ## Starting Steppe
 
 Start Steppe from the application menu, the Start menu or Finder, or from a
@@ -22,6 +41,11 @@ steppe --help          # every command-line option
 
 Command names follow the product name. In a build tree, the app is
 `build/<preset>/daw/gui/steppe`.
+
+A new project is empty. To begin,
+drop audio or MIDI files onto the arrangement (each makes a track), or click
+**+ track** at the bottom left. The **Browser** (press **B**)
+lists plug-ins, saved FX chains and files to add.
 
 The last of the transport buttons sets how the view follows the playhead.
 Click it to go round the three modes: by page (the default: when the playhead
@@ -42,6 +66,15 @@ by default, or ASIO).
 audio system, the output and input devices, the sample rate and the buffer
 size. Steppe remembers the choice and starts with it next time. Each change
 restarts the running engine at once.
+
+**Edit > Preferences…** holds the settings that apply to every project, in
+sections: **Audio**, **Recording and import**, **Plug-ins** and **Editing**.
+Each takes effect when you change it. The low-level tuning (how many threads
+process audio, locking memory, keeping CPUs out of deep idle) is under
+**Advanced**: click **Show** beside it. You do not need those to get started.
+Locking memory and the CPU idle setting work on Linux only, and are listed
+only there.
+In a low window the settings scroll under the dialog's heading.
 
 - **Linux:** the rate and buffer size are requests to PipeWire, which shares
   the graph with other apps. It changes the rate only while no other client
@@ -83,102 +116,6 @@ audio engine restarts:
   helps.
 - **plug-in errors**: a plug-in refused to start. Its track plays without
   it until it starts.
-
-### Outputs and several masters
-
-Steppe opens every output of the device (up to 64; with JACK, one per
-playback port). The main master plays to outputs 1 and 2. A project can have
-more masters (right-click the mixer's empty space, **Master**), for example
-a headphone mix or a second pair of speakers: each has its own fader, effects
-and outputs. Click a master's **out** button in the mixer to choose where it
-plays: *None*, a stereo pair (1/2, 3/4, …) or a single output in mono. A new
-master plays nowhere until you choose. Masters that share outputs add up, and
-all masters reach the device at the same moment, whatever their effects'
-latency. The metronome plays on outputs 1 and 2. The menu lists the outputs
-only while the audio engine is running.
-
-Agents can print rack notes with `rack.capture {async:true, ...}` and follow
-`job.get`; `job.cancel` leaves the project unchanged. Completion adds one
-undo step. Rack or automation edits and overlapping destination item edits
-need a new capture; destination fader moves and distant item edits are allowed.
-Notes source MIDI and incoming routes are snapshots from launch. The rack window
-captures the same way.
-
-Agents can cable modulation to a plug-in parameter by semantic key or its
-CLAP id (`fx_3.gain` or `fx_3.12`; `effect.12` in a named `rack.patch`).
-Numeric ids use canonical decimal spelling: `12`, not `012`.
-`fx.describe` lists the ids, including third-party plug-ins without semantic
-keys. The target must support modulation. Numeric semantic keys take precedence.
-
-Rack plug-in latency is compensated against the song, including oversampling.
-The rack's longest routed audio or Note Out path sets its clock; shorter
-routes receive padding. Parallel paths summed inside the rack keep their
-relative timing; add a Delay module when the patch needs alignment.
-
-Sends into rack In ports apply the route's level and pan without Console 9
-trim. Existing effect patches fed by those sends play about 2.34 dB louder
-than earlier builds; check their output level when updating.
-
-A rack's Out modules can also send straight to a buss or master, beside the
-channel they feed: in the routing window's Audio mode each Out has a row
-under its channel ("Pad » Out 1", teal), and only buss and master cells take
-a send. A rack send has a level and a mute, nothing else; pan and polarity
-belong in the rack. It joins the buss after the buss's Console 9 decode,
-unencoded, so it does not get a channel's summing character (route the Out
-into a channel and send from there for that). Muting or soloing the rack's
-channel mutes or solos its rack sends too; its fader does not move them. So
-muting the channel to hear the drum rack's reverb alone silences the reverb
-as well: pull the channel's fader down instead. The routing window's status
-line names the channel each Out row follows; moving the rack to another
-channel (or removing its channel, when another channel also hears it) makes
-the sends follow that channel. Removing a rack's only channel removes the
-rack and its sends; for agents, `track.remove` names them in a warning.
-Freezing the channel leaves its rack sends playing live, so the rack still
-uses its CPU, and locks the rack until you unfreeze: you can still move its
-modules, rename them and change the sends, but not its knobs, cables,
-plug-ins or MIDI learn bindings. Agents use
-`route.add {from: {module: "mo_3"}, to: "tr_5"}`.
-
-### Printing a mix onto its master
-
-A master has an arm button in the mixer, like a channel. Arm it and press
-record: Steppe records what the master plays, after its effects, fader and
-pan, as the music goes. The take lands on the master itself, in a lane that
-appears at the top of its tracks (a master armed or holding a take has one;
-the lane goes away when it has neither). Several masters can record at once,
-each its own take. Punch and loop recording work as on a channel.
-
-A master's takes are already mixed, so they play after its effects and fader,
-which do not change them; only the master's own mute silences them with the
-rest. They play beside the live mix, so right after a print you hear the mix
-twice. The **M** in the lane's header is the lane mute: it silences the
-master's takes and nothing else, to compare the print with the live mix or to
-keep it silent. While a master records, its earlier takes are silent in the
-punch range (everywhere when punch is off), so an old print never ends up in
-the new one; outside the punch range they play as usual. Recording while the
-song already plays can let an old print be heard for a fraction of a second
-before it goes quiet; it is never recorded.
-
-Takes on a master are audio items: move, trim, split, fade and copy them as
-on any channel, or drop an audio file onto the lane. A MIDI item cannot go on
-a master. A render of the master includes its takes; stems of channels and
-busses leave them out. Projects that use master takes or an armed master do
-not open in versions of Steppe from before this feature.
-
-Arming a channel or turning its monitoring on or off while the song plays
-does not interrupt it: an instrument's notes from the timeline and an
-effect's tail keep sounding, at any playrate. The exception is the first
-change since audio started that sets a playrate other than 1× while the song
-plays: if that same change arms a channel or turns its monitoring on, a note
-the channel holds stops. A plug-in run in a separate process is not heard on
-a monitored channel at all. Notes you hold on the keyboard end when the
-keyboard stops being heard (disarmed or monitoring off) and whenever the
-monitor mode changes, for example from On to Auto.
-
-When monitoring an armed input, the latency comes from the device, input FX,
-and effects on that input's route to the master. Effects on unrelated playback
-tracks do not delay it. If the input feeds both a direct path and a bus with
-latency, the shorter path is delayed so the two stay aligned.
 
 ## Projects
 
@@ -277,69 +214,13 @@ projects (see *Rendering*).
 
 Uninstalling Steppe leaves these folders and your projects in place.
 
-### Project timecode
-
-**Project > Timecode…** sets the project's timecode: its frame rate (23.976,
-24, 25, 29.97 drop-frame, 29.97 non-drop or 30 fps) and its start, the
-timecode at the project's first beat (01:00:00:00 is common for picture
-work). New and older projects use 30 fps from 00:00:00:00. Type the start
-as HH:MM:SS:FF (with `;` before the frames in drop-frame) and press Enter.
-The setting is saved with the project and undoable, and timecode sync and
-LTC output use it.
-
-### Following another machine (sync)
-
-Steppe can follow a master: a drum machine or another DAW sending **MIDI
-clock**, a video deck or DAW sending **MTC**, or a tape machine or video
-system sending **SMPTE LTC** as audio. Right-click the tempo button in the
-transport bar and choose the source; **Sync settings…** in the same menu
-(or Transport > Sync settings…) chooses where it arrives:
-
-- **MIDI clock** and **MTC** arrive on a MIDI input: choose it in **MIDI
-  input**.
-- **LTC** arrives on an audio input: choose the channel in **LTC input**.
-
-When the master plays, Steppe starts at the same place and follows it
-by changing its playrate slightly, with the pitch kept, so it stays with
-the master even if their clocks differ. When the master stops, so does
-Steppe; when it jumps, Steppe jumps too. With MIDI clock, **Follow the
-master's tempo** plays the project at the master's tempo (a 126 bpm master
-plays a 120 bpm project 5% faster); without it, only Start, Stop and Song
-Position are followed. MTC and LTC positions use the project's timecode
-(Project > Timecode…): a master at 01:00:10:00 plays a project that starts
-at 01:00:00:00 from its tenth second. **Offset** moves Steppe later
-(positive) or earlier against the master, and **When the signal stops**
-either stops at once or keeps playing for a few frames, for signals with
-gaps.
-
-The tempo button then reads **EXT** and the tempo heard: green when locked
-to the master, orange while it is catching up, red when nothing arrives.
-The project's own playrate is not changed, and renders are unaffected.
-You can record while following: takes are placed where the master was.
-While following, Steppe processes the whole project live, as when
-monitoring an input, so very heavy projects may need a larger buffer.
-When it follows the master's speed (MTC, LTC, or MIDI clock with Follow
-the master's tempo), audio items play through the time stretcher, which
-sounds very close to, but is not exactly, normal playback.
-
-**LTC output** (off until you turn it on) sends the transport's timecode as
-LTC on an output channel you choose (it replaces anything a master sends to
-that channel), so a tape machine, a camera or another DAW can follow
-Steppe. The timecode is the position of the audio leaving with it, so
-plug-in latency does not put it early. If the chosen channel is not on the
-current device, LTC goes to the device's last output instead, and the
-dialog says so; your choice is kept for when the device has it. It is
-silent while the transport is stopped.
-
-Real devices' timing has not been measured on every system yet.
-
 ## Tracks and items
 
 ### Colours and names
 
 Every new channel and buss gets a colour: the one the fewest of your tracks
-use, starting with red. The colour marks the track's left edge, its mixer
-strip and every item on the track, so you can find a part in the arrangement
+use, starting with red. The colour marks the track's left edge, the top of
+its mixer strip and every item on the track, so you can find a part in the arrangement
 by its colour. To change it, right-click the track in the track list or the
 mixer and choose **Color…**, then one of eight colours or **None**. A track
 without a colour has blue items. Projects made before colours were given
@@ -351,6 +232,42 @@ name. Where an item fades in or out, the faded part is shaded and the fade's
 curve is drawn over it. A selected item is brighter and has an outline in the
 accent colour.
 
+### A track's buttons
+
+A track has the same buttons in the same order in the track list and on its
+mixer strip, each a small rounded box. The ring arms the track for
+recording; armed, its box is red. The speaker sets input monitoring: a faint
+outline when off, solid when on, green when automatic (you hear the input
+while the track is armed). **M** mutes it and **S** solos it. **Ø** inverts
+polarity and **mono** sums left and right. A button that is on is filled
+with its colour; one that is off is an outline.
+
+In the track list the first four are at the right of the track's name, at
+any row height. Under them is a line with **Ø**, **mono**, the fader and
+the pan, and then a line with the input, **fx**, **+**, **env** and **out**.
+A new project's rows are just tall enough for all three lines; drag a row's
+bottom edge to make it taller, or lower, which hides the lines from the
+bottom up.
+On a mixer strip, from the top: the name, **fx** and **+** over the
+plug-ins, the sends, the input and **out**, **Ø** and **mono**, the pan,
+then arm, monitor, **M** and **S** directly above the fader.
+
+A buss has no arm, monitor or input, and their places stay empty. A buss is
+marked by a small sign of lines joining before its name, and a master by the
+same sign ending at a bar; a channel has no mark.
+
+### Levels in the mixer
+
+Each mixer strip has a meter beside its fader. The numbers along the meter
+are decibels: **0** is full scale, and 12, 24, 36 and 48 are that
+far under it. Each number has a line that runs across the meter's two bars,
+so you read a level where a bar crosses a line. A bar is green low down
+and turns yellow, then orange as the level rises, and red from just under
+0 dB up. The number under the fader is the fader's own setting. The number under
+the meter is the highest peak the track has reached since you last cleared
+it; it turns red when the peak went over 0 dB, as the light at the top of
+the meter does. Click that number or the meter to clear both.
+
 ### The side panel
 
 A panel at the right of the window holds the **Inspector**, the **Browser**
@@ -361,7 +278,8 @@ and the **History**. It stays closed until you ask for it:
   kind, or how many of each. Press **I** again to close the panel.
   With one item selected it also shows the item's settings, and you can
   change them there: its **Name**, where it **starts** (bar.beat, for
-  example `3.2`), its **length** in beats, whether it **follows** the beats
+  example `3.2`, or `3.2.5` for half a beat after it), its **length** in
+  beats, whether it **follows** the beats
   or the clock when the tempo changes, its **gain**, its **fades** in
   seconds, and **Mute**, **Loop** and **Lock**. Type a value and press
   Enter, or click elsewhere; Escape leaves it as it was. Each change is one
@@ -383,6 +301,8 @@ and the **History**. It stays closed until you ask for it:
   your plug-ins, with the stock ones and your favourites first. Type to
   search by name, maker or kind ("reverb"). Select one or more tracks, then
   press Enter, double-click a plug-in or click **Add** to put it on them.
+  **Add** lights up once a plug-in is chosen: click one, use the arrow
+  keys, or search (the first one found is chosen).
   The Browser stays open, so you can add another. You can also drag a
   plug-in from the list onto a track, in the arrangement or on its mixer
   strip; the track it will land on is outlined. **Favourite** keeps a
@@ -406,120 +326,223 @@ left edge to make it wider or narrower. Steppe remembers per project whether
 the panel was open, which tab it showed, how wide it was and which kind the
 Browser showed.
 
-## Rendering
+## Editing items
 
-**File > Render…** opens the render dialog; **File > Mix** renders the mix
-straight away with the project's render settings; its progress and the file it
-wrote show in the status bar.
+An item is a piece of audio or MIDI on a track. Every edit here is one step
+of undo: while you drag you see a ghost of the result, and the project
+changes when you let go. Where this section says Ctrl, use Cmd on macOS.
 
-### One set of settings per project
+### Selecting
 
-Each project keeps one set of render settings. They are saved in the project,
-belong to its branch and can be undone like any other edit. The dialog opens on
-them and writes them back only when you press **Render** or **Add to queue** and
-something changed; that change is one step in the history, *Render settings*.
-Closing the dialog without rendering keeps the project as it was. File > Mix and
-agents' renders use the same settings, so what you set up in the dialog is what
-they render.
+Click an item to select it. Shift-click adds an item to the selection and
+Ctrl-click adds or removes one. A drag from empty space, or a drag with the
+right button from anywhere, draws a selection rectangle: it takes the items
+and the automation points inside it, on any track, and with Shift or Ctrl
+held it adds them to what is selected. `Ctrl+A` selects every item.
 
-What a project leaves unset comes from **your default**: **Save as default**
-stores the dialog's settings for every project, and values that come from it
-are drawn in the quieter ink. **Presets** are named settings of your own, plus
-read-only factory presets: WAV 24-bit, a streaming master (−14 LUFS, −1 dBTP),
-a CD master (16-bit 44.1 kHz with noise-shaped dither, −1 dBTP), a podcast MP3
-(−16 LUFS), stems for mixing (24-bit, mono tracks as mono) and a game loop
-(Ogg Vorbis, seamless). Choosing a preset loads it into the dialog; Render
-writes it to the project. Presets and your default are kept in the data folder
-(`render-presets`, see *Where Steppe keeps its files*).
+### Moving, copying and trimming
 
-### Sources and ranges
+- **Move:** drag an item by its middle, in time or onto another track.
+  Ctrl-drag leaves the item where it is and drags a copy.
+- **Trim:** drag an item's left or right end. Every selected item is trimmed
+  by the same amount.
+- **Fade:** drag one of the item's top corners inwards. Ctrl-click a fade to
+  step through its shapes.
+- **Slip:** Alt-drag an item to move its audio under it while the item stays
+  where it is.
+- **Stretch:** Alt-drag an audio item's right end, and the audio plays
+  faster or slower to fit the new length.
 
-- **Master mix** renders the main master. With more than one master, a list
-  under it chooses which masters to render, each to its own file named after
-  the master (`-{track}` is added to the file name unless it already has
-  `{track}`). **Stems** renders each checked top-level
-  track to its own file, isolated (no master processing) or through the
-  master, after the fader, before it or before the effects; *Skip silent
-  stems* leaves out tracks that stay below −90 dBFS. **Regions** renders each
-  region, with *Handles* adding seconds before and after it.
-- **Version** renders the current mix, another branch's head or an earlier
-  version from the history, for this render only. Every result names the
-  branch and version it came from, and its menu offers *Branch from this
-  version* to start a branch at that mix.
-- **Range**: the entire project (to the last item's end), the time
-  selection (the range drawn on the ruler, also the loop, whether or not
-  looping is on), or a custom start and end in beats. A **tail** renders seconds past the end for
-  reverb and delays; *Cut silence at the end* trims what is left quiet.
+Drags land on the grid, which follows the zoom: as fine as a sixteenth of a
+beat when you are zoomed far in, as coarse as 32 beats when zoomed far out.
+Hold Shift to place something off the grid.
 
-### Files and formats
+The pointer shows what a drag would do. Over an item's left or right end,
+or its top corners where the fades are, it becomes a pair of sideways
+arrows: drag there to trim the item or draw a fade. Over the middle it
+stays an arrow: drag to move the item. The same sideways arrows show at
+the ends of the loop range in the ruler and of a note in the piano roll,
+and up-and-down arrows at a track row's lower edge and at the top edge of
+the mixer and the MIDI editor, which set their height.
 
-All renders go to **one folder for every project**, shown in the dialog with
-**Choose folder…** and **Open**. The **file name** is a pattern: **Tokens…**
-inserts `{project}`, `{version}`, `{branch}`, `{track}`, `{region}`,
-`{date:YYYY-MM-DD}` and the others, and a `/` makes subfolders, so
-`{project}/{project}-v{version}` keeps each project's renders in a folder of
-its own. **If the file exists** chooses Overwrite, Add a number (`-2`, `-3`…),
-Skip, or Ask, which lists the existing files before rendering.
+To drag something further than the window shows, hold it at the edge of
+the arrangement: the view scrolls that way, faster the further out you
+hold it, and stops when you bring the pointer back in. This works for
+items, their ends and fades, automation points, a selection rectangle,
+and the loop range, markers and regions in the ruler. An item being moved
+also scrolls the tracks up and down. The piano roll does the same for notes:
+hold a note or a selection rectangle at an edge and the roll scrolls in
+time, or up and down the keys.
 
-Each render can write up to four files of the same audio (**+ Output**): WAV
-(16 or 24-bit, or 32-bit float), AIFF, FLAC, MP3 (constant or variable bit
-rate, with a gapless header) or Ogg Vorbis, each with its own bit depth,
-dither (TPDF or noise-shaped) and sample rate. Later outputs whose extension
-repeats get a suffix (`mix.16.wav`) unless you give one.
+### Splitting, copying and deleting
 
-### Loudness and delivery checks
+| Key | What it does to the selected items |
+| --- | --- |
+| `S` | Splits them at the cursor (the playhead) |
+| `Delete` or `Alt+C` | Deletes them |
+| `Ctrl+C`, `Ctrl+X` | Copies or cuts them |
+| `Ctrl+V` | Pastes at the cursor |
+| `Ctrl+D` | Duplicates each one after itself |
 
-**Loudness** normalizes to an integrated (LUFS-I), short-term or momentary
-loudness, a sample or true peak, or RMS, with targets for the usual platforms
-(−14 LUFS for Spotify and YouTube, −16 for Apple Music and podcasts, −23 for
-EBU R128, −24 for ATSC A/85). *Only turn down* never raises the level; for
-stems, *Same gain for every stem* applies the master mix's gain to all of
-them, so they still add up to the mix. **Limit true peak** works with or
-without normalizing. When a target or a ceiling is set, every file is measured
-as written (MP3 and Vorbis decoded first) and the results show a pass or a
-FAIL with the measured value; *Write a loudness report* puts a text report
-beside each file.
+A right-click on an item opens its menu, with the same actions (**Paste**
+there pastes where you clicked) and with **Consolidate items**, **Heal
+splits**, which joins the pieces of a split audio item again, **Split item
+at prior zero crossing**, **Mix to new track** and **Edit MIDI**. The
+**Item** menu in the menu bar has the rest: exporting an item to a file, its
+timebase, warping and its takes.
 
-**Processing** trims silence at the start or end, and *Seamless loop* folds
-the tail back into the start so a game loop repeats without a gap.
-**Metadata** writes title, artist, album, track, date, genre, ISRC, comment
-and a cover image from the project folder where the format holds them (the
-dialog says where it cannot), BWF timecode and loudness in WAV files, and the
-project's markers and regions as WAV cue points or AIFF markers.
+### Takes
 
-**After render**, *Add to project* puts the files on new tracks, and *Open
-folder when done* (a preference) shows them in the file manager. **Add to
-queue** pins a render to the project as it is now; **Queue** runs them all.
+An item that holds several takes shows their number on its name bar; click
+the number to hear the next take. **Item > Show all takes** lays the takes
+out as lanes inside the item: click a lane to hear that take, or drag across
+part of a lane to use that take for that stretch only. Ctrl-drag from below
+the name bar pulls a take out into an item of its own.
 
-## Automation
+### Changing what the mouse does
 
-A track's **env** button lists its volume, pan and mute envelopes, then the
-same three for each of its sends ("Send → Reverb · Volume"). A send's lanes
-appear under the track it leaves, after the track's own. Record a send's
-moves as you would the fader's: set the lane's mode to touch, latch or write
-and move the send's level or pan in the routing matrix while playing.
+**Edit > Mouse modifiers…** lists these gestures (dragging an item, dragging
+its end, clicking it, pressing a fade, dragging in empty space, the wheel)
+and lets you choose what each does with Shift, Ctrl and Alt held.
 
-While you write a level or pan (a track's or send's level or pan, or a VCA's
-level), you hear the control as you move it rather than the envelope's older
-points. In latch and write mode it keeps the last value until you stop or
-pause, which is also what the envelope stores. In touch mode the envelope
-takes over again half a second after your last move; holding the control
-still for longer than that hands back to the old automation. Mute and
-plug-in parameters play from their envelopes while you write them.
+## The MIDI editor
 
-Undo, redo or switching branches while playing starts a fresh automation
-pass at the current position. Earlier moves no longer override the envelope
-or extend their last value to where you stop.
+Double-click a MIDI item to open it in the MIDI editor, a panel along the
+bottom of the window (`Ctrl+E` opens the selected item; `Alt+E` shows or
+hides the panel). To start a new part, double-click empty space on a
+channel: that makes an empty MIDI item a bar long and opens it. Drag the
+panel's top edge to set its height; a double-click there puts it back.
 
-To edit an automation item's points, its amplitude magnitude must be greater than
-0.000000001. If it is zero or too small to invert, the app asks you to restore
-the amplitude first; the source curve is preserved.
+The panel's main part is the **piano roll**: time runs left to right, the
+keys are at the left, and each note is a bar drawn in its item's colour,
+fuller the higher its velocity.
 
-If another edit changes an automation item's amplitude, baseline or geometry
-while you drag its points, header or edge, the drag is cancelled with a message.
-Start the drag again using the updated item.
+### Notes
 
-## Panning
+- **Add:** double-click empty space. The note is as long as the last one you
+  clicked or sized, or one grid step.
+- **Delete:** double-click the note, or select notes and press `Delete`.
+- **Move:** drag a note, in time or to another pitch. Selected notes move
+  together.
+- **Change its length:** drag either end of a note.
+- **Select:** click a note; Shift-click adds or removes one; drag from empty
+  space for a selection rectangle. `Ctrl+A` selects every note and `Escape`
+  none.
+
+| Key | What it does to the selected notes |
+| --- | --- |
+| `Up`, `Down` | Moves them a semitone (with Shift, an octave) |
+| `Left`, `Right` | Moves them a grid step earlier or later |
+| `Q` | Quantizes them to the grid (every note when none is selected) |
+| `Ctrl+C`, `Ctrl+X`, `Ctrl+V` | Copies, cuts, and pastes at the cursor |
+| `Ctrl+D` | Duplicates them |
+
+A right-click opens a menu with Delete, Copy, Cut, Paste (where you clicked)
+and Duplicate.
+
+### The grid
+
+The buttons in the panel's header choose the grid: **1/4**, **1/8**,
+**1/16**, **1/32** and **1/8T** (eighth-note triplets). **Snap** turns
+snapping to it on and off, and **Quantize** does what `Q` does.
+
+### Velocity and controllers
+
+Under the roll, the **Vel** lane has a stem for each note: drag near a
+note's start to set its velocity, and the other selected notes change by
+the same amount. Below it is a controller lane. Drag in it to draw values,
+one for each grid step; drag with the right button, or with Alt, to erase.
+The **CC** button in the header steps the lane through mod wheel, volume,
+pan, expression and sustain.
+
+### Moving around
+
+The wheel zooms in time around the pointer. With Shift it scrolls in time,
+with Ctrl it scrolls up and down the keys, and with Alt it makes the keys
+and rows taller or lower. **Edit > Mouse modifiers…** can change these.
+
+### Notation and the event list
+
+**Notation** in the header shows the item as text beside the roll, in the
+notation Steppe's agents write. The two are one thing: edit a note in the
+roll and the text changes; type in the text and, after a short pause, the
+roll follows. A mistake in the text is reported under it, with its place,
+and changes nothing until it is put right. If the item's MIDI was changed
+somewhere else while you typed, the panel says so and `Ctrl+Enter` applies
+your text over that change.
+
+**List** swaps the roll for a list of the item's events, notes and
+controller values alike. Double-click a row to edit it; `Delete` removes the
+selected rows.
+
+## Plugins
+
+Steppe hosts CLAP and VST3 plugins. It looks for them in this order:
+
+1. its own stock plugins, installed privately with the app (in a build tree,
+   `build/<preset>/plugins/clap`);
+2. `CLAP_PATH`, then the standard CLAP folders: user before system on Linux
+   (`~/.clap`, `/usr/lib/clap`, `/usr/local/lib/clap`) and macOS
+   (`~/Library/Audio/Plug-Ins/CLAP`, `/Library/Audio/Plug-Ins/CLAP`);
+   system before user on Windows (`%COMMONPROGRAMFILES%\CLAP`,
+   `%LOCALAPPDATA%\Programs\Common\CLAP`);
+3. `VST3_PATH`, then the standard VST3 folders in the same platform order.
+
+The first copy of a plugin id wins. An older copy of a stock plugin installed
+for other hosts is listed as shadowed and never loaded. `--plugin-path P`
+(repeatable) replaces the whole list.
+
+To add an effect or instrument, use the **+** beside **fx** on a track or
+mixer strip, or double-click the empty part of a mixer strip's plug-in
+list. The
+**fx** button opens the
+track's FX chain, including when it is empty. In the mixer, right-click a
+plugin to rename, duplicate or delete it; a duplicate keeps the plugin's
+current settings and goes right after it. Alt-click (Option-click on macOS)
+also deletes a plugin. A bypassed plugin's name is dimmed and struck through
+on its strip; one taken offline is dimmed inside a dashed outline.
+The chain window's **<** and **>** at the top left step to the previous or
+next track, bus or master in mixer order, and clicking its title lists them
+all to pick from.
+In the chain window, Ctrl-click (Cmd-click on macOS) toggles a row in the
+selection, including the active row. Effects moved to another track leave
+that window’s selection.
+
+Each row in the chain window says where its plugin runs: in-process (inside
+Steppe), shared bridge (in a helper process shared with other plugins) or
+isolated (in a process of its own). A plugin that crashes in a bridge
+process goes silent and can be restarted, and Steppe keeps playing; one
+that crashes in-process takes Steppe down with it. If a bridged plugin
+crashes or stops responding (for a minute) while you export, freeze or
+apply FX, that operation fails and names the plugin rather than leaving it
+silent in the result; try again, or bypass or replace the plugin. **Edit > Preferences… >
+Third-party plug-ins run** sets where plugins you have not set yourself
+run: in the app (the default), in a shared bridge process, or each in its
+own process. Those rows say "(default)". The choice applies as plugins
+load (adding one, opening a project, restarting one); Steppe's own plugins
+always run in the app.
+
+On Linux, while a plugin in a bridge process plays live, for example on a
+monitored track, Steppe keeps the CPUs out of deep idle, as **Edit > Preferences… > Advanced > Keep CPUs out of deep idle** does whenever
+the engine runs. A bridged plugin waits for its bridge to wake, and a CPU in
+deep idle wakes late. This is a request Steppe's process holds, not a system
+setting: it ends when no bridged plugin plays live, when the engine stops or
+when Steppe quits, and nothing changes after. While held, the computer may
+use more power and run warmer. Many systems let only administrators make the
+request; the preference's note then says it was refused, audio plays
+without it, and the preference's caution line says how to allow it. With the
+preference on, the request is held whenever the engine runs. macOS and
+Windows have no such per-process request (Windows' power plan is
+system-wide, and Steppe leaves it alone); there Steppe's audio threads and
+its bridges' ask for the system's audio class instead, as they always have.
+
+## Mixing
+
+Beyond the fader and the buttons on every track (see Tracks and items),
+these are the tools for a mix that has grown: where a sound sits between
+the speakers, tracks that move together, and channels frozen to audio.
+
+### Panning
 
 Right-click a channel's or buss's pan, in the track list or the mixer, to
 choose how it pans:
@@ -540,9 +563,9 @@ Right move it.
 
 The same menu sets the **pan law**: how much a centred mono signal is cut.
 **Project** follows the project's law, set in **Project** in the menu bar;
-the others (0, −2.5, −3, −4.5 and −6 dB) give the strip its own. 0 dB, the
+the others (0, −2.5, −3, −4.5 and −6 dB) give the track its own. 0 dB, the
 default, never cuts or boosts, so a centred signal keeps its level through
-any number of busses. A cut law applies at every strip a centred signal
+any number of busses. A cut law applies at every track a centred signal
 passes. **Gain compensation (boost pans)** keeps the centre at 0 dB and
 boosts the sides instead, which can clip a loud recording. A master's pan is
 a plain balance, with no mode or law.
@@ -557,6 +580,65 @@ lane keeps driving the position and has no effect in dual mode.
 The pan group link and selection drags move all pan positions by relative
 offsets, clamped at the ends. Mode and law choices copy to the other members;
 masters are skipped for these extra controls.
+
+### Track groups and VCA faders
+
+Select the tracks, right-click a track header or mixer strip, then choose
+**Groups… → Create group from selected tracks…**. Groups initially link volume, mute and solo. Open a
+group's menu to add/remove selected tracks, change its color or links, or
+suspend it. Volume changes preserve members' dB offsets; pan links preserve
+pan offsets. Hold Alt (Option on macOS) when starting a fader or pan gesture
+to adjust just that member.
+
+Enable **Edit** to select and edit matching items across the member tracks.
+Items must have the same start/end at project sample resolution and the same
+lane. Moves, trims, fades, mute, splits, duplicates and deletes stay together;
+notes and take contents remain independent. A locked matching item refuses
+the whole linked edit.
+
+Choose **Add VCA** in the group menu for a mixer fader that controls the
+members without moving their own faders. Its mute and solo affect the group;
+its **env** button opens normal volume/mute automation lanes. Suspending the
+group stops linked editing while its VCA remains audible. Combined member and
+VCA levels stop at Console 9's native fader top (about +12.0412 dB). Agents can
+inspect requested and applied levels with `track.describe` or `track.list`,
+and nest controls with `vca.members.set`.
+
+### Freezing a channel
+
+Choose **Freeze** from a track header or mixer strip's context menu to record its
+items, take effects and complete insert chain to project media. It records in
+the background; the window shows no progress and cannot stop it, and if it
+fails the channel simply stays unfrozen. When it
+finishes the channel shows a small snowflake, its items are dimmed and marked, and its
+plugins are released. Fader, pan, mute, solo, their automation, sends and parent
+routing remain available. To change the sound inside the recording, choose
+**Unfreeze** from the same menu. Each completed operation is one undo step.
+
+Agents use `track.freeze {"track":"tr_1","job":true}` (following it with
+`job.get`, stopping it with `job.cancel`) and `track.unfreeze {"track":"tr_1"}`. `track.list` reports frozen state and cache
+metadata; `session.describe` marks frozen channels. Work on other tracks can
+continue during a freeze. Completion refuses if the source sound, input files,
+project/branch or latency schedule changed; submit the freeze again.
+
+Disarm the channel and remove external audio, sidechain/key or MIDI inputs first.
+V1 requires unity master playrate without an active rate envelope. Tempo, meter,
+project sample rate and master-rate edits name the frozen tracks that must be
+unfrozen first. Missing plugins or unavailable media must be repaired before
+unfreezing. Infinite or unsettled tails refuse capture; finite reported tails
+and a one-second quiet window are retained, up to ten minutes of tail. A bridge
+that discovers a longer tail after rendering asks for in-process isolation.
+
+Freeze keeps a particular offline performance. A random or transport-sensitive
+plugin may sound different on a fresh pass, seek or loop; internal live DSP
+memory cannot be restored by a saved patch. Keep plugin binaries and plugin-owned sample files stable
+during capture. Audio after an unreported delay longer than the quiet window
+cannot be predicted. Playback at a different device rate resamples the cache.
+
+Frozen files are kept like recorded media, including after unfreeze, because
+undo, branches, autosaves and saved projects can still refer to them. Save and
+Save As carry them with the project. Do not manually edit or remove those files
+while any saved project or history still needs them.
 
 ## Routing
 
@@ -659,8 +741,8 @@ choose **Only the instrument hears MIDI**. Projects saved before this version
 open that way on every channel with two or more plug-ins, so they sound as
 they did; switch it back to hear the new routing.
 
-**View > Routing matrix**, or a strip's **out** button, opens a grid of what
-feeds what: a row per strip (and per output pair of a multi-out instrument),
+**View > Routing matrix**, or a track's **out** button, opens a grid of what
+feeds what: a row per track (and per output pair of a multi-out instrument),
 a column per destination. A square with a dot is a send; a crossed-out square
 is not allowed, and hovering it says why.
 
@@ -671,7 +753,7 @@ empty corner above the row names, or press Ctrl+A, to select every square.
 
 Double-click a square to put a send there. **Add** puts a send on every
 selected square that can have one, and **Remove** (or Delete) removes the
-sends on every selected square. On a strip's parent square these turn the
+sends on every selected square. On a track's parent square these turn the
 parent send on and off.
 
 Every control under the grid acts on all the sends you have selected: the
@@ -685,6 +767,244 @@ A mixer strip lists its sends under its plugins, two at a time; scroll the
 list (or drag its bar) to see more. Clicking a send opens the routing matrix,
 like **out**. Right-click a send and choose **Delete**, or Alt-click
 (Option-click on macOS) it, to remove it.
+
+### Outputs and several masters
+
+Steppe opens every output of the device (up to 64; with JACK, one per
+playback port). The main master plays to outputs 1 and 2. A project can have
+more masters (right-click the mixer's empty space, **Master**), for example
+a headphone mix or a second pair of speakers: each has its own fader, effects
+and outputs. Click a master's **out** button in the mixer to choose where it
+plays: *None*, a stereo pair (1/2, 3/4, …) or a single output in mono. A new
+master plays nowhere until you choose. Masters that share outputs add up, and
+all masters reach the device at the same moment, whatever their effects'
+latency. The metronome plays on outputs 1 and 2. The menu lists the outputs
+only while the audio engine is running.
+
+Agents can print rack notes with `rack.capture {async:true, ...}` and follow
+`job.get`; `job.cancel` leaves the project unchanged. Completion adds one
+undo step. Rack or automation edits and overlapping destination item edits
+need a new capture; destination fader moves and distant item edits are allowed.
+Notes source MIDI and incoming routes are snapshots from launch. The rack window
+captures the same way.
+
+Agents can cable modulation to a plug-in parameter by semantic key or its
+CLAP id (`fx_3.gain` or `fx_3.12`; `effect.12` in a named `rack.patch`).
+Numeric ids use canonical decimal spelling: `12`, not `012`.
+`fx.describe` lists the ids, including third-party plug-ins without semantic
+keys. The target must support modulation. Numeric semantic keys take precedence.
+
+Rack plug-in latency is compensated against the song, including oversampling.
+The rack's longest routed audio or Note Out path sets its clock; shorter
+routes receive padding. Parallel paths summed inside the rack keep their
+relative timing; add a Delay module when the patch needs alignment.
+
+Sends into rack In ports apply the route's level and pan without Console 9
+trim. Existing effect patches fed by those sends play about 2.34 dB louder
+than earlier builds; check their output level when updating.
+
+A rack's Out modules can also send straight to a buss or master, beside the
+channel they feed: in the routing window's Audio mode each Out has a row
+under its channel ("Pad » Out 1", teal), and only buss and master cells take
+a send. A rack send has a level and a mute, nothing else; pan and polarity
+belong in the rack. It joins the buss after the buss's Console 9 decode,
+unencoded, so it does not get a channel's summing character (route the Out
+into a channel and send from there for that). Muting or soloing the rack's
+channel mutes or solos its rack sends too; its fader does not move them. So
+muting the channel to hear the drum rack's reverb alone silences the reverb
+as well: pull the channel's fader down instead. The routing window's status
+line names the channel each Out row follows; moving the rack to another
+channel (or removing its channel, when another channel also hears it) makes
+the sends follow that channel. Removing a rack's only channel removes the
+rack and its sends; for agents, `track.remove` names them in a warning.
+Freezing the channel leaves its rack sends playing live, so the rack still
+uses its CPU, and locks the rack until you unfreeze: you can still move its
+modules, rename them and change the sends, but not its knobs, cables,
+plug-ins or MIDI learn bindings. Agents use
+`route.add {from: {module: "mo_3"}, to: "tr_5"}`.
+
+### Printing a mix onto its master
+
+A master has an arm button in the mixer, like a channel. Arm it and press
+record: Steppe records what the master plays, after its effects, fader and
+pan, as the music goes. The take lands on the master itself, in a lane that
+appears at the top of its tracks (a master armed or holding a take has one;
+the lane goes away when it has neither). Several masters can record at once,
+each its own take. Punch and loop recording work as on a channel.
+
+A master's takes are already mixed, so they play after its effects and fader,
+which do not change them; only the master's own mute silences them with the
+rest. They play beside the live mix, so right after a print you hear the mix
+twice. The **M** in the lane's header is the lane mute: it silences the
+master's takes and nothing else, to compare the print with the live mix or to
+keep it silent. While a master records, its earlier takes are silent in the
+punch range (everywhere when punch is off), so an old print never ends up in
+the new one; outside the punch range they play as usual. Recording while the
+song already plays can let an old print be heard for a fraction of a second
+before it goes quiet; it is never recorded.
+
+Takes on a master are audio items: move, trim, split, fade and copy them as
+on any channel, or drop an audio file onto the lane. A MIDI item cannot go on
+a master. A render of the master includes its takes; stems of channels and
+busses leave them out. Projects that use master takes or an armed master do
+not open in versions of Steppe from before this feature.
+
+Arming a channel or turning its monitoring on or off while the song plays
+does not interrupt it: an instrument's notes from the timeline and an
+effect's tail keep sounding, at any playrate. The exception is the first
+change since audio started that sets a playrate other than 1× while the song
+plays: if that same change arms a channel or turns its monitoring on, a note
+the channel holds stops. A plug-in run in a separate process is not heard on
+a monitored channel at all. Notes you hold on the keyboard end when the
+keyboard stops being heard (disarmed or monitoring off) and whenever the
+monitor mode changes, for example from On to Auto.
+
+When monitoring an armed input, the latency comes from the device, input FX,
+and effects on that input's route to the master. Effects on unrelated playback
+tracks do not delay it. If the input feeds both a direct path and a bus with
+latency, the shorter path is delayed so the two stay aligned.
+
+## Automation
+
+A track's **env** button lists its volume, pan and mute envelopes, then the
+same three for each of its sends ("Send → Reverb · Volume"). A send's lanes
+appear under the track it leaves, after the track's own. Record a send's
+moves as you would the fader's: set the lane's mode to touch, latch or write
+and move the send's level or pan in the routing matrix while playing.
+
+While you write a level or pan (a track's or send's level or pan, or a VCA's
+level), you hear the control as you move it rather than the envelope's older
+points. In latch and write mode it keeps the last value until you stop or
+pause, which is also what the envelope stores. In touch mode the envelope
+takes over again half a second after your last move; holding the control
+still for longer than that hands back to the old automation. Mute and
+plug-in parameters play from their envelopes while you write them.
+
+Undo, redo or switching branches while playing starts a fresh automation
+pass at the current position. Earlier moves no longer override the envelope
+or extend their last value to where you stop.
+
+To edit an automation item's points, its amplitude magnitude must be greater than
+0.000000001. If it is zero or too small to invert, the app asks you to restore
+the amplitude first; the source curve is preserved.
+
+If another edit changes an automation item's amplitude, baseline or geometry
+while you drag its points, header or edge, the drag is cancelled with a message.
+Start the drag again using the updated item.
+
+## Timing audio with hits and stretch markers
+
+Items have two menus. Right-click an item for the everyday edits: cut, copy,
+paste, duplicate, delete, consolidate, heal, split, mix to new track, the MIDI
+editor and rendering through FX. The menu bar's **Item** menu has the rest for
+the selected items: export, what the items follow when the tempo changes, audio
+timing (hits and stretch markers), take FX and envelopes, and the takes.
+
+Right-click selected items and choose **Consolidate items** to combine material
+per track, including MIDI items on several tracks at once.
+Audio and MIDI remain separate. Audio uses active takes and bakes their item
+controls, timing, take FX and envelopes into a new WAV; track processing stays
+live. Gaps stay silent. MIDI items on a track become one MIDI item, with gaps
+left empty and overlapping notes layered; a single MIDI item with several takes
+has its takes layered into one. Progress appears in the status line; all
+results publish together in one undo step.
+Select complete linked/warp bundles on matching lanes and groups. Undo retains
+the original takes; the new media stays available to history and project saves.
+Agents use `item.consolidate {items:[...]}` and follow the returned job with `job.get`.
+
+**Heal splits**, beside Consolidate items, joins compatible audio pieces without
+making a new file. Agents use `item.heal {items:[...]}`.
+Select consecutive unchanged pieces from the same source on each track, including
+any linked/warp peers. Healing keeps all corresponding takes, the outer fades and
+the full source/warp mapping, removing generated internal slice fades. Source
+settings and stored take FX must match; moved pieces, changed fades and nonlinear
+envelope seams that cannot be restored need consolidation instead. Each track
+becomes one item and the operation is one undo step.
+Both menu entries are greyed when the selection cannot use them.
+
+For items with several takes, **Item > Keep only the selected take** deletes
+every take but the one you hear (click a take's lane to choose it) on each
+selected item, in one undo step. **Item > Delete take** removes just the take
+you hear.
+
+Right-click selected items to render them through their FX, audio and MIDI
+alike (MIDI plays through its track's instrument), in one undo step. **Render
+with FX, replacing the audio** puts the result in place of the take you hear;
+**Render with FX as a new take** keeps that take and adds the result beside it.
+**Render with FX, deleting FX** replaces the take as well and then deletes the
+effects the render went through: the take's and those on the items' tracks, so
+they do not process the result again. Other items on those tracks lose the
+track effects too. On the item you right-click, the take under the pointer is
+the one rendered.
+
+Dragging an item's edge trims that edge of every selected item by the same
+amount, on any track and audio or MIDI alike; Alt on the right edge stretches
+the audio items and trims the MIDI ones. Locked items stay as they are.
+
+Right-click an item and choose **Split item at cursor**, or press S, to split
+selected audio and MIDI items at the edit cursor. Items outside the cursor stay
+whole; the menu's pointer position does not set the split point. Undo restores
+the entire selection edit in one step.
+
+**Item > Mix to new track** mixes the selected items into one new audio file,
+as a buss would: each item plays through its track's effects, automation, fader
+and pan, and the result goes onto a new track, created muted so it does not
+double what is already playing. Unmute it (and mute or remove the originals)
+when you want to hear it instead; this saves CPU and joins many files into one.
+Only the selected items are heard, whatever the tracks' mute and solo say;
+sends and the tracks' parent busses are left out. The new file runs from the
+first selected item's start to the last one's end (effect tails beyond that are
+cut) and is always a stereo WAV at the project's rate; the render dialog's
+settings do not apply. Progress shows in the status line, and one undo removes
+the new track. Agents use `item.mix-to-track {items:[...]}` and follow the job.
+
+Select an item and choose **Item > Export…** to save its material to a file of
+your choosing. An audio item gives a WAV of its source audio exactly as recorded
+or imported: no gain, fades, effects or mixer processing, at the source's own
+sample rate and channels (a 16- or 24-bit WAV source stays 16 or 24-bit; others
+become 32-bit float). Only the part the item covers is exported: a trimmed item
+gives its trimmed part, and one piece of a split item gives only that piece. A
+looping item repeats its source as you hear it. Play rate and stretch markers
+choose which stretch of the source is exported but are not applied. A MIDI item
+gives a MIDI file of the notes it plays, starting at zero, with the tempo and time
+signature at the item's start. The entry is greyed for an empty take; the status
+line says where the file went. Agents use `item.export {item, path}`.
+
+**Split item at prior zero crossing** moves the split back to the last point,
+at most 100 ms before the cursor, where the item's audio crosses zero, which
+avoids a click at the cut. If there is none, it splits at the cursor. It does
+nothing to MIDI items. Linked items split together at the same point.
+
+Select audio items and choose **Item > Detect hits** to show candidate
+attacks. Drag a dim hit to create a stretch marker, or drag a solid marker handle
+to change timing while retaining pitch. Hold Shift for a move off the grid. Item
+edges stay pinned when the first marker is added. **Remove warping** returns to the
+take's original scalar rate/pitch and leaves detected hits visible.
+
+To put an anchor at a specific time, set the edit cursor there, select the
+items and choose **Item > Add stretch marker at cursor**. It inserts a marker in each
+selected audio item containing the cursor, without moving its timing. Drag the
+marker to change timing later. Existing markers are not duplicated; MIDI items
+are skipped. The command is one undo step and keeps warp peers together. As with
+other warp edits, it needs nonlooped audio in Signalsmith pitch-preserving mode.
+Agents can use `take.stretch.add {take, item_pos}` with `item_pos` in seconds
+from the item's start; omitting `source_pos` preserves the current timing.
+
+**Quantize audio** moves attacks to the current arrange grid. **Slice at hits**
+splits without moving them and adds short fades. Both detect hits automatically
+when needed; undo the timing edit first, then detection if desired. Agents can
+also quantize slice positions, choose sensitivity/strength/swing, and merge hits
+from several selected items. Several aligned drum-microphone items use one set of
+hit times; warp bundles process their channels together to retain relative phase.
+Select the entire bundle for further timing edits or use `audio.warp.detach` to
+separate it deliberately. Gain, pan and FX remain independently editable.
+
+Use nonlooped audio with pitch preservation and the Signalsmith algorithm. Linked
+items must share start/end positions, rate and pitch. Remove warping before slicing.
+Quantization that would cross hits or land on an item edge refuses with a hint to
+choose a finer grid or lower strength. Slicing can leave faded gaps; it does not
+invent sustained tails. The previous audio continues while “Preparing audio…” is
+shown. Source preparation finishes before the new timing becomes audible.
 
 ## Racks
 
@@ -922,63 +1242,191 @@ actions the dialog offers **Soft takeover** too, as it does for a fader (the
 last touched parameter and send always take over softly). Action bindings
 are your own settings, shared by every project.
 
-## Plugins
+### Hardware MIDI output device status
 
-Steppe hosts CLAP and VST3 plugins. It looks for them in this order:
+`engine.start` opens available MIDI destinations alongside inputs. Inspect
+`engine.inputs.midi_outputs` for names, and `engine.status` for
+`midi_output_warnings`, `midi_out_dropped` and `midi_output_latency` (signed
+frames, audio output latency minus MIDI output latency). A busy device is
+skipped while audio keeps running; close the application using it and restart
+the engine to retry. Device topology changes are advisory and require an
+explicit restart to adopt the new set. `midi.inputs.get`/`midi.outputs.get` show
+per-port settings and warnings. Opening outputs alone sends no music; add
+hardware routes in the routing window.
 
-1. its own stock plugins, installed privately with the app (in a build tree,
-   `build/<preset>/plugins/clap`);
-2. `CLAP_PATH`, then the standard CLAP folders: user before system on Linux
-   (`~/.clap`, `/usr/lib/clap`, `/usr/local/lib/clap`) and macOS
-   (`~/Library/Audio/Plug-Ins/CLAP`, `/Library/Audio/Plug-Ins/CLAP`);
-   system before user on Windows (`%COMMONPROGRAMFILES%\CLAP`,
-   `%LOCALAPPDATA%\Programs\Common\CLAP`);
-3. `VST3_PATH`, then the standard VST3 folders in the same platform order.
+## Sync
 
-The first copy of a plugin id wins. An older copy of a stock plugin installed
-for other hosts is listed as shadowed and never loaded. `--plugin-path P`
-(repeatable) replaces the whole list.
+A project has a timecode of its own, Steppe can follow another machine,
+and it can send MIDI clock and MTC to other devices.
 
-To add an effect or instrument, use the **+** beside **fx** on a track or
-mixer strip. The **fx** button opens the
-track's FX chain, including when it is empty. In the mixer, right-click a
-plugin to rename, duplicate or delete it; a duplicate keeps the plugin's
-current settings and goes right after it. Alt-click (Option-click on macOS)
-also deletes a plugin.
-The chain window's **<** and **>** at the top left step to the previous or
-next track, bus or master in mixer order, and clicking its title lists them
-all to pick from.
-In the chain window, Ctrl-click (Cmd-click on macOS) toggles a row in the
-selection, including the active row. Effects moved to another track leave
-that window’s selection.
+### Project timecode
 
-Each row in the chain window says where its plugin runs: in-process (inside
-Steppe), shared bridge (in a helper process shared with other plugins) or
-isolated (in a process of its own). A plugin that crashes in a bridge
-process goes silent and can be restarted, and Steppe keeps playing; one
-that crashes in-process takes Steppe down with it. If a bridged plugin
-crashes or stops responding (for a minute) while you export, freeze or
-apply FX, that operation fails and names the plugin rather than leaving it
-silent in the result; try again, or bypass or replace the plugin. **Edit > Preferences… >
-Third-party plug-ins run** sets where plugins you have not set yourself
-run: in the app (the default), in a shared bridge process, or each in its
-own process. Those rows say "(default)". The choice applies as plugins
-load (adding one, opening a project, restarting one); Steppe's own plugins
-always run in the app.
+**Project > Timecode…** sets the project's timecode: its frame rate (23.976,
+24, 25, 29.97 drop-frame, 29.97 non-drop or 30 fps) and its start, the
+timecode at the project's first beat (01:00:00:00 is common for picture
+work). New and older projects use 30 fps from 00:00:00:00. Type the start
+as HH:MM:SS:FF (with `;` before the frames in drop-frame) and press Enter.
+The setting is saved with the project and undoable, and timecode sync and
+LTC output use it.
 
-On Linux, while a plugin in a bridge process plays live, for example on a
-monitored track, Steppe keeps the CPUs out of deep idle, as **Edit > Preferences… > Keep CPUs out of deep idle** does whenever
-the engine runs. A bridged plugin waits for its bridge to wake, and a CPU in
-deep idle wakes late. This is a request Steppe's process holds, not a system
-setting: it ends when no bridged plugin plays live, when the engine stops or
-when Steppe quits, and nothing changes after. While held, the computer may
-use more power and run warmer. Many systems let only administrators make the
-request; the preference's note then says it was refused, audio plays
-without it, and the preference's caution line says how to allow it. With the
-preference on, the request is held whenever the engine runs. macOS and
-Windows have no such per-process request (Windows' power plan is
-system-wide, and Steppe leaves it alone); there Steppe's audio threads and
-its bridges' ask for the system's audio class instead, as they always have.
+### Following another machine (sync)
+
+Steppe can follow a master: a drum machine or another DAW sending **MIDI
+clock**, a video deck or DAW sending **MTC**, or a tape machine or video
+system sending **SMPTE LTC** as audio. Right-click the tempo button in the
+transport bar and choose the source; **Sync settings…** in the same menu
+(or Transport > Sync settings…) chooses where it arrives:
+
+- **MIDI clock** and **MTC** arrive on a MIDI input: choose it in **MIDI
+  input**.
+- **LTC** arrives on an audio input: choose the channel in **LTC input**.
+
+When the master plays, Steppe starts at the same place and follows it
+by changing its playrate slightly, with the pitch kept, so it stays with
+the master even if their clocks differ. When the master stops, so does
+Steppe; when it jumps, Steppe jumps too. With MIDI clock, **Follow the
+master's tempo** plays the project at the master's tempo (a 126 bpm master
+plays a 120 bpm project 5% faster); without it, only Start, Stop and Song
+Position are followed. MTC and LTC positions use the project's timecode
+(Project > Timecode…): a master at 01:00:10:00 plays a project that starts
+at 01:00:00:00 from its tenth second. **Offset** moves Steppe later
+(positive) or earlier against the master, and **When the signal stops**
+either stops at once or keeps playing for a few frames, for signals with
+gaps.
+
+The tempo button then reads **EXT** and the tempo heard: green when locked
+to the master, orange while it is catching up, red when nothing arrives.
+The project's own playrate is not changed, and renders are unaffected.
+You can record while following: takes are placed where the master was.
+While following, Steppe processes the whole project live, as when
+monitoring an input, so very heavy projects may need a larger buffer.
+When it follows the master's speed (MTC, LTC, or MIDI clock with Follow
+the master's tempo), audio items play through the time stretcher, which
+sounds very close to, but is not exactly, normal playback.
+
+**LTC output** (off until you turn it on) sends the transport's timecode as
+LTC on an output channel you choose (it replaces anything a master sends to
+that channel), so a tape machine, a camera or another DAW can follow
+Steppe. The timecode is the position of the audio leaving with it, so
+plug-in latency does not put it early. If the chosen channel is not on the
+current device, LTC goes to the device's last output instead, and the
+dialog says so; your choice is kept for when the device has it. It is
+silent while the transport is stopped.
+
+Real devices' timing has not been measured on every system yet.
+
+### MIDI clock and MTC to other devices
+
+A drum machine, sequencer or video system can follow Steppe over a MIDI
+output. In the routing window's **Hardware MIDI** tab, right-click the
+output's column header: **Send clock**, **Send transport**, **Song Position
+Pointer**, **MTC** and **Clock while stopped** (once Send clock is on) turn
+each on or off, beside **Reset notes on stop** and **Timing offset…**. An
+output that is sending clock shows a small clock before its name. An agent
+sets the same with `midi.outputs.set`, one output at a time, for example
+`{"port": "Interface", "clock": true, "transport": true, "spp": true}`:
+`clock` sends MIDI clock while playing, `transport` Start, Continue and
+Stop, `spp` the song position (so a device starts mid-song in the right
+place), `mtc` MIDI time code at the project's timecode, and
+`clock_while_stopped` keeps the clock running at the tempo while stopped.
+`offset_ms` moves that output's MIDI later (or earlier, negative) to suit
+the device, notes and clock alike, and `enabled: false` silences the output.
+An offset earlier than the audio's own latency delays all audio by the
+difference (`lead_ms` shows it), so the clock still lands on time.
+The port is the output's name as `midi.outputs.get` lists it (any letter
+case, as long as only one output matches). Clock and MTC are off until you
+turn them on, and the settings are kept with your preferences, also for a
+device that is not connected now.
+The messages are timed with the audio you hear, so plug-in latency does
+not put them early; nothing is sent during a count-in, and an output on
+the device Steppe follows (Transport sync) does not get its own clock
+back. `midi.outputs.get` and `engine.status` show what each output sends
+and how many messages went out.
+
+## Rendering
+
+**File > Render…** opens the render dialog; **File > Mix** renders the mix
+straight away with the project's render settings; its progress and the file it
+wrote show in the status bar.
+
+### One set of settings per project
+
+Each project keeps one set of render settings. They are saved in the project,
+belong to its branch and can be undone like any other edit. The dialog opens on
+them and writes them back only when you press **Render** or **Add to queue** and
+something changed; that change is one step in the history, *Render settings*.
+Closing the dialog without rendering keeps the project as it was. File > Mix and
+agents' renders use the same settings, so what you set up in the dialog is what
+they render.
+
+What a project leaves unset comes from **your default**: **Save as default**
+stores the dialog's settings for every project, and values that come from it
+are drawn in the quieter ink. **Presets** are named settings of your own, plus
+read-only factory presets: WAV 24-bit, a streaming master (−14 LUFS, −1 dBTP),
+a CD master (16-bit 44.1 kHz with noise-shaped dither, −1 dBTP), a podcast MP3
+(−16 LUFS), stems for mixing (24-bit, mono tracks as mono) and a game loop
+(Ogg Vorbis, seamless). Choosing a preset loads it into the dialog; Render
+writes it to the project. Presets and your default are kept in the data folder
+(`render-presets`, see *Where Steppe keeps its files*).
+
+### Sources and ranges
+
+- **Master mix** renders the main master. With more than one master, a list
+  under it chooses which masters to render, each to its own file named after
+  the master (`-{track}` is added to the file name unless it already has
+  `{track}`). **Stems** renders each checked top-level
+  track to its own file, isolated (no master processing) or through the
+  master, after the fader, before it or before the effects; *Skip silent
+  stems* leaves out tracks that stay below −90 dBFS. **Regions** renders each
+  region, with *Handles* adding seconds before and after it.
+- **Version** renders the current mix, another branch's head or an earlier
+  version from the history, for this render only. Every result names the
+  branch and version it came from, and its menu offers *Branch from this
+  version* to start a branch at that mix.
+- **Range**: the entire project (to the last item's end), the time
+  selection (the range drawn on the ruler, also the loop, whether or not
+  looping is on), or a custom start and end in beats. A **tail** renders seconds past the end for
+  reverb and delays; *Cut silence at the end* trims what is left quiet.
+
+### Files and formats
+
+All renders go to **one folder for every project**, shown in the dialog with
+**Choose folder…** and **Open**. The **file name** is a pattern: **Tokens…**
+inserts `{project}`, `{version}`, `{branch}`, `{track}`, `{region}`,
+`{date:YYYY-MM-DD}` and the others, and a `/` makes subfolders, so
+`{project}/{project}-v{version}` keeps each project's renders in a folder of
+its own. **If the file exists** chooses Overwrite, Add a number (`-2`, `-3`…),
+Skip, or Ask, which lists the existing files before rendering.
+
+Each render can write up to four files of the same audio (**+ Output**): WAV
+(16 or 24-bit, or 32-bit float), AIFF, FLAC, MP3 (constant or variable bit
+rate, with a gapless header) or Ogg Vorbis, each with its own bit depth,
+dither (TPDF or noise-shaped) and sample rate. Later outputs whose extension
+repeats get a suffix (`mix.16.wav`) unless you give one.
+
+### Loudness and delivery checks
+
+**Loudness** normalizes to an integrated (LUFS-I), short-term or momentary
+loudness, a sample or true peak, or RMS, with targets for the usual platforms
+(−14 LUFS for Spotify and YouTube, −16 for Apple Music and podcasts, −23 for
+EBU R128, −24 for ATSC A/85). *Only turn down* never raises the level; for
+stems, *Same gain for every stem* applies the master mix's gain to all of
+them, so they still add up to the mix. **Limit true peak** works with or
+without normalizing. When a target or a ceiling is set, every file is measured
+as written (MP3 and Vorbis decoded first) and the results show a pass or a
+FAIL with the measured value; *Write a loudness report* puts a text report
+beside each file.
+
+**Processing** trims silence at the start or end, and *Seamless loop* folds
+the tail back into the start so a game loop repeats without a gap.
+**Metadata** writes title, artist, album, track, date, genre, ISRC, comment
+and a cover image from the project folder where the format holds them (the
+dialog says where it cannot), BWF timecode and loudness in WAV files, and the
+project's markers and regions as WAV cue points or AIFF markers.
+
+**After render**, *Add to project* puts the files on new tracks, and *Open
+folder when done* (a preference) shows them in the file manager. **Add to
+queue** pins a render to the project as it is now; **Queue** runs them all.
 
 ## Agents (MCP)
 
@@ -1140,219 +1588,6 @@ The tool list is large (over 140 tools). If you run a local model behind a
 harness that sends every tool with each request, give the model a context of
 32k tokens or more. llama.cpp's `llama-server` needs `--jinja` to accept
 tools.
-
-### Track groups and VCA faders
-
-Select the tracks, right-click a track header or mixer strip, then choose
-**Groups… → Create group from selected tracks…**. Groups initially link volume, mute and solo. Open a
-group's menu to add/remove selected tracks, change its color or links, or
-suspend it. Volume changes preserve members' dB offsets; pan links preserve
-pan offsets. Hold Alt (Option on macOS) when starting a fader or pan gesture
-to adjust just that member.
-
-Enable **Edit** to select and edit matching items across the member tracks.
-Items must have the same start/end at project sample resolution and the same
-lane. Moves, trims, fades, mute, splits, duplicates and deletes stay together;
-notes and take contents remain independent. A locked matching item refuses
-the whole linked edit.
-
-Choose **Add VCA** in the group menu for a mixer fader that controls the
-members without moving their own faders. Its mute and solo affect the group;
-its **env** button opens normal volume/mute automation lanes. Suspending the
-group stops linked editing while its VCA remains audible. Combined member and
-VCA levels stop at Console 9's native fader top (about +12.0412 dB). Agents can
-inspect requested and applied levels with `track.describe` or `track.list`,
-and nest controls with `vca.members.set`.
-
-### Freezing a channel
-
-Choose **Freeze** from a track header or mixer strip's context menu to record its
-items, take effects and complete insert chain to project media. It records in
-the background; the window shows no progress and cannot stop it, and if it
-fails the channel simply stays unfrozen. When it
-finishes the channel shows a small snowflake, its items are dimmed and marked, and its
-plugins are released. Fader, pan, mute, solo, their automation, sends and parent
-routing remain available. To change the sound inside the recording, choose
-**Unfreeze** from the same menu. Each completed operation is one undo step.
-
-Agents use `track.freeze {"track":"tr_1","job":true}` (following it with
-`job.get`, stopping it with `job.cancel`) and `track.unfreeze {"track":"tr_1"}`. `track.list` reports frozen state and cache
-metadata; `session.describe` marks frozen channels. Work on other tracks can
-continue during a freeze. Completion refuses if the source sound, input files,
-project/branch or latency schedule changed; submit the freeze again.
-
-Disarm the channel and remove external audio, sidechain/key or MIDI inputs first.
-V1 requires unity master playrate without an active rate envelope. Tempo, meter,
-project sample rate and master-rate edits name the frozen tracks that must be
-unfrozen first. Missing plugins or unavailable media must be repaired before
-unfreezing. Infinite or unsettled tails refuse capture; finite reported tails
-and a one-second quiet window are retained, up to ten minutes of tail. A bridge
-that discovers a longer tail after rendering asks for in-process isolation.
-
-Freeze keeps a particular offline performance. A random or transport-sensitive
-plugin may sound different on a fresh pass, seek or loop; internal live DSP
-memory cannot be restored by a saved patch. Keep plugin binaries and plugin-owned sample files stable
-during capture. Audio after an unreported delay longer than the quiet window
-cannot be predicted. Playback at a different device rate resamples the cache.
-
-Frozen files are kept like recorded media, including after unfreeze, because
-undo, branches, autosaves and saved projects can still refer to them. Save and
-Save As carry them with the project. Do not manually edit or remove those files
-while any saved project or history still needs them.
-
-## Timing audio with hits and stretch markers
-
-Items have two menus. Right-click an item for the everyday edits: cut, copy,
-paste, duplicate, delete, consolidate, heal, split, mix to new track, the MIDI
-editor and rendering through FX. The menu bar's **Item** menu has the rest for
-the selected items: export, what the items follow when the tempo changes, audio
-timing (hits and stretch markers), take FX and envelopes, and the takes.
-
-Right-click selected items and choose **Consolidate items** to combine material
-per track, including MIDI items on several tracks at once.
-Audio and MIDI remain separate. Audio uses active takes and bakes their item
-controls, timing, take FX and envelopes into a new WAV; track processing stays
-live. Gaps stay silent. MIDI items on a track become one MIDI item, with gaps
-left empty and overlapping notes layered; a single MIDI item with several takes
-has its takes layered into one. Progress appears in the status line; all
-results publish together in one undo step.
-Select complete linked/warp bundles on matching lanes and groups. Undo retains
-the original takes; the new media stays available to history and project saves.
-Agents use `item.consolidate {items:[...]}` and follow the returned job with `job.get`.
-
-**Heal splits**, beside Consolidate items, joins compatible audio pieces without
-making a new file. Agents use `item.heal {items:[...]}`.
-Select consecutive unchanged pieces from the same source on each track, including
-any linked/warp peers. Healing keeps all corresponding takes, the outer fades and
-the full source/warp mapping, removing generated internal slice fades. Source
-settings and stored take FX must match; moved pieces, changed fades and nonlinear
-envelope seams that cannot be restored need consolidation instead. Each track
-becomes one item and the operation is one undo step.
-Both menu entries are greyed when the selection cannot use them.
-
-For items with several takes, **Item > Keep only the selected take** deletes
-every take but the one you hear (click a take's lane to choose it) on each
-selected item, in one undo step. **Item > Delete take** removes just the take
-you hear.
-
-Right-click selected items to render them through their FX, audio and MIDI
-alike (MIDI plays through its track's instrument), in one undo step. **Render
-with FX, replacing the audio** puts the result in place of the take you hear;
-**Render with FX as a new take** keeps that take and adds the result beside it.
-**Render with FX, deleting FX** replaces the take as well and then deletes the
-effects the render went through: the take's and those on the items' tracks, so
-they do not process the result again. Other items on those tracks lose the
-track effects too. On the item you right-click, the take under the pointer is
-the one rendered.
-
-Dragging an item's edge trims that edge of every selected item by the same
-amount, on any track and audio or MIDI alike; Alt on the right edge stretches
-the audio items and trims the MIDI ones. Locked items stay as they are.
-
-Right-click an item and choose **Split item at cursor**, or press S, to split
-selected audio and MIDI items at the edit cursor. Items outside the cursor stay
-whole; the menu's pointer position does not set the split point. Undo restores
-the entire selection edit in one step.
-
-**Item > Mix to new track** mixes the selected items into one new audio file,
-as a buss would: each item plays through its track's effects, automation, fader
-and pan, and the result goes onto a new track, created muted so it does not
-double what is already playing. Unmute it (and mute or remove the originals)
-when you want to hear it instead; this saves CPU and joins many files into one.
-Only the selected items are heard, whatever the tracks' mute and solo say;
-sends and the tracks' parent busses are left out. The new file runs from the
-first selected item's start to the last one's end (effect tails beyond that are
-cut) and is always a stereo WAV at the project's rate; the render dialog's
-settings do not apply. Progress shows in the status line, and one undo removes
-the new track. Agents use `item.mix-to-track {items:[...]}` and follow the job.
-
-Select an item and choose **Item > Export…** to save its material to a file of
-your choosing. An audio item gives a WAV of its source audio exactly as recorded
-or imported: no gain, fades, effects or mixer processing, at the source's own
-sample rate and channels (a 16- or 24-bit WAV source stays 16 or 24-bit; others
-become 32-bit float). Only the part the item covers is exported: a trimmed item
-gives its trimmed part, and one piece of a split item gives only that piece. A
-looping item repeats its source as you hear it. Play rate and stretch markers
-choose which stretch of the source is exported but are not applied. A MIDI item
-gives a MIDI file of the notes it plays, starting at zero, with the tempo and time
-signature at the item's start. The entry is greyed for an empty take; the status
-line says where the file went. Agents use `item.export {item, path}`.
-
-**Split item at prior zero crossing** moves the split back to the last point,
-at most 100 ms before the cursor, where the item's audio crosses zero, which
-avoids a click at the cut. If there is none, it splits at the cursor. It does
-nothing to MIDI items. Linked items split together at the same point.
-
-Select audio items and choose **Item > Detect hits** to show candidate
-attacks. Drag a dim hit to create a stretch marker, or drag a solid marker handle
-to change timing while retaining pitch. Hold Shift for a move off the grid. Item
-edges stay pinned when the first marker is added. **Remove warping** returns to the
-take's original scalar rate/pitch and leaves detected hits visible.
-
-To put an anchor at a specific time, set the edit cursor there, select the
-items and choose **Item > Add stretch marker at cursor**. It inserts a marker in each
-selected audio item containing the cursor, without moving its timing. Drag the
-marker to change timing later. Existing markers are not duplicated; MIDI items
-are skipped. The command is one undo step and keeps warp peers together. As with
-other warp edits, it needs nonlooped audio in Signalsmith pitch-preserving mode.
-Agents can use `take.stretch.add {take, item_pos}` with `item_pos` in seconds
-from the item's start; omitting `source_pos` preserves the current timing.
-
-**Quantize audio** moves attacks to the current arrange grid. **Slice at hits**
-splits without moving them and adds short fades. Both detect hits automatically
-when needed; undo the timing edit first, then detection if desired. Agents can
-also quantize slice positions, choose sensitivity/strength/swing, and merge hits
-from several selected items. Several aligned drum-microphone items use one set of
-hit times; warp bundles process their channels together to retain relative phase.
-Select the entire bundle for further timing edits or use `audio.warp.detach` to
-separate it deliberately. Gain, pan and FX remain independently editable.
-
-Use nonlooped audio with pitch preservation and the Signalsmith algorithm. Linked
-items must share start/end positions, rate and pitch. Remove warping before slicing.
-Quantization that would cross hits or land on an item edge refuses with a hint to
-choose a finer grid or lower strength. Slicing can leave faded gaps; it does not
-invent sustained tails. The previous audio continues while “Preparing audio…” is
-shown. Source preparation finishes before the new timing becomes audible.
-
-### Hardware MIDI output device status
-
-`engine.start` opens available MIDI destinations alongside inputs. Inspect
-`engine.inputs.midi_outputs` for names, and `engine.status` for
-`midi_output_warnings`, `midi_out_dropped` and `midi_output_latency` (signed
-frames, audio output latency minus MIDI output latency). A busy device is
-skipped while audio keeps running; close the application using it and restart
-the engine to retry. Device topology changes are advisory and require an
-explicit restart to adopt the new set. `midi.inputs.get`/`midi.outputs.get` show
-per-port settings and warnings. Opening outputs alone sends no music; add
-hardware routes in the routing window.
-
-### MIDI clock and MTC to other devices
-
-A drum machine, sequencer or video system can follow Steppe over a MIDI
-output. In the routing window's **Hardware MIDI** tab, right-click the
-output's column header: **Send clock**, **Send transport**, **Song Position
-Pointer**, **MTC** and **Clock while stopped** (once Send clock is on) turn
-each on or off, beside **Reset notes on stop** and **Timing offset…**. An
-output that is sending clock shows a small clock before its name. An agent
-sets the same with `midi.outputs.set`, one output at a time, for example
-`{"port": "Interface", "clock": true, "transport": true, "spp": true}`:
-`clock` sends MIDI clock while playing, `transport` Start, Continue and
-Stop, `spp` the song position (so a device starts mid-song in the right
-place), `mtc` MIDI time code at the project's timecode, and
-`clock_while_stopped` keeps the clock running at the tempo while stopped.
-`offset_ms` moves that output's MIDI later (or earlier, negative) to suit
-the device, notes and clock alike, and `enabled: false` silences the output.
-An offset earlier than the audio's own latency delays all audio by the
-difference (`lead_ms` shows it), so the clock still lands on time.
-The port is the output's name as `midi.outputs.get` lists it (any letter
-case, as long as only one output matches). Clock and MTC are off until you
-turn them on, and the settings are kept with your preferences, also for a
-device that is not connected now.
-The messages are timed with the audio you hear, so plug-in latency does
-not put them early; nothing is sent during a count-in, and an output on
-the device Steppe follows (Transport sync) does not get its own clock
-back. `midi.outputs.get` and `engine.status` show what each output sends
-and how many messages went out.
 
 ### Agent transport limits
 

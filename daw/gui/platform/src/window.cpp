@@ -88,7 +88,42 @@ Result<std::unique_ptr<Platform>> Platform::start(Driver driver) {
 
 Platform::~Platform() {
     SDL_RemoveEventWatch(&Platform::watch, this);
+    for (SDL_Cursor* cursor : cursors_)
+        if (cursor) SDL_DestroyCursor(cursor);
     SDL_Quit();
+}
+
+void Platform::setCursor(Cursor cursor) const {
+    if (driver_ == Driver::Offscreen || cursor == shown_) return;
+    const auto index = static_cast<std::size_t>(cursor);
+    if (index >= cursors_.size()) return;
+    shown_ = cursor;
+    if (!cursors_[index]) {
+        SDL_SystemCursor shape = SDL_SYSTEM_CURSOR_DEFAULT;
+        switch (cursor) {
+            case Cursor::Arrow:
+                shape = SDL_SYSTEM_CURSOR_DEFAULT;
+                break;
+            case Cursor::Text:
+                shape = SDL_SYSTEM_CURSOR_TEXT;
+                break;
+            case Cursor::ResizeHorizontal:
+                shape = SDL_SYSTEM_CURSOR_EW_RESIZE;
+                break;
+            case Cursor::ResizeVertical:
+                shape = SDL_SYSTEM_CURSOR_NS_RESIZE;
+                break;
+            case Cursor::Move:
+                shape = SDL_SYSTEM_CURSOR_MOVE;
+                break;
+            case Cursor::NotAllowed:
+                shape = SDL_SYSTEM_CURSOR_NOT_ALLOWED;
+                break;
+        }
+        cursors_[index] = SDL_CreateSystemCursor(shape);
+    }
+    // A system without that shape keeps the cursor it has.
+    if (cursors_[index]) SDL_SetCursor(cursors_[index]);
 }
 
 bool Platform::watch(void* platform, SDL_Event* e) {
@@ -268,6 +303,13 @@ float Window::width() const {
     int w = 0, h = 0;
     SDL_GetWindowSize(window_, &w, &h);
     return static_cast<float>(w) / inputScale();
+}
+
+void Window::setCursor(Cursor cursor) {
+    // The pointer is the app's, not the window's: another window may have
+    // changed it since this one last asked, so the platform decides.
+    cursor_ = cursor;
+    if (platform_) platform_->setCursor(cursor);
 }
 
 float Window::height() const {

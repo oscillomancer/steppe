@@ -476,7 +476,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
             "start, with "
             "device, numeric os_error, message and corrective hint. meter_drops: entries a full "
             "ring "
-            "dropped (the renderer's, the audio callback's) — a strip's peak/RMS missed a block, "
+            "dropped (the renderer's, the audio callback's) — a track's peak/RMS missed a block, "
             "never audio. dropped/voice_dropped count lost plug-in output/voice records. "
             "memory_lock reports requested/active and an optional OS error with errno and a "
             "corrective hint, including while stopped. Bridges are excluded. cpu_idle_latency "

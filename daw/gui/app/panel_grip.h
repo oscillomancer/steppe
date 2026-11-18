@@ -31,6 +31,7 @@ class PanelGrip : public ui::Node {
             c.fillRect({bounds().x + bounds().w / 2 - 16, bounds().y + 1, 32, 2}, t.color("focus"));
     }
     void onHover(bool) override { invalidate(); }
+    ui::Cursor cursorAt(ui::Point) const override { return ui::Cursor::ResizeVertical; }
     bool onPointer(const ui::PointerEvent& e) override {
         if (e.type == ui::PointerEvent::Type::Down && e.button == 1) {
             if (e.clicks >= 2) {

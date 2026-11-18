@@ -3197,6 +3197,52 @@ TEST_CASE("every character in the GUI's strings is in the UI font") {
     CHECK(missing.empty());
 }
 
+// The user's word is "track"; channel, buss and master are its types. "Strip"
+// is the mixer's picture of a track in the code and the spec, and is not said
+// in the UI: no string with a space in it (a label, a message, a tooltip:
+// ids have none) holds the word.
+TEST_CASE("the GUI's strings say track, never strip") {
+    const std::filesystem::path gui =
+        std::filesystem::path(SUPPLE_GUI_GOLDEN_DIR).parent_path().parent_path();
+    std::size_t scanned = 0;
+    std::vector<std::string> found;
+    auto word = [](std::string text, const std::string& w) {
+        for (char& ch : text) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        auto letter = [&](std::size_t i) {
+            return i < text.size() && std::isalpha(static_cast<unsigned char>(text[i]));
+        };
+        for (std::size_t at = text.find(w); at != std::string::npos; at = text.find(w, at + 1)) {
+            std::size_t end = at + w.size();
+            if (end < text.size() && text[end] == 's') ++end;  // the plural
+            if ((at == 0 || !letter(at - 1)) && !letter(end)) return true;
+        }
+        return false;
+    };
+    for (const auto& e : std::filesystem::recursive_directory_iterator(gui)) {
+        const auto ext = e.path().extension();
+        if (!e.is_regular_file() || (ext != ".cpp" && ext != ".h")) continue;
+        if (e.path().generic_string().find("/tests/") != std::string::npos) continue;
+        std::ifstream in(e.path());
+        std::string line;
+        for (int n = 1; std::getline(in, line); ++n) {
+            line = line.substr(0, line.find("//"));  // comments are not shown
+            for (std::size_t q = line.find('"'); q != std::string::npos;) {
+                std::size_t end = q + 1;
+                while (end < line.size() && line[end] != '"') end += line[end] == '\\' ? 2 : 1;
+                if (end >= line.size()) break;
+                const std::string text = line.substr(q + 1, end - q - 1);
+                ++scanned;
+                if (text.find(' ') != std::string::npos && word(text, "strip"))
+                    found.push_back(e.path().filename().string() + ":" + std::to_string(n) + ": " +
+                                    text);
+                q = line.find('"', end + 1);
+            }
+        }
+    }
+    CHECK(scanned > 1000);
+    for (const std::string& f : found) FAIL_CHECK(f);
+}
+
 TEST_CASE("input menu: No input clears channels in a mixed strip selection") {
     App a;
     if (!a.ok) return;
@@ -3618,6 +3664,60 @@ TEST_CASE("file actions: Save before Open autosave works after a first save") {
     CHECK(a.app->head().project->name == "Autosaved");
     CHECK(a.root->find("file.recovered"));
     CHECK(model::parseProjectFile(*readTextFile(file))->store.head()->project->name == "Current");
+}
+
+TEST_CASE("an empty project takes a dropped file and has + track; both track counts agree") {
+    App a(1200, 800);
+    REQUIRE(a.ok);
+    peaks::PeakService peaks(a.dir / "cache", [](std::function<void()> f) { f(); });
+    gui::MeterFeed meters;
+    gui::Shell shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters);
+    struct Detach {
+        ui::Root& root;
+        ~Detach() { root.setContent(std::make_unique<ui::Node>("detached")); }
+    } detach{*a.root};
+    a.root->setContent(shell.build(*a.root, *a.actions));
+    shell.sync();
+    a.root->frame(false);
+    views::Lanes& lanes = shell.arrange()->lanes();
+    // The lanes of an empty project are bare (no text), and both ways to
+    // begin work: a file dropped on them has somewhere to land, and the
+    // track panel has its "+ track" button (the toolbar's buttons can be
+    // taken out; this one cannot).
+    const ui::Rect area = lanes.bounds();
+    CHECK(shell.fileTargetAt({area.x + area.w / 2, area.y + area.h / 2}));
+    bool named = false;
+    std::function<void(ui::Node&)> walk = [&](ui::Node& node) {
+        if (node.valueText() == "+ track") named = true;
+        for (auto& child : node.children()) walk(*child);
+    };
+    walk(*a.root->content());
+    CHECK(named);
+    a.snapshot("empty-project.png");
+    auto r = a.dispatcher->execute({"track.add",
+                                    json::parse(R"({"name":"Bass"})").value(),
+                                    {cmd::Origin::Type::Test, "t", {}}});
+    REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+    shell.sync();
+    a.root->frame(false);
+    // The track list's heading and the status line say the same number:
+    // channels and busses, not the master, and not an automation lane.
+    auto exec = [&](const char* command, const char* args) {
+        auto done = a.dispatcher->execute(
+            {command, json::parse(args).value(), {cmd::Origin::Type::Test, "t", {}}});
+        REQUIRE_MESSAGE(done, (done ? "" : done.error().toString()));
+    };
+    exec("track.add", R"({"name":"Keys"})");
+    exec("track.add", R"({"type":"buss","name":"Band"})");
+    exec("track.add", R"({"type":"master","name":"Cue"})");
+    exec("env.add", R"({"track":"tr_1","param":"volume","points":[{"bar":1,"value":0}]})");
+    shell.sync();
+    a.root->frame(false);
+    CHECK(views::countTracks(a.app->head()) == 3);
+    CHECK(a.app->head().tracks.size() == 5);               // with the two masters
+    CHECK(shell.arrange()->trackLayout().rowCount() > 3);  // the lane is a row
+    CHECK(a.root->find("tcp-header")->valueText() == "Tracks  3");
+    CHECK(a.root->find("status")->valueText().rfind("3 tracks  ", 0) == 0);
 }
 
 TEST_CASE("a plugin dragged from the browser lands on the track row or strip under the pointer") {

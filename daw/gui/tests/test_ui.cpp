@@ -729,6 +729,72 @@ TEST_CASE("text area replacement preserves the UTF-8 caret column") {
     CHECK(area.caretLineColumn() == std::pair{1, 3});  // same code-point column
 }
 
+TEST_CASE("the pointer's shape is the cursor of the node under it, its parents or a drag") {
+    if (!fixture().ok) return;
+    Root root(*fixture().window, fixture().fonts, Theme::dark());
+    // A node whose right 10 units resize it, and which holds a drag.
+    struct Edge : Node {
+        using Node::Node;
+        bool dragging = false;
+        Cursor cursorAt(Point p) const override {
+            return dragging || p.x >= bounds().right() - 10 ? Cursor::ResizeHorizontal
+                                                            : Cursor::Arrow;
+        }
+        bool onPointer(const PointerEvent& e) override {
+            if (e.type == PointerEvent::Type::Down) dragging = p(e) >= bounds().right() - 10;
+            if (e.type == PointerEvent::Type::Up) dragging = false;
+            return true;
+        }
+        static float p(const PointerEvent& e) { return e.pos.x; }
+    };
+    auto content = std::make_unique<Node>("root");
+    content->layout.dir = Layout::Dir::Row;
+    content->layout.padding = Insets::all(8);
+    content->layout.gap = 8;
+    auto& edge = content->emplace<Edge>("edge");
+    edge.interactive = true;
+    edge.layout.dir = Layout::Dir::Column;
+    edge.layout.width = SizeRule::fixed(100);
+    auto& inner = edge.emplace<Box>("inner");  // a child with nothing to say
+    inner.interactive = true;
+    auto& field = content->emplace<TextField>("field", "text");
+    field.layout.width = SizeRule::fixed(100);
+    auto& plain = content->emplace<Box>("plain");
+    plain.interactive = true;
+    plain.layout.width = SizeRule::fixed(100);
+    root.setContent(std::move(content));
+    root.frame(false);
+    auto move = [&](Point at) { root.pointer({PointerEvent::Type::Move, at}); };
+    auto mid = [](const Node& n) {
+        return Point{n.bounds().x + n.bounds().w / 2, n.bounds().y + n.bounds().h / 2};
+    };
+    CHECK(root.cursor() == Cursor::Arrow);
+    move(mid(plain));
+    CHECK(root.cursor() == Cursor::Arrow);
+    move(mid(field));
+    CHECK(root.cursor() == Cursor::Text);
+    CHECK(fixture().window->cursor() == Cursor::Text);  // shown on the window
+    // The child covers its parent and says nothing: the parent's edge shows.
+    const Rect e = edge.bounds();
+    REQUIRE(root.hovered() != &edge);
+    move({e.x + 20, e.y + 10});
+    CHECK(root.hovered() == &inner);
+    CHECK(root.cursor() == Cursor::Arrow);
+    move({e.right() - 3, e.y + 10});
+    CHECK(root.cursor() == Cursor::ResizeHorizontal);
+    // A drag keeps its holder's cursor wherever the pointer goes, and the
+    // release gives the node under the pointer its say again.
+    root.pointer({PointerEvent::Type::Down, {e.right() - 3, e.y + 10}, 1});
+    move(mid(field));
+    CHECK(root.cursor() == Cursor::ResizeHorizontal);
+    root.pointer({PointerEvent::Type::Up, mid(field), 1});
+    CHECK(root.cursor() == Cursor::Text);
+    // A disabled node has no cursor of its own.
+    field.enabled = false;
+    move({mid(field).x + 1, mid(field).y});
+    CHECK(root.cursor() == Cursor::Arrow);
+}
+
 TEST_CASE("mixer controls: fader taper and gestures, pan, meter hold and clip, toggle") {
     // The taper round-trips over its range; -inf at the bottom.
     for (double db = -60; db <= 12; db += 0.5)
@@ -787,9 +853,62 @@ TEST_CASE("mixer controls: fader taper and gestures, pan, meter hold and clip, t
     meter.push(peak, rms);
     CHECK(meter.clipped());
     CHECK(meter.shownPeakDb(1) == doctest::Approx(20 * std::log10(0.5)).epsilon(0.01));
+    // Its highest peak stays until a click or a reset, and is told in tenths.
+    int told = 0;
+    meter.onPeak = [&] { ++told; };
+    CHECK(meter.maxPeakDb() == doctest::Approx(20 * std::log10(1.2)).epsilon(0.01));
+    const float lower[2] = {0.25f, 0.25f};
+    meter.push(lower, rms);
+    CHECK(meter.maxPeakDb() == doctest::Approx(20 * std::log10(1.2)).epsilon(0.01));
+    CHECK(told == 0);
+    const float barely[2] = {1.2001f, 0.5f}, higher[2] = {1.5f, 0.5f};
+    meter.push(barely, rms);
+    CHECK(told == 0);  // under a tenth of a dB: nothing new to show
+    meter.push(higher, rms);
+    CHECK(told == 1);
+    CHECK(Meter::position(-60) == doctest::Approx(0));
+    CHECK(Meter::position(6) == doctest::Approx(1));
+    CHECK(Meter::position(0) > Meter::position(-6));
+    // A bar's colour belongs to the level: green low down, then yellow,
+    // orange and, from just under 0 dB up, red; blended between them.
+    {
+        const Theme theme = Theme::dark();
+        auto same = [](Color one, Color other) {
+            return std::abs(one.r - other.r) + std::abs(one.g - other.g) +
+                       std::abs(one.b - other.b) <
+                   0.01f;
+        };
+        const Color green = theme.color("meter"), yellow = theme.color("meter-hot"),
+                    red = theme.color("clip");
+        CHECK(same(Meter::colorAt(theme, -60), green));
+        CHECK(same(Meter::colorAt(theme, -18), green));
+        CHECK(same(Meter::colorAt(theme, -9), yellow));
+        CHECK(same(Meter::colorAt(theme, -1), red));
+        CHECK(same(Meter::colorAt(theme, 0), red));
+        CHECK(same(Meter::colorAt(theme, 6), red));
+        // Orange sits between yellow and red, and the steps between are blends.
+        const Color orange = Meter::colorAt(theme, -4);
+        CHECK(orange.g < yellow.g);
+        CHECK(orange.g > red.g);
+        const Color between = Meter::colorAt(theme, -13.5f);
+        CHECK(between.r > green.r);
+        CHECK(between.r < yellow.r);
+        // It never goes back towards green on the way up.
+        float last = Meter::colorAt(theme, -60).g;
+        for (float db = -60; db <= 6; db += 0.5f) {
+            const float g = Meter::colorAt(theme, db).g;
+            CHECK(g <= last + 1e-4f);
+            last = g;
+        }
+    }
     root.frame(false);
     CHECK(root.click("meter"));
     CHECK_FALSE(meter.clipped());
+    CHECK(meter.maxPeakDb() == Meter::kNoPeak);
+    CHECK(told == 2);
+    meter.reset();  // nothing held: nothing to tell
+    CHECK(told == 2);
+    meter.onPeak = {};
     // Toggle.
     CHECK(root.click("solo"));
     CHECK(soloed);
@@ -849,7 +968,7 @@ TEST_CASE("colour is state: an off pill and a quiet button at rest are ink alone
     content->layout.gap = 16;
     auto pill = [&](const char* id, bool on) -> Toggle& {
         auto& t = content->emplace<Toggle>(id, "S", "solo");
-        t.pill = true;
+        t.cell = true;
         t.layout.width = SizeRule::fixed(24);
         t.layout.height = SizeRule::fixed(16);
         t.setOn(on);

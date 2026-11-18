@@ -639,7 +639,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
                 if (from < 1 || from > fromChannels || to < 1 || to > toChannels) {
                     p.warnings.push_back(e.id.str() + ": channel " +
                                          std::to_string(std::max(from, to)) +
-                                         " is beyond its strip's channels; that pair is ignored");
+                                         " is beyond its track's channels; that pair is ignored");
                     continue;
                 }
                 if (from > 2 || to > 2) {
@@ -1756,16 +1756,16 @@ Status checkStrips(const Plan& p) {
         const Node& n = p.nodes[i];
         if (n.decodeInput != (n.type != model::StripType::Channel) ||
             n.master != (n.type == model::StripType::Master))
-            return Error("engine.strip_order", "implicit strip stages disagree with its type", {},
-                         "report this strip-type compiler inconsistency with the project and "
-                         "session.describe; a valid strip should not fail this check");
+            return Error("engine.strip_order", "implicit track stages disagree with its type", {},
+                         "report this track-type compiler inconsistency with the project and "
+                         "session.describe; a valid track should not fail this check");
         // Items play on channels before the chain and on masters after the
         // plain stage (ADR-0057): never into a summing input, never on a buss.
         if (n.postItems != n.master ||
             (n.type == model::StripType::Buss && (n.hasItems() || !n.events.empty())))
-            return Error("engine.strip_order", "items are placed where the strip type forbids", {},
-                         "report this strip-type compiler inconsistency with the project and "
-                         "session.describe; a valid strip should not fail this check");
+            return Error("engine.strip_order", "items are placed where the track type forbids", {},
+                         "report this track-type compiler inconsistency with the project and "
+                         "session.describe; a valid track should not fail this check");
         for (std::size_t ei : n.in) {
             if (ei >= p.edges.size())
                 return Error("engine.strip_edge", "missing input edge", {},

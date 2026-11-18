@@ -315,7 +315,7 @@ std::string inspectorBarsText(double beat, const time::TimeMap& map) {
 
 Result<double> inspectorParseBars(std::string_view text, const time::TimeMap& map) {
     const Error bad("gui.inspector",
-                    "write a bar, or bar.beat, or bar.beat.thousandths: 3, 3.2 or 3.2.500");
+                    "write a bar, or bar.beat, or bar.beat.fraction: 3, 3.2 or 3.2.500");
     text = trimmed(text);
     long long part[3] = {1, 1, 0};
     int count = 0;
@@ -326,6 +326,13 @@ Result<double> inspectorParseBars(std::string_view text, const time::TimeMap& ma
         const auto [end, ec] =
             std::from_chars(piece.data(), piece.data() + piece.size(), part[count]);
         if (ec != std::errc{} || end != piece.data() + piece.size() || part[count] < 0) return bad;
+        // The third part is the digits after the beat's decimal point, up to
+        // three: "3.2.5" is half a beat on, as "3.2.500" is, and "3.2.005"
+        // five thousandths.
+        if (count == 2) {
+            if (piece.size() > 3 || piece.front() == '+') return bad;
+            for (std::size_t digits = piece.size(); digits < 3; ++digits) part[2] *= 10;
+        }
         ++count;
         if (dot == std::string_view::npos) break;
         text.remove_prefix(dot + 1);
@@ -398,7 +405,7 @@ ui::Toggle& Inspector::state(ui::Node& parent, const std::string& key, const std
                              const std::string& color) {
     auto& t = parent.emplace<ui::Toggle>("inspector." + key, label, color,
                                          [this, key](bool on) { set(key, on); });
-    t.pill = true;
+    t.cell = true;
     t.layout.width = ui::SizeRule::content();
     states_[key] = &t;
     return t;
@@ -469,7 +476,7 @@ std::unique_ptr<ui::Node> Inspector::build() {
     auto& stretch = formRow(take, "stretch", "Stretch");
     keepPitch_ = &stretch.emplace<ui::Toggle>("inspector.preserve_pitch", "Keep pitch", "accent",
                                               [this](bool on) { setTake("preserve_pitch", on); });
-    keepPitch_->pill = true;
+    keepPitch_->cell = true;
     keepPitch_->layout.width = ui::SizeRule::content();
 
     // Its takes, when it has several: a click chooses the one heard.
@@ -605,7 +612,7 @@ void Inspector::readItems(bool force) {
     show("fade_out", text([](const model::Item& i) { return i.fadeOut.length; }, 3, "s"), force);
     const auto timebase = common(items, [](const model::Item& i) { return i.timebase; });
     timebase_->setValue(timebase ? timebaseName(*timebase) : "");
-    // A pill is lit when every item has the state on.
+    // A cell is lit when every item has the state on.
     auto all = [&](bool model::Item::* flag) {
         return std::all_of(items.begin(), items.end(),
                            [&](const model::Item* i) { return i->*flag; });
