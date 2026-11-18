@@ -417,6 +417,12 @@ Result<Fonts> loadFonts(NVGcontext* vg, const std::filesystem::path& dir) {
         if (!id) return std::move(id).error();
         *slot = *id;
     }
+    // The mono faces are a small subset (ASCII and the dashes). A character
+    // they lack, such as the ellipsis of a shortened value or a name typed
+    // into a mono field, is drawn from the UI face of the same weight
+    // instead of leaving a gap.
+    nvgAddFallbackFontId(vg, f.mono, f.ui);
+    nvgAddFallbackFontId(vg, f.monoBold, f.uiBold);
     return f;
 }
 

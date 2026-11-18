@@ -1238,6 +1238,24 @@ TEST_CASE("text ellipsis removes whole UTF-8 characters") {
     CHECK(pixelDistance(expected, root.readBack()) == 0);
 }
 
+TEST_CASE("canvas: a character the mono face lacks is drawn from the UI face") {
+    REQUIRE_GL();
+    const Theme theme = Theme::dark();
+    Canvas canvas(fixture().window->vg(), fixture().fonts, theme);
+    auto width = [&](std::string_view text, Font font) {
+        return static_cast<double>(canvas.textWidth(text, font, 14));
+    };
+    // The mono subset has no ellipsis; a shortened value still shows one.
+    const std::string ellipsis = "\xE2\x80\xA6";
+    const double cell = width("0", Font::Mono);
+    CHECK(width("m", Font::Mono) == doctest::Approx(cell));  // it is mono
+    CHECK(width(ellipsis, Font::Mono) == doctest::Approx(width(ellipsis, Font::Ui)));
+    CHECK(width(ellipsis, Font::MonoBold) == doctest::Approx(width(ellipsis, Font::UiBold)));
+    CHECK(width(ellipsis, Font::Mono) != doctest::Approx(cell));
+    // What the face has is still its own.
+    CHECK(width("i", Font::Mono) != doctest::Approx(width("i", Font::Ui)));
+}
+
 TEST_CASE("unchanged button text and scrollbar ranges leave the content cache intact") {
     REQUIRE_GL();
     Root root(*fixture().window, fixture().fonts, Theme::dark());

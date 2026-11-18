@@ -219,6 +219,10 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   and a character it lacks draws as a gap: UI strings use only what it has
   (a test scans the GUI's string literals against both weights), so a rack
   path reads "Bells » Out 1" and pickers draw their chevrons (`ui::Dropdown`).
+  The bundled Plex Mono is a smaller subset (ASCII and the dashes); a
+  character it lacks is drawn from Inter of the same weight, so a shortened
+  mono value shows its ellipsis and a "·" between two mono values is not a
+  gap.
 - **Theme.** A token set (colours, type scale, spacing, radii, stroke widths,
   motion durations, strip-type colours) loaded from JSON; light and dark
   variants; widgets read tokens only, never literals. Extends the plugin
