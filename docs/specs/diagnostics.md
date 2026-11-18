@@ -1182,7 +1182,33 @@ sleeping a millisecond at a time (`nanosleep`, `Sleep`), until the capture has e
 wait for itself. This needs the POSIX handlers to be reachable by a second fault, so they are
 installed without `SA_RESETHAND` (the handler restores the default action itself when it re-raises;
 a fault on the claiming thread inside the handler meets its own signal blocked, which the kernel
-answers by ending the process). The wait is the only one the handler ever makes. The
+answers by ending the process). The wait is the only one the handler ever makes.
+
+*The bound against the host's deadlines, and a kill that lands in the handler (round 6c-a).* The
+handler's 200 ms is a tenth of the host's shortest failure deadline (a `process` call fails after
+2 s by default, and a lifecycle call after 5/2 of the deadline plus 2 s, ADR-0013), so a bridge
+that is failing is gone, re-raised, long before the host's first deadline on it can run out, and
+the host's deadlines never wait for a capsule. When a kill does land inside the handler (the
+handler hung, or the machine stalled it past the host's deadline), the host's own kill ends the
+process: SIGKILL on POSIX, `TerminateProcess` with exit code 1 on Windows. The classification
+(`classifyBridgeEnd`) reads that as the host's end (`how: host`), which has no `bridge_exit`
+report, whatever the slot holds (`writing`, or a complete capsule nobody reads): a host kill is
+the host's doing and the one kind of end this report is not for. The exception is a bridge whose
+status is another fatal one (it died of its own fault first and the host's kill only cut a dump
+short): that keeps the fault's status and is reported, as before.
+
+*Known limit, Windows: a fault while the loader's function-table lock is held.* The Windows walk
+asks `RtlLookupFunctionEntry` for each frame's unwind data, and that call can take the lock that
+guards the process's function tables (taken while an image loads or a dynamic function table is
+added or removed). A fault in a thread that holds it, or one that another thread holds while this
+one faults, makes the handler wait on it: the handler's 200 ms is checked between frames, not
+inside the call, so it cannot interrupt it. The bridge then hangs until the host's deadline kills
+it and the end reads as a host end (above): no report, and today's behaviour. It needs a fault at
+the instant of a load or a JIT registration, which is rare; no mitigation is built (the options are
+unwind data cached for the recorded images while cold, or a frame-pointer walk on Windows too).
+Unproven either way: no Windows machine was available to try it.
+
+The
 handler's bound is its own: 200 ms from the fault to a published slot, measured on the monotonic
 clock, and a slot not complete by then is left `writing`. The host's kill deadlines are never
 extended to wait for a capsule, as the ADR requires.

@@ -1668,7 +1668,11 @@ worker tells the supervisor with a `Slot` event (channel protocol 3), which keep
 capsule the supervisor read; macOS and Windows wait for native CI), but nothing reads the capsule yet (6c.4:
 `docs/specs/diagnostics.md` "Bridge self-capture"), so a report is still today's. When it lands, only the
 fault thread is walked on Linux and Windows (the others appear by role and entry as not collected); macOS walks
-all threads. Not done: a Windows bridge whose plug-in calls `raise(SIGSEGV)` still ends with an exit code. The
+all threads. Not done: a Windows bridge whose plug-in calls `raise(SIGSEGV)` still ends with an exit code. A Windows bridge
+that faults while another thread holds the loader's function-table lock can hang in the handler's
+unwinder (`RtlLookupFunctionEntry`) until the host's deadline kills it, which reads as a host end with no
+report (the handler's 200 ms is checked between frames, not inside the call; unproven, no mitigation yet).
+A kill that lands inside the handler is likewise a host end. The
 attribution is the only live member or none, an exit's code is not read on POSIX, a bridge killed
 by the out-of-memory killer reads as a signal, and the 65536th bridge of a run has no ordinal.
 It is never a restart notice and takes no place in the suspect window, and retention keeps the newest
