@@ -581,7 +581,14 @@ instructions are in `docs/guides/installing.md`.
   gets the palette colour the fewest tracks carry (`track.add`, for agents
   and the GUI alike). Track rows and mixer
   strips are quiet at rest (mute, solo, polarity and mono show their colour
-  only when on) and each row has a meter 8 units wide. The transport bar's
+  only when on) and each row has a meter 8 units wide. Rows and strips carry
+  the same buttons in one order (arm, monitor, mute, solo; then polarity and
+  mono), a buss's missing ones leaving their places empty; a buss or a
+  master is told by a mark before its name, and colour on a row or strip is
+  the track's own. A new project's rows are as low as their three lines
+  allow. A mixer strip's meter has a dB scale (0, 12, 24, 36, 48) with
+  lines across its bars, and every meter's bar goes from green through
+  yellow and orange to red just under 0 dB. The transport bar's
   engine readout is in words ("48 kHz · 256 samples") and warns in colour
   only of a stopped engine, dropouts, render gaps or plug-in errors; the
   toolbar's buttons are quiet at rest. A side panel at the right edge,
