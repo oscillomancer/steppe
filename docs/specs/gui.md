@@ -2648,6 +2648,21 @@ engine.md "Load overrides"; the reports stay in the viewer), so the next open do
 unless a newer run ends badly. A choice that cannot be applied (`plugin.override_unavailable`) is
 said in the status line and the open does not happen halfway.
 
+*Nothing reaches the engine until the open is about to happen* (round 6b). The check only reads and
+asks; every remembered choice and every answer is collected, and only when the last question is
+answered do they act, in this order: (1) the overrides, remembered ones first, as a whole: one that
+fails sets the ones already applied back to the normal load (the suspects asked about were on it)
+and ends there, with nothing settled, nothing saved and no open; (2) the settling of what was
+answered **Load it normally**, before the open so that the open does not warn of a plug-in the
+person has just cleared; (3) the open itself (File > Open passes the check's `hash` as
+`expect_hash`; a file that changed since the check is refused and the project is unchanged). An open
+that then fails sets the overrides back and keeps no choice: no remembered rule is written or
+dropped. What stays after a failed open, and why: the reports settled by a **Load it normally**
+answer (the person's word that it loads stands, and nothing can unsettle them), and, when the
+override was set back, the restart that setting it made of that plug-in's instances in the project
+that stayed open (the engine restarts them for any change of mode). Cancel at any question changes
+nothing, in the engine or on disk.
+
 *Remembering* is a preference, opt-in per question: `plugin_overrides` in `preferences.json`
 (`supple.preferences/1.10`; absent and older files mean none) is an array of `{format, id, build_id,
 mode, remembered_ms}` with the plug-in's `name`, `vendor` and `version` for the list in Settings;
@@ -2655,8 +2670,9 @@ mode, remembered_ms}` with the plug-in's `name`, `vendor` and `version` for the 
 `preferences.plugin_overrides` at `/plugin_overrides/<n>`. The key is the exact build: an entry
 applies only while `project.plugins` says the installed build is the report's (`suspect.build` is
 `same`), so a rebuilt plug-in is asked about again. A remembered `bridge` or `disable` is applied
-through `plugin.override` without a question and said once in the status line ("<plug-in>: loaded in
-a separate process, as you chose before. Edit > Preferences lists it."); one that cannot hold here
+through `plugin.override` without a question (with the answers, see above) and said once in the
+status line, once the open has happened ("<plug-in>: loaded in a separate process, as you chose
+before. Edit > Preferences lists it."); one that cannot hold here
 (a separate process where none is possible) is asked about instead. A remembered `normal` is
 evidence the plug-in was fine, so a new report for that build makes the question be asked again,
 and the entry is removed once it is answered (a cancelled question changes nothing on disk). Remembering is rewritten by `Preferences::save`; the GUI

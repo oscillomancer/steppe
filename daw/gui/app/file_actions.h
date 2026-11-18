@@ -136,7 +136,7 @@ class FileActions {
     void showNotice(const std::string& id, const std::string& title, const std::string& text);
     // Runs `project.plugins {args}` through safe-load, then `then` with its result; nothing when
     // the question is cancelled. Without safe-load, `then` at once with an empty object.
-    void checked(json::Value args, std::function<void(const json::Value&)> then);
+    void checked(json::Value args, std::function<bool(const json::Value&)> then);
     SafeLoad* safeLoad_ = nullptr;
     ui::Root& root_;
     AppActions& actions_;

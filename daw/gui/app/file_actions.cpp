@@ -469,7 +469,7 @@ void FileActions::recoverProjectAutosave(const std::string& autosave, std::uint6
                 showError(
                     "Another project was opened while the question was open; nothing was "
                     "loaded.");
-                return;
+                return false;
             }
             json::Value args = json::Value::object();
             args["autosave"] = true;
@@ -479,7 +479,7 @@ void FileActions::recoverProjectAutosave(const std::string& autosave, std::uint6
             else if (const json::Value* read = found.find("autosave"); read && read->isString())
                 args["autosave_file"] = read->asString();
             auto r = exec("project.recover", std::move(args));
-            if (!r) return;
+            if (!r) return false;
             ui_.selectedTracks.clear();
             ui_.selectedItems.clear();
             // Not marked saved: the file on disk is still the older version.
@@ -491,6 +491,7 @@ void FileActions::recoverProjectAutosave(const std::string& autosave, std::uint6
                     if (const json::Value* m = w.find("message"); m && m->isString())
                         text += "\n" + m->asString();
             showNotice("file.recovered", "Recovered the autosave", text);
+            return true;
         });
     });
 }
@@ -516,7 +517,7 @@ void FileActions::recoverSession(const std::string& session, const std::string& 
             json::Value args = json::Value::object();
             args["session"] = session;
             auto r = exec("project.recover", std::move(args));
-            if (!r) return;
+            if (!r) return false;
             ui_.selectedTracks.clear();
             ui_.selectedItems.clear();
             // Not marked saved: it is unsaved until the user saves it.
@@ -537,6 +538,7 @@ void FileActions::recoverSession(const std::string& session, const std::string& 
                     if (const json::Value* m = w.find("message"); m && m->isString())
                         text += "\n" + m->asString();
             showNotice("file.recovered", "Recovered \"" + title + "\"", text);
+            return true;
         });
     });
 }
@@ -613,8 +615,11 @@ void FileActions::showError(const std::string& message) {
     if (actions_.onError) actions_.onError(message);
 }
 
-void FileActions::checked(json::Value args, std::function<void(const json::Value&)> then) {
-    if (!safeLoad_) return then(json::Value::object());
+void FileActions::checked(json::Value args, std::function<bool(const json::Value&)> then) {
+    if (!safeLoad_) {
+        (void)then(json::Value::object());
+        return;
+    }
     safeLoad_->check(std::move(args), std::move(then));
 }
 
@@ -627,7 +632,8 @@ void FileActions::openPath(const std::filesystem::path& path) {
         // The bytes the check read are the bytes opened.
         if (const json::Value* hash = found.find("hash"); hash && hash->isString())
             args["expect_hash"] = hash->asString();
-        if (auto opened = exec("project.open", std::move(args))) {
+        auto opened = exec("project.open", std::move(args));
+        if (opened) {
             ui_.selectedTracks.clear();
             ui_.selectedItems.clear();
             markSaved();
@@ -638,6 +644,7 @@ void FileActions::openPath(const std::filesystem::path& path) {
             if ((a && a->isBool() && a->asBool()) || integerAt(*opened, "recoverable") > 0)
                 openRecovery();
         }
+        return static_cast<bool>(opened);
     });
 }
 
@@ -851,13 +858,16 @@ void FileActions::loadTemplate(const std::string& name) {
     auto load = [this, name](const json::Value&) {
         json::Value args = json::Value::object();
         args["name"] = name;
-        if (exec("project.template.load", std::move(args))) {
-            ui_.selectedTracks.clear();
-            ui_.selectedItems.clear();
-            markSaved();
-        }
+        if (!exec("project.template.load", std::move(args))) return false;
+        ui_.selectedTracks.clear();
+        ui_.selectedItems.clear();
+        markSaved();
+        return true;
     };
-    if (!safeLoad_) return load(json::Value::object());
+    if (!safeLoad_) {
+        (void)load(json::Value::object());
+        return;
+    }
     // The plug-ins a template names are checked where the template is; a template that cannot be
     // found is for the load itself to report.
     std::string where;
@@ -870,7 +880,10 @@ void FileActions::loadTemplate(const std::string& name) {
                 if (n && p && n->isString() && p->isString() && n->asString() == name)
                     where = p->asString();
             }
-    if (where.empty()) return load(json::Value::object());
+    if (where.empty()) {
+        (void)load(json::Value::object());
+        return;
+    }
     json::Value check = json::Value::object();
     check["path"] = where;
     check["template"] = true;

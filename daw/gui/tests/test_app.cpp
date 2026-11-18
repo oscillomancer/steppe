@@ -4406,7 +4406,9 @@ struct SafeLoadRig {
     bool stock = false, bridgeable = true, listed = true;
     bool second = false;  // a second suspect plug-in in the same listing
     int checks = 0;
-    json::Value lastArgs;  // what the last check asked about
+    json::Value lastArgs;              // what the last check asked about
+    std::function<void()> afterCheck;  // runs once the check has read the file
+    std::string failFor;               // a plug-in id whose override the engine refuses
 
     explicit SafeLoadRig(int width = 1000, int height = 640,
                          const std::filesystem::path& scratch = {})
@@ -4424,6 +4426,7 @@ struct SafeLoadRig {
             lastArgs = args;
             auto real = a.dispatcher->execute({"project.plugins", args, {}});
             if (!real) return real;
+            if (afterCheck) afterCheck();
             json::Value out = *real;
             auto plugins = json::Value::array();
             if (listed) {
@@ -4489,6 +4492,8 @@ struct SafeLoadRig {
             return all;
         };
         load.override_ = [this](const std::string& id, const std::string& mode) -> Status {
+            if (!failFor.empty() && id == failFor && mode != "normal")
+                return Error("plugin.override", "the engine refused it");
             overrides.emplace_back(id, mode);
             return {};
         };
@@ -4511,6 +4516,15 @@ struct SafeLoadRig {
     void pick(const char* row) {
         REQUIRE(a.root->click(row));
         REQUIRE(a.root->click("safeload.continue"));
+    }
+    // Starts File > Open of the saved file and gets past the unsaved changes' question.
+    void ask() {
+        files->openPath(file);
+        a.root->frame(false);
+        if (!a.root->find("safeload") && a.root->find("file.confirm.discard")) {
+            REQUIRE(a.root->click("file.confirm.discard"));
+            a.root->frame(false);
+        }
     }
     void open() {
         files->openPath(file);
@@ -4620,6 +4634,99 @@ TEST_CASE("safe-load: a suspect plug-in is asked about before File > Open loads,
         CHECK_FALSE(r.a.root->find("safeload"));
         CHECK(r.name() == "Open now");
         CHECK(r.overrides.empty());
+    }
+}
+
+TEST_CASE("safe-load: nothing reaches the engine until the open happens (round 6b F1, F2, F4)") {
+    SafeLoadRig r;
+    r.second = true;
+    const gui::RememberedLoad canary{"clap", "com.acme.canary", "0123abcd", "bridge", "Canary Verb",
+                                     "Acme", "1.2.0",           1};
+    SUBCASE("a remembered choice waits for the answers: Cancel leaves the engine as it was") {
+        r.rules = {canary};
+        r.ask();
+        REQUIRE(r.a.root->find("safeload"));
+        CHECK(r.a.root->find("safeload.title")->valueText().find("Second Verb") == 0);
+        CHECK(r.overrides.empty());  // nothing applied while the question is open
+        REQUIRE(r.a.root->click("safeload.cancel"));
+        r.a.root->frame(false);
+        CHECK(r.overrides.empty());
+        CHECK(r.settled.empty());
+        CHECK(r.statuses.empty());  // no "as you chose before" for an open that did not happen
+        CHECK(r.name() == "Open now");
+        CHECK(r.rules.size() == 1);
+    }
+    SUBCASE("answered, the remembered choice and the answer act together, then the project opens") {
+        r.rules = {canary};
+        r.ask();
+        r.pick("safeload.disable");
+        r.a.root->frame(false);
+        REQUIRE(r.overrides.size() == 2);
+        CHECK(r.overrides[0] == std::pair<std::string, std::string>{"com.acme.canary", "bridge"});
+        CHECK(r.overrides[1] == std::pair<std::string, std::string>{"com.acme.second", "disable"});
+        CHECK(r.name() == "Saved");
+        bool said = false;
+        for (const auto& s : r.statuses)
+            said |= s.find("Canary Verb") != std::string::npos &&
+                    s.find("as you chose before") != std::string::npos;
+        CHECK(said);
+    }
+    SUBCASE("an override that fails sets the others back and settles and saves nothing") {
+        r.failFor = "com.acme.second";
+        r.ask();
+        REQUIRE(r.a.root->find("safeload"));  // the first suspect: Canary
+        r.pick("safeload.disable");
+        r.a.root->frame(false);
+        REQUIRE(r.a.root->find("safeload"));  // the second
+        REQUIRE(r.a.root->click("safeload.remember"));
+        r.pick("safeload.bridge");
+        r.a.root->frame(false);
+        // Canary was disabled, then set back to normal when the second could not be made.
+        REQUIRE(r.overrides.size() == 2);
+        CHECK(r.overrides[0] == std::pair<std::string, std::string>{"com.acme.canary", "disable"});
+        CHECK(r.overrides[1] == std::pair<std::string, std::string>{"com.acme.canary", "normal"});
+        CHECK(r.settled.empty());
+        CHECK(r.rules.empty());
+        CHECK(r.name() == "Open now");  // no open
+        REQUIRE_FALSE(r.statuses.empty());
+        CHECK(r.statuses.back().find("Second Verb") != std::string::npos);
+    }
+    SUBCASE("a failing override after a Normal answer leaves that plug-in's reports unsettled") {
+        r.failFor = "com.acme.second";
+        r.ask();
+        r.pick("safeload.normal");
+        r.a.root->frame(false);
+        r.pick("safeload.disable");
+        r.a.root->frame(false);
+        CHECK(r.settled.empty());
+        CHECK(r.name() == "Open now");
+    }
+    SUBCASE("an open that fails sets the overrides back and keeps no choice (F4: the hash)") {
+        r.second = false;
+        // The file changes after the check read it: the open must be refused, not load the
+        // other bytes. (Dropping `expect_hash` from File > Open makes it load them.)
+        r.afterCheck = [&] {
+            std::ofstream out(r.file, std::ios::binary | std::ios::app);
+            out << "\n";
+        };
+        r.ask();
+        REQUIRE(r.a.root->find("safeload"));
+        REQUIRE(r.a.root->click("safeload.remember"));
+        r.pick("safeload.disable");
+        r.a.root->frame(false);
+        CHECK(r.name() == "Open now");  // the open was refused; the project is unchanged
+        REQUIRE(r.overrides.size() == 2);
+        CHECK(r.overrides[0].second == "disable");
+        CHECK(r.overrides[1].second == "normal");  // set back: the load did not happen
+        CHECK(r.rules.empty());                    // nothing is remembered for it
+    }
+    SUBCASE("the file the check read is the file opened: unchanged, the open succeeds") {
+        r.second = false;
+        r.ask();
+        r.pick("safeload.disable");
+        r.a.root->frame(false);
+        CHECK(r.name() == "Saved");
+        CHECK(r.overrides.size() == 1);
     }
 }
 

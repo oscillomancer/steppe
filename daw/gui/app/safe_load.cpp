@@ -243,7 +243,13 @@ struct SafeLoad::Run {
     std::vector<RememberedLoad> rules;
     bool rulesChanged = false;
     std::vector<std::array<std::string, 3>> dropped;  // remembered "normal" rules to remove
-    std::function<void(const json::Value&)> proceed;
+    // Remembered "separate process" and "disable" choices of this open: applied with the answers
+    // in finish(), never at the check, so that a Cancel leaves the engine as it was.
+    struct Held {
+        std::string id, name, mode;
+    };
+    std::vector<Held> held;
+    std::function<bool(const json::Value&)> proceed;
 };
 
 SafeLoad::SafeLoad(ui::Root& root, cmd::Dispatcher& dispatcher, std::filesystem::path diagnostics)
@@ -281,16 +287,22 @@ void SafeLoad::status(const std::string& text) {
     if (onStatus) onStatus(text);
 }
 
-void SafeLoad::check(json::Value args, std::function<void(const json::Value&)> proceed) {
+void SafeLoad::check(json::Value args, std::function<bool(const json::Value&)> proceed) {
     auto run = std::make_shared<Run>();
     run->proceed = std::move(proceed);
     // Without an engine answer (a bad file, the check unavailable) the load goes on and reports
     // its own error: asking is never what stops an open.
     auto found = plugins ? plugins(args) : Result<json::Value>(Error("safeload.none", "no check"));
-    if (!found) return run->proceed(json::Value::object());
+    if (!found) {
+        (void)run->proceed(json::Value::object());
+        return;
+    }
     run->found = *found;
     const json::Value* list = run->found.find("plugins");
-    if (!list || !list->isArray()) return run->proceed(run->found);
+    if (!list || !list->isArray()) {
+        (void)run->proceed(run->found);
+        return;
+    }
     const std::vector<diagnostics::Suspect> known =
         reported ? reported() : std::vector<diagnostics::Suspect>();
     if (remembered) run->rules = remembered();
@@ -328,12 +340,8 @@ void SafeLoad::check(json::Value args, std::function<void(const json::Value&)> p
                 if (rule->mode == "normal") {
                     // Dropped once the question is answered: a cancelled one changes nothing.
                     run->dropped.push_back({q.format, q.id, q.buildId});
-                } else if (!(rule->mode == "bridge" && (!q.bridgeable || q.stock)) &&
-                           (override_ && override_(q.id, rule->mode))) {
-                    status(
-                        q.name + ": " +
-                        (rule->mode == "bridge" ? "loaded in a separate process" : "not loaded") +
-                        ", as you chose before. Edit > Preferences lists it.");
+                } else if (!(rule->mode == "bridge" && (!q.bridgeable || q.stock)) && override_) {
+                    run->held.push_back({q.id, q.name, rule->mode});
                     asked = false;
                 }
             }
@@ -370,6 +378,49 @@ Status SafeLoad::enable(const std::string& pluginId, const std::string& format) 
 
 void SafeLoad::finish(std::shared_ptr<Run> run) {
     asking_ = false;
+    // Nothing reaches the engine before every question is answered; then the overrides go first
+    // and as a whole: one that fails sets the others back, and nothing is settled or saved.
+    struct Pending {
+        std::string id, name, mode;
+        bool remembered;
+    };
+    std::vector<Pending> overrides;
+    for (const auto& h : run->held) overrides.push_back({h.id, h.name, h.mode, true});
+    for (const auto& a : run->answers)
+        if (a.choice != LoadChoice::Normal)
+            overrides.push_back({a.question.id, a.question.name,
+                                 a.choice == LoadChoice::Bridge ? "bridge" : "disable", false});
+    std::vector<const Pending*> applied;
+    // The suspects asked about were on the normal load, which is what an undo restores.
+    auto undo = [&] {
+        for (auto at = applied.rbegin(); at != applied.rend(); ++at)
+            if (override_) (void)override_((*at)->id, "normal");
+        applied.clear();
+    };
+    for (const auto& o : overrides) {
+        const Status done = override_ ? override_(o.id, o.mode) : Status{};
+        if (!done) {
+            undo();
+            status(o.name + ": " + done.error().message);
+            return;  // a safety choice that cannot be made is not made halfway: no open
+        }
+        applied.push_back(&o);
+    }
+    for (const auto& a : run->answers)
+        if (a.choice == LoadChoice::Normal) {
+            // The person's own word that it loads: the suspicion is resolved (the reports stay).
+            // Before the open, so the open does not warn of a plug-in they just cleared.
+            for (const auto& incident : a.question.incidents)
+                if (settle) (void)settle(incident);
+        }
+    // The open: when it does not happen the overrides are set back (the choices the person made
+    // are not kept for a load that did not take place).
+    if (!run->proceed(run->found)) return undo();
+    for (const auto& o : overrides)
+        if (o.remembered)
+            status(o.name + ": " +
+                   (o.mode == "bridge" ? "loaded in a separate process" : "not loaded") +
+                   ", as you chose before. Edit > Preferences lists it.");
     for (const auto& d : run->dropped) {
         run->rulesChanged |=
             std::erase_if(run->rules, [&](const auto& r) {
@@ -377,42 +428,28 @@ void SafeLoad::finish(std::shared_ptr<Run> run) {
             }) > 0;
     }
     for (const auto& a : run->answers) {
-        const std::string mode = a.choice == LoadChoice::Bridge    ? "bridge"
-                                 : a.choice == LoadChoice::Disable ? "disable"
-                                                                   : "normal";
-        if (a.choice == LoadChoice::Normal) {
-            // The person's own word that it loads: the suspicion is resolved (the reports stay).
-            for (const auto& incident : a.question.incidents)
-                if (settle) (void)settle(incident);
-        } else {
-            const Status applied = override_ ? override_(a.question.id, mode) : Status{};
-            if (!applied) {
-                status(a.question.name + ": " + applied.error().message);
-                return;  // a safety choice that cannot be made is not made halfway: no open
-            }
-        }
-        if (a.remember && a.question.rememberable()) {
-            RememberedLoad rule;
-            rule.format = a.question.format;
-            rule.id = a.question.id;
-            rule.buildId = a.question.buildId;
-            rule.mode = mode;
-            rule.name = a.question.name;
-            rule.vendor = a.question.vendor;
-            rule.version = a.question.version;
-            rule.rememberedMs = now ? now() : 0;
-            std::erase_if(run->rules, [&](const auto& r) {
-                return r.format == rule.format && r.id == rule.id && r.buildId == rule.buildId;
-            });
-            run->rules.push_back(std::move(rule));
-            run->rulesChanged = true;
-        }
+        if (!a.remember || !a.question.rememberable()) continue;
+        RememberedLoad rule;
+        rule.format = a.question.format;
+        rule.id = a.question.id;
+        rule.buildId = a.question.buildId;
+        rule.mode = a.choice == LoadChoice::Bridge    ? "bridge"
+                    : a.choice == LoadChoice::Disable ? "disable"
+                                                      : "normal";
+        rule.name = a.question.name;
+        rule.vendor = a.question.vendor;
+        rule.version = a.question.version;
+        rule.rememberedMs = now ? now() : 0;
+        std::erase_if(run->rules, [&](const auto& r) {
+            return r.format == rule.format && r.id == rule.id && r.buildId == rule.buildId;
+        });
+        run->rules.push_back(std::move(rule));
+        run->rulesChanged = true;
     }
     if (run->rulesChanged && setRemembered) {
         if (const Status saved = setRemembered(run->rules); !saved)
             status("Could not keep your choices: " + saved.error().message);
     }
-    run->proceed(run->found);
 }
 
 }  // namespace supple::gui
