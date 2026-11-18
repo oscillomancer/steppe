@@ -459,11 +459,13 @@ BridgeProcess::~BridgeProcess() {
     }
     // A bridge that was still there when the host let go may be dying of its own fault at that
     // moment (a crash whose core or dump is still being written is alive until it is done): if it
-    // ended by a signal or an exception that the host did not cause, that is its own death, not
-    // the host's end.
+    // ended by a signal or an exception, that is its own death, not the host's end. Also when the
+    // host had killed it already (a request that found its socket closed and the process not yet
+    // gone does that): a kill cannot change the status of a process that is dying of a fault, and
+    // classifyBridgeEnd tells the host's own kill, whose status is the kill's, from that.
     int endedWith = diedWith;
     bool hostEnded = !diedFirst;
-    if (!diedFirst && child_ && !child_->alive() && !hostKilled_.load(std::memory_order_acquire)) {
+    if (!diedFirst && child_ && !child_->alive()) {
         const int after = child_->exitStatus();
         const auto how = classifyBridgeEnd(after, false).how;
         if (how == diagctx::BridgeHow::Signal || how == diagctx::BridgeHow::Exception) {

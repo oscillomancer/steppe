@@ -870,7 +870,8 @@ system's: the end is `host`, with the status the host's kill gives (POSIX `SIGKI
 code 1), which says nothing about the plug-in, unless the status is another fatal one (below). A bridge the host lets go
 of while it still runs is also `host`, unless it is then found to have ended by a signal or an
 exception the host did not cause (a crash whose dump was still being written when the host let go
-is alive until it is done): that is its own death. Otherwise POSIX says `signal` with the signal number, or
+is alive until it is done): that is its own death, also when a failed request had already made the host
+kill it (its socket closed before the process was gone), because the status tells the order, as below. Otherwise POSIX says `signal` with the signal number, or
 `exit` with code 0 (the exit code is not read); Windows says `exception` for a status with the
 fatal severity bits set (`0xC0000000`) and `exit` for any other, with the exit code. When both
 happen (the host kills a bridge that was already dying: its core or dump still being written when a
