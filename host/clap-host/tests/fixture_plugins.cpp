@@ -50,6 +50,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <string>
 #include <thread>
 #include <utility>
@@ -1448,7 +1449,8 @@ clap_process_status CLAP_ABI multiOutProcess(const clap_plugin_t* pl, const clap
 // runtime ends the process with exit code 3 and no exception), 2 hangs it there, 3 takes
 // 20 ms over each block (a plug-in that misses a live deadline, ADR-0081), 4 writes through a bad
 // pointer: a signal on POSIX and an access violation on Windows, the crash a host classifies as
-// one on every platform.
+// one on every platform. 5 faults when the instance is destroyed, 6 calls abort(), 7 runs the stack
+// out, 8 faults on a thread the plug-in made itself, 9 calls std::terminate().
 
 const clap_plugin_descriptor_t* crashDescriptor() {
     static const char* features[] = {CLAP_PLUGIN_FEATURE_AUDIO_EFFECT, nullptr};
@@ -1467,6 +1469,17 @@ const clap_plugin_descriptor_t* crashDescriptor() {
 }
 
 [[gnu::noinline]] void badWrite() { *reinterpret_cast<volatile int*>(8) = 1; }
+
+// Runs the stack out: each frame touches its own page-sized buffer, and the result is used so
+// that nothing folds the recursion into a loop.
+volatile bool gStackHasEnd = false;  // never set: the recursion has no end the compiler can see
+[[gnu::noinline]] int runOutOfStack(int depth) {
+    volatile char page[4096];
+    if (gStackHasEnd) return depth;
+    page[0] = static_cast<char>(depth);
+    page[sizeof(page) - 1] = static_cast<char>(depth >> 8);
+    return runOutOfStack(depth + 1) + page[0] + page[sizeof(page) - 1];
+}
 
 struct Crash {
     clap_plugin_t plugin{};
@@ -1487,7 +1500,7 @@ bool CLAP_ABI crashParamInfo(const clap_plugin_t*, uint32_t index, clap_param_in
     info->id = 1;
     info->flags = CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_AUTOMATABLE;
     std::snprintf(info->name, sizeof(info->name), "Mode");
-    info->max_value = 6;
+    info->max_value = 9;
     return true;
 }
 bool CLAP_ABI crashParamValue(const clap_plugin_t* pl, clap_id id, double* out) {
@@ -1496,8 +1509,9 @@ bool CLAP_ABI crashParamValue(const clap_plugin_t* pl, clap_id id, double* out) 
     return true;
 }
 bool CLAP_ABI crashValueToText(const clap_plugin_t*, clap_id, double v, char* out, uint32_t size) {
-    static const char* kNames[] = {"pass", "crash", "hang", "slow", "fault", "teardown", "abort"};
-    std::snprintf(out, size, "%s", kNames[std::clamp(static_cast<int>(v), 0, 6)]);
+    static const char* kNames[] = {"pass",     "crash", "hang",     "slow",   "fault",
+                                   "teardown", "abort", "overflow", "thread", "terminate"};
+    std::snprintf(out, size, "%s", kNames[std::clamp(static_cast<int>(v), 0, 9)]);
     return true;
 }
 bool CLAP_ABI crashTextToValue(const clap_plugin_t*, clap_id, const char*, double*) {
@@ -1529,6 +1543,9 @@ clap_process_status CLAP_ABI crashProcess(const clap_plugin_t* pl, const clap_pr
     if (C(pl)->mode.load() == 1) std::raise(SIGSEGV);
     if (C(pl)->mode.load() == 4) badWrite();
     if (C(pl)->mode.load() == 6) std::abort();  // what the host makes of abort() differs
+    if (C(pl)->mode.load() == 7) (void)runOutOfStack(0);
+    if (C(pl)->mode.load() == 8) std::thread([] { badWrite(); }).join();  // a thread of its own
+    if (C(pl)->mode.load() == 9) std::terminate();
     while (C(pl)->mode.load() == 2) {  // spin (no system call: sanitizers see a hang, not a call)
     }
     if (C(pl)->mode.load() == 3) {  // spin on the clock: no system call either

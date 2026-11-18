@@ -45,10 +45,10 @@ with tempfile.TemporaryDirectory(prefix="host-inventory-") as folder:
 
 # Bridge processes (ADR-0083, topic 6a), from the real host and the real bridge. The fixture
 # program bridges the crash plug-in and the host observes each bridge's end.
-def run_bridged(mode):
+def run_bridged(mode,*more):
     with tempfile.TemporaryDirectory(prefix="host-bridges-") as folder:
         root=pathlib.Path(folder)/"app"/"diagnostics"
-        run=subprocess.run([binary,str(root),mode],capture_output=True,timeout=180)
+        run=subprocess.run([binary,str(root),mode,*more],capture_output=True,timeout=180)
         assert run.returncode!=0,run  # the program itself faults at the end
         reports=[json.loads(p.read_text()) for p in sorted(root.glob("*.json"))]
         leftovers=[p.name for p in root.iterdir() if p.suffix in (".run",".pub")]
@@ -119,4 +119,71 @@ if not sanitized:
     slots=[l for l in run.stderr.decode(errors="replace").splitlines() if l.startswith("slot bridge=")]
     assert [l.split()[2] for l in slots]==["capsule=ok"]*5,(slots,run.stderr)
     assert [l.split()[4] for l in slots]==["parsed=yes"]*5,(slots,run.stderr)  # and the parser takes it
+    # Topic 6c.5: the same bridge, ended in every way a plug-in can end it, each from its own
+    # fixture program. Each says the bridge wrote the account, walks the fault thread, and names
+    # the plug-in that was in it. What differs is where the fault was: in the plug-in's binary
+    # (the instruction is in the build the bridge recorded), or in the system's code under the
+    # plug-in's entry (abort, a raised signal, std::terminate), which the open entry still names.
+    posix=sys.platform!="win32"
+    faults=(10,11)  # a bad address is SIGSEGV or, on some systems, SIGBUS
+    def bridge_report(*args):
+        reports,run=run_bridged(*args)
+        exits=[r for r in reports if r["kind"]=="bridge_exit"]
+        assert len(exits)==1 and len([r for r in reports if r["kind"]=="crash"])==1,([r["kind"] for r in reports],run.stderr)
+        e=exits[0]
+        assert e.get("capture")=="bridge" and e["complete"] is False and e["commands"]==[],e
+        ended=[b for b in e["bridges"] if b["id"]==e["bridge"]][0]["ended"]
+        assert ended["how"] in ("signal","exception") and ended["code"]==e["code"],(ended,e["code"])
+        slots=[l for l in run.stderr.decode(errors="replace").splitlines() if l.startswith("slot bridge=")]
+        assert [l.split()[2:5:2] for l in slots]==[["capsule=ok","parsed=yes"]],(slots,run.stderr)
+        t=e["threads"]
+        assert t and t[0]["role"]=="fault" and t[0]["state"]=="walked" and t[0]["frames"],t
+        assert "\"image\"" not in json.dumps(e) and "0x" not in json.dumps(e["plugins"]),e
+        return e,ended
+    def named(e):
+        member=[p for p in e["plugins"] if p.get("bridge")==e["bridge"] and p["plugin_id"]=="com.suppleaudio.test.crash"]
+        assert len(member)==1,e["plugins"]
+        return member[0]
+    def in_build(e,member):
+        ids=[m["id"] for m in e["modules"]]
+        assert member["build"]["id"] in ids,(member,ids)
+        assert e["threads"][0]["frames"][0]["module"]==ids.index(member["build"]["id"]),(e["threads"][0]["frames"][0],ids)
+    def counted(e,member):
+        # An entry the table held open that no thread could be given is said so, never dropped
+        # in silence (a stack overflow's stack pointer is below the stack the thread recorded).
+        assert member.get("executing") or e["dropped"]["cells"]>=1,(member,e["dropped"])
+    # (mode, level, the registered role of the fault thread or None, the entry it was in, codes)
+    scenarios=[(4,"fault_in_image","bridge_audio","process",faults),
+               (8,"fault_in_image",None,None,faults),
+               (5,"fault_in_image","bridge_control","destroy",faults)]
+    if posix:
+        # raise(SIGSEGV) and abort() end a Windows bridge with exit code 3, which is no crash to
+        # the host there; a stack overflow and std::terminate are not yet shown on Windows.
+        scenarios+=[(1,"active_token","bridge_audio","process",(11,)),
+                    (6,"active_token","bridge_audio","process",(6,)),
+                    (7,"fault_in_image","bridge_audio",None,faults),
+                    (9,"active_token","bridge_audio","process",(6,))]
+    for mode,level,registered,entry,codes in scenarios:
+        e,ended=bridge_report("bridged-one",str(mode))
+        member=named(e)
+        label=(mode,e["attribution"],e["threads"][0],ended)
+        assert e["attribution"]=={"confidence":level,"plugin":member["id"]},label
+        assert e["code"] in codes and ended["how"]==("signal" if posix else "exception"),label
+        assert e["threads"][0].get("registered")==registered,label
+        if entry: assert e["threads"][0].get("entry")==entry,label
+        if level=="fault_in_image": in_build(e,member)
+        if mode!=7: assert member["executing"] and member["executing"][0]["entry"]==(entry or "process"),label
+        counted(e,member)
+        if mode==8:
+            # The plug-in's own thread is not one the bridge registered; the audio thread that
+            # was waiting on it is listed beside it, inside the entry it was in.
+            assert member["executing"]==[{"entry":"process","thread":member["executing"][0]["thread"],"match":"other_thread"}],member
+    # Two plug-ins of one binary share a bridge, and the one that faults is named, not the other.
+    e,ended=bridge_report("bridged-shared")
+    crash=named(e)
+    others=[p for p in e["plugins"] if p.get("bridge")==e["bridge"] and p is not crash]
+    assert len(others)==1 and others[0]["plugin_id"]=="com.suppleaudio.test.gain" and others[0]["build"]==crash["build"],e["plugins"]
+    assert e["attribution"]=={"confidence":"fault_in_image","plugin":crash["id"]},e["attribution"]
+    assert not others[0].get("executing") and crash["executing"][0]["entry"]=="process",e["plugins"]
+    in_build(e,crash)
 print("host inventory passed")

@@ -8,13 +8,20 @@
 //                                                 then the program faults (topic 6a)
 //         <diagnostics directory> bridged-hang    the host kills a hung bridge, then the
 //                                                 program faults
+//         <diagnostics directory> bridged-one <n> the crash plug-in is made to misbehave in mode
+//                                                 n (fixture_plugins.cpp) in a bridge of its own,
+//                                                 once; then the program faults (topic 6c.5)
+//         <diagnostics directory> bridged-shared  a gain plug-in and the crash plug-in share a
+//                                                 bridge, which the crash plug-in kills
 #include <supple/diagcap/selfcapture.h>
 #include <supple/diagnostics/frontend.h>
 #include <supple/host/clap_host.h>
 #include <array>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <span>
 #include <string>
 #include <thread>
@@ -61,8 +68,10 @@ void lookAtSlot(const supple::diagnostics::detail::Packet& packet,
 
 // A bridged crash plug-in is made to misbehave in its next process(), and the host then makes a
 // main-thread request, which is where it observes the bridge's end.
-bool misbehave(const supple::host::PluginInfo& info, double mode) {
-    auto made = supple::host::Instance::create(info, {}, true);
+bool misbehave(const supple::host::PluginInfo& info, double mode,
+               const std::shared_ptr<supple::host::BridgeProcess>& shared = nullptr) {
+    auto made = shared ? supple::host::Instance::create(info, {}, true, shared)
+                       : supple::host::Instance::create(info, {}, true);
     if (!made) return false;
     supple::host::Instance& instance = **made;
     if (!instance.activate(48000.0, 1, 64) || !instance.startProcessing()) return false;
@@ -76,6 +85,12 @@ bool misbehave(const supple::host::PluginInfo& info, double mode) {
     block.inputChannels = block.outputChannels = 1;
     block.frames = 64;
     (void)instance.process(block);
+    if (mode == 5.0) {
+        // The instance passes this block and faults when the bridge destroys it: the host lets
+        // go of the instance, and of the bridge with it, and the bridge's end is observed there.
+        made->reset();
+        return true;
+    }
     (void)instance.paramValue(1);  // fails: the bridge is gone, and this is where it is reaped
     return instance.failed();
 }
@@ -103,6 +118,37 @@ int body(int argc, char** argv) {
         return supple::host::PluginInfo{};
     };
     const std::string mode = argc >= 3 ? argv[2] : "loaded";
+    if (mode == "bridged-one" || mode == "bridged-shared") {
+        supple::host::setBridgeExecutable(BRIDGE_PATH);
+        const auto crash = find("com.suppleaudio.test.crash");
+        double plugin = 4.0;
+        if (mode == "bridged-one") {
+            if (argc < 4) return 9;
+            plugin = std::atof(argv[3]);
+            if (!misbehave(crash, plugin)) {
+                std::fprintf(stderr, "bridged-one: mode %g was not seen by the host\n", plugin);
+                return 7;
+            }
+        } else {
+            auto process = supple::host::createBridgeProcess();
+            if (!process) return 10;
+            // The gain plug-in is active in the same bridge, in the same binary, when the crash
+            // plug-in faults.
+            auto gain = supple::host::Instance::create(find("com.suppleaudio.test.gain"), {}, true,
+                                                       *process);
+            if (!gain || !(*gain)->activate(48000.0, 1, 64)) return 11;
+            if (!misbehave(crash, plugin, *process)) {
+                std::fprintf(stderr, "bridged-shared: the death was not seen by the host\n");
+                return 7;
+            }
+        }
+        if (!awaitReport(argv[1])) {
+            std::fprintf(stderr, "%s: no report of the death in 30 s\n", mode.c_str());
+            return 8;
+        }
+        fault();
+        return 0;
+    }
     if (mode == "bridged-crash" || mode == "bridged-hang") {
         supple::host::setBridgeExecutable(BRIDGE_PATH);
         const auto crash = find("com.suppleaudio.test.crash");
@@ -144,7 +190,8 @@ int body(int argc, char** argv) {
 int main(int argc, char** argv) {
     if (argc < 3) return 1;
     // Only the supervisor process calls it (the worker never applies a packet).
-    if (std::string_view(argv[2]) == "bridged-crash")
+    if (const std::string_view mode = argv[2];
+        mode == "bridged-crash" || mode == "bridged-one" || mode == "bridged-shared")
         supple::diagnostics::detail::setInventoryHook(&lookAtSlot);
     return supple::diagnostics::runFrontend(argc, argv, supple::diagnostics::Role::Fixture, body,
                                             {std::filesystem::path(argv[1])});
