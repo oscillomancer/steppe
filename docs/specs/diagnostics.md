@@ -866,7 +866,8 @@ and may include one ended by `abort()` or an uncaught `std::terminate`: the C ru
 process with exit code 3 and no exception, so the host cannot tell it from an orderly exit and
 writes no report. Whether `abort()` does that depends on the runtime's abort behaviour (the
 release UCRT's default fast-fails, which is an exception and is reported); it is unproven until
-a fixture mode that calls `abort()` runs on Windows CI. A bridge ended by an access
+the `abort()` case of `test_bridge_diagnostics.cpp` (the crash fixture's mode 6) has run on Windows CI:
+it expects the exception there and names the status if it gets an exit. A bridge ended by an access
 violation, a stack overflow or `__fastfail` ends with an exception status and is reported. This
 is a known gap on Windows, in STATUS.md.) The supervisor writes it from its inventory when it
 applies the `Bridge` end event, under a new incident id, with no run marker or hold, so a reader

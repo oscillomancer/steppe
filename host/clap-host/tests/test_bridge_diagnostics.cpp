@@ -7,6 +7,7 @@
 #endif
 #include <array>
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <mutex>
 #include <span>
@@ -173,6 +174,55 @@ TEST_CASE("a bridged instance announces where it is in its bridge, an in-process
 // without killing it, so the instance is never destroyed by a request: the bridge destroys it when
 // the socket closes, and the fixture faults in its destructor. No timing decides this: the bridge
 // is alive when the host lets go, and what it did next is what the end reads as.
+// What a bridge ended by abort() reads as. POSIX ends it with SIGABRT, a signal. On Windows the C
+// runtime's abort() either fast-fails (an exception status, which is reported) or ends the process
+// with exit code 3 (an exit, which is not): it depends on the runtime's abort behaviour, and the
+// spec says "may" until this case has run there. On Windows it expects the fast-fail (an exception)
+// and, if the runtime gives an exit instead, fails naming the status it got, so a native run
+// settles it (the spec, STATUS and this expectation then follow); on POSIX it requires the signal.
+TEST_CASE("a bridge ended by abort() is told as the system ended it, and the result is recorded") {
+    setBridgeExecutable(BRIDGE_PATH);
+    Sink sink;
+    auto process = createBridgeProcess();
+    REQUIRE(process);
+    const auto ordinal = (*process)->ordinal();
+    auto made = Instance::create(fixture("com.suppleaudio.test.crash"), {}, true, *process);
+    REQUIRE(made);
+    Instance& instance = **made;
+    REQUIRE(instance.activate(48000.0, 1, 64));
+    REQUIRE(instance.startProcessing());
+    REQUIRE(instance.setParam(1, 6.0));  // abort() in the next process()
+    std::array<float, 64> in{}, out{};
+    const float* inputs[1]{in.data()};
+    float* outputs[1]{out.data()};
+    ProcessBlock block;
+    block.inputs = inputs;
+    block.outputs = outputs;
+    block.inputChannels = block.outputChannels = 1;
+    block.frames = 64;
+    (void)instance.process(block);
+    awaitEnded(**process);
+    (*process)->reap();
+    diagctx::Event end;
+    for (const auto& event : Sink::of(diagctx::EventKind::Bridge))
+        if (event.bridge == ordinal && event.how != diagctx::BridgeHow::None) end = event;
+    std::fprintf(stderr, "abort() ended a bridge as how=%s status=%d (0x%x)\n",
+                 diagctx::bridgeHowName(end.how) ? diagctx::bridgeHowName(end.how) : "none",
+                 end.status, static_cast<unsigned>(end.status));
+#if defined(_WIN32)
+    CHECK_MESSAGE(
+        end.how == diagctx::BridgeHow::Exception,
+        "abort() ended the bridge as "
+            << (diagctx::bridgeHowName(end.how) ? diagctx::bridgeHowName(end.how) : "none")
+            << ", status " << end.status);
+#else
+    CHECK(end.how == diagctx::BridgeHow::Signal);
+    CHECK(end.status == SIGABRT);
+#endif
+    CHECK(end.how != diagctx::BridgeHow::Host);
+    made->reset();
+}
+
 // AddressSanitizer and ThreadSanitizer end a faulting bridge with their own exit (after their
 // report), not with the signal: the host rightly reads that as an exit, so there is no signal for
 // this case to observe in those builds.

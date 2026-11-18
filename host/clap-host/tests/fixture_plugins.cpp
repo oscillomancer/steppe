@@ -1440,7 +1440,7 @@ bool CLAP_ABI crashParamInfo(const clap_plugin_t*, uint32_t index, clap_param_in
     info->id = 1;
     info->flags = CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_AUTOMATABLE;
     std::snprintf(info->name, sizeof(info->name), "Mode");
-    info->max_value = 5;
+    info->max_value = 6;
     return true;
 }
 bool CLAP_ABI crashParamValue(const clap_plugin_t* pl, clap_id id, double* out) {
@@ -1449,8 +1449,8 @@ bool CLAP_ABI crashParamValue(const clap_plugin_t* pl, clap_id id, double* out) 
     return true;
 }
 bool CLAP_ABI crashValueToText(const clap_plugin_t*, clap_id, double v, char* out, uint32_t size) {
-    static const char* kNames[] = {"pass", "crash", "hang", "slow", "fault", "teardown"};
-    std::snprintf(out, size, "%s", kNames[std::clamp(static_cast<int>(v), 0, 5)]);
+    static const char* kNames[] = {"pass", "crash", "hang", "slow", "fault", "teardown", "abort"};
+    std::snprintf(out, size, "%s", kNames[std::clamp(static_cast<int>(v), 0, 6)]);
     return true;
 }
 bool CLAP_ABI crashTextToValue(const clap_plugin_t*, clap_id, const char*, double*) {
@@ -1481,6 +1481,7 @@ clap_process_status CLAP_ABI crashProcess(const clap_plugin_t* pl, const clap_pr
     crashEvents(pl, p->in_events);
     if (C(pl)->mode.load() == 1) std::raise(SIGSEGV);
     if (C(pl)->mode.load() == 4) badWrite();
+    if (C(pl)->mode.load() == 6) std::abort();  // what the host makes of abort() differs
     while (C(pl)->mode.load() == 2) {  // spin (no system call: sanitizers see a hang, not a call)
     }
     if (C(pl)->mode.load() == 3) {  // spin on the clock: no system call either

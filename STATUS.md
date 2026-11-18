@@ -1626,7 +1626,8 @@ by an exception is exercised only by `clap-host.diagnostics-inventory` there, wh
 on Windows yet. The case that a bridge faulting as the host lets go is its own end (the crash fixture's
 teardown mode) is compiled on every platform and unproven on Windows and macOS until native CI runs. A known gap on Windows: a bridge that a plug-in ends with `raise(SIGSEGV)`, and
 may be one it ends with `abort()` or an uncaught `std::terminate` (the release UCRT's default
-fast-fails, which is reported; unproven without a Windows run of an `abort()` fixture), exits with
+fast-fails, which is reported; the case `a bridge ended by abort()` in `test_bridge_diagnostics.cpp` expects that on Windows and
+fails naming the status if the runtime gives an exit, so the next native run settles it), exits with
 the C runtime's code 3 and no exception, so it is read as an exit and gets no report of its own (on POSIX the same plug-in dies by a signal and does);
 a real access violation or `__fastfail` is an exception and does.
 The bridge's `Create` reply now carries the instance's cell and generation in the bridge's own execution table and
