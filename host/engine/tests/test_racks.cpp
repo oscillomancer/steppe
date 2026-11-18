@@ -2378,6 +2378,99 @@ TEST_CASE("MIDI sends: all-notes-off releases precede a same-frame reattack" *
     }
 }
 
+TEST_CASE("MIDI sends: a source mute or a route mute while playing needs no plan" *
+          doctest::description("rt")) {
+    // ADR-0093: a post-fader MIDI send follows its source's mute, and its own,
+    // from the slots. Its source runs on the same executor as its target (the
+    // live region takes both), so the send reads the source's synced mute.
+    model::EditTxn t(model::Session::create({.console9 = false}), 1);
+    const Id source = addChannel(t), target = addChannel(t);
+    t.modify<model::Track>(source, [](auto& tr) { tr.parentSend.enabled = false; });
+    model::FxInstance synth;
+    synth.plugin.id = "com.suppleaudio.test.sine";
+    const Id fx = t.create(synth);
+    t.modify<model::Track>(target, [&](auto& tr) { tr.chain = {fx}; });
+    model::MidiSource midi;
+    midi.sequence.ppq = 960;
+    midi.sequence.length = 4 * 960;
+    for (int i = 0; i < 8; ++i)
+        midi.sequence.notes.push_back({i * 480, 470, 0, static_cast<std::uint8_t>(60 + i), 100, 0});
+    model::Take take;
+    take.source = t.create(midi);
+    const Id tk = t.create(take);
+    model::Item item;
+    item.track = source;
+    item.length = 4;
+    item.takes = {tk};
+    item.activeTake = tk;
+    t.create(item);
+    model::Route route;
+    route.from.track = source;
+    route.to.track = target;
+    route.midi = model::MidiRouting{};
+    const Id send = t.create(route);
+    const auto base = commit(t);
+    auto play = [&](const model::Session& next, const EngineOptions& options, int run) {
+        auto pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 300 * 256});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256}));
+        REQUIRE(engine.load(base));
+        engine.play();
+        auto cycles = [&](int n) {
+            for (int i = 0; i < n; ++i) {
+                if (options.anticipative)
+                    REQUIRE(engine.awaitRendered((backend.cycles() + 1) * 256));
+                backend.run(1);
+            }
+        };
+        cycles(100);
+        const auto generation = engine.planGeneration();
+        if (run == 0) REQUIRE(engine.load(next));
+        if (run == 1) {
+            model::EditTxn marker(next, next.version + 1);
+            marker.create(model::Marker{});
+            REQUIRE(engine.load(commit(marker)));
+        }
+        CHECK(engine.planGeneration() == generation + (run == 1 ? 1 : 0));
+        cycles(200);
+        CHECK(engine.processErrors() == 0);
+        engine.stop();
+        return backend.capture().channels[0];
+    };
+    const std::vector<std::pair<std::string, std::function<void(model::EditTxn&)>>> edits = {
+        {"source muted",
+         [&](auto& e) { e.template modify<model::Track>(source, [](auto& x) { x.mute = true; }); }},
+        {"send muted",
+         [&](auto& e) { e.template modify<model::Route>(send, [](auto& x) { x.mute = true; }); }},
+    };
+    for (const auto& [name, edit] : edits)
+        for (const EngineOptions& options :
+             {EngineOptions{.anticipative = false, .workers = 0}, EngineOptions{.workers = 0}}) {
+            CAPTURE(name);
+            CAPTURE(options.anticipative);
+            model::EditTxn e(base, 2);
+            edit(e);
+            const auto next = commit(e);
+            const auto fast = play(next, options, 0), compiled = play(next, options, 1),
+                       unedited = play(next, options, 2);
+            auto heard = [&](const std::vector<float>& x) {
+                for (std::size_t i = 0; i < x.size(); ++i)
+                    if (x[i] != unedited[i]) return i;
+                return x.size();
+            };
+            REQUIRE(heard(fast) < fast.size());
+            if (!options.anticipative) {
+                CHECK(fast == compiled);
+            } else {
+                CHECK(heard(fast) <= heard(compiled));
+                CHECK(
+                    std::equal(fast.begin() + 250 * 256, fast.end(), compiled.begin() + 250 * 256));
+            }
+        }
+}
+
 TEST_CASE("MIDI sends: solo follows a MIDI send downstream only") {
     namespace d = supple::engine::detail;
     model::EditTxn t(model::Session::create({.console9 = false}), 1);
