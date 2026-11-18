@@ -100,6 +100,9 @@ struct BridgeEntry {
     diagctx::BridgeHow how = diagctx::BridgeHow::None;  // when ended
     std::int32_t status = 0;                            // when ended: the native status
     bool considered = false;                            // a report was decided on (written or not)
+    // The id the worker minted for the report of this end (a signal or an exception), empty when
+    // it sent none: the supervisor writes the report under it, so the application can name it.
+    std::string incident;
 };
 
 // The text a report may show for a plug-in's string: at most `kMaxText` bytes, valid UTF-8,

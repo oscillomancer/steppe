@@ -953,11 +953,17 @@ TEST_CASE("the worker sends a bridge's start, its end and the bridge each instan
     diagctx::announce(5, diagctx::InstanceKind::Clap, diagctx::InstanceOrigin::Foreign,
                       diagctx::InstanceMode::InProcess, InstanceState::Active, 0,
                       {"Local", {}, {}, {}});
-    diagctx::announceBridge(1, diagctx::BridgeHow::Signal, 11);
-    diagctx::announceBridge(0);                                // not a bridge: ignored
-    diagctx::announceBridge(2, diagctx::BridgeHow::None, 99);  // a start carries no status
+    const std::string minted = diagctx::announceBridge(1, diagctx::BridgeHow::Signal, 11);
+    CHECK(diagctx::announceBridge(0).empty());  // not a bridge: ignored
+    CHECK(diagctx::announceBridge(2, diagctx::BridgeHow::None, 99).empty());  // no status, no id
     resetInventoryForTests(nullptr);
     REQUIRE(gSent.size() == 5);
+    // The end by a signal names the report it may cause: the worker minted the id, and the packet
+    // carries it, and the supervisor keeps it.
+    REQUIRE(minted.size() == 32);
+    CHECK(gSent[3].instance.length[3] == 32);
+    CHECK(std::string(gSent[3].instance.text[3], 32) == minted);
+    for (const std::size_t other : {0u, 1u, 2u, 4u}) CHECK(gSent[other].instance.length[3] == 0);
     CHECK(gSent[0].instance.event == static_cast<std::uint8_t>(EventKind::Bridge));
     CHECK(gSent[0].instance.bridge == 1);
     CHECK(gSent[0].instance.how == 0);
@@ -972,6 +978,7 @@ TEST_CASE("the worker sends a bridge's start, its end and the bridge each instan
     for (const auto& packet : gSent) CHECK(inventory.apply(packet));
     CHECK(inventory.rejected() == 0);
     CHECK(inventory.bridge(1)->ended);
+    CHECK(inventory.bridge(1)->incident == minted);
     CHECK(inventory.find(4, 0)->bridge == 1);
     CHECK(inventory.find(5, 0)->bridge == 0);
     CHECK(bridgesShape(inventory.bridgesJson(), inventory.pluginsJson(nullptr), 0));
@@ -1505,4 +1512,41 @@ TEST_CASE("every byte of a Child record, replaced, is refused or leaves the plac
             }
             CHECK(inventory.entries().size() == 1);  // never a second entry out of one packet
         }
+}
+
+TEST_CASE(
+    "only an end by a signal or an exception may name a report, and only by a real report id") {
+    const std::string id = "0123456789abcdef0123456789abcdef";
+    const auto ended = [&](diagctx::BridgeHow how, std::string_view text) {
+        Packet p = bridgeEvent(3, how, how == diagctx::BridgeHow::None ? 0 : 11);
+        std::memcpy(p.instance.text[3], text.data(), text.size());
+        p.instance.length[3] = static_cast<std::uint8_t>(text.size());
+        return p;
+    };
+    const auto accepted = [&](const Packet& p) {
+        Inventory inventory;
+        return inventory.apply(p) && inventory.rejected() == 0;
+    };
+    {
+        Inventory inventory;
+        REQUIRE(inventory.apply(ended(diagctx::BridgeHow::Signal, id)));
+        CHECK(inventory.bridge(3)->incident == id);
+    }
+    CHECK(accepted(ended(diagctx::BridgeHow::Exception, id)));
+    CHECK(accepted(ended(diagctx::BridgeHow::Signal, "")));      // an older worker sends none
+    CHECK_FALSE(accepted(ended(diagctx::BridgeHow::Host, id)));  // never reported
+    CHECK_FALSE(accepted(ended(diagctx::BridgeHow::Exit, id)));
+    CHECK_FALSE(accepted(ended(diagctx::BridgeHow::None, id)));
+    CHECK_FALSE(accepted(ended(diagctx::BridgeHow::Signal, id.substr(1))));  // 31 characters
+    CHECK_FALSE(accepted(ended(diagctx::BridgeHow::Signal, id + "0")));
+    CHECK_FALSE(accepted(ended(diagctx::BridgeHow::Signal, "0123456789ABCDEF0123456789abcdef")));
+    CHECK_FALSE(accepted(ended(diagctx::BridgeHow::Signal, "0123456789abcdef0123456789abcde/")));
+    auto withName = ended(diagctx::BridgeHow::Signal, id);
+    withName.instance.length[0] = 1;  // text in any other field
+    CHECK_FALSE(accepted(withName));
+    // A second end does not replace the first's id.
+    Inventory inventory;
+    REQUIRE(inventory.apply(ended(diagctx::BridgeHow::Signal, id)));
+    REQUIRE(inventory.apply(ended(diagctx::BridgeHow::Signal, "ffffffffffffffffffffffffffffffff")));
+    CHECK(inventory.bridge(3)->incident == id);
 }

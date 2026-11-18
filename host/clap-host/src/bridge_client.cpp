@@ -440,7 +440,16 @@ void BridgeProcess::announceEnd(int why, bool hostEnded) noexcept {
     if (ordinal_ == 0 || endAnnounced_.exchange(true)) return;
     const BridgeEnd end =
         classifyBridgeEnd(why, hostEnded || hostKilled_.load(std::memory_order_acquire));
-    diagctx::announceBridge(ordinal_, end.how, end.status);
+    const std::string incident = diagctx::announceBridge(ordinal_, end.how, end.status);
+    if (incident.size() == incident_.size()) {
+        std::copy(incident.begin(), incident.end(), incident_.begin());
+        incidentReady_.store(true, std::memory_order_release);
+    }
+}
+
+std::string BridgeProcess::incident() const {
+    if (!incidentReady_.load(std::memory_order_acquire)) return {};
+    return std::string(incident_.data(), incident_.size());
 }
 
 void BridgeProcess::abandon() {

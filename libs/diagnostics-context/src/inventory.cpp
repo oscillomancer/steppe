@@ -3,7 +3,10 @@
 #include "supple/diagctx/inventory.h"
 
 #include <atomic>
+#include <chrono>
 #include <mutex>
+#include <random>
+#include <string>
 
 #include <algorithm>
 
@@ -30,6 +33,28 @@ std::mutex gGate;
 InventorySink enter(std::unique_lock<std::mutex>& lock) noexcept {
     lock = std::unique_lock(gGate);
     return gSink.load(std::memory_order_acquire);
+}
+
+// A report's id: 128 random bits as 32 lowercase hex characters. The id names a file in a private
+// folder and the supervisor never overwrites one, so it needs to be unique, not secret; a random
+// device that fails is mixed with the clock and a counter and still gives distinct ids.
+std::string mintIncident() noexcept {
+    static std::atomic<std::uint64_t> counter{0};
+    std::uint64_t words[2]{0, 0};
+    try {
+        std::random_device device;
+        for (auto& word : words) word = (std::uint64_t{device()} << 32) | device();
+    } catch (...) {
+    }
+    words[0] ^=
+        static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+    words[1] ^= (counter.fetch_add(1, std::memory_order_relaxed) + 1) * 0x9e3779b97f4a7c15ULL;
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string text(32, '0');
+    for (int w = 0; w < 2; ++w)
+        for (int i = 0; i < 16; ++i)
+            text[static_cast<std::size_t>(w * 16 + i)] = kHex[(words[w] >> (60 - 4 * i)) & 0xf];
+    return text;
 }
 
 std::uint16_t generationOfCell(std::uint32_t cell) noexcept {
@@ -143,16 +168,22 @@ void announce(std::uint32_t cell, InstanceKind kind, InstanceOrigin origin, Inst
     sink(event);
 }
 
-void announceBridge(std::uint16_t bridge, BridgeHow how, std::int32_t status) noexcept {
+std::string announceBridge(std::uint16_t bridge, BridgeHow how, std::int32_t status) noexcept {
     std::unique_lock<std::mutex> lock;
     const auto sink = enter(lock);
-    if (!sink || bridge == 0) return;
+    if (!sink || bridge == 0) return {};
     Event event;
     event.event = EventKind::Bridge;
     event.bridge = bridge;
     event.how = how;
     event.status = how == BridgeHow::None ? 0 : status;
+    std::string incident;
+    if (how == BridgeHow::Signal || how == BridgeHow::Exception) {
+        incident = mintIncident();
+        event.identity.id = incident;
+    }
     sink(event);
+    return incident;
 }
 
 std::uint64_t announcedImage(std::uint32_t cell) noexcept {

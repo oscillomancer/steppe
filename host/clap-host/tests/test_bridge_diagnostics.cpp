@@ -9,8 +9,10 @@
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
+#include <map>
 #include <mutex>
 #include <span>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <vector>
@@ -24,9 +26,13 @@ using namespace supple::host;
 namespace {
 std::mutex gEventsMutex;
 std::vector<diagctx::Event> gEvents;
+std::map<std::uint16_t, std::string> gIncidents;  // by bridge: the id an end carried
 void collect(const diagctx::Event& event) noexcept {
     std::lock_guard lock(gEventsMutex);
     gEvents.push_back(event);
+    // The strings of an event are only good for the call: keep the id the end names.
+    if (event.event == diagctx::EventKind::Bridge && !event.identity.id.empty())
+        gIncidents[event.bridge] = std::string(event.identity.id);
 }
 // Collects what the host announces for the length of a test.
 struct Sink {
@@ -34,11 +40,18 @@ struct Sink {
         {
             std::lock_guard lock(gEventsMutex);
             gEvents.clear();
+            gIncidents.clear();
         }
         // Not under the events lock: the sink runs under the announcement lock and then takes it.
         diagctx::setInventorySink(&collect);
     }
     ~Sink() { diagctx::setInventorySink(nullptr); }
+    // The incident id the end of bridge `bridge` carried, empty when it carried none.
+    static std::string incidentOf(std::uint16_t bridge) {
+        std::lock_guard lock(gEventsMutex);
+        const auto found = gIncidents.find(bridge);
+        return found == gIncidents.end() ? std::string() : found->second;
+    }
     static std::vector<diagctx::Event> of(diagctx::EventKind kind) {
         std::lock_guard lock(gEventsMutex);
         std::vector<diagctx::Event> found;
@@ -169,6 +182,40 @@ TEST_CASE("a bridged instance announces where it is in its bridge, an in-process
     first->reset();
 }
 
+// A death the host caused, or an orderly end, is never reported, so it names no report; and
+// without a supervisor to write one there is none to name, whatever ended the bridge.
+TEST_CASE("only a death that may be reported names a report") {
+    setBridgeExecutable(BRIDGE_PATH);
+    const auto info = fixture("com.suppleaudio.test.edge");
+    {
+        Sink sink;
+        auto process = createBridgeProcess();
+        REQUIRE(process);
+        const auto ordinal = (*process)->ordinal();
+        auto instance = Instance::create(info, {}, true, *process);
+        REQUIRE(instance);
+        (*process)->killBridge();  // the host's own kill
+        awaitEnded(**process);
+        (*process)->reap();
+        CHECK(Sink::incidentOf(ordinal).empty());
+        CHECK((*instance)->bridgeIncident().empty());
+        instance->reset();
+    }
+    // No sink: nothing writes reports, so the end carries nothing, even for a signal.
+    auto process = createBridgeProcess();
+    REQUIRE(process);
+    auto instance = Instance::create(info, {}, true, *process);
+    REQUIRE(instance);
+#if !defined(_WIN32)
+    REQUIRE(::kill((*process)->pid(), SIGKILL) == 0);
+    awaitEnded(**process);
+    (*process)->reap();
+    CHECK((*process)->failed());
+#endif
+    CHECK((*instance)->bridgeIncident().empty());
+    instance->reset();
+}
+
 // A bridge whose plug-in faults only once the host lets go of it is the bridge's own end, not the
 // host's (the destructor reads the status after it waits; round 6a, F3). The host fails the bridge
 // without killing it, so the instance is never destroyed by a request: the bridge destroys it when
@@ -220,6 +267,11 @@ TEST_CASE("a bridge ended by abort() is told as the system ended it, and the res
     CHECK(end.status == SIGABRT);
 #endif
     CHECK(end.how != diagctx::BridgeHow::Host);
+    // Whatever the system called it, a signal or an exception names a report; an exit does not.
+    const bool reported =
+        end.how == diagctx::BridgeHow::Signal || end.how == diagctx::BridgeHow::Exception;
+    CHECK(Sink::incidentOf(ordinal).size() == (reported ? 32u : 0u));
+    CHECK(instance.bridgeIncident() == Sink::incidentOf(ordinal));
     made->reset();
 }
 
@@ -307,6 +359,11 @@ TEST_CASE("a bridge that dies of a signal is announced as that signal, with its 
         if (event.bridge == ordinal && event.how != diagctx::BridgeHow::None) end = event;
     CHECK(end.how == diagctx::BridgeHow::Signal);
     CHECK(end.status == SIGKILL);
+    // The end names the report it may cause, and the instance says it (topic 6a, round 6a S1).
+    const auto incident = Sink::incidentOf(ordinal);
+    CHECK(incident.size() == 32);
+    CHECK((*first)->bridgeIncident() == incident);
+    CHECK((*second)->bridgeIncident().empty());  // another bridge, still running
     first->reset();
     second->reset();
 }

@@ -294,8 +294,22 @@ bool Inventory::applyBridge(const InstanceRecord& r) {
         r.mode != 0 || r.state != 0 || r.image != 0 || r.how >= diagctx::kBridgeHowCount ||
         (r.how == 0 && r.status != 0) || r.childCell != 0 || r.childGeneration != 0)
         return false;
-    for (const auto length : r.length)
-        if (length != 0) return false;
+    // The only text an event of a bridge may carry is the incident id the worker minted for an end
+    // that may be reported: a signal or an exception, 32 lowercase hex characters.
+    for (std::size_t i = 0; i < diagctx::kTextFields; ++i)
+        if (r.length[i] != 0 && i != 3) return false;
+    std::string incident;
+    if (r.length[3] != 0) {
+        if (r.length[3] != 32 ||
+            (r.how != static_cast<std::uint8_t>(diagctx::BridgeHow::Signal) &&
+             r.how != static_cast<std::uint8_t>(diagctx::BridgeHow::Exception)))
+            return false;
+        incident.assign(r.text[3], 32);
+        if (!std::all_of(incident.begin(), incident.end(), [](char ch) {
+                return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f');
+            }))
+            return false;
+    }
     BridgeEntry* entry = touchBridge(r.bridge);
     if (!entry) {
         // Counted in bridgesLost_: valid, but there is no room for it, so it is never considered
@@ -309,6 +323,7 @@ bool Inventory::applyBridge(const InstanceRecord& r) {
         entry->ended = true;
         entry->how = static_cast<diagctx::BridgeHow>(r.how);
         entry->status = r.status;
+        entry->incident = std::move(incident);
     }
     return true;
 }

@@ -478,12 +478,18 @@ Status publishBridgeReport(const fs::path& root, const Packet& boot, const Inven
                            std::uint16_t bridge) {
     const BridgeEntry* entry = inventory.bridge(bridge);
     if (!entry || !entry->ended) return failure();
-    auto id = incidentId();
-    if (!id) return failure();
     // Its own incident: the worker's run goes on under the id it has, and no marker belongs to
-    // this one, so a reader counts it the moment it is there.
+    // this one, so a reader counts it the moment it is there. The id is the one the worker minted
+    // when it announced the end, so that the application can name this report; a worker that sent
+    // none (an older one, a test) gets one made here.
+    std::string id = entry->incident;
+    if (id.size() != 32) {
+        auto made = incidentId();
+        if (!made) return failure();
+        id = std::move(*made);
+    }
     Packet own = boot;
-    std::copy(id->begin(), id->end(), own.incident.begin());
+    std::copy(id.begin(), id.end(), own.incident.begin());
     auto v = base(own);
     v["schema"] = "supple.crash-report/1.0";
     v["kind"] = "bridge_exit";

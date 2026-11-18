@@ -28,6 +28,7 @@
 // from.
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <string_view>
 
 namespace supple::diagctx {
@@ -129,8 +130,16 @@ void announce(std::uint32_t cell, InstanceKind kind, InstanceOrigin origin, Inst
 // `bridge` is an ordinal of 1 or more; an announcement of 0 is ignored. Called from the thread
 // that spawns the bridge and from the main thread that observes its end, never from an audio
 // path (it takes the same lock every announcement does).
-void announceBridge(std::uint16_t bridge, BridgeHow how = BridgeHow::None,
-                    std::int32_t status = 0) noexcept;
+//
+// An end by a signal or an exception is one the supervisor may write a report for (topic 6a), so
+// the worker names the report: it mints the incident id (32 lowercase hex characters, the same
+// form every report has), sends it with the end in `identity.id`, and returns it, so that the
+// application can say which report its bridge's death caused. The supervisor uses it as the
+// report's id when it writes one; it may write none (a repeat, the run's limit), and then the id
+// names nothing. Empty, and nothing minted, for a start, for any other end (the host's own kill,
+// an exit: never reported) and when no sink is installed (no supervisor to write a report).
+std::string announceBridge(std::uint16_t bridge, BridgeHow how = BridgeHow::None,
+                           std::int32_t status = 0) noexcept;
 void announceState(std::uint32_t cell, InstanceState state) noexcept;
 // What a bridged instance is in its bridge process (topic 6b): `cell` is the host's cell of the
 // instance, `childCell` its cell in the bridge's table, `childGeneration` that cell's generation

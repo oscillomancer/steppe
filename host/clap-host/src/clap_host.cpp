@@ -1040,6 +1040,10 @@ Instance::DiagnosticsPlace Instance::diagnosticsPlace() const noexcept {
     return place;
 }
 
+std::string Instance::bridgeIncident() const {
+    return remote_ ? remote_->incident() : std::string();
+}
+
 Instance::~Instance() {
     MainEntry destroying(cell_.id(), remote_ != nullptr, diagctx::Entry::Destroy);
     setAudioWake(nullptr);

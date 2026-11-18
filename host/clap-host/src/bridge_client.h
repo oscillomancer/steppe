@@ -6,6 +6,7 @@
 #include "bridge_child.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <map>
 #include <memory>
@@ -59,6 +60,11 @@ class BridgeProcess {
     // This bridge's ordinal in the run (ADR-0083, topic 6a): 1, 2, ...; 0 when it has none (a
     // process adopted by a test, or the 65536th of a run).
     std::uint16_t ordinal() const { return ordinal_; }
+    // The id of the local crash report this bridge's death may have caused (ADR-0083, topic 6a):
+    // set when the end was observed (reap(), main thread) and was a signal or an exception while a
+    // diagnostics supervisor was there to write one; empty otherwise. The report may still not
+    // exist (a repeat, the run's limit, a full folder): a reader of the id handles that.
+    std::string incident() const;
 
   private:
     friend struct BridgeTestAccess;
@@ -106,6 +112,10 @@ class BridgeProcess {
     // reap() on the main thread, or from the destructor when nobody reaped.
     std::uint16_t ordinal_ = 0;
     std::atomic<bool> hostKilled_{false}, endAnnounced_{false};
+    // Topic 6a: the id of the crash report a signal or exception end may have caused (written once
+    // by announceEnd, then published by the release store of `incidentReady_`).
+    std::array<char, 32> incident_{};
+    std::atomic<bool> incidentReady_{false};
     void announceEnd(int why, bool hostEnded) noexcept;
 };
 
@@ -191,6 +201,7 @@ class RemoteInstance {
     // The bridge's audio thread did not get the class its last command asked for.
     bool classRefused() const { return classRefused_.load(std::memory_order_relaxed); }
     std::string failure() const;
+    std::string incident() const { return process_->incident(); }
     int bridgePid() const { return process_->pid(); }
 
   private:

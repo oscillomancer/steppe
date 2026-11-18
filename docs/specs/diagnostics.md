@@ -885,12 +885,19 @@ version, or the name when it has no id) and native status repeat one already rep
 bridge's own modules are read, those stand in for a build); the others are counted in
 `dropped.bridge_reports` of every later report of the run, with a line in `unavailable`, and so is
 an end by a signal or an exception that had no room in the list of 256 running bridges (it is never
-considered, so it could not have a report). There is no `Message::BridgeEnd`, and the worker does not mint the incident id or watch for the
-report: the `Bridge` end event travels in order on the same channel as the other inventory events,
-so the supervisor alone decides, from what it has applied, whether the death is reported and under
-which id. The worker's "pending/ready/unavailable" association (the wake of the model through its
-existing watcher, under Later integration contracts) is not built; a bridge death does not wake the
-model by itself. A report
+considered, so it could not have a report). There is no `Message::BridgeEnd` and no watcher: the `Bridge` end event travels in order on the same
+channel as the other inventory events, so the supervisor alone decides, from what it has applied,
+whether the death is reported. The worker names the report, though: when it announces an end by a
+signal or an exception (the only ends that may be reported) and a supervisor is there, it mints the
+incident id (`diagctx::announceBridge` returns it; 32 lowercase hex characters), sends it in the
+end event's text (the `id` field of the identity, the only text a `Bridge` event may carry, and
+only on those two ends), and the supervisor writes the report under that id, or under one of its
+own when the worker sent none. The id is therefore known to the application before the report is
+written, and names nothing when the supervisor writes none (a repeat, the run's limit, a folder it
+cannot write): a reader of the id handles a missing report. `Instance::bridgeIncident()` gives it
+for a bridged instance once the bridge's end was observed, and the engine puts it in the failed fx's
+`engine.status.failed_errors[]` entry and in `fx.failed` as `incident` (docs/specs/engine.md). A
+bridge death does not wake the model by itself. A report
 that cannot be written prints one line to the supervisor's standard error. The strict validator
 holds the kind to its parts: `bridge` is a listed bridge that ended by `signal` or `exception`
 with the report's `code`, `attribution` is the `bridge_exit` level and its plug-in a listed member

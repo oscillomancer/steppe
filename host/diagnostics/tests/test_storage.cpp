@@ -227,7 +227,8 @@ TEST_CASE("a report with bridges is published, validated, pruned, and kept when 
 }
 namespace {
 // A bridge whose one plug-in lived in it, and which then ended by `how`.
-Inventory bridgeThatEnded(supple::diagctx::BridgeHow how, std::int32_t status) {
+Inventory bridgeThatEnded(supple::diagctx::BridgeHow how, std::int32_t status,
+                          std::string_view incident = {}) {
     using namespace supple::diagctx;
     Inventory inventory;
     const auto apply = [&](auto&& change) {
@@ -256,6 +257,8 @@ Inventory bridgeThatEnded(supple::diagctx::BridgeHow how, std::int32_t status) {
         r.bridge = 1;
         r.how = static_cast<std::uint8_t>(how);
         r.status = status;
+        std::memcpy(r.text[3], incident.data(), incident.size());
+        r.length[3] = static_cast<std::uint8_t>(incident.size());
     });
     return inventory;
 }
@@ -303,6 +306,27 @@ TEST_CASE("a bridge's death is published as a report of its own, valid, with no 
     REQUIRE(publishBridgeReport(root.path, boot(0), inventory, 1));
     CHECK_FALSE(fs::exists(files[0]));
     CHECK(reports(root.path) == 20 + kKeepBridgeReports);
+}
+TEST_CASE("a bridge's report is written under the id the worker minted for it") {
+    Root root;
+    const std::string id = "00112233445566778899aabbccddeeff";
+    const auto inventory = bridgeThatEnded(supple::diagctx::BridgeHow::Signal, 11, id);
+    REQUIRE(publishBridgeReport(root.path, boot(0), inventory, 1));
+    const auto files = jsonFiles(root.path);
+    REQUIRE(files.size() == 1);
+    CHECK(files[0].stem().string() == id);
+    const auto parsed = json::parse(*readTextFile(files[0]));
+    REQUIRE(parsed);
+    CHECK(parsed->find("incident")->asString() == id);
+    CHECK(reportShape(*parsed));
+    // Not an id the run itself already has, and without one the supervisor makes its own.
+    CHECK(id != std::string(boot(0).incident.data(), 32));
+    Root other;
+    const auto without = bridgeThatEnded(supple::diagctx::BridgeHow::Signal, 11);
+    REQUIRE(publishBridgeReport(other.path, boot(0), without, 1));
+    const auto made = jsonFiles(other.path);
+    REQUIRE(made.size() == 1);
+    CHECK(made[0].stem().string().size() == 32);
 }
 TEST_CASE("a bridge_exit report is valid only as the report of a bridge that died on its own") {
     Root root;
