@@ -350,6 +350,9 @@ Result<std::unique_ptr<RemoteInstance>> RemoteInstance::spawn(
         port.channels = r.u32();
         ports.auxOutputs.push_back(std::move(port));
     }
+    ports.childCell = r.u32();
+    ports.childGeneration = r.u16();
+    ports.childImage = r.u64();
     if (!r.ok() || !self->instanceId_ || auxPorts > kMaxAuxPorts)
         return Error("host.bridge", "malformed reply from the plugin bridge");
     if (ports.inChannels > kMaxChannels || ports.outChannels > kMaxChannels ||

@@ -254,3 +254,10 @@ and writes the report; a bridge death does not wake the model by itself. Bridge 
 newest 5), so a plug-in whose bridge dies in every run cannot push out the crash report that makes it
 a suspect. Contracts:
 `docs/specs/diagnostics.md` "Bridge processes (topic 6a)".
+
+*Note, 2026-11-17 (topic 6b, the child's identity):* the bridge answers `Create` with the instance's
+cell and generation in its own execution table and an address in the plug-in's binary (bridge
+protocol 26, Windows 27, ADR-0013's note), and the host announces them in a `Child` event. The
+supervisor keeps them as private matching data and never reports them; the bridge's own threads
+are registered with topic 6c, where something reads them. Contracts: `docs/specs/diagnostics.md`
+"The child's identity (topic 6b)".

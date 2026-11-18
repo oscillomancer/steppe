@@ -33,6 +33,8 @@
 #include "../src/bridge_notifications.h"
 #include "../src/bridge_protocol.h"
 #include "../src/main_thread_wake.h"
+#include "supple/diagctx/scope.h"
+#include "supple/diagctx/table.h"
 
 #include <supple/clap/semantic_params.h>
 #include <supple/host/clap_host.h>
@@ -1313,6 +1315,18 @@ TEST_CASE("bridge rejects undersized shared memory and unexpected descriptors wi
     REQUIRE(status == static_cast<std::uint32_t>(bridge::Reply::Ok));
     bridge::Reader reader(reply.data(), reply.size());
     const auto instance = reader.u32();
+    // The reply ends with the instance's place in the bridge's own table (topic 6b): a cell of
+    // that process's table, a generation, and an address in the plug-in's binary.
+    CHECK(bridge::validReply(bridge::Op::Create, {reply.data(), reply.size()}));
+    REQUIRE(reply.size() > 14);
+    bridge::Reader place(reply.data() + reply.size() - 14, 14);
+    const auto childCell = place.u32();
+    const auto childGeneration = place.u16();
+    const auto childImage = place.u64();
+    CHECK(place.done());
+    CHECK(childCell < diagctx::kMaxInstances);
+    CHECK(childGeneration <= diagctx::kGenerationMask);
+    CHECK(childImage != 0);
     REQUIRE(bridge::sendFrame(sockets[0], static_cast<std::uint32_t>(bridge::Op::SetParam),
                               instance, {}));
     REQUIRE(bridge::recvFrame(sockets[0], status, id, reply, nullptr, 2000));
@@ -1480,9 +1494,9 @@ TEST_CASE("bridge protocol v6 retains nested structured error details") {
     REQUIRE(decoded.details[0].details.size() == 1);
     CHECK(decoded.details[0].details[0].code == "leaf");
 #if defined(_WIN32)
-    CHECK(bridge::kVersion == 26);
+    CHECK(bridge::kVersion == 27);
 #else
-    CHECK(bridge::kVersion == 25);
+    CHECK(bridge::kVersion == 26);
 #endif
 }
 

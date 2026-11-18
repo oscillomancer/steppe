@@ -266,3 +266,8 @@ an empty available catalogue.
 
 *Amended 2026-11-15:* [ADR-0083](0083-local-crash-reports.md) adds external local crash diagnostics.
 Existing bridge deadlines, notification framing and recovery ownership remain authoritative.
+
+*Note, 2026-11-17 (ADR-0083 topic 6b):* bridge protocol 26 (27 on Windows) appends the instance's
+place in the bridge's own execution table (cell, generation, an address in the plug-in's binary) to
+the `Create` reply, for crash reports; see `docs/specs/sandbox.md`. Nothing on the data plane
+changes, and the bridge's exit status is untouched.

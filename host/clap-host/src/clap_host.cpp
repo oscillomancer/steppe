@@ -849,6 +849,10 @@ Result<std::unique_ptr<Instance>> Instance::create(const PluginInfo& info,
         self->remoteEditor_ = ports.editor;
         self->hostState_ = std::make_unique<HostState>();
         self->remote_ = std::move(*remote);
+        // Where it is in the bridge's own table (topic 6b). A table with no room says so with its
+        // no-cell value, and nothing is announced.
+        diagctx::announceChild(self->cell_.id(), ports.childCell, ports.childGeneration,
+                               ports.childImage);
         diagctx::announceState(self->cell_.id(), diagctx::InstanceState::Inactive);
         return self;
     }
@@ -1026,6 +1030,14 @@ Result<std::unique_ptr<Instance>> Instance::create(const PluginInfo& info,
     }
     diagctx::announceState(self->cell_.id(), diagctx::InstanceState::Inactive);
     return self;
+}
+
+Instance::DiagnosticsPlace Instance::diagnosticsPlace() const noexcept {
+    DiagnosticsPlace place;
+    place.cell = cell_.id();
+    place.generation = diagctx::cellGeneration(place.cell);
+    place.image = diagctx::announcedImage(place.cell);
+    return place;
 }
 
 Instance::~Instance() {

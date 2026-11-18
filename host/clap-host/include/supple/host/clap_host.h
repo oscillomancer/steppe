@@ -543,6 +543,16 @@ class Instance {
     bool startUnanswered() const SUPPLE_RT;
     void stopProcessing() SUPPLE_RT;
     bool processing() const { return processing_; }
+    // Where this instance is in this process's execution table (ADR-0083, topic 6b): its cell,
+    // that cell's generation and an address in the plug-in's binary, 0 when unknown (a VST3, an
+    // instance the table had no room for). A bridge says it in its Create reply, so that the
+    // host can match what the bridge's table says to the instance it announced.
+    struct DiagnosticsPlace {
+        std::uint32_t cell = 0xffffffffu;
+        std::uint16_t generation = 0;
+        std::uint64_t image = 0;
+    };
+    DiagnosticsPlace diagnosticsPlace() const noexcept;
     // The host's executor that currently processes this instance (an opaque
     // token, null for none): a host with several audio threads uses it so
     // that exactly one of them calls the audio-thread API at a time. An

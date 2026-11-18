@@ -16,6 +16,8 @@
 #include "../src/bridge_client.h"
 #include "../src/bridge_diagnostics.h"
 #include "supple/diagctx/inventory.h"
+#include "supple/diagctx/scope.h"
+#include "supple/diagctx/table.h"
 using namespace supple;
 using namespace supple::host;
 namespace {
@@ -122,6 +124,49 @@ PluginInfo fixture(std::string_view id) {
     return {};
 }
 }  // namespace
+
+// The bridge answers Create with the instance's place in its own execution table, and the host
+// announces it, so that the supervisor can match what the bridge's table says to the instance the
+// report lists (topic 6b). What the child's numbers are can only be known from the child; what the
+// host can check is that they are in range, that they differ per instance, and that they
+// reach the announcement under the host's own cell.
+TEST_CASE("a bridged instance announces where it is in its bridge, an in-process one does not") {
+    setBridgeExecutable(BRIDGE_PATH);
+    Sink sink;
+    auto process = createBridgeProcess();
+    REQUIRE(process);
+    const auto info = fixture("com.suppleaudio.test.edge");
+    auto first = Instance::create(info, {}, true, *process);
+    REQUIRE(first);
+    auto second = Instance::create(info, {}, true, *process);  // the same bridge
+    REQUIRE(second);
+    auto third = Instance::create(info, {}, true);  // a bridge of its own
+    REQUIRE(third);
+    auto local = Instance::create(info, {}, false);
+    REQUIRE(local);
+    const auto adds = Sink::of(diagctx::EventKind::Add);
+    const auto children = Sink::of(diagctx::EventKind::Child);
+    REQUIRE(children.size() == 3);  // not for the in-process instance
+    for (const auto& child : children) {
+        CHECK(child.childCell < diagctx::kMaxInstances);
+        CHECK(child.childGeneration <= diagctx::kGenerationMask);
+        CHECK(child.image != 0);  // an address in the plug-in's binary, in the bridge
+        // It belongs to an instance the host announced as bridged, under that cell and generation.
+        bool found = false;
+        for (const auto& add : adds)
+            if (add.cell == child.cell && add.generation == child.generation &&
+                add.mode == diagctx::InstanceMode::Bridged && add.bridge != 0)
+                found = true;
+        CHECK(found);
+    }
+    // Two instances of one bridge are two cells of its table.
+    CHECK(children[0].childCell != children[1].childCell);
+    CHECK(children[0].cell != children[1].cell);
+    local->reset();
+    third->reset();
+    second->reset();
+    first->reset();
+}
 
 // A bridge whose plug-in faults only once the host lets go of it is the bridge's own end, not the
 // host's (the destructor reads the status after it waits; round 6a, F3). The host fails the bridge

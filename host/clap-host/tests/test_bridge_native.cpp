@@ -628,3 +628,42 @@ TEST_CASE("abandoning a bridge returns a call waiting on it from another thread"
         gate.reset();
     }
 }
+
+TEST_CASE(
+    "a Create reply carries the instance's place in the bridge's table, and no less or more") {
+    // Protocol 26 on POSIX, 27 on Windows: the reply gained its tail with that number.
+#if defined(_WIN32)
+    CHECK(bridge::kVersion == 27);
+#else
+    CHECK(bridge::kVersion == 26);
+#endif
+    bridge::Writer w;
+    w.u32(3);  // the instance id
+    w.u32(2);
+    w.u32(2);  // channels
+    w.u8(1);   // accepts notes
+    w.u8(0);   // semantic
+    w.u32(0);  // key channels
+    w.u8(0);   // editor
+    w.u8(0);   // outputs notes
+    w.u32(1);  // one auxiliary output
+    w.str("Aux");
+    w.u32(2);
+    const auto bare = w.bytes.size();
+    w.u32(7);  // cell
+    w.u16(5);  // generation
+    w.u64(0x7f0000001000ULL);
+    const auto valid = [&](std::size_t size) {
+        return bridge::validReply(bridge::Op::Create, bridge::Reader(w.bytes.data(), size));
+    };
+    CHECK(valid(w.bytes.size()));
+    CHECK_FALSE(valid(bare));                // a reply of the protocol before: no place
+    CHECK_FALSE(valid(w.bytes.size() - 1));  // cut short
+    w.u8(0);
+    CHECK_FALSE(valid(w.bytes.size()));  // something trailing
+    bridge::Reader r(w.bytes.data(), w.bytes.size());
+    r.skip(bare);
+    CHECK(r.u32() == 7);
+    CHECK(r.u16() == 5);
+    CHECK(r.u64() == 0x7f0000001000ULL);
+}

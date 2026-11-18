@@ -26,6 +26,11 @@ struct RemotePorts {
     std::uint32_t inChannels = 0, outChannels = 0, keyChannels = 0;
     std::vector<AudioPortInfo> auxOutputs;  // ADR-0021
     bool acceptsNotes = false, outputsNotes = false, semantic = false, editor = false;
+    // The instance's place in the bridge's own execution table and an address in the plug-in's
+    // binary there (ADR-0083, topic 6b); 0xffffffff, 0, 0 when the bridge's table had no room.
+    std::uint32_t childCell = 0xffffffffu;
+    std::uint16_t childGeneration = 0;
+    std::uint64_t childImage = 0;
 };
 
 class RemoteInstance;

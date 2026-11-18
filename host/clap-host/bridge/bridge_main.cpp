@@ -593,6 +593,11 @@ struct Bridge {
                 w.str(aux[i].name);
                 w.u32(aux[i].channels);
             }
+            // Where the instance is in this process's own table, for the host to match (6b).
+            const auto place = slot->instance->diagnosticsPlace();
+            w.u32(place.cell);
+            w.u16(place.generation);
+            w.u64(place.image);
             instances.emplace(newId, std::move(slot));
             return reply(w);
         }

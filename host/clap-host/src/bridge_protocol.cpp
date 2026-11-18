@@ -310,6 +310,7 @@ bool validReply(Op op, Reader r) {
                 r.skipString();
                 r.skip(4);
             }
+            r.skip(14);  // the instance's place in the bridge's table: cell, generation, image
             break;
         }
         case Op::Activate: {  // the settled widths: in, out, key, auxiliary outputs

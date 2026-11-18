@@ -62,10 +62,12 @@ inline constexpr std::uint32_t kMagic = 0x31474253;  // "SBG1"
 // read at an oversampled plug-in's rate.
 // 25/26: the AckNotifications reply names the instances with new captures,
 // so the parent pulls only those.
+// 26/27: the Create reply ends with the instance's place in the bridge's own execution table
+// (cell, generation) and an address in the plug-in's binary (crash reports, ADR-0083 topic 6b).
 #if defined(_WIN32)
-inline constexpr std::uint32_t kVersion = 26;  // Windows runs one ahead: native control handles
+inline constexpr std::uint32_t kVersion = 27;  // Windows runs one ahead: native control handles
 #else
-inline constexpr std::uint32_t kVersion = 25;
+inline constexpr std::uint32_t kVersion = 26;
 #endif
 inline constexpr int kControlFd = 3;  // the bridge's end of the socketpair
 inline constexpr std::uint32_t kMaxChannels = 16;
@@ -90,7 +92,7 @@ inline double liveClassPeriodNs(std::uint32_t livePeriodNs, std::uint32_t frames
 // --- control plane -----------------------------------------------------------------
 
 enum class Op : std::uint32_t {
-    Create = 1,  // path, id, identity → info
+    Create = 1,  // path, id, identity → info (ends with u32 cell, u16 generation, u64 image)
     Activate,    // rate, min, max (+ memfd) → ok
     Deactivate,
     Params,  // → [ParamInfo]
@@ -134,6 +136,7 @@ class Writer {
     std::vector<std::uint8_t> bytes;
     void u8(std::uint8_t v) { bytes.push_back(v); }
     void u32(std::uint32_t v) { raw(&v, 4); }
+    void u16(std::uint16_t v) { raw(&v, 2); }
     void i16(std::int16_t v) { raw(&v, 2); }
     void i32(std::int32_t v) { raw(&v, 4); }
     void u64(std::uint64_t v) { raw(&v, 8); }
@@ -189,6 +192,11 @@ class Reader {
     std::uint32_t u32() {
         std::uint32_t v = 0;
         raw(&v, 4);
+        return v;
+    }
+    std::uint16_t u16() {
+        std::uint16_t v = 0;
+        raw(&v, 2);
         return v;
     }
     std::int16_t i16() {

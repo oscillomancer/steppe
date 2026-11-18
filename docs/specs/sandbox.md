@@ -272,7 +272,7 @@ for eventfd type, read/write access and O_NONBLOCK; received copies are CLOEXEC.
 Missing, wrong-type, extra or duplicate descriptors, duplicate subscriptions,
 wrong versions/instance ids and trailing payloads are rejected with structured
 errors; rejected descriptors are closed. A wrong version's error names both
-protocols ("bridge protocol 25, host 24"); a refusal from a bridge older than
+protocols ("bridge protocol 26, host 25"); a refusal from a bridge older than
 protocol 25, which names neither, is reported with the host's. A host/bridge mismatch is detected
 even when no instance is activated. Existing operation numbers are preserved;
 SubscribeNotifications and AckNotifications are appended after TakeIdleOutputs.
@@ -280,6 +280,14 @@ SubscribeNotifications and AckNotifications are appended after TakeIdleOutputs.
 Windows) its reply names the instances with captures since the last ACK
 (`u32 count`, then `count` instance ids), each once. A destroyed instance
 leaves the list. A count above the parent's members plus 16 is unreadable.
+Protocol 26 (27 on Windows) appends three fields to the end of the `Create` reply, after the
+auxiliary ports: `u32 cell`, `u16 generation`, `u64 image`, the instance's place in the bridge's
+own execution table (ADR-0083, topic 6b): its cell (`0xffffffff` when the table had no room), that
+cell's generation and an address in the plug-in's binary in the bridge's address space (0 when
+unknown). They are private to the channel: the host passes them to its crash-report supervisor to
+match what the bridge's table says to the instance it announced, and never records them. The
+reply validator refuses a `Create` reply without them or with anything after them. Nothing else
+in the protocol, and nothing on the data plane, changes.
 Protocol 12 appends the main-thread `PluginStatus` query after it (no payload,
 one JSON string reply); the data plane and earlier operation numbers are
 unchanged. See [plugin-status](plugin-status-extension.md).

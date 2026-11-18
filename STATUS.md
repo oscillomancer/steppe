@@ -1629,6 +1629,12 @@ may be one it ends with `abort()` or an uncaught `std::terminate` (the release U
 fast-fails, which is reported; unproven without a Windows run of an `abort()` fixture), exits with
 the C runtime's code 3 and no exception, so it is read as an exit and gets no report of its own (on POSIX the same plug-in dies by a signal and does);
 a real access violation or `__fastfail` is an exception and does.
+The bridge's `Create` reply now carries the instance's cell and generation in the bridge's own execution table and
+an address in the plug-in's binary there (bridge protocol 26, Windows 27; topic 6b), which the host announces and
+the supervisor keeps as private matching data (`Inventory::findInBridge`); nothing reads it yet (6c matches the
+bridge's own capsule with it, and the bridge's threads are not registered until then). Tested on Linux with the
+real bridge (`clap-host.tests`: the announcement, the reply's tail) and by unit tests; the protocol number and the
+reply validator are checked on every platform's build, and a Windows/macOS bridge is unproven until native CI runs.
 Restart UI/hangs and release package verification remain later topics.
 Supervisor end (ADR-0091): a supervisor that crashes tells the worker first and the worker keeps
 running without crash capture; a supervisor ended with no notice (`SIGKILL`, `TerminateProcess`,

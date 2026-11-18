@@ -21,6 +21,7 @@ static void announceEverything() {
     dc::announceRemove(1);
     dc::announceBridge(1);
     dc::announceBridge(1, dc::BridgeHow::Signal, 11);
+    dc::announceChild(1, 2, 3, 0x1000);
 }
 
 static void announceOnAudioThread() SUPPLE_RT { announceEverything(); }
@@ -30,6 +31,8 @@ static void announceBridgeOnAudioThread() SUPPLE_RT { dc::announceBridge(1); }
 static void announceBridgeEndOnAudioThread() SUPPLE_RT {
     dc::announceBridge(1, dc::BridgeHow::Signal, 11);
 }
+// A bridged instance's place in its bridge (topic 6b) alone, for the same reason.
+static void announceChildOnAudioThread() SUPPLE_RT { dc::announceChild(1, 2, 3, 0x1000); }
 
 int main(int argc, char** argv) {
     if (argc == 2 && std::strcmp(argv[1], "audio") == 0) {
@@ -44,6 +47,11 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::strcmp(argv[1], "audio-bridge-end") == 0) {
         announceBridgeEndOnAudioThread();
+        std::puts("rtsan did not fire");
+        return 0;
+    }
+    if (argc == 2 && std::strcmp(argv[1], "audio-child") == 0) {
+        announceChildOnAudioThread();
         std::puts("rtsan did not fire");
         return 0;
     }
