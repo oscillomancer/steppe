@@ -1152,7 +1152,7 @@ TEST_CASE("mixer: a strip shows its meter's highest peak under it; a click clear
     CHECK_FALSE(f.strip(a).meter->clipped());
 }
 
-TEST_CASE("mixer: an empty chain's line adds a plug-in; a bypassed or offline one says so") {
+TEST_CASE("mixer: an empty chain is bare and a double-click adds; bypassed and offline say so") {
     Fixture f;
     if (!f.ok) return;
     std::vector<std::string> added;
@@ -1168,23 +1168,19 @@ TEST_CASE("mixer: an empty chain's line adds a plug-in; a bypassed or offline on
     f.exec("fx.set", R"({"fx":")" + p2 + R"(","bypass":true})");
     f.exec("fx.set", R"({"fx":")" + p3 + R"(","offline":true})");
     f.refresh();
-    // The empty chain's first row is the line; one click, and a double-click's
-    // second press opens nothing more.
+    // An empty chain shows no text. One click on it, at its top as anywhere,
+    // does nothing; a double-click adds a plug-in, as the strip's "+" does.
     const ui::Rect chain = f.strip(a).chain->bounds();
-    const ui::Point line{chain.x + chain.w / 2, chain.y + 9};
-    f.pointer(ui::PointerEvent::Type::Down, line);
-    f.pointer(ui::PointerEvent::Type::Up, line);
-    CHECK(added == std::vector<std::string>{a});
-    f.pointer(ui::PointerEvent::Type::Down, line, 2);
-    f.pointer(ui::PointerEvent::Type::Up, line);
-    CHECK(added == std::vector<std::string>{a});
-    // Under the line the chain's empty part is as it was: a double-click.
-    const ui::Point below{line.x, chain.y + 40};
-    f.pointer(ui::PointerEvent::Type::Down, below);
-    f.pointer(ui::PointerEvent::Type::Up, below);
-    CHECK(added.size() == 1);
-    f.pointer(ui::PointerEvent::Type::Down, below, 2);
-    f.pointer(ui::PointerEvent::Type::Up, below);
+    for (const float y : {9.0f, 40.0f}) {
+        const ui::Point at{chain.x + chain.w / 2, chain.y + y};
+        const std::size_t before = added.size();
+        f.pointer(ui::PointerEvent::Type::Down, at);
+        f.pointer(ui::PointerEvent::Type::Up, at);
+        CHECK(added.size() == before);
+        f.pointer(ui::PointerEvent::Type::Down, at, 2);
+        f.pointer(ui::PointerEvent::Type::Up, at);
+        CHECK(added.size() == before + 1);
+    }
     CHECK(added == std::vector<std::string>{a, a});
     // A plug-in's name is its own; its state is told apart from it.
     const std::string name = f.node("mixer.fx." + p1)->valueText();

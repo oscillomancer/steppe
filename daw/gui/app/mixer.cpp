@@ -421,27 +421,7 @@ class FxList : public ui::Node {
         }
     }
     std::function<void()> onDoubleClick;  // on the list's empty part: add a plug-in
-    // An empty chain says where plug-ins go: one quiet line at its top, lit
-    // under the pointer; a click on it adds one, as the strip's "+" does.
-    std::function<void()> onAdd;
-    bool empty() const { return racks_.empty() && slots_.empty(); }
-    ui::Rect hint() const { return {bounds().x, bounds().y, bounds().w, kSlotH}; }
-    void paint(ui::Canvas& c) override {
-        if (!empty() || !onAdd) return;
-        const ui::Theme& t = c.theme();
-        c.text(hint(), "+ plug-in", ui::Font::Ui, t.type("caption"),
-               t.color(hovered() ? "ink-quiet" : "ink-faint"), ui::kCenter | ui::kMiddle);
-    }
-    void onHover(bool) override {
-        if (empty()) invalidate();
-    }
     bool onPointer(const ui::PointerEvent& e) override {
-        if (e.type == ui::PointerEvent::Type::Down && e.button == 1 && empty() && onAdd &&
-            hint().contains(e.pos)) {
-            // The second press of a double-click has nothing more to open.
-            if (e.clicks == 1) onAdd();
-            return true;
-        }
         if (e.type == ui::PointerEvent::Type::Down && e.button == 1 && e.clicks >= 2 &&
             onDoubleClick &&
             std::none_of(slots_.begin(), slots_.end(),
@@ -1100,7 +1080,6 @@ void Mixer::rebuild() {
             args["track"] = tid;
             run("ui.fx.add", std::move(args));
         };
-        if (!t.freeze) chain.onAdd = chain.onDoubleClick;  // a frozen chain takes none
         // The racks that feed it (their Outs route to its input), first.
         if (t.type == model::StripType::Channel)
             for (model::Id rack : racks::racksFeeding(s, id)) {

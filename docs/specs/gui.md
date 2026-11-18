@@ -800,9 +800,8 @@ module's face and a faint "rack". A click on one opens the rack window on
 the rack (a double-click's second press does nothing more); a right-click
 is the strip's. A bypassed plug-in's name is dimmed and struck through; an
 offline one's is dimmed inside a dashed outline (their `valueText` ends in
-" (bypassed)" or " (offline)"). An empty chain shows one quiet line at its
-top, "+ plug-in", lit under the pointer: a click on it opens the plugin
-browser for the strip, as the strip's "+" does (a frozen track has none).
+" (bypassed)" or " (offline)"). An empty chain is bare: no text is drawn in
+it.
 The chain scrolls when it is
 longer than its section, and takes the room a strip's
 unused rows would leave (sends show only when there are some, two rows of
