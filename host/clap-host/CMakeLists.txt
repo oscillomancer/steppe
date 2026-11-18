@@ -39,7 +39,7 @@ if(APPLE)
                              COMPILE_OPTIONS "${_bridge_objcxx_options}")
 endif()
 target_link_libraries(${PRODUCT_SLUG}-bridge PRIVATE supple::clap-host supple::core-dsp
-                      supple::diagnostics-context)
+                      supple::diagnostics-context supple::diagnostics-capture)
 if(WIN32)
   target_link_libraries(${PRODUCT_SLUG}-bridge PRIVATE avrt)  # MMCSS for live audio (ADR-0081)
 endif()

@@ -52,6 +52,7 @@
 #include "../src/scan.h"
 #include "supple/base/rt.h"
 #include "supple/base/thread.h"
+#include "supple/diagcap/selfcapture.h"
 #include "supple/diagctx/table.h"
 #include "supple/dsp/dsp.h"
 #include "supple/host/clap_host.h"
@@ -601,6 +602,10 @@ struct Bridge {
             w.u32(place.cell);
             w.u16(place.generation);
             w.u64(place.image);
+            // The plug-in's build for the capsule's module list, read now while nothing is
+            // failing; a fault inside it is then labelled with that build (topic 6c).
+            (void)diagnostics::selfcapture::recordImage(
+                reinterpret_cast<const void*>(static_cast<std::uintptr_t>(place.image)));
             instances.emplace(newId, std::move(slot));
             return reply(w);
         }
@@ -1040,6 +1045,11 @@ int main(int argc, char** argv) {
         return result ? 0 : 1;
     }
 #endif
+    // The bridge describes its own death (ADR-0083, topic 6c): fault handlers that write a capsule
+    // into the capture slot and let the process end as it would have. Before any plug-in is loaded
+    // and before the first command is read; nothing is installed where a sanitizer owns the
+    // signals, and the bridge then works as before, with no capsule.
+    (void)diagnostics::selfcapture::install();
     // The process's command loop is this thread: the report names it (ADR-0083, topic 6c).
     (void)diagctx::registerThread(diagctx::ThreadRole::BridgeControl);
     Bridge b;
