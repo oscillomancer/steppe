@@ -1638,7 +1638,8 @@ in (`plugins[].bridge`, a `bridges` section with each bridge's state and how it 
 `signal`, `exception` or `host` for the host's own kill) and a bridge that dies by a signal or an
 exception while the app lives gets a report of its own, kind `bridge_exit`, at most 3 per run and
 none for a repeat (the plug-in's id and version and the status stand in for a build). It is the
-host's account only: the bridge's own threads and fault are not collected yet (6b, 6c), the
+host's account only: the bridge's own threads and fault are not collected yet (6b, 6c; the design of 6c is
+written and unbuilt, `docs/specs/diagnostics.md` "Bridge self-capture"), the
 attribution is the only live member or none, an exit's code is not read on POSIX, a bridge killed
 by the out-of-memory killer reads as a signal, and the 65536th bridge of a run has no ordinal.
 It is never a restart notice and takes no place in the suspect window, and retention keeps the newest

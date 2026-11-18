@@ -246,7 +246,8 @@ every other level, a plug-in with no id, an unreadable report and a report still
 yield none, but those that are valid still occupy a place in the window. The exception is a
 `bridge_exit` report (topic 6a): a bridge's death is not a run that closed, so it neither names a
 suspect nor takes a place in the window, and a loop of bridge crashes cannot push a real crash out
-of it. A suspect is keyed on
+of it. (Whether a bridge report that names a
+plug-in in its image may count is an open decision, kept to one function: "Bridge self-capture".) A suspect is keyed on
 `(format, plugin_id, build id)`; a report with no build id (an `active_token` attribution, every
 VST3) is keyed on the version too, so two versions are two suspects and none is an exact build.
 The suspect carries the name, vendor, version and `origin` of its newest report (P8 decides on
@@ -974,7 +975,178 @@ cells and generations in the table's range and nothing else in the record set. D
 instance again (`Add` with the same generation) keeps where it is; a new incarnation of the cell
 does not inherit it. Nothing of it is ever in a report: not the cell, not the generation, and not
 the address, which belongs to another process and must never be looked up among the worker's own
-modules. Nothing reads it yet: 6c matches a bridge's capsule with it.
+modules. Nothing reads it yet: 6c matches a bridge's capsule with it ("Bridge self-capture").
+
+### Bridge self-capture (topic 6c)
+
+**Status: contract only (step 6c.0). Nothing below is built.** Each step of the plan marks what it
+makes true; until then the sections above describe the code. The maintainer settled the
+transport, the trust rule and the two thread roles (decisions 1, 2 and 4); decision 3, whether a
+bridge's fault counts as a suspect, is open and is built as a switch (see "One rule for
+suspects").
+
+*Why the bridge captures itself.* The worker's capture works because the supervisor, its parent,
+reads the stopped worker while it waits in its handler. A bridge is a child of the worker and is
+connected to no supervisor; by the time anyone looks it is dead. Nothing can be read remotely, so
+the bridge must describe its own death, in its own fault handler, into storage that already
+exists and outlives it, without anything that can block. The goal is narrow: the fault thread's
+frames, which of the bridge's plug-ins the fault instruction lies in (with that plug-in's build
+id), and the roles and entries of the bridge's registered threads. The result is a
+`bridge_exit` report that can say `fault_in_image`. It is not a crash dump and holds no stack or
+register bytes, as the ADR forbids.
+
+*The slot (decision 1).* One shared-memory region per bridge process, the **capture slot**,
+created by the host in the worker before the bridge's `Create` and shared with two readers:
+the bridge, which writes it, and the supervisor, which reads it. Memory only, never a disk file
+(the ADR forbids temporary memory dumps): a `memfd` sealed against shrink and grow on Linux (the
+slot size is a compile-time constant, 256 KiB, checked against the capsule's maximum plus the
+execution table's 74,816 bytes), an anonymous `shm_open` object unlinked at once with its size set
+once on macOS, a pagefile-backed file mapping on Windows. Layout: a 64-byte header
+(`magic`, `version`, `state`, `length`, the bridge's ordinal) followed by the capsule. `state` is one
+atomic 32-bit word: 0 empty, 1 writing, 2 complete; the handler sets 1, writes, then publishes 2
+with a release store, so a reader that sees 2 sees the bytes, and a reader that sees 1 knows the
+bridge died mid-write and uses nothing. The slot is written once per bridge (a re-entering
+handler terminates, as the worker's does).
+
+*Handing it over.* Not by command line or by inheritance, so no spawn path changes and nothing
+extra leaks to the plug-ins' own children. One new process-level operation of the bridge protocol,
+`AttachCaptureSlot` (instance 0, appended after `AckNotifications`, payload `u32 version`, answered
+before any `Create`): POSIX sends the descriptor with `SCM_RIGHTS` like the notification eventfd
+(the received copy is `CLOEXEC`); Windows follows the convention of the notification events: the
+host duplicates the mapping handle into the bridge with `DuplicateHandle` and sends the
+recipient-owned handle value, which the bridge validates (a section handle, the expected size)
+before mapping. Missing, extra, duplicate or wrong-type resources and wrong versions are
+structured errors, as for the subscription. A bridge that does not attach (an older bridge, a
+refusal, or a death before the operation) leaves today's report exactly. The bridge protocol and
+the Windows native version each rise by one with this operation (`docs/specs/sandbox.md`), and a
+host refuses a bridge that does not know it only for capture: the bridge still works, with no
+capsule.
+
+*The supervisor reads it.* The worker announces the slot to the supervisor in order on the
+inventory channel (a new event kind `Slot`, bridge ordinal, one resource: POSIX a descriptor in
+the packet's ancillary data, Windows a handle value the supervisor duplicates with the process
+handle it already holds for the worker, as the notification convention does) and the
+supervisor keeps it with the bridge's entry. This is the one new capability of the private
+channel: its POSIX stream carries fixed-size packets only, so a packet that has a resource is sent
+with `sendmsg` and a single descriptor as ancillary data (attached to the packet's first byte,
+so a partial send that is finished later still delivers it; a received copy is `CLOEXEC`; any
+other ancillary data, a second descriptor or a descriptor on a packet that may carry none is
+damage, counted and closed), and the Windows channel's packet has a handle-value field that no
+other event uses. The channel's protocol version rises by one (`native.h`). The alternative, if the
+review of this step prefers no new channel capability: the worker reads the complete slot at the
+bridge's end and forwards it as chunked packets on the existing channel under the existing
+nonblocking send and deadline rules; it costs the worker a bounded send of up to 256 KiB from the
+thread that observes the end, which is why it is not the recommendation. No capsule bytes pass through the worker: the worker
+only says, as today and in order, that the bridge ended. When the supervisor applies that end it
+reads the slot: POSIX with `pread` of at most the slot size into a bounded buffer (never a map: a
+mapping that someone shrank is a fault, a read is an error), Windows by mapping read-only a
+section of fixed extent and copying. The supervisor takes the slot's descriptor only for a bridge
+the end event names and closes it on every path (a count of open slots is bounded by the 256
+bridges the inventory keeps, and the oldest ended one falls out with its slot). A slot that is
+empty, still `writing`, wrong in magic, version or length, or whose bytes the parser refuses,
+changes nothing: the report is today's. The supervisor writes a bridge report from the slot on
+the same background writer as today's, so nothing waits on the disk.
+
+*Trust (decision 2).* The capsule is untrusted input of the same kind as the worker's. A bridge
+runs third-party code that can write the slot as well as the bridge's own handler can, so the
+existing capsule parser and its caps are the only reader (strict counts, roles, ranges, bytes
+consumed exactly), no address from the slot leaves the parser (a frame is a module index and an
+offset, as for the worker), and the worst a hostile plug-in can do is mislabel its own bridge's
+report. A bridge never writes anything outside its slot, and the supervisor never trusts a length
+from it beyond the slot size it knows. The report records that a bridge capsule is
+bridge-reported (`capture: "bridge"`, below) so a reader weighs it so.
+
+*What the capsule holds (CTC5).* The capsule of topic 4 (header, modules, threads with frames
+and roles, command ring: `CTC4`) plus a copy of the bridge's own execution table, 74,816 bytes,
+copied from the handler straight into the slot (never through a stack buffer, which a 64 KiB
+signal stack could not hold) with relaxed loads. The parser checks the table's magic and
+version as the worker's table is checked, and uses it as the worker's table is used: a thread's
+role and entry (the cell and generation of the instance it was inside), nothing else. The
+fault thread is walked from the signal context or the exception record, frames are raw
+addresses, and the frame walker is the one of `diagnostics-capture`, over a reader that cannot
+fault (`process_vm_readv` on the own process on Linux, `mach_vm_read_overwrite` on the own task,
+a guarded copy on Windows). **Other threads' frames** are collected only where the
+platform's in-process code already does it: macOS walks the own task's threads as the worker
+does; Linux and Windows record the other registered threads by role and entry from the table copy
+with `state: unavailable` and reason `not_collected`. Collecting their frames needs a thread
+handshake (a signal per thread on Linux, suspend and context on Windows) that this topic does
+not take on: the fault thread is what attribution needs.
+
+*Modules.* The handler does no module discovery: `/proc/self/maps`, `dl_iterate_phdr` and the
+Windows loader list are not safe or bounded there. Instead the bridge records, while cold, the
+identity of the images it loads on purpose: its own executable at start, and each plug-in's
+library when the plug-in is created (text range, load bias, build id: the ELF note, Mach-O UUID or
+CodeView record, read by the code the supervisor's reader already has, `image-identity`), in a
+static list of 256 entries that the handler copies into the capsule's `modules`. A frame in an
+image the bridge did not record (a system library, the loader) has no module identity, which the
+parser already accepts ("a return address outside every module is kept as such"). macOS adds what
+dyld lists, as the worker's capture does. A fault inside a plug-in's code is therefore labelled
+with the plug-in's own build, which is all `fault_in_image` needs; a fault in a system library
+called by it is `active_token`, as for the worker. *Not proven:* that every platform can read the
+build id cold and cheaply at `Create`; the fallback is that the entry has no identity, and a
+bridge whose plug-in has none produces today's report.
+
+*Thread roles (decision 4).* Two registered roles join the closed set: `bridge_control`, the
+thread that runs the bridge's command loop (the process's main thread), and `bridge_audio`, the
+thread that runs a plug-in's `process` (today the `audio-bridge` thread of each instance's slot),
+numbered from 1 in creation order in `worker` like the pools. Every other thread in the bridge, the
+plug-in's own and the system's, stays `other`. This changes four places together, in step 6c.1: the
+execution table's version (the role is stored by number), `threadRoleName` and the roles the
+reader's validator accepts and the viewer's `roleName` (and the viewer's text), and the paragraph
+above that lists which threads are registered ("the sandbox and bridge children" leave the list of
+unregistered ones). Roles are stored by the process that registers them, so the worker and a bridge
+share the closed set but never each other's table: the supervisor reads a bridge's roles only from
+that bridge's capsule. Registration happens when the thread starts and off every audio path;
+the plug-in call entries use the same atomic scopes as the worker's (`host::Instance`, table
+`enter` and `leave`: stores only), so the `rtsan` check on the bridge's audio entry stays as it is.
+
+*Where the handlers are.* The bridge's `main` installs, once and before it reads any command,
+the same handlers the worker has (`diagnostics-capture`, no frontend and no supervisor): the
+signals SEGV, BUS, ILL, FPE and ABRT with an alternate stack per registered thread on POSIX, the
+last-chance filter and the `SIGABRT` and terminate hooks on Windows (the runtime settings of
+`8336fe69` stay). A handler writes the capsule into the slot and then **chains to the previous
+action so the exit status stays the fatal one**: the host's classification of the end
+(`signal`, `exception`, `host`) and its kill rules are unchanged by capture, and a
+`bridge_exit` report without a capsule stays exactly as today's. Closing the Windows gap in which
+`raise(SIGSEGV)` ends a process with an exit code (a `bridge_exit` that reads as an `exit`, so no
+report) falls out of a handler in the bridge, which can end with the exception status. The
+handler's bound is its own: 200 ms from the fault to a published slot, measured on the monotonic
+clock, and a slot not complete by then is left `writing`. The host's kill deadlines are never
+extended to wait for a capsule, as the ADR requires.
+
+*What the report says.* A bridge's `bridge_exit` report gains `threads` (the fault thread first,
+the rest by role and entry as above), `modules`, and `capture: "bridge"` (the origin of the
+threads; absent on a report from the host's account alone), and its `complete` is true only when
+the capsule's threads are all walked. `attribution` stays `{confidence, plugin}`: when the fault
+thread's first frame lies in a module that is the `build` of a bridge member (the build found in the
+capsule's modules by the 6b `image` address of each member, matched with `findInBridge` and the
+cell and generation of the thread's entry) the confidence is `fault_in_image`, the plug-in the one
+the thread was inside or the only one alive, under the same rules as the worker's 5e; the
+validator allows `fault_in_image` and `active_token` in a `bridge_exit` report when the report
+carries a bridge capsule and holds them to the same evidence rules as the worker's. A report with
+no capsule keeps the `bridge_exit` level only. A bridge member's `build` is no longer null for a bridge
+that captured: the repeat rule (members and status) uses it instead of the stand-in.
+
+*One rule for suspects (decision 3, open).* Whether a bridge report that names a plug-in by
+`fault_in_image` takes a place in the suspect window and yields a suspect for the safe-load
+question is **not decided** (it changes what a user is asked about, and so is the maintainer's
+and the product owner's). It is built as one function in one file, `bridgeReportCounts(summary)` in
+`host/diagnostics/src/reports.cpp`, called where the window is read (`suspects`), and it returns
+false in this topic: a `bridge_exit` report neither names a suspect nor takes a place in the window,
+as the section on suspects above says. Switching it to "true for `fault_in_image` with an exact
+build" changes that one function and the sentence in the section on suspects; the report, its
+validator, the reader's summary and the viewer carry the attribution either way. Whatever the
+answer, a bridge report is never a restart notice (`lastRunNotice` and the role scan keep
+skipping it: the application did not close), and a plug-in already bridged by `plugin.override` is
+not asked about again (suspects are asked about plug-ins whose mode is `normal`).
+
+*Plan and review stops.* 6c.0 this contract (review stop A). 6c.1 thread roles. 6c.2 the bridge
+captures itself (handlers, CTC5, the cold module list). 6c.3 the host carries the slot (the
+operation, the `Slot` event, the protocol and wire bumps) (review stop B, with Linux working end
+to end). 6c.4 the supervisor reads and reports (parser, labels, attribution, validator, reader,
+viewer). 6c.5 tests on the three platforms and the sanitizers (review stop C). Native CI is the
+only proof of the macOS in-process walk of a child, the Windows filter in a bridge and the
+Windows handle duplication. A missing, late or malformed capsule is always today's report.
 
 ### Command breadcrumbs (topic 5d)
 

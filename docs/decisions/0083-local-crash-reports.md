@@ -263,3 +263,19 @@ protocol 26, Windows 27, ADR-0013's note), and the host announces them in a `Chi
 supervisor keeps them as private matching data and never reports them; the bridge's own threads
 are registered with topic 6c, where something reads them. Contracts: `docs/specs/diagnostics.md`
 "The child's identity (topic 6b)".
+
+*Note, 2026-11-19 (topic 6c, design; nothing built yet):* a bridge describes its own death. It is a child
+of the worker and dead before anyone could read it, so it captures itself in its own fault handler into a
+shared-memory **capture slot** (memory only, no file) that the host creates and hands to the bridge with one
+new process-level operation, and that the supervisor also holds and reads when it applies the bridge's end;
+no capsule bytes pass through the worker, and the host's kill deadlines never wait for a capsule. The
+capsule is untrusted input: the existing parser and caps are its only reader and no address leaves them.
+The bridge records its plug-ins' build identities while cold and the handler only copies them, so the
+handler discovers no modules. The fault thread is walked everywhere; other threads' frames only where the
+platform's in-process code already does it (macOS). Two thread roles join the closed set, `bridge_control`
+and `bridge_audio`. The handler ends in the fatal status as before, so the host's classification and
+kills are unchanged. Maintainer decisions of 2026-11-19: the slot as transport, the capsule as untrusted
+input and the two roles. **Open (the maintainer and the product owner):** whether a bridge report that
+names a plug-in's image takes a place in the suspect window and so changes what the safe-load question
+asks about; it is built as one switch, off, in one function, and the report carries the attribution
+either way. Contract: `docs/specs/diagnostics.md` "Bridge self-capture (topic 6c)".

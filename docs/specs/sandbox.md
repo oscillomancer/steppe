@@ -288,6 +288,12 @@ unknown). They are private to the channel: the host passes them to its crash-rep
 match what the bridge's table says to the instance it announced, and never records them. The
 reply validator refuses a `Create` reply without them or with anything after them. Nothing else
 in the protocol, and nothing on the data plane, changes.
+Topic 6c (planned, not built: ADR-0083's note of 2026-11-19, `docs/specs/diagnostics.md` "Bridge
+self-capture") appends one process-level operation after `AckNotifications`, `AttachCaptureSlot`
+(instance 0, `u32 version`, one shared-memory resource: a descriptor on POSIX, a duplicated
+mapping handle's value on Windows), sent before `Create`, so a bridge can write its own crash
+capsule where the host's supervisor can read it. Both protocol versions rise by one when it is
+built; the data plane and every earlier operation are unchanged.
 Protocol 12 appends the main-thread `PluginStatus` query after it (no payload,
 one JSON string reply); the data plane and earlier operation numbers are
 unchanged. See [plugin-status](plugin-status-extension.md).
