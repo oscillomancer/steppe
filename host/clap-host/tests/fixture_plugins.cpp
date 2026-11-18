@@ -1419,10 +1419,17 @@ const clap_plugin_descriptor_t* crashDescriptor() {
     return &d;
 }
 
+[[gnu::noinline]] void badWrite() { *reinterpret_cast<volatile int*>(8) = 1; }
+
 struct Crash {
     clap_plugin_t plugin{};
     const clap_host_t* host = nullptr;
     std::atomic<int> mode{0};
+    // Mode 5: processes like mode 0 and faults when it is destroyed, which is a crash that
+    // happens only once the host lets go of a bridge that still holds the instance.
+    ~Crash() {
+        if (mode.load() == 5) badWrite();
+    }
 };
 Crash* C(const clap_plugin_t* p) { return static_cast<Crash*>(p->plugin_data); }
 
@@ -1433,7 +1440,7 @@ bool CLAP_ABI crashParamInfo(const clap_plugin_t*, uint32_t index, clap_param_in
     info->id = 1;
     info->flags = CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_AUTOMATABLE;
     std::snprintf(info->name, sizeof(info->name), "Mode");
-    info->max_value = 4;
+    info->max_value = 5;
     return true;
 }
 bool CLAP_ABI crashParamValue(const clap_plugin_t* pl, clap_id id, double* out) {
@@ -1442,8 +1449,8 @@ bool CLAP_ABI crashParamValue(const clap_plugin_t* pl, clap_id id, double* out) 
     return true;
 }
 bool CLAP_ABI crashValueToText(const clap_plugin_t*, clap_id, double v, char* out, uint32_t size) {
-    static const char* kNames[] = {"pass", "crash", "hang", "slow", "fault"};
-    std::snprintf(out, size, "%s", kNames[std::clamp(static_cast<int>(v), 0, 4)]);
+    static const char* kNames[] = {"pass", "crash", "hang", "slow", "fault", "teardown"};
+    std::snprintf(out, size, "%s", kNames[std::clamp(static_cast<int>(v), 0, 5)]);
     return true;
 }
 bool CLAP_ABI crashTextToValue(const clap_plugin_t*, clap_id, const char*, double*) {
@@ -1470,7 +1477,6 @@ const void* CLAP_ABI crashExt(const clap_plugin_t*, const char* id) {
     return nullptr;
 }
 bool CLAP_ABI crashActivate(const clap_plugin_t*, double, uint32_t, uint32_t) { return true; }
-[[gnu::noinline]] void badWrite() { *reinterpret_cast<volatile int*>(8) = 1; }
 clap_process_status CLAP_ABI crashProcess(const clap_plugin_t* pl, const clap_process_t* p) {
     crashEvents(pl, p->in_events);
     if (C(pl)->mode.load() == 1) std::raise(SIGSEGV);

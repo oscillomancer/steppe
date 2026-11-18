@@ -5,8 +5,12 @@
 #if !defined(_WIN32)
 #include <signal.h>
 #endif
+#include <array>
 #include <chrono>
+#include <filesystem>
 #include <mutex>
+#include <span>
+#include <string_view>
 #include <thread>
 #include <vector>
 #include "../src/bridge_client.h"
@@ -105,13 +109,6 @@ TEST_CASE("a bridge the host kills is announced as the host's end, once, when it
     CHECK(Sink::of(diagctx::EventKind::Bridge).size() == 2);
 }
 
-// The two cases below end a bridge with SIGKILL from outside. The Windows counterpart would end it
-// with TerminateProcess(OpenProcess(pid), 0xC0000005); it is not written because nothing here can
-// compile or run it, and an untried Windows branch has already broken this build once. Windows is
-// covered by the classification case above (exception and exit statuses) and by the host-kill and
-// orderly-shutdown cases; a bridge ended by an exception is proven there by native CI only, and
-// STATUS.md says so.
-#if !defined(_WIN32)
 namespace {
 PluginInfo fixture(std::string_view id) {
     ScanOptions options;
@@ -126,6 +123,52 @@ PluginInfo fixture(std::string_view id) {
 }
 }  // namespace
 
+// A bridge whose plug-in faults only once the host lets go of it is the bridge's own end, not the
+// host's (the destructor reads the status after it waits; round 6a, F3). The host fails the bridge
+// without killing it, so the instance is never destroyed by a request: the bridge destroys it when
+// the socket closes, and the fixture faults in its destructor. No timing decides this: the bridge
+// is alive when the host lets go, and what it did next is what the end reads as.
+TEST_CASE("a bridge that faults as the host lets go is its own end, not the host's") {
+    setBridgeExecutable(BRIDGE_PATH);
+    Sink sink;
+    auto process = createBridgeProcess();
+    REQUIRE(process);
+    const auto ordinal = (*process)->ordinal();
+    {
+        auto made = Instance::create(fixture("com.suppleaudio.test.crash"), {}, true, *process);
+        REQUIRE(made);
+        Instance& instance = **made;
+        REQUIRE(instance.activate(48000.0, 1, 64));
+        REQUIRE(instance.startProcessing());
+        REQUIRE(instance.setParam(1, 5.0));  // faults at its destruction, processes until then
+        std::array<float, 64> in{}, out{};
+        const float* inputs[1]{in.data()};
+        float* outputs[1]{out.data()};
+        ProcessBlock block;
+        block.inputs = inputs;
+        block.outputs = outputs;
+        block.inputChannels = block.outputChannels = 1;
+        block.frames = 64;
+        REQUIRE(instance.process(block));
+        REQUIRE((*process)->alive());
+        (*process)->fail(0);  // no more requests: Destroy is not sent
+    }
+    process->reset();  // the host lets go; the bridge destroys the instance it still holds
+    diagctx::Event end;
+    for (const auto& event : Sink::of(diagctx::EventKind::Bridge))
+        if (event.bridge == ordinal && event.how != diagctx::BridgeHow::None) end = event;
+    CHECK(end.how != diagctx::BridgeHow::Host);
+    CHECK((end.how == diagctx::BridgeHow::Signal || end.how == diagctx::BridgeHow::Exception));
+    CHECK(end.status != 0);
+}
+
+// The two cases below end a bridge with SIGKILL from outside. The Windows counterpart would end it
+// with TerminateProcess(OpenProcess(pid), 0xC0000005); it is not written because nothing here can
+// compile or run it, and an untried Windows branch has already broken this build once. Windows is
+// covered by the classification case above (exception and exit statuses) and by the host-kill and
+// orderly-shutdown cases; a bridge ended by an exception is proven there by native CI only, and
+// STATUS.md says so.
+#if !defined(_WIN32)
 TEST_CASE("a bridge that dies of a signal is announced as that signal, with its instances") {
     setBridgeExecutable(BRIDGE_PATH);
     Sink sink;
