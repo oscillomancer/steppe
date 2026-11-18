@@ -372,7 +372,7 @@ void registerRouteCommands(cmd::Registry& registry) {
         c.name = "route.add";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary = "Send audio between strips, or MIDI between channels and rack modules.";
+        c.summary = "Send audio between tracks, or MIDI between channels and rack modules.";
         c.description =
             "The destination must not feed the source. Master accepts routes. With fx instead of "
             "to, the send feeds that plug-in's sidechain (key) input — e.g. a kick keying a "
@@ -428,7 +428,7 @@ void registerRouteCommands(cmd::Registry& registry) {
             {"Mute a route", j(R"({"route":"sd_1","mute":true})"), j("{}"), "song_with_route"},
             {"Swap left and right", j(R"({"route":"sd_1","channels":{"from":[1,2],"to":[2,1]}})"),
              j("{}"), "song_with_route"}};
-        c.errors = {{"route.channels", "the map pairs channels the strips do not have",
+        c.errors = {{"route.channels", "the map pairs channels the tracks do not have",
                      "pair 1 and 2: {from: [1, 2], to: [2, 1]}"},
                     {"route.endpoint", "MIDI sends need channel or note-module endpoints",
                      "send channel/Note Out MIDI to a channel or Notes module"},
@@ -543,19 +543,19 @@ void registerRouteCommands(cmd::Registry& registry) {
             "mode: audio (default), midi or hardware_midi (channels/Note Out and hardware inputs "
             "to channels/hardware outputs). MIDI sources are channels and Note Out; destinations "
             "are "
-            "channels and Notes, with no audio controls. Audio sources: strips in tree order "
-            "(depth, parent, parent_send). destinations: strips "
+            "channels and Notes, with no audio controls. Audio sources: tracks in tree order "
+            "(depth, parent, parent_send). destinations: tracks "
             "(kind track), plug-in keys (kind key: fx with a sidechain input) and racks' In "
             "modules (kind module: mo_N, named \"<rack> \u00bb <In>\", with rack and home "
-            "track), each strip's keys and In modules after it. Each channel's rack Out "
+            "track), each track's keys and In modules after it. Each channel's rack Out "
             "modules follow it among sources (type rack_out, named \"<rack> \u00bb <Out>\", "
             "with rack and home track): they send only to busses and masters (their rule), "
             "added after the decode, never encoded (ADR-0075). A pair is blocked when the "
             "source's rule applies (masters feed only keys), the destination's rule applies "
-            "(channels take only hardware audio), it is the same strip, or it is listed in "
+            "(channels take only hardware audio), it is the same track, or it is listed in "
             "cycles (the destination already feeds the source; for an In module, its rack's Outs "
             "reach the source; path names its ids, names the same by name). sends: existing routes "
-            "per pair (to: a strip, an fx or an In "
+            "per pair (to: a track, an fx or an In "
             "module). Otherwise route.add accepts the pair (an In module: route.add {from, to: "
             "mo_N}). A source's channels past 2 are auxiliary (ADR-0020); "
             "channel_names names those a multi-out plug-in writes ({\"3\": \"Kick\"}), and "

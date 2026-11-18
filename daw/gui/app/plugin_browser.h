@@ -17,6 +17,7 @@
 #include "supple/ui/node.h"
 
 namespace supple::ui {
+class Button;
 class Root;
 class TextField;
 class Label;
@@ -114,6 +115,8 @@ class PluginBrowser {
     ui::Node* page_ = nullptr;
     ui::TextField* search_ = nullptr;
     ui::List* list_ = nullptr;
+    ui::Button* add_ = nullptr;  // in the panel: enabled once a row is chosen
+    void activateChosen();       // Add and Enter: the chosen row (the popup's first, if none)
     ui::Label* status_ = nullptr;
     ui::Label* detailLabel_ = nullptr;
     ui::Label* title_ = nullptr;

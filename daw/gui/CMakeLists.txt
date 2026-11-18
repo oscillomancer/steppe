@@ -179,6 +179,9 @@ if(SUPPLE_BUILD_TESTS)
     get_filename_component(stem ${src} NAME_WE)
     set_tests_properties(gui-app.tests.${stem} PROPERTIES ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
   endforeach()
+  # The longest of them: past the presets' 600 s on a slow macOS CI runner and
+  # more than half of it under ThreadSanitizer on a busy machine.
+  set_tests_properties(gui-app.tests.test_gestures PROPERTIES TIMEOUT 1200)
   supple_add_tests(gui-ui SOURCES tests/test_ui.cpp DEPS SDL3::SDL3 LABELS gui)
   target_compile_definitions(gui-ui.tests PRIVATE
     SUPPLE_GUI_FONTS_DIR="${PROJECT_SOURCE_DIR}/assets/fonts"

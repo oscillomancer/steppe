@@ -1323,7 +1323,7 @@
   },
   {
     "name": "route_add",
-    "title": "Send audio between strips, or MIDI between channels and rack modules.",
+    "title": "Send audio between tracks, or MIDI between channels and rack modules.",
     "description": "The destination must not feed the source. Master accepts routes. With fx instead of to, the send feeds that plug-in's sidechain (key) input — e.g. a kick keying a compressor on the bass; it is delay-compensated, and soloing the keyed track does not stop the key. MIDI sends use channel or Note Out sources and channel or Notes destinations, midi: {} (all channels unchanged); from_channel filters and to_channel remaps, 0..16 with 0 meaning all/original. to_midi selects a hardware MIDI output by exact name instead of to. Missing outputs warn while audio keeps playing. A rack's Out module (from: mo_N) sends audio to a buss or master: a rack send, added after the destination's Console 9 decode, never encoded, with level and mute only; it follows the mute and solo of the rack's home channel (ADR-0075). See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
@@ -1578,7 +1578,7 @@
   },
   {
     "name": "track_add",
-    "title": "Add a channel, buss or master strip and return its id.",
+    "title": "Add a track (a channel, buss or master) and return its id.",
     "description": "parent: a buss/master id (default tr_0); masters have no parent; index: position among its siblings; name: default the first free ch_N, buss_N or mstr_N. A new channel gets the user's default monitoring (on unless set otherwise; monitoring needs the track armed). color: a track colour's name or \"#rrggbb\", \"\" for none; default for a channel or buss the palette colour the fewest tracks carry (red first), for a master none. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
@@ -1805,7 +1805,7 @@
                 }
               },
               "additionalProperties": false,
-              "description": "This strip's pan law: db is the centre's cut (0, -2.5, -3, -4.5 or -6); boost raises the sides instead. null follows project.pan_law"
+              "description": "This track's pan law: db is the centre's cut (0, -2.5, -3, -4.5 or -6); boost raises the sides instead. null follows project.pan_law"
             },
             {
               "type": "null"
@@ -1884,7 +1884,7 @@
         },
         "parent_send": {
           "type": "boolean",
-          "description": "The implicit send to the parent buss/master (off: only explicit sends leave the strip)"
+          "description": "The implicit send to the parent buss/master (off: only explicit sends leave the track)"
         },
         "timebase": {
           "type": "string",
@@ -1895,7 +1895,7 @@
           "type": "integer",
           "minimum": 1.0,
           "maximum": 128.0,
-          "description": "1-2: the strip's main pair; up to 128 adds auxiliary channels 3-128 for routes and plug-in pins (a detector on 3/4, a multi-out instrument's outputs), outside the fader, pan and parent send"
+          "description": "1-2: the track's main pair; up to 128 adds auxiliary channels 3-128 for routes and plug-in pins (a detector on 3/4, a multi-out instrument's outputs), outside the fader, pan and parent send"
         },
         "hw_output": {
           "type": "array",

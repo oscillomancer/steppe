@@ -433,4 +433,10 @@ void TrackLayout::rebuildGeometry() {
     if (onChanged) onChanged();
 }
 
+std::size_t countTracks(const model::Session& session) {
+    std::size_t n = 0;
+    for (const auto& e : session.tracks) n += e.value->type != model::StripType::Master;
+    return n;
+}
+
 }  // namespace supple::views

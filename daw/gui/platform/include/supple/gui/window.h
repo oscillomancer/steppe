@@ -4,6 +4,7 @@
 // benchmarks), one OpenGL 3.3 core context, NanoVG GL3 for chrome (ADR-0005).
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
@@ -16,10 +17,23 @@
 #include "supple/base/result.h"
 
 struct NVGcontext;
+struct SDL_Cursor;
 struct SDL_Window;
 union SDL_Event;
 
 namespace supple::gui {
+
+// The pointer's shape over a window: what a press there would do. The
+// system draws each in its own style (SDL's system cursors).
+enum class Cursor {
+    Arrow,             // nothing special
+    Text,              // an I-beam: text to edit
+    ResizeHorizontal,  // an edge that moves left and right
+    ResizeVertical,    // an edge that moves up and down
+    Move,              // the thing under the pointer is being moved
+    NotAllowed,        // a drag that cannot be dropped here
+};
+inline constexpr std::size_t kCursorCount = 6;
 
 // Video subsystem lifetime. One per process, before any Window.
 class Platform {
@@ -38,6 +52,9 @@ class Platform {
     // and a count of focus gains, both kept by an SDL event watch.
     std::uint32_t lastFocused() const { return lastFocused_.load(std::memory_order_relaxed); }
     std::uint64_t focusGains() const { return focusGains_.load(std::memory_order_relaxed); }
+    // Shows `cursor` as the pointer over this app's windows (UI thread). The
+    // offscreen driver has no pointer: nothing happens there.
+    void setCursor(Cursor cursor) const;
 
   private:
     explicit Platform(Driver d) : driver_(d) {}
@@ -46,6 +63,8 @@ class Platform {
     std::uint32_t wakeEvent_ = 0;
     std::atomic<std::uint32_t> lastFocused_{0};
     std::atomic<std::uint64_t> focusGains_{0};
+    mutable std::array<SDL_Cursor*, kCursorCount> cursors_{};  // made on first use
+    mutable Cursor shown_ = Cursor::Arrow;  // one pointer for all the app's windows
 };
 
 struct WindowOptions {
@@ -109,6 +128,10 @@ class Window {
     std::pair<int, int> position() const;
     void setResizable(bool resizable);
     void setTitle(const std::string& title);
+    // The pointer's shape while it is over this window; cursor() is the last
+    // one asked for (also under the offscreen driver, for tests).
+    void setCursor(Cursor cursor);
+    Cursor cursor() const { return cursor_; }
     std::string renderer() const;  // GL_RENDERER and GL_VERSION, for reports
     // Makes the context current, clears to `rgb` (0xRRGGBB) and starts a
     // NanoVG frame in design units.
@@ -133,7 +156,8 @@ class Window {
     bool vsync_ = false;             // the swap interval can be set
     int interval_ = 0;               // as set
     std::uint64_t stalled_ = ~0ull;  // Platform::focusGains() at a stalled swap
-    void* context_ = nullptr;        // SDL_GLContext
+    Cursor cursor_ = Cursor::Arrow;
+    void* context_ = nullptr;  // SDL_GLContext
     NVGcontext* vg_ = nullptr;
 };
 

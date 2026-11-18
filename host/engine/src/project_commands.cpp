@@ -208,7 +208,7 @@ void registerProjectCommands(cmd::Registry& registry) {
                      .field("console9", &ProjectSetArgs::console9, schema::boolean())
                      .field("pan_law", &ProjectSetArgs::panLaw,
                             model::panLawSchema().doc(
-                                "Channels' and busses' pan law unless a strip sets its own: db "
+                                "Channels' and busses' pan law unless a track sets its own: db "
                                 "is the centre's cut (0, -2.5, -3, -4.5 or -6; default 0); "
                                 "boost keeps the centre at 0 dB and raises the sides instead"))
                      .field("history_budget_bytes", &ProjectSetArgs::historyBudgetBytes,

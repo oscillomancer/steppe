@@ -104,7 +104,8 @@ struct Viewport {
 
 class TrackLayout {
   public:
-    static constexpr float kDefaultHeight = 72;
+    // As low as a row can be with every control showing (60 units).
+    static constexpr float kDefaultHeight = TcpRowGeometry::kAllLinesHeight;
     static constexpr float kMinHeight = TcpRowGeometry::kMinHeight;
     static constexpr float kMaxHeight = 400;
 
@@ -175,5 +176,10 @@ class TrackLayout {
     std::vector<float> yOffsets_;
     float contentHeight_ = 0;
 };
+
+// How many tracks the user has: channels and busses. A master is not
+// counted, and an automation lane is a row of its track, not a track. The
+// track list's heading and the status line both say this number.
+std::size_t countTracks(const model::Session& session);
 
 }  // namespace supple::views

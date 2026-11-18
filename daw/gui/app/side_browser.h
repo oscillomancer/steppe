@@ -22,6 +22,7 @@
 #include "supple/ui/root.h"
 
 namespace supple::ui {
+class Button;
 class Label;
 class List;
 class TextBlock;
@@ -108,6 +109,7 @@ class SideBrowser {
     void setFileStatus(std::string text);
     void reload();        // the kind in view
     void filterChains();  // by the search
+    void chosen();        // a list's selection changed: its Add follows
     void addChain(std::size_t row);
     Status loadChain(const Chain& chain, const std::vector<model::Id>& tracks);
     void setChainStatus(std::string text);
@@ -125,6 +127,8 @@ class SideBrowser {
     ui::Node* chainsPage_ = nullptr;
     ui::TextField* chainSearch_ = nullptr;
     ui::List* chainList_ = nullptr;
+    ui::Button* chainAdd_ = nullptr;
+    ui::Button* fileAdd_ = nullptr;
     ui::Label* chainStatus_ = nullptr;
     ui::TextBlock* chainEmpty_ = nullptr;
     std::vector<Chain> chains_;       // as fx.chain.list gave them

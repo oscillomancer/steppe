@@ -1134,6 +1134,8 @@ std::string nextTrackName(const Session& s, StripType type) {
 }
 
 std::string nextTrackColor(const Session& s) {
+    // The search below starts at the first colour, so that one must be a hue.
+    static_assert(kTrackColors.front() != "grey", "the palette starts with a hue");
     std::array<std::size_t, kTrackColors.size()> used{};
     for (const auto& e : s.tracks)
         if (const auto at = std::find(kTrackColors.begin(), kTrackColors.end(), e.value->color);

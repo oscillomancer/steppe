@@ -15,6 +15,7 @@
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/text_area.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/lanes.h"
 #include "supple/views/mouse_map.h"
 
 namespace supple::gui {
@@ -97,10 +98,15 @@ struct Geometry {
     }
 };
 
-ui::Color velocityColor(const ui::Theme& t, int velocity, bool selected) {
-    const ui::Color base = selected ? t.color("focus") : t.color("accent");
+// A note's colour: the item's (the selection's when selected), fuller the
+// harder the note is played. A soft note keeps 45% of it and is drawn the
+// rest of the way towards the ground, so it fades in either theme.
+ui::Color velocityColor(const ui::Theme& t, const RollState& s, int velocity, bool selected) {
+    const ui::Color base = selected ? t.color("focus") : s.color ? s.color(t) : t.color("accent");
+    const ui::Color ground = t.color("ground");
     const float k = 0.45f + 0.55f * static_cast<float>(velocity) / 127.0f;
-    return {base.r * k, base.g * k, base.b * k, 1};
+    return {ground.r + (base.r - ground.r) * k, ground.g + (base.g - ground.g) * k,
+            ground.b + (base.b - ground.b) * k, 1};
 }
 
 // ----------------------------------------------------------------- the roll
@@ -120,12 +126,13 @@ class Roll : public ui::Node {
         const ui::Rect b = bounds();
         c.save();
         c.clip(b);
-        c.fillRect(b, t.color("ground"));
-        // Rows: black keys darker, C lines stronger.
+        // Rows: the white keys' on the panel, the black keys' on the darker
+        // ground, as on the keyboard beside them; C lines stronger.
+        c.fillRect(b, t.color("panel"));
         const int top = g.pitchOf(b.y), bottom = g.pitchOf(b.bottom());
         for (int p = std::min(127, top); p >= std::max(0, bottom); --p) {
             const float y = g.yOf(p);
-            if (blackKey(p)) c.fillRect({b.x, y, b.w, s_.rowHeight}, t.color("panel"));
+            if (blackKey(p)) c.fillRect({b.x, y, b.w, s_.rowHeight}, t.color("ground"));
             if (p % 12 == 0) c.fillRect({b.x, y + s_.rowHeight - 1, b.w, 1}, t.color("rule"));
         }
         // Outside the item: shaded.
@@ -158,7 +165,7 @@ class Roll : public ui::Node {
             if (r.right() < b.x || r.x > b.right() || r.bottom() < b.y || r.y > b.bottom())
                 continue;
             const bool sel = s_.selected.contains(i);
-            c.fillRound(r, 2, velocityColor(t, n.velocity, sel));
+            c.fillRound(r, 2, velocityColor(t, s_, n.velocity, sel));
             c.strokeRound(r, 2, sel ? t.color("ink") : t.color("ground").withAlpha(0.7f));
             if (r.w > 34 && s_.rowHeight >= 11)
                 c.text({r.x + 3, r.y, r.w - 4, r.h}, pitchName(n.pitch), ui::Font::Ui,
@@ -187,7 +194,93 @@ class Roll : public ui::Node {
         return std::nullopt;
     }
 
+    // A note's ends set its length; a note in hand is being moved.
+    ui::Cursor cursorAt(ui::Point p) const override {
+        switch (s_.drag) {
+            case RollState::Drag::ResizeEnd:
+            case RollState::Drag::ResizeStart:
+                return ui::Cursor::ResizeHorizontal;
+            case RollState::Drag::Move:
+                return moved_ ? ui::Cursor::Move : ui::Cursor::Arrow;
+            case RollState::Drag::Marquee:
+            case RollState::Drag::Velocity:
+                return ui::Cursor::Arrow;
+            case RollState::Drag::None:
+                break;
+        }
+        int edge = 0;
+        return noteAt(p, &edge) && edge != 0 ? ui::Cursor::ResizeHorizontal : ui::Cursor::Arrow;
+    }
+
     bool onPointer(const ui::PointerEvent& e) override {
+        const bool handled = handle(e);
+        noteDrag(e);
+        return handled;
+    }
+
+    // Edge scroll, as in the arrange view (gui.md §4.3): a note drag or a
+    // marquee held within kEdgeZone of the roll's left or right edge, or
+    // past it, scrolls in time; a move and a marquee also scroll the
+    // pitches at the top and bottom. The press point goes with the content
+    // and the drag's last event is delivered again, so the notes in hand
+    // stay under the pointer.
+    static constexpr float kEdgeZone = 24;
+    bool autoScrolling() const { return edgeVx_ != 0 || edgeVy_ != 0; }
+    bool autoScroll(double seconds) {
+        if (!autoScrolling()) return false;
+        if (!scrollsAtEdge()) {
+            edgeVx_ = edgeVy_ = 0;
+            return false;
+        }
+        const double beat = s_.scrollBeat, top = s_.topPitch;
+        s_.scrollBeat += static_cast<double>(edgeVx_) * seconds / s_.pixelsPerBeat;
+        // Leftwards it stops just before the item's start, where the view opens.
+        if (edgeVx_ < 0) s_.scrollBeat = std::max(s_.scrollBeat, std::min(beat, kLeftLimit));
+        s_.topPitch = std::clamp(
+            top - static_cast<double>(edgeVy_) * seconds / static_cast<double>(s_.rowHeight), 12.0,
+            127.0);
+        const auto dx = static_cast<float>((s_.scrollBeat - beat) * s_.pixelsPerBeat);
+        const auto dy = static_cast<float>((top - s_.topPitch) * static_cast<double>(s_.rowHeight));
+        if (dx == 0 && dy == 0) return false;  // at an end of the view's range
+        press_.x -= dx;
+        press_.y -= dy;
+        handle(last_);
+        repaintAll();
+        return true;
+    }
+
+  private:
+    static constexpr double kLeftLimit = -0.5;  // beats before the item's start
+    bool scrollsAtEdge() const {
+        return s_.drag == RollState::Drag::Move || s_.drag == RollState::Drag::ResizeEnd ||
+               s_.drag == RollState::Drag::ResizeStart || s_.drag == RollState::Drag::Marquee;
+    }
+    void noteDrag(const ui::PointerEvent& e) {
+        using T = ui::PointerEvent::Type;
+        if (!scrollsAtEdge() || e.type != T::Move) {
+            if (!scrollsAtEdge() || e.type == T::Up || e.type == T::Cancel) edgeVx_ = edgeVy_ = 0;
+            return;
+        }
+        auto along = [](float at, float from, float to) {
+            auto speed = [](float depth) {
+                return depth <= 0 ? 0.0f : std::min(2400.0f, 120.0f + 30.0f * depth);
+            };
+            return at > to - kEdgeZone     ? speed(at - (to - kEdgeZone))
+                   : at < from + kEdgeZone ? -speed(from + kEdgeZone - at)
+                                           : 0.0f;
+        };
+        const ui::Rect b = bounds();
+        const bool rows = s_.drag == RollState::Drag::Move || s_.drag == RollState::Drag::Marquee;
+        edgeVx_ = along(e.pos.x, b.x, b.right());
+        edgeVy_ = rows ? along(e.pos.y, b.y, b.bottom()) : 0.0f;
+        last_ = e;
+        if (autoScrolling() && root()) root()->requestAnimationFrame();  // sync advances it
+    }
+    float edgeVx_ = 0, edgeVy_ = 0;  // design units per second
+    ui::PointerEvent last_;
+
+  public:
+    bool handle(const ui::PointerEvent& e) {
         const Geometry g{s_, bounds()};
         using T = ui::PointerEvent::Type;
         if (e.type == T::Cancel) {
@@ -425,7 +518,7 @@ class VelocityLane : public ui::Node {
             if (x < a.x - 4 || x > a.right()) continue;
             const float h = a.h * static_cast<float>(n.velocity) / 127.0f;
             const bool sel = s_.selected.contains(i);
-            const ui::Color col = velocityColor(t, n.velocity, sel);
+            const ui::Color col = velocityColor(t, s_, n.velocity, sel);
             c.fillRect({x, a.bottom() - h, 2, h}, col);
             c.fillRound({x - 2, a.bottom() - h - 2, 6, 4}, 1, col);
         }
@@ -690,6 +783,17 @@ class Panel : public ui::Node {
 MidiEditor::MidiEditor(ui::Root& root, AppActions& actions, cmd::Dispatcher& dispatcher,
                        engine::EngineApp& app, UiState& ui)
     : root_(root), actions_(actions), dispatcher_(dispatcher), app_(app), ui_(ui) {
+    // The notes take the colour their item has in the arrangement.
+    state_.color = [this](const ui::Theme& theme) {
+        const model::Session& s = app_.head();
+        if (auto id = model::Id::parse(state_.item))
+            if (const model::Item* item = s.items.find(*id)) {
+                const model::Track* track = s.tracks.find(item->track);
+                return views::Lanes::itemColor(theme, *item, track,
+                                               track ? track->type : model::StripType::Channel);
+            }
+        return theme.color("accent");
+    };
     // The selected MIDI item, or the one a caller names.
     actions_.addUiFor("ui.midi.edit", "MIDI: edit selected item", "item",
                       [this](const json::Value& v) -> Status {
@@ -1034,8 +1138,13 @@ Status MidiEditor::reload() {
         std::string name = state_.item;
         if (auto id = model::Id::parse(state_.item))
             if (const model::Item* it = app_.head().items.find(*id))
-                if (const model::Track* t = app_.head().tracks.find(it->track))
-                    name = (t->name.empty() ? it->track.str() : t->name) + " — " + state_.item;
+                if (const model::Track* t = app_.head().tracks.find(it->track)) {
+                    // The item as the arrangement names it; its id when it
+                    // has no name there.
+                    const std::string label = views::Lanes::itemLabel(app_.head(), *it);
+                    name = (t->name.empty() ? it->track.str() : t->name) + " — " +
+                           (label.empty() ? state_.item : label);
+                }
         titleBase_ = "MIDI · " + name + " · " + std::to_string(state_.notes.size()) + " notes";
         refreshTitle();
     }
@@ -1341,8 +1450,30 @@ void MidiEditor::openNoteMenu(ui::Point at, double itemBeat) {
                     ui::Rect{at.x, at.y, 0, 0}, ui::Placement::Below);
 }
 
+bool MidiEditor::autoScrolling() const {
+    return roll_ && static_cast<const Roll*>(roll_)->autoScrolling();
+}
+
+bool MidiEditor::autoScroll(double seconds) {
+    if (!roll_ || !static_cast<Roll*>(roll_)->autoScroll(seconds)) return false;
+    if (keys_) keys_->invalidate();
+    if (velocity_) velocity_->invalidate();
+    return true;
+}
+
 void MidiEditor::sync() {
     if (!isOpen()) return;
+    // A drag held at the roll's edge scrolls by the time since the last pass
+    // (at most 50 ms of it, so a stalled frame is not a jump).
+    if (autoScrolling()) {
+        const auto now = std::chrono::steady_clock::now();
+        const double seconds =
+            edgeAt_ ? std::min(0.05, std::chrono::duration<double>(now - *edgeAt_).count()) : 0.0;
+        edgeAt_ = now;
+        if (autoScroll(seconds) || seconds == 0) root_.requestAnimationFrame();
+    } else {
+        edgeAt_.reset();
+    }
     applyHeight();  // a smaller window or a taller neighbour shrinks the panel
     if (playhead_ && roll_) static_cast<RollPlayhead*>(playhead_)->place(roll_->bounds());
     const bool replaced = app_.projectGeneration() != projectGeneration_;

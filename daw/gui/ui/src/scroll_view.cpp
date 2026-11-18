@@ -71,6 +71,12 @@ void ScrollView::scrollTo(float y) {
 
 void ScrollView::scrollToEnd() { scrollTo(contentHeight_); }
 
+Size ScrollView::measure(const Canvas& c, Size available) {
+    const Size inner =
+        content_->measure(c, {std::max(0.0f, available.w - ScrollBar::kThickness), available.h});
+    return {inner.w + ScrollBar::kThickness, inner.h};
+}
+
 void ScrollView::arrange(const Canvas& c, const Rect& r) {
     setBounds(r);
     const float width = r.w - ScrollBar::kThickness;

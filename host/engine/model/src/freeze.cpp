@@ -175,7 +175,7 @@ Status validateFreezeInput(const Session& s, Id track) {
         return Error("freeze.unsupported", std::move(message), "/track",
                      "use an unarmed channel with no external inputs and unity master playrate");
     };
-    if (t->type != StripType::Channel) return unsupported("only channel strips can freeze");
+    if (t->type != StripType::Channel) return unsupported("only channels can freeze");
     if (t->record.armed)
         return unsupported("disarm the track before freezing (monitoring requires the arm)");
     if (s.project->playrate.rate != 1 || activePlayrateEnvelope(s))

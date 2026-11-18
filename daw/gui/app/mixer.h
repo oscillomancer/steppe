@@ -88,6 +88,7 @@ class Mixer {
         ui::MonitorButton* monitor = nullptr;
         ui::Label* value = nullptr;
         ui::Meter* meter = nullptr;
+        ui::Node* peak = nullptr;        // the meter's highest peak, in dB; a click clears it
         ui::Button* fx = nullptr;        // "fx" at the strip's top right: the chain
         ui::Button* addFx = nullptr;     // "+" beside it: the plugin browser
         ui::Button* input = nullptr;     // channels: the record input

@@ -241,8 +241,9 @@ std::unique_ptr<ui::Node> SideBrowser::buildFiles() {
     };
     fileSearch_->onChange = [this](const std::string&) { filterFiles(); };
     fileSearch_->onSubmit = [this](const std::string&) {
-        activateFile(fileList_->selected().value_or(0));
+        if (const auto row = fileList_->selected()) activateFile(*row);
     };
+    fileList_->onSelect = [this](std::size_t) { chosen(); };
     fileSearch_->onOtherKey = [this](const ui::KeyEvent& e) { return fileList_->onKey(e); };
     fileList_->onActivate = [this](std::size_t row) { activateFile(row); };
     fileList_->onDrag = [this](std::size_t row, ui::DragPhase phase, ui::Point at) {
@@ -266,8 +267,9 @@ std::unique_ptr<ui::Node> SideBrowser::buildFiles() {
     footer.layout.align = ui::Layout::Align::Center;
     footer.emplace<ui::Node>("side.browser.files.footer.rest").layout.width =
         ui::SizeRule::fraction();
-    footer.emplace<ui::Button>("side.browser.files.add", "Add",
-                               [this] { activateFile(fileList_->selected().value_or(0)); });
+    fileAdd_ = &footer.emplace<ui::Button>("side.browser.files.add", "Add", [this] {
+        if (const auto row = fileList_->selected()) activateFile(*row);
+    });
     fileStatus_ = &page->emplace<ui::Label>("side.browser.files.status", "", ui::Font::Ui,
                                             "caption", "ink-quiet");
     fileStatus_->layout.height = ui::SizeRule::fixed(16);
@@ -385,7 +387,11 @@ void SideBrowser::filterFiles() {
                         : entries_.empty()  ? "No folders and no audio or MIDI files here."
                                             : "Nothing here matches.");
     fileList_->setCount(fileShown_.size());
-    fileList_->select(fileShown_.empty() ? std::nullopt : std::optional<std::size_t>(0));
+    // A row is chosen by a click, the arrow keys or a search (its first hit):
+    // Add does nothing until then.
+    fileList_->select(fileShown_.empty() || query.empty() ? std::nullopt
+                                                          : std::optional<std::size_t>(0));
+    chosen();
     fileList_->invalidate();
     root_.relayout();
     root_.damageAll();
@@ -429,8 +435,9 @@ std::unique_ptr<ui::Node> SideBrowser::buildChains() {
     };
     chainSearch_->onChange = [this](const std::string&) { filterChains(); };
     chainSearch_->onSubmit = [this](const std::string&) {
-        addChain(chainList_->selected().value_or(0));
+        if (const auto row = chainList_->selected()) addChain(*row);
     };
+    chainList_->onSelect = [this](std::size_t) { chosen(); };
     chainSearch_->onOtherKey = [this](const ui::KeyEvent& e) { return chainList_->onKey(e); };
     chainList_->onActivate = [this](std::size_t row) { addChain(row); };
     chainList_->onDrag = [this](std::size_t row, ui::DragPhase phase, ui::Point at) {
@@ -454,8 +461,9 @@ std::unique_ptr<ui::Node> SideBrowser::buildChains() {
     footer.layout.align = ui::Layout::Align::Center;
     footer.emplace<ui::Node>("side.browser.chains.footer.rest").layout.width =
         ui::SizeRule::fraction();
-    footer.emplace<ui::Button>("side.browser.chains.add", "Add",
-                               [this] { addChain(chainList_->selected().value_or(0)); });
+    chainAdd_ = &footer.emplace<ui::Button>("side.browser.chains.add", "Add", [this] {
+        if (const auto row = chainList_->selected()) addChain(*row);
+    });
     chainStatus_ = &page->emplace<ui::Label>("side.browser.chains.status", "", ui::Font::Ui,
                                              "caption", "ink-quiet");
     chainStatus_->layout.height = ui::SizeRule::fixed(16);
@@ -543,6 +551,14 @@ void SideBrowser::reload() {
     filterChains();
 }
 
+// Add is for the row chosen: a stray click on it must not put the list's
+// first plug-in chain or file on every selected track.
+void SideBrowser::chosen() {
+    if (chainAdd_ && chainList_) chainAdd_->enabled = chainList_->selected().has_value();
+    if (fileAdd_ && fileList_) fileAdd_->enabled = fileList_->selected().has_value();
+    root_.damageAll();
+}
+
 void SideBrowser::filterChains() {
     const std::string query = chainSearch_ ? lower(chainSearch_->text()) : std::string();
     shown_.clear();
@@ -558,7 +574,9 @@ void SideBrowser::filterChains() {
                          : shown_.empty() ? "No chain matches."
                                           : "");
     chainList_->setCount(shown_.size());
-    chainList_->select(shown_.empty() ? std::nullopt : std::optional<std::size_t>(0));
+    chainList_->select(shown_.empty() || query.empty() ? std::nullopt
+                                                       : std::optional<std::size_t>(0));
+    chosen();
     chainList_->invalidate();
     root_.relayout();
     root_.damageAll();
