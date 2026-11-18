@@ -212,7 +212,10 @@ TEST_CASE("audition: the engine frees a voice once the callback no longer reads 
 TEST_CASE("audition: a file's start plays at the device's rate on outputs 1/2, then ends") {
     // ADR-0094 through the commands. The file is read and resampled off the
     // model thread: audition.play answers at once (decoding), tick() hands
-    // the voice to the engine when it is ready.
+    // the voice to the engine when it is ready. The cap is in frames at the
+    // higher of the file's and the device's rates: a 44.1 kHz file plays the
+    // cap's length in device frames, a 96 kHz one decodes no more than the
+    // cap.
     const fs::path root =
         fs::temp_directory_path() /
         ("supple-audition-" +
@@ -230,7 +233,7 @@ TEST_CASE("audition: a file's start plays at the device's rate on outputs 1/2, t
     o.templateDir = root / "templates";
     o.projectTemplateDir = root / "project-templates";
     o.pluginPath = {kFixture};
-    o.auditionMaxSeconds = 0.25;  // the cap, short: 11025 of the file's 22050 frames
+    o.auditionMaxFrames = 12000;  // short: 0.25 s at 48 kHz, 0.125 s at 96 kHz
     auto made = EngineApp::create(o, {.console9 = false});
     REQUIRE(made);
     auto& app = *made;
@@ -238,17 +241,24 @@ TEST_CASE("audition: a file's start plays at the device's rate on outputs 1/2, t
     auto call = [&](std::string command, const json::Value& args) {
         return d.execute({std::move(command), args, {cmd::Origin::Type::Test, "unit", ""}});
     };
-    // Half a second of stereo at 44.1 kHz, every frame distinct.
-    audio::AudioData file;
-    file.sampleRate = 44100;
-    file.channels.assign(2, std::vector<float>(22050));
-    for (std::size_t i = 0; i < 22050; ++i) {
-        file.channels[0][i] = 0.5f * static_cast<float>(std::sin(0.01 * static_cast<double>(i)));
-        file.channels[1][i] = 0.25f * static_cast<float>(std::cos(0.02 * static_cast<double>(i)));
-    }
+    // Half a second of stereo, every frame distinct, at 44.1 and 96 kHz.
     fs::create_directories(app->mediaDir());
-    const fs::path wav = app->mediaDir() / "take.wav";
-    REQUIRE(audio::writeWav(wav, file));
+    auto writeFile = [&](const char* name, double rate) {
+        audio::AudioData file;
+        file.sampleRate = rate;
+        const auto n = static_cast<std::size_t>(rate / 2);
+        file.channels.assign(2, std::vector<float>(n));
+        for (std::size_t i = 0; i < n; ++i) {
+            const double x = static_cast<double>(i);
+            file.channels[0][i] = 0.5f * static_cast<float>(std::sin(0.01 * x));
+            file.channels[1][i] = 0.25f * static_cast<float>(std::cos(0.02 * x));
+        }
+        const fs::path at = app->mediaDir() / name;
+        REQUIRE(audio::writeWav(at, file));
+        return at;
+    };
+    const fs::path wav = writeFile("take.wav", 44100);
+    const fs::path fast = writeFile("fast.wav", 96000);
     auto args = json::Value::object();
     args["path"] = wav.string();
 
@@ -257,7 +267,7 @@ TEST_CASE("audition: a file's start plays at the device's rate on outputs 1/2, t
     REQUIRE_FALSE(refused);
     CHECK(refused.error().code == "engine.stopped");
 
-    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 64 * 256});
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 128 * 256});
     REQUIRE(app->startEngine(backend, {.sampleRate = 48000, .blockSize = 256, .outputs = 4},
                              {.anticipative = false})
                 .ok());
@@ -287,44 +297,64 @@ TEST_CASE("audition: a file's start plays at the device's rate on outputs 1/2, t
     REQUIRE(again);
     CHECK(fs::equivalent(again->find("path")->asString(), wav));
     // Decoded off this thread: wait on the state, not the clock.
-    while (app->auditionStatus().decoding) {
-        app->tick();
-        std::this_thread::yield();
-    }
-    auto got = call("audition.get", json::Value::object());
-    REQUIRE(got);
-    CHECK(got->find("playing")->asBool());  // published, taken at the next cycle
-    CHECK_FALSE(got->find("decoding")->asBool());
-    const std::int64_t start = backend.cycles() * 256;
-
-    // What it plays: the file's first 0.25 s resampled to 48 kHz.
-    auto head = audio::readAudioHead(wav, {.maxFrames = 11025});
-    REQUIRE(head);
-    auto expected = audio::resample(*head, 48000);
-    REQUIRE(expected);
-    const std::size_t frames = expected->frames();
-    while (app->auditionStatus().playing) {
-        backend.run(1);
-        app->tick();
-        REQUIRE(backend.cycles() < 64);
-    }
-    // It ended where the voice did, not later (the cycle that played its last frame).
-    CHECK(backend.cycles() * 256 - start - static_cast<std::int64_t>(frames) < 256);
-    const auto& out = backend.capture().channels;
-    for (std::size_t c = 0; c < 4; ++c) {
-        CAPTURE(c);
-        std::size_t wrong = out[c].size();
-        for (std::size_t i = 0; i < static_cast<std::size_t>(backend.cycles() * 256); ++i) {
-            const std::size_t at = i - static_cast<std::size_t>(start);
-            const bool voice = c < 2 && i >= static_cast<std::size_t>(start) && at < frames;
-            const float want = voice ? expected->channels[c][at] : 0.0f;
-            if (out[c][i] != want) {
-                wrong = i;
-                break;
-            }
+    auto decode = [&] {
+        while (app->auditionStatus().decoding) {
+            app->tick();
+            std::this_thread::yield();
         }
-        CHECK(wrong == out[c].size());
-    }
+    };
+    // Plays the file's first `head` frames resampled to 48 kHz on outputs
+    // 1/2, nothing on 3/4, and ends within the cycle that plays its last
+    // frame. Before it, outputs 1/2 are silent from `from` on.
+    auto playsHead = [&](const fs::path& file, std::int64_t head, std::int64_t from) {
+        decode();
+        auto got = call("audition.get", json::Value::object());
+        REQUIRE(got);
+        CHECK(got->find("playing")->asBool());  // published, taken at the next cycle
+        CHECK_FALSE(got->find("decoding")->asBool());
+        const std::int64_t start = backend.cycles() * 256;
+        auto read = audio::readAudioHead(file, {.maxFrames = head});
+        REQUIRE(read);
+        auto expected = audio::resample(*read, 48000);
+        REQUIRE(expected);
+        const std::size_t frames = expected->frames();
+        CHECK(frames <= 12000);  // the cap holds for the voice too
+        while (app->auditionStatus().playing) {
+            backend.run(1);
+            app->tick();
+            REQUIRE(backend.cycles() < 128);
+        }
+        CHECK(backend.cycles() * 256 - start - static_cast<std::int64_t>(frames) < 256);
+        const auto& out = backend.capture().channels;
+        for (std::size_t c = 0; c < 4; ++c) {
+            CAPTURE(c);
+            std::size_t wrong = out[c].size();
+            for (auto i = static_cast<std::size_t>(from);
+                 i < static_cast<std::size_t>(backend.cycles() * 256); ++i) {
+                const std::size_t at = i - static_cast<std::size_t>(start);
+                const bool voice = c < 2 && i >= static_cast<std::size_t>(start) && at < frames;
+                const float want = voice ? expected->channels[c][at] : 0.0f;
+                if (out[c][i] != want) {
+                    wrong = i;
+                    break;
+                }
+            }
+            CHECK(wrong == out[c].size());
+        }
+    };
+    playsHead(wav, 11025, 0);  // 12000 frames at 48 kHz are 11025 at 44.1 kHz
+
+    // Above the device's rate the cap counts the file's frames: 12000 of
+    // them, 0.125 s, played as 6000 at 48 kHz.
+    auto fastArgs = json::Value::object();
+    fastArgs["path"] = "fast.wav";
+    const std::int64_t before = backend.cycles() * 256;
+    auto fastPlayed = call("audition.play", fastArgs);
+    REQUIRE(fastPlayed);
+    CHECK(fastPlayed->find("seconds")->asDouble() == doctest::Approx(0.125));
+    CHECK(fastPlayed->find("sample_rate")->asDouble() == 96000.0);
+    CHECK(fastPlayed->find("truncated")->asBool());
+    playsHead(fast, 12000, before);
 
     // audition.stop ends one that plays; a new project does too.
     REQUIRE(call("audition.play", args));
@@ -333,10 +363,7 @@ TEST_CASE("audition: a file's start plays at the device's rate on outputs 1/2, t
     CHECK_FALSE(stopped->find("playing")->asBool());
     CHECK_FALSE(app->auditionStatus().playing);
     REQUIRE(call("audition.play", args));
-    while (app->auditionStatus().decoding) {
-        app->tick();
-        std::this_thread::yield();
-    }
+    decode();
     CHECK(app->auditionStatus().playing);
     REQUIRE(call("project.new", json::Value::object()));
     CHECK_FALSE(app->auditionStatus().playing);

@@ -728,8 +728,11 @@ the request it took, the voice playing, the one fading) and `service()`
 frees requests below it. `auditionState()` (any thread) gives the playing
 voice's serial (0: none), its frame and the serial last taken; the end of a
 voice notifies the main thread. `EngineApp::playAudition` reads the file's
-first `AppOptions::auditionMaxSeconds` (600) with `audio::readAudioHead` (two
-channels) and resamples it to the device's rate on its own worker
+start with `audio::readAudioHead` (two channels), up to
+`AppOptions::auditionMaxFrames` (28,800,000) counted at the higher of the
+file's and the device's rates, so neither the decoded file nor the voice is
+longer (about 230 MB of stereo float; ten minutes at 48 kHz, 2.5 at 192 kHz;
+`truncated` when the file is longer), and resamples it to the device's rate on its own worker
 (`AuditionLoader`: one replaceable request, cancelled by a newer one or
 `stopAudition`, its result taken in `tick()`), then publishes the voice; a
 device restart before then drops it. `auditionStatus()` is what the GUI

@@ -27,11 +27,14 @@ project (a hidden track feeding the main master), or beside it.
   graph and into anything recorded from the master.
 - **Decoded before it sounds, off the model and audio threads, capped.**
   `audition.play` reads the file's header and answers; a worker reads its
-  first ten minutes (`readAudioHead`, which stops reading there, so memory
-  is bounded however long the file is) and resamples them to the device's
-  rate; the model thread then publishes the voice. Ten minutes of stereo
-  float at 48 kHz is about 230 MB, 920 MB at 192 kHz, freed when the
-  audition ends. Streaming from disk would remove the cap and the wait
+  start (`readAudioHead`, which stops reading at the cap, so memory is
+  bounded however long the file is) and resamples it to the device's rate;
+  the model thread then publishes the voice. The cap is 28,800,000 frames,
+  counted at the higher of the file's and the device's rates, so neither
+  the decoded file nor the voice is longer: about 230 MB of stereo float at
+  any rate, freed when the audition ends. That is ten minutes at 48 kHz and
+  2.5 at 192 kHz. A cap in time would not bound memory: ten minutes at
+  192 kHz is about 920 MB. Streaming from disk would remove the cap and the wait
   before a long file sounds; it is a larger piece of engine work.
 - **Hand-over.** Each request (a voice, or a stop) is immutable and carries
   a serial; one atomic pointer publishes the newest. The callback reports
@@ -53,5 +56,6 @@ project (a hidden track feeding the main master), or beside it.
 - A device with fewer than two outputs never runs the engine
   (`Engine::start` refuses it), so outputs 1/2 always exist; the callback
   still checks.
-- Limits, in `STATUS.md`: outputs 1/2 only, the first ten minutes, from the
-  start only, a wait before a long file sounds.
+- Limits, in `STATUS.md`: outputs 1/2 only, the first 28,800,000 frames (ten
+  minutes at 48 kHz, less at higher rates), from the start only, a wait
+  before a long file sounds.

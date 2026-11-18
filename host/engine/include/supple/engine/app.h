@@ -97,8 +97,11 @@ struct AppOptions {
     // pass while the main thread seeks (the dummy backend's manual mode;
     // tests, which must not pass or fail by the wall clock).
     std::optional<double> syncLocateSeconds;
-    // The file audition's cap (ADR-0094): its first this many seconds play.
-    double auditionMaxSeconds = 600;
+    // The file audition's cap (ADR-0094), in frames so that its memory is
+    // bounded at any rate: neither the decoded file nor the voice resampled to
+    // the device's rate is longer (ten minutes at 48 kHz, 2.5 at 192 kHz;
+    // about 230 MB of stereo float).
+    std::int64_t auditionMaxFrames = 28'800'000;
 };
 
 // A file audition (audition.*, ADR-0094): transient, never saved.
@@ -699,7 +702,7 @@ class EngineApp : public cmd::Host {
     const TransportRange& loop() const { return loop_; }
     const MetronomeSettings& metronome() const { return metronome_; }
     void setMetronome(const MetronomeSettings& m);  // reaches the engine now and on every start
-    // File audition (ADR-0094): the file's start (AppOptions::auditionMaxSeconds),
+    // File audition (ADR-0094): the file's start (AppOptions::auditionMaxFrames),
     // read and resampled to the device's rate off the model and audio threads,
     // then played once on outputs 1/2, outside the project. A relative path
     // is in the project's media folder. A new one, stopAudition, the engine
