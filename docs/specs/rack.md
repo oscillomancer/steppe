@@ -714,7 +714,9 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   (`RackNode::resetModules`, deferred and retained the same way, applied
   first), and empty its plug-in stages' dry delays and oversampling filters
   as a chain's, so real time equals an offline render from there. A loop
-  wrap, and an executor's adoption of a plan, keep module state.
+  wrap, and an executor's adoption of a plan, keep module state; adoption
+  also carries the plug-in stages' wet ramps, dry delays and oversampling
+  filters, by instance as a chain's (`carryMix`).
   With anticipation off, the callback owns all modules; offline plans have
   private instances and need no ownership check. The callback and renderer
   graphs remain disjoint within each plan; ownership protects shared

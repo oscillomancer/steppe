@@ -3714,6 +3714,10 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
                             break;
                         }
             };
+            // A rack's plug-in stages as a chain's, by instance: wet ramp,
+            // dry delay, oversampling filters. (Their notes are their
+            // modules', which the rack pool keeps; the voices are empty.)
+            carryStages(n.rackStages, old.rackStages);
             carryStages(n.inputChain, old.inputChain);
             carryStages(n.chain, old.chain);
             // A take chain playing on keeps playing (no reset at the swap).

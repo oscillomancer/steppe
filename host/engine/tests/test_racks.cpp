@@ -2547,19 +2547,129 @@ TEST_CASE("racks: a rack FX's wet or bypass edit while playing sounds like a com
             std::size_t heard = 0;
             while (heard < fast.size() && fast[heard] == unedited[heard]) ++heard;
             // Nothing is live, so in both executors the value edit takes it
-            // at the block the compiled reload does. A plan swap does not
-            // carry a rack stage's wet ramp (carryStages skips rackStages),
-            // so the compiled reload jumps where the value edit ramps from
-            // the old level: the two differ only over that ramp. Once the
-            // swap carries rack stages, this is fast == compiled.
+            // at the block the compiled reload does, and the swap carries the
+            // rack stage's applied wet level: both ramp from the old level.
             REQUIRE(heard < fast.size());
             CHECK(heard >= 100 * 256);
-            std::size_t at = 0;
-            while (at < compiled.size() && compiled[at] == unedited[at]) ++at;
-            CHECK((heard == at || heard == at + 1));
-            const std::size_t ramped = std::min(fast.size(), at + 480);  // Plan::smoothFrames
-            CHECK(std::equal(fast.begin(), fast.begin() + at, compiled.begin()));
-            CHECK(std::equal(fast.begin() + ramped, fast.end(), compiled.begin() + ramped));
+            CHECK(bool(fast == compiled));
+        }
+}
+
+TEST_CASE("racks: a plan swap carries a rack plug-in stage's dry delay, oversampling and wet ramp" *
+          doctest::description("rt")) {
+    // A swap carries a rack's plug-in stages as it carries a chain's, by
+    // instance: what each holds from block to block outside its plug-in
+    // plays on. A marker edit compiles and swaps the plan at block 101 (101
+    // with a wet edit a block before, still ramping); the output must be
+    // the run's without the swap, sample for sample, in both executors,
+    // in process and through the shared bridge.
+    struct Case {
+        const char* name;
+        bool instrument = false;  // the sine, a note per beat, else the gain on a ramp
+        bool latent = false;      // the gain's "short" latency (64 frames)
+        double wet = 100;
+        int oversampling = 1;
+        bool rampAtSwap = false;  // a wet edit (to 40) one block before the swap
+    };
+    const Case cases[] = {
+        {"latent effect at 50% wet: its dry delay", false, true, 50},
+        {"oversampled x4 effect: its filters", false, false, 100, 4},
+        {"a wet ramp in progress at the swap", false, false, 100, 1, true},
+        // Its module holds the notes (no note ids): they play on, as before.
+        {"instrument, a note per beat", true},
+    };
+    host::setBridgeExecutable(BRIDGE_PATH);
+    for (const bool bridged : {false, true})
+        for (const Case& c : cases) {
+            CAPTURE(bridged);
+            const std::string name = c.name;
+            CAPTURE(name);
+            model::Project project;
+            project.console9 = false;
+            model::EditTxn t(model::Session::create(project), 1);
+            const Id channel = addChannel(t);
+            const Id rack = t.create(model::Rack{channel, ""});
+            const Id transport = addModule(t, rack, "com.suppleaudio.rack.transport");
+            const Id out = addModule(t, rack, "com.suppleaudio.rack.out");
+            std::optional<json::Value> patch;
+            if (!c.instrument)
+                patch = json::parse(c.latent ? R"({"schema":"supple.test-gain-patch/1.0",)"
+                                               R"("params":{"gain":-6,"latency":"short"}})"
+                                             : R"({"schema":"supple.test-gain-patch/1.0",)"
+                                               R"("params":{"gain":-6}})")
+                            .value();
+            const Id plugin = addPlugin(
+                t, rack, c.instrument ? "com.suppleaudio.test.sine" : "com.suppleaudio.test.gain",
+                patch);
+            if (c.instrument) {
+                cable(t, transport, "beat_phase", plugin, "gate");
+            } else {
+                const Id vca = addModule(t, rack, "com.suppleaudio.rack.vca");
+                cable(t, transport, "beat_phase", vca, "in");
+                cable(t, vca, "out", plugin, "in_l");
+            }
+            cable(t, plugin, "out_l", out, "l");
+            listen(t, out, channel);
+            const Id fx = *t.preview().modules.find(plugin)->fx;
+            t.modify<model::FxInstance>(fx, [&](auto& f) {
+                f.wet = c.wet;
+                f.oversampling = c.oversampling;
+                if (bridged) f.isolation = model::Isolation::SharedBridge;
+            });
+            const auto base = commit(t);
+            auto play = [&](const EngineOptions& options, bool swap) {
+                auto pool = makePool();
+                MediaCache media;
+                DummyBackend backend(
+                    {.mode = DummyBackend::Mode::Manual, .captureFrames = 300 * 256});
+                Engine engine(pool, media, engine::test::patient(options));
+                REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256}));
+                REQUIRE(engine.load(base));
+                engine.play();
+                auto cycles = [&](int n) {
+                    for (int i = 0; i < n; ++i) {
+                        if (options.anticipative)
+                            REQUIRE(engine.awaitRendered((backend.cycles() + 1) * 256));
+                        backend.run(1);
+                    }
+                    // A full renderer waiting for the callback: every run
+                    // takes the next edit from the same renderer position.
+                    if (options.anticipative)
+                        REQUIRE(engine.awaitRendered(std::numeric_limits<std::int64_t>::max()));
+                };
+                cycles(100);
+                model::Session s = base;
+                if (c.rampAtSwap) {
+                    model::EditTxn e(s, s.version + 1);
+                    e.modify<model::FxInstance>(fx, [](auto& f) { f.wet = 40; });
+                    s = commit(e);
+                    REQUIRE(engine.load(s));
+                    REQUIRE(engine.mixEdits() == 1);
+                    cycles(1);
+                }
+                const auto generation = engine.planGeneration();
+                if (swap) {
+                    model::EditTxn marker(s, s.version + 1);
+                    marker.create(model::Marker{});
+                    REQUIRE(engine.load(commit(marker)));
+                }
+                CHECK(engine.planGeneration() == generation + (swap ? 1 : 0));
+                cycles(c.rampAtSwap ? 199 : 200);
+                CHECK(engine.bridgeLateCycles() == 0);
+                CHECK(engine.processErrors() == 0);
+                engine.stop();
+                return backend.capture().channels[0];
+            };
+            for (const EngineOptions& options : {EngineOptions{.anticipative = false, .workers = 0},
+                                                 EngineOptions{.workers = 0}}) {
+                CAPTURE(options.anticipative);
+                const auto swapped = play(options, true), kept = play(options, false);
+                CHECK(*std::max_element(kept.begin(), kept.end()) > 0.01f);
+                std::size_t first = 0;
+                while (first < kept.size() && swapped[first] == kept[first]) ++first;
+                CAPTURE(first);  // where the swapped run first differs
+                CHECK(bool(swapped == kept));
+            }
         }
 }
 
