@@ -46,7 +46,9 @@ class SafeLoad {
     std::function<void(const std::string&)> onStatus;
     // The engine's side, replaceable by tests: `project.plugins` and `plugin.override`.
     std::function<Result<json::Value>(const json::Value& args)> plugins;
-    std::function<Status(const std::string& id, const std::string& mode)> override_;
+    // Returns whether the plug-in's mode changed (false: it was set that way already), as
+    // `plugin.override` does: an undo sets back only what an open changed.
+    std::function<Result<bool>(const std::string& id, const std::string& mode)> override_;
     // The reports' suspects (their build ids) and settling a report: `diagnostics::suspects` and
     // `crash.settle` by default.
     std::function<std::vector<diagnostics::Suspect>()> reported;

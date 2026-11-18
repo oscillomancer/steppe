@@ -257,13 +257,15 @@ SafeLoad::SafeLoad(ui::Root& root, cmd::Dispatcher& dispatcher, std::filesystem:
     plugins = [this](const json::Value& args) {
         return dispatcher_.execute({"project.plugins", args, kOrigin});
     };
-    override_ = [this](const std::string& id, const std::string& mode) -> Status {
+    override_ = [this](const std::string& id, const std::string& mode) -> Result<bool> {
         json::Value args = json::Value::object();
         args["plugin"] = id;
         args["mode"] = mode;
         auto r = dispatcher_.execute({"plugin.override", std::move(args), kOrigin});
         if (!r) return r.error();
-        return {};
+        // A result without the field is read as a change: setting back is then the safe side.
+        const json::Value* changed = r->find("changed");
+        return changed && changed->isBool() ? changed->asBool() : true;
     };
     reported = [this] {
         auto found = diagnostics::suspects(diagnostics_);
@@ -366,7 +368,7 @@ void SafeLoad::ask(std::shared_ptr<Run> run) {
 
 Status SafeLoad::enable(const std::string& pluginId, const std::string& format) {
     if (!override_) return {};
-    SUPPLE_TRY(override_(pluginId, "normal"));
+    if (auto set = override_(pluginId, "normal"); !set) return set.error();
     // The person's own word that it loads: what a report suspected of it is resolved.
     if (reported && settle)
         for (const auto& suspect : reported())
@@ -390,21 +392,24 @@ void SafeLoad::finish(std::shared_ptr<Run> run) {
         if (a.choice != LoadChoice::Normal)
             overrides.push_back({a.question.id, a.question.name,
                                  a.choice == LoadChoice::Bridge ? "bridge" : "disable", false});
+    // Only what this open changed is set back: an override holds until the app quits, so one
+    // that was already in force (a remembered choice applied by an earlier open) is not this
+    // open's to undo. The plug-ins asked about were on the normal load, which is what an undo
+    // restores.
     std::vector<const Pending*> applied;
-    // The suspects asked about were on the normal load, which is what an undo restores.
     auto undo = [&] {
         for (auto at = applied.rbegin(); at != applied.rend(); ++at)
             if (override_) (void)override_((*at)->id, "normal");
         applied.clear();
     };
     for (const auto& o : overrides) {
-        const Status done = override_ ? override_(o.id, o.mode) : Status{};
+        Result<bool> done = override_ ? override_(o.id, o.mode) : Result<bool>(false);
         if (!done) {
             undo();
             status(o.name + ": " + done.error().message);
             return;  // a safety choice that cannot be made is not made halfway: no open
         }
-        applied.push_back(&o);
+        if (*done) applied.push_back(&o);
     }
     for (const auto& a : run->answers)
         if (a.choice == LoadChoice::Normal) {

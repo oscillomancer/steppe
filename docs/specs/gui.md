@@ -2831,12 +2831,14 @@ said in the status line and the open does not happen halfway.
 *Nothing reaches the engine until the open is about to happen* (round 6b). The check only reads and
 asks; every remembered choice and every answer is collected, and only when the last question is
 answered do they act, in this order: (1) the overrides, remembered ones first, as a whole: one that
-fails sets the ones already applied back to the normal load (the suspects asked about were on it)
-and ends there, with nothing settled, nothing saved and no open; (2) the settling of what was
+fails sets back to the normal load the ones this open changed (the suspects asked about were on
+it; `plugin.override` says `changed`, and one it did not change, because an earlier open's
+remembered choice already holds, stays as it is: an override holds until the app quits, and
+setting it back would restart that plug-in in the project that stays open) and ends there, with nothing settled, nothing saved and no open; (2) the settling of what was
 answered **Load it normally**, before the open so that the open does not warn of a plug-in the
 person has just cleared; (3) the open itself (File > Open passes the check's `hash` as
 `expect_hash`; a file that changed since the check is refused and the project is unchanged). An open
-that then fails sets the overrides back and keeps no choice: no remembered rule is written or
+that then fails sets back the overrides it changed (and only those) and keeps no choice: no remembered rule is written or
 dropped. What stays after a failed open, and why: the reports settled by a **Load it normally**
 answer (the person's word that it loads stands, and nothing can unsettle them), and, when the
 override was set back, the restart that setting it made of that plug-in's instances in the project

@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -4568,9 +4569,10 @@ struct SafeLoadRig {
     bool stock = false, bridgeable = true, listed = true;
     bool second = false;  // a second suspect plug-in in the same listing
     int checks = 0;
-    json::Value lastArgs;              // what the last check asked about
-    std::function<void()> afterCheck;  // runs once the check has read the file
-    std::string failFor;               // a plug-in id whose override the engine refuses
+    json::Value lastArgs;                      // what the last check asked about
+    std::function<void()> afterCheck;          // runs once the check has read the file
+    std::string failFor;                       // a plug-in id whose override the engine refuses
+    std::map<std::string, std::string> modes;  // the mode each plug-in was last set to
 
     explicit SafeLoadRig(int width = 1000, int height = 640,
                          const std::filesystem::path& scratch = {})
@@ -4653,11 +4655,15 @@ struct SafeLoadRig {
             }
             return all;
         };
-        load.override_ = [this](const std::string& id, const std::string& mode) -> Status {
+        load.override_ = [this](const std::string& id, const std::string& mode) -> Result<bool> {
             if (!failFor.empty() && id == failFor && mode != "normal")
                 return Error("plugin.override", "the engine refused it");
             overrides.emplace_back(id, mode);
-            return {};
+            // As the engine answers: whether the plug-in's mode changed.
+            auto [at, fresh] = modes.emplace(id, "normal");
+            const bool changed = at->second != mode;
+            at->second = mode;
+            return changed;
         };
         load.settle = [this](const std::string& incident) -> Status {
             settled.push_back(incident);
@@ -4889,6 +4895,49 @@ TEST_CASE("safe-load: nothing reaches the engine until the open happens (round 6
         r.a.root->frame(false);
         CHECK(r.name() == "Saved");
         CHECK(r.overrides.size() == 1);
+    }
+}
+
+TEST_CASE("safe-load: an undo sets back only what this open changed (round 6c-a F1)") {
+    // A plug-in override holds until the app quits. A later open that finds the plug-in already
+    // set the way a remembered choice says changes nothing, so a refusal of that open must not
+    // put the plug-in back on the normal load: that restarts it in process under the project that
+    // is still open and loses its unsaved state.
+    SafeLoadRig r;
+    const gui::RememberedLoad canary{"clap", "com.acme.canary", "0123abcd", "bridge", "Canary Verb",
+                                     "Acme", "1.2.0",           1};
+    r.rules = {canary};
+    r.open();  // the first open applies the remembered bridge to Canary and opens
+    REQUIRE(r.name() == "Saved");
+    REQUIRE(r.overrides.size() == 1);
+    CHECK(r.overrides[0] == std::pair<std::string, std::string>{"com.acme.canary", "bridge"});
+    SUBCASE("a second open that is refused leaves Canary on its bridge") {
+        r.afterCheck = [&] {  // the file changes after the check: the open is refused
+            std::ofstream out(r.file, std::ios::binary | std::ios::app);
+            out << "\n";
+        };
+        REQUIRE(r.a.dispatcher->execute(
+            {"project.set", json::parse(R"({"name":"Open now"})").value(), {}}));
+        r.open();
+        CHECK(r.name() == "Open now");  // refused
+        for (std::size_t i = 1; i < r.overrides.size(); ++i)
+            CHECK(r.overrides[i] ==
+                  std::pair<std::string, std::string>{"com.acme.canary", "bridge"});
+        CHECK(r.overrides.size() == 2);  // the remembered choice was applied again, never undone
+    }
+    SUBCASE("a later override that fails leaves it there too") {
+        r.second = true;
+        r.failFor = "com.acme.second";
+        REQUIRE(r.a.dispatcher->execute(
+            {"project.set", json::parse(R"({"name":"Open now"})").value(), {}}));
+        r.ask();
+        REQUIRE(r.a.root->find("safeload"));
+        r.pick("safeload.disable");
+        r.a.root->frame(false);
+        CHECK(r.name() == "Open now");  // the second suspect's override was refused: no open
+        for (std::size_t i = 1; i < r.overrides.size(); ++i)
+            CHECK(r.overrides[i] ==
+                  std::pair<std::string, std::string>{"com.acme.canary", "bridge"});
     }
 }
 
