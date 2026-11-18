@@ -94,9 +94,9 @@ class ArrangeView : public ui::Node {
     // Reads the transport (at most once per 16 ms) and moves the playhead;
     // true when the playhead moved (the app loop keeps its wait short then).
     // force after input/model service, bypassing the throttle. `now` is the
-    // pass's time (tests pass their own).
-    bool poll(bool force = false,
-              std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
+    // pass's time, which the caller gives (the app the clock's, a test its
+    // own); it also steps the edge scroll.
+    bool poll(bool force, std::chrono::steady_clock::time_point now);
 
     // Edge scroll: a drag in the lanes or the ruler held within the zone at
     // an edge of the lanes, or past it, scrolls the view that way, faster

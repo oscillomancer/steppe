@@ -45,6 +45,10 @@ using namespace supple;
 
 namespace {
 
+// The time of the arrangement's passes here: no test in this file holds a
+// drag at an edge, and a forced pass is not throttled, so one time serves.
+constexpr std::chrono::steady_clock::time_point kPass{std::chrono::hours(1)};
+
 // One offscreen window shared by the tests (GL contexts are not free).
 struct Gl {
     std::unique_ptr<gui::Platform> platform;
@@ -293,7 +297,7 @@ TEST_CASE("smooth following moves the picture in whole pixels, so nothing in it 
     auto shot = [&](double seconds) {
         transport.playing = true;
         transport.seconds = seconds;
-        arrange->poll(true);
+        arrange->poll(true, kPass);
         root.damageAll();
         root.frame(false);
         return root.readBack();
@@ -656,7 +660,7 @@ TEST_CASE("the view follows the playhead by page, not at all, or smoothly while 
         arrange->setViewport(v);
         transport.playing = playing;
         transport.seconds = seconds;
-        arrange->poll(true);
+        arrange->poll(true, kPass);
         return arrange->viewport().startSeconds;
     };
     // Page (the default): nothing moves until the playhead leaves the view,
@@ -678,7 +682,7 @@ TEST_CASE("the view follows the playhead by page, not at all, or smoothly while 
     CHECK(at(500, true, 10) == doctest::Approx(500 - width / 2).epsilon(0.01));  // a seek
     // Stopped, moving the cursor only pages: a click past the middle stays put.
     transport.playing = false;
-    arrange->poll(true);
+    arrange->poll(true, kPass);
     CHECK(at(10 + width * 0.8, false, 10) == doctest::Approx(10));
     CHECK(at(10 + width * 1.5, false, 10) ==
           doctest::Approx(10 + width * 1.5 - width * 0.25).epsilon(0.01));

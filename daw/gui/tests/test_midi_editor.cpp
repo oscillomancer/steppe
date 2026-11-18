@@ -1483,17 +1483,17 @@ TEST_CASE("mixer: grouped strips, a fader drag is one undo step, toggles, pan, C
     const auto route =
         f.exec("route.add", R"({"from":")" + strips[0].track + R"(","to":")" + buss + R"("})")["id"]
             .asString();
-    mixer.sync();
+    mixer.sync(f.now);
     auto* send = dynamic_cast<ui::Button*>(f.root->find("mixer.send." + route));
     REQUIRE(send);
     const auto originalSend = send->valueText();
     auto* originalFader = strips[0].fader;
     f.exec("route.set", R"({"route":")" + route + R"(","volume_db":-12})");
-    mixer.sync();
+    mixer.sync(f.now);
     CHECK(send->valueText().find("-12.0") != std::string::npos);
     CHECK(strips[0].fader == originalFader);
     f.exec("history.undo", "{}");
-    mixer.sync();
+    mixer.sync(f.now);
     CHECK(send->valueText() == originalSend);
     f.root->frame(false);
     // The masters stay pinned to the right edge; the others start at the left.
@@ -1509,7 +1509,7 @@ TEST_CASE("mixer: grouped strips, a fader drag is one undo step, toggles, pan, C
     CHECK(fxButton->valueText() == "fx");
     // The track's colour is a bar across the strip's top, over the name.
     f.exec("track.set", R"({"track":")" + strips[0].track + R"(","color":"teal"})");
-    mixer.sync();
+    mixer.sync(f.now);
     f.root->frame(false);
     auto* stripe = f.root->find("mixer.color." + strips[0].track);
     REQUIRE(stripe);
@@ -1548,7 +1548,7 @@ TEST_CASE("mixer: grouped strips, a fader drag is one undo step, toggles, pan, C
     for (int i = 1; i <= 10; ++i)
         f.pointer(ui::PointerEvent::Type::Move, {cap.x, cap.y + static_cast<float>(i) * 3});
     f.pointer(ui::PointerEvent::Type::Up, {cap.x, cap.y + 30});
-    mixer.sync();
+    mixer.sync(f.now);
     CHECK(track(keys)->volumeDb < -3);
     CHECK(steps() == s0 + 1);
     const double dragged = track(keys)->volumeDb;
@@ -1560,7 +1560,7 @@ TEST_CASE("mixer: grouped strips, a fader drag is one undo step, toggles, pan, C
     CHECK(steps() == s0 + 2);
     f.exec("history.undo", "{}");
     CHECK(track(keys)->volumeDb == doctest::Approx(dragged));  // only the second drag undone
-    mixer.sync();
+    mixer.sync(f.now);
     // Double-click: unity, its own step.
     f.pointer(ui::PointerEvent::Type::Down, cap2, 2);
     f.pointer(ui::PointerEvent::Type::Up, cap2);
@@ -1585,10 +1585,10 @@ TEST_CASE("mixer: grouped strips, a fader drag is one undo step, toggles, pan, C
     CHECK(f.app->head().project->console9 == !c9);
     // Changes from elsewhere reach the strips; a new track adds a strip.
     f.exec("track.set", R"({"track":")" + keys + R"(","volume_db":-12})");
-    mixer.sync();
+    mixer.sync(f.now);
     CHECK(strips[0].fader->value() == doctest::Approx(-12.0));
     f.exec("track.add", R"({"name":"Bass"})");
-    mixer.sync();
+    mixer.sync(f.now);
     CHECK(mixer.strips().size() == 4);
     // Meters: readings land on the strip's meter.
     readings = {{keys, {0.5f, 0.25f}, {0.3f, 0.1f}}};

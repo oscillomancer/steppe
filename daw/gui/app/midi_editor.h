@@ -104,9 +104,10 @@ class MidiEditor {
     void close();
     bool isOpen() const { return !state_.item.empty(); }
     // Every loop pass: reload when the session changed, compile the notation
-    // after a pause in typing, follow the playhead. `now` is the pass's time
-    // (tests pass their own); it steps the edge scroll.
-    void sync(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
+    // after a pause in typing, follow the playhead. `now` is the pass's time,
+    // which the caller gives (the app the clock's, a test its own); it steps
+    // the edge scroll.
+    void sync(std::chrono::steady_clock::time_point now);
     std::optional<std::chrono::steady_clock::time_point> nextDeadline() const;
 
     // The panel's height, set by dragging its top border (double-click resets
@@ -158,6 +159,7 @@ class MidiEditor {
     void openNoteMenu(ui::Point at, double itemBeat);
 
   private:
+    void follow();  // sync without the pass's time
     Status reload();
     void reloadText();
     // `submit`: the user pressed Ctrl+Enter, which also overwrites MIDI that

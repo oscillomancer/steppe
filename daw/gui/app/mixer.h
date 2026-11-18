@@ -53,9 +53,9 @@ class Mixer {
     void toggle();
     void setVisible(bool visible);
     bool visible() const;
-    // Every loop pass. `now` is the pass's time (tests pass their own); it
-    // steps the edge scroll.
-    void sync(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
+    // Every loop pass. `now` is the pass's time, which the caller gives (the
+    // app the clock's, a test its own); it steps the edge scroll.
+    void sync(std::chrono::steady_clock::time_point now);
     // Edge scroll (gui.md §4.4): true while a drag is held at an edge of the
     // strips that scroll, or a plug-in at an end of its strip's plug-in
     // list; autoScroll advances it by `seconds` and is true when the strips
@@ -143,6 +143,7 @@ class Mixer {
     void applyHeight();
     void rebuild(bool keepLists);  // keepLists: the plug-in lists stay scrolled where they are
     void update();
+    void follow();  // sync without the pass's time: the session, the selection, the height
     void dragStrip(const std::string& track, DragPhase phase, ui::Point p);
     void dragFx(const std::string& track, model::Id fx, DragPhase phase, ui::Point p,
                 unsigned mods);

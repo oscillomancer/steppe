@@ -1263,7 +1263,7 @@ void MidiEditor::compileText(bool write, bool submit) {
 }
 
 std::uint64_t MidiEditor::beginGesture() {
-    sync();
+    follow();
     gestureGeneration_ = app_.projectGeneration();
     return app_.head().version;
 }
@@ -1271,7 +1271,7 @@ std::uint64_t MidiEditor::beginGesture() {
 Status MidiEditor::edit(json::Value ops, std::optional<std::uint64_t> expectedVersion) {
     if (expectedVersion && (*expectedVersion != app_.head().version ||
                             gestureGeneration_ != app_.projectGeneration())) {
-        sync();
+        follow();
         return Error("gui.midi.stale", "the MIDI item changed during the gesture", "/item",
                      "start the gesture again against the current item");
     }
@@ -1462,6 +1462,14 @@ void MidiEditor::sync(std::chrono::steady_clock::time_point now) {
     } else {
         edgeClock_.reset();
     }
+    follow();
+}
+
+// The pass without its time: the editor follows the window, the session, the
+// text's pending compile and the playhead. A gesture calls it too, to start
+// from the session as it is.
+void MidiEditor::follow() {
+    if (!isOpen()) return;
     applyHeight();  // a smaller window or a taller neighbour shrinks the panel
     if (playhead_ && roll_) static_cast<RollPlayhead*>(playhead_)->place(roll_->bounds());
     const bool replaced = app_.projectGeneration() != projectGeneration_;

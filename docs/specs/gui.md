@@ -699,8 +699,10 @@ step are one piece of code for every view that scrolls this way
 (`supple/ui/edge_scroll.h`): `ui::EdgeScrollClock` gives the step, never
 more than 50 ms, so a stalled frame is a short step and not a jump, and
 nothing on a scroll's first pass. `ArrangeView::poll`, `MidiEditor::sync`,
-`Mixer::sync` and `RackWindow::tick` take the pass's time, so tests pass
-their own; `autoScroll(seconds)` on each is the step itself.
+`Mixer::sync` and `RackWindow::tick` take the pass's time, with no
+default: the app loop gives each of them the one time it read for the pass,
+and a test gives its own, so none can start a scroll's clock at the real
+time without saying so. `autoScroll(seconds)` on each is the step itself.
 By default Alt+wheel anywhere over the arrange view, and Ctrl+wheel over the
 TCP, adds eight design units per notch to every track row, including hidden tracks and compact folders, preserving
 mixed heights and clamping each independently. Fractional wheel deltas work

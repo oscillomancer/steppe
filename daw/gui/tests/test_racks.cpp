@@ -2217,7 +2217,7 @@ TEST_CASE("rack window: a sequencer's notes are captured to a track from its men
     f.snapshot("rack-capturing.png");
     REQUIRE(gate.waitFinished());
     f.dispatcher->flushJobEvents();  // its edit lands on the model thread
-    CHECK(f.racks->tick());
+    CHECK(f.racks->tick(std::chrono::steady_clock::now()));
     f.frame();
     CHECK_FALSE(f.racks->capturing());
     CHECK_FALSE(f.r().find("rack.capture.stop")->visible);
@@ -2269,7 +2269,7 @@ TEST_CASE("rack window: a sequencer's notes are captured to a track from its men
     gate.release();
     REQUIRE(gate.waitFinished());
     f.dispatcher->flushJobEvents();
-    f.racks->tick();
+    f.racks->tick(std::chrono::steady_clock::now());
     f.frame();
     CHECK(items() == 0);
 
@@ -2281,7 +2281,7 @@ TEST_CASE("rack window: a sequencer's notes are captured to a track from its men
     gate.release();
     REQUIRE(gate.waitFinished());
     f.dispatcher->flushJobEvents();
-    CHECK(f.racks->tick());
+    CHECK(f.racks->tick(std::chrono::steady_clock::now()));
     f.frame();
     CHECK_FALSE(f.racks->capturing());
     CHECK(items() == 0);

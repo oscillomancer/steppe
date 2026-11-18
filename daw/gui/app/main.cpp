@@ -1214,16 +1214,17 @@ int main(int argc, char** argv) {
             uiFile.tick((*app)->projectPath(), (*app)->projectGeneration());
         });
         timed([&] {
+            // The pass's time: what steps an edge scroll and paces the meters.
+            const auto now = Clock::now();
             shell.sync(event);
-            midiEditor.sync();
+            midiEditor.sync(now);
             routing.sync();
             racks.sync();
-            racks.tick();
-            mixer.sync();
+            racks.tick(now);
+            mixer.sync(now);
             history.sync();
             inspector.sync();
             sideBrowser.sync();
-            const auto now = Clock::now();
             const auto activity = (*app)->meterActivitySequence();
             // Observe before reading; arm/recheck after the visible meters rest.
             if (event || !meterFrame || now >= *meterFrame) {
@@ -1242,7 +1243,7 @@ int main(int argc, char** argv) {
             if (audioDevice.isOpen()) audioDevice.refresh();
             if (timecodeDialog.isOpen()) timecodeDialog.refresh();
             syncDialog.refresh();
-            if (shell.arrange()->poll(event)) root.requestAnimationFrame();
+            if (shell.arrange()->poll(event, now)) root.requestAnimationFrame();
         });
         return next;
     };
@@ -1403,16 +1404,17 @@ int main(int argc, char** argv) {
     if (server) server->stop();
     (void)uiFile.flush((*app)->projectPath());
     if (!o.snapshot.empty()) {  // the final state, for tests and bug reports
+        const auto now = Clock::now();
         shell.sync();
-        midiEditor.sync();
+        midiEditor.sync(now);
         routing.sync();
         racks.sync();
-        racks.tick();
-        mixer.sync();
+        racks.tick(now);
+        mixer.sync(now);
         history.sync();
         inspector.sync();
         sideBrowser.sync();
-        meterFeed.poll();
+        meterFeed.poll(now);
         root.damageAll();
         root.frame(false);
         for (const auto& [name, panel] :
