@@ -219,10 +219,13 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
                 else
                     bridgeReports.post(
                         [directory = options.directory, report = std::move(*prepared)] {
+                            const auto step = reportStepHook();  // tests only
+                            if (step) step(ReportStep::BridgeReportWrite);
                             if (!writeBridgeReport(directory, report))
                                 std::fputs(
                                     "a plug-in bridge died; its local report could not be saved\n",
                                     stderr);
+                            if (step) step(ReportStep::BridgeReportWritten);
                         });
             }
             continue;
@@ -246,6 +249,7 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
     close(native);
     if (markerUnavailable) std::fputs("diagnostic coverage was partial\n", stderr);
     if (hasTerminal || fatal || !expected) {
+        if (const auto step = reportStepHook()) step(ReportStep::WorkerReport);  // tests only
         if (!storage || !publishReport(options.directory, boot, hasTerminal ? &terminal : nullptr,
                                        code, fatal, hasTerminal ? &trace : nullptr, &inventory))
             std::fputs(

@@ -13,10 +13,14 @@
 //                                                 once; then the program faults (topic 6c.5)
 //         <diagnostics directory> bridged-shared  a gain plug-in and the crash plug-in share a
 //                                                 bridge, which the crash plug-in kills
+//         <diagnostics directory> bridged-slow-writer  a bridged plug-in kills its bridge, and the
+//                                                 program faults before the report of that is
+//                                                 written: the supervisor holds that write open
 #include <supple/diagcap/selfcapture.h>
 #include <supple/diagnostics/frontend.h>
 #include <supple/host/clap_host.h>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -108,6 +112,28 @@ bool awaitReport(const std::filesystem::path& directory) {
     return false;
 }
 
+// The supervisor's order of writing, from inside it (round 6b): a bridge report's write is held
+// open until the supervisor reaches the worker's report, which it must not do before the write
+// has ended. If it does (a supervisor that does not wait for the writer), the hold is over at
+// once and the steps say the wrong order; if it does not, the hold ends at its bound, which only
+// makes a wrong order unseen, never a right one fail.
+std::atomic<bool> gWorkerReportReached{false};
+void sayStep(supple::diagnostics::detail::ReportStep step) {
+    using supple::diagnostics::detail::ReportStep;
+    if (step == ReportStep::BridgeReportWrite) {
+        std::fprintf(stderr, "step bridge-write\n");
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        while (!gWorkerReportReached.load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < until)
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    } else if (step == ReportStep::BridgeReportWritten) {
+        std::fprintf(stderr, "step bridge-written\n");
+    } else {
+        gWorkerReportReached.store(true, std::memory_order_release);
+        std::fprintf(stderr, "step worker-report\n");
+    }
+}
+
 int body(int argc, char** argv) {
     const std::filesystem::path path = FIXTURE_CLAP_PATH;
     auto found = supple::host::scan(std::span<const std::filesystem::path>(&path, 1));
@@ -118,6 +144,12 @@ int body(int argc, char** argv) {
         return supple::host::PluginInfo{};
     };
     const std::string mode = argc >= 3 ? argv[2] : "loaded";
+    if (mode == "bridged-slow-writer") {
+        supple::host::setBridgeExecutable(BRIDGE_PATH);
+        if (!misbehave(find("com.suppleaudio.test.crash"), 4.0)) return 7;
+        fault();  // before the supervisor has finished writing the bridge's report
+        return 0;
+    }
     if (mode == "bridged-one" || mode == "bridged-shared") {
         supple::host::setBridgeExecutable(BRIDGE_PATH);
         const auto crash = find("com.suppleaudio.test.crash");
@@ -193,6 +225,8 @@ int main(int argc, char** argv) {
     if (const std::string_view mode = argv[2];
         mode == "bridged-crash" || mode == "bridged-one" || mode == "bridged-shared")
         supple::diagnostics::detail::setInventoryHook(&lookAtSlot);
+    if (std::string_view(argv[2]) == "bridged-slow-writer")
+        supple::diagnostics::detail::setReportStepHook(&sayStep);
     return supple::diagnostics::runFrontend(argc, argv, supple::diagnostics::Role::Fixture, body,
                                             {std::filesystem::path(argv[1])});
 }

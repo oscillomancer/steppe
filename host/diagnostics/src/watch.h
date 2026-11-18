@@ -30,4 +30,12 @@ class Inventory;
 using InventoryHook = void (*)(const Packet& packet, const Inventory& inventory);
 void setInventoryHook(InventoryHook hook) noexcept;
 InventoryHook inventoryHook() noexcept;
+// Tests only: called by the supervisor at the steps of writing reports, so a test can hold one
+// open (BridgeReportWrite runs on the background writer's thread, the others on the supervisor's)
+// and see which ends first. The order is the contract: every bridge report is on disk before
+// the worker's own is written.
+enum class ReportStep { BridgeReportWrite, BridgeReportWritten, WorkerReport };
+using ReportStepHook = void (*)(ReportStep step);
+void setReportStepHook(ReportStepHook hook) noexcept;
+ReportStepHook reportStepHook() noexcept;
 }  // namespace supple::diagnostics::detail

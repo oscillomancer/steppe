@@ -86,4 +86,11 @@ void setInventoryHook(InventoryHook value) noexcept {
     gInventoryHook.store(value, std::memory_order_release);
 }
 InventoryHook inventoryHook() noexcept { return gInventoryHook.load(std::memory_order_acquire); }
+
+std::atomic<ReportStepHook> gReportStepHook{nullptr};
+
+void setReportStepHook(ReportStepHook value) noexcept {
+    gReportStepHook.store(value, std::memory_order_release);
+}
+ReportStepHook reportStepHook() noexcept { return gReportStepHook.load(std::memory_order_acquire); }
 }  // namespace supple::diagnostics::detail

@@ -186,4 +186,12 @@ if not sanitized:
     assert e["attribution"]=={"confidence":"fault_in_image","plugin":crash["id"]},e["attribution"]
     assert not others[0].get("executing") and crash["executing"][0]["entry"]=="process",e["plugins"]
     in_build(e,crash)
+    # The supervisor writes every bridge report before the worker's own, though the writer is slow
+    # (a disk, a retention pass): the fixture holds the bridge report's write open until the
+    # supervisor reaches the worker's report, if it ever does before the hold's bound, and says
+    # each step on stderr. The program faults before the bridge's report is awaited.
+    reports,run=run_bridged("bridged-slow-writer")
+    steps=[l.split()[1] for l in run.stderr.decode(errors="replace").splitlines() if l.startswith("step ")]
+    assert steps==["bridge-write","bridge-written","worker-report"],(steps,run.stderr)
+    assert sorted(r["kind"] for r in reports)==["bridge_exit","crash"],[r["kind"] for r in reports]
 print("host inventory passed")
