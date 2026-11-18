@@ -2366,11 +2366,23 @@ Unit tests for layout, input routing, damage, theme loading and the peak
 pyramid; golden images for widgets and each view in fixed states (offscreen,
 tolerance-aware); scripted UI tests that drive views by node id and assert
 on the resulting session (through the bus) — the same commands the agent
-uses, so a UI test can also be an agent workflow test. The `asan` preset
-builds the GUI and runs these tests under AddressSanitizer and UBSan (leak
-checks off where a test opens GL: the driver's allocations outlive the
-process). TSan for the worker/UI handoffs (not in place: the `tsan` preset
-builds without the GUI; `STATUS.md`, Known limits). Plugin GUI embedding keeps the template's host probe
+uses, so a UI test can also be an agent workflow test. The `asan` and
+`tsan` presets build the GUI and run these tests under AddressSanitizer
+with UBSan (leak checks off where a test opens GL: the driver's
+allocations outlive the process) and under ThreadSanitizer, which covers
+the worker/UI handoffs. Every GUI test, in every preset, renders with
+Mesa's software renderer on the calling thread and without its shader
+cache thread (`LIBGL_ALWAYS_SOFTWARE=1`, `LP_NUM_THREADS=0`,
+`MESA_SHADER_CACHE_DISABLE=true` in the tests' environment,
+`daw/gui/CMakeLists.txt`): the pictures do not depend on the machine's GPU
+driver, and ThreadSanitizer sees no driver threads, which are not built
+with it. The `tsan` test preset sets the same three for every other test
+that draws an editor, and leaves out the stock plugins' on-screen
+embedding probes (`plugin.<name>.embedding`, labelled `tsan-skip`).
+`tools/ci/tsan-gui.supp` suppresses the lock-order reports of libdbus,
+which SDL opens. The variables mean nothing on macOS and Windows. `rtsan`
+builds without the GUI, which adds nothing to the audio path. Plugin GUI
+embedding keeps the template's host probe
 tests (`*-linux-host-probe`).
 
 ## Platform directory roots (2026-10-14, ADR-0035)
