@@ -403,7 +403,8 @@ and the **History**. It stays closed until you ask for it:
 
 Click a tab to switch, **Close** to put the panel away, and drag the panel's
 left edge to make it wider or narrower. Steppe remembers per project whether
-the panel was open, which tab it showed and how wide it was.
+the panel was open, which tab it showed, how wide it was and which kind the
+Browser showed.
 
 ## Rendering
 

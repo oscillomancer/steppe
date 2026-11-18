@@ -1022,11 +1022,16 @@ int main(int argc, char** argv) {
         v["mixer"] = mixer.visible();
         v["history"] = history.visible();
         v["side"] = side.save();
+        v["side"]["browser"] = sideBrowser.kind();  // the Browser tab's kind
         return v;
     };
     auto panelsLoad = [&](const json::Value& v) {
         if (const json::Value* m = v.find("mixer"); m && m->isBool()) mixer.setVisible(m->asBool());
         if (const json::Value* state = v.find("side")) {
+            // The kind first, so that the tab reads one list when it shows.
+            if (const json::Value* kind = state->isObject() ? state->find("browser") : nullptr;
+                kind && kind->isString())
+                sideBrowser.show(kind->asString());
             side.load(*state);
         } else if (const json::Value* h = v.find("history"); h && h->isBool()) {
             // A file from before the side panel: the history dock was its own.

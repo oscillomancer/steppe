@@ -1791,8 +1791,9 @@ into view.
 Its left edge (`side.grip`) drags to set the width, 240 to 560 units, 300 by
 default; a double-click restores the default. Whether the panel is open,
 which tab is in view (remembered while closed) and the width are UI state:
-`panels.side` in the sidecar, `{"visible", "tab", "width"}`, and so part of
-a screenset. A field of the wrong type or a tab the panel does not have is
+`panels.side` in the sidecar, `{"visible", "tab", "width", "browser"}`
+(`browser`: the Browser tab's kind, "plugins", "chains" or "files"), and so
+part of a screenset. A field of the wrong type or a tab the panel does not have is
 ignored. `panels.history` is still written (true while the History tab is
 in view); a sidecar from before the side panel, with `panels.history` and
 no `panels.side`, opens the panel on History when it was true.
@@ -1800,7 +1801,8 @@ no `panels.side`, opens the panel on History when it was true.
 **Browser** (`SideBrowser`, node `side.browser`). A row of kinds
 (`side.browser.kinds`: **Plug-ins**, **Chains** and **Files**, the one shown raised; a
 click picks one, and with the row focused Left and Right do) over one page
-per kind. It opens on Plug-ins; which kind is shown is not saved. A page
+per kind. It opens on Plug-ins, or on the kind `panels.side.browser`
+names (a kind it does not have is ignored). A page
 that leaves view gives up the keyboard, and the page shown reads its list
 again when the tab or the kind comes into view. `ui.browser` puts the
 keyboard in the shown page's search field; a panel restored on this tab
