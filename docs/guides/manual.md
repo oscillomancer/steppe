@@ -327,8 +327,9 @@ and the **History**. It stays closed until you ask for it:
   outputs and is not part of the project: it does not pass your tracks or
   the master, and is never in a render or a recording. It stops when you
   click **Stop**, choose another file, add it or leave the page. A long
-  file takes a moment before it sounds, and only its first ten minutes
-  are played. MIDI files cannot be played this way.
+  file takes a moment before it sounds, and only its start is played: the
+  first ten minutes at 48 kHz, less at higher sample rates (two and a half
+  minutes at 192 kHz). MIDI files cannot be played this way.
   **Media** lists the audio your project already holds, each file with its
   format and length, so you can use a recording or an imported file again
   without looking for it on disk. Add it or drag it as you would a file;

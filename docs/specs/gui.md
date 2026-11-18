@@ -2132,8 +2132,10 @@ whether the transport is stopped or playing. It is disabled with no row
 chosen, on a folder and on a MIDI file (there is no instrument to play it
 on). While the file plays the button reads **Stop**, and the page's status
 line says "Reading *file*…" until the file has been read and sounds, then
-"Playing *file*"; for a file longer than the engine's cap, "the first
-10:00 of *file*". Nothing plays on selection alone.
+"Playing *file*"; for a file longer than the engine's cap (a number of
+frames: ten minutes at 48 kHz, less at higher rates), "the first *m:ss* of
+*file*" with the length the engine says it plays ("the first 10:00 of
+*file*" at 48 kHz). Nothing plays on selection alone.
 
 - The Browser stops it (`audition.stop`) at a second press; when another
   row is chosen or none is (a click, the arrow keys, a search, another

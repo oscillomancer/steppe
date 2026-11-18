@@ -637,7 +637,8 @@ instructions are in `docs/guides/installing.md`.
   holds as a fourth kind, Media, added or dragged the same way without a
   second copy; Play on the Files and Media pages hears the chosen audio
   file before it is added (`audition.play`, ADR-0094: on outputs 1/2, from
-  its start, its first ten minutes, not on selection alone, no MIDI files,
+  its start, its first 28,800,000 frames (ten minutes at 48 kHz, 2.5 at
+  192 kHz), not on selection alone, no MIDI files,
   no position shown and no level control); MIDI sources and how often a
   source is used are not listed, and rack patches are not in the Browser) and the History
   as tabs; its tab,
