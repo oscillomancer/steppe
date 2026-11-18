@@ -254,6 +254,7 @@ class MonitorButton : public Node {
     std::string valueText() const override {
         return mode_ == Mode::Off ? "off" : mode_ == Mode::On ? "on" : "auto";
     }
+    Hint hintAt(Point p) const override;  // says the mode too
 
   private:
     Mode mode_ = Mode::Off;

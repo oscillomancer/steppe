@@ -3,11 +3,12 @@
 // The side panel's Browser tab (docs/specs/gui.md §4.14): a row of kinds
 // over one page per kind. Plug-ins is the plugin browser built as a panel's
 // content; Chains lists the saved FX chain presets; Files lists a folder's
-// audio and MIDI files. What is chosen goes on the selected tracks, or
-// where it is dragged, through commands that exist (`fx.add`,
-// `fx.chain.load`, `item.add`).
+// audio and MIDI files; Media lists the audio the project already holds.
+// What is chosen goes on the selected tracks, or where it is dragged,
+// through commands that exist (`fx.add`, `fx.chain.load`, `item.add`).
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -56,11 +57,14 @@ class SideBrowser {
     // The tab came into view or left it: in view, the kind shown reads its
     // list again (the scan cache and favourites, the chains folder).
     void setVisible(bool visible);
-    // The kinds, in the row's order: "plugins", "chains", "files". Unknown:
-    // ignored.
+    // The kinds, in the row's order: "plugins", "chains", "files", "media".
+    // Unknown: ignored.
     void show(const std::string& kind);
     const std::string& kind() const { return kind_; }
     void focusSearch();  // the shown kind's search field; typing searches
+    // Once per pass of the loop: the Media page, while in view, lists the
+    // project's media again when the project has changed.
+    void sync();
 
     // The chains as listed (after the search), for tests: a row's name and
     // what is at its right ("3 effects").
@@ -89,6 +93,15 @@ class SideBrowser {
     // cut ("…/Loops/Drums") so that the last folders stay readable.
     std::string shownPath() const;
 
+    // The Media page: the project's audio sources (the session's `media`)
+    // after the search, by file name, for tests. `detail` is the format and
+    // the length ("WAV · 0:12"), or "missing" for a file that is not there.
+    struct MediaRow {
+        std::string name, detail;
+    };
+    std::size_t mediaCount() const { return mediaShown_.size(); }
+    MediaRow mediaRow(std::size_t row) const;
+
   private:
     struct Chain {
         std::string name, path;
@@ -99,8 +112,18 @@ class SideBrowser {
         std::filesystem::path path;
         bool folder = false;
     };
+    struct Media {
+        std::string id, name, detail;  // the source's id, its file's name
+        std::filesystem::path path;    // absolute
+        bool operator==(const Media&) const = default;
+    };
     std::unique_ptr<ui::Node> buildChains();
     std::unique_ptr<ui::Node> buildFiles();
+    std::unique_ptr<ui::Node> buildMedia();
+    void loadMedia();    // from the session, when its media changed
+    void filterMedia();  // by the search
+    void addMedia(std::size_t row);
+    void setMediaStatus(std::string text);
     ui::Node* pageOf(const std::string& kind) const;
     std::vector<std::filesystem::path> roots() const;
     void goUp();
@@ -147,6 +170,16 @@ class SideBrowser {
     std::vector<std::size_t> fileShown_;  // indices into entries_, after the search
     std::optional<Entry> draggedFile_;    // the file in a drag
     bool atRoots_ = false;                // the roots are listed, not a folder
+    ui::Node* mediaPage_ = nullptr;
+    ui::TextField* mediaSearch_ = nullptr;
+    ui::List* mediaList_ = nullptr;
+    ui::Button* mediaAdd_ = nullptr;
+    ui::Label* mediaStatus_ = nullptr;
+    std::vector<Media> media_;             // the project's audio sources, by name
+    std::vector<std::size_t> mediaShown_;  // indices into media_, after the search
+    std::optional<Media> draggedMedia_;    // the one in a drag
+    // The session the list was read from; ~0: not read yet.
+    std::uint64_t mediaVersion_ = ~std::uint64_t{0}, mediaGeneration_ = ~std::uint64_t{0};
 };
 
 }  // namespace supple::gui

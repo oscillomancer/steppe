@@ -334,10 +334,12 @@ std::unique_ptr<ui::Node> TransportBar::build() {
         return &b;
     };
     auto actionButton = [&](const char* id, Symbol symbol, const char* text, const char* action) {
-        return symbolButton(id, symbol, text, [this, action] {
+        auto* b = symbolButton(id, symbol, text, [this, action] {
             auto r = actions_.run(action);
             if (!r && actions_.onError) actions_.onError(r.error().message);
         });
+        b->hint = {{}, action};  // the status line says the action's name and keys
+        return b;
     };
     actionButton("transport.start", Symbol::Start, "start", "transport.seek:start");  // W, Home
     play_ = actionButton("transport.play", Symbol::Play, "play", "transport.toggle");
@@ -384,6 +386,10 @@ std::unique_ptr<ui::Node> TransportBar::build() {
                 sync();
             },
             40);
+    punch_->hint = {"Punch in and out", {}};
+    click_->hint = {"Metronome", {}};
+    count_->hint = {"Count-in before recording", {}};
+    if (followButton_) followButton_->hint = {{}, "ui.follow.cycle"};
     bar->emplace<ui::Node>("transport.gap").layout.width = ui::SizeRule::fixed(10);
     position_ = &bar->emplace<ui::Label>("transport.position", "1.1.000", ui::Font::MonoBold,
                                          "title", "ink");
@@ -428,6 +434,9 @@ std::unique_ptr<ui::Node> TransportBar::build() {
                                "ink-quiet");
     rateValue_ =
         &readout.emplace<ui::Label>("transport.rate.value", "1.0", ui::Font::Mono, "caption");
+    meter_->hint = {"Time signature", {}};
+    tempo_->hint = {"Tempo", {}};
+    rate.hint = readout.hint = {"Playrate", {}};
     bar->emplace<ui::Node>("transport.spacer");  // takes the rest
     // Warnings first, in the warning colour and only while there are any; then
     // what the device runs at, quiet.

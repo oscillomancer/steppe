@@ -429,6 +429,101 @@ TEST_CASE("rack window: the light theme") {
     f.snapshot("rack-patch-light-zoom.png");
 }
 
+TEST_CASE("rack window: a module held at the space's edge pans the view and goes with it") {
+    Fixture f;
+    if (!f.ok) return;
+    Patch p(f);
+    f.racks->open();
+    f.frame();
+    using T = ui::PointerEvent::Type;
+    gui::RackSpace& space = *f.racks->space();
+    const model::Id vca = *model::Id::parse(p.vca);
+    const auto moduleX = [&] {
+        for (const auto& m : space.scene().modules)
+            if (m.id == vca) return m.x;
+        return 0.0;
+    };
+    const double before = f.app->head().modules.find(vca)->x;
+    const ui::Rect b = space.bounds();
+    const ui::Point a = *space.bodyAt(vca);
+    const gui::RackSpace::View v0 = space.view();
+    const double grab = static_cast<double>(space.toSpace(a).x) - moduleX();
+    const auto steps = f.exec("history.list", "{}")["versions"].size();
+    // In the middle a drag pans nothing.
+    f.pointer(T::Move, a, 0);
+    f.pointer(T::Down, a);
+    f.pointer(T::Move, {a.x + 10, a.y}, 0);
+    CHECK_FALSE(space.autoScrolling());
+    CHECK_FALSE(space.autoScroll(1.0));
+    CHECK(space.view() == v0);
+    // Held at the right edge the view pans on, sideways only, and the module
+    // keeps its place under the pointer; further out is faster.
+    const ui::Point edge{b.right() - 4, a.y};
+    f.pointer(T::Move, edge, 0);
+    REQUIRE(space.autoScrolling());
+    f.snapshot("rack-edge-scroll-1-held.png");
+    CHECK(space.autoScroll(0.5));
+    f.frame();
+    f.snapshot("rack-edge-scroll-2-panned.png");
+    const double once = space.view().x;
+    CHECK(once > v0.x);
+    CHECK(space.view().y == v0.y);
+    CHECK(static_cast<double>(space.toSpace(edge).x) - moduleX() ==
+          doctest::Approx(grab).epsilon(0.01));
+    f.pointer(T::Move, {b.right() + 60, a.y}, 0);
+    CHECK(space.autoScroll(0.5));
+    CHECK(space.view().x - once > once - v0.x);
+    // The window's tick steps it by the time since the tick before, and by
+    // no more than the cap: a frame that stalled for two seconds is a short
+    // step, not a jump. The first tick of a scroll only starts the clock.
+    {
+        namespace ch = std::chrono;
+        const ch::steady_clock::time_point t0{ch::hours(1)};
+        const double s0 = space.view().x;
+        f.racks->tick(t0);
+        CHECK(space.view().x == s0);
+        f.racks->tick(t0 + ch::milliseconds(25));
+        const double step = space.view().x - s0;
+        CHECK(step > 0);
+        f.racks->tick(t0 + ch::milliseconds(25) + ch::seconds(2));
+        CHECK(space.view().x - s0 == doctest::Approx(3 * step));
+    }
+    // Back inside it stops, and the module lands where the pointer is.
+    const ui::Point inside{b.x + b.w / 2, a.y};
+    f.pointer(T::Move, inside, 0);
+    CHECK_FALSE(space.autoScrolling());
+    const gui::RackSpace::View held = space.view();
+    CHECK_FALSE(space.autoScroll(1.0));
+    CHECK(space.view() == held);
+    const double lands = static_cast<double>(space.toSpace(inside).x) - grab;
+    f.pointer(T::Up, inside);
+    CHECK_FALSE(space.autoScrolling());
+    CHECK(f.app->head().modules.find(vca)->x == doctest::Approx(lands).epsilon(0.01));
+    // The pan's distance and the pointer's, together.
+    CHECK(lands - before ==
+          doctest::Approx(held.x - v0.x + static_cast<double>(inside.x - a.x) / held.zoom)
+              .epsilon(0.01));
+    CHECK(held.x - v0.x > static_cast<double>(b.w) / held.zoom);          // further than one view
+    CHECK(f.exec("history.list", "{}")["versions"].size() == steps + 1);  // one undo step
+
+    // A marquee from empty space pans at the top edge too, and keeps its
+    // first corner; a pan of the space itself does not edge-scroll.
+    const ui::Point empty{b.x + b.w - 30, b.y + b.h - 30};
+    f.pointer(T::Down, empty);
+    f.pointer(T::Move, {empty.x - 40, b.y + 3}, 0);
+    REQUIRE(space.autoScrolling());
+    const double y0 = space.view().y;
+    CHECK(space.autoScroll(0.25));
+    CHECK(space.view().y < y0);
+    f.pointer(T::Move, {empty.x - 40, b.y + b.h / 2}, 0);
+    CHECK_FALSE(space.autoScrolling());
+    f.pointer(T::Up, {empty.x - 40, b.y + b.h / 2});
+    f.pointer(T::Down, empty, 2);
+    f.pointer(T::Move, {b.right() - 2, empty.y}, 0);
+    CHECK_FALSE(space.autoScrolling());
+    f.pointer(T::Up, {b.right() - 2, empty.y}, 2);
+}
+
 TEST_CASE(
     "rack window: a drag moves the selection, one undo step; the wheel zooms at the pointer") {
     Fixture f;
@@ -441,6 +536,16 @@ TEST_CASE(
     const auto before = *f.app->head().modules.find(vca);
     const ui::Point a = *space.bodyAt(vca);
     const double zoom = space.view().zoom;
+    // The pointer is the move cursor once a module is in hand, and the arrow
+    // again when it is let go.
+    f.pointer(ui::PointerEvent::Type::Move, a, 0);
+    f.pointer(ui::PointerEvent::Type::Down, a);
+    CHECK(f.r().cursor() == ui::Cursor::Arrow);
+    f.pointer(ui::PointerEvent::Type::Move, {a.x + 8, a.y}, 0);
+    CHECK(f.r().cursor() == ui::Cursor::Move);
+    f.pointer(ui::PointerEvent::Type::Move, a, 0);
+    f.pointer(ui::PointerEvent::Type::Up, a);
+    CHECK(f.r().cursor() == ui::Cursor::Arrow);
     f.drag(a, {a.x + static_cast<float>(30 * zoom), a.y + static_cast<float>(20 * zoom)});
     const auto& after = *f.app->head().modules.find(vca);
     CHECK(after.x == doctest::Approx(before.x + 30).epsilon(0.02));
@@ -493,8 +598,15 @@ TEST_CASE(
     CHECK(space.view().x == doctest::Approx(sideways.x + 80 / sideways.zoom));
     CHECK(space.view().y == sideways.y);
     CHECK(space.view().zoom == sideways.zoom);
-    // Middle-drag pans.
+    // Middle-drag pans, under the move cursor.
     const auto v = space.view();
+    f.pointer(ui::PointerEvent::Type::Down, at, 2);
+    f.pointer(ui::PointerEvent::Type::Move, {at.x - 10, at.y}, 0);
+    CHECK(f.r().cursor() == ui::Cursor::Move);
+    f.pointer(ui::PointerEvent::Type::Move, at, 0);
+    f.pointer(ui::PointerEvent::Type::Up, at, 2);
+    CHECK(f.r().cursor() == ui::Cursor::Arrow);
+    CHECK(space.view().x == doctest::Approx(v.x));
     f.drag(at, {at.x - 40, at.y}, 2);
     CHECK(space.view().x == doctest::Approx(v.x + 40 / v.zoom));
 }
@@ -1509,6 +1621,27 @@ TEST_CASE("rack window: patches have a view of their own, searchable, with a car
     CHECK(search->placeholder() == "Search modules");
     CHECK(search->text().empty());
     CHECK(f.racks->browserShows().size() > 40);
+    // A module type carried out of the browser: the move cursor over the
+    // list it came from and over the space, "not allowed" where nothing
+    // takes it; let go over the list it adds nothing and the pointer is the
+    // nodes' again.
+    const auto modules = f.app->head().modules.size();
+    const auto type = f.racks->browserRowAt(f.racks->browserShows()[0]);
+    REQUIRE(type);
+    f.pointer(ui::PointerEvent::Type::Move, *type, 0);
+    f.pointer(ui::PointerEvent::Type::Down, *type);
+    f.pointer(ui::PointerEvent::Type::Move, {type->x + 3, type->y + 6}, 0);
+    CHECK(f.r().cursor() == ui::Cursor::Move);  // over its own list: not refused
+    f.pointer(ui::PointerEvent::Type::Move, {sb.x + sb.w / 2, sb.y + sb.h / 2}, 0);
+    CHECK(f.r().cursor() == ui::Cursor::Move);
+    // Above the space, in the window's top row, nothing takes a module.
+    f.pointer(ui::PointerEvent::Type::Move, {sb.x + sb.w / 2, sb.y - 6}, 0);
+    CHECK(f.r().cursor() == ui::Cursor::NotAllowed);
+    f.pointer(ui::PointerEvent::Type::Move, {type->x + 3, type->y + 6}, 0);
+    CHECK(f.r().cursor() == ui::Cursor::Move);
+    f.pointer(ui::PointerEvent::Type::Up, {type->x + 3, type->y + 6});
+    CHECK_FALSE(f.r().dragCursor());
+    CHECK(f.app->head().modules.size() == modules);
 }
 
 TEST_CASE("rack window: a Notes module's menu picks its MIDI input and the track it plays") {

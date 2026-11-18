@@ -127,8 +127,12 @@ struct Fixture {
         return *r;
     }
     json::Value notes() { return exec("midi.notes", R"({"item":")" + item + R"("})")["notes"]; }
+    // The time of every pass the fixture makes. A test moves it on by hand:
+    // no pass reads the real clock, so nothing here depends on how long the
+    // machine has been up or how fast it runs.
+    std::chrono::steady_clock::time_point now{std::chrono::hours(1)};
     void frame() {
-        editor->sync();
+        editor->sync(now);
         root->frame(false);
     }
     // Pointer input in window coordinates, the same path as SDL events.
@@ -215,12 +219,12 @@ TEST_CASE("MIDI editor: notes take their item's colour; the title names the item
     // The title names the item as the arrangement does: its id only while
     // it has no name.
     auto title = [&] { return f.root->find("midi.title")->valueText(); };
-    f.editor->sync();
+    f.editor->sync(f.now);
     f.frame();
     CHECK(title().find("Keys") != std::string::npos);
     CHECK(title().find(f.item) != std::string::npos);
     f.exec("item.set", R"({"item":")" + f.item + R"(","name":"Chords"})");
-    f.editor->sync();
+    f.editor->sync(f.now);
     f.frame();
     CHECK(title().find("Chords") != std::string::npos);
     CHECK(title().find(f.item) == std::string::npos);
@@ -507,6 +511,26 @@ TEST_CASE("MIDI editor: a note held at the roll's edge scrolls the roll and goes
     CHECK(f.editor->autoScroll(0.5));
     CHECK(state.scrollBeat - once > once - scroll);
     CHECK(state.topPitch == pitches);  // the pitches stayed
+    // The loop's pass steps it by the time since the pass before, and by no
+    // more than the cap: a frame that stalled for two seconds is a short
+    // step, not a jump. The first pass of a scroll only starts the clock,
+    // however long ago the pass before it was.
+    {
+        using namespace std::chrono;
+        const ui::Point edge{roll.right() + 60, body.y};
+        f.pointer(T::Move, {roll.x + roll.w / 2, body.y});  // inside: the scroll ends
+        REQUIRE_FALSE(f.editor->autoScrolling());
+        f.now += seconds(10);
+        const double s0 = state.scrollBeat;
+        f.pointer(T::Move, edge);  // at the edge again, and the new scroll's first pass
+        REQUIRE(f.editor->autoScrolling());
+        CHECK(state.scrollBeat == s0);
+        f.editor->sync(f.now += milliseconds(25));
+        const double step = state.scrollBeat - s0;
+        CHECK(step > 0);
+        f.editor->sync(f.now += seconds(2));
+        CHECK(state.scrollBeat - s0 == doctest::Approx(3 * step));
+    }
     // Back inside it stops, and the note lands where the pointer is.
     const ui::Point inside{roll.x + roll.w / 2, body.y};
     f.pointer(T::Move, inside);
@@ -1968,6 +1992,17 @@ TEST_CASE("routing matrix clamps scrolling when channel rows are deleted") {
     REQUIRE(status);
     CHECK(status->valueText().find(matrix.model().blocked(0, 0)) != std::string::npos);
     CHECK(status->valueText().find("not allowed") != std::string::npos);
+    // The pointer says so too, and only over a cell that cannot be connected
+    // (cells are 22 units).
+    CHECK(matrix.grid()->cursorAt(hover.pos) == ui::Cursor::NotAllowed);
+    std::size_t open = 0;
+    while (open < matrix.model().destinations.size() && !matrix.model().blocked(0, open).empty())
+        ++open;
+    REQUIRE(open < matrix.model().destinations.size());
+    CHECK(matrix.grid()->cursorAt({hover.pos.x + 22 * static_cast<float>(open), hover.pos.y}) ==
+          ui::Cursor::Arrow);
+    CHECK(matrix.grid()->cursorAt({bounds.x + 20, bounds.y + 123}) ==
+          ui::Cursor::Arrow);  // a label
 }
 
 TEST_CASE("audit3: empty event-list double-click never edits the old selection") {

@@ -846,6 +846,7 @@ ArmButton::ArmButton(std::string id, std::function<void(bool)> toggle)
     : Toggle(std::move(id), "", "armed", std::move(toggle)) {
     layout.width = SizeRule::fixed(20);
     layout.height = SizeRule::fixed(20);
+    hint.name = "Arm for recording";
 }
 
 void ArmButton::paint(Canvas& c) {
@@ -872,6 +873,8 @@ MonitorButton::MonitorButton(std::string id, std::function<void()> click)
     layout.width = SizeRule::fixed(20);
     layout.height = SizeRule::fixed(20);
 }
+
+Hint MonitorButton::hintAt(Point) const { return {"Monitor the input: " + valueText(), {}}; }
 
 void MonitorButton::setMode(Mode mode) {
     if (mode == mode_) return;

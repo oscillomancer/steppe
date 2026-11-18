@@ -21,6 +21,7 @@
 #include "supple/ui/popup.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/control_names.h"
 #include "supple/views/track_layout.h"
 
 namespace supple::gui {
@@ -413,6 +414,20 @@ class FxList : public ui::Node {
     const std::vector<FxSlot*>& slots() const { return slots_; }
     const std::vector<RackSlot*>& racks() const { return racks_; }
     float content() const { return chainRows(static_cast<int>(racks_.size() + slots_.size())); }
+    // Where the list is scrolled to; a rebuilt strip's list takes the old
+    // one's place (arrange clamps it to the new content).
+    float scroll() const { return scroll_; }
+    void setScroll(float v) { scroll_ = v; }
+    // A scroll by `dy` units (the edge scroll): true when the list moved.
+    bool scrollBy(float dy) {
+        const float limit = std::max(0.0f, content() - bounds().h);
+        const float next = std::clamp(scroll_ + dy, 0.0f, limit);
+        if (next == scroll_) return false;
+        scroll_ = next;
+        relayout();
+        invalidate();
+        return true;
+    }
     void arrange(const ui::Canvas& canvas, const ui::Rect& b) override {
         setBounds(b);
         const bool bar = content() > b.h + 0.5f;
@@ -622,6 +637,19 @@ class StripRow : public ui::Node {
         pinned_->arrange(canvas, {b.right() - pinnedW, b.y, pinnedW, b.h});
     }
     void paint(ui::Canvas& c) override { c.fillRect(bounds(), c.theme().color("ground")); }
+    // The part of the row that scrolls (the masters at its right do not),
+    // and a scroll by `dx` units: true when the strips moved.
+    ui::Rect scrolledArea() const { return scrolled_->bounds(); }
+    ui::Rect pinnedArea() const { return pinned_->bounds(); }
+    bool scrollBy(float dx) {
+        const float limit = std::max(0.0f, scrolled_->content() - scrolled_->bounds().w);
+        const float next = std::clamp(scrolled_->scroll + dx, 0.0f, limit);
+        if (next == scrolled_->scroll) return false;
+        scrolled_->scroll = next;
+        relayout();
+        invalidate();
+        return true;
+    }
     std::function<void()> onDoubleClick;           // on the row's empty space
     std::function<void(ui::Point)> onContextMenu;  // a right-click there
     bool onPointer(const ui::PointerEvent& e) override {
@@ -1061,8 +1089,16 @@ Result<json::Value> Mixer::set(const std::string& track, const char* field, json
     return r;
 }
 
-void Mixer::rebuild() {
+void Mixer::rebuild(bool keepLists) {
     endDrag(false);  // the nodes it points at are about to go
+    // A strip's plug-in list stays where it is scrolled to (a plug-in dropped
+    // at the end of a long chain is still in view after it); a new project's
+    // lists start at their tops.
+    std::vector<std::pair<std::string, float>> listScroll;
+    if (keepLists)
+        for (const Strip& st : strips_)
+            if (auto* list = dynamic_cast<FxList*>(st.chain); list && list->scroll() > 0)
+                listScroll.emplace_back(st.track, list->scroll());
     for (const Strip& s : strips_) meters_.detach(s.meter);
     strips_.clear();
     vcaStrips_.clear();
@@ -1139,6 +1175,8 @@ void Mixer::rebuild() {
         // one section that takes the room the panel's height gives.
         auto& chain = frame->emplace<FxList>("mixer.fx." + tid);
         st.chain = &chain;
+        for (const auto& [track, scroll] : listScroll)
+            if (track == tid) chain.setScroll(scroll);
         chain.onDoubleClick = [this, tid] {
             json::Value args = json::Value::object();
             args["track"] = tid;
@@ -1396,6 +1434,19 @@ void Mixer::rebuild() {
         st.value->layout.width = ui::SizeRule::fraction();
         st.peak = &values.emplace<PeakReadout>("mixer.peak." + tid, *st.meter);
         st.peak->layout.width = ui::SizeRule::fraction();
+        // What the status line calls each control, as on the track's row.
+        namespace names = views::names;
+        st.fx->hint = names::kChain;
+        st.addFx->hint = names::kAddFx;
+        st.out->hint =
+            t.type == model::StripType::Master ? names::kHardwareOutput : names::kRouting;
+        if (st.input) st.input->hint = names::kInput;
+        st.polarity->hint = names::kPolarity;
+        st.mono->hint = names::kMono;
+        st.pan->hint = names::kPan;
+        st.mute->hint = names::kMute;
+        st.solo->hint = names::kSolo;
+        st.fader->hint = names::kVolume;
         meters_.attach(tid, st.meter);
         static_cast<StripRow*>(row_)->addStrip(std::move(frame),
                                                t.type == model::StripType::Master);
@@ -1462,6 +1513,11 @@ void Mixer::rebuild() {
             cell->layout.height = ui::SizeRule::fixed(kCellH);
         }
         st.fader = &frame->emplace<ui::Fader>("mixer.vca.fader." + tid);
+        members.hint = {"The group's tracks", {}};
+        env.hint = views::names::kEnvelopes;
+        st.mute->hint = views::names::kMute;
+        st.solo->hint = views::names::kSolo;
+        st.fader->hint = views::names::kVolume;
         st.fader->layout.height = ui::SizeRule::fixed(kFaderH);
         st.fader->setValue(e.value->vca->volumeDb);
         st.value =
@@ -1534,6 +1590,8 @@ void Mixer::dragStrip(const std::string& track, DragPhase phase, ui::Point p) {
     d.pos = p;
     resolveStripDrop();
     if (phase == DragPhase::End) return endDrag(true);
+    showDragCursor();
+    noteDragEdge(p);
     root_.requestAnimationFrame();
 }
 
@@ -1560,7 +1618,10 @@ void Mixer::dragFx(const std::string& track, model::Id fx, DragPhase phase, ui::
         d.label = "chain (" + std::to_string(t->chain.size()) + ")";
     else if (ui::Node* slot = root_.find("mixer.fx." + d.fx))
         d.label = slot->valueText();
+    dragMods_ = mods;
     if (phase == DragPhase::End) return endDrag(true);
+    showDragCursor();
+    noteDragEdge(p, phase == DragPhase::Begin);
     root_.requestAnimationFrame();
 }
 
@@ -1582,6 +1643,7 @@ void Mixer::dragSend(const std::string& track, DragPhase phase, ui::Point p) {
     // Busses and masters take sends; a channel takes only hardware input. A
     // strip the track already sends to takes no second one.
     const Strip* over = stripAt(p);
+    d.home = over && over->track == track;  // still over the strip it leaves
     const auto from = model::Id::parse(track),
                to = over ? model::Id::parse(over->track) : std::nullopt;
     if (over && over->track != track && over->type != "channel" && from && to &&
@@ -1591,6 +1653,8 @@ void Mixer::dragSend(const std::string& track, DragPhase phase, ui::Point p) {
         d.marker = over->node->bounds().intersect(over->node->parent()->bounds());
     }
     if (phase == DragPhase::End) return endDrag(true);
+    showDragCursor();
+    noteDragEdge(p);
     root_.requestAnimationFrame();
 }
 
@@ -1599,6 +1663,7 @@ void Mixer::dragSend(const std::string& track, DragPhase phase, ui::Point p) {
 void Mixer::resolveStripDrop() {
     DragView& d = *drag_;
     d.drop = DragView::Drop::None;
+    d.home = false;
     d.moves.clear();
     const model::Session& s = app_.head();
     const auto dragged = model::Id::parse(d.track);
@@ -1648,9 +1713,16 @@ void Mixer::resolveStripDrop() {
         d.moves = views::reorderMoves(s, *dragged, selected, before);
         if (!d.moves.empty()) index = 0;
     }
+    d.home = !index;  // among its own kind, where it already is
     if (!index) return;
-    const float x = gap < group.size() ? group[gap]->node->bounds().x - 2
-                                       : group.back()->node->bounds().right() + 1;
+    float x = gap < group.size() ? group[gap]->node->bounds().x - 2
+                                 : group.back()->node->bounds().right() + 1;
+    // Among the strips that scroll, the bar stays where they show: at their
+    // edge for a gap that is out of view, not on the masters beside them.
+    if (track->type != model::StripType::Master) {
+        const ui::Rect area = static_cast<StripRow*>(row_)->scrolledArea();
+        x = std::clamp(x, area.x + 1, std::max(area.x + 1, area.right() - 2));
+    }
     d.marker = ui::Rect{x - 1, row.y, 3, row.h}.intersect(row);
     d.index = *index;
     d.drop = DragView::Drop::Reorder;
@@ -1661,6 +1733,7 @@ void Mixer::resolveStripDrop() {
 void Mixer::resolveFxDrop() {
     DragView& d = *drag_;
     d.drop = DragView::Drop::None;
+    d.home = false;
     const Strip* home = nullptr;
     for (const Strip& st : strips_)
         if (st.track == d.track) home = &st;
@@ -1688,11 +1761,15 @@ void Mixer::resolveFxDrop() {
     if (!t) return;
     const std::size_t chainGap = gap < slots.size() ? slots[gap]->chainIndex : t->chain.size();
     const auto index = chainMoveIndex(dragged->chainIndex, chainGap);
+    d.home = !index;  // in its own chain, where it already is
     if (!index) return;
-    const float y =
-        gap < slots.size() ? slots[gap]->bounds().y - 2 : slots.back()->bounds().bottom() + 0.5f;
-    d.marker = ui::Rect{homeList->bounds().x, y - 0.5f, homeList->bounds().w, 3}.intersect(
-        homeList->bounds());
+    // The bar stays where the list shows: at its edge for a gap that is
+    // scrolled out of view.
+    const ui::Rect list = homeList->bounds();
+    const float y = std::clamp(
+        gap < slots.size() ? slots[gap]->bounds().y - 2 : slots.back()->bounds().bottom() + 0.5f,
+        list.y + 0.5f, std::max(list.y + 0.5f, list.bottom() - 2.5f));
+    d.marker = ui::Rect{list.x, y - 0.5f, list.w, 3}.intersect(list);
     d.index = *index;
     d.drop = DragView::Drop::Reorder;
 }
@@ -1784,10 +1861,95 @@ void Mixer::openFxRename(model::Id fx, const ui::Rect& slot) {
     root_.focus(edit);
 }
 
+// The pointer while a strip, a plug-in or a send is in hand: the move
+// cursor where a release would do something and over the thing's own place,
+// "not allowed" over a place that refuses it.
+void Mixer::showDragCursor() {
+    const bool refused = drag_->drop == DragView::Drop::None && !drag_->home;
+    root_.setDragCursor(refused ? ui::Cursor::NotAllowed : ui::Cursor::Move);
+}
+
+// Edge scroll (gui.md §4.4): a strip, a plug-in or an output held within
+// the zone at the left or right edge of the strips that scroll, or past it,
+// scrolls them that way at the arrange view's speeds, so a drop can reach a
+// strip that is out of view. The masters, pinned at the right, do not scroll:
+// a plug-in or an output over one of them is where it can be dropped, and
+// scrolls nothing; a strip there is past the edge of its own kind's strips,
+// and scrolls them on.
+// A plug-in held over its own strip, within the zone at the top or bottom of
+// the strip's plug-in list or past it, scrolls that list, so a drop can
+// reach a place in a chain longer than the list shows. The zone the drag
+// began in (`begin`: the drag's first point) waits until the pointer has
+// left it once: the first and last rows in view lie inside the zones, and
+// picking one of them up is not yet a wish to scroll.
+void Mixer::noteDragEdge(ui::Point p, bool begin) {
+    const auto* row = static_cast<const StripRow*>(row_);
+    const ui::Rect area = row->scrolledArea();
+    const bool onPinned = drag_->kind != DragView::Kind::Strip && row->pinnedArea().contains(p);
+    edgeV_ = onPinned ? 0.0f : ui::edgeScrollSpeed(p.x, area.x, area.right());
+    edgeListV_ = 0;
+    int zone = 0;  // the list's zone the pointer is inside: top -1, bottom 1
+    if (const Strip* over = stripAt(p);
+        drag_->kind == DragView::Kind::Fx && over && over->track == drag_->track) {
+        const ui::Rect list = over->chain->bounds();
+        edgeListV_ = ui::edgeScrollSpeed(p.y, list.y, list.bottom());
+        if (p.y >= list.y && p.y <= list.bottom()) zone = (edgeListV_ > 0) - (edgeListV_ < 0);
+    }
+    if (begin)
+        edgeListHeld_ = zone;
+    else if (zone != edgeListHeld_)
+        edgeListHeld_ = 0;
+    if (edgeListHeld_ != 0) edgeListV_ = 0;
+    if (!edgeResolving_) edgeIdle_ = false;  // the pointer moved: there may be more to scroll
+}
+
+bool Mixer::autoScrolling() const {
+    return (edgeV_ != 0 || edgeListV_ != 0) && drag_->kind != DragView::Kind::None;
+}
+
+bool Mixer::autoScroll(double seconds) {
+    if (!autoScrolling()) {
+        edgeV_ = edgeListV_ = 0;
+        return false;
+    }
+    // At an end of the strips nothing more happens until the pointer moves.
+    if (edgeIdle_) return false;
+    // The drop is resolved again first, against the strips as the last step
+    // left them and the layout has since placed them; then the next step.
+    const DragView d = *drag_;
+    edgeResolving_ = true;
+    switch (d.kind) {
+        case DragView::Kind::Strip:
+            dragStrip(d.track, DragPhase::Move, d.pos);
+            break;
+        case DragView::Kind::Fx:
+            if (const auto fx = model::Id::parse(d.fx))
+                dragFx(d.track, *fx, DragPhase::Move, d.pos, dragMods_);
+            break;
+        case DragView::Kind::Send:
+            dragSend(d.track, DragPhase::Move, d.pos);
+            break;
+        case DragView::Kind::None:
+            break;
+    }
+    edgeResolving_ = false;
+    bool moved = static_cast<StripRow*>(row_)->scrollBy(edgeV_ * static_cast<float>(seconds));
+    if (edgeListV_ != 0)
+        for (const Strip& st : strips_)
+            if (auto* list = dynamic_cast<FxList*>(st.chain); list && st.track == drag_->track)
+                moved = list->scrollBy(edgeListV_ * static_cast<float>(seconds)) || moved;
+    edgeIdle_ = !moved && seconds > 0;
+    return moved;
+}
+
 // The drag is over: drop it (one command, one undo step) or let it go.
 void Mixer::endDrag(bool commit) {
     const DragView done = *drag_;
+    edgeV_ = edgeListV_ = 0;
+    edgeListHeld_ = 0;
+    edgeIdle_ = false;
     *drag_ = DragView{};
+    root_.setDragCursor(std::nullopt);
     ghost_.reset();
     if (done.kind == DragView::Kind::None) return;
     root_.requestAnimationFrame();
@@ -1894,18 +2056,26 @@ void Mixer::update() {
     }
 }
 
-void Mixer::sync() {
+void Mixer::sync(std::chrono::steady_clock::time_point now) {
     if (!visible()) return;
+    // A drag held at the strips' edge scrolls by the time since the last pass
+    // (capped, so a stalled frame is not a jump).
+    if (autoScrolling()) {
+        const double seconds = edgeClock_.step(now);
+        if (autoScroll(seconds) || seconds == 0) root_.requestAnimationFrame();
+    } else {
+        edgeClock_.reset();
+    }
     applyHeight();  // the window may have been resized
     if (actions_.ui().selectedTracks != shownSelection_) showSelection();  // the TCP changed it
     const bool replaced = app_.projectGeneration() != projectGeneration_;
     if (!replaced && app_.head().version == version_) return;
     projectGeneration_ = app_.projectGeneration();
     version_ = app_.head().version;
-    const std::string now = structure();
-    if (replaced || now != structure_) {
-        structure_ = now;
-        rebuild();
+    const std::string structureNow = structure();
+    if (replaced || structureNow != structure_) {
+        structure_ = structureNow;
+        rebuild(!replaced);
     }
     update();
 }

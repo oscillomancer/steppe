@@ -143,6 +143,9 @@ class TcpPanel : public ui::Node {
         // The track.move steps the drop would take (the dragged track and the
         // selected tracks of its parent and type), empty when it changes nothing.
         std::vector<TrackMove> moves;
+        // Over the row's own place (its own row, or the slot it is already
+        // in): a release changes nothing, and nothing refuses it.
+        bool home = false;
         float markerY = 0;  // the insertion marker, in window coordinates
     };
     void beginReorder(const model::Id& track, ui::Point press);

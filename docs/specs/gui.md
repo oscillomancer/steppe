@@ -176,7 +176,46 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   ends in the piano roll. A press on an item, a note, a range, a region or
   a marker keeps the arrow until it moves, then shows the move cursor; a
   trim, slip, fade or warp in hand keeps the horizontal arrows wherever
-  the pointer goes.
+  the pointer goes. In the rack window a module in hand and a pan of the
+  space show the move cursor. In the routing matrix a cell that cannot be
+  connected (`MatrixModel::blocked`, drawn struck through) shows "not
+  allowed".
+  **A thing carried to a drop** says what a release would do: the move
+  cursor where it would land and over its own place (where a release
+  changes nothing, as at the start of every such drag: the strip, row or
+  slot it is in, or the browser it is picked from), "not allowed"
+  over a place that refuses it: a strip of another kind, a track an
+  output cannot go to, a track row with no other row of its kind to
+  change places with, somewhere that takes no plug-in. The carrier sets
+  it on the root
+  (`Root::setDragCursor`), since the node its events go to cannot know
+  where the thing may land; while set it replaces the nodes' answer, the
+  carrier clears it when the drag ends or is given up, and a new press
+  clears one left behind. It applies to a plug-in, a chain preset or a
+  file out of the side panel's browser (`PluginDrag`), a strip, a plug-in
+  or an output dragged in the mixer, a module type out of the rack's
+  browser, and a track row dragged to a new place (the row answers that
+  one itself). Files dragged in from the desktop keep the desktop's own
+  cursor.
+  **Names**: a control can say what it is called (`Node::hint`, a
+  `ui::Hint`: a name, and the id of the action a press runs when it runs
+  one). `Root::hint()` asks the node the pointer's events go to, then its
+  parents, for `Node::hintAt`, and gives the first that is not empty;
+  nothing before the first pointer event, once the pointer has left the
+  window, or while a drag carries a thing (`Root::setDragCursor`). A
+  pressed control keeps its name while it holds the pointer. The main
+  window's status line shows it (§4.1). Named: a track's controls, the same
+  words on its row and on its mixer strip (`views/control_names.h`: Mute,
+  Solo, Invert polarity, Mono, Volume, Pan, Record input, Automation
+  lanes, Plug-in chain, Add a plug-in, Output routing; a master's
+  Hardware output, and "Mute the master's own items" on its lane); the
+  arm ("Arm for recording") and the monitor button, which says its mode
+  ("Monitor the input: auto"); an automation lane's mode, on and hide; a
+  VCA strip's controls; the track list's "+ track"; the transport bar's
+  punch, metronome, count-in, time signature, tempo and playrate. A
+  button that runs an action and has no name of its own takes the
+  action's (the toolbar's buttons, the transport's start, play, record,
+  loop and follow, the track list's "mixer").
   Keyboard: focus chain, Tab navigation, shortcuts resolved by the actions
   system (§6) with context sections (arrange, MIDI editor, mixer, text
   field). Key releases reach the focused node and its parents
@@ -342,6 +381,15 @@ message a view or an action reported. An action that fails (`AppActions`'
 `onError`: a menu entry, a key, a toolbar or transport button, an inspector
 field) puts its message there, and on stderr as before; the message stays
 until the next one.
+While the pointer rests on a control that has a name (§2, Names), the name
+takes the note's place: "7 tracks  version 12 · Mute", and with the keys
+bound to the control's action after it, every binding, as the actions list
+shows them: "Transport: play/stop (Space)", "Transport: go to start (Home,
+W)". An action with no key shows its name alone; a control whose action
+this build does not have shows nothing. The note comes back when the
+pointer leaves the control. A note that arrives while the pointer rests
+there (the press's own error) shows at once and stays until the pointer is
+over something else. Only names and keys are said, no instructions.
 
 FX and routing are resizable utility windows owned by the main window, using
 the same SDL utility/parent mechanism as plugin editors (ADR-0005/0039).
@@ -636,7 +684,7 @@ moves, or (with the pointer anchor) the pointer moves. Horizontal zoom is contin
 vertical track height per track and global.
 
 **Edge scroll.** A drag in the lanes or the ruler that is held within 24
-units of the lanes' left or right edge (`ArrangeView::kEdgeZone`), or past
+units of the lanes' left or right edge (`ui::kEdgeScrollZone`), or past
 it, scrolls the view in time that way: 120 units per second at the zone's
 start, 30 more for each unit further out, at most 2400. The thing in hand
 stays under the pointer, so it moves along the timeline as the view does
@@ -645,10 +693,14 @@ drop lands where the pointer is. A move, a take dragged out of its item
 and a marquee also scroll the rows at the lanes' top and bottom; a trim,
 slip, fade or point drag stays on its row. It stops when the pointer
 returns inside, at the release, when the drag is cancelled, and at the
-timeline's start. The view advances by frame time (`ArrangeView::poll`,
-at most 50 ms a frame) and asks for frames only while it moves;
-`ArrangeView::autoScroll(seconds)` is the step, which tests drive
-without a clock.
+timeline's start. The view advances by the time since the loop's last pass
+and asks for frames only while it moves. The zone, the speed and the time
+step are one piece of code for every view that scrolls this way
+(`supple/ui/edge_scroll.h`): `ui::EdgeScrollClock` gives the step, never
+more than 50 ms, so a stalled frame is a short step and not a jump, and
+nothing on a scroll's first pass. `ArrangeView::poll`, `MidiEditor::sync`,
+`Mixer::sync` and `RackWindow::tick` take the pass's time, so tests pass
+their own; `autoScroll(seconds)` on each is the step itself.
 By default Alt+wheel anywhere over the arrange view, and Ctrl+wheel over the
 TCP, adds eight design units per notch to every track row, including hidden tracks and compact folders, preserving
 mixed heights and clamping each independently. Fractional wheel deltas work
@@ -930,6 +982,31 @@ empty part moves it among the strips of its own type only (`track.move`, an
 index among its parent's children; `views::reorderIndex` in `track_layout.h` computes it, shared
 with the TCP). A drag shows an insertion bar or a target outline; Escape or a
 drop outside the strips cancels; each is one undo step.
+
+**Edge scroll**, as in the arrange view (§4.3, the same zone and speeds): a
+strip, a plug-in or an output held within 24 units of the left or right
+edge of the strips that scroll, or past it, scrolls them that way, so a
+drop can reach a strip that is out of view. The masters, pinned at the
+right, do not scroll, and a plug-in or an output held over one of them,
+where it can be dropped, scrolls nothing; a strip held there is past the
+edge of its own kind's strips and scrolls them on. The drop is resolved
+again at every step. At an end
+of the strips it rests until the pointer moves. `Mixer::sync` advances it
+by the shared clock (§4.3); `Mixer::autoScroll(seconds)` is the
+step.
+
+A plug-in held over its own strip within 24 units of the top or bottom of
+that strip's plug-in list, or past it, scrolls the list the same way and by
+the same step, so a drop can reach a place in a chain longer than the list
+shows; over another strip it scrolls no list. The first and last rows in
+view lie inside those zones, so the zone a plug-in is picked up in does not
+scroll until the pointer has left it once, into the list's middle or past
+its end. The insertion bar stays in the list: at its edge for a gap that is
+scrolled out of view.
+
+A plug-in list keeps the place it is scrolled to when the strips are
+rebuilt after an edit, clamped to the new chain; a new project's lists
+start at their tops.
 
 A strip reorder ignores destination strips removed from the model before the
 next mixer sync; stale displayed rows cannot become drop targets.
@@ -1355,9 +1432,9 @@ units of the roll's left or right edge, or past it, scrolls the roll in
 time, and the notes in hand stay under the pointer. A move and a marquee
 also scroll the pitches at the roll's top and bottom, within the range the
 wheel has. Leftwards it stops half a beat before the item's start.
-`MidiEditor::sync` advances it by frame time (at most 50 ms a pass);
-`MidiEditor::autoScroll(seconds)` is the step, which tests drive without a
-clock. Velocity and controller drags do not scroll.
+`MidiEditor::sync` advances it by the shared clock (§4.3);
+`MidiEditor::autoScroll(seconds)` is the step. Velocity and controller
+drags do not scroll.
 
 The panel's top border is a drag handle: dragging resizes the panel (up is
 taller; up to nearly the whole window, always leaving the transport and a strip
@@ -1615,7 +1692,14 @@ a new channel). It follows rack.md §8.
   browser (shown if hidden) on its Modules or its Patches view with the
   search focused; the line goes with the first other module. Middle-drag
   or Space-drag pans (Space alone, released without a drag, still plays and
-  stops), the wheel zooms at the pointer from 10 to 400 %, Ctrl+wheel
+  stops). Edge scroll, as in the arrange view (§4.3, the same zone and
+  speeds, in window units whatever the zoom): modules in hand, a cable in
+  hand or a marquee held within 24 units of an edge of the space, or past
+  it, pan the view that way, sideways and up and down; modules keep their
+  place under the pointer and a marquee keeps its first corner
+  (`RackSpace::autoScroll(seconds)`, stepped by `RackWindow::tick`). A
+  knob, a cable's amount, a display and a pan of the space do not. The
+  wheel zooms at the pointer from 10 to 400 %, Ctrl+wheel
   scrolls vertically (Cmd+wheel on macOS) and Shift+wheel scrolls across; a sideways wheel pans
   horizontally. Ctrl+= and Ctrl+- zoom, Ctrl+0 is 100 %, Home
   shows everything (at most 100 %, as far out as it takes) and Shift+Home
@@ -1930,14 +2014,14 @@ Its left edge (`side.grip`) drags to set the width, 240 to 560 units, 300 by
 default; a double-click restores the default. Whether the panel is open,
 which tab is in view (remembered while closed) and the width are UI state:
 `panels.side` in the sidecar, `{"visible", "tab", "width", "browser"}`
-(`browser`: the Browser tab's kind, "plugins", "chains" or "files"), and so
+(`browser`: the Browser tab's kind, "plugins", "chains", "files" or "media"), and so
 part of a screenset. A field of the wrong type or a tab the panel does not have is
 ignored. `panels.history` is still written (true while the History tab is
 in view); a sidecar from before the side panel, with `panels.history` and
 no `panels.side`, opens the panel on History when it was true.
 
 **Browser** (`SideBrowser`, node `side.browser`). A row of kinds
-(`side.browser.kinds`: **Plug-ins**, **Chains** and **Files**, the one shown raised; a
+(`side.browser.kinds`: **Plug-ins**, **Chains**, **Files** and **Media**, the one shown raised; a
 click picks one, and with the row focused Left and Right do) over one page
 per kind. It opens on Plug-ins, or on the kind `panels.side.browser`
 names (a kind it does not have is ignored). A page
@@ -1961,7 +2045,7 @@ several ("Add FX"), so one undo step. The browser stays open with its
 search as typed, and its status line (`.status`) says what happened:
 "Added to *track*", "Added to *N* tracks", "Select a track first" when no
 track is selected, or the command's message. **Add waits for a chosen
-row** on all three pages: a page opens with no row chosen and its Add
+row** on every page: a page opens with no row chosen and its Add
 disabled, so that a stray click cannot put the list's first row on every
 selected track. A click on a row or the arrow keys choose one; a search
 chooses its first hit, so typing and Enter still adds; with the search
@@ -2013,6 +2097,24 @@ lane). The release there drops it as a file dragged in from outside the
 app (§4.3: `item.add` at the pointer's snapped position on that row, or on
 a new track under the rows); a release anywhere else does nothing. A
 folder does not drag.
+
+*Media* lists the audio the project holds (node ids under
+`side.browser.media`): one row for each of the session's media sources
+(session-model §1.6), by its file's name without regard to case, with the
+format and the length at the right ("WAV · 0:12"; "1:02:03" from an hour),
+or "missing" when the file is not where the source says (looked for when
+the list is read). MIDI sources are not files and are not listed. The page
+reads the session when it comes into view and, while in view, at the
+loop's next pass after the project changes (`SideBrowser::sync`); a list
+that comes out the same is left alone, and the chosen row stays chosen
+while its source is listed. The search (`.search`) narrows it by name.
+Enter in the search, a double-click or **Add** (`.add`) puts the media on
+a track as the Files page does a file, through the same hook with the
+source's file (`item.add` on the selected track, or on a new one, at the
+playhead; one undo step): `item.add` finds the source by the file's hash,
+so the project gains an item and no second source or copy. A row drags
+into the arrangement as a file does. The status line (`.status`) says
+"Added *file*" or the error. An empty list says nothing.
 
 A row of the Plug-ins and Chains pages **drags onto a track**. A left press on a row that
 moves more than four units (`ui::List::onDrag`, `List::kDragSlop`) starts
