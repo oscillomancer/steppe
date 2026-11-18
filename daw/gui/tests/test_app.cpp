@@ -1056,12 +1056,12 @@ TEST_CASE(
             writeFileAtomic(a.dir / name, std::span<const std::uint8_t>(*audio::encodeWav(tone))));
     const std::string track = a.app->head().tracks.begin()[1].id.str();  // the channel Ctrl+T added
     a.ui.selectedTracks = {track};
-    files.import({a.dir / "a.wav"});
+    REQUIRE(files.import({a.dir / "a.wav"}));
     std::size_t onTrack = 0;
     for (const auto& e : a.app->head().items) onTrack += e.value->track.str() == track;
     CHECK(onTrack == 1);
     const std::size_t tracks = a.tracks();
-    files.import({a.dir / "b.wav", a.dir / "c.wav"});
+    REQUIRE(files.import({a.dir / "b.wav", a.dir / "c.wav"}));
     CHECK(a.tracks() == tracks + 2);
     a.key("Ctrl+Z");
     CHECK(a.tracks() == tracks);  // both imports undone together
@@ -3689,6 +3689,34 @@ TEST_CASE("a plugin dragged from the browser lands on the track row or strip und
     CHECK_FALSE(shell.trackTargetAt({panel.x + 20, panel.bottom() - 4}));
     CHECK_FALSE(shell.trackTargetAt({lane.x + 40, arrange.lanesRect().bottom() - 4}));
 
+    // A file lands in a lane that holds items, or under the last row (a new
+    // track); not on the control panel, an automation lane or a buss.
+    const model::Id buss = *model::Id::parse(
+        exec("track.add", R"({"name":"Verb","type":"buss"})")["track"].asString());
+    sync();
+    const auto bussRow = arrange.trackLayout().indexOf(buss);
+    REQUIRE(bussRow);
+    const ui::Rect lanes = arrange.lanesRect();
+    const auto inLane = shell.fileTargetAt(centre(arrange.rowRect(*bassRow)));
+    REQUIRE(inLane);
+    CHECK(inLane->x == lanes.x);
+    CHECK(inLane->w == lanes.w);
+    CHECK(inLane->y == arrange.rowRect(*bassRow).y);
+    CHECK(inLane->h == arrange.rowRect(*bassRow).h);
+    CHECK_FALSE(shell.fileTargetAt(centre(arrange.tcpRowRect(*bassRow))));
+    CHECK_FALSE(shell.fileTargetAt(centre(arrange.rowRect(*envRow))));
+    CHECK_FALSE(shell.fileTargetAt(centre(arrange.rowRect(*bussRow))));
+    CHECK_FALSE(shell.fileTargetAt(centre(arrange.ruler().bounds())));
+    float lastBottom = lanes.y;
+    for (std::size_t i = 0; i < arrange.trackLayout().rowCount(); ++i)
+        lastBottom = std::max(lastBottom, arrange.rowRect(i).bottom());
+    REQUIRE(lastBottom + 8 < lanes.bottom());
+    const auto under = shell.fileTargetAt({lanes.x + 40, lastBottom + 4});
+    REQUIRE(under);
+    CHECK(under->y == lastBottom);
+    CHECK(under->bottom() == lanes.bottom());
+    CHECK(under->w == lanes.w);
+
     // The mixer's strips are targets only while it is shown.
     CHECK_FALSE(mixer.visible());
     CHECK_FALSE(mixer.trackTargetAt({600, 700}));
@@ -3764,6 +3792,33 @@ TEST_CASE("a plugin dragged from the browser lands on the track row or strip und
     CHECK_FALSE(drops[0].code.empty());
     CHECK(chain(bass) == 0);
     CHECK(steps() == before);
+
+    // A drag to a place (a file): the place under the pointer is outlined,
+    // and the release there hands over the point; elsewhere, nothing.
+    std::vector<ui::Point> landed;
+    const gui::PluginDrag::Place where = [&](ui::Point p) { return shell.fileTargetAt(p); };
+    auto land = [&](ui::Point p) { landed.push_back(p); };
+    const ui::Point inBass = centre(arrange.rowRect(*bassRow));
+    drag.dragTo("loop.wav", ui::DragPhase::Begin, nowhere, where, land);
+    CHECK(drag.view().active);
+    CHECK(drag.view().label == "loop.wav");
+    CHECK_FALSE(drag.view().place);
+    drag.dragTo("loop.wav", ui::DragPhase::Move, inBass, where, land);
+    REQUIRE(drag.view().place);
+    CHECK(drag.view().place->y == arrange.rowRect(*bassRow).y);
+    CHECK_FALSE(drag.view().target);
+    drag.dragTo("loop.wav", ui::DragPhase::End, inBass, where, land);
+    CHECK_FALSE(drag.view().active);
+    CHECK(a.root->overlay().children().size() == overlays);
+    REQUIRE(landed.size() == 1);
+    CHECK(landed[0].x == inBass.x);
+    drag.dragTo("loop.wav", ui::DragPhase::Begin, nowhere, where, land);
+    drag.dragTo("loop.wav", ui::DragPhase::End, centre(arrange.tcpRowRect(*bassRow)), where, land);
+    CHECK(landed.size() == 1);
+    drag.dragTo("loop.wav", ui::DragPhase::Begin, nowhere, where, land);
+    drag.dragTo("loop.wav", ui::DragPhase::Cancel, inBass, where, land);
+    CHECK(landed.size() == 1);
+    CHECK_FALSE(drag.view().active);
 
     // With a plugin that is installed: one fx.add, one undo step, on the
     // track under the pointer only.

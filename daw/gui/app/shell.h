@@ -59,6 +59,10 @@ class Shell {
     // a place to drop something on the track (a plugin from the side
     // panel's browser). An automation lane is not one.
     std::optional<TrackTarget> trackTargetAt(ui::Point p) const;
+    // Where a file dragged from the side panel's browser would land: the
+    // lane of the row under `p` that can hold items, or the empty space
+    // under the last row (a new track). Nothing elsewhere.
+    std::optional<ui::Rect> fileTargetAt(ui::Point p) const;
     json::Value saveTransportLayout() const;
     void loadTransportLayout(const json::Value& value);
     // The meters the TCP shows; the app sets the source (EngineApp::meters())

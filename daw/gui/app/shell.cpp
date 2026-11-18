@@ -273,6 +273,24 @@ std::optional<TrackTarget> Shell::trackTargetAt(ui::Point p) const {
     return std::nullopt;
 }
 
+std::optional<ui::Rect> Shell::fileTargetAt(ui::Point p) const {
+    if (!arrange_ || !arrange_->tcpPanel().visibleInTree()) return std::nullopt;
+    const ui::Rect lanes = arrange_->lanesRect();
+    if (!lanes.contains(p)) return std::nullopt;
+    const auto& rows = arrange_->trackLayout().rows();
+    float below = lanes.y;
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        const ui::Rect row = arrange_->rowRect(i);
+        below = std::max(below, row.bottom());
+        if (p.y < row.y || p.y >= row.bottom()) continue;
+        // A buss or an automation lane holds no items (ADR-0057).
+        if (!views::holdsItem(app_.head(), rows[i], nullptr)) return std::nullopt;
+        return row.intersect(lanes);
+    }
+    if (p.y < below) return std::nullopt;
+    return ui::Rect{lanes.x, below, lanes.w, lanes.bottom() - below};
+}
+
 void Shell::installOverlay(ui::Root& root) {
     if (arrange_) arrange_->installOverlay(root);
 }

@@ -1160,7 +1160,7 @@ TEST_CASE("the side panel's browser has kinds: saved FX chains go on tracks by A
     };
     auto text = [&](const char* id) { return f.root->find(id)->valueText(); };
 
-    // Plug-ins first; a click on the row's other half shows Chains.
+    // Plug-ins first; a click on the row's middle third shows Chains.
     CHECK(browser.kind() == "plugins");
     CHECK(text("side.browser.kinds") == "Plug-ins");
     CHECK(inView("side.browser.plugins.search"));
@@ -1173,7 +1173,7 @@ TEST_CASE("the side panel's browser has kinds: saved FX chains go on tracks by A
         f.root->frame(false);
     };
     f.root->focus(f.root->find("side.browser.plugins.search"));
-    pick(0.75f);
+    pick(0.5f);
     CHECK(browser.kind() == "chains");
     CHECK(text("side.browser.kinds") == "Chains");
     CHECK(inView("side.browser.chains.search"));
@@ -1192,8 +1192,8 @@ TEST_CASE("the side panel's browser has kinds: saved FX chains go on tracks by A
     REQUIRE(f.run("fx.add", f.args({{"track", source.str()}, {"plugin", f.pluginId("Hickory")}})));
     REQUIRE(f.run("fx.chain.save", f.args({{"track", source.str()}, {"name", "Vocal bus"}})));
     CHECK(browser.chainCount() == 0);  // not read while nothing asked
-    pick(0.25f);
-    pick(0.75f);
+    pick(0.17f);
+    pick(0.5f);
     REQUIRE(browser.chainCount() == 2);
     CHECK_FALSE(inView("side.browser.chains.empty"));
     CHECK(browser.chainRow(0).name == "Clean");
@@ -1291,6 +1291,219 @@ TEST_CASE("the side panel's browser has kinds: saved FX chains go on tracks by A
     f.root->frame(false);
     CHECK(chain(two) == twoBefore + 1);
     CHECK(text("side.browser.plugins.status") == "Added to Two");
+}
+
+TEST_CASE("the side panel's browser lists a folder's files; a file is added or dragged") {
+    Fixture f;
+    if (!f.ok) return;
+    // A folder with two subfolders, three files that import, one that does
+    // not and a hidden one.
+    const std::filesystem::path media = f.dir / "media";
+    std::filesystem::create_directories(media / "Loops");
+    std::filesystem::create_directories(media / "zeta");
+    auto touch = [](const std::filesystem::path& file) {
+        std::FILE* out = std::fopen(file.string().c_str(), "wb");
+        REQUIRE(out);
+        std::fclose(out);
+    };
+    for (const char* name : {"b.wav", "A.flac", "song.MID", "notes.txt", ".hidden.wav"})
+        touch(media / name);
+    touch(media / "Loops" / "x.mp3");
+
+    gui::PluginDrag drag(*f.root, *f.dispatcher);
+    gui::SideBrowser browser(*f.root, *f.app, *f.dispatcher, f.ui, *f.fx, drag);
+    std::vector<std::filesystem::path> added;
+    std::vector<std::pair<std::filesystem::path, ui::Point>> dropped;
+    bool refuse = false;
+    browser.files.add = [&](const std::filesystem::path& file) -> Status {
+        if (refuse) return Error("test.refused", "that file cannot be read");
+        added.push_back(file);
+        return {};
+    };
+    // The test's arrangement: anything left of x = 100.
+    browser.files.where = [](ui::Point p) -> std::optional<ui::Rect> {
+        if (p.x >= 100) return std::nullopt;
+        return ui::Rect{0, 0, 100, 400};
+    };
+    browser.files.drop = [&](const std::filesystem::path& file, ui::Point at) -> Status {
+        dropped.emplace_back(file, at);
+        return {};
+    };
+    gui::SidePanel side(*f.root);
+    side.addTab("browser", "Browser", browser.build(), [&](bool on) { browser.setVisible(on); });
+    f.root->find("window")->add(side.build());
+    side.show("browser");
+    REQUIRE(browser.openFolder(media));  // before the page is first shown: it stays there
+    browser.show("files");
+    f.root->frame(false);
+    auto text = [&](const char* id) { return f.root->find(id)->valueText(); };
+    auto inView = [&](const char* id) {
+        const ui::Node* n = f.root->find(id);
+        return n && n->visibleInTree();
+    };
+    CHECK(text("side.browser.kinds") == "Files");
+    REQUIRE(inView("side.browser.files.results"));
+    CHECK(browser.folder() == media);
+    CHECK(text("side.browser.files.folder") == "media");
+    CHECK(text("side.browser.files.path") == media.string());
+
+    // Folders first, then what imports, by name whatever the case.
+    auto names = [&] {
+        std::vector<std::string> out;
+        for (std::size_t i = 0; i < browser.fileCount(); ++i) {
+            const auto row = browser.fileRow(i);
+            out.push_back(row.name + "|" + row.detail);
+        }
+        return out;
+    };
+    CHECK(names() == std::vector<std::string>{"Loops|folder", "zeta|folder", "A.flac|FLAC",
+                                              "b.wav|WAV", "song.MID|MIDI"});
+    CHECK(gui::SideBrowser::importable("take.WAV"));
+    CHECK(gui::SideBrowser::importable("a/b/c.midi"));
+    CHECK_FALSE(gui::SideBrowser::importable("notes.txt"));
+    CHECK_FALSE(gui::SideBrowser::importable("wav"));
+
+    auto* list = dynamic_cast<ui::List*>(f.root->find("side.browser.files.results"));
+    REQUIRE(list);
+    auto rowPoint = [&](std::size_t row) {
+        return ui::Point{list->bounds().x + 20,
+                         list->bounds().y + (static_cast<float>(row) + 0.5f) * list->rowHeight};
+    };
+    auto doubleClick = [&](std::size_t row) {
+        const ui::Point at = rowPoint(row);
+        f.root->pointer({ui::PointerEvent::Type::Down, at, 1, 1});
+        f.root->pointer({ui::PointerEvent::Type::Up, at, 1, 1});
+        f.root->pointer({ui::PointerEvent::Type::Down, at, 1, 2});
+        f.root->pointer({ui::PointerEvent::Type::Up, at, 1, 2});
+        f.root->frame(false);
+    };
+    // A double click on a folder goes into it; Up comes back.
+    doubleClick(0);
+    CHECK(browser.folder() == media / "Loops");
+    CHECK(text("side.browser.files.folder") == "Loops");
+    CHECK(names() == std::vector<std::string>{"x.mp3|MP3"});
+    CHECK(added.empty());
+    REQUIRE(f.root->click("side.browser.files.up"));
+    f.root->frame(false);
+    CHECK(browser.folder() == media);
+    CHECK(browser.fileCount() == 5);
+    // An empty folder says so.
+    doubleClick(1);
+    CHECK(browser.folder() == media / "zeta");
+    CHECK(browser.fileCount() == 0);
+    REQUIRE(inView("side.browser.files.empty"));
+    CHECK(text("side.browser.files.empty") == "No folders and no audio or MIDI files here.");
+    REQUIRE(f.root->click("side.browser.files.up"));
+    f.root->frame(false);
+    CHECK_FALSE(inView("side.browser.files.empty"));
+
+    // The search narrows this folder; Enter adds the file found.
+    browser.focusSearch();
+    CHECK(f.root->focused() == f.root->find("side.browser.files.search"));
+    f.root->text("SONG");
+    f.root->frame(false);
+    CHECK(names() == std::vector<std::string>{"song.MID|MIDI"});
+    f.root->key(SDLK_RETURN, 0);
+    f.root->frame(false);
+    REQUIRE(added.size() == 1);
+    CHECK(added[0] == media / "song.MID");
+    CHECK(text("side.browser.files.status") == "Added song.MID");
+    // What the import refuses is said, and nothing is claimed.
+    refuse = true;
+    REQUIRE(f.root->click("side.browser.files.add"));
+    f.root->frame(false);
+    CHECK(added.size() == 1);
+    CHECK(text("side.browser.files.status") == "that file cannot be read");
+    refuse = false;
+    browser.focusSearch();
+    f.root->text("zzz");
+    f.root->frame(false);
+    CHECK(browser.fileCount() == 0);
+    CHECK(text("side.browser.files.empty") == "Nothing here matches.");
+    // Going into a folder starts with an empty search.
+    REQUIRE(browser.openFolder(media));
+    f.root->frame(false);
+    CHECK(text("side.browser.files.search").empty());
+    CHECK(browser.fileCount() == 5);
+
+    // A file drags to where the app says it may land; released there it is
+    // dropped at that point, elsewhere nothing happens.
+    const ui::Point wav = rowPoint(3);
+    f.root->pointer({ui::PointerEvent::Type::Down, wav, 1});
+    f.root->pointer({ui::PointerEvent::Type::Move, {wav.x - 30, wav.y}, 1});
+    CHECK(drag.view().active);
+    CHECK(drag.view().label == "b.wav");
+    CHECK_FALSE(drag.view().place);
+    f.root->pointer({ui::PointerEvent::Type::Move, {60, 70}, 1});
+    REQUIRE(drag.view().place);
+    CHECK(drag.view().place->w == 100);
+    CHECK_FALSE(drag.view().target);
+    f.root->pointer({ui::PointerEvent::Type::Up, {61, 71}, 1});
+    f.root->frame(false);
+    CHECK_FALSE(drag.view().active);
+    REQUIRE(dropped.size() == 1);
+    CHECK(dropped[0].first == media / "b.wav");
+    CHECK(dropped[0].second.x == 61);
+    CHECK(dropped[0].second.y == 71);
+    CHECK(text("side.browser.files.status") == "Added b.wav");
+    f.root->pointer({ui::PointerEvent::Type::Down, wav, 1});
+    f.root->pointer({ui::PointerEvent::Type::Move, {wav.x - 30, wav.y}, 1});
+    f.root->pointer({ui::PointerEvent::Type::Up, {wav.x - 30, wav.y}, 1});
+    CHECK(dropped.size() == 1);
+    // A folder does not drag.
+    const ui::Point folder = rowPoint(0);
+    f.root->pointer({ui::PointerEvent::Type::Down, folder, 1});
+    f.root->pointer({ui::PointerEvent::Type::Move, {60, 70}, 1});
+    CHECK_FALSE(drag.view().active);
+    f.root->pointer({ui::PointerEvent::Type::Up, {60, 70}, 1});
+    CHECK(dropped.size() == 1);
+    CHECK(browser.folder() == media);
+    f.snapshot("side-browser-files.png");
+
+    // Up from a root lists the roots where there are several (the drives
+    // on Windows); one of them opens as a folder does.
+    CHECK(f.root->find("side.browser.files.up")->enabled);
+    const std::filesystem::path top = media.root_path();
+    REQUIRE(browser.openFolder(top));
+    f.root->frame(false);
+    CHECK(text("side.browser.files.folder") == top.string());  // a root has no name
+#if !defined(_WIN32)
+    CHECK_FALSE(f.root->find("side.browser.files.up")->enabled);  // one root: nowhere to go
+#endif
+    browser.files.roots = [&] {
+        return std::vector<std::filesystem::path>{media, media / "Loops"};
+    };
+    REQUIRE(browser.openFolder(top));
+    f.root->frame(false);
+    CHECK(f.root->find("side.browser.files.up")->enabled);
+    REQUIRE(f.root->click("side.browser.files.up"));
+    f.root->frame(false);
+    CHECK(browser.folder().empty());
+    CHECK(text("side.browser.files.folder") == "Computer");
+    CHECK_FALSE(f.root->find("side.browser.files.up")->enabled);
+    CHECK(names() == std::vector<std::string>{media.string() + "|folder",
+                                              (media / "Loops").string() + "|folder"});
+    doubleClick(1);
+    CHECK(browser.folder() == media / "Loops");
+    CHECK(names() == std::vector<std::string>{"x.mp3|MP3"});
+    REQUIRE(browser.openFolder(media));
+    f.root->frame(false);
+
+    // A folder that cannot be opened: said, and the listing stays.
+    CHECK_FALSE(browser.openFolder(media / "gone"));
+    CHECK(text("side.browser.files.status").find("Cannot open gone") != std::string::npos);
+    CHECK(browser.folder() == media);
+    CHECK(browser.fileCount() == 5);
+    // A folder removed while the tab was closed: the page falls back to
+    // somewhere that exists when it comes into view again.
+    REQUIRE(browser.openFolder(media / "zeta"));
+    side.hide();
+    std::filesystem::remove_all(media / "zeta");
+    side.show("browser");
+    f.root->frame(false);
+    CHECK(browser.folder() != media / "zeta");
+    std::error_code ec;
+    CHECK(std::filesystem::is_directory(browser.folder(), ec));
 }
 
 TEST_CASE("the plugin browser finds a stock plugin by what it is") {

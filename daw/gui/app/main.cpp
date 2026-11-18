@@ -534,6 +534,15 @@ int main(int argc, char** argv) {
     pluginDrag.addTargets([&mixer](ui::Point p) { return mixer.trackTargetAt(p); });
     pluginDrag.addTargets([&shell](ui::Point p) { return shell.trackTargetAt(p); });
     gui::SideBrowser sideBrowser(root, **app, dispatcher, uiState, fxWindow, pluginDrag);
+    // A file from the browser: Add is File > Import's own path; a drag lands
+    // as a file dropped from outside the app does.
+    sideBrowser.files.add = [&fileActions](const std::filesystem::path& file) {
+        return fileActions.import({file});
+    };
+    sideBrowser.files.where = [&shell](ui::Point p) { return shell.fileTargetAt(p); };
+    sideBrowser.files.drop = [&shell](const std::filesystem::path& file, ui::Point at) {
+        return shell.arrange()->gestures().drop({file}, at);
+    };
     appActions.addUi("ui.browser", "View: browser", [&] {
         side.toggle("browser");
         if (side.showing("browser")) sideBrowser.focusSearch();

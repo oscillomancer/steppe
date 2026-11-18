@@ -1794,7 +1794,7 @@ in view); a sidecar from before the side panel, with `panels.history` and
 no `panels.side`, opens the panel on History when it was true.
 
 **Browser** (`SideBrowser`, node `side.browser`). A row of kinds
-(`side.browser.kinds`: **Plug-ins** and **Chains**, the one shown raised; a
+(`side.browser.kinds`: **Plug-ins**, **Chains** and **Files**, the one shown raised; a
 click picks one, and with the row focused Left and Right do) over one page
 per kind. It opens on Plug-ins; which kind is shown is not saved. A page
 that leaves view gives up the keyboard, and the page shown reads its list
@@ -1833,7 +1833,36 @@ is listed here."); a search that finds nothing says "No chain matches."
 Replacing a chain, deleting a preset and the input and take chains stay
 with the FX window (§4.5).
 
-A row of either page **drags onto a track**. A left press on a row that
+*Files* lists one folder (node ids under `side.browser.files`): its
+folders first, in bold, then the files File > Import takes (`.wav`,
+`.flac`, `.mp3`, `.mid`, `.midi`, whatever the case) with their type at
+the right, each by name without regard to case. Hidden entries (a leading
+dot) and other files are left out. Above the list are **Up** (`.up`, to
+the folder above) and the folder's name (`.folder`); under it the status
+line and the folder's whole path (`.path`). The page starts in the
+project's folder, or the user's home folder for a project not saved yet,
+and stays where the user went; a folder that has gone falls back the same
+way. The search (`.search`) narrows this folder and is cleared on entering
+another. Enter, a double-click or **Add** (`.add`) on a folder goes into
+it; on a file it imports the file as File > Import does (`item.add` on the
+selected track, or on a new track named after the file when none is
+selected, at the playhead; one undo step) and the status line says "Added
+*file*" or the error. An empty folder says "No folders and no audio or
+MIDI files here."; a folder that cannot be read says why and the listing
+stays. Up from a root lists the roots as folders under the name
+"Computer" where there are several (the drives on Windows); elsewhere Up
+is disabled at the root. Files are not auditioned.
+
+A file **drags into the arrangement** (`PluginDrag::dragTo`): the chip
+carries its name, and the place it would land is outlined, the lane of a
+row that holds items or the empty space under the last row
+(`Shell::fileTargetAt`; not the control panel, a buss or an automation
+lane). The release there drops it as a file dragged in from outside the
+app (§4.3: `item.add` at the pointer's snapped position on that row, or on
+a new track under the rows); a release anywhere else does nothing. A
+folder does not drag.
+
+A row of the Plug-ins and Chains pages **drags onto a track**. A left press on a row that
 moves more than four units (`ui::List::onDrag`, `List::kDragSlop`) starts
 the drag (`PluginDrag`): a chip with the plugin's or the chain's name
 follows the pointer on the overlay layer (`plugin.drag`), and the track
@@ -1847,8 +1876,8 @@ whatever is selected: one undo step, and the page's status line says
 "Added to *track*", "Loaded onto *track*" or the command's message. A
 release anywhere else, and a cancelled gesture, do nothing. What is
 dragged is the row the drag began on, even when the list changes under it
-(a search, a rescan that finishes). Rack patches, the project's media and
-files are not there yet.
+(a search, a rescan that finishes). Rack patches and the project's own
+media are not in the Browser.
 
 **Inspector.** What is selected, read from the selection and the session
 each pass (`inspectorSubject`), and for one item the fields that edit it.

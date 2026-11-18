@@ -594,7 +594,9 @@ instructions are in `docs/guides/installing.md`.
   browser as a tab: a chosen plugin goes on every selected track as one
   undo step, and the browser stays; saved FX chains as a second kind,
   loaded with `fx.chain.load`; a row of either drags onto a track's row or
-  mixer strip; rack patches, media and files are not there yet) and the History
+  mixer strip; a folder's audio and MIDI files as a third kind, added as
+  File > Import does or dragged into a lane; no audition of files, and
+  rack patches and the project's own media are not in the Browser) and the History
   as tabs; its tab,
   width and open state are saved per project. Help exports the bundled
   skill as a copy or link, shows this copy's MCP commands and JSON, and registers

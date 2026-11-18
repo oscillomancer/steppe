@@ -40,6 +40,12 @@ class PluginDrag {
     // the chip, and `drop` runs with the track it was released on.
     using Drop = std::function<void(const model::Id& track)>;
     void drag(const std::string& label, ui::DragPhase phase, ui::Point at, Drop drop);
+    // A drag with its own places (a file into the arrangement): `where`
+    // gives the part of the window to outline for a point, or nothing where
+    // it cannot land, and `drop` runs with the point it was released at.
+    using Place = std::function<std::optional<ui::Rect>(ui::Point)>;
+    void dragTo(const std::string& label, ui::DragPhase phase, ui::Point at, const Place& where,
+                const std::function<void(ui::Point)>& drop);
     // What a drop did or why it did nothing, for the browser's status line:
     // the track it went on, or the command's error.
     std::function<void(const model::Id& track, const Status& result)> onDrop;
@@ -49,7 +55,8 @@ class PluginDrag {
         bool active = false;
         std::string plugin, label;
         ui::Point pos;
-        std::optional<TrackTarget> target;
+        std::optional<TrackTarget> target;  // a drag onto a track
+        std::optional<ui::Rect> place;      // a drag to a place (dragTo)
     };
     const View& view() const { return *view_; }
 
