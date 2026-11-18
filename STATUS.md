@@ -624,8 +624,10 @@ instructions are in `docs/guides/installing.md`.
   undo step, and the browser stays; saved FX chains as a second kind,
   loaded with `fx.chain.load`; a row of either drags onto a track's row or
   mixer strip; a folder's audio and MIDI files as a third kind, added as
-  File > Import does or dragged into a lane; no audition of files, and
-  rack patches and the project's own media are not in the Browser) and the History
+  File > Import does or dragged into a lane; the audio the project already
+  holds as a fourth kind, Media, added or dragged the same way without a
+  second copy; no audition of files, MIDI sources and how often a source is
+  used are not listed, and rack patches are not in the Browser) and the History
   as tabs; its tab,
   width and open state are saved per project. Help exports the bundled
   skill as a copy or link, shows this copy's MCP commands and JSON, and registers

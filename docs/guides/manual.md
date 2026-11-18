@@ -322,6 +322,11 @@ and the **History**. It stays closed until you ask for it:
   on the selected track at the playhead (on a new track when none is
   selected); or drag it to the spot in the arrangement where you want it.
   Drop it under the last track to make a new one.
+  **Media** lists the audio your project already holds, each file with its
+  format and length, so you can use a recording or an imported file again
+  without looking for it on disk. Add it or drag it as you would a file;
+  the project keeps one copy however often you use it. A file that is no
+  longer where the project expects it is marked "missing".
 - **View > History and command log**, or **Ctrl+H**, opens it on the History:
   the versions you can step back to, the branches, and every command with who
   ran it.

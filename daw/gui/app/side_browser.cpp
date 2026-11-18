@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdio>
 #include <system_error>
 #include <utility>
 
@@ -34,8 +35,8 @@ struct Kind {
     const char* id;
     const char* title;
 };
-constexpr std::array<Kind, 3> kKinds{
-    {{"plugins", "Plug-ins"}, {"chains", "Chains"}, {"files", "Files"}}};
+constexpr std::array<Kind, 4> kKinds{
+    {{"plugins", "Plug-ins"}, {"chains", "Chains"}, {"files", "Files"}, {"media", "Media"}}};
 
 // What File > Import takes, by extension, and what the row calls it.
 struct FileType {
@@ -154,6 +155,18 @@ class PathLabel : public ui::Node {
     std::string text_, shown_;
 };
 
+// A length as the Media page says it: "0:07", "3:25", "1:02:03".
+std::string lengthText(double seconds) {
+    const auto total = static_cast<long long>(seconds + 0.5);
+    const long long h = total / 3600, m = total / 60 % 60, sec = total % 60;
+    char buf[32];
+    if (h > 0)
+        std::snprintf(buf, sizeof buf, "%lld:%02lld:%02lld", h, m, sec);
+    else
+        std::snprintf(buf, sizeof buf, "%lld:%02lld", m, sec);
+    return buf;
+}
+
 std::string effectsText(int count) {
     return count == 1 ? std::string("1 effect") : std::to_string(count) + " effects";
 }
@@ -196,11 +209,18 @@ std::unique_ptr<ui::Node> SideBrowser::build() {
     filesPage_ = filesPage.get();
     filesPage_->visible = false;
     page->add(std::move(filesPage));
+    auto mediaPage = buildMedia();
+    mediaPage_ = mediaPage.get();
+    mediaPage_->visible = false;
+    page->add(std::move(mediaPage));
     return page;
 }
 
 ui::Node* SideBrowser::pageOf(const std::string& kind) const {
-    return kind == "plugins" ? pluginsPage_ : kind == "chains" ? chainsPage_ : filesPage_;
+    return kind == "plugins"  ? pluginsPage_
+           : kind == "chains" ? chainsPage_
+           : kind == "files"  ? filesPage_
+                              : mediaPage_;
 }
 
 bool SideBrowser::importable(const std::filesystem::path& file) {
@@ -486,6 +506,150 @@ void SideBrowser::setChainStatus(std::string text) {
     root_.damageAll();
 }
 
+std::unique_ptr<ui::Node> SideBrowser::buildMedia() {
+    auto page = std::make_unique<ui::Node>("side.browser.media");
+    page->layout.dir = ui::Layout::Dir::Column;
+    page->layout.padding = ui::Insets::all(12);
+    page->layout.gap = 8;
+    mediaSearch_ = &page->emplace<ui::TextField>("side.browser.media.search", "", "Search media…");
+    mediaSearch_->layout.height = ui::SizeRule::fixed(26);
+    mediaList_ = &page->emplace<ui::List>("side.browser.media.results");
+    mediaList_->rowHeight = 24;
+    mediaList_->paintRow = [this](ui::Canvas& c, std::size_t i, const ui::Rect& r, bool) {
+        if (i >= mediaShown_.size()) return;
+        const ui::Theme& t = c.theme();
+        const MediaRow row = mediaRow(i);
+        const float detail = c.textWidth(row.detail, ui::Font::Ui, t.type("caption"));
+        c.text({r.x + 8, r.y, std::max(0.0f, r.w - 28 - detail), r.h}, row.name, ui::Font::Ui,
+               t.type("small"), t.color("ink"));
+        c.text({r.x, r.y, r.w - 10, r.h}, row.detail, ui::Font::Ui, t.type("caption"),
+               t.color("ink-faint"), ui::kRight | ui::kMiddle);
+    };
+    mediaSearch_->onChange = [this](const std::string&) { filterMedia(); };
+    mediaSearch_->onSubmit = [this](const std::string&) {
+        if (const auto row = mediaList_->selected()) addMedia(*row);
+    };
+    mediaList_->onSelect = [this](std::size_t) { chosen(); };
+    mediaSearch_->onOtherKey = [this](const ui::KeyEvent& e) { return mediaList_->onKey(e); };
+    mediaList_->onActivate = [this](std::size_t row) { addMedia(row); };
+    mediaList_->onDrag = [this](std::size_t row, ui::DragPhase phase, ui::Point at) {
+        // It drags into the arrangement as a file does; the one the drag
+        // began on, whatever the rows become.
+        if (phase == ui::DragPhase::Begin) {
+            if (row >= mediaShown_.size()) return;
+            draggedMedia_ = media_[mediaShown_[row]];
+        }
+        if (!draggedMedia_) return;
+        const Media media = *draggedMedia_;
+        if (phase == ui::DragPhase::End || phase == ui::DragPhase::Cancel) draggedMedia_.reset();
+        drag_.dragTo(media.name, phase, at, files.where, [this, media](ui::Point released) {
+            if (!files.drop) return;
+            const Status dropped = files.drop(media.path, released);
+            setMediaStatus(dropped ? "Added " + media.name : dropped.error().message);
+        });
+    };
+    auto& footer = page->emplace<ui::Node>("side.browser.media.footer");
+    footer.layout.dir = ui::Layout::Dir::Row;
+    footer.layout.height = ui::SizeRule::fixed(28);
+    footer.layout.align = ui::Layout::Align::Center;
+    footer.emplace<ui::Node>("side.browser.media.footer.rest").layout.width =
+        ui::SizeRule::fraction();
+    mediaAdd_ = &footer.emplace<ui::Button>("side.browser.media.add", "Add", [this] {
+        if (const auto row = mediaList_->selected()) addMedia(*row);
+    });
+    mediaAdd_->enabled = false;  // until a row is chosen; an empty project never lists one
+    mediaStatus_ = &page->emplace<ui::Label>("side.browser.media.status", "", ui::Font::Ui,
+                                             "caption", "ink-quiet");
+    mediaStatus_->layout.height = ui::SizeRule::fixed(16);
+    return page;
+}
+
+SideBrowser::MediaRow SideBrowser::mediaRow(std::size_t row) const {
+    if (row >= mediaShown_.size()) return {};
+    const Media& media = media_[mediaShown_[row]];
+    return {media.name, media.detail};
+}
+
+void SideBrowser::setMediaStatus(std::string text) {
+    if (mediaStatus_) mediaStatus_->setText(std::move(text));
+    root_.damageAll();
+}
+
+void SideBrowser::sync() {
+    if (!visible_ || kind_ != "media") return;
+    if (app_.head().version != mediaVersion_ || app_.projectGeneration() != mediaGeneration_)
+        loadMedia();
+}
+
+// The session's audio sources, by file name without regard to case. A list
+// that comes out as it was is left alone, so an edit elsewhere in the
+// project does not take the chosen row away.
+void SideBrowser::loadMedia() {
+    const model::Session& s = app_.head();
+    mediaVersion_ = s.version;
+    mediaGeneration_ = app_.projectGeneration();
+    std::vector<Media> found;
+    for (const auto& e : s.media) {
+        Media media;
+        media.id = e.id.str();
+        media.path = std::filesystem::path(e.value->path);
+        if (media.path.is_relative()) media.path = app_.mediaDir() / media.path;
+        media.name = media.path.filename().string();
+        std::string format = e.value->format;
+        for (char& c : format) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        std::error_code ec;
+        if (!std::filesystem::exists(media.path, ec))
+            media.detail = "missing";
+        else if (e.value->sampleRate > 0)
+            media.detail = (format.empty() ? std::string() : format + " \u00b7 ") +
+                           lengthText(static_cast<double>(e.value->frames) / e.value->sampleRate);
+        else
+            media.detail = format;
+        found.push_back(std::move(media));
+    }
+    std::sort(found.begin(), found.end(), [](const Media& a, const Media& b) {
+        const std::string x = lower(a.name), y = lower(b.name);
+        return x != y ? x < y : a.id < b.id;
+    });
+    if (found == media_) return;
+    // The chosen row stays chosen while its source is still listed.
+    std::string chosenId;
+    if (mediaList_)
+        if (const auto row = mediaList_->selected(); row && *row < mediaShown_.size())
+            chosenId = media_[mediaShown_[*row]].id;
+    media_ = std::move(found);
+    filterMedia();
+    if (!mediaList_ || chosenId.empty()) return;
+    for (std::size_t i = 0; i < mediaShown_.size(); ++i)
+        if (media_[mediaShown_[i]].id == chosenId) mediaList_->select(i);
+    chosen();
+}
+
+void SideBrowser::filterMedia() {
+    const std::string query = mediaSearch_ ? lower(mediaSearch_->text()) : std::string();
+    mediaShown_.clear();
+    for (std::size_t i = 0; i < media_.size(); ++i)
+        if (query.empty() || lower(media_[i].name).find(query) != std::string::npos)
+            mediaShown_.push_back(i);
+    if (!mediaList_) return;
+    mediaList_->setCount(mediaShown_.size());
+    mediaList_->select(mediaShown_.empty() || query.empty() ? std::nullopt
+                                                            : std::optional<std::size_t>(0));
+    chosen();
+    mediaList_->invalidate();
+    root_.relayout();
+    root_.damageAll();
+}
+
+// As a file from the Files page: `item.add` knows the bytes and uses the
+// source the project has, so nothing is copied and no second source is made.
+void SideBrowser::addMedia(std::size_t row) {
+    if (row >= mediaShown_.size() || !files.add) return;
+    const Media media = media_[mediaShown_[row]];
+    const Status added = files.add(media.path);
+    setMediaStatus(added ? "Added " + media.name : added.error().message);
+}
+
 void SideBrowser::setVisible(bool visible) {
     visible_ = visible;
     if (visible) reload();
@@ -507,13 +671,19 @@ void SideBrowser::show(const std::string& kind) {
 void SideBrowser::focusSearch() {
     if (kind_ == "plugins")
         fx_.sideBrowser().focusSearch();
-    else if (ui::TextField* search = kind_ == "chains" ? chainSearch_ : fileSearch_)
+    else if (ui::TextField* search = kind_ == "chains"  ? chainSearch_
+                                     : kind_ == "files" ? fileSearch_
+                                                        : mediaSearch_)
         root_.focus(search);
 }
 
 void SideBrowser::reload() {
     if (kind_ == "plugins") {
         fx_.sideBrowser().reload();
+        return;
+    }
+    if (kind_ == "media") {
+        loadMedia();
         return;
     }
     if (kind_ == "files" && atRoots_) {
@@ -561,6 +731,7 @@ void SideBrowser::reload() {
 void SideBrowser::chosen() {
     if (chainAdd_ && chainList_) chainAdd_->enabled = chainList_->selected().has_value();
     if (fileAdd_ && fileList_) fileAdd_->enabled = fileList_->selected().has_value();
+    if (mediaAdd_ && mediaList_) mediaAdd_->enabled = mediaList_->selected().has_value();
     root_.damageAll();
 }
 

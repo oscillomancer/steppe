@@ -2014,14 +2014,14 @@ Its left edge (`side.grip`) drags to set the width, 240 to 560 units, 300 by
 default; a double-click restores the default. Whether the panel is open,
 which tab is in view (remembered while closed) and the width are UI state:
 `panels.side` in the sidecar, `{"visible", "tab", "width", "browser"}`
-(`browser`: the Browser tab's kind, "plugins", "chains" or "files"), and so
+(`browser`: the Browser tab's kind, "plugins", "chains", "files" or "media"), and so
 part of a screenset. A field of the wrong type or a tab the panel does not have is
 ignored. `panels.history` is still written (true while the History tab is
 in view); a sidecar from before the side panel, with `panels.history` and
 no `panels.side`, opens the panel on History when it was true.
 
 **Browser** (`SideBrowser`, node `side.browser`). A row of kinds
-(`side.browser.kinds`: **Plug-ins**, **Chains** and **Files**, the one shown raised; a
+(`side.browser.kinds`: **Plug-ins**, **Chains**, **Files** and **Media**, the one shown raised; a
 click picks one, and with the row focused Left and Right do) over one page
 per kind. It opens on Plug-ins, or on the kind `panels.side.browser`
 names (a kind it does not have is ignored). A page
@@ -2045,7 +2045,7 @@ several ("Add FX"), so one undo step. The browser stays open with its
 search as typed, and its status line (`.status`) says what happened:
 "Added to *track*", "Added to *N* tracks", "Select a track first" when no
 track is selected, or the command's message. **Add waits for a chosen
-row** on all three pages: a page opens with no row chosen and its Add
+row** on every page: a page opens with no row chosen and its Add
 disabled, so that a stray click cannot put the list's first row on every
 selected track. A click on a row or the arrow keys choose one; a search
 chooses its first hit, so typing and Enter still adds; with the search
@@ -2097,6 +2097,24 @@ lane). The release there drops it as a file dragged in from outside the
 app (§4.3: `item.add` at the pointer's snapped position on that row, or on
 a new track under the rows); a release anywhere else does nothing. A
 folder does not drag.
+
+*Media* lists the audio the project holds (node ids under
+`side.browser.media`): one row for each of the session's media sources
+(session-model §1.6), by its file's name without regard to case, with the
+format and the length at the right ("WAV · 0:12"; "1:02:03" from an hour),
+or "missing" when the file is not where the source says (looked for when
+the list is read). MIDI sources are not files and are not listed. The page
+reads the session when it comes into view and, while in view, at the
+loop's next pass after the project changes (`SideBrowser::sync`); a list
+that comes out the same is left alone, and the chosen row stays chosen
+while its source is listed. The search (`.search`) narrows it by name.
+Enter in the search, a double-click or **Add** (`.add`) puts the media on
+a track as the Files page does a file, through the same hook with the
+source's file (`item.add` on the selected track, or on a new one, at the
+playhead; one undo step): `item.add` finds the source by the file's hash,
+so the project gains an item and no second source or copy. A row drags
+into the arrangement as a file does. The status line (`.status`) says
+"Added *file*" or the error. An empty list says nothing.
 
 A row of the Plug-ins and Chains pages **drags onto a track**. A left press on a row that
 moves more than four units (`ui::List::onDrag`, `List::kDragSlop`) starts
