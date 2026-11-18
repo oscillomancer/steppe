@@ -1686,8 +1686,8 @@ Resource memory(std::size_t bytes, bool header, std::uint32_t ordinal, bool seal
     if (header) {
         void* view = MapViewOfFile(section, FILE_MAP_ALL_ACCESS, 0, 0, bytes);
         REQUIRE(view);
-        const auto header = headerFor(ordinal);
-        std::memcpy(view, &header, sizeof header);
+        const auto written = headerFor(ordinal);
+        std::memcpy(view, &written, sizeof written);
         UnmapViewOfFile(view);
     }
     return reinterpret_cast<Resource>(section);

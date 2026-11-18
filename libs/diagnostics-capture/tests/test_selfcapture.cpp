@@ -33,6 +33,7 @@ using namespace supple::diagnostics::selfcapture;
 namespace diagctx = supple::diagctx;
 namespace detail = supple::diagnostics::detail;
 namespace {
+#if !defined(_WIN32)  // only the fault tests below read a slot back
 struct Parsed {
     detail::CapsuleHeader header{};
     std::vector<BridgeModule> modules;
@@ -73,6 +74,7 @@ bool parse(const unsigned char* memory, Parsed& out) {
     out.consumed = static_cast<std::size_t>(at - (memory + sizeof(slot)));
     return at == end;
 }
+#endif
 
 TEST_CASE("the slot header is written and checked field by field") {
     alignas(64) static unsigned char memory[kSlotBytes];
