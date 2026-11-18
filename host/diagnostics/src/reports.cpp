@@ -117,6 +117,17 @@ ReportSummary summarise(const json::Value& report, const fs::path& path,
     }
     return s;
 }
+// Whether a bridge's death counts as a run that ended badly (decision 3, decided 2026-11-18): it
+// does not. A bridged plug-in's crash while the application keeps running neither names a suspect
+// nor takes a place in the window of the last few reports, even when the report names the plug-in
+// by `fault_in_image` with an exact build: the application did not close, and the plug-in already
+// runs apart from it. The report, its validator, the summary and the viewer carry the attribution
+// all the same, so a user can read it. This is the one place the rule lives; a later decision to
+// count bridge reports changes this function only.
+bool bridgeReportCounts(const ReportSummary& summary) {
+    (void)summary;
+    return false;
+}
 // The role a run's marker recorded; empty when it cannot be read.
 std::string markerRole(const fs::path& marker) {
     if (auto text = privateRead(marker))
@@ -345,12 +356,12 @@ Result<std::vector<Suspect>> suspects(const fs::path& directory) {
         ++attempts;
         auto loaded = loadReport(c.path);
         if (!loaded) continue;
-        // A bridge's death is not a run that closed: it neither names a suspect nor takes a
-        // place in the window of the last few reports.
-        if (textOf(loaded->value, "kind") == "bridge_exit") continue;
+        const auto summary = summarise(loaded->value, c.path, loaded->written);
+        // A bridge's death is not a run that closed (`bridgeReportCounts`): it neither names a
+        // suspect nor takes a place in the window of the last few reports.
+        if (summary.kind == ReportKind::BridgeExit && !bridgeReportCounts(summary)) continue;
         ++valid;
         if (isSettled(root, c.incident)) continue;
-        const auto summary = summarise(loaded->value, c.path, loaded->written);
         const bool named =
             summary.attribution == "fault_in_image" || summary.attribution == "active_token";
         if (!named || !summary.culprit) continue;

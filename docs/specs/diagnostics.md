@@ -905,16 +905,18 @@ violation, a stack overflow or `__fastfail` ends with an exception status and is
 applies the `Bridge` end event, under a new incident id, with no run marker or hold, so a reader
 counts it the moment it is there. The worker's own run, marker and eventual report are untouched.
 The report has `bridge` (the ordinal), `code` (the native status, the same as `bridges[].ended.code`),
-no threads, no commands, `complete` false, `terminal_context` false, `native_fatal_status` false, and
-`unavailable` says the bridge process's threads were not collected: the report is the host's
-account of it, nothing the bridge itself captured (a later step). `attribution` is
+no commands, `complete` false, `terminal_context` false, `native_fatal_status` false, and, when the
+bridge left no capsule of its own, no threads and no modules, and `unavailable` says the bridge
+process's threads were not collected: the report is the host's account of it. (When the bridge did
+leave one, the report also carries it: "Bridge self-capture", *What the report says*.) `attribution` is
 `{confidence: "bridge_exit", plugin}`, the plug-in the only member of the bridge that had not been
 destroyed, or null when there is none or there are several (the host thread's own `bridge_call`
 entry is not read for it yet). `bridge_exit` is weaker than `fault_in_image`: it names no
 instruction. It belongs to a `bridge_exit` report only, and a `bridge_exit` report carries no other
 level. At most 3 are written per worker run, and none for a bridge whose members (plug-in id and
 version, or the name when it has no id) and native status repeat one already reported (until the
-bridge's own modules are read, those stand in for a build); the others are counted in
+bridge's own modules are read, those stand in for a build; a bridge that left a capsule has its members' builds, which stand in
+their place); the others are counted in
 `dropped.bridge_reports` of every later report of the run, with a line in `unavailable`, and so is
 an end by a signal or an exception that had no room in the list of 256 running bridges (it is never
 considered, so it could not have a report). There is no `Message::BridgeEnd` and no watcher: the `Bridge` end event travels in order on the same
@@ -939,7 +941,9 @@ before it ends, so no bridge report is lost to the exit and two retention passes
 that cannot be written prints one line to the supervisor's standard error. The strict validator
 holds the kind to its parts: `bridge` is a listed bridge that ended by `signal` or `exception`
 with the report's `code`, `attribution` is the `bridge_exit` level and its plug-in a listed member
-of that bridge that was not destroyed, and no other kind has `bridge` or that level.
+of that bridge that was not destroyed (or, for a report that carries the bridge's own capsule, one
+of the two levels its evidence supports, "Bridge self-capture"), and no other kind has `bridge` or
+that level.
 
 *Supervisor.* `Inventory` keeps a list of bridges by ordinal, at most 256: a bridge is made by
 its start, or by an instance or an end that names it when the start was lost, and an end after
@@ -995,9 +999,11 @@ bridge protocol 27, 28 on Windows: `docs/specs/sandbox.md`) and tells the superv
 event (channel protocol 3), which keeps the slot with the bridge's entry and can copy its capsule
 out (`Inventory::slotCapsule`). Exercised for real on Linux, from a real plug-in fault in a real
 bridge to the capsule the supervisor read; the Windows and macOS code compiles and is proven by
-native CI only. Built in 6c.4a: the parser (`parseBridgeCapsule`, below). Not built: labelling
-the capsule and writing it into the report (6c.4b onward): nothing reads what the supervisor holds
-yet, so a report is still today's.
+native CI only. Built in 6c.4a: the parser (`parseBridgeCapsule`, below). Built in 6c.4b: the supervisor reads the
+capsule at the bridge's end and writes it into the report (`capture`, `modules`, `threads`, the
+attribution), the validator holds it, and `bridgeReportCounts` is the one rule for suspects. Not built:
+the viewer's wording (6c.4c). Exercised on Linux from a real plug-in fault in a real bridge to the
+report the supervisor wrote.
 *Why the bridge captures itself.* The worker's capture works because the supervisor, its parent,
 reads the stopped worker while it waits in its handler. A bridge is a child of the worker and is
 connected to no supervisor; by the time anyone looks it is dead. Nothing can be read remotely, so
@@ -1240,18 +1246,39 @@ handler's bound is its own: 200 ms from the fault to a published slot, measured 
 clock, and a slot not complete by then is left `writing`. The host's kill deadlines are never
 extended to wait for a capsule, as the ADR requires.
 
-*What the report says.* A bridge's `bridge_exit` report gains `threads` (the fault thread first,
-the rest by role and entry as above), `modules`, and `capture: "bridge"` (the origin of the
-threads; absent on a report from the host's account alone), and its `complete` is true only when
-the capsule's threads are all walked. `attribution` stays `{confidence, plugin}`: when the fault
-thread's first frame lies in a module that is the `build` of a bridge member (the build found in the
-capsule's modules by the 6b `image` address of each member, matched with `findInBridge` and the
-cell and generation of the thread's entry) the confidence is `fault_in_image`, the plug-in the one
-the thread was inside or the only one alive, under the same rules as the worker's 5e; the
-validator allows `fault_in_image` and `active_token` in a `bridge_exit` report when the report
-carries a bridge capsule and holds them to the same evidence rules as the worker's. A report with
-no capsule keeps the `bridge_exit` level only. A bridge member's `build` is no longer null for a bridge
-that captured: the repeat rule (members and status) uses it instead of the stand-in.
+*What the report says (as built, 6c.4b).* When the slot holds a capsule the parser accepts, the
+supervisor reads it where it applies the bridge's end (a bridge that ended by a signal or an
+exception, only; `Inventory::bridgeTrace`, a `pread` or a mapping that never waits) and the
+`bridge_exit` report gains `capture: "bridge"` (whose account the threads are: the bridge's own,
+written while a plug-in's code ran in it; absent on a report from the host's account alone),
+`modules` (the capsule's, as `format` and `id`, in the worker's report's shape), and `threads` (the
+fault thread first, then the table's other registered threads by role and entry, not collected).
+The first line of `unavailable` says the threads were written by the bridge process itself, and the
+trace's own limits follow (frames are best effort, some threads could not be read). `complete` stays
+`false`, as for every report: this corrects the earlier sentence of this section, which had it true
+when every thread was walked (the strict validator has always refused a `complete` report, and the
+worker's reports never set it). `commands` is empty (a bridge begins none), `dropped.cells` counts
+the table's open entries that no thread claimed.
+
+*Attribution from the capsule.* The levels are the worker's own, under the same rules, matched
+through the bridge's own addresses and cells and never the worker's: a member's `build` is the id of the
+module that holds the address the bridge said the plug-in's binary has (the `image` of its 6b
+`Child` event, not the host's `image`), so only members of that bridge have one in this report; a
+thread's entry names the member found with `findInBridge(bridge, cell, generation)`. When the fault
+thread's first frame lies in a module that is the build of a member the confidence is
+`fault_in_image`, the plug-in the one the thread was inside (when it is a member in that image) or
+the only live one; otherwise, when the thread was inside a member's entry, `active_token`. Anything
+else the capsule shows (another thread inside an entry, nothing) leaves the `bridge_exit` level:
+`concurrent_activity` and `recent_command` are not levels of a bridge's report, a bridge having no
+commands and its other threads not being read. The strict validator allows a bridge report exactly
+the levels `bridge_exit`, and, only with `capture: "bridge"`, `fault_in_image` and `active_token`,
+holds those two to the evidence of the report's own threads, modules and plug-ins as for the
+worker's, and requires the plug-in a bridge report names to be a member of that bridge. It also
+holds the two shapes apart: `capture` only in a `bridge_exit` report, with `modules` and a first thread of role
+`fault`, or with neither `capture`, `modules` nor any thread. The repeat rule (members, native
+status) uses each member's build when the capsule has one, so the same plug-in at two builds is two
+reports and one build at one status is one; without a capsule the plug-in's id and version still
+stand in.
 
 *One rule for suspects (decision 3, decided 2026-11-18).* A bridged plug-in's crash while the
 application keeps running does **not** count as a suspect and never causes the safe-load question,
@@ -1261,9 +1288,10 @@ reader's summary and the viewer carry the attribution all the same, so a user ca
 rule is kept as one function in one file, `bridgeReportCounts(summary)` in
 `host/diagnostics/src/reports.cpp`, called where the window is read (`suspects`), and it returns
 false: a `bridge_exit` report neither names a suspect nor takes a place in the window, as the
-section on suspects above says, and nothing else in the reader consults the kind. A later
-decision to count bridge reports would change that function and that sentence only. A bridge
-report is never a restart notice either (`lastRunNotice` and the role scan skip it).
+section on suspects above says, and nothing else decides whether one counts. A later decision to
+count bridge reports would change that function and that sentence only. A bridge report is never a
+restart notice either: `lastRunNotice` and the role scan skip it on its kind, since a bridge's death
+is never the application closing (that is not the rule above and does not move with it).
 
 *Tests the damage cases need (POSIX and Windows, each).* The operation and the `Slot` event
 refuse, with a structured error or a counted and closed resource and no effect on anything else:

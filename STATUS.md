@@ -1660,20 +1660,24 @@ fixes after it. Bridge processes (topic 6a): a report says which bridge each plu
 in (`plugins[].bridge`, a `bridges` section with each bridge's state and how it ended: `exit`,
 `signal`, `exception` or `host` for the host's own kill) and a bridge that dies by a signal or an
 exception while the app lives gets a report of its own, kind `bridge_exit`, at most 3 per run and
-none for a repeat (the plug-in's id and version and the status stand in for a build). It is the
-host's account only: the bridge's own threads and fault are not collected yet (6b, 6c). A bridge now writes
+none for a repeat (the plug-in's id and version and the status stand in for a build). Without
+a capsule it is the host's account only. A bridge now writes
 its own capsule at a fault (6c.2; Linux exercised with real faults, the Windows and macOS handlers compile and
 wait for native CI) into the slot the host hands it (`AttachCaptureSlot`, bridge protocol 27, Windows 28), and the
 worker tells the supervisor with a `Slot` event (channel protocol 3), which keeps the slot with the bridge's entry and can copy the capsule out (6c.3; Linux exercised from a real plug-in fault in a real bridge to the
-capsule the supervisor read; macOS and Windows wait for native CI), but nothing reads the capsule yet (6c.4:
-`docs/specs/diagnostics.md` "Bridge self-capture"), so a report is still today's. When it lands, only the
-fault thread is walked on Linux and Windows (the others appear by role and entry as not collected); macOS walks
-all threads. Not done: a Windows bridge whose plug-in calls `raise(SIGSEGV)` still ends with an exit code. A Windows bridge
+capsule the supervisor read; macOS and Windows wait for native CI), and the supervisor reads the capsule at the
+bridge's end and writes it into the report (6c.4, `docs/specs/diagnostics.md` "Bridge self-capture"): `capture: "bridge"`
+(the bridge's own account, written while a plug-in's code ran in it), `modules`, the fault thread walked, and the attribution
+its evidence supports, `fault_in_image` or `active_token` by the bridge's own addresses and cells; a missing, half-written or
+malformed capsule leaves the host's account. Only the fault thread is walked on Linux and Windows (the others appear by
+role and entry as not collected); macOS walks all threads. A bridged plug-in's crash while the app runs is not a suspect,
+even when its report names it (decided 2026-11-18). Exercised on Linux from a real plug-in fault in a real bridge to the
+report the supervisor wrote; macOS and Windows wait for native CI. Not done: a Windows bridge whose plug-in calls `raise(SIGSEGV)` still ends with an exit code. A Windows bridge
 that faults while another thread holds the loader's function-table lock can hang in the handler's
 unwinder (`RtlLookupFunctionEntry`) until the host's deadline kills it, which reads as a host end with no
 report (the handler's 200 ms is checked between frames, not inside the call; unproven, no mitigation yet).
-A kill that lands inside the handler is likewise a host end. The
-attribution is the only live member or none, an exit's code is not read on POSIX, a bridge killed
+A kill that lands inside the handler is likewise a host end. Without
+a capsule the attribution is the only live member or none; an exit's code is not read on POSIX, a bridge killed
 by the out-of-memory killer reads as a signal, and the 65536th bridge of a run has no ordinal.
 It is never a restart notice and takes no place in the suspect window, and retention keeps the newest
 5 of them apart from the 20 crash reports, so they cannot evict the report behind a suspicion. The app can name the

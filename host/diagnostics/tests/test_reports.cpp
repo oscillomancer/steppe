@@ -1364,6 +1364,69 @@ TEST_CASE("bridge deaths take no place in the window of reports that decides who
     CHECK(found[0].incidents == std::vector<std::string>{name(1)});
 }
 
+namespace {
+// The report of a bridge that died of a fault in Canary's own code, with the bridge's own capsule,
+// as the supervisor writes it: attributed to Canary by `fault_in_image` with an exact build.
+void capsuleBridgeDeath(const Root& root, unsigned id, int hoursAgo) {
+    Inventory inventory;
+    auto member = plugin(4, 0x7000, "Canary");
+    member.instance.mode = static_cast<std::uint8_t>(diagctx::InstanceMode::Bridged);
+    member.instance.bridge = 1;
+    std::memcpy(member.instance.text[2], "1.2", 3);
+    member.instance.length[2] = 3;
+    std::memcpy(member.instance.text[3], "com.acme.canary", 15);
+    member.instance.length[3] = 15;
+    REQUIRE(inventory.apply(member));
+    Packet child = boot(0);
+    child.kind = Message::Instance;
+    child.instance.event = static_cast<std::uint8_t>(diagctx::EventKind::Child);
+    child.instance.cell = 4;
+    child.instance.childCell = 2;
+    child.instance.childGeneration = 1;
+    child.instance.image = 0x5100;  // an address in the bridge, inside the capsule's first module
+    REQUIRE(inventory.apply(child));
+    Packet ended = boot(0);
+    ended.kind = Message::Instance;
+    ended.instance.event = static_cast<std::uint8_t>(diagctx::EventKind::Bridge);
+    ended.instance.bridge = 1;
+    ended.instance.how = static_cast<std::uint8_t>(diagctx::BridgeHow::Signal);
+    ended.instance.status = 11;
+    std::memcpy(ended.instance.text[3], name(id).data(), 32);  // the incident it is written under
+    ended.instance.length[3] = 32;
+    REQUIRE(inventory.apply(ended));
+    const TraceSnapshot trace = faultIn("0123456789abcdef");
+    REQUIRE(publishBridgeReport(root.path, boot(0), inventory, 1, &trace));
+    age(root, id, hoursAgo);
+}
+}  // namespace
+
+TEST_CASE("a bridge's own capsule can name a plug-in in its report, which still makes no suspect") {
+    Root root;
+    capsuleBridgeDeath(root, 1, 1);
+    // The reader and the viewer see the attribution and the plug-in with its build...
+    const auto listing = listReports(root.path);
+    REQUIRE(listing);
+    REQUIRE(listing->reports.size() == 1);
+    const auto& summary = listing->reports[0];
+    CHECK(summary.kind == ReportKind::BridgeExit);
+    CHECK(summary.attribution == "fault_in_image");
+    REQUIRE(summary.culprit);
+    CHECK(summary.culprit->name == "Canary");
+    CHECK(summary.culprit->pluginId == "com.acme.canary");
+    CHECK(summary.culprit->buildId == "0123456789abcdef");
+    // ...but a bridged plug-in's crash while the application runs is not a suspect (decision 3):
+    // nothing is named, so no safe-load question follows from it.
+    CHECK(suspectsOf(root).empty());
+    // Nor does it take a place in the window of reports, however many there are: the crash of a
+    // run that did close, older than five of them, is still the one that makes its plug-in a
+    // suspect.
+    crashing(root, 20, {"Other", "2.0", "com.acme.other"}, 50);
+    for (unsigned id = 2; id < 7; ++id) capsuleBridgeDeath(root, id, static_cast<int>(40 - id));
+    const auto found = suspectsOf(root);
+    REQUIRE(found.size() == 1);
+    CHECK(found[0].pluginId == "com.acme.other");
+}
+
 TEST_CASE("bridge deaths cannot push out the crash that makes a plug-in a suspect") {
     Root root;
     crashing(root, 1, {}, 100);

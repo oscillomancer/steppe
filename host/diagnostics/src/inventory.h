@@ -183,16 +183,30 @@ class Inventory {
     // plug-ins' ids and versions stand in for a build until the bridge's own modules are read).
     // A bridge turned away for the limit or for repeating is counted in `dropped.bridge_reports`.
     // True means "write one": the caller then calls publishBridgeReport.
-    bool admitBridgeReport(std::uint16_t bridge);
+    // `trace`, the bridge's own capsule when it left one (`bridgeTrace`), gives each member's
+    // build, which stands in the repeat rule where the version did.
+    bool admitBridgeReport(std::uint16_t bridge, const TraceSnapshot* trace = nullptr);
+    // What a bridge that ended by a signal or an exception wrote about itself (topic 6c.4): the
+    // capsule of its capture slot, copied out and parsed as untrusted input; nullopt for a bridge
+    // that is running, ended another way, never announced a slot, left an empty or half-written
+    // one, or whose capsule the parser refuses. Reads the slot without waiting.
+    std::optional<TraceSnapshot> bridgeTrace(std::uint16_t bridge) const;
     std::size_t bridgeReportsSuppressed() const noexcept { return bridgeReportsSuppressed_; }
     // The attribution of a bridge_exit report: `{confidence: "bridge_exit", plugin}`, the plug-in
     // being the only one of the bridge that had not been destroyed, or null when there are none
     // or several.
-    json::Value bridgeExitAttributionJson(std::uint16_t bridge) const;
+    // With a `trace` (the bridge's own capsule), the capsule's evidence counts: `fault_in_image`
+    // and `active_token` under the rules of the worker's, matched through `findInBridge`; any other
+    // finding stays the `bridge_exit` level.
+    json::Value bridgeExitAttributionJson(std::uint16_t bridge,
+                                          const TraceSnapshot* trace = nullptr) const;
 
     // The report's "plugins" array. `trace`, when there is one, supplies the module each
     // instance came from (`build`) and which thread was inside which instance (`executing`).
-    json::Value pluginsJson(const TraceSnapshot* trace) const;
+    // With a `bridge`, `trace` is that bridge's own capsule: an instance's build and the threads
+    // inside it are matched by the bridge's cells and images (`findInBridge`, the child's image),
+    // and only for that bridge's members; nothing of the worker's own is looked up in it.
+    json::Value pluginsJson(const TraceSnapshot* trace, std::uint16_t bridge = 0) const;
     // Limit strings for the report's "unavailable".
     std::vector<std::string> limits() const;
 
@@ -207,11 +221,17 @@ class Inventory {
 
     // The report's "attribution" (topic 5e): what the evidence in this report says about which
     // plug-in, if any, the crash belongs to, and how strongly. The single place the policy is.
-    json::Value attributionJson(const TraceSnapshot* trace) const;
+    // With a `bridge`, as for `pluginsJson`: the evidence of that bridge's own capsule.
+    json::Value attributionJson(const TraceSnapshot* trace, std::uint16_t bridge = 0) const;
     // The report's "dropped" object: everything that was left out, by kind.
     json::Value droppedJson(const TraceSnapshot* trace) const;
 
   private:
+    // The instance a thread of a trace was inside, and the build id of an instance's image in it:
+    // by the worker's cells and images, or (`bridge` not 0) by that bridge's.
+    const PluginEntry* entryOfThread(const ThreadTrace& thread, std::uint16_t bridge) const;
+    const std::string* buildOf(const TraceSnapshot& trace, const PluginEntry& entry,
+                               std::uint16_t bridge) const;
     void retire(PluginEntry entry);
     bool applyNames(const InstanceRecord& record);
     bool applyBridge(const InstanceRecord& record);
@@ -238,11 +258,14 @@ bool commandsShape(const json::Value& commands);
 // confidence is one of the closed set, `plugin` is null or the id of a listed plug-in, and the
 // claim is one the listed evidence supports (a token needs an entry on the fault thread, and so
 // on; `fault_in_image` needs the fault thread's first frame in a module of `modules` whose id is
-// the `build` of the plug-in named, or of a listed one when none is).
+// the `build` of the plug-in named, or of a listed one when none is). In a bridge's report
+// (`bridge` not 0) the level is `bridge_exit`, or, only when the report carries the bridge's
+// capsule, `fault_in_image` or `active_token`; the plug-in named is a member of that bridge.
 bool attributionShape(const json::Value& attribution, const json::Value& plugins,
                       const json::Value& commands, const json::Value& threads,
                       const json::Value* modules,  // null when the report has none
-                      std::int64_t bridge = 0);    // the bridge of a bridge_exit report, else 0
+                      std::int64_t bridge = 0,     // the bridge of a bridge_exit report, else 0
+                      bool capsule = false);       // that report carries the bridge's own capsule
 // Strict validation of a report's "bridges" against its "plugins": ids rising from 1, a state
 // from the closed set, `ended` exactly for an ended bridge (a `how` from the set and an integer
 // code), every listed instance a listed plug-in whose `bridge` is that id, and every plug-in's

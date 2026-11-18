@@ -26,8 +26,13 @@ Status publishReport(const std::filesystem::path& root, const Packet& boot, cons
 // A report of a bridge process that died while the worker lives (topic 6a): kind `bridge_exit`,
 // under an incident of its own with no run marker, written by the supervisor from the inventory
 // alone. `bridge` must be an ended one in `inventory`.
+//
+// With `trace` (the bridge's own capsule, `Inventory::bridgeTrace`) the report also carries the
+// bridge's threads and modules, `capture: "bridge"`, and the attribution its evidence supports
+// (topic 6c.4); without one it is the host's account alone.
 Status publishBridgeReport(const std::filesystem::path& root, const Packet& boot,
-                           const Inventory& inventory, std::uint16_t bridge);
+                           const Inventory& inventory, std::uint16_t bridge,
+                           const TraceSnapshot* trace = nullptr);
 // The same in two steps, so that the supervisor can do the second off its receive loop. The first
 // formats the report from the inventory as it is now (in memory, no file); it fails when `bridge`
 // is not an ended one or the report would exceed its size. The second writes it and applies
@@ -38,7 +43,8 @@ struct PreparedBridgeReport {
 };
 std::optional<PreparedBridgeReport> prepareBridgeReport(const Packet& boot,
                                                         const Inventory& inventory,
-                                                        std::uint16_t bridge);
+                                                        std::uint16_t bridge,
+                                                        const TraceSnapshot* trace = nullptr);
 Status writeBridgeReport(const std::filesystem::path& root, const PreparedBridgeReport& report);
 void removeMarker(const std::filesystem::path& root, const Packet& boot);
 // The worker removes its own marker, which it still holds open and locked, when no supervisor

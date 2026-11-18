@@ -80,14 +80,31 @@ if not sanitized:
     e=exit_report[0]
     assert e["incident"]!=program[0]["incident"],e["incident"]
     assert e["bridge"]==1 and e["complete"] is False and e["terminal_context"] is False,e
-    assert e["threads"]==[] and e["commands"]==[],e
+    assert e["commands"]==[],e
+    # Topic 6c: the bridge's own capsule is in it, and says whose account it is. The fault thread
+    # is the plug-in's audio thread inside the bridge, walked; the bridge's command thread is
+    # listed beside it by role, not collected.
+    assert e["capture"]=="bridge",e
+    threads=e["threads"]
+    assert threads and threads[0]["role"]=="fault" and threads[0]["state"]=="walked",threads
+    assert threads[0]["registered"]=="bridge_audio" and threads[0]["entry"]=="process",threads[0]
+    assert any(t["role"]=="bridge_control" and t["state"]=="unavailable" and t["reason"]=="not_collected" for t in threads[1:]),threads
+    ids=[m["id"] for m in e["modules"]]
+    assert ids and all(i is None or len(i)%2==0 for i in ids),ids
     ended=[b for b in e["bridges"] if b["id"]==e["bridge"]][0]
     assert ended["state"]=="ended" and ended["ended"]["how"] in ("signal","exception"),ended
     assert ended["ended"]["code"]==e["code"],(ended,e["code"])
     member=[p for p in e["plugins"] if p.get("bridge")==e["bridge"]]
     assert [p["plugin_id"] for p in member]==["com.suppleaudio.test.crash"],member
-    assert e["attribution"]=={"confidence":"bridge_exit","plugin":member[0]["id"]},e["attribution"]
-    assert any("not collected" in u for u in e["unavailable"]),e["unavailable"]
+    # The fault was in the plug-in's own binary, whose build the bridge recorded when it created
+    # the plug-in: the report says so with the evidence of its own capsule.
+    assert e["attribution"]=={"confidence":"fault_in_image","plugin":member[0]["id"]},e["attribution"]
+    build=member[0].get("build")
+    assert build and build["id"] in ids,(build,ids)
+    assert threads[0]["frames"][0]["module"]==ids.index(build["id"]),(threads[0]["frames"][0],ids)
+    assert member[0]["executing"]==[{"entry":"process","thread":0,"match":"thread"}],member[0]
+    assert any("written by the bridge process itself" in u for u in e["unavailable"]),e["unavailable"]
+    assert "\"image\"" not in json.dumps(e) and "0x" not in json.dumps(e["plugins"]),e
     # The program's own report knows all five bridges, and that four reports were not written.
     crash=program[0]
     assert [b["id"] for b in crash["bridges"]]==[1,2,3,4,5],crash["bridges"]
@@ -96,8 +113,9 @@ if not sanitized:
     assert any("not reported separately" in u for u in crash["unavailable"]),crash["unavailable"]
     assert "bridge" not in crash and crash["attribution"]["confidence"]!="bridge_exit",crash["attribution"]
     # Topic 6c, from the real host: each bridge's own capture reached the supervisor through the
-    # slot the host handed it (a capsule the supervisor read after the bridge's end). The report
-    # does not carry it yet, so the fixture's hook inside the supervisor says what it found.
+    # slot the host handed it (a capsule the supervisor read after the bridge's end), and the one
+    # report above is made from it. The fixture's hook inside the supervisor says what it found
+    # for every one of the five.
     slots=[l for l in run.stderr.decode(errors="replace").splitlines() if l.startswith("slot bridge=")]
     assert [l.split()[2] for l in slots]==["capsule=ok"]*5,(slots,run.stderr)
 print("host inventory passed")

@@ -1839,6 +1839,110 @@ TEST_CASE("a slot is read through a mapping where the object cannot be read (mac
 }
 #endif
 
+namespace {
+// The bytes of a capsule a bridge's handler could have written: one image, the fault thread with
+// one frame inside it, and a table copy.
+std::vector<unsigned char> bridgeCapsuleBytes() {
+    std::vector<unsigned char> bytes;
+    const auto put = [&](const void* p, std::size_t n) {
+        const auto* b = static_cast<const unsigned char*>(p);
+        bytes.insert(bytes.end(), b, b + n);
+    };
+    CapsuleHeader header{};
+    header.magic = capture::kBridgeCapsuleMagic;
+    header.moduleCount = 1;
+    header.threadCount = 1;
+    header.flags = capture::kCapsuleHasTable;
+    header.reserved = 100;
+    put(&header, sizeof header);
+    capture::BridgeModule module{};
+    module.start = 0x10000;
+    module.end = 0x20000;
+    module.idLength = 4;
+    module.id[0] = 0xaa;
+    module.id[1] = 0xbb;
+    module.id[2] = 0xcc;
+    module.id[3] = 0xdd;
+    put(&module, sizeof module);
+    CapsuleThread thread{};
+    thread.role = static_cast<std::uint8_t>(supple::diagnostics::detail::Role::Fault);
+    thread.frameCount = 1;
+    put(&thread, sizeof thread);
+    const std::uint64_t frame = 0x10100;
+    put(&frame, sizeof frame);
+    auto table = std::make_unique<diagctx::TableImage>();
+    std::memset(table.get(), 0, sizeof(diagctx::TableImage));
+    table->header.magic = diagctx::kTableMagic;
+    table->header.version = diagctx::kTableVersion;
+    put(table.get(), sizeof(diagctx::TableImage));
+    return bytes;
+}
+}  // namespace
+
+TEST_CASE(
+    "what a bridge wrote about itself is read once it has ended by a signal or an exception") {
+    const auto capsule = bridgeCapsuleBytes();
+    // One bridge per way of ending; every one holds a complete, good capsule in its slot.
+    const auto bridgeWith = [&](Inventory& inventory, diagctx::BridgeHow how,
+                                std::uint32_t state = capture::kSlotComplete,
+                                const std::vector<unsigned char>& bytes = bridgeCapsuleBytes()) {
+        REQUIRE(inventory.apply(bridgeEvent(1)));
+        Resource slot = slotMemory(1);
+        const Resource writer = duplicateOf(slot);
+        REQUIRE(inventory.apply(slotEvent(1), &slot));
+        bridgeWrites(writer, bytes, state);
+        closeResource(writer);
+        if (how != diagctx::BridgeHow::None) REQUIRE(inventory.apply(bridgeEvent(1, how, 11)));
+    };
+    {
+        Inventory inventory;
+        bridgeWith(inventory, diagctx::BridgeHow::Signal);
+        const auto trace = inventory.bridgeTrace(1);
+        REQUIRE(trace);
+        REQUIRE(trace->threads.size() == 1);
+        CHECK(trace->threads[0].role == supple::diagnostics::detail::Role::Fault);
+        REQUIRE(trace->modules.size() == 1);
+        CHECK(trace->modules[0].id == std::string("aabbccdd"));
+        CHECK_FALSE(inventory.bridgeTrace(2));  // no such bridge
+    }
+    {
+        Inventory inventory;
+        bridgeWith(inventory, diagctx::BridgeHow::Exception);
+        CHECK(inventory.bridgeTrace(1));
+    }
+    // The host's own kill and an orderly exit are not the bridge's failure: nothing is read.
+    for (const auto how :
+         {diagctx::BridgeHow::Host, diagctx::BridgeHow::Exit, diagctx::BridgeHow::None}) {
+        Inventory inventory;
+        bridgeWith(inventory, how);
+        CHECK_FALSE(inventory.bridgeTrace(1));
+    }
+    {  // died while writing: the state says so and nothing is used
+        Inventory inventory;
+        bridgeWith(inventory, diagctx::BridgeHow::Signal, capture::kSlotWriting);
+        CHECK_FALSE(inventory.bridgeTrace(1));
+    }
+    {  // complete, but not a capsule a handler writes: the parser refuses it
+        Inventory inventory;
+        bridgeWith(inventory, diagctx::BridgeHow::Signal, capture::kSlotComplete, sampleCapsule());
+        CHECK(inventory.slotCapsule(1));        // the slot is fine...
+        CHECK_FALSE(inventory.bridgeTrace(1));  // ...its contents are not
+        auto damaged = capsule;
+        // The first byte of the table copy: a table this build did not write.
+        damaged[sizeof(CapsuleHeader) + sizeof(capture::BridgeModule) + sizeof(CapsuleThread) +
+                sizeof(std::uint64_t)] ^= 0xff;
+        Inventory second;
+        bridgeWith(second, diagctx::BridgeHow::Signal, capture::kSlotComplete, damaged);
+        CHECK_FALSE(second.bridgeTrace(1));
+    }
+    {  // no slot was ever announced for it
+        Inventory inventory;
+        REQUIRE(inventory.apply(bridgeEvent(1)));
+        REQUIRE(inventory.apply(bridgeEvent(1, diagctx::BridgeHow::Signal, 11)));
+        CHECK_FALSE(inventory.bridgeTrace(1));
+    }
+}
+
 TEST_CASE("a slot header that stopped being a slot's is never read") {
     Inventory inventory;
     REQUIRE(inventory.apply(bridgeEvent(1)));

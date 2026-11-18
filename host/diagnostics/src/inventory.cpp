@@ -520,7 +520,7 @@ std::vector<const BridgeEntry*> Inventory::bridges() const {
     return all;  // a std::map: ascending ids
 }
 
-bool Inventory::admitBridgeReport(std::uint16_t bridge) {
+bool Inventory::admitBridgeReport(std::uint16_t bridge, const TraceSnapshot* trace) {
     const auto found = bridges_.find(bridge);
     if (found == bridges_.end()) return false;
     BridgeEntry& entry = found->second;
@@ -530,9 +530,15 @@ bool Inventory::admitBridgeReport(std::uint16_t bridge) {
         return false;  // the host's own kill, or an exit: no report, and nothing to count
     std::vector<std::string> members;
     for (const PluginEntry* plugin : entries())
-        if (plugin->bridge == bridge && plugin->state != diagctx::InstanceState::Destroyed)
-            members.push_back(plugin->text[3] + '\x1f' + plugin->text[2] + '\x1f' +
-                              (plugin->text[3].empty() ? plugin->text[0] : std::string()));
+        if (plugin->bridge == bridge && plugin->state != diagctx::InstanceState::Destroyed) {
+            // The build the bridge's own capsule found for the member, when it has one; else the
+            // plug-in's id and version stand in for it.
+            const std::string* build = trace ? buildOf(*trace, *plugin, bridge) : nullptr;
+            members.push_back(
+                build ? "build\x1f" + *build
+                      : plugin->text[3] + '\x1f' + plugin->text[2] + '\x1f' +
+                            (plugin->text[3].empty() ? plugin->text[0] : std::string()));
+        }
     std::sort(members.begin(), members.end());
     std::string key;
     for (const auto& member : members) key += member + '\x1e';
@@ -548,7 +554,26 @@ bool Inventory::admitBridgeReport(std::uint16_t bridge) {
     return true;
 }
 
-json::Value Inventory::bridgeExitAttributionJson(std::uint16_t bridge) const {
+std::optional<TraceSnapshot> Inventory::bridgeTrace(std::uint16_t bridge) const {
+    const BridgeEntry* entry = this->bridge(bridge);
+    if (!entry || !entry->ended ||
+        (entry->how != diagctx::BridgeHow::Signal && entry->how != diagctx::BridgeHow::Exception))
+        return std::nullopt;
+    const auto bytes = slotCapsule(bridge);
+    if (!bytes) return std::nullopt;
+    return parseBridgeCapsule(bytes->data(), bytes->size());
+}
+
+json::Value Inventory::bridgeExitAttributionJson(std::uint16_t bridge,
+                                                 const TraceSnapshot* trace) const {
+    // The bridge's own evidence, when it left some, under the worker's rules.
+    if (trace) {
+        auto found = attributionJson(trace, bridge);
+        const json::Value* level = found.find("confidence");
+        if (level && level->isString() &&
+            (level->asString() == "fault_in_image" || level->asString() == "active_token"))
+            return found;
+    }
     std::optional<std::uint32_t> only;
     std::size_t live = 0;
     for (const PluginEntry* plugin : entries())
@@ -605,9 +630,9 @@ int moduleOfImage(const TraceSnapshot& trace, std::uint64_t address) {
     const Region& region = *(it - 1);
     return address < region.end ? region.module : -1;
 }
-// The id of the module that holds an entry's image, when the snapshot has it and it has one.
-const std::string* buildIdOf(const TraceSnapshot& trace, const PluginEntry& entry) {
-    const int module = moduleOfImage(trace, entry.image);
+// The id of the module that holds `address`, when the snapshot has it and it has one.
+const std::string* buildIdOf(const TraceSnapshot& trace, std::uint64_t address) {
+    const int module = moduleOfImage(trace, address);
     if (module < 0 || static_cast<std::size_t>(module) >= trace.modules.size()) return nullptr;
     const auto& id = trace.modules[static_cast<std::size_t>(module)].id;
     return id ? &*id : nullptr;
@@ -618,7 +643,21 @@ bool isLibrary(const PluginEntry& entry) {
 }
 }  // namespace
 
-json::Value Inventory::pluginsJson(const TraceSnapshot* trace) const {
+const std::string* Inventory::buildOf(const TraceSnapshot& trace, const PluginEntry& entry,
+                                      std::uint16_t bridge) const {
+    // A bridge's capsule knows only that bridge's images, by the address the bridge itself said;
+    // the worker's own `image` is an address of another process and is never looked up in it.
+    if (bridge == 0) return buildIdOf(trace, entry.image);
+    return entry.bridge == bridge ? buildIdOf(trace, entry.child.image) : nullptr;
+}
+
+const PluginEntry* Inventory::entryOfThread(const ThreadTrace& thread, std::uint16_t bridge) const {
+    if (thread.entry == diagctx::Entry::None) return nullptr;
+    return bridge == 0 ? find(thread.entryCell, thread.entryGeneration)
+                       : findInBridge(bridge, thread.entryCell, thread.entryGeneration);
+}
+
+json::Value Inventory::pluginsJson(const TraceSnapshot* trace, std::uint16_t bridge) const {
     auto plugins = json::Value::array();
     for (const PluginEntry* entry : entries()) {
         auto item = json::Value::object();
@@ -629,7 +668,7 @@ json::Value Inventory::pluginsJson(const TraceSnapshot* trace) const {
         item["state"] = diagctx::instanceStateName(entry->state);
         if (entry->bridge != 0) item["bridge"] = static_cast<long long>(entry->bridge);
         if (trace)
-            if (const std::string* id = buildIdOf(*trace, *entry)) {
+            if (const std::string* id = buildOf(*trace, *entry, bridge)) {
                 auto build = json::Value::object();
                 build["format"] = moduleFormat();
                 build["id"] = *id;
@@ -643,8 +682,10 @@ json::Value Inventory::pluginsJson(const TraceSnapshot* trace) const {
             long long ordinal = 0;
             for (const auto& thread : trace->threads) {
                 const auto at = ordinal++;
-                if (thread.entry == diagctx::Entry::None || thread.entryCell != entry->cell ||
-                    thread.entryGeneration != entry->generation)
+                if (thread.entry == diagctx::Entry::None) continue;
+                if (bridge == 0 ? (thread.entryCell != entry->cell ||
+                                   thread.entryGeneration != entry->generation)
+                                : entryOfThread(thread, bridge) != entry)
                     continue;
                 auto active = json::Value::object();
                 active["entry"] = diagctx::entryName(thread.entry);
@@ -659,12 +700,11 @@ json::Value Inventory::pluginsJson(const TraceSnapshot* trace) const {
     return plugins;
 }
 
-json::Value Inventory::attributionJson(const TraceSnapshot* trace) const {
+json::Value Inventory::attributionJson(const TraceSnapshot* trace, std::uint16_t bridge) const {
     const char* confidence = "unknown";
     std::optional<std::uint32_t> plugin;
     const auto thread = [&](std::size_t i) -> const PluginEntry* {
-        const auto& t = trace->threads[i];
-        return t.entry == diagctx::Entry::None ? nullptr : find(t.entryCell, t.entryGeneration);
+        return entryOfThread(trace->threads[i], bridge);
     };
     if (trace && !trace->threads.empty() && trace->threads[0].role == Role::Fault) {
         const auto& fault = trace->threads[0];
@@ -681,7 +721,8 @@ json::Value Inventory::attributionJson(const TraceSnapshot* trace) const {
         std::vector<const PluginEntry*> inImage;
         if (faultModule)
             for (const PluginEntry* entry : entries())
-                if (const std::string* id = buildIdOf(*trace, *entry); id && *id == *faultModule)
+                if (const std::string* id = buildOf(*trace, *entry, bridge);
+                    id && *id == *faultModule)
                     inImage.push_back(entry);
         if (!inImage.empty()) {
             confidence = "fault_in_image";
@@ -879,7 +920,7 @@ static const std::string* faultModuleId(const json::Value& threads, const json::
 
 bool attributionShape(const json::Value& attribution, const json::Value& plugins,
                       const json::Value& commands, const json::Value& threads,
-                      const json::Value* modules, std::int64_t bridge) {
+                      const json::Value* modules, std::int64_t bridge, bool capsule) {
     if (!attribution.isObject() || attribution.size() != 2) return false;
     const auto* confidence = attribution.find("confidence");
     const auto* plugin = attribution.find("plugin");
@@ -888,8 +929,16 @@ bool attributionShape(const json::Value& attribution, const json::Value& plugins
     if (how != "fault_in_image" && how != "active_token" && how != "concurrent_activity" &&
         how != "recent_command" && how != "unknown" && how != "bridge_exit")
         return false;
-    // A bridge's end names no instruction: it belongs to a bridge_exit report and only to one.
-    if ((how == "bridge_exit") != (bridge != 0)) return false;
+    // A bridge's end names no instruction: it belongs to a bridge_exit report and only to one. That
+    // report may also carry the instruction its own capsule found, `fault_in_image` or
+    // `active_token`, and no other level of the worker's.
+    if (bridge != 0) {
+        if (how != "bridge_exit" &&
+            !(capsule && (how == "fault_in_image" || how == "active_token")))
+            return false;
+    } else if (how == "bridge_exit") {
+        return false;
+    }
     // A fault in a plug-in's binary needs the fault thread's first frame in a module whose id
     // is the build of a plug-in the report lists; the plug-in named, if any, is held to it below.
     const std::string* faultId = nullptr;
@@ -925,12 +974,14 @@ bool attributionShape(const json::Value& attribution, const json::Value& plugins
                         return true;
             return false;
         };
-        if (how == "bridge_exit") {
-            // A member of that bridge that was still there when it ended.
+        if (bridge != 0) {
+            // A member of that bridge; for the bridge's end, one that was still there when it
+            // ended.
             const auto* member = item.find("bridge");
             const auto* state = item.find("state");
-            return member && member->isInt() && member->asInt() == bridge && state &&
-                   state->isString() && state->asString() != "destroyed";
+            if (!member || !member->isInt() || member->asInt() != bridge) return false;
+            if (how == "bridge_exit")
+                return state && state->isString() && state->asString() != "destroyed";
         }
         if (how == "active_token") return matched("thread");
         if (how == "concurrent_activity") return matched("other_thread");

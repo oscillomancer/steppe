@@ -356,6 +356,293 @@ TEST_CASE("a bridge report is prepared in memory and written separately, to the 
     const auto running = bridgeThatEnded(supple::diagctx::BridgeHow::None, 0);
     CHECK_FALSE(prepareBridgeReport(boot(0), running, 1));
 }
+// ---- a bridge report with the bridge's own capsule (topic 6c.4)
+// -----------------------------------
+namespace {
+// Two bridges that ended by a signal, each with two members (Canary and Other); the worker's own
+// "Host" plug-in sits at an address that is also inside Canary's image, in another process.
+struct CapsuleWorld {
+    Inventory inventory;
+    TraceSnapshot trace;  // bridge 2's capsule
+};
+Packet instancePacket(std::uint32_t cell, std::uint16_t bridge, std::string_view name,
+                      std::string_view id) {
+    using namespace supple::diagctx;
+    Packet p = boot(0);
+    p.kind = Message::Instance;
+    auto& r = p.instance;
+    r.cell = cell;
+    r.generation = 1;
+    r.event = static_cast<std::uint8_t>(EventKind::Add);
+    r.kind = static_cast<std::uint8_t>(InstanceKind::Clap);
+    r.origin = static_cast<std::uint8_t>(InstanceOrigin::Foreign);
+    r.mode = static_cast<std::uint8_t>(bridge ? InstanceMode::Bridged : InstanceMode::InProcess);
+    r.state = static_cast<std::uint8_t>(InstanceState::Active);
+    r.bridge = bridge;
+    r.image = 0x55550010;  // the worker's own address: never looked up in a bridge's capsule
+    std::memcpy(r.text[0], name.data(), name.size());
+    r.length[0] = static_cast<std::uint8_t>(name.size());
+    std::memcpy(r.text[2], "1.2", 3);
+    r.length[2] = 3;
+    std::memcpy(r.text[3], id.data(), id.size());
+    r.length[3] = static_cast<std::uint8_t>(id.size());
+    return p;
+}
+Packet childPacket(std::uint32_t cell, std::uint32_t childCell, std::uint16_t childGeneration,
+                   std::uint64_t image) {
+    using namespace supple::diagctx;
+    Packet p = boot(0);
+    p.kind = Message::Instance;
+    p.instance.event = static_cast<std::uint8_t>(EventKind::Child);
+    p.instance.cell = cell;
+    p.instance.generation = 1;
+    p.instance.childCell = childCell;
+    p.instance.childGeneration = childGeneration;
+    p.instance.image = image;
+    return p;
+}
+Packet bridgeEnds(std::uint16_t bridge) {
+    using namespace supple::diagctx;
+    Packet p = boot(0);
+    p.kind = Message::Instance;
+    p.instance.event = static_cast<std::uint8_t>(EventKind::Bridge);
+    p.instance.bridge = bridge;
+    p.instance.how = static_cast<std::uint8_t>(BridgeHow::Signal);
+    p.instance.status = 11;
+    return p;
+}
+// The build ids the capsule's two images carry; Canary's image is the first, Other's the second.
+TraceSnapshot capsuleOf(const char* canaryBuild, const char* otherBuild) {
+    TraceSnapshot t;
+    t.table = TableState::Read;
+    t.modules.resize(3);
+    t.modules[0].id = canaryBuild;
+    t.modules[1].id = otherBuild;  // modules[2] has no identity: a system library
+    t.regions = {
+        {0x55550000, 0x55560000, 0}, {0x66660000, 0x66670000, 1}, {0x77770000, 0x77780000, 2}};
+    t.threads.resize(1);
+    t.threads[0].role = supple::diagnostics::detail::Role::Fault;
+    t.threads[0].missing = Missing::None;
+    t.threads[0].registered = supple::diagctx::ThreadRole::BridgeAudio;
+    t.threads[0].worker = 1;
+    Frame frame;
+    frame.module = 0;
+    frame.offset = 0x100;
+    t.threads[0].walk.frames.push_back(frame);
+    return t;
+}
+void world(CapsuleWorld& w, bool twin = false) {
+    auto& i = w.inventory;
+    REQUIRE(i.apply(instancePacket(1, 0, "Host", "com.acme.host")));
+    for (const std::uint16_t bridge : {std::uint16_t{2}, std::uint16_t{3}}) {
+        if (bridge == 3 && !twin) break;
+        const std::uint32_t base = bridge == 2 ? 5 : 7;
+        REQUIRE(i.apply(instancePacket(base, bridge, "Canary", "com.acme.canary")));
+        REQUIRE(i.apply(instancePacket(base + 1, bridge, "Other", "com.acme.other")));
+        REQUIRE(i.apply(childPacket(base, 4, 7, 0x55550000)));
+        REQUIRE(i.apply(childPacket(base + 1, 9, 3, 0x66660000)));
+        REQUIRE(i.apply(bridgeEnds(bridge)));
+    }
+    w.trace = capsuleOf("aabbccdd", "11223344");
+}
+json::Value bridgeReportOf(const CapsuleWorld& w, const TraceSnapshot* trace) {
+    const auto prepared = prepareBridgeReport(boot(0), w.inventory, 2, trace);
+    REQUIRE(prepared);
+    auto parsed = json::parse(prepared->text);
+    REQUIRE(parsed);
+    return std::move(*parsed);
+}
+const json::Value* pluginNamed(const json::Value& report, std::string_view name) {
+    for (const auto& p : report.find("plugins")->asArray())
+        if (const auto* n = p.find("name"); n && n->asString() == name) return &p;
+    return nullptr;
+}
+}  // namespace
+
+TEST_CASE(
+    "a bridge's own capsule puts its threads, modules and the plug-in it faulted in in the "
+    "report") {
+    CapsuleWorld w;
+    world(w);
+    const auto report = bridgeReportOf(w, &w.trace);
+    CHECK(report.find("kind")->asString() == "bridge_exit");
+    CHECK(report.find("capture")->asString() == "bridge");  // whose account it is
+    CHECK(report.find("complete")->asBool() == false);
+    CHECK(report.find("terminal_context")->asBool() == false);
+    CHECK(report.find("threads")->size() == 1);
+    CHECK(report.find("threads")->asArray()[0].find("role")->asString() == "fault");
+    CHECK(report.find("modules")->size() == 3);
+    // The members' builds are found in the bridge's capsule by the bridge's own addresses; the
+    // worker's own plug-in sits at an address inside Canary's image and gets no build from it.
+    CHECK(pluginNamed(report, "Canary")->find("build")->find("id")->asString() == "aabbccdd");
+    CHECK(pluginNamed(report, "Other")->find("build")->find("id")->asString() == "11223344");
+    CHECK(pluginNamed(report, "Host")->find("build") == nullptr);
+    const auto* attribution = report.find("attribution");
+    CHECK(attribution->find("confidence")->asString() == "fault_in_image");
+    CHECK(attribution->find("plugin")->asInt() ==
+          pluginNamed(report, "Canary")->find("id")->asInt());
+    CHECK(reportShape(report));
+    CHECK(reportShape(report, true));
+    // Nothing of the capsule is an address.
+    CHECK(json::writeCanonical(report).find("55550000") == std::string::npos);
+}
+
+TEST_CASE(
+    "a bridge's capsule names a plug-in by its token when the fault is in code it cannot place") {
+    CapsuleWorld w;
+    world(w);
+    auto& fault = w.trace.threads[0];
+    fault.walk.frames[0].module = 2;  // a system library: no identity
+    fault.entry = supple::diagctx::Entry::Process;
+    fault.entryCell = 9;  // Other's cell in the bridge's own table
+    fault.entryGeneration = 3;
+    const auto report = bridgeReportOf(w, &w.trace);
+    const auto* attribution = report.find("attribution");
+    CHECK(attribution->find("confidence")->asString() == "active_token");
+    const auto* other = pluginNamed(report, "Other");
+    CHECK(attribution->find("plugin")->asInt() == other->find("id")->asInt());
+    CHECK(other->find("executing")->asArray()[0].find("match")->asString() == "thread");
+    CHECK(pluginNamed(report, "Canary")->find("executing") == nullptr);
+    CHECK(reportShape(report));
+    // The host's own instance in cell 9 of the worker is not the bridge's: only the bridge's cells
+    // are looked up for a bridge's capsule.
+    CHECK(pluginNamed(report, "Host")->find("executing") == nullptr);
+}
+
+TEST_CASE("a bridge's capsule that points at nobody leaves the report at the bridge_exit level") {
+    CapsuleWorld w;
+    world(w);
+    auto& fault = w.trace.threads[0];
+    fault.walk.frames[0].module = 2;  // no identity, and no token
+    // Another thread was inside Canary (its cell in the bridge's table): activity, not blame.
+    ThreadTrace other;
+    other.role = supple::diagnostics::detail::Role::Other;
+    other.missing = Missing::NotCollected;
+    other.registered = supple::diagctx::ThreadRole::BridgeControl;
+    other.entry = supple::diagctx::Entry::Create;
+    other.entryCell = 4;
+    other.entryGeneration = 7;
+    w.trace.threads.push_back(other);
+    const auto report = bridgeReportOf(w, &w.trace);
+    CHECK(report.find("attribution")->find("confidence")->asString() == "bridge_exit");
+    CHECK(report.find("threads")->size() == 2);
+    CHECK(
+        pluginNamed(report, "Canary")->find("executing")->asArray()[0].find("match")->asString() ==
+        "other_thread");
+    CHECK(reportShape(report));
+}
+
+TEST_CASE("a bridge report without a capsule is as it was, and the validator holds the two apart") {
+    CapsuleWorld w;
+    world(w);
+    const auto bare = bridgeReportOf(w, nullptr);
+    CHECK(bare.find("capture") == nullptr);
+    CHECK(bare.find("modules") == nullptr);
+    CHECK(bare.find("threads")->size() == 0);
+    CHECK(bare.find("attribution")->find("confidence")->asString() == "bridge_exit");
+    CHECK(reportShape(bare));
+    const auto with = bridgeReportOf(w, &w.trace);
+    const auto breaks = [&](const char* what, auto change, const json::Value& from) {
+        auto copy = from;
+        change(copy);
+        INFO(what);
+        CHECK_FALSE(reportShape(copy));
+        CHECK_FALSE(reportShape(copy, true));
+    };
+    // A capsule's report that has lost its capsule, or has it without saying whose it is.
+    breaks("threads without capture", [](json::Value& v) { v.asObject().erase("capture"); }, with);
+    breaks("another account", [](json::Value& v) { v["capture"] = "worker"; }, with);
+    breaks("capture of nothing", [](json::Value& v) { v["capture"] = json::Value(); }, with);
+    breaks(
+        "capture without threads",
+        [](json::Value& v) {
+            v["threads"] = json::Value::array();
+            v.asObject().erase("modules");
+        },
+        with);
+    breaks("capture without modules", [](json::Value& v) { v.asObject().erase("modules"); }, with);
+    breaks(
+        "a first thread that is not the fault thread",
+        [](json::Value& v) { v["threads"].asArray()[0]["role"] = "other"; }, with);
+    breaks(
+        "threads in a report with no capture",
+        [](json::Value& v) {
+            v.asObject().erase("capture");
+            v["attribution"]["confidence"] = "bridge_exit";
+        },
+        with);
+    // The levels a bridge report may claim, and the evidence each is held to.
+    breaks(
+        "a worker's concurrent_activity",
+        [](json::Value& v) {
+            v["attribution"]["confidence"] = "concurrent_activity";
+            v["attribution"]["plugin"] = json::Value();
+        },
+        with);
+    breaks(
+        "recent_command",
+        [](json::Value& v) {
+            v["attribution"]["confidence"] = "recent_command";
+            v["attribution"]["plugin"] = json::Value();
+        },
+        with);
+    breaks(
+        "an unknown level",
+        [](json::Value& v) {
+            v["attribution"]["confidence"] = "unknown";
+            v["attribution"]["plugin"] = json::Value();
+        },
+        with);
+    breaks(
+        "fault_in_image naming a plug-in of another build",
+        [&](json::Value& v) {
+            v["attribution"]["plugin"] = pluginNamed(v, "Other")->find("id")->asInt();
+        },
+        with);
+    breaks(
+        "fault_in_image naming the worker's own plug-in",
+        [&](json::Value& v) {
+            v["attribution"]["plugin"] = pluginNamed(v, "Host")->find("id")->asInt();
+        },
+        with);
+    breaks(
+        "fault_in_image with no build to match",
+        [](json::Value& v) {
+            for (auto& p : v["plugins"].asArray()) p.asObject().erase("build");
+        },
+        with);
+    breaks(
+        "active_token without a thread inside the plug-in",
+        [](json::Value& v) { v["attribution"]["confidence"] = "active_token"; }, with);
+    // Without a capsule the only level there is stays the only level.
+    breaks(
+        "fault_in_image without a capsule",
+        [](json::Value& v) { v["attribution"]["confidence"] = "fault_in_image"; }, bare);
+    breaks(
+        "active_token without a capsule",
+        [](json::Value& v) { v["attribution"]["confidence"] = "active_token"; }, bare);
+    breaks(
+        "capture on a report of the host's account",
+        [](json::Value& v) { v["capture"] = "bridge"; }, bare);
+}
+
+TEST_CASE("the repeat rule tells builds apart where the version could not") {
+    // Two bridges with the same members and the same status. Without their capsules they are one
+    // repeat; with them they are one only when the builds are the same.
+    const auto admit = [](const TraceSnapshot* first, const TraceSnapshot* second) {
+        CapsuleWorld w;
+        world(w, true);
+        const bool one = w.inventory.admitBridgeReport(2, first);
+        const bool two = w.inventory.admitBridgeReport(3, second);
+        return std::make_pair(one, two);
+    };
+    CHECK(admit(nullptr, nullptr) == std::make_pair(true, false));  // as before
+    const auto same = capsuleOf("aabbccdd", "11223344");
+    const auto newer = capsuleOf("ddccbbaa", "11223344");
+    CHECK(admit(&same, &same) == std::make_pair(true, false));
+    CHECK(admit(&same, &newer) == std::make_pair(true, true));
+}
+
 TEST_CASE("background work is queued without waiting, runs in order off the caller's thread") {
     std::mutex mutex;
     std::condition_variable changed;

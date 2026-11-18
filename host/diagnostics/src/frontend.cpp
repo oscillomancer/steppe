@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 #include <utility>
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -196,13 +197,22 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
             // and its marker are untouched.
             const bool applied = inventory.apply(packet, &resource.value);
             if (const auto look = inventoryHook()) look(packet, inventory);  // tests only
-            if (applied &&
-                packet.instance.event == static_cast<std::uint8_t>(diagctx::EventKind::Bridge) &&
-                inventory.admitBridgeReport(packet.instance.bridge) && storage) {
+            const bool bridgeEnded =
+                applied &&
+                packet.instance.event == static_cast<std::uint8_t>(diagctx::EventKind::Bridge);
+            // What a bridge that failed wrote about itself (topic 6c): read here, at its end, from
+            // the slot it left (a read that never waits), and parsed as untrusted input; a missing,
+            // half-written or malformed capsule is no capsule, and the report is the host's
+            // account.
+            const auto bridgeTrace = bridgeEnded ? inventory.bridgeTrace(packet.instance.bridge)
+                                                 : std::optional<TraceSnapshot>();
+            const TraceSnapshot* own = bridgeTrace ? &*bridgeTrace : nullptr;
+            if (bridgeEnded && inventory.admitBridgeReport(packet.instance.bridge, own) &&
+                storage) {
                 // Formatted here, from the inventory as it is now; written (and the folder's
                 // retention applied, which reads every report in it) on the writer's thread, so
                 // the packets behind this one are not held up by the disk.
-                auto prepared = prepareBridgeReport(boot, inventory, packet.instance.bridge);
+                auto prepared = prepareBridgeReport(boot, inventory, packet.instance.bridge, own);
                 if (!prepared)
                     std::fputs("a plug-in bridge died; its local report could not be saved\n",
                                stderr);

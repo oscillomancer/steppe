@@ -156,7 +156,7 @@ bool reportShape(const json::Value& value, bool tolerant) {
                                          "threads",     "plugins",
                                          "commands",    "dropped",
                                          "attribution", "bridges",
-                                         "bridge"};
+                                         "bridge",      "capture"};
         if (std::find(std::begin(allowed), std::end(allowed), field.key) == std::end(allowed))
             return false;
     }
@@ -187,6 +187,13 @@ bool reportShape(const json::Value& value, bool tolerant) {
     } else if (bridgeExit) {
         return false;
     }
+    // `capture` says whose account the threads are: a bridge's own capsule (topic 6c), the
+    // only one there is, and only in a bridge_exit report.
+    bool bridgeCapsule = false;
+    if (const auto* capture = value.find("capture")) {
+        if (!bridgeExit || !capture->isString() || capture->asString() != "bridge") return false;
+        bridgeCapsule = true;
+    }
     auto integer = [&](const char* key, std::int64_t min, std::int64_t max) {
         const auto* v = value.find(key);
         return v && v->isInt() && v->asInt() >= min && v->asInt() <= max;
@@ -214,6 +221,17 @@ bool reportShape(const json::Value& value, bool tolerant) {
     }
     const auto* threads = value.find("threads");
     if (!threads || !traceShape(value.find("modules"), *threads)) return false;
+    if (bridgeExit) {
+        // A bridge's report has the capsule's threads and modules, the fault thread first, or none
+        // of either: the host's account alone.
+        const auto* role = threads->isArray() && threads->size() != 0
+                               ? threads->asArray()[0].find("role")
+                               : nullptr;
+        if (bridgeCapsule ? !value.find("modules") || !role || !role->isString() ||
+                                role->asString() != "fault"
+                          : threads->size() != 0 || value.find("modules"))
+            return false;
+    }
     {
         const auto* plugins = value.find("plugins");
         if (!plugins || !pluginsShape(*plugins, threads->size())) return false;
@@ -236,10 +254,10 @@ bool reportShape(const json::Value& value, bool tolerant) {
              level->asString() == "unknown" || level->asString() == "bridge_exit");
         if ((known || !tolerant || !level || !level->isString()) &&
             !attributionShape(*attribution, *value.find("plugins"), *value.find("commands"),
-                              *threads, value.find("modules"), bridgeOrdinal))
+                              *threads, value.find("modules"), bridgeOrdinal, bridgeCapsule))
             return false;
-        if (bridgeExit && (!level || !level->isString() || level->asString() != "bridge_exit"))
-            return false;
+        if (bridgeExit && (!level || !level->isString()))
+            return false;  // the level itself is held to the bridge's rules by attributionShape
     }
     const auto* unavailable = value.find("unavailable");
     if (!unavailable || !unavailable->isArray() || unavailable->size() == 0 ||
@@ -476,7 +494,8 @@ Status publishReport(const fs::path& root, const Packet& boot, const Packet* ter
 }
 std::optional<PreparedBridgeReport> prepareBridgeReport(const Packet& boot,
                                                         const Inventory& inventory,
-                                                        std::uint16_t bridge) {
+                                                        std::uint16_t bridge,
+                                                        const TraceSnapshot* trace) {
     const BridgeEntry* entry = inventory.bridge(bridge);
     if (!entry || !entry->ended) return std::nullopt;
     // Its own incident: the worker's run goes on under the id it has, and no marker belongs to
@@ -501,15 +520,28 @@ std::optional<PreparedBridgeReport> prepareBridgeReport(const Packet& boot,
     v["complete"] = false;
     v["terminal_context"] = false;
     v["unavailable"] = json::Value::array();
-    v["unavailable"].asArray().push_back(
-        "the bridge process's threads were not collected: the report is the host's account of it");
+    if (trace) {
+        // What the bridge process wrote about itself, while it was failing and running a plug-in's
+        // code: the report says so, and weighs it as the bridge's own account.
+        v["capture"] = "bridge";
+        v["unavailable"].asArray().push_back(
+            "the threads and modules were written by the bridge process itself, which runs the "
+            "plug-in's code: they are the bridge's account of its own failure");
+        for (auto& limit : traceLimits(*trace)) v["unavailable"].asArray().push_back(limit);
+        v["modules"] = modulesJson(*trace);
+        v["threads"] = threadsJson(*trace);
+    } else {
+        v["unavailable"].asArray().push_back(
+            "the bridge process's threads were not collected: the report is the host's account of "
+            "it");
+        v["threads"] = json::Value::array();
+    }
     for (auto& limit : inventory.limits()) v["unavailable"].asArray().push_back(limit);
-    v["threads"] = json::Value::array();
-    v["plugins"] = inventory.pluginsJson(nullptr);
+    v["plugins"] = inventory.pluginsJson(trace, trace ? bridge : 0);
     v["bridges"] = inventory.bridgesJson();
     v["commands"] = json::Value::array();
-    v["attribution"] = inventory.bridgeExitAttributionJson(bridge);
-    v["dropped"] = inventory.droppedJson(nullptr);
+    v["attribution"] = inventory.bridgeExitAttributionJson(bridge, trace);
+    v["dropped"] = inventory.droppedJson(trace);
     auto text = json::writeCanonical(v) + "\n";
     if (text.size() > 4 * 1024 * 1024) return std::nullopt;
     return PreparedBridgeReport{std::move(id), std::move(text)};
@@ -519,8 +551,8 @@ Status writeBridgeReport(const fs::path& root, const PreparedBridgeReport& repor
     return pruneReports(root);
 }
 Status publishBridgeReport(const fs::path& root, const Packet& boot, const Inventory& inventory,
-                           std::uint16_t bridge) {
-    const auto prepared = prepareBridgeReport(boot, inventory, bridge);
+                           std::uint16_t bridge, const TraceSnapshot* trace) {
+    const auto prepared = prepareBridgeReport(boot, inventory, bridge, trace);
     if (!prepared) return failure();
     return writeBridgeReport(root, *prepared);
 }
