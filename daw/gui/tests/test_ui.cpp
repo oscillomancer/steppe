@@ -968,7 +968,7 @@ TEST_CASE("colour is state: an off pill and a quiet button at rest are ink alone
     content->layout.gap = 16;
     auto pill = [&](const char* id, bool on) -> Toggle& {
         auto& t = content->emplace<Toggle>(id, "S", "solo");
-        t.pill = true;
+        t.cell = true;
         t.layout.width = SizeRule::fixed(24);
         t.layout.height = SizeRule::fixed(16);
         t.setOn(on);

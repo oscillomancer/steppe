@@ -421,7 +421,7 @@ Per track, a row of up to three lines (`TcpRowGeometry`):
    down the row's left edge; the type's mark for a buss or a master (below);
    the name (rename in place: a double-click; Enter or a click anywhere
    else keeps the edit, Escape drops it); and at the right the four
-   **state buttons**: arm, monitor, mute, solo, in that order.
+   **state cells**: arm, monitor, mute, solo, in that order.
 2. **The mix line**, from 40 units, in signal order: polarity ("Ø") and
    mono (ADR-0022), the volume fader and the pan (Console 9 Channel's
    controls on channels and busses; plain gain and balance on masters; the
@@ -439,16 +439,17 @@ Per track, a row of up to three lines (`TcpRowGeometry`):
 A meter 8 units wide (`TcpRowGeometry::kMeterWidth`) stands at the row's
 right edge for the row's whole height, with the controls ending before it.
 
-**The buttons.** Mute, solo, polarity and mono are rounded pills
-(`ui::Toggle::pill`): an ink outline and letter off, filled with their own
-colour on, the colour showing under the pointer. Arm is a disc
-(`ui::ArmButton`): a red ring off, solid red armed. Monitor is a speaker
-(`ui::MonitorButton`): an outline off, solid on, green on auto. The four
-state buttons stand in four places of one pitch (20 units; a pill is 18 by
-14, the disc and the speaker 16 square, centred in their places). The
-mixer's strips carry the same buttons in the same order (§4.4).
+**One button shape.** Arm, monitor, mute, solo, polarity and mono are
+**cells** (`ui::drawStateCell`, `ui::Toggle::cell`): a rounded rectangle,
+18 by 14 units here. Off, a cell is the ground colour with a faint outline
+and a quiet letter; under the pointer it takes a little of its state's
+colour; on, it is filled with it. Arm is a ring in its cell (red, off; a
+disc on the red cell, armed) and monitor a speaker in its cell (a faint
+outline off; solid in full ink on, which is where a new channel starts and
+so not a colour; green with a green outline on auto). The mixer's strips
+carry the same cells in the same order (§4.4).
 
-**A place belongs to its control.** A buss has no arm, monitor or input: their
+**A cell is a control's place.** A buss has no arm, monitor or input: their
 places stay empty, so mute and solo are in one column down the whole panel,
 at any depth, and the mix and connections lines start at the panel's left
 edge at any depth.
@@ -459,20 +460,21 @@ sums); a master the same ending at a bar (it ends at the device). Both are
 drawn in quiet ink. A frozen track has its snowflake after the mark, and a
 track's groups are small colour tabs under the name's start.
 
-"fx", "+", "env" and "out" are quiet buttons (`ui::Button::quiet`): their
-text alone in quiet ink, a box under the pointer; "fx" is in full ink when
-the track's chain or input chain holds a plug-in. The input stays a boxed
-field, since it shows a value.
+"fx" and "+" are quiet buttons (`ui::Button::quiet`): their text alone in
+quiet ink, a box under the pointer; "fx" is in full ink when the track's
+chain or input chain holds a plug-in. The input, "env" and "out" are boxed,
+as the input and "out" are on a mixer strip, so the routing buttons look
+the same in both views.
 A master that is armed or holds items has a row too, its **lane** (ADR-0057):
-the header shows only the master's mark, its name, the lane mute ("M", a pill in
-the mute's place and colour, `track.set {lane_mute}`: it silences the
-master's own items, never the master) and the arm in its place; the master's
+the header shows only the master's mark, its name, the lane mute ("M", in
+the mute cell's place and colour, `track.set {lane_mute}`: it silences the
+master's own items, never the master) and the arm in its cell; the master's
 fader, pan and FX stay in the mixer. A lane-muted master's items are drawn dimmed. A master with
 neither has no row.
 A new project's rows are 60 units high (`TrackLayout::kDefaultHeight`), the
 lowest that shows all three lines clear of the resize grip; a project whose
 UI sidecar holds a row height keeps it.
-Rows shrink to 24 design units: the name line, with its four state buttons,
+Rows shrink to 24 design units: the name line, with its four state cells,
 fits above a four-unit bottom resize grip. The mix line hides below 40
 units; the connections line hides below 58. Track heights clamp to 24–400 units,
 including compact folders and older UI sidecars; expanded takes retain that
@@ -833,7 +835,7 @@ their entire ancestor chain is visible, and clear peak hold on reopening.
 
 A strip is 92 units wide and is **one grid of four columns**: a row is four
 cells, two halves or one full width, and every button is 16 units high
-(the buttons of §4.2). Top to bottom, in the order of the signal, with the
+(the cells of §4.2). Top to bottom, in the order of the signal, with the
 buttons used most next to the fader:
 
 1. **The colour bar** (`mixer.color.<track>`): the track's own colour,
@@ -864,10 +866,7 @@ buttons used most next to the fader:
    monitor and a master no monitor (a master records its output,
    ADR-0057): their cells stay empty (`mixer.state.1.<track>`,
    `mixer.state.2.<track>`), so mute and solo are at the same place on
-   every strip. The arm's disc is 16 units across, as tall as the pills
-   beside it, and the speaker 14 (`ArmButton::margin`,
-   `MonitorButton::margin`: two units more than in the TCP, where the pills
-   are 14 high); each takes a click anywhere in its cell.
+   every strip. Each takes a click anywhere in its cell.
 9. **The fader and the meter** (`mixer.faderrow.<track>`), then their
    **values**.
 
@@ -2052,7 +2051,7 @@ inspector adds no command:
 | Follows (`inspector.timebase`) | Its track's setting, Beats, Time, or Beats, start only | A choice | `timebase` |
 | Gain (`inspector.gain_db`) | "-3.0 dB" | A number, with or without "dB" | `gain_db` |
 | Fade in, Fade out (`inspector.fade_in`, `inspector.fade_out`) | "0.400 s" | A number, with or without "s" | `fade_in`, `fade_out` |
-| Mute, Loop, Lock (`inspector.mute`, `.loop`, `.locked`) | Pills, lit when on | A click | `mute`, `loop`, `locked` |
+| Mute, Loop, Lock (`inspector.mute`, `.loop`, `.locked`) | Cells (§4.2), lit when on | A click | `mute`, `loop`, `locked` |
 | File (`inspector.file`) | An audio item's file path, then its rate, channels and length | Read only | |
 
 When the heard take plays audio, its speed and pitch follow
@@ -2062,7 +2061,7 @@ When the heard take plays audio, its speed and pitch follow
 |---|---|---|---|
 | Speed (`inspector.playrate`) | "1.000 x" | A number, with or without "x" | `playrate` |
 | Pitch (`inspector.pitch`) | "0.00 st" | A number, with or without "st" | `pitch` |
-| Keep pitch (`inspector.preserve_pitch`) | A pill, lit when on | A click | `preserve_pitch` |
+| Keep pitch (`inspector.preserve_pitch`) | A cell, lit when on | A click | `preserve_pitch` |
 
 An item with several takes lists them in its order (`inspector.takes`,
 at most six rows before it scrolls), a take without a name as "Take *n*";
@@ -2080,10 +2079,10 @@ in the field being typed in. A locked item's fields are disabled, all but
 Lock, under a line that says so. An item with no take cannot be named.
 
 **Several items** show the fields they can share: Follows, Gain, the
-fades and the three pills. Name, Start, Length, the take settings, the
+fades and the three cells. Name, Start, Length, the take settings, the
 take list and the file are for one item only. A field shows the value all
 of them have, and is empty with the placeholder "mixed" when they differ;
-a pill is lit when all have the state on. An edit runs `item.set` on each
+a cell is lit when all have the state on. An edit runs `item.set` on each
 inside one transaction (`Dispatcher::transact`, labelled "Item gain" and
 so on): one undo step, and all of them or none when the command refuses
 one. With any of them locked the fields are disabled; Lock then locks the
@@ -2489,8 +2488,9 @@ Steppe's own character, not a REAPER clone or a generic dark theme
   agent-changed) and for the user's own organizing (track colours, which
   tint a track's items); meters and waveforms in ink tones; motion only for
   feedback. Controls that repeat on every track row and mixer strip are
-  quiet at rest: an off toggle is an ink outline and letter, a secondary
-  button its text alone. The state's colour and the button's box appear
+  quiet at rest: an off toggle is a faint outline and a quiet letter, and
+  "fx" and "+" are their text alone (a row's "env" and "out" are boxed, as
+  routing is on a strip). The state's colour and a text button's box appear
   under the pointer, so at rest the only colour in a row is a state that is
   on and the track's own colour. The toolbar's buttons
   are quiet in the same way, so the top row reads as menus first. A

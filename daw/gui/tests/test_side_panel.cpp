@@ -682,7 +682,7 @@ TEST_CASE("inspector: several items show what they share; one edit is one undo s
     for (const auto& id : {a, b, c}) CHECK_FALSE(f.item(id).mute);
     CHECK(f.text("inspector.mute") == "off");
 
-    // A pill is lit only when all have the state; with one locked the
+    // A cell is lit only when all have the state; with one locked the
     // fields are off, and Lock locks, then unlocks, them all.
     f.exec("item.set", R"({"item":")" + b + R"(","locked":true})");
     f.pass();

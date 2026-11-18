@@ -383,12 +383,12 @@ also scrolls the tracks up and down.
 ### A track's buttons
 
 A track has the same buttons in the same order in the track list and on its
-mixer strip. The disc arms it for recording: a red ring when off, solid red
-when armed. The speaker sets input monitoring: an outline when off, solid
-when on, green when automatic (you hear the input while the track is
-armed). **M** mutes it and **S** solos it. **Ø** inverts polarity and
-**mono** sums left and right. A lettered button that is on is filled with
-its colour; one that is off is an outline.
+mixer strip, each a small rounded box. The ring arms the track for
+recording; armed, its box is red. The speaker sets input monitoring: a faint
+outline when off, solid when on, green when automatic (you hear the input
+while the track is armed). **M** mutes it and **S** solos it. **Ø** inverts
+polarity and **mono** sums left and right. A button that is on is filled
+with its colour; one that is off is an outline.
 
 In the track list the first four are at the right of the track's name, at
 any row height. Under them is a line with **Ø**, **mono**, the fader and

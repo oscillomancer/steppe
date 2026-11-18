@@ -35,6 +35,7 @@
 #include "supple/model/source_mapping.h"
 #include "supple/ui/root.h"
 #include "supple/ui/text_field.h"
+#include "supple/ui/widgets.h"
 #include "supple/views/arrange.h"
 #include "supple/views/envelope_edit.h"
 #include "supple/views/envelope_lane.h"
@@ -1704,9 +1705,7 @@ TEST_CASE("a TCP row's meter stands at its right edge, clear of the controls") {
         CHECK(node->bounds().right() < meter.x);
     }
     // Three lines, each in one order (gui.md §4.2). The name line: the name,
-    // then arm, monitor, mute, solo in four places of one pitch. Mute and
-    // solo are pills that fill their place; arm and monitor are drawn, 16
-    // units square, centred in theirs.
+    // then arm, monitor, mute, solo as four cells of one size.
     auto box = [&](const model::Id& track, const char* what) {
         return panel->controlNode(track, what)->bounds();
     };
@@ -1715,13 +1714,10 @@ TEST_CASE("a TCP row's meter stands at its right edge, clear of the controls") {
     using G = views::TcpRowGeometry;
     CHECK(box(tr1, "name").right() <= cells[0].x);
     for (std::size_t i = 0; i < cells.size(); ++i) {
-        const bool drawn = i < 2;
-        CHECK(cells[i].w == (drawn ? 16 : G::kCellWidth));
-        CHECK(cells[i].h == (drawn ? 16 : G::kCellHeight));
-        CHECK(cells[i].y + cells[i].h / 2 == cells[0].y + cells[0].h / 2);
-        if (i)
-            CHECK(cells[i].x + cells[i].w / 2 ==
-                  cells[i - 1].x + cells[i - 1].w / 2 + G::kCellWidth + G::kCellGap);
+        CHECK(cells[i].w == G::kCellWidth);
+        CHECK(cells[i].h == G::kCellHeight);
+        CHECK(cells[i].y == cells[0].y);
+        if (i) CHECK(cells[i].x == cells[i - 1].right() + G::kCellGap);
     }
     // The mix line: polarity, mono, the fader, the pan.
     const std::vector<ui::Rect> mix = {box(tr1, "polarity"), box(tr1, "mono"), box(tr1, "fader"),
@@ -1736,6 +1732,18 @@ TEST_CASE("a TCP row's meter stands at its right edge, clear of the controls") {
     for (std::size_t i = 0; i < links.size(); ++i) {
         CHECK(links[i].y >= mix[0].bottom());
         if (i) CHECK(links[i].x >= links[i - 1].right());
+    }
+    // The routing buttons are boxed in both views; "fx" and "+" are text
+    // alone until the pointer is on them.
+    for (const char* what : {"env", "out"}) {
+        const auto* button = dynamic_cast<const ui::Button*>(panel->controlNode(tr1, what));
+        REQUIRE(button);
+        CHECK_FALSE(button->quiet);
+    }
+    for (const char* what : {"fx", "addfx"}) {
+        const auto* button = dynamic_cast<const ui::Button*>(panel->controlNode(tr1, what));
+        REQUIRE(button);
+        CHECK(button->quiet);
     }
     CHECK(links.back().right() == cells.back().right());  // one right edge
     CHECK(mix.back().right() == cells.back().right());

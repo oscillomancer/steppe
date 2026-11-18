@@ -1296,7 +1296,7 @@ void Mixer::rebuild() {
             [this, tid](bool on) { (void)set(tid, "mono", json::Value(on)); });
         st.polarity->layout.width = st.mono->layout.width = ui::SizeRule::fraction();
         st.polarity->layout.height = st.mono->layout.height = ui::SizeRule::fixed(kCellH);
-        st.polarity->pill = st.mono->pill = true;
+        st.polarity->cell = st.mono->cell = true;
         st.pan = &frame->emplace<ui::PanControl>("mixer.pan." + tid);
         // Each bar sets what the strip's pan mode gives it (ADR-0066).
         auto panBar = [this, tid, id, control = st.pan](int part) {
@@ -1327,11 +1327,9 @@ void Mixer::rebuild() {
         ui::Node* first = nullptr;
         ui::Node* second = nullptr;
         if (t.type != model::StripType::Buss) {
-            auto& arm = state.emplace<ui::ArmButton>("mixer.arm." + tid, [this, tid](bool on) {
+            st.arm = &state.emplace<ui::ArmButton>("mixer.arm." + tid, [this, tid](bool on) {
                 (void)set(tid, "armed", json::Value(on));
             });
-            arm.margin = 0;  // as tall as the M and S pills beside it
-            st.arm = &arm;
             first = st.arm;
         } else {
             first = &state.emplace<ui::Node>("mixer.state.1." + tid);
@@ -1346,7 +1344,6 @@ void Mixer::rebuild() {
                                                                               : "off";
                 (void)set(tid, "monitor", json::Value(std::string(next)));
             });
-            st.monitor->margin = 1;  // two units larger, as the arm disc is
             second = st.monitor;
         } else {
             second = &state.emplace<ui::Node>("mixer.state.2." + tid);
@@ -1358,7 +1355,7 @@ void Mixer::rebuild() {
             &state.emplace<ui::Toggle>("mixer.solo." + tid, "S", "solo", [this, tid](bool on) {
                 (void)set(tid, "solo", json::Value(std::string(on ? "on" : "off")));
             });
-        st.mute->pill = st.solo->pill = true;
+        st.mute->cell = st.solo->cell = true;
         for (ui::Node* cell :
              {first, second, static_cast<ui::Node*>(st.mute), static_cast<ui::Node*>(st.solo)}) {
             cell->layout.width = ui::SizeRule::fraction();
@@ -1458,7 +1455,7 @@ void Mixer::rebuild() {
                                           [setVca](bool on) { setVca("mute", on); });
         st.solo = &ms.emplace<ui::Toggle>("mixer.vca.solo." + tid, "S", "solo",
                                           [setVca](bool on) { setVca("solo", on); });
-        st.mute->pill = st.solo->pill = true;
+        st.mute->cell = st.solo->cell = true;
         for (ui::Node* cell :
              {first, second, static_cast<ui::Node*>(st.mute), static_cast<ui::Node*>(st.solo)}) {
             cell->layout.width = ui::SizeRule::fraction();
