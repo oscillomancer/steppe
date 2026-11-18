@@ -15,6 +15,8 @@ the public commands and GUI actions (`Shift+/` or `Ctrl+Shift+P`,
 - [Audio](#audio)
 - [Projects](#projects)
 - [Tracks and items](#tracks-and-items)
+- [Editing items](#editing-items)
+- [The MIDI editor](#the-midi-editor)
 - [Plugins](#plugins)
 - [Mixing](#mixing)
 - [Routing](#routing)
@@ -230,23 +232,6 @@ name. Where an item fades in or out, the faded part is shaded and the fade's
 curve is drawn over it. A selected item is brighter and has an outline in the
 accent colour.
 
-The pointer shows what a drag would do. Over an item's left or right end,
-or its top corners where the fades are, it becomes a pair of sideways
-arrows: drag there to trim the item or draw a fade. Over the middle it
-stays an arrow: drag to move the item. The same sideways arrows show at
-the ends of the loop range in the ruler and of a note in the piano roll,
-and up-and-down arrows at a track row's lower edge and at the top edge of
-the mixer and the MIDI editor, which set their height.
-
-To drag something further than the window shows, hold it at the edge of
-the arrangement: the view scrolls that way, faster the further out you
-hold it, and stops when you bring the pointer back in. This works for
-items, their ends and fades, automation points, a selection rectangle,
-and the loop range, markers and regions in the ruler. An item being moved
-also scrolls the tracks up and down. The piano roll does the same for notes:
-hold a note or a selection rectangle at an edge and the roll scrolls in
-time, or up and down the keys.
-
 ### A track's buttons
 
 A track has the same buttons in the same order in the track list and on its
@@ -340,6 +325,155 @@ Click a tab to switch, **Close** to put the panel away, and drag the panel's
 left edge to make it wider or narrower. Steppe remembers per project whether
 the panel was open, which tab it showed, how wide it was and which kind the
 Browser showed.
+
+## Editing items
+
+An item is a piece of audio or MIDI on a track. Every edit here is one step
+of undo: while you drag you see a ghost of the result, and the project
+changes when you let go. Where this section says Ctrl, use Cmd on macOS.
+
+### Selecting
+
+Click an item to select it. Shift-click adds an item to the selection and
+Ctrl-click adds or removes one. A drag from empty space, or a drag with the
+right button from anywhere, draws a selection rectangle: it takes the items
+and the automation points inside it, on any track, and with Shift or Ctrl
+held it adds them to what is selected. `Ctrl+A` selects every item.
+
+### Moving, copying and trimming
+
+- **Move:** drag an item by its middle, in time or onto another track.
+  Ctrl-drag leaves the item where it is and drags a copy.
+- **Trim:** drag an item's left or right end. Every selected item is trimmed
+  by the same amount.
+- **Fade:** drag one of the item's top corners inwards. Ctrl-click a fade to
+  step through its shapes.
+- **Slip:** Alt-drag an item to move its audio under it while the item stays
+  where it is.
+- **Stretch:** Alt-drag an audio item's right end, and the audio plays
+  faster or slower to fit the new length.
+
+Drags land on the grid, which follows the zoom: as fine as a sixteenth of a
+beat when you are zoomed far in, as coarse as 32 beats when zoomed far out.
+Hold Shift to place something off the grid.
+
+The pointer shows what a drag would do. Over an item's left or right end,
+or its top corners where the fades are, it becomes a pair of sideways
+arrows: drag there to trim the item or draw a fade. Over the middle it
+stays an arrow: drag to move the item. The same sideways arrows show at
+the ends of the loop range in the ruler and of a note in the piano roll,
+and up-and-down arrows at a track row's lower edge and at the top edge of
+the mixer and the MIDI editor, which set their height.
+
+To drag something further than the window shows, hold it at the edge of
+the arrangement: the view scrolls that way, faster the further out you
+hold it, and stops when you bring the pointer back in. This works for
+items, their ends and fades, automation points, a selection rectangle,
+and the loop range, markers and regions in the ruler. An item being moved
+also scrolls the tracks up and down. The piano roll does the same for notes:
+hold a note or a selection rectangle at an edge and the roll scrolls in
+time, or up and down the keys.
+
+### Splitting, copying and deleting
+
+| Key | What it does to the selected items |
+| --- | --- |
+| `S` | Splits them at the cursor (the playhead) |
+| `Delete` or `Alt+C` | Deletes them |
+| `Ctrl+C`, `Ctrl+X` | Copies or cuts them |
+| `Ctrl+V` | Pastes at the cursor |
+| `Ctrl+D` | Duplicates each one after itself |
+
+A right-click on an item opens its menu, with the same actions (**Paste**
+there pastes where you clicked) and with **Consolidate items**, **Heal
+splits**, which joins the pieces of a split audio item again, **Split item
+at prior zero crossing**, **Mix to new track** and **Edit MIDI**. The
+**Item** menu in the menu bar has the rest: exporting an item to a file, its
+timebase, warping and its takes.
+
+### Takes
+
+An item that holds several takes shows their number on its name bar; click
+the number to hear the next take. **Item > Show all takes** lays the takes
+out as lanes inside the item: click a lane to hear that take, or drag across
+part of a lane to use that take for that stretch only. Ctrl-drag from below
+the name bar pulls a take out into an item of its own.
+
+### Changing what the mouse does
+
+**Edit > Mouse modifiers…** lists these gestures (dragging an item, dragging
+its end, clicking it, pressing a fade, dragging in empty space, the wheel)
+and lets you choose what each does with Shift, Ctrl and Alt held.
+
+## The MIDI editor
+
+Double-click a MIDI item to open it in the MIDI editor, a panel along the
+bottom of the window (`Ctrl+E` opens the selected item; `Alt+E` shows or
+hides the panel). To start a new part, double-click empty space on a
+channel: that makes an empty MIDI item a bar long and opens it. Drag the
+panel's top edge to set its height; a double-click there puts it back.
+
+The panel's main part is the **piano roll**: time runs left to right, the
+keys are at the left, and each note is a bar drawn in its item's colour,
+fuller the higher its velocity.
+
+### Notes
+
+- **Add:** double-click empty space. The note is as long as the last one you
+  clicked or sized, or one grid step.
+- **Delete:** double-click the note, or select notes and press `Delete`.
+- **Move:** drag a note, in time or to another pitch. Selected notes move
+  together.
+- **Change its length:** drag either end of a note.
+- **Select:** click a note; Shift-click adds or removes one; drag from empty
+  space for a selection rectangle. `Ctrl+A` selects every note and `Escape`
+  none.
+
+| Key | What it does to the selected notes |
+| --- | --- |
+| `Up`, `Down` | Moves them a semitone (with Shift, an octave) |
+| `Left`, `Right` | Moves them a grid step earlier or later |
+| `Q` | Quantizes them to the grid (every note when none is selected) |
+| `Ctrl+C`, `Ctrl+X`, `Ctrl+V` | Copies, cuts, and pastes at the cursor |
+| `Ctrl+D` | Duplicates them |
+
+A right-click opens a menu with Delete, Copy, Cut, Paste (where you clicked)
+and Duplicate.
+
+### The grid
+
+The buttons in the panel's header choose the grid: **1/4**, **1/8**,
+**1/16**, **1/32** and **1/8T** (eighth-note triplets). **Snap** turns
+snapping to it on and off, and **Quantize** does what `Q` does.
+
+### Velocity and controllers
+
+Under the roll, the **Vel** lane has a stem for each note: drag near a
+note's start to set its velocity, and the other selected notes change by
+the same amount. Below it is a controller lane. Drag in it to draw values,
+one for each grid step; drag with the right button, or with Alt, to erase.
+The **CC** button in the header steps the lane through mod wheel, volume,
+pan, expression and sustain.
+
+### Moving around
+
+The wheel zooms in time around the pointer. With Shift it scrolls in time,
+with Ctrl it scrolls up and down the keys, and with Alt it makes the keys
+and rows taller or lower. **Edit > Mouse modifiers…** can change these.
+
+### Notation and the event list
+
+**Notation** in the header shows the item as text beside the roll, in the
+notation Steppe's agents write. The two are one thing: edit a note in the
+roll and the text changes; type in the text and, after a short pause, the
+roll follows. A mistake in the text is reported under it, with its place,
+and changes nothing until it is put right. If the item's MIDI was changed
+somewhere else while you typed, the panel says so and `Ctrl+Enter` applies
+your text over that change.
+
+**List** swaps the roll for a list of the item's events, notes and
+controller values alike. Double-click a row to edit it; `Delete` removes the
+selected rows.
 
 ## Plugins
 
