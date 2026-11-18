@@ -387,7 +387,13 @@ TEST_CASE("inspector: positions read and write as bar.beat.thousandths, in the b
     CHECK(*gui::inspectorParseNumber("+1.5db", "dB") == 1.5);
     CHECK(*gui::inspectorParseNumber("0.4s", "s") == 0.4);
     CHECK(*gui::inspectorParseNumber("12 beats", "beats") == 12);
-    for (const char* bad : {"", "dB", "three", "1,5", "1.5 Hz", "nan", "inf"})
+    // The same on every platform (supple::fromChars, not the standard
+    // library's, which Apple's lacks for floating point).
+    CHECK(*gui::inspectorParseNumber(".5", "s") == 0.5);
+    CHECK(*gui::inspectorParseNumber("1e2", "s") == 100);
+    CHECK(*gui::inspectorParseNumber("-0.25 st", "st") == -0.25);
+    for (const char* bad : {"", "dB", "three", "1,5", "1.5 Hz", "nan", "inf", "-inf", "0x10", "1e",
+                            "--3", "3 3", "1e999"})
         CHECK_MESSAGE(!gui::inspectorParseNumber(bad, "dB"), bad);
 }
 

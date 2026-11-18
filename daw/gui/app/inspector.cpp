@@ -13,6 +13,7 @@
 #include <set>
 #include <utility>
 
+#include "supple/base/chars.h"
 #include "supple/ui/controls.h"
 #include "supple/ui/forms.h"
 #include "supple/ui/list.h"
@@ -186,7 +187,8 @@ std::optional<double> number(std::string_view text) {
     text = trimmed(text);
     if (!text.empty() && text.front() == '+') text.remove_prefix(1);
     double value = 0;
-    const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
+    // Not std::from_chars: Apple's libc++ has none for floating point.
+    const auto [end, ec] = ::supple::fromChars(text.data(), text.data() + text.size(), value);
     if (ec != std::errc{} || end != text.data() + text.size() || !std::isfinite(value)) return {};
     return value;
 }
