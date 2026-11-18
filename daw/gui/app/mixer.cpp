@@ -639,6 +639,7 @@ class StripRow : public ui::Node {
     // The part of the row that scrolls (the masters at its right do not),
     // and a scroll by `dx` units: true when the strips moved.
     ui::Rect scrolledArea() const { return scrolled_->bounds(); }
+    ui::Rect pinnedArea() const { return pinned_->bounds(); }
     bool scrollBy(float dx) {
         const float limit = std::max(0.0f, scrolled_->content() - scrolled_->bounds().w);
         const float next = std::clamp(scrolled_->scroll + dx, 0.0f, limit);
@@ -1852,7 +1853,10 @@ void Mixer::showDragCursor() {
 // Edge scroll (gui.md §4.4): a strip, a plug-in or an output held within
 // the zone at the left or right edge of the strips that scroll, or past it,
 // scrolls them that way at the arrange view's speeds, so a drop can reach a
-// strip that is out of view. The masters, pinned at the right, do not scroll.
+// strip that is out of view. The masters, pinned at the right, do not scroll:
+// a plug-in or an output over one of them is where it can be dropped, and
+// scrolls nothing; a strip there is past the edge of its own kind's strips,
+// and scrolls them on.
 // A plug-in held over its own strip, within the zone at the top or bottom of
 // the strip's plug-in list or past it, scrolls that list, so a drop can
 // reach a place in a chain longer than the list shows. The zone the drag
@@ -1860,8 +1864,10 @@ void Mixer::showDragCursor() {
 // left it once: the first and last rows in view lie inside the zones, and
 // picking one of them up is not yet a wish to scroll.
 void Mixer::noteDragEdge(ui::Point p, bool begin) {
-    const ui::Rect area = static_cast<StripRow*>(row_)->scrolledArea();
-    edgeV_ = ui::edgeScrollSpeed(p.x, area.x, area.right());
+    const auto* row = static_cast<const StripRow*>(row_);
+    const ui::Rect area = row->scrolledArea();
+    const bool onPinned = drag_->kind != DragView::Kind::Strip && row->pinnedArea().contains(p);
+    edgeV_ = onPinned ? 0.0f : ui::edgeScrollSpeed(p.x, area.x, area.right());
     edgeListV_ = 0;
     int zone = 0;  // the list's zone the pointer is inside: top -1, bottom 1
     if (const Strip* over = stripAt(p);

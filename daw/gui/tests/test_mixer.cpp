@@ -1143,6 +1143,67 @@ TEST_CASE("mixer: a plug-in held at an end of its strip's plug-in list scrolls t
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("mixer: a plug-in or an output held over a pinned master scrolls no strips") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::string> ids;
+    for (int i = 0; i < 30; ++i) ids.push_back(f.addTrack("channel", "T"));
+    const auto m2 = f.addTrack("master", "M2");
+    const std::string first = ids.front();
+    const auto fx = f.addFx(first, "Hickory");
+    f.refresh();
+    using T = ui::PointerEvent::Type;
+    using Drop = gui::Mixer::DragView::Drop;
+    const ui::Rect area = f.node("mixer.scrolled")->bounds();
+    // More strips than fit, and the masters pinned past the edge of the
+    // strips that scroll.
+    REQUIRE(f.strip(ids.back()).node->bounds().x > area.right());
+    const ui::Point master = f.centre(f.node("mixer.faderrow." + m2));
+    REQUIRE(master.x > area.right());
+    const auto x = [&] {
+        f.root->frame(false);
+        return f.strip(ids[1]).node->bounds().x;
+    };
+    const float x0 = x();
+    const auto rests = [&] {
+        CHECK_FALSE(f.mixer->autoScrolling());
+        CHECK_FALSE(f.mixer->autoScroll(0.25));
+        CHECK(x() == x0);
+    };
+    // A plug-in: at the edge of the strips that scroll it would scroll them;
+    // over the master, where it can be dropped, it scrolls nothing.
+    f.pointer(T::Down, f.centre(f.node("mixer.fx." + fx)));
+    f.pointer(T::Move, {area.right() - 4, master.y});
+    REQUIRE(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Fx);
+    CHECK(f.mixer->autoScrolling());
+    f.pointer(T::Move, master);
+    CHECK(f.mixer->drag().drop == Drop::Copy);
+    CHECK(f.mixer->drag().target == m2);
+    rests();
+    f.root->key(SDLK_ESCAPE);
+    f.pointer(T::Up, master);
+    // An output, held over the master to send to it.
+    f.pointer(T::Down, f.centre(f.node("mixer.out." + first)));
+    f.pointer(T::Move, master);
+    REQUIRE(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Send);
+    CHECK(f.mixer->drag().drop == Drop::Copy);
+    CHECK(f.mixer->drag().target == m2);
+    rests();
+    f.root->key(SDLK_ESCAPE);
+    f.pointer(T::Up, master);
+    // A strip there is past the edge of its own kind's strips: they scroll
+    // on, so that it can be put last.
+    f.pointer(T::Down, f.empty(first));
+    f.pointer(T::Move, {master.x, f.empty(first).y});
+    REQUIRE(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Strip);
+    CHECK(f.mixer->autoScrolling());
+    CHECK(f.mixer->autoScroll(0.25));
+    CHECK(x() < x0);
+    f.root->key(SDLK_ESCAPE);
+    f.pointer(T::Up, master);
+    CHECK(f.errors.empty());
+}
+
 TEST_CASE("mixer: a plug-in list keeps its place when the strips are rebuilt") {
     Fixture f;
     if (!f.ok) return;

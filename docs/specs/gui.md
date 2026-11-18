@@ -959,7 +959,10 @@ drop outside the strips cancels; each is one undo step.
 strip, a plug-in or an output held within 24 units of the left or right
 edge of the strips that scroll, or past it, scrolls them that way, so a
 drop can reach a strip that is out of view. The masters, pinned at the
-right, do not scroll. The drop is resolved again at every step. At an end
+right, do not scroll, and a plug-in or an output held over one of them,
+where it can be dropped, scrolls nothing; a strip held there is past the
+edge of its own kind's strips and scrolls them on. The drop is resolved
+again at every step. At an end
 of the strips it rests until the pointer moves. `Mixer::sync` advances it
 by the shared clock (§4.3); `Mixer::autoScroll(seconds)` is the
 step.
