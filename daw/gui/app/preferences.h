@@ -12,6 +12,7 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "audio_device.h"
 #include "mouse_dialog.h"
@@ -48,6 +49,11 @@ class PreferencesDialog {
                       std::filesystem::path file);
     void open();
     bool isOpen() const;
+    // The lines under Lock memory and under Keep CPUs out of deep idle: on
+    // Linux the cautions and how to allow each; elsewhere that it is
+    // Linux's alone.
+    static std::vector<std::string> memoryNotes(bool onLinux);
+    static std::vector<std::string> idleNotes(bool onLinux);
     void setDefaultMonitor(model::Monitor m);  // applied at once and saved
     Status setMemoryLock(bool requested);
     Status setPreventDeepIdle(bool requested);

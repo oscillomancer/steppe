@@ -78,6 +78,12 @@ ui::Node& row(ui::Node& form, const std::string& id, const std::string& label) {
     return r;
 }
 
+#if defined(__linux__)
+constexpr bool kOnLinux = true;
+#else
+constexpr bool kOnLinux = false;
+#endif
+
 class RuleLine : public ui::Node {
   public:
     explicit RuleLine(std::string id) : Node(std::move(id)) {
@@ -270,6 +276,21 @@ Status PreferencesDialog::save(Preferences& prefs) {
 
 bool PreferencesDialog::isOpen() const { return root_.find("prefs") != nullptr; }
 
+// Both settings act on Linux only (the engine refuses them elsewhere, and
+// says so): the notes there say that instead of naming Linux's files.
+std::vector<std::string> PreferencesDialog::memoryNotes(bool onLinux) {
+    if (!onLinux) return {"Linux only: on this system it has no effect."};
+    return {"Uses RAM; large sample libraries or stack growth can fail.",
+            "Host process only; turning it off also unlocks plug-in locks.",
+            "To allow: add \"@audio - memlock unlimited\" to /etc/security/limits.d/, join audio."};
+}
+
+std::vector<std::string> PreferencesDialog::idleNotes(bool onLinux) {
+    if (!onLinux) return {"Linux only: on this system it has no effect."};
+    return {"While the engine runs, affects system idle; may increase power, heat and fan noise.",
+            "To allow: a udev rule giving group audio rw on /dev/cpu_dma_latency; join audio."};
+}
+
 void PreferencesDialog::open() {
     if (root_.popupOpen()) root_.closePopups();
     auto form = std::make_unique<ui::Node>("prefs");
@@ -410,10 +431,7 @@ void PreferencesDialog::open() {
     });
     memory_->layout.width = ui::SizeRule::fraction();
     memory_->layout.height = ui::SizeRule::fixed(26);
-    for (const auto& text :
-         {"Uses RAM; large sample libraries or stack growth can fail.",
-          "Host process only; turning it off also unlocks plug-in locks.",
-          "To allow: add \"@audio - memlock unlimited\" to /etc/security/limits.d/, join audio."}) {
+    for (const std::string& text : memoryNotes(kOnLinux)) {
         auto& label = advanced.emplace<ui::Label>(
             "prefs.memory.caution." + std::to_string(advanced.children().size()), text,
             ui::Font::Ui, "small", "ink-quiet");
@@ -434,18 +452,14 @@ void PreferencesDialog::open() {
     });
     latency_->layout.width = ui::SizeRule::fraction();
     latency_->layout.height = ui::SizeRule::fixed(26);
-    advanced
-        .emplace<ui::Label>(
-            "prefs.latency.caution",
-            "While the engine runs, affects system idle; may increase power, heat and fan noise.",
-            ui::Font::Ui, "small", "ink-quiet")
-        .layout.height = ui::SizeRule::fixed(20);
-    advanced
-        .emplace<ui::Label>(
-            "prefs.latency.permission",
-            "To allow: a udev rule giving group audio rw on /dev/cpu_dma_latency; join audio.",
-            ui::Font::Ui, "small", "ink-quiet")
-        .layout.height = ui::SizeRule::fixed(20);
+    {
+        // On Linux: the caution, then how to allow it. Elsewhere: one line.
+        const std::vector<std::string> notes = idleNotes(kOnLinux);
+        const char* ids[] = {"prefs.latency.caution", "prefs.latency.permission"};
+        for (std::size_t i = 0; i < notes.size() && i < 2; ++i)
+            advanced.emplace<ui::Label>(ids[i], notes[i], ui::Font::Ui, "small", "ink-quiet")
+                .layout.height = ui::SizeRule::fixed(20);
+    }
     for (std::size_t i = 0; i < latencyNote_.size(); ++i) {
         auto& label = advanced.emplace<ui::Label>("prefs.latency.note." + std::to_string(i), "",
                                                   ui::Font::Ui, "small", "ink-quiet");

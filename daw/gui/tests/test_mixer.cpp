@@ -1236,6 +1236,22 @@ TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
     CHECK(f.node("prefs.advanced.toggle")->valueText() == "Hide");
     CHECK(f.node("prefs")->bounds().h > folded + 100);
     CHECK(f.node("prefs.latency.set")->bounds().bottom() <= f.node("prefs")->bounds().bottom());
+    // Their notes name Linux's files on Linux only; elsewhere one line says
+    // that the setting is Linux's.
+    CHECK(gui::PreferencesDialog::memoryNotes(true).size() == 3);
+    CHECK(gui::PreferencesDialog::idleNotes(true).size() == 2);
+    for (const auto& notes :
+         {gui::PreferencesDialog::memoryNotes(false), gui::PreferencesDialog::idleNotes(false)}) {
+        REQUIRE(notes.size() == 1);
+        CHECK(notes[0].find("Linux only") == 0);
+        CHECK(notes[0].find('/') == std::string::npos);
+    }
+#if defined(__linux__)
+    CHECK(f.node("prefs.latency.permission")->valueText().find("udev") != std::string::npos);
+#else
+    CHECK(f.root->find("prefs.latency.permission") == nullptr);
+    CHECK(f.node("prefs.latency.caution")->valueText().find("Linux only") == 0);
+#endif
     REQUIRE(f.root->click("prefs.close"));
     prefs.open();
     f.root->frame(false);
