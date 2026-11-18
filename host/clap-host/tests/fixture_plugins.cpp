@@ -52,6 +52,7 @@
 #include <cstring>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "lifecycle_gate.h"
@@ -235,6 +236,8 @@ struct Gain {
     bool rejectPatch = false;
     bool slowPatch = false;
     std::uint32_t patchRescan = 0;  // GainControl::patchRescan
+    std::uint32_t patchEffect = 0;  // GainControl::patchEffect, once
+    bool failActivate = false;      // the next activate() fails
     bool mismatchedId = false, missingValue = false;
     bool malformedSchema = false;
     bool badCurve = false;
@@ -482,6 +485,26 @@ bool CLAP_ABI semSetPatch(const clap_plugin_t* pl, uint32_t mode, const char* te
             G(pl)->host->get_extension(G(pl)->host, CLAP_EXT_PARAMS));
         if (hp) hp->rescan(G(pl)->host, G(pl)->patchRescan);
     }
+    // GainControl::patchEffect: what this patch does besides its values.
+    switch (std::exchange(G(pl)->patchEffect, 0u)) {
+        case 1:  // a latency change, without the restart CLAP asks for
+            G(pl)->activeLatency = 16;
+            break;
+        case 2:  // asks the host to clear the gain's automation
+            if (const auto* hp = static_cast<const clap_host_params_t*>(
+                    G(pl)->host->get_extension(G(pl)->host, CLAP_EXT_PARAMS)))
+                hp->clear(G(pl)->host, 0, CLAP_PARAM_CLEAR_AUTOMATIONS);
+            break;
+        case 3:  // asks to process (an inactive instance is then activated)
+            G(pl)->host->request_process(G(pl)->host);
+            break;
+        case 4:  // likewise, and that activation fails
+            G(pl)->failActivate = true;
+            G(pl)->host->request_process(G(pl)->host);
+            break;
+        default:
+            break;
+    }
     return true;
 }
 bool CLAP_ABI semDescribe(const clap_plugin_t* pl, uint32_t detail, const clap_ostream_t* out) {
@@ -506,6 +529,11 @@ struct GainControl {
     std::uint32_t (*creates)();
     // The rescan flags a later applied patch reports (0: none).
     void (*patchRescan)(const clap_plugin_t*, std::uint32_t);
+    // What the next applied patch does besides its values, once: 1 reports
+    // another latency without a restart, 2 asks the host to clear the gain's
+    // automation, 3 asks to process, 4 asks to process and fails the
+    // activation that follows.
+    void (*patchEffect)(const clap_plugin_t*, std::uint32_t);
 };
 void gainEditorEdit(const clap_plugin_t* pl, double value, std::uint32_t flags) {
     G(pl)->gainDb = value;
@@ -522,8 +550,9 @@ void gainRequestLatency(const clap_plugin_t* pl, bool delayed) {
 }
 std::uint32_t gainCreates() { return gGainCreates.load(); }
 void gainPatchRescan(const clap_plugin_t* pl, std::uint32_t flags) { G(pl)->patchRescan = flags; }
-const GainControl kGainControl{gainEditorEdit, gainHostDeliveries, gainRequestLatency, gainCreates,
-                               gainPatchRescan};
+void gainPatchEffect(const clap_plugin_t* pl, std::uint32_t effect) { G(pl)->patchEffect = effect; }
+const GainControl kGainControl{gainEditorEdit, gainHostDeliveries, gainRequestLatency,
+                               gainCreates,    gainPatchRescan,    gainPatchEffect};
 const void* CLAP_ABI gainExt(const clap_plugin_t* pl, const char* id) {
     if (!std::strcmp(id, "supple.test.gain-control")) return &kGainControl;
     if (!std::strcmp(id, CLAP_EXT_PARAMS)) return &kGainParams;
@@ -538,6 +567,7 @@ const void* CLAP_ABI gainExt(const clap_plugin_t* pl, const char* id) {
 
 bool CLAP_ABI gainActivate(const clap_plugin_t* pl, double, uint32_t, uint32_t) {
     if (!checkGainMain(pl)) return false;
+    if (std::exchange(G(pl)->failActivate, false)) return false;
     gainGate(supple::test::GatedCall::Activate);
     // A gated params flush must happen: ask for one, as a plug-in whose
     // values changed would. While active, the host serves it on the audio

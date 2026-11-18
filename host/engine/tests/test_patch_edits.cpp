@@ -4,6 +4,7 @@
 // stage 3, ADR-0092): dummy devices and the fixture plug-ins only.
 #include <doctest/doctest.h>
 
+#include <filesystem>
 #include <limits>
 #include <string>
 #include <vector>
@@ -384,6 +385,63 @@ TEST_CASE("a patch-only edit while stopped compiles no plan either") {
     // The gain's value is normalized over -60..12 dB (ADR-0010).
     CHECK(pool.find(p.trackGain)->paramValue(0).value() == doctest::Approx((-14 + 60) / 72.0));
     engine.stop();
+}
+
+TEST_CASE("whatever a patch changes that a plan holds makes the edit a compile (ADR-0092)") {
+    // Each case trips one guard of loadPatches alone. The gain's test control
+    // makes the next patch do something besides its values. Two guards have
+    // no case: a frozen owner (a commit never changes what a frozen track
+    // depends on, validateFrozenTransition) and changed ports (an instance's
+    // ports change only with a restart or an activation, guarded here).
+    struct Control {
+        void (*edit)(const clap_plugin_t*, double, std::uint32_t);
+        std::uint32_t (*deliveries)(const clap_plugin_t*);
+        void (*latency)(const clap_plugin_t*, bool);
+        std::uint32_t (*creates)();
+        void (*patchRescan)(const clap_plugin_t*, std::uint32_t);
+        void (*patchEffect)(const clap_plugin_t*, std::uint32_t);
+    };
+    enum class Trip { Latency = 1, Clear, Activation, RestartError, ProjectFolder };
+    const Patched p = patchedSession(false);
+    const model::Session next = [&] {
+        model::EditTxn t(p.session, 3);
+        t.modify<model::FxInstance>(p.trackGain, [](auto& fx) { fx.patch = gainPatch(-14); });
+        return t.commit().value();
+    }();
+    const std::filesystem::path dir = "project", elsewhere = "elsewhere";  // never read
+    for (const auto& [name, trip] : std::vector<std::pair<std::string, Trip>>{
+             {"the latency changes without a restart", Trip::Latency},
+             {"the plug-in clears its automation", Trip::Clear},
+             {"an inactive instance is activated", Trip::Activation},
+             {"that activation fails", Trip::RestartError},
+             {"another project folder", Trip::ProjectFolder}}) {
+        CAPTURE(name);
+        auto pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        Engine engine(pool, media, kInCallback);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        REQUIRE(engine.load(p.session, dir));
+        host::Instance* gain = pool.find(p.trackGain);
+        REQUIRE(gain);
+        const clap_plugin_t* plugin = gain->raw();
+        const auto* control =
+            static_cast<const Control*>(plugin->get_extension(plugin, "supple.test.gain-control"));
+        REQUIRE(control);
+        if (trip <= Trip::RestartError) control->patchEffect(plugin, std::uint32_t(trip));
+        if (trip == Trip::Activation || trip == Trip::RestartError) {
+            gain->deactivate();  // nothing processes: the engine never ran a cycle
+            REQUIRE_FALSE(gain->active());
+        }
+        const auto generation = engine.planGeneration();
+        (void)engine.load(next, trip == Trip::ProjectFolder ? elsewhere : dir);
+        CHECK(engine.patchEdits() == 0);
+        CHECK(engine.planGeneration() == generation + 1);
+        // The trip happened.
+        if (trip == Trip::Activation) CHECK(pool.find(p.trackGain)->active());
+        if (trip == Trip::RestartError) CHECK_FALSE(pool.failed().empty());
+        engine.stop();
+    }
 }
 
 TEST_CASE("a bridged FX's patch-only edit costs no more bridge requests than its compile") {
