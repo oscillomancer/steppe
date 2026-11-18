@@ -322,16 +322,16 @@ void Shell::sync(bool event) {
             changes = &previous->changes;
         shownVersion_ = s.version;
         projectGeneration_ = app_.projectGeneration();
-        const int strips = static_cast<int>(s.tracks.size());
-        counts_->setText(std::to_string(strips) + (strips == 1 ? " track  " : " tracks  ") +
+        const std::size_t tracks = views::countTracks(s);
+        counts_->setText(std::to_string(tracks) + (tracks == 1 ? " track  " : " tracks  ") +
                          "version " + std::to_string(s.version));
         arrange_->show(s, changes, projectGeneration_);
     }
     const auto note = app_.preparingAudio()              ? std::string("Preparing audio…")
                       : !app_.preparationError().empty() ? app_.preparationError()
                                                          : editStatus_;
-    const int strips = static_cast<int>(s.tracks.size());
-    counts_->setText(std::to_string(strips) + (strips == 1 ? " track  " : " tracks  ") +
+    const std::size_t tracks = views::countTracks(s);
+    counts_->setText(std::to_string(tracks) + (tracks == 1 ? " track  " : " tracks  ") +
                      "version " + std::to_string(s.version) + (note.empty() ? "" : " · " + note));
     std::vector<model::Id> selected;
     for (const auto& text : ui_.selectedItems)

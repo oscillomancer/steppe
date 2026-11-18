@@ -3702,6 +3702,24 @@ TEST_CASE("an empty project says how to start; the line goes with the first trac
     shell.sync();
     a.root->frame(false);
     CHECK_FALSE(lanes.showsEmptyHint());
+    // The track list's heading and the status line say the same number:
+    // channels and busses, not the master, and not an automation lane.
+    auto exec = [&](const char* command, const char* args) {
+        auto done = a.dispatcher->execute(
+            {command, json::parse(args).value(), {cmd::Origin::Type::Test, "t", {}}});
+        REQUIRE_MESSAGE(done, (done ? "" : done.error().toString()));
+    };
+    exec("track.add", R"({"name":"Keys"})");
+    exec("track.add", R"({"type":"buss","name":"Band"})");
+    exec("track.add", R"({"type":"master","name":"Cue"})");
+    exec("env.add", R"({"track":"tr_1","param":"volume","points":[{"bar":1,"value":0}]})");
+    shell.sync();
+    a.root->frame(false);
+    CHECK(views::countTracks(a.app->head()) == 3);
+    CHECK(a.app->head().tracks.size() == 5);               // with the two masters
+    CHECK(shell.arrange()->trackLayout().rowCount() > 3);  // the lane is a row
+    CHECK(a.root->find("tcp-header")->valueText() == "Tracks  3");
+    CHECK(a.root->find("status")->valueText().rfind("3 tracks  ", 0) == 0);
 }
 
 TEST_CASE("a plugin dragged from the browser lands on the track row or strip under the pointer") {

@@ -850,12 +850,17 @@ bool Ruler::onPointer(const ui::PointerEvent& e) {
 class TcpHeader : public ui::Node {
   public:
     explicit TcpHeader(ArrangeView& view) : Node("tcp-header"), view_(view) {}
+    // Channels and busses: not the master, and not the automation lanes
+    // that are rows under their tracks.
+    std::string valueText() const override {
+        return "Tracks  " + std::to_string(countTracks(view_.trackLayout().session()));
+    }
     void paint(ui::Canvas& c) override {
         c.fillRect(bounds(), c.theme().color("panel"));
         c.fillRect({bounds().x, bounds().bottom() - 1, bounds().w, 1}, c.theme().color("rule"));
-        c.text({bounds().x + 12, bounds().y, bounds().w - 20, bounds().h},
-               "Tracks  " + std::to_string(view_.trackLayout().rowCount()), ui::Font::UiBold,
-               c.theme().type("caption"), c.theme().color("ink-quiet"), ui::kLeft | ui::kMiddle);
+        c.text({bounds().x + 12, bounds().y, bounds().w - 20, bounds().h}, valueText(),
+               ui::Font::UiBold, c.theme().type("caption"), c.theme().color("ink-quiet"),
+               ui::kLeft | ui::kMiddle);
     }
 
   private:
