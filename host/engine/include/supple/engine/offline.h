@@ -61,6 +61,16 @@ class InstancePool {
     // turn into a pass-through placeholder.
     Result<host::Instance*> get(model::Id id, const model::FxInstance& fx,
                                 const model::Session& session);
+    // Route E stage 3 (ADR-0092): whether a changed patch of `fx` can reach
+    // its instance without a compile. The instance exists, has not failed
+    // and waits on no restart, was made for the same plug-in and isolation,
+    // and was configured from a patch, as `fx` is.
+    bool patchable(model::Id id, const model::FxInstance& fx) const;
+    // Applies `fx`'s patch to that instance as get() would, then services
+    // it, and returns what service() reported: the caller compiles when any
+    // of it reaches a plan.
+    Result<host::Instance::Notifications> applyPatch(model::Id id, const model::FxInstance& fx,
+                                                     const model::Session& session);
     // Destroys instances whose fx no longer exists in `session` (call it once
     // no plan uses them), and replaced instances retired at a generation up
     // to `liveGeneration` (the newest plan the audio side has adopted).
@@ -107,7 +117,9 @@ class InstancePool {
     std::uint32_t rememberedLatency(model::Id id) const;
     void rememberLatency(model::Id id, std::uint32_t latency);  // what a plan compensated
     bool automationCleared(model::Id id, std::uint32_t param) const;
-    void resetAutomation(model::Id id);  // explicit model reload
+    bool automationCleared(model::Id id) const;  // for any of its parameters
+    bool anyAutomationCleared() const;           // for any instance
+    void resetAutomation(model::Id id);          // explicit model reload
     // Main thread, only after applying plug-in-originated values to its model
     // patch: acknowledge that patch without sending it back on the next get().
     void acknowledgeOutputPatch(model::Id id, const json::Value& patch);

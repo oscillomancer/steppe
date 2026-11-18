@@ -21,7 +21,9 @@ The model thread (or a worker it delegates to) compiles a version into a
 new plan, compiled complete from the session; instances, recycled rings and
 state carry over from the previous one (§1.6).
 Its DSP state belongs to the executors, and strip, send and VCA levels and
-pans arrive through its mix slots (ADR-0060, §1.6) without a new plan.
+pans, FX wet and bypass, and mute and solo arrive through its mix slots
+(ADR-0060, ADR-0093, §1.6) without a new plan, as patch-only FX edits reach the
+instances (ADR-0092, §1.6).
 
 ### 1.1 Nodes
 
@@ -283,7 +285,7 @@ before constructing its latency request.
 Every compile is complete: `Engine::load` builds a whole new plan from the
 session, every node, stage, buffer and event list, except for the edits that
 publish values instead (mix values below, ADR-0060, and the playrate scalar,
-ADR-0046). Plugin instances are not rebuilt: the instance pool keeps each
+ADR-0046) and patch-only FX edits (below, ADR-0092). Plugin instances are not rebuilt: the instance pool keeps each
 FX's instance while its plug-in and isolation stay the same, and applies a
 changed patch or state to it on the main thread during the compile
 (`InstancePool::get`). State crosses the swap when the executor adopts the
@@ -321,6 +323,8 @@ specified here as it lands); so far:
   when it recreates the instance and when the app acknowledges a patch or
   state the plug-in produced, since the object then no longer describes
   the instance.
+- **A patch-only edit publishes no plan** (stage 3, ADR-0092): see
+  "Patch-only FX edits" below.
 Returning to a version with neither patch nor state after applying saved FX
 settings recreates the factory-default instance. The old instance remains alive
 until both executors release its plan, as with a changed opaque state.
@@ -387,17 +391,23 @@ earlier collection does not imply that collection already freed its old plan.
 
 **Mix-value edits (ADR-0060).** A session that differs from the last one
 `Engine::load` took only in strip `volume_db`/`pan`/`width`/`pan_left`/`pan_right`,
-send `volume_db`/`pan` and VCA `volume_db` (and in the points of envelopes a
-write pass holds, including the new pan targets, §1.4) is not compiled. The comparison copies each changed track, route, group
-and envelope with those fields taken from the new one and compares the whole
-object, so any other change (mute, solo, a name, an FX or a route's tap)
-compiles. A send whose level moves to or from exactly 0 dB, or whose pan
+send `volume_db`/`pan`, VCA `volume_db`, and since ADR-0093 FX `wet`/`bypass`
+(not `offline`, which decides whether an instance exists), track `mute` and
+`solo`, VCA `mute` and `solo`, and route `mute` where the send is encoded
+anyway (a tap before the fader, a level other than 0 dB, its own pan, mono
+or polarity; MIDI routes and rack sends are never encoded) (and in the
+points of envelopes a write pass holds, including the new pan targets,
+§1.4) is not compiled. The comparison copies each changed track, route,
+group, FX and envelope with those fields taken from the new one and
+compares the whole object, so any other change (a name, an item's mute, an
+FX's plug-in or pins, a route's tap) compiles. A send whose level moves to or from exactly 0 dB, or whose pan
 starts or stops following its source, compiles: that decides whether it is
 encoded. A rack send is never encoded, so any change of its `volume_db` is
 a mix value (ADR-0075). An unchanged session is a maintenance reload and compiles too. A
 qualifying edit writes the values into the newest plan's mix slots (per
-node, per route edge, per VCA; parent sends carry no values) between an odd
-and an even sequence number. Each executor, at the start of a block
+node, per route edge, per VCA, per stage for wet and bypass, numbered node by
+node in `forEachStage` order from `Node::stageSlot`; parent sends carry no
+values) between an odd and an even sequence number. Each executor, at the start of a block
 (`syncMix`, `SUPPLE_RT`), copies the slots its nodes and edges read when the
 sequence moved: a node's own values; an edge's for its encoder (source side)
 or, for a key route, its destination; the source level a send's static gain
@@ -413,6 +423,60 @@ session from the first block whose copy completes. The edit
 publishes no plan, prepares no rate transition and changes no epoch, also
 after rate scheduling has started (§ Master playrate); a plan still queued
 for adoption takes the values when it is adopted.
+A solo edit publishes each strip's silenced flag, from
+`model::soloSilencedTracks` (the function compile uses), and a rack send
+copies its home channel's mute and flag. A stage's wet and bypass reach it
+the same way, and its own wet ramp crossfades the change as after a compile. No compile-time decision depends
+on them: a stage's latency, dry delay, MIDI bus slot and note target are
+the same bypassed or not, and whether it takes part in the MIDI bus is
+decided each block (ADR-0093). In the anticipative executor a rendered node
+takes a value edit at the next block the renderer renders, and a compiled
+reload hands over at the renderer's position. With the renderer full and
+waiting for the callback when the edit is made, both start at the same
+block, so an edit heard only on rendered nodes is bit-identical to the
+compiled reload. A live node takes it at its next callback block, the
+render-ahead rounded up to a render block earlier than the reload reaches
+it, and the two are identical once the reload's ramp is done. A renderer still filling renders with the
+old plan while the compile runs, so a compiled reload is only ever later.
+In the anticipative executor (`detail::changedExecutors`, ADR-0093) an edit
+compiles when it changes these values both where the callback reads them and
+where the renderer does (a node's executor, an edge's owner, a hardware MIDI
+route's source), or where the callback reads them while an earlier edit the
+renderer reads is still ahead of the playhead: the callback has not yet
+played, in that epoch, to where the renderer was rendering when it was
+published plus one render block. The two take values at different stream
+positions, and in between would play neither session's mix, such as silence
+when solo moves from a monitored track to a rendered one, in one edit or
+two. ADR-0060's level and pan edits and ADR-0092's patch edits are not
+gated.
+
+**Patch-only FX edits (ADR-0092).** A session that differs from the last one
+`Engine::load` took only in FX `patch` values, each of those FX having a
+patch before and after, is not compiled. Every other collection must have
+the same storage, and each changed FX is compared whole with its patch taken
+from the new one, so a change of anything else (wet, bypass, pins, a
+plug-in, a name elsewhere) compiles; an unchanged session compiles. The
+edit also compiles when a guard of the mix-value path holds (a deferred or
+rate-seeking edit, a queued scalar, a notification reload), when an edited
+FX has no instance the pool can patch (none, failed, waiting on a restart,
+another plug-in or isolation, configured from a state blob), belongs to a
+frozen track or has an active envelope (a new plan resends automated values
+at its first block), or when any instance has automation its plug-in
+cleared (a compile restores it). Otherwise `InstancePool::applyPatch` applies
+each patch as `get()` would and services the instance; a rescan of the
+parameter list (INFO, ALL or no flags; a values or text rescan is not one) or
+a clear, a latency change, a restart request or failure, a change of
+activation or of ports then makes it a compile, which finds the patches
+applied. When the patch is heard is unchanged: it reaches the instance on
+the main thread inside `load` as before, and a plan swap neither drops nor
+re-renders chunks rendered ahead, so a live node plays it from its next
+block and a node the renderer runs after the chunks it had rendered. The
+real-time output is bit-identical to a compiled reload of the same edit at
+the same block. The patch sequence (`Engine::patchSequence()`) moves by one
+before the patches are applied and by one after; every executor reads it
+before processing a block and stamps that block's plug-in outputs with it,
+and the app drops outputs stamped with any value other than the current
+one (see plug-in outputs below). `Engine::patchEdits()` counts these edits.
 
 ## 2. Real-time execution
 
@@ -749,6 +813,9 @@ first use, and no plug-in code runs early to warm it.
   a render with a failure first ends the watch (a call ended by its kill can
   return before the watch has recorded the kill), and a stop or cancel asked
   for by the time the outcome is decided is the outcome.
+  `setRenderWatchTestHooks` (internal `src/render_watch.h`, tests only, set
+  while no render runs) holds the watch after its kills until the render
+  ends it, which orders that race the same way every time.
   Instance creation, before that point, keeps its control-plane timeouts
   (20 s for `Create`).
 - Once a render has succeeded, each plugin's read-only parameters (meters,
@@ -1921,6 +1988,11 @@ Bridged wake and clear forwarding need the control-protocol extension below.
 
 Rescan requests rebuild an immutable plan from the current parameter list and
 schema; envelopes are resolved again, including their value-domain conversion.
+A rescan of values or their text only (`CLAP_PARAM_RESCAN_VALUES`, `_TEXT`)
+rebuilds it only when the FX has an active envelope, whose values the new
+plan sends again, or had automation cleared, which the rescan re-enables: a
+plan holds no parameter values (ADR-0092). A rescan without flags counts as
+one of the list.
 Missing/read-only parameters stop receiving events and produce a warning naming
 the FX and parameter. Clear `ALL`/`AUTOMATIONS` suppresses only the matching
 parameter's automation until a subsequent rescan or explicit engine load. Clear
@@ -1930,7 +2002,9 @@ re-enables it; a clear after a rescan remains effective. Changes are heard at
 normal plan-adoption boundaries, including the anticipative edit horizon.
 
 `Engine::takePluginOutputs()` is main-thread only. Each record contains FX id,
-plan generation, transport epoch, timeline sample, stream sample, the entire
+plan generation, the patch sequence read before its block was processed
+(ADR-0092; idle flush records: when drained), transport epoch, timeline
+sample, stream sample, the entire
 `host::OutputEvent`, and idle/anticipative markers. Note ends and plug-in
 note/MIDI output (ADR-0068) are not published there. Timeline coordinates subtract
 the stage's input timeline shift (§1.3); idle flush records use the service-time
@@ -1970,7 +2044,9 @@ The app-side consumer belongs in `EngineApp::tick()` after engine main servicing
 1. Drain the take API and publish cumulative event/voice drop counts in
    `engine.status` and `engine.stats`. On a changed drop count, close incomplete
    gestures and resynchronize parameter values on main; do not invent missing
-   automation points. Reject removed FX and superseded plan/transport epochs.
+   automation points. Reject removed FX, superseded plan/transport epochs and
+   records whose patch sequence is not the engine's current one (produced
+   before a patch-only edit, or while it applied, ADR-0092).
    For anticipative records, use `streamSample`/`playedStream(epoch)` to delay
    timeline recording until that stream position has played (discard abandoned
    seeks). Idle records apply immediately.
@@ -2993,7 +3069,10 @@ absorbing. Clamp the final effective gain to the existing Console 9 ceiling
 sum and applied level are queryable. Ordinary unassigned master behavior is
 unchanged. Mute is the OR of member and controller mute; VCA solo adds its
 transitive track members to the ordinary solo seed set, retaining solo-defeat
-and signal-path reachability. Member fader/envelope data never moves.
+and signal-path reachability. One function decides solo silencing,
+`model::soloSilencedTracks`: plans and `model::effectiveTrackLevel` both call
+it, so the audio and the readouts cannot disagree (ADR-0093). Member
+fader/envelope data never moves.
 
 The combined control is applied before encoding, at the member's fader.
 Post-fader send encoders first clamp the combined source/VCA level at the
@@ -3580,9 +3659,10 @@ writes to a new preferences file. An explicit correction merges into the raw
 object, preserving its other fields, then validates strictly before replacing it.
 Command edits still use strict validation.
 
-Hardware routes preserve scalar-rate and mix-only edit paths. With hardware
-routes, route/source/VCA mute values join the existing atomic mix publication;
-the callback updates its hardware gate consumers without a plan compile.
+Hardware routes preserve scalar-rate and mix-only edit paths. Route, source
+and VCA mute values are part of the atomic mix publication (in every session
+since ADR-0093); the callback updates its hardware gate consumers without a
+plan compile.
 Fader edits retain the running plan and prepared audio history.
 
 ### The FX chain's MIDI bus (ADR-0068)

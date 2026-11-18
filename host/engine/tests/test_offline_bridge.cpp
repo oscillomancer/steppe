@@ -17,6 +17,7 @@
 #include "../../clap-host/tests/process_pause.h"
 #include "bridge_patience.h"
 #include "realtime_common.h"
+#include "render_watch.h"
 
 namespace {
 using supple::test::GatedCall;
@@ -72,6 +73,39 @@ struct Stopper {
         else
             source.request_stop();
     }
+};
+
+// Holds a render's watch between killing the bridges and recording that it
+// did, until the render ends the watch: the render has then seen its
+// instance fail and decided, or is about to decide, its outcome. This is
+// the order CI 44135770973 met on Windows by chance (a cancel reported as
+// a failed FX); here it is the order every time.
+// `holds` counts the times the watch was held: if the render's thread saw
+// the request before the watch killed anything, nothing was ordered, and the
+// test says so rather than passing (review round 39c).
+struct WatchHeldAfterKills {
+    std::atomic<bool> finishing{false};
+    std::atomic<int> holds{0};
+    WatchHeldAfterKills() {
+        engine::setRenderWatchTestHooks({
+            .killed =
+                [](void* self) {
+                    auto* held = static_cast<WatchHeldAfterKills*>(self);
+                    held->holds.fetch_add(1);
+                    held->finishing.wait(false);
+                },
+            .finishing =
+                [](void* self) {
+                    auto& held = static_cast<WatchHeldAfterKills*>(self)->finishing;
+                    held.store(true);
+                    held.notify_all();
+                },
+            .context = this,
+        });
+    }
+    ~WatchHeldAfterKills() { engine::setRenderWatchTestHooks({}); }
+    WatchHeldAfterKills(const WatchHeldAfterKills&) = delete;
+    WatchHeldAfterKills& operator=(const WatchHeldAfterKills&) = delete;
 };
 }  // namespace
 
@@ -196,7 +230,9 @@ TEST_CASE("a stopped or cancelled offline render does not wait for a bridged cal
     // holds the named call at a gate until the test has stopped the render;
     // the render's deadline is the product's (60 s, lifecycle 152 s), so
     // only the stop can end the wait within the test, and the instance's
-    // failure says which did.
+    // failure says which did. The watch records its kills only once the
+    // render ends it (WatchHeldAfterKills): the outcome must not depend on
+    // whether the render saw the record.
     host::setBridgeExecutable(BRIDGE_PATH);
     const std::pair<GatedCall, const char*> calls[] = {
         {GatedCall::Activate, "activate"},  {GatedCall::Reset, "reset"},
@@ -214,6 +250,7 @@ TEST_CASE("a stopped or cancelled offline render does not wait for a bridged cal
             Stopper stop{cancel};
             OfflineSettings settings = twoSeconds();
             stop.arm(settings);
+            const WatchHeldAfterKills held;
             // Named while the render spawns its bridges; nothing else makes
             // a gain meanwhile.
             std::optional<LifecycleGate> gate(std::in_place, call);
@@ -232,6 +269,7 @@ TEST_CASE("a stopped or cancelled offline render does not wait for a bridged cal
             CHECK(in->failed());
             CHECK(in->failure().find(kAbandoned) != std::string::npos);
             CHECK(in->callDeadlineMs() == 0);
+            CHECK(held.holds.load() == 1);  // the race was ordered, not skipped
             gate.reset();
         }
 }

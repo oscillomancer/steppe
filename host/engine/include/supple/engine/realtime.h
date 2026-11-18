@@ -519,7 +519,9 @@ struct EngineOptions {
 // consumers convert them, honor DontRecord and never echo them back to DSP.
 struct PluginOutput {
     model::Id fx;
-    std::uint64_t planGeneration = 0, epoch = 0;
+    // The plan that produced it, and the patch sequence when its block began
+    // (ADR-0092): odd while patches are being applied.
+    std::uint64_t planGeneration = 0, epoch = 0, patchSequence = 0;
     std::int64_t timelineSample = 0, streamSample = 0;
     host::OutputEvent event;
     bool idle = false, anticipative = false;
@@ -579,6 +581,9 @@ class Engine {
     const std::vector<model::EnvTarget>& writeHolds() const { return writeHolds_; }
     // Edits load() applied to the running plan without compiling (ADR-0060).
     std::uint64_t mixEdits() const { return mixEdits_; }  // main thread
+    // Patch-only FX edits load() applied to the instances without compiling
+    // (ADR-0092).
+    std::uint64_t patchEdits() const { return patchEdits_; }  // main thread
     void play();
     void pause();  // stops the transport; plugin state is reset (no hanging notes)
     void seek(double seconds);
@@ -724,6 +729,9 @@ class Engine {
     std::int64_t playedStream(std::uint64_t epoch) const;
     std::optional<RackLatencyInfo> rackLatencies(model::Id rack, std::uint64_t version) const;
     std::uint64_t planGeneration() const { return publishedGen_; }  // main thread
+    // Moves by two with each patch-only edit (ADR-0092): plug-in outputs that
+    // carry another value were produced before it. Main thread.
+    std::uint64_t patchSequence() const { return patchSeq_.load(std::memory_order_relaxed); }
     // Main thread (ADR-0086): the last plan load() published has the device
     // callback process a bridged plug-in (one on a live node, or any with
     // the in-callback executor). False when stopped.
@@ -906,8 +914,10 @@ class Engine {
     // the shape it needs.
     void recycleRings(std::uint64_t oldest);
     std::unique_ptr<detail::ChunkRing> takeRing(std::size_t capacity, std::uint32_t frames);
+    // `patchSequence`: read before the block was processed.
     void publishPluginOutputs(detail::Plan& plan, bool renderer, std::uint64_t epoch,
-                              std::int64_t pos, std::int64_t stream) SUPPLE_RT;
+                              std::int64_t pos, std::int64_t stream,
+                              std::uint64_t patchSequence) SUPPLE_RT;
 
     void pushControlMidi() SUPPLE_RT;
     std::unique_ptr<SpscRing<ControlMidiEvent, kControlRing>> controlMidi_ =
@@ -1090,6 +1100,18 @@ class Engine {
     bool loadMixValues(const model::Session& session, const std::filesystem::path& projectDir);
     std::vector<model::EnvTarget> writeHolds_, staleCurves_;
     std::uint64_t mixEdits_ = 0;
+    // ADR-0093: the stream position, in this epoch, by which the renderer has
+    // taken the last published edit it reads (loadMixValues).
+    std::uint64_t renderedAheadEpoch_ = 0;
+    std::int64_t renderedAheadUntil_ = 0;
+    // ADR-0092 (main thread): the patch-only edit path of load().
+    bool loadPatches(const model::Session& session, const std::filesystem::path& projectDir);
+    std::uint64_t patchEdits_ = 0;
+    // Moved before and after loadPatches applies patches (odd in between);
+    // executors read it before each block they process and stamp that
+    // block's plug-in outputs with it. The app drops any other stamp.
+    std::atomic<std::uint64_t> patchSeq_{0};
+    static_assert(std::atomic<std::uint64_t>::is_always_lock_free);  // read on the audio path
     bool holdsPending_ = false;       // writeHolds_ not yet in the newest plan
     bool releasesStaleCurve() const;  // a load must compile
     void applyPendingHolds();         // after a shortcut that publishes no plan

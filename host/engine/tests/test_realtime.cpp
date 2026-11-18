@@ -104,6 +104,7 @@ struct EngineTestAccess {
     }
     static std::int64_t aheadFrames(const Engine& e) { return e.aheadFrames_; }
     static std::size_t pooledRings(const Engine& e) { return e.ringPool_.size(); }
+    static std::uint64_t callbackGeneration(const Engine& e) { return e.callbackGen_.load(); }
     // Whether the plan the callback plays is still held (manual backends).
     static bool livePlanKept(const Engine& e) {
         return !e.livePlan_ || std::any_of(e.plans_.begin(), e.plans_.end(),
@@ -3839,6 +3840,12 @@ TEST_CASE("a hung bridged plug-in on a live track fails within the bound; the re
     constexpr int kCycles = 200;  // 533 ms
     Engine::BridgeOverruns overruns;
     host::BridgeTiming::Calls liveCalls;
+    // The cycles until the hung plug-in had started, and the late cycles by
+    // then. Its start is asked in the callback with the live deadline, so a
+    // loaded machine can answer it cycles later; each cycle asks again
+    // (ADR-0081) and counts as late (CI 44201655657).
+    int started = 0;
+    std::uint64_t lateBeforeHang = 0;
     auto run = [&](bool hung, InstancePool& pool, Engine*& out, std::uint64_t& late) {
         host::resetBridgeTiming();
         MediaCache media;
@@ -3849,12 +3856,16 @@ TEST_CASE("a hung bridged plug-in on a live track fails within the bound; the re
         REQUIRE(engine.load(session));
         engine.play();
         if (hung) {
-            // It plays from the start; from the next block it hangs in process().
-            backend.run(1);
+            // It plays once started; from the next block it hangs in process().
             REQUIRE(pool.find(crash));
-            REQUIRE(pool.find(crash)->processing());
+            while (started < kCycles / 2 && !pool.find(crash)->processing()) {
+                backend.run(1);
+                ++started;
+            }
+            REQUIRE_MESSAGE(pool.find(crash)->processing(), "its start was never answered");
+            lateBeforeHang = engine.bridgeLateCycles();
             REQUIRE(pool.find(crash)->setParam(1, 2));
-            backend.run(kCycles - 1);
+            backend.run(kCycles - started);
         } else {
             backend.run(kCycles);
         }
@@ -3889,25 +3900,29 @@ TEST_CASE("a hung bridged plug-in on a live track fails within the bound; the re
     // longer than its period), so only what the deadline guarantees is
     // checked: each late cycle waited at least its period, so no more than
     // 50 ms of periods, and the two cycles at its ends, were late.
-    CHECK(late >= 1);
-    CHECK(late <= 50 * 48000 / 1000 / kBlock + 2);
+    CHECK(late - lateBeforeHang >= 1);
+    CHECK(late - lateBeforeHang <= 50 * 48000 / 1000 / kBlock + 2);
     CHECK(late < static_cast<std::uint64_t>(kCycles));
-    // The other track played on exactly as with the hung one muted (after
-    // the first block, which the hung track also played).
+    // The other track played on exactly as with the hung one muted, from the
+    // block it hung in (before it, the hung track played or, its start late,
+    // passed audio through).
+    const auto from = static_cast<std::size_t>(started) * kBlock;
     auto referencePool = makePool();
     const auto reference = run(false, referencePool, none, referenceLate);
     CHECK(referenceLate == 0);
     double peak = 0;
     for (float x : reference.channels[0]) peak = std::max(peak, double(std::fabs(x)));
     REQUIRE(peak > 0.01);
-    CHECK(maxDiff(played.channels[0], kBlock,
-                  std::vector<float>(reference.channels[0].begin() + kBlock,
-                                     reference.channels[0].end()),
-                  (kCycles - 1) * kBlock) == 0);
-    CHECK(maxDiff(played.channels[1], kBlock,
-                  std::vector<float>(reference.channels[1].begin() + kBlock,
-                                     reference.channels[1].end()),
-                  (kCycles - 1) * kBlock) == 0);
+    CHECK(maxDiff(
+              played.channels[0], from,
+              std::vector<float>(reference.channels[0].begin() + static_cast<std::ptrdiff_t>(from),
+                                 reference.channels[0].end()),
+              kCycles * kBlock - from) == 0);
+    CHECK(maxDiff(
+              played.channels[1], from,
+              std::vector<float>(reference.channels[1].begin() + static_cast<std::ptrdiff_t>(from),
+                                 reference.channels[1].end()),
+              kCycles * kBlock - from) == 0);
 }
 
 TEST_CASE("recording header errors retain the first error and spare other targets") {
@@ -4241,6 +4256,61 @@ TEST_CASE("a frontier ring is reused only once both executors have left its plan
     CHECK(EngineTestAccess::pooledRings(engine) == 0);
 }
 
+TEST_CASE("plans retired while newer ones are in flight leave the pool what those hold" *
+          doctest::description("rt")) {
+    // The pool keeps as many rings as the plans still in use hold (round 36
+    // R5), not only the newest plan's count. Those differ only when several
+    // plans retire in one collection while more than the newest are still
+    // in flight: here the callback plays the first of three, and the renderer
+    // has handed the last two over farther on.
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    Engine engine(pool, media, {.workers = 1});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
+    const auto session = frontierSession();
+    REQUIRE(engine.load(session));
+    engine.play();
+    runAhead(engine, backend, 64, 256);
+    std::uint64_t version = 10;
+    const auto publish = [&] {
+        REQUIRE(engine.load(recompiled(session, version++)));
+        requirePlansKept(engine);
+        REQUIRE(engine.awaitPlan());  // the renderer took it: its handoff is set
+        return EngineTestAccess::latestPlan(engine).generation;
+    };
+    // The renderer is its full lead ahead and waits: three plans, handed over
+    // where it stands. The callback still plays the first plan.
+    REQUIRE(engine.awaitRendered(EngineTestAccess::aheadFrames(engine)));
+    publish();
+    publish();
+    const auto first = publish();
+    // Eight cycles on, the renderer stands 2048 frames farther than it did,
+    // more than one render block: two more plans, handed over there.
+    backend.run(8);
+    REQUIRE(engine.awaitRendered(EngineTestAccess::aheadFrames(engine)));
+    publish();
+    const auto last = publish();
+    // The callback reaches the first handoff, not yet the later one.
+    while (EngineTestAccess::callbackGeneration(engine) < first) {
+        backend.run(1);
+        REQUIRE(EngineTestAccess::callbackGeneration(engine) < last);
+    }
+    REQUIRE(EngineTestAccess::callbackGeneration(engine) == first);
+    // One collection retires the plans before `first`, 3 plans of 2 rings,
+    // while `first` and the two after it, 6 rings, are still in use.
+    engine.service();
+    REQUIRE(EngineTestAccess::ringsInUseKept(engine));
+    CHECK(EngineTestAccess::pooledRings(engine) == 6);
+    // Once the callback plays the newest, the next edit takes pooled rings.
+    runAhead(engine, backend, 64, 256);
+    const auto before = detail::chunkRingAllocations();
+    publish();
+    CHECK(detail::chunkRingAllocations() == before);
+    CHECK(engine.anticipationMisses() == 0);
+    engine.stop();
+}
+
 TEST_CASE("a loop shorter than a render block still lets the renderer get its lead" *
           doctest::description("rt")) {
     // No chunk crosses a loop wrap, so with a 300-frame loop every chunk
@@ -4252,24 +4322,43 @@ TEST_CASE("a loop shorter than a render block still lets the renderer get its le
     DummyBackend backend({.mode = DummyBackend::Mode::Manual});
     Engine engine(pool, media, {.workers = 1});
     REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
-    REQUIRE(engine.load(frontierSession()));
+    std::vector<const detail::ChunkRing*> rings;
+    SUBCASE("frontier rings, into the live master") {
+        REQUIRE(engine.load(frontierSession()));
+        const auto& plan = EngineTestAccess::latestPlan(engine);
+        REQUIRE(plan.frontierRings.size() == 2);
+        for (const auto& ring : plan.frontierRings) rings.push_back(ring.get());
+    }
+    SUBCASE("the record ring of a recorded master the renderer runs (ADR-0057)") {
+        model::EditTxn t(synthSession(-12.0, nullptr, 2), 2);
+        t.modify<model::Track>(kMaster, [](auto& m) { m.record.armed = true; });
+        REQUIRE(engine.load(t.commit().value()));
+        const auto& plan = EngineTestAccess::latestPlan(engine);
+        REQUIRE_FALSE(plan.split);
+        REQUIRE(plan.recordRings.size() == 1);
+        rings.push_back(plan.recordRings[0].get());
+    }
     engine.setLoop(0.0, 300.0 / 48000.0, true);
     engine.play();
     runAhead(engine, backend, 64, 256);
-    const auto& plan = EngineTestAccess::latestPlan(engine);
-    REQUIRE(plan.frontierRings.size() == 2);
     const auto full = [&] {
-        for (const auto& ring : plan.frontierRings)
+        for (const auto* ring : rings)
             if (ring->write.load() - ring->read.load() == ring->chunks.size()) return true;
         return false;
     };
-    // Bounded only against a hang: one of the two always comes.
-    for (int i = 0; i < 100000; ++i) {
-        if (EngineTestAccess::lead(engine) >= EngineTestAccess::aheadFrames(engine) || full())
-            break;
+    const auto ahead = [&] {
+        return EngineTestAccess::lead(engine) >= EngineTestAccess::aheadFrames(engine);
+    };
+    // Nothing consumes from here on: the lead only grows, a full ring stays
+    // full, and the renderer runs until one of the two. The wait is on that
+    // state; its deadline only reports a hang and never decides the checks.
+    const auto hang = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    while (!ahead() && !full()) {
+        REQUIRE_MESSAGE(std::chrono::steady_clock::now() < hang,
+                        "hung: in 60 s the renderer neither got its lead nor filled a ring");
         std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
-    CHECK(EngineTestAccess::lead(engine) >= EngineTestAccess::aheadFrames(engine));
+    CHECK(ahead());
     CHECK_FALSE(full());
     CHECK(engine.anticipationMisses() == 0);
     engine.stop();
@@ -4342,6 +4431,8 @@ struct EngineEdgeControl {
     void (*rescan)(const clap_plugin_t*, bool);
     void (*clear)(const clap_plugin_t*, clap_id, clap_param_clear_flags);
     void (*restart)(const clap_plugin_t*);
+    void (*markDirty)(const clap_plugin_t*, std::uint8_t);
+    void (*rescanFlags)(const clap_plugin_t*, std::uint32_t);
 };
 const EngineEdgeControl& engineEdgeControl(host::Instance& instance) {
     const auto* control = static_cast<const EngineEdgeControl*>(
@@ -4667,6 +4758,68 @@ TEST_CASE("main servicing publishes a new plan for parameter clear and rescan") 
     CHECK(std::any_of(engine.warnings().begin(), engine.warnings().end(), [](const auto& warning) {
         return warning.find("orphaned automation parameter 7") != std::string::npos;
     }));
+    engine.stop();
+}
+
+TEST_CASE("a plug-in's values rescan publishes a plan only when automation depends on it") {
+    // ADR-0092: a plan holds a plug-in's parameter list, not its values. A
+    // values or text rescan (a preset chosen in its editor) reloads only if
+    // it re-enables automation the plug-in had cleared, or the FX has an
+    // active envelope, whose values a new plan sends again.
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    Engine engine(pool, media, {.anticipative = false});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 64}));
+    auto session = edgeSession(12);
+    const auto fx = session.fx.begin()->id;
+    REQUIRE(engine.load(session));
+    backend.run(1);
+    auto* instance = pool.find(fx);
+    REQUIRE(instance);
+    const auto& control = engineEdgeControl(*instance);
+    // Each rescan is serviced; `reloads`: whether that published a plan.
+    auto rescan = [&](std::uint32_t flags, bool reloads) {
+        CAPTURE(flags);
+        const auto generation = engine.planGeneration();
+        control.rescanFlags(instance->raw(), flags);
+        engine.service();
+        backend.run(1);
+        CHECK(engine.planGeneration() == generation + (reloads ? 1 : 0));
+    };
+    rescan(CLAP_PARAM_RESCAN_VALUES, false);
+    rescan(CLAP_PARAM_RESCAN_VALUES | CLAP_PARAM_RESCAN_TEXT, false);
+    rescan(CLAP_PARAM_RESCAN_TEXT, false);
+    rescan(CLAP_PARAM_RESCAN_INFO, true);
+    rescan(CLAP_PARAM_RESCAN_ALL, true);
+    rescan(0, true);  // no flags: taken as the list
+    // Automation the plug-in cleared plays again after any rescan: once.
+    const auto generation = engine.planGeneration();
+    control.clear(instance->raw(), 7, CLAP_PARAM_CLEAR_AUTOMATIONS);
+    engine.service();
+    backend.run(1);
+    REQUIRE(engine.planGeneration() == generation + 1);
+    REQUIRE(pool.automationCleared(fx, 7));
+    rescan(CLAP_PARAM_RESCAN_VALUES, true);
+    CHECK_FALSE(pool.automationCleared(fx, 7));
+    rescan(CLAP_PARAM_RESCAN_VALUES, false);
+    // An FX with an active envelope: its values are sent again.
+    model::EditTxn edit(session, 2);
+    model::Envelope envelope;
+    envelope.target = {fx, "7"};
+    envelope.points = {{0, 2, model::PointShape::Linear, 0}};
+    const auto env = edit.create(envelope);
+    session = edit.commit().value();
+    REQUIRE(engine.load(session));
+    backend.run(1);
+    rescan(CLAP_PARAM_RESCAN_VALUES, true);
+    model::EditTxn off(session, 3);
+    off.modify<model::Envelope>(env, [](auto& e) { e.active = false; });
+    session = off.commit().value();
+    REQUIRE(engine.load(session));
+    backend.run(1);
+    rescan(CLAP_PARAM_RESCAN_VALUES, false);  // an inactive envelope sends nothing
+    CHECK(engine.processErrors() == 0);
     engine.stop();
 }
 

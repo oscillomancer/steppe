@@ -3351,6 +3351,50 @@ TEST_CASE("app rejects plug-in outputs from a replaced plan and a removed FX") {
     app->stopEngine();
 }
 
+TEST_CASE("a plug-in output from before a patch-only edit is not committed over it") {
+    // A patch-only edit compiles no plan (ADR-0092), so the plan generation
+    // no longer tells outputs the plug-in produced before the edit from
+    // those after it: the patch sequence they carry does.
+    struct Control {
+        void (*edit)(const clap_plugin_t*, double, std::uint32_t);
+        std::uint32_t (*deliveries)(const clap_plugin_t*);
+    };
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    REQUIRE(bus.execute({"track.add", j(R"({"name":"Gain"})"), kTest}));
+    REQUIRE(bus.execute({"fx.add", j(R"({"track":"tr_1","plugin":"Test Gain"})"), kTest}));
+    REQUIRE(bus.execute(
+        {"fx.patch.merge", j(R"({"fx":"fx_1","patch":{"params":{"gain":-6}}})"), kTest}));
+    const auto fx = *model::Id::parse("fx_1");
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(
+        app->startEngine(backend, {.sampleRate = 48000, .blockSize = 64}, {.anticipative = false}));
+    REQUIRE(app->transport("play"));
+    backend.run(1);
+    app->tick();
+    auto* instance = app->instanceOf(fx);
+    const auto* plugin = instance->raw();
+    const auto* control =
+        static_cast<const Control*>(plugin->get_extension(plugin, "supple.test.gain-control"));
+    REQUIRE(control);
+    control->edit(plugin, -12, host::OutputEvent::IsLive);
+    backend.run(1);  // the plug-in reports -12, not yet drained
+    const auto edits = app->engine()->patchEdits();
+    REQUIRE(bus.execute(
+        {"fx.patch.merge", j(R"({"fx":"fx_1","patch":{"params":{"gain":-3}}})"), kTest}));
+    REQUIRE(app->engine()->patchEdits() == edits + 1);
+    app->tick();
+    backend.run(1);
+    app->tick();
+    CHECK(app->head().fx.find(fx)->patch->find("params")->find("gain")->asDouble() ==
+          doctest::Approx(-3));
+    CHECK(instance->paramValue(0).value() == doctest::Approx((-3 + 60) / 72.0));
+    app->stopEngine();
+}
+
 TEST_CASE("app holds anticipative plug-in edits until their stream position has played") {
     struct Control {
         void (*edit)(const clap_plugin_t*, double, std::uint32_t);
