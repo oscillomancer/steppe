@@ -886,13 +886,29 @@ std::string FxWindow::badgeText(const model::FxInstance& fx, model::Isolation ef
 }
 
 // engine.status lists the isolated instances whose process crashed or hung.
-void FxWindow::checkFailures() {
-    const auto status = app_.engineStatus();
+void FxWindow::checkFailures() { applyFailures(app_.engineStatus()); }
+
+void FxWindow::applyFailures(const engine::EngineStatus& status) {
     std::set<std::string> failed;
     for (const auto& id : status.failedFx) failed.insert(id);
-    if (failed == failed_) return;
+    std::map<std::string, std::string> incidents;
+    if (status.failedErrors.isArray())
+        for (const auto& entry : status.failedErrors.asArray()) {
+            const json::Value* fx = entry.find("fx");
+            const json::Value* incident = entry.find("incident");
+            if (fx && fx->isString() && incident && incident->isString() &&
+                !incident->asString().empty())
+                incidents[fx->asString()] = incident->asString();
+        }
+    if (failed == failed_ && incidents == incidents_) return;
     failed_ = std::move(failed);
+    incidents_ = std::move(incidents);
     refresh();
+}
+
+std::string FxWindow::incidentOf(const std::string& fx) const {
+    const auto at = incidents_.find(fx);
+    return at == incidents_.end() ? std::string() : at->second;
 }
 
 void FxWindow::tick(bool event) {
@@ -900,6 +916,7 @@ void FxWindow::tick(bool event) {
     if (replaced) {
         latency_.clear();
         failed_.clear();
+        incidents_.clear();
         selected_ = anchor_ = {};
         picked_.clear();
         take_.reset();
@@ -1255,9 +1272,11 @@ void FxWindow::buildRow(ui::Node& body, model::Id fx, std::size_t index, bool in
                 if (dispatch("fx.restart", std::move(args))) {
                     latency_.erase(fx.str());
                     failed_.erase(fx.str());
+                    incidents_.erase(fx.str());
                     refresh();
                 }
             });
+
         // Bypass, offline and remove act on every selected effect when the
         // row is one of several selected (gui.md §4.5).
         l1.emplace<ui::Button>(prefix + "bypass." + id, inst->bypass ? "bypassed" : "bypass",
@@ -1309,6 +1328,12 @@ void FxWindow::buildRow(ui::Node& body, model::Id fx, std::size_t index, bool in
             ui::Font::Mono, "caption", isFailed ? "clip" : "ink-faint");
         // Room for the longest: "shared bridge (default) · offline · failed".
         badge.layout.width = ui::SizeRule::fixed(296);
+        // Beside the state it explains (line 1 has no room): a failed effect's report.
+        if (isFailed && hooks_.showCrashReport && !incidentOf(id).empty())
+            l2.emplace<ui::Button>(
+                  prefix + "report." + id, "Show report",
+                  [this, report = incidentOf(id)] { hooks_.showCrashReport(report); })
+                .quiet = true;
         auto* wetLabel = &l2.emplace<ui::Label>(prefix + "wetlabel." + id, "", ui::Font::Mono,
                                                 "caption", "ink-quiet");
         wetLabel->layout.width = ui::SizeRule::fixed(76);

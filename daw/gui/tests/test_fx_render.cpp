@@ -1592,6 +1592,54 @@ TEST_CASE("the FX chain badges each effect's state, and a failed one offers a re
     CHECK(f.uiRoot().find("fx.restart." + fx.str()) == nullptr);
 }
 
+TEST_CASE("a failed effect links to the report its bridge's death left") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::string> shown;
+    gui::FxWindow::Hooks hooks;
+    hooks.showCrashReport = [&](const std::string& incident) { shown.push_back(incident); };
+    f.fx =
+        std::make_unique<gui::FxWindow>(*f.app, *f.dispatcher, *f.root, *f.panel, std::move(hooks),
+                                        gui::Favourites::defaultFile(gui::test::slug()));
+    const model::Id track = f.addTrack("Guitar");
+    REQUIRE(f.fx->open(track));
+    f.click("fx.add");
+    f.type("Hickory");
+    f.key("Return");
+    REQUIRE(f.fx->chain().size() == 1);
+    const std::string id = f.fx->chain()[0].str();
+    auto statusWith = [&](const char* incident) {
+        engine::EngineStatus status;
+        status.failedFx = {id};
+        auto failure = json::Value::object();
+        failure["fx"] = id;
+        failure["reason"] = "the bridge ended";
+        if (*incident) failure["incident"] = incident;
+        status.failedErrors.asArray().push_back(std::move(failure));
+        return status;
+    };
+    // A failure that left no report offers a restart and no link.
+    f.fx->applyFailures(statusWith(""));
+    f.frame();
+    CHECK(f.uiRoot().find("fx.restart." + id));
+    CHECK(f.uiRoot().find("fx.report." + id) == nullptr);
+    CHECK(f.fx->incidentOf(id).empty());
+    // One that did gets "Report", which opens the viewer on that incident.
+    f.fx->applyFailures(statusWith("0123456789abcdef0123456789abcdef"));
+    f.frame();
+    REQUIRE(f.uiRoot().find("fx.report." + id));
+    CHECK(f.uiRoot().find("fx.report." + id)->valueText() == "Show report");
+    f.snapshot("fx-failed-report.png");
+    CHECK(f.fx->incidentOf(id) == "0123456789abcdef0123456789abcdef");
+    REQUIRE(f.click("fx.report." + id));
+    REQUIRE(shown.size() == 1);
+    CHECK(shown[0] == "0123456789abcdef0123456789abcdef");
+    f.fx->applyFailures(engine::EngineStatus{});  // restarted: both go
+    f.frame();
+    CHECK(f.uiRoot().find("fx.restart." + id) == nullptr);
+    CHECK(f.uiRoot().find("fx.report." + id) == nullptr);
+}
+
 TEST_CASE(
     "the FX chain's pins choose a plugin's channels on a strip with aux channels (ADR-0020)") {
     Fixture f;

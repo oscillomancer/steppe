@@ -525,7 +525,12 @@ int frontendMain(int argc, char** argv) {
             [&](gui::LearnRequest request) {
                 gui::openLearnDialog(fxPanel.root(), appActions, **app, std::move(request));
             },
-            [&](model::Id rack) { racks.open(rack); }},
+            [&](model::Id rack) { racks.open(rack); },
+            // The viewer is a popup of the main window: bring that window up first.
+            [&](const std::string& incident) {
+                SDL_RaiseWindow((*window)->sdl());
+                helpActions.crashReports().open(incident);
+            }},
         gui::Favourites::defaultFile(product::kSlug));
     // A plugin dragged out of the browser lands on the strip or the track
     // row under the pointer (gui.md §4.14).

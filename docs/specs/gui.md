@@ -904,6 +904,12 @@ Each row's second line starts with a badge saying where the plug-in runs:
 `inherit`, where the plug-in isolation preference placed it when its
 instance was made, with `(default)` (`fx.describe isolation_effective`,
 ADR-0081). `· offline` and `· failed` follow when they apply.
+A failed effect (`engine.status failed_fx`) shows Restart on its first line and, when the death of its
+bridge left a crash report (`failed_errors[].incident`, the `incident` of the `fx.failed` event; topic 7d),
+a quiet "Show report" button after the badge on the second, which raises the main window and opens the
+crash viewer (Help > Crash reports…) on that incident. A failure with no report has no such button. If the
+report was deleted since, or is past what is kept, the viewer says "That report is no longer on this
+computer. These are the ones left." in its status line and selects nothing in particular.
 Below come the knobs of its Macro modules
 (`com.suppleaudio.rack.macro`), grouped under each Macro's label (else
 "Macro"). Only a knob whose output (`macro_N` out of `out_N`) is cabled

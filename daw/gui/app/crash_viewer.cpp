@@ -360,6 +360,10 @@ void CrashViewer::open(const std::string& incident) {
     popupWidth_ = width;
     rebuild();
     root_.openPopup(std::move(form), {}, ui::Placement::Center, [this] { popup_ = nullptr; });
+    // A link to a report that is gone (deleted, or past what is kept) must not show another.
+    if (!incident.empty() && std::none_of(entries_.begin(), entries_.end(),
+                                          [&](const Entry& e) { return e.incident == incident; }))
+        status("That report is no longer on this computer. These are the ones left.");
 }
 
 void CrashViewer::status(const std::string& text) {

@@ -4815,3 +4815,22 @@ TEST_CASE("safe-load: recovering an earlier run's session asks first") {
         CHECK(r.a.app->recoverableSessionCount() == 1);
     }
 }
+
+TEST_CASE("the crash viewer opened on a report that is gone says so and keeps the list") {
+    App a;
+    REQUIRE(a.ok);
+    const auto dir = a.app->diagnosticsDir();
+    REQUIRE(diagnostics::writeSampleReport(kNoticeTwo, dir, diagnostics::Role::Gui));
+    gui::HelpActions help(*a.root, *a.actions, a.window->sdl(), runNow, gui::help::ownExecutable(),
+                          {}, dir);
+    help.crashReports().open(kNoticeOne);  // not there
+    a.root->frame(false);
+    REQUIRE(a.root->find("crash.viewer"));
+    CHECK(a.root->find("crash.viewer.status")->valueText().find("no longer on this computer") !=
+          std::string::npos);
+    CHECK(a.root->find("crash.viewer.row.0"));
+    a.root->closePopups();
+    help.crashReports().open(kNoticeTwo);  // there: the intro line
+    a.root->frame(false);
+    CHECK(a.root->find("crash.viewer.status")->valueText().find("no longer") == std::string::npos);
+}
