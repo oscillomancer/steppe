@@ -3862,7 +3862,8 @@ TEST_CASE("a plugin dragged from the browser lands on the track row or strip und
     a.root->setContent(std::move(frame));
     auto sync = [&] {
         shell.sync();
-        mixer.sync();
+        mixer.sync(
+            std::chrono::steady_clock::time_point{std::chrono::hours(1)});  // nothing is held
         a.root->frame(false);
     };
     sync();

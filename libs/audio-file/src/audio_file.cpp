@@ -5,6 +5,7 @@
 #include "supple/base/files.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -151,6 +152,172 @@ Result<AudioData> readAudio(const fs::path& path) {
         return e;
     }
     return r;
+}
+
+namespace {
+// A file as dr_wav, dr_flac and dr_mp3 read it through their callbacks.
+struct Stream {
+    std::ifstream in;
+    static std::size_t read(void* self, void* out, std::size_t bytes) {
+        auto& s = static_cast<Stream*>(self)->in;
+        s.read(static_cast<char*>(out), static_cast<std::streamsize>(bytes));
+        return static_cast<std::size_t>(s.gcount());
+    }
+    static bool seek(void* self, int offset, int origin) {  // 0 set, 1 current, 2 end
+        auto& s = static_cast<Stream*>(self)->in;
+        s.clear();
+        s.seekg(offset, origin == 0 ? std::ios::beg : origin == 1 ? std::ios::cur : std::ios::end);
+        return !s.fail();
+    }
+    static bool tell(void* self, std::int64_t* at) {
+        auto& s = static_cast<Stream*>(self)->in;
+        s.clear();
+        const auto position = s.tellg();
+        if (position < 0) return false;
+        *at = static_cast<std::int64_t>(position);
+        return true;
+    }
+};
+template <class Origin>
+int originOf(Origin origin, Origin set, Origin current) {
+    return origin == set ? 0 : origin == current ? 1 : 2;
+}
+}  // namespace
+
+Result<AudioData> readAudioHead(const fs::path& path, const HeadOptions& options, bool* cut) {
+    g_decodes.fetch_add(1, std::memory_order_relaxed);
+    Stream stream;
+    stream.in.open(path, std::ios::binary);
+    if (!stream.in)
+        return Error("audio.open", "cannot open " + detail::files::text(path), {},
+                     "check the path");
+    std::array<std::uint8_t, 16> head{};
+    Stream::read(&stream, head.data(), head.size());
+    if (!Stream::seek(&stream, 0, 0)) return Error("audio.read", "cannot read the file");
+    const Container container = detect(head);
+    const auto name = detail::files::text(path.filename());
+    auto named = [&](Error e) {
+        e.message = name + ": " + e.message;
+        return e;
+    };
+    // One decoder behind one signature: read up to `frames` interleaved
+    // frames into `out`, returning how many it read.
+    unsigned channels = 0;
+    double rate = 0;
+    std::uint64_t declared = 0;  // the frames the header gives (0: unknown, MP3)
+    std::function<std::uint64_t(std::uint64_t, float*)> readFrames;
+    std::function<void()> close;
+    drwav wav{};
+    drflac* flac = nullptr;
+    drmp3 mp3{};
+    switch (container) {
+        case Container::Wav:
+            if (!drwav_init(
+                    &wav, &Stream::read,
+                    [](void* s, int offset, drwav_seek_origin origin) -> drwav_bool32 {
+                        return Stream::seek(s, offset,
+                                            originOf(origin, DRWAV_SEEK_SET, DRWAV_SEEK_CUR));
+                    },
+                    [](void* s, drwav_int64* at) -> drwav_bool32 {
+                        std::int64_t p = 0;
+                        if (!Stream::tell(s, &p)) return DRWAV_FALSE;
+                        *at = p;
+                        return DRWAV_TRUE;
+                    },
+                    &stream, nullptr))
+                return named(decodeError("WAV"));
+            channels = wav.channels;
+            rate = wav.sampleRate;
+            declared = wav.totalPCMFrameCount;
+            readFrames = [&](std::uint64_t n, float* out) {
+                return drwav_read_pcm_frames_f32(&wav, n, out);
+            };
+            close = [&] { drwav_uninit(&wav); };
+            break;
+        case Container::Flac:
+            flac = drflac_open(
+                &Stream::read,
+                [](void* s, int offset, drflac_seek_origin origin) -> drflac_bool32 {
+                    return Stream::seek(s, offset,
+                                        originOf(origin, DRFLAC_SEEK_SET, DRFLAC_SEEK_CUR));
+                },
+                [](void* s, drflac_int64* at) -> drflac_bool32 {
+                    std::int64_t p = 0;
+                    if (!Stream::tell(s, &p)) return DRFLAC_FALSE;
+                    *at = p;
+                    return DRFLAC_TRUE;
+                },
+                &stream, nullptr);
+            if (!flac) return named(decodeError("FLAC"));
+            channels = flac->channels;
+            rate = flac->sampleRate;
+            declared = flac->totalPCMFrameCount;
+            readFrames = [&](std::uint64_t n, float* out) {
+                return drflac_read_pcm_frames_f32(flac, n, out);
+            };
+            close = [&] { drflac_close(flac); };
+            break;
+        case Container::Mp3:
+            if (!drmp3_init(
+                    &mp3, &Stream::read,
+                    [](void* s, int offset, drmp3_seek_origin origin) -> drmp3_bool32 {
+                        return Stream::seek(s, offset,
+                                            originOf(origin, DRMP3_SEEK_SET, DRMP3_SEEK_CUR));
+                    },
+                    [](void* s, drmp3_int64* at) -> drmp3_bool32 {
+                        std::int64_t p = 0;
+                        if (!Stream::tell(s, &p)) return DRMP3_FALSE;
+                        *at = p;
+                        return DRMP3_TRUE;
+                    },
+                    nullptr, &stream, nullptr))
+                return named(decodeError("MP3"));
+            channels = mp3.channels;
+            rate = mp3.sampleRate;
+            readFrames = [&](std::uint64_t n, float* out) {
+                return drmp3_read_pcm_frames_f32(&mp3, n, out);
+            };
+            close = [&] { drmp3_uninit(&mp3); };
+            break;
+        case Container::Unknown:
+            return Error("audio.format", name + ": unrecognised audio format", {},
+                         "supported: WAV, FLAC, MP3");
+    }
+    struct Closer {
+        std::function<void()>& close;
+        ~Closer() { close(); }
+    } closer{close};
+    if (channels == 0) return named(decodeError("audio"));
+    AudioData out;
+    out.sampleRate = rate;
+    const unsigned kept =
+        std::min(channels, static_cast<unsigned>(std::max(1, options.maxChannels)));
+    out.channels.resize(kept);
+    constexpr std::uint64_t kChunk = 16384;
+    std::vector<float> interleaved(kChunk * channels);
+    const auto limit = static_cast<std::uint64_t>(std::max<std::int64_t>(0, options.maxFrames));
+    // A lying header reserves no more than the limit, nor more than two
+    // frames a byte (the read stops at the file's end whatever it says).
+    std::error_code sizeError;
+    const auto bytes = fs::file_size(path, sizeError);
+    if (!sizeError) declared = std::min<std::uint64_t>(declared, 2 * bytes);  // as readAudio
+    if (declared > 0)
+        for (auto& channel : out.channels)
+            channel.reserve(static_cast<std::size_t>(std::min(declared, limit)));
+    std::uint64_t total = 0;
+    while (total < limit) {
+        if (options.stop && options.stop())
+            return Error("audio.cancelled", name + ": the read was cancelled");
+        const std::uint64_t want = std::min(kChunk, limit - total);
+        const std::uint64_t got = readFrames(want, interleaved.data());
+        for (unsigned c = 0; c < kept; ++c)
+            for (std::uint64_t i = 0; i < got; ++i)
+                out.channels[c].push_back(interleaved[i * channels + c]);
+        total += got;
+        if (got < want) break;  // the end of the file
+    }
+    if (cut) *cut = total == limit && readFrames(1, interleaved.data()) == 1;
+    return out;
 }
 
 Result<std::vector<std::uint8_t>> wavHeader(std::uint64_t frames, std::uint32_t channels,

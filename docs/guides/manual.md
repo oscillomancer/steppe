@@ -322,11 +322,21 @@ and the **History**. It stays closed until you ask for it:
   on the selected track at the playhead (on a new track when none is
   selected); or drag it to the spot in the arrangement where you want it.
   Drop it under the last track to make a new one.
+  To hear an audio file before you add it, select it and click **Play**;
+  the button reads **Stop** while it plays. It plays on your first two
+  outputs and is not part of the project: it does not pass your tracks or
+  the master, and is never in a render or a recording. It stops when you
+  click **Stop**, choose another file, add it or leave the page. A long
+  file takes a moment before it sounds, and only its start is played: the
+  first ten minutes at 48 kHz, less at higher sample rates (two and a half
+  minutes at 192 kHz). MIDI files cannot be played this way.
   **Media** lists the audio your project already holds, each file with its
   format and length, so you can use a recording or an imported file again
   without looking for it on disk. Add it or drag it as you would a file;
   the project keeps one copy however often you use it. A file that is no
-  longer where the project expects it is marked "missing".
+  longer where the project expects it is marked "missing"; the page looks
+  for the files when it opens and when the project's audio changes.
+  **Play** hears one here too.
 - **View > History and command log**, or **Ctrl+H**, opens it on the History:
   the versions you can step back to, the branches, and every command with who
   ran it.

@@ -18,6 +18,7 @@
 #include <chrono>
 #include <climits>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -151,6 +152,23 @@ struct BackendConfig {
     std::uint32_t inputs = 0, outputs = 2;
     bool midiInputs = false;   // open the device's MIDI inputs too (ADR-0016)
     bool midiOutputs = false;  // open hardware MIDI destinations (ADR-0069)
+};
+
+// A file audition (ADR-0094): decoded audio at the device's rate, played on
+// outputs 1/2 after the project's output and outside it. Immutable once
+// published. `right` empty: mono, played on both.
+struct AuditionVoice {
+    std::vector<float> left, right;
+    std::size_t frames() const { return left.size(); }
+};
+// What the callback plays (Engine::auditionState): the voice's serial (0:
+// none) and its frame, and the serial of the last request it took (a voice
+// published and not yet taken is newer).
+struct AuditionState {
+    std::uint64_t serial = 0;
+    bool playing = false;
+    std::int64_t position = 0;
+    std::uint64_t taken = 0;
 };
 
 // A short MIDI message from a device input during one callback (ADR-0016).
@@ -606,6 +624,15 @@ class Engine {
     // count ends. The clicks sound with the metronome off too (at its level).
     // pause() cancels it. Live output only.
     void playCountIn(std::int64_t frames, std::int64_t beatFrames, int beatsPerBar);
+    // File audition (ADR-0094). Main thread: `voice` plays from its first
+    // sample at the next cycle, on outputs 1/2 after the project's output,
+    // in either executor, stopped or playing; what played fades out over
+    // 5 ms. Null or empty stops. Returns the voice's serial (0 for a stop).
+    // A stop of the engine drops it; renders, recordings and meters never
+    // contain it.
+    std::uint64_t audition(std::shared_ptr<const AuditionVoice> voice);
+    // Any thread: the voice playing and its frame.
+    AuditionState auditionState() const;
     // Main thread (one consumer): the control messages the devices sent since
     // the last call (ADR-0027), oldest first, appended to `out`; at most
     // kControlRing are held between calls (more are counted as dropped).
@@ -817,6 +844,32 @@ class Engine {
     // that play timeline frames from `pos`. Audio thread.
     void addClicks(const detail::Plan& p, float* const* out, std::uint32_t offset, std::int64_t pos,
                    std::uint32_t k) SUPPLE_RT;
+    // File audition (ADR-0094): requests the main thread publishes, each an
+    // immutable voice (or a stop) with a serial; it frees those below the
+    // smallest serial the callback still reads (auditionKeep_).
+    struct AuditionRequest {
+        std::shared_ptr<const AuditionVoice> voice;  // null: a stop
+        std::uint64_t serial = 0;
+    };
+    struct AuditionPlay {
+        const AuditionVoice* voice = nullptr;
+        std::size_t position = 0;
+        std::uint64_t serial = 0;
+    };
+    static constexpr double kAuditionFadeSeconds = 0.005;
+    void mixAudition(float* const* out, std::uint32_t frames) SUPPLE_RT;
+    void reclaimAuditions();  // main thread
+    void resetAuditions();    // main thread, no callback running
+    std::deque<std::unique_ptr<AuditionRequest>> auditionOwned_;  // main thread
+    std::uint64_t auditionSerial_ = 0;                            // main thread
+    std::atomic<const AuditionRequest*> auditionNext_{nullptr};
+    std::atomic<std::uint64_t> auditionKeep_{0}, auditionPlaying_{0}, auditionTaken_{0};
+    std::atomic<std::int64_t> auditionPosition_{0};
+    // Audio thread: the request last taken, the voice playing and the one
+    // fading out (a newer request cuts an older fade).
+    const AuditionRequest* auditionSeen_ = nullptr;
+    AuditionPlay auditionPlay_, auditionFade_;
+    std::uint32_t auditionFadeLeft_ = 0, auditionFadeFrames_ = 0;
     std::atomic<bool> metroOn_{false};
     std::atomic<float> metroGain_{0.5f};
     // The click sounding now (audio thread only).

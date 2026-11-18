@@ -699,8 +699,10 @@ step are one piece of code for every view that scrolls this way
 (`supple/ui/edge_scroll.h`): `ui::EdgeScrollClock` gives the step, never
 more than 50 ms, so a stalled frame is a short step and not a jump, and
 nothing on a scroll's first pass. `ArrangeView::poll`, `MidiEditor::sync`,
-`Mixer::sync` and `RackWindow::tick` take the pass's time, so tests pass
-their own; `autoScroll(seconds)` on each is the step itself.
+`Mixer::sync` and `RackWindow::tick` take the pass's time, with no
+default: the app loop gives each of them the one time it read for the pass,
+and a test gives its own, so none can start a scroll's clock at the real
+time without saying so. `autoScroll(seconds)` on each is the step itself.
 By default Alt+wheel anywhere over the arrange view, and Ctrl+wheel over the
 TCP, adds eight design units per notch to every track row, including hidden tracks and compact folders, preserving
 mixed heights and clamping each independently. Fractional wheel deltas work
@@ -1394,7 +1396,11 @@ quantize, transpose), velocity and CC lanes, and a **notation panel**: the
 item's notation text (`libs/notation`) beside the roll, editable with live
 compile diagnostics (the compiler's located errors and hints); edits in
 either side update the other through `midi.edit` (event edits) and
-`midi.write` (notation replacement). A draft that would replace MIDI changed
+`midi.write` (notation replacement). The text compiles and is written after
+a pause of 300 ms in typing. The pause is counted in the time the loop's
+passes are given (`MidiEditor::sync(now)`), from the first pass after the
+last keystroke, which in the app is the pass that keystroke woke; a test
+steps it by its own time and waits for nothing. A draft that would replace MIDI changed
 elsewhere since it was loaded is not written by the pause, leaving the panel or
 closing the editor: the panel says so, and Ctrl+Enter applies it over the
 change. This is the
@@ -2087,7 +2093,7 @@ selected, at the playhead; one undo step) and the status line says "Added
 MIDI files here."; a folder that cannot be read says why and the listing
 stays. Up from a root lists the roots as folders under the name
 "Computer" where there are several (the drives on Windows); elsewhere Up
-is disabled at the root. Files are not auditioned.
+is disabled at the root. **Play** (below) hears an audio file first.
 
 A file **drags into the arrangement** (`PluginDrag::dragTo`): the chip
 carries its name, and the place it would land is outlined, the lane of a
@@ -2105,9 +2111,15 @@ format and the length at the right ("WAV · 0:12"; "1:02:03" from an hour),
 or "missing" when the file is not where the source says (looked for when
 the list is read). MIDI sources are not files and are not listed. The page
 reads the session when it comes into view and, while in view, at the
-loop's next pass after the project changes (`SideBrowser::sync`); a list
-that comes out the same is left alone, and the chosen row stays chosen
-while its source is listed. The search (`.search`) narrows it by name.
+loop's next pass after the project's sources or its media folder change,
+or another project opens (`SideBrowser::sync`). An edit that leaves the
+sources as they were reads nothing and looks for no file: most edits are
+of that kind, and a look is a file system call for each source. So a file
+deleted or put back on disk shows in its row when the page next comes
+into view or the project's sources next change, not before. A list that
+comes out the same is left alone, and the chosen row stays chosen while
+its source is listed; another project's list starts with no row chosen,
+whatever its sources' ids. The search (`.search`) narrows it by name.
 Enter in the search, a double-click or **Add** (`.add`) puts the media on
 a track as the Files page does a file, through the same hook with the
 source's file (`item.add` on the selected track, or on a new one, at the
@@ -2115,6 +2127,37 @@ playhead; one undo step): `item.add` finds the source by the file's hash,
 so the project gains an item and no second source or copy. A row drags
 into the arrangement as a file does. The status line (`.status`) says
 "Added *file*" or the error. An empty list says nothing.
+
+**Play** (`side.browser.files.play`, `side.browser.media.play`), beside
+Add on the Files and Media pages, lets the chosen audio file be heard
+before it is added: `audition.play` with the file's path (engine.md "File
+audition", ADR-0094), on the device's outputs 1/2, outside the project,
+whether the transport is stopped or playing. It is disabled with no row
+chosen, on a folder and on a MIDI file (there is no instrument to play it
+on). While the file plays the button reads **Stop**, and the page's status
+line says "Reading *file*…" until the file has been read and sounds, then
+"Playing *file*"; for a file longer than the engine's cap (a number of
+frames: ten minutes at 48 kHz, less at higher rates), "the first *m:ss* of
+*file*" with the length the engine says it plays ("the first 10:00 of
+*file*" at 48 kHz). Nothing plays on selection alone.
+
+- The Browser stops it (`audition.stop`) at a second press; when another
+  row is chosen or none is (a click, the arrow keys, a search, another
+  folder); when the file is added or dropped into the arrangement; when
+  another kind is shown; and when the Browser goes out of view (another
+  tab, the panel closed).
+- It ends by itself at the file's end, when the engine stops and when
+  another project is opened. The Browser reads the engine's state once per
+  pass of the loop (`SideBrowser::sync`, `EngineApp::auditionStatus`): the
+  button reads Play again at the pass after the end, and the status line
+  stops saying it plays.
+- A file that something else plays in its place (an agent's
+  `audition.play`) is not the Browser's: the button reads Play again and
+  the other file is left playing.
+- An error is said in the status line: the command's (`engine.stopped`,
+  `audition.file`), or the engine's `audition.error` event for a file that
+  could not be read after all.
+- Play keeps its width as Stop, and Add beside it is as wide.
 
 A row of the Plug-ins and Chains pages **drags onto a track**. A left press on a row that
 moves more than four units (`ui::List::onDrag`, `List::kDragSlop`) starts
