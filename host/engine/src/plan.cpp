@@ -3630,9 +3630,9 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
     for (Node& n : to.nodes) {
         if (toClass >= 0 && n.live != (toClass == 1)) continue;
         // Only what this executor processed (the other one writes the rest).
-        Node* const carried = carriedNode(from, n, fromClass);
-        if (!carried) continue;
-        Node& old = *carried;
+        Node* const counterpart = carriedNode(from, n, fromClass);
+        if (!counterpart) continue;
+        Node& old = *counterpart;
         // A locate may still be waiting for pooled module ownership.
         // Keep that reset through another plan adoption by this executor.
         if (n.rack && old.rack) {

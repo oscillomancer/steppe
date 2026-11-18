@@ -3281,8 +3281,9 @@ TEST_CASE(
         model::Track tr;
         tr.parent = kMaster;
         const Id first = e.create(tr);
-        e.modify<model::Track>(
-            kMaster, [&](model::Track& x) { x.children.insert(x.children.begin(), first); });
+        e.modify<model::Track>(kMaster, [&](model::Track& root) {
+            root.children.insert(root.children.begin(), first);
+        });
         midiRoute(e, first, b);
     });
     edit([&](model::EditTxn& e) {
@@ -3292,8 +3293,8 @@ TEST_CASE(
     edit([&](model::EditTxn& e) { monitor(e, m, false); });
     edit([&](model::EditTxn& e) {  // live again, and c ahead of a
         monitor(e, m, true);
-        e.modify<model::Track>(kMaster, [&](model::Track& x) {
-            auto& order = x.children;
+        e.modify<model::Track>(kMaster, [&](model::Track& root) {
+            auto& order = root.children;
             order.erase(std::find(order.begin(), order.end(), c));
             order.insert(std::find(order.begin(), order.end(), a), c);
         });
