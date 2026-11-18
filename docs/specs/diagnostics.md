@@ -850,14 +850,18 @@ from `reap()` on the main thread (the one place the host observes it), or from t
 destructor when nobody reaped it, never from `fail()` or `abandon()` (which can run on any thread,
 or on an audio path). `hostKilled_` is set inside `killBridge()`, before the kill, so every host
 kill (a hung or abandoned bridge, a protocol violation, a shutdown) is told from the operating
-system's: the end is `host` and its status says nothing about the plug-in. A bridge the host lets go
+system's: the end is `host`, with the status the host's kill gives (POSIX `SIGKILL`; Windows exit
+code 1), which says nothing about the plug-in, unless the status is another fatal one (below). A bridge the host lets go
 of while it still runs is also `host`, unless it is then found to have ended by a signal or an
 exception the host did not cause (a crash whose dump was still being written when the host let go
 is alive until it is done): that is its own death. Otherwise POSIX says `signal` with the signal number, or
 `exit` with code 0 (the exit code is not read); Windows says `exception` for a status with the
 fatal severity bits set (`0xC0000000`) and `exit` for any other, with the exit code. When both
-happen (the host kills a bridge that was already dying) the end is `host`: the order cannot be
-told. The 65536th bridge of a run has no ordinal (it reads as this process): a stated limit.
+happen (the host kills a bridge that was already dying: its core or dump still being written when a
+failed call or a missed deadline made the host kill it) the status tells the order: a host kill
+ends the process with `SIGKILL` (exit code 1 on Windows), so any other fatal status is the
+bridge's own fault, which came first (the kill only cut the dump short), and the end is `signal`
+or `exception` with that status. The 65536th bridge of a run has no ordinal (it reads as this process): a stated limit.
 
 *A report when the worker lives.* A bridge that ends by a signal or an exception (not by the
 host's kill, not by an exit: the exit code is not read on POSIX) while the worker goes on gets a

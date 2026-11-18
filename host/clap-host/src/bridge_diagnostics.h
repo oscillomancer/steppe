@@ -31,7 +31,10 @@ struct BridgeEnd {
 // How a bridge ended, from what the host observed. `why` is NativeChild::exitStatus(): on POSIX
 // 0 for an exit (the exit code is not read) and the signal number otherwise; on Windows the
 // process's exit code. `hostKilled`: the host killed it (it set this before every kill), so the
-// status says nothing about the plug-in and the end is Host, whatever the status. Otherwise
+// end is Host, unless the status is a fatal one that the host's own kill does not give (POSIX: a
+// signal other than SIGKILL; Windows: an exception status other than the exit code 1 it kills
+// with): then the bridge was already dying of its own fault when it was killed (its core or dump
+// still being written), the kill only cut that short, and the end is the fault's. Otherwise
 // POSIX: a signal is Signal, anything else Exit; Windows: a status with the severity bits set
 // (0xC0000000, the fatal NTSTATUS class an unhandled exception ends a process with) is
 // Exception, anything else Exit.

@@ -81,10 +81,23 @@ TEST_CASE("a bridge's ordinals count from one and are never reused") {
 
 TEST_CASE("how a bridge ended is told from the host's own kill and from the status") {
     using diagctx::BridgeHow;
-    // A kill by the host is the host's, whatever the status says.
-    CHECK(bridge::classifyBridgeEnd(9, true).how == BridgeHow::Host);
+    // A kill by the host is the host's: it ends a bridge with SIGKILL (exit code 1 on Windows).
     CHECK(bridge::classifyBridgeEnd(0, true).how == BridgeHow::Host);
+#if defined(_WIN32)
+    CHECK(bridge::classifyBridgeEnd(1, true).how == BridgeHow::Host);
+    CHECK(bridge::classifyBridgeEnd(1, true).status == 1);
+    // A bridge that was already dying of its own fault when the host killed it keeps the fault's
+    // status (the kill only cut its dump short): its own end.
+    const auto dying = bridge::classifyBridgeEnd(static_cast<int>(0xC0000005U), true);
+    CHECK(dying.how == BridgeHow::Exception);
+    CHECK(dying.status == static_cast<std::int32_t>(0xC0000005U));
+#else
+    CHECK(bridge::classifyBridgeEnd(9, true).how == BridgeHow::Host);
     CHECK(bridge::classifyBridgeEnd(9, true).status == 9);
+    CHECK(bridge::classifyBridgeEnd(11, true).how == BridgeHow::Signal);
+    CHECK(bridge::classifyBridgeEnd(11, true).status == 11);
+    CHECK(bridge::classifyBridgeEnd(6, true).how == BridgeHow::Signal);
+#endif
 #if defined(_WIN32)
     const auto fault = bridge::classifyBridgeEnd(static_cast<int>(0xC0000005U), false);
     CHECK(fault.how == BridgeHow::Exception);
