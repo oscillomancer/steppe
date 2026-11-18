@@ -17,6 +17,7 @@
 #include "../../clap-host/tests/process_pause.h"
 #include "bridge_patience.h"
 #include "realtime_common.h"
+#include "render_watch.h"
 
 namespace {
 using supple::test::GatedCall;
@@ -79,12 +80,20 @@ struct Stopper {
 // instance fail and decided, or is about to decide, its outcome. This is
 // the order CI 44135770973 met on Windows by chance (a cancel reported as
 // a failed FX); here it is the order every time.
+// `holds` counts the times the watch was held: if the render's thread saw
+// the request before the watch killed anything, nothing was ordered, and the
+// test says so rather than passing (review round 39c).
 struct WatchHeldAfterKills {
     std::atomic<bool> finishing{false};
+    std::atomic<int> holds{0};
     WatchHeldAfterKills() {
         engine::setRenderWatchTestHooks({
             .killed =
-                [](void* self) { static_cast<WatchHeldAfterKills*>(self)->finishing.wait(false); },
+                [](void* self) {
+                    auto* held = static_cast<WatchHeldAfterKills*>(self);
+                    held->holds.fetch_add(1);
+                    held->finishing.wait(false);
+                },
             .finishing =
                 [](void* self) {
                     auto& held = static_cast<WatchHeldAfterKills*>(self)->finishing;
@@ -260,6 +269,7 @@ TEST_CASE("a stopped or cancelled offline render does not wait for a bridged cal
             CHECK(in->failed());
             CHECK(in->failure().find(kAbandoned) != std::string::npos);
             CHECK(in->callDeadlineMs() == 0);
+            CHECK(held.holds.load() == 1);  // the race was ordered, not skipped
             gate.reset();
         }
 }

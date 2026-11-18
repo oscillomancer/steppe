@@ -779,9 +779,9 @@ first use, and no plug-in code runs early to warm it.
   a render with a failure first ends the watch (a call ended by its kill can
   return before the watch has recorded the kill), and a stop or cancel asked
   for by the time the outcome is decided is the outcome.
-  `setRenderWatchTestHooks` (tests only, set while no render runs) holds
-  the watch after its kills until the render ends it, which orders that
-  race the same way every time.
+  `setRenderWatchTestHooks` (internal `src/render_watch.h`, tests only, set
+  while no render runs) holds the watch after its kills until the render
+  ends it, which orders that race the same way every time.
   Instance creation, before that point, keeps its control-plane timeouts
   (20 s for `Create`).
 - Once a render has succeeded, each plugin's read-only parameters (meters,

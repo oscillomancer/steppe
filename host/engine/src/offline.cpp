@@ -5,6 +5,7 @@
 #include "rack_runtime.h"
 
 #include "plan.h"
+#include "render_watch.h"
 #include "stretch.h"
 #include "supple/model/freeze.h"
 
