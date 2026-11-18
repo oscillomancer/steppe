@@ -429,6 +429,86 @@ TEST_CASE("rack window: the light theme") {
     f.snapshot("rack-patch-light-zoom.png");
 }
 
+TEST_CASE("rack window: a module held at the space's edge pans the view and goes with it") {
+    Fixture f;
+    if (!f.ok) return;
+    Patch p(f);
+    f.racks->open();
+    f.frame();
+    using T = ui::PointerEvent::Type;
+    gui::RackSpace& space = *f.racks->space();
+    const model::Id vca = *model::Id::parse(p.vca);
+    const auto moduleX = [&] {
+        for (const auto& m : space.scene().modules)
+            if (m.id == vca) return m.x;
+        return 0.0;
+    };
+    const double before = f.app->head().modules.find(vca)->x;
+    const ui::Rect b = space.bounds();
+    const ui::Point a = *space.bodyAt(vca);
+    const gui::RackSpace::View v0 = space.view();
+    const double grab = static_cast<double>(space.toSpace(a).x) - moduleX();
+    const auto steps = f.exec("history.list", "{}")["versions"].size();
+    // In the middle a drag pans nothing.
+    f.pointer(T::Move, a, 0);
+    f.pointer(T::Down, a);
+    f.pointer(T::Move, {a.x + 10, a.y}, 0);
+    CHECK_FALSE(space.autoScrolling());
+    CHECK_FALSE(space.autoScroll(1.0));
+    CHECK(space.view() == v0);
+    // Held at the right edge the view pans on, sideways only, and the module
+    // keeps its place under the pointer; further out is faster.
+    const ui::Point edge{b.right() - 4, a.y};
+    f.pointer(T::Move, edge, 0);
+    REQUIRE(space.autoScrolling());
+    f.snapshot("rack-edge-scroll-1-held.png");
+    CHECK(space.autoScroll(0.5));
+    f.frame();
+    f.snapshot("rack-edge-scroll-2-panned.png");
+    const double once = space.view().x;
+    CHECK(once > v0.x);
+    CHECK(space.view().y == v0.y);
+    CHECK(static_cast<double>(space.toSpace(edge).x) - moduleX() ==
+          doctest::Approx(grab).epsilon(0.01));
+    f.pointer(T::Move, {b.right() + 60, a.y}, 0);
+    CHECK(space.autoScroll(0.5));
+    CHECK(space.view().x - once > once - v0.x);
+    // Back inside it stops, and the module lands where the pointer is.
+    const ui::Point inside{b.x + b.w / 2, a.y};
+    f.pointer(T::Move, inside, 0);
+    CHECK_FALSE(space.autoScrolling());
+    const gui::RackSpace::View held = space.view();
+    CHECK_FALSE(space.autoScroll(1.0));
+    CHECK(space.view() == held);
+    const double lands = static_cast<double>(space.toSpace(inside).x) - grab;
+    f.pointer(T::Up, inside);
+    CHECK_FALSE(space.autoScrolling());
+    CHECK(f.app->head().modules.find(vca)->x == doctest::Approx(lands).epsilon(0.01));
+    // The pan's distance and the pointer's, together.
+    CHECK(lands - before ==
+          doctest::Approx(held.x - v0.x + static_cast<double>(inside.x - a.x) / held.zoom)
+              .epsilon(0.01));
+    CHECK(held.x - v0.x > static_cast<double>(b.w) / held.zoom);          // further than one view
+    CHECK(f.exec("history.list", "{}")["versions"].size() == steps + 1);  // one undo step
+
+    // A marquee from empty space pans at the top edge too, and keeps its
+    // first corner; a pan of the space itself does not edge-scroll.
+    const ui::Point empty{b.x + b.w - 30, b.y + b.h - 30};
+    f.pointer(T::Down, empty);
+    f.pointer(T::Move, {empty.x - 40, b.y + 3}, 0);
+    REQUIRE(space.autoScrolling());
+    const double y0 = space.view().y;
+    CHECK(space.autoScroll(0.25));
+    CHECK(space.view().y < y0);
+    f.pointer(T::Move, {empty.x - 40, b.y + b.h / 2}, 0);
+    CHECK_FALSE(space.autoScrolling());
+    f.pointer(T::Up, {empty.x - 40, b.y + b.h / 2});
+    f.pointer(T::Down, empty, 2);
+    f.pointer(T::Move, {b.right() - 2, empty.y}, 0);
+    CHECK_FALSE(space.autoScrolling());
+    f.pointer(T::Up, {b.right() - 2, empty.y}, 2);
+}
+
 TEST_CASE(
     "rack window: a drag moves the selection, one undo step; the wheel zooms at the pointer") {
     Fixture f;

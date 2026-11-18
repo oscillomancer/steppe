@@ -908,6 +908,78 @@ TEST_CASE("mixer: dragging one of several selected strips moves them all, one un
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("mixer: a strip held at the strips' edge scrolls them, and drops out of first view") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::string> ids;
+    for (int i = 0; i < 30; ++i) ids.push_back(f.addTrack("channel", "T"));
+    f.refresh();
+    using T = ui::PointerEvent::Type;
+    const ui::Rect area = f.node("mixer.scrolled")->bounds();
+    const std::string first = ids.front(), last = ids.back();
+    // More strips than fit: the last one starts out of view.
+    REQUIRE(f.strip(last).node->bounds().x > area.right());
+    const auto x = [&](const std::string& id) { return f.strip(id).node->bounds().x; };
+    const float y = f.empty(first).y;
+    // In the middle a drag scrolls nothing.
+    f.pointer(T::Down, f.empty(first));
+    f.pointer(T::Move, {area.x + area.w / 2, y});
+    REQUIRE(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Strip);
+    CHECK_FALSE(f.mixer->autoScrolling());
+    CHECK_FALSE(f.mixer->autoScroll(1.0));
+    // Held at the right edge the strips scroll on; further out is faster.
+    const float start = x(last);
+    f.pointer(T::Move, {area.right() - 4, y});
+    REQUIRE(f.mixer->autoScrolling());
+    // The insertion bar stays among the strips that scroll, off the master.
+    CHECK(f.mixer->drag().marker.right() <= area.right());
+    f.snapshot("mixer-edge-scroll-1-held.png");
+    CHECK(f.mixer->autoScroll(0.25));
+    f.root->frame(false);
+    const float once = x(last);
+    CHECK(once < start);
+    f.pointer(T::Move, {area.right() + 40, y});
+    CHECK(f.mixer->autoScroll(0.25));
+    f.root->frame(false);
+    CHECK(once - x(last) > start - once);
+    // Back inside it stops.
+    f.pointer(T::Move, {area.x + area.w / 2, y});
+    CHECK_FALSE(f.mixer->autoScrolling());
+    const float held = x(last);
+    CHECK_FALSE(f.mixer->autoScroll(1.0));
+    f.root->frame(false);
+    CHECK(x(last) == held);
+    // To the end: it stops there by itself, rests, and the drop lands after
+    // the last strip, which the first view did not show.
+    f.pointer(T::Move, {area.right() - 2, y});
+    for (int i = 0; i < 400 && f.mixer->autoScroll(0.05); ++i) f.root->frame(false);
+    f.root->frame(false);
+    CHECK(f.strip(last).node->bounds().right() <= area.right() + 1);
+    CHECK_FALSE(f.mixer->autoScroll(0.05));  // nothing more until the pointer moves
+    CHECK(f.mixer->autoScrolling());         // still held at the edge
+    f.snapshot("mixer-edge-scroll-2-at-the-end.png");
+    const auto before = f.app->head().version;
+    f.pointer(T::Move, {area.right() - 3, y});
+    CHECK(f.mixer->drag().drop == gui::Mixer::DragView::Drop::Reorder);
+    f.pointer(T::Up, {area.right() - 3, y});
+    CHECK_FALSE(f.mixer->autoScrolling());
+    CHECK(f.app->head().version == before + 1);  // one edit
+    CHECK(f.children("tr_0").back() == first);
+    f.refresh();
+    // And back: held at the left edge the strips return to the start.
+    const float scrolled = x(ids[1]);
+    f.pointer(T::Down, f.empty(first));
+    f.pointer(T::Move, {area.x + 3, y});
+    REQUIRE(f.mixer->autoScrolling());
+    CHECK(f.mixer->autoScroll(0.25));
+    f.root->frame(false);
+    CHECK(x(ids[1]) > scrolled);
+    f.root->key(SDLK_ESCAPE);
+    CHECK_FALSE(f.mixer->autoScrolling());  // a drag given up scrolls no more
+    f.pointer(T::Up, {area.x + 3, y});
+    CHECK(f.errors.empty());
+}
+
 TEST_CASE("mixer: masters reorder among masters; tr_0 stays first") {
     Fixture f;
     if (!f.ok) return;

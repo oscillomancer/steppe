@@ -1272,6 +1272,64 @@ void RackSpace::sendPointer(model::Id id, script::PointerAction action, ui::Poin
     if (!edits.empty() && hooks_.displayEdit) hooks_.displayEdit(id, edits, gesture);
 }
 
+bool RackSpace::edgeDrag() const {
+    switch (drag_.kind) {
+        case Drag::Kind::Move:
+        case Drag::Kind::Marquee:
+            return drag_.moved;
+        case Drag::Kind::Cable:
+            return true;
+        default:
+            return false;
+    }
+}
+
+void RackSpace::noteDragEdge(const ui::PointerEvent& e) {
+    if (!edgeDrag()) {
+        edgeVx_ = edgeVy_ = 0;
+        return;
+    }
+    auto along = [](float at, float from, float to) {
+        auto speed = [](float depth) {
+            return depth <= 0 ? 0.0f : std::min(2400.0f, 120.0f + 30.0f * depth);
+        };
+        return at > to - kEdgeZone     ? speed(at - (to - kEdgeZone))
+               : at < from + kEdgeZone ? -speed(from + kEdgeZone - at)
+                                       : 0.0f;
+    };
+    const ui::Rect b = bounds();
+    edgeVx_ = along(e.pos.x, b.x, b.right());
+    edgeVy_ = along(e.pos.y, b.y, b.bottom());
+    edgeLast_ = e;
+    if (autoScrolling() && root()) root()->requestAnimationFrame();  // the window's tick steps it
+}
+
+bool RackSpace::autoScrolling() const { return (edgeVx_ != 0 || edgeVy_ != 0) && edgeDrag(); }
+
+bool RackSpace::autoScroll(double seconds) {
+    if (!autoScrolling()) {
+        edgeVx_ = edgeVy_ = 0;
+        return false;
+    }
+    const View before = view_;
+    View v = view_;
+    v.x += D(edgeVx_) * seconds / v.zoom;
+    v.y += D(edgeVy_) * seconds / v.zoom;
+    setView(v);
+    const auto dx = static_cast<float>((view_.x - before.x) * view_.zoom);
+    const auto dy = static_cast<float>((view_.y - before.y) * view_.zoom);
+    if (dx == 0 && dy == 0) return false;  // at the space's limit
+    // The press point goes with the content, so modules in hand keep their
+    // place under the pointer and a marquee keeps its first corner; a cable
+    // hangs from its socket and needs none.
+    if (drag_.kind != Drag::Kind::Cable) {
+        drag_.start.x -= dx;
+        drag_.start.y -= dy;
+    }
+    onPointer(edgeLast_);
+    return true;
+}
+
 ui::Cursor RackSpace::cursorAt(ui::Point) const {
     const bool inHand = drag_.kind == Drag::Kind::Move || drag_.kind == Drag::Kind::Pan;
     return inHand && drag_.moved ? ui::Cursor::Move : ui::Cursor::Arrow;
@@ -1434,6 +1492,7 @@ bool RackSpace::onPointer(const ui::PointerEvent& e) {
             default:
                 break;
         }
+        noteDragEdge(e);
         invalidate();
         return true;
     }

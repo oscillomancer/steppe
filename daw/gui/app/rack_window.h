@@ -192,6 +192,7 @@ class RackWindow {
     bool browserVisible_ = true;
     int gesture_ = 0;
     std::optional<std::chrono::steady_clock::time_point> nextTelemetry_;
+    std::optional<std::chrono::steady_clock::time_point> edgeAt_;  // the edge scroll's last step
     racks::Watchers watchers_;  // the modules in view (telemetry)
     RackSpace* space_ = nullptr;
     RackTabs* tabs_ = nullptr;

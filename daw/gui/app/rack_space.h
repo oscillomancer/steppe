@@ -166,6 +166,15 @@ class RackSpace : public ui::Node {
     bool onPointer(const ui::PointerEvent& e) override;
     // The move cursor while modules are in hand or the space is being panned.
     ui::Cursor cursorAt(ui::Point p) const override;
+    // Edge scroll (gui.md §4.12): modules in hand, a cable in hand or a
+    // marquee held within kEdgeZone of an edge of the space, or past it, pan
+    // the view that way at the arrange view's speeds, and what is in hand
+    // stays under the pointer. True while such a drag is held at an edge;
+    // autoScroll advances it by `seconds` and is true when the view moved
+    // (the rack window's tick calls it with the frame's time).
+    static constexpr float kEdgeZone = 24;
+    bool autoScrolling() const;
+    bool autoScroll(double seconds);
     bool onKey(const ui::KeyEvent& e) override;
     bool onKeyUp(const ui::KeyEvent& e) override;
     bool onText(std::string_view text) override;
@@ -261,6 +270,10 @@ class RackSpace : public ui::Node {
     std::string dropName_;
     std::optional<ui::Point> dropAt_;
     Drag drag_;
+    void noteDragEdge(const ui::PointerEvent& e);
+    bool edgeDrag() const;           // a drag that scrolls at the edges
+    float edgeVx_ = 0, edgeVy_ = 0;  // window units per second
+    ui::PointerEvent edgeLast_;      // the drag's last event, delivered again after a step
     bool spaceHeld_ = false, spaceUsed_ = false, frameOnLayout_ = false;
     int gesture_ = 0;
     // pointer(): the display under the pointer (it hears Leave when it goes),

@@ -17,7 +17,9 @@
 // (SelectionEdit); a fader or pan drag, a reorder or a copy is one undo step.
 #pragma once
 
+#include <chrono>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -51,6 +53,12 @@ class Mixer {
     void setVisible(bool visible);
     bool visible() const;
     void sync();  // every loop pass
+    // Edge scroll (gui.md §4.4): true while a drag is held at an edge of the
+    // strips that scroll; autoScroll advances it by `seconds` and is true
+    // when the strips moved (sync calls it with the frame's time).
+    static constexpr float kEdgeZone = 24;
+    bool autoScrolling() const;
+    bool autoScroll(double seconds);
 
     // The panel's height (UI state, persisted with the panels): clamped to what
     // the window can give it; the default fits about five plug-ins.
@@ -141,6 +149,11 @@ class Mixer {
     void dragSend(const std::string& track, DragPhase phase, ui::Point p);
     void endDrag(bool commit);
     void showDragCursor();
+    void noteDragEdge(ui::Point p);
+    float edgeV_ = 0;                                // units per second
+    bool edgeIdle_ = false, edgeResolving_ = false;  // at an end; inside autoScroll
+    unsigned dragMods_ = 0;                          // a plug-in drag's last modifiers
+    std::optional<std::chrono::steady_clock::time_point> edgeAt_;  // the edge scroll's last step
     void resolveStripDrop();
     void resolveFxDrop();
     const Strip* stripAt(ui::Point p) const;

@@ -622,6 +622,18 @@ class StripRow : public ui::Node {
         pinned_->arrange(canvas, {b.right() - pinnedW, b.y, pinnedW, b.h});
     }
     void paint(ui::Canvas& c) override { c.fillRect(bounds(), c.theme().color("ground")); }
+    // The part of the row that scrolls (the masters at its right do not),
+    // and a scroll by `dx` units: true when the strips moved.
+    ui::Rect scrolledArea() const { return scrolled_->bounds(); }
+    bool scrollBy(float dx) {
+        const float limit = std::max(0.0f, scrolled_->content() - scrolled_->bounds().w);
+        const float next = std::clamp(scrolled_->scroll + dx, 0.0f, limit);
+        if (next == scrolled_->scroll) return false;
+        scrolled_->scroll = next;
+        relayout();
+        invalidate();
+        return true;
+    }
     std::function<void()> onDoubleClick;           // on the row's empty space
     std::function<void(ui::Point)> onContextMenu;  // a right-click there
     bool onPointer(const ui::PointerEvent& e) override {
@@ -1535,6 +1547,7 @@ void Mixer::dragStrip(const std::string& track, DragPhase phase, ui::Point p) {
     resolveStripDrop();
     if (phase == DragPhase::End) return endDrag(true);
     showDragCursor();
+    noteDragEdge(p);
     root_.requestAnimationFrame();
 }
 
@@ -1561,8 +1574,10 @@ void Mixer::dragFx(const std::string& track, model::Id fx, DragPhase phase, ui::
         d.label = "chain (" + std::to_string(t->chain.size()) + ")";
     else if (ui::Node* slot = root_.find("mixer.fx." + d.fx))
         d.label = slot->valueText();
+    dragMods_ = mods;
     if (phase == DragPhase::End) return endDrag(true);
     showDragCursor();
+    noteDragEdge(p);
     root_.requestAnimationFrame();
 }
 
@@ -1594,6 +1609,7 @@ void Mixer::dragSend(const std::string& track, DragPhase phase, ui::Point p) {
     }
     if (phase == DragPhase::End) return endDrag(true);
     showDragCursor();
+    noteDragEdge(p);
     root_.requestAnimationFrame();
 }
 
@@ -1652,8 +1668,14 @@ void Mixer::resolveStripDrop() {
         if (!d.moves.empty()) index = 0;
     }
     if (!index) return;
-    const float x = gap < group.size() ? group[gap]->node->bounds().x - 2
-                                       : group.back()->node->bounds().right() + 1;
+    float x = gap < group.size() ? group[gap]->node->bounds().x - 2
+                                 : group.back()->node->bounds().right() + 1;
+    // Among the strips that scroll, the bar stays where they show: at their
+    // edge for a gap that is out of view, not on the masters beside them.
+    if (track->type != model::StripType::Master) {
+        const ui::Rect area = static_cast<StripRow*>(row_)->scrolledArea();
+        x = std::clamp(x, area.x + 1, std::max(area.x + 1, area.right() - 2));
+    }
     d.marker = ui::Rect{x - 1, row.y, 3, row.h}.intersect(row);
     d.index = *index;
     d.drop = DragView::Drop::Reorder;
@@ -1794,9 +1816,59 @@ void Mixer::showDragCursor() {
                                                             : ui::Cursor::Move);
 }
 
+// Edge scroll (gui.md §4.4): a strip, a plug-in or an output held within
+// kEdgeZone of the left or right edge of the strips that scroll, or past it,
+// scrolls them that way at the arrange view's speeds, so a drop can reach a
+// strip that is out of view. The masters, pinned at the right, do not scroll.
+void Mixer::noteDragEdge(ui::Point p) {
+    const ui::Rect area = static_cast<StripRow*>(row_)->scrolledArea();
+    auto speed = [](float depth) {
+        return depth <= 0 ? 0.0f : std::min(2400.0f, 120.0f + 30.0f * depth);
+    };
+    edgeV_ = p.x > area.right() - kEdgeZone ? speed(p.x - (area.right() - kEdgeZone))
+             : p.x < area.x + kEdgeZone     ? -speed(area.x + kEdgeZone - p.x)
+                                            : 0.0f;
+    if (!edgeResolving_) edgeIdle_ = false;  // the pointer moved: there may be more to scroll
+}
+
+bool Mixer::autoScrolling() const { return edgeV_ != 0 && drag_->kind != DragView::Kind::None; }
+
+bool Mixer::autoScroll(double seconds) {
+    if (!autoScrolling()) {
+        edgeV_ = 0;
+        return false;
+    }
+    // At an end of the strips nothing more happens until the pointer moves.
+    if (edgeIdle_) return false;
+    // The drop is resolved again first, against the strips as the last step
+    // left them and the layout has since placed them; then the next step.
+    const DragView d = *drag_;
+    edgeResolving_ = true;
+    switch (d.kind) {
+        case DragView::Kind::Strip:
+            dragStrip(d.track, DragPhase::Move, d.pos);
+            break;
+        case DragView::Kind::Fx:
+            if (const auto fx = model::Id::parse(d.fx))
+                dragFx(d.track, *fx, DragPhase::Move, d.pos, dragMods_);
+            break;
+        case DragView::Kind::Send:
+            dragSend(d.track, DragPhase::Move, d.pos);
+            break;
+        case DragView::Kind::None:
+            break;
+    }
+    edgeResolving_ = false;
+    const bool moved = static_cast<StripRow*>(row_)->scrollBy(edgeV_ * static_cast<float>(seconds));
+    edgeIdle_ = !moved && seconds > 0;
+    return moved;
+}
+
 // The drag is over: drop it (one command, one undo step) or let it go.
 void Mixer::endDrag(bool commit) {
     const DragView done = *drag_;
+    edgeV_ = 0;
+    edgeIdle_ = false;
     *drag_ = DragView{};
     root_.setDragCursor(std::nullopt);
     ghost_.reset();
@@ -1907,6 +1979,17 @@ void Mixer::update() {
 
 void Mixer::sync() {
     if (!visible()) return;
+    // A drag held at the strips' edge scrolls by the time since the last pass
+    // (at most 50 ms of it, so a stalled frame is not a jump).
+    if (autoScrolling()) {
+        const auto now = std::chrono::steady_clock::now();
+        const double seconds =
+            edgeAt_ ? std::min(0.05, std::chrono::duration<double>(now - *edgeAt_).count()) : 0.0;
+        edgeAt_ = now;
+        if (autoScroll(seconds) || seconds == 0) root_.requestAnimationFrame();
+    } else {
+        edgeAt_.reset();
+    }
     applyHeight();  // the window may have been resized
     if (actions_.ui().selectedTracks != shownSelection_) showSelection();  // the TCP changed it
     const bool replaced = app_.projectGeneration() != projectGeneration_;

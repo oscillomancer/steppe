@@ -596,12 +596,16 @@ instructions are in `docs/guides/installing.md`.
   row, a rack module) shows the move cursor where it would land and "not
   allowed" where a release would do nothing, as does a routing matrix
   cell that cannot be connected. A drag held at the edge of the arrangement scrolls the view
-  and takes the thing in hand with it, and so does a note held at the
-  piano roll's edge (not yet in the rack or the mixer). The pointer
-  shapes and the edge scroll have been watched on a Linux desktop
-  (Hyprland, the app under XWayland), where the system draws the cursor
-  and the frame clock paces the scroll; on macOS and Windows they are
-  verified by tests only. The transport bar's
+  and takes the thing in hand with it; so do a note held at the piano
+  roll's edge, a strip, plug-in or output held at the edge of the mixer's
+  strips, and modules, a cable or a marquee held at the edge of the rack
+  window's space (not a plug-in list that scrolls inside its strip). The resize,
+  text and move cursors and the edge scroll in the arrangement and the
+  piano roll have been watched on a Linux desktop (Hyprland, the app
+  under XWayland), where the system draws the cursor and the frame clock
+  paces the scroll; the cursors of carried things, the edge scroll in the
+  mixer and the rack, and all of it on macOS and Windows are verified by
+  tests only. The transport bar's
   engine readout is in words ("48 kHz · 256 samples") and warns in colour
   only of a stopped engine, dropouts, render gaps or plug-in errors; the
   toolbar's buttons are quiet at rest. A side panel at the right edge,

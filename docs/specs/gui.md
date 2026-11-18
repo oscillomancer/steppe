@@ -946,6 +946,15 @@ index among its parent's children; `views::reorderIndex` in `track_layout.h` com
 with the TCP). A drag shows an insertion bar or a target outline; Escape or a
 drop outside the strips cancels; each is one undo step.
 
+**Edge scroll**, as in the arrange view (§4.3, the same zone and speeds): a
+strip, a plug-in or an output held within 24 units of the left or right
+edge of the strips that scroll, or past it, scrolls them that way, so a
+drop can reach a strip that is out of view. The masters, pinned at the
+right, do not scroll. The drop is resolved again at every step. At an end
+of the strips it rests until the pointer moves. `Mixer::sync` advances it
+by frame time (at most 50 ms a pass); `Mixer::autoScroll(seconds)` is the
+step. A plug-in list that scrolls inside its strip does not edge-scroll.
+
 A strip reorder ignores destination strips removed from the model before the
 next mixer sync; stale displayed rows cannot become drop targets.
 
@@ -1630,7 +1639,14 @@ a new channel). It follows rack.md §8.
   browser (shown if hidden) on its Modules or its Patches view with the
   search focused; the line goes with the first other module. Middle-drag
   or Space-drag pans (Space alone, released without a drag, still plays and
-  stops), the wheel zooms at the pointer from 10 to 400 %, Ctrl+wheel
+  stops). Edge scroll, as in the arrange view (§4.3, the same zone and
+  speeds, in window units whatever the zoom): modules in hand, a cable in
+  hand or a marquee held within 24 units of an edge of the space, or past
+  it, pan the view that way, sideways and up and down; modules keep their
+  place under the pointer and a marquee keeps its first corner
+  (`RackSpace::autoScroll(seconds)`, stepped by `RackWindow::tick`). A
+  knob, a cable's amount, a display and a pan of the space do not. The
+  wheel zooms at the pointer from 10 to 400 %, Ctrl+wheel
   scrolls vertically (Cmd+wheel on macOS) and Shift+wheel scrolls across; a sideways wheel pans
   horizontally. Ctrl+= and Ctrl+- zoom, Ctrl+0 is 100 %, Home
   shows everything (at most 100 %, as far out as it takes) and Shift+Home
