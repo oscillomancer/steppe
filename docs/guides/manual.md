@@ -353,6 +353,12 @@ held it adds them to what is selected. `Ctrl+A` selects every item.
 - **Stretch:** Alt-drag an audio item's right end, and the audio plays
   faster or slower to fit the new length.
 
+**Crossfades** make themselves. Move, copy or trim an item so that it
+overlaps another on the same track, and the earlier item fades out while
+the later one fades in over the overlap, as part of the same step of undo.
+An item placed wholly inside another gets no fades. To change a crossfade,
+drag the fade corners of the two items as you would any fade.
+
 Drags land on the grid, which follows the zoom: as fine as a sixteenth of a
 beat when you are zoomed far in, as coarse as 32 beats when zoomed far out.
 Hold Shift to place something off the grid.
@@ -472,8 +478,21 @@ somewhere else while you typed, the panel says so and `Ctrl+Enter` applies
 your text over that change.
 
 **List** swaps the roll for a list of the item's events, notes and
-controller values alike. Double-click a row to edit it; `Delete` removes the
-selected rows.
+controller values alike, one to a row:
+
+| Column | What it shows | To change it, type |
+| --- | --- | --- |
+| Position | Where the event is, as bar.beat.tick (960 ticks to a beat) | `3.2.480` |
+| Type | "Note", or "CC" and the controller's number | (not editable) |
+| Length | A note's length, as beats.ticks | `1.0`, `0.480` |
+| Pitch / CC | A note's pitch by name, or the controller's number | `C#4` or `61`; `7` |
+| Vel / value | A note's velocity (1 to 127) or the controller's value (0 to 127) | `96` |
+| Channel | The MIDI channel | (not editable) |
+
+Double-click a cell to edit it, then press Enter (Escape leaves it as it
+was). A value the list cannot use is refused, and the line under the list
+says what form it wants. **+ Note** under the list adds a note, and `Delete`
+removes the selected rows.
 
 ## Plugins
 
