@@ -964,6 +964,10 @@ of the strips it rests until the pointer moves. `Mixer::sync` advances it
 by the shared clock (§4.3); `Mixer::autoScroll(seconds)` is the
 step. A plug-in list that scrolls inside its strip does not edge-scroll.
 
+A plug-in list keeps the place it is scrolled to when the strips are
+rebuilt after an edit, clamped to the new chain; a new project's lists
+start at their tops.
+
 A strip reorder ignores destination strips removed from the model before the
 next mixer sync; stale displayed rows cannot become drop targets.
 

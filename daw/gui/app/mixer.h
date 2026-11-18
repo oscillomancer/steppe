@@ -140,7 +140,7 @@ class Mixer {
     void addStrip(const std::string& type);
     float maxHeight() const;
     void applyHeight();
-    void rebuild();
+    void rebuild(bool keepLists);  // keepLists: the plug-in lists stay scrolled where they are
     void update();
     void dragStrip(const std::string& track, DragPhase phase, ui::Point p);
     void dragFx(const std::string& track, model::Id fx, DragPhase phase, ui::Point p,

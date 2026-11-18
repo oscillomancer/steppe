@@ -413,6 +413,10 @@ class FxList : public ui::Node {
     const std::vector<FxSlot*>& slots() const { return slots_; }
     const std::vector<RackSlot*>& racks() const { return racks_; }
     float content() const { return chainRows(static_cast<int>(racks_.size() + slots_.size())); }
+    // Where the list is scrolled to; a rebuilt strip's list takes the old
+    // one's place (arrange clamps it to the new content).
+    float scroll() const { return scroll_; }
+    void setScroll(float v) { scroll_ = v; }
     void arrange(const ui::Canvas& canvas, const ui::Rect& b) override {
         setBounds(b);
         const bool bar = content() > b.h + 0.5f;
@@ -1073,8 +1077,16 @@ Result<json::Value> Mixer::set(const std::string& track, const char* field, json
     return r;
 }
 
-void Mixer::rebuild() {
+void Mixer::rebuild(bool keepLists) {
     endDrag(false);  // the nodes it points at are about to go
+    // A strip's plug-in list stays where it is scrolled to (a plug-in dropped
+    // at the end of a long chain is still in view after it); a new project's
+    // lists start at their tops.
+    std::vector<std::pair<std::string, float>> listScroll;
+    if (keepLists)
+        for (const Strip& st : strips_)
+            if (auto* list = dynamic_cast<FxList*>(st.chain); list && list->scroll() > 0)
+                listScroll.emplace_back(st.track, list->scroll());
     for (const Strip& s : strips_) meters_.detach(s.meter);
     strips_.clear();
     vcaStrips_.clear();
@@ -1151,6 +1163,8 @@ void Mixer::rebuild() {
         // one section that takes the room the panel's height gives.
         auto& chain = frame->emplace<FxList>("mixer.fx." + tid);
         st.chain = &chain;
+        for (const auto& [track, scroll] : listScroll)
+            if (track == tid) chain.setScroll(scroll);
         chain.onDoubleClick = [this, tid] {
             json::Value args = json::Value::object();
             args["track"] = tid;
@@ -1997,7 +2011,7 @@ void Mixer::sync(std::chrono::steady_clock::time_point now) {
     const std::string structureNow = structure();
     if (replaced || structureNow != structure_) {
         structure_ = structureNow;
-        rebuild();
+        rebuild(!replaced);
     }
     update();
 }

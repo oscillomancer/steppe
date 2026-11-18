@@ -1013,6 +1013,34 @@ TEST_CASE("mixer: a strip held at the strips' edge scrolls them, and drops out o
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("mixer: a plug-in list keeps its place when the strips are rebuilt") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    const auto b = f.addTrack("channel", "B");
+    std::vector<std::string> fx;
+    for (int i = 0; i < 12; ++i) fx.push_back(f.addFx(a, "Hickory"));
+    f.refresh();
+    ui::PointerEvent wheel;
+    wheel.type = ui::PointerEvent::Type::Wheel;
+    wheel.pos = f.centre(f.node("mixer.fx." + fx[2]));
+    wheel.wheelY = -3;
+    f.root->pointer(wheel);
+    f.root->frame(false);
+    const ui::Node* old = f.node("mixer.fx." + fx[0]);
+    const float y = old->bounds().y;
+    REQUIRE(y < f.strip(a).chain->bounds().y - 10);
+    // Another strip gets a plug-in: every strip is rebuilt.
+    f.addFx(b, "Hickory");
+    f.refresh();
+    CHECK(f.node("mixer.fx." + fx[0])->bounds().y == y);
+    // A chain that got shorter than the list shows comes back to its top.
+    for (int i = 3; i < 12; ++i) f.exec("fx.remove", R"({"fx":")" + fx[i] + R"("})");
+    f.refresh();
+    CHECK(f.node("mixer.fx." + fx[0])->bounds().y == f.strip(a).chain->bounds().y);
+    CHECK(f.errors.empty());
+}
+
 TEST_CASE("mixer: masters reorder among masters; tr_0 stays first") {
     Fixture f;
     if (!f.ok) return;
