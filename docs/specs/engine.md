@@ -429,10 +429,15 @@ copies its home channel's mute and flag. A stage's wet and bypass reach it
 the same way, and its own wet ramp crossfades the change as after a compile. No compile-time decision depends
 on them: a stage's latency, dry delay, MIDI bus slot and note target are
 the same bypassed or not, and whether it takes part in the MIDI bus is
-decided each block (ADR-0093). In the anticipative executor a compiled
-reload hands over at the renderer's position, so a value edit there is
-heard no later than the compiled reload would be, and plays the same once
-both have taken it.
+decided each block (ADR-0093). In the anticipative executor a rendered node
+takes a value edit at the next block the renderer renders, and a compiled
+reload hands over at the renderer's position. With the renderer full and
+waiting for the callback when the edit is made, both start at the same
+block, so an edit heard only on rendered nodes is bit-identical to the
+compiled reload. A live node takes it at its next callback block, the
+render-ahead rounded up to a render block earlier than the reload reaches
+it, and the two are identical once the reload's ramp is done. A renderer still filling renders with the
+old plan while the compile runs, so a compiled reload is only ever later.
 
 **Patch-only FX edits (ADR-0092).** A session that differs from the last one
 `Engine::load` took only in FX `patch` values, each of those FX having a

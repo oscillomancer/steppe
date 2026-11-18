@@ -9,6 +9,7 @@
 #include <supple/audio/audio_file.h>
 #include <chrono>
 #include <cmath>
+#include <limits>
 
 #include <supple/engine/offline.h>
 #include <supple/engine/realtime.h>
@@ -2426,6 +2427,10 @@ TEST_CASE("MIDI sends: a source mute or a route mute while playing needs no plan
             }
         };
         cycles(100);
+        // A full renderer waiting for the callback: every run takes the edit
+        // from the same renderer position.
+        if (options.anticipative)
+            REQUIRE(engine.awaitRendered(std::numeric_limits<std::int64_t>::max()));
         const auto generation = engine.planGeneration();
         if (run == 0) REQUIRE(engine.load(next));
         if (run == 1) {
@@ -2460,14 +2465,11 @@ TEST_CASE("MIDI sends: a source mute or a route mute while playing needs no plan
                     if (x[i] != unedited[i]) return i;
                 return x.size();
             };
+            // No node is live, so in both executors the value edit
+            // plays sample for sample like the compiled reload (ADR-0093).
             REQUIRE(heard(fast) < fast.size());
-            if (!options.anticipative) {
-                CHECK(fast == compiled);
-            } else {
-                CHECK(heard(fast) <= heard(compiled));
-                CHECK(
-                    std::equal(fast.begin() + 250 * 256, fast.end(), compiled.begin() + 250 * 256));
-            }
+            CHECK(heard(fast) >= 100 * 256);
+            CHECK(fast == compiled);
         }
 }
 

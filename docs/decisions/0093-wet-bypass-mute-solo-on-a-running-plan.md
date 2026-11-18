@@ -81,10 +81,27 @@ compile's; only the stages' `bypass` and `wet` differ.
   stores, whatever the session's size. This includes a solo, which floods
   the signal graph once on the main thread.
 - In the in-callback executor, each of these edits while playing sounds
-  sample for sample like a compiled reload. In the anticipative executor a
-  compiled reload hands over at the renderer's position, later than a value
-  edit's next block. There, as with ADR-0060's level edits, a value edit is
-  heard no later than the compiled reload, and the two play the same once
-  both have taken it. Tests check both.
+  sample for sample like a compiled reload.
+- In the anticipative executor, a node the renderer runs takes a value
+  edit at the start of the next block the renderer renders. A compiled
+  reload hands over at the renderer's position too. A live node takes a
+  value edit at its next callback block.
+  - **Exact, when the renderer has rendered its whole render-ahead and is
+    waiting for the callback as the edit is made.** An edit heard only on
+    rendered nodes sounds sample for sample like the compiled reload: both
+    start at the block where the renderer resumes. An edit heard on a live
+    node plays there from its next block. The compiled reload reaches it at
+    the renderer's position, the render-ahead (200 ms by default) rounded
+    up to a render block later: 213 ms in the tests. The two are
+    identical once that reload's ramp is done.
+  - **Otherwise,** the renderer may still be filling while the compile
+    runs. It renders those blocks with the old plan, so the compiled reload
+    hands over later than it would have, never earlier. A value edit is
+    therefore never heard later than a compiled reload made at the same
+    moment.
+  - The tests fill the renderer before the edit, so every run starts from
+    the same renderer position, and check the exact case. Comparing runs
+    without that compares different renderer positions, by whole render
+    blocks (native CI 44247107355).
 - Offline renders still compile in full and are the reference.
 - Native macOS and Windows CI must pass before merging.

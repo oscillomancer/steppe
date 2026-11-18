@@ -9,7 +9,9 @@
 #include <cmath>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "supple/engine/app.h"
@@ -816,78 +818,116 @@ DummyBackend::Options sawInput(std::int64_t frames) {
             }
         }};
 }
+// Plays `base`, takes `next` at cycle 100 by `run` (0: value edit, 1:
+// compiled reload, 2: not at all) and returns channel 0 of 300 cycles. The
+// anticipative renderer is full when the edit is made: it has rendered its
+// whole render-ahead and waits for the callback, so every run takes the
+// edit from the same renderer position.
+constexpr std::size_t kEditFrame = 100 * 256, kEditFrames = 300 * 256;
+std::vector<float> playEdit(const model::Session& base, const model::Session& next,
+                            const EngineOptions& options, int run) {
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend(sawInput(kEditFrames));
+    Engine engine(pool, media, options);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
+    REQUIRE(engine.load(base));
+    engine.play();
+    const auto cycles = [&](int n) {
+        if (options.anticipative)
+            runAhead(engine, backend, n, 256);
+        else
+            backend.run(n);
+    };
+    cycles(100);
+    if (options.anticipative)
+        REQUIRE(engine.awaitRendered(std::numeric_limits<std::int64_t>::max()));
+    const auto generation = engine.planGeneration();
+    if (run == 0) REQUIRE(engine.load(next));
+    if (run == 1) REQUIRE(engine.load(withMarker(next, next.version + 1)));
+    CHECK(engine.planGeneration() == generation + (run == 1 ? 1 : 0));
+    CHECK(engine.mixEdits() == (run == 0 ? 1u : 0u));
+    cycles(200);
+    CHECK(engine.anticipationMisses() == 0);
+    CHECK(engine.processErrors() == 0);
+    engine.stop();
+    return backend.capture().channels[0];
+}
+
+// Where a full renderer resumes: the first render block that ends past the
+// playhead plus the render-ahead target (EngineOptions::renderAheadMs).
+std::size_t rendererResumesAt(const EngineOptions& options, std::size_t playhead) {
+    const std::size_t block = options.renderBlock;
+    const std::size_t ahead = std::max<std::size_t>(
+        2 * block, static_cast<std::size_t>(options.renderAheadMs / 1000.0 * 48000));
+    return (playhead + ahead + block - 1) / block * block;
+}
+
+// The value edit against the compiled reload and the unedited run (ADR-0093).
+// In the callback executor they are equal. In the anticipative one, with the
+// renderer full at the edit, a compiled reload is heard from where the
+// renderer resumes. A value edit heard only on rendered tracks is too, and
+// is then equal to the compiled reload sample for sample. One heard on a
+// live track (`live`) plays there from the next block, and equals the
+// compiled reload once that reload's ramp (Plan::smoothFrames, 480) is done.
+void checkLikeCompiled(const model::Session& base, const model::Session& next, bool live) {
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 1}}) {
+        CAPTURE(options.anticipative);
+        const auto fast = playEdit(base, next, options, 0);
+        const auto compiled = playEdit(base, next, options, 1);
+        const auto unedited = playEdit(base, next, options, 2);
+        auto heard = [&](const std::vector<float>& x) {
+            for (std::size_t i = 0; i < kEditFrames; ++i)
+                if (x[i] != unedited[i]) return i;
+            return kEditFrames;
+        };
+        CHECK(peakOf(unedited, 0, kEditFrames) > 0.01);
+        REQUIRE(heard(fast) < kEditFrames);  // the edit is heard
+        if (!options.anticipative) {
+            CHECK(heard(fast) >= kEditFrame);
+            CHECK(maxDiff(fast, 0, compiled, kEditFrames) == 0.0);
+            continue;
+        }
+        // From frame `at`: a stage's wet ramp starts at the old level, so its
+        // first frame may still sound unchanged.
+        auto from = [](std::size_t heardAt, std::size_t at) {
+            return heardAt == at || heardAt == at + 1;
+        };
+        const std::size_t resumes = rendererResumesAt(options, kEditFrame);
+        CHECK(from(heard(compiled), resumes));
+        if (live) {
+            CHECK(from(heard(fast), kEditFrame));
+            const std::size_t ramped = resumes + 480;
+            CHECK(std::equal(fast.begin() + ramped, fast.begin() + kEditFrames,
+                             compiled.begin() + ramped));
+        } else {
+            CHECK(maxDiff(fast, 0, compiled, kEditFrames) == 0.0);
+        }
+    }
+}
 }  // namespace
 
 TEST_CASE("FX wet and bypass edits while playing sound exactly like a compiled reload" *
           doctest::description("rt")) {
     // ADR-0093: no plan; the stage's own ramp crossfades, as after a compile.
+    // The instruments' gains run in the renderer, the vocal's live.
     const Wet w = wetSession();
-    for (const auto& [name, edit] :
-         std::vector<std::pair<std::string, void (*)(model::EditTxn&, const Wet&)>>{
-             {"wet",
-              [](model::EditTxn& t, const Wet& x) {
-                  for (Id fx : {x.gainA, x.gainVocal})
-                      t.modify<model::FxInstance>(fx, [](auto& f) { f.wet = 40; });
-              }},
-             {"bypass", [](model::EditTxn& t, const Wet& x) {
-                  for (Id fx : {x.gainB, x.gainVocal})
-                      t.modify<model::FxInstance>(fx, [](auto& f) { f.bypass = true; });
-              }}}) {
+    for (const auto& [name, fxs, bypass, live] :
+         std::vector<std::tuple<std::string, std::vector<Id>, bool, bool>>{
+             {"wet, rendered", {w.gainA}, false, false},
+             {"wet, rendered and live", {w.gainA, w.gainVocal}, false, true},
+             {"bypass, rendered", {w.gainB}, true, false},
+             {"bypass, rendered and live", {w.gainB, w.gainVocal}, true, true}}) {
+        CAPTURE(name);
         model::EditTxn t(w.m.session, 3);
-        edit(t, w);
-        const model::Session next = t.commit().value();
-        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 1}}) {
-            CAPTURE(name);
-            CAPTURE(options.anticipative);
-            std::vector<std::vector<float>> outputs;
-            for (int run = 0; run < 3; ++run) {  // fast, compiled, unedited
-                INFO(name << ", anticipative " << options.anticipative << ", run " << run);
-                auto pool = makePool();
-                MediaCache media;
-                DummyBackend backend(sawInput(300 * 256));
-                Engine engine(pool, media, options);
-                REQUIRE(
-                    engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
-                REQUIRE(engine.load(w.m.session));
-                engine.play();
-                const auto cycles = [&](int n) {
-                    if (options.anticipative)
-                        runAhead(engine, backend, n, 256);
-                    else
-                        backend.run(n);
-                };
-                cycles(100);
-                const auto generation = engine.planGeneration();
-                if (run == 0) REQUIRE(engine.load(next));
-                if (run == 1) REQUIRE(engine.load(withMarker(next, 4)));
-                CHECK(engine.planGeneration() == generation + (run == 1 ? 1 : 0));
-                CHECK(engine.mixEdits() == (run == 0 ? 1u : 0u));
-                cycles(200);
-                CHECK(engine.anticipationMisses() == 0);
-                CHECK(engine.processErrors() == 0);
-                engine.stop();
-                outputs.push_back(backend.capture().channels[0]);
-            }
-            CHECK(peakOf(outputs[0], 0, 300 * 256) > 0.01);
-            // Where the edit is first heard: the first sample unlike the unedited run.
-            auto heard = [&](const std::vector<float>& x) {
-                for (std::size_t i = 0; i < 300 * 256; ++i)
-                    if (x[i] != outputs[2][i]) return i;
-                return std::size_t{300 * 256};
-            };
-            REQUIRE(heard(outputs[0]) < 300 * 256);
-            if (!options.anticipative) {
-                CHECK(maxDiff(outputs[0], 0, outputs[1], 300 * 256) == 0.0);
-            } else {
-                // As a level edit (ADR-0060): a live node takes it at its next
-                // block, a rendered one at the renderer's, never later than a
-                // compiled reload hands over. Once both have it, they agree.
-                CHECK(heard(outputs[0]) >= 100 * 256);
-                CHECK(heard(outputs[0]) <= heard(outputs[1]));
-                const std::vector<float> tail(outputs[1].begin() + 250 * 256, outputs[1].end());
-                CHECK(maxDiff(outputs[0], 250 * 256, tail, 50 * 256) == 0.0);
-            }
-        }
+        for (Id fx : fxs)
+            t.modify<model::FxInstance>(fx, [&](auto& f) {
+                if (bypass)
+                    f.bypass = true;
+                else
+                    f.wet = 40;
+            });
+        checkLikeCompiled(w.m.session, t.commit().value(), live);
     }
 }
 
@@ -934,107 +974,57 @@ TEST_CASE("an FX wet or bypass edit compiles with anything else, or when the FX 
     engine.stop();
 }
 
-namespace {
-// Plays `base`, takes `next` at cycle 100 by `run` (0: value edit, 1:
-// compiled reload, 2: not at all) and returns channel 0 of 300 cycles.
-std::vector<float> playEdit(const model::Session& base, const model::Session& next,
-                            const EngineOptions& options, int run) {
-    auto pool = makePool();
-    MediaCache media;
-    DummyBackend backend(sawInput(300 * 256));
-    Engine engine(pool, media, options);
-    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
-    REQUIRE(engine.load(base));
-    engine.play();
-    const auto cycles = [&](int n) {
-        if (options.anticipative)
-            runAhead(engine, backend, n, 256);
-        else
-            backend.run(n);
-    };
-    cycles(100);
-    const auto generation = engine.planGeneration();
-    if (run == 0) REQUIRE(engine.load(next));
-    if (run == 1) REQUIRE(engine.load(withMarker(next, next.version + 1)));
-    CHECK(engine.planGeneration() == generation + (run == 1 ? 1 : 0));
-    CHECK(engine.mixEdits() == (run == 0 ? 1u : 0u));
-    cycles(200);
-    CHECK(engine.anticipationMisses() == 0);
-    CHECK(engine.processErrors() == 0);
-    engine.stop();
-    return backend.capture().channels[0];
-}
-
-// The value edit against the compiled reload and the unedited run: equal in
-// the callback executor; heard no later and equal once both have it in the
-// anticipative one (ADR-0093).
-void checkLikeCompiled(const model::Session& base, const model::Session& next) {
-    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 1}}) {
-        CAPTURE(options.anticipative);
-        const auto fast = playEdit(base, next, options, 0);
-        const auto compiled = playEdit(base, next, options, 1);
-        const auto unedited = playEdit(base, next, options, 2);
-        constexpr std::size_t kFrames = 300 * 256;
-        auto heard = [&](const std::vector<float>& x) {
-            for (std::size_t i = 0; i < kFrames; ++i)
-                if (x[i] != unedited[i]) return i;
-            return kFrames;
-        };
-        CHECK(peakOf(unedited, 0, kFrames) > 0.01);
-        REQUIRE(heard(fast) < kFrames);  // the edit is heard
-        CHECK(heard(fast) >= 100 * 256);
-        if (!options.anticipative) {
-            CHECK(maxDiff(fast, 0, compiled, kFrames) == 0.0);
-        } else {
-            CHECK(heard(fast) <= heard(compiled));
-            const std::vector<float> tail(compiled.begin() + 250 * 256, compiled.end());
-            CHECK(maxDiff(fast, 250 * 256, tail, 50 * 256) == 0.0);
-        }
-    }
-}
-}  // namespace
-
 TEST_CASE("mute and solo edits while playing sound exactly like a compiled reload" *
           doctest::description("rt")) {
     // ADR-0093: track, VCA and route mutes, track and VCA solo, solo-defeat,
-    // on rendered tracks (a, b, the buss) and a live one (the vocal).
+    // on rendered tracks (a, b, the buss) and a live one (the vocal). `live`:
+    // the edit changes what the vocal plays.
     const Wet w = wetSession();
     const Mix& m = w.m;
     using Edit = std::function<void(model::EditTxn&)>;
-    const std::vector<std::pair<std::string, Edit>> edits = {
-        {"track mute",
+    const std::vector<std::tuple<std::string, Edit, bool>> edits = {
+        {"track mute, rendered",
+         [&](model::EditTxn& t) { t.modify<model::Track>(m.a, [](auto& x) { x.mute = true; }); },
+         false},
+        {"track mute, rendered and live",
          [&](model::EditTxn& t) {
              for (Id id : {m.a, w.vocal})
                  t.modify<model::Track>(id, [](auto& x) { x.mute = true; });
-         }},
+         },
+         true},
         {"solo a rendered track",
          [&](model::EditTxn& t) {
              t.modify<model::Track>(m.b, [](auto& x) { x.solo = model::Solo::On; });
-         }},
+         },
+         true},
         {"solo the live track, defeat another",
          [&](model::EditTxn& t) {
              t.modify<model::Track>(w.vocal, [](auto& x) { x.solo = model::Solo::InPlace; });
              t.modify<model::Track>(m.a, [](auto& x) { x.solo = model::Solo::Defeat; });
-         }},
+         },
+         false},
         {"VCA mute",
          [&](model::EditTxn& t) {
              t.modify<model::TrackGroup>(m.vca, [](auto& g) { g.vca->mute = true; });
-         }},
+         },
+         false},
         {"VCA solo",
          [&](model::EditTxn& t) {
              t.modify<model::TrackGroup>(m.vca, [](auto& g) { g.vca->solo = true; });
-         }},
+         },
+         true},
         {"an encoded send's mute",
          [&](model::EditTxn& t) {
              t.modify<model::Route>(m.sendA, [](auto& r) { r.mute = true; });
              t.modify<model::Route>(m.sendB, [](auto& r) { r.mute = true; });
-         }},
+         },
+         false},
     };
-    for (const auto& [name, edit] : edits) {
+    for (const auto& [name, edit, live] : edits) {
         CAPTURE(name);
         model::EditTxn t(m.session, 3);
         edit(t);
-        checkLikeCompiled(m.session, t.commit().value());
+        checkLikeCompiled(m.session, t.commit().value(), live);
     }
 }
 
