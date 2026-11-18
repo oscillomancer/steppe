@@ -317,8 +317,13 @@ by core-dsp's FFT destructor, freed memory it did not own).
 
 **audio-file:** `Result<AudioData> readAudio(path)` (WAV all PCM/float
 formats via dr_wav, FLAC via dr_flac, MP3 via dr_mp3) → planar float +
-sample rate + channel count; `Status writeWav(path, data, format)` (16/24-bit
-PCM with TPDF dither — seeded — or 32-bit float). Round-trip tests.
+sample rate + channel count; `readAudioHead(path, {maxFrames, maxChannels,
+stop}, &cut)` decodes only a file's start, a chunk at a time through the same
+decoders, so memory is bounded by the limits however long or wide the file is
+(`stop` cancels between chunks with `audio.cancelled`; `cut` says the file
+holds more; the file audition reads with it, ADR-0094); `Status writeWav(path,
+data, format)` (16/24-bit PCM with TPDF dither — seeded — or 32-bit float).
+Round-trip tests.
 `inspect(path)` reads container metadata without decoding PCM (for WAV also
 the stored bits per sample and whether they are IEEE float). PCM and
 IEEE-float WAV headers, including those EXTENSIBLE subformats, must have

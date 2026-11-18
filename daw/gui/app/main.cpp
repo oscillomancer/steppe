@@ -360,9 +360,11 @@ int main(int argc, char** argv) {
     loop.setWaker([p = platform->get()] { p->wake(); });
     std::unique_ptr<rpc::Server> server;
     gui::Shell* eventShell = nullptr;
+    gui::SideBrowser* eventBrowser = nullptr;
     auto publish = [&] {
         for (auto& [topic, payload] : (*app)->takeEvents()) {
             if (eventShell && topic == "record.error") eventShell->recordingError(payload);
+            if (eventBrowser && topic == "audition.error") eventBrowser->auditionFailed(payload);
             if (server) server->publish(topic, payload);
         }
     };
@@ -534,6 +536,7 @@ int main(int argc, char** argv) {
     pluginDrag.addTargets([&mixer](ui::Point p) { return mixer.trackTargetAt(p); });
     pluginDrag.addTargets([&shell](ui::Point p) { return shell.trackTargetAt(p); });
     gui::SideBrowser sideBrowser(root, **app, dispatcher, uiState, fxWindow, pluginDrag);
+    eventBrowser = &sideBrowser;  // a file it plays that cannot be read after all
     // A file from the browser: Add is File > Import's own path; a drag lands
     // as a file dropped from outside the app does.
     sideBrowser.files.add = [&fileActions](const std::filesystem::path& file) {
@@ -1211,16 +1214,17 @@ int main(int argc, char** argv) {
             uiFile.tick((*app)->projectPath(), (*app)->projectGeneration());
         });
         timed([&] {
+            // The pass's time: what steps an edge scroll and paces the meters.
+            const auto now = Clock::now();
             shell.sync(event);
-            midiEditor.sync();
+            midiEditor.sync(now);
             routing.sync();
             racks.sync();
-            racks.tick();
-            mixer.sync();
+            racks.tick(now);
+            mixer.sync(now);
             history.sync();
             inspector.sync();
             sideBrowser.sync();
-            const auto now = Clock::now();
             const auto activity = (*app)->meterActivitySequence();
             // Observe before reading; arm/recheck after the visible meters rest.
             if (event || !meterFrame || now >= *meterFrame) {
@@ -1239,7 +1243,7 @@ int main(int argc, char** argv) {
             if (audioDevice.isOpen()) audioDevice.refresh();
             if (timecodeDialog.isOpen()) timecodeDialog.refresh();
             syncDialog.refresh();
-            if (shell.arrange()->poll(event)) root.requestAnimationFrame();
+            if (shell.arrange()->poll(event, now)) root.requestAnimationFrame();
         });
         return next;
     };
@@ -1400,16 +1404,17 @@ int main(int argc, char** argv) {
     if (server) server->stop();
     (void)uiFile.flush((*app)->projectPath());
     if (!o.snapshot.empty()) {  // the final state, for tests and bug reports
+        const auto now = Clock::now();
         shell.sync();
-        midiEditor.sync();
+        midiEditor.sync(now);
         routing.sync();
         racks.sync();
-        racks.tick();
-        mixer.sync();
+        racks.tick(now);
+        mixer.sync(now);
         history.sync();
         inspector.sync();
         sideBrowser.sync();
-        meterFeed.poll();
+        meterFeed.poll(now);
         root.damageAll();
         root.frame(false);
         for (const auto& [name, panel] :

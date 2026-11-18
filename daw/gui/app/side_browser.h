@@ -6,6 +6,7 @@
 // audio and MIDI files; Media lists the audio the project already holds.
 // What is chosen goes on the selected tracks, or where it is dragged,
 // through commands that exist (`fx.add`, `fx.chain.load`, `item.add`).
+// An audio file of the last two is heard first with Play (`audition.play`).
 #pragma once
 
 #include <cstdint>
@@ -63,8 +64,21 @@ class SideBrowser {
     const std::string& kind() const { return kind_; }
     void focusSearch();  // the shown kind's search field; typing searches
     // Once per pass of the loop: the Media page, while in view, lists the
-    // project's media again when the project has changed.
+    // project's media again when the project has changed; and a file played
+    // from here that has ended gives its button back to Play.
     void sync();
+
+    // Play, beside Add on the Files and Media pages: the chosen audio file
+    // is heard on outputs 1/2 before it is added (`audition.play`,
+    // ADR-0094); the button reads Stop meanwhile. The file played from
+    // here, empty when none is.
+    const std::filesystem::path& auditioned() const { return auditioned_; }
+    // The engine's `audition.error` event: a file that could not be read
+    // after all. Said on the page when it is the one played from here.
+    void auditionFailed(const json::Value& event);
+    // What the status line says while a file plays, or is still being read.
+    static std::string playingText(const std::string& name, double seconds, bool truncated,
+                                   bool reading);
 
     // The chains as listed (after the search), for tests: a row's name and
     // what is at its right ("3 effects").
@@ -120,10 +134,23 @@ class SideBrowser {
     std::unique_ptr<ui::Node> buildChains();
     std::unique_ptr<ui::Node> buildFiles();
     std::unique_ptr<ui::Node> buildMedia();
-    void loadMedia();    // from the session, when its media changed
+    // From the session. `whenChanged`: only when its sources or its media
+    // folder are not those the list was last read from.
+    void loadMedia(bool whenChanged);
     void filterMedia();  // by the search
     void addMedia(std::size_t row);
     void setMediaStatus(std::string text);
+    // The chosen row of the page shown, when it is an audio file.
+    struct Playable {
+        std::filesystem::path path;
+        std::string name;
+    };
+    std::optional<Playable> playable() const;
+    void togglePlay();                // the Play button of the page shown
+    void stopPlay();                  // what was played from here, if it still plays
+    void playFollows();               // the chosen row is another now: it stops
+    void playEnded(std::string say);  // the buttons read Play again
+    void setPlayStatus(std::string text);
     ui::Node* pageOf(const std::string& kind) const;
     std::vector<std::filesystem::path> roots() const;
     void goUp();
@@ -152,6 +179,13 @@ class SideBrowser {
     ui::List* chainList_ = nullptr;
     ui::Button* chainAdd_ = nullptr;
     ui::Button* fileAdd_ = nullptr;
+    ui::Button* filePlay_ = nullptr;
+    ui::Button* mediaPlay_ = nullptr;
+    // The file played from here, its name, and what the engine said of it.
+    std::filesystem::path auditioned_;
+    std::string auditionedName_;
+    double auditionedSeconds_ = 0;
+    bool auditionedCut_ = false, auditionReading_ = false;
     ui::Label* chainStatus_ = nullptr;
     ui::TextBlock* chainEmpty_ = nullptr;
     std::vector<Chain> chains_;       // as fx.chain.list gave them
@@ -180,6 +214,10 @@ class SideBrowser {
     std::optional<Media> draggedMedia_;    // the one in a drag
     // The session the list was read from; ~0: not read yet.
     std::uint64_t mediaVersion_ = ~std::uint64_t{0}, mediaGeneration_ = ~std::uint64_t{0};
+    // Its sources (they share storage with the session's until an edit
+    // changes them) and the folder their relative paths were resolved in.
+    model::IdMap<model::MediaSource> mediaSeen_;
+    std::filesystem::path mediaDir_;
 };
 
 }  // namespace supple::gui

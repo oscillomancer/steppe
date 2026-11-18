@@ -14,6 +14,8 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -65,6 +67,20 @@ Result<AudioData> resample(const AudioData& data, double targetRate);
 
 Result<AudioData> readAudio(const std::filesystem::path& path);
 Result<AudioData> readAudio(std::span<const std::uint8_t> bytes);
+
+// The start of a file, decoded as readAudio decodes it, reading the file a
+// chunk at a time and only as far as that takes: at most `maxFrames` of its
+// first `maxChannels` channels (the rest are decoded and dropped), so memory
+// is bounded however long or wide the file is. `stop` (optional) is asked
+// between chunks; true ends the read with "audio.cancelled". `cut`, when
+// given, says whether the file holds more frames than were read.
+struct HeadOptions {
+    std::int64_t maxFrames = std::numeric_limits<std::int64_t>::max();
+    int maxChannels = 64;
+    std::function<bool()> stop;
+};
+Result<AudioData> readAudioHead(const std::filesystem::path& path, const HeadOptions& options,
+                                bool* cut = nullptr);
 
 // Tests: how many whole-file decodes readAudio() has performed (the path
 // overload goes through the byte overload, which counts once). The media model

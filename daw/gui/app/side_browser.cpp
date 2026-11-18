@@ -167,6 +167,10 @@ std::string lengthText(double seconds) {
     return buf;
 }
 
+// Play and Stop are one button: wide enough for either, so that it and Add
+// stay where they are when it changes. Add beside it is as wide.
+constexpr float kPlayWidth = 52;
+
 std::string effectsText(int count) {
     return count == 1 ? std::string("1 effect") : std::to_string(count) + " effects";
 }
@@ -268,7 +272,10 @@ std::unique_ptr<ui::Node> SideBrowser::buildFiles() {
     fileSearch_->onSubmit = [this](const std::string&) {
         if (const auto row = fileList_->selected()) activateFile(*row);
     };
-    fileList_->onSelect = [this](std::size_t) { chosen(); };
+    fileList_->onSelect = [this](std::size_t) {
+        chosen();
+        playFollows();
+    };
     fileSearch_->onOtherKey = [this](const ui::KeyEvent& e) { return fileList_->onKey(e); };
     fileList_->onActivate = [this](std::size_t row) { activateFile(row); };
     fileList_->onDrag = [this](std::size_t row, ui::DragPhase phase, ui::Point at) {
@@ -282,6 +289,7 @@ std::unique_ptr<ui::Node> SideBrowser::buildFiles() {
         if (phase == ui::DragPhase::End || phase == ui::DragPhase::Cancel) draggedFile_.reset();
         drag_.dragTo(file.name, phase, at, files.where, [this, file](ui::Point released) {
             if (!files.drop) return;
+            stopPlay();  // it is added: no longer only heard
             const Status dropped = files.drop(file.path, released);
             setFileStatus(dropped ? "Added " + file.name : dropped.error().message);
         });
@@ -290,11 +298,17 @@ std::unique_ptr<ui::Node> SideBrowser::buildFiles() {
     footer.layout.dir = ui::Layout::Dir::Row;
     footer.layout.height = ui::SizeRule::fixed(28);
     footer.layout.align = ui::Layout::Align::Center;
+    footer.layout.gap = 6;
     footer.emplace<ui::Node>("side.browser.files.footer.rest").layout.width =
         ui::SizeRule::fraction();
+    filePlay_ =
+        &footer.emplace<ui::Button>("side.browser.files.play", "Play", [this] { togglePlay(); });
+    filePlay_->layout.width = ui::SizeRule::fixed(kPlayWidth);
+    filePlay_->enabled = false;  // until an audio file is chosen
     fileAdd_ = &footer.emplace<ui::Button>("side.browser.files.add", "Add", [this] {
         if (const auto row = fileList_->selected()) activateFile(*row);
     });
+    fileAdd_->layout.width = ui::SizeRule::fixed(kPlayWidth);  // two cells alike
     fileStatus_ = &page->emplace<ui::Label>("side.browser.files.status", "", ui::Font::Ui,
                                             "caption", "ink-quiet");
     fileStatus_->layout.height = ui::SizeRule::fixed(16);
@@ -417,6 +431,7 @@ void SideBrowser::filterFiles() {
     fileList_->select(fileShown_.empty() || query.empty() ? std::nullopt
                                                           : std::optional<std::size_t>(0));
     chosen();
+    playFollows();
     fileList_->invalidate();
     root_.relayout();
     root_.damageAll();
@@ -430,6 +445,7 @@ void SideBrowser::activateFile(std::size_t row) {
         return;
     }
     if (!files.add) return;
+    stopPlay();  // it is added: no longer only heard
     const Status added = files.add(entry.path);
     setFileStatus(added ? "Added " + entry.name : added.error().message);
 }
@@ -525,11 +541,17 @@ std::unique_ptr<ui::Node> SideBrowser::buildMedia() {
         c.text({r.x, r.y, r.w - 10, r.h}, row.detail, ui::Font::Ui, t.type("caption"),
                t.color("ink-faint"), ui::kRight | ui::kMiddle);
     };
-    mediaSearch_->onChange = [this](const std::string&) { filterMedia(); };
+    mediaSearch_->onChange = [this](const std::string&) {
+        filterMedia();
+        playFollows();
+    };
     mediaSearch_->onSubmit = [this](const std::string&) {
         if (const auto row = mediaList_->selected()) addMedia(*row);
     };
-    mediaList_->onSelect = [this](std::size_t) { chosen(); };
+    mediaList_->onSelect = [this](std::size_t) {
+        chosen();
+        playFollows();
+    };
     mediaSearch_->onOtherKey = [this](const ui::KeyEvent& e) { return mediaList_->onKey(e); };
     mediaList_->onActivate = [this](std::size_t row) { addMedia(row); };
     mediaList_->onDrag = [this](std::size_t row, ui::DragPhase phase, ui::Point at) {
@@ -544,6 +566,7 @@ std::unique_ptr<ui::Node> SideBrowser::buildMedia() {
         if (phase == ui::DragPhase::End || phase == ui::DragPhase::Cancel) draggedMedia_.reset();
         drag_.dragTo(media.name, phase, at, files.where, [this, media](ui::Point released) {
             if (!files.drop) return;
+            stopPlay();
             const Status dropped = files.drop(media.path, released);
             setMediaStatus(dropped ? "Added " + media.name : dropped.error().message);
         });
@@ -552,12 +575,18 @@ std::unique_ptr<ui::Node> SideBrowser::buildMedia() {
     footer.layout.dir = ui::Layout::Dir::Row;
     footer.layout.height = ui::SizeRule::fixed(28);
     footer.layout.align = ui::Layout::Align::Center;
+    footer.layout.gap = 6;
     footer.emplace<ui::Node>("side.browser.media.footer.rest").layout.width =
         ui::SizeRule::fraction();
+    mediaPlay_ =
+        &footer.emplace<ui::Button>("side.browser.media.play", "Play", [this] { togglePlay(); });
+    mediaPlay_->layout.width = ui::SizeRule::fixed(kPlayWidth);
+    mediaPlay_->enabled = false;
     mediaAdd_ = &footer.emplace<ui::Button>("side.browser.media.add", "Add", [this] {
         if (const auto row = mediaList_->selected()) addMedia(*row);
     });
     mediaAdd_->enabled = false;  // until a row is chosen; an empty project never lists one
+    mediaAdd_->layout.width = ui::SizeRule::fixed(kPlayWidth);
     mediaStatus_ = &page->emplace<ui::Label>("side.browser.media.status", "", ui::Font::Ui,
                                              "caption", "ink-quiet");
     mediaStatus_->layout.height = ui::SizeRule::fixed(16);
@@ -576,24 +605,45 @@ void SideBrowser::setMediaStatus(std::string text) {
 }
 
 void SideBrowser::sync() {
+    if (!auditioned_.empty()) {
+        // It ended, was stopped or replaced from elsewhere (an agent's
+        // audition.play, the engine stopping, another project): Play again.
+        const engine::AuditionStatus now = app_.auditionStatus();
+        if (!now.playing || std::filesystem::path(now.path) != auditioned_) {
+            playEnded({});
+        } else if (now.decoding != auditionReading_) {
+            auditionReading_ = now.decoding;
+            setPlayStatus(
+                playingText(auditionedName_, auditionedSeconds_, auditionedCut_, auditionReading_));
+        }
+    }
     if (!visible_ || kind_ != "media") return;
     if (app_.head().version != mediaVersion_ || app_.projectGeneration() != mediaGeneration_)
-        loadMedia();
+        loadMedia(true);
 }
 
 // The session's audio sources, by file name without regard to case. A list
 // that comes out as it was is left alone, so an edit elsewhere in the
 // project does not take the chosen row away.
-void SideBrowser::loadMedia() {
+// `whenChanged` (the loop's pass): an edit that left the project's sources
+// and its media folder as they were has nothing new to list, and the files
+// are not looked for on disk again; most edits are of that kind, a fader's
+// drag makes many of them, and a look is a file system call for each source.
+void SideBrowser::loadMedia(bool whenChanged) {
     const model::Session& s = app_.head();
+    const bool sameProject = app_.projectGeneration() == mediaGeneration_;
+    const std::filesystem::path dir = app_.mediaDir();
     mediaVersion_ = s.version;
     mediaGeneration_ = app_.projectGeneration();
+    if (whenChanged && sameProject && s.media.sameStorage(mediaSeen_) && dir == mediaDir_) return;
+    mediaSeen_ = s.media;
+    mediaDir_ = dir;
     std::vector<Media> found;
     for (const auto& e : s.media) {
         Media media;
         media.id = e.id.str();
         media.path = std::filesystem::path(e.value->path);
-        if (media.path.is_relative()) media.path = app_.mediaDir() / media.path;
+        if (media.path.is_relative()) media.path = dir / media.path;
         media.name = media.path.filename().string();
         std::string format = e.value->format;
         for (char& c : format) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -612,17 +662,20 @@ void SideBrowser::loadMedia() {
         return x != y ? x < y : a.id < b.id;
     });
     if (found == media_) return;
-    // The chosen row stays chosen while its source is still listed.
+    // The chosen row stays chosen while its source is still listed. Another
+    // project's source with the same id is another file, and is not chosen.
     std::string chosenId;
-    if (mediaList_)
+    if (mediaList_ && sameProject)
         if (const auto row = mediaList_->selected(); row && *row < mediaShown_.size())
             chosenId = media_[mediaShown_[*row]].id;
     media_ = std::move(found);
     filterMedia();
-    if (!mediaList_ || chosenId.empty()) return;
-    for (std::size_t i = 0; i < mediaShown_.size(); ++i)
-        if (media_[mediaShown_[i]].id == chosenId) mediaList_->select(i);
-    chosen();
+    if (mediaList_ && !chosenId.empty()) {
+        for (std::size_t i = 0; i < mediaShown_.size(); ++i)
+            if (media_[mediaShown_[i]].id == chosenId) mediaList_->select(i);
+        chosen();
+    }
+    playFollows();  // after the row is chosen again: a source that went stops
 }
 
 void SideBrowser::filterMedia() {
@@ -646,19 +699,127 @@ void SideBrowser::filterMedia() {
 void SideBrowser::addMedia(std::size_t row) {
     if (row >= mediaShown_.size() || !files.add) return;
     const Media media = media_[mediaShown_[row]];
+    stopPlay();
     const Status added = files.add(media.path);
     setMediaStatus(added ? "Added " + media.name : added.error().message);
 }
 
 void SideBrowser::setVisible(bool visible) {
     visible_ = visible;
-    if (visible) reload();
+    if (visible)
+        reload();
+    else
+        stopPlay();  // out of view: nothing goes on playing unseen
+}
+
+// --- Play: hearing a file before it is added (ADR-0094) ---------------------
+
+std::string SideBrowser::playingText(const std::string& name, double seconds, bool truncated,
+                                     bool reading) {
+    // A long file is read before it sounds; only its start is played.
+    const std::string what = truncated ? "the first " + lengthText(seconds) + " of " + name : name;
+    return reading ? "Reading " + what + "\u2026" : "Playing " + what;
+}
+
+std::optional<SideBrowser::Playable> SideBrowser::playable() const {
+    if (kind_ == "files" && fileList_) {
+        const auto row = fileList_->selected();
+        if (!row || *row >= fileShown_.size()) return std::nullopt;
+        const Entry& entry = entries_[fileShown_[*row]];
+        // A MIDI file has no instrument here to play it.
+        if (entry.folder || entry.kind == "MIDI") return std::nullopt;
+        return Playable{entry.path, entry.name};
+    }
+    if (kind_ == "media" && mediaList_) {
+        const auto row = mediaList_->selected();
+        if (!row || *row >= mediaShown_.size()) return std::nullopt;
+        const Media& media = media_[mediaShown_[*row]];
+        return Playable{media.path, media.name};
+    }
+    return std::nullopt;
+}
+
+void SideBrowser::setPlayStatus(std::string text) {
+    if (kind_ == "files")
+        setFileStatus(std::move(text));
+    else if (kind_ == "media")
+        setMediaStatus(std::move(text));
+}
+
+void SideBrowser::togglePlay() {
+    if (!auditioned_.empty()) {
+        stopPlay();
+        return;
+    }
+    const auto file = playable();
+    if (!file) return;
+    json::Value args = json::Value::object();
+    args["path"] = file->path.string();
+    const auto played = dispatcher_.execute({"audition.play", args, kUiOrigin});
+    if (!played) {
+        setPlayStatus(played.error().message);
+        return;
+    }
+    auditioned_ = file->path;
+    auditionedName_ = file->name;
+    const json::Value* seconds = played->find("seconds");
+    const json::Value* cut = played->find("truncated");
+    auditionedSeconds_ = seconds && seconds->isNumber() ? seconds->asDouble() : 0;
+    auditionedCut_ = cut && cut->isBool() && cut->asBool();
+    auditionReading_ = app_.auditionStatus().decoding;
+    for (ui::Button* play : {filePlay_, mediaPlay_})
+        if (play) play->setText("Stop");
+    setPlayStatus(
+        playingText(auditionedName_, auditionedSeconds_, auditionedCut_, auditionReading_));
+}
+
+void SideBrowser::stopPlay() {
+    if (auditioned_.empty()) return;
+    // Only what was played from here: another file an agent has since
+    // started is not this page's to stop.
+    const engine::AuditionStatus now = app_.auditionStatus();
+    if (now.playing && std::filesystem::path(now.path) == auditioned_)
+        (void)dispatcher_.execute({"audition.stop", json::Value::object(), kUiOrigin});
+    playEnded({});
+}
+
+void SideBrowser::playFollows() {
+    if (auditioned_.empty()) return;
+    const auto file = playable();
+    if (!file || file->path != auditioned_) stopPlay();
+}
+
+void SideBrowser::playEnded(std::string say) {
+    if (auditioned_.empty()) return;
+    const std::string was[] = {
+        playingText(auditionedName_, auditionedSeconds_, auditionedCut_, false),
+        playingText(auditionedName_, auditionedSeconds_, auditionedCut_, true)};
+    auditioned_.clear();
+    auditionedName_.clear();
+    auditionReading_ = false;
+    for (ui::Button* play : {filePlay_, mediaPlay_})
+        if (play) play->setText("Play");
+    // The line stops saying it plays; what was said since (Added…) stays.
+    for (ui::Label* status : {fileStatus_, mediaStatus_})
+        if (status && (status->valueText() == was[0] || status->valueText() == was[1]))
+            status->setText(say);
+    root_.damageAll();
+}
+
+void SideBrowser::auditionFailed(const json::Value& event) {
+    const json::Value* path = event.find("path");
+    const json::Value* message = event.find("message");
+    if (auditioned_.empty() || !path || !path->isString() ||
+        std::filesystem::path(path->asString()) != auditioned_)
+        return;
+    playEnded(message && message->isString() ? message->asString() : std::string());
 }
 
 void SideBrowser::show(const std::string& kind) {
     const bool known =
         std::any_of(kKinds.begin(), kKinds.end(), [&](const Kind& k) { return kind == k.id; });
     if (!known || kind == kind_ || !pluginsPage_) return;
+    stopPlay();  // what the page leaving view was playing
     // The page leaving view gives up the keyboard.
     root_.releaseWithin(pageOf(kind_));
     kind_ = kind;
@@ -683,7 +844,7 @@ void SideBrowser::reload() {
         return;
     }
     if (kind_ == "media") {
-        loadMedia();
+        loadMedia(false);  // in view again: the files are looked for too
         return;
     }
     if (kind_ == "files" && atRoots_) {
@@ -732,6 +893,14 @@ void SideBrowser::chosen() {
     if (chainAdd_ && chainList_) chainAdd_->enabled = chainList_->selected().has_value();
     if (fileAdd_ && fileList_) fileAdd_->enabled = fileList_->selected().has_value();
     if (mediaAdd_ && mediaList_) mediaAdd_->enabled = mediaList_->selected().has_value();
+    // Play is for an audio file: not a folder, not a MIDI file.
+    if (filePlay_ && fileList_) {
+        const auto row = fileList_->selected();
+        const Entry* entry =
+            row && *row < fileShown_.size() ? &entries_[fileShown_[*row]] : nullptr;
+        filePlay_->enabled = entry && !entry->folder && entry->kind != "MIDI";
+    }
+    if (mediaPlay_ && mediaList_) mediaPlay_->enabled = mediaList_->selected().has_value();
     root_.damageAll();
 }
 

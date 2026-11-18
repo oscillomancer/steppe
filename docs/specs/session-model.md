@@ -1106,6 +1106,10 @@ and naming. All `edit` unless marked (q) query or (a) action.
   fails with `record.loop` at the take's `loop_end`; each punch endpoint, in
   every take's frames, is within the same 2^48, and an enabled punch ends
   after it starts, or the call fails with `record.punch` at that endpoint.
+- **audition** (a): `audition.play {path}`, `audition.stop`, `audition.get`
+  (q): an audio file heard once on the device's outputs 1/2, outside the
+  session; not an undo step, and nothing of it is saved (engine.md "File
+  audition", ADR-0094).
 - **render** (a): `render.mix {master}` (one master for the call; default the `masters` setting, else tr_0), `render.stems`, `render.regions` (matrix),
   `render.items`, `render.dry-run` (q: resolved file list), `render.job.*`;
   `format` (wav|flac), `secondary` (a second file in another format/bit depth

@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <thread>
 #include "test_support.h"
 
@@ -1770,14 +1771,35 @@ TEST_CASE("the side panel's browser lists the project's media; one is added or d
     CHECK(dropped[0].second.x == 61);
     CHECK(text("side.browser.media.status") == "Added pad.wav");
 
-    // A file that has gone is said to be missing when the page comes into
-    // view again; the others are as they were.
+    // The files are looked for when the page comes into view and when the
+    // project's sources change, not at every edit: a file that has gone is
+    // said to be missing when the page comes into view again; the others
+    // are as they were.
     std::filesystem::remove(pad);
+    (void)exec("track.add", json::parse(R"({"name":"Elsewhere"})").value());
+    pass();
+    CHECK(names() == std::vector<std::string>{"Bass.wav|WAV \u00b7 1:05",
+                                              "kick.wav|WAV \u00b7 0:12",
+                                              "pad.wav|WAV \u00b7 0:01"});
     side.hide();
     side.show("browser");
     f.root->frame(false);
     CHECK(names() == std::vector<std::string>{"Bass.wav|WAV \u00b7 1:05",
                                               "kick.wav|WAV \u00b7 0:12", "pad.wav|missing"});
+    // It comes back: still "missing" after an edit elsewhere, found again
+    // when the project takes in another source, and at an undo of that.
+    (void)tone("pad.wav", 1, 0.125f);
+    (void)exec("track.add", json::parse(R"({"name":"Elsewhere"})").value());
+    pass();
+    CHECK(browser.mediaRow(2).detail == "missing");
+    (void)import(tone("hat.wav", 3, 0.25f), 80);
+    pass();
+    CHECK(names() == std::vector<std::string>{"Bass.wav|WAV \u00b7 1:05", "hat.wav|WAV \u00b7 0:03",
+                                              "kick.wav|WAV \u00b7 0:12",
+                                              "pad.wav|WAV \u00b7 0:01"});
+    (void)exec("history.undo", json::Value::object());
+    pass();
+    CHECK(browser.mediaCount() == 3);
     // The other kinds are a click away, and the page comes back as it was.
     browser.show("files");
     f.root->frame(false);
@@ -1858,6 +1880,397 @@ TEST_CASE("the side panel's browser finds a project's own copy of its media") {
     // The copy's bytes are the source's: an item more, and still one source.
     CHECK(f.app->head().media.size() == 1);
     CHECK(f.app->head().items.size() == 2);
+
+    // Saved somewhere else, the project has another media folder: the same
+    // sources are found there from the next pass after an edit on.
+    const std::filesystem::path was = f.app->mediaDir();
+    save["path"] = (f.dir / "elsewhere" / "song.json").string();
+    (void)exec("project.save", save);
+    REQUIRE(f.app->mediaDir() != was);
+    (void)exec("track.add", json::parse(R"({"name":"Other"})").value());
+    browser.sync();
+    f.root->frame(false);
+    REQUIRE(browser.mediaCount() == 1);
+    f.root->pointer({ui::PointerEvent::Type::Down, row, 1, 1});
+    f.root->pointer({ui::PointerEvent::Type::Up, row, 1, 1});
+    f.root->frame(false);
+    REQUIRE(f.root->click("side.browser.media.add"));
+    REQUIRE(added.size() == 2);
+    CHECK(added[1] == f.app->mediaDir() / stored);
+    CHECK(browser.mediaRow(0).detail == "WAV \u00b7 0:03");  // the save took its copy along
+}
+
+// Two projects made by the same steps have the same head version: the page
+// tells the projects apart, not only the versions.
+TEST_CASE("the side panel's browser lists the opened project's media, not the last one's") {
+    Fixture f;
+    if (!f.ok) return;
+    auto exec = [&](const char* command, const json::Value& args) {
+        auto r = f.run(command, args);
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const std::filesystem::path sounds = f.dir / "sounds";
+    std::filesystem::create_directories(sounds);
+    auto tone = [&](const char* name, int seconds) {
+        audio::AudioData audio;
+        audio.sampleRate = 8000;
+        audio.channels.assign(1,
+                              std::vector<float>(static_cast<std::size_t>(8000 * seconds), 0.25f));
+        REQUIRE(audio::writeWav(sounds / name, audio));
+        return sounds / name;
+    };
+    // A project: one track, one audio file on it, saved.
+    auto project = [&](const std::filesystem::path& audio, const char* file) {
+        json::Value add = json::Value::object();
+        add["track"] =
+            exec("track.add", json::parse(R"({"name":"Keys"})").value())["track"].asString();
+        add["audio_file"] = audio.string();
+        add["position"] = 0.0;
+        (void)exec("item.add", add);
+        REQUIRE(f.app->save(f.dir / file));
+    };
+    project(tone("kick.wav", 2), "one.json");
+    REQUIRE(f.app->newProject({}));
+    project(tone("snare.wav", 5), "two.json");
+    REQUIRE(f.app->open(f.dir / "one.json"));
+
+    gui::PluginDrag drag(*f.root, *f.dispatcher);
+    gui::SideBrowser browser(*f.root, *f.app, *f.dispatcher, f.ui, *f.fx, drag);
+    gui::SidePanel side(*f.root);
+    side.addTab("browser", "Browser", browser.build(), [&](bool on) { browser.setVisible(on); });
+    f.root->find("window")->add(side.build());
+    side.show("browser");
+    browser.show("media");
+    f.root->frame(false);
+    auto names = [&] {
+        std::vector<std::string> out;
+        for (std::size_t i = 0; i < browser.mediaCount(); ++i) {
+            const auto row = browser.mediaRow(i);
+            out.push_back(row.name + "|" + row.detail);
+        }
+        return out;
+    };
+    auto pass = [&] {  // the loop's
+        browser.sync();
+        f.root->frame(false);
+    };
+    pass();
+    CHECK(names() == std::vector<std::string>{"kick.wav|WAV \u00b7 0:02"});
+    // Its row is chosen.
+    auto* list = dynamic_cast<ui::List*>(f.root->find("side.browser.media.results"));
+    REQUIRE(list);
+    const ui::Node* add = f.root->find("side.browser.media.add");
+    REQUIRE(add);
+    const ui::Point row{list->bounds().x + 20, list->bounds().y + 0.5f * list->rowHeight};
+    f.root->pointer({ui::PointerEvent::Type::Down, row, 1, 1});
+    f.root->pointer({ui::PointerEvent::Type::Up, row, 1, 1});
+    f.root->frame(false);
+    REQUIRE(list->selected());
+    CHECK(add->enabled);
+    const std::string chosenId = f.app->head().media.begin()->id.str();
+
+    // The other project, opened with the page in view, at the same version.
+    const auto version = f.app->head().version;
+    REQUIRE(f.app->open(f.dir / "two.json"));
+    REQUIRE(f.app->head().version == version);
+    pass();
+    CHECK(names() == std::vector<std::string>{"snare.wav|WAV \u00b7 0:05"});
+    // Its source has the id the first project's had, and is another file:
+    // what was chosen there is not chosen here.
+    REQUIRE(f.app->head().media.begin()->id.str() == chosenId);
+    CHECK_FALSE(list->selected());
+    CHECK_FALSE(add->enabled);
+    // And an empty one.
+    REQUIRE(f.app->newProject({}));
+    pass();
+    CHECK(browser.mediaCount() == 0);
+}
+
+// Play, beside Add on the Files and Media pages: the chosen audio file is
+// heard before it is added (audition.play, ADR-0094), and what ends it.
+TEST_CASE("the side panel's browser plays the chosen audio file until something ends it") {
+    Fixture f;
+    if (!f.ok) return;
+    auto exec = [&](const char* command, const json::Value& args) {
+        auto r = f.run(command, args);
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    // A folder with a folder, two short audio files and a MIDI file.
+    const std::filesystem::path sounds = f.dir / "sounds";
+    std::filesystem::create_directories(sounds / "Loops");
+    auto tone = [&](const char* name, float level) {
+        audio::AudioData audio;
+        audio.sampleRate = 8000;
+        audio.channels.assign(1, std::vector<float>(400, level));  // 50 ms
+        REQUIRE(audio::writeWav(sounds / name, audio));
+        return sounds / name;
+    };
+    const auto kick = tone("kick.wav", 0.25f);
+    const auto snare = tone("snare.wav", 0.5f);
+    std::ofstream(sounds / "tune.mid") << "MThd";
+
+    gui::PluginDrag drag(*f.root, *f.dispatcher);
+    gui::SideBrowser browser(*f.root, *f.app, *f.dispatcher, f.ui, *f.fx, drag);
+    std::vector<std::filesystem::path> added;
+    browser.files.add = [&](const std::filesystem::path& file) -> Status {
+        added.push_back(file);
+        return {};
+    };
+    gui::SidePanel side(*f.root);
+    side.addTab("browser", "Browser", browser.build(), [&](bool on) { browser.setVisible(on); });
+    f.root->find("window")->add(side.build());
+    side.show("browser");
+    browser.show("files");
+    REQUIRE(browser.openFolder(sounds));
+    f.root->frame(false);
+    // Folders first, then the files by name: Loops, kick.wav, snare.wav, tune.mid.
+    REQUIRE(browser.fileCount() == 4);
+    REQUIRE(browser.fileRow(1).name == "kick.wav");
+    REQUIRE(browser.fileRow(3).name == "tune.mid");
+    auto text = [&](const char* id) { return f.root->find(id)->valueText(); };
+    auto choose = [&](const char* results, std::size_t row) {
+        auto* list = dynamic_cast<ui::List*>(f.root->find(results));
+        REQUIRE(list);
+        const ui::Point at{list->bounds().x + 20,
+                           list->bounds().y + (static_cast<float>(row) + 0.5f) * list->rowHeight};
+        f.root->pointer({ui::PointerEvent::Type::Down, at, 1, 1});
+        f.root->pointer({ui::PointerEvent::Type::Up, at, 1, 1});
+        f.root->frame(false);
+    };
+    auto pass = [&] {  // the loop's
+        f.app->tick();
+        browser.sync();
+        f.root->frame(false);
+    };
+    const char* const files = "side.browser.files.results";
+    const char* const play = "side.browser.files.play";
+    const char* const status = "side.browser.files.status";
+    const ui::Node* button = f.root->find(play);
+    REQUIRE(button);
+
+    // Play waits for an audio file: no row, a folder and a MIDI file leave
+    // it off, though Add is on for the last two.
+    CHECK(text(play) == "Play");
+    CHECK_FALSE(button->enabled);
+    choose(files, 0);
+    CHECK_FALSE(button->enabled);
+    choose(files, 3);
+    CHECK_FALSE(button->enabled);
+    CHECK(f.root->find("side.browser.files.add")->enabled);
+    CHECK_FALSE(f.root->click(play));
+    choose(files, 1);
+    CHECK(button->enabled);
+
+    // With no engine running the press says so, and nothing is claimed.
+    REQUIRE(f.root->click(play));
+    CHECK(text(status) == "the engine is not running");
+    CHECK(text(play) == "Play");
+    CHECK(browser.auditioned().empty());
+
+    engine::DummyBackend backend({.mode = engine::DummyBackend::Mode::Manual});
+    struct StopEngine {
+        engine::EngineApp& app;
+        ~StopEngine() { app.stopEngine(); }
+    } stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 256},
+                               {.anticipative = false}));
+    // The file is read off this thread: waited for by its state, not the clock.
+    auto read = [&] {
+        while (f.app->auditionStatus().decoding) {
+            f.app->tick();
+            std::this_thread::yield();
+        }
+        pass();
+    };
+    auto press = [&](const char* id) {
+        REQUIRE(f.root->click(id));
+        f.root->frame(false);
+    };
+
+    // A press runs audition.play with the chosen file: the button reads Stop
+    // and the line says what plays, first that it is being read.
+    press(play);
+    CHECK(browser.auditioned() == kick);
+    CHECK(text(play) == "Stop");
+    CHECK(text(status) == "Reading kick.wav…");
+    CHECK(f.app->auditionStatus().playing);
+    CHECK(std::filesystem::path(f.app->auditionStatus().path) == kick);
+    read();
+    CHECK(text(status) == "Playing kick.wav");
+    CHECK(text(play) == "Stop");
+    f.snapshot("side-browser-files-playing.png");
+    // The file's end gives the button back: 50 ms is ten cycles of 256 at 48 kHz.
+    for (int cycle = 0; f.app->auditionStatus().playing; ++cycle) {
+        REQUIRE(cycle < 64);
+        backend.run(1);
+        f.app->tick();
+    }
+    CHECK(text(play) == "Stop");  // until the loop's next pass
+    pass();
+    CHECK(text(play) == "Play");
+    CHECK(text(status) == "");
+    CHECK(browser.auditioned().empty());
+    CHECK(button->enabled);
+    f.snapshot("side-browser-files-play.png");
+
+    // A second press stops it.
+    press(play);
+    read();
+    CHECK(f.app->auditionStatus().playing);
+    press(play);
+    CHECK_FALSE(f.app->auditionStatus().playing);
+    CHECK(text(play) == "Play");
+    CHECK(text(status) == "");
+
+    // Another row chosen stops it; the row it was played from does not.
+    press(play);
+    choose(files, 1);
+    CHECK(f.app->auditionStatus().playing);
+    CHECK(text(play) == "Stop");
+    choose(files, 2);
+    CHECK_FALSE(f.app->auditionStatus().playing);
+    CHECK(text(play) == "Play");
+    CHECK(button->enabled);  // the row now chosen can be played
+    // Add stops it: the file is in the project, no longer only heard.
+    press(play);
+    CHECK(browser.auditioned() == snare);
+    press("side.browser.files.add");
+    CHECK_FALSE(f.app->auditionStatus().playing);
+    REQUIRE(added.size() == 1);
+    CHECK(added[0] == snare);
+    CHECK(text(status) == "Added snare.wav");
+    CHECK(text(play) == "Play");
+    // A search that chooses another file stops it.
+    press(play);
+    browser.focusSearch();
+    f.root->text("kick");
+    f.root->frame(false);
+    CHECK_FALSE(f.app->auditionStatus().playing);
+    CHECK(text(play) == "Play");
+    // The same file found by the search goes on playing.
+    press(play);
+    CHECK(browser.auditioned() == kick);
+    browser.focusSearch();  // the press took the keyboard
+    f.root->key(SDLK_BACKSPACE, 0);
+    f.root->frame(false);
+    CHECK(browser.fileCount() == 1);  // "kic" still finds it
+    CHECK(f.app->auditionStatus().playing);
+    for (int i = 0; i < 3; ++i) f.root->key(SDLK_BACKSPACE, 0);  // no search: no row chosen
+    f.root->frame(false);
+    CHECK_FALSE(f.app->auditionStatus().playing);
+    CHECK_FALSE(button->enabled);
+
+    // Another kind shown stops it, and so does the Browser going out of view.
+    choose(files, 1);
+    press(play);
+    browser.show("media");
+    CHECK_FALSE(f.app->auditionStatus().playing);
+    CHECK(text(play) == "Play");
+    browser.show("files");
+    f.root->frame(false);
+    choose(files, 1);
+    press(play);
+    side.hide();
+    CHECK_FALSE(f.app->auditionStatus().playing);
+    CHECK(browser.auditioned().empty());
+    side.show("browser");
+    f.root->frame(false);
+    CHECK(text(play) == "Play");
+
+    // What something else plays in its place is not this page's: the button
+    // reads Play again at the next pass, and the other file is left playing.
+    choose(files, 1);
+    press(play);
+    json::Value other = json::Value::object();
+    other["path"] = snare.string();
+    (void)exec("audition.play", other);
+    pass();
+    CHECK(text(play) == "Play");
+    CHECK(browser.auditioned().empty());
+    choose(files, 2);
+    choose(files, 1);
+    CHECK(f.app->auditionStatus().playing);
+    CHECK(std::filesystem::path(f.app->auditionStatus().path) == snare);
+    (void)exec("audition.stop", json::Value::object());
+    // The same when a row is chosen before the loop's next pass: the page
+    // gives up its own, and does not stop the other.
+    press(play);
+    CHECK(browser.auditioned() == kick);
+    (void)exec("audition.play", other);
+    choose(files, 2);
+    CHECK(text(play) == "Play");
+    CHECK(f.app->auditionStatus().playing);
+    CHECK(std::filesystem::path(f.app->auditionStatus().path) == snare);
+    (void)exec("audition.stop", json::Value::object());
+    choose(files, 1);
+
+    // A file the engine could not read after all (its audition.error event)
+    // is said, when it is the one played from here.
+    press(play);
+    json::Value failed = json::Value::object();
+    failed["path"] = snare.string();
+    failed["code"] = "audio.format";
+    failed["message"] = "snare.wav: not audio";
+    browser.auditionFailed(failed);
+    CHECK(text(play) == "Stop");
+    failed["path"] = kick.string();
+    failed["message"] = "kick.wav: its data cannot be read";
+    browser.auditionFailed(failed);
+    CHECK(text(play) == "Play");
+    CHECK(text(status) == "kick.wav: its data cannot be read");
+    (void)exec("audition.stop", json::Value::object());
+
+    // The Media page has the same button for the project's own audio.
+    const std::string track =
+        exec("track.add", json::parse(R"({"name":"Keys"})").value())["track"].asString();
+    auto import = [&](const std::filesystem::path& file, double position) {
+        json::Value add = json::Value::object();
+        add["track"] = track;
+        add["audio_file"] = file.string();
+        add["position"] = position;
+        (void)exec("item.add", add);
+    };
+    import(kick, 0);
+    import(snare, 16);
+    browser.show("media");
+    pass();
+    const char* const media = "side.browser.media.results";
+    const char* const mediaPlay = "side.browser.media.play";
+    REQUIRE(browser.mediaCount() == 2);
+    CHECK_FALSE(f.root->find(mediaPlay)->enabled);
+    choose(media, 1);
+    CHECK(f.root->find(mediaPlay)->enabled);
+    press(mediaPlay);
+    CHECK(browser.auditioned() == snare);
+    CHECK(text(mediaPlay) == "Stop");
+    read();
+    CHECK(text("side.browser.media.status") == "Playing snare.wav");
+    f.snapshot("side-browser-media-playing.png");
+    // The project changing elsewhere, and a source listed before the chosen
+    // one, leave it playing: the same source is still chosen.
+    (void)exec("track.add", json::parse(R"({"name":"Other"})").value());
+    pass();
+    CHECK(text(mediaPlay) == "Stop");
+    import(tone("alpha.wav", 0.125f), 32);
+    pass();
+    REQUIRE(browser.mediaCount() == 3);
+    CHECK(browser.mediaRow(2).name == "snare.wav");
+    CHECK(text(mediaPlay) == "Stop");
+    CHECK(f.app->auditionStatus().playing);
+    // Another project opened ends it in the engine; the button follows.
+    (void)exec("project.new", json::Value::object());
+    CHECK_FALSE(f.app->auditionStatus().playing);
+    pass();
+    CHECK(text(mediaPlay) == "Play");
+    CHECK(browser.auditioned().empty());
+
+    // A file longer than the cap: the line says how much of it is heard.
+    CHECK(gui::SideBrowser::playingText("long.mp3", 600, true, true) ==
+          "Reading the first 10:00 of long.mp3…");
+    CHECK(gui::SideBrowser::playingText("long.mp3", 600, true, false) ==
+          "Playing the first 10:00 of long.mp3");
 }
 
 TEST_CASE("the plugin browser finds a stock plugin by what it is") {

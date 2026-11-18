@@ -1032,7 +1032,7 @@ void Mixer::setVisible(bool visible) {
     if (!visible) root_.releaseWithin(panel_);
     if (visible) {
         version_ = ~0ull;
-        sync();
+        follow();
     }
     root_.relayout();
     root_.damageAll();
@@ -2066,6 +2066,13 @@ void Mixer::sync(std::chrono::steady_clock::time_point now) {
     } else {
         edgeClock_.reset();
     }
+    follow();
+}
+
+// The pass without its time: what the panel shows follows the window, the
+// selection and the session.
+void Mixer::follow() {
+    if (!visible()) return;
     applyHeight();  // the window may have been resized
     if (actions_.ui().selectedTracks != shownSelection_) showSelection();  // the TCP changed it
     const bool replaced = app_.projectGeneration() != projectGeneration_;

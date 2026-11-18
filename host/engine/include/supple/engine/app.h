@@ -45,6 +45,7 @@
 namespace supple::engine {
 struct RackClip;
 class SourcePreparation;
+class AuditionLoader;
 
 namespace detail {
 class RuntimeProtection;
@@ -96,6 +97,25 @@ struct AppOptions {
     // pass while the main thread seeks (the dummy backend's manual mode;
     // tests, which must not pass or fail by the wall clock).
     std::optional<double> syncLocateSeconds;
+    // The file audition's cap (ADR-0094), in frames so that its memory is
+    // bounded at any rate: neither the decoded file nor the voice resampled to
+    // the device's rate is longer (ten minutes at 48 kHz, 2.5 at 192 kHz;
+    // about 230 MB of stereo float).
+    std::int64_t auditionMaxFrames = 28'800'000;
+};
+
+// A file audition (audition.*, ADR-0094): transient, never saved.
+struct AuditionInfo {
+    std::string path;  // as resolved
+    double seconds = 0, sampleRate = 0;
+    int channels = 0;
+    bool truncated = false;  // longer than the cap: its start plays
+};
+struct AuditionStatus {
+    bool playing = false;   // from audition.play until it ends or stops
+    bool decoding = false;  // read and resampled before the first sound
+    std::string path;
+    double seconds = 0, position = 0;
 };
 
 // Meter entries a full ring dropped (P5.3c): the renderer's ring and the audio
@@ -682,6 +702,14 @@ class EngineApp : public cmd::Host {
     const TransportRange& loop() const { return loop_; }
     const MetronomeSettings& metronome() const { return metronome_; }
     void setMetronome(const MetronomeSettings& m);  // reaches the engine now and on every start
+    // File audition (ADR-0094): the file's start (AppOptions::auditionMaxFrames),
+    // read and resampled to the device's rate off the model and audio threads,
+    // then played once on outputs 1/2, outside the project. A relative path
+    // is in the project's media folder. A new one, stopAudition, the engine
+    // stopping and a project replaced end it. Main thread.
+    Result<AuditionInfo> playAudition(const std::filesystem::path& path);
+    void stopAudition();
+    AuditionStatus auditionStatus() const;  // the GUI reads it each frame
     const TransportRange& punch() const { return punch_; }
     // External sync (ADR-0071): the settings reach the engine now and on
     // every start; tick() turns what the engine hears into transport changes
@@ -905,6 +933,14 @@ class EngineApp : public cmd::Host {
     Status moveScratchMedia(const std::filesystem::path& dest,
                             const std::function<Status()>& publish);
     std::unique_ptr<SourcePreparation> sourcePreparation_;
+    // File audition (ADR-0094): the decoder, the request it serves, the
+    // engine's serial for the voice published (0: none), what plays.
+    std::unique_ptr<AuditionLoader> auditionLoader_;
+    std::uint64_t auditionRequest_ = 0, auditionVoice_ = 0;
+    bool auditionDecoding_ = false;
+    double auditionRate_ = 0;
+    AuditionInfo auditionInfo_;
+    void serviceAudition();
     std::string pendingSourceKey_, preparationError_;
     // The last source key and what it was computed from: most edits (a fader,
     // a plug-in parameter) share these collections, so the key is reused. An

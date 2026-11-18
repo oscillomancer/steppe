@@ -11,7 +11,6 @@
 #include <array>
 #include <filesystem>
 #include <set>
-#include <thread>
 
 #include "app_actions.h"
 #include "control_map.h"
@@ -882,10 +881,32 @@ TEST_CASE("MIDI editor: the notation panel compiles live, writes back, and follo
     f.root->focus(text);
     f.root->key(SDLK_A, ui::kCtrl);
     f.root->text("voice v; 1: D4:h F4:h");
+    // The pause is counted in the passes' time, from the first pass after
+    // the last keystroke: until that pass has run, one is due at once.
+    using std::chrono::milliseconds;
+    const auto typed = f.app->head().version;
     REQUIRE(f.editor->nextDeadline());
+    CHECK(*f.editor->nextDeadline() <= f.now);
     f.frame();
-    std::this_thread::sleep_for(std::chrono::milliseconds(350));
+    REQUIRE(f.editor->nextDeadline());
+    CHECK(*f.editor->nextDeadline() == f.now + milliseconds(300));
+    // Just short of it nothing is written, however many passes run.
+    f.now += milliseconds(299);
     f.frame();
+    f.frame();
+    CHECK(f.app->head().version == typed);
+    // A keystroke starts the pause again, from the pass after it.
+    f.root->text(" ");
+    f.now += milliseconds(200);
+    f.frame();
+    REQUIRE(f.editor->nextDeadline());
+    CHECK(*f.editor->nextDeadline() == f.now + milliseconds(300));
+    f.now += milliseconds(299);
+    f.frame();
+    CHECK(f.app->head().version == typed);
+    f.now += milliseconds(1);
+    f.frame();
+    CHECK(f.app->head().version > typed);
     CHECK_FALSE(f.editor->nextDeadline());
     auto n = f.notes();
     REQUIRE(n.size() == 2);
@@ -897,7 +918,7 @@ TEST_CASE("MIDI editor: the notation panel compiles live, writes back, and follo
     f.root->key(SDLK_END, ui::kCtrl);
     f.root->text(" Q9:zz");
     f.frame();
-    std::this_thread::sleep_for(std::chrono::milliseconds(350));
+    f.now += milliseconds(300);
     f.frame();
     CHECK(f.app->head().version == v);
     REQUIRE_FALSE(text->marks().empty());
@@ -908,7 +929,7 @@ TEST_CASE("MIDI editor: the notation panel compiles live, writes back, and follo
     f.root->key(SDLK_A, ui::kCtrl);
     f.root->text("voice v; 1: A3:w");
     f.frame();
-    std::this_thread::sleep_for(std::chrono::milliseconds(350));
+    f.now += milliseconds(300);
     f.frame();
     CHECK(text->marks().empty());
     CHECK(f.notes().size() == 1);
@@ -1483,17 +1504,17 @@ TEST_CASE("mixer: grouped strips, a fader drag is one undo step, toggles, pan, C
     const auto route =
         f.exec("route.add", R"({"from":")" + strips[0].track + R"(","to":")" + buss + R"("})")["id"]
             .asString();
-    mixer.sync();
+    mixer.sync(f.now);
     auto* send = dynamic_cast<ui::Button*>(f.root->find("mixer.send." + route));
     REQUIRE(send);
     const auto originalSend = send->valueText();
     auto* originalFader = strips[0].fader;
     f.exec("route.set", R"({"route":")" + route + R"(","volume_db":-12})");
-    mixer.sync();
+    mixer.sync(f.now);
     CHECK(send->valueText().find("-12.0") != std::string::npos);
     CHECK(strips[0].fader == originalFader);
     f.exec("history.undo", "{}");
-    mixer.sync();
+    mixer.sync(f.now);
     CHECK(send->valueText() == originalSend);
     f.root->frame(false);
     // The masters stay pinned to the right edge; the others start at the left.
@@ -1509,7 +1530,7 @@ TEST_CASE("mixer: grouped strips, a fader drag is one undo step, toggles, pan, C
     CHECK(fxButton->valueText() == "fx");
     // The track's colour is a bar across the strip's top, over the name.
     f.exec("track.set", R"({"track":")" + strips[0].track + R"(","color":"teal"})");
-    mixer.sync();
+    mixer.sync(f.now);
     f.root->frame(false);
     auto* stripe = f.root->find("mixer.color." + strips[0].track);
     REQUIRE(stripe);
@@ -1548,7 +1569,7 @@ TEST_CASE("mixer: grouped strips, a fader drag is one undo step, toggles, pan, C
     for (int i = 1; i <= 10; ++i)
         f.pointer(ui::PointerEvent::Type::Move, {cap.x, cap.y + static_cast<float>(i) * 3});
     f.pointer(ui::PointerEvent::Type::Up, {cap.x, cap.y + 30});
-    mixer.sync();
+    mixer.sync(f.now);
     CHECK(track(keys)->volumeDb < -3);
     CHECK(steps() == s0 + 1);
     const double dragged = track(keys)->volumeDb;
@@ -1560,7 +1581,7 @@ TEST_CASE("mixer: grouped strips, a fader drag is one undo step, toggles, pan, C
     CHECK(steps() == s0 + 2);
     f.exec("history.undo", "{}");
     CHECK(track(keys)->volumeDb == doctest::Approx(dragged));  // only the second drag undone
-    mixer.sync();
+    mixer.sync(f.now);
     // Double-click: unity, its own step.
     f.pointer(ui::PointerEvent::Type::Down, cap2, 2);
     f.pointer(ui::PointerEvent::Type::Up, cap2);
@@ -1585,10 +1606,10 @@ TEST_CASE("mixer: grouped strips, a fader drag is one undo step, toggles, pan, C
     CHECK(f.app->head().project->console9 == !c9);
     // Changes from elsewhere reach the strips; a new track adds a strip.
     f.exec("track.set", R"({"track":")" + keys + R"(","volume_db":-12})");
-    mixer.sync();
+    mixer.sync(f.now);
     CHECK(strips[0].fader->value() == doctest::Approx(-12.0));
     f.exec("track.add", R"({"name":"Bass"})");
-    mixer.sync();
+    mixer.sync(f.now);
     CHECK(mixer.strips().size() == 4);
     // Meters: readings land on the strip's meter.
     readings = {{keys, {0.5f, 0.25f}, {0.3f, 0.1f}}};

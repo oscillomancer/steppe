@@ -726,6 +726,34 @@ sample count. The metronome plays on outputs 1/2. Offline renders of any
 master use that master's own shift and latency, so the device output of each
 master equals its offline render at `outputLatency`.
 
+**File audition** (ADR-0094). `Engine::audition(voice)` (main thread) plays
+an `AuditionVoice` (decoded audio at the device's rate; `right` empty: mono)
+from its first sample at the next cycle: the callback adds it to outputs 1/2
+in `Engine::cycle`, after `cycleTransport` and before LTC (`runSync`) and the
+hardware MIDI lead's delay, in both executors, stopped, playing or counting
+in. It is outside the plan: no track, master, plug-in, Console 9 stage or
+meter sees it, renders never run the callback and recordings never contain
+it. A new voice or a stop (`audition(nullptr)`) fades what played over 5 ms
+(`kAuditionFadeSeconds`; a third request inside a fade cuts the older fade).
+A stopping engine adds nothing and `Engine::stop` drops the voice. Each
+request is immutable with a serial, published through one atomic pointer;
+the callback stores the smallest serial it may still read (`auditionKeep_`:
+the request it took, the voice playing, the one fading) and `service()`
+frees requests below it. `auditionState()` (any thread) gives the playing
+voice's serial (0: none), its frame and the serial last taken; the end of a
+voice notifies the main thread. `EngineApp::playAudition` reads the file's
+start with `audio::readAudioHead` (two channels), up to
+`AppOptions::auditionMaxFrames` (28,800,000) counted at the higher of the
+file's and the device's rates, so neither the decoded file nor the voice is
+longer (about 230 MB of stereo float; ten minutes at 48 kHz, 2.5 at 192 kHz;
+`truncated` when the file is longer), and resamples it to the device's rate on its own worker
+(`AuditionLoader`: one replaceable request, cancelled by a newer one or
+`stopAudition`, its result taken in `tick()`), then publishes the voice; a
+device restart before then drops it. `auditionStatus()` is what the GUI
+reads each frame (`playing` from `audition.play` until the end, `decoding`
+before the first sound). `stopAudition` runs when the engine halts and when a
+project is replaced.
+
 **Meters**. Per strip, the peak and the mean square of the strip's signal
 **after the fader and after the pan law, before the Console 9 encode**
 (`sum × pan matrix × faderGain` — what a user expects at unity: a −6 dBFS
@@ -1501,6 +1529,13 @@ bus and exposes it through the control protocol (Unix socket), Lua and MCP (prox
 `bridge_timing` (the live bridged calls' waits and why cycles overran, §5),
 anticipation misses, meter drops), `engine.settings.set {render_ahead_ms,
 worker_threads, automation_resolution, …}`.
+`audition.play {path}` (a WAV, FLAC or MP3, absolute or a name in the
+project's media folder; returns `path`, `seconds`, `sample_rate`,
+`channels`, `truncated`), `audition.stop` and `audition.get` (q: `playing`,
+`decoding`, `path`, `seconds`, `position`) play a file on outputs 1/2
+outside the project ("File audition" above, ADR-0094); errors
+`engine.stopped` and `audition.file`, a failed decode the event
+`audition.error {path, code, message}`.
 `OfflineResult::graph` supplies compiled graph text: input edges and residual
 padding, `lat_in` (the forward arrival diagnostic), `lat_chain` (compensated
 chain latency), and `timeline_shift` (processing position minus node-input
