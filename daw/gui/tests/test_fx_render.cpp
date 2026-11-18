@@ -1861,6 +1861,76 @@ TEST_CASE("the side panel's browser finds a project's own copy of its media") {
     CHECK(f.app->head().items.size() == 2);
 }
 
+// Two projects made by the same steps have the same head version: the page
+// tells the projects apart, not only the versions.
+TEST_CASE("the side panel's browser lists the opened project's media, not the last one's") {
+    Fixture f;
+    if (!f.ok) return;
+    auto exec = [&](const char* command, const json::Value& args) {
+        auto r = f.run(command, args);
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const std::filesystem::path sounds = f.dir / "sounds";
+    std::filesystem::create_directories(sounds);
+    auto tone = [&](const char* name, int seconds) {
+        audio::AudioData audio;
+        audio.sampleRate = 8000;
+        audio.channels.assign(1,
+                              std::vector<float>(static_cast<std::size_t>(8000 * seconds), 0.25f));
+        REQUIRE(audio::writeWav(sounds / name, audio));
+        return sounds / name;
+    };
+    // A project: one track, one audio file on it, saved.
+    auto project = [&](const std::filesystem::path& audio, const char* file) {
+        json::Value add = json::Value::object();
+        add["track"] =
+            exec("track.add", json::parse(R"({"name":"Keys"})").value())["track"].asString();
+        add["audio_file"] = audio.string();
+        add["position"] = 0.0;
+        (void)exec("item.add", add);
+        REQUIRE(f.app->save(f.dir / file));
+    };
+    project(tone("kick.wav", 2), "one.json");
+    REQUIRE(f.app->newProject({}));
+    project(tone("snare.wav", 5), "two.json");
+    REQUIRE(f.app->open(f.dir / "one.json"));
+
+    gui::PluginDrag drag(*f.root, *f.dispatcher);
+    gui::SideBrowser browser(*f.root, *f.app, *f.dispatcher, f.ui, *f.fx, drag);
+    gui::SidePanel side(*f.root);
+    side.addTab("browser", "Browser", browser.build(), [&](bool on) { browser.setVisible(on); });
+    f.root->find("window")->add(side.build());
+    side.show("browser");
+    browser.show("media");
+    f.root->frame(false);
+    auto names = [&] {
+        std::vector<std::string> out;
+        for (std::size_t i = 0; i < browser.mediaCount(); ++i) {
+            const auto row = browser.mediaRow(i);
+            out.push_back(row.name + "|" + row.detail);
+        }
+        return out;
+    };
+    auto pass = [&] {  // the loop's
+        browser.sync();
+        f.root->frame(false);
+    };
+    pass();
+    CHECK(names() == std::vector<std::string>{"kick.wav|WAV · 0:02"});
+
+    // The other project, opened with the page in view, at the same version.
+    const auto version = f.app->head().version;
+    REQUIRE(f.app->open(f.dir / "two.json"));
+    REQUIRE(f.app->head().version == version);
+    pass();
+    CHECK(names() == std::vector<std::string>{"snare.wav|WAV · 0:05"});
+    // And an empty one.
+    REQUIRE(f.app->newProject({}));
+    pass();
+    CHECK(browser.mediaCount() == 0);
+}
+
 // Play, beside Add on the Files and Media pages: the chosen audio file is
 // heard before it is added (audition.play, ADR-0094), and what ends it.
 TEST_CASE("the side panel's browser plays the chosen audio file until something ends it") {
