@@ -1089,8 +1089,11 @@ TEST_CASE("seeded plan-swap soak during playback in both executors" * doctest::d
                 soak.finish();
                 std::cout << "plan-soak carry matches: nodes=" << soak.carryMatches.nodes
                           << " edges=" << soak.carryMatches.edges << std::endl;
-                REQUIRE(soak.carryMatches.nodes > 0);
-                REQUIRE(soak.carryMatches.edges > 0);
+                // A seeded run compares many plans; a short replay may compile one.
+                if (!replayPath) {
+                    REQUIRE(soak.carryMatches.nodes > 0);
+                    REQUIRE(soak.carryMatches.edges > 0);
+                }
                 const auto noOps = checkNoChangeSwaps(soak.heads, soak.headCommands, ahead);
                 std::cout << "plan-soak no-change swaps: heads=" << soak.heads.size()
                           << " swaps=" << noOps << std::endl;
