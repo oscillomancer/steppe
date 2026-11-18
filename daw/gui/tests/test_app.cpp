@@ -3620,6 +3620,44 @@ TEST_CASE("file actions: Save before Open autosave works after a first save") {
     CHECK(model::parseProjectFile(*readTextFile(file))->store.head()->project->name == "Current");
 }
 
+TEST_CASE("an empty project says how to start; the line goes with the first track") {
+    App a(1200, 800);
+    REQUIRE(a.ok);
+    peaks::PeakService peaks(a.dir / "cache", [](std::function<void()> f) { f(); });
+    gui::MeterFeed meters;
+    gui::Shell shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters);
+    struct Detach {
+        ui::Root& root;
+        ~Detach() { root.setContent(std::make_unique<ui::Node>("detached")); }
+    } detach{*a.root};
+    a.root->setContent(shell.build(*a.root, *a.actions));
+    shell.sync();
+    a.root->frame(false);
+    views::Lanes& lanes = shell.arrange()->lanes();
+    CHECK(lanes.showsEmptyHint());
+    // What the line promises holds: a file dropped on the empty lanes has
+    // somewhere to land, and the track panel has the button it names (the
+    // toolbar's buttons can be taken out; this one cannot).
+    const ui::Rect area = lanes.bounds();
+    CHECK(shell.fileTargetAt({area.x + area.w / 2, area.y + area.h / 2}));
+    CHECK(std::string(views::Lanes::kEmptyHint).find("+ strip") != std::string::npos);
+    bool named = false;
+    std::function<void(ui::Node&)> walk = [&](ui::Node& node) {
+        if (node.valueText() == "+ strip") named = true;
+        for (auto& child : node.children()) walk(*child);
+    };
+    walk(*a.root->content());
+    CHECK(named);
+    a.snapshot("empty-project.png");
+    auto r = a.dispatcher->execute({"track.add",
+                                    json::parse(R"({"name":"Bass"})").value(),
+                                    {cmd::Origin::Type::Test, "t", {}}});
+    REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+    shell.sync();
+    a.root->frame(false);
+    CHECK_FALSE(lanes.showsEmptyHint());
+}
+
 TEST_CASE("a plugin dragged from the browser lands on the track row or strip under the pointer") {
     App a(1200, 800);
     REQUIRE(a.ok);

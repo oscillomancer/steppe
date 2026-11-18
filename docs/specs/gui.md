@@ -533,6 +533,14 @@ move and resize drags also compare the press-time amplitude, baseline, position,
 length, source length, loop state, envelope and pool. A change cancels the drag
 with `env.changed`; it does not rebase the draft onto the changed item.
 
+**Empty project.** While the project has no track row, the lanes show two
+centred lines in quiet ink, a little above the middle: "This project is
+empty." and "Drop audio or MIDI files here, or click + strip at the bottom
+left to add a track." (`views::Lanes::kEmptyTitle`, `kEmptyHint`). Both
+things it names always work: a file dropped on the empty lanes makes a
+track, and "+ strip" is in the track panel's foot, which no customization
+removes. The lines go with the first row.
+
 **Item appearance.** An item is drawn in its own colour when it has one
 (`item.set {color}`: a track colour's name or "#rrggbb"), else in its track's
 colour (§7), else in its strip type's (`Lanes::itemColor`): a body at

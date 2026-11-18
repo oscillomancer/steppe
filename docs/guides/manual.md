@@ -23,6 +23,11 @@ steppe --help          # every command-line option
 Command names follow the product name. In a build tree, the app is
 `build/<preset>/daw/gui/steppe`.
 
+A new project is empty, and says so in the middle of the window. To begin,
+drop audio or MIDI files onto the arrangement (each makes a track), or click
+**+ strip** at the bottom left to add a track. The **Browser** (press **B**)
+lists plug-ins, saved FX chains and files to add.
+
 The last of the transport buttons sets how the view follows the playhead.
 Click it to go round the three modes: by page (the default: when the playhead
 leaves the view, the view jumps ahead), off (the view stays where you put it),

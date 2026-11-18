@@ -303,6 +303,14 @@ void Lanes::paint(ui::Canvas& c) {
     theme_ = &c.theme();
     const ui::Theme& t = c.theme();
     c.fillRect(bounds(), t.color("ground"));
+    if (showsEmptyHint()) {
+        const ui::Rect b = bounds();
+        const float mid = b.y + b.h * 0.4f;
+        c.text({b.x, mid - 24, b.w, 24}, kEmptyTitle, ui::Font::UiBold, t.type("body"),
+               t.color("ink-quiet"), ui::kCenter | ui::kMiddle);
+        c.text({b.x, mid, b.w, 20}, kEmptyHint, ui::Font::Ui, t.type("small"), t.color("ink-quiet"),
+               ui::kCenter | ui::kMiddle);
+    }
     for (std::size_t i = 0; i < layout_.rowCount(); ++i) {
         const ui::Rect r = rowRect(i);
         if (r.bottom() < bounds().y) continue;
