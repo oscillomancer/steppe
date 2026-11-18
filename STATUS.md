@@ -1184,8 +1184,9 @@ Engine and hosting:
   await a keypress during shutdown.
 - Only level and pan edits (ADR-0060), FX wet, bypass, mute and solo edits
   (ADR-0093) and patch-only FX edits (ADR-0092) skip compiling. Routing, item
-  mutes, a route mute that changes a send's encoding and other plug-in changes
-  compile the session, as does a patch edit on an FX with automation or one
+  mutes, a route mute that changes a send's encoding, an ADR-0093 edit that
+  in the anticipative executor changes both a live and a rendered track's
+  values, and other plug-in changes compile the session, as does a patch edit on an FX with automation or one
   that changes the plug-in's latency, parameters or ports. With playrate
   scheduling started each compile also prepares a rate plan, which costs
   several milliseconds per edit in a session of a few dozen tracks.

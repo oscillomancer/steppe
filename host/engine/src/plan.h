@@ -1203,6 +1203,15 @@ double sendGain(double routeDb, model::Tap tap, double sourceDb) SUPPLE_RT;
 // Mix-value publication (ADR-0060). `holds`: the volume/pan targets a write
 // pass holds (ADR-0061). Main thread, before or after the plan is published.
 void publishMix(Plan& p, const model::Session& s, std::span<const model::EnvTarget> holds);
+// Main thread (ADR-0093): whether publishing `s` into a split plan would
+// change a mute, solo, route mute, wet or bypass that the callback reads and
+// one that the renderer reads. Such an edit compiles: the callback takes
+// values at its next block and the renderer at its own position, so in
+// between the output would be neither session's (a solo moved from a live
+// track to a rendered one would leave both silent until the renderer took
+// it). Compared with the values the slots hold, which only the main thread
+// writes.
+bool splitsExecutors(const Plan& p, const model::Session& s);
 // An executor's copy of the published values into the nodes and edges its
 // class reads (`liveClass` as for wrapTo), at the start of a block.
 void syncMix(Plan& p, int liveClass) SUPPLE_RT;

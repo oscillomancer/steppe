@@ -825,7 +825,7 @@ DummyBackend::Options sawInput(std::int64_t frames) {
 // edit from the same renderer position.
 constexpr std::size_t kEditFrame = 100 * 256, kEditFrames = 300 * 256;
 std::vector<float> playEdit(const model::Session& base, const model::Session& next,
-                            const EngineOptions& options, int run) {
+                            const EngineOptions& options, int run, bool valueEdit = true) {
     auto pool = makePool();
     MediaCache media;
     DummyBackend backend(sawInput(kEditFrames));
@@ -845,8 +845,9 @@ std::vector<float> playEdit(const model::Session& base, const model::Session& ne
     const auto generation = engine.planGeneration();
     if (run == 0) REQUIRE(engine.load(next));
     if (run == 1) REQUIRE(engine.load(withMarker(next, next.version + 1)));
-    CHECK(engine.planGeneration() == generation + (run == 1 ? 1 : 0));
-    CHECK(engine.mixEdits() == (run == 0 ? 1u : 0u));
+    const bool fast = run == 0 && valueEdit;
+    CHECK(engine.planGeneration() == generation + (run == 2 || fast ? 0 : 1));
+    CHECK(engine.mixEdits() == (fast ? 1u : 0u));
     cycles(200);
     CHECK(engine.anticipationMisses() == 0);
     CHECK(engine.processErrors() == 0);
@@ -863,17 +864,25 @@ std::size_t rendererResumesAt(const EngineOptions& options, std::size_t playhead
     return (playhead + ahead + block - 1) / block * block;
 }
 
+// Which executor's values an edit changes in the anticipative executor:
+// only the renderer's, only the callback's (a live node's), or both.
+enum class Path { Rendered, Live, Split };
+
 // The value edit against the compiled reload and the unedited run (ADR-0093).
 // In the callback executor they are equal. In the anticipative one, with the
 // renderer full at the edit, a compiled reload is heard from where the
 // renderer resumes. A value edit heard only on rendered tracks is too, and
 // is then equal to the compiled reload sample for sample. One heard on a
-// live track (`live`) plays there from the next block, and equals the
-// compiled reload once that reload's ramp (Plan::smoothFrames, 480) is done.
-void checkLikeCompiled(const model::Session& base, const model::Session& next, bool live) {
+// live track plays there from the next block, and equals the compiled
+// reload once that reload's ramp (Plan::smoothFrames, 480) is done. One
+// that changes both executors' values compiles there, so both switch at the
+// handover: the callback and the renderer take values at different stream
+// positions, and between them the output would be neither session's.
+void checkLikeCompiled(const model::Session& base, const model::Session& next, Path path) {
     for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 1}}) {
         CAPTURE(options.anticipative);
-        const auto fast = playEdit(base, next, options, 0);
+        const bool valueEdit = !options.anticipative || path != Path::Split;
+        const auto fast = playEdit(base, next, options, 0, valueEdit);
         const auto compiled = playEdit(base, next, options, 1);
         const auto unedited = playEdit(base, next, options, 2);
         auto heard = [&](const std::vector<float>& x) {
@@ -895,7 +904,7 @@ void checkLikeCompiled(const model::Session& base, const model::Session& next, b
         };
         const std::size_t resumes = rendererResumesAt(options, kEditFrame);
         CHECK(from(heard(compiled), resumes));
-        if (live) {
+        if (path == Path::Live) {
             CHECK(from(heard(fast), kEditFrame));
             const std::size_t ramped = resumes + 480;
             CHECK(std::equal(fast.begin() + ramped, fast.begin() + kEditFrames,
@@ -912,12 +921,14 @@ TEST_CASE("FX wet and bypass edits while playing sound exactly like a compiled r
     // ADR-0093: no plan; the stage's own ramp crossfades, as after a compile.
     // The instruments' gains run in the renderer, the vocal's live.
     const Wet w = wetSession();
-    for (const auto& [name, fxs, bypass, live] :
-         std::vector<std::tuple<std::string, std::vector<Id>, bool, bool>>{
-             {"wet, rendered", {w.gainA}, false, false},
-             {"wet, rendered and live", {w.gainA, w.gainVocal}, false, true},
-             {"bypass, rendered", {w.gainB}, true, false},
-             {"bypass, rendered and live", {w.gainB, w.gainVocal}, true, true}}) {
+    for (const auto& [name, fxs, bypass, path] :
+         std::vector<std::tuple<std::string, std::vector<Id>, bool, Path>>{
+             {"wet, rendered", {w.gainA}, false, Path::Rendered},
+             {"wet, live", {w.gainVocal}, false, Path::Live},
+             {"wet, rendered and live", {w.gainA, w.gainVocal}, false, Path::Split},
+             {"bypass, rendered", {w.gainB}, true, Path::Rendered},
+             {"bypass, live", {w.gainVocal}, true, Path::Live},
+             {"bypass, rendered and live", {w.gainB, w.gainVocal}, true, Path::Split}}) {
         CAPTURE(name);
         model::EditTxn t(w.m.session, 3);
         for (Id fx : fxs)
@@ -927,7 +938,7 @@ TEST_CASE("FX wet and bypass edits while playing sound exactly like a compiled r
                 else
                     f.wet = 40;
             });
-        checkLikeCompiled(w.m.session, t.commit().value(), live);
+        checkLikeCompiled(w.m.session, t.commit().value(), path);
     }
 }
 
@@ -977,54 +988,70 @@ TEST_CASE("an FX wet or bypass edit compiles with anything else, or when the FX 
 TEST_CASE("mute and solo edits while playing sound exactly like a compiled reload" *
           doctest::description("rt")) {
     // ADR-0093: track, VCA and route mutes, track and VCA solo, solo-defeat,
-    // on rendered tracks (a, b, the buss) and a live one (the vocal). `live`:
-    // the edit changes what the vocal plays.
+    // on rendered tracks (a, b, the buss; the VCA holds a and b) and a live
+    // one (the vocal).
     const Wet w = wetSession();
     const Mix& m = w.m;
+    auto soloed = [&](Id track) {
+        model::EditTxn t(m.session, 3);
+        t.modify<model::Track>(track, [](auto& x) { x.solo = model::Solo::On; });
+        return t.commit().value();
+    };
+    const model::Session vocalSoloed = soloed(w.vocal), bSoloed = soloed(m.b);
     using Edit = std::function<void(model::EditTxn&)>;
-    const std::vector<std::tuple<std::string, Edit, bool>> edits = {
-        {"track mute, rendered",
-         [&](model::EditTxn& t) { t.modify<model::Track>(m.a, [](auto& x) { x.mute = true; }); },
-         false},
-        {"track mute, rendered and live",
-         [&](model::EditTxn& t) {
-             for (Id id : {m.a, w.vocal})
-                 t.modify<model::Track>(id, [](auto& x) { x.mute = true; });
-         },
-         true},
-        {"solo a rendered track",
-         [&](model::EditTxn& t) {
-             t.modify<model::Track>(m.b, [](auto& x) { x.solo = model::Solo::On; });
-         },
-         true},
-        {"solo the live track, defeat another",
-         [&](model::EditTxn& t) {
-             t.modify<model::Track>(w.vocal, [](auto& x) { x.solo = model::Solo::InPlace; });
-             t.modify<model::Track>(m.a, [](auto& x) { x.solo = model::Solo::Defeat; });
-         },
-         false},
-        {"VCA mute",
+    auto mute = [](std::vector<Id> ids) -> Edit {
+        return [ids](model::EditTxn& t) {
+            for (Id id : ids) t.modify<model::Track>(id, [](auto& x) { x.mute = true; });
+        };
+    };
+    auto solo = [](std::vector<std::pair<Id, model::Solo>> to) -> Edit {
+        return [to](model::EditTxn& t) {
+            for (const auto& [id, s] : to) t.modify<model::Track>(id, [s](auto& x) { x.solo = s; });
+        };
+    };
+    struct Case {
+        std::string name;
+        const model::Session& base;
+        Edit edit;
+        Path path;
+    };
+    const std::vector<Case> cases = {
+        {"track mute, rendered", m.session, mute({m.a}), Path::Rendered},
+        {"track mute, live", m.session, mute({w.vocal}), Path::Live},
+        {"track mute, rendered and live", m.session, mute({m.a, w.vocal}), Path::Split},
+        // Silences the vocal and a.
+        {"solo a rendered track", m.session, solo({{m.b, model::Solo::On}}), Path::Split},
+        // Silences b alone.
+        {"solo the live track, defeat another", m.session,
+         solo({{w.vocal, model::Solo::InPlace}, {m.a, model::Solo::Defeat}}), Path::Rendered},
+        // Silences the vocal and lets b play, or the reverse (round 42).
+        {"solo moves from the live track to a rendered one", vocalSoloed,
+         solo({{w.vocal, model::Solo::Off}, {m.b, model::Solo::On}}), Path::Split},
+        {"solo moves from a rendered track to the live one", bSoloed,
+         solo({{m.b, model::Solo::Off}, {w.vocal, model::Solo::On}}), Path::Split},
+        {"VCA mute", m.session,
          [&](model::EditTxn& t) {
              t.modify<model::TrackGroup>(m.vca, [](auto& g) { g.vca->mute = true; });
          },
-         false},
-        {"VCA solo",
+         Path::Rendered},
+        // Silences the vocal alone: the buss is fed by a and b.
+        {"VCA solo", m.session,
          [&](model::EditTxn& t) {
              t.modify<model::TrackGroup>(m.vca, [](auto& g) { g.vca->solo = true; });
          },
-         true},
-        {"an encoded send's mute",
+         Path::Live},
+        {"an encoded send's mute", m.session,
          [&](model::EditTxn& t) {
              t.modify<model::Route>(m.sendA, [](auto& r) { r.mute = true; });
              t.modify<model::Route>(m.sendB, [](auto& r) { r.mute = true; });
          },
-         false},
+         Path::Rendered},
     };
-    for (const auto& [name, edit, live] : edits) {
-        CAPTURE(name);
-        model::EditTxn t(m.session, 3);
-        edit(t);
-        checkLikeCompiled(m.session, t.commit().value(), live);
+    for (const Case& c : cases) {
+        CAPTURE(c.name);
+        model::EditTxn t(c.base, c.base.version + 1);
+        c.edit(t);
+        checkLikeCompiled(c.base, t.commit().value(), c.path);
     }
 }
 

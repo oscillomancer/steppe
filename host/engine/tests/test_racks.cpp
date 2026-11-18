@@ -3536,7 +3536,10 @@ TEST_CASE("rack sends: home mute and send level are mix edits beside a hardware 
     // With a hardware MIDI route a home mute toggle is a mix-only edit
     // (ADR-0072); the send follows it from the home's slot. A level edit on
     // the send is a mix value too (no compile). Console 9 is off so that
-    // the master's decode does not bend the level ratio.
+    // the master's decode does not bend the level ratio. In the anticipative
+    // executor the hardware route makes the home live while the renderer
+    // runs the rack, which reads the home's mute for the send: the mute
+    // changes both executors' values and compiles (ADR-0093).
     const RackSend r(false, false, false);
     const auto base = r.with([&](model::EditTxn& t) {
         t.modify<model::Track>(r.home, [](auto& x) { x.volumeDb = model::kSilenceDb; });
@@ -3574,8 +3577,8 @@ TEST_CASE("rack sends: home mute and send level are mix edits beside a hardware 
         runBlocks(engine, backend, options.anticipative, 200, kBlock);
         REQUIRE(engine.load(muted));
         runBlocks(engine, backend, options.anticipative, 200, kBlock);
-        CHECK(engine.planGeneration() == generation);  // neither compiled
-        CHECK(engine.mixEdits() == 2);
+        CHECK(engine.planGeneration() == generation + (options.anticipative ? 1 : 0));
+        CHECK(engine.mixEdits() == (options.anticipative ? 1u : 2u));
         engine.stop();
         CHECK(engine.processErrors() == 0);
         const auto& L = backend.capture().channels[0];

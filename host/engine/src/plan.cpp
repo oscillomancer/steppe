@@ -3807,6 +3807,63 @@ void publishMix(Plan& p, const model::Session& s, std::span<const model::EnvTarg
     mix.sequence.store(sequence + 2, std::memory_order_release);
 }
 
+bool splitsExecutors(const Plan& p, const model::Session& s) {
+    if (!p.split) return false;
+    const MixSlots& mix = *p.mix;
+    constexpr auto relaxed = std::memory_order_relaxed;
+    // Who reads a value is who syncMix copies it for: a node's executor, an
+    // edge's owner, a hardware MIDI route's source.
+    bool live = false, rendered = false;
+    auto touch = [&](const Node& owner) { (owner.live ? live : rendered) = true; };
+    std::vector<bool> vcaMuteMoves(mix.vcaIds.size(), false);
+    for (std::size_t i = 0; i < mix.vcaIds.size(); ++i)
+        if (const model::TrackGroup* g = s.groups.find(mix.vcaIds[i]); g && g->vca)
+            vcaMuteMoves[i] = g->vca->mute != mix.vcas[i].mute.load(relaxed);
+    auto touchVcas = [&](const VcaControls& vcas, const Node& owner) {
+        for (const VcaControl& v : vcas.values)
+            if (vcaMuteMoves[v.slot]) touch(owner);
+    };
+    const std::set<Id> silenced = model::soloSilencedTracks(s);
+    auto stripMoves = [&](std::size_t i) {
+        const model::Track* t = s.tracks.find(p.nodes[i].id);
+        return t && (t->mute != mix.strips[i].mute.load(relaxed) ||
+                     (!p.nodes[i].rack && silenced.contains(p.nodes[i].id) !=
+                                              mix.strips[i].soloSilenced.load(relaxed)));
+    };
+    for (std::size_t i = 0; i < p.nodes.size(); ++i) {
+        const Node& n = p.nodes[i];
+        if (stripMoves(i)) touch(n);
+        touchVcas(n.vcas, n);
+        std::size_t k = n.stageSlot;
+        forEachStage(n, [&](const Stage&) {
+            const model::FxInstance* fx = s.fx.find(mix.stageFx[k]);
+            if (fx && (fx->wet / 100.0 != mix.stages[k].wet.load(relaxed) ||
+                       (fx->bypass || fx->offline) != mix.stages[k].bypass.load(relaxed)))
+                touch(n);
+            ++k;
+        });
+    }
+    for (std::size_t i = 0; i < p.edges.size(); ++i) {
+        const Edge& e = p.edges[i];
+        if (!e.route) continue;
+        const Node& owner = p.nodes[e.stage >= 0 ? e.to : e.from];
+        if (const model::Route* r = s.routes.find(*e.route);
+            r && r->mute != mix.routes[i].mute.load(relaxed))
+            touch(owner);
+        if (e.rackSend && e.rackHome >= 0 && stripMoves(static_cast<std::size_t>(e.rackHome)))
+            touch(owner);
+        touchVcas(e.vcas, owner);
+    }
+    for (std::size_t i = 0; i < p.hardwareMidi.size(); ++i) {
+        const auto& route = *p.hardwareMidi[i];
+        if (const model::Route* r = s.routes.find(route.id);
+            r && r->mute != mix.hardware[i].mute.load(relaxed))
+            touch(p.nodes[route.source]);
+        touchVcas(route.vcas, p.nodes[route.source]);
+    }
+    return live && rendered;
+}
+
 void syncMix(Plan& p, int liveClass) SUPPLE_RT {
     MixSlots& mix = *p.mix;
     std::uint64_t& seen = mix.seen[liveClass == 1 ? 1 : 0];

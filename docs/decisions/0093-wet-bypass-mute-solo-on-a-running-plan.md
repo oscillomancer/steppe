@@ -55,6 +55,33 @@ fields copied from the new version), slots and seqlock:
 
 Item mute still compiles, because it decides which events a plan holds.
 
+### An edit that changes both executors' values compiles
+
+In the anticipative executor, the callback takes a value edit at its next
+block and the renderer at the next block it renders, up to the render-ahead
+later in the stream. An edit that changes these fields both on a node, edge
+or stage the callback reads and on one the renderer reads would therefore
+play, in between, a mix that neither session has. Moving solo from a
+monitored track to a rendered one would silence both until the renderer took
+it (about 200 ms with a full renderer); the reverse would play both. Such an
+edit compiles, so both executors switch at the handover
+(`detail::splitsExecutors`, on the main thread, before anything is
+published). It compares each value the new session would publish with the
+one its slot holds, and tells the readers apart as `syncMix` does: a node's
+executor, an edge's owner, a hardware MIDI route's source.
+
+Every edit that still takes the value path changes one executor's values,
+so its output is the old session's up to one point and the new session's
+after it. The in-callback executor has one executor and is unaffected.
+ADR-0060's level and pan edits are not gated this way: they blend rather
+than silence, as that ADR describes.
+
+The alternative was to let live nodes take a value edit at the stream
+position where the renderer takes it. That keeps these edits off the
+compile, but the callback would have to switch values inside a block at the
+renderer's handover position, as plan adoption does. It remains open if
+these compiles turn out to matter.
+
 ### Why nothing at compile time depends on wet or bypass
 
 The compile reads `fx.bypass` and `fx.wet` only to set the stage's
@@ -79,7 +106,9 @@ compile's; only the stages' `bypass` and `wet` differ.
 
 - Wet, bypass, mute and solo edits cost a model commit and a few atomic
   stores, whatever the session's size. This includes a solo, which floods
-  the signal graph once on the main thread.
+  the signal graph once on the main thread. In a split plan the main thread
+  also compares the new values with the slots once, and floods for solo a
+  second time.
 - In the in-callback executor, each of these edits while playing sounds
   sample for sample like a compiled reload.
 - In the anticipative executor, a node the renderer runs takes a value
@@ -99,6 +128,8 @@ compile's; only the stages' `bypass` and `wet` differ.
     hands over later than it would have, never earlier. A value edit is
     therefore never heard later than a compiled reload made at the same
     moment.
+  - An edit that changes both executors' values compiles (above), so it is
+    a compiled reload.
   - The tests fill the renderer before the edit, so every run starts from
     the same renderer position, and check the exact case. Comparing runs
     without that compares different renderer positions, by whole render

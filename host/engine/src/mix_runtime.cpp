@@ -275,6 +275,8 @@ bool Engine::loadMixValues(const model::Session& session, const std::filesystem:
     bool changed = false;
     std::vector<model::EnvTarget> stale = staleCurves_;
     if (!mixOnly(*latest_, session, writeHolds_, changed, stale) || !changed) return false;
+    if (detail::splitsExecutors(*p, session))
+        return false;  // ADR-0093: both switch at the handover
     detail::publishMix(*p, session, writeHolds_);
     plugins_.racks().applyParams(session);
     holdsPending_ = false;
