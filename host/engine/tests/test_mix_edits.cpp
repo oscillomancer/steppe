@@ -1236,6 +1236,106 @@ TEST_CASE("mute and solo edits while playing sound exactly like a compiled reloa
     }
 }
 
+TEST_CASE("an edit is split wherever a value it changes is read (ADR-0093)" *
+          doctest::description("rt")) {
+    // Each split case changes values in both executors through one branch of
+    // changedExecutors alone: a VCA mute read by a live member, a send whose
+    // owner is live, a hardware MIDI route read by its live source. Each
+    // compiles in the anticipative executor and equals the compiled reload.
+    // A key into the live track is not one: it carries its source's output,
+    // after the fader and VCAs the renderer applies there.
+    const Wet w = wetSession();
+    const Mix& m = w.m;
+    auto with = [&](auto change) {
+        model::EditTxn t(m.session, 3);
+        change(t);
+        return t.commit().value();
+    };
+    // A second VCA over a rendered track and the live vocal.
+    Id mixedVca;
+    const model::Session vcaLive = with([&](model::EditTxn& t) {
+        model::TrackGroup group;
+        group.members = {m.b, w.vocal};
+        group.vca = model::Vca{0, false, false, {}, {}};
+        mixedVca = t.create(group);
+    });
+    // The vocal's own encoded send to a buss of its own (live with it).
+    Id vocalSend;
+    const model::Session sendLive = with([&](model::EditTxn& t) {
+        model::Track buss;
+        buss.type = model::StripType::Buss;
+        buss.parent = kMaster;
+        const Id id = t.create(buss);
+        t.modify<model::Track>(kMaster, [&](auto& x) { x.children.push_back(id); });
+        model::Route r;
+        r.from.track = w.vocal;
+        r.to.track = id;
+        r.volumeDb = -6;  // encoded, so its mute is a value
+        vocalSend = t.create(r);
+    });
+    // a keys a key mix on the vocal.
+    const model::Session keyLive = with([&](model::EditTxn& t) {
+        model::FxInstance fx;
+        fx.plugin.id = "com.suppleaudio.test.keymix";
+        const Id keyMix = t.create(fx);
+        t.modify<model::Track>(w.vocal, [&](auto& x) { x.chain.push_back(keyMix); });
+        model::Route r;
+        r.from.track = m.a;
+        r.to.fx = keyMix;
+        r.volumeDb = -6;
+        t.create(r);
+    });
+    // b plays to a hardware MIDI port as well, which makes b live.
+    Id hardware;
+    const model::Session hardwareLive = with([&](model::EditTxn& t) {
+        model::Route r;
+        r.from.track = m.b;
+        r.to.midiDevice = "No such port";
+        r.midi = model::MidiRouting{};
+        hardware = t.create(r);
+    });
+    using Edit = std::function<void(model::EditTxn&)>;
+    struct Case {
+        std::string name;
+        const model::Session& base;
+        Edit edit;
+        Path path;
+    };
+    auto muteA = [&](model::EditTxn& t) {
+        t.modify<model::Track>(m.a, [](auto& x) { x.mute = true; });
+    };
+    const std::vector<Case> cases = {
+        {"a VCA mute with a live member", vcaLive,
+         [&](model::EditTxn& t) {
+             t.modify<model::TrackGroup>(mixedVca, [](auto& g) { g.vca->mute = true; });
+         },
+         Path::Split},
+        {"the live track's send muted with a rendered track", sendLive,
+         [&](model::EditTxn& t) {
+             t.modify<model::Route>(vocalSend, [](auto& r) { r.mute = true; });
+             muteA(t);
+         },
+         Path::Split},
+        {"a VCA mute over a track that keys the live one", keyLive,
+         [&](model::EditTxn& t) {
+             t.modify<model::TrackGroup>(m.vca, [](auto& g) { g.vca->mute = true; });
+         },
+         Path::Rendered},
+        {"a hardware MIDI route muted with a rendered track", hardwareLive,
+         [&](model::EditTxn& t) {
+             t.modify<model::Route>(hardware, [](auto& r) { r.mute = true; });
+             muteA(t);
+         },
+         Path::Split},
+    };
+    for (const Case& c : cases) {
+        CAPTURE(c.name);
+        model::EditTxn t(c.base, c.base.version + 1);
+        c.edit(t);
+        checkLikeCompiled(c.base, t.commit().value(), c.path);
+    }
+}
+
 TEST_CASE("a mute or solo edit compiles where it changes what a plan holds") {
     // A route mute decides an unencoded send's encoding; item mute decides
     // which events a plan holds.

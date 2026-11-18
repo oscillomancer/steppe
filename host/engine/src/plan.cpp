@@ -3843,6 +3843,10 @@ ExecutorChanges changedExecutors(const Plan& p, const model::Session& s) {
             ++k;
         });
     }
+    // An edge's owner is its source, or a key route's destination as in
+    // syncMix. No value edit reaches a key route today: its mute compiles
+    // (mixOnly) and it carries no VCAs, since it takes its source's output
+    // (a test pins both). A rack send's VCAs are its home's, read by the rack.
     for (std::size_t i = 0; i < p.edges.size(); ++i) {
         const Edge& e = p.edges[i];
         if (!e.route) continue;
@@ -3854,12 +3858,13 @@ ExecutorChanges changedExecutors(const Plan& p, const model::Session& s) {
             touch(owner);
         touchVcas(e.vcas, owner);
     }
+    // A hardware route's VCAs are its source's (prepareHardwareMidi), read by
+    // the same executor: the node's own check covers them.
     for (std::size_t i = 0; i < p.hardwareMidi.size(); ++i) {
         const auto& route = *p.hardwareMidi[i];
         if (const model::Route* r = s.routes.find(route.id);
             r && r->mute != mix.hardware[i].mute.load(relaxed))
             touch(p.nodes[route.source]);
-        touchVcas(route.vcas, p.nodes[route.source]);
     }
     return {live, rendered};
 }

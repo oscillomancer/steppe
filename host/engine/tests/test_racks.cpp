@@ -3680,6 +3680,92 @@ TEST_CASE("rack sends: home mute and send level are mix edits beside a hardware 
     }
 }
 
+TEST_CASE("rack sends: a VCA mute over a live home compiles where the renderer runs the rack" *
+          doctest::description("rt")) {
+    // ADR-0093: beside a hardware MIDI route the home is live, while the
+    // renderer runs the rack, which reads the home's VCAs for the send. A
+    // mute of a VCA over the home changes values both executors read.
+    const RackSend r(false, false, false);
+    Id vca;
+    const auto base = r.with([&](model::EditTxn& t) {
+        model::Route hw;
+        hw.from.track = r.home;
+        hw.to.midiDevice = "No such port";
+        hw.midi = model::MidiRouting{};
+        t.create(hw);
+        model::TrackGroup group;
+        group.members = {r.home};
+        group.vca = model::Vca{0, false, false, {}, {}};
+        vca = t.create(group);
+    });
+    const auto muted = [&] {
+        model::EditTxn t(base, base.version + 1);
+        t.modify<model::TrackGroup>(vca, [](auto& g) { g.vca->mute = true; });
+        return t.commit().value();
+    }();
+    for (const EngineOptions& options :
+         {EngineOptions{.anticipative = false, .workers = 0}, EngineOptions{.workers = 0}}) {
+        CAPTURE(options.anticipative);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256}));
+        REQUIRE(engine.load(base));
+        engine.play();
+        runBlocks(engine, backend, options.anticipative, 20, 256);
+        const auto generation = engine.planGeneration();
+        REQUIRE(engine.load(muted));
+        CHECK(engine.planGeneration() == generation + (options.anticipative ? 1 : 0));
+        CHECK(engine.mixEdits() == (options.anticipative ? 0u : 1u));
+        engine.stop();
+    }
+}
+
+TEST_CASE("a key route takes no value edit: its mute compiles and it carries no VCAs") {
+    // The split check (ADR-0093) gives a key route's values to its
+    // destination, as syncMix does; no value edit reaches them while these
+    // hold.
+    model::EditTxn t(model::Session::create({.console9 = false}), 1);
+    const Id a = addChannel(t), b = addChannel(t);
+    model::FxInstance fx;
+    fx.plugin.id = "com.suppleaudio.test.keymix";
+    const Id keyMix = t.create(fx);
+    t.modify<model::Track>(b, [&](auto& x) { x.chain.push_back(keyMix); });
+    model::Route key;
+    key.from.track = a;
+    key.to.fx = keyMix;
+    key.volumeDb = -6;
+    const Id route = t.create(key);
+    model::TrackGroup group;
+    group.members = {a};
+    group.vca = model::Vca{0, false, false, {}, {}};
+    t.create(group);
+    const auto s = commit(t);
+    auto pool = makePool();
+    auto plan = supple::engine::detail::compile(s, pool, 0, 128);
+    REQUIRE(plan);
+    int keys = 0;
+    for (const auto& e : plan->edges)
+        if (e.stage >= 0) {
+            ++keys;
+            CHECK(e.vcas.empty());
+        }
+    CHECK(keys == 1);
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    Engine engine(pool, media, {.anticipative = false, .workers = 0});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+    REQUIRE(engine.load(s));
+    model::EditTxn m(s, 2);
+    m.modify<model::Route>(route, [](auto& x) { x.mute = true; });
+    const auto generation = engine.planGeneration();
+    REQUIRE(engine.load(commit(m)));
+    CHECK(engine.planGeneration() == generation + 1);
+    CHECK(engine.mixEdits() == 0);
+    engine.stop();
+}
+
 TEST_CASE("racks: transport() keeps its arithmetic at a nonzero start; gridTransport() is exact") {
     // Review round 20: transport() had taken the exact grid arithmetic,
     // (origin + sample) / rate, which rounds apart in the last bit from the
