@@ -526,6 +526,26 @@ TEST_CASE("a report lists at most 256 bridges: the oldest ended one falls out, c
                        inventory.droppedJson(nullptr).find("bridges")->asInt()));
 }
 
+TEST_CASE("an end that has no room among 256 running bridges is counted as a report not written") {
+    Inventory inventory;
+    for (std::uint16_t id = 1; id <= kMaxBridges; ++id) REQUIRE(inventory.apply(bridgeEvent(id)));
+    // Every bridge is running, so there is nowhere to put another: the event is valid, counted in
+    // `dropped.bridges`, and the bridge is never considered. An end that would have been reported
+    // (a signal or an exception) is counted as the report it did not get; the others are not.
+    REQUIRE(inventory.apply(bridgeEvent(kMaxBridges + 1)));  // a start
+    CHECK(inventory.bridgeReportsSuppressed() == 0);
+    REQUIRE(inventory.apply(bridgeEvent(kMaxBridges + 2, diagctx::BridgeHow::Exit, 1)));
+    REQUIRE(inventory.apply(bridgeEvent(kMaxBridges + 3, diagctx::BridgeHow::Host, 0)));
+    CHECK(inventory.bridgeReportsSuppressed() == 0);
+    REQUIRE(inventory.apply(bridgeEvent(kMaxBridges + 4, diagctx::BridgeHow::Signal, 11)));
+    CHECK(inventory.bridgeReportsSuppressed() == 1);
+    REQUIRE(inventory.apply(bridgeEvent(kMaxBridges + 5, diagctx::BridgeHow::Exception, -1)));
+    CHECK(inventory.bridgeReportsSuppressed() == 2);
+    CHECK(inventory.bridgesLost() == 5);
+    CHECK(inventory.droppedJson(nullptr).find("bridge_reports")->asInt() == 2);
+    CHECK_FALSE(inventory.admitBridgeReport(kMaxBridges + 4));  // not there: nothing to write
+}
+
 TEST_CASE("the bridges validator accepts what the writer makes and refuses every other shape") {
     Inventory inventory;
     REQUIRE(inventory.apply(bridgeEvent(1)));

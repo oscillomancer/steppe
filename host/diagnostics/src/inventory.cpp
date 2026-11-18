@@ -297,7 +297,14 @@ bool Inventory::applyBridge(const InstanceRecord& r) {
     for (const auto length : r.length)
         if (length != 0) return false;
     BridgeEntry* entry = touchBridge(r.bridge);
-    if (!entry) return true;  // counted in bridgesLost_: valid, but there is no room for it
+    if (!entry) {
+        // Counted in bridgesLost_: valid, but there is no room for it, so it is never considered
+        // for a report. An end that would have had one says so in `dropped.bridge_reports`.
+        if (r.how == static_cast<std::uint8_t>(diagctx::BridgeHow::Signal) ||
+            r.how == static_cast<std::uint8_t>(diagctx::BridgeHow::Exception))
+            ++bridgeReportsSuppressed_;
+        return true;
+    }
     if (r.how != 0 && !entry->ended) {
         entry->ended = true;
         entry->how = static_cast<diagctx::BridgeHow>(r.how);

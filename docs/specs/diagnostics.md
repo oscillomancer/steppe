@@ -882,7 +882,9 @@ instruction. It belongs to a `bridge_exit` report only, and a `bridge_exit` repo
 level. At most 3 are written per worker run, and none for a bridge whose members (plug-in id and
 version, or the name when it has no id) and native status repeat one already reported (until the
 bridge's own modules are read, those stand in for a build); the others are counted in
-`dropped.bridge_reports` of every later report of the run, with a line in `unavailable`. There is no `Message::BridgeEnd`, and the worker does not mint the incident id or watch for the
+`dropped.bridge_reports` of every later report of the run, with a line in `unavailable`, and so is
+an end by a signal or an exception that had no room in the list of 256 running bridges (it is never
+considered, so it could not have a report). There is no `Message::BridgeEnd`, and the worker does not mint the incident id or watch for the
 report: the `Bridge` end event travels in order on the same channel as the other inventory events,
 so the supervisor alone decides, from what it has applied, whether the death is reported and under
 which id. The worker's "pending/ready/unavailable" association (the wake of the model through its
