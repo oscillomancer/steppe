@@ -1494,9 +1494,9 @@ TEST_CASE("bridge protocol v6 retains nested structured error details") {
     REQUIRE(decoded.details[0].details.size() == 1);
     CHECK(decoded.details[0].details[0].code == "leaf");
 #if defined(_WIN32)
-    CHECK(bridge::kVersion == 27);
+    CHECK(bridge::kVersion == 28);
 #else
-    CHECK(bridge::kVersion == 26);
+    CHECK(bridge::kVersion == 27);
 #endif
 }
 

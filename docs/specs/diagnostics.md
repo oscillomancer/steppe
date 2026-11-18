@@ -988,12 +988,13 @@ modules. Nothing reads it yet: 6c matches a bridge's capsule with it ("Bridge se
 
 ### Bridge self-capture (topic 6c)
 
-**Status: 6c.2 built, the rest is contract.** Built: the roles (6c.1), and the bridge's own capture
-(6c.2): the handlers, the CTC5 capsule, the cold module list and the slot's protocol (the writer's
-side), exercised for real on Linux; the Windows and macOS handlers compile and are proven by native
-CI only. Not built: the host carrying the slot to the supervisor (`AttachCaptureSlot`, the `Slot`
-event, 6c.3) and everything the supervisor does with it (6c.4). Until 6c.3 a bridge writes its
-capsule into a private slot nobody reads, so a report is still today's. Each step of the plan marks
+**Status: 6c.3 under way, the rest is contract.** Built: the roles (6c.1), the bridge's own capture
+(6c.2: the handlers, the CTC5 capsule, the cold module list and the slot's protocol, the writer's
+side), and the first half of 6c.3, the host handing the slot to the bridge (`AttachCaptureSlot`,
+bridge protocol 27, 28 on Windows: `docs/specs/sandbox.md`); exercised for real on Linux, the
+Windows and macOS code compiles and is proven by native CI only. Not built: the `Slot` event that
+carries the slot to the supervisor (the other half of 6c.3) and everything the supervisor does with
+it (6c.4). Until then nothing reads the slot, so a report is still today's. Each step of the plan marks
 what it makes true; until then the sections above describe the code. The maintainer settled the
 transport, the trust rule, whether a bridge's fault counts as a suspect and the two thread roles
 (decisions 1 to 4, below); the reviewed contract of the channel's new capability and of the
@@ -1025,8 +1026,8 @@ handler terminates, as the worker's does).
 
 *Handing it over.* Not by command line or by inheritance, so no spawn path changes and nothing
 extra leaks to the plug-ins' own children. One new process-level operation of the bridge protocol,
-`AttachCaptureSlot` (instance 0, appended after `AckNotifications`, payload `u32 version`, answered
-before any `Create`): POSIX sends the descriptor with `SCM_RIGHTS` like the notification eventfd
+`AttachCaptureSlot` (instance 0, appended after the existing operations, payload `u32 version`,
+answered before any `Create`): POSIX sends the descriptor with `SCM_RIGHTS` like the notification eventfd
 (the received copy is `CLOEXEC`); Windows follows the convention of the notification events: the
 host duplicates the mapping handle into the bridge with `DuplicateHandle` and sends the
 recipient-owned handle value, which the bridge validates (a section handle, the expected size)

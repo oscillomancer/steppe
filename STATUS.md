@@ -1659,7 +1659,9 @@ exception while the app lives gets a report of its own, kind `bridge_exit`, at m
 none for a repeat (the plug-in's id and version and the status stand in for a build). It is the
 host's account only: the bridge's own threads and fault are not collected yet (6b, 6c). A bridge now writes
 its own capsule at a fault into a private slot (6c.2; Linux exercised with real faults, the Windows and macOS
-handlers compile and wait for native CI), but nothing carries the slot to the supervisor yet (6c.3, 6c.4:
+handlers compile and wait for native CI), and the host now hands each bridge its slot (`AttachCaptureSlot`, bridge
+protocol 27, Windows 28; Linux exercised with a real bridge and a real fault), but nothing carries the slot to the
+supervisor yet (the rest of 6c.3, then 6c.4:
 `docs/specs/diagnostics.md` "Bridge self-capture"), so a report is still today's. When it lands, only the
 fault thread is walked on Linux and Windows (the others appear by role and entry as not collected); macOS walks
 all threads. Not done: a Windows bridge whose plug-in calls `raise(SIGSEGV)` still ends with an exit code. The

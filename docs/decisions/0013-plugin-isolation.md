@@ -271,3 +271,8 @@ Existing bridge deadlines, notification framing and recovery ownership remain au
 place in the bridge's own execution table (cell, generation, an address in the plug-in's binary) to
 the `Create` reply, for crash reports; see `docs/specs/sandbox.md`. Nothing on the data plane
 changes, and the bridge's exit status is untouched.
+
+*Note, 2026-11-19 (ADR-0083 topic 6c):* bridge protocol 27 (28 on Windows) appends `AttachCaptureSlot`,
+which hands the bridge the shared-memory slot it writes its own crash capsule into (so a bridge that
+faults can describe itself); see `docs/specs/sandbox.md`. The data plane, the earlier operations and
+the bridge's exit status are untouched.

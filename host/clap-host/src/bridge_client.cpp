@@ -8,6 +8,7 @@
 #include "bridge_notifications.h"
 #include "editor_platform.h"
 #include "platform.h"
+#include "supple/diagcap/selfcapture.h"
 #include "supple/diagctx/inventory.h"
 
 #include <algorithm>
@@ -29,6 +30,7 @@ std::atomic<std::uint64_t> gRequests{0};  // bridgeRequests()
 
 std::mutex gBridgeMutex;
 std::filesystem::path gBridgeExecutable;
+std::atomic<bool> gAttachCaptureSlot{true};  // tests only
 
 constexpr int kCreateTimeoutMs = 20000;
 
@@ -88,6 +90,10 @@ ThreadPolicy liveBridgeAudioPolicy() SUPPLE_RT {
 
 std::uint32_t liveBridgePeriodNs() SUPPLE_RT {
     return gLiveBridgePeriodNs.load(std::memory_order_relaxed);
+}
+
+void setBridgeCaptureSlotForTests(bool attach) {
+    gAttachCaptureSlot.store(attach, std::memory_order_relaxed);
 }
 
 void setBridgeExecutable(std::filesystem::path path) {
@@ -160,7 +166,31 @@ Result<std::shared_ptr<BridgeProcess>> BridgeProcess::spawn() {
     self->sock_ = sv[0];
 #endif
     if (auto status = self->initializeNotifications(); !status) return status.error();
+    self->attachCaptureSlot();
     return self;
+}
+
+void BridgeProcess::attachCaptureSlot() {
+    namespace capture = diagnostics::selfcapture;
+    if (ordinal_ == 0 || failed() || !gAttachCaptureSlot.load(std::memory_order_relaxed)) return;
+    const Resource memory = createMemory(capture::kSlotBytes);
+    if (memory == noResource) return;
+    void* map = mapMemory(memory, capture::kSlotBytes);
+    const bool ready = map && capture::initializeSlot(map, capture::kSlotBytes, ordinal_);
+    unmapMemory(map, capture::kSlotBytes);
+    Writer w;
+    w.u32(capture::kSlotVersion);
+    // On Windows call() duplicates the handle into the bridge; `memory` stays this process's.
+    const bool attached = ready && static_cast<bool>(call(Op::AttachCaptureSlot, 0, w, memory));
+#if defined(_WIN32)
+    if (attached)
+        slot_ = memory;
+    else
+        closeResource(memory);
+#else
+    closeResource(memory);
+#endif
+    (void)attached;
 }
 
 Status BridgeProcess::initializeNotifications() {
@@ -412,6 +442,7 @@ BridgeProcess::~BridgeProcess() {
     }
     announceEnd(endedWith, hostEnded);
     child_.reset();
+    if (slot_ != noResource) closeResource(slot_);
 }
 
 void RemoteInstance::unmap() {

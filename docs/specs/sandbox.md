@@ -288,12 +288,28 @@ unknown). They are private to the channel: the host passes them to its crash-rep
 match what the bridge's table says to the instance it announced, and never records them. The
 reply validator refuses a `Create` reply without them or with anything after them. Nothing else
 in the protocol, and nothing on the data plane, changes.
-Topic 6c (planned, not built: ADR-0083's note of 2026-11-19, `docs/specs/diagnostics.md` "Bridge
-self-capture") appends one process-level operation after `AckNotifications`, `AttachCaptureSlot`
-(instance 0, `u32 version`, one shared-memory resource: a descriptor on POSIX, a duplicated
-mapping handle's value on Windows), sent before `Create`, so a bridge can write its own crash
-capsule where the host's supervisor can read it. Both protocol versions rise by one when it is
-built; the data plane and every earlier operation are unchanged.
+Protocol 27 (28 on Windows) appends one process-level operation, `AttachCaptureSlot` (ADR-0083
+topic 6c, `docs/specs/diagnostics.md` "Bridge self-capture"), so that a bridge can write its own
+crash capsule where the host's supervisor can read it. Instance 0, payload `u32 version` (the
+slot's, `selfcapture::kSlotVersion`, 1), exactly one shared-memory resource beside the frame
+(POSIX: a descriptor with SCM_RIGHTS; Windows: the mapping handle the host duplicated into the
+bridge, which the frame carries as its recipient-owned handle, as for `Activate`); the reply repeats
+the version. The host creates the slot (`bridge::createMemory`: a memfd sealed against shrinking and
+growing on Linux, an unlinked `shm_open` object on macOS, a pagefile-backed section on Windows) of
+`kSlotBytes` (256 KiB), writes an empty slot's header into it and sends it right after the
+subscription and before any `Create`; it then closes its descriptor (POSIX) or keeps its handle
+until the process object is gone (Windows). The bridge refuses with a structured error
+(`bridge.capture_slot`, or `bridge.malformed` for a payload that is not exactly `u32`, or
+`bridge.fd` for more than one descriptor) and closes whatever it was sent, changing nothing:
+a wrong version (the error names both), a request with an instance id, no resource, a resource
+that is not shared memory of exactly the slot's size (a pipe, an event, a file or an object of
+another size; on Linux an unsealed memfd), memory that is not an empty slot of this version
+(no magic, a wrong version or capacity, a state that is not empty) and a second slot after one was
+taken (checked last, so each of the others reports its own cause on an attached bridge). It
+requires an established subscription, like every operation but the subscription. A bridge that was
+not attached works exactly as before and writes its capsule nowhere anyone reads. A host that
+could not attach (an allocation failure, a refusal) goes on without a capsule: attaching is never
+a reason to fail a bridge's start. The data plane and every earlier operation are unchanged.
 Protocol 12 appends the main-thread `PluginStatus` query after it (no payload,
 one JSON string reply); the data plane and earlier operation numbers are
 unchanged. See [plugin-status](plugin-status-extension.md).

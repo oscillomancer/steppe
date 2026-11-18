@@ -3,7 +3,7 @@
 supple_add_library(clap-host
   SOURCES src/clap_host.cpp src/vst3_host.cpp src/platform.cpp src/scan.cpp
   DEPS supple::core-base supple::core-json supple::clap supple::semantic-params-abi supple::vst3-host
-  PRIVATE_DEPS ${CMAKE_DL_LIBS} supple::product-info supple::diagnostics-context)
+  PRIVATE_DEPS ${CMAKE_DL_LIBS} supple::product-info supple::diagnostics-context supple::diagnostics-capture)
 target_sources(clap-host PRIVATE src/bridge_client.cpp src/bridge_protocol.cpp src/bridge_platform.cpp src/bridge_child.cpp src/bridge_diagnostics.cpp)
 if(WIN32)
   target_sources(clap-host PRIVATE src/child_process_windows.cpp src/editor_platform_windows.cpp)
@@ -72,7 +72,7 @@ if(SUPPLE_BUILD_TESTS)
     target_link_libraries(clap-host.tests PRIVATE "-framework CoreGraphics")
   endif()
   # The tests read the execution table from inside the fixture plug-in (tests/scope_probe.h).
-  target_link_libraries(clap-host.tests PRIVATE supple::diagnostics-context)
+  target_link_libraries(clap-host.tests PRIVATE supple::diagnostics-context supple::diagnostics-capture)
   add_dependencies(clap-host.tests ${PRODUCT_SLUG}-scanner host-child-fixture)
   # The agent skill beside the binary (test_scan.cpp) and, with the stock
   # plugins, the script player in their folder (review round 33).

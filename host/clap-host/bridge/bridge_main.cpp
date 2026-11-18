@@ -447,6 +447,7 @@ struct Bridge {
 #endif
     MainThreadWake wake;  // outlives every instance and its callback threads
     Resource outward = noResource;
+    bool captureAttached = false;  // the crash-capsule slot (topic 6c), taken once
     NotificationLatch notifications;
     ~Bridge() {
         if (outward != noResource) closeResource(outward);
@@ -491,6 +492,46 @@ struct Bridge {
         w.u8(size.resizable ? 1 : 0);
     }
 
+    // AttachCaptureSlot (topic 6c): the shared slot this process writes its own crash capsule
+    // into. Every refusal is a structured error that closes the resource it was sent with and
+    // changes nothing; the slot is taken once.
+    bool attachCaptureSlot(std::uint32_t instanceId, std::uint32_t version, Resource fd) {
+        namespace capture = diagnostics::selfcapture;
+        const auto refuse = [&](std::string message, const char* path, const char* hint) {
+            if (fd >= 0) closeResource(fd);
+            return fail(Error("bridge.capture_slot", std::move(message), path, hint));
+        };
+        if (instanceId != 0)
+            return refuse("AttachCaptureSlot requires instance id 0", "/instance",
+                          "send it with instance 0");
+        if (version != capture::kSlotVersion)
+            return refuse("capture slot version " + std::to_string(capture::kSlotVersion) +
+                              ", host " + std::to_string(version),
+                          "/version", "use matching host and bridge builds");
+        if (fd < 0)
+            return refuse("AttachCaptureSlot needs one shared-memory resource", "/fd",
+                          "send the slot's memory object with the request");
+        void* map = mapCaptureSlot(fd, capture::kSlotBytes);
+        closeResource(fd);  // the mapping keeps the memory
+        fd = noResource;
+        if (!map)
+            return refuse("not a capture slot of the expected size", "/fd",
+                          "send a sealed shared-memory object of exactly the slot's size");
+        if (captureAttached) {
+            unmapMemory(map, capture::kSlotBytes);
+            return refuse("a capture slot is already attached", "/fd", "attach one slot only");
+        }
+        if (!capture::attachSlot(map, capture::kSlotBytes)) {
+            unmapMemory(map, capture::kSlotBytes);
+            return refuse("the capture slot is not an empty slot of this version", "/fd",
+                          "send a slot the host initialized and nobody has written");
+        }
+        captureAttached = true;  // the mapping stays for the life of the process
+        Writer w;
+        w.u32(capture::kSlotVersion);
+        return reply(w);
+    }
+
     // Returns false to exit.
     bool handle(Op op, std::uint32_t instanceId, Reader& r, Resource fd, int descriptorCount = -1) {
         replyId = instanceId;
@@ -533,10 +574,11 @@ struct Bridge {
             w.u32(kVersion);
             return reply(w);
         }
-        if (fd >= 0 && op != Op::Activate) {
+        if (fd >= 0 && op != Op::Activate && op != Op::AttachCaptureSlot) {
             closeResource(fd);
             return fail(Error("bridge.fd", "unexpected descriptor for this operation", "/fd",
-                              "send descriptors only with Activate or SubscribeNotifications"));
+                              "send descriptors only with Activate, SubscribeNotifications or "
+                              "AttachCaptureSlot"));
         }
         if (op == Op::AckNotifications) {
             if (instanceId || outward < 0)
@@ -560,6 +602,7 @@ struct Bridge {
                 Error("bridge.subscription", "notification subscription is required", "/version",
                       "subscribe with the matching bridge protocol before creating instances"));
         }
+        if (op == Op::AttachCaptureSlot) return attachCaptureSlot(instanceId, r.u32(), fd);
         if (op == Op::Create) {
             if (instanceId != 0)
                 return fail(Error("bridge.instance", "Create requires instance id 0"));
@@ -628,6 +671,7 @@ struct Bridge {
             case Op::Create:
             case Op::SubscribeNotifications:
             case Op::AckNotifications:
+            case Op::AttachCaptureSlot:
                 break;
             case Op::Activate: {
                 const double rate = r.f64();

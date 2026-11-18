@@ -235,6 +235,9 @@ bool validRequest(Op op, Reader r) {
             break;
         case Op::AckNotifications:
             break;
+        case Op::AttachCaptureSlot:
+            r.skip(4);  // the slot's version; the resource travels beside the frame
+            break;
         case Op::Activate:
             r.skip(20);
 #if defined(_WIN32)
@@ -388,6 +391,9 @@ bool validReply(Op op, Reader r) {
         }
         case Op::SubscribeNotifications:
             if (r.u32() != kVersion) return false;
+            break;
+        case Op::AttachCaptureSlot:  // the slot version the bridge attached
+            r.skip(4);
             break;
         case Op::AckNotifications: {  // the instances with new captures
             const auto count = r.u32();

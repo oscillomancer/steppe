@@ -6,27 +6,37 @@
 #include <supple/base/waitable.h>
 #include <supple/host/clap_host.h>
 #if !defined(_WIN32)
+#include <dirent.h>
 #include <signal.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
+#if defined(__APPLE__)
+#include <libproc.h>
+#endif
 #if defined(__linux__)
 #include <fcntl.h>
+#include <sys/mman.h>
 #include <cerrno>
 #endif
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <condition_variable>
+#include <cstring>
 #include <mutex>
 #include <optional>
 #include <ostream>
+#include <string>
 #include <thread>
 #include <vector>
 #include "../src/bridge_client.h"
 #include "../src/bridge_protocol.h"
 #include "lifecycle_gate.h"
 #include "process_pause.h"
+#include "supple/diagcap/selfcapture.h"
 using namespace supple;
 using namespace supple::host;
 namespace {
@@ -53,6 +63,53 @@ struct Audio {
         b.frames = 64;
         return b;
     }
+};
+// How many descriptors (POSIX) or handles (Windows) process `pid` holds open; -1 when this
+// platform cannot say. The attach tests compare it before and after a refused request: a
+// refusal that leaks the resource it was sent would show here.
+long openResourcesOf(int pid) {
+#if defined(__linux__)
+    long count = 0;
+    DIR* dir = ::opendir(("/proc/" + std::to_string(pid) + "/fd").c_str());
+    if (!dir) return -1;
+    while (const dirent* entry = ::readdir(dir))
+        if (entry->d_name[0] != '.') ++count;
+    ::closedir(dir);
+    return count;
+#elif defined(__APPLE__)
+    const int bytes = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nullptr, 0);
+    return bytes < 0 ? -1 : static_cast<long>(bytes / static_cast<int>(sizeof(proc_fdinfo)));
+#elif defined(_WIN32)
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
+    if (!process) return -1;
+    DWORD count = 0;
+    const BOOL ok = GetProcessHandleCount(process, &count);
+    CloseHandle(process);
+    return ok ? static_cast<long>(count) : -1;
+#else
+    (void)pid;
+    return -1;
+#endif
+}
+// A slot as the host makes one: sealed shared memory with an empty slot's header written.
+bridge::Resource makeSlot(std::uint32_t ordinal = 1) {
+    namespace capture = diagnostics::selfcapture;
+    const auto memory = bridge::createMemory(capture::kSlotBytes);
+    REQUIRE(memory != bridge::noResource);
+    void* map = bridge::mapMemory(memory, capture::kSlotBytes);
+    REQUIRE(map);
+    REQUIRE(capture::initializeSlot(map, capture::kSlotBytes, ordinal));
+    bridge::unmapMemory(map, capture::kSlotBytes);
+    return memory;
+}
+bridge::Writer slotRequest(std::uint32_t version = diagnostics::selfcapture::kSlotVersion) {
+    bridge::Writer w;
+    w.u32(version);
+    return w;
+}
+struct NoAutoAttach {  // a bridge started in this scope is not given a slot
+    NoAutoAttach() { setBridgeCaptureSlotForTests(false); }
+    ~NoAutoAttach() { setBridgeCaptureSlotForTests(true); }
 };
 void awaitWake(MainThreadWake& wake) {
     WaitItem item{wake.waitable()};
@@ -512,6 +569,195 @@ TEST_CASE("native bridge malformed payloads and unexpected resources close clean
     CHECK_FALSE((*process)->failed());
     REQUIRE((*instance)->paramValue(0));
 }
+TEST_CASE("a bridge takes the capture slot once, and every damaged attach is refused cleanly") {
+    namespace capture = diagnostics::selfcapture;
+    setBridgeExecutable(BRIDGE_PATH);
+    NoAutoAttach none;
+    auto made = createBridgeProcess();
+    REQUIRE(made);
+    auto& process = *made;
+    const long before = openResourcesOf(process->pid());
+    const auto refused = [&](const char* label, bridge::Op op, std::uint32_t instance,
+                             const bridge::Writer& w, bridge::Resource resource,
+                             std::string_view code) {
+        CAPTURE(label);
+        auto reply = process->call(op, instance, w, resource);
+        if (resource != bridge::noResource) bridge::closeResource(resource);  // the sender's copy
+        REQUIRE_FALSE(reply);
+        CHECK(reply.error().code == code);
+        CHECK_FALSE(process->failed());
+        // The bridge closed what it was sent: its own open-resource count is where it was.
+        if (before >= 0) CHECK(openResourcesOf(process->pid()) == before);
+    };
+    refused("wrong version", bridge::Op::AttachCaptureSlot, 0,
+            slotRequest(capture::kSlotVersion + 1), makeSlot(), "bridge.capture_slot");
+    refused("no resource", bridge::Op::AttachCaptureSlot, 0, slotRequest(), bridge::noResource,
+            "bridge.capture_slot");
+    refused("a request for an instance", bridge::Op::AttachCaptureSlot, 1, slotRequest(),
+            makeSlot(), "bridge.capture_slot");
+    {
+        bridge::Writer trailing = slotRequest();
+        trailing.u8(0);
+        refused("trailing payload", bridge::Op::AttachCaptureSlot, 0, trailing, makeSlot(),
+                "bridge.malformed");
+        refused("short payload", bridge::Op::AttachCaptureSlot, 0, bridge::Writer{}, makeSlot(),
+                "bridge.malformed");
+    }
+    refused("memory too small", bridge::Op::AttachCaptureSlot, 0, slotRequest(),
+            bridge::createMemory(capture::kSlotBytes / 2), "bridge.capture_slot");
+    refused("memory too large", bridge::Op::AttachCaptureSlot, 0, slotRequest(),
+            bridge::createMemory(capture::kSlotBytes * 2), "bridge.capture_slot");
+    // Right size, never initialized as a slot: no magic.
+    refused("not a slot", bridge::Op::AttachCaptureSlot, 0, slotRequest(),
+            bridge::createMemory(capture::kSlotBytes), "bridge.capture_slot");
+#if defined(_WIN32)
+    {
+        const HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        REQUIRE(event);
+        refused("an event is no memory", bridge::Op::AttachCaptureSlot, 0, slotRequest(),
+                reinterpret_cast<bridge::Resource>(event), "bridge.capture_slot");
+    }
+#else
+    {
+        int ends[2];
+        REQUIRE(::pipe(ends) == 0);
+        ::close(ends[1]);
+        refused("a pipe is no memory", bridge::Op::AttachCaptureSlot, 0, slotRequest(), ends[0],
+                "bridge.capture_slot");
+    }
+#endif
+#if defined(__linux__)
+    {
+        // Right size, a slot's header, but unsealed: the mapping could be shrunk to a fault.
+        const int fd = ::memfd_create("unsealed", MFD_CLOEXEC);
+        REQUIRE(fd >= 0);
+        REQUIRE(::ftruncate(fd, static_cast<off_t>(capture::kSlotBytes)) == 0);
+        refused("an unsealed memfd", bridge::Op::AttachCaptureSlot, 0, slotRequest(), fd,
+                "bridge.capture_slot");
+    }
+#endif
+    // A request that may carry no resource still refuses one (an existing rule, kept for it).
+    refused("a resource on another operation", bridge::Op::AckNotifications, 0, bridge::Writer{},
+            makeSlot(), "bridge.fd");
+    // None of that used the one attach: a good slot is taken now, and a second is refused.
+    {
+        const auto slot = makeSlot();
+        auto taken = process->call(bridge::Op::AttachCaptureSlot, 0, slotRequest(), slot);
+        bridge::closeResource(slot);
+        REQUIRE(taken);
+        bridge::Reader r(taken->data(), taken->size());
+        CHECK(r.u32() == capture::kSlotVersion);
+    }
+    refused("a second slot", bridge::Op::AttachCaptureSlot, 0, slotRequest(), makeSlot(),
+            "bridge.capture_slot");
+    CHECK_FALSE(process->failed());
+}
+
+TEST_CASE("a bridge starts with a capture slot attached, which a second attach finds taken") {
+    setBridgeExecutable(BRIDGE_PATH);
+    auto made = createBridgeProcess();  // the host hands one over as it starts
+    REQUIRE(made);
+    const auto slot = makeSlot();
+    auto again = (*made)->call(bridge::Op::AttachCaptureSlot, 0, slotRequest(), slot);
+    bridge::closeResource(slot);
+    REQUIRE_FALSE(again);
+    CHECK(again.error().code == "bridge.capture_slot");
+    CHECK(again.error().message.find("already attached") != std::string::npos);
+    CHECK_FALSE((*made)->failed());
+}
+
+#if !defined(_WIN32)
+TEST_CASE("two descriptors on an attach are refused and both closed") {
+    setBridgeExecutable(BRIDGE_PATH);
+    bridge::Resource pair[2];
+    REQUIRE(bridge::controlPair(pair));
+    auto child = bridge::NativeChild::launch(BRIDGE_PATH, pair[1]);
+    bridge::closeResource(pair[1]);
+    REQUIRE(child);
+    {
+        // The bridge is up once it has answered anything (it may still be opening its own files
+        // before that, which would move the count under the comparison below).
+        REQUIRE(bridge::sendFrame(pair[0], static_cast<std::uint32_t>(bridge::Op::AckNotifications),
+                                  0, {}));
+        std::uint32_t status = 0, id = 0;
+        std::vector<std::uint8_t> bytes;
+        REQUIRE(bridge::recvFrame(pair[0], status, id, bytes, nullptr, 10000));
+        CHECK(status == static_cast<std::uint32_t>(bridge::Reply::Error));  // no subscription yet
+    }
+    const long before = openResourcesOf((*child)->pid());
+    int first = makeSlot(), second = makeSlot();
+    std::uint32_t prefix[3] = {4, static_cast<std::uint32_t>(bridge::Op::AttachCaptureSlot), 0};
+    std::uint32_t version = diagnostics::selfcapture::kSlotVersion;
+    iovec parts[2] = {{prefix, sizeof prefix}, {&version, sizeof version}};
+    alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int) * 2)]{};
+    msghdr message{};
+    message.msg_iov = parts;
+    message.msg_iovlen = 2;
+    message.msg_control = control;
+    message.msg_controllen = sizeof control;
+    cmsghdr* header = CMSG_FIRSTHDR(&message);
+    header->cmsg_level = SOL_SOCKET;
+    header->cmsg_type = SCM_RIGHTS;
+    header->cmsg_len = CMSG_LEN(sizeof(int) * 2);
+    const int both[2] = {first, second};
+    std::memcpy(CMSG_DATA(header), both, sizeof both);
+    REQUIRE(::sendmsg(pair[0], &message, 0) ==
+            static_cast<ssize_t>(sizeof prefix + sizeof version));
+    ::close(first);
+    ::close(second);
+    std::uint32_t status = 0, id = 0;
+    std::vector<std::uint8_t> bytes;
+    REQUIRE(bridge::recvFrame(pair[0], status, id, bytes, nullptr, 10000));
+    CHECK(status == static_cast<std::uint32_t>(bridge::Reply::Error));
+    bridge::Reader r(bytes.data(), bytes.size());
+    const Error error = r.error();
+    CHECK(error.code == "bridge.fd");
+    if (before >= 0) CHECK(openResourcesOf((*child)->pid()) == before);
+    bridge::closeResource(pair[0]);
+}
+
+TEST_CASE("a bridge that faults writes its capsule into the slot the host handed it") {
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer) || \
+    __has_feature(memory_sanitizer) || __has_feature(realtime_sanitizer)
+    return;  // a sanitizer owns the signals in this build: the bridge installs no handler
+#endif
+#endif
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+    return;
+#endif
+    namespace capture = diagnostics::selfcapture;
+    setBridgeExecutable(BRIDGE_PATH);
+    NoAutoAttach none;
+    auto made = createBridgeProcess();
+    REQUIRE(made);
+    auto& process = *made;
+    // The test is the host and keeps its own end of the slot, as the supervisor will.
+    const auto slot = makeSlot(7);
+    auto taken = process->call(bridge::Op::AttachCaptureSlot, 0, slotRequest(), slot);
+    REQUIRE(taken);
+    const int pid = process->pid();
+    REQUIRE(::kill(pid, SIGSEGV) == 0);  // the handler runs as for a fault, on the main thread
+    for (int i = 0; i < 2000 && process->alive(); ++i) (void)waitFor({}, 5);
+    REQUIRE_FALSE(process->alive());
+    // Read as the supervisor does: pread, never a mapping.
+    std::vector<std::uint8_t> bytes(capture::kSlotBytes);
+    REQUIRE(::pread(slot, bytes.data(), bytes.size(), 0) == static_cast<ssize_t>(bytes.size()));
+    bridge::closeResource(slot);
+    capture::SlotHeader header;
+    std::memcpy(&header, bytes.data(), sizeof header);
+    REQUIRE(capture::slotUsable(header, bytes.size()));
+    CHECK(header.ordinal == 7);
+    REQUIRE(header.state == capture::kSlotComplete);
+    REQUIRE(header.length >= sizeof(capture::CapsuleHeader));
+    capture::CapsuleHeader capsule;
+    std::memcpy(&capsule, bytes.data() + sizeof header, sizeof capsule);
+    CHECK(capsule.magic == capture::kBridgeCapsuleMagic);
+    CHECK((capsule.flags & capture::kCapsuleHasTable) != 0);
+    CHECK(capsule.reserved != 0);  // the fault thread's id
+}
+#endif
+
 TEST_CASE("native idle process death wakes every subscribed parent") {
     setBridgeExecutable(BRIDGE_PATH);
     MainThreadWake firstWake, secondWake;
@@ -631,11 +877,11 @@ TEST_CASE("abandoning a bridge returns a call waiting on it from another thread"
 
 TEST_CASE(
     "a Create reply carries the instance's place in the bridge's table, and no less or more") {
-    // Protocol 26 on POSIX, 27 on Windows: the reply gained its tail with that number.
+    // Protocol 26 on POSIX, 27 on Windows, gave the reply its tail; the number is now one higher.
 #if defined(_WIN32)
-    CHECK(bridge::kVersion == 27);
+    CHECK(bridge::kVersion == 28);
 #else
-    CHECK(bridge::kVersion == 26);
+    CHECK(bridge::kVersion == 27);
 #endif
     bridge::Writer w;
     w.u32(3);  // the instance id

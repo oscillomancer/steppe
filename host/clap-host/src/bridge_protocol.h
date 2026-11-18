@@ -64,10 +64,12 @@ inline constexpr std::uint32_t kMagic = 0x31474253;  // "SBG1"
 // so the parent pulls only those.
 // 26/27: the Create reply ends with the instance's place in the bridge's own execution table
 // (cell, generation) and an address in the plug-in's binary (crash reports, ADR-0083 topic 6b).
+// 27/28: AttachCaptureSlot hands the bridge the shared-memory slot it writes its own crash
+// capsule into (ADR-0083 topic 6c).
 #if defined(_WIN32)
-inline constexpr std::uint32_t kVersion = 27;  // Windows runs one ahead: native control handles
+inline constexpr std::uint32_t kVersion = 28;  // Windows runs one ahead: native control handles
 #else
-inline constexpr std::uint32_t kVersion = 26;
+inline constexpr std::uint32_t kVersion = 27;
 #endif
 inline constexpr int kControlFd = 3;  // the bridge's end of the socketpair
 inline constexpr std::uint32_t kMaxChannels = 16;
@@ -126,6 +128,8 @@ enum class Op : std::uint32_t {
     PluginStatus,            // no payload → JSON text (null if unsupported)
     FactoryPatches,          // no payload → canonical patch array JSON text
     EditorScale,             // f64 scale → the size for the window (as EditorOpen)
+    AttachCaptureSlot,       // process id 0: u32 slot version + one shared-memory resource → u32
+                             // slot version (the bridge's crash-capsule slot, topic 6c)
 };
 
 enum class Reply : std::uint32_t { Ok = 0, Error = 1 };

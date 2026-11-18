@@ -36,6 +36,10 @@ struct RemotePorts {
 
 class RemoteInstance;
 
+// Tests only: whether a new bridge is handed a capture slot as it starts (true), so that a test
+// can send the operation itself. Process-wide.
+void setBridgeCaptureSlotForTests(bool attach);
+
 class BridgeProcess {
   public:
     static constexpr int kHung = -2;
@@ -72,6 +76,9 @@ class BridgeProcess {
     static constexpr int kProtocolViolation = -3;
     BridgeProcess() = default;
     Status initializeNotifications();
+    // Topic 6c: creates the bridge's capture slot and hands it over; any failure leaves the
+    // bridge working with no capsule (the report is then the one of the host's account alone).
+    void attachCaptureSlot();
     void watch();
     void notifySubscribers();
     void subscribe(RemoteInstance& instance, MainThreadWake& wake);
@@ -111,6 +118,10 @@ class BridgeProcess {
     // from one the operating system or the plug-in caused. The end is announced once, from
     // reap() on the main thread, or from the destructor when nobody reaped.
     std::uint16_t ordinal_ = 0;
+    // Topic 6c: the capture slot's memory object while this process holds it. POSIX closes it as
+    // soon as it is sent (the descriptor in flight keeps the object); Windows keeps the handle
+    // until the process object goes, because the supervisor duplicates it from this process.
+    bridge::Resource slot_ = bridge::noResource;
     std::atomic<bool> hostKilled_{false}, endAnnounced_{false};
     // Topic 6a: the id of the crash report a signal or exception end may have caused (written once
     // by announceEnd, then published by the release store of `incidentReady_`).
