@@ -1231,6 +1231,19 @@ LLM-native differentiator: the same text an agent writes is visible and
 editable by the human. The event list edits notes and CC events;
 double-click editing requires a row hit and edits that row. Roll gesture
 anchors use exact model timing rather than the rounded `midi.notes` query.
+
+**Roll appearance.** The notes are drawn in the colour their item has in
+the arrangement (`views::Lanes::itemColor`: the item's own, else its
+track's, else its strip type's), so the roll and the item it edits look
+alike; the velocity lane's stems take the same colour. A selected note is
+in the focus colour with an ink outline. Velocity shows as fullness: a
+note keeps 45% of its colour at velocity 0 and all of it at 127, the rest
+drawn towards the ground. The rows of the white keys are on the panel
+colour and those of the black keys on the darker ground, as on the
+keyboard at the left; the line under each C is stronger. The title names
+the track and the item as the arrangement labels it ("MIDI · Rhodes —
+Chords · 4 notes · grid 1/16"), with the item's id only while it has no
+name.
 A right-click on the grid (on a note: that note joins or is the selection)
 opens **Delete**, **Copy**, **Cut**, **Paste** (at the pointer's beat on the
 grid, pitches as copied) and **Duplicate** for the selected notes; the same

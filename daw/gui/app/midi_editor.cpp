@@ -15,6 +15,7 @@
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/text_area.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/lanes.h"
 #include "supple/views/mouse_map.h"
 
 namespace supple::gui {
@@ -97,10 +98,15 @@ struct Geometry {
     }
 };
 
-ui::Color velocityColor(const ui::Theme& t, int velocity, bool selected) {
-    const ui::Color base = selected ? t.color("focus") : t.color("accent");
+// A note's colour: the item's (the selection's when selected), fuller the
+// harder the note is played. A soft note keeps 45% of it and is drawn the
+// rest of the way towards the ground, so it fades in either theme.
+ui::Color velocityColor(const ui::Theme& t, const RollState& s, int velocity, bool selected) {
+    const ui::Color base = selected ? t.color("focus") : s.color ? s.color(t) : t.color("accent");
+    const ui::Color ground = t.color("ground");
     const float k = 0.45f + 0.55f * static_cast<float>(velocity) / 127.0f;
-    return {base.r * k, base.g * k, base.b * k, 1};
+    return {ground.r + (base.r - ground.r) * k, ground.g + (base.g - ground.g) * k,
+            ground.b + (base.b - ground.b) * k, 1};
 }
 
 // ----------------------------------------------------------------- the roll
@@ -120,12 +126,13 @@ class Roll : public ui::Node {
         const ui::Rect b = bounds();
         c.save();
         c.clip(b);
-        c.fillRect(b, t.color("ground"));
-        // Rows: black keys darker, C lines stronger.
+        // Rows: the white keys' on the panel, the black keys' on the darker
+        // ground, as on the keyboard beside them; C lines stronger.
+        c.fillRect(b, t.color("panel"));
         const int top = g.pitchOf(b.y), bottom = g.pitchOf(b.bottom());
         for (int p = std::min(127, top); p >= std::max(0, bottom); --p) {
             const float y = g.yOf(p);
-            if (blackKey(p)) c.fillRect({b.x, y, b.w, s_.rowHeight}, t.color("panel"));
+            if (blackKey(p)) c.fillRect({b.x, y, b.w, s_.rowHeight}, t.color("ground"));
             if (p % 12 == 0) c.fillRect({b.x, y + s_.rowHeight - 1, b.w, 1}, t.color("rule"));
         }
         // Outside the item: shaded.
@@ -158,7 +165,7 @@ class Roll : public ui::Node {
             if (r.right() < b.x || r.x > b.right() || r.bottom() < b.y || r.y > b.bottom())
                 continue;
             const bool sel = s_.selected.contains(i);
-            c.fillRound(r, 2, velocityColor(t, n.velocity, sel));
+            c.fillRound(r, 2, velocityColor(t, s_, n.velocity, sel));
             c.strokeRound(r, 2, sel ? t.color("ink") : t.color("ground").withAlpha(0.7f));
             if (r.w > 34 && s_.rowHeight >= 11)
                 c.text({r.x + 3, r.y, r.w - 4, r.h}, pitchName(n.pitch), ui::Font::Ui,
@@ -425,7 +432,7 @@ class VelocityLane : public ui::Node {
             if (x < a.x - 4 || x > a.right()) continue;
             const float h = a.h * static_cast<float>(n.velocity) / 127.0f;
             const bool sel = s_.selected.contains(i);
-            const ui::Color col = velocityColor(t, n.velocity, sel);
+            const ui::Color col = velocityColor(t, s_, n.velocity, sel);
             c.fillRect({x, a.bottom() - h, 2, h}, col);
             c.fillRound({x - 2, a.bottom() - h - 2, 6, 4}, 1, col);
         }
@@ -690,6 +697,17 @@ class Panel : public ui::Node {
 MidiEditor::MidiEditor(ui::Root& root, AppActions& actions, cmd::Dispatcher& dispatcher,
                        engine::EngineApp& app, UiState& ui)
     : root_(root), actions_(actions), dispatcher_(dispatcher), app_(app), ui_(ui) {
+    // The notes take the colour their item has in the arrangement.
+    state_.color = [this](const ui::Theme& theme) {
+        const model::Session& s = app_.head();
+        if (auto id = model::Id::parse(state_.item))
+            if (const model::Item* item = s.items.find(*id)) {
+                const model::Track* track = s.tracks.find(item->track);
+                return views::Lanes::itemColor(theme, *item, track,
+                                               track ? track->type : model::StripType::Channel);
+            }
+        return theme.color("accent");
+    };
     // The selected MIDI item, or the one a caller names.
     actions_.addUiFor("ui.midi.edit", "MIDI: edit selected item", "item",
                       [this](const json::Value& v) -> Status {
@@ -1034,8 +1052,13 @@ Status MidiEditor::reload() {
         std::string name = state_.item;
         if (auto id = model::Id::parse(state_.item))
             if (const model::Item* it = app_.head().items.find(*id))
-                if (const model::Track* t = app_.head().tracks.find(it->track))
-                    name = (t->name.empty() ? it->track.str() : t->name) + " — " + state_.item;
+                if (const model::Track* t = app_.head().tracks.find(it->track)) {
+                    // The item as the arrangement names it; its id when it
+                    // has no name there.
+                    const std::string label = views::Lanes::itemLabel(app_.head(), *it);
+                    name = (t->name.empty() ? it->track.str() : t->name) + " — " +
+                           (label.empty() ? state_.item : label);
+                }
         titleBase_ = "MIDI · " + name + " · " + std::to_string(state_.notes.size()) + " notes";
         refreshTitle();
     }

@@ -29,6 +29,7 @@
 #include "supple/ui/text_area.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/lanes.h"
 #include "supple/views/mouse_map.h"
 
 using namespace supple;
@@ -179,6 +180,51 @@ struct Fixture {
 };
 
 }  // namespace
+
+TEST_CASE("MIDI editor: notes take their item's colour; the title names the item") {
+    Fixture f;
+    if (!f.ok) return;
+    const ui::Theme theme = ui::Theme::dark();
+    auto same = [](ui::Color a, ui::Color b) { return a.r == b.r && a.g == b.g && a.b == b.b; };
+    REQUIRE(f.editor->open(f.item));
+    f.frame();
+    REQUIRE(f.editor->state().color);
+    const model::Session& s = f.app->head();
+    const model::Item* item = s.items.find(*model::Id::parse(f.item));
+    REQUIRE(item);
+    const std::string track = item->track.str();
+    const std::string given = s.tracks.find(item->track)->color;
+    REQUIRE(theme.trackColor(given));  // a new track comes with a colour
+    // The track's colour, as the item has in the arrangement: not the accent.
+    CHECK(same(f.editor->state().color(theme), *theme.trackColor(given)));
+    CHECK_FALSE(same(f.editor->state().color(theme), theme.color("accent")));
+    // It follows the track, and the item's own colour wins over it.
+    const char* other = given == "blue" ? "green" : "blue";
+    REQUIRE(theme.trackColor(other));
+    f.exec("track.set", R"({"track":")" + track + R"(","color":")" + other + R"("})");
+    CHECK(same(f.editor->state().color(theme), *theme.trackColor(other)));
+    f.exec("item.set", R"({"item":")" + f.item + R"(","color":")" + given + R"("})");
+    CHECK(same(f.editor->state().color(theme), *theme.trackColor(given)));
+    // Without a colour anywhere: the strip type's, as the arrangement draws it.
+    f.exec("item.set", R"({"item":")" + f.item + R"(","color":""})");
+    f.exec("track.set", R"({"track":")" + track + R"(","color":""})");
+    const model::Item* now = f.app->head().items.find(*model::Id::parse(f.item));
+    CHECK(same(f.editor->state().color(theme),
+               views::Lanes::itemColor(theme, *now, f.app->head().tracks.find(now->track),
+                                       model::StripType::Channel)));
+    // The title names the item as the arrangement does: its id only while
+    // it has no name.
+    auto title = [&] { return f.root->find("midi.title")->valueText(); };
+    f.editor->sync();
+    f.frame();
+    CHECK(title().find("Keys") != std::string::npos);
+    CHECK(title().find(f.item) != std::string::npos);
+    f.exec("item.set", R"({"item":")" + f.item + R"(","name":"Chords"})");
+    f.editor->sync();
+    f.frame();
+    CHECK(title().find("Chords") != std::string::npos);
+    CHECK(title().find(f.item) == std::string::npos);
+}
 
 TEST_CASE("MIDI editor: Alt+E shows and hides it on the item it had last") {
     Fixture f;

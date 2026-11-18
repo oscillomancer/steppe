@@ -9,6 +9,7 @@
 #pragma once
 
 #include <chrono>
+#include <functional>
 #include <optional>
 #include <set>
 #include <string>
@@ -52,6 +53,10 @@ struct RollState {
     double itemLength = 4;    // beats
     std::vector<RollNote> notes;
     std::set<std::size_t> selected;
+    // The colour the notes are drawn in: the item's in the arrangement (its
+    // own, else its track's, else its strip type's), so the roll and the
+    // item it edits look alike. Unset: the accent.
+    std::function<ui::Color(const ui::Theme&)> color;
     // The CC lane: one controller at a time (channel 1).
     int ccNumber = 1;
     std::vector<CcPoint> cc;
