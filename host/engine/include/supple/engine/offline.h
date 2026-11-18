@@ -234,6 +234,11 @@ class MediaCache {
     std::shared_ptr<const PreparedSources> prepared_;
 };
 
+// The deadline of a bridged call in an offline render (ADR-0090): a minute,
+// thirty times the live path's 2 s, since an offline render loses only time
+// by waiting; a hung plug-in still fails the render within it.
+inline constexpr int kOfflineBridgeDeadlineMs = 60'000;
+
 struct OfflineSettings {
     // Playback/stems apply master rate; analysis and item-FX renders opt out.
     bool applyMasterPlayrate = true;
@@ -268,6 +273,10 @@ struct OfflineSettings {
     std::function<void(double)> progress;
     double progressBase = 0.0, progressScale = 1.0;
     supple::StopToken stopToken;
+    // How long a bridged call may go unanswered before the render fails its
+    // plug-in (ADR-0090); lifecycle commands get 5/2 of it plus 2 s. Tests
+    // shorten it; the product keeps the default.
+    int bridgeDeadlineMs = kOfflineBridgeDeadlineMs;
 };
 
 struct OfflineResult {
@@ -293,5 +302,17 @@ Result<json::Value> instanceReadouts(host::Instance& in);
 
 Result<OfflineResult> renderOffline(const model::Session& session, InstancePool& pool,
                                     const OfflineSettings& settings);
+
+// For tests only: points inside a render's watch (ADR-0090), set while no
+// render runs. `killed` runs on the watch's thread after it has killed the
+// render's bridges and before it records that it did; `finishing` runs on
+// the thread that ends the watch, before it waits for it. A test orders the
+// two to show the render's outcome does not depend on which comes first.
+struct RenderWatchTestHooks {
+    void (*killed)(void*) = nullptr;
+    void (*finishing)(void*) = nullptr;
+    void* context = nullptr;
+};
+void setRenderWatchTestHooks(const RenderWatchTestHooks& hooks);
 
 }  // namespace supple::engine

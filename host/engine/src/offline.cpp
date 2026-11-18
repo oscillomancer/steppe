@@ -12,7 +12,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
+#include <mutex>
 #include <numbers>
 #include <optional>
 #include <set>
@@ -585,6 +587,93 @@ void MediaCache::trimVariants(std::size_t samples) {
 
 using namespace detail;
 
+namespace {
+// ADR-0090: a render's bridged calls wait with its own deadline, from its
+// first activation to its last stopProcessing, and the process-wide one
+// returns after it.
+class RenderDeadlines {
+  public:
+    RenderDeadlines(std::vector<host::Instance*> list, int ms) : instances_(std::move(list)) {
+        for (host::Instance* in : instances_) in->setCallDeadlineMs(std::max(ms, 1));
+    }
+    ~RenderDeadlines() {
+        for (host::Instance* in : instances_) in->setCallDeadlineMs(0);
+    }
+    RenderDeadlines(const RenderDeadlines&) = delete;
+    RenderDeadlines& operator=(const RenderDeadlines&) = delete;
+
+  private:
+    std::vector<host::Instance*> instances_;
+};
+
+// ADR-0090: a stop or a cancel kills the render's own bridges, so a render
+// blocked in a bridged call (activation, reset, flush, start, a block or
+// stopProcessing) returns within a wait step instead of at its deadline.
+// Every caller gives a render a pool of its own, so no one else uses them.
+// The watch looks every 10 ms; what it does is decided by the request, not
+// the clock. It runs only while the render has bridged instances.
+RenderWatchTestHooks gWatchHooks;  // tests only, set while no render runs
+
+class RenderWatch {
+  public:
+    RenderWatch(std::vector<host::Instance*> list, const OfflineSettings& opt)
+        : instances_(std::move(list)), opt_(opt) {
+        std::erase_if(instances_, [](host::Instance* in) { return !in->isolated(); });
+        if (instances_.empty()) return;
+        thread_ = std::thread([this] {
+            nameThread("render-watch");
+            std::unique_lock lock(mutex_);
+            while (!finished_) {
+                if (requested(opt_)) {
+                    for (host::Instance* in : instances_) in->abandonBridge();
+                    if (gWatchHooks.killed) gWatchHooks.killed(gWatchHooks.context);
+                    abandoned_.store(true, std::memory_order_release);
+                    return;
+                }
+                wake_.wait_for(lock, std::chrono::milliseconds(10));
+            }
+        });
+    }
+    ~RenderWatch() { finish(); }
+    RenderWatch(const RenderWatch&) = delete;
+    RenderWatch& operator=(const RenderWatch&) = delete;
+    // A stop or a cancel was asked for.
+    static bool requested(const OfflineSettings& opt) {
+        return opt.stopToken.stop_requested() ||
+               (opt.cancelFlag && opt.cancelFlag->load(std::memory_order_relaxed));
+    }
+    // Ends the watch; after it, abandoned() no longer changes.
+    void finish() {
+        if (gWatchHooks.finishing) gWatchHooks.finishing(gWatchHooks.context);
+        {
+            std::lock_guard lock(mutex_);
+            finished_ = true;
+        }
+        wake_.notify_one();
+        if (thread_.joinable()) thread_.join();
+    }
+    // The watch killed the render's bridges.
+    bool abandoned() const { return abandoned_.load(std::memory_order_acquire); }
+
+  private:
+    std::vector<host::Instance*> instances_;
+    const OfflineSettings& opt_;
+    std::mutex mutex_;
+    std::condition_variable wake_;
+    bool finished_ = false;
+    std::atomic<bool> abandoned_{false};
+    std::thread thread_;
+};
+
+Error renderCancelled() {
+    return Error("job.cancelled", "offline render cancelled", {},
+                 "submit a new render job if its output is still wanted; the cancelled job "
+                 "cannot resume");
+}
+}  // namespace
+
+void setRenderWatchTestHooks(const RenderWatchTestHooks& hooks) { gWatchHooks = hooks; }
+
 Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                                     const OfflineSettings& opt) {
     static_assert(std::atomic<double>::is_always_lock_free);
@@ -650,6 +739,11 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
     auto compiled = detail::compile(selectedSession, pool, opt.startSeconds, opt.blockSize);
     if (!compiled) return std::move(compiled).error();
     Plan& p = *compiled;
+    // From here every bridged call of the render has its deadline and its
+    // stop (ADR-0090): activation in prepare() included.
+    const RenderDeadlines deadlines(p.instances, opt.bridgeDeadlineMs);
+    RenderWatch watch(p.instances, opt);
+    if (RenderWatch::requested(opt)) return renderCancelled();
     if (!opt.applyMasterPlayrate) p.rateEnabled = false;
     MediaCache localMedia;
     p.projectDir = opt.projectDir;
@@ -681,7 +775,38 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
     auto sources = p.media->prepareSources(sourceSession, p.projectDir, p.rate);
     if (!sources) return sources.error();
     p.preparedSources = *sources;
-    SUPPLE_TRY(prepare(p, selectedSession));
+    if (auto prepared = prepare(p, selectedSession); !prepared) {
+        watch.finish();
+        // A stop while it activated: the watch killed what it waited for.
+        if (watch.abandoned()) return renderCancelled();
+        return std::move(prepared).error();
+    }
+    // ADR-0090: a plug-in that fails while the render runs fails the
+    // render; one that had failed before keeps its behaviour.
+    struct Watched {
+        host::Instance* instance;
+        Id fx;
+        bool failedBefore;
+    };
+    std::vector<Watched> watched;
+    for (const Node& node : p.nodes)
+        forEachStage(node, [&](const Stage& st) {
+            if (st.instance) watched.push_back({st.instance, st.fx, st.instance->failed()});
+        });
+    const auto failing = [&] {
+        return std::any_of(watched.begin(), watched.end(), [](const Watched& w) {
+            return !w.failedBefore && w.instance->failed();
+        });
+    };
+    const auto failedNow = [&] {
+        std::vector<const Watched*> out;
+        for (const Watched& w : watched)
+            if (!w.failedBefore && w.instance->failed() &&
+                std::none_of(out.begin(), out.end(),
+                             [&](const Watched* seen) { return seen->instance == w.instance; }))
+                out.push_back(&w);
+        return out;
+    };
     auto master = std::find_if(p.nodes.begin(), p.nodes.end(),
                                [&](const Node& node) { return node.id == opt.master; });
     if (master == p.nodes.end() || !master->master)
@@ -813,8 +938,7 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
         }
         if (!startFailed) {
             for (std::int64_t pos = 0; pos < total;) {
-                if (opt.stopToken.stop_requested() ||
-                    (opt.cancelFlag && opt.cancelFlag->load(std::memory_order_relaxed))) {
+                if (RenderWatch::requested(opt)) {
                     cancelled = true;
                     break;
                 }
@@ -825,6 +949,9 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                     failed = true;
                     break;
                 }
+                // A failed plug-in's output went silent (ADR-0013 §6): the
+                // render fails below.
+                if (failing()) break;
                 const Stereo& tap = opt.tap == model::Tap::PreFx      ? selected->preFx
                                     : opt.tap == model::Tap::PreFader ? selected->preFader
                                                                       : selected->post;
@@ -886,22 +1013,46 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
     for (host::Instance* in : instances) {
         for (auto& line : in->takeLog()) r.log.push_back(in->info().name + ": " + line);
     }
-    for (const auto& fx : s.fx)
-        if (host::Instance* in = pool.find(fx.id); in && !in->failed())
-            if (auto readouts = instanceReadouts(*in); readouts && readouts->size() > 0)
-                r.meters[fx.id.str()] = std::move(*readouts);
     if (preparationError) return *preparationError;
+    // A call the watch's kill ended can return before the watch has said it
+    // killed: a failed render waits for the watch to end first (the join
+    // orders its kills before abandoned()), and a stop or cancel asked for
+    // by then is the outcome too.
+    const auto lost = failedNow();
+    if (startFailed || failed || !lost.empty()) watch.finish();
+    // Cancelled between blocks, or stopped while a bridged call waited: the
+    // job's outcome, whatever the abandoned bridges' instances say.
+    if (cancelled || watch.abandoned() || RenderWatch::requested(opt)) return renderCancelled();
+    // Failed starting, processing or stopping: the render's audio is not
+    // what the session plays (ADR-0090).
+    if (!lost.empty()) {
+        const Watched& first = *lost.front();
+        std::string message = first.instance->info().name + " (" + first.fx.str() +
+                              ") failed during the render: " + first.instance->failure();
+        for (std::size_t i = 1; i < lost.size(); ++i)
+            message += (i == 1 ? "; so did " : ", ") + lost[i]->instance->info().name + " (" +
+                       lost[i]->fx.str() + ")";
+        return Error("engine.fx_failed", message, "/fx/" + first.fx.str(),
+                     "render again: an offline render starts its own plug-in instances; if the "
+                     "FX fails again, bypass or replace it");
+    }
     if (startFailed)
         return Error("engine.start_failed", "a plugin refused to start processing", {},
                      "restart or replace the FX that refused processing with a plugin supporting "
                      "the render sample rate and block size");
-    if (cancelled)
-        return Error("job.cancelled", "offline render cancelled", {},
-                     "submit a new render job if its output is still wanted; the cancelled job "
-                     "cannot resume");
     if (failed)
         return Error("engine.process_error", "a plugin reported a processing error", {},
                      "bypass or replace the failing FX and render the range again");
+    // Read once the render is known good: a readout is a bridged request too,
+    // and a failed instance has none (ADR-0090).
+    for (const auto& fx : s.fx)
+        if (host::Instance* in = pool.find(fx.id); in && !in->failed())
+            if (auto readouts = instanceReadouts(*in); readouts && readouts->size() > 0)
+                r.meters[fx.id.str()] = std::move(*readouts);
+    // The watch covered the requests above too; a stop during them still
+    // cancels the render.
+    watch.finish();
+    if (watch.abandoned()) return renderCancelled();
     for (const Node& n : p.nodes) {
         std::string line = n.id.str() + " in=[";
         for (std::size_t k = 0; k < n.in.size(); ++k) {

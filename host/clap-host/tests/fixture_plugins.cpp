@@ -6,8 +6,8 @@
 //   com.suppleaudio.test.gain  — stereo effect; params "gain" (dB, ADR-0010
 //     normalized CLAP value, modulatable by param_mod) and "latency" (0/64 samples, stepped;
 //     changing it while active requests a restart); versioned state; the semantic-params extension
-//     implemented with core-params + core-patch. With SUPPLE_TEST_START_GATE set when it is
-//     made (POSIX), start_processing waits on a gate shared with the test (see factoryCreate).
+//     implemented with core-params + core-patch. With SUPPLE_TEST_LIFECYCLE_GATE set when it
+//     is made, one of its calls waits on a gate shared with the test (lifecycle_gate.h).
 //   com.suppleaudio.test.sine  — instrument; 0 inputs, stereo output, CLAP and
 //     MIDI note dialects; one sine voice per key at velocity * 0.25, stops at
 //     note off and reports NOTE_END.
@@ -54,6 +54,7 @@
 #include <thread>
 #include <vector>
 
+#include "lifecycle_gate.h"
 #include "supple/clap/semantic_params.h"
 #include "supple/json/json.h"
 #include "supple/params/params.h"
@@ -330,8 +331,16 @@ void gainEditorOutput(const clap_plugin_t* pl, const clap_output_events_t* out) 
         out->try_push(out, &gesture.header);
     }
 }
+// The lifecycle gate (lifecycle_gate.h): mapped when a gain is made with
+// SUPPLE_TEST_LIFECYCLE_GATE set (main thread), never freed.
+std::atomic<std::atomic<unsigned>*> gLifecycleGate{nullptr};
+void gainGate(supple::test::GatedCall call) {
+    supple::test::passGate(gLifecycleGate.load(std::memory_order_acquire), call);
+}
+
 void CLAP_ABI gainFlush(const clap_plugin_t* pl, const clap_input_events_t* in,
                         const clap_output_events_t* out) {
+    gainGate(supple::test::GatedCall::Flush);
     for (uint32_t i = 0; i < in->size(in); ++i) {
         const auto* h = in->get(in, i);
         if (h->type == CLAP_EVENT_PARAM_VALUE)
@@ -529,6 +538,16 @@ const void* CLAP_ABI gainExt(const clap_plugin_t* pl, const char* id) {
 
 bool CLAP_ABI gainActivate(const clap_plugin_t* pl, double, uint32_t, uint32_t) {
     if (!checkGainMain(pl)) return false;
+    gainGate(supple::test::GatedCall::Activate);
+    // A gated params flush must happen: ask for one, as a plug-in whose
+    // values changed would. While active, the host serves it on the audio
+    // thread's next flush or block.
+    if (auto* gate = gLifecycleGate.load(std::memory_order_acquire);
+        gate && gate[3].load(std::memory_order_acquire) ==
+                    static_cast<unsigned>(supple::test::GatedCall::Flush))
+        if (const auto* hp = static_cast<const clap_host_params_t*>(
+                G(pl)->host->get_extension(G(pl)->host, CLAP_EXT_PARAMS)))
+            hp->request_flush(G(pl)->host);
     auto* g = G(pl);
     g->activeLatency = g->latencyChoice ? 64 : 0;
     std::memset(g->delay, 0, sizeof(g->delay));
@@ -539,6 +558,7 @@ bool CLAP_ABI gainActivate(const clap_plugin_t* pl, double, uint32_t, uint32_t) 
 }
 
 clap_process_status CLAP_ABI gainProcess(const clap_plugin_t* pl, const clap_process_t* p) {
+    gainGate(supple::test::GatedCall::Process);
     auto* g = G(pl);
     gainEditorOutput(pl, p->out_events);
     const uint32_t n = p->frames_count;
@@ -1765,34 +1785,24 @@ const clap_plugin_t* CLAP_ABI factoryCreate(const clap_plugin_factory_t*, const 
     if (!std::strcmp(id, gainDescriptor()->id)) {
         auto* plugin = const_cast<clap_plugin_t*>(
             make<Gain>(host, gainDescriptor(), gainActivate, gainProcess, gainExt));
+        // The lifecycle gate for host tests (lifecycle_gate.h): the gated
+        // call spins, with no system call, until the test lets it go on.
+        if (const char* file = std::getenv(supple::test::kLifecycleGateVariable); file && *file)
+            if (auto* words = supple::test::mapGateFile(file))
+                gLifecycleGate.store(words, std::memory_order_release);
         plugin->reset = [](const clap_plugin_t* pl) {
+            gainGate(supple::test::GatedCall::Reset);
             // A seek must clear latency history just as activation does.
             std::memset(G(pl)->delay, 0, sizeof(G(pl)->delay));
             G(pl)->delayPos = 0;
         };
-#if !defined(_WIN32)
-        // A gated start for host tests: SUPPLE_TEST_START_GATE names a file of
-        // at least three atomic words, mapped here, on the main thread. Then
-        // start_processing sets word 0, spins until the test sets word 1, sets
-        // word 2 and succeeds: no system call on the audio thread.
-        if (const char* file = std::getenv("SUPPLE_TEST_START_GATE")) {
-            static std::atomic<unsigned>* gate = nullptr;
-            const int fd = ::open(file, O_RDWR);
-            void* words = fd >= 0 ? ::mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)
-                                  : MAP_FAILED;
-            if (fd >= 0) ::close(fd);
-            if (words != MAP_FAILED) {
-                gate = static_cast<std::atomic<unsigned>*>(words);
-                plugin->start_processing = [](const clap_plugin_t*) {
-                    gate[0].store(1, std::memory_order_release);
-                    while (!gate[1].load(std::memory_order_acquire)) {
-                    }
-                    gate[2].store(1, std::memory_order_release);
-                    return true;
-                };
-            }
-        }
-#endif
+        plugin->start_processing = [](const clap_plugin_t*) {
+            gainGate(supple::test::GatedCall::StartProcessing);
+            return true;
+        };
+        plugin->stop_processing = [](const clap_plugin_t*) {
+            gainGate(supple::test::GatedCall::StopProcessing);
+        };
         return plugin;
     }
     if (!std::strcmp(id, checkedGainDescriptor(false)->id) ||

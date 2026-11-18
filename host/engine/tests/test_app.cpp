@@ -1741,6 +1741,65 @@ TEST_CASE("stem render job publishes files and analysis summaries") {
     CHECK(status->find("status")->asString() == "done");
 }
 
+TEST_CASE("a render job that fails at a later task lists the files it wrote") {
+    // Review round 34: a multi-task job keeps the files of the tasks it
+    // finished; its result must say which they are. The second stem's
+    // track holds a plug-in that refuses to start (the edge fixture,
+    // configuration byte 1), so its render fails after the first file.
+    Root root;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    auto app = makeApp(root.path);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_item");
+    auto added = d.execute({"track.add", j(R"({"name":"Refuses"})"), kTest});
+    REQUIRE(added);
+    const std::string refusing = added->find("track")->asString();
+    json::Value fxArgs = json::Value::object();
+    fxArgs["track"] = refusing;
+    fxArgs["plugin"] = "com.suppleaudio.test.edge";
+    auto fx = d.execute({"fx.add", fxArgs, kTest});
+    REQUIRE(fx);
+    const auto fxId = model::Id::parse(fx->find("fx")->asString());
+    REQUIRE(fxId);
+    auto setup = app->beginTransaction(kTest, "Refusing start");
+    REQUIRE(setup);
+    const std::string hash = "sha256:" + std::string(64, '1');
+    app->txn().putBlob(hash, std::make_shared<const model::Blob>(model::Blob{{1, 0, 0, 0}}));
+    app->txn().modify<model::FxInstance>(*fxId, [&](auto& value) {
+        value.patch.reset();
+        value.state = hash;
+    });
+    REQUIRE(app->commitTransaction(*setup));
+    auto started = d.execute(
+        {"render.stems", j(R"({"end_beat":4,"job":true,"pattern":"partial-{track}"})"), kTest});
+    REQUIRE(started);
+    json::Value args = json::Value::object();
+    args["job"] = started->find("job")->asString();
+    args["timeout_s"] = 30;
+    auto done = d.execute({"job.wait", args, kTest});
+    REQUIRE_MESSAGE(done, (done ? std::string() : done.error().toString()));
+    CHECK(done->find("status")->asString() == "failed");
+    CHECK(done->find("error")->find("code")->asString() == "engine.start_failed");
+    const json::Value* result = done->find("result");
+    REQUIRE(result);
+    const json::Value* files = result->find("files");
+    REQUIRE(files);
+    REQUIRE(files->size() == 1);
+    const std::string path = files->at(0).find("path")->asString();
+    CHECK(fs::exists(path));
+    CHECK(path.find("Refuses") == std::string::npos);  // the first track's
+    CHECK_FALSE(files->at(0).find("render")->asString().empty());
+    CHECK(result->find("unfinished_task_files") == nullptr);
+    // job.get answers the same.
+    json::Value get = json::Value::object();
+    get["job"] = args["job"];
+    auto status = d.execute({"job.get", get, kTest});
+    REQUIRE(status);
+    REQUIRE(status->find("result"));
+    CHECK(*status->find("result") == *result);
+}
+
 TEST_CASE("offline render reports progress and honors cancellation between blocks") {
     Root root;
     auto app = makeApp(root.path);

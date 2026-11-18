@@ -107,4 +107,5 @@ current state.
 | [0087](0087-control-boundary-budgets.md) | Bounded local control input and output | Accepted |
 | [0088](0088-lost-bridged-output-ends-held-notes.md) | A bridged block's lost output ends the notes it held | Accepted |
 | [0089](0089-endpoint-lock-ownership.md) | A server owns its control endpoint by holding its lock | Accepted |
+| [0090](0090-offline-renders-and-bridged-plugins.md) | Offline renders wait for bridged plug-ins, and fail when one fails | Accepted |
 | [0092](0092-patch-only-fx-edits.md) | Patch-only FX edits reach the running instances without a plan | Accepted |

@@ -1204,14 +1204,16 @@ Engine and hosting:
   whichever is larger) is silent for that block, which counts as an xrun.
   There is no pipelined bridge mode. macOS and Windows timing is unmeasured,
   and the macOS bridge does not join the device's audio workgroup.
-- A bridged call made off the callback, in an offline render, the renderer or
-  on the main thread, fails if the bridge has not answered within 2 s
-  (lifecycle commands 7 s; ADR-0013). The plug-in is then killed and silent,
-  and an offline render still succeeds, with no warning. A healthy plug-in
-  can miss this under memory pressure: two test suites at once did it, and
-  pausing a bridge for 2.3 s reproduces it. The engine tests raise the
-  deadline (`host::setBridgeDeadlineMs`), but the product default and the
-  silent success are open questions.
+- A bridged call made off the callback by the anticipative renderer, a
+  worker or the main thread fails if the bridge has not answered within 2 s
+  (lifecycle commands 7 s; ADR-0013); the plug-in is killed and silent and
+  playback goes on. An offline render waits 60 s (152 s) instead, and fails
+  with `engine.fx_failed`, naming the FX, if a plug-in fails while it runs
+  (ADR-0090). Stopping or cancelling such a render kills its own bridges,
+  so it does not wait for a hung plug-in, and neither does quitting or
+  opening a project; only a render still loading its plug-ins waits, up to
+  20 s per plug-in. A render job that fails or is cancelled at a later
+  task keeps the files of the tasks before it and lists them in its result.
 - Audio backends: Linux JACK, dummy, and native PortAudio (CoreAudio on macOS;
   WASAPI/ASIO on Windows), with selection, latency/xruns and restart notifications.
   Fake-device output equals offline in both executors, with native CI coverage.

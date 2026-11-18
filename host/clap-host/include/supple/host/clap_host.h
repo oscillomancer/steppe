@@ -263,7 +263,8 @@ ThreadPolicy bridgeAudioPolicy() SUPPLE_RT;
 // The failure deadline of a bridged call made off the device callback
 // (ADR-0013): `process` waits this long, lifecycle commands 5/2 of it plus
 // 2 s; a bridge that has not answered by then is killed and its instances
-// fail (silent). Process-wide; 2000 ms by default, at least 1. A test that
+// fail (silent). Process-wide, for instances without their own
+// (Instance::setCallDeadlineMs); 2000 ms by default, at least 1. A test that
 // compares bridged renders bit for bit raises it, so a stalled machine
 // fails no healthy plug-in (see bridge_patience.cpp in the engine tests).
 void setBridgeDeadlineMs(int ms);
@@ -417,6 +418,23 @@ class Instance {
     std::string failure() const;
     bool isolated() const { return remote_ != nullptr; }
     int bridgePid() const;  // -1 for in-process
+    // Bridged: this instance's failure deadline off the callback, in place
+    // of bridgeDeadlineMs() (0, the default, uses that); lifecycle commands
+    // get 5/2 of it plus 2 s, and so do control requests (activation,
+    // parameters, patches) at least, beyond their own timeouts. An offline
+    // render sets it while it runs (ADR-0090). It is atomic: any thread may
+    // set it at any time, and a wait already under way keeps the deadline
+    // it started with. No effect in process; callDeadlineMs() is then 0.
+    void setCallDeadlineMs(int ms);
+    int callDeadlineMs() const;
+    // Bridged: kills this instance's bridge now, from any thread, and fails
+    // every instance in it; failure() says the host abandoned it. A call
+    // waiting on it off the callback, on any thread, returns within one wait
+    // step (10 ms), and a control request as its socket closes. For work
+    // that no longer wants the answer and owns every instance in the bridge,
+    // such as a stopped offline render with its own pool (ADR-0090). No
+    // effect in process.
+    void abandonBridge();
     // Bridged: its bridge's audio thread was refused the scheduling class the
     // last audio-thread call asked for (ADR-0026, ADR-0081); false in process.
     bool bridgeThreadRefused() const;
