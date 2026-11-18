@@ -381,6 +381,34 @@ TEST_CASE("a bridge that dies of a signal is announced as that signal, with its 
     second->reset();
 }
 
+// The engine does not pull a failed bridge (it has a wake instead), so nothing else would observe
+// the end of a bridge that died: asking for the incident does.
+TEST_CASE("asking a failed instance for its incident observes the bridge's end") {
+    setBridgeExecutable(BRIDGE_PATH);
+    Sink sink;
+    auto process = createBridgeProcess();
+    REQUIRE(process);
+    const auto ordinal = (*process)->ordinal();
+    auto instance = Instance::create(fixture("com.suppleaudio.test.edge"), {}, true, *process);
+    REQUIRE(instance);
+    REQUIRE(::kill((*process)->pid(), SIGKILL) == 0);
+    // The parent's watcher fails the bridge as it dies; nobody calls reap().
+    const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    while (!(*instance)->failed() && std::chrono::steady_clock::now() < limit)
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    REQUIRE((*instance)->failed());
+    // A bridge that is only dying (its core still being written) has not ended yet: ask until it
+    // has.
+    std::string incident;
+    while (incident.empty() && std::chrono::steady_clock::now() < limit) {
+        incident = (*instance)->bridgeIncident();
+        if (incident.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(incident.size() == 32);
+    CHECK(incident == Sink::incidentOf(ordinal));
+    instance->reset();
+}
+
 TEST_CASE("a bridge that died and was never reaped is still told when it is destroyed") {
     setBridgeExecutable(BRIDGE_PATH);
     Sink sink;

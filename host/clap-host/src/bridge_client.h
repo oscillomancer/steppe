@@ -201,7 +201,12 @@ class RemoteInstance {
     // The bridge's audio thread did not get the class its last command asked for.
     bool classRefused() const { return classRefused_.load(std::memory_order_relaxed); }
     std::string failure() const;
-    std::string incident() const { return process_->incident(); }
+    // Main thread: the end of a failed bridge is observed here, so the id does not wait for some
+    // other call to touch the bridge (the engine, which has a wake, does not pull a failed one).
+    std::string incident() const {
+        if (process_->failed()) process_->reap();
+        return process_->incident();
+    }
     int bridgePid() const { return process_->pid(); }
 
   private:

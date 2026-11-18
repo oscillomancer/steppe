@@ -553,11 +553,13 @@ class Instance {
         std::uint64_t image = 0;
     };
     DiagnosticsPlace diagnosticsPlace() const noexcept;
-    // For a bridged instance whose bridge died of a signal or an exception once its end was
-    // observed (any later call that touches the failed bridge does): the id of the local crash
-    // report that death may have caused (ADR-0083, topic 6a). Empty for anything else, and while
-    // no supervisor writes reports. The report may not exist (a repeat in the run, the run's
-    // limit): whoever reads it by this id handles a missing one.
+    // Main thread. For a bridged instance whose bridge died of a signal or an exception: the id of
+    // the local crash report that death may have caused (ADR-0083, topic 6a). Asking observes the
+    // end of a failed bridge (and kills one that failed by a missed deadline and is still there),
+    // so it may be empty for a moment after the failure: a bridge that is still writing its core
+    // has not ended. Empty for anything else, and while no supervisor writes reports. The report
+    // may not exist (a repeat in the run, the run's limit): whoever reads it by this id handles a
+    // missing one.
     std::string bridgeIncident() const;
     // The host's executor that currently processes this instance (an opaque
     // token, null for none): a host with several audio threads uses it so
