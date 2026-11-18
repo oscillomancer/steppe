@@ -4936,6 +4936,34 @@ TEST_CASE("safe-load: nothing reaches the engine until the open happens (round 6
     }
 }
 
+TEST_CASE("safe-load: the app reads plugin.override's changed from the real dispatcher (F4)") {
+    // F1's undo rests on the field `changed` of the engine's answer; a rename on either side
+    // would make every override read as a change (the safe default) and the fix return silently.
+    // The default override, wired to the real command, must say false for a mode already held.
+    App a(1000, 640, gui::Platform::Driver::Offscreen);
+    REQUIRE(a.ok);
+    gui::SafeLoad load(*a.root, *a.dispatcher, a.dir / "diagnostics");
+    auto listed = a.dispatcher->execute({"plugin.list", json::Value::object(), {}});
+    REQUIRE(listed);
+    std::string id;
+    for (const json::Value& p : (*listed)["plugins"].asArray())
+        if (const json::Value* found = p.find("id"); found && found->isString()) {
+            id = found->asString();
+            break;
+        }
+    if (id.empty()) return;  // a partial build has no stock plug-ins: nothing to override
+    const auto say = [&](const char* mode) {
+        auto changed = load.override_(id, mode);
+        REQUIRE(changed);
+        return *changed;
+    };
+    CHECK_FALSE(say("normal"));  // it is loaded normally already
+    CHECK(say("disable"));
+    CHECK_FALSE(say("disable"));  // held already: the second says so
+    CHECK(say("normal"));
+    CHECK_FALSE(say("normal"));
+}
+
 TEST_CASE("safe-load: an undo sets back only what this open changed (round 6c-a F1)") {
     // A plug-in override holds until the app quits. A later open that finds the plug-in already
     // set the way a remembered choice says changes nothing, so a refusal of that open must not
