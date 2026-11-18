@@ -30,8 +30,13 @@ class AuditionLoader {
         std::uint64_t generation = 0;
         Result<std::shared_ptr<const AuditionVoice>> voice;
     };
-    explicit AuditionLoader(std::function<void()> wake)
-        : wake_(std::move(wake)), worker_([this](StopToken) { run(); }) {}
+    // `stopCheck` (tests): called on the worker with the read's generation
+    // each time the read asks whether to stop.
+    explicit AuditionLoader(std::function<void()> wake,
+                            std::function<void(std::uint64_t)> stopCheck = {})
+        : wake_(std::move(wake)),
+          stopCheck_(std::move(stopCheck)),
+          worker_([this](StopToken) { run(); }) {}
     ~AuditionLoader() {
         {
             std::lock_guard lock(mutex_);
@@ -58,6 +63,8 @@ class AuditionLoader {
         request_.reset();
         done_.reset();
     }
+    // Reads that a newer request or cancel() overtook: their result dropped.
+    std::uint64_t discarded() const { return discarded_.load(std::memory_order_acquire); }
     std::optional<Done> take() {
         std::lock_guard lock(mutex_);
         auto out = std::move(done_);
@@ -93,17 +100,25 @@ class AuditionLoader {
                 request_.reset();
             }
             const auto serial = request->second;
-            auto voice = load(request->first, [&] { return generation_.load() != serial; });
+            auto voice = load(request->first, [&] {
+                if (stopCheck_) stopCheck_(serial);
+                return generation_.load() != serial;
+            });
             {
                 std::lock_guard lock(mutex_);
                 if (stopping_) return;
-                if (generation_.load() != serial) continue;
+                if (generation_.load() != serial) {
+                    discarded_.fetch_add(1, std::memory_order_release);
+                    continue;
+                }
                 done_ = Done{serial, std::move(voice)};
             }
             wake_();
         }
     }
     std::function<void()> wake_;
+    std::function<void(std::uint64_t)> stopCheck_;
+    std::atomic<std::uint64_t> discarded_{0};
     std::mutex mutex_;
     std::condition_variable changed_;
     bool stopping_ = false;
