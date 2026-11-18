@@ -14,6 +14,7 @@
 #include "supple/gui/png.h"
 #include "supple/json/parse.h"
 #include "supple/ui/controls.h"
+#include "supple/ui/edge_scroll.h"
 #include "supple/ui/forms.h"
 #include "supple/ui/list.h"
 #include "supple/ui/popup.h"
@@ -1779,4 +1780,27 @@ TEST_CASE("a control's drag reaches its callback once per frame, the latest posi
     root.frame(false);
     REQUIRE(calls.size() == before + 1);
     CHECK(calls.back().second == Gesture::End);
+}
+
+TEST_CASE("edge scroll: the speed by depth, and a clock that caps a stalled frame") {
+    // No scroll in the middle; from the zone's start it grows with depth, the
+    // same at both ends, and stops growing far outside.
+    CHECK(ui::edgeScrollSpeed(300, 100, 500) == 0);
+    CHECK(ui::edgeScrollSpeed(500 - ui::kEdgeScrollZone, 100, 500) == 0);
+    CHECK(ui::edgeScrollSpeed(480, 100, 500) == doctest::Approx(240));  // 4 units in
+    CHECK(ui::edgeScrollSpeed(120, 100, 500) == doctest::Approx(-240));
+    CHECK(ui::edgeScrollSpeed(500, 100, 500) > ui::edgeScrollSpeed(480, 100, 500));
+    CHECK(ui::edgeScrollSpeed(560, 100, 500) > ui::edgeScrollSpeed(500, 100, 500));  // past it
+    CHECK(ui::edgeScrollSpeed(5000, 100, 500) == 2400);
+    CHECK(ui::edgeScrollSpeed(-5000, 100, 500) == -2400);
+
+    using namespace std::chrono;
+    ui::EdgeScrollClock clock;
+    const steady_clock::time_point t0{hours(1)};
+    CHECK(clock.step(t0) == 0);  // the first pass only starts it
+    CHECK(clock.step(t0 + milliseconds(16)) == doctest::Approx(0.016));
+    CHECK(clock.step(t0 + milliseconds(16) + seconds(2)) == ui::EdgeScrollClock::kMaxStep);
+    CHECK(clock.step(t0) == 0);  // a time that went back is no step
+    clock.reset();
+    CHECK(clock.step(t0 + seconds(9)) == 0);  // a new scroll starts again
 }

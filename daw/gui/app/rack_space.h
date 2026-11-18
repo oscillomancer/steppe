@@ -24,6 +24,7 @@
 #include "rack_face.h"
 #include "rack_scene.h"
 #include "supple/ui/controls.h"
+#include "supple/ui/edge_scroll.h"
 #include "supple/ui/node.h"
 
 namespace supple::gui {
@@ -167,12 +168,11 @@ class RackSpace : public ui::Node {
     // The move cursor while modules are in hand or the space is being panned.
     ui::Cursor cursorAt(ui::Point p) const override;
     // Edge scroll (gui.md §4.12): modules in hand, a cable in hand or a
-    // marquee held within kEdgeZone of an edge of the space, or past it, pan
+    // marquee held within the zone at an edge of the space, or past it, pan
     // the view that way at the arrange view's speeds, and what is in hand
     // stays under the pointer. True while such a drag is held at an edge;
     // autoScroll advances it by `seconds` and is true when the view moved
-    // (the rack window's tick calls it with the frame's time).
-    static constexpr float kEdgeZone = 24;
+    // (the rack window's tick calls it with the pass's time step).
     bool autoScrolling() const;
     bool autoScroll(double seconds);
     bool onKey(const ui::KeyEvent& e) override;

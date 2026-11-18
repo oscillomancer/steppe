@@ -1289,17 +1289,9 @@ void RackSpace::noteDragEdge(const ui::PointerEvent& e) {
         edgeVx_ = edgeVy_ = 0;
         return;
     }
-    auto along = [](float at, float from, float to) {
-        auto speed = [](float depth) {
-            return depth <= 0 ? 0.0f : std::min(2400.0f, 120.0f + 30.0f * depth);
-        };
-        return at > to - kEdgeZone     ? speed(at - (to - kEdgeZone))
-               : at < from + kEdgeZone ? -speed(from + kEdgeZone - at)
-                                       : 0.0f;
-    };
     const ui::Rect b = bounds();
-    edgeVx_ = along(e.pos.x, b.x, b.right());
-    edgeVy_ = along(e.pos.y, b.y, b.bottom());
+    edgeVx_ = ui::edgeScrollSpeed(e.pos.x, b.x, b.right());
+    edgeVy_ = ui::edgeScrollSpeed(e.pos.y, b.y, b.bottom());
     edgeLast_ = e;
     if (autoScrolling() && root()) root()->requestAnimationFrame();  // the window's tick steps it
 }

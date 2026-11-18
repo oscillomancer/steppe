@@ -1817,17 +1817,12 @@ void Mixer::showDragCursor() {
 }
 
 // Edge scroll (gui.md §4.4): a strip, a plug-in or an output held within
-// kEdgeZone of the left or right edge of the strips that scroll, or past it,
+// the zone at the left or right edge of the strips that scroll, or past it,
 // scrolls them that way at the arrange view's speeds, so a drop can reach a
 // strip that is out of view. The masters, pinned at the right, do not scroll.
 void Mixer::noteDragEdge(ui::Point p) {
     const ui::Rect area = static_cast<StripRow*>(row_)->scrolledArea();
-    auto speed = [](float depth) {
-        return depth <= 0 ? 0.0f : std::min(2400.0f, 120.0f + 30.0f * depth);
-    };
-    edgeV_ = p.x > area.right() - kEdgeZone ? speed(p.x - (area.right() - kEdgeZone))
-             : p.x < area.x + kEdgeZone     ? -speed(area.x + kEdgeZone - p.x)
-                                            : 0.0f;
+    edgeV_ = ui::edgeScrollSpeed(p.x, area.x, area.right());
     if (!edgeResolving_) edgeIdle_ = false;  // the pointer moved: there may be more to scroll
 }
 
@@ -1977,18 +1972,15 @@ void Mixer::update() {
     }
 }
 
-void Mixer::sync() {
+void Mixer::sync(std::chrono::steady_clock::time_point now) {
     if (!visible()) return;
     // A drag held at the strips' edge scrolls by the time since the last pass
-    // (at most 50 ms of it, so a stalled frame is not a jump).
+    // (capped, so a stalled frame is not a jump).
     if (autoScrolling()) {
-        const auto now = std::chrono::steady_clock::now();
-        const double seconds =
-            edgeAt_ ? std::min(0.05, std::chrono::duration<double>(now - *edgeAt_).count()) : 0.0;
-        edgeAt_ = now;
+        const double seconds = edgeClock_.step(now);
         if (autoScroll(seconds) || seconds == 0) root_.requestAnimationFrame();
     } else {
-        edgeAt_.reset();
+        edgeClock_.reset();
     }
     applyHeight();  // the window may have been resized
     if (actions_.ui().selectedTracks != shownSelection_) showSelection();  // the TCP changed it
@@ -1996,9 +1988,9 @@ void Mixer::sync() {
     if (!replaced && app_.head().version == version_) return;
     projectGeneration_ = app_.projectGeneration();
     version_ = app_.head().version;
-    const std::string now = structure();
-    if (replaced || now != structure_) {
-        structure_ = now;
+    const std::string structureNow = structure();
+    if (replaced || structureNow != structure_) {
+        structure_ = structureNow;
         rebuild();
     }
     update();

@@ -1214,14 +1214,12 @@ void RackWindow::watch(bool on) {
 bool RackWindow::tick(std::chrono::steady_clock::time_point now) {
     if (plugins_ && plugins_->isOpen()) plugins_->tick();
     // A drag held at the space's edge pans by the time since the last pass
-    // (at most 50 ms of it, so a stalled frame is not a jump).
+    // (capped, so a stalled frame is not a jump).
     if (space_ && space_->autoScrolling()) {
-        const double seconds =
-            edgeAt_ ? std::min(0.05, std::chrono::duration<double>(now - *edgeAt_).count()) : 0.0;
-        edgeAt_ = now;
+        const double seconds = edgeClock_.step(now);
         if (space_->autoScroll(seconds) || seconds == 0) root().requestAnimationFrame();
     } else {
-        edgeAt_.reset();
+        edgeClock_.reset();
     }
     const bool captured = pollCapture();  // with the window closed too
     bool shown = captured;

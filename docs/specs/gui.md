@@ -651,7 +651,7 @@ moves, or (with the pointer anchor) the pointer moves. Horizontal zoom is contin
 vertical track height per track and global.
 
 **Edge scroll.** A drag in the lanes or the ruler that is held within 24
-units of the lanes' left or right edge (`ArrangeView::kEdgeZone`), or past
+units of the lanes' left or right edge (`ui::kEdgeScrollZone`), or past
 it, scrolls the view in time that way: 120 units per second at the zone's
 start, 30 more for each unit further out, at most 2400. The thing in hand
 stays under the pointer, so it moves along the timeline as the view does
@@ -660,10 +660,14 @@ drop lands where the pointer is. A move, a take dragged out of its item
 and a marquee also scroll the rows at the lanes' top and bottom; a trim,
 slip, fade or point drag stays on its row. It stops when the pointer
 returns inside, at the release, when the drag is cancelled, and at the
-timeline's start. The view advances by frame time (`ArrangeView::poll`,
-at most 50 ms a frame) and asks for frames only while it moves;
-`ArrangeView::autoScroll(seconds)` is the step, which tests drive
-without a clock.
+timeline's start. The view advances by the time since the loop's last pass
+and asks for frames only while it moves. The zone, the speed and the time
+step are one piece of code for every view that scrolls this way
+(`supple/ui/edge_scroll.h`): `ui::EdgeScrollClock` gives the step, never
+more than 50 ms, so a stalled frame is a short step and not a jump, and
+nothing on a scroll's first pass. `ArrangeView::poll`, `MidiEditor::sync`,
+`Mixer::sync` and `RackWindow::tick` take the pass's time, so tests pass
+their own; `autoScroll(seconds)` on each is the step itself.
 By default Alt+wheel anywhere over the arrange view, and Ctrl+wheel over the
 TCP, adds eight design units per notch to every track row, including hidden tracks and compact folders, preserving
 mixed heights and clamping each independently. Fractional wheel deltas work
@@ -952,7 +956,7 @@ edge of the strips that scroll, or past it, scrolls them that way, so a
 drop can reach a strip that is out of view. The masters, pinned at the
 right, do not scroll. The drop is resolved again at every step. At an end
 of the strips it rests until the pointer moves. `Mixer::sync` advances it
-by frame time (at most 50 ms a pass); `Mixer::autoScroll(seconds)` is the
+by the shared clock (§4.3); `Mixer::autoScroll(seconds)` is the
 step. A plug-in list that scrolls inside its strip does not edge-scroll.
 
 A strip reorder ignores destination strips removed from the model before the
@@ -1379,9 +1383,9 @@ units of the roll's left or right edge, or past it, scrolls the roll in
 time, and the notes in hand stay under the pointer. A move and a marquee
 also scroll the pitches at the roll's top and bottom, within the range the
 wheel has. Leftwards it stops half a beat before the item's start.
-`MidiEditor::sync` advances it by frame time (at most 50 ms a pass);
-`MidiEditor::autoScroll(seconds)` is the step, which tests drive without a
-clock. Velocity and controller drags do not scroll.
+`MidiEditor::sync` advances it by the shared clock (§4.3);
+`MidiEditor::autoScroll(seconds)` is the step. Velocity and controller
+drags do not scroll.
 
 The panel's top border is a drag handle: dragging resizes the panel (up is
 taller; up to nearly the whole window, always leaving the transport and a strip

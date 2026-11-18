@@ -1590,6 +1590,21 @@ TEST_CASE("a drag held at the lanes' edge scrolls the view and takes the item wi
     CHECK(f.view->autoScroll(0.5));
     CHECK(f.view->viewport().startSeconds - near > near - once);
     CHECK(std::abs(pinned({lanes.right() + 60, body.y})) <= g.gridBeats() / 2);
+    // The loop's pass steps it by the time since the pass before, and by no
+    // more than the cap: a frame that stalled for two seconds is a short
+    // step, not a jump. The first pass of a scroll only starts the clock.
+    {
+        using namespace std::chrono;
+        const steady_clock::time_point t0{hours(1)};
+        const double s0 = f.view->viewport().startSeconds;
+        f.view->poll(true, t0);
+        CHECK(f.view->viewport().startSeconds == s0);
+        f.view->poll(true, t0 + milliseconds(25));
+        const double step = f.view->viewport().startSeconds - s0;
+        CHECK(step > 0);
+        f.view->poll(true, t0 + milliseconds(25) + seconds(2));
+        CHECK(f.view->viewport().startSeconds - s0 == doctest::Approx(3 * step));
+    }
     // Back inside, it stops; the drop lands where the pointer is.
     f.pointer(T::Move, {lanes.x + lanes.w / 2, body.y});
     CHECK_FALSE(f.view->autoScrolling());

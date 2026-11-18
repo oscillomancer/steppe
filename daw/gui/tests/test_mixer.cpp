@@ -942,6 +942,25 @@ TEST_CASE("mixer: a strip held at the strips' edge scrolls them, and drops out o
     CHECK(f.mixer->autoScroll(0.25));
     f.root->frame(false);
     CHECK(once - x(last) > start - once);
+    // The loop's pass steps it by the time since the pass before, and by no
+    // more than the cap: a frame that stalled for two seconds is a short
+    // step, not a jump. The first pass of a scroll only starts the clock.
+    {
+        using namespace std::chrono;
+        const steady_clock::time_point t0{hours(1)};
+        const auto at = [&] {
+            f.root->frame(false);
+            return x(last);
+        };
+        const float s0 = at();
+        f.mixer->sync(t0);
+        CHECK(at() == s0);
+        f.mixer->sync(t0 + milliseconds(25));
+        const double step = static_cast<double>(s0 - at());
+        CHECK(step > 0);
+        f.mixer->sync(t0 + milliseconds(25) + seconds(2));
+        CHECK(static_cast<double>(s0 - at()) == doctest::Approx(3.0 * step).epsilon(0.02));
+    }
     // Back inside it stops.
     f.pointer(T::Move, {area.x + area.w / 2, y});
     CHECK_FALSE(f.mixer->autoScrolling());

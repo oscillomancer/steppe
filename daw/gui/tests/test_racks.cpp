@@ -473,6 +473,21 @@ TEST_CASE("rack window: a module held at the space's edge pans the view and goes
     f.pointer(T::Move, {b.right() + 60, a.y}, 0);
     CHECK(space.autoScroll(0.5));
     CHECK(space.view().x - once > once - v0.x);
+    // The window's tick steps it by the time since the tick before, and by
+    // no more than the cap: a frame that stalled for two seconds is a short
+    // step, not a jump. The first tick of a scroll only starts the clock.
+    {
+        namespace ch = std::chrono;
+        const ch::steady_clock::time_point t0{ch::hours(1)};
+        const double s0 = space.view().x;
+        f.racks->tick(t0);
+        CHECK(space.view().x == s0);
+        f.racks->tick(t0 + ch::milliseconds(25));
+        const double step = space.view().x - s0;
+        CHECK(step > 0);
+        f.racks->tick(t0 + ch::milliseconds(25) + ch::seconds(2));
+        CHECK(space.view().x - s0 == doctest::Approx(3 * step));
+    }
     // Back inside it stops, and the module lands where the pointer is.
     const ui::Point inside{b.x + b.w / 2, a.y};
     f.pointer(T::Move, inside, 0);

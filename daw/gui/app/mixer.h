@@ -27,6 +27,7 @@
 #include "meter_feed.h"
 #include "plugin_drag.h"
 #include "selection_edit.h"
+#include "supple/ui/edge_scroll.h"
 #include "supple/ui/root.h"
 #include "supple/views/track_layout.h"
 #include "track_menu.h"
@@ -52,11 +53,12 @@ class Mixer {
     void toggle();
     void setVisible(bool visible);
     bool visible() const;
-    void sync();  // every loop pass
+    // Every loop pass. `now` is the pass's time (tests pass their own); it
+    // steps the edge scroll.
+    void sync(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
     // Edge scroll (gui.md §4.4): true while a drag is held at an edge of the
     // strips that scroll; autoScroll advances it by `seconds` and is true
-    // when the strips moved (sync calls it with the frame's time).
-    static constexpr float kEdgeZone = 24;
+    // when the strips moved (sync calls it with the pass's time step).
     bool autoScrolling() const;
     bool autoScroll(double seconds);
 
@@ -153,7 +155,7 @@ class Mixer {
     float edgeV_ = 0;                                // units per second
     bool edgeIdle_ = false, edgeResolving_ = false;  // at an end; inside autoScroll
     unsigned dragMods_ = 0;                          // a plug-in drag's last modifiers
-    std::optional<std::chrono::steady_clock::time_point> edgeAt_;  // the edge scroll's last step
+    ui::EdgeScrollClock edgeClock_;                  // the time sync steps the edge scroll by
     void resolveStripDrop();
     void resolveFxDrop();
     const Strip* stripAt(ui::Point p) const;

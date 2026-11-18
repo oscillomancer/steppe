@@ -507,6 +507,21 @@ TEST_CASE("MIDI editor: a note held at the roll's edge scrolls the roll and goes
     CHECK(f.editor->autoScroll(0.5));
     CHECK(state.scrollBeat - once > once - scroll);
     CHECK(state.topPitch == pitches);  // the pitches stayed
+    // The loop's pass steps it by the time since the pass before, and by no
+    // more than the cap: a frame that stalled for two seconds is a short
+    // step, not a jump. The first pass of a scroll only starts the clock.
+    {
+        using namespace std::chrono;
+        const steady_clock::time_point t0{hours(1)};
+        const double s0 = state.scrollBeat;
+        f.editor->sync(t0);
+        CHECK(state.scrollBeat == s0);
+        f.editor->sync(t0 + milliseconds(25));
+        const double step = state.scrollBeat - s0;
+        CHECK(step > 0);
+        f.editor->sync(t0 + milliseconds(25) + seconds(2));
+        CHECK(state.scrollBeat - s0 == doctest::Approx(3 * step));
+    }
     // Back inside it stops, and the note lands where the pointer is.
     const ui::Point inside{roll.x + roll.w / 2, body.y};
     f.pointer(T::Move, inside);
