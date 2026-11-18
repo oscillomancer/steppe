@@ -40,9 +40,10 @@ void registerAuditionCommands(cmd::Registry& registry) {
             "A WAV, FLAC or MP3 file plays from its start, once, on the device's outputs 1 and "
             "2 (mono on both; a wider file's first two channels), whether the transport is "
             "stopped or playing. It does not pass the project's tracks, masters or meters, and "
-            "renders and recordings never contain it. The file's first ten minutes are read and "
-            "resampled to the device's rate before it sounds (decoding: true meanwhile; "
-            "truncated: true when the file is longer). path: absolute, or a name in the "
+            "renders and recordings never contain it. The file's start, up to 28,800,000 frames "
+            "at the higher of its rate and the device's (ten minutes at 48 kHz, 2.5 at 192 "
+            "kHz), is read and resampled to the device's rate before it sounds (decoding: true "
+            "meanwhile; truncated: true when the file is longer). path: absolute, or a name in the "
             "project's media folder. A second call replaces what plays; it ends at the file's "
             "end, with audition.stop, when the engine stops or another project is opened. Not "
             "an undo step, not saved.";

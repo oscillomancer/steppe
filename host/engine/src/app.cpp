@@ -2561,8 +2561,13 @@ Result<AuditionInfo> EngineApp::playAudition(const fs::path& given) {
                      "give a WAV, FLAC or MP3 file: an absolute path, or a name in the "
                      "project's media folder");
     stopAudition();
+    // The cap bounds the decoded file and the resampled voice alike, so it
+    // counts at the higher of the file's and the device's rates (the
+    // resampler's round(n * device / file) frames stay within it).
+    const double deviceRate = engine_->config().sampleRate;
     const auto cap = static_cast<std::int64_t>(
-        std::floor(std::max(0.0, options_.auditionMaxSeconds) * inspected->sampleRate));
+        std::floor(static_cast<double>(std::max<std::int64_t>(0, options_.auditionMaxFrames)) *
+                   std::min(1.0, inspected->sampleRate / deviceRate)));
     AuditionInfo info;
     info.path = path.string();
     info.sampleRate = inspected->sampleRate;
@@ -2571,7 +2576,7 @@ Result<AuditionInfo> EngineApp::playAudition(const fs::path& given) {
     info.seconds = static_cast<double>(std::min(inspected->frames, cap)) / inspected->sampleRate;
     if (!auditionLoader_)
         auditionLoader_ = std::make_unique<AuditionLoader>([this] { mainWake_.notify(); });
-    auditionRate_ = engine_->config().sampleRate;
+    auditionRate_ = deviceRate;
     auditionRequest_ = auditionLoader_->request({path, cap, auditionRate_});
     auditionDecoding_ = true;
     auditionInfo_ = info;

@@ -333,8 +333,9 @@ instructions are in `docs/guides/installing.md`.
   `audition.stop`, `audition.get`, ADR-0094): a WAV, FLAC or MP3 plays once on
   outputs 1/2, stopped or playing, outside the project (no track, master or
   meter, never in renders or recordings), fading out over 5 ms when stopped
-  or replaced. Its first ten minutes are read and resampled before it sounds,
-  so a long file starts late; it plays from its start only; nothing plays it
+  or replaced. Its first 28,800,000 frames (counted at the higher of the
+  file's and the device's rates: ten minutes at 48 kHz, 2.5 at 192 kHz) are
+  read and resampled before it sounds, so a long file starts late; it plays from its start only; nothing plays it
   on selection; the Browser's Play button is how the GUI reaches it. Armed masters print their output in real
   time onto a lane of their own (ADR-0057): the take is bit-identical to
   `render.mix` of that master in every executor; a master's items play after
