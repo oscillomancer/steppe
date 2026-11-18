@@ -302,7 +302,8 @@ ReportPage describeReport(const json::Value& report, const std::string& saved) {
     if (const auto* plugins = list(report, "plugins")) {
         ReportSection s;
         s.id = "plugins";
-        s.title = "Plug-ins (" + std::to_string(plugins->size()) + ")";
+        s.title = "Plug-ins";
+        s.count = plugins->size();
         s.note = "What the program had loaded, as each plug-in described itself.";
         for (const auto& p : *plugins) {
             std::string line =
@@ -325,7 +326,8 @@ ReportPage describeReport(const json::Value& report, const std::string& saved) {
     if (const auto* bridges = list(report, "bridges"); bridges && !bridges->empty()) {
         ReportSection s;
         s.id = "bridges";
-        s.title = "Separate processes (" + std::to_string(bridges->size()) + ")";
+        s.title = "Separate processes";
+        s.count = bridges->size();
         s.note = "Processes that ran plug-ins away from the program.";
         for (const auto& b : *bridges) {
             std::string line = "Process " + std::to_string(num(b, "id"));
@@ -353,7 +355,8 @@ ReportPage describeReport(const json::Value& report, const std::string& saved) {
     if (const auto* threads = list(report, "threads"); threads && !threads->empty()) {
         ReportSection s;
         s.id = "threads";
-        s.title = "Threads (" + std::to_string(threads->size()) + ")";
+        s.title = "Threads";
+        s.count = threads->size();
         s.note =
             "Where each thread was. A frame is a place in a program or plug-in file, as an offset "
             "from where that file was loaded; no names of functions are kept.";
@@ -393,7 +396,8 @@ ReportPage describeReport(const json::Value& report, const std::string& saved) {
     if (const auto* commands = list(report, "commands"); commands && !commands->empty()) {
         ReportSection s;
         s.id = "commands";
-        s.title = "Recent commands (" + std::to_string(commands->size()) + ")";
+        s.title = "Recent commands";
+        s.count = commands->size();
         s.note =
             "The last commands the model thread began, oldest first. One marked \"running\" had "
             "not finished when the program stopped. Names only; no arguments or project content "
@@ -439,7 +443,8 @@ ReportPage describeReport(const json::Value& report, const std::string& saved) {
             s.lines.push_back(std::to_string(dropped->asInt()) + " items left out");
         }
         if (s.lines.empty()) s.lines.push_back("Nothing is noted as missing.");
-        s.title = "What is missing (" + std::to_string(s.lines.size()) + ")";
+        s.title = "What is missing";
+        s.count = s.lines.size();
         page.sections.push_back(std::move(s));
     }
     return page;
@@ -463,7 +468,7 @@ std::string ReportPage::text() const {
     for (const auto& s : sentences) out += "\n" + s;
     if (!sentences.empty()) out += "\n";
     for (const auto& section : this->sections) {
-        out += "\n" + section.title + "\n";
+        out += "\n" + section.title + " (" + std::to_string(section.count) + ")\n";
         if (!section.note.empty()) out += section.note + "\n";
         for (const auto& line : section.lines) out += line + "\n";
     }

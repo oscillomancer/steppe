@@ -3676,7 +3676,7 @@ TEST_CASE("the restart notice sits under the transport and Dismiss acknowledges 
         REQUIRE(banner);
         REQUIRE(banner->visibleInTree());
         CHECK(noticeText(a).find("closed unexpectedly last time") != std::string::npos);
-        CHECK(noticeText(a).find("not sent anywhere") != std::string::npos);
+        CHECK(noticeText(a).find("A report was saved on this computer.") != std::string::npos);
         // Under the transport, above the arrangement: not modal, nothing else moves out of reach.
         const auto* transport = a.root->find("transport");
         if (transport)
@@ -3700,9 +3700,9 @@ TEST_CASE("the restart notice sits under the transport and Dismiss acknowledges 
                                               diagnostics::Role::Gui));
         NoticeShell s(a);
         CHECK(noticeText(a).find("Canary Verb by Acme was running when") == 0);
-        CHECK(noticeText(a).find(
-                  "The report points at that plug-in but cannot prove it was the cause.") !=
-              std::string::npos);
+        CHECK(noticeText(a).find("A report was saved on this computer.") != std::string::npos);
+        // The rest of what the report says is the viewer's: the banner keeps to one short line.
+        CHECK(noticeText(a).find("cannot prove") == std::string::npos);
         a.snapshot("crash-notice-plugin.png");
         // "Show report" is the boxed button and Dismiss goes quiet.
         const auto* show = dynamic_cast<ui::Button*>(a.root->find("crash.notice.show"));
@@ -4178,7 +4178,7 @@ TEST_CASE("Help > Crash reports lists what earlier runs left and shows one in pl
         REQUIRE(a.root->click("crash.viewer.section.plugins.toggle"));
         a.root->frame(false);
         CHECK(a.root->find("crash.viewer.section.plugins")->valueText() == "open");
-        CHECK(a.root->find("crash.viewer.section.plugins.lines")
+        CHECK(a.root->find("crash.viewer.section.plugins.lines.0")
                   ->valueText()
                   .find("Canary Verb by Acme") != std::string::npos);
         a.snapshot("crash-viewer-report.png");

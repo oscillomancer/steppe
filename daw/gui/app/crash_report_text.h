@@ -6,6 +6,7 @@
 // ignored, one it expected and cannot find reads as "not recorded", never as an error, and
 // nothing a report holds is left out of the summary.
 #pragma once
+#include <cstddef>
 #include <string>
 #include <vector>
 #include "supple/json/value.h"
@@ -13,9 +14,10 @@
 namespace supple::gui {
 
 struct ReportSection {
-    std::string id;     // "plugins", "bridges", "threads", "commands", "limits"
-    std::string title;  // "Plug-ins (3)"
-    std::string note;   // one plain sentence of what the lines are; may be empty
+    std::string id;         // "plugins", "bridges", "threads", "commands", "limits"
+    std::string title;      // "Plug-ins"
+    std::size_t count = 0;  // shown after the title: "Plug-ins (3)"
+    std::string note;       // one plain sentence of what the lines are; may be empty
     std::vector<std::string> lines;
 };
 

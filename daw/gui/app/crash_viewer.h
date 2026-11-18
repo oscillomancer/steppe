@@ -64,7 +64,7 @@ class CrashViewer {
     std::string pendingIncident_;
     ui::Node* popup_ = nullptr;
     std::vector<ui::Node*> rows_;  // the list's rows, ReportRow in the .cpp
-    float bodyHeight_ = 300;
+    float bodyHeight_ = 300, popupWidth_ = 900;
 };
 
 // "17 Nov 2026, 14:32" in the local time zone.

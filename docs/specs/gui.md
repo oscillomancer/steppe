@@ -2532,13 +2532,13 @@ report and a viewer to open it, and `crash.notice.dismiss`). It is not modal, ta
 no focus and blocks nothing; recovery (ADR-0078) is its own offer and may show at the same time.
 The text is the diagnostics library's `lastRunNotice` (diagnostics.md, "Restart notice"): that the
 last run closed unexpectedly, naming the plug-in a report points at when it points at one
-(`fault_in_image` or `active_token` only), or saying that no report was written; and that nothing
-was sent anywhere. The first sentence is in full ink, with the plug-in's name in bold; the rest is
-quiet ink. How many earlier closes the same Dismiss covers is the viewer's to tell: the banner
+(`fault_in_image` or `active_token` only), or saying that no report was written. The first sentence is in full ink, with the plug-in's name in bold;
+what follows is quiet ink and short: for a report only "A report was saved on this computer." (what the report says
+and that nothing is sent is the viewer's), for a run with no report why that can be. How many earlier closes the same Dismiss covers is the viewer's to tell: the banner
 shows it only as the count on the viewer's button, "Show reports (3)" (one incident: "Show
 report"). The band is a `raised` strip with a 3-unit `meter-hot` bar at its left edge, a `rule`
 under it and 12 by 8 padding; the text takes the width the buttons leave, and the band is as tall
-as its lines (two at 1000 units). "Show report" is the boxed button and Dismiss goes quiet; with no
+as its lines (one at 1280 units for a report). "Show report" is the boxed button and Dismiss goes quiet; with no
 report to show (an unreported run), or with no viewer, Dismiss is alone and boxed. The banner is for GUI runs
 only (`lastRunNotice` with `Role::Gui`): an incident of the headless engine is that service's to
 announce, and Dismiss acknowledges only the incidents the banner covered and hides it; no report or
@@ -2550,24 +2550,30 @@ The paragraph is `ui::RichText`: runs of words that differ in weight or ink, bro
 across runs.
 
 **Crash report viewer (topic 7c; delivered).** Help > Crash reports… (`ui.help.crash_reports`; the
-banner's "Show report" opens it on the incident it names) is a popup, `crash.viewer`, sized to the
-window (at most 980 by about 680 units): the title, one quiet sentence that reports stay on this
-computer and nothing in them is ever sent, a list at the left (280 units) and the shown report at
-the right, and a footer with Open folder, Delete all… and Close. The list is every report whose
-run is over and every run that left none (`listReports`), newest first, each a row of two lines:
-when it was written (local time) in bold, then what it was (Crash, Unexpected exit, Plug-in
-process stopped, Other report, or "No report was written"), with the plug-in's name when the report's
-attribution names one (`fault_in_image`, `active_token`, `bridge_exit`). A report nobody has marked
-seen has a 3-unit `meter-hot` bar at its row's left edge; the shown row has a `rule` outline (the
-`focus` outline when it has the focus), and Up and Down move through the rows. A kind this version
-does not know is listed as "Other report" and shown as far as it can be read, never hidden.
+banner's "Show report" opens it on the incident it names) is a popup, `crash.viewer`, 12 units of
+padding and 16 between groups, at most 980 units wide and as tall as its content up to the window (the
+list and the report each scroll in a `ui::ScrollView` past that). Its header is the title and Close. Under
+it is one quiet line saying that reports stay on this computer and nothing in them is ever sent (it is
+also where the message about an action shows) with Open folder and Delete all… at its right; then a
+list at the left (240 units), a 1-unit `rule` with 16 on each side, and the shown report. The list is every
+report whose run is over and every run that left none (`listReports`), newest first, each a row 40
+high of two lines: when it was written (local time) in `small`, then what it was in `caption`, `ink-quiet` (Crash,
+Unexpected exit, Plug-in process stopped, Other report, or "No report was written"), with the plug-in's name
+when the report's attribution names one (`fault_in_image`, `active_token`, `bridge_exit`). Unread is the date in bold `ink`
+with a 6-unit `accent` dot at the row's left (the amber of the banner is the warning, not this); seen is the
+date regular and `ink-quiet`. The shown row is filled with `selection` (the focus outline when it has the focus),
+and Up and Down move through the rows. A kind this version does not know is listed as "Other report" and shown
+as far as it can be read, never hidden.
 
 The shown report starts with one plain sentence (the headline, a plug-in's name in bold), then when it
-was saved, by which build, on what, and in which app; then Copy summary (the boxed button), Save a copy…, Mark as
-seen and Delete (quiet); then the sentences: what stopped it (a signal or Windows exception in
+was saved, by which build, on what, and in which app; then Copy summary (the boxed button), Save a copy… and Mark as
+seen (quiet), and Delete (quiet, at the far end); then the sentences: what stopped it (a signal or Windows exception in
 words, `std::terminate`, `abort()`, or an exit status), what the report points at and how far to
-trust it ("a clue, not proof"), and that nothing was sent. The technical detail is below, every
-section folded (`ui::FoldSection`): the plug-ins the program had loaded (by their own names;
+trust it ("a clue, not proof"), and that nothing was sent: the first sentence in `small` `ink`, the rest under
+it in `caption`, `ink-quiet`. The technical detail is below, every
+section folded: a heading with the title in bold over a `rule`, its count quiet after it and Show or Hide at
+the right (the whole row takes the click), and a body that starts at the heading's left edge, with the data (plug-ins,
+frames, commands) in the mono face and full `ink` on an inset in the `well` colour, and the explanations as `caption` lines: the plug-ins the program had loaded (by their own names;
 a frame in a plug-in's file is named by the plug-in), the separate processes (`bridges`), the
 threads by role with module-relative frames (no function names), the recent commands (names and
 origin only, "running" for one that had not finished) and what is missing: every line of the

@@ -49,8 +49,11 @@ void CrashBanner::show(std::optional<diagnostics::RestartNotice> notice) {
         runs.push_back({notice_->plugin, ui::Font::UiBold, "ink"});
         runs.push_back({head.substr(at + notice_->plugin.size()), ui::Font::Ui, "ink"});
     }
-    if (!notice_->detail.empty())
-        runs.push_back({" " + notice_->detail, ui::Font::Ui, "ink-quiet"});
+    // What follows the first sentence is short: a report's own sentences are the viewer's.
+    const std::string rest = notice_->kind == diagnostics::RestartNotice::Kind::Report
+                                 ? std::string("A report was saved on this computer.")
+                                 : notice_->detail;
+    if (!rest.empty()) runs.push_back({" " + rest, ui::Font::Ui, "ink-quiet"});
     auto& text = emplace<ui::RichText>("crash.notice.text", std::move(runs), "small");
     text.layout.width = ui::SizeRule::fraction();
     text_ = &text;
