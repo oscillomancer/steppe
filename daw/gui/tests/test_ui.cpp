@@ -935,6 +935,70 @@ TEST_CASE("mixer controls: fader taper and gestures, pan, meter hold and clip, t
     CHECK(solo.on());
 }
 
+TEST_CASE("a vertical meter draws its scale's levels as lines, on the well and on a bar") {
+    REQUIRE_GL();
+    const Theme theme = Theme::dark();
+    Root root(*fixture().window, fixture().fonts, theme);
+    auto content = std::make_unique<Node>("root");
+    content->layout.dir = Layout::Dir::Row;
+    content->layout.padding = Insets::all(8);
+    auto& meter = content->emplace<Meter>("meter");
+    meter.layout.width = SizeRule::fixed(12);
+    meter.layout.height = SizeRule::fixed(164);
+    root.setContent(std::move(content));
+    root.frame(false);
+    REQUIRE(meter.bounds().h == 164);
+    // A pixel's colour is the token's, within what blending and rounding give.
+    auto shows = [&](const gui::Image& image, float x, float y, const char* token) {
+        const float ratio = root.pixelRatio();
+        const auto i =
+            (static_cast<std::size_t>(y * ratio) * static_cast<std::size_t>(image.width) +
+             static_cast<std::size_t>(x * ratio)) *
+            4;
+        const Color want = theme.color(token);
+        return std::abs(image.rgba[i] - static_cast<int>(std::lround(want.r * 255))) +
+                   std::abs(image.rgba[i + 1] - static_cast<int>(std::lround(want.g * 255))) +
+                   std::abs(image.rgba[i + 2] - static_cast<int>(std::lround(want.b * 255))) <=
+               6;
+    };
+    // Where the meter draws the line of `db`: the middle of its one-unit row,
+    // in the left lane.
+    auto row = [&](float db) {
+        const Rect b = meter.bounds();
+        return Point{b.x + 2, std::round(b.y + Meter::kClipLight +
+                                         (1 - Meter::position(db)) * (b.h - Meter::kClipLight)) +
+                                  0.5f};
+    };
+    const std::vector<float> marks{0, -12, -24, -36, -48};
+    // Without a scale an idle meter is its well, but for the line at 0 dB.
+    root.frame(false);
+    const gui::Image bare = root.readBack();
+    for (float db : marks)
+        CHECK_MESSAGE(shows(bare, row(db).x, row(db).y, db == 0 ? "ink-faint" : "well"), db);
+    // With one, each level is a line in the panel's colour, and the well
+    // shows between the lines.
+    meter.setMarks(marks);
+    root.frame(false);
+    const gui::Image scaled = root.readBack();
+    for (float db : marks) {
+        CHECK_MESSAGE(shows(scaled, row(db).x, row(db).y, db == 0 ? "ink-faint" : "panel"), db);
+        CHECK_MESSAGE(shows(scaled, row(db).x, row(db).y + 4, "well"), db);
+        CHECK_MESSAGE(shows(scaled, row(db).x, row(db).y - 4, "well"), db);
+    }
+    // A bar does not hide them: at -6 dB it covers the lines from -12 down,
+    // which still show, and it shows between them.
+    const float level[2] = {0.5f, 0.5f};
+    meter.push(level, level);
+    root.frame(false);
+    const gui::Image lit = root.readBack();
+    for (float db : marks) {
+        if (db == 0) continue;
+        CHECK_MESSAGE(shows(lit, row(db).x, row(db).y, "panel"), db);
+        CHECK_FALSE_MESSAGE(shows(lit, row(db).x, row(db).y + 4, "panel"), db);
+        CHECK_FALSE_MESSAGE(shows(lit, row(db).x, row(db).y + 4, "well"), db);
+    }
+}
+
 TEST_CASE("a disabled text field lies flat and its text is faint; it takes no click or text") {
     REQUIRE_GL();
     const Theme theme = Theme::dark();
