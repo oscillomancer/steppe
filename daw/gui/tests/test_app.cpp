@@ -4611,6 +4611,7 @@ struct SafeLoadRig {
     std::function<void()> afterCheck;          // runs once the check has read the file
     std::string failFor;                       // a plug-in id whose override the engine refuses
     std::map<std::string, std::string> modes;  // the mode each plug-in was last set to
+    std::string canaryId = "com.acme.canary";  // the suspect plug-in's id (a real one for F4)
 
     explicit SafeLoadRig(int width = 1000, int height = 640,
                          const std::filesystem::path& scratch = {})
@@ -4634,7 +4635,7 @@ struct SafeLoadRig {
             if (listed) {
                 auto p = json::Value::object();
                 p["format"] = "clap";
-                p["id"] = "com.acme.canary";
+                p["id"] = canaryId;
                 p["name"] = "Canary";
                 p["mode"] = "normal";
                 p["stock"] = stock;
@@ -4680,7 +4681,7 @@ struct SafeLoadRig {
         load.reported = [this] {
             diagnostics::Suspect s;
             s.format = "clap";
-            s.pluginId = "com.acme.canary";
+            s.pluginId = canaryId;
             s.buildId = buildId;
             s.incidents = {"aa11"};
             std::vector<diagnostics::Suspect> all{s};
@@ -4962,6 +4963,51 @@ TEST_CASE("safe-load: the app reads plugin.override's changed from the real disp
     CHECK_FALSE(say("disable"));  // held already: the second says so
     CHECK(say("normal"));
     CHECK_FALSE(say("normal"));
+}
+
+TEST_CASE("safe-load: a refused second open leaves the override in the real engine (F4)") {
+    // The reviewer's sequence through the real dispatcher: a remembered choice is applied by the
+    // first open, the second open is refused, and `plugin.overrides` still lists the plug-in.
+    // A reader of plugin.override that stopped finding `changed` would read the second open's
+    // override as a change and set the plug-in back to normal.
+    SafeLoadRig r;
+    auto listed = r.a.dispatcher->execute({"plugin.list", json::Value::object(), {}});
+    REQUIRE(listed);
+    std::string id;
+    for (const json::Value& p : (*listed)["plugins"].asArray())
+        if (const json::Value* found = p.find("id"); found && found->isString()) {
+            id = found->asString();
+            break;
+        }
+    if (id.empty()) return;  // a partial build has no stock plug-ins to override
+    gui::SafeLoad real(*r.a.root, *r.a.dispatcher, r.a.dir / "diagnostics");
+    r.load.override_ = real.override_;  // the default: the real plugin.override
+    r.canaryId = id;
+    r.stock = true;
+    r.bridgeable = false;
+    r.rules = {
+        gui::RememberedLoad{"clap", id, "0123abcd", "disable", "Canary Verb", "Acme", "1.2.0", 1}};
+    const auto held = [&] {
+        auto all = r.a.dispatcher->execute({"plugin.overrides", json::Value::object(), {}});
+        REQUIRE(all);
+        std::vector<std::string> plugins;
+        for (const json::Value& o : (*all)["overrides"].asArray())
+            if (const json::Value* who = o.find("plugin"); who && who->isString())
+                plugins.push_back(who->asString());
+        return plugins;
+    };
+    r.open();  // the first open applies the remembered disable and opens
+    REQUIRE(r.name() == "Saved");
+    REQUIRE(held().size() == 1);
+    r.afterCheck = [&] {  // the file changes after the check: the second open is refused
+        std::ofstream out(r.file, std::ios::binary | std::ios::app);
+        out << "\n";
+    };
+    REQUIRE(r.a.dispatcher->execute(
+        {"project.set", json::parse(R"({"name":"Open now"})").value(), {}}));
+    r.open();
+    CHECK(r.name() == "Open now");  // refused
+    CHECK(held().size() == 1);      // and the plug-in is still disabled
 }
 
 TEST_CASE("safe-load: an undo sets back only what this open changed (round 6c-a F1)") {
