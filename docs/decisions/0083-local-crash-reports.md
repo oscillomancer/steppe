@@ -274,8 +274,8 @@ The bridge records its plug-ins' build identities while cold and the handler onl
 handler discovers no modules. The fault thread is walked everywhere; other threads' frames only where the
 platform's in-process code already does it (macOS). Two thread roles join the closed set, `bridge_control`
 and `bridge_audio`. The handler ends in the fatal status as before, so the host's classification and
-kills are unchanged. Maintainer decisions of 2026-11-19: the slot as transport, the capsule as untrusted
-input and the two roles. **Open (the maintainer and the product owner):** whether a bridge report that
-names a plug-in's image takes a place in the suspect window and so changes what the safe-load question
-asks about; it is built as one switch, off, in one function, and the report carries the attribution
-either way. Contract: `docs/specs/diagnostics.md` "Bridge self-capture (topic 6c)".
+kills are unchanged. Maintainer decisions of 2026-11-18 and 2026-11-19: the slot as transport (the supervisor
+holds it too, which gives the private channel its first packet that carries a descriptor or handle), the
+capsule as untrusted input, the two roles, and that a bridged plug-in's crash while the application keeps
+running is never a suspect and never causes the safe-load question, whatever its report names (kept as one
+function that returns false; the report carries the attribution all the same). Contract: `docs/specs/diagnostics.md` "Bridge self-capture (topic 6c)".

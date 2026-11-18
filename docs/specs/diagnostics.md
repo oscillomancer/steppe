@@ -246,8 +246,8 @@ every other level, a plug-in with no id, an unreadable report and a report still
 yield none, but those that are valid still occupy a place in the window. The exception is a
 `bridge_exit` report (topic 6a): a bridge's death is not a run that closed, so it neither names a
 suspect nor takes a place in the window, and a loop of bridge crashes cannot push a real crash out
-of it. (Whether a bridge report that names a
-plug-in in its image may count is an open decision, kept to one function: "Bridge self-capture".) A suspect is keyed on
+of it. This holds for a bridge report that names a plug-in in its image too (decided, 2026-11-18:
+"Bridge self-capture"). A suspect is keyed on
 `(format, plugin_id, build id)`; a report with no build id (an `active_token` attribution, every
 VST3) is keyed on the version too, so two versions are two suspects and none is an exact build.
 The suspect carries the name, vendor, version and `origin` of its newest report (P8 decides on
@@ -981,9 +981,9 @@ modules. Nothing reads it yet: 6c matches a bridge's capsule with it ("Bridge se
 
 **Status: contract only (step 6c.0). Nothing below is built.** Each step of the plan marks what it
 makes true; until then the sections above describe the code. The maintainer settled the
-transport, the trust rule and the two thread roles (decisions 1, 2 and 4); decision 3, whether a
-bridge's fault counts as a suspect, is open and is built as a switch (see "One rule for
-suspects").
+transport, the trust rule, whether a bridge's fault counts as a suspect and the two thread roles
+(decisions 1 to 4, below); the reviewed contract of the channel's new capability and of the
+report's new fields is as written here.
 
 *Why the bridge captures itself.* The worker's capture works because the supervisor, its parent,
 reads the stopped worker while it waits in its handler. A bridge is a child of the worker and is
@@ -1127,18 +1127,24 @@ carries a bridge capsule and holds them to the same evidence rules as the worker
 no capsule keeps the `bridge_exit` level only. A bridge member's `build` is no longer null for a bridge
 that captured: the repeat rule (members and status) uses it instead of the stand-in.
 
-*One rule for suspects (decision 3, open).* Whether a bridge report that names a plug-in by
-`fault_in_image` takes a place in the suspect window and yields a suspect for the safe-load
-question is **not decided** (it changes what a user is asked about, and so is the maintainer's
-and the product owner's). It is built as one function in one file, `bridgeReportCounts(summary)` in
+*One rule for suspects (decision 3, decided 2026-11-18).* A bridged plug-in's crash while the
+application keeps running does **not** count as a suspect and never causes the safe-load question,
+even when its report names the plug-in by `fault_in_image` with an exact build: the application
+did not close, and the plug-in already runs apart from it. The report, its validator, the
+reader's summary and the viewer carry the attribution all the same, so a user can read it. The
+rule is kept as one function in one file, `bridgeReportCounts(summary)` in
 `host/diagnostics/src/reports.cpp`, called where the window is read (`suspects`), and it returns
-false in this topic: a `bridge_exit` report neither names a suspect nor takes a place in the window,
-as the section on suspects above says. Switching it to "true for `fault_in_image` with an exact
-build" changes that one function and the sentence in the section on suspects; the report, its
-validator, the reader's summary and the viewer carry the attribution either way. Whatever the
-answer, a bridge report is never a restart notice (`lastRunNotice` and the role scan keep
-skipping it: the application did not close), and a plug-in already bridged by `plugin.override` is
-not asked about again (suspects are asked about plug-ins whose mode is `normal`).
+false: a `bridge_exit` report neither names a suspect nor takes a place in the window, as the
+section on suspects above says, and nothing else in the reader consults the kind. A later
+decision to count bridge reports would change that function and that sentence only. A bridge
+report is never a restart notice either (`lastRunNotice` and the role scan skip it).
+
+*Tests the damage cases need (POSIX and Windows, each).* The operation and the `Slot` event
+refuse, with a structured error or a counted and closed resource and no effect on anything else:
+an extra resource, a missing resource, a duplicate attach, a resource of the wrong type or size (a
+descriptor that is not a sealed memory object of the expected size, a handle that is not a section
+of it), a wrong version, a trailing payload, and a resource on a packet that may carry none. Each
+case also shows that no descriptor or handle is left open afterwards.
 
 *Plan and review stops.* 6c.0 this contract (review stop A). 6c.1 thread roles. 6c.2 the bridge
 captures itself (handlers, CTC5, the cold module list). 6c.3 the host carries the slot (the
