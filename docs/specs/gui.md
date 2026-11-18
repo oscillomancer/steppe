@@ -1856,8 +1856,14 @@ every selected track: one `fx.add` each, inside one transaction for
 several ("Add FX"), so one undo step. The browser stays open with its
 search as typed, and its status line (`.status`) says what happened:
 "Added to *track*", "Added to *N* tracks", "Select a track first" when no
-track is selected, or the command's message. The popup browser of a
-strip's "+" (§4.5) is unchanged and may be open at the same time.
+track is selected, or the command's message. **Add waits for a chosen
+row** on all three pages: a page opens with no row chosen and its Add
+disabled, so that a stray click cannot put the list's first row on every
+selected track. A click on a row or the arrow keys choose one; a search
+chooses its first hit, so typing and Enter still adds; with the search
+empty Enter does nothing. The popup browser of a
+strip's "+" (§4.5) is for one track and is unchanged (it opens on its first
+row); it may be open at the same time.
 
 *Chains* lists the saved FX chain presets (`fx.chain.list`; node ids under
 `side.browser.chains`), by name with their size at the right ("1 effect",

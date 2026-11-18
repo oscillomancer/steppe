@@ -407,6 +407,8 @@ and the **History**. It stays closed until you ask for it:
   The Browser stays open, so you can add another. You can also drag a
   plug-in from the list onto a track, in the arrangement or on its mixer
   strip; the track it will land on is outlined. **Favourite** keeps a
+  **Add** lights up once a plug-in is chosen: click one, use the arrow
+  keys, or search (the first one found is chosen).
   plug-in at the top; **Rescan** looks for newly installed ones.
   **Chains**, beside **Plug-ins** at the top of the Browser, lists the FX
   chains you saved with **Save chain…** in a track's FX window. Add one or
