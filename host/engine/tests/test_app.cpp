@@ -547,10 +547,6 @@ TEST_CASE("an isolated plugin that crashes is reported and restarted over the bu
     call("engine.stop", "{}");
 }
 
-namespace {
-void ignoreAnnouncements(const supple::diagctx::Event&) noexcept {}
-}  // namespace
-
 // With a diagnostics supervisor behind the process (here: a sink that only listens) a bridge that
 // dies of a signal or an exception may have caused a local crash report, and the engine says which:
 // the failed fx's entry in `failed_errors` carries its id, once the bridge's end was observed.
@@ -565,6 +561,10 @@ void ignoreAnnouncements(const supple::diagctx::Event&) noexcept {}
 #define SUPPLE_TEST_SANITIZER_EXITS 1
 #endif
 #if !defined(SUPPLE_TEST_SANITIZER_EXITS)
+namespace {
+void ignoreAnnouncements(const supple::diagctx::Event&) noexcept {}
+}  // namespace
+
 TEST_CASE("a failed fx names the crash report its bridge's death may have caused") {
     host::setBridgeExecutable(BRIDGE_PATH);
     diagctx::setInventorySink(&ignoreAnnouncements);
