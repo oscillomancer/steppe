@@ -21,8 +21,9 @@ The model thread (or a worker it delegates to) compiles a version into a
 new plan, compiled complete from the session; instances, recycled rings and
 state carry over from the previous one (§1.6).
 Its DSP state belongs to the executors, and strip, send and VCA levels and
-pans arrive through its mix slots (ADR-0060, §1.6) without a new plan, as
-patch-only FX edits reach the instances (ADR-0092, §1.6).
+pans, and FX wet and bypass, arrive through its mix slots (ADR-0060,
+ADR-0093, §1.6) without a new plan, as patch-only FX edits reach the
+instances (ADR-0092, §1.6).
 
 ### 1.1 Nodes
 
@@ -390,17 +391,20 @@ earlier collection does not imply that collection already freed its old plan.
 
 **Mix-value edits (ADR-0060).** A session that differs from the last one
 `Engine::load` took only in strip `volume_db`/`pan`/`width`/`pan_left`/`pan_right`,
-send `volume_db`/`pan` and VCA `volume_db` (and in the points of envelopes a
-write pass holds, including the new pan targets, §1.4) is not compiled. The comparison copies each changed track, route, group
-and envelope with those fields taken from the new one and compares the whole
-object, so any other change (mute, solo, a name, an FX or a route's tap)
-compiles. A send whose level moves to or from exactly 0 dB, or whose pan
+send `volume_db`/`pan`, VCA `volume_db` and FX `wet`/`bypass` (ADR-0093; not
+`offline`, which decides whether an instance exists) (and in the points of
+envelopes a write pass holds, including the new pan targets, §1.4) is not
+compiled. The comparison copies each changed track, route, group, FX and
+envelope with those fields taken from the new one and compares the whole
+object, so any other change (mute, solo, a name, an FX's plug-in or pins, a
+route's tap) compiles. A send whose level moves to or from exactly 0 dB, or whose pan
 starts or stops following its source, compiles: that decides whether it is
 encoded. A rack send is never encoded, so any change of its `volume_db` is
 a mix value (ADR-0075). An unchanged session is a maintenance reload and compiles too. A
 qualifying edit writes the values into the newest plan's mix slots (per
-node, per route edge, per VCA; parent sends carry no values) between an odd
-and an even sequence number. Each executor, at the start of a block
+node, per route edge, per VCA, per stage for wet and bypass, numbered node by
+node in `forEachStage` order from `Node::stageSlot`; parent sends carry no
+values) between an odd and an even sequence number. Each executor, at the start of a block
 (`syncMix`, `SUPPLE_RT`), copies the slots its nodes and edges read when the
 sequence moved: a node's own values; an edge's for its encoder (source side)
 or, for a key route, its destination; the source level a send's static gain
@@ -416,6 +420,14 @@ session from the first block whose copy completes. The edit
 publishes no plan, prepares no rate transition and changes no epoch, also
 after rate scheduling has started (§ Master playrate); a plan still queued
 for adoption takes the values when it is adopted.
+A stage's wet and bypass reach it the same way, and its own wet ramp
+crossfades the change as after a compile. No compile-time decision depends
+on them: a stage's latency, dry delay, MIDI bus slot and note target are
+the same bypassed or not, and whether it takes part in the MIDI bus is
+decided each block (ADR-0093). In the anticipative executor a compiled
+reload hands over at the renderer's position, so a value edit there is
+heard no later than the compiled reload would be, and plays the same once
+both have taken it.
 
 **Patch-only FX edits (ADR-0092).** A session that differs from the last one
 `Engine::load` took only in FX `patch` values, each of those FX having a

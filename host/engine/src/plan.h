@@ -838,6 +838,7 @@ struct Node {
     UtilityControl utility;
     bool soloSilenced = false;
     bool postKeyed = false;
+    std::uint32_t stageSlot = 0;  // its first stage's MixSlots::stages entry (forEachStage order)
     ConsoleStage<console9::Buss> decoder;
     ConsoleStage<console9::Channel> encoder;
     FaderControl fader;
@@ -926,6 +927,14 @@ struct MixSlots {
     std::unique_ptr<Value[]> vcas;      // per VCA group (pan unused)
     std::unique_ptr<Value[]> hardware;  // per hardware MIDI route
     std::vector<Id> vcaIds;             // main thread: the group of each VCA slot
+    // FX wet and bypass (ADR-0093), per stage, node by node in forEachStage
+    // order from Node::stageSlot; stageFx is each slot's FX (main thread).
+    struct StageValue {
+        std::atomic<double> wet{1};
+        std::atomic<bool> bypass{false};
+    };
+    std::unique_ptr<StageValue[]> stages;
+    std::vector<Id> stageFx;
     std::atomic<std::uint64_t> sequence{0};
     std::array<std::uint64_t, 2> seen{};  // per executor class (0: renderer or all, 1: live)
 };

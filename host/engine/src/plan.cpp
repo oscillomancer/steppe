@@ -1695,6 +1695,22 @@ Status prepare(Plan& p, const Session& s) {
             edge.vcas.timeline(timeline);
         }
     }
+    // Wet and bypass slots (ADR-0093), once every stage list is final.
+    MixSlots& mix = *p.mix;
+    mix.stageFx.clear();
+    for (Node& n : p.nodes) {
+        n.stageSlot = static_cast<std::uint32_t>(mix.stageFx.size());
+        forEachStage(n, [&](const Stage& st) { mix.stageFx.push_back(st.fx); });
+    }
+    mix.stages = std::make_unique<MixSlots::StageValue[]>(mix.stageFx.size());
+    for (const Node& n : p.nodes) {
+        std::size_t k = n.stageSlot;
+        forEachStage(n, [&](const Stage& st) {
+            mix.stages[k].wet.store(st.wet, std::memory_order_relaxed);
+            mix.stages[k].bypass.store(st.bypass, std::memory_order_relaxed);
+            ++k;
+        });
+    }
     return okStatus();
 }
 
@@ -3773,6 +3789,11 @@ void publishMix(Plan& p, const model::Session& s, std::span<const model::EnvTarg
     for (std::size_t i = 0; i < p.hardwareMidi.size(); ++i)
         if (const auto* route = s.routes.find(p.hardwareMidi[i]->id))
             mix.hardware[i].mute.store(route->mute, relaxed);
+    for (std::size_t k = 0; k < mix.stageFx.size(); ++k)
+        if (const model::FxInstance* fx = s.fx.find(mix.stageFx[k])) {
+            mix.stages[k].wet.store(fx->wet / 100.0, relaxed);
+            mix.stages[k].bypass.store(fx->bypass || fx->offline, relaxed);
+        }
     for (std::size_t i = 0; i < mix.vcaIds.size(); ++i) {
         const model::TrackGroup* g = s.groups.find(mix.vcaIds[i]);
         if (!g || !g->vca) continue;
@@ -3816,6 +3837,12 @@ void syncMix(Plan& p, int liveClass) SUPPLE_RT {
             n.panSettings.right = slot.panRight.load(relaxed);
         }
         syncVcas(n.vcas);
+        std::size_t k = n.stageSlot;
+        forEachStage(n, [&](Stage& st) {
+            st.wet = mix.stages[k].wet.load(relaxed);
+            st.bypass = mix.stages[k].bypass.load(relaxed);
+            ++k;
+        });
     }
     // An edge belongs to whoever reads it: a key route to its destination
     // (addEdge), any other to its source (the send's encode). The source's

@@ -78,7 +78,11 @@ compile's; only the stages' `bypass` and `wet` differ.
 - Wet, bypass, mute and solo edits cost a model commit and a few atomic
   stores, whatever the session's size. This includes a solo, which floods
   the signal graph once on the main thread.
-- The real-time output of each of these edits equals a compiled reload at
-  the same block, in both executors. Tests compare them sample for sample.
+- In the in-callback executor, each of these edits while playing sounds
+  sample for sample like a compiled reload. In the anticipative executor a
+  compiled reload hands over at the renderer's position, later than a value
+  edit's next block. There, as with ADR-0060's level edits, a value edit is
+  heard no later than the compiled reload, and the two play the same once
+  both have taken it. Tests check both.
 - Offline renders still compile in full and are the reference.
 - Native macOS and Windows CI must pass before merging.

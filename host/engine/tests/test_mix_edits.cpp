@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <string>
 #include <vector>
 
 #include "supple/engine/app.h"
@@ -764,6 +765,176 @@ TEST_CASE("mix edits reach live and rendered nodes alike, across the frontier" *
             else
                 for (std::size_t c = 0; c < 2; ++c) CHECK(cap[c] == reference[c]);
         }
+}
+
+namespace {
+// mixSession() with a gain at -12 dB after each instrument, and a monitored
+// vocal with its own gain: the instruments' gains run in the renderer, the
+// vocal's in the callback (ADR-0093 edits reach both).
+struct Wet {
+    Mix m;
+    Id vocal, gainA, gainB, gainVocal;
+};
+Wet wetSession() {
+    Wet w;
+    w.m = mixSession();
+    model::EditTxn t(w.m.session, 2);
+    auto gain = [&](Id track) {
+        model::FxInstance fx;
+        fx.plugin.id = "com.suppleaudio.test.gain";
+        fx.patch =
+            json::parse(R"({"schema":"supple.test-gain-patch/1.0","params":{"gain":-12}})").value();
+        const Id id = t.create(fx);
+        t.modify<model::Track>(track, [&](auto& x) { x.chain.push_back(id); });
+        return id;
+    };
+    w.gainA = gain(w.m.a);
+    w.gainB = gain(w.m.b);
+    model::Track tr;
+    tr.parent = kMaster;
+    w.vocal = t.create(tr);
+    t.modify<model::Track>(kMaster, [&](auto& x) { x.children.push_back(w.vocal); });
+    model::Route in;
+    in.from.hwChannels = std::vector<int>{1, 2};
+    in.to.track = w.vocal;
+    const Id input = t.create(in);
+    t.modify<model::Track>(w.vocal, [&](auto& x) {
+        x.record.input = input;
+        x.record.monitor = model::Monitor::On;
+        x.record.armed = true;
+    });
+    w.gainVocal = gain(w.vocal);
+    w.m.session = t.commit().value();
+    return w;
+}
+DummyBackend::Options sawInput(std::int64_t frames) {
+    return {
+        .mode = DummyBackend::Mode::Manual,
+        .captureFrames = frames,
+        .input = [](float* const* in, std::uint32_t channels, std::uint32_t n, std::int64_t frame) {
+            for (std::uint32_t i = 0; i < n; ++i) {
+                const float v = static_cast<float>((frame + i) % 4800) / 4800.0f - 0.5f;
+                in[0][i] = v;
+                if (channels > 1) in[1][i] = -v;
+            }
+        }};
+}
+}  // namespace
+
+TEST_CASE("FX wet and bypass edits while playing sound exactly like a compiled reload" *
+          doctest::description("rt")) {
+    // ADR-0093: no plan; the stage's own ramp crossfades, as after a compile.
+    const Wet w = wetSession();
+    for (const auto& [name, edit] :
+         std::vector<std::pair<std::string, void (*)(model::EditTxn&, const Wet&)>>{
+             {"wet",
+              [](model::EditTxn& t, const Wet& x) {
+                  for (Id fx : {x.gainA, x.gainVocal})
+                      t.modify<model::FxInstance>(fx, [](auto& f) { f.wet = 40; });
+              }},
+             {"bypass", [](model::EditTxn& t, const Wet& x) {
+                  for (Id fx : {x.gainB, x.gainVocal})
+                      t.modify<model::FxInstance>(fx, [](auto& f) { f.bypass = true; });
+              }}}) {
+        model::EditTxn t(w.m.session, 3);
+        edit(t, w);
+        const model::Session next = t.commit().value();
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 1}}) {
+            CAPTURE(name);
+            CAPTURE(options.anticipative);
+            std::vector<std::vector<float>> outputs;
+            for (int run = 0; run < 3; ++run) {  // fast, compiled, unedited
+                INFO(name << ", anticipative " << options.anticipative << ", run " << run);
+                auto pool = makePool();
+                MediaCache media;
+                DummyBackend backend(sawInput(300 * 256));
+                Engine engine(pool, media, options);
+                REQUIRE(
+                    engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
+                REQUIRE(engine.load(w.m.session));
+                engine.play();
+                const auto cycles = [&](int n) {
+                    if (options.anticipative)
+                        runAhead(engine, backend, n, 256);
+                    else
+                        backend.run(n);
+                };
+                cycles(100);
+                const auto generation = engine.planGeneration();
+                if (run == 0) REQUIRE(engine.load(next));
+                if (run == 1) REQUIRE(engine.load(withMarker(next, 4)));
+                CHECK(engine.planGeneration() == generation + (run == 1 ? 1 : 0));
+                CHECK(engine.mixEdits() == (run == 0 ? 1u : 0u));
+                cycles(200);
+                CHECK(engine.anticipationMisses() == 0);
+                CHECK(engine.processErrors() == 0);
+                engine.stop();
+                outputs.push_back(backend.capture().channels[0]);
+            }
+            CHECK(peakOf(outputs[0], 0, 300 * 256) > 0.01);
+            // Where the edit is first heard: the first sample unlike the unedited run.
+            auto heard = [&](const std::vector<float>& x) {
+                for (std::size_t i = 0; i < 300 * 256; ++i)
+                    if (x[i] != outputs[2][i]) return i;
+                return std::size_t{300 * 256};
+            };
+            REQUIRE(heard(outputs[0]) < 300 * 256);
+            if (!options.anticipative) {
+                CHECK(maxDiff(outputs[0], 0, outputs[1], 300 * 256) == 0.0);
+            } else {
+                // As a level edit (ADR-0060): a live node takes it at its next
+                // block, a rendered one at the renderer's, never later than a
+                // compiled reload hands over. Once both have it, they agree.
+                CHECK(heard(outputs[0]) >= 100 * 256);
+                CHECK(heard(outputs[0]) <= heard(outputs[1]));
+                const std::vector<float> tail(outputs[1].begin() + 250 * 256, outputs[1].end());
+                CHECK(maxDiff(outputs[0], 250 * 256, tail, 50 * 256) == 0.0);
+            }
+        }
+    }
+}
+
+TEST_CASE("an FX wet or bypass edit compiles with anything else, or when the FX goes offline") {
+    const Wet w = wetSession();
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    Engine engine(pool, media, kInCallback);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128, .inputs = 2}));
+    REQUIRE(engine.load(w.m.session));
+    std::uint64_t version = 3;
+    auto compiles = [&](auto change) {
+        model::EditTxn t(w.m.session, version++);
+        change(t);
+        const auto generation = engine.planGeneration();
+        REQUIRE(engine.load(t.commit().value()));
+        const bool compiled = engine.planGeneration() == generation + 1;
+        REQUIRE(engine.load(w.m.session));
+        return compiled;
+    };
+    CHECK_FALSE(compiles([&](auto& t) {
+        t.template modify<model::FxInstance>(w.gainA, [](auto& f) { f.wet = 50; });
+    }));
+    CHECK_FALSE(compiles([&](auto& t) {
+        t.template modify<model::FxInstance>(w.gainA, [](auto& f) { f.bypass = true; });
+    }));
+    CHECK(compiles([&](auto& t) {
+        t.template modify<model::FxInstance>(w.gainA, [](auto& f) { f.offline = true; });
+    }));
+    CHECK(compiles([&](auto& t) {
+        t.template modify<model::FxInstance>(w.gainA, [](auto& f) {
+            f.wet = 50;
+            f.pdc = model::PdcMode::Ignore;  // with anything else, the whole edit compiles
+        });
+    }));
+    CHECK(compiles([&](auto& t) {
+        t.template modify<model::FxInstance>(w.gainA, [](auto& f) {
+            f.bypass = true;
+            f.patch = json::parse(R"({"schema":"supple.test-gain-patch/1.0","params":{"gain":-3}})")
+                          .value();
+        });
+    }));
+    engine.stop();
 }
 
 TEST_CASE("pan controls: held writing width edits skip compilation and release the stale curve" *

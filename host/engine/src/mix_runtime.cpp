@@ -38,7 +38,7 @@ bool entriesMatch(const model::IdMap<T>& a, const model::IdMap<T>& b, F&& same) 
 
 // Whether `b` differs from `a` only in what a running plan takes without
 // compiling: strip levels, pans, widths and dual pans, send levels and pans that keep the send's
-// encoding, VCA levels, and the points of held volume/pan envelopes in a
+// encoding, VCA levels, FX wet and bypass, and the points of held volume/pan envelopes in a
 // writing mode. Every other field is compared whole, so a field added to one
 // of these objects can never pass as a mix edit. `changed`: something did
 // change; `stale` gains the held targets whose curves the plan no longer
@@ -49,7 +49,7 @@ bool mixOnly(const model::Session& a, const model::Session& b,
     if (!(a.project == b.project || *a.project == *b.project)) return false;
     if (!a.tempo.sameStorage(b.tempo) || !a.meters.sameStorage(b.meters) ||
         !a.items.sameStorage(b.items) || !a.takes.sameStorage(b.takes) ||
-        !a.media.sameStorage(b.media) || !a.midi.sameStorage(b.midi) || !a.fx.sameStorage(b.fx) ||
+        !a.media.sameStorage(b.media) || !a.midi.sameStorage(b.midi) ||
         !a.autoItems.sameStorage(b.autoItems) || !a.markers.sameStorage(b.markers) ||
         !a.regions.sameStorage(b.regions) || !a.racks.sameStorage(b.racks) ||
         !a.cables.sameStorage(b.cables) || a.blobs != b.blobs || a.extraSections != b.extraSections)
@@ -66,6 +66,15 @@ bool mixOnly(const model::Session& a, const model::Session& b,
             return x == y;
         });
     if (!modules) return false;
+    // An FX's wet and bypass (ADR-0093): every stage that runs it has a slot.
+    // `offline` decides whether an instance exists, so it compiles.
+    const bool fx = entriesMatch(a.fx, b.fx, [&](model::FxInstance x, const model::FxInstance& y) {
+        changed |= x.wet != y.wet || x.bypass != y.bypass;
+        x.wet = y.wet;
+        x.bypass = y.bypass;
+        return x == y;
+    });
+    if (!fx) return false;
     const bool tracks =
         entriesMatch(a.tracks, b.tracks, [&](model::Track x, const model::Track& y) {
             changed |= x.volumeDb != y.volumeDb || x.pan != y.pan || x.width != y.width ||
