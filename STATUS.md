@@ -595,7 +595,10 @@ instructions are in `docs/guides/installing.md`.
   yet: cursors in the rack, the routing matrix and for drops that are
   refused). A drag held at the edge of the arrangement scrolls the view
   and takes the thing in hand with it, and so does a note held at the
-  piano roll's edge (not yet in the rack or the mixer). The transport bar's
+  piano roll's edge (not yet in the rack or the mixer). Both the pointer
+  shapes and the edge scroll are verified by tests only: nobody has yet
+  watched them on a real desktop, where the system draws the cursor and
+  the frame clock paces the scroll. The transport bar's
   engine readout is in words ("48 kHz · 256 samples") and warns in colour
   only of a stopped engine, dropouts, render gaps or plug-in errors; the
   toolbar's buttons are quiet at rest. A side panel at the right edge,
@@ -1478,8 +1481,7 @@ GUI:
   Script-player headless pictures (`dsp.preview`) use framework 1.24.0's
   EGL, Metal and WGL renderers. Native CI requires pictures and pointer edits;
   missing devices/drivers return `dsp.no_picture` with a corrective hint.
-- No autoscroll during drags; no resize cursor; plugins can be dropped onto
-  mixer strips but not onto track-panel rows.
+- Plugins can be dropped onto mixer strips but not onto track-panel rows.
 
 Plugins:
 - Bracken, Ghyll, Pollia, Umber and Withy discard non-finite inputs before their recursive
