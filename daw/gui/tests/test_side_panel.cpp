@@ -375,6 +375,13 @@ TEST_CASE("inspector: positions read and write as bar.beat.thousandths, in the b
     CHECK(*gui::inspectorParseBars("3", four) == 8);
     CHECK(*gui::inspectorParseBars(" 3.2 ", four) == 9);
     CHECK(*gui::inspectorParseBars("3.2.500", four) == 9.5);
+    // The third part is a fraction of the beat, not a count of thousandths:
+    // fewer digits mean the same as with zeros after them.
+    CHECK(*gui::inspectorParseBars("3.2.5", four) == 9.5);
+    CHECK(*gui::inspectorParseBars("3.2.50", four) == 9.5);
+    CHECK(*gui::inspectorParseBars("3.2.05", four) == doctest::Approx(9.05));
+    CHECK(*gui::inspectorParseBars("3.2.005", four) == doctest::Approx(9.005));
+    CHECK(*gui::inspectorParseBars("3.2.0", four) == 9.0);
     for (const double beat : {0.0, 1.0, 7.25, 123.456})
         CHECK(*gui::inspectorParseBars(gui::inspectorBarsText(beat, four), four) ==
               doctest::Approx(beat).epsilon(1e-9));

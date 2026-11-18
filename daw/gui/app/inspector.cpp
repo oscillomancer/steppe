@@ -315,7 +315,7 @@ std::string inspectorBarsText(double beat, const time::TimeMap& map) {
 
 Result<double> inspectorParseBars(std::string_view text, const time::TimeMap& map) {
     const Error bad("gui.inspector",
-                    "write a bar, or bar.beat, or bar.beat.thousandths: 3, 3.2 or 3.2.500");
+                    "write a bar, or bar.beat, or bar.beat.fraction: 3, 3.2 or 3.2.500");
     text = trimmed(text);
     long long part[3] = {1, 1, 0};
     int count = 0;
@@ -326,6 +326,13 @@ Result<double> inspectorParseBars(std::string_view text, const time::TimeMap& ma
         const auto [end, ec] =
             std::from_chars(piece.data(), piece.data() + piece.size(), part[count]);
         if (ec != std::errc{} || end != piece.data() + piece.size() || part[count] < 0) return bad;
+        // The third part is the digits after the beat's decimal point, up to
+        // three: "3.2.5" is half a beat on, as "3.2.500" is, and "3.2.005"
+        // five thousandths.
+        if (count == 2) {
+            if (piece.size() > 3 || piece.front() == '+') return bad;
+            for (std::size_t digits = piece.size(); digits < 3; ++digits) part[2] *= 10;
+        }
         ++count;
         if (dot == std::string_view::npos) break;
         text.remove_prefix(dot + 1);

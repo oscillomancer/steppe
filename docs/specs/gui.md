@@ -1946,7 +1946,7 @@ inspector adds no command:
 | Field (node) | Shows | Accepts | `item.set` |
 |---|---|---|---|
 | Name (`inspector.name`) | The active take's name; unnamed, the file's name as a placeholder | Any text | `name` |
-| Start (`inspector.start`) | "3.1.000": bar, beat of that bar's meter, thousandths of the beat, each from 1 | "3", "3.2" or "3.2.500" (`inspectorParseBars`) | `position` (beats) |
+| Start (`inspector.start`) | "3.1.000": bar, beat of that bar's meter, thousandths of the beat, each from 1 | "3", "3.2" or "3.2.500"; the third part is the digits after the beat's decimal point, up to three, so "3.2.5" is "3.2.500" and "3.2.005" five thousandths (`inspectorParseBars`) | `position` (beats) |
 | Length (`inspector.length`) | "32 beats" | A number, with or without "beats" | `length` |
 | Follows (`inspector.timebase`) | Its track's setting, Beats, Time, or Beats, start only | A choice | `timebase` |
 | Gain (`inspector.gain_db`) | "-3.0 dB" | A number, with or without "dB" | `gain_db` |

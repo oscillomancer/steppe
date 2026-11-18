@@ -381,7 +381,8 @@ and the **History**. It stays closed until you ask for it:
   kind, or how many of each. Press **I** again to close the panel.
   With one item selected it also shows the item's settings, and you can
   change them there: its **Name**, where it **starts** (bar.beat, for
-  example `3.2`), its **length** in beats, whether it **follows** the beats
+  example `3.2`, or `3.2.5` for half a beat after it), its **length** in
+  beats, whether it **follows** the beats
   or the clock when the tempo changes, its **gain**, its **fades** in
   seconds, and **Mute**, **Loop** and **Lock**. Type a value and press
   Enter, or click elsewhere; Escape leaves it as it was. Each change is one
