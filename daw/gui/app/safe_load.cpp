@@ -41,51 +41,58 @@ class FixedWidthText : public ui::TextBlock {
     }
 };
 
-// One of the choices: a full-width row, a bold label over one quiet line. It is the default when
-// it has the focus; Enter or a click picks it, Up and Down move.
-class ChoiceRow : public ui::Node {
+// One of the choices, in a radio list: a 12-unit ring at the left, filled for the chosen one, a
+// bold label and under it one quiet line. A click or Space chooses it, Up and Down move the choice,
+// Enter goes on with it.
+class RadioRow : public ui::Node {
   public:
-    ChoiceRow(std::string id, std::string label, std::string what, std::function<void()> pick,
-              std::function<void(int)> step)
+    RadioRow(std::string id, std::string label, std::string what, std::function<void()> choose,
+             std::function<void(int)> step, std::function<void()> confirm)
         : Node(std::move(id), ui::Role::Button),
           label_(std::move(label)),
           what_(std::move(what)),
-          pick_(std::move(pick)),
-          step_(std::move(step)) {
+          choose_(std::move(choose)),
+          step_(std::move(step)),
+          confirm_(std::move(confirm)) {
         interactive = true;
         focusable = true;
-        layout.height = ui::SizeRule::fixed(44);
+        layout.height = ui::SizeRule::fixed(40);
     }
+    bool selected = false;
     void paint(ui::Canvas& c) override {
         const ui::Theme& t = c.theme();
         const ui::Rect b = bounds();
-        c.fillRound(b, t.radius("s"), t.color(pressed_ || hovered() ? "raised" : "panel"));
-        c.strokeRound(b, t.radius("s"), t.color(focused() ? "focus" : "rule"));
+        if (focused()) c.strokeRound({b.x, b.y, b.w, b.h}, t.radius("s"), t.color("focus"));
+        const ui::Point centre{b.x + 14, b.y + 12};
+        c.strokeCircle(centre, 6, t.color(selected ? "ink" : "ink-faint"), 1.2f);
+        if (selected) c.fillCircle(centre, 3.4f, t.color("ink"));
         const float small = t.type("small"), caption = t.type("caption");
-        c.text({b.x + 12, b.y + 5, b.w - 24, small * 1.4f}, label_, ui::Font::UiBold, small,
+        c.text({b.x + 32, b.y + 4, b.w - 36, small * 1.4f}, label_, ui::Font::UiBold, small,
                t.color("ink"));
-        c.text({b.x + 12, b.y + 5 + small * 1.4f, b.w - 24, caption * 1.4f}, what_, ui::Font::Ui,
+        c.text({b.x + 32, b.y + 4 + small * 1.4f, b.w - 36, caption * 1.4f}, what_, ui::Font::Ui,
                caption, t.color("ink-quiet"));
     }
     bool onPointer(const ui::PointerEvent& e) override {
         if (e.button != 1) return false;
         if (e.type == ui::PointerEvent::Type::Down) {
             pressed_ = true;
-            invalidate();
             return true;
         }
         if (e.type == ui::PointerEvent::Type::Up) {
             const bool fire = pressed_ && bounds().contains(e.pos);
             pressed_ = false;
-            invalidate();
-            if (fire && pick_) pick_();
+            if (fire && choose_) choose_();
             return true;
         }
         return false;
     }
     bool onKey(const ui::KeyEvent& e) override {
         if (e.key == SDLK_RETURN || e.key == SDLK_KP_ENTER) {
-            if (pick_) pick_();
+            if (confirm_) confirm_();
+            return true;
+        }
+        if (e.key == SDLK_SPACE) {
+            if (choose_) choose_();
             return true;
         }
         if (e.key == SDLK_DOWN || e.key == SDLK_UP) {
@@ -94,13 +101,16 @@ class ChoiceRow : public ui::Node {
         }
         return false;
     }
-    std::string valueText() const override { return label_ + " | " + what_; }
+    std::string valueText() const override {
+        return std::string(selected ? "(x) " : "( ) ") + label_ + " | " + what_;
+    }
 
   private:
     std::string label_, what_;
     bool pressed_ = false;
-    std::function<void()> pick_;
+    std::function<void()> choose_;
     std::function<void(int)> step_;
+    std::function<void()> confirm_;
 };
 
 }  // namespace
@@ -112,26 +122,28 @@ void openSafeLoadDialog(ui::Root& root, const LoadQuestion& q,
     struct State {
         bool decided = false;
         ui::Checkbox* remember = nullptr;
-        std::vector<ui::Node*> rows;
+        std::vector<RadioRow*> rows;
+        std::vector<LoadChoice> choices;
+        std::size_t chosen = 0;
     };
     auto state = std::make_shared<State>();
+    constexpr float kWidth = 520, kInner = kWidth - 32;
     auto form = std::make_unique<ui::Node>("safeload");
     form->layout.dir = ui::Layout::Dir::Column;
-    form->layout.width = ui::SizeRule::fixed(460);
+    form->layout.width = ui::SizeRule::fixed(kWidth);
     form->layout.height = ui::SizeRule::content();
     form->layout.padding = ui::Insets::all(16);
     form->layout.gap = 8;
     const std::string app(product::kName);
-    constexpr float kInner = 460 - 32;
-    // The title wraps: a long plug-in name takes two lines.
+    // The title: a long plug-in name may take a second line.
     form->emplace<FixedWidthText>("safeload.title",
                                   q.name + " was running when " + app + " closed unexpectedly",
-                                  ui::Font::UiBold, "title", "ink", kInner);
-    // One sentence in ink, then what to keep in mind, quiet.
+                                  ui::Font::UiBold, "body", "ink", kInner);
+    // The question in ink; what to keep in mind sits under the answers, quiet.
     std::string sentence, caveat;
     if (q.stock) {
         sentence = "It comes with " + app + ", so this looks like a fault in " + app +
-                   " rather than in the plug-in.";
+                   " rather than in the plug-in. How should it load this time?";
         caveat = "A report cannot prove what caused it.";
     } else {
         sentence = "This project uses it. How should it load this time?";
@@ -146,53 +158,68 @@ void openSafeLoadDialog(ui::Root& root, const LoadQuestion& q,
     }
     form->emplace<FixedWidthText>("safeload.sentence", sentence, ui::Font::Ui, "small", "ink",
                                   kInner);
-    form->emplace<FixedWidthText>("safeload.caveat", caveat, ui::Font::Ui, "caption", "ink-quiet",
-                                  kInner);
-    auto choose = [state, &root, done](LoadChoice choice) {
+    auto finish = [state, &root, done] {
         if (state->decided) return;
         state->decided = true;
         const bool remember =
             state->remember && state->remember->visible && state->remember->checked();
+        const LoadChoice choice = state->choices[state->chosen];
         root.closePopups();
         if (done) done(choice, remember);
     };
-    const auto step = [state, &root](int by) {
-        const auto at = std::find(state->rows.begin(), state->rows.end(), root.focused());
-        if (at == state->rows.end()) return;
-        const auto next = (at - state->rows.begin()) + by;
-        if (next >= 0 && next < static_cast<long>(state->rows.size()))
-            root.focus(state->rows[static_cast<std::size_t>(next)]);
+    auto choose = [state](std::size_t index) {
+        state->chosen = index;
+        for (std::size_t i = 0; i < state->rows.size(); ++i) {
+            state->rows[i]->selected = i == index;
+            state->rows[i]->invalidate();
+        }
     };
-    // The default is the first: the bridge where one is possible, else disabling.
+    const auto step = [state, &root, choose](int by) {
+        const auto next = static_cast<long>(state->chosen) + by;
+        if (next < 0 || next >= static_cast<long>(state->rows.size())) return;
+        choose(static_cast<std::size_t>(next));
+        root.focus(state->rows[static_cast<std::size_t>(next)]);
+    };
+    auto add = [&](const char* id, LoadChoice choice, const char* label, const std::string& what) {
+        const std::size_t index = state->rows.size();
+        state->choices.push_back(choice);
+        state->rows.push_back(&form->emplace<RadioRow>(
+            id, label, what, [choose, index] { choose(index); }, step, finish));
+    };
+    // The recommended one is chosen at open: a separate process where there can be one, else
+    // disabling (a stock plug-in is never bridged).
     if (q.bridgeable && !q.stock)
-        state->rows.push_back(&form->emplace<ChoiceRow>(
-            "safeload.bridge", "Run it in a separate process",
-            "If it stops again, " + app + " keeps running",
-            [choose] { choose(LoadChoice::Bridge); }, step));
-    state->rows.push_back(&form->emplace<ChoiceRow>(
-        "safeload.disable", "Do not load it this time",
-        "Audio passes through. The project keeps the plug-in",
-        [choose] { choose(LoadChoice::Disable); }, step));
-    state->rows.push_back(&form->emplace<ChoiceRow>(
-        "safeload.normal", "Load it normally",
-        "As before. " + app + " may close again if it is at fault",
-        [choose] { choose(LoadChoice::Normal); }, step));
-    if (q.rememberable()) {
-        const std::string what =
-            q.version.empty() ? "this build of " + q.name : q.name + " " + q.version;
-        state->remember = &form->emplace<ui::Checkbox>("safeload.remember",
-                                                       "Remember my choice for " + what, false);
-    }
+        add("safeload.bridge", LoadChoice::Bridge, "Run it in a separate process",
+            "If it stops again, " + app + " keeps running");
+    add("safeload.disable", LoadChoice::Disable, "Disable it this time",
+        "Audio passes through. The project keeps the plug-in");
+    add("safeload.normal", LoadChoice::Normal, "Load it normally",
+        "As before. " + app + " may close again if it is at fault");
+    choose(0);
+    form->emplace<FixedWidthText>("safeload.caveat", caveat, ui::Font::Ui, "caption", "ink-quiet",
+                                  kInner);
     auto& buttons = form->emplace<ui::Node>("safeload.buttons");
     buttons.layout.dir = ui::Layout::Dir::Row;
     buttons.layout.height = ui::SizeRule::fixed(28);
-    buttons.emplace<ui::Node>("safeload.space");
+    buttons.layout.gap = 8;
+    buttons.layout.align = ui::Layout::Align::Center;
+    if (q.rememberable()) {
+        const std::string what =
+            q.version.empty() ? "this build of " + q.name : q.name + " " + q.version;
+        state->remember = &buttons.emplace<ui::Checkbox>("safeload.remember",
+                                                         "Remember my choice for " + what, false);
+        state->remember->outline = "ink-faint";
+    }
+    auto& space = buttons.emplace<ui::Node>("safeload.space");
+    space.layout.width = ui::SizeRule::fraction();
     // Cancel closes the popup, and the popup's close handler is what cancels.
     auto& cancel =
         buttons.emplace<ui::Button>("safeload.cancel", "Cancel", [&root] { root.closePopups(); });
     cancel.quiet = true;
     cancel.layout.width = ui::SizeRule::fixed(84);
-    ui::Node* first = state->rows.front();
+    auto& go = buttons.emplace<ui::Button>("safeload.continue", "Continue", finish);
+    go.layout.width = ui::SizeRule::fixed(96);
+    RadioRow* first = state->rows.front();
     root.openPopup(std::move(form), {}, ui::Placement::Center, [state, cancelled] {
         if (!state->decided && cancelled) {
             state->decided = true;

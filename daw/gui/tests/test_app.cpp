@@ -4388,6 +4388,7 @@ struct SafeLoadRig {
     std::vector<gui::RememberedLoad> rules;
     std::string build = "same", buildId = "0123abcd";
     bool stock = false, bridgeable = true, listed = true;
+    bool second = false;  // a second suspect plug-in in the same listing
     int checks = 0;
     json::Value lastArgs;  // what the last check asked about
 
@@ -4430,6 +4431,27 @@ struct SafeLoadRig {
                 suspect["incidents"] = std::move(incidents);
                 p["suspect"] = std::move(suspect);
                 plugins.push_back(std::move(p));
+                if (second) {
+                    auto q = json::Value::object();
+                    q["format"] = "clap";
+                    q["id"] = "com.acme.second";
+                    q["name"] = "Second";
+                    q["mode"] = "normal";
+                    q["stock"] = false;
+                    q["bridgeable"] = true;
+                    auto resolved2 = json::Value::object();
+                    resolved2["name"] = "Second Verb";
+                    resolved2["version"] = "2.0";
+                    q["resolved"] = std::move(resolved2);
+                    auto suspect2 = json::Value::object();
+                    suspect2["build"] = "same";
+                    suspect2["attribution"] = "fault_in_image";
+                    auto incidents2 = json::Value::array();
+                    incidents2.push_back(json::Value("bb22"));
+                    suspect2["incidents"] = std::move(incidents2);
+                    q["suspect"] = std::move(suspect2);
+                    plugins.push_back(std::move(q));
+                }
             }
             out["plugins"] = std::move(plugins);
             return out;
@@ -4440,7 +4462,15 @@ struct SafeLoadRig {
             s.pluginId = "com.acme.canary";
             s.buildId = buildId;
             s.incidents = {"aa11"};
-            return std::vector<diagnostics::Suspect>{s};
+            std::vector<diagnostics::Suspect> all{s};
+            if (second) {
+                diagnostics::Suspect t = s;
+                t.pluginId = "com.acme.second";
+                t.buildId = "second-build";
+                t.incidents = {"bb22"};
+                all.push_back(t);
+            }
+            return all;
         };
         load.override_ = [this](const std::string& id, const std::string& mode) -> Status {
             overrides.emplace_back(id, mode);
@@ -4460,6 +4490,11 @@ struct SafeLoadRig {
         files = std::make_unique<gui::FileActions>(*a.root, *a.actions, *a.dispatcher, *a.app, a.ui,
                                                    a.window->sdl(), [](auto task) { task(); });
         files->setSafeLoad(&load);
+    }
+    // Choose a row of the question and go on with it (a click chooses; Continue acts).
+    void pick(const char* row) {
+        REQUIRE(a.root->click(row));
+        REQUIRE(a.root->click("safeload.continue"));
     }
     void open() {
         files->openPath(file);
@@ -4499,6 +4534,31 @@ TEST_CASE("safe-load: a suspect plug-in is asked about before File > Open loads,
     CHECK(r.a.root->find("safeload")->bounds().bottom() >=
           r.a.root->find("safeload.cancel")->bounds().bottom());
 
+    // A radio list: the recommended one chosen at open, one boxed Continue, the box on its line.
+    CHECK(r.a.root->find("safeload.bridge")->valueText().rfind("(x) ", 0) == 0);
+    CHECK(r.a.root->find("safeload.disable")->valueText().rfind("( ) ", 0) == 0);
+    CHECK(r.a.root->find("safeload.normal")->valueText().rfind("( ) ", 0) == 0);
+    CHECK(r.a.root->find("safeload.disable")->valueText().find("Disable it this time") !=
+          std::string::npos);
+    CHECK(r.a.root->find("safeload.continue"));
+    CHECK(std::abs(r.a.root->find("safeload.remember")->bounds().y -
+                   r.a.root->find("safeload.continue")->bounds().y) < 6.0f);
+    CHECK(r.a.root->find("safeload.caveat")->bounds().y >
+          r.a.root->find("safeload.normal")->bounds().y);  // under the options
+    CHECK(r.a.root->find("safeload")->bounds().w == doctest::Approx(520.0));
+
+    SUBCASE("a click only chooses; Continue acts") {
+        REQUIRE(r.a.root->click("safeload.normal"));
+        CHECK(r.a.root->find("safeload.normal")->valueText().rfind("(x) ", 0) == 0);
+        CHECK(r.a.root->find("safeload.bridge")->valueText().rfind("( ) ", 0) == 0);
+        CHECK(r.overrides.empty());
+        CHECK(r.settled.empty());
+        CHECK(r.a.root->find("safeload"));  // still asking
+        REQUIRE(r.a.root->click("safeload.continue"));
+        r.a.root->frame(false);
+        CHECK(r.overrides.empty());
+        CHECK(r.settled.size() == 1);  // Normal, as chosen
+    }
     SUBCASE("Enter takes the default: a separate process, once") {
         r.a.root->key(SDLK_RETURN, 0);
         r.a.root->frame(false);
@@ -4511,6 +4571,7 @@ TEST_CASE("safe-load: a suspect plug-in is asked about before File > Open loads,
     SUBCASE("Down then Enter disables") {
         r.a.root->key(SDLK_DOWN, 0);
         CHECK(r.a.root->focused() == r.a.root->find("safeload.disable"));
+        CHECK(r.a.root->find("safeload.disable")->valueText().rfind("(x) ", 0) == 0);
         r.a.root->key(SDLK_RETURN, 0);
         r.a.root->frame(false);
         REQUIRE(r.overrides.size() == 1);
@@ -4522,7 +4583,7 @@ TEST_CASE("safe-load: a suspect plug-in is asked about before File > Open loads,
         CHECK(r.a.root->focused() == r.a.root->find("safeload.bridge"));
     }
     SUBCASE("Normal settles the reports and overrides nothing") {
-        REQUIRE(r.a.root->click("safeload.normal"));
+        r.pick("safeload.normal");
         r.a.root->frame(false);
         CHECK(r.overrides.empty());
         REQUIRE(r.settled.size() == 1);
@@ -4570,7 +4631,7 @@ TEST_CASE("safe-load: nothing suspect, nothing asked; a stock plug-in has two ch
               std::string::npos);
         CHECK(r.a.root->focused() == r.a.root->find("safeload.disable"));
         r.a.snapshot("safe-load-dialog-stock.png");
-        REQUIRE(r.a.root->click("safeload.disable"));
+        r.pick("safeload.disable");
         r.a.root->frame(false);
         REQUIRE(r.overrides.size() == 1);
         CHECK(r.overrides[0].second == "disable");
@@ -4591,7 +4652,7 @@ TEST_CASE(
     SUBCASE("a choice is kept and applied the next time without a question") {
         ask();
         REQUIRE(r.a.root->click("safeload.remember"));
-        REQUIRE(r.a.root->click("safeload.disable"));
+        r.pick("safeload.disable");
         r.a.root->frame(false);
         REQUIRE(r.rules.size() == 1);
         CHECK(r.rules[0].mode == "disable");
@@ -4623,7 +4684,7 @@ TEST_CASE(
         CHECK(r.a.root->find("safeload"));
         CHECK(r.rules.size() == 1);  // nothing changes until the question is answered
         SUBCASE("answered") {
-            REQUIRE(r.a.root->click("safeload.disable"));
+            r.pick("safeload.disable");
             r.a.root->frame(false);
             CHECK(r.rules.empty());
         }
@@ -4647,7 +4708,7 @@ TEST_CASE(
         ask();
         REQUIRE(r.a.root->find("safeload"));
         CHECK_FALSE(r.a.root->find("safeload.remember"));
-        REQUIRE(r.a.root->click("safeload.disable"));
+        r.pick("safeload.disable");
         r.a.root->frame(false);
         CHECK(r.rules.empty());
     }
@@ -4704,7 +4765,7 @@ TEST_CASE(
         CHECK(r.name() == "Later");
     }
     SUBCASE("a choice loads it") {
-        REQUIRE(r.a.root->click("safeload.disable"));
+        r.pick("safeload.disable");
         r.a.root->frame(false);
         CHECK(r.name() == "Open now");  // the template holds the project as it was saved
         REQUIRE(r.overrides.size() == 1);
@@ -4747,12 +4808,25 @@ TEST_CASE(
     CHECK(r.a.app->head().project->name == "Saved");  // nothing loaded while it asks
 
     SUBCASE("a choice recovers it") {
-        REQUIRE(r.a.root->click("safeload.disable"));
+        r.pick("safeload.disable");
         r.a.root->frame(false);
         REQUIRE(r.overrides.size() == 1);
         CHECK(r.overrides[0].second == "disable");
         CHECK(r.a.app->head().project->name == "After the save");
         CHECK(r.a.root->find("file.recovered"));
+    }
+    SUBCASE("the autosave recovered is the one the question was asked about") {
+        // An autosave newer than the offered one lands while the question is open (the project
+        // changed and a minute passed): choosing recovers the file the check read, not that one.
+        REQUIRE(r.lastArgs.find("autosave_file"));
+        const std::string asked = r.lastArgs.find("autosave_file")->asString();
+        CHECK(std::filesystem::path(asked).filename() == r.a.app->newerAutosave(r.file).filename());
+        exec("project.set", R"({"name":"Even later"})");
+        r.a.app->setFixedClock(1'125'000);
+        r.a.app->tick();
+        r.pick("safeload.disable");
+        r.a.root->frame(false);
+        CHECK(r.a.app->head().project->name == "After the save");
     }
     SUBCASE("Cancel recovers nothing and leaves the file's project open") {
         REQUIRE(r.a.root->click("safeload.cancel"));
@@ -4761,6 +4835,48 @@ TEST_CASE(
         CHECK(r.overrides.empty());
         CHECK_FALSE(r.a.root->find("file.recovered"));
     }
+}
+
+TEST_CASE("safe-load: two suspects on a recovery path are asked one after the other") {
+    SafeLoadRig r;
+    r.listed = false;
+    auto exec = [&](const char* name, const char* args) {
+        auto done = r.a.dispatcher->execute({name, json::parse(args).value(), {}});
+        REQUIRE_MESSAGE(done, (done ? std::string() : done.error().toString()));
+    };
+    r.a.app->setFixedClock(1'000'000);
+    exec("project.set", R"({"name":"Saved"})");
+    REQUIRE(r.a.app->save(r.file));
+    exec("project.set", R"({"name":"After the save"})");
+    r.a.app->setFixedClock(1'061'000);
+    r.a.app->tick();
+    r.files->openPath(r.file);
+    r.a.root->frame(false);
+    REQUIRE(r.a.root->find("file.recover.autosave.open"));
+    r.listed = true;
+    r.second = true;
+    REQUIRE(r.a.root->click("file.recover.autosave.open"));
+    r.a.root->frame(false);
+    if (r.a.root->find("file.confirm.discard")) {
+        REQUIRE(r.a.root->click("file.confirm.discard"));
+        r.a.root->frame(false);
+    }
+    // The first plug-in's question; nothing applies or loads yet.
+    REQUIRE(r.a.root->find("safeload"));
+    CHECK(r.a.root->find("safeload.title")->valueText().find("Canary Verb") == 0);
+    r.pick("safeload.bridge");
+    r.a.root->frame(false);
+    // The second's takes its place; still nothing loaded.
+    REQUIRE(r.a.root->find("safeload"));
+    CHECK(r.a.root->find("safeload.title")->valueText().find("Second Verb") == 0);
+    CHECK(r.a.app->head().project->name == "Saved");
+    CHECK(r.overrides.empty());
+    r.pick("safeload.disable");
+    r.a.root->frame(false);
+    REQUIRE(r.overrides.size() == 2);
+    CHECK(r.overrides[0] == std::pair<std::string, std::string>{"com.acme.canary", "bridge"});
+    CHECK(r.overrides[1] == std::pair<std::string, std::string>{"com.acme.second", "disable"});
+    CHECK(r.a.app->head().project->name == "After the save");
 }
 
 TEST_CASE("safe-load: recovering an earlier run's session asks first") {
@@ -4801,7 +4917,7 @@ TEST_CASE("safe-load: recovering an earlier run's session asks first") {
     CHECK(r.name() == "Open now");
 
     SUBCASE("a choice recovers it") {
-        REQUIRE(r.a.root->click("safeload.bridge"));
+        r.pick("safeload.bridge");
         r.a.root->frame(false);
         REQUIRE(r.overrides.size() == 1);
         CHECK(r.overrides[0].second == "bridge");
