@@ -1954,6 +1954,11 @@ Bridged wake and clear forwarding need the control-protocol extension below.
 
 Rescan requests rebuild an immutable plan from the current parameter list and
 schema; envelopes are resolved again, including their value-domain conversion.
+A rescan of values or their text only (`CLAP_PARAM_RESCAN_VALUES`, `_TEXT`)
+rebuilds it only when the FX has an active envelope, whose values the new
+plan sends again, or had automation cleared, which the rescan re-enables: a
+plan holds no parameter values (ADR-0092). A rescan without flags counts as
+one of the list.
 Missing/read-only parameters stop receiving events and produce a warning naming
 the FX and parameter. Clear `ALL`/`AUTOMATIONS` suppresses only the matching
 parameter's automation until a subsequent rescan or explicit engine load. Clear

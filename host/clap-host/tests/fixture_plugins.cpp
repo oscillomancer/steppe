@@ -1069,6 +1069,8 @@ struct EdgeControl {
     // State beyond the parameters (a sampler's file): its last byte, then
     // clap.state mark_dirty, as an editor would.
     void (*markDirty)(const clap_plugin_t*, std::uint8_t);
+    // clap.params rescan with these flags, the parameter list unchanged.
+    void (*rescanFlags)(const clap_plugin_t*, std::uint32_t);
 };
 void edgeRequestProcess(const clap_plugin_t* pl) { E(pl)->host->request_process(E(pl)->host); }
 void edgeRescan(const clap_plugin_t* pl, bool removed) {
@@ -1089,8 +1091,13 @@ void edgeMarkDirty(const clap_plugin_t* pl, std::uint8_t value) {
         E(pl)->host->get_extension(E(pl)->host, CLAP_EXT_STATE));
     hs->mark_dirty(E(pl)->host);
 }
-const EdgeControl kEdgeControl = {edgeRequestProcess, edgeRescan, edgeClear, edgeRestart,
-                                  edgeMarkDirty};
+void edgeRescanFlags(const clap_plugin_t* pl, std::uint32_t flags) {
+    const auto* hp = static_cast<const clap_host_params_t*>(
+        E(pl)->host->get_extension(E(pl)->host, CLAP_EXT_PARAMS));
+    hp->rescan(E(pl)->host, flags);
+}
+const EdgeControl kEdgeControl = {edgeRequestProcess, edgeRescan,    edgeClear,
+                                  edgeRestart,        edgeMarkDirty, edgeRescanFlags};
 void CLAP_ABI edgeMain(const clap_plugin_t* pl) {
     ++E(pl)->mainCalls;
     if (E(pl)->config[0] == 44) {

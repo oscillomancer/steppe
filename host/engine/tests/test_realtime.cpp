@@ -4431,6 +4431,8 @@ struct EngineEdgeControl {
     void (*rescan)(const clap_plugin_t*, bool);
     void (*clear)(const clap_plugin_t*, clap_id, clap_param_clear_flags);
     void (*restart)(const clap_plugin_t*);
+    void (*markDirty)(const clap_plugin_t*, std::uint8_t);
+    void (*rescanFlags)(const clap_plugin_t*, std::uint32_t);
 };
 const EngineEdgeControl& engineEdgeControl(host::Instance& instance) {
     const auto* control = static_cast<const EngineEdgeControl*>(
@@ -4756,6 +4758,68 @@ TEST_CASE("main servicing publishes a new plan for parameter clear and rescan") 
     CHECK(std::any_of(engine.warnings().begin(), engine.warnings().end(), [](const auto& warning) {
         return warning.find("orphaned automation parameter 7") != std::string::npos;
     }));
+    engine.stop();
+}
+
+TEST_CASE("a plug-in's values rescan publishes a plan only when automation depends on it") {
+    // ADR-0092: a plan holds a plug-in's parameter list, not its values. A
+    // values or text rescan (a preset chosen in its editor) reloads only if
+    // it re-enables automation the plug-in had cleared, or the FX has an
+    // active envelope, whose values a new plan sends again.
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    Engine engine(pool, media, {.anticipative = false});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 64}));
+    auto session = edgeSession(12);
+    const auto fx = session.fx.begin()->id;
+    REQUIRE(engine.load(session));
+    backend.run(1);
+    auto* instance = pool.find(fx);
+    REQUIRE(instance);
+    const auto& control = engineEdgeControl(*instance);
+    // Each rescan is serviced; `reloads`: whether that published a plan.
+    auto rescan = [&](std::uint32_t flags, bool reloads) {
+        CAPTURE(flags);
+        const auto generation = engine.planGeneration();
+        control.rescanFlags(instance->raw(), flags);
+        engine.service();
+        backend.run(1);
+        CHECK(engine.planGeneration() == generation + (reloads ? 1 : 0));
+    };
+    rescan(CLAP_PARAM_RESCAN_VALUES, false);
+    rescan(CLAP_PARAM_RESCAN_VALUES | CLAP_PARAM_RESCAN_TEXT, false);
+    rescan(CLAP_PARAM_RESCAN_TEXT, false);
+    rescan(CLAP_PARAM_RESCAN_INFO, true);
+    rescan(CLAP_PARAM_RESCAN_ALL, true);
+    rescan(0, true);  // no flags: taken as the list
+    // Automation the plug-in cleared plays again after any rescan: once.
+    const auto generation = engine.planGeneration();
+    control.clear(instance->raw(), 7, CLAP_PARAM_CLEAR_AUTOMATIONS);
+    engine.service();
+    backend.run(1);
+    REQUIRE(engine.planGeneration() == generation + 1);
+    REQUIRE(pool.automationCleared(fx, 7));
+    rescan(CLAP_PARAM_RESCAN_VALUES, true);
+    CHECK_FALSE(pool.automationCleared(fx, 7));
+    rescan(CLAP_PARAM_RESCAN_VALUES, false);
+    // An FX with an active envelope: its values are sent again.
+    model::EditTxn edit(session, 2);
+    model::Envelope envelope;
+    envelope.target = {fx, "7"};
+    envelope.points = {{0, 2, model::PointShape::Linear, 0}};
+    const auto env = edit.create(envelope);
+    session = edit.commit().value();
+    REQUIRE(engine.load(session));
+    backend.run(1);
+    rescan(CLAP_PARAM_RESCAN_VALUES, true);
+    model::EditTxn off(session, 3);
+    off.modify<model::Envelope>(env, [](auto& e) { e.active = false; });
+    session = off.commit().value();
+    REQUIRE(engine.load(session));
+    backend.run(1);
+    rescan(CLAP_PARAM_RESCAN_VALUES, false);  // an inactive envelope sends nothing
+    CHECK(engine.processErrors() == 0);
     engine.stop();
 }
 

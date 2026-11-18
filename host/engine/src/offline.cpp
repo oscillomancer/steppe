@@ -487,6 +487,11 @@ void InstancePool::acknowledgeOutputState(Id id, const std::string& hash) {
     }
 }
 
+bool InstancePool::automationCleared(Id id) const {
+    const auto it = instances_.find(id);
+    return it != instances_.end() && !it->second.clearedAutomation.empty();
+}
+
 bool InstancePool::anyAutomationCleared() const {
     return std::any_of(instances_.begin(), instances_.end(),
                        [](const auto& entry) { return !entry.second.clearedAutomation.empty(); });

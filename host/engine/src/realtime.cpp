@@ -1300,15 +1300,22 @@ void Engine::service() {
             serviced.insert(instance);
             const bool active = instance->active();
             const bool restarting = plugins_.restarting(fx.id);
+            const bool cleared = plugins_.automationCleared(fx.id);
             auto notes = plugins_.service(fx.id);
             if (notes.stateDirty &&
                 std::find(dirtyStates_.begin(), dirtyStates_.end(), fx.id) == dirtyStates_.end())
                 dirtyStates_.push_back(fx.id);
             // A restart waiting on processing takes the plug-in off the
             // executors; once restarted, its (new) latency is compensated.
-            reload |= notes.paramsRescan || !notes.paramsClear.empty() ||
-                      notes.restartError.has_value() || active != instance->active() ||
-                      notes.latencyChanged || restarting != plugins_.restarting(fx.id);
+            // A values rescan matters only to automation (ADR-0092): one the
+            // plug-in had cleared plays again, and an envelope's values are
+            // sent again over what the plug-in changed.
+            const bool rescan =
+                detail::rescansParamList(notes) ||
+                (notes.paramsRescan && (cleared || detail::automated(*latest_, fx.id)));
+            reload |= rescan || !notes.paramsClear.empty() || notes.restartError.has_value() ||
+                      active != instance->active() || notes.latencyChanged ||
+                      restarting != plugins_.restarting(fx.id);
             drainIdle(*instance, fx.id, publishedGen_);
         }
         // Replaced instances still belong to older executor plans. Keep their

@@ -191,8 +191,7 @@ bool Engine::loadPatches(const model::Session& session, const std::filesystem::p
         // A frozen track's FX is in no plan; its instance waits to be pruned.
         if (model::frozenOwner(session, id) || !plugins_.patchable(id, *session.fx.find(id)))
             return false;
-        for (const auto& envelope : session.envelopes)
-            if (envelope.value->target.object == id && envelope.value->active) return false;
+        if (detail::automated(session, id)) return false;
     }
     // From here the patches are applied. Whatever a plug-in reports that a
     // plan holds (latency, parameters, ports, activation, a restart) makes
@@ -219,15 +218,10 @@ bool Engine::loadPatches(const model::Session& session, const std::filesystem::p
         if (notes->stateDirty &&
             std::find(dirtyStates_.begin(), dirtyStates_.end(), id) == dirtyStates_.end())
             dirtyStates_.push_back(id);
-        // A plan holds the parameter list, not the values: a rescan of values
-        // or their text, which a plug-in reports after a patch, is not one.
-        constexpr std::uint32_t kValues = CLAP_PARAM_RESCAN_VALUES | CLAP_PARAM_RESCAN_TEXT;
-        const bool listChanged =
-            notes->paramsRescan &&
-            (notes->paramsRescanFlags == 0 || (notes->paramsRescanFlags & ~kValues) != 0);
-        if (listChanged || !notes->paramsClear.empty() || notes->restartError ||
-            notes->latencyChanged || plugins_.restarting(id) || active != instance.active() ||
-            before != ports())
+        // A rescan of values or their text, reported after a patch, is not one.
+        if (detail::rescansParamList(*notes) || !notes->paramsClear.empty() ||
+            notes->restartError || notes->latencyChanged || plugins_.restarting(id) ||
+            active != instance.active() || before != ports())
             return false;
     }
     latest_ = std::make_shared<const model::Session>(session);

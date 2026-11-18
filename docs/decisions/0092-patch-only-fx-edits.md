@@ -2,6 +2,12 @@
 
 **Status:** Accepted, 2026-11-17. Amends the scope of ADR-0060.
 
+*Note, 2026-11-18:* `Engine::service`'s notification reload now treats a
+plug-in's rescan the same way. A values or text rescan publishes a plan
+only when the FX has an active envelope or had automation cleared
+(`detail::rescansParamList`, `detail::automated`, `plan.h`), so a preset
+chosen in a stock plug-in's editor no longer costs a compile.
+
 Contracts: `specs/engine.md` §1.6.
 
 ## Context

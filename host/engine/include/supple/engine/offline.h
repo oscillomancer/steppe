@@ -117,8 +117,9 @@ class InstancePool {
     std::uint32_t rememberedLatency(model::Id id) const;
     void rememberLatency(model::Id id, std::uint32_t latency);  // what a plan compensated
     bool automationCleared(model::Id id, std::uint32_t param) const;
-    bool anyAutomationCleared() const;   // for any instance
-    void resetAutomation(model::Id id);  // explicit model reload
+    bool automationCleared(model::Id id) const;  // for any of its parameters
+    bool anyAutomationCleared() const;           // for any instance
+    void resetAutomation(model::Id id);          // explicit model reload
     // Main thread, only after applying plug-in-originated values to its model
     // patch: acknowledge that patch without sending it back on the next get().
     void acknowledgeOutputPatch(model::Id id, const json::Value& patch);
