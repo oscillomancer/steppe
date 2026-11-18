@@ -594,7 +594,7 @@ instructions are in `docs/guides/installing.md`.
   edges, an I-beam over text, the move cursor on a thing being moved, in
   the rack too; a thing carried to a drop (a plug-in, a strip, a track
   row, a rack module) shows the move cursor where it would land and "not
-  allowed" where a release would do nothing, as does a routing matrix
+  allowed" over a place that refuses it, as does a routing matrix
   cell that cannot be connected. A drag held at the edge of the arrangement scrolls the view
   and takes the thing in hand with it; so do a note held at the piano
   roll's edge, a strip, plug-in or output held at the edge of the mixer's

@@ -587,10 +587,11 @@ ui::Cursor TcpPanel::Row::cursorAt(ui::Point p) const {
     const bool grip = track_.has_value() && panel_.cb_.resizeTrack &&
                       p.y >= bounds().bottom() - TcpRowGeometry::kResizeGrip;
     if (resizing_) return ui::Cursor::ResizeVertical;
-    // A row in hand: the move cursor where a release would move it, "not
-    // allowed" where it would stay as it is.
+    // A row in hand: the move cursor where a release would move it and over
+    // its own place, "not allowed" elsewhere when it has nowhere to go (no
+    // other row of its kind beside it).
     if (const auto& r = panel_.reorder_; r && r->moved && track_ && r->track == *track_)
-        return r->moves.empty() ? ui::Cursor::NotAllowed : ui::Cursor::Move;
+        return r->moves.empty() && !r->home ? ui::Cursor::NotAllowed : ui::Cursor::Move;
     return grip ? ui::Cursor::ResizeVertical : ui::Cursor::Arrow;
 }
 
@@ -891,6 +892,8 @@ void TcpPanel::moveReorder(ui::Point p) {
 void TcpPanel::updateReorder(ui::Point p) {
     Reorder& r = *reorder_;
     r.moves.clear();
+    const auto own = layout_.indexOf(r.track);
+    r.home = own && rowRect(*own).contains({rowRect(*own).x, p.y});  // still over its own row
     auto selected = [this](model::Id id) { return cb_.selected && cb_.selected(id); };
     const std::vector<model::Id> group = reorderGroup(session_, r.track, selected);
     const model::Track* t = session_.tracks.find(r.track);
@@ -923,6 +926,7 @@ void TcpPanel::updateReorder(ui::Point p) {
         markerY = *end;
     }
     r.moves = reorderMoves(session_, r.track, selected, before);
+    r.home = r.home || r.moves.empty();  // or over the slot it is already in
     r.markerY = markerY;
 }
 

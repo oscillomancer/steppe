@@ -60,6 +60,13 @@ void PluginDrag::end() {
     root_.damageAll();
 }
 
+// The pointer while something is carried: the move cursor where it would
+// land and over the place it came from, "not allowed" where nothing takes it.
+void PluginDrag::showCursor(bool lands, ui::Point at) {
+    const bool atHome = home && home().contains(at);
+    root_.setDragCursor(lands || atHome ? ui::Cursor::Move : ui::Cursor::NotAllowed);
+}
+
 void PluginDrag::drag(const std::string& plugin, const std::string& name, ui::DragPhase phase,
                       ui::Point at) {
     drag(name.empty() ? plugin : name, phase, at, [this, plugin](const model::Id& track) {
@@ -87,7 +94,7 @@ void PluginDrag::drag(const std::string& label, ui::DragPhase phase, ui::Point a
     for (const Finder& find : finders_)
         if ((d.target = find(at))) break;
     if (phase != ui::DragPhase::End) {
-        root_.setDragCursor(d.target ? ui::Cursor::Move : ui::Cursor::NotAllowed);
+        showCursor(d.target.has_value(), at);
         root_.requestAnimationFrame();
         return;
     }
@@ -110,7 +117,7 @@ void PluginDrag::dragTo(const std::string& label, ui::DragPhase phase, ui::Point
     d.pos = at;
     d.place = where ? where(at) : std::nullopt;
     if (phase != ui::DragPhase::End) {
-        root_.setDragCursor(d.place ? ui::Cursor::Move : ui::Cursor::NotAllowed);
+        showCursor(d.place.has_value(), at);
         root_.requestAnimationFrame();
         return;
     }

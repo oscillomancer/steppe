@@ -1621,20 +1621,24 @@ TEST_CASE("rack window: patches have a view of their own, searchable, with a car
     CHECK(search->placeholder() == "Search modules");
     CHECK(search->text().empty());
     CHECK(f.racks->browserShows().size() > 40);
-    // A module type carried out of the browser: "not allowed" until it is
-    // over the space, the move cursor there, and let go over the list it
-    // adds nothing and the pointer is the nodes' again.
+    // A module type carried out of the browser: the move cursor over the
+    // list it came from and over the space, "not allowed" where nothing
+    // takes it; let go over the list it adds nothing and the pointer is the
+    // nodes' again.
     const auto modules = f.app->head().modules.size();
     const auto type = f.racks->browserRowAt(f.racks->browserShows()[0]);
     REQUIRE(type);
     f.pointer(ui::PointerEvent::Type::Move, *type, 0);
     f.pointer(ui::PointerEvent::Type::Down, *type);
     f.pointer(ui::PointerEvent::Type::Move, {type->x + 3, type->y + 6}, 0);
-    CHECK(f.r().cursor() == ui::Cursor::NotAllowed);
+    CHECK(f.r().cursor() == ui::Cursor::Move);  // over its own list: not refused
     f.pointer(ui::PointerEvent::Type::Move, {sb.x + sb.w / 2, sb.y + sb.h / 2}, 0);
     CHECK(f.r().cursor() == ui::Cursor::Move);
-    f.pointer(ui::PointerEvent::Type::Move, {type->x + 3, type->y + 6}, 0);
+    // Above the space, in the window's top row, nothing takes a module.
+    f.pointer(ui::PointerEvent::Type::Move, {sb.x + sb.w / 2, sb.y - 6}, 0);
     CHECK(f.r().cursor() == ui::Cursor::NotAllowed);
+    f.pointer(ui::PointerEvent::Type::Move, {type->x + 3, type->y + 6}, 0);
+    CHECK(f.r().cursor() == ui::Cursor::Move);
     f.pointer(ui::PointerEvent::Type::Up, {type->x + 3, type->y + 6});
     CHECK_FALSE(f.r().dragCursor());
     CHECK(f.app->head().modules.size() == modules);

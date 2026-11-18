@@ -3877,8 +3877,16 @@ TEST_CASE("a plugin dragged from the browser lands on the track row or strip und
     CHECK_FALSE(a.root->dragCursor());  // the pointer is the nodes' again
     CHECK(a.root->overlay().children().size() == overlays);
     CHECK(drops.empty());
-    // Cancelled over a track: the same.
+    // Cancelled over a track: the same. Over the place the thing was picked
+    // from (the browser gives it) the pointer is the move cursor: its own
+    // place refuses nothing.
     drag.drag("com.example.none", "Nothing", ui::DragPhase::Begin, nowhere);
+    CHECK(a.root->dragCursor() == ui::Cursor::NotAllowed);
+    drag.home = [&] { return a.root->find("transport.play")->bounds(); };
+    drag.drag("com.example.none", "Nothing", ui::DragPhase::Move, nowhere);
+    CHECK_FALSE(drag.view().target);
+    CHECK(a.root->dragCursor() == ui::Cursor::Move);
+    drag.home = {};
     drag.drag("com.example.none", "Nothing", ui::DragPhase::Move, centre(lane));
     CHECK(a.root->dragCursor() == ui::Cursor::Move);
     drag.drag("com.example.none", "Nothing", ui::DragPhase::Cancel, {});

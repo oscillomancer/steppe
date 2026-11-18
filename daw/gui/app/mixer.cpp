@@ -1599,6 +1599,7 @@ void Mixer::dragSend(const std::string& track, DragPhase phase, ui::Point p) {
     // Busses and masters take sends; a channel takes only hardware input. A
     // strip the track already sends to takes no second one.
     const Strip* over = stripAt(p);
+    d.home = over && over->track == track;  // still over the strip it leaves
     const auto from = model::Id::parse(track),
                to = over ? model::Id::parse(over->track) : std::nullopt;
     if (over && over->track != track && over->type != "channel" && from && to &&
@@ -1618,6 +1619,7 @@ void Mixer::dragSend(const std::string& track, DragPhase phase, ui::Point p) {
 void Mixer::resolveStripDrop() {
     DragView& d = *drag_;
     d.drop = DragView::Drop::None;
+    d.home = false;
     d.moves.clear();
     const model::Session& s = app_.head();
     const auto dragged = model::Id::parse(d.track);
@@ -1667,6 +1669,7 @@ void Mixer::resolveStripDrop() {
         d.moves = views::reorderMoves(s, *dragged, selected, before);
         if (!d.moves.empty()) index = 0;
     }
+    d.home = !index;  // among its own kind, where it already is
     if (!index) return;
     float x = gap < group.size() ? group[gap]->node->bounds().x - 2
                                  : group.back()->node->bounds().right() + 1;
@@ -1686,6 +1689,7 @@ void Mixer::resolveStripDrop() {
 void Mixer::resolveFxDrop() {
     DragView& d = *drag_;
     d.drop = DragView::Drop::None;
+    d.home = false;
     const Strip* home = nullptr;
     for (const Strip& st : strips_)
         if (st.track == d.track) home = &st;
@@ -1713,6 +1717,7 @@ void Mixer::resolveFxDrop() {
     if (!t) return;
     const std::size_t chainGap = gap < slots.size() ? slots[gap]->chainIndex : t->chain.size();
     const auto index = chainMoveIndex(dragged->chainIndex, chainGap);
+    d.home = !index;  // in its own chain, where it already is
     if (!index) return;
     const float y =
         gap < slots.size() ? slots[gap]->bounds().y - 2 : slots.back()->bounds().bottom() + 0.5f;
@@ -1809,11 +1814,12 @@ void Mixer::openFxRename(model::Id fx, const ui::Rect& slot) {
     root_.focus(edit);
 }
 
-// The pointer while a strip, a plug-in or a send is in hand: the move cursor
-// where a release would do something, "not allowed" where it would not.
+// The pointer while a strip, a plug-in or a send is in hand: the move
+// cursor where a release would do something and over the thing's own place,
+// "not allowed" over a place that refuses it.
 void Mixer::showDragCursor() {
-    root_.setDragCursor(drag_->drop == DragView::Drop::None ? ui::Cursor::NotAllowed
-                                                            : ui::Cursor::Move);
+    const bool refused = drag_->drop == DragView::Drop::None && !drag_->home;
+    root_.setDragCursor(refused ? ui::Cursor::NotAllowed : ui::Cursor::Move);
 }
 
 // Edge scroll (gui.md §4.4): a strip, a plug-in or an output held within

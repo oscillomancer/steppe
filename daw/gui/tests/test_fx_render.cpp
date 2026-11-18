@@ -1282,6 +1282,11 @@ TEST_CASE("the side panel's browser has kinds: saved FX chains go on tracks by A
     CHECK(drag.view().active);
     CHECK(drag.view().label == "Vocal bus");
     CHECK_FALSE(drag.view().target);
+    // Still over the Browser it came from, the pointer is the move cursor:
+    // its own place refuses nothing.
+    f.root->pointer({ui::PointerEvent::Type::Move, {row.x + 8, row.y}, 1});
+    CHECK_FALSE(drag.view().target);
+    CHECK(f.root->cursor() == ui::Cursor::Move);
     f.root->pointer({ui::PointerEvent::Type::Move, {50, 50}, 1});
     REQUIRE(drag.view().target);
     CHECK(drag.view().target->track == two);

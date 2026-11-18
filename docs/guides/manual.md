@@ -372,7 +372,7 @@ and up-and-down arrows at a track row's lower edge and at the top edge of
 the mixer and the MIDI editor, which set their height. While you carry
 something to drop it (a plug-in out of the browser, a mixer strip, a track
 row, a module for a rack), the pointer is a four-way arrow where letting go
-would put it, and a "not allowed" sign where letting go would do nothing.
+would put it, and a "not allowed" sign over a place that will not take it.
 The routing matrix shows the same sign over a cell that cannot be connected.
 
 To drag something further than the window shows, hold it at the edge of

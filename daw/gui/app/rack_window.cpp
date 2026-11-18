@@ -928,10 +928,11 @@ void RackWindow::open(std::optional<model::Id> rack) {
     bh.dragOver = [this](const std::string& name, std::optional<ui::Point> at) {
         const bool lands = space_ && at && space_->bounds().contains(*at);
         if (space_) space_->dragTypeOver(name, lands ? at : std::nullopt);
-        // In hand: the move cursor over the space, "not allowed" elsewhere.
+        // In hand: the move cursor over the space and over the list it came
+        // from (no point: back over the list), "not allowed" elsewhere.
         root().setDragCursor(
             name.empty() ? std::nullopt
-                         : std::optional(lands ? ui::Cursor::Move : ui::Cursor::NotAllowed));
+                         : std::optional(lands || !at ? ui::Cursor::Move : ui::Cursor::NotAllowed));
     };
     bh.drop = [this](const std::string& type, ui::Point at) {
         if (space_ && space_->bounds().contains(at)) (void)addModule(type, space_->toSpace(at));

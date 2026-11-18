@@ -621,11 +621,16 @@ TEST_CASE("mixer: a click on a plug-in still opens it; a drag within the chain r
     const ui::Point again = f.centre(f.node("mixer.fx." + p1));
     f.drag(again, {again.x, f.node("mixer.fx." + p2)->bounds().y - 1});
     CHECK(f.chain(a) == std::vector<std::string>{p1, p2, p3});
-    // Dropped where it already is: nothing.
+    // Dropped where it already is: nothing, and the pointer does not call
+    // its own place refused.
     f.refresh();
     const auto steps = f.steps();
     const ui::Point same = f.centre(f.node("mixer.fx." + p2));
-    f.drag(same, {same.x + 20, same.y});
+    f.drag(same, {same.x + 20, same.y}, false);
+    CHECK(f.mixer->drag().drop == gui::Mixer::DragView::Drop::None);
+    CHECK(f.mixer->drag().home);
+    CHECK(f.root->cursor() == ui::Cursor::Move);
+    f.pointer(ui::PointerEvent::Type::Up, {same.x + 20, same.y});
     CHECK(f.steps() == steps);
     // Escape cancels the drag, and the release after it is no click.
     const ui::Point esc = f.centre(f.node("mixer.fx." + p1));
@@ -637,8 +642,12 @@ TEST_CASE("mixer: a click on a plug-in still opens it; a drag within the chain r
     CHECK(f.chain(a) == std::vector<std::string>{p1, p2, p3});
     CHECK(f.steps() == steps);
     CHECK(f.editors.size() == 2);
-    // Dropped somewhere that is nobody's strip: cancelled.
-    f.drag(f.centre(f.node("mixer.fx." + p1)), {700, 20});
+    // Dropped somewhere that is nobody's strip: cancelled, and "not allowed"
+    // on the way.
+    f.drag(f.centre(f.node("mixer.fx." + p1)), {700, 20}, false);
+    CHECK_FALSE(f.mixer->drag().home);
+    CHECK(f.root->cursor() == ui::Cursor::NotAllowed);
+    f.pointer(ui::PointerEvent::Type::Up, {700, 20});
     CHECK(f.chain(a) == std::vector<std::string>{p1, p2, p3});
     CHECK(f.steps() == steps);
     CHECK(f.errors.empty());
@@ -844,6 +853,11 @@ TEST_CASE("mixer: dragging a strip's empty part reorders it among its own kind, 
     f.pointer(ui::PointerEvent::Type::Move, f.empty(bus));
     CHECK(f.mixer->drag().drop == gui::Mixer::DragView::Drop::None);
     CHECK(f.root->cursor() == ui::Cursor::NotAllowed);  // not among the busses
+    // Over its own place a release changes nothing, and nothing refuses it.
+    f.pointer(ui::PointerEvent::Type::Move, f.empty(a));
+    CHECK(f.mixer->drag().drop == gui::Mixer::DragView::Drop::None);
+    CHECK(f.mixer->drag().home);
+    CHECK(f.root->cursor() == ui::Cursor::Move);
     f.pointer(ui::PointerEvent::Type::Move, {rc.x + rc.w - 10, rc.y + 200});
     CHECK(f.root->cursor() == ui::Cursor::Move);
     f.pointer(ui::PointerEvent::Type::Up, {rc.x + rc.w - 10, rc.y + 200});
@@ -1155,10 +1169,18 @@ TEST_CASE("mixer: \"out\" opens the routing matrix; a drag onto a buss makes one
         sent = sent || (e.value->from.track && e.value->from.track->str() == a &&
                         e.value->to.track && e.value->to.track->str() == bus);
     CHECK(sent);
-    // A second drag onto a strip it already feeds marks nothing and adds nothing.
-    f.drag(f.centre(f.node("mixer.out." + a)), f.centre(f.node("mixer.faderrow." + bus)), false);
+    // A second drag onto a strip it already feeds marks nothing and adds
+    // nothing: the buss refuses it. Over its own strip nothing refuses it.
+    f.pointer(ui::PointerEvent::Type::Down, f.centre(f.node("mixer.out." + a)));
+    f.pointer(ui::PointerEvent::Type::Move, f.centre(f.node("mixer.faderrow." + a)));
+    CHECK(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Send);
+    CHECK(f.mixer->drag().home);
+    CHECK(f.root->cursor() == ui::Cursor::Move);
+    f.pointer(ui::PointerEvent::Type::Move, f.centre(f.node("mixer.faderrow." + bus)));
     CHECK(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Send);
     CHECK(f.mixer->drag().drop == gui::Mixer::DragView::Drop::None);
+    CHECK_FALSE(f.mixer->drag().home);
+    CHECK(f.root->cursor() == ui::Cursor::NotAllowed);
     f.pointer(ui::PointerEvent::Type::Up, f.centre(f.node("mixer.faderrow." + bus)));
     CHECK(f.steps() == before + 1);
     CHECK(f.app->head().routes.size() == 1);

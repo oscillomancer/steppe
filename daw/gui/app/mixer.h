@@ -117,6 +117,9 @@ class Mixer {
     struct DragView {
         enum class Kind { None, Strip, Fx, Send } kind = Kind::None;
         enum class Drop { None, Reorder, Copy } drop = Drop::None;
+        // Drop::None over the dragged thing's own place: a release changes
+        // nothing there, but nothing refuses it either.
+        bool home = false;
         bool active = false;  // past the movement threshold
         std::string track;    // the dragged strip, or the plug-in's own strip
         std::string fx;       // the dragged plug-in

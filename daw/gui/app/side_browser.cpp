@@ -173,6 +173,11 @@ std::unique_ptr<ui::Node> SideBrowser::build() {
     top.layout.padding = {12, 10, 12, 0};
     kinds_ = &top.emplace<Kinds>("side.browser.kinds", kind_,
                                  [this](const std::string& kind) { show(kind); });
+    // Over the Browser itself a dragged row is at home, not refused.
+    drag_.home = [this] {
+        const ui::Node* browser = root_.find("side.browser");
+        return browser ? browser->bounds() : ui::Rect{};
+    };
     // A plugin dragged out of the list lands on the track under the pointer.
     drag_.onDrop = [this](const model::Id& track, const Status& added) {
         fx_.sideBrowser().setStatus(added ? "Added to " + model::trackLabel(app_.head(), track)

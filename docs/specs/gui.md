@@ -181,8 +181,13 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   connected (`MatrixModel::blocked`, drawn struck through) shows "not
   allowed".
   **A thing carried to a drop** says what a release would do: the move
-  cursor where it would land, "not allowed" where it would do nothing,
-  its own place included. The carrier sets it on the root
+  cursor where it would land and over its own place (where a release
+  changes nothing, as at the start of every such drag: the strip, row or
+  slot it is in, or the browser it is picked from), "not allowed"
+  over a place that refuses it: a strip of another kind, a track an
+  output cannot go to, a track row with no other row of its kind to
+  change places with, somewhere that takes no plug-in. The carrier sets
+  it on the root
   (`Root::setDragCursor`), since the node its events go to cannot know
   where the thing may land; while set it replaces the nodes' answer, the
   carrier clears it when the drag ends or is given up, and a new press
