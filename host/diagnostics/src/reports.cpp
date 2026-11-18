@@ -534,10 +534,10 @@ RestartNotice composeNotice(const ReportSummary* report, bool noReport,
         }
     }
     if (notice.earlier == 1)
-        notice.detail += " " + app + " also closed unexpectedly once before that.";
+        notice.earlierNote = app + " also closed unexpectedly once before that.";
     else if (notice.earlier > 1)
-        notice.detail += " " + app + " also closed unexpectedly " + std::to_string(notice.earlier) +
-                         " times before that.";
+        notice.earlierNote = app + " also closed unexpectedly " + std::to_string(notice.earlier) +
+                             " times before that.";
     return notice;
 }
 }  // namespace
@@ -627,7 +627,9 @@ Result<std::optional<RestartNotice>> lastRunNotice(const fs::path& directory,
         composeNotice(head ? &*head : nullptr, headIsRun, std::move(incidents), role));
 }
 std::string noticeText(const RestartNotice& notice) {
-    return notice.headline + " " + notice.detail;
+    std::string text = notice.headline + " " + notice.detail;
+    if (!notice.earlierNote.empty()) text += " " + notice.earlierNote;
+    return text;
 }
 Status acknowledgeNotice(const RestartNotice& notice, const fs::path& directory) {
     const fs::path root = directory.empty() ? defaultDirectory() : directory;

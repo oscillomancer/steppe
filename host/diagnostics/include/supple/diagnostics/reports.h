@@ -169,6 +169,7 @@ struct RestartNotice {
     enum class Kind { Report, NoReport } kind = Kind::Report;
     std::string headline;                // the sentence the user reads first
     std::string detail;                  // what to know next
+    std::string earlierNote;             // "<app> also closed unexpectedly 2 times before that."
     std::vector<std::string> incidents;  // newest first: the ones dismissing this acknowledges
     std::size_t earlier = 0;             // incidents.size() - 1
     std::string plugin;                  // the plug-in the report points at, when it points at one
@@ -196,7 +197,7 @@ inline constexpr std::size_t kNoticeRoleReads = 8;
 // `acknowledge` of a named incident cover every role.
 Result<std::optional<RestartNotice>> lastRunNotice(const std::filesystem::path& directory = {},
                                                    std::optional<Role> role = std::nullopt);
-// The headline and detail as one text, for a place with no layout (a terminal).
+// The headline, detail and earlier note as one text, for a place with no layout (a terminal).
 std::string noticeText(const RestartNotice& notice);
 // Acknowledges every incident the notice covers (the latest and the earlier ones, all of the
 // notice's own role); keeps going past a failure and returns the first. Parses nothing.

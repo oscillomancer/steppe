@@ -354,7 +354,8 @@ the attribution is `fault_in_image` or `active_token` and the report names one, 
 the report was saved here, was sent nowhere, and that the report cannot prove the plug-in was the cause; any other
 attribution, and a kind this build does not know, gets the plain sentence. An unreported run gives
 `Kind::NoReport` and says why that happens. The other unacknowledged incidents are counted in
-`earlier`, and `incidents` lists every one the notice covers, newest first, so that
+`earlier` and named in `earlierNote` (a sentence of its own, so that a banner can leave it to the
+viewer; `noticeText` joins it last), and `incidents` lists every one the notice covers, newest first, so that
 `acknowledgeNotice` marks them all, unreported runs included, by name and without parsing, so the
 run is not announced again. The product's name comes from `product::kName`. The wording is
 provisional (P12). The GUI shows it as a banner (gui.md). A headless service (`<slug>-engine --mcp`
