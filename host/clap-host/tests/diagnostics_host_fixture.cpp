@@ -8,6 +8,7 @@
 //                                                 then the program faults (topic 6a)
 //         <diagnostics directory> bridged-hang    the host kills a hung bridge, then the
 //                                                 program faults
+#include <supple/diagcap/selfcapture.h>
 #include <supple/diagnostics/frontend.h>
 #include <supple/host/clap_host.h>
 #include <array>
@@ -19,7 +20,39 @@
 #include <thread>
 #include <vector>
 
+#include "../../diagnostics/src/inventory.h"
+#include "../../diagnostics/src/watch.h"
+
 namespace {
+// The supervisor's side of topic 6c, from inside the supervisor process: when a bridge's end
+// that the operating system caused is applied, the capture slot the bridge wrote must hold a
+// complete CTC5 capsule with the bridge's execution table copied after it. Said on stderr, for
+// host_inventory.py (the report does not carry it yet: that is step 6c.4).
+void lookAtSlot(const supple::diagnostics::detail::Packet& packet,
+                const supple::diagnostics::detail::Inventory& inventory) {
+    namespace capture = supple::diagnostics::selfcapture;
+    const auto& r = packet.instance;
+    if (packet.kind != supple::diagnostics::detail::Message::Instance ||
+        r.event != static_cast<std::uint8_t>(supple::diagctx::EventKind::Bridge) ||
+        (r.how != static_cast<std::uint8_t>(supple::diagctx::BridgeHow::Signal) &&
+         r.how != static_cast<std::uint8_t>(supple::diagctx::BridgeHow::Exception)))
+        return;
+    const auto capsule = inventory.slotCapsule(r.bridge);
+    const char* verdict = "none";
+    if (capsule) {
+        supple::diagnostics::detail::CapsuleHeader header{};
+        verdict = "bad";
+        if (capsule->size() >= sizeof header + supple::diagctx::kTableBytes) {
+            std::memcpy(&header, capsule->data(), sizeof header);
+            if (header.magic == capture::kBridgeCapsuleMagic &&
+                (header.flags & capture::kCapsuleHasTable) != 0 && header.reserved != 0)
+                verdict = "ok";
+        }
+    }
+    std::fprintf(stderr, "slot bridge=%u capsule=%s bytes=%zu\n", static_cast<unsigned>(r.bridge),
+                 verdict, capsule ? capsule->size() : 0);
+}
+
 [[gnu::noinline]] void fault() { *reinterpret_cast<volatile int*>(8) = 1; }
 
 // A bridged crash plug-in is made to misbehave in its next process(), and the host then makes a
@@ -106,6 +139,9 @@ int body(int argc, char** argv) {
 
 int main(int argc, char** argv) {
     if (argc < 3) return 1;
+    // Only the supervisor process calls it (the worker never applies a packet).
+    if (std::string_view(argv[2]) == "bridged-crash")
+        supple::diagnostics::detail::setInventoryHook(&lookAtSlot);
     return supple::diagnostics::runFrontend(argc, argv, supple::diagnostics::Role::Fixture, body,
                                             {std::filesystem::path(argv[1])});
 }

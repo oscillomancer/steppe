@@ -182,15 +182,19 @@ void BridgeProcess::attachCaptureSlot() {
     w.u32(capture::kSlotVersion);
     // On Windows call() duplicates the handle into the bridge; `memory` stays this process's.
     const bool attached = ready && static_cast<bool>(call(Op::AttachCaptureSlot, 0, w, memory));
+    // The supervisor is told once the bridge holds the slot, so a Slot event always names one a
+    // bridge can write. The announcement sends a copy; this process's own goes below.
+    if (attached) diagctx::announceSlot(ordinal_, memory);
 #if defined(_WIN32)
+    // The supervisor duplicates the handle from this process when it reads the announcement, so
+    // it stays open until the process object goes (~BridgeProcess).
     if (attached)
         slot_ = memory;
     else
         closeResource(memory);
 #else
-    closeResource(memory);
+    closeResource(memory);  // a descriptor in flight keeps the object
 #endif
-    (void)attached;
 }
 
 Status BridgeProcess::initializeNotifications() {

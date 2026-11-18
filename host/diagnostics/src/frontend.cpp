@@ -6,6 +6,18 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <utility>
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 #include "background.h"
 #include "inventory.h"
 #include "storage.h"
@@ -46,6 +58,22 @@ void removeOwnMarkerAtExit() {
         detail::supervisorEnd() == detail::SupervisorEnd::Launcher)
         detail::removeOwnMarker(marker.directory, marker.boot, marker.file);
 }
+// A resource a packet brought (topic 6c: a descriptor, or on Windows a handle this process
+// duplicated), closed unless something took it.
+struct ResourceGuard {
+    std::intptr_t value;
+    explicit ResourceGuard(std::intptr_t resource) : value(resource) {}
+    ResourceGuard(const ResourceGuard&) = delete;
+    ResourceGuard& operator=(const ResourceGuard&) = delete;
+    ~ResourceGuard() {
+        if (value < 0) return;
+#if defined(_WIN32)
+        CloseHandle(reinterpret_cast<HANDLE>(value));
+#else
+        ::close(static_cast<int>(value));
+#endif
+    }
+};
 // The supervisor's lock on its incident (storage.h, createPublishHold): from before the worker
 // starts to the end of the supervisor, after the report is published and the worker's marker
 // removed. Taken best effort: without it a reader may call the window after the worker's death a
@@ -148,7 +176,12 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
     std::optional<std::uint32_t> expected;
     Packet packet, terminal;
     TraceSnapshot trace;
-    while (receive(native, packet)) {
+    std::intptr_t arrived = -1;
+    while (receive(native, packet, &arrived)) {
+        // Owns what the packet brought (a bridge's capture slot): whatever the inventory does not
+        // take is closed when this turn ends, on every path out of it.
+        ResourceGuard resource(std::exchange(arrived, std::intptr_t{-1}));
+        inventory.noteRefusedResources(native.refusedResources);
         if (packet.incident != boot.incident || packet.role != boot.role) break;
         if (packet.kind == Message::Ready) {
             native.table = tableAddress(packet);
@@ -161,7 +194,8 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
             // Damage is counted inside, never fatal. A bridge process that died while the worker
             // lives gets a report of its own, within the run's limit (topic 6a); the worker's run
             // and its marker are untouched.
-            const bool applied = inventory.apply(packet);
+            const bool applied = inventory.apply(packet, &resource.value);
+            if (const auto look = inventoryHook()) look(packet, inventory);  // tests only
             if (applied &&
                 packet.instance.event == static_cast<std::uint8_t>(diagctx::EventKind::Bridge) &&
                 inventory.admitBridgeReport(packet.instance.bridge) && storage) {

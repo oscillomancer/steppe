@@ -217,12 +217,18 @@ Result<Native> adopt(std::string_view text, Packet& boot) {
     return n;
 }
 bool publish(Native& n, const Packet& packet) noexcept {
+    return publishWithResource(n, packet, -1);
+}
+bool publishWithResource(Native& n, const Packet& packet, std::intptr_t resourceValue) noexcept {
     auto& shared = *static_cast<Shared*>(n.shared);
     if (packet.kind == Message::Instance) {
         const auto head = shared.inventoryHead.load(std::memory_order_relaxed);
         if (!ringHasRoom(head, shared.inventoryTail.load(std::memory_order_acquire)))
             return false;  // full: the worker counts the event as dropped
-        shared.inventory[ringSlot(head)] = packet;
+        Packet& slot = shared.inventory[ringSlot(head)];
+        slot = packet;
+        // The handle's value is this process's own; the supervisor duplicates it from here.
+        slot.resource = resourceValue >= 0 ? static_cast<std::uint64_t>(resourceValue) : 0;
         shared.inventoryHead.store(head + 1, std::memory_order_release);
         return SetEvent(handle(n.event)) != FALSE;
     }
@@ -231,7 +237,25 @@ bool publish(Native& n, const Packet& packet) noexcept {
     shared.ready.fetch_or(1U << index, std::memory_order_release);
     return SetEvent(handle(n.event)) != FALSE;
 }
-bool receive(Native& n, Packet& packet) {
+// A packet that came off the channel: the handle in it, if any, becomes the caller's own. Only a
+// packet that may carry one (`mayCarryResource`) is looked at; any other value is counted and
+// ignored, and never duplicated. The handle is duplicated from the worker's process, so a value
+// that is not an object of the worker's, or not one the caller can use, fails here and is counted;
+// what the handle is is checked by whoever adopts it.
+void takeResource(Native& n, const Packet& packet, std::intptr_t* out) {
+    if (packet.resource == 0) return;
+    HANDLE copy = nullptr;
+    if (!out || !mayCarryResource(packet) || n.process == -1 ||
+        !DuplicateHandle(handle(n.process), reinterpret_cast<HANDLE>(packet.resource),
+                         GetCurrentProcess(), &copy, 0, FALSE, DUPLICATE_SAME_ACCESS) ||
+        !copy) {
+        ++n.refusedResources;
+        return;
+    }
+    *out = resource(copy);
+}
+bool receive(Native& n, Packet& packet, std::intptr_t* out) {
+    if (out) *out = -1;
     auto& shared = *static_cast<Shared*>(n.shared);
     for (;;) {
         // Inventory events first: they are older than anything in the slots, and the terminal
@@ -240,13 +264,17 @@ bool receive(Native& n, Packet& packet) {
         if (ringHasData(shared.inventoryHead.load(std::memory_order_acquire), tail)) {
             packet = shared.inventory[ringSlot(tail)];
             shared.inventoryTail.store(tail + 1, std::memory_order_release);
-            return valid(packet);
+            if (!valid(packet)) return false;
+            takeResource(n, packet, out);
+            return true;
         }
         const auto ready = shared.ready.load(std::memory_order_acquire) & ~n.seen;
         if (const int index = nextSharedSlot(ready); index >= 0) {
             packet = shared.messages[index];
             n.seen |= 1U << index;
-            return valid(packet);
+            if (!valid(packet)) return false;
+            takeResource(n, packet, out);
+            return true;
         }
         const HANDLE waits[]{handle(n.event), handle(n.process)};
         if (WaitForMultipleObjects(2, waits, FALSE, INFINITE) != WAIT_OBJECT_0) {

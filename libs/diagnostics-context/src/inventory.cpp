@@ -217,6 +217,17 @@ void announceChild(std::uint32_t cell, std::uint32_t childCell, std::uint16_t ch
     sink(event);
 }
 
+void announceSlot(std::uint16_t bridge, std::intptr_t resource) noexcept {
+    std::unique_lock<std::mutex> lock;
+    const auto sink = enter(lock);
+    if (!sink || bridge == 0 || resource < 0) return;
+    Event event;
+    event.event = EventKind::Slot;
+    event.bridge = bridge;
+    event.resource = resource;
+    sink(event);
+}
+
 std::uint16_t cellGeneration(std::uint32_t cell) noexcept {
     return cell < kMaxInstances ? generationOfCell(cell) : std::uint16_t{0};
 }

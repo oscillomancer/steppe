@@ -11,10 +11,22 @@
 #include <vector>
 #include "../src/inventory.h"
 #include "supple/diagcap/native.h"
+#include "supple/diagcap/selfcapture.h"
 #if !defined(_WIN32)
+#include <dirent.h>
 #include <fcntl.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
+#else
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #endif
 using namespace supple::diagnostics::detail;
 namespace diagctx = supple::diagctx;
@@ -1624,3 +1636,499 @@ TEST_CASE(
     REQUIRE(inventory.apply(ended(diagctx::BridgeHow::Signal, "ffffffffffffffffffffffffffffffff")));
     CHECK(inventory.bridge(3)->incident == id);
 }
+
+// ---- a bridge's capture slot (topic 6c, step 6c.3) ----------------------------------------------
+namespace {
+namespace capture = supple::diagnostics::selfcapture;
+using Resource = std::intptr_t;
+
+// What this process holds open: descriptors on POSIX, handles on Windows. The slot cases compare
+// it before and after, so a resource that is refused and not closed shows.
+long openResources() {
+#if defined(_WIN32)
+    DWORD count = 0;
+    return GetProcessHandleCount(GetCurrentProcess(), &count) ? static_cast<long>(count) : -1;
+#else
+    long count = 0;
+    for (int fd = 0; fd < 4096; ++fd)
+        if (::fcntl(fd, F_GETFD) != -1) ++count;
+    return count;
+#endif
+}
+void closeResource(Resource resource) {
+    if (resource < 0) return;
+#if defined(_WIN32)
+    CloseHandle(reinterpret_cast<HANDLE>(resource));
+#else
+    ::close(static_cast<int>(resource));
+#endif
+}
+// An empty slot's header for bridge `ordinal`, claiming the slot's own capacity whatever object it
+// is written into (a wrong-sized object with a right-looking header is a case to refuse).
+capture::SlotHeader headerFor(std::uint32_t ordinal) {
+    capture::SlotHeader header{};
+    header.magic = capture::kSlotMagic;
+    header.version = capture::kSlotVersion;
+    header.state = capture::kSlotEmpty;
+    header.capacity = static_cast<std::uint32_t>(capture::kSlotBytes);
+    header.ordinal = ordinal;
+    return header;
+}
+// A shared-memory object of `bytes` the way the host makes one (sealed on Linux), optionally with
+// an empty slot's header for bridge `ordinal` written in it.
+Resource memory(std::size_t bytes, bool header, std::uint32_t ordinal, bool seal = true) {
+#if defined(_WIN32)
+    (void)seal;
+    HANDLE section = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
+                                        static_cast<DWORD>(static_cast<std::uint64_t>(bytes) >> 32),
+                                        static_cast<DWORD>(bytes), nullptr);
+    REQUIRE(section);
+    if (header) {
+        void* view = MapViewOfFile(section, FILE_MAP_ALL_ACCESS, 0, 0, bytes);
+        REQUIRE(view);
+        const auto header = headerFor(ordinal);
+        std::memcpy(view, &header, sizeof header);
+        UnmapViewOfFile(view);
+    }
+    return reinterpret_cast<Resource>(section);
+#else
+#if defined(__linux__)
+    const int fd = ::memfd_create("slot-test", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+#else
+    char name[] = "/slottestXXXXXX";
+    for (int i = 9; i < 15; ++i) name[i] = static_cast<char>('a' + (::getpid() + i * 7) % 26);
+    const int fd = ::shm_open(name, O_CREAT | O_EXCL | O_RDWR, 0600);
+    if (fd >= 0) ::shm_unlink(name);
+#endif
+    REQUIRE(fd >= 0);
+    REQUIRE(::ftruncate(fd, static_cast<off_t>(bytes)) == 0);
+#if defined(__linux__)
+    if (seal) REQUIRE(::fcntl(fd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW) == 0);
+#else
+    (void)seal;
+#endif
+    if (header) {
+        const auto slotHeader = headerFor(ordinal);
+        REQUIRE(::pwrite(fd, &slotHeader, sizeof slotHeader, 0) ==
+                static_cast<ssize_t>(sizeof slotHeader));
+    }
+    return fd;
+#endif
+}
+Resource slotMemory(std::uint32_t ordinal) { return memory(capture::kSlotBytes, true, ordinal); }
+// A second handle on the same object, as the bridge's own mapping is one.
+Resource duplicateOf(Resource resource) {
+#if defined(_WIN32)
+    HANDLE copy = nullptr;
+    REQUIRE(DuplicateHandle(GetCurrentProcess(), reinterpret_cast<HANDLE>(resource),
+                            GetCurrentProcess(), &copy, 0, FALSE, DUPLICATE_SAME_ACCESS));
+    return reinterpret_cast<Resource>(copy);
+#else
+    const int copy = ::dup(static_cast<int>(resource));
+    REQUIRE(copy >= 0);
+    return copy;
+#endif
+}
+// What a bridge does at a fault: the capsule, then the state last (here, `state`). Through
+// `writer`, a handle on the slot's object that is not the supervisor's.
+void bridgeWrites(Resource writer, const std::vector<unsigned char>& capsule, std::uint32_t state) {
+    std::vector<unsigned char> block(capture::kSlotBytes);
+    capture::SlotHeader header{};
+    header.magic = capture::kSlotMagic;
+    header.version = capture::kSlotVersion;
+    header.state = state;
+    header.length = static_cast<std::uint32_t>(capsule.size());
+    header.capacity = static_cast<std::uint32_t>(capture::kSlotBytes);
+    header.ordinal = 1;
+    std::memcpy(block.data(), &header, sizeof header);
+    std::copy(capsule.begin(), capsule.end(), block.begin() + sizeof header);
+#if defined(_WIN32)
+    void* view = MapViewOfFile(reinterpret_cast<HANDLE>(writer), FILE_MAP_ALL_ACCESS, 0, 0,
+                               capture::kSlotBytes);
+    REQUIRE(view);
+    std::memcpy(view, block.data(), block.size());
+    UnmapViewOfFile(view);
+#else
+    REQUIRE(::pwrite(static_cast<int>(writer), block.data(), block.size(), 0) ==
+            static_cast<ssize_t>(block.size()));
+#endif
+}
+Packet slotEvent(std::uint16_t bridge) {
+    Packet p = base();
+    p.instance.event = static_cast<std::uint8_t>(diagctx::EventKind::Slot);
+    p.instance.bridge = bridge;
+    return p;
+}
+std::vector<unsigned char> sampleCapsule() {
+    std::vector<unsigned char> capsule(300);
+    for (std::size_t i = 0; i < capsule.size(); ++i) capsule[i] = static_cast<unsigned char>(i * 7);
+    return capsule;
+}
+}  // namespace
+
+TEST_CASE("a bridge's slot is kept for the bridge it names and read once the bridge is gone") {
+    const long baseline = openResources();
+    {
+        Inventory inventory;
+        REQUIRE(inventory.apply(bridgeEvent(1)));
+        Resource slot = slotMemory(1);
+        const Resource writer = duplicateOf(slot);  // the bridge's own end of the object
+        REQUIRE(inventory.apply(slotEvent(1), &slot));
+        CHECK(slot == -1);  // taken: the caller has nothing to close
+        CHECK(inventory.slotsHeld() == 1);
+        CHECK_FALSE(inventory.slotCapsule(1));  // empty: nothing was written
+        bridgeWrites(writer, sampleCapsule(), capture::kSlotWriting);
+        CHECK_FALSE(inventory.slotCapsule(1));  // died mid-write: nothing is used
+        bridgeWrites(writer, sampleCapsule(), capture::kSlotComplete);
+        const auto capsule = inventory.slotCapsule(1);
+        REQUIRE(capsule);
+        CHECK(*capsule == sampleCapsule());     // exactly the bytes the header's length says
+        CHECK_FALSE(inventory.slotCapsule(2));  // another bridge has none
+        closeResource(writer);
+        CHECK(inventory.rejected() == 0);
+    }
+    // Destroying the inventory closes the slot it held.
+    CHECK(openResources() == baseline);
+}
+
+TEST_CASE("a slot header that stopped being a slot's is never read") {
+    Inventory inventory;
+    REQUIRE(inventory.apply(bridgeEvent(1)));
+    Resource slot = slotMemory(1);
+    const Resource writer = duplicateOf(slot);
+    REQUIRE(inventory.apply(slotEvent(1), &slot));
+    // A length past the slot, a wrong capacity, a wrong magic, and a state past complete: each
+    // is a plug-in writing where the bridge's handler should, and each reads as no capsule.
+    auto write = [&](auto change) {
+        std::vector<unsigned char> block(capture::kSlotBytes);
+        capture::SlotHeader header{};
+        header.magic = capture::kSlotMagic;
+        header.version = capture::kSlotVersion;
+        header.state = capture::kSlotComplete;
+        header.length = 16;
+        header.capacity = static_cast<std::uint32_t>(capture::kSlotBytes);
+        header.ordinal = 1;
+        change(header);
+        std::memcpy(block.data(), &header, sizeof header);
+#if defined(_WIN32)
+        void* view = MapViewOfFile(reinterpret_cast<HANDLE>(writer), FILE_MAP_ALL_ACCESS, 0, 0,
+                                   capture::kSlotBytes);
+        REQUIRE(view);
+        std::memcpy(view, block.data(), block.size());
+        UnmapViewOfFile(view);
+#else
+        REQUIRE(::pwrite(static_cast<int>(writer), block.data(), block.size(), 0) ==
+                static_cast<ssize_t>(block.size()));
+#endif
+    };
+    write([](capture::SlotHeader&) {});
+    CHECK(inventory.slotCapsule(1));  // the unchanged one is readable
+    write([](capture::SlotHeader& h) { h.length = capture::kSlotBytes; });
+    CHECK_FALSE(inventory.slotCapsule(1));
+    write([](capture::SlotHeader& h) { h.capacity = 4096; });
+    CHECK_FALSE(inventory.slotCapsule(1));
+    write([](capture::SlotHeader& h) { h.magic = 0; });
+    CHECK_FALSE(inventory.slotCapsule(1));
+    write([](capture::SlotHeader& h) { h.state = 3; });
+    CHECK_FALSE(inventory.slotCapsule(1));
+    write([](capture::SlotHeader& h) { h.version = capture::kSlotVersion + 1; });
+    CHECK_FALSE(inventory.slotCapsule(1));
+    closeResource(writer);
+}
+
+TEST_CASE("a damaged Slot event is refused, counted, changes nothing and leaves nothing open") {
+    const long baseline = openResources();
+    {
+        Inventory inventory;
+        REQUIRE(inventory.apply(bridgeEvent(1)));
+        REQUIRE(inventory.apply(bridgeEvent(2)));
+        REQUIRE(inventory.apply(bridgeEvent(3, diagctx::BridgeHow::Signal, 11)));  // ended
+        std::size_t refused = 0;
+        // Applies `packet` with `resource` (made by `make`), which must be refused with the
+        // resource still the caller's, then closed here: nothing is held and nothing leaked.
+        const auto damaged = [&](const char* label, const Packet& packet, auto make) {
+            CAPTURE(label);
+            const long before = openResources();
+            Resource resource = make();
+            CHECK_FALSE(inventory.apply(packet, resource < 0 ? nullptr : &resource));
+            closeResource(resource);
+            CHECK(openResources() == before);
+            CHECK(inventory.rejected() == ++refused);
+        };
+        const auto good = [] { return slotMemory(1); };
+        damaged("no resource", slotEvent(1), [] { return Resource{-1}; });
+        damaged("a bridge nobody started", slotEvent(9), [] { return slotMemory(9); });
+        damaged("a bridge that has ended", slotEvent(3), [] { return slotMemory(3); });
+        damaged("bridge 0", slotEvent(0), [] { return slotMemory(0); });
+        damaged("the slot of another bridge", slotEvent(1), [] { return slotMemory(2); });
+        damaged("memory too small", slotEvent(1),
+                [] { return memory(capture::kSlotBytes / 2, true, 1); });
+        damaged("memory too large", slotEvent(1),
+                [] { return memory(capture::kSlotBytes * 2, true, 1); });
+        damaged("memory with no header", slotEvent(1),
+                [] { return memory(capture::kSlotBytes, false, 1); });
+#if defined(__linux__)
+        damaged("an unsealed memfd", slotEvent(1),
+                [] { return memory(capture::kSlotBytes, true, 1, false); });
+#endif
+#if defined(_WIN32)
+        damaged("an event is no memory", slotEvent(1), [] {
+            return reinterpret_cast<Resource>(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+        });
+#else
+        damaged("a pipe is no memory", slotEvent(1), [] {
+            int ends[2];
+            REQUIRE(::pipe(ends) == 0);
+            ::close(ends[1]);
+            return Resource{ends[0]};
+        });
+#endif
+        // A Slot event with any other field set, or text, is not one the worker writes.
+        const auto spoiled = [&](const char* label, auto change) {
+            Packet p = slotEvent(1);
+            change(p.instance);
+            damaged(label, p, good);
+        };
+        spoiled("a cell", [](InstanceRecord& r) { r.cell = 1; });
+        spoiled("a generation", [](InstanceRecord& r) { r.generation = 1; });
+        spoiled("a kind", [](InstanceRecord& r) { r.kind = 1; });
+        spoiled("a state", [](InstanceRecord& r) { r.state = 1; });
+        spoiled("an image", [](InstanceRecord& r) { r.image = 1; });
+        spoiled("an end", [](InstanceRecord& r) { r.how = 1; });
+        spoiled("a status", [](InstanceRecord& r) { r.status = 1; });
+        spoiled("a child cell", [](InstanceRecord& r) { r.childCell = 1; });
+        spoiled("text", [](InstanceRecord& r) { r.length[0] = 1; });
+        CHECK(inventory.slotsHeld() == 0);  // not one of them was kept
+        // The good one is taken, and a second for the same bridge is refused.
+        Resource first = slotMemory(1);
+        REQUIRE(inventory.apply(slotEvent(1), &first));
+        CHECK(inventory.slotsHeld() == 1);
+        damaged("a second slot", slotEvent(1), good);
+        CHECK(inventory.slotsHeld() == 1);
+        // A slot for the bridge that went on running is still taken after all those refusals.
+        Resource other = slotMemory(2);
+        REQUIRE(inventory.apply(slotEvent(2), &other));
+        CHECK(inventory.slotsHeld() == 2);
+        // A resource on a Slot event when the caller passes nowhere to put it is refused.
+        Resource unwanted = slotMemory(2);
+        CHECK_FALSE(inventory.apply(slotEvent(2), nullptr));
+        closeResource(unwanted);
+    }
+    CHECK(openResources() == baseline);
+}
+
+TEST_CASE("a bridge that falls out of the list takes its slot with it") {
+    const long baseline = openResources();
+    {
+        Inventory inventory;
+        for (std::uint16_t id = 1; id <= kMaxBridges; ++id) {
+            REQUIRE(inventory.apply(bridgeEvent(id)));
+            Resource slot = slotMemory(id);
+            REQUIRE(inventory.apply(slotEvent(id), &slot));
+        }
+        CHECK(inventory.slotsHeld() == kMaxBridges);
+        // Bridge 1 ends; bridge 257 then has no room unless the oldest ended one goes.
+        REQUIRE(inventory.apply(bridgeEvent(1, diagctx::BridgeHow::Signal, 11)));
+        REQUIRE(inventory.apply(bridgeEvent(static_cast<std::uint16_t>(kMaxBridges + 1))));
+        CHECK(inventory.bridge(1) == nullptr);
+        CHECK(inventory.slotsHeld() == kMaxBridges - 1);
+        CHECK_FALSE(inventory.slotCapsule(1));
+        Resource late = slotMemory(static_cast<std::uint32_t>(kMaxBridges + 1));
+        REQUIRE(inventory.apply(slotEvent(static_cast<std::uint16_t>(kMaxBridges + 1)), &late));
+        CHECK(inventory.slotsHeld() == kMaxBridges);  // never more than the list holds
+    }
+    CHECK(openResources() == baseline);
+}
+
+namespace {
+struct Seen {
+    static inline int calls = 0, plain = 0;
+    static inline Resource resource = -1;
+    static inline Packet packet;
+};
+}  // namespace
+
+TEST_CASE("the worker announces a slot once, with the resource beside the packet") {
+    Seen::calls = Seen::plain = 0;
+    Seen::resource = -1;
+    resetInventoryForTests(
+        [](Native&, const Packet&) noexcept {
+            ++Seen::plain;
+            return true;
+        },
+        [](Native&, const Packet& packet, std::intptr_t resource) noexcept {
+            ++Seen::calls;
+            Seen::resource = resource;
+            Seen::packet = packet;
+            return true;
+        });
+    Native native;
+    installInventory(native, base());
+    diagctx::announceSlot(0, 5);   // no bridge
+    diagctx::announceSlot(3, -1);  // no resource
+    CHECK(Seen::calls == 0);
+    diagctx::announceSlot(3, 17);
+    REQUIRE(Seen::calls == 1);
+    CHECK(Seen::plain == 0);  // it never went as a plain packet
+    CHECK(Seen::resource == 17);
+    const auto& r = Seen::packet.instance;
+    CHECK(Seen::packet.kind == Message::Instance);
+    CHECK(r.event == static_cast<std::uint8_t>(diagctx::EventKind::Slot));
+    CHECK(r.bridge == 3);
+    CHECK((r.cell | r.generation | r.kind | r.origin | r.mode | r.state | r.how | r.status |
+           r.childCell | r.childGeneration) == 0);
+    CHECK(r.image == 0);
+    for (const auto length : r.length) CHECK(length == 0);
+    resetInventoryForTests(nullptr);
+}
+
+#if !defined(_WIN32)
+namespace {
+// One end of the channel as a worker, the other as the supervisor.
+struct Channel {
+    int pair[2]{-1, -1};
+    Native sender, receiver;
+    Channel() {
+        REQUIRE(::socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
+        sender = Native{pair[0]};
+        receiver = Native{pair[1]};
+        receiver.exited = true;  // receive() then drains what is queued and ends, without waitpid
+    }
+    ~Channel() {
+        ::close(pair[0]);
+        ::close(pair[1]);
+    }
+    // Sends `packet` the way publishWithResource() does, but with `descriptors` attached (any
+    // number) at the first byte, or after `plainFirst` plain bytes (a descriptor on a later one).
+    void sendRaw(const Packet& packet, const std::vector<int>& descriptors,
+                 std::size_t plainFirst = 0) {
+        const auto* bytes = reinterpret_cast<const char*>(&packet);
+        if (plainFirst)
+            REQUIRE(::send(pair[0], bytes, plainFirst, 0) == static_cast<ssize_t>(plainFirst));
+        iovec part{const_cast<char*>(bytes) + plainFirst, sizeof(packet) - plainFirst};
+        msghdr message{};
+        message.msg_iov = &part;
+        message.msg_iovlen = 1;
+        std::vector<char> control(CMSG_SPACE(sizeof(int) * (descriptors.size() + 1)));
+        if (!descriptors.empty()) {
+            message.msg_control = control.data();
+            message.msg_controllen = CMSG_SPACE(sizeof(int) * descriptors.size());
+            cmsghdr* header = CMSG_FIRSTHDR(&message);
+            header->cmsg_level = SOL_SOCKET;
+            header->cmsg_type = SCM_RIGHTS;
+            header->cmsg_len = CMSG_LEN(sizeof(int) * descriptors.size());
+            std::memcpy(CMSG_DATA(header), descriptors.data(), sizeof(int) * descriptors.size());
+        }
+        REQUIRE(::sendmsg(pair[0], &message, 0) == static_cast<ssize_t>(part.iov_len));
+    }
+};
+bool sameObject(int a, int b) {
+    struct stat x{}, y{};
+    return ::fstat(a, &x) == 0 && ::fstat(b, &y) == 0 && x.st_dev == y.st_dev &&
+           x.st_ino == y.st_ino;
+}
+}  // namespace
+
+TEST_CASE(
+    "the channel carries one descriptor with a Slot packet, and every other shape is refused") {
+    const long baseline = openResources();
+    {
+        Channel channel;
+        Packet packet;
+        Resource got = -1;
+        // The shape that is allowed: one descriptor, publishWithResource, a Slot packet.
+        const Resource slot = slotMemory(1);
+        REQUIRE(publishWithResource(channel.sender, slotEvent(1), slot));
+        REQUIRE(receive(channel.receiver, packet, &got));
+        REQUIRE(got >= 0);
+        CHECK(got != slot);  // a copy in the receiving table
+        CHECK(sameObject(static_cast<int>(got), static_cast<int>(slot)));
+        CHECK((::fcntl(static_cast<int>(got), F_GETFD) & FD_CLOEXEC) != 0);
+        CHECK(mayCarryResource(packet));
+        CHECK(channel.receiver.refusedResources == 0);
+        closeResource(got);
+        // A Slot packet that came with none: nothing to adopt, nothing refused by the channel.
+        REQUIRE(publish(channel.sender, slotEvent(1)));
+        REQUIRE(receive(channel.receiver, packet, &got));
+        CHECK(got == -1);
+        CHECK(channel.receiver.refusedResources == 0);
+        // Two descriptors on a Slot packet: the first is the packet's, the second is refused.
+        const Resource second = slotMemory(1);
+        channel.sendRaw(slotEvent(1), {static_cast<int>(slot), static_cast<int>(second)});
+        REQUIRE(receive(channel.receiver, packet, &got));
+        REQUIRE(got >= 0);
+        CHECK(channel.receiver.refusedResources == 1);
+        closeResource(got);
+        // A descriptor on a packet that may carry none: closed, counted, the packet still read.
+        REQUIRE(publishWithResource(channel.sender, add(1, 0, InstanceState::Active), slot));
+        REQUIRE(receive(channel.receiver, packet, &got));
+        CHECK(got == -1);
+        CHECK(packet.instance.cell == 1);
+        CHECK(channel.receiver.refusedResources == 2);
+        // The same for the Terminal-style kinds: no packet but a Slot may carry one.
+        Packet ready = base();
+        ready.kind = Message::Ready;
+        REQUIRE(publishWithResource(channel.sender, ready, slot));
+        REQUIRE(receive(channel.receiver, packet, &got));
+        CHECK(got == -1);
+        CHECK(channel.receiver.refusedResources == 3);
+        // A descriptor attached to a later byte of the packet: refused, the packet still whole.
+        channel.sendRaw(slotEvent(1), {static_cast<int>(slot)}, 10);
+        REQUIRE(receive(channel.receiver, packet, &got));
+        CHECK(got == -1);
+        CHECK(channel.receiver.refusedResources == 4);
+        CHECK(valid(packet));
+        // The caller who passes nowhere for it gets the same: a Slot packet's descriptor, closed.
+        REQUIRE(publishWithResource(channel.sender, slotEvent(1), slot));
+        REQUIRE(receive(channel.receiver, packet));
+        CHECK(channel.receiver.refusedResources == 5);
+        // A wrong protocol version on a Slot packet that carries one: the stream stops, the
+        // descriptor is closed.
+        Packet wrong = slotEvent(1);
+        wrong.version = kProtocolVersion + 1;
+        channel.sendRaw(wrong, {static_cast<int>(slot)});
+        CHECK_FALSE(receive(channel.receiver, packet, &got));
+        CHECK(got == -1);
+        closeResource(slot);
+        closeResource(second);
+    }
+    CHECK(openResources() == baseline);
+}
+
+TEST_CASE(
+    "a Slot announced by the worker reaches the supervisor's inventory, and its capsule is read") {
+    const long baseline = openResources();
+    {
+        Channel channel;
+        resetInventoryForTests(nullptr);
+        Packet boot = base();
+        installInventory(channel.sender, boot);
+        Inventory inventory;
+        Packet packet;
+        Resource got = -1;
+        const auto next = [&] {
+            REQUIRE(receive(channel.receiver, packet, &got));
+            const bool taken = inventory.apply(packet, &got);
+            closeResource(got);  // what the frontend's guard does with whatever was not taken
+            got = -1;
+            return taken;
+        };
+        diagctx::announceBridge(1);
+        CHECK(next());
+        const Resource slot = slotMemory(1);
+        diagctx::announceSlot(1, slot);  // the worker keeps its own, closes it after
+        CHECK(next());
+        CHECK(inventory.slotsHeld() == 1);
+        bridgeWrites(slot, sampleCapsule(), capture::kSlotComplete);  // the bridge's own end
+        diagctx::announceBridge(1, diagctx::BridgeHow::Signal, 11);
+        CHECK(next());
+        const auto capsule = inventory.slotCapsule(1);
+        REQUIRE(capsule);
+        CHECK(*capsule == sampleCapsule());
+        closeResource(slot);
+        CHECK(inventory.rejected() == 0);
+        resetInventoryForTests(nullptr);
+    }
+    CHECK(openResources() == baseline);
+}
+#endif

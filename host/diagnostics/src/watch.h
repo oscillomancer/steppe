@@ -23,4 +23,11 @@ void setStopBound(std::chrono::milliseconds bound) noexcept;
 using SupervisorHook = void (*)(const Packet& packet);
 void setSupervisorHook(SupervisorHook hook) noexcept;
 SupervisorHook supervisorHook() noexcept;
+// Tests only: called by the supervisor after it applied each inventory packet (accepted or not),
+// with the inventory as it is then, so a test can look at what the supervisor holds (a bridge's
+// capture slot, topic 6c) from inside the supervisor process, where nothing else can.
+class Inventory;
+using InventoryHook = void (*)(const Packet& packet, const Inventory& inventory);
+void setInventoryHook(InventoryHook hook) noexcept;
+InventoryHook inventoryHook() noexcept;
 }  // namespace supple::diagnostics::detail

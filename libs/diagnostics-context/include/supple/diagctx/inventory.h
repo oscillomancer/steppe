@@ -83,6 +83,8 @@ enum class EventKind : std::uint8_t {
     Child,    // a bridged instance's identity inside its bridge (topic 6b): `cell` and
               // `generation` are the host's own, `childCell`, `childGeneration` and `image` the
               // bridge process's
+    Slot,     // a bridge's capture slot (topic 6c): `bridge`, and one resource, the shared memory
+              // the bridge writes its own crash capsule into
 };
 // How a bridge process ended, as the host classified it when it observed the end (topic 6a).
 // None is the other event: the bridge started. Host: the host killed it (a hung or abandoned
@@ -112,6 +114,10 @@ struct Event {
     // the supervisor matches a bridge's capsule to the instance with them and never records them.
     std::uint32_t childCell = 0;
     std::uint16_t childGeneration = 0;
+    // Slot events (topic 6c): the capture slot's memory object in this process (a descriptor, or
+    // on Windows a handle). The sink sends a copy and never closes it: the announcer keeps its
+    // own and closes it when it is done. -1 in every other event.
+    std::intptr_t resource = -1;
     Identity identity;
 };
 
@@ -148,6 +154,14 @@ void announceState(std::uint32_t cell, InstanceState state) noexcept;
 // either cell is out of range (the table had no room for it).
 void announceChild(std::uint32_t cell, std::uint32_t childCell, std::uint16_t childGeneration,
                    std::uint64_t childImage) noexcept;
+// A bridge's capture slot (topic 6c): `bridge` is the bridge's ordinal (1 or more) and `resource`
+// the shared-memory object the bridge was handed, a descriptor on POSIX and a handle on Windows,
+// which stays the caller's: the sink sends a copy to the supervisor, and the caller closes its own
+// afterwards (on Windows not before the bridge's process object is gone, because the supervisor
+// duplicates the handle from this process when it reads the announcement). Cold, from the thread
+// that started the bridge, once the bridge has taken the slot. Ignored when `bridge` is 0 or
+// `resource` is negative, and when no sink is installed.
+void announceSlot(std::uint16_t bridge, std::intptr_t resource) noexcept;
 // The generation `cell` has now: what an announcement made this moment would carry. 0 for a cell
 // out of range. The bridge says it in its Create reply (topic 6b).
 std::uint16_t cellGeneration(std::uint32_t cell) noexcept;

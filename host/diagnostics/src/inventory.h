@@ -21,6 +21,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include "capture_slot.h"
 #include "supple/diagcap/native.h"
 #include "supple/diagcap/trace.h"
 #include "supple/diagctx/inventory.h"
@@ -62,7 +63,9 @@ bool finishPartSend(Native& native, const Packet& packet, std::size_t sent) noex
 void setPartSendCutoffForTests(std::uint64_t nanoseconds) noexcept;
 // Tests only: forgets the installed sink, the closed gate and the drop count, and replaces the
 // function that sends a packet (null restores publish()).
-void resetInventoryForTests(bool (*publishFn)(Native&, const Packet&) noexcept);
+void resetInventoryForTests(bool (*publishFn)(Native&, const Packet&) noexcept,
+                            bool (*publishResourceFn)(Native&, const Packet&,
+                                                      std::intptr_t) noexcept = nullptr);
 // Events dropped so far. Async-signal-safe.
 std::uint32_t inventoryDropped() noexcept;
 
@@ -114,6 +117,10 @@ struct BridgeEntry {
     // The id the worker minted for the report of this end (a signal or an exception), empty when
     // it sent none: the supervisor writes the report under it, so the application can name it.
     std::string incident;
+    // The shared memory the bridge writes its own crash capsule into (topic 6c), once the worker
+    // announced it and it checked out; held until the entry goes (the oldest ended bridge falls
+    // out past kMaxBridges), so at most kMaxBridges are open.
+    CaptureSlot slot;
 };
 
 // The text a report may show for a plug-in's string: at most `kMaxText` bytes, valid UTF-8,
@@ -124,8 +131,14 @@ class Inventory {
   public:
     Inventory();
     // Applies an Instance packet. False, with the packet counted and nothing changed, when
-    // its record is damaged or names an instance that was never announced.
-    bool apply(const Packet& packet);
+    // its record is damaged or names an instance that was never announced. `resource`, when the
+    // packet brought one (`receive`), is taken (and set to -1) only by a Slot event that is
+    // accepted; whatever is left in it the caller closes. A Slot event needs one: without it the
+    // event is refused.
+    bool apply(const Packet& packet, std::intptr_t* resource = nullptr);
+    // The channel's count of resources it refused (`Native::refusedResources`): each is damage,
+    // added to `rejected()` once.
+    void noteRefusedResources(std::uint32_t channelCount) noexcept;
     // The worker's own count of events it could not send (the largest seen).
     void noteDropped(std::uint32_t workerCount) noexcept;
 
@@ -147,6 +160,14 @@ class Inventory {
                                     std::uint16_t generation) const;
     // Live and retired entries by ordinal.
     std::vector<const PluginEntry*> entries() const;
+
+    // The capsule a bridge published into its capture slot (topic 6c), copied out and not yet
+    // parsed; nullopt when the bridge has no slot (never announced, refused, or fell out of the
+    // list), the slot is not complete (empty, or the bridge died writing), or its header is not
+    // a slot's any more. Reads without waiting and without a mapping that can fault.
+    std::optional<std::vector<std::uint8_t>> slotCapsule(std::uint16_t bridge) const;
+    // How many bridges hold a slot now (bounded by kMaxBridges).
+    std::size_t slotsHeld() const noexcept;
 
     // The bridge processes (topic 6a), by id, and the ones that fell out of the list.
     const BridgeEntry* bridge(std::uint16_t id) const;
@@ -194,6 +215,7 @@ class Inventory {
     void retire(PluginEntry entry);
     bool applyNames(const InstanceRecord& record);
     bool applyBridge(const InstanceRecord& record);
+    bool applySlot(const InstanceRecord& record, std::intptr_t* resource);
     BridgeEntry* touchBridge(std::uint16_t id);
     std::vector<std::optional<PluginEntry>> live_;
     std::vector<std::string> names_;  // by command id; empty: not received
@@ -203,6 +225,7 @@ class Inventory {
     std::vector<std::string> bridgeReportKeys_;
     std::uint32_t nextOrdinal_ = 0;
     std::size_t announced_ = 0, rejected_ = 0, workerDropped_ = 0, retiredLost_ = 0;
+    std::uint32_t refusedResources_ = 0;
 };
 
 // Strict validation of a report's "plugins" value; `threadCount` is the report's number of

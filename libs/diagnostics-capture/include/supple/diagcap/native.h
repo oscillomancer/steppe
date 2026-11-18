@@ -16,9 +16,10 @@ enum class Message : std::uint32_t {
     Trace = 5,
     Instance = 6  // one inventory event (topic 5c), carried in `Packet::instance`
 };
-// Version 2 added `dropped` and `instance` (topic 5c) and the Instance message. Both ends are
-// the same executable, so a mismatch is only a damaged or foreign packet.
-constexpr std::uint32_t kProtocolVersion = 2;
+// Version 2 added `dropped` and `instance` (topic 5c) and the Instance message. Version 3 added
+// `Packet::resource` and the one event that may carry a resource (topic 6c). Both ends are the
+// same executable, so a mismatch is only a damaged or foreign packet.
+constexpr std::uint32_t kProtocolVersion = 3;
 // One inventory event as it travels (topic 5c): the whole of what an announcement says, in
 // fixed-size plain fields so a packet stays one fixed-size record. Everything in it is
 // untrusted on receipt (the supervisor checks every field before use; see inventory.h).
@@ -54,6 +55,10 @@ struct Packet {
     // private to the channel; the collector reads memory with them and the report
     // never records them.
     std::uint64_t pid = 0, pc = 0, frame = 0, tid = 0, sp = 0;
+    // Windows: the sender's own handle value for the one resource this packet may carry
+    // (`mayCarryResource`), which the receiver duplicates from the sender's process; 0 for none.
+    // Always 0 on POSIX, where the descriptor travels as ancillary data beside the packet.
+    std::uint64_t resource = 0;
     std::array<char, 33> incident{};
     InstanceRecord instance;
 };
@@ -66,6 +71,13 @@ inline void setTableAddress(Packet& ready, const void* table) noexcept {
     ready.pc = reinterpret_cast<std::uintptr_t>(table);
 }
 inline std::uint64_t tableAddress(const Packet& ready) noexcept { return ready.pc; }
+// The one event that carries a resource (topic 6c): diagctx::EventKind::Slot, a bridge's capture
+// slot. inventory.cpp asserts the number. A resource on any other packet is damage: the receiver
+// closes it (never uses it) and counts it in `Native::refusedResources`.
+constexpr std::uint8_t kSlotEventKind = 7;
+inline bool mayCarryResource(const Packet& packet) noexcept {
+    return packet.kind == Message::Instance && packet.instance.event == kSlotEventKind;
+}
 // A packet is written to a stream socket in one non-blocking send; it stays well under the
 // smallest atomic pipe write (512 bytes, macOS) so one send takes it or none of it.
 static_assert(sizeof(Packet) <= 512);
@@ -119,11 +131,25 @@ struct Native {
     // Worker, POSIX: a publish() sent part of a packet and could not send the rest, so the
     // stream no longer holds whole packets. The caller must stop sending on it.
     bool torn = false;
+    // Supervisor: resources that arrived and were closed unused, or could not be taken: a second
+    // descriptor, one on a packet that may carry none (or not on its first byte), control data of
+    // another kind, a handle that could not be duplicated. Only ever grows.
+    std::uint32_t refusedResources = 0;
 };
 Result<Native> launch(int argc, char** argv, const Packet& boot);
 Result<Native> adopt(std::string_view value, Packet& boot);
-bool receive(Native& native, Packet& packet);  // collector, parked until work/exit
+// Collector, parked until work/exit. `resource`, when given, receives the resource a packet that
+// may carry one (`mayCarryResource`) brought: a descriptor on POSIX, a handle duplicated from the
+// worker on Windows, owned by the caller; -1 when it brought none. Anything else that arrived is
+// closed here and counted (`refusedResources`); with no `resource` a packet's resource is one of
+// those. Never leaves `*resource` set when it returns false.
+bool receive(Native& native, Packet& packet, std::intptr_t* resource = nullptr);
 bool publish(Native& native, const Packet& packet) noexcept;
+// publish() with one resource, a descriptor or a handle of this process, for a packet that may
+// carry one. POSIX: the descriptor goes as SCM_RIGHTS attached to the packet's first byte, so a
+// send that is finished later still delivers it; Windows: the handle value goes in
+// `packet.resource`. Never waits, as publish() never does. A negative `resource` is publish().
+bool publishWithResource(Native& native, const Packet& packet, std::intptr_t resource) noexcept;
 void acknowledge(Native& native) noexcept;
 void awaitAcknowledgement(Native& native) noexcept;  // terminal only, <=1 second
 inline bool windowsFatalStatus(std::uint32_t code, std::optional<std::uint32_t> expected) {

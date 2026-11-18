@@ -95,4 +95,9 @@ if not sanitized:
     assert crash["dropped"]["bridge_reports"]==4 and crash["dropped"]["bridges"]==0,crash["dropped"]
     assert any("not reported separately" in u for u in crash["unavailable"]),crash["unavailable"]
     assert "bridge" not in crash and crash["attribution"]["confidence"]!="bridge_exit",crash["attribution"]
+    # Topic 6c, from the real host: each bridge's own capture reached the supervisor through the
+    # slot the host handed it (a capsule the supervisor read after the bridge's end). The report
+    # does not carry it yet, so the fixture's hook inside the supervisor says what it found.
+    slots=[l for l in run.stderr.decode(errors="replace").splitlines() if l.startswith("slot bridge=")]
+    assert [l.split()[2] for l in slots]==["capsule=ok"]*5,(slots,run.stderr)
 print("host inventory passed")

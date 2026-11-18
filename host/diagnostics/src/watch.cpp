@@ -79,4 +79,11 @@ void setSupervisorHook(SupervisorHook value) noexcept {
     hook.store(value, std::memory_order_release);
 }
 SupervisorHook supervisorHook() noexcept { return hook.load(std::memory_order_acquire); }
+namespace {
+std::atomic<InventoryHook> gInventoryHook{nullptr};
+}
+void setInventoryHook(InventoryHook value) noexcept {
+    gInventoryHook.store(value, std::memory_order_release);
+}
+InventoryHook inventoryHook() noexcept { return gInventoryHook.load(std::memory_order_acquire); }
 }  // namespace supple::diagnostics::detail

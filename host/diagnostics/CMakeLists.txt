@@ -6,9 +6,9 @@ add_custom_target(diagnostics-build-id
   BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/diagnostics_build.h"
   VERBATIM)
 if(WIN32)
-  set(native_source src/native_windows.cpp)
+  set(native_source src/native_windows.cpp src/capture_slot_windows.cpp)
 else()
-  set(native_source src/native_posix.cpp)
+  set(native_source src/native_posix.cpp src/capture_slot_posix.cpp)
 endif()
 supple_add_library(diagnostics SOURCES src/frontend.cpp src/inventory.cpp src/terminal.cpp src/storage.cpp src/reports.cpp src/watch.cpp src/private_files.cpp ${native_source}
   DEPS supple::core-base supple::core-json supple::product-info supple::diagnostics-context supple::diagnostics-capture)

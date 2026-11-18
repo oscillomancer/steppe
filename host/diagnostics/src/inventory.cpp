@@ -31,6 +31,10 @@ std::atomic<bool> gInstalled{false}, gClosed{false};
 std::atomic<std::uint32_t> gSenders{0}, gDropped{0};
 std::atomic<std::uint64_t> gCutoffNs{0};  // closeInventory's deadline for the senders in flight
 bool (*gPublish)(Native&, const Packet&) noexcept = &publish;  // a test replaces it
+// The same for the one event that carries a resource (topic 6c); a test replaces it too.
+bool (*gPublishResource)(Native&, const Packet&, std::intptr_t) noexcept = &publishWithResource;
+static_assert(kSlotEventKind == static_cast<std::uint8_t>(diagctx::EventKind::Slot),
+              "native.h's number for the event that may carry a resource");
 // The command names go out in one burst when the registry is built; a small socket buffer
 // (macOS) can fill before the supervisor wakes, so a name chunk waits for room, but the
 // whole table gets one budget in all and then the rest is dropped.
@@ -96,7 +100,9 @@ void send(const diagctx::Event& event) noexcept {
         gDropped.fetch_add(1, std::memory_order_relaxed);
         return;
     }
-    bool sent = gPublish(gNative, packet);
+    const bool slot = event.event == diagctx::EventKind::Slot;
+    bool sent =
+        slot ? gPublishResource(gNative, packet, event.resource) : gPublish(gNative, packet);
     if (!sent && names && !gNative.torn) {
         if (!gNamesStarted) {
             gNamesStarted = true;
@@ -146,9 +152,12 @@ void installInventory(const Native& native, const Packet& boot) {
     diagctx::setInventorySink(&send);
 }
 
-void resetInventoryForTests(bool (*publishFn)(Native&, const Packet&) noexcept) {
+void resetInventoryForTests(bool (*publishFn)(Native&, const Packet&) noexcept,
+                            bool (*publishResourceFn)(Native&, const Packet&,
+                                                      std::intptr_t) noexcept) {
     diagctx::setInventorySink(nullptr);
     gPublish = publishFn ? publishFn : &publish;
+    gPublishResource = publishResourceFn ? publishResourceFn : &publishWithResource;
     gInstalled.store(false);
     gClosed.store(false);
     gCutoffNs.store(0);
@@ -330,13 +339,54 @@ bool Inventory::applyBridge(const InstanceRecord& r) {
     return true;
 }
 
-bool Inventory::apply(const Packet& packet) {
+// A Slot event (topic 6c): bridge `bridge` has taken this shared memory as its capture slot. It
+// names a bridge that started and has not ended, once, and nothing else in the record may be set;
+// the resource must be the one it brought and must check out as a slot of that bridge
+// (`CaptureSlot::adopt`). Taken, `*resource` is -1; refused, it is still the caller's to close.
+bool Inventory::applySlot(const InstanceRecord& r, std::intptr_t* resource) {
+    if (r.bridge == 0 || r.cell != 0 || r.generation != 0 || r.kind != 0 || r.origin != 0 ||
+        r.mode != 0 || r.state != 0 || r.image != 0 || r.how != 0 || r.status != 0 ||
+        r.childCell != 0 || r.childGeneration != 0)
+        return false;
+    for (const auto length : r.length)
+        if (length != 0) return false;
+    if (!resource || *resource < 0) return false;
+    const auto found = bridges_.find(r.bridge);
+    if (found == bridges_.end() || found->second.ended || found->second.slot.held()) return false;
+    if (!CaptureSlot::adopt(*resource, r.bridge, found->second.slot)) return false;
+    *resource = -1;
+    return true;
+}
+
+void Inventory::noteRefusedResources(std::uint32_t channelCount) noexcept {
+    if (channelCount > refusedResources_) {
+        rejected_ += channelCount - refusedResources_;
+        refusedResources_ = channelCount;
+    }
+}
+
+std::optional<std::vector<std::uint8_t>> Inventory::slotCapsule(std::uint16_t bridge) const {
+    const auto found = bridges_.find(bridge);
+    if (found == bridges_.end()) return std::nullopt;
+    return found->second.slot.capsule();
+}
+
+std::size_t Inventory::slotsHeld() const noexcept {
+    return static_cast<std::size_t>(
+        std::count_if(bridges_.begin(), bridges_.end(),
+                      [](const auto& item) { return item.second.slot.held(); }));
+}
+
+bool Inventory::apply(const Packet& packet, std::intptr_t* resource) {
     noteDropped(packet.dropped);
     const auto& r = packet.instance;
     const auto reject = [&] {
         ++rejected_;
         return false;
     };
+    if (packet.kind == Message::Instance &&
+        r.event == static_cast<std::uint8_t>(diagctx::EventKind::Slot))
+        return applySlot(r, resource) || reject();
     if (packet.kind == Message::Instance &&
         r.event == static_cast<std::uint8_t>(diagctx::EventKind::Names))
         return applyNames(r) || reject();
@@ -419,6 +469,7 @@ bool Inventory::apply(const Packet& packet) {
         }
         case diagctx::EventKind::Names:
         case diagctx::EventKind::Bridge:
+        case diagctx::EventKind::Slot:
             break;  // handled above, before the cell checks
     }
     return reject();

@@ -988,19 +988,15 @@ modules. Nothing reads it yet: 6c matches a bridge's capsule with it ("Bridge se
 
 ### Bridge self-capture (topic 6c)
 
-**Status: 6c.3 under way, the rest is contract.** Built: the roles (6c.1), the bridge's own capture
+**Status: 6c.3 built, the rest is contract.** Built: the roles (6c.1), the bridge's own capture
 (6c.2: the handlers, the CTC5 capsule, the cold module list and the slot's protocol, the writer's
-side), and the first half of 6c.3, the host handing the slot to the bridge (`AttachCaptureSlot`,
-bridge protocol 27, 28 on Windows: `docs/specs/sandbox.md`); exercised for real on Linux, the
-Windows and macOS code compiles and is proven by native CI only. Not built: the `Slot` event that
-carries the slot to the supervisor (the other half of 6c.3) and everything the supervisor does with
-it (6c.4). Until then nothing reads the slot, so a report is still today's. Each step of the plan marks
-what it makes true; until then the sections above describe the code. The maintainer settled the
-transport, the trust rule, whether a bridge's fault counts as a suspect and the two thread roles
-(decisions 1 to 4, below); the reviewed contract of the channel's new capability and of the
-report's new fields is as written here.
-
-*Why the bridge captures itself.* The worker's capture works because the supervisor, its parent,
+side), and the carriage of the slot (6c.3): the host hands each bridge its slot (`AttachCaptureSlot`,
+bridge protocol 27, 28 on Windows: `docs/specs/sandbox.md`) and tells the supervisor with a `Slot`
+event (channel protocol 3), which keeps the slot with the bridge's entry and can copy its capsule
+out (`Inventory::slotCapsule`). Exercised for real on Linux, from a real plug-in fault in a real
+bridge to the capsule the supervisor read; the Windows and macOS code compiles and is proven by
+native CI only. Not built: parsing the capsule, labelling it and writing it into the report (6c.4):
+nothing reads what the supervisor holds yet, so a report is still today's.*Why the bridge captures itself.* The worker's capture works because the supervisor, its parent,
 reads the stopped worker while it waits in its handler. A bridge is a child of the worker and is
 connected to no supervisor; by the time anyone looks it is dead. Nothing can be read remotely, so
 the bridge must describe its own death, in its own fault handler, into storage that already
@@ -1031,7 +1027,9 @@ answered before any `Create`): POSIX sends the descriptor with `SCM_RIGHTS` like
 (the received copy is `CLOEXEC`); Windows follows the convention of the notification events: the
 host duplicates the mapping handle into the bridge with `DuplicateHandle` and sends the
 recipient-owned handle value, which the bridge validates (a section handle, the expected size)
-before mapping. Missing, extra, duplicate or wrong-type resources and wrong versions are
+before mapping. Built as specified, and the host attaches only the slot it has initialized, then
+announces it (below) once the bridge has taken it, so a `Slot` event always names a slot a bridge
+can write. Missing, extra, duplicate or wrong-type resources and wrong versions are
 structured errors, as for the subscription. A bridge that does not attach (an older bridge, a
 refusal, or a death before the operation) leaves today's report exactly. The bridge protocol and
 the Windows native version each rise by one with this operation (`docs/specs/sandbox.md`), and a
@@ -1048,7 +1046,8 @@ with `sendmsg` and a single descriptor as ancillary data (attached to the packet
 so a partial send that is finished later still delivers it; a received copy is `CLOEXEC`; any
 other ancillary data, a second descriptor or a descriptor on a packet that may carry none is
 damage, counted and closed), and the Windows channel's packet has a handle-value field that no
-other event uses. The channel's protocol version rises by one (`native.h`). The alternative, if the
+other event uses. The channel's protocol version rises by one (`native.h`: 3; `Packet::resource`, the handle value
+of the Windows packet, is 0 on POSIX). The alternative, if the
 review of this step prefers no new channel capability: the worker reads the complete slot at the
 bridge's end and forwards it as chunked packets on the existing channel under the existing
 nonblocking send and deadline rules; it costs the worker a bounded send of up to 256 KiB from the
@@ -1062,6 +1061,34 @@ bridges the inventory keeps, and the oldest ended one falls out with its slot). 
 empty, still `writing`, wrong in magic, version or length, or whose bytes the parser refuses,
 changes nothing: the report is today's. The supervisor writes a bridge report from the slot on
 the same background writer as today's, so nothing waits on the disk.
+
+*The `Slot` event as built (6c.3).* One new `EventKind` (`Slot`, 7) whose record carries only
+`bridge` (every other field and every text length is zero, or the record is damaged) and one
+resource beside the packet. The worker's sink sends the resource it is given and never closes it
+(`diagctx::announceSlot(bridge, resource)`, a cold call by the thread that started the bridge, after
+the bridge answered the attach); the host closes its own descriptor at once on POSIX, since a
+descriptor in flight keeps the object, and holds its handle until the bridge's process object goes
+on Windows. The only packet that may carry a resource is a `Slot` event (`mayCarryResource`);
+`receive` hands the supervisor that packet's resource, and refuses and counts (`refusedResources`,
+added to the inventory's `rejected`) every other shape: a descriptor on any other packet, a second
+descriptor, control data of another kind, a descriptor attached to any byte but the packet's first
+(the first read of a packet takes one byte, so the first byte's descriptor is told from a later
+one's even when the sends were merged), and on Windows a handle that cannot be duplicated from the
+worker or a value on a packet that may carry none (never duplicated). A refused descriptor is
+closed where it is found. The inventory takes the resource only for a `Slot` event that names a
+bridge that started and has not ended, once, and only after `CaptureSlot::adopt` found it to be
+shared memory of exactly the slot's size (POSIX: a regular object, on Linux a memfd sealed against
+shrinking and growing; Windows: a section whose whole extent is that, found by mapping it and
+asking the region) with a slot's header for that bridge; anything else leaves the resource with the
+caller, which closes it (the frontend does this at the end of every turn of its loop). The slot is
+held with the bridge's entry and closed with it, so no more than 256 are open and the oldest ended
+bridge takes its slot out with it. `slotCapsule(bridge)` copies the capsule out of a complete slot:
+POSIX `pread` of the header and then `length` bytes (never a mapping), Windows a read-only view of
+the section, copied and unmapped; it gives nothing for an empty or still-`writing` slot or a header
+that stopped being a slot's. *Windows, not proven:* the supervisor duplicates the handle from the
+worker when it reads the packet, which may be after the worker closed it (the bridge's process
+object went) and the value was reused; the mapping check and the ordinal in the header decide
+whether what it got is the slot, and anything else is refused, but the race itself is unexercised.
 
 *Trust (decision 2).* The capsule is untrusted input of the same kind as the worker's. A bridge
 runs third-party code that can write the slot as well as the bridge's own handler can, so the

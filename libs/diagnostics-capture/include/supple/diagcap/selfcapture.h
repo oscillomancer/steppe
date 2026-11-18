@@ -87,7 +87,8 @@ bool slotUsable(const SlotHeader& header, std::size_t bytes) noexcept;
 bool install() noexcept;
 // Cold. Gives the handler the shared slot to write: it must be an initialized, empty slot
 // (`initializeSlot`) of `bytes` bytes that stays mapped for the rest of the process. Until
-// then the handler writes a private slot of the same shape that nobody reads. False, and
+// then the handler writes a private slot of the same shape that nobody reads (the host hands the
+// bridge its shared slot right after it starts: `AttachCaptureSlot`). False, and
 // nothing changed, for anything else, and after the first success.
 bool attachSlot(void* memory, std::size_t bytes) noexcept;
 // Cold. Records the identity of the image that holds `address` (text range, load bias and build

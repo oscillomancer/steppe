@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cstring>
 #include <ctime>
+#include <utility>
 #include "inventory.h"
 #include "supple/diagcap/capsule.h"
 #include "supple/diagcap/native.h"
@@ -240,10 +241,54 @@ pid_t observe(Native& native, int flags) {
     return result;
 }
 }  // namespace
-bool receive(Native& native, Packet& packet) {
+namespace {
+// What a read of the channel may have brought beside its bytes (topic 6c): descriptors sent as
+// SCM_RIGHTS. The first of the packet's first read is the packet's resource; every other one is
+// refused here (closed and counted), as is control data of any other kind. Everything is closed
+// that the caller does not take, on every path.
+struct Received {
+    int descriptor = -1;
+    ~Received() {
+        if (descriptor >= 0) ::close(descriptor);
+    }
+    int take() { return std::exchange(descriptor, -1); }
+};
+void harvest(Native& native, msghdr& message, std::size_t at, Received& held) {
+    for (cmsghdr* c = CMSG_FIRSTHDR(&message); c; c = CMSG_NXTHDR(&message, c)) {
+        if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_RIGHTS) {
+            ++native.refusedResources;
+            continue;
+        }
+        const auto count = (c->cmsg_len - CMSG_LEN(0)) / sizeof(int);
+        for (std::size_t i = 0; i < count; ++i) {
+            int fd = -1;
+            std::memcpy(&fd, CMSG_DATA(c) + i * sizeof(int), sizeof(int));
+            if (fd < 0) continue;
+#if defined(__APPLE__)
+            if (::fcntl(fd, F_SETFD, FD_CLOEXEC) != 0) {
+                ::close(fd);
+                ++native.refusedResources;
+                continue;
+            }
+#endif
+            // One descriptor, with the packet's first byte: anything else is damage.
+            if (at == 0 && held.descriptor < 0) {
+                held.descriptor = fd;
+            } else {
+                ::close(fd);
+                ++native.refusedResources;
+            }
+        }
+    }
+    if (message.msg_flags & MSG_CTRUNC) ++native.refusedResources;  // the kernel closed the rest
+}
+}  // namespace
+bool receive(Native& native, Packet& packet, std::intptr_t* resource) {
+    if (resource) *resource = -1;
     auto* bytes = reinterpret_cast<char*>(&packet);
     std::size_t at = 0;
     const int fd = static_cast<int>(native.channel);
+    Received held;
     for (;;) {
         if (!native.exited) {
             const pid_t result = observe(native, WNOHANG);
@@ -252,10 +297,35 @@ bool receive(Native& native, Packet& packet) {
         }
         // Drain complete packets already sent before exit, even if a forked
         // helper retains the endpoint. Never block on a partial packet/EOF.
-        const auto n = ::recv(fd, bytes + at, sizeof(packet) - at, MSG_DONTWAIT);
+        // The first read of a packet takes one byte: a descriptor is delivered with the byte it
+        // is attached to, and a read that spans several sends cannot tell where in them it was.
+        // With this, a descriptor that arrives on that read was attached to the packet's first
+        // byte, and one that comes later was not.
+        iovec part{bytes + at, at == 0 ? std::size_t{1} : sizeof(packet) - at};
+        msghdr message{};
+        message.msg_iov = &part;
+        message.msg_iovlen = 1;
+        alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int) * 4)];
+        message.msg_control = control;
+        message.msg_controllen = sizeof control;
+        const auto n = ::recvmsg(fd, &message,
+#if defined(MSG_CMSG_CLOEXEC)
+                                 MSG_CMSG_CLOEXEC |
+#endif
+                                     MSG_DONTWAIT);
         if (n > 0) {
+            harvest(native, message, at, held);
             at += static_cast<std::size_t>(n);
-            if (at == sizeof(packet)) return valid(packet);
+            if (at == sizeof(packet)) {
+                if (!valid(packet)) return false;
+                if (held.descriptor >= 0) {
+                    if (resource && mayCarryResource(packet))
+                        *resource = held.take();
+                    else
+                        ++native.refusedResources;  // closed with `held`
+                }
+                return true;
+            }
             continue;
         }
         if (n == 0) return false;
@@ -269,17 +339,36 @@ bool receive(Native& native, Packet& packet) {
     }
 }
 bool publish(Native& native, const Packet& packet) noexcept {
+    return publishWithResource(native, packet, -1);
+}
+bool publishWithResource(Native& native, const Packet& packet, std::intptr_t resource) noexcept {
     const int fd = static_cast<int>(native.channel);
     const auto* bytes = reinterpret_cast<const char*>(&packet);
     // The announcing thread must never wait on a full channel, so the descriptor is made
     // non-blocking for the call (macOS decides from the socket's own state, not the flag).
     const NonBlocking guard(fd);
-    ssize_t sent = ::send(fd, bytes, sizeof(packet), noSignal() | MSG_DONTWAIT);
+    iovec whole{const_cast<char*>(bytes), sizeof(packet)};
+    msghdr message{};
+    message.msg_iov = &whole;
+    message.msg_iovlen = 1;
+    alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int))];
+    if (resource >= 0) {
+        std::memset(control, 0, sizeof control);
+        message.msg_control = control;
+        message.msg_controllen = sizeof control;
+        cmsghdr* header = CMSG_FIRSTHDR(&message);
+        header->cmsg_level = SOL_SOCKET;
+        header->cmsg_type = SCM_RIGHTS;
+        header->cmsg_len = CMSG_LEN(sizeof(int));
+        const int descriptor = static_cast<int>(resource);
+        std::memcpy(CMSG_DATA(header), &descriptor, sizeof(int));
+    }
+    ssize_t sent = ::sendmsg(fd, &message, noSignal() | MSG_DONTWAIT);
     if (sent == static_cast<ssize_t>(sizeof(packet))) return true;
     if (sent <= 0) return false;  // nothing went out: the stream is as it was
     // A stream socket may take part of a message when its buffer is nearly full (macOS does;
     // Linux's unix sockets take a message this small whole or not at all): the rest goes out now,
-    // within a bound (finishPartSend).
+    // within a bound (finishPartSend). The descriptor went with the first bytes.
     return finishPartSend(native, packet, static_cast<std::size_t>(sent));
 }
 bool finishPartSend(Native& native, const Packet& packet, std::size_t sent) noexcept {
