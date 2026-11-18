@@ -537,7 +537,7 @@ std::unique_ptr<ui::Node> Inspector::build() {
     auto& notes = frame.emplace<ui::TextArea>("inspector.track.notes");
     notes.lineNumbers = false;
     notes.layout.width = ui::SizeRule::fraction();
-    notes.onSubmit = [this](const std::string& text) { commitNotes(text); };
+    notes.onSubmit = [this](const std::string& typed) { commitNotes(typed); };
     notes.onFocusChange = [this](bool focused) {
         if (!focused && notes_) commitNotes(notes_->text());
     };
