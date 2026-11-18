@@ -423,6 +423,55 @@ TEST_CASE("a hung bridged plug-in fails after 50 ms of late blocks; main kills i
     CHECK(exited());
 #endif
 }
+#if !defined(_WIN32)
+TEST_CASE("a bridge failed by late blocks is left to finish a capsule for the handler's budget") {
+    // Late blocks fail a bridge after 50 ms, the shortest deadline the host has on one; the main
+    // thread's kill follows at its next reap. A bridge that faulted as it was failed would be cut
+    // off mid-capsule, so the kill waits out the bridge's handler budget. The grace is set by the
+    // test, not measured by the clock: with a long one nothing kills it however often main looks,
+    // and with none the next look does.
+    setBridgeExecutable(BRIDGE_PATH);
+    struct Grace {
+        ~Grace() { setBridgeKillGraceForTests(-1); }
+    } restore;
+    setBridgeKillGraceForTests(3600LL * 1'000'000'000);
+    auto remote =
+        Instance::create(nativePlugin(FIXTURE_CLAP_PATH, "com.suppleaudio.test.crash"), {}, true);
+    REQUIRE(remote);
+    Instance& c = **remote;
+    REQUIRE(c.activate(48000, 1, 64));
+    REQUIRE(c.startProcessing());
+    REQUIRE(c.setParam(1, 2));  // hangs in the next block
+    Audio audio;
+    const auto guard = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (!c.failed() && std::chrono::steady_clock::now() < guard) {
+        LiveBridgeDeadline deadline(steadyNanoseconds());
+        REQUIRE(c.process(audio.block()));
+    }
+    REQUIRE(c.failed());
+    const int pid = c.bridgePid();
+    REQUIRE(pid > 0);
+    auto exited = [pid] {
+        siginfo_t info{};
+        return ::waitid(P_PID, static_cast<id_t>(pid), &info, WEXITED | WNOHANG | WNOWAIT) == 0 &&
+               info.si_pid == pid;
+    };
+    // Main looks for long enough that a kill, which takes a moment to show as an exit, would have
+    // shown (the time only makes the check stricter: it cannot make it fail).
+    for (const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
+         std::chrono::steady_clock::now() < until;) {
+        c.serviceMainThread();
+        std::this_thread::yield();
+    }
+    CHECK_FALSE(exited());  // main looked for 300 ms and killed nothing
+    setBridgeKillGraceForTests(0);
+    while (!exited() && std::chrono::steady_clock::now() < guard) {
+        c.serviceMainThread();
+        std::this_thread::yield();
+    }
+    CHECK(exited());
+}
+#endif
 TEST_CASE("native bridge notifications ACK and rearm without periodic parent polling") {
     setBridgeExecutable(BRIDGE_PATH);
     MainThreadWake wake;

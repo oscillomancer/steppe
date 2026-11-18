@@ -96,6 +96,17 @@ void setBridgeCaptureSlotForTests(bool attach) {
     gAttachCaptureSlot.store(attach, std::memory_order_relaxed);
 }
 
+namespace {
+std::atomic<std::int64_t> gKillGraceNs{-1};
+std::int64_t killGraceNs() {
+    const std::int64_t set = gKillGraceNs.load(std::memory_order_relaxed);
+    return set >= 0 ? set : static_cast<std::int64_t>(diagnostics::selfcapture::kHandlerBudget);
+}
+}  // namespace
+void setBridgeKillGraceForTests(std::int64_t nanoseconds) {
+    gKillGraceNs.store(nanoseconds, std::memory_order_relaxed);
+}
+
 void setBridgeExecutable(std::filesystem::path path) {
     std::lock_guard lock(gBridgeMutex);
     gBridgeExecutable = std::move(path);
@@ -496,8 +507,15 @@ void BridgeProcess::abandon() {
 // Main thread: observes exit without reaping the helper-owned leader.
 void BridgeProcess::reap() {
     if (pid_ <= 0) return;
-    // A live block may fail a hung bridge but never kills it (ADR-0081).
-    if (failed_.load() && failSignal_.load() == kHung && child_ && child_->alive()) killBridge();
+    // A live block may fail a hung bridge but never kills it (ADR-0081). The kill waits out the
+    // bridge's own handler budget after the failure, so that a bridge that faulted as it was
+    // failed (50 ms of late blocks is far shorter than any other deadline) finishes its capsule
+    // first; a hung one is not kept for it longer than that. Not a wait: a later reap() kills.
+    if (failed_.load() && failSignal_.load() == kHung && child_ && child_->alive()) {
+        const std::int64_t failedAt = hungAt_.load(std::memory_order_acquire);
+        if (failedAt != 0 && steadyNanoseconds() - failedAt < killGraceNs()) return;
+        killBridge();
+    }
     if (!child_ || child_->alive()) return;
     const int why = child_->exitStatus();
     pid_ = -1;
@@ -513,6 +531,7 @@ bool BridgeProcess::alive() const {
 
 void BridgeProcess::fail(int why) SUPPLE_RT {
     if (!failed_.exchange(true)) {
+        if (why == kHung) hungAt_.store(steadyNanoseconds(), std::memory_order_release);
         failSignal_.store(why, std::memory_order_release);
         watcherWake_.notify();
     }

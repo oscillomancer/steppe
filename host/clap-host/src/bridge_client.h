@@ -40,6 +40,12 @@ class RemoteInstance;
 // can send the operation itself. Process-wide.
 void setBridgeCaptureSlotForTests(bool attach);
 
+// How long after a bridge was failed as hung by late blocks (ADR-0081) the main thread leaves it
+// alive before it kills it: the bridge's own handler budget (selfcapture::kHandlerBudget), so
+// that a bridge that faulted as it was failed is not cut off mid-capsule. Tests only: a different
+// grace in nanoseconds, or a negative value for the default. Process-wide.
+void setBridgeKillGraceForTests(std::int64_t nanoseconds);
+
 class BridgeProcess {
   public:
     static constexpr int kHung = -2;
@@ -114,6 +120,7 @@ class BridgeProcess {
     std::mutex requests_;  // control calls from instances on the main thread
     std::atomic<bool> failed_{false};
     std::atomic<int> failSignal_{0};
+    std::atomic<std::int64_t> hungAt_{0};  // steady ns when it was failed as kHung
     // Topic 6a. The host sets `hostKilled_` before every kill, so that an end it caused is told
     // from one the operating system or the plug-in caused. The end is announced once, from
     // reap() on the main thread, or from the destructor when nobody reaped.

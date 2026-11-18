@@ -1218,10 +1218,20 @@ a fault on the claiming thread inside the handler meets its own signal blocked, 
 answers by ending the process). The wait is the only one the handler ever makes.
 
 *The bound against the host's deadlines, and a kill that lands in the handler (round 6c-a).* The
-handler's 200 ms is a tenth of the host's shortest failure deadline (a `process` call fails after
-2 s by default, and a lifecycle call after 5/2 of the deadline plus 2 s, ADR-0013), so a bridge
-that is failing is gone, re-raised, long before the host's first deadline on it can run out, and
-the host's deadlines never wait for a capsule. When a kill does land inside the handler (the
+handler's 200 ms is a tenth of the host's failure deadline for a call that waits (a `process`
+call off the callback fails after 2 s by default, and a lifecycle call after 5/2 of the deadline
+plus 2 s, ADR-0013), so a bridge that is failing is gone, re-raised, long before such a deadline
+runs out. It is *not* shorter than every deadline: while playing live, consecutive late blocks fail
+a bridge after 50 ms (ADR-0081) and the main thread's next `reap()` kills it. That kill therefore
+waits out the handler budget (`BridgeProcess::reap`, the budget `selfcapture::kHandlerBudget`,
+counted from the failure): a bridge that faulted as it was failed finishes its capsule or reaches
+its own bound first, and a hung one lives at most 200 ms longer than before, which costs nothing
+(it is already failed and silent; the engine does not wait for it). It is not a wait: a `reap()`
+inside the grace returns, and a later one kills. The other choice was a handler budget under 50 ms,
+which was refused because the all-thread capture time on macOS has not been measured (Linux's
+fault-thread capture measured 61 to 76 us), and a bound set too low would truncate captures where
+they are largest. The kill deadlines of a call that waits are unchanged and never extended for a
+capsule. When a kill does land inside the handler (the
 handler hung, or the machine stalled it past the host's deadline), the host's own kill ends the
 process: SIGKILL on POSIX, `TerminateProcess` with exit code 1 on Windows. The classification
 (`classifyBridgeEnd`) reads that as the host's end (`how: host`), which has no `bridge_exit`
