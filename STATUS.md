@@ -597,10 +597,11 @@ instructions are in `docs/guides/installing.md`.
   allowed" where a release would do nothing, as does a routing matrix
   cell that cannot be connected. A drag held at the edge of the arrangement scrolls the view
   and takes the thing in hand with it, and so does a note held at the
-  piano roll's edge (not yet in the rack or the mixer). Both the pointer
-  shapes and the edge scroll are verified by tests only: nobody has yet
-  watched them on a real desktop, where the system draws the cursor and
-  the frame clock paces the scroll. The transport bar's
+  piano roll's edge (not yet in the rack or the mixer). The pointer
+  shapes and the edge scroll have been watched on a Linux desktop
+  (Hyprland, the app under XWayland), where the system draws the cursor
+  and the frame clock paces the scroll; on macOS and Windows they are
+  verified by tests only. The transport bar's
   engine readout is in words ("48 kHz · 256 samples") and warns in colour
   only of a stopped engine, dropouts, render gaps or plug-in errors; the
   toolbar's buttons are quiet at rest. A side panel at the right edge,
