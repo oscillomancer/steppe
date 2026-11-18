@@ -55,6 +55,13 @@ TEST_CASE("role names are a closed set") {
     CHECK(std::strcmp(threadRoleName(ThreadRole::AudioOffline), "audio_offline") == 0);
     CHECK(std::strcmp(threadRoleName(ThreadRole::Recorder), "recorder") == 0);
     CHECK(std::strcmp(threadRoleName(ThreadRole::MidiOutput), "midi_output") == 0);
+    CHECK(std::strcmp(threadRoleName(ThreadRole::BridgeControl), "bridge_control") == 0);
+    CHECK(std::strcmp(threadRoleName(ThreadRole::BridgeAudio), "bridge_audio") == 0);
+    // every role below the count has a name and nothing else does: a role added without a name
+    // would be reported as nothing
+    for (std::uint8_t r = 1; r < kThreadRoleCount; ++r)
+        CHECK(threadRoleName(static_cast<ThreadRole>(r)) != nullptr);
+    CHECK(kThreadRoleCount == 10);
     CHECK(threadRoleName(ThreadRole::None) == nullptr);
     CHECK(threadRoleName(ThreadRole::Count_) == nullptr);
     CHECK(threadRoleName(static_cast<ThreadRole>(200)) == nullptr);
@@ -90,6 +97,40 @@ TEST_CASE("a registered thread is found by its id until it exits") {
     // The slot is free again, so a new thread that reuses the id is not mislabelled.
     CHECK(findThread(id).role == ThreadRole::None);
     CHECK(findThread(copyOut(), id).role == ThreadRole::None);
+}
+
+TEST_CASE("a bridge's roles register, number and release like the others") {
+    std::uint64_t controlId = 0, audioId = 0;
+    bool controlRegistered = false, audioRegistered = false;
+    std::atomic<bool> release{false}, ready{false};
+    std::thread bridge([&] {
+        controlRegistered = registerThread(ThreadRole::BridgeControl);
+        controlId = currentThreadId();
+        std::thread audio([&] {
+            audioRegistered = registerThread(ThreadRole::BridgeAudio, 2);
+            audioId = currentThreadId();
+            ready.store(true);
+            testing::waitFor([&] { return release.load(); }, "release");
+        });
+        testing::waitFor([&] { return release.load(); }, "release");
+        audio.join();
+    });
+    testing::waitFor([&] { return ready.load(); }, "ready");
+    CHECK(controlRegistered);
+    CHECK(audioRegistered);
+    const auto live = copyOut();
+    for (const auto& found : {findThread(live, controlId), findThread(controlId)}) {
+        CHECK(found.role == ThreadRole::BridgeControl);
+        CHECK(found.ordinal == 0);
+    }
+    for (const auto& found : {findThread(live, audioId), findThread(audioId)}) {
+        CHECK(found.role == ThreadRole::BridgeAudio);
+        CHECK(found.ordinal == 2);
+    }
+    release.store(true);
+    bridge.join();
+    CHECK(findThread(controlId).role == ThreadRole::None);
+    CHECK(findThread(audioId).role == ThreadRole::None);
 }
 
 TEST_CASE("the table holds 256 threads and counts the ones it cannot hold") {

@@ -52,6 +52,7 @@
 #include "../src/scan.h"
 #include "supple/base/rt.h"
 #include "supple/base/thread.h"
+#include "supple/diagctx/table.h"
 #include "supple/dsp/dsp.h"
 #include "supple/host/clap_host.h"
 #include "supple/json/json.h"
@@ -674,8 +675,16 @@ struct Bridge {
                 }
                 slot.rate = rate;
                 const std::uint32_t first = hdr->request.load(std::memory_order_acquire);
-                audio = std::thread([&slot, first] {
+                // Numbered in creation order, from 1 (the report's `worker`), and wrapping
+                // past 65535 to 1 so the number stays one the report accepts.
+                static std::atomic<std::uint32_t> audioThreads{0};
+                const auto number = static_cast<std::uint16_t>(
+                    1 + audioThreads.fetch_add(1, std::memory_order_relaxed) % 65535);
+                audio = std::thread([&slot, first, number] {
                     nameThread("audio-bridge");
+                    // Cold, before the first block: the report names this thread (ADR-0083,
+                    // topic 6c); the slot is released when the thread ends.
+                    (void)diagctx::registerThread(diagctx::ThreadRole::BridgeAudio, number);
                     rt::prefaultStack();  // ADR-0025
                     slot.audioLoop(first);
                 });
@@ -1031,6 +1040,8 @@ int main(int argc, char** argv) {
         return result ? 0 : 1;
     }
 #endif
+    // The process's command loop is this thread: the report names it (ADR-0083, topic 6c).
+    (void)diagctx::registerThread(diagctx::ThreadRole::BridgeControl);
     Bridge b;
     for (int i = 1; i + 1 < argc; ++i)
 #if defined(_WIN32)

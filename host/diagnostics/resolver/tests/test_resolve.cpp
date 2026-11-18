@@ -53,6 +53,28 @@ const std::string kId = "deadbeef01020304";
 
 }  // namespace
 
+TEST_CASE("a bridge's thread roles are roles the resolver accepts") {
+    auto text = reportText("elf", kId);
+    const auto at = text.find("\"registered\":\"audio_live\"");
+    REQUIRE(at != std::string::npos);
+    auto bridgeAudio = text;
+    bridgeAudio.replace(at, std::string("\"registered\":\"audio_live\"").size(),
+                        "\"registered\":\"bridge_audio\"");
+    const auto report = parseReport(bridgeAudio);
+    REQUIRE(report);
+    CHECK(report->threads[0].registered == "bridge_audio");
+    auto control = text;
+    const auto main = control.find("\"role\":\"main\"");
+    REQUIRE(main != std::string::npos);
+    control.replace(main, std::string("\"role\":\"main\"").size(), "\"role\":\"bridge_control\"");
+    CHECK(parseReport(control));
+    auto unknown = text;
+    unknown.replace(unknown.find("\"registered\":\"audio_live\""),
+                    std::string("\"registered\":\"audio_live\"").size(),
+                    "\"registered\":\"bridge\"");
+    CHECK_FALSE(parseReport(unknown));
+}
+
 TEST_CASE("a report parses to the modules, threads and frames the resolver uses") {
     const auto report = parseReport(reportText("elf", kId));
     REQUIRE(report);

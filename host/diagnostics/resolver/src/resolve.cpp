@@ -122,10 +122,11 @@ Result<Report> parseReport(std::string_view text) {
         const auto* state = member(thread, "state");
         const auto* frames = member(thread, "frames");
         const std::initializer_list<std::string_view> kRegistered{
-            "model",         "audio_render", "audio_live", "audio_background",
-            "audio_offline", "recorder",     "midi_output"};
+            "model",    "audio_render", "audio_live",     "audio_background", "audio_offline",
+            "recorder", "midi_output",  "bridge_control", "bridge_audio"};
         if (!oneOf(role, {"fault", "main", "model", "audio_render", "audio_live",
-                          "audio_background", "audio_offline", "recorder", "midi_output", "other"}))
+                          "audio_background", "audio_offline", "recorder", "midi_output",
+                          "bridge_control", "bridge_audio", "other"}))
             return bad(at + "/role", "unknown role");
         const auto* registered = member(thread, "registered");
         if (registered && !oneOf(registered, kRegistered))

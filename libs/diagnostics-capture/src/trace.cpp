@@ -795,16 +795,17 @@ bool traceShape(const json::Value* modules, const json::Value& threads) {
         if (!ordinal || !ordinal->isInt() || ordinal->asInt() != static_cast<std::int64_t>(index++))
             return false;
         // "main" is what reports written before the thread roles called the model thread.
-        if (!oneOf(thread.find("role"),
-                   {"fault", "main", "model", "audio_render", "audio_live", "audio_background",
-                    "audio_offline", "recorder", "midi_output", "other"}))
+        if (!oneOf(thread.find("role"), {"fault", "main", "model", "audio_render", "audio_live",
+                                         "audio_background", "audio_offline", "recorder",
+                                         "midi_output", "bridge_control", "bridge_audio", "other"}))
             return false;
         {  // the fault thread's own role, and the worker number of a numbered thread
             const bool fault = thread.find("role")->asString() == "fault";
             const auto* registered = thread.find("registered");
-            if (registered && (!fault || !oneOf(registered, {"model", "audio_render", "audio_live",
-                                                             "audio_background", "audio_offline",
-                                                             "recorder", "midi_output"})))
+            if (registered &&
+                (!fault || !oneOf(registered, {"model", "audio_render", "audio_live",
+                                               "audio_background", "audio_offline", "recorder",
+                                               "midi_output", "bridge_control", "bridge_audio"})))
                 return false;
             const auto* worker = thread.find("worker");
             if (worker) {

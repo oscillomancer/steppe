@@ -280,6 +280,18 @@ TEST_CASE("a capsule carries the role each thread registered as") {
     data->threads[3].head.registered = static_cast<std::uint8_t>(ThreadRole::Recorder);
     const auto cut = encode(*data);
     CHECK(parseCapsule(cut.data(), cut.size())->threads[3].registered == ThreadRole::Recorder);
+    // A bridge's roles, and a number for its audio threads (topic 6c).
+    data->threads[1].head.registered = static_cast<std::uint8_t>(ThreadRole::BridgeControl);
+    data->threads[2].head.registered = static_cast<std::uint8_t>(ThreadRole::BridgeAudio);
+    data->threads[2].head.worker = 3;
+    const auto bridge = encode(*data);
+    const auto parsed = parseCapsule(bridge.data(), bridge.size());
+    REQUIRE(parsed);
+    CHECK(parsed->threads[1].registered == ThreadRole::BridgeControl);
+    CHECK(parsed->threads[2].registered == ThreadRole::BridgeAudio);
+    CHECK(parsed->threads[2].worker == 3);
+    CHECK(roleString(parsed->threads[1]) == "bridge_control");
+    CHECK(roleString(parsed->threads[2]) == "bridge_audio");
 }
 
 TEST_CASE("a capsule carries the entry each thread was inside, and the table's counters") {

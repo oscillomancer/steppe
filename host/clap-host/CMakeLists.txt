@@ -38,7 +38,8 @@ if(APPLE)
   set_source_files_properties(bridge/bridge_main.cpp PROPERTIES LANGUAGE OBJCXX
                              COMPILE_OPTIONS "${_bridge_objcxx_options}")
 endif()
-target_link_libraries(${PRODUCT_SLUG}-bridge PRIVATE supple::clap-host supple::core-dsp)
+target_link_libraries(${PRODUCT_SLUG}-bridge PRIVATE supple::clap-host supple::core-dsp
+                      supple::diagnostics-context)
 if(WIN32)
   target_link_libraries(${PRODUCT_SLUG}-bridge PRIVATE avrt)  # MMCSS for live audio (ADR-0081)
 endif()

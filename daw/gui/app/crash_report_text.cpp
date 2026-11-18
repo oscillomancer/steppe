@@ -56,6 +56,8 @@ std::string threadRole(const std::string& role) {
         {"audio_offline", "Offline render thread"},
         {"recorder", "Recorder thread"},
         {"midi_output", "MIDI output thread"},
+        {"bridge_control", "Plug-in process: control thread"},
+        {"bridge_audio", "Plug-in process: audio thread"},
         {"other", "Other thread"},
     };
     const auto it = names.find(role);

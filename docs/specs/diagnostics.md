@@ -597,11 +597,20 @@ report read from such a table carries the limit "threads beyond the execution ta
 capacity have no role and may show as other". The roles are a closed set: `model` (the main
 thread, registered when terminal handling is installed), `audio_render` (the anticipative
 renderer), `audio_live` and `audio_background` (the pool helpers, numbered from 1),
-`audio_offline`, `recorder`, `midi_output`. Not registered, so `other`: the audio driver's
+`audio_offline`, `recorder`, `midi_output`, and, from topic 6c, `bridge_control` (a bridge
+process's command loop, its main thread) and `bridge_audio` (the thread that runs a plug-in's
+`process` in a bridge, one per activated instance, numbered from 1 in creation order and wrapping
+past 65535). A bridge process registers them in its own execution table, a different one from the
+worker's: `diagnostics-context` is linked into the bridge executable, the roles are registered
+once while cold (the control thread before the bridge reads a command, an audio thread before its
+first block) and released when the thread ends, and the entry scopes `host::Instance` already
+marks are the bridge's entries too. The table's version is 2 for the two roles; the worker's table
+and a bridge's never meet in one report, and the supervisor reads a bridge's roles only from that
+bridge's capsule (6c.4: until then nothing reads them). Not registered, so `other`: the audio driver's
 callback thread (created by the driver; registering it would need a thread-id call or TLS
 write on the audio path), the dummy backend's thread (it stands in for that driver thread,
-and tests should see it as one), `main-wake` (in MIT `core-base`), the sandbox and bridge
-children, and any thread a plug-in or the OS creates.
+and tests should see it as one), `main-wake` (in MIT `core-base`), the sandbox child, and any
+thread a plug-in or the OS creates, in a bridge too.
 
 The report labels each thread with its role. The fault thread keeps `role: "fault"` and
 adds `registered` with the role it was registered as; a thread of a numbered pool carries

@@ -730,12 +730,15 @@ TEST_CASE("role fields in a report are validated strictly") {
         return traceShape(&modules, threads);
     };
     // every registered role is a valid role string, and "main" stays valid for old reports
-    for (const char* role : {"model", "audio_render", "audio_live", "audio_background",
-                             "audio_offline", "recorder", "midi_output", "other", "main"})
+    for (const char* role :
+         {"model", "audio_render", "audio_live", "audio_background", "audio_offline", "recorder",
+          "midi_output", "bridge_control", "bridge_audio", "other", "main"})
         CHECK(mutate([&](json::Value& t) { t.asArray()[1]["role"] = role; }));
     CHECK_FALSE(mutate([](json::Value& t) { t.asArray()[1]["role"] = "audio"; }));
     CHECK_FALSE(mutate([](json::Value& t) { t.asArray()[1]["role"] = "Model"; }));
     // "registered" belongs to the fault thread and is one of the registrable roles
+    for (const char* role : {"bridge_control", "bridge_audio"})
+        CHECK(mutate([&](json::Value& t) { t.asArray()[0]["registered"] = role; }));
     CHECK_FALSE(mutate([](json::Value& t) { t.asArray()[0]["registered"] = "fault"; }));
     CHECK_FALSE(mutate([](json::Value& t) { t.asArray()[0]["registered"] = "other"; }));
     CHECK_FALSE(mutate([](json::Value& t) { t.asArray()[0]["registered"] = 5; }));

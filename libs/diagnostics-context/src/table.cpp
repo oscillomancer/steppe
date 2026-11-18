@@ -96,6 +96,10 @@ const char* threadRoleName(ThreadRole role) noexcept {
             return "recorder";
         case ThreadRole::MidiOutput:
             return "midi_output";
+        case ThreadRole::BridgeControl:
+            return "bridge_control";
+        case ThreadRole::BridgeAudio:
+            return "bridge_audio";
         case ThreadRole::None:
         case ThreadRole::Count_:
             break;

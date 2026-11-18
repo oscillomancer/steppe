@@ -4092,7 +4092,9 @@ TEST_CASE("crash report text: threads, commands, limits and counters are all in 
                    {"module":1,"offset":"0x20","return":true},
                    {"module":null,"return":true}]},
         {"ordinal":1,"role":"model","state":"unavailable","reason":"ptrace_denied"},
-        {"ordinal":2,"role":"a_role_from_the_future","state":"walked","stop":"depth","frames":[]}],
+        {"ordinal":2,"role":"a_role_from_the_future","state":"walked","stop":"depth","frames":[]},
+        {"ordinal":3,"role":"bridge_control","state":"walked","stop":"end","frames":[]},
+        {"ordinal":4,"role":"bridge_audio","worker":2,"state":"walked","stop":"end","frames":[]}],
       "plugins":[{"id":0,"kind":"vst3","origin":"foreign","mode":"in_process","state":"active",
                   "build":{"format":"elf","id":"0123456789abcdef0123"},"name":"Canary Verb"}],
       "commands":[{"seq":1,"name":"transport.play","origin":"ui","state":"ended"},
@@ -4115,6 +4117,9 @@ TEST_CASE("crash report text: threads, commands, limits and counters are all in 
     CHECK(text.find("Model thread · not read: the system did not allow reading it") !=
           std::string::npos);
     CHECK(text.find("a_role_from_the_future · stopped at the depth limit") != std::string::npos);
+    CHECK(text.find("Plug-in process: control thread · reached the end of its stack") !=
+          std::string::npos);
+    CHECK(text.find("Plug-in process: audio thread") != std::string::npos);
     CHECK(text.find("running  fx.add  (agent (MCP))") != std::string::npos);
     CHECK(text.find("done     transport.play  (app)") != std::string::npos);
     // Every limit the report states and every counter that is not zero.

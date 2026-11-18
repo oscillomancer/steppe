@@ -29,7 +29,8 @@
 namespace supple::diagctx {
 
 constexpr std::uint32_t kTableMagic = 0x58435453;  // "STCX"
-constexpr std::uint32_t kTableVersion = 1;
+// 2: the roles bridge_control and bridge_audio (a bridge process's own threads, topic 6c).
+constexpr std::uint32_t kTableVersion = 2;
 // Slots are sized for the real maximum of owned threads: the fixed ones (model, render,
 // MIDI output, recorder, one offline render), a live pool and a background pool of up to
 // 64 helpers each, and an export's own pool of up to 63. A machine with 32 CPUs runs 92 of
@@ -48,7 +49,9 @@ enum class ThreadRole : std::uint8_t {
     AudioOffline,
     Recorder,
     MidiOutput,
-    Count_  // one past the last role
+    BridgeControl,  // a bridge process's command loop (its main thread)
+    BridgeAudio,    // a bridge process's plug-in `process` thread, numbered from 1
+    Count_          // one past the last role
 };
 constexpr std::uint8_t kThreadRoleCount = static_cast<std::uint8_t>(ThreadRole::Count_);
 // The report string for a role ("model", "audio_render", ...); nullptr for None or out of
