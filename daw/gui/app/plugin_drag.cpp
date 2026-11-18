@@ -60,13 +60,23 @@ void PluginDrag::end() {
 
 void PluginDrag::drag(const std::string& plugin, const std::string& name, ui::DragPhase phase,
                       ui::Point at) {
+    drag(name.empty() ? plugin : name, phase, at, [this, plugin](const model::Id& track) {
+        json::Value args = json::Value::object();
+        args["track"] = track.str();
+        args["plugin"] = plugin;
+        const auto added = dispatcher_.execute({"fx.add", std::move(args), kUiOrigin});
+        if (onDrop) onDrop(track, added ? Status{} : Status{added.error()});
+    });
+    if (view_->active) view_->plugin = plugin;
+}
+
+void PluginDrag::drag(const std::string& label, ui::DragPhase phase, ui::Point at, Drop drop) {
     View& d = *view_;
     if (phase == ui::DragPhase::Cancel) return end();
     if (phase == ui::DragPhase::Begin) {
         end();
         d.active = true;
-        d.plugin = plugin;
-        d.label = name.empty() ? plugin : name;
+        d.label = label;
         ghost_ = root_.addOverlay(std::make_unique<Ghost>(view_));
     }
     if (!d.active) return;
@@ -79,14 +89,8 @@ void PluginDrag::drag(const std::string& plugin, const std::string& name, ui::Dr
         return;
     }
     const std::optional<TrackTarget> target = d.target;
-    const std::string dropped = d.plugin;
     end();
-    if (!target) return;  // released over nothing: nothing happens
-    json::Value args = json::Value::object();
-    args["track"] = target->track.str();
-    args["plugin"] = dropped;
-    const auto added = dispatcher_.execute({"fx.add", std::move(args), kUiOrigin});
-    if (onDrop) onDrop(target->track, added ? Status{} : Status{added.error()});
+    if (target && drop) drop(target->track);  // released over nothing: nothing happens
 }
 
 }  // namespace supple::gui

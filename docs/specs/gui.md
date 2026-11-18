@@ -1793,39 +1793,61 @@ ignored. `panels.history` is still written (true while the History tab is
 in view); a sidecar from before the side panel, with `panels.history` and
 no `panels.side`, opens the panel on History when it was true.
 
-**Browser.** The plugin browser (§4.5) as the tab's content
-(`PluginBrowser::buildEmbedded`, node ids under `side.browser`): the same
-search (`side.browser.search`), list (`side.browser.results`), favourites
-(`side.browser.fav`), rescan (`side.browser.rescan`) and ordering, over the
-same scan cache and favourites file. It has no title and no Close of its
-own. A row is the plugin's name with what a stock plugin is, and at the
-right "stock", the vendor or "shadowed", followed by "· VST3" for a VST3
-plugin (the popup's id column tells the formats apart; a panel's row has
-no room for it); the line under the list
-(`side.browser.detail`) gives the selected plugin's id, as `fx.add` takes
-it. Enter in the search, a double-click on a row or **Add**
-(`side.browser.add`) adds the plugin to every selected track: one `fx.add`
-each, inside one transaction for several ("Add FX"), so one undo step. The
-browser stays open with its search as typed, and its status line
-(`side.browser.status`) says what happened: "Added to *track*", "Added to
-*N* tracks", "Select a track first" when no track is selected, or the
-command's message. `ui.browser` puts the keyboard in the search field; a
-panel restored on this tab does not take it. The popup browser of a
+**Browser** (`SideBrowser`, node `side.browser`). A row of kinds
+(`side.browser.kinds`: **Plug-ins** and **Chains**, the one shown raised; a
+click picks one, and with the row focused Left and Right do) over one page
+per kind. It opens on Plug-ins; which kind is shown is not saved. A page
+that leaves view gives up the keyboard, and the page shown reads its list
+again when the tab or the kind comes into view. `ui.browser` puts the
+keyboard in the shown page's search field; a panel restored on this tab
+does not take it.
+
+*Plug-ins* is the plugin browser (§4.5) as a panel's content
+(`PluginBrowser::buildEmbedded`, node ids under `side.browser.plugins`):
+the same search (`.search`), list (`.results`), favourites (`.fav`), rescan
+(`.rescan`) and ordering, over the same scan cache and favourites file. It
+has no title and no Close of its own. A row is the plugin's name with what
+a stock plugin is, and at the right "stock", the vendor or "shadowed",
+followed by "· VST3" for a VST3 plugin (the popup's id column tells the
+formats apart; a panel's row has no room for it); the line under the list
+(`.detail`) gives the selected plugin's id, as `fx.add` takes it. Enter in
+the search, a double-click on a row or **Add** (`.add`) adds the plugin to
+every selected track: one `fx.add` each, inside one transaction for
+several ("Add FX"), so one undo step. The browser stays open with its
+search as typed, and its status line (`.status`) says what happened:
+"Added to *track*", "Added to *N* tracks", "Select a track first" when no
+track is selected, or the command's message. The popup browser of a
 strip's "+" (§4.5) is unchanged and may be open at the same time.
 
-A row **drags onto a track**. A left press on a row that moves more than
-four units (`ui::List::onDrag`, `List::kDragSlop`) starts the drag
-(`PluginDrag`): a chip with the plugin's name follows the pointer on the
-overlay layer (`plugin.drag`), and the track under it is outlined in the
-focus colour. A track is under the pointer on its row of the arrange view,
-the control panel and the lane together (`Shell::trackTargetAt`; not an
-automation lane, the ruler or the band at the panel's foot), or on its
-strip while the mixer is shown (`Mixer::trackTargetAt`), the strip first.
-The release runs one `fx.add {track, plugin}` on that track only, whatever
-is selected: one undo step, and the status line says "Added to *track*" or
-the command's message. A release anywhere else, and a cancelled gesture,
-do nothing. The plugin is the one the drag began on, even when the list
-changes under it (a search, a rescan that finishes). Patches, media and
+*Chains* lists the saved FX chain presets (`fx.chain.list`; node ids under
+`side.browser.chains`), by name with their size at the right ("1 effect",
+"3 effects"), and a search by name (`.search`). Enter in the search, a
+double-click or **Add** (`.add`) appends the chain to every selected
+track's main chain: one `fx.chain.load {track, path}` each, inside one
+transaction for several ("Load chain"), so one undo step and all of them
+or none. The status line (`.status`) says "Loaded onto *track*", "Loaded
+onto *N* tracks", "Select a track first" or the command's message. With
+nothing saved the list's place says where chains come from (`.empty`: "No
+saved chains yet. Save one with Save chain… in a track's FX window, and it
+is listed here."); a search that finds nothing says "No chain matches."
+Replacing a chain, deleting a preset and the input and take chains stay
+with the FX window (§4.5).
+
+A row of either page **drags onto a track**. A left press on a row that
+moves more than four units (`ui::List::onDrag`, `List::kDragSlop`) starts
+the drag (`PluginDrag`): a chip with the plugin's or the chain's name
+follows the pointer on the overlay layer (`plugin.drag`), and the track
+under it is outlined in the focus colour. A track is under the pointer on
+its row of the arrange view, the control panel and the lane together
+(`Shell::trackTargetAt`; not an automation lane, the ruler or the band at
+the panel's foot), or on its strip while the mixer is shown
+(`Mixer::trackTargetAt`), the strip first. The release runs one `fx.add
+{track, plugin}` or one `fx.chain.load {track, path}` on that track only,
+whatever is selected: one undo step, and the page's status line says
+"Added to *track*", "Loaded onto *track*" or the command's message. A
+release anywhere else, and a cancelled gesture, do nothing. What is
+dragged is the row the drag began on, even when the list changes under it
+(a search, a rescan that finishes). Rack patches, the project's media and
 files are not there yet.
 
 **Inspector.** What is selected, read from the selection and the session

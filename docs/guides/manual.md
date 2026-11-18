@@ -387,6 +387,10 @@ and the **History**. It stays closed until you ask for it:
   plug-in from the list onto a track, in the arrangement or on its mixer
   strip; the track it will land on is outlined. **Favourite** keeps a
   plug-in at the top; **Rescan** looks for newly installed ones.
+  **Chains**, beside **Plug-ins** at the top of the Browser, lists the FX
+  chains you saved with **Save chain…** in a track's FX window. Add one or
+  drag it onto a track the same way; it is added after the plug-ins the
+  track already has.
 - **View > History and command log**, or **Ctrl+H**, opens it on the History:
   the versions you can step back to, the branches, and every command with who
   ran it.

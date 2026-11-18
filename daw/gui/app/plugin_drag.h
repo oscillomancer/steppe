@@ -32,9 +32,14 @@ class PluginDrag {
     // answers wins (the mixer's strips, then the arrange view's rows).
     using Finder = std::function<std::optional<TrackTarget>(ui::Point)>;
     void addTargets(Finder finder);
-    // The browser's drag (PluginBrowser::onDrag).
+    // The browser's drag (PluginBrowser::onDrag): the release runs `fx.add`
+    // and tells onDrop.
     void drag(const std::string& plugin, const std::string& name, ui::DragPhase phase,
               ui::Point at);
+    // Anything else that goes on a track (an FX chain preset): `label` is on
+    // the chip, and `drop` runs with the track it was released on.
+    using Drop = std::function<void(const model::Id& track)>;
+    void drag(const std::string& label, ui::DragPhase phase, ui::Point at, Drop drop);
     // What a drop did or why it did nothing, for the browser's status line:
     // the track it went on, or the command's error.
     std::function<void(const model::Id& track, const Status& result)> onDrop;

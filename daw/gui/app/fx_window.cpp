@@ -675,18 +675,19 @@ std::unique_ptr<ui::Node> FxWindow::buildSideBrowser(
     const UiState& ui,
     std::function<void(const std::string&, const std::string&, ui::DragPhase, ui::Point)> drag) {
     sideBrowser_->onDrag = std::move(drag);
-    return sideBrowser_->buildEmbedded("side.browser", [this, &ui](const std::string& plugin) {
-        const auto added = addToSelection(ui, plugin);
-        std::string status;
-        if (!added)
-            status = added.error().code == "gui.track" ? std::string("Select a track first")
-                                                       : added.error().message;
-        else if (added->size() == 1)
-            status = "Added to " + model::trackLabel(app_.head(), added->front());
-        else
-            status = "Added to " + std::to_string(added->size()) + " tracks";
-        sideBrowser_->setStatus(std::move(status));
-    });
+    return sideBrowser_->buildEmbedded(
+        "side.browser.plugins", [this, &ui](const std::string& plugin) {
+            const auto added = addToSelection(ui, plugin);
+            std::string status;
+            if (!added)
+                status = added.error().code == "gui.track" ? std::string("Select a track first")
+                                                           : added.error().message;
+            else if (added->size() == 1)
+                status = "Added to " + model::trackLabel(app_.head(), added->front());
+            else
+                status = "Added to " + std::to_string(added->size()) + " tracks";
+            sideBrowser_->setStatus(std::move(status));
+        });
 }
 
 Result<std::vector<model::Id>> FxWindow::addToSelection(const UiState& ui,

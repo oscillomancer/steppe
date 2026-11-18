@@ -22,7 +22,9 @@
 #include "generate.h"
 #include "learn_dialog.h"
 #include "plugin_browser.h"
+#include "plugin_drag.h"
 #include "render_dialog.h"
+#include "side_browser.h"
 #include "side_panel.h"
 #include "supple/audio/audio_file.h"
 #include "supple/engine/app.h"
@@ -1001,16 +1003,16 @@ TEST_CASE("the side panel's browser adds to the selected tracks, and stays") {
     side.show("browser");
     f.root->frame(false);
     CHECK(shown == 1);
-    auto* search = dynamic_cast<ui::TextField*>(f.root->find("side.browser.search"));
-    auto* list = dynamic_cast<ui::List*>(f.root->find("side.browser.results"));
-    auto* status = f.root->find("side.browser.status");
+    auto* search = dynamic_cast<ui::TextField*>(f.root->find("side.browser.plugins.search"));
+    auto* list = dynamic_cast<ui::List*>(f.root->find("side.browser.plugins.results"));
+    auto* status = f.root->find("side.browser.plugins.status");
     REQUIRE(search);
     REQUIRE(list);
     REQUIRE(status);
     CHECK(search->visibleInTree());
     // A panel has its own tab and Close: the browser brings no title.
-    CHECK_FALSE(f.root->find("side.browser.title"));
-    CHECK_FALSE(f.root->find("side.browser.close"));
+    CHECK_FALSE(f.root->find("side.browser.plugins.title"));
+    CHECK_FALSE(f.root->find("side.browser.plugins.close"));
     CHECK(f.fx->sideBrowser().rowCount() > 0);
     // A row says which format it is when it is not CLAP.
     {
@@ -1025,8 +1027,8 @@ TEST_CASE("the side panel's browser adds to the selected tracks, and stays") {
     }
     // It fits the panel: nothing is wider than it.
     const ui::Rect panel = f.root->find("side")->bounds();
-    for (const char* id : {"side.browser.search", "side.browser.results", "side.browser.footer",
-                           "side.browser.add"}) {
+    for (const char* id : {"side.browser.plugins.search", "side.browser.plugins.results",
+                           "side.browser.plugins.footer", "side.browser.plugins.add"}) {
         const ui::Rect r = f.root->find(id)->bounds();
         CHECK_MESSAGE(r.x >= panel.x, id);
         CHECK_MESSAGE(r.right() <= panel.right(), id);
@@ -1061,7 +1063,7 @@ TEST_CASE("the side panel's browser adds to the selected tracks, and stays") {
 
     // Two tracks: the Add button puts it on both, as one undo step.
     f.ui.selectedTracks = {one.str(), two.str()};
-    REQUIRE(f.root->click("side.browser.add"));
+    REQUIRE(f.root->click("side.browser.plugins.add"));
     f.root->frame(false);
     CHECK(f.app->head().tracks.find(one)->chain.size() == 2);
     CHECK(f.app->head().tracks.find(two)->chain.size() == 1);
@@ -1117,7 +1119,7 @@ TEST_CASE("the side panel's browser adds to the selected tracks, and stays") {
     typed("");
     const std::string last = f.fx->sideBrowser().shown().back();
     list->select(f.fx->sideBrowser().rowCount() - 1, true);
-    REQUIRE(f.root->click("side.browser.fav"));
+    REQUIRE(f.root->click("side.browser.plugins.fav"));
     f.root->frame(false);
     CHECK(f.fx->sideBrowser().shown().front() == last);
     side.hide();
@@ -1127,6 +1129,168 @@ TEST_CASE("the side panel's browser adds to the selected tracks, and stays") {
     f.root->frame(false);
     CHECK(shown == 2);
     CHECK(f.fx->sideBrowser().shown().front() == last);
+}
+
+TEST_CASE("the side panel's browser has kinds: saved FX chains go on tracks by Add or by a drag") {
+    Fixture f;
+    if (!f.ok) return;
+    if (!f.stockPlugins()) {
+        MESSAGE("skipped: no stock plugins (a partial build)");
+        return;
+    }
+    const model::Id source = f.addTrack("Source"), one = f.addTrack("One"), two = f.addTrack("Two");
+    auto chain = [&](const model::Id& track) {
+        return f.app->head().tracks.find(track)->chain.size();
+    };
+    gui::PluginDrag drag(*f.root, *f.dispatcher);
+    // The test's drop target: anything left of x = 100 is track Two.
+    drag.addTargets([&](ui::Point p) -> std::optional<gui::TrackTarget> {
+        if (p.x >= 100) return std::nullopt;
+        return gui::TrackTarget{two, {0, 0, 100, 400}};
+    });
+    gui::SideBrowser browser(*f.root, *f.app, *f.dispatcher, f.ui, *f.fx, drag);
+    gui::SidePanel side(*f.root);
+    side.addTab("browser", "Browser", browser.build(), [&](bool on) { browser.setVisible(on); });
+    f.root->find("window")->add(side.build());
+    side.show("browser");
+    f.root->frame(false);
+    auto inView = [&](const char* id) {
+        const ui::Node* n = f.root->find(id);
+        return n && n->visibleInTree();
+    };
+    auto text = [&](const char* id) { return f.root->find(id)->valueText(); };
+
+    // Plug-ins first; a click on the row's other half shows Chains.
+    CHECK(browser.kind() == "plugins");
+    CHECK(text("side.browser.kinds") == "Plug-ins");
+    CHECK(inView("side.browser.plugins.search"));
+    CHECK_FALSE(inView("side.browser.chains.search"));
+    const ui::Rect kinds = f.root->find("side.browser.kinds")->bounds();
+    auto pick = [&](float part) {
+        const ui::Point at{kinds.x + kinds.w * part, kinds.y + kinds.h / 2};
+        f.root->pointer({ui::PointerEvent::Type::Down, at, 1});
+        f.root->pointer({ui::PointerEvent::Type::Up, at, 1});
+        f.root->frame(false);
+    };
+    f.root->focus(f.root->find("side.browser.plugins.search"));
+    pick(0.75f);
+    CHECK(browser.kind() == "chains");
+    CHECK(text("side.browser.kinds") == "Chains");
+    CHECK(inView("side.browser.chains.search"));
+    CHECK_FALSE(inView("side.browser.plugins.search"));
+    // The page that left gave up the keyboard.
+    CHECK(f.root->focused() != f.root->find("side.browser.plugins.search"));
+    // Nothing saved: the page says where chains come from.
+    CHECK(browser.chainCount() == 0);
+    REQUIRE(inView("side.browser.chains.empty"));
+    CHECK(text("side.browser.chains.empty").find("Save chain") != std::string::npos);
+
+    // Two chains saved from a track: listed by name with their size, when
+    // the page next comes into view.
+    REQUIRE(f.run("fx.add", f.args({{"track", source.str()}, {"plugin", f.pluginId("Hickory")}})));
+    REQUIRE(f.run("fx.chain.save", f.args({{"track", source.str()}, {"name", "Clean"}})));
+    REQUIRE(f.run("fx.add", f.args({{"track", source.str()}, {"plugin", f.pluginId("Hickory")}})));
+    REQUIRE(f.run("fx.chain.save", f.args({{"track", source.str()}, {"name", "Vocal bus"}})));
+    CHECK(browser.chainCount() == 0);  // not read while nothing asked
+    pick(0.25f);
+    pick(0.75f);
+    REQUIRE(browser.chainCount() == 2);
+    CHECK_FALSE(inView("side.browser.chains.empty"));
+    CHECK(browser.chainRow(0).name == "Clean");
+    CHECK(browser.chainRow(0).detail == "1 effect");
+    CHECK(browser.chainRow(1).name == "Vocal bus");
+    CHECK(browser.chainRow(1).detail == "2 effects");
+
+    // The search narrows by name; nothing found says so.
+    browser.focusSearch();
+    CHECK(f.root->focused() == f.root->find("side.browser.chains.search"));
+    f.root->text("voc");
+    f.root->frame(false);
+    REQUIRE(browser.chainCount() == 1);
+    CHECK(browser.chainRow(0).name == "Vocal bus");
+    // Enter with nothing selected: nothing loads.
+    auto before = f.historyCount();
+    f.root->key(SDLK_RETURN, 0);
+    f.root->frame(false);
+    CHECK(text("side.browser.chains.status") == "Select a track first");
+    CHECK(f.historyCount() == before);
+    // One track: Enter appends the chain there.
+    f.ui.selectedTracks = {one.str()};
+    f.root->key(SDLK_RETURN, 0);
+    f.root->frame(false);
+    CHECK(chain(one) == 2);
+    CHECK(text("side.browser.chains.status") == "Loaded onto One");
+    CHECK(f.historyCount() == before + 1);
+    // Two tracks: Add loads it onto both as one undo step.
+    f.ui.selectedTracks = {one.str(), two.str()};
+    REQUIRE(f.root->click("side.browser.chains.add"));
+    f.root->frame(false);
+    CHECK(chain(one) == 4);
+    CHECK(chain(two) == 2);
+    CHECK(text("side.browser.chains.status") == "Loaded onto 2 tracks");
+    CHECK(f.historyCount() == before + 2);
+    REQUIRE(f.run("history.undo", json::Value::object()));
+    CHECK(chain(one) == 2);
+    CHECK(chain(two) == 0);
+
+    // A row dragged onto a track loads the chain on that track only,
+    // whatever is selected; released elsewhere it does nothing.
+    auto* list = dynamic_cast<ui::List*>(f.root->find("side.browser.chains.results"));
+    REQUIRE(list);
+    const ui::Point row{list->bounds().x + 20, list->bounds().y + list->rowHeight / 2};
+    before = f.historyCount();
+    f.root->pointer({ui::PointerEvent::Type::Down, row, 1});
+    f.root->pointer({ui::PointerEvent::Type::Move, {row.x - 30, row.y}, 1});
+    CHECK(drag.view().active);
+    CHECK(drag.view().label == "Vocal bus");
+    CHECK_FALSE(drag.view().target);
+    f.root->pointer({ui::PointerEvent::Type::Move, {50, 50}, 1});
+    REQUIRE(drag.view().target);
+    CHECK(drag.view().target->track == two);
+    f.root->pointer({ui::PointerEvent::Type::Up, {50, 50}, 1});
+    f.root->frame(false);
+    CHECK_FALSE(drag.view().active);
+    CHECK(chain(two) == 2);
+    CHECK(chain(one) == 2);
+    CHECK(text("side.browser.chains.status") == "Loaded onto Two");
+    CHECK(f.historyCount() == before + 1);
+    f.root->pointer({ui::PointerEvent::Type::Down, row, 1});
+    f.root->pointer({ui::PointerEvent::Type::Move, {row.x - 30, row.y}, 1});
+    f.root->pointer({ui::PointerEvent::Type::Up, {row.x - 30, row.y}, 1});
+    f.root->frame(false);
+    CHECK(f.historyCount() == before + 1);
+    f.snapshot("side-browser-chains.png");
+
+    // A search that finds nothing, then the kinds from the keyboard.
+    browser.focusSearch();
+    f.root->text("zzz");
+    f.root->frame(false);
+    CHECK(browser.chainCount() == 0);
+    CHECK(text("side.browser.chains.empty") == "No chain matches.");
+    f.root->focus(f.root->find("side.browser.kinds"));
+    f.root->key(SDLK_LEFT, 0);
+    f.root->frame(false);
+    CHECK(browser.kind() == "plugins");
+    f.root->key(SDLK_LEFT, 0);  // already the first
+    CHECK(browser.kind() == "plugins");
+    f.root->key(SDLK_RIGHT, 0);
+    CHECK(browser.kind() == "chains");
+    browser.show("no such kind");
+    CHECK(browser.kind() == "chains");
+    // A plug-in dragged from the Plug-ins page still lands through fx.add.
+    browser.show("plugins");
+    f.root->frame(false);
+    auto* plugins = dynamic_cast<ui::List*>(f.root->find("side.browser.plugins.results"));
+    REQUIRE(plugins);
+    const ui::Point first{plugins->bounds().x + 20, plugins->bounds().y + plugins->rowHeight / 2};
+    const auto twoBefore = chain(two);
+    f.root->pointer({ui::PointerEvent::Type::Down, first, 1});
+    f.root->pointer({ui::PointerEvent::Type::Move, {first.x - 30, first.y}, 1});
+    CHECK(drag.view().plugin == f.fx->sideBrowser().shown().front());
+    f.root->pointer({ui::PointerEvent::Type::Up, {50, 50}, 1});
+    f.root->frame(false);
+    CHECK(chain(two) == twoBefore + 1);
+    CHECK(text("side.browser.plugins.status") == "Added to Two");
 }
 
 TEST_CASE("the plugin browser finds a stock plugin by what it is") {

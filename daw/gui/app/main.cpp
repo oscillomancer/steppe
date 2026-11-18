@@ -60,6 +60,7 @@
 #include "routing_matrix.h"
 #include "screensets.h"
 #include "shell.h"
+#include "side_browser.h"
 #include "side_panel.h"
 #include "supple/base/files.h"
 #include "supple/cmd/bus.h"
@@ -532,14 +533,10 @@ int main(int argc, char** argv) {
     gui::PluginDrag pluginDrag(root, dispatcher);
     pluginDrag.addTargets([&mixer](ui::Point p) { return mixer.trackTargetAt(p); });
     pluginDrag.addTargets([&shell](ui::Point p) { return shell.trackTargetAt(p); });
-    pluginDrag.onDrop = [&](const model::Id& track, const Status& added) {
-        fxWindow.sideBrowser().setStatus(
-            added ? "Added to " + model::trackLabel((*app)->head(), track) : added.error().message);
-        if (!added && appActions.onError) appActions.onError("fx.add: " + added.error().message);
-    };
+    gui::SideBrowser sideBrowser(root, **app, dispatcher, uiState, fxWindow, pluginDrag);
     appActions.addUi("ui.browser", "View: browser", [&] {
         side.toggle("browser");
-        if (side.showing("browser")) fxWindow.sideBrowser().focusSearch();
+        if (side.showing("browser")) sideBrowser.focusSearch();
     });
     // A strip's rack slot opens the rack window on it.
     mixer.openRack = [&](const model::Id& rack) { racks.open(rack); };
@@ -622,15 +619,8 @@ int main(int argc, char** argv) {
         center.add(mixer.build());
         side.addTab("inspector", "Inspector", inspector.build(),
                     [&inspector](bool on) { inspector.setVisible(on); });
-        side.addTab(
-            "browser", "Browser",
-            fxWindow.buildSideBrowser(
-                uiState, [&pluginDrag](const std::string& plugin, const std::string& name,
-                                       ui::DragPhase phase,
-                                       ui::Point at) { pluginDrag.drag(plugin, name, phase, at); }),
-            [&fxWindow](bool on) {
-                if (on) fxWindow.sideBrowser().reload();
-            });
+        side.addTab("browser", "Browser", sideBrowser.build(),
+                    [&sideBrowser](bool on) { sideBrowser.setVisible(on); });
         side.addTab("history", "History", history.build(),
                     [&history](bool on) { history.setVisible(on); });
         body.add(side.build());
