@@ -34,6 +34,9 @@ void removeMarker(const std::filesystem::path& root, const Packet& boot);
 // no moment at which it is both present and unlocked, then closes it; Windows has to close its
 // handle first (the file is not opened for deletion), then removes the file.
 void removeOwnMarker(const std::filesystem::path& root, const Packet& boot, std::intptr_t file);
+// Retention keeps the newest 20 crash and unexpected-exit reports and, on a budget of their own,
+// the newest `kKeepBridgeReports` bridge_exit reports; 50 MiB bounds both together.
+inline constexpr std::size_t kKeepBridgeReports = 5;
 Status pruneReports(const std::filesystem::path& root);
 // Runs that ended and left no report keep their marker so the next start can say so; the newest
 // `kKeepUnreportedRuns` are kept and older ones removed with their acknowledgements. Held markers

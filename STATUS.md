@@ -1615,7 +1615,8 @@ none for a repeat (the plug-in's id and version and the status stand in for a bu
 host's account only: the bridge's own threads and fault are not collected yet (6b, 6c), the
 attribution is the only live member or none, an exit's code is not read on POSIX, a bridge killed
 by the out-of-memory killer reads as a signal, and the 65536th bridge of a run has no ordinal.
-It is never a restart notice and takes no place in the suspect window. Tested on Linux only
+It is never a restart notice and takes no place in the suspect window, and retention keeps the newest
+5 of them apart from the 20 crash reports, so they cannot evict the report behind a suspicion. Tested on Linux only
 (unit tests, `clap-host.diagnostics-inventory` with the real bridge); the Windows exception
 classification and the macOS signal path are unproven until native CI runs. On Windows the
 `test_bridge_diagnostics` cases that end a bridge from outside (a signal, a bridge that died

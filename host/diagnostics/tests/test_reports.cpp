@@ -1265,6 +1265,7 @@ TEST_CASE("a pruned unreported run takes its settlement and acknowledgement") {
 }
 
 namespace {
+constexpr unsigned kBridgeKeepForTest = static_cast<unsigned>(kKeepBridgeReports);
 // The report of a bridge that died while its program lived (topic 6a), as the supervisor writes
 // it, under the incident `id` and the age given: an ordinary sample report with the parts of that
 // kind swapped in, so the reader sees what it would see.
@@ -1361,4 +1362,43 @@ TEST_CASE("bridge deaths take no place in the window of reports that decides who
     REQUIRE(found.size() == 1);
     CHECK(found[0].pluginId == "com.acme.canary");
     CHECK(found[0].incidents == std::vector<std::string>{name(1)});
+}
+
+TEST_CASE("bridge deaths cannot push out the crash that makes a plug-in a suspect") {
+    Root root;
+    crashing(root, 1, {}, 100);
+    // Far more bridge deaths than the folder holds, each followed by retention as the supervisor
+    // does when it publishes one (round 6a, F1).
+    for (unsigned id = 2; id < 40; ++id) {
+        bridgeDeath(root, id, static_cast<int>(90 - id));
+        REQUIRE(pruneReports(root.path));
+    }
+    CHECK(fs::exists(file(root, 1, ".json")));
+    const auto found = suspectsOf(root);
+    REQUIRE(found.size() == 1);
+    CHECK(found[0].incidents == std::vector<std::string>{name(1)});
+    // The bridge deaths keep to their own budget, the newest ones.
+    unsigned kept = 0;
+    for (unsigned id = 2; id < 40; ++id) {
+        const bool there = fs::exists(file(root, id, ".json"));
+        kept += there ? 1 : 0;
+        CHECK(there == (id >= 40 - kBridgeKeepForTest));
+    }
+    CHECK(kept == kBridgeKeepForTest);
+}
+
+TEST_CASE("bridge deaths do not count against the twenty crash reports either") {
+    Root root;
+    for (unsigned id = 1; id <= 5; ++id) bridgeDeath(root, id, static_cast<int>(200 - id));
+    for (unsigned id = 10; id < 30; ++id) {
+        report(root, id);
+        age(root, id, static_cast<int>(100 - id));
+    }
+    REQUIRE(pruneReports(root.path));
+    for (unsigned id = 1; id <= 5; ++id) CHECK(fs::exists(file(root, id, ".json")));
+    for (unsigned id = 10; id < 30; ++id) CHECK(fs::exists(file(root, id, ".json")));
+    // One more crash report removes the oldest crash report, not a bridge death.
+    report(root, 30);
+    CHECK_FALSE(fs::exists(file(root, 10, ".json")));
+    for (unsigned id = 1; id <= 5; ++id) CHECK(fs::exists(file(root, id, ".json")));
 }

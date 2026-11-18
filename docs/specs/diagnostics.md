@@ -155,7 +155,9 @@ are forbidden. Never create a minidump to sanitize later.
 
 Atomic private publication uses native wide Windows paths and existing atomic
 write/durability primitives. Retention prunes oldest validated owned reports until
-count <=20 and total <=50 MiB. Validation checks the implemented role/kind/platform/architecture
+count <=20 and total <=50 MiB; `bridge_exit` reports (topic 6a) have a budget of their own, the
+newest `kKeepBridgeReports` (5), and do not count among the 20, so bridge deaths never evict the
+report that makes a plug-in a suspect (the 50 MiB bound covers both). Validation checks the implemented role/kind/platform/architecture
 enums, native code/cause bounds, nonnegative drop counters and incomplete-report
 reasons. The thread, plug-in and command arrays have nested schemas (topics 4, 5c and 5d)
 that are validated field by field; a report whose arrays have another shape is kept, never

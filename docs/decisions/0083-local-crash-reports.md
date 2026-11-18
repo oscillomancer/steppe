@@ -250,5 +250,7 @@ a capture of the bridge, and it is not a restart notice or a place in the suspec
 change, no change to the bridge. Instead of the `Message::BridgeEnd`, the worker-minted incident id
 and the worker's pending/ready watcher sketched under "Later integration contracts", the `Bridge` end
 event travels in order on the inventory channel and the supervisor, applying it, mints the incident id
-and writes the report; a bridge death does not wake the model by itself. Contracts:
+and writes the report; a bridge death does not wake the model by itself. Bridge reports have their own retention budget (the
+newest 5), so a plug-in whose bridge dies in every run cannot push out the crash report that makes it
+a suspect. Contracts:
 `docs/specs/diagnostics.md` "Bridge processes (topic 6a)".

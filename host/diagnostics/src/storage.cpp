@@ -516,6 +516,7 @@ Status pruneReports(const fs::path& root,
         fs::path path;
         fs::file_time_type time;
         std::uintmax_t bytes;
+        bool bridge;  // a bridge_exit report: kept on its own budget
     };
     std::vector<Entry> reports;
     std::error_code ec;
@@ -557,22 +558,29 @@ Status pruneReports(const fs::path& root,
             continue;
         }
         if (ec) return failure();
-        reports.push_back({path, time, bytes});
+        const auto* kind = value->find("kind");
+        reports.push_back(
+            {path, time, bytes, kind && kind->isString() && kind->asString() == "bridge_exit"});
         total += bytes;
     }
     if (ec) return failure();
     std::sort(reports.begin(), reports.end(), [](const auto& a, const auto& b) {
         return a.time == b.time ? a.path < b.path : a.time < b.time;
     });
-    std::size_t count = reports.size();
+    // A bridge's death is the host's note about a plug-in's process, not a crash of the app. It
+    // has a budget of its own, so a plug-in whose bridge dies in every run cannot push out the
+    // report that makes a plug-in a suspect; the byte cap covers both kinds.
+    std::size_t count = 0, bridges = 0;
+    for (const auto& report : reports) (report.bridge ? bridges : count) += 1;
     for (const auto& report : reports) {
-        if (count <= 20 && total <= 50 * 1024 * 1024) break;
+        const bool overBytes = total > 50 * 1024 * 1024;
+        if (!(report.bridge ? bridges > kKeepBridgeReports : count > 20) && !overBytes) continue;
         if (checkpoint) checkpoint(report.path, "remove");
         if (!privateRemove(report.path)) return failure();
         privateRemove(
             fs::path(report.path).replace_extension(".ack"));  // its acknowledgement, if any
         privateRemove(fs::path(report.path).replace_extension(".settled"));  // and settlement
-        --count;
+        --(report.bridge ? bridges : count);
         total -= report.bytes;
     }
     return okStatus();

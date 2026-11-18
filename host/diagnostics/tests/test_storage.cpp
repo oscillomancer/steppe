@@ -290,12 +290,19 @@ TEST_CASE("a bridge's death is published as a report of its own, valid, with no 
     CHECK(parsed->find("attribution")->find("plugin")->asInt() == 0);
     CHECK(reportShape(*parsed));
     CHECK(reportShape(*parsed, true));
-    // Retention keeps it like any report and removes it as the oldest when the time comes.
+    // Retention keeps it beside twenty crash reports, since bridge reports have a budget of
+    // their own, and removes it as the oldest once five newer bridge reports are there.
     fs::last_write_time(files[0], fs::file_time_type::clock::now() - std::chrono::hours(48));
     for (unsigned i = 1; i < 21; ++i)
         REQUIRE(publishReport(root.path, boot(i), nullptr, 31, false));
-    CHECK(reports(root.path) == 20);
+    CHECK(reports(root.path) == 21);
+    CHECK(fs::exists(files[0]));
+    for (unsigned i = 0; i + 1 < kKeepBridgeReports; ++i)
+        REQUIRE(publishBridgeReport(root.path, boot(0), inventory, 1));
+    CHECK(fs::exists(files[0]));
+    REQUIRE(publishBridgeReport(root.path, boot(0), inventory, 1));
     CHECK_FALSE(fs::exists(files[0]));
+    CHECK(reports(root.path) == 20 + kKeepBridgeReports);
 }
 TEST_CASE("a bridge_exit report is valid only as the report of a bridge that died on its own") {
     Root root;
