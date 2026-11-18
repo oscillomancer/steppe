@@ -937,7 +937,9 @@ with the folder's retention pass (which reads every report in it), on a writer t
 supervisor's own (`BackgroundWriter`, `host/diagnostics/src/background.h`), so the packets behind
 the end, among them the worker's own terminal packet, do not wait for the disk. The writer runs its
 work in order; the supervisor drains it and joins it before it writes the worker's own report and
-before it ends, so no bridge report is lost to the exit and two retention passes never overlap. A report
+before it ends, so no bridge report is lost to the exit and two retention passes never overlap. When the
+system gives the writer no thread, the piece runs at once on the supervisor's own loop: the report is late, never lost,
+and the supervisor stays alive. A report
 that cannot be written prints one line to the supervisor's standard error. The strict validator
 holds the kind to its parts: `bridge` is a listed bridge that ended by `signal` or `exception`
 with the report's `code`, `attribution` is the `bridge_exit` level and its plug-in a listed member

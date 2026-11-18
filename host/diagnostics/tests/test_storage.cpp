@@ -697,6 +697,29 @@ TEST_CASE("a background writer that is destroyed first runs what it was given") 
     }  // the destructor finishes
     CHECK(done == std::vector<int>{0, 1, 2, 3, 4});
 }
+TEST_CASE("a background writer that cannot start its thread runs the work on the caller's thread") {
+    std::vector<int> done;
+    std::vector<std::thread::id> threads;
+    BackgroundWriter writer;
+    writer.failNextStartForTests();
+    REQUIRE_NOTHROW(writer.post([&] {
+        done.push_back(1);
+        threads.push_back(std::this_thread::get_id());
+    }));
+    // Nothing is lost and nothing waits: the piece has run, here.
+    CHECK(done == std::vector<int>{1});
+    REQUIRE(threads.size() == 1);
+    CHECK(threads[0] == std::this_thread::get_id());
+    // The failure was one attempt's: the next piece gets its thread and runs off this one.
+    writer.post([&] {
+        done.push_back(2);
+        threads.push_back(std::this_thread::get_id());
+    });
+    writer.finish();
+    CHECK(done == std::vector<int>{1, 2});
+    REQUIRE(threads.size() == 2);
+    CHECK(threads[1] != std::this_thread::get_id());
+}
 TEST_CASE("a bridge_exit report is valid only as the report of a bridge that died on its own") {
     Root root;
     const auto inventory = bridgeThatEnded(supple::diagctx::BridgeHow::Exception, -1073741819);

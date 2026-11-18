@@ -9,12 +9,14 @@
 // never waits for earlier work; `finish` runs what is queued and joins, and is what the
 // supervisor calls before it writes the worker's own report, so that two retention passes never
 // overlap and no report is left unwritten when the supervisor ends. Work posted after `finish`
-// runs at once on the caller's thread.
+// runs at once on the caller's thread, as does work posted
+// when no thread can be started.
 #pragma once
 #include <condition_variable>
 #include <deque>
 #include <functional>
 #include <mutex>
+#include <system_error>
 #include <thread>
 #include <utility>
 
@@ -28,17 +30,24 @@ class BackgroundWriter {
     ~BackgroundWriter() { finish(); }
 
     // Queues `work` (which must not throw) and returns. The thread starts with the first piece.
+    // When the system gives no thread, `work` runs at once on the caller's: a report is written
+    // late, never lost, and the supervisor stays alive.
     void post(std::function<void()> work) {
         {
             std::lock_guard lock(mutex_);
-            if (!finished_) {
-                if (!thread_.joinable()) thread_ = std::thread([this] { run(); });
+            if (!finished_ && startThread()) {
                 queue_.push_back(std::move(work));
                 wake_.notify_one();
                 return;
             }
         }
         work();
+    }
+    // Tests only: the next attempt to start the thread fails, as it does when the process is out
+    // of threads.
+    void failNextStartForTests() {
+        std::lock_guard lock(mutex_);
+        failStart_ = true;
     }
     // Runs what is queued, then joins. Safe to call again.
     void finish() {
@@ -53,6 +62,19 @@ class BackgroundWriter {
     }
 
   private:
+    // With the mutex held. True when the thread runs (already, or now).
+    bool startThread() {
+        if (thread_.joinable()) return true;
+        try {
+            if (std::exchange(failStart_, false))
+                throw std::system_error(
+                    std::make_error_code(std::errc::resource_unavailable_try_again));
+            thread_ = std::thread([this] { run(); });
+            return true;
+        } catch (const std::system_error&) {
+            return false;
+        }
+    }
     void run() {
         std::unique_lock lock(mutex_);
         for (;;) {
@@ -69,7 +91,7 @@ class BackgroundWriter {
     std::condition_variable wake_;
     std::deque<std::function<void()>> queue_;
     std::thread thread_;
-    bool finished_ = false;
+    bool finished_ = false, failStart_ = false;
 };
 
 }  // namespace supple::diagnostics::detail
