@@ -456,10 +456,11 @@ the main thread inside `load` as before, and a plan swap neither drops nor
 re-renders chunks rendered ahead, so a live node plays it from its next
 block and a node the renderer runs after the chunks it had rendered. The
 real-time output is bit-identical to a compiled reload of the same edit at
-the same block. The patch sequence (`Engine::patchSequence()`) is odd while
-patches are applied and moves by two per edit; every executor reads it
-before processing a block and stamps that block's plug-in outputs with it
-(see plug-in outputs below). `Engine::patchEdits()` counts these edits.
+the same block. The patch sequence (`Engine::patchSequence()`) moves by one
+before the patches are applied and by one after; every executor reads it
+before processing a block and stamps that block's plug-in outputs with it,
+and the app drops outputs stamped with any value other than the current
+one (see plug-in outputs below). `Engine::patchEdits()` counts these edits.
 
 ## 2. Real-time execution
 

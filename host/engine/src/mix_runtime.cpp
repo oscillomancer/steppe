@@ -217,9 +217,10 @@ bool Engine::loadPatches(const model::Session& session, const std::filesystem::p
     // From here the patches are applied. Whatever a plug-in reports that a
     // plan holds (latency, parameters, ports, activation, a restart) makes
     // this a compile, which finds those patches already applied. The patch
-    // sequence is odd meanwhile: plug-in outputs of blocks begun before the
-    // last patch reached its instance carry an older value, and the app
-    // drops them as it drops a replaced plan's.
+    // sequence moves before and after: plug-in outputs of blocks begun
+    // before the last patch reached its instance carry an older value, and
+    // the app drops any value other than the current one, as it drops a
+    // replaced plan's. Odd in between is only a marker.
     patchSeq_.fetch_add(1);
     struct Even {
         std::atomic<std::uint64_t>& seq;
