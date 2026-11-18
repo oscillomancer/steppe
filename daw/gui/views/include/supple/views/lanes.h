@@ -89,13 +89,6 @@ class Lanes : public ui::Node {
     void paint(ui::Canvas& canvas) override;
     void paintGl(const ui::GlFrame& frame) override;
 
-    // A project without a track says how to start, in quiet ink in the
-    // middle of the lanes (gui.md §4.3): two lines, gone with the first row.
-    static constexpr const char* kEmptyTitle = "This project is empty.";
-    static constexpr const char* kEmptyHint =
-        "Drop audio or MIDI files here, or click + track at the bottom left.";
-    bool showsEmptyHint() const { return layout_.rowCount() == 0; }
-
     // What the last paint drew (benchmarks, tests).
     struct Stats {
         std::size_t rows = 0, items = 0, columns = 0, notes = 0, pending = 0, fades = 0;

@@ -23,7 +23,7 @@ steppe --help          # every command-line option
 Command names follow the product name. In a build tree, the app is
 `build/<preset>/daw/gui/steppe`.
 
-A new project is empty, and says so in the middle of the window. To begin,
+A new project is empty. To begin,
 drop audio or MIDI files onto the arrangement (each makes a track), or click
 **+ track** at the bottom left. The **Browser** (press **B**)
 lists plug-ins, saved FX chains and files to add.

@@ -3666,7 +3666,7 @@ TEST_CASE("file actions: Save before Open autosave works after a first save") {
     CHECK(model::parseProjectFile(*readTextFile(file))->store.head()->project->name == "Current");
 }
 
-TEST_CASE("an empty project says how to start; the line goes with the first track") {
+TEST_CASE("an empty project takes a dropped file and has + track; both track counts agree") {
     App a(1200, 800);
     REQUIRE(a.ok);
     peaks::PeakService peaks(a.dir / "cache", [](std::function<void()> f) { f(); });
@@ -3680,13 +3680,12 @@ TEST_CASE("an empty project says how to start; the line goes with the first trac
     shell.sync();
     a.root->frame(false);
     views::Lanes& lanes = shell.arrange()->lanes();
-    CHECK(lanes.showsEmptyHint());
-    // What the line promises holds: a file dropped on the empty lanes has
-    // somewhere to land, and the track panel has the button it names (the
-    // toolbar's buttons can be taken out; this one cannot).
+    // The lanes of an empty project are bare (no text), and both ways to
+    // begin work: a file dropped on them has somewhere to land, and the
+    // track panel has its "+ track" button (the toolbar's buttons can be
+    // taken out; this one cannot).
     const ui::Rect area = lanes.bounds();
     CHECK(shell.fileTargetAt({area.x + area.w / 2, area.y + area.h / 2}));
-    CHECK(std::string(views::Lanes::kEmptyHint).find("+ track") != std::string::npos);
     bool named = false;
     std::function<void(ui::Node&)> walk = [&](ui::Node& node) {
         if (node.valueText() == "+ track") named = true;
@@ -3701,7 +3700,6 @@ TEST_CASE("an empty project says how to start; the line goes with the first trac
     REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
     shell.sync();
     a.root->frame(false);
-    CHECK_FALSE(lanes.showsEmptyHint());
     // The track list's heading and the status line say the same number:
     // channels and busses, not the master, and not an automation lane.
     auto exec = [&](const char* command, const char* args) {
