@@ -678,21 +678,21 @@ TEST_CASE("rack window: a plugin module shows the plug-in's name and a click ope
 }
 
 TEST_CASE(
-    "rack window: a plugin module of a disabled plug-in says it is silent, and can be enabled") {
+    "rack window: a plugin module of a disabled plug-in says it is disabled, and can be enabled") {
     Fixture f(ui::Theme::dark(), {FIXTURE_CLAP_PATH});
     if (!f.ok) return;
     Patch p(f);
     const std::string sine =
         f.exec("module.add",
                R"({"rack":")" + p.rack +
-                   R"(","plugin":"com.suppleaudio.test.sine","x":440,"y":300})")["module"]
+                   R"(","plugin":"com.suppleaudio.test.sine","x":260,"y":560})")["module"]
             .asString();
     std::vector<model::Id> enabled;
     f.racks->enableFx = [&](model::Id fx) { enabled.push_back(fx); };
     f.racks->open();
     f.frame();
     const model::Id id = *model::Id::parse(sine);
-    CHECK(f.racks->space()->scene().module(id)->subtitle.find("silent") == std::string::npos);
+    CHECK(f.racks->space()->scene().module(id)->subtitle != "disabled");
     const model::Id fx = *f.app->head().modules.find(id)->fx;
     {
         const auto version = f.app->head().version;
@@ -701,9 +701,7 @@ TEST_CASE(
     }
     f.racks->sync();  // the window follows the override
     f.frame();
-    const std::string subtitle = f.racks->space()->scene().module(id)->subtitle;
-    CHECK(subtitle.size() >= 6);
-    CHECK(subtitle.substr(subtitle.size() - 6) == "silent");
+    CHECK(f.racks->space()->scene().module(id)->subtitle == "disabled");
     CHECK(f.racks->space()->scene().module(id)->silent);
     f.snapshot("rack-plugin-disabled.png");
     // Its menu starts with Enable.
@@ -720,7 +718,7 @@ TEST_CASE(
     f.exec("plugin.override", R"({"plugin":"com.suppleaudio.test.sine","mode":"normal"})");
     f.racks->sync();
     f.frame();
-    CHECK(f.racks->space()->scene().module(id)->subtitle.find("silent") == std::string::npos);
+    CHECK(f.racks->space()->scene().module(id)->subtitle != "disabled");
     CHECK_FALSE(f.racks->space()->scene().module(id)->silent);
 }
 

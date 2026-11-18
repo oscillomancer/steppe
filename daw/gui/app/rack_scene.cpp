@@ -174,8 +174,7 @@ RackScene RackScene::build(const model::Session& s, model::Id rackId, const rack
             v.title = moduleTitle(s, catalog, e.id);
             if (fx) v.subtitle = fx->plugin.vendor;
             v.silent = fx && disabled && disabled(fx->plugin);
-            if (v.silent)
-                v.subtitle += (v.subtitle.empty() ? "" : " \u00b7 ") + std::string("silent");
+            if (v.silent) v.subtitle = "disabled";  // where the vendor line is
         } else if (const rack::Catalog::Entry* t = catalog.find(m.type)) {
             v.type = t->type;
             v.title = moduleTitle(s, catalog, e.id);

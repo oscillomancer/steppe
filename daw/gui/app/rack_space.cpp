@@ -596,7 +596,8 @@ void RackSpace::paintItem(ui::Canvas& c, const RackScene::Module& m, const Panel
     if (isJack(item.kind)) {
         const bool output = item.kind == Kind::Output;
         const auto& port = output ? m.type->output(item.index) : m.type->input(item.index);
-        const ui::Color sig = t.color(signalToken(port.signal));
+        // A disabled plug-in's jacks carry nothing: their rings go faint.
+        const ui::Color sig = t.color(m.silent ? "ink-faint" : signalToken(port.signal));
         const double level = jackLevel(m, item);
         if (level > 0.02)
             c.fillCircle(centre, kJackR + 3.5f, sig.withAlpha(static_cast<float>(0.32 * level)));
@@ -815,6 +816,8 @@ void RackSpace::paintModule(ui::Canvas& c, const RackScene::Module& m, bool sele
     c.fillRound(r, kRadius, plate);
     c.restore();
     c.fillRect({r.x, r.y + head - 0.5f, r.w, 1}, t.color("rule").withAlpha(0.7f));
+    // A disabled plug-in: a 2-unit warning bar down the module's left edge.
+    if (m.silent) c.fillRect({r.x, r.y + kRadius, 2.0f, r.h - 2 * kRadius}, t.color("meter-hot"));
     const ui::Color ink = m.bypass || m.silent ? t.color("ink-faint") : t.color("ink");
     if (m.plugin) {
         // A plug-in shows its name, and opens on a click.
