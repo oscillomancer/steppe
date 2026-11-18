@@ -914,6 +914,80 @@ TEST_CASE("closing the inventory publishes one deadline for the sends it waits o
     resetInventoryForTests(nullptr);
     CHECK(partSendCutoffNs() == 0);  // a reset forgets it
 }
+#if !defined(_WIN32)
+// The real part-send loop of publish(), driven on a socket pair (round 6a, F4). The test above
+// swaps publish out, so it tests only that the close publishes its deadline; this one tests that
+// the loop that finishes a part-sent packet obeys it. The packet's first bytes are "already
+// sent"; the rest could go at once (the buffer is empty), so the only thing that can stop it is
+// the deadline, and it is already past when the loop starts: an ordering check, not a timing one.
+namespace {
+struct SocketPair {
+    int fd[2]{-1, -1};
+    SocketPair() { REQUIRE(::socketpair(AF_UNIX, SOCK_STREAM, 0, fd) == 0); }
+    ~SocketPair() {
+        for (const int one : fd)
+            if (one >= 0) ::close(one);
+    }
+    // What is waiting to be read on the far end, without blocking.
+    std::vector<char> pending() const {
+        std::vector<char> got(sizeof(Packet) + 16);
+        const auto n = ::recv(fd[1], got.data(), got.size(), MSG_DONTWAIT);
+        got.resize(n > 0 ? static_cast<std::size_t>(n) : 0);
+        return got;
+    }
+};
+Packet patterned() {
+    Packet packet = base();
+    for (std::size_t i = 0; i < sizeof(packet.instance.text[0]); ++i)
+        packet.instance.text[0][i] = static_cast<char>('a' + i % 26);
+    return packet;
+}
+}  // namespace
+
+TEST_CASE(
+    "a part-sent packet is finished by the real loop unless the close's deadline has passed") {
+    constexpr std::size_t kSent = 10;  // as if the first send had taken only this much
+    const Packet packet = patterned();
+    const auto* bytes = reinterpret_cast<const char*>(&packet);
+    const std::uint64_t now = monotonicNs();
+    REQUIRE(now > 10'000'000'000ULL);
+    resetInventoryForTests(nullptr);
+    {
+        // No close in progress: the rest goes out, whole and in order.
+        SocketPair pair;
+        Native native;
+        native.channel = pair.fd[0];
+        CHECK(finishPartSend(native, packet, kSent));
+        CHECK_FALSE(native.torn);
+        const auto got = pair.pending();
+        REQUIRE(got.size() == sizeof(Packet) - kSent);
+        CHECK(std::equal(got.begin(), got.end(), bytes + kSent));
+    }
+    {
+        // A deadline still ahead does not stop it either.
+        SocketPair pair;
+        Native native;
+        native.channel = pair.fd[0];
+        setPartSendCutoffForTests(now + 10'000'000'000ULL);
+        CHECK(finishPartSend(native, packet, kSent));
+        CHECK_FALSE(native.torn);
+        CHECK(pair.pending().size() == sizeof(Packet) - kSent);
+    }
+    {
+        // A deadline already past stops it before it sends anything more: the stream is torn, and
+        // nothing follows the part already sent (the terminal packet must not land inside this one,
+        // and the close has given up waiting for it).
+        SocketPair pair;
+        Native native;
+        native.channel = pair.fd[0];
+        setPartSendCutoffForTests(now - 1);
+        CHECK_FALSE(finishPartSend(native, packet, kSent));
+        CHECK(native.torn);
+        CHECK(pair.pending().empty());
+    }
+    resetInventoryForTests(nullptr);
+}
+#endif
 
 TEST_CASE("closing the inventory says when a send left the stream torn") {
     Native native;

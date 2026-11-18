@@ -278,17 +278,24 @@ bool publish(Native& native, const Packet& packet) noexcept {
     if (sent == static_cast<ssize_t>(sizeof(packet))) return true;
     if (sent <= 0) return false;  // nothing went out: the stream is as it was
     // A stream socket may take part of a message when its buffer is nearly full (macOS does;
-    // Linux's unix sockets take a message this small whole or not at all). The part already
-    // sent cannot be taken back, and the supervisor reads fixed-size packets, so the rest
-    // goes out now: the wait is bounded (the supervisor is draining, or a terminal hold is on
-    // and nothing else is being sent) and uses only async-signal-safe calls. If it cannot be
-    // finished the stream is torn, the supervisor's next packet fails its checks and it stops
-    // reading, as it does for any damaged packet.
-    // The bound is time: kPartSendPolls ms from here by the monotonic clock, or the deadline
-    // closeInventory published (partSendCutoffNs), whichever is earlier: that is what the close
-    // waits out (a count of 1 ms polls would take longer under load or timer slack, and the
-    // terminal packet could then land inside this one). Only without a clock does it count polls.
-    std::size_t at = static_cast<std::size_t>(sent);
+    // Linux's unix sockets take a message this small whole or not at all): the rest goes out now,
+    // within a bound (finishPartSend).
+    return finishPartSend(native, packet, static_cast<std::size_t>(sent));
+}
+bool finishPartSend(Native& native, const Packet& packet, std::size_t sent) noexcept {
+    const int fd = static_cast<int>(native.channel);
+    const auto* bytes = reinterpret_cast<const char*>(&packet);
+    const NonBlocking guard(fd);
+    // The `sent` bytes already out cannot be taken back, and the supervisor reads fixed-size
+    // packets, so the rest goes out now: the wait is bounded (the supervisor is draining, or a
+    // terminal hold is on and nothing else is being sent) and uses only async-signal-safe calls. If
+    // it cannot be finished the stream is torn, the supervisor's next packet fails its checks and
+    // it stops reading, as it does for any damaged packet. The bound is time: kPartSendPolls ms
+    // from here by the monotonic clock, or the deadline closeInventory published
+    // (partSendCutoffNs), whichever is earlier: that is what the close waits out (a count of 1 ms
+    // polls would take longer under load or timer slack, and the terminal packet could then land
+    // inside this one). Only without a clock does it count polls.
+    std::size_t at = sent;
     timespec begin{};
     const bool clocked = ::clock_gettime(CLOCK_MONOTONIC, &begin) == 0;
     for (int attempts = 0; at < sizeof(packet); ++attempts) {
@@ -310,10 +317,10 @@ bool publish(Native& native, const Packet& packet) noexcept {
         const int ready = ::poll(&item, 1, 1);
         if (ready < 0 && errno != EINTR) break;
         if (ready <= 0) continue;
-        sent = ::send(fd, bytes + at, sizeof(packet) - at, noSignal() | MSG_DONTWAIT);
-        if (sent > 0)
-            at += static_cast<std::size_t>(sent);
-        else if (sent < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+        const ssize_t more = ::send(fd, bytes + at, sizeof(packet) - at, noSignal() | MSG_DONTWAIT);
+        if (more > 0)
+            at += static_cast<std::size_t>(more);
+        else if (more < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
             break;
     }
     if (at == sizeof(packet)) return true;

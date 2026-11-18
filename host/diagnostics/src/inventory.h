@@ -49,6 +49,17 @@ std::uint64_t partSendCutoffNs() noexcept;
 // CLOCK_MONOTONIC in nanoseconds on POSIX (what publish() times its wait by), the steady clock
 // elsewhere. 0 when there is no clock. Async-signal-safe.
 std::uint64_t monotonicNs() noexcept;
+#if !defined(_WIN32)
+// The part-send loop of publish() (native_posix.cpp), on its own so that a test can drive it: the
+// packet's first `sent` bytes (less than all) are already in the stream; sends the rest until it
+// is all out, or the sender's own bound (kPartSendPolls ms) or the close's deadline
+// (partSendCutoffNs) has passed, whichever comes first; checked before every attempt, so a
+// deadline already past stops it before it sends anything. Sets `native.torn` and returns false
+// when it gives up. Async-signal-safe.
+bool finishPartSend(Native& native, const Packet& packet, std::size_t sent) noexcept;
+#endif
+// Tests only: sets the close's deadline as closeInventory would (0 clears it).
+void setPartSendCutoffForTests(std::uint64_t nanoseconds) noexcept;
 // Tests only: forgets the installed sink, the closed gate and the drop count, and replaces the
 // function that sends a packet (null restores publish()).
 void resetInventoryForTests(bool (*publishFn)(Native&, const Packet&) noexcept);

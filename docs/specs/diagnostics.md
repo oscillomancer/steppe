@@ -775,7 +775,9 @@ is sent (`closeInventory`: a flag and a counter of sends in progress, waited out
 a send can take, the 250 ms a part-sent packet is given plus 50 ms for scheduling; the close
 publishes that 250 ms as one deadline, before it closes the gate, and a send finishing a part-sent
 packet stops at its own bound or at that deadline, whichever is earlier, so a sender preempted
-after the gate cannot go on after the close has given up): on macOS the
+after the gate cannot go on after the close has given up; the loop (`finishPartSend`, POSIX) checks the
+deadline before every attempt, so one already past stops it before it sends anything, and it is
+tested on its own on a socket pair): on macOS the
 capsule follows the terminal packet on the same stream, and another thread's packet inside it
 would corrupt it, as would the terminal packet written into the rest of a part-sent one. If a
 send left the stream torn, the terminal packet is not sent at all, since the supervisor would read

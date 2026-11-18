@@ -159,6 +159,8 @@ void resetInventoryForTests(bool (*publishFn)(Native&, const Packet&) noexcept) 
 
 std::uint64_t partSendCutoffNs() noexcept { return gCutoffNs.load(); }
 
+void setPartSendCutoffForTests(std::uint64_t nanoseconds) noexcept { gCutoffNs.store(nanoseconds); }
+
 std::uint64_t monotonicNs() noexcept {
 #if defined(_WIN32)
     return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
