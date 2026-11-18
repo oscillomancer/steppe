@@ -435,6 +435,19 @@ void Root::pointer(PointerEvent e) {
     }
     if (target) deliver(*this, target, e);
     if (e.type == PointerEvent::Type::Up) captured_ = nullptr;
+    // After the event, since it may have started or ended a drag, or
+    // replaced the node under the pointer.
+    if (e.type != PointerEvent::Type::Cancel) updateCursor(e.pos);
+}
+
+void Root::updateCursor(Point at) {
+    // Asked up the tree as the events are delivered: the first node with
+    // something to say decides (a row's resize edge under one of its labels).
+    Cursor cursor = Cursor::Arrow;
+    for (const Node* n = pointerTarget(at); n && cursor == Cursor::Arrow; n = n->parent())
+        if (n->enabled) cursor = n->cursorAt(at);
+    cursor_ = cursor;
+    window_.setCursor(cursor);
 }
 
 bool Root::click(std::string_view id, int button) {

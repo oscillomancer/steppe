@@ -147,6 +147,7 @@ class TcpPanel::Row : public ui::Node {
     void arrange(const ui::Canvas& canvas, const ui::Rect& r) override;
     void paint(ui::Canvas& canvas) override;
     bool onPointer(const ui::PointerEvent& e) override;
+    ui::Cursor cursorAt(ui::Point p) const override;
     bool onKey(const ui::KeyEvent& e) override;
 
   private:
@@ -584,6 +585,13 @@ void TcpPanel::Row::paint(ui::Canvas& c) {
     if (panel_.reorder_ && panel_.reorder_->moved && panel_.reorder_->track == track_)
         c.fillRect(r, t.color("focus").withAlpha(0.12f));
     if (selected) c.strokeRect({r.x + 0.5f, r.y + 0.5f, r.w - 1, r.h - 1}, t.color("focus"), 1.0f);
+}
+
+// The bottom edge sets the row's height.
+ui::Cursor TcpPanel::Row::cursorAt(ui::Point p) const {
+    const bool grip = track_.has_value() && panel_.cb_.resizeTrack &&
+                      p.y >= bounds().bottom() - TcpRowGeometry::kResizeGrip;
+    return resizing_ || grip ? ui::Cursor::ResizeVertical : ui::Cursor::Arrow;
 }
 
 bool TcpPanel::Row::onPointer(const ui::PointerEvent& e) {

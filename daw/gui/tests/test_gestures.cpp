@@ -1477,6 +1477,71 @@ TEST_CASE("arrange gestures: take FX and a take envelope drawn and edited on its
     CHECK_FALSE(g.takeEnvelopeAt(audio, {mid.x, lineY}));
 }
 
+TEST_CASE("cursors: an item's ends and fade corners, a locked item, a move, a row's lower edge") {
+    Fixture f;
+    if (!f.ok) return;
+    using C = ui::Cursor;
+    const model::Id a = f.itemOnRow(0);
+    const ui::Rect r = f.rectOf(a);
+    REQUIRE(r.w > 60);
+    auto over = [&](ui::Point p) {
+        f.pointer(ui::PointerEvent::Type::Move, p);
+        return f.root->cursor();
+    };
+    const ui::Point body{r.x + r.w / 2, r.y + r.h / 2};
+    const ui::Point right{r.right() - 2, r.y + r.h / 2}, left{r.x + 2, r.y + r.h / 2};
+    const ui::Point fadeIn{r.x + 3, r.y + 3}, fadeOut{r.right() - 3, r.y + 3};
+    CHECK(over(body) == C::Arrow);
+    CHECK(over(right) == C::ResizeHorizontal);
+    CHECK(over(left) == C::ResizeHorizontal);
+    CHECK(over(fadeIn) == C::ResizeHorizontal);
+    CHECK(over(fadeOut) == C::ResizeHorizontal);
+    CHECK(over({r.x + r.w / 2, f.view->lanesRect().bottom() - 2}) == C::Arrow);  // empty lanes
+    // A locked item is not trimmed or faded, and says so.
+    auto lock = [&](bool on) {
+        REQUIRE(f.dispatcher->execute({"item.set",
+                                       json::parse(R"({"item":")" + a.str() + R"(","locked":)" +
+                                                   (on ? "true" : "false") + "}")
+                                           .value(),
+                                       kUi}));
+        f.sync();
+    };
+    lock(true);
+    CHECK(over(right) == C::Arrow);
+    CHECK(over(fadeIn) == C::Arrow);
+    lock(false);
+    CHECK(over(right) == C::ResizeHorizontal);
+    // A press on the body is still a click; once it moves, the item moves.
+    // (A drag given up, as when the window loses the pointer: the gesture is
+    // cancelled and the root lets go of it.)
+    auto cancel = [&](ui::Point at) {
+        f.pointer(ui::PointerEvent::Type::Cancel, at);
+        f.root->capture(nullptr);
+        f.sync();
+    };
+    const auto steps = f.steps();
+    f.pointer(ui::PointerEvent::Type::Down, body);
+    CHECK(f.root->cursor() == C::Arrow);
+    f.pointer(ui::PointerEvent::Type::Move, {body.x + 30, body.y});
+    CHECK(f.root->cursor() == C::Move);
+    cancel({body.x + 30, body.y});
+    CHECK(f.steps() == steps);
+    CHECK(over(body) == C::Arrow);
+    // A trim keeps its cursor while the pointer is away from the edge.
+    f.pointer(ui::PointerEvent::Type::Down, right);
+    f.pointer(ui::PointerEvent::Type::Move, {right.x - 40, right.y + 50});
+    CHECK(f.root->cursor() == C::ResizeHorizontal);
+    cancel({right.x - 40, right.y + 50});
+    CHECK(f.steps() == steps);
+    // The track panel: a row's lower edge sets its height.
+    const ui::Node* row = f.view->tcpPanel().rowNode(f.view->trackLayout().rows()[0].track);
+    REQUIRE(row);
+    const ui::Rect rb = row->bounds();
+    using G = views::TcpRowGeometry;
+    CHECK(over({rb.x + 100, rb.bottom() - 2}) == C::ResizeVertical);
+    CHECK(over({rb.x + 100, rb.y + (G::kMixTop + G::kCellHeight + G::kLinkTop) / 2}) == C::Arrow);
+}
+
 TEST_CASE("left trim moves every take offset at its own play rate in one undo step") {
     Fixture f;
     REQUIRE(f.ok);

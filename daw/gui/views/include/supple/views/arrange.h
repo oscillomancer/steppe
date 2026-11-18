@@ -152,6 +152,7 @@ class ArrangeView : public ui::Node {
     void zoomStep(bool in);
 
     bool onPointer(const ui::PointerEvent& e) override;
+    ui::Cursor cursorAt(ui::Point p) const override;
 
   private:
     void damageViews();

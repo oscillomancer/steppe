@@ -51,6 +51,7 @@ class TextArea : public Node {
     Size measure(const Canvas& canvas, Size available) override;
     void paint(Canvas& canvas) override;
     bool onPointer(const PointerEvent& e) override;
+    Cursor cursorAt(Point) const override { return Cursor::Text; }
     bool onKey(const KeyEvent& e) override;
     bool onText(std::string_view text) override;
     bool onComposition(std::string_view text, int cursor) override;

@@ -95,6 +95,9 @@ class Root {
     void focus(Node* node);
     Node* focused() const { return focused_; }
     Node* hovered() const { return hovered_; }
+    // The pointer's shape: the cursorAt of the node its events go to, kept
+    // up to date after every pointer event and shown on the window.
+    Cursor cursor() const { return cursor_; }
     // Where the pointer was last seen over this root (keys act on the panel
     // under it); empty before any pointer event.
     std::optional<Point> lastPointer() const { return lastPointer_; }
@@ -163,6 +166,8 @@ class Root {
     Node* hovered_ = nullptr;
     std::optional<Point> lastPointer_;
     Node* captured_ = nullptr;
+    Cursor cursor_ = Cursor::Arrow;
+    void updateCursor(Point at);
     std::optional<PointerEvent> pendingMotion_;  // for captured_ (handle)
     std::vector<Rect> damage_;
     bool layoutPending_ = true, animate_ = false;

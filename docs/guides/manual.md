@@ -365,6 +365,14 @@ name. Where an item fades in or out, the faded part is shaded and the fade's
 curve is drawn over it. A selected item is brighter and has an outline in the
 accent colour.
 
+The pointer shows what a drag would do. Over an item's left or right end,
+or its top corners where the fades are, it becomes a pair of sideways
+arrows: drag there to trim the item or draw a fade. Over the middle it
+stays an arrow: drag to move the item. The same sideways arrows show at
+the ends of the loop range in the ruler and of a note in the piano roll,
+and up-and-down arrows at a track row's lower edge and at the top edge of
+the mixer and the MIDI editor, which set their height.
+
 ### A track's buttons
 
 A track has the same buttons in the same order in the track list and on its

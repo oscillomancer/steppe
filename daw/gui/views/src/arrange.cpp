@@ -29,6 +29,7 @@ namespace {
 constexpr float kTcpWidth = 220;
 constexpr float kBeatRowH = 22;    // bars | beats
 constexpr float kTimeRowH = 15;    // m:ss.mmm
+constexpr float kRangeEdge = 5;    // px beside a loop or punch range's end that drag it
 constexpr float kTempoRowH = 20;   // tempo and meter flags
 constexpr float kRegionRowH = 15;  // regions
 constexpr float kMarkerRowH = 16;  // markers
@@ -109,6 +110,35 @@ class Ruler : public ui::Node {
         execute("region.add", std::move(args));
     }
     bool onPointer(const ui::PointerEvent& e) override;
+    // The ends of the loop range (bars row) and the punch range (time row)
+    // are dragged; so is a range, a region or a marker once it moves.
+    ui::Cursor cursorAt(ui::Point p) const override {
+        switch (drag_) {
+            case Drag::LoopLeft:
+            case Drag::LoopRight:
+            case Drag::RegionLeft:
+            case Drag::RegionRight:
+                return ui::Cursor::ResizeHorizontal;
+            case Drag::LoopMove:
+            case Drag::RegionMove:
+            case Drag::Marker:
+                return moved_ ? ui::Cursor::Move : ui::Cursor::Arrow;
+            case Drag::LoopNew:
+                return ui::Cursor::Arrow;
+            case Drag::None:
+                break;
+        }
+        const float y = p.y - bounds().y;
+        if (y < 0 || y >= kBeatRowH + kTimeRowH) return ui::Cursor::Arrow;
+        const bool punch = y >= kBeatRowH;
+        const double start = punch ? view_.punchStart() : view_.loopStart();
+        const double end = punch ? view_.punchEnd() : view_.loopEnd();
+        if (end <= start) return ui::Cursor::Arrow;
+        return std::abs(p.x - view_.xAt(start)) <= kRangeEdge ||
+                       std::abs(p.x - view_.xAt(end)) <= kRangeEdge
+                   ? ui::Cursor::ResizeHorizontal
+                   : ui::Cursor::Arrow;
+    }
     bool onKey(const ui::KeyEvent& e) override {
         if (e.key != SDLK_ESCAPE || drag_ == Drag::None) return false;
         drag_ = Drag::None;
@@ -635,9 +665,9 @@ bool Ruler::onPointer(const ui::PointerEvent& e) {
             const float left = view_.xAt(rangeStart), right = view_.xAt(rangeEnd);
             drag_ = Drag::LoopNew;
             if (originalEnd_ > originalStart_) {
-                if (std::abs(e.pos.x - left) <= 5)
+                if (std::abs(e.pos.x - left) <= kRangeEdge)
                     drag_ = Drag::LoopLeft;
-                else if (std::abs(e.pos.x - right) <= 5)
+                else if (std::abs(e.pos.x - right) <= kRangeEdge)
                     drag_ = Drag::LoopRight;
                 else if (e.pos.x > left && e.pos.x < right)
                     drag_ = Drag::LoopMove;
@@ -1370,6 +1400,8 @@ void ArrangeView::loadLayout(const json::Value& v) {
             if (const auto id = item.isString() ? model::Id::parse(item.asString()) : std::nullopt)
                 trackLayout().setTakesExpanded(*id, true);
 }
+
+ui::Cursor ArrangeView::cursorAt(ui::Point p) const { return gestures_->cursorAt(p); }
 
 bool ArrangeView::onPointer(const ui::PointerEvent& e) {
     if (e.type != ui::PointerEvent::Type::Wheel) return gestures_->pointer(e);

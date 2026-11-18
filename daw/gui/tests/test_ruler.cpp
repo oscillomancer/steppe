@@ -172,6 +172,24 @@ TEST_CASE("ruler: loop selection, seek, edges, body and cancellation are transpo
     f.drag(f.at(3), f.at(5));
     CHECK(f.app->loop().start == doctest::Approx(1.5));
     CHECK(f.app->loop().end == doctest::Approx(4.5));
+    // The range's ends say they are dragged; its body and the punch row
+    // (which has no range) keep the arrow.
+    {
+        auto over = [&](ui::Point p) {
+            f.pointer(Pointer::Move, p);
+            return f.root->cursor();
+        };
+        CHECK(over(f.at(3)) == ui::Cursor::ResizeHorizontal);
+        CHECK(over(f.at(9)) == ui::Cursor::ResizeHorizontal);
+        CHECK(over(f.at(6)) == ui::Cursor::Arrow);
+        CHECK(over(f.at(3, 28)) == ui::Cursor::Arrow);
+        f.pointer(Pointer::Down, f.at(9));
+        f.pointer(Pointer::Move, f.at(10, 60));
+        CHECK(f.root->cursor() == ui::Cursor::ResizeHorizontal);
+        f.pointer(Pointer::Cancel, f.at(10, 60));
+        f.root->capture(nullptr);
+        CHECK(f.app->loop().end == doctest::Approx(4.5));
+    }
     f.drag(f.at(9), f.at(11.13), ui::kShift);
     CHECK(f.app->loop().end == doctest::Approx(5.565));
     f.click(f.at(12.13));

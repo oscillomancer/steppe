@@ -15,6 +15,8 @@
 
 namespace supple::ui {
 
+using Cursor = gui::Cursor;
+
 class Root;
 struct GlFrame;
 
@@ -125,6 +127,14 @@ class Node {
     bool focusable = false;
     bool interactive = false;  // receives pointer events (else they pass through)
     virtual Node* hitTest(Point p);
+    // The pointer's shape at `p` over this node: what a press there would
+    // do, or what the drag this node holds is doing. Asked of the node the
+    // pointer's events go to and then of its parents, as the events are;
+    // the first answer other than Arrow is shown (Root::cursor).
+    virtual Cursor cursorAt(Point p) const {
+        (void)p;
+        return Cursor::Arrow;
+    }
     virtual bool onPointer(const PointerEvent& e) {
         (void)e;
         return false;

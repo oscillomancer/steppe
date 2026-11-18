@@ -588,7 +588,12 @@ instructions are in `docs/guides/installing.md`.
   the track's own. A new project's rows are as low as their three lines
   allow. A mixer strip's meter has a dB scale (0, 12, 24, 36, 48) with
   lines across its bars, and every meter's bar goes from green through
-  yellow and orange to red just under 0 dB. The transport bar's
+  yellow and orange to red just under 0 dB. The pointer's shape says what
+  a press would do: resize arrows at an item's ends and fade corners, a
+  note's ends, the loop range's ends, a row's lower edge and the panels'
+  edges, an I-beam over text, the move cursor on a thing being moved (not
+  yet: cursors in the rack, the routing matrix and for drops that are
+  refused). The transport bar's
   engine readout is in words ("48 kHz · 256 samples") and warns in colour
   only of a stopped engine, dropouts, render gaps or plug-in errors; the
   toolbar's buttons are quiet at rest. A side panel at the right edge,

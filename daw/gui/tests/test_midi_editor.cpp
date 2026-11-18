@@ -489,6 +489,13 @@ TEST_CASE("MIDI editor: selected notes painted on top win overlapping hit tests"
     CHECK(state.selected == std::set<std::size_t>{0});
     f.pointer(ui::PointerEvent::Type::Up, f.at(0.4, 60));
     CHECK(state.selected == std::set<std::size_t>{0});
+    // A note's ends set its length and say so; its body keeps the arrow.
+    f.pointer(ui::PointerEvent::Type::Move, f.at(0.4, 60));
+    CHECK(f.root->cursor() == ui::Cursor::Arrow);
+    f.pointer(ui::PointerEvent::Type::Move, {f.at(1, 60).x - 2, f.at(1, 60).y});
+    CHECK(f.root->cursor() == ui::Cursor::ResizeHorizontal);
+    f.pointer(ui::PointerEvent::Type::Move, {f.at(0, 60).x + 2, f.at(0, 60).y});
+    CHECK(f.root->cursor() == ui::Cursor::ResizeHorizontal);
 }
 
 TEST_CASE("MIDI editor: external note removal cancels a captured drag") {

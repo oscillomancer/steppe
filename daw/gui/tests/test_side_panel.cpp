@@ -213,6 +213,8 @@ TEST_CASE("side panel: its width drags, clamps and resets; its state saves and r
     f.pass();
     const ui::Rect grip = f.node("side.grip")->bounds();
     const ui::Point at{grip.x + grip.w / 2, grip.y + grip.h / 2};
+    f.root->pointer({ui::PointerEvent::Type::Move, at});
+    CHECK(f.root->cursor() == ui::Cursor::ResizeHorizontal);  // the panel's edge is dragged
     f.root->pointer({ui::PointerEvent::Type::Down, at, 1});
     f.root->pointer({ui::PointerEvent::Type::Move, {at.x - 80, at.y}, 1});
     f.root->pointer({ui::PointerEvent::Type::Up, {at.x - 80, at.y}, 1});

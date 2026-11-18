@@ -194,6 +194,24 @@ class Roll : public ui::Node {
         return std::nullopt;
     }
 
+    // A note's ends set its length; a note in hand is being moved.
+    ui::Cursor cursorAt(ui::Point p) const override {
+        switch (s_.drag) {
+            case RollState::Drag::ResizeEnd:
+            case RollState::Drag::ResizeStart:
+                return ui::Cursor::ResizeHorizontal;
+            case RollState::Drag::Move:
+                return moved_ ? ui::Cursor::Move : ui::Cursor::Arrow;
+            case RollState::Drag::Marquee:
+            case RollState::Drag::Velocity:
+                return ui::Cursor::Arrow;
+            case RollState::Drag::None:
+                break;
+        }
+        int edge = 0;
+        return noteAt(p, &edge) && edge != 0 ? ui::Cursor::ResizeHorizontal : ui::Cursor::Arrow;
+    }
+
     bool onPointer(const ui::PointerEvent& e) override {
         const Geometry g{s_, bounds()};
         using T = ui::PointerEvent::Type;

@@ -729,6 +729,72 @@ TEST_CASE("text area replacement preserves the UTF-8 caret column") {
     CHECK(area.caretLineColumn() == std::pair{1, 3});  // same code-point column
 }
 
+TEST_CASE("the pointer's shape is the cursor of the node under it, its parents or a drag") {
+    if (!fixture().ok) return;
+    Root root(*fixture().window, fixture().fonts, Theme::dark());
+    // A node whose right 10 units resize it, and which holds a drag.
+    struct Edge : Node {
+        using Node::Node;
+        bool dragging = false;
+        Cursor cursorAt(Point p) const override {
+            return dragging || p.x >= bounds().right() - 10 ? Cursor::ResizeHorizontal
+                                                            : Cursor::Arrow;
+        }
+        bool onPointer(const PointerEvent& e) override {
+            if (e.type == PointerEvent::Type::Down) dragging = p(e) >= bounds().right() - 10;
+            if (e.type == PointerEvent::Type::Up) dragging = false;
+            return true;
+        }
+        static float p(const PointerEvent& e) { return e.pos.x; }
+    };
+    auto content = std::make_unique<Node>("root");
+    content->layout.dir = Layout::Dir::Row;
+    content->layout.padding = Insets::all(8);
+    content->layout.gap = 8;
+    auto& edge = content->emplace<Edge>("edge");
+    edge.interactive = true;
+    edge.layout.dir = Layout::Dir::Column;
+    edge.layout.width = SizeRule::fixed(100);
+    auto& inner = edge.emplace<Box>("inner");  // a child with nothing to say
+    inner.interactive = true;
+    auto& field = content->emplace<TextField>("field", "text");
+    field.layout.width = SizeRule::fixed(100);
+    auto& plain = content->emplace<Box>("plain");
+    plain.interactive = true;
+    plain.layout.width = SizeRule::fixed(100);
+    root.setContent(std::move(content));
+    root.frame(false);
+    auto move = [&](Point at) { root.pointer({PointerEvent::Type::Move, at}); };
+    auto mid = [](const Node& n) {
+        return Point{n.bounds().x + n.bounds().w / 2, n.bounds().y + n.bounds().h / 2};
+    };
+    CHECK(root.cursor() == Cursor::Arrow);
+    move(mid(plain));
+    CHECK(root.cursor() == Cursor::Arrow);
+    move(mid(field));
+    CHECK(root.cursor() == Cursor::Text);
+    CHECK(fixture().window->cursor() == Cursor::Text);  // shown on the window
+    // The child covers its parent and says nothing: the parent's edge shows.
+    const Rect e = edge.bounds();
+    REQUIRE(root.hovered() != &edge);
+    move({e.x + 20, e.y + 10});
+    CHECK(root.hovered() == &inner);
+    CHECK(root.cursor() == Cursor::Arrow);
+    move({e.right() - 3, e.y + 10});
+    CHECK(root.cursor() == Cursor::ResizeHorizontal);
+    // A drag keeps its holder's cursor wherever the pointer goes, and the
+    // release gives the node under the pointer its say again.
+    root.pointer({PointerEvent::Type::Down, {e.right() - 3, e.y + 10}, 1});
+    move(mid(field));
+    CHECK(root.cursor() == Cursor::ResizeHorizontal);
+    root.pointer({PointerEvent::Type::Up, mid(field), 1});
+    CHECK(root.cursor() == Cursor::Text);
+    // A disabled node has no cursor of its own.
+    field.enabled = false;
+    move({mid(field).x + 1, mid(field).y});
+    CHECK(root.cursor() == Cursor::Arrow);
+}
+
 TEST_CASE("mixer controls: fader taper and gestures, pan, meter hold and clip, toggle") {
     // The taper round-trips over its range; -inf at the bottom.
     for (double db = -60; db <= 12; db += 0.5)

@@ -160,6 +160,23 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   factor.
 - **Input.** Hit testing front-to-back, pointer capture during drags,
   hover, wheel with precision (trackpad deltas), modifiers, double-click.
+  **Cursors**: the pointer's shape says what a press would do, or what the
+  drag in hand is doing. After every pointer event the root asks the node
+  the events go to (the one under the pointer, or the one holding a drag),
+  then its parents, for `Node::cursorAt`; the first answer other than the
+  arrow is shown (`Root::cursor`, `gui::Window::setCursor`, SDL's system
+  cursors, so each desktop draws its own; one pointer for all the app's
+  windows; nothing under the offscreen driver). The shapes are the arrow,
+  the I-beam, the horizontal and vertical resize arrows, the four-way move
+  and "not allowed". A disabled node has no cursor of its own. Where they
+  apply: a text field or text area (I-beam); the docks' top edges, a track
+  row's lower edge (vertical) and the side panel's edge (horizontal); an
+  item's ends and fade corners, unless it is locked, and an automation
+  item's end; the ends of the loop and punch ranges in the ruler; a note's
+  ends in the piano roll. A press on an item, a note, a range, a region or
+  a marker keeps the arrow until it moves, then shows the move cursor; a
+  trim, slip, fade or warp in hand keeps the horizontal arrows wherever
+  the pointer goes.
   Keyboard: focus chain, Tab navigation, shortcuts resolved by the actions
   system (§6) with context sections (arrange, MIDI editor, mixer, text
   field). Key releases reach the focused node and its parents

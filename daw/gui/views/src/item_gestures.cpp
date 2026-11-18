@@ -655,6 +655,50 @@ std::optional<ItemGestures::Hit> ItemGestures::hit(ui::Point p) const {
     return best;
 }
 
+ui::Cursor ItemGestures::cursorAt(ui::Point p) const {
+    auto of = [](Drag drag) {
+        switch (drag) {
+            case Drag::TrimLeft:
+            case Drag::TrimRight:
+            case Drag::FadeIn:
+            case Drag::FadeOut:
+            case Drag::Slip:
+            case Drag::Warp:
+            case Drag::AutoItemLength:
+                return ui::Cursor::ResizeHorizontal;
+            case Drag::Move:
+            case Drag::AutoItemMove:
+            case Drag::TakeOut:
+                return ui::Cursor::Move;
+            case Drag::None:
+            case Drag::Marquee:
+            case Drag::EnvPoint:
+            case Drag::Comp:
+                break;
+        }
+        return ui::Cursor::Arrow;
+    };
+    // A press that has not moved yet is still a click: the item keeps the
+    // arrow until it goes somewhere.
+    if (state_.drag != Drag::None) {
+        const ui::Cursor cursor = of(state_.drag);
+        return cursor == ui::Cursor::Move && !moved_ ? ui::Cursor::Arrow : cursor;
+    }
+    // At rest only the places whose press is not a plain move or selection
+    // say so: an item's body keeps the arrow.
+    if (const auto lane = rowAt(p.y); lane && view_.trackLayout().rows()[*lane].env) {
+        const auto ai = autoItemAt(*view_.trackLayout().rows()[*lane].env, p);
+        return ai && ai->zone == Drag::AutoItemLength ? ui::Cursor::ResizeHorizontal
+                                                      : ui::Cursor::Arrow;
+    }
+    const auto h = hit(p);
+    if (!h || h->zone == Drag::Move || h->zone == Drag::Comp || h->takeBadge)
+        return ui::Cursor::Arrow;
+    // A locked item is not trimmed or faded.
+    const model::Item* it = itemOf(view_.session(), h->item);
+    return it && !it->locked ? of(h->zone) : ui::Cursor::Arrow;
+}
+
 bool ItemGestures::pointer(const ui::PointerEvent& e) {
     using T = ui::PointerEvent::Type;
     const model::Session& s = view_.session();

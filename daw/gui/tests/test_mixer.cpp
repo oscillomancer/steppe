@@ -555,6 +555,8 @@ TEST_CASE("mixer: dragging the top edge resizes only the chain section; double-c
     const float meter = f.strip(a).meter->bounds().h;
     const float chain = f.strip(a).chain->bounds().h;
     const float edge = f.node("mixer.grip")->bounds().y + 2;
+    f.pointer(ui::PointerEvent::Type::Move, {700, edge});
+    CHECK(f.root->cursor() == ui::Cursor::ResizeVertical);  // the panel's top edge is dragged
     f.drag({700, edge}, {700, edge - 120});
     CHECK(near(panel->bounds().h, standard + 120));
     CHECK(near(f.mixer->height(), standard + 120));
