@@ -863,7 +863,12 @@ happen (the host kills a bridge that was already dying: its core or dump still b
 failed call or a missed deadline made the host kill it) the status tells the order: a host kill
 ends the process with `SIGKILL` (exit code 1 on Windows), so any other fatal status is the
 bridge's own fault, which came first (the kill only cut the dump short), and the end is `signal`
-or `exception` with that status. The 65536th bridge of a run has no ordinal (it reads as this process): a stated limit.
+or `exception` with that status. The rule rests on an assumption: the kernel keeps the original
+signal as the exit status when a core dump is cut short by a later kill (observed on Linux; not
+checked on macOS), and on Windows that `TerminateProcess` and `TerminateJobObject` leave an
+earlier exception's status alone when the process is already ending (by reading only). The
+fallback if a platform reports the kill instead: the status reads `SIGKILL` (exit code 1), the end
+is `host` and no report is written, which is how the host classified every kill before. The 65536th bridge of a run has no ordinal (it reads as this process): a stated limit.
 
 *A report when the worker lives.* A bridge that ends by a signal or an exception (not by the
 host's kill, not by an exit: the exit code is not read on POSIX) while the worker goes on gets a
