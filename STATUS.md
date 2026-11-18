@@ -280,8 +280,9 @@ instructions are in `docs/guides/installing.md`.
   deadlines (ADR-0030), including MIDI controls, plug-in subscriptions,
   render-ahead output consumption, jobs, restart and autosave; smooth plan swaps (10 ms ramps);
   strip, send and VCA level and pan edits applied to the running plan without
-  compiling, also once playrate scheduling has started (ADR-0060), and control
-  drags sent once per frame rather than per pointer motion;
+  compiling, also once playrate scheduling has started (ADR-0060), patch-only
+  FX edits applied to the running instances without a plan (ADR-0092), and
+  control drags sent once per frame rather than per pointer motion;
   every node, plug-ins and bridged plug-ins included, runs with FTZ/DAZ in
   every executor, and owned audio threads prefault their stacks (ADR-0025).
   A seeded plan-swap soak drives real command edits during dummy-backend
@@ -1180,10 +1181,12 @@ Engine and hosting:
   latency preferences report unsupported on other platforms. Windows MCP is
   intended for piped/file input; cancelling an interactive console read can
   await a keypress during shutdown.
-- Only level and pan edits skip compiling (ADR-0060). Mute, solo, routing and
-  plug-in changes compile the session, and with playrate scheduling started
-  each also prepares a rate plan, which costs several milliseconds per edit in
-  a session of a few dozen tracks.
+- Only level and pan edits (ADR-0060) and patch-only FX edits (ADR-0092)
+  skip compiling. Mute, solo, routing, wet, bypass and other plug-in changes
+  compile the session, as does a patch edit on an FX with automation or one
+  that changes the plug-in's latency, parameters or ports. With playrate
+  scheduling started each compile also prepares a rate plan, which costs
+  several milliseconds per edit in a session of a few dozen tracks.
 - A structural edit that playrate scheduling defers is accepted before it
   compiles. If it then fails to compile (for example over the hardware MIDI
   route budget), it never plays. The engine keeps playing the version before

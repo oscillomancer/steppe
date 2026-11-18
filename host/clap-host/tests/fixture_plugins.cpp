@@ -234,6 +234,7 @@ struct Gain {
     bool enforceThread = false;
     bool rejectPatch = false;
     bool slowPatch = false;
+    std::uint32_t patchRescan = 0;  // GainControl::patchRescan
     bool mismatchedId = false, missingValue = false;
     bool malformedSchema = false;
     bool badCurve = false;
@@ -476,6 +477,11 @@ bool CLAP_ABI semSetPatch(const clap_plugin_t* pl, uint32_t mode, const char* te
     const int latency = static_cast<int>(result->body.values[1]);
     if (latency != G(pl)->latencyChoice.exchange(latency) && G(pl)->host->request_restart)
         G(pl)->host->request_restart(G(pl)->host);
+    if (G(pl)->patchRescan) {
+        const auto* hp = static_cast<const clap_host_params_t*>(
+            G(pl)->host->get_extension(G(pl)->host, CLAP_EXT_PARAMS));
+        if (hp) hp->rescan(G(pl)->host, G(pl)->patchRescan);
+    }
     return true;
 }
 bool CLAP_ABI semDescribe(const clap_plugin_t* pl, uint32_t detail, const clap_ostream_t* out) {
@@ -498,6 +504,8 @@ struct GainControl {
     std::uint32_t (*deliveries)(const clap_plugin_t*);
     void (*latency)(const clap_plugin_t*, bool);
     std::uint32_t (*creates)();
+    // The rescan flags a later applied patch reports (0: none).
+    void (*patchRescan)(const clap_plugin_t*, std::uint32_t);
 };
 void gainEditorEdit(const clap_plugin_t* pl, double value, std::uint32_t flags) {
     G(pl)->gainDb = value;
@@ -513,7 +521,9 @@ void gainRequestLatency(const clap_plugin_t* pl, bool delayed) {
     G(pl)->host->request_restart(G(pl)->host);
 }
 std::uint32_t gainCreates() { return gGainCreates.load(); }
-const GainControl kGainControl{gainEditorEdit, gainHostDeliveries, gainRequestLatency, gainCreates};
+void gainPatchRescan(const clap_plugin_t* pl, std::uint32_t flags) { G(pl)->patchRescan = flags; }
+const GainControl kGainControl{gainEditorEdit, gainHostDeliveries, gainRequestLatency, gainCreates,
+                               gainPatchRescan};
 const void* CLAP_ABI gainExt(const clap_plugin_t* pl, const char* id) {
     if (!std::strcmp(id, "supple.test.gain-control")) return &kGainControl;
     if (!std::strcmp(id, CLAP_EXT_PARAMS)) return &kGainParams;
@@ -1059,6 +1069,8 @@ struct EdgeControl {
     // State beyond the parameters (a sampler's file): its last byte, then
     // clap.state mark_dirty, as an editor would.
     void (*markDirty)(const clap_plugin_t*, std::uint8_t);
+    // clap.params rescan with these flags, the parameter list unchanged.
+    void (*rescanFlags)(const clap_plugin_t*, std::uint32_t);
 };
 void edgeRequestProcess(const clap_plugin_t* pl) { E(pl)->host->request_process(E(pl)->host); }
 void edgeRescan(const clap_plugin_t* pl, bool removed) {
@@ -1079,8 +1091,13 @@ void edgeMarkDirty(const clap_plugin_t* pl, std::uint8_t value) {
         E(pl)->host->get_extension(E(pl)->host, CLAP_EXT_STATE));
     hs->mark_dirty(E(pl)->host);
 }
-const EdgeControl kEdgeControl = {edgeRequestProcess, edgeRescan, edgeClear, edgeRestart,
-                                  edgeMarkDirty};
+void edgeRescanFlags(const clap_plugin_t* pl, std::uint32_t flags) {
+    const auto* hp = static_cast<const clap_host_params_t*>(
+        E(pl)->host->get_extension(E(pl)->host, CLAP_EXT_PARAMS));
+    hp->rescan(E(pl)->host, flags);
+}
+const EdgeControl kEdgeControl = {edgeRequestProcess, edgeRescan,    edgeClear,
+                                  edgeRestart,        edgeMarkDirty, edgeRescanFlags};
 void CLAP_ABI edgeMain(const clap_plugin_t* pl) {
     ++E(pl)->mainCalls;
     if (E(pl)->config[0] == 44) {

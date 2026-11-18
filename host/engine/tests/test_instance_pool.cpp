@@ -158,6 +158,19 @@ TEST_CASE("an FX the pool remembers is compared by text once it may not describe
         CHECK((*again)->paramValue(0).value() == applied);
     }
 
+    SUBCASE("an acknowledged output state whose commit did not happen") {
+        // The same through the plug-in's state: it changed itself and the app
+        // acknowledged the state it published, but the session kept the
+        // patch object from before.
+        const auto moved = json::writeCompact(patch(-20));
+        REQUIRE((*first)->setPatch(moved, CLAP_SUPPLE_SET_REPLACE));
+        pool.acknowledgeOutputState(id, "sha256:published");
+        REQUIRE((*first)->paramValue(0).value() != applied);
+        auto again = pool.get(id, own, session);
+        REQUIRE(again);
+        CHECK((*again)->paramValue(0).value() == applied);
+    }
+
     SUBCASE("a recreated instance whose state failed to load") {
         // A state edit recreates a processing instance; its blob is missing,
         // so the fresh instance keeps its defaults. Undo returns the object

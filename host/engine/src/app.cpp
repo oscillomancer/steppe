@@ -1494,7 +1494,7 @@ void EngineApp::haltEngine() {
     ownedBackend_.reset();
     outputGestures_.clear();
     pendingOutputs_.clear();
-    outputGeneration_ = outputEpoch_ = 0;
+    outputGeneration_ = outputPatches_ = outputEpoch_ = 0;
     outputDrops_ = voiceDrops_ = consumerDrops_ = 0;
     outputOverflow_ = false;
 }

@@ -4,6 +4,10 @@
 
 Contracts: `specs/engine.md` §1.6, `specs/gui.md` §2.
 
+**Amendment, 2026-11-17:** [ADR-0092](0092-patch-only-fx-edits.md) widens the
+edits that skip a compile: an edit of FX patches alone reaches the running
+instances, detected by the same whole-object comparison.
+
 ## Context
 
 A fader or pan drag sends one `track.set` per pointer motion event, and every

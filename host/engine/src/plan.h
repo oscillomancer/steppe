@@ -1210,4 +1210,21 @@ host::Transport transportAt(const Plan& p, std::int64_t sample, const LoopRange*
 // from the tempo map (transportAt without playrate or loop).
 host::Transport transportAtSeconds(const Plan& p, double seconds) SUPPLE_RT;
 
+// Whether a plug-in's parameter rescan can change what a plan holds of it:
+// its parameter list (INFO or ALL, or a rescan without flags). A rescan of
+// values or their text, which a plug-in reports after a patch or a preset,
+// cannot: a plan holds no values (ADR-0092).
+inline bool rescansParamList(const host::Instance::Notifications& n) {
+    constexpr std::uint32_t kValues = CLAP_PARAM_RESCAN_VALUES | CLAP_PARAM_RESCAN_TEXT;
+    return n.paramsRescan && (n.paramsRescanFlags == 0 || (n.paramsRescanFlags & ~kValues) != 0);
+}
+
+// Whether an active envelope automates the FX: a new plan resends its lanes'
+// values at its first block, covering what the plug-in changed meanwhile.
+inline bool automated(const model::Session& s, model::Id fx) {
+    for (const auto& envelope : s.envelopes)
+        if (envelope.value->target.object == fx && envelope.value->active) return true;
+    return false;
+}
+
 }  // namespace supple::engine::detail
