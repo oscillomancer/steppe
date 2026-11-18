@@ -3961,6 +3961,31 @@ TEST_CASE("the track list's \"fx\" takes the warning colour by the mixer's rule"
     shell.attention().apply(engine::EngineStatus{});
     shell.sync();
     CHECK(colour(track).empty());
+    // The rule is for both chains: a plug-in only in a track's input chain marks "fx" as well
+    // (round 6c-a E8: the input chain was left out of the rule and no test noticed).
+    const std::string voice = exec("track.add", R"({"name":"Voice"})")["track"].asString();
+    const std::string tap = exec("fx.add", R"({"track":")" + voice + R"(","plugin":")" + plugin +
+                                               R"(","chain":"input"})")["fx"]
+                                .asString();
+    shell.sync();
+    a.root->frame(false);
+    CHECK(colour(voice).empty());
+    exec("plugin.override", R"({"plugin":")" + plugin + R"(","mode":"disable"})");
+    shell.sync();
+    a.root->frame(false);
+    CHECK(colour(voice) == "meter-hot");
+    exec("plugin.override", R"({"plugin":")" + plugin + R"(","mode":"normal"})");
+    shell.sync();
+    CHECK(colour(voice).empty());
+    status.failedFx = {tap};
+    shell.attention().apply(status);
+    shell.sync();
+    a.root->frame(false);
+    CHECK(colour(voice) == "meter-hot");
+    CHECK(colour(track).empty());
+    shell.attention().apply(engine::EngineStatus{});
+    shell.sync();
+    CHECK(colour(voice).empty());
 }
 
 TEST_CASE("a plugin dragged from the browser lands on the track row or strip under the pointer") {
