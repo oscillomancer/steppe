@@ -1427,6 +1427,11 @@ Session and editing:
   macOS/Windows CI has not run on it yet.
 
 GUI:
+- ThreadSanitizer does not run the stock plugins' on-screen embedding probes
+  (`plugin.<name>.embedding`, labelled `tsan-skip`): one at a time, on the
+  software renderer the `tsan` preset draws with, they take twelve minutes.
+  They run in every other preset that builds the GUI, and the DAW's own GUI
+  tests run under `tsan`.
 - Automation-item point editing requires an amplitude magnitude above 0.000000001; restore
   the amplitude before editing a flattened item.
 - Plan compilation (including media decoding/resampling), Lua execution and
