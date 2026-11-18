@@ -10,7 +10,7 @@ namespace supple::views {
 struct TcpRowGeometry {
     static constexpr float kNameTop = 2, kNameHeight = 18;
     // A row's buttons are cells of one size on three lines (gui.md §4.2): the
-    // name line with mute, solo, arm and monitor at its right; the mix line
+    // name line with arm, monitor, mute and solo at its right; the mix line
     // (from kMixHeight); the connections line (from kFullHeight).
     static constexpr float kCellWidth = 18, kCellHeight = 14, kCellGap = 2;
     static constexpr float kStateTop = 4, kMixTop = 22, kLinkTop = 42;

@@ -368,18 +368,19 @@ accent colour.
 ### A track's buttons
 
 A track has the same buttons in the same order in the track list and on its
-mixer strip. **M** mutes it and **S** solos it. The disc arms it for
-recording, and the speaker sets input monitoring: off, on, or automatic
-(green outline: you hear the input while the track is armed). **Ø** inverts
-polarity and **mono** sums left and right. A button that is on is filled
-with its colour; one that is off is an outline.
+mixer strip. The disc arms it for recording: a red ring when off, solid red
+when armed. The speaker sets input monitoring: an outline when off, solid
+when on, green when automatic (you hear the input while the track is
+armed). **M** mutes it and **S** solos it. **Ø** inverts polarity and
+**mono** sums left and right. A lettered button that is on is filled with
+its colour; one that is off is an outline.
 
 In the track list the first four are at the right of the track's name, at
 any row height. A taller row adds a line with **Ø**, **mono**, the fader and
 the pan, and then a line with the input, **fx**, **+**, **env** and **out**.
 On a mixer strip, from the top: the name, **fx** and **+** over the
 plug-ins, the sends, the input and **out**, **Ø** and **mono**, the pan,
-then **M**, **S**, arm and monitor directly above the fader.
+then arm, monitor, **M** and **S** directly above the fader.
 
 A buss has no arm, monitor or input, and their places stay empty. A buss is
 marked by a small sign of lines joining before its name, and a master by the
@@ -388,10 +389,11 @@ same sign ending at a bar; a channel has no mark.
 ### Levels in the mixer
 
 Each mixer strip has a meter beside its fader. The numbers along the meter
-are decibels: **0** is full scale, and 6, 12, 18, 24, 36 and 48 are that
+are decibels: **0** is full scale, and 12, 24, 36 and 48 are that
 far under it. Each number has a line that runs across the meter's two bars,
-so you read a level where a bar crosses a line. The part of a bar above
--6 dB is drawn in a warmer colour. The number under the fader is the fader's own setting. The number under
+so you read a level where a bar crosses a line. A bar is green low down
+and turns yellow, then orange as the level rises, and red from just under
+0 dB up. The number under the fader is the fader's own setting. The number under
 the meter is the highest peak the track has reached since you last cleared
 it; it turns red when the peak went over 0 dB, as the light at the top of
 the meter does. Click that number or the meter to clear both.

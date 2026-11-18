@@ -165,6 +165,9 @@ class Meter : public Node {
     // Where `db` sits along a lane: 0 at the floor (-60 dB), 1 at +6 dB. A
     // vertical meter's lanes start kClipLight under its top edge.
     static float position(float db);
+    // The colour a bar has at `db`: green up to -18 dB, yellow at -9, orange
+    // at -4 and red from -1 upwards, blended between them.
+    static Color colorAt(const Theme& theme, float db);
     static constexpr float kClipLight = 4;
     // The levels a scale beside the meter labels (dB, highest first). A
     // vertical meter given them draws each as a hairline across its lanes,
@@ -199,9 +202,9 @@ class Toggle : public Node {
     bool onPointer(const PointerEvent& e) override;
     bool onKey(const KeyEvent& e) override;
     std::string valueText() const override { return on_ ? "on" : "off"; }
-    // A strip's state button (mute, solo, polarity, mono): the cell every
-    // strip button shares (drawStateCell), filled with the "on" colour when on.
-    bool cell = false;
+    // A strip's mute and solo: a rounded pill whose letter and outline carry
+    // the "on" colour, filled with it when on.
+    bool pill = false;
 
   protected:
     bool pressed() const { return pressed_; }
@@ -211,20 +214,13 @@ class Toggle : public Node {
     bool on_ = false, pressed_ = false;
 };
 
-// The face every strip button shares, in the mixer and the track panel: a
-// rounded rectangle. At rest quiet (the ground colour, a faint outline);
-// `hot` (under the pointer) it takes a little of `colour`; `on` it is filled
-// with it. Returns the ink for the glyph or letter drawn on it.
-Color drawStateCell(Canvas& c, const Rect& b, Color colour, bool on, bool hot, bool pressed,
-                    bool focused);
-
 // A track type's mark before its name: lines joining into one for a buss (it
 // sums), the same ending at a bar for a master (it ends at the device). A
 // channel, the usual case, has none. `box` is the square the mark is drawn in.
 enum class TrackGlyph { Buss, Master };
 void drawTrackGlyph(Canvas& c, const Rect& box, TrackGlyph glyph, Color ink);
 
-// Record arm: a red disc in the strip's cell; armed, the cell is red.
+// Record arm: a red disc, faded when off and solid when armed.
 class ArmButton : public Toggle {
   public:
     explicit ArmButton(std::string id, std::function<void(bool)> onToggle = {});
@@ -234,10 +230,8 @@ class ArmButton : public Toggle {
 // A frozen track's mark: a six-armed snowflake of `radius` around `centre`.
 void drawSnowflake(Canvas& c, Point centre, float radius, Color ink);
 
-// Input monitoring (off, on, auto): a small speaker in the strip's cell. Off,
-// an outline; on, solid in full ink (where a new channel starts, so not a
-// colour); auto (heard while armed), green with a green outline. A click
-// runs onClick (the owner cycles it).
+// Input monitoring (off, on, auto): a small speaker, an outline when off,
+// solid when on, green when auto. A click runs onClick (the owner cycles it).
 class MonitorButton : public Node {
   public:
     enum class Mode { Off, On, Auto };

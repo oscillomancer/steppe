@@ -235,7 +235,7 @@ TcpPanel::Row::Row(TcpPanel& panel, std::size_t slot)
         args["lane_mute"] = on;
         setTrack(std::move(args), {});
     });
-    laneMute_->cell = true;
+    laneMute_->pill = true;
     solo_ = &emplace<ui::Toggle>(id + ".solo", "S", "solo", [this, setTrack](bool on) {
         json::Value args = trackArg(*track_);
         args["solo"] = on ? "on" : "off";
@@ -252,7 +252,7 @@ TcpPanel::Row::Row(TcpPanel& panel, std::size_t slot)
         args["mono"] = on;
         setTrack(std::move(args), {});
     });
-    mute_->cell = solo_->cell = polarity_->cell = mono_->cell = true;
+    mute_->pill = solo_->pill = polarity_->pill = mono_->pill = true;
     arm_ = &emplace<ui::ArmButton>(id + ".arm", [this, setTrack](bool on) {
         json::Value args = trackArg(*track_);
         args["armed"] = on;
@@ -469,13 +469,18 @@ void TcpPanel::Row::arrange(const ui::Canvas& canvas, const ui::Rect& r) {
     // The meter stands at the row's right edge; the controls end a gap
     // before it.
     const float edge = right - G::kMeterWidth - 7;
-    // The name line's four cells: mute, solo, arm, monitor. A cell is a
+    // The name line's four cells: arm, monitor, mute, solo. A cell is a
     // control's place: a buss has no arm or monitor and their cells stay
-    // empty, so M and S are in one column down the whole panel.
+    // empty, so M and S are in one column down the whole panel. Arm and
+    // monitor are drawn controls, a little taller than the pills.
     const float cells = edge - 4 * G::kCellWidth - 3 * G::kCellGap;
     auto cell = [&](int column) {
         return ui::Rect{cells + static_cast<float>(column) * (G::kCellWidth + G::kCellGap),
                         r.y + G::kStateTop, G::kCellWidth, G::kCellHeight};
+    };
+    auto drawn = [&](int column) {
+        const ui::Rect in = cell(column);
+        return ui::Rect{in.x + (in.w - 16) / 2, in.y - 1, 16, 16};
     };
     const float mark = (master_ || !channel_ ? G::kMark : 0.0f) + (frozen_ ? G::kMark : 0.0f);
     nameRect_ = {x + G::kLeft + indent + mark, r.y + G::kNameTop,
@@ -490,17 +495,17 @@ void TcpPanel::Row::arrange(const ui::Canvas& canvas, const ui::Rect& r) {
         for (ui::Node* n : std::initializer_list<ui::Node*>{input_, env_, out_, fader_, pan_,
                                                             polarity_, mono_, meter_, fx_, addFx_})
             n->visible = false;
-        laneMute_->arrange(canvas, cell(0));
-        arm_->arrange(canvas, cell(2));
+        arm_->arrange(canvas, drawn(0));
+        laneMute_->arrange(canvas, cell(2));
         return;
     }
     meter_->visible = true;
     meter_->arrange(canvas,
                     {right - G::kMeterWidth - 2, r.y + 3, G::kMeterWidth, std::max(4.0f, r.h - 6)});
-    mute_->arrange(canvas, cell(0));
-    solo_->arrange(canvas, cell(1));
-    if (arm_->visible) arm_->arrange(canvas, cell(2));
-    if (monitor_->visible) monitor_->arrange(canvas, cell(3));
+    if (arm_->visible) arm_->arrange(canvas, drawn(0));
+    if (monitor_->visible) monitor_->arrange(canvas, drawn(1));
+    mute_->arrange(canvas, cell(2));
+    solo_->arrange(canvas, cell(3));
 
     // The mix line, in signal order: polarity and mono, the fader, the pan.
     const bool mix = r.h >= G::kMixHeight;

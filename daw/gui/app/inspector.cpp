@@ -405,7 +405,7 @@ ui::Toggle& Inspector::state(ui::Node& parent, const std::string& key, const std
                              const std::string& color) {
     auto& t = parent.emplace<ui::Toggle>("inspector." + key, label, color,
                                          [this, key](bool on) { set(key, on); });
-    t.cell = true;
+    t.pill = true;
     t.layout.width = ui::SizeRule::content();
     states_[key] = &t;
     return t;
@@ -476,7 +476,7 @@ std::unique_ptr<ui::Node> Inspector::build() {
     auto& stretch = formRow(take, "stretch", "Stretch");
     keepPitch_ = &stretch.emplace<ui::Toggle>("inspector.preserve_pitch", "Keep pitch", "accent",
                                               [this](bool on) { setTake("preserve_pitch", on); });
-    keepPitch_->cell = true;
+    keepPitch_->pill = true;
     keepPitch_->layout.width = ui::SizeRule::content();
 
     // Its takes, when it has several: a click chooses the one heard.
@@ -612,7 +612,7 @@ void Inspector::readItems(bool force) {
     show("fade_out", text([](const model::Item& i) { return i.fadeOut.length; }, 3, "s"), force);
     const auto timebase = common(items, [](const model::Item& i) { return i.timebase; });
     timebase_->setValue(timebase ? timebaseName(*timebase) : "");
-    // A cell is lit when every item has the state on.
+    // A pill is lit when every item has the state on.
     auto all = [&](bool model::Item::* flag) {
         return std::all_of(items.begin(), items.end(),
                            [&](const model::Item* i) { return i->*flag; });

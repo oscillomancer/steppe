@@ -803,6 +803,36 @@ TEST_CASE("mixer controls: fader taper and gestures, pan, meter hold and clip, t
     CHECK(Meter::position(-60) == doctest::Approx(0));
     CHECK(Meter::position(6) == doctest::Approx(1));
     CHECK(Meter::position(0) > Meter::position(-6));
+    // A bar's colour belongs to the level: green low down, then yellow,
+    // orange and, from just under 0 dB up, red; blended between them.
+    {
+        const Theme theme = Theme::dark();
+        auto same = [](Color a, Color b) {
+            return std::abs(a.r - b.r) + std::abs(a.g - b.g) + std::abs(a.b - b.b) < 0.01f;
+        };
+        const Color green = theme.color("meter"), yellow = theme.color("meter-hot"),
+                    red = theme.color("clip");
+        CHECK(same(Meter::colorAt(theme, -60), green));
+        CHECK(same(Meter::colorAt(theme, -18), green));
+        CHECK(same(Meter::colorAt(theme, -9), yellow));
+        CHECK(same(Meter::colorAt(theme, -1), red));
+        CHECK(same(Meter::colorAt(theme, 0), red));
+        CHECK(same(Meter::colorAt(theme, 6), red));
+        // Orange sits between yellow and red, and the steps between are blends.
+        const Color orange = Meter::colorAt(theme, -4);
+        CHECK(orange.g < yellow.g);
+        CHECK(orange.g > red.g);
+        const Color between = Meter::colorAt(theme, -13.5f);
+        CHECK(between.r > green.r);
+        CHECK(between.r < yellow.r);
+        // It never goes back towards green on the way up.
+        float last = Meter::colorAt(theme, -60).g;
+        for (float db = -60; db <= 6; db += 0.5f) {
+            const float g = Meter::colorAt(theme, db).g;
+            CHECK(g <= last + 1e-4f);
+            last = g;
+        }
+    }
     root.frame(false);
     CHECK(root.click("meter"));
     CHECK_FALSE(meter.clipped());
@@ -860,7 +890,7 @@ TEST_CASE("a disabled text field lies flat and its text is faint; it takes no cl
     CHECK(off.text() == "Bass line");
 }
 
-TEST_CASE("colour is state: an off cell and a quiet button at rest are ink alone") {
+TEST_CASE("colour is state: an off pill and a quiet button at rest are ink alone") {
     REQUIRE_GL();
     const Theme theme = Theme::dark();
     Root root(*fixture().window, fixture().fonts, theme);
@@ -868,16 +898,16 @@ TEST_CASE("colour is state: an off cell and a quiet button at rest are ink alone
     content->layout.dir = Layout::Dir::Row;
     content->layout.padding = Insets::all(16);
     content->layout.gap = 16;
-    auto cell = [&](const char* id, bool on) -> Toggle& {
+    auto pill = [&](const char* id, bool on) -> Toggle& {
         auto& t = content->emplace<Toggle>(id, "S", "solo");
-        t.cell = true;
+        t.pill = true;
         t.layout.width = SizeRule::fixed(24);
         t.layout.height = SizeRule::fixed(16);
         t.setOn(on);
         return t;
     };
-    Toggle& off = cell("off", false);
-    Toggle& on = cell("on", true);
+    Toggle& off = pill("off", false);
+    Toggle& on = pill("on", true);
     auto& quiet = content->emplace<Button>("quiet", "fx");
     quiet.quiet = true;
     auto& boxed = content->emplace<Button>("boxed", "fx");

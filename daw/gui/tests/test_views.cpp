@@ -1694,18 +1694,24 @@ TEST_CASE("a TCP row's meter stands at its right edge, clear of the controls") {
         CHECK(node->bounds().right() < meter.x);
     }
     // Three lines, each in one order (gui.md §4.2). The name line: the name,
-    // then mute, solo, arm, monitor as four cells of one size.
+    // then arm, monitor, mute, solo in four places of one pitch. Mute and
+    // solo are pills that fill their place; arm and monitor are drawn, 16
+    // units square, centred in theirs.
     auto box = [&](const model::Id& track, const char* what) {
         return panel->controlNode(track, what)->bounds();
     };
-    const std::vector<ui::Rect> cells = {box(tr1, "mute"), box(tr1, "solo"), box(tr1, "arm"),
-                                         box(tr1, "monitor")};
+    const std::vector<ui::Rect> cells = {box(tr1, "arm"), box(tr1, "monitor"), box(tr1, "mute"),
+                                         box(tr1, "solo")};
+    using G = views::TcpRowGeometry;
     CHECK(box(tr1, "name").right() <= cells[0].x);
     for (std::size_t i = 0; i < cells.size(); ++i) {
-        CHECK(cells[i].w == views::TcpRowGeometry::kCellWidth);
-        CHECK(cells[i].h == views::TcpRowGeometry::kCellHeight);
-        CHECK(cells[i].y == cells[0].y);
-        if (i) CHECK(cells[i].x == cells[i - 1].right() + views::TcpRowGeometry::kCellGap);
+        const bool drawn = i < 2;
+        CHECK(cells[i].w == (drawn ? 16 : G::kCellWidth));
+        CHECK(cells[i].h == (drawn ? 16 : G::kCellHeight));
+        CHECK(cells[i].y + cells[i].h / 2 == cells[0].y + cells[0].h / 2);
+        if (i)
+            CHECK(cells[i].x + cells[i].w / 2 ==
+                  cells[i - 1].x + cells[i - 1].w / 2 + G::kCellWidth + G::kCellGap);
     }
     // The mix line: polarity, mono, the fader, the pan.
     const std::vector<ui::Rect> mix = {box(tr1, "polarity"), box(tr1, "mono"), box(tr1, "fader"),

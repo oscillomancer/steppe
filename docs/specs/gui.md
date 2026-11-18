@@ -404,7 +404,7 @@ Per track, a row of up to three lines (`TcpRowGeometry`):
    down the row's left edge; the type's mark for a buss or a master (below);
    the name (rename in place: a double-click; Enter or a click anywhere
    else keeps the edit, Escape drops it); and at the right the four
-   **state cells**: mute, solo, arm, monitor, in that order.
+   **state buttons**: arm, monitor, mute, solo, in that order.
 2. **The mix line**, from 40 units, in signal order: polarity ("Ø") and
    mono (ADR-0022), the volume fader and the pan (Console 9 Channel's
    controls on channels and busses; plain gain and balance on masters; the
@@ -422,16 +422,16 @@ Per track, a row of up to three lines (`TcpRowGeometry`):
 A meter 8 units wide (`TcpRowGeometry::kMeterWidth`) stands at the row's
 right edge for the row's whole height, with the controls ending before it.
 
-**One button shape.** Mute, solo, arm, monitor, polarity and mono are
-**cells** (`ui::drawStateCell`, `ui::Toggle::cell`): a rounded rectangle,
-18 by 14 units here. Off, a cell is the ground colour with a faint outline
-and a quiet letter; under the pointer it takes a little of its state's
-colour; on, it is filled with it. Arm is a disc in its cell (a red ring off;
-a disc on the red cell armed) and monitor a speaker in its cell (an outline
-off; green with a green outline on auto; on the green cell on). The mixer's
-strips carry the same cells in the same order (§4.4).
+**The buttons.** Mute, solo, polarity and mono are rounded pills
+(`ui::Toggle::pill`): an ink outline and letter off, filled with their own
+colour on, the colour showing under the pointer. Arm is a disc
+(`ui::ArmButton`): a red ring off, solid red armed. Monitor is a speaker
+(`ui::MonitorButton`): an outline off, solid on, green on auto. The four
+state buttons stand in four places of one pitch (20 units; a pill is 18 by
+14, the disc and the speaker 16 square, centred in their places). The
+mixer's strips carry the same buttons in the same order (§4.4).
 
-**A cell is a control's place.** A buss has no arm, monitor or input: their
+**A place belongs to its control.** A buss has no arm, monitor or input: their
 places stay empty, so mute and solo are in one column down the whole panel,
 at any depth, and the mix and connections lines start at the panel's left
 edge at any depth.
@@ -447,12 +447,12 @@ text alone in quiet ink, a box under the pointer; "fx" is in full ink when
 the track's chain or input chain holds a plug-in. The input stays a boxed
 field, since it shows a value.
 A master that is armed or holds items has a row too, its **lane** (ADR-0057):
-the header shows only the master's mark, its name, the lane mute ("M", in
-the mute cell's place and colour, `track.set {lane_mute}`: it silences the
-master's own items, never the master) and the arm in its cell; the master's
+the header shows only the master's mark, its name, the lane mute ("M", a pill in
+the mute's place and colour, `track.set {lane_mute}`: it silences the
+master's own items, never the master) and the arm in its place; the master's
 fader, pan and FX stay in the mixer. A lane-muted master's items are drawn dimmed. A master with
 neither has no row.
-Rows shrink to 24 design units: the name line, with its four state cells,
+Rows shrink to 24 design units: the name line, with its four state buttons,
 fits above a four-unit bottom resize grip. The mix line hides below 40
 units; the connections line hides below 58. Track heights clamp to 24–400 units,
 including compact folders and older UI sidecars; expanded takes retain that
@@ -798,7 +798,7 @@ their entire ancestor chain is visible, and clear peak hold on reopening.
 
 A strip is 92 units wide and is **one grid of four columns**: a row is four
 cells, two halves or one full width, and every button is 16 units high
-(the cells of §4.2). Top to bottom, in the order of the signal, with the
+(the buttons of §4.2). Top to bottom, in the order of the signal, with the
 buttons used most next to the fader:
 
 1. **The colour bar** (`mixer.color.<track>`): the track's own colour,
@@ -824,23 +824,28 @@ buttons used most next to the fader:
 6. **Stereo** (`mixer.util.<track>`): polarity ("Ø") and mono (ADR-0022),
    two halves. They act before the pan, so they sit on it.
 7. **The pan.**
-8. **The state row** (`mixer.state.<track>`): mute, solo, arm and monitor,
+8. **The state row** (`mixer.state.<track>`): arm, monitor, mute and solo,
    four cells in that order, directly over the fader. A buss has no arm or
    monitor and a master no monitor (a master records its output,
-   ADR-0057): their cells stay empty, so mute and solo are at the same
-   place on every strip.
+   ADR-0057): their cells stay empty (`mixer.state.1.<track>`,
+   `mixer.state.2.<track>`), so mute and solo are at the same place on
+   every strip.
 9. **The fader and the meter** (`mixer.faderrow.<track>`), then their
    **values**.
 
 Every type has the same rows, each of a fixed height, so every strip's
 chain is as tall and every fader sits at the same height. Between the fader
-and the meter is the meter's scale (`mixer.scale.<track>`): 0, then 6, 12,
-18, 24, 36 and 48 for the dB under it, at the places `ui::Meter::position`
+and the meter is the meter's scale (`mixer.scale.<track>`): 0, then 12,
+24, 36 and 48 for the dB under it, at the places `ui::Meter::position`
 gives. Each number has a tick that ends where the meter starts, and the
 meter draws the same levels as hairlines across both bars
-(`ui::Meter::setMarks`), so a level is read on the bars themselves. A bar
-is drawn in zones: its part above -6 dB in the hot colour, the rest in the
-meter colour.
+(`ui::Meter::setMarks`), so a level is read on the bars themselves. A
+bar's colour belongs to the level, not to the bar (`ui::Meter::colorAt`,
+every meter): the meter colour (green) up to -18 dB, the hot colour
+(yellow) at -9, orange at -4 and the clip colour (red) from -1 dB up,
+blended between them, so a bar that reaches 0 dB shows all four. The peak
+is fainter than the RMS over it while both are green and at full strength
+from yellow up.
 Under the fader is its value (`mixer.value.<track>`); under the meter the
 highest peak it has shown since it was last cleared (`mixer.peak.<track>`,
 `ui::Meter::maxPeakDb`), in dB with a sign and one decimal, empty until
@@ -2009,7 +2014,7 @@ inspector adds no command:
 | Follows (`inspector.timebase`) | Its track's setting, Beats, Time, or Beats, start only | A choice | `timebase` |
 | Gain (`inspector.gain_db`) | "-3.0 dB" | A number, with or without "dB" | `gain_db` |
 | Fade in, Fade out (`inspector.fade_in`, `inspector.fade_out`) | "0.400 s" | A number, with or without "s" | `fade_in`, `fade_out` |
-| Mute, Loop, Lock (`inspector.mute`, `.loop`, `.locked`) | Cells (§4.2), lit when on | A click | `mute`, `loop`, `locked` |
+| Mute, Loop, Lock (`inspector.mute`, `.loop`, `.locked`) | Pills, lit when on | A click | `mute`, `loop`, `locked` |
 | File (`inspector.file`) | An audio item's file path, then its rate, channels and length | Read only | |
 
 When the heard take plays audio, its speed and pitch follow
@@ -2019,7 +2024,7 @@ When the heard take plays audio, its speed and pitch follow
 |---|---|---|---|
 | Speed (`inspector.playrate`) | "1.000 x" | A number, with or without "x" | `playrate` |
 | Pitch (`inspector.pitch`) | "0.00 st" | A number, with or without "st" | `pitch` |
-| Keep pitch (`inspector.preserve_pitch`) | A cell, lit when on | A click | `preserve_pitch` |
+| Keep pitch (`inspector.preserve_pitch`) | A pill, lit when on | A click | `preserve_pitch` |
 
 An item with several takes lists them in its order (`inspector.takes`,
 at most six rows before it scrolls), a take without a name as "Take *n*";
@@ -2037,10 +2042,10 @@ in the field being typed in. A locked item's fields are disabled, all but
 Lock, under a line that says so. An item with no take cannot be named.
 
 **Several items** show the fields they can share: Follows, Gain, the
-fades and the three cells. Name, Start, Length, the take settings, the
+fades and the three pills. Name, Start, Length, the take settings, the
 take list and the file are for one item only. A field shows the value all
 of them have, and is empty with the placeholder "mixed" when they differ;
-a cell is lit when all have the state on. An edit runs `item.set` on each
+a pill is lit when all have the state on. An edit runs `item.set` on each
 inside one transaction (`Dispatcher::transact`, labelled "Item gain" and
 so on): one undo step, and all of them or none when the command refuses
 one. With any of them locked the fields are disabled; Lock then locks the

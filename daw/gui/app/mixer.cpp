@@ -326,7 +326,7 @@ class MeterScale : public ui::Node {
     // The levels it labels, in dB below full scale. Each has a tick that ends
     // at the scale's right edge, where the meter starts, and the meter draws
     // the same levels as lines across its bars (ui::Meter::setMarks).
-    static std::vector<float> marks() { return {0, -6, -12, -18, -24, -36, -48}; }
+    static std::vector<float> marks() { return {0, -12, -24, -36, -48}; }
     static constexpr float kTick = 4, kWidth = 24;
     explicit MeterScale(std::string id) : Node(std::move(id)) {
         layout.width = ui::SizeRule::fixed(kWidth);
@@ -1296,7 +1296,7 @@ void Mixer::rebuild() {
             [this, tid](bool on) { (void)set(tid, "mono", json::Value(on)); });
         st.polarity->layout.width = st.mono->layout.width = ui::SizeRule::fraction();
         st.polarity->layout.height = st.mono->layout.height = ui::SizeRule::fixed(kCellH);
-        st.polarity->cell = st.mono->cell = true;
+        st.polarity->pill = st.mono->pill = true;
         st.pan = &frame->emplace<ui::PanControl>("mixer.pan." + tid);
         // Each bar sets what the strip's pan mode gives it (ADR-0066).
         auto panBar = [this, tid, id, control = st.pan](int part) {
@@ -1316,7 +1316,7 @@ void Mixer::rebuild() {
         st.pan->onChange = panBar(0);
         st.pan->onSecondChange = panBar(1);
         showPan(*st.pan, t);
-        // The state row, over the fader: mute, solo, arm, monitor, one cell
+        // The state row, over the fader: arm, monitor, mute, solo, one cell
         // each and always in that place. A buss has no arm or monitor and a
         // master no monitor: their cells stay empty, so M and S line up
         // across every strip (ADR-0057: a master records its output).
@@ -1324,23 +1324,15 @@ void Mixer::rebuild() {
         state.layout.dir = ui::Layout::Dir::Row;
         state.layout.height = ui::SizeRule::fixed(kCellH);
         state.layout.gap = kCellGap;
-        st.mute = &state.emplace<ui::Toggle>(
-            "mixer.mute." + tid, "M", "mute",
-            [this, tid](bool on) { (void)set(tid, "mute", json::Value(on)); });
-        st.solo =
-            &state.emplace<ui::Toggle>("mixer.solo." + tid, "S", "solo", [this, tid](bool on) {
-                (void)set(tid, "solo", json::Value(std::string(on ? "on" : "off")));
-            });
-        st.mute->cell = st.solo->cell = true;
-        ui::Node* third = nullptr;
-        ui::Node* fourth = nullptr;
+        ui::Node* first = nullptr;
+        ui::Node* second = nullptr;
         if (t.type != model::StripType::Buss) {
             st.arm = &state.emplace<ui::ArmButton>("mixer.arm." + tid, [this, tid](bool on) {
                 (void)set(tid, "armed", json::Value(on));
             });
-            third = st.arm;
+            first = st.arm;
         } else {
-            third = &state.emplace<ui::Node>("mixer.state.3." + tid);
+            first = &state.emplace<ui::Node>("mixer.state.1." + tid);
         }
         if (t.type == model::StripType::Channel) {
             st.monitor = &state.emplace<ui::MonitorButton>("mixer.monitor." + tid, [this, tid] {
@@ -1352,12 +1344,20 @@ void Mixer::rebuild() {
                                                                               : "off";
                 (void)set(tid, "monitor", json::Value(std::string(next)));
             });
-            fourth = st.monitor;
+            second = st.monitor;
         } else {
-            fourth = &state.emplace<ui::Node>("mixer.state.4." + tid);
+            second = &state.emplace<ui::Node>("mixer.state.2." + tid);
         }
+        st.mute = &state.emplace<ui::Toggle>(
+            "mixer.mute." + tid, "M", "mute",
+            [this, tid](bool on) { (void)set(tid, "mute", json::Value(on)); });
+        st.solo =
+            &state.emplace<ui::Toggle>("mixer.solo." + tid, "S", "solo", [this, tid](bool on) {
+                (void)set(tid, "solo", json::Value(std::string(on ? "on" : "off")));
+            });
+        st.mute->pill = st.solo->pill = true;
         for (ui::Node* cell :
-             {static_cast<ui::Node*>(st.mute), static_cast<ui::Node*>(st.solo), third, fourth}) {
+             {first, second, static_cast<ui::Node*>(st.mute), static_cast<ui::Node*>(st.solo)}) {
             cell->layout.width = ui::SizeRule::fraction();
             cell->layout.height = ui::SizeRule::fixed(kCellH);
         }
@@ -1449,14 +1449,15 @@ void Mixer::rebuild() {
         ms.layout.dir = ui::Layout::Dir::Row;
         ms.layout.height = ui::SizeRule::fixed(kCellH);
         ms.layout.gap = kCellGap;
+        ui::Node* first = &ms.emplace<ui::Node>("mixer.vca.ms.1." + tid);
+        ui::Node* second = &ms.emplace<ui::Node>("mixer.vca.ms.2." + tid);
         st.mute = &ms.emplace<ui::Toggle>("mixer.vca.mute." + tid, "M", "mute",
                                           [setVca](bool on) { setVca("mute", on); });
         st.solo = &ms.emplace<ui::Toggle>("mixer.vca.solo." + tid, "S", "solo",
                                           [setVca](bool on) { setVca("solo", on); });
-        st.mute->cell = st.solo->cell = true;
-        for (ui::Node* cell : {static_cast<ui::Node*>(st.mute), static_cast<ui::Node*>(st.solo),
-                               &ms.emplace<ui::Node>("mixer.vca.ms.3." + tid),
-                               &ms.emplace<ui::Node>("mixer.vca.ms.4." + tid)}) {
+        st.mute->pill = st.solo->pill = true;
+        for (ui::Node* cell :
+             {first, second, static_cast<ui::Node*>(st.mute), static_cast<ui::Node*>(st.solo)}) {
             cell->layout.width = ui::SizeRule::fraction();
             cell->layout.height = ui::SizeRule::fixed(kCellH);
         }

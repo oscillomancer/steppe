@@ -348,9 +348,9 @@ TEST_CASE("mixer: a strip is one grid: routing, stereo, pan, the state row, then
     CHECK(near(box("mixer.polarity." + a).x, left));
     CHECK(near(box("mixer.mono." + a).right(), right));
     CHECK(near(box("mixer.polarity." + a).w, box("mixer.mono." + a).w));
-    // State: four equal cells in one order, mute, solo, arm, monitor.
-    const std::vector<ui::Rect> cells = {box("mixer.mute." + a), box("mixer.solo." + a),
-                                         box("mixer.arm." + a), box("mixer.monitor." + a)};
+    // State: four equal cells in one order, arm, monitor, mute, solo.
+    const std::vector<ui::Rect> cells = {box("mixer.arm." + a), box("mixer.monitor." + a),
+                                         box("mixer.mute." + a), box("mixer.solo." + a)};
     CHECK(near(cells.front().x, left));
     CHECK(near(cells.back().right(), right));
     for (std::size_t i = 1; i < cells.size(); ++i) {
@@ -370,13 +370,13 @@ TEST_CASE("mixer: a strip is one grid: routing, stereo, pan, the state row, then
     CHECK(near(box("mixer.out." + bus).w, right - left));
     for (const std::string& other : {bus, master}) {
         const float dx = f.strip(other).node->bounds().x - f.strip(a).node->bounds().x;
-        CHECK(near(box("mixer.mute." + other).x - dx, cells[0].x));
-        CHECK(near(box("mixer.solo." + other).x - dx, cells[1].x));
-        CHECK(near(box("mixer.solo." + other).w, cells[1].w));
+        CHECK(near(box("mixer.mute." + other).x - dx, cells[2].x));
+        CHECK(near(box("mixer.solo." + other).x - dx, cells[3].x));
+        CHECK(near(box("mixer.solo." + other).w, cells[3].w));
     }
     CHECK(near(box("mixer.arm." + master).x -
                    (f.strip(master).node->bounds().x - f.strip(a).node->bounds().x),
-               cells[2].x));
+               cells[0].x));
     // Every type has the same rows, so every chain is as tall and every
     // fader lines up; a send takes one row out of its own strip's chain.
     CHECK(near(f.strip(bus).chain->bounds().h, f.strip(a).chain->bounds().h));
@@ -1168,6 +1168,32 @@ TEST_CASE("mixer: the strips match their golden picture") {
     CHECK(f.mixer->strips().size() == 5);
     f.snapshot("mixer-strips.png");
     f.golden("mixer-strips.png");
+}
+
+TEST_CASE("mixer: meters at rising levels, for the picture: green, yellow, orange, red") {
+    Fixture f;
+    if (!f.ok) return;
+    // Six channels at -30, -18, -12, -6, -2 and +1 dB peak (the RMS 6 dB
+    // under): the bars show where on the scale each colour begins.
+    const float levels[] = {-30, -18, -12, -6, -2, 1};
+    std::vector<std::string> tracks;
+    for (const float level : levels) {
+        char name[16];
+        std::snprintf(name, sizeof name, "%+.0f dB", static_cast<double>(level));
+        tracks.push_back(f.addTrack("channel", name));
+    }
+    f.refresh();
+    for (std::size_t i = 0; i < tracks.size(); ++i) {
+        const float peak = std::pow(10.0f, levels[i] / 20), rms = peak / 2;
+        const float p[2] = {peak, peak * 0.7f}, r[2] = {rms, rms * 0.7f};
+        f.strip(tracks[i]).meter->push(p, r);
+    }
+    f.root->frame(false);
+    f.snapshot("mixer-levels.png");
+    CHECK(f.strip(tracks.back()).meter->clipped());
+    CHECK_FALSE(f.strip(tracks.front()).meter->clipped());
+    // The scale has five marks, and the meter draws the same.
+    CHECK(f.strip(tracks[0]).meter->marks() == std::vector<float>{0, -12, -24, -36, -48});
 }
 
 TEST_CASE("mixer: a strip shows its meter's highest peak under it; a click clears it") {
