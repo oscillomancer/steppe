@@ -3860,9 +3860,13 @@ TEST_CASE("a plugin dragged from the browser lands on the track row or strip und
     CHECK_FALSE(drag.view().target);
     CHECK(a.root->overlay().children().size() == overlays + 1);
     REQUIRE(a.root->overlay().find("plugin.drag"));
+    // The pointer: "not allowed" where a release would do nothing, the move
+    // cursor over a track.
+    CHECK(a.root->cursor() == ui::Cursor::NotAllowed);
     drag.drag("com.example.none", "Nothing", ui::DragPhase::Move, centre(lane));
     REQUIRE(drag.view().target);
     CHECK(drag.view().target->track == bass);
+    CHECK(a.root->cursor() == ui::Cursor::Move);
     a.snapshot("plugin-drag.png");
     drag.drag("com.example.none", "Nothing", ui::DragPhase::Move, centre(strip->node->bounds()));
     REQUIRE(drag.view().target);
@@ -3870,12 +3874,15 @@ TEST_CASE("a plugin dragged from the browser lands on the track row or strip und
     // Released over nothing: no command, no report.
     drag.drag("com.example.none", "Nothing", ui::DragPhase::End, nowhere);
     CHECK_FALSE(drag.view().active);
+    CHECK_FALSE(a.root->dragCursor());  // the pointer is the nodes' again
     CHECK(a.root->overlay().children().size() == overlays);
     CHECK(drops.empty());
     // Cancelled over a track: the same.
     drag.drag("com.example.none", "Nothing", ui::DragPhase::Begin, nowhere);
     drag.drag("com.example.none", "Nothing", ui::DragPhase::Move, centre(lane));
+    CHECK(a.root->dragCursor() == ui::Cursor::Move);
     drag.drag("com.example.none", "Nothing", ui::DragPhase::Cancel, {});
+    CHECK_FALSE(a.root->dragCursor());
     CHECK_FALSE(drag.view().active);
     CHECK(a.root->overlay().children().size() == overlays);
     CHECK(drops.empty());

@@ -55,6 +55,7 @@ void PluginDrag::addTargets(Finder finder) { finders_.push_back(std::move(finder
 
 void PluginDrag::end() {
     *view_ = View{};
+    root_.setDragCursor(std::nullopt);
     ghost_.reset();
     root_.damageAll();
 }
@@ -86,6 +87,7 @@ void PluginDrag::drag(const std::string& label, ui::DragPhase phase, ui::Point a
     for (const Finder& find : finders_)
         if ((d.target = find(at))) break;
     if (phase != ui::DragPhase::End) {
+        root_.setDragCursor(d.target ? ui::Cursor::Move : ui::Cursor::NotAllowed);
         root_.requestAnimationFrame();
         return;
     }
@@ -108,6 +110,7 @@ void PluginDrag::dragTo(const std::string& label, ui::DragPhase phase, ui::Point
     d.pos = at;
     d.place = where ? where(at) : std::nullopt;
     if (phase != ui::DragPhase::End) {
+        root_.setDragCursor(d.place ? ui::Cursor::Move : ui::Cursor::NotAllowed);
         root_.requestAnimationFrame();
         return;
     }

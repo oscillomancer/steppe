@@ -1534,6 +1534,7 @@ void Mixer::dragStrip(const std::string& track, DragPhase phase, ui::Point p) {
     d.pos = p;
     resolveStripDrop();
     if (phase == DragPhase::End) return endDrag(true);
+    showDragCursor();
     root_.requestAnimationFrame();
 }
 
@@ -1561,6 +1562,7 @@ void Mixer::dragFx(const std::string& track, model::Id fx, DragPhase phase, ui::
     else if (ui::Node* slot = root_.find("mixer.fx." + d.fx))
         d.label = slot->valueText();
     if (phase == DragPhase::End) return endDrag(true);
+    showDragCursor();
     root_.requestAnimationFrame();
 }
 
@@ -1591,6 +1593,7 @@ void Mixer::dragSend(const std::string& track, DragPhase phase, ui::Point p) {
         d.marker = over->node->bounds().intersect(over->node->parent()->bounds());
     }
     if (phase == DragPhase::End) return endDrag(true);
+    showDragCursor();
     root_.requestAnimationFrame();
 }
 
@@ -1784,10 +1787,18 @@ void Mixer::openFxRename(model::Id fx, const ui::Rect& slot) {
     root_.focus(edit);
 }
 
+// The pointer while a strip, a plug-in or a send is in hand: the move cursor
+// where a release would do something, "not allowed" where it would not.
+void Mixer::showDragCursor() {
+    root_.setDragCursor(drag_->drop == DragView::Drop::None ? ui::Cursor::NotAllowed
+                                                            : ui::Cursor::Move);
+}
+
 // The drag is over: drop it (one command, one undo step) or let it go.
 void Mixer::endDrag(bool commit) {
     const DragView done = *drag_;
     *drag_ = DragView{};
+    root_.setDragCursor(std::nullopt);
     ghost_.reset();
     if (done.kind == DragView::Kind::None) return;
     root_.requestAnimationFrame();

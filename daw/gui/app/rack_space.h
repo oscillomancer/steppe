@@ -164,6 +164,8 @@ class RackSpace : public ui::Node {
 
     void paint(ui::Canvas& c) override;
     bool onPointer(const ui::PointerEvent& e) override;
+    // The move cursor while modules are in hand or the space is being panned.
+    ui::Cursor cursorAt(ui::Point p) const override;
     bool onKey(const ui::KeyEvent& e) override;
     bool onKeyUp(const ui::KeyEvent& e) override;
     bool onText(std::string_view text) override;

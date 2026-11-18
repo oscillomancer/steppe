@@ -395,6 +395,9 @@ void Root::flushMotion() {
 void Root::pointer(PointerEvent e) {
     Dispatch dispatch(*this);
     if (e.type != PointerEvent::Type::Cancel) lastPointer_ = e.pos;
+    // A new press begins a new gesture: a drag cursor whose owner went away
+    // without ending its drag does not outlive it.
+    if (e.type == PointerEvent::Type::Down) dragCursor_.reset();
     // A press outside the topmost popup closes every popup above the one it
     // lands in (all of them when it lands in none) and goes no further, so a
     // dialog's menu button closes its own menu instead of opening another.
@@ -443,11 +446,20 @@ void Root::pointer(PointerEvent e) {
 void Root::updateCursor(Point at) {
     // Asked up the tree as the events are delivered: the first node with
     // something to say decides (a row's resize edge under one of its labels).
-    Cursor cursor = Cursor::Arrow;
-    for (const Node* n = pointerTarget(at); n && cursor == Cursor::Arrow; n = n->parent())
-        if (n->enabled) cursor = n->cursorAt(at);
+    Cursor cursor = dragCursor_.value_or(Cursor::Arrow);
+    if (!dragCursor_)
+        for (const Node* n = pointerTarget(at); n && cursor == Cursor::Arrow; n = n->parent())
+            if (n->enabled) cursor = n->cursorAt(at);
     cursor_ = cursor;
     window_.setCursor(cursor);
+}
+
+void Root::setDragCursor(std::optional<Cursor> cursor) {
+    if (cursor == dragCursor_) return;
+    dragCursor_ = cursor;
+    // At once: a drag may end without a pointer event. Before any pointer
+    // event there is no node to ask, and a point outside the window finds none.
+    updateCursor(lastPointer_.value_or(Point{-1, -1}));
 }
 
 bool Root::click(std::string_view id, int button) {

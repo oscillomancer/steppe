@@ -586,7 +586,12 @@ void TcpPanel::Row::paint(ui::Canvas& c) {
 ui::Cursor TcpPanel::Row::cursorAt(ui::Point p) const {
     const bool grip = track_.has_value() && panel_.cb_.resizeTrack &&
                       p.y >= bounds().bottom() - TcpRowGeometry::kResizeGrip;
-    return resizing_ || grip ? ui::Cursor::ResizeVertical : ui::Cursor::Arrow;
+    if (resizing_) return ui::Cursor::ResizeVertical;
+    // A row in hand: the move cursor where a release would move it, "not
+    // allowed" where it would stay as it is.
+    if (const auto& r = panel_.reorder_; r && r->moved && track_ && r->track == *track_)
+        return r->moves.empty() ? ui::Cursor::NotAllowed : ui::Cursor::Move;
+    return grip ? ui::Cursor::ResizeVertical : ui::Cursor::Arrow;
 }
 
 bool TcpPanel::Row::onPointer(const ui::PointerEvent& e) {

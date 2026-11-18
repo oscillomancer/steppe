@@ -140,6 +140,7 @@ class Mixer {
     void removeSend(model::Id route);
     void dragSend(const std::string& track, DragPhase phase, ui::Point p);
     void endDrag(bool commit);
+    void showDragCursor();
     void resolveStripDrop();
     void resolveFxDrop();
     const Strip* stripAt(ui::Point p) const;

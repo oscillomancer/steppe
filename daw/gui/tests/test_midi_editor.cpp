@@ -1968,6 +1968,17 @@ TEST_CASE("routing matrix clamps scrolling when channel rows are deleted") {
     REQUIRE(status);
     CHECK(status->valueText().find(matrix.model().blocked(0, 0)) != std::string::npos);
     CHECK(status->valueText().find("not allowed") != std::string::npos);
+    // The pointer says so too, and only over a cell that cannot be connected
+    // (cells are 22 units).
+    CHECK(matrix.grid()->cursorAt(hover.pos) == ui::Cursor::NotAllowed);
+    std::size_t open = 0;
+    while (open < matrix.model().destinations.size() && !matrix.model().blocked(0, open).empty())
+        ++open;
+    REQUIRE(open < matrix.model().destinations.size());
+    CHECK(matrix.grid()->cursorAt({hover.pos.x + 22 * static_cast<float>(open), hover.pos.y}) ==
+          ui::Cursor::Arrow);
+    CHECK(matrix.grid()->cursorAt({bounds.x + 20, bounds.y + 123}) ==
+          ui::Cursor::Arrow);  // a label
 }
 
 TEST_CASE("audit3: empty event-list double-click never edits the old selection") {

@@ -1272,6 +1272,11 @@ void RackSpace::sendPointer(model::Id id, script::PointerAction action, ui::Poin
     if (!edits.empty() && hooks_.displayEdit) hooks_.displayEdit(id, edits, gesture);
 }
 
+ui::Cursor RackSpace::cursorAt(ui::Point) const {
+    const bool inHand = drag_.kind == Drag::Kind::Move || drag_.kind == Drag::Kind::Pan;
+    return inHand && drag_.moved ? ui::Cursor::Move : ui::Cursor::Arrow;
+}
+
 bool RackSpace::onPointer(const ui::PointerEvent& e) {
     using T = ui::PointerEvent::Type;
     const ui::Point sp = toSpace(e.pos);

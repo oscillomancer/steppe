@@ -789,6 +789,26 @@ TEST_CASE("the pointer's shape is the cursor of the node under it, its parents o
     CHECK(root.cursor() == Cursor::ResizeHorizontal);
     root.pointer({PointerEvent::Type::Up, mid(field), 1});
     CHECK(root.cursor() == Cursor::Text);
+    // A drag that carries a thing sets the pointer itself, at once and over
+    // any node; given back, the node under the pointer has its say again.
+    root.setDragCursor(Cursor::NotAllowed);
+    CHECK(root.cursor() == Cursor::NotAllowed);
+    CHECK(fixture().window->cursor() == Cursor::NotAllowed);
+    move(mid(plain));
+    CHECK(root.cursor() == Cursor::NotAllowed);
+    root.setDragCursor(Cursor::Move);
+    CHECK(root.cursor() == Cursor::Move);
+    move(mid(field));
+    CHECK(root.cursor() == Cursor::Move);
+    root.setDragCursor(std::nullopt);
+    CHECK(root.cursor() == Cursor::Text);
+    // One left behind by an owner that went away ends with the next press.
+    root.setDragCursor(Cursor::NotAllowed);
+    root.pointer({PointerEvent::Type::Down, mid(plain), 1});
+    CHECK_FALSE(root.dragCursor());
+    CHECK(root.cursor() == Cursor::Arrow);
+    root.pointer({PointerEvent::Type::Up, mid(plain), 1});
+    move(mid(field));
     // A disabled node has no cursor of its own.
     field.enabled = false;
     move({mid(field).x + 1, mid(field).y});

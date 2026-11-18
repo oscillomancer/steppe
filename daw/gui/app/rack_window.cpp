@@ -926,8 +926,12 @@ void RackWindow::open(std::optional<model::Id> rack) {
     bh.add = [this](const std::string& type) { (void)addModule(type); };
     bh.menu = [this](const std::string& type, ui::Point at) { browserMenu(type, at); };
     bh.dragOver = [this](const std::string& name, std::optional<ui::Point> at) {
-        if (space_)
-            space_->dragTypeOver(name, at && space_->bounds().contains(*at) ? at : std::nullopt);
+        const bool lands = space_ && at && space_->bounds().contains(*at);
+        if (space_) space_->dragTypeOver(name, lands ? at : std::nullopt);
+        // In hand: the move cursor over the space, "not allowed" elsewhere.
+        root().setDragCursor(
+            name.empty() ? std::nullopt
+                         : std::optional(lands ? ui::Cursor::Move : ui::Cursor::NotAllowed));
     };
     bh.drop = [this](const std::string& type, ui::Point at) {
         if (space_ && space_->bounds().contains(at)) (void)addModule(type, space_->toSpace(at));

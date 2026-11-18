@@ -441,6 +441,16 @@ TEST_CASE(
     const auto before = *f.app->head().modules.find(vca);
     const ui::Point a = *space.bodyAt(vca);
     const double zoom = space.view().zoom;
+    // The pointer is the move cursor once a module is in hand, and the arrow
+    // again when it is let go.
+    f.pointer(ui::PointerEvent::Type::Move, a, 0);
+    f.pointer(ui::PointerEvent::Type::Down, a);
+    CHECK(f.r().cursor() == ui::Cursor::Arrow);
+    f.pointer(ui::PointerEvent::Type::Move, {a.x + 8, a.y}, 0);
+    CHECK(f.r().cursor() == ui::Cursor::Move);
+    f.pointer(ui::PointerEvent::Type::Move, a, 0);
+    f.pointer(ui::PointerEvent::Type::Up, a);
+    CHECK(f.r().cursor() == ui::Cursor::Arrow);
     f.drag(a, {a.x + static_cast<float>(30 * zoom), a.y + static_cast<float>(20 * zoom)});
     const auto& after = *f.app->head().modules.find(vca);
     CHECK(after.x == doctest::Approx(before.x + 30).epsilon(0.02));
@@ -493,8 +503,15 @@ TEST_CASE(
     CHECK(space.view().x == doctest::Approx(sideways.x + 80 / sideways.zoom));
     CHECK(space.view().y == sideways.y);
     CHECK(space.view().zoom == sideways.zoom);
-    // Middle-drag pans.
+    // Middle-drag pans, under the move cursor.
     const auto v = space.view();
+    f.pointer(ui::PointerEvent::Type::Down, at, 2);
+    f.pointer(ui::PointerEvent::Type::Move, {at.x - 10, at.y}, 0);
+    CHECK(f.r().cursor() == ui::Cursor::Move);
+    f.pointer(ui::PointerEvent::Type::Move, at, 0);
+    f.pointer(ui::PointerEvent::Type::Up, at, 2);
+    CHECK(f.r().cursor() == ui::Cursor::Arrow);
+    CHECK(space.view().x == doctest::Approx(v.x));
     f.drag(at, {at.x - 40, at.y}, 2);
     CHECK(space.view().x == doctest::Approx(v.x + 40 / v.zoom));
 }
@@ -1509,6 +1526,23 @@ TEST_CASE("rack window: patches have a view of their own, searchable, with a car
     CHECK(search->placeholder() == "Search modules");
     CHECK(search->text().empty());
     CHECK(f.racks->browserShows().size() > 40);
+    // A module type carried out of the browser: "not allowed" until it is
+    // over the space, the move cursor there, and let go over the list it
+    // adds nothing and the pointer is the nodes' again.
+    const auto modules = f.app->head().modules.size();
+    const auto type = f.racks->browserRowAt(f.racks->browserShows()[0]);
+    REQUIRE(type);
+    f.pointer(ui::PointerEvent::Type::Move, *type, 0);
+    f.pointer(ui::PointerEvent::Type::Down, *type);
+    f.pointer(ui::PointerEvent::Type::Move, {type->x + 3, type->y + 6}, 0);
+    CHECK(f.r().cursor() == ui::Cursor::NotAllowed);
+    f.pointer(ui::PointerEvent::Type::Move, {sb.x + sb.w / 2, sb.y + sb.h / 2}, 0);
+    CHECK(f.r().cursor() == ui::Cursor::Move);
+    f.pointer(ui::PointerEvent::Type::Move, {type->x + 3, type->y + 6}, 0);
+    CHECK(f.r().cursor() == ui::Cursor::NotAllowed);
+    f.pointer(ui::PointerEvent::Type::Up, {type->x + 3, type->y + 6});
+    CHECK_FALSE(f.r().dragCursor());
+    CHECK(f.app->head().modules.size() == modules);
 }
 
 TEST_CASE("rack window: a Notes module's menu picks its MIDI input and the track it plays") {

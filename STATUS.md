@@ -591,9 +591,11 @@ instructions are in `docs/guides/installing.md`.
   yellow and orange to red just under 0 dB. The pointer's shape says what
   a press would do: resize arrows at an item's ends and fade corners, a
   note's ends, the loop range's ends, a row's lower edge and the panels'
-  edges, an I-beam over text, the move cursor on a thing being moved (not
-  yet: cursors in the rack, the routing matrix and for drops that are
-  refused). A drag held at the edge of the arrangement scrolls the view
+  edges, an I-beam over text, the move cursor on a thing being moved, in
+  the rack too; a thing carried to a drop (a plug-in, a strip, a track
+  row, a rack module) shows the move cursor where it would land and "not
+  allowed" where a release would do nothing, as does a routing matrix
+  cell that cannot be connected. A drag held at the edge of the arrangement scrolls the view
   and takes the thing in hand with it, and so does a note held at the
   piano roll's edge (not yet in the rack or the mixer). Both the pointer
   shapes and the edge scroll are verified by tests only: nobody has yet
@@ -1481,7 +1483,6 @@ GUI:
   Script-player headless pictures (`dsp.preview`) use framework 1.24.0's
   EGL, Metal and WGL renderers. Native CI requires pictures and pointer edits;
   missing devices/drivers return `dsp.no_picture` with a corrective hint.
-- Plugins can be dropped onto mixer strips but not onto track-panel rows.
 
 Plugins:
 - Bracken, Ghyll, Pollia, Umber and Withy discard non-finite inputs before their recursive

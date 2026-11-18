@@ -176,7 +176,22 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   ends in the piano roll. A press on an item, a note, a range, a region or
   a marker keeps the arrow until it moves, then shows the move cursor; a
   trim, slip, fade or warp in hand keeps the horizontal arrows wherever
-  the pointer goes.
+  the pointer goes. In the rack window a module in hand and a pan of the
+  space show the move cursor. In the routing matrix a cell that cannot be
+  connected (`MatrixModel::blocked`, drawn struck through) shows "not
+  allowed".
+  **A thing carried to a drop** says what a release would do: the move
+  cursor where it would land, "not allowed" where it would do nothing,
+  its own place included. The carrier sets it on the root
+  (`Root::setDragCursor`), since the node its events go to cannot know
+  where the thing may land; while set it replaces the nodes' answer, the
+  carrier clears it when the drag ends or is given up, and a new press
+  clears one left behind. It applies to a plug-in, a chain preset or a
+  file out of the side panel's browser (`PluginDrag`), a strip, a plug-in
+  or an output dragged in the mixer, a module type out of the rack's
+  browser, and a track row dragged to a new place (the row answers that
+  one itself). Files dragged in from the desktop keep the desktop's own
+  cursor.
   Keyboard: focus chain, Tab navigation, shortcuts resolved by the actions
   system (§6) with context sections (arrange, MIDI editor, mixer, text
   field). Key releases reach the focused node and its parents

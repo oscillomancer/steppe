@@ -840,7 +840,14 @@ TEST_CASE("mixer: dragging a strip's empty part reorders it among its own kind, 
     CHECK(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Strip);
     f.snapshot("mixer-drag-strip.png");
     CHECK(f.mixer->drag().drop == gui::Mixer::DragView::Drop::Reorder);
+    CHECK(f.root->cursor() == ui::Cursor::Move);  // a release here moves it
+    f.pointer(ui::PointerEvent::Type::Move, f.empty(bus));
+    CHECK(f.mixer->drag().drop == gui::Mixer::DragView::Drop::None);
+    CHECK(f.root->cursor() == ui::Cursor::NotAllowed);  // not among the busses
+    f.pointer(ui::PointerEvent::Type::Move, {rc.x + rc.w - 10, rc.y + 200});
+    CHECK(f.root->cursor() == ui::Cursor::Move);
     f.pointer(ui::PointerEvent::Type::Up, {rc.x + rc.w - 10, rc.y + 200});
+    CHECK_FALSE(f.root->dragCursor());
     CHECK(f.children(master) == std::vector<std::string>{b, c, a, bus});  // not after the buss
     CHECK(f.steps() == before + 1);
     f.refresh();
@@ -856,7 +863,9 @@ TEST_CASE("mixer: dragging a strip's empty part reorders it among its own kind, 
     f.drag(f.empty(c), f.empty(master));
     CHECK(f.children(master) == std::vector<std::string>{c, b, a, bus});
     f.drag(f.empty(c), f.empty(a), false);
+    CHECK(f.root->dragCursor());
     f.root->key(SDLK_ESCAPE);
+    CHECK_FALSE(f.root->dragCursor());  // given up: the pointer is the nodes' again
     f.pointer(ui::PointerEvent::Type::Up, f.empty(a));
     CHECK(f.children(master) == std::vector<std::string>{c, b, a, bus});
     // A drag of the empty bottom (nobody's strip): cancelled.
