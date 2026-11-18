@@ -104,7 +104,8 @@ struct Viewport {
 
 class TrackLayout {
   public:
-    static constexpr float kDefaultHeight = 72;
+    // As low as a row can be with every control showing (60 units).
+    static constexpr float kDefaultHeight = TcpRowGeometry::kAllLinesHeight;
     static constexpr float kMinHeight = TcpRowGeometry::kMinHeight;
     static constexpr float kMaxHeight = 400;
 

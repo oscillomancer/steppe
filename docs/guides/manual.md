@@ -376,8 +376,11 @@ armed). **M** mutes it and **S** solos it. **Ø** inverts polarity and
 its colour; one that is off is an outline.
 
 In the track list the first four are at the right of the track's name, at
-any row height. A taller row adds a line with **Ø**, **mono**, the fader and
+any row height. Under them is a line with **Ø**, **mono**, the fader and
 the pan, and then a line with the input, **fx**, **+**, **env** and **out**.
+A new project's rows are just tall enough for all three lines; drag a row's
+bottom edge to make it taller, or lower, which hides the lines from the
+bottom up.
 On a mixer strip, from the top: the name, **fx** and **+** over the
 plug-ins, the sends, the input and **out**, **Ø** and **mono**, the pan,
 then arm, monitor, **M** and **S** directly above the fader.

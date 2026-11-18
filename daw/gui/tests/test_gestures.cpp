@@ -1703,7 +1703,8 @@ TEST_CASE("automation points: select, move together, marquee, menu, clipboard, s
     f.click(at(3), ui::kCtrl);
     REQUIRE(g.selectedPoints().size() == 2);
     // Dragging one of them moves both, in one step; the others stay.
-    f.drag(at(1), {at(1).x, at(1).y - area.h * 0.1f});
+    // (A quarter of the lane: far enough to be a drag in a lane of any height.)
+    f.drag(at(1), {at(1).x, at(1).y - area.h * 0.25f});
     CHECK(f.steps() == steps + 1);
     REQUIRE(points().size() == 4);
     CHECK(points()[1].value > -6);

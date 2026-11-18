@@ -22,6 +22,9 @@ struct TcpRowGeometry {
     static constexpr float kTopLineBottom =
         std::max(kNameTop + kNameHeight, kStateTop + kCellHeight);
     static constexpr float kMinHeight = kTopLineBottom + kResizeGrip;
+    // The lowest row that shows all three lines clear of the resize grip:
+    // a new project's row height.
+    static constexpr float kAllLinesHeight = kLinkTop + kCellHeight + kResizeGrip;
 };
 
 }  // namespace supple::views

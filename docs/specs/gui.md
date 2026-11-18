@@ -452,6 +452,9 @@ the mute's place and colour, `track.set {lane_mute}`: it silences the
 master's own items, never the master) and the arm in its place; the master's
 fader, pan and FX stay in the mixer. A lane-muted master's items are drawn dimmed. A master with
 neither has no row.
+A new project's rows are 60 units high (`TrackLayout::kDefaultHeight`), the
+lowest that shows all three lines clear of the resize grip; a project whose
+UI sidecar holds a row height keeps it.
 Rows shrink to 24 design units: the name line, with its four state buttons,
 fits above a four-unit bottom resize grip. The mix line hides below 40
 units; the connections line hides below 58. Track heights clamp to 24–400 units,

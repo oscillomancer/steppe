@@ -1437,6 +1437,16 @@ void press(ui::Root& root, ui::Node* node, int clicks = 1, unsigned mods = 0) {
     root.pointer({ui::PointerEvent::Type::Up, at, 1, clicks, mods});
 }
 
+// A press on a row's own ground, between its mix and connections lines: at
+// the default height a row's centre is on its fader.
+void pressRow(ui::Root& root, ui::Node* row, int clicks = 1, unsigned mods = 0) {
+    using G = views::TcpRowGeometry;
+    const ui::Rect b = row->bounds();
+    const ui::Point at{b.x + b.w / 2, b.y + (G::kMixTop + G::kCellHeight + G::kLinkTop) / 2};
+    root.pointer({ui::PointerEvent::Type::Down, at, 1, clicks, mods});
+    root.pointer({ui::PointerEvent::Type::Up, at, 1, clicks, mods});
+}
+
 // A control's rect as it is laid out (the toolkit arranges a container's
 // children in the container's own space, so this is the point to press).
 void pressAt(ui::Root& root, const ui::Node& node) {
@@ -1652,17 +1662,17 @@ TEST_CASE("TCP selection follows click, Ctrl+click and Shift+click") {
     const model::Id tr1 = *model::Id::parse("tr_1");
     const model::Id tr3 = *model::Id::parse("tr_3");
     REQUIRE(panel->rowNode(tr1));
-    press(root, panel->rowNode(tr1));
+    pressRow(root, panel->rowNode(tr1));
     CHECK(tcp.is("tr_1"));
     CHECK(tcp.selected.size() == 1);
-    press(root, panel->rowNode(tr3), 1, ui::kCtrl);
+    pressRow(root, panel->rowNode(tr3), 1, ui::kCtrl);
     CHECK(tcp.is("tr_1"));
     CHECK(tcp.is("tr_3"));
-    press(root, panel->rowNode(tr3), 1, ui::kCtrl);  // toggles off
+    pressRow(root, panel->rowNode(tr3), 1, ui::kCtrl);  // toggles off
     CHECK_FALSE(tcp.is("tr_3"));
-    press(root, panel->rowNode(tr1));
-    press(root, panel->rowNode(tr3), 1, ui::kShift);  // extends
-    CHECK(tcp.selected.size() == 3);                  // tr_1..tr_3
+    pressRow(root, panel->rowNode(tr1));
+    pressRow(root, panel->rowNode(tr3), 1, ui::kShift);  // extends
+    CHECK(tcp.selected.size() == 3);                     // tr_1..tr_3
     CHECK(tcp.error.empty());
 }
 
