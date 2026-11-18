@@ -1380,20 +1380,19 @@ summary, save a copy of the report file wherever you choose (it is never sent an
 The banner's "Show report" button opens the same window on that report. 
 **When a plug-in may have closed Steppe.** If a recent report points at a plug-in your project uses, Steppe
 asks before it opens the project (File > Open, Recover, or starting from a template) how to load that plug-in
-this time: in a separate process, so that a new fault stays there; not at all, so that its tracks pass audio
-through and the project keeps the plug-in; or normally, which also marks the reports as dealt with. Nothing is
-saved in your project by this choice. A plug-in that comes with Steppe offers the last two only, since a fault in
-one is Steppe's own. Cancel, or Escape, cancels the open. Tick "Remember my choice" to have Steppe apply the
-same answer the next time without asking; it is kept for that exact version of the plug-in, so an updated plug-in
-is asked about again, and a remembered "normally" is dropped if that plug-in closes Steppe again. Remembered
-choices are saved in the preferences file, and **Edit > Preferences… > Remembered plug-in choices** lists them:
-Forget removes one (Steppe asks again the next time a report points at that plug-in), Forget all removes every one.
+this time: in a separate process, so that a new fault stays there (the suggested choice); disabled this time, so that
+its tracks pass audio through and the project keeps the plug-in; or normally, which also marks the reports as dealt
+with. Choose one and press Continue; nothing is saved in your project by this choice. A plug-in that comes with
+Steppe offers the last two only, since a fault in one is Steppe's own. Cancel, or Escape, cancels the open. Tick
+"Remember my choice" to have Steppe apply the same answer the next time without asking; it is kept for that exact
+version of the plug-in, so an updated plug-in is asked about again, and a remembered "normally" is dropped if that
+plug-in closes Steppe again. Remembered choices are saved in the preferences file.
 
-A plug-in you chose not to load is marked in the mixer (its name goes faint with an amber bar, and the
+A plug-in you disabled is marked in the mixer (its name goes faint with an amber bar, and the
 track's "fx" turns amber), in the FX window ("disabled after an unexpected close · audio passes through") and in
-a rack (its module says "silent"). Right-click it in the mixer or a rack, or press Enable in the FX window, to
+a rack (its module says "disabled"). Right-click it in the mixer or a rack, or press Enable in the FX window, to
 load it again. The choice lasts until you quit Steppe. If a failed plug-in left a report, its row in the FX window has
-a Show report button.
+a Show report button beside Restart.
 
 #### Stopping Steppe from a script or a service
 

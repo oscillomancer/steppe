@@ -904,9 +904,11 @@ Each row's second line starts with a badge saying where the plug-in runs:
 `inherit`, where the plug-in isolation preference placed it when its
 instance was made, with `(default)` (`fx.describe isolation_effective`,
 ADR-0081). `· offline` and `· failed` follow when they apply.
-A failed effect (`engine.status failed_fx`) shows Restart on its first line and, when the death of its
-bridge left a crash report (`failed_errors[].incident`, the `incident` of the `fx.failed` event; topic 7d),
-a quiet "Show report" button after the badge on the second, which raises the main window and opens the
+A failed effect (`engine.status failed_fx`) shows its mode in `ink-quiet` followed by "failed" in the
+`clip` colour (no more red than that) on the second line, and on the first line Restart and, when the
+death of its bridge left a crash report (`failed_errors[].incident`, the `incident` of the
+`fx.failed` event; topic 7d), a quiet "Show report" button beside it, so the two answers to a failure
+sit together; it raises the main window and opens the
 crash viewer (Help > Crash reports…) on that incident. A failure with no report has no such button. If the
 report was deleted since, or is past what is kept, the viewer says "That report is no longer on this
 computer. These are the ones left." in its status line and selects nothing in particular.
@@ -2253,12 +2255,13 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   `fx.restart`): one already running stays where it is. Stock plug-ins stay
   in the app, and a plug-in's own isolation wins. A note says so.
   **Remembered load choices** (1.10, topic 7d): `plugin_overrides`, written by the safe-load question
-  (below, "Safe-load question") and read back by it. The last section of the dialog is its list: a
-  `ui::FoldSection` "Remembered plug-in choices" (folded; its summary says how many, "none" for
-  none), whose rows are 24 high: the plug-in's name in bold `ink`, its maker and version in quiet
-  `caption`, what was chosen in `ink` at the right ("In a separate process", "Not loaded", "Normally")
-  and a quiet **Forget**. A quiet **Forget all** follows the rows, and appears only with rows; with
-  none, one quiet sentence says nothing is remembered. More than six rows scroll. Forgetting is
+  (below, "Safe-load question") and read back by it. The last section of the dialog is its list, "Plug-in choices": a heading
+  in bold `small` over a rule with the count in quiet `caption` after it and a quiet **Forget all** at
+  its right (only with rows), then one row of 24 to a choice on the form's grid: the plug-in in bold
+  `ink` with its maker and version after it in `ink-quiet` on one line ("Unknown plug-in" when no
+  name was recorded), what was chosen in `ink` where the other rows' controls start ("In a
+  separate process", "Disabled", "Normally"), and a quiet **Forget** at the right edge. With none,
+  one quiet sentence says nothing is remembered. More than six rows scroll. Forgetting is
   saved at once (`PreferencesDialog::setRememberedLoads`) and takes effect the next time a project
   opens: the plug-in is asked about again if a report still points at it.
   **Audio device** (1.5): the row shows the audio system, output device,
@@ -2615,24 +2618,30 @@ or a script opening a project gets the `project.suspect_plugin` warning and its 
 (`plugin.override`). A check that cannot be made (a bad file, no engine answer) never stops the
 load: it goes on and reports its own error.
 
-The question is a popup on `raised`, 460 wide, 16 padding, opened over the window's centre. A bold
-`title` line, "<plug-in> was running when <product> closed unexpectedly"; one `small` `ink` sentence ("This
-project uses it. How should it load this time?"); one `caption` `ink-quiet` caveat ("A report cannot
-prove the plug-in was the cause", longer when the check matched the version only or could not read
-the file, and saying so when a separate process is not possible here). Then three full-width
-rows, 44 high, `panel` fill, `rule` outline, radius `s`, `raised` under the pointer, each a bold
-`small` label over one `caption` `ink-quiet` line: **Run it in a separate process** (the default, the
-first row, with the `focus` outline), **Do not load it this time** and **Load it normally**. A
-stock plug-in (it comes with the app, so the fault is the app's: the sentence says "looks like a fault
-in <product>") has two rows, Disable first; a plug-in with no bridge executable behind it has no
-separate-process row. Enter picks the focused row, Up and Down move between rows, a click picks.
-A `ui::Checkbox` "Remember my choice for <name> <version>" sits under the rows; it is not shown when
-the choice cannot be kept for an exact build (the report recorded no build id, as for every VST3 and
-every `active_token` attribution, or the check matched the version only). One quiet Cancel at the
-bottom right; Escape is the same, and cancelling cancels the open: nothing loads and no choice
-applies. Several suspects are asked one after another before anything is applied.
+The question is a popup on `raised`, 520 wide, 16 padding, opened over the window's centre. A bold
+`body` title, "<plug-in> was running when <product> closed unexpectedly" (one line at that width; a
+long name wraps to a second); one `small` `ink` question ("This project uses it. How should it load
+this time?"). Then a radio list: a 12-unit ring at the left of each option, filled for the chosen
+one, a bold `small` label with one `caption` `ink-quiet` line under it, no box, 8 units between
+them: **Run it in a separate process**, **Disable it this time** (its line says that audio passes
+through and the project keeps the plug-in) and **Load it normally**. The recommended option is
+chosen at open and holds the focus: the separate process where there can be one, else disabling. A
+stock plug-in (it comes with the app, so the fault is the app's: the question says "looks like a
+fault in <product>") has the last two; a plug-in with no bridge executable behind it has no
+separate-process option. A click or Space chooses an option and acts on nothing; Up and Down move
+the choice and the focus; Enter goes on with it. Under the options one `caption` `ink-quiet` caveat
+("A report cannot prove the plug-in was the cause", longer when the check matched the version only or
+could not read the file, and saying so when a separate process is not possible here). The last line
+holds a `ui::Checkbox` "Remember my choice for <name> <version>" at the left, its box outlined in
+`ink-faint` (`Checkbox::outline`) so that it reads on the panel in both themes, and at the right a
+quiet **Cancel** and the one boxed **Continue**. The checkbox is not shown when the choice cannot be
+kept for an exact build (the report recorded no build id, as for every VST3 and every
+`active_token` attribution, or the check matched the version only). Continue acts on the chosen
+option. Closing the dialog any other way, Cancel or Escape, cancels the open: nothing loads and no
+choice applies. Several suspects are asked one after another before anything is applied, on every
+path that asks (open, the two recoveries, a template).
 
-A choice is applied through `plugin.override` (separate process: `bridge`; not loaded: `disable`);
+A choice is applied through `plugin.override` (separate process: `bridge`; "Disable it this time": `disable`);
 nothing is written to the project (a project saved while it holds is byte-for-byte the one saved
 without). Choosing **Load it normally** settles the reports the suspicion rests on (`crash.settle`,
 engine.md "Load overrides"; the reports stay in the viewer), so the next open does not ask again
@@ -2653,23 +2662,30 @@ evidence the plug-in was fine, so a new report for that build makes the question
 and the entry is removed once it is answered (a cancelled question changes nothing on disk). Remembering is rewritten by `Preferences::save`; the GUI
 is its only writer.
 
-**Disabled plug-ins are marked (topic 7d; delivered).** A plug-in this run has disabled
-(`plugin.override` mode `disable`: the question's second row, an agent, or a remembered choice;
+**Disabled plug-ins are marked (topic 7d; delivered, the mixer part being revised).** One word for
+the state everywhere: the question says "Disable it this time", the marks say "disabled",
+Preferences says "Disabled", and **Enable** is its opposite. A plug-in this run has disabled
+(`plugin.override` mode `disable`: the question, an agent, or a remembered choice;
 `engine.status.disabled_fx`) is marked wherever its fx shows, in the one colour the feature has
-(`meter-hot`, an amber bar as the banner's): the mixer strip's plug-in slot has its name in `ink-faint`
-and a 3-unit bar at its left edge, and the strip's "fx" button has its text in `meter-hot`
+(`meter-hot`, the banner's bar): the mixer strip's plug-in slot has its name in `ink-faint` and a bar
+at its left edge, and the strip's "fx" button has its text in `meter-hot`
 (`ui::Button::setTextColor`, beside `setEmphasis`) while the chain holds one; the slot's right-click
-menu starts with **Enable**. The FX window's row has its name in `ink-faint`, the same bar, an
-**Enable** button where a failed effect has Restart, and its second line reads "disabled after an
-unexpected close · audio passes through" in place of the isolation badge. The FX row's "UI" button is off, and a double-click on the row (or a click on the
-mixer slot) opens no editor: the window's status line says "<name> is not loaded: it was disabled for this run"
-and how to enable it (the toolkit has no hover tooltips, so the reason is on screen already in the row's
-second line and the status line rather than under the pointer). A rack's plug-in module
-has its title in `ink-faint` too and adds "· silent" to its subtitle, and its menu starts with **Enable**. A disabled plug-in in a rack is
-otherwise silent and says nothing more (a project that opens with one is not asked about again). Enable
-is the action `ui.fx.enable` (an `fx` id): `plugin.override` mode `normal` for the plug-in, and the
-reports its suspicion rests on are settled as in "Load it normally". An override is not in the
-project, so the windows follow `EngineApp::loadOverridesVersion()` as well as the project's version.
+menu starts with **Enable**. (The mixer's slot, its words and its "fx" rule follow the strip
+redesign; they are rebuilt on it.) The FX window's row has its name in `ink-quiet`, a 2-unit bar at
+its left edge, and **Enable** as its one boxed button in that state: bypass, offline, UI, params and
+presets are off (faint) since they act on a plug-in that is not loaded, and Remove goes quiet. Its
+second line reads "disabled after an unexpected close · audio passes through" in `ink-quiet` (a
+sentence, not a value) in place of the isolation badge. Nothing opens an editor for it: a double-click
+on the row (or a click on the mixer slot) puts "<name> is disabled for this run and not loaded" and
+how to enable it in the window's status line (the toolkit has no hover tooltips; the reason is on
+screen in the row's second line and the status line). A rack's plug-in module has a 2-unit bar down its left
+edge, its title in `ink-faint`, "disabled" in `ink-quiet` where the vendor line is, and its jacks'
+rings in `ink-faint` (they carry nothing); its menu starts with **Enable**. A disabled plug-in in a
+rack is otherwise silent and says nothing more (a project that opens with one is not asked about
+again). Enable is the action `ui.fx.enable` (an `fx` id): `plugin.override` mode `normal` for the
+plug-in, and the reports its suspicion rests on are settled as in "Load it normally". An override is
+not in the project, so the windows follow `EngineApp::loadOverridesVersion()` as well as the
+project's version.
 
 Recovery (ADR-0078) stays its own offer. No upload or global OS-reporting changes. See
 diagnostics.md and STATUS for delivery scope.
