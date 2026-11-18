@@ -109,7 +109,7 @@ void registerTransportCommands(cmd::Registry& registry) {
         c.description =
             "rate: finite 0.25..4.0 (default 1); preserve_pitch defaults false in a new project. "
             "Omitted fields keep their values. Updates during a drag use Origin.gesture like "
-            "strip faders, and write/touch/latch capture tr_0/playrate coarsely: unlike strip "
+            "track faders, and write/touch/latch capture tr_0/playrate coarsely: unlike track "
             "levels (ADR-0061), the curve keeps playing while it is written (no hold or touch "
             "return). Recording requires unity. "
             "Settings are saved/undoable. File sources convert before take FX and live input "

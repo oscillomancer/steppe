@@ -118,7 +118,7 @@ Status validateStripRules(const Session& s) {
         const std::string path = "/tracks/" + e.id.str();
         if (t.type != StripType::Channel && t.type != StripType::Buss &&
             t.type != StripType::Master)
-            return trackError("unknown strip type", path + "/type", "use channel, buss or master");
+            return trackError("unknown track type", path + "/type", "use channel, buss or master");
         if (t.type == StripType::Master) {
             if (t.parent || !roots.contains(e.id))
                 return trackError("a master must be a listed root", path + "/parent",
@@ -141,9 +141,9 @@ Status validateStripRules(const Session& s) {
         // The main pair, plus auxiliary channels (ADR-0020).
         if (t.channels < 1 || t.channels > kMaxTrackChannels ||
             (t.type != StripType::Channel && t.channels < 2))
-            return trackError("a strip has 1-128 channels; busses and masters at least 2",
+            return trackError("a track has 1-128 channels; busses and masters at least 2",
                               path + "/channels",
-                              "use 2 for a stereo strip, more for auxiliary channels 3-128");
+                              "use 2 for a stereo track, more for auxiliary channels 3-128");
         if (t.type == StripType::Channel && !t.children.empty())
             return trackError("a channel cannot have children", path + "/children",
                               "add a buss and place the channels under it");
@@ -162,7 +162,7 @@ Status validateStripRules(const Session& s) {
                                   : "record or monitor on a child channel instead");
         if (t.laneMute && t.type != StripType::Master)
             return trackError("only masters have a lane mute", path + "/lane_mute",
-                              "mute the items themselves, or the strip");
+                              "mute the items themselves, or the track");
         for (const auto& learn : t.learn)
             if (t.type == StripType::Master &&
                 (learn.param == "width" || learn.param == "pan_left" ||
@@ -173,7 +173,7 @@ Status validateStripRules(const Session& s) {
             const auto& out = *t.hwOutput;
             if (t.type != StripType::Master)
                 return trackError("only masters play to hardware outputs", path + "/hw_output",
-                                  "send this strip to a master and set that master's hw_output");
+                                  "send this track to a master and set that master's hw_output");
             if (out.size() > 2 || (out.size() == 2 && out[0] == out[1]))
                 return Error(
                     "track.hw_output", "hw_output is two different channels, one channel or none",
@@ -235,7 +235,7 @@ Status validateStripRules(const Session& s) {
             const bool boost = target.param == "pan_boost";
             if (!position && !boost && target.param != "volume" && target.param != "pan" &&
                 target.param != "mute")
-                return trackError("unknown strip envelope parameter",
+                return trackError("unknown track envelope parameter",
                                   "/envelopes/" + e.id.str() + "/target/param",
                                   "use volume, pan, mute, width, pan_left, pan_right or pan_boost");
             const Track* t = s.tracks.find(target.object);
@@ -251,14 +251,14 @@ Status validateStripRules(const Session& s) {
         if (r.to.fx) {
             if (!r.from.track)
                 return routeError(
-                    e.id, "a key is fed from a strip tap", "from",
+                    e.id, "a key is fed from a track tap", "from",
                     "route hardware into a channel, then send that channel to the key");
             continue;
         }
         if (r.to.hwChannels)  // ADR-0056: a master's hw_output, not a route
             return Error("route.hw_output", "hardware outputs are set on a master, not routed",
                          "/routes/" + e.id.str() + "/to",
-                         "route the strip into a master and set that master's hw_output "
+                         "route the track into a master and set that master's hw_output "
                          "(track.set {track, hw_output: [1, 2]})");
         if ((r.to.track || r.to.module) && r.from.track) {
             const Track* from = s.tracks.find(*r.from.track);
@@ -275,7 +275,7 @@ Status validateStripRules(const Session& s) {
             // A buss or master takes a rack's Out as a rack send (ADR-0075).
             if (to->type != StripType::Channel && !r.from.track && !r.from.module)
                 return routeError(
-                    e.id, "a buss/master accepts audio only from strips", "from",
+                    e.id, "a buss/master accepts audio only from tracks", "from",
                     "route hardware into a channel, then route that channel into the buss/master");
         }
     }

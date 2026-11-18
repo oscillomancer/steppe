@@ -134,7 +134,7 @@ void registerTrackCommands(cmd::Registry& registry) {
         c.name = "track.add";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary = "Add a channel, buss or master strip and return its id.";
+        c.summary = "Add a track (a channel, buss or master) and return its id.";
         c.description =
             "parent: a buss/master id (default tr_0); masters have no parent; index: position "
             "among its siblings; name: default the first free ch_N, buss_N or mstr_N. A new "
@@ -242,7 +242,7 @@ void registerTrackCommands(cmd::Registry& registry) {
             const Id id = *idr;
             if (id == model::kMaster)
                 return Error("track.strip_type", "tr_0 cannot be removed", "/track",
-                             "keep the main master; remove another empty strip instead");
+                             "keep the main master; remove another empty track instead");
             const model::Track& tr = *s.tracks.find(id);
             if (!tr.children.empty())
                 return Error(
@@ -368,7 +368,7 @@ void registerTrackCommands(cmd::Registry& registry) {
                 .field("pan_law", &TrackSetArgs::panLaw,
                        clearable("clearable_pan_law",
                                  model::panLawSchema().doc(
-                                     "This strip's pan law: db is the centre's cut (0, -2.5, "
+                                     "This track's pan law: db is the centre's cut (0, -2.5, "
                                      "-3, -4.5 or -6); boost raises the sides instead. null "
                                      "follows project.pan_law")))
                 .field("mute", &TrackSetArgs::mute, schema::boolean())
@@ -411,7 +411,7 @@ void registerTrackCommands(cmd::Registry& registry) {
                                                             {model::Monitor::Auto, "auto"}}))
                 .field("parent_send", &TrackSetArgs::parentSend,
                        schema::boolean().doc("The implicit send to the parent buss/master "
-                                             "(off: only explicit sends leave the strip)"))
+                                             "(off: only explicit sends leave the track)"))
                 .field("timebase", &TrackSetArgs::timebase,
                        model::trackTimebaseSchema().doc(
                            "What this channel's items follow when the tempo changes (those "
@@ -421,7 +421,7 @@ void registerTrackCommands(cmd::Registry& registry) {
                     "channels", &TrackSetArgs::channels,
                     schema::integer()
                         .range(1, model::kMaxTrackChannels)
-                        .doc("1-2: the strip's main pair; up to 128 adds auxiliary channels 3-128 "
+                        .doc("1-2: the track's main pair; up to 128 adds auxiliary channels 3-128 "
                              "for routes and plug-in pins (a detector on 3/4, a multi-out "
                              "instrument's outputs), outside the fader, pan and parent send"))
                 .field("hw_output", &TrackSetArgs::hwOutput,
@@ -449,10 +449,10 @@ void registerTrackCommands(cmd::Registry& registry) {
             {"Play and record a MIDI keyboard (any device, channel 1)",
              j(R"({"track": "tr_1", "armed": true, "record_midi": "*", "midi_channel": 1, "monitor": "auto"})"),
              j("{}"), "song"},
-            {"Narrow a stereo strip to half width, a little right",
+            {"Narrow a stereo track to half width, a little right",
              j(R"({"track": "tr_1", "pan_mode": "width", "width": 50, "pan": 20})"), j("{}"),
              "song"},
-            {"Give a strip the -3 dB pan law", j(R"({"track": "tr_1", "pan_law": {"db": -3}})"),
+            {"Give a track the -3 dB pan law", j(R"({"track": "tr_1", "pan_law": {"db": -3}})"),
              j("{}"), "song"},
             {"Check the mix in mono", j(R"({"track": "tr_0", "mono": true})"), j("{}"), "song"},
             {"Four channels: a key signal can arrive on 3/4",
@@ -490,7 +490,7 @@ void registerTrackCommands(cmd::Registry& registry) {
                              "arm a child channel, or the master to print the mix");
             if (a.laneMute && newType != model::StripType::Master)
                 return Error("track.strip_type", "only masters have a lane mute", "/lane_mute",
-                             "mute the items themselves (item.set {mute}) or the strip");
+                             "mute the items themselves (item.set {mute}) or the track");
             if ((a.panMode || a.width || a.panLeft || a.panRight || a.panLaw) &&
                 newType == model::StripType::Master)
                 return Error("track.strip_type",
@@ -531,7 +531,7 @@ void registerTrackCommands(cmd::Registry& registry) {
             if (a.hwOutput && a.type.value_or(s.tracks.find(*id)->type) != model::StripType::Master)
                 return Error("track.strip_type", "only masters play to hardware outputs",
                              "/hw_output",
-                             "send this strip to a master and set that master's hw_output");
+                             "send this track to a master and set that master's hw_output");
             if (a.hwOutput && (a.hwOutput->size() > 2 ||
                                (a.hwOutput->size() == 2 && (*a.hwOutput)[0] == (*a.hwOutput)[1])))
                 return Error("track.hw_output",
@@ -543,7 +543,7 @@ void registerTrackCommands(cmd::Registry& registry) {
             if (a.type && *a.type != s.tracks.find(*id)->type) {
                 if (*id == model::kMaster)
                     return Error("track.strip_type", "tr_0 cannot be retyped", "/type",
-                                 "keep the main master; add another strip instead");
+                                 "keep the main master; add another track instead");
                 // A channel cannot take a rack send (ADR-0075): name the route.
                 if (*a.type == model::StripType::Channel)
                     for (const auto& r : s.routes)
@@ -849,7 +849,7 @@ void registerTrackCommands(cmd::Registry& registry) {
                 if (auto valid = model::checkInvariants(app.view()); !valid)
                     return Error(
                         "route.cycle", "the parent send would feed back: " + valid.error().message,
-                        "/parent_send", "remove the send from the parent to this strip first");
+                        "/parent_send", "remove the send from the parent to this track first");
             if (a.type && *a.type != s.tracks.find(*id)->type) {
                 SUPPLE_TRY(model::validateStripRules(app.view()));
                 auto valid = model::checkInvariants(app.view());

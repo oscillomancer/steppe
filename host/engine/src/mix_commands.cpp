@@ -312,9 +312,9 @@ void registerMixCommands(cmd::Registry& registry) {
     command.name = "item.mix-to-track";
     command.kind = cmd::Kind::Action;
     command.exposure = cmd::Exposure::McpExec;
-    command.summary = "Mix the selected items through their strips onto a new muted channel.";
+    command.summary = "Mix the selected items through their tracks onto a new muted channel.";
     command.description =
-        "Background job. Only the given items sound; each plays through its channel's full strip "
+        "Background job. Only the given items sound; each plays through its channel in full "
         "(take FX, item gain/fades, track FX, automation, fader, pan, Console 9 encode), and the "
         "sum is decoded by a neutral Console 9 Buss, as a fresh buss fed by those channels hears "
         "it. Sends, parent busses, mute switches and solo are ignored. Span: earliest item start "
