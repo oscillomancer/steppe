@@ -2133,6 +2133,19 @@ TEST_CASE("the side panel's browser plays the chosen audio file until something 
     CHECK_FALSE(f.app->auditionStatus().playing);
     CHECK(text(play) == "Play");
     CHECK(button->enabled);  // the row now chosen can be played
+    // A MIDI row chosen stops it too, and is not offered: a press there
+    // reaches no command, with the engine running as without it.
+    press(play);
+    choose(files, 3);
+    CHECK_FALSE(f.app->auditionStatus().playing);
+    CHECK(text(play) == "Play");
+    CHECK_FALSE(button->enabled);
+    CHECK_FALSE(f.root->click(play));
+    CHECK_FALSE(f.app->auditionStatus().playing);
+    CHECK(browser.auditioned().empty());
+    CHECK(text(status) == "");
+    choose(files, 2);
+    CHECK(button->enabled);
     // Add stops it: the file is in the project, no longer only heard.
     press(play);
     CHECK(browser.auditioned() == snare);

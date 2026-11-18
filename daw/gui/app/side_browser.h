@@ -15,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "app_actions.h"
@@ -140,12 +141,13 @@ class SideBrowser {
     void filterMedia();  // by the search
     void addMedia(std::size_t row);
     void setMediaStatus(std::string text);
-    // The chosen row of the page shown, when it is an audio file.
+    // The chosen row of a page ("files" or "media"), when it is an audio
+    // file. The one rule for what Play is offered on and what it plays.
     struct Playable {
         std::filesystem::path path;
         std::string name;
     };
-    std::optional<Playable> playable() const;
+    std::optional<Playable> playable(std::string_view kind) const;
     void togglePlay();                // the Play button of the page shown
     void stopPlay();                  // what was played from here, if it still plays
     void playFollows();               // the chosen row is another now: it stops
