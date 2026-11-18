@@ -967,6 +967,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
     mix.vcas = std::make_unique<MixSlots::Value[]>(mix.vcaIds.size());
     for (std::size_t i = 0; i < p.nodes.size(); ++i) {
         mix.strips[i].mute.store(p.nodes[i].mute, std::memory_order_relaxed);
+        mix.strips[i].soloSilenced.store(p.nodes[i].soloSilenced, std::memory_order_relaxed);
         mix.strips[i].volumeDb.store(p.nodes[i].volumeDb, std::memory_order_relaxed);
         mix.strips[i].pan.store(p.nodes[i].pan, std::memory_order_relaxed);
         mix.strips[i].width.store(p.nodes[i].panSettings.width, std::memory_order_relaxed);
@@ -3757,11 +3758,14 @@ void publishMix(Plan& p, const model::Session& s, std::span<const model::EnvTarg
         slot.holdVolume.store(holdVolume, relaxed);
         slot.holdPan.store(holdPan, relaxed);
     };
+    // Solo (ADR-0093): the same function compile uses; a rack keeps its flag.
+    const std::set<Id> silenced = model::soloSilencedTracks(s);
     for (std::size_t i = 0; i < p.nodes.size(); ++i) {
         const Id id = p.nodes[i].id;
         const model::Track* t = s.tracks.find(id);
         if (!t) continue;
         mix.strips[i].mute.store(t->mute, relaxed);
+        if (!p.nodes[i].rack) mix.strips[i].soloSilenced.store(silenced.contains(id), relaxed);
         store(mix.strips[i], t->volumeDb, t->pan, held(holds, id, "volume"),
               held(holds, id, "pan"));
         mix.strips[i].width.store(t->width, relaxed);
@@ -3822,6 +3826,7 @@ void syncMix(Plan& p, int liveClass) SUPPLE_RT {
         if (!ours(n)) continue;
         const MixSlots::Value& slot = mix.strips[i];
         n.mute = slot.mute.load(relaxed);
+        n.soloSilenced = slot.soloSilenced.load(relaxed);
         n.volumeDb = slot.volumeDb.load(relaxed);
         n.pan = slot.pan.load(relaxed);
         n.holdVolume = slot.holdVolume.load(relaxed);
@@ -3867,8 +3872,11 @@ void syncMix(Plan& p, int liveClass) SUPPLE_RT {
         e.staticGain = e.rackSend ? sendGain(e.volumeDb, model::Tap::PreFader, 0)
                                   : sendGain(e.volumeDb, e.tap, source.volumeDb.load(relaxed));
         // A rack send follows its home channel's mute (ADR-0075).
-        if (e.rackSend && e.rackHome >= 0)
-            e.homeMute = mix.strips[static_cast<std::size_t>(e.rackHome)].mute.load(relaxed);
+        if (e.rackSend && e.rackHome >= 0) {
+            const MixSlots::Value& home = mix.strips[static_cast<std::size_t>(e.rackHome)];
+            e.homeMute = home.mute.load(relaxed);
+            e.homeSilenced = home.soloSilenced.load(relaxed);
+        }
         if (!p.nodes[e.from].master) {
             e.source.width = source.width.load(relaxed);
             e.source.left = source.panLeft.load(relaxed);

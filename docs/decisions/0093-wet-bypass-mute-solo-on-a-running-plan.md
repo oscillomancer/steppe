@@ -47,9 +47,11 @@ fields copied from the new version), slots and seqlock:
   `mute`**. The main thread calls `model::soloSilencedTracks` on the new
   session and publishes one silenced flag per node. A rack send follows its
   home channel's flag.
-- **Route `mute`**, only when the send is encoded either way. A route mute
-  decides whether a send needs an encoder (ADR-0060's rule for a 0 dB level),
-  so a mute that changes the encoding compiles.
+- **Route `mute`**, only when the send is encoded either way: a tap before
+  the fader, a level other than 0 dB, its own pan, mono or polarity. A route
+  mute decides whether a send needs an encoder (ADR-0060's rule for a 0 dB
+  level), so a mute that changes the encoding compiles. MIDI routes and rack
+  sends are never encoded, so their mute is always a value.
 
 Item mute still compiles, because it decides which events a plan holds.
 

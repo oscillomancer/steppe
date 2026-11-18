@@ -38,13 +38,14 @@ bool entriesMatch(const model::IdMap<T>& a, const model::IdMap<T>& b, F&& same) 
 
 // Whether `b` differs from `a` only in what a running plan takes without
 // compiling: strip levels, pans, widths and dual pans, send levels and pans that keep the send's
-// encoding, VCA levels, FX wet and bypass, and the points of held volume/pan envelopes in a
+// encoding, VCA levels, FX wet and bypass, track and VCA mute and solo, route mutes that
+// keep the send's encoding, and the points of held volume/pan envelopes in a
 // writing mode. Every other field is compared whole, so a field added to one
 // of these objects can never pass as a mix edit. `changed`: something did
 // change; `stale` gains the held targets whose curves the plan no longer
 // matches. Keep the collections in step with model::Session.
 bool mixOnly(const model::Session& a, const model::Session& b,
-             const std::vector<model::EnvTarget>& holds, bool hardwareMidi, bool& changed,
+             const std::vector<model::EnvTarget>& holds, bool& changed,
              std::vector<model::EnvTarget>& stale) {
     if (!(a.project == b.project || *a.project == *b.project)) return false;
     if (!a.tempo.sameStorage(b.tempo) || !a.meters.sameStorage(b.meters) ||
@@ -75,14 +76,15 @@ bool mixOnly(const model::Session& a, const model::Session& b,
         return x == y;
     });
     if (!fx) return false;
+    // Mute and solo (ADR-0093): mute is a slot; solo is published as each
+    // node's silenced flag from model::soloSilencedTracks.
     const bool tracks =
         entriesMatch(a.tracks, b.tracks, [&](model::Track x, const model::Track& y) {
             changed |= x.volumeDb != y.volumeDb || x.pan != y.pan || x.width != y.width ||
-                       x.panLeft != y.panLeft || x.panRight != y.panRight;
-            if (hardwareMidi) {
-                changed |= x.mute != y.mute;
-                x.mute = y.mute;
-            }
+                       x.panLeft != y.panLeft || x.panRight != y.panRight || x.mute != y.mute ||
+                       x.solo != y.solo;
+            x.mute = y.mute;
+            x.solo = y.solo;
             x.volumeDb = y.volumeDb;
             x.pan = y.pan;
             x.width = y.width;  // pan positions (ADR-0066); mode and law compile
@@ -94,36 +96,46 @@ bool mixOnly(const model::Session& a, const model::Session& b,
     const bool groups =
         entriesMatch(a.groups, b.groups, [&](model::TrackGroup x, const model::TrackGroup& y) {
             if (x.vca && y.vca) {
-                changed |= x.vca->volumeDb != y.vca->volumeDb;
+                changed |= x.vca->volumeDb != y.vca->volumeDb || x.vca->mute != y.vca->mute ||
+                           x.vca->solo != y.vca->solo;
                 x.vca->volumeDb = y.vca->volumeDb;
-                if (hardwareMidi) {
-                    changed |= x.vca->mute != y.vca->mute;
-                    x.vca->mute = y.vca->mute;
-                }
+                x.vca->mute = y.vca->mute;
+                x.vca->solo = y.vca->solo;
             }
             return x == y;
         });
     if (!groups) return false;
     const bool routes =
         entriesMatch(a.routes, b.routes, [&](model::Route x, const model::Route& y) {
-            if (hardwareMidi && x.midi && !x.from.midiDevice) {
+            // A MIDI route is never encoded: its mute is a value.
+            if (x.midi && !x.from.midiDevice) {
                 changed |= x.mute != y.mute;
                 x.mute = y.mute;
                 return x == y;
             }
-            // A rack send's level (ADR-0075): it is never encoded, so any
-            // level is a mix value (publishMix, syncMix).
+            // A rack send's level and mute (ADR-0075): it is never encoded,
+            // so any level is a mix value (publishMix, syncMix).
             if (!x.midi && x.from.module && model::rackSendHome(a, x) &&
                 model::rackSendHome(b, y)) {
-                changed |= x.volumeDb != y.volumeDb;
+                changed |= x.volumeDb != y.volumeDb || x.mute != y.mute;
                 x.volumeDb = y.volumeDb;
+                x.mute = y.mute;
                 return x == y;
             }
             // Only sends between strips are plan edges; a level of exactly 0 dB
             // (with nothing else set) is summed without an encoder (plan.cpp).
             if (!x.from.track || !(x.to.track || x.to.fx)) return false;
             if ((x.volumeDb != 0) != (y.volumeDb != 0)) return false;
-            changed |= x.volumeDb != y.volumeDb || x.pan.percent != y.pan.percent;
+            // A mute decides a send's encoding unless something else encodes
+            // it anyway (plan.cpp, Edge::encode): only then is it a value.
+            const auto encoded = [](const model::Route& r) {
+                return r.tap != model::Tap::PostFader || r.volumeDb != 0 || r.pan.percent ||
+                       r.mono || r.phaseInvert;
+            };
+            if (x.mute != y.mute && !(x.to.track && encoded(x) && encoded(y))) return false;
+            changed |=
+                x.volumeDb != y.volumeDb || x.pan.percent != y.pan.percent || x.mute != y.mute;
+            x.mute = y.mute;
             x.volumeDb = y.volumeDb;
             if (x.pan.percent && y.pan.percent) x.pan = y.pan;
             return x == y;
@@ -250,9 +262,7 @@ bool Engine::loadMixValues(const model::Session& session, const std::filesystem:
     if (releasesStaleCurve()) return false;
     bool changed = false;
     std::vector<model::EnvTarget> stale = staleCurves_;
-    if (!mixOnly(*latest_, session, writeHolds_, !p->hardwareMidi.empty(), changed, stale) ||
-        !changed)
-        return false;
+    if (!mixOnly(*latest_, session, writeHolds_, changed, stale) || !changed) return false;
     detail::publishMix(*p, session, writeHolds_);
     plugins_.racks().applyParams(session);
     holdsPending_ = false;

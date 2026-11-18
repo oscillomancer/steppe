@@ -918,6 +918,7 @@ struct MixSlots {
         std::atomic<double> volumeDb{0}, pan{0};  // a route's pan resolved against its source
         std::atomic<double> width{100}, panLeft{-100}, panRight{100};  // strips (ADR-0066)
         std::atomic<bool> mute{false};
+        std::atomic<bool> soloSilenced{false};  // strips (ADR-0093)
         std::atomic<bool> holdVolume{false}, holdPan{false};
         std::atomic<bool> holdWidth{false}, holdPanLeft{false}, holdPanRight{false},
             holdPanBoost{false};

@@ -3089,6 +3089,52 @@ TEST_CASE("rack sends: the Out joins a buss once, after its decode, never encode
     CHECK(sends == 1);
 }
 
+TEST_CASE("rack sends: a home mute, a solo or a send mute while playing needs no plan") {
+    // ADR-0093: the send follows its home channel's mute and solo flag from
+    // the slots, sample for sample as after a compiled reload.
+    const RackSend r(false, false, false);
+    auto play = [&](const model::Session& next, int run) {
+        auto pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 300 * 256});
+        Engine engine(pool, media, {.anticipative = false, .workers = 0});
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256}));
+        REQUIRE(engine.load(r.s));
+        engine.play();
+        backend.run(100);
+        const auto generation = engine.planGeneration();
+        if (run == 0) REQUIRE(engine.load(next));
+        if (run == 1) {
+            model::EditTxn t(next, next.version + 1);
+            t.create(model::Marker{});
+            REQUIRE(engine.load(commit(t)));
+        }
+        CHECK(engine.planGeneration() == generation + (run == 1 ? 1 : 0));
+        backend.run(200);
+        engine.stop();
+        return backend.capture().channels;
+    };
+    const std::vector<std::pair<std::string, std::function<void(model::EditTxn&)>>> edits = {
+        {"home muted",
+         [&](auto& t) { t.template modify<model::Track>(r.home, [](auto& x) { x.mute = true; }); }},
+        {"another soloed",
+         [&](auto& t) {
+             t.template modify<model::Track>(r.other, [](auto& x) { x.solo = model::Solo::On; });
+         }},
+        {"send muted",
+         [&](auto& t) { t.template modify<model::Route>(r.send, [](auto& x) { x.mute = true; }); }},
+    };
+    for (const auto& [name, edit] : edits) {
+        CAPTURE(name);
+        const auto next = r.with(edit);
+        const auto fast = play(next, 0), compiled = play(next, 1), unedited = play(next, 2);
+        for (std::size_t c = 0; c < 2; ++c) {
+            CHECK(fast[c] == compiled[c]);
+            CHECK(fast[c] != unedited[c]);  // heard
+        }
+    }
+}
+
 TEST_CASE("rack sends: follow the home channel's mute, mute envelope and solo") {
     // The home channel plays to the master, so the buss hears only the send.
     const RackSend r(false, false);

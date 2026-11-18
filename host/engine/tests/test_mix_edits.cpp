@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -287,13 +288,9 @@ TEST_CASE("what a running plan cannot take still compiles") {
         REQUIRE(engine.load(m.session));  // back, for the next case
         return compiled;
     };
-    // Mute, solo and a send's encoding are structural; a send to 0 dB drops
-    // its encoder, and a send that starts following its source's pan gains one.
-    CHECK(compiles(
-        [&](auto& t) { t.template modify<model::Track>(m.a, [](auto& x) { x.mute = true; }); }));
-    CHECK(compiles([&](auto& t) {
-        t.template modify<model::Track>(m.a, [](auto& x) { x.solo = model::Solo::On; });
-    }));
+    // A send's encoding is structural: a send to 0 dB drops its encoder, and
+    // a send that starts following its source's pan gains one. (Mute and solo
+    // are values since ADR-0093; see below.)
     CHECK(compiles([&](auto& t) {
         t.template modify<model::Route>(m.sendA, [](auto& r) { r.volumeDb = 0; });
     }));
@@ -932,6 +929,165 @@ TEST_CASE("an FX wet or bypass edit compiles with anything else, or when the FX 
             f.bypass = true;
             f.patch = json::parse(R"({"schema":"supple.test-gain-patch/1.0","params":{"gain":-3}})")
                           .value();
+        });
+    }));
+    engine.stop();
+}
+
+namespace {
+// Plays `base`, takes `next` at cycle 100 by `run` (0: value edit, 1:
+// compiled reload, 2: not at all) and returns channel 0 of 300 cycles.
+std::vector<float> playEdit(const model::Session& base, const model::Session& next,
+                            const EngineOptions& options, int run) {
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend(sawInput(300 * 256));
+    Engine engine(pool, media, options);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
+    REQUIRE(engine.load(base));
+    engine.play();
+    const auto cycles = [&](int n) {
+        if (options.anticipative)
+            runAhead(engine, backend, n, 256);
+        else
+            backend.run(n);
+    };
+    cycles(100);
+    const auto generation = engine.planGeneration();
+    if (run == 0) REQUIRE(engine.load(next));
+    if (run == 1) REQUIRE(engine.load(withMarker(next, next.version + 1)));
+    CHECK(engine.planGeneration() == generation + (run == 1 ? 1 : 0));
+    CHECK(engine.mixEdits() == (run == 0 ? 1u : 0u));
+    cycles(200);
+    CHECK(engine.anticipationMisses() == 0);
+    CHECK(engine.processErrors() == 0);
+    engine.stop();
+    return backend.capture().channels[0];
+}
+
+// The value edit against the compiled reload and the unedited run: equal in
+// the callback executor; heard no later and equal once both have it in the
+// anticipative one (ADR-0093).
+void checkLikeCompiled(const model::Session& base, const model::Session& next) {
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 1}}) {
+        CAPTURE(options.anticipative);
+        const auto fast = playEdit(base, next, options, 0);
+        const auto compiled = playEdit(base, next, options, 1);
+        const auto unedited = playEdit(base, next, options, 2);
+        constexpr std::size_t kFrames = 300 * 256;
+        auto heard = [&](const std::vector<float>& x) {
+            for (std::size_t i = 0; i < kFrames; ++i)
+                if (x[i] != unedited[i]) return i;
+            return kFrames;
+        };
+        CHECK(peakOf(unedited, 0, kFrames) > 0.01);
+        REQUIRE(heard(fast) < kFrames);  // the edit is heard
+        CHECK(heard(fast) >= 100 * 256);
+        if (!options.anticipative) {
+            CHECK(maxDiff(fast, 0, compiled, kFrames) == 0.0);
+        } else {
+            CHECK(heard(fast) <= heard(compiled));
+            const std::vector<float> tail(compiled.begin() + 250 * 256, compiled.end());
+            CHECK(maxDiff(fast, 250 * 256, tail, 50 * 256) == 0.0);
+        }
+    }
+}
+}  // namespace
+
+TEST_CASE("mute and solo edits while playing sound exactly like a compiled reload" *
+          doctest::description("rt")) {
+    // ADR-0093: track, VCA and route mutes, track and VCA solo, solo-defeat,
+    // on rendered tracks (a, b, the buss) and a live one (the vocal).
+    const Wet w = wetSession();
+    const Mix& m = w.m;
+    using Edit = std::function<void(model::EditTxn&)>;
+    const std::vector<std::pair<std::string, Edit>> edits = {
+        {"track mute",
+         [&](model::EditTxn& t) {
+             for (Id id : {m.a, w.vocal})
+                 t.modify<model::Track>(id, [](auto& x) { x.mute = true; });
+         }},
+        {"solo a rendered track",
+         [&](model::EditTxn& t) {
+             t.modify<model::Track>(m.b, [](auto& x) { x.solo = model::Solo::On; });
+         }},
+        {"solo the live track, defeat another",
+         [&](model::EditTxn& t) {
+             t.modify<model::Track>(w.vocal, [](auto& x) { x.solo = model::Solo::InPlace; });
+             t.modify<model::Track>(m.a, [](auto& x) { x.solo = model::Solo::Defeat; });
+         }},
+        {"VCA mute",
+         [&](model::EditTxn& t) {
+             t.modify<model::TrackGroup>(m.vca, [](auto& g) { g.vca->mute = true; });
+         }},
+        {"VCA solo",
+         [&](model::EditTxn& t) {
+             t.modify<model::TrackGroup>(m.vca, [](auto& g) { g.vca->solo = true; });
+         }},
+        {"an encoded send's mute",
+         [&](model::EditTxn& t) {
+             t.modify<model::Route>(m.sendA, [](auto& r) { r.mute = true; });
+             t.modify<model::Route>(m.sendB, [](auto& r) { r.mute = true; });
+         }},
+    };
+    for (const auto& [name, edit] : edits) {
+        CAPTURE(name);
+        model::EditTxn t(m.session, 3);
+        edit(t);
+        checkLikeCompiled(m.session, t.commit().value());
+    }
+}
+
+TEST_CASE("a mute or solo edit compiles where it changes what a plan holds") {
+    // A route mute decides an unencoded send's encoding; item mute decides
+    // which events a plan holds.
+    Mix m = mixSession();
+    Id plain;
+    {
+        model::EditTxn t(m.session, 2);
+        model::Route r;  // post-fader, 0 dB, following its source's pan: unencoded
+        r.from.track = m.b;
+        r.to.track = m.bus;
+        plain = t.create(r);
+        m.session = t.commit().value();
+    }
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    Engine engine(pool, media, kInCallback);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+    REQUIRE(engine.load(m.session));
+    std::uint64_t version = 3;
+    auto compiles = [&](auto change) {
+        model::EditTxn t(m.session, version++);
+        change(t);
+        const auto generation = engine.planGeneration();
+        const auto edits = engine.mixEdits();
+        REQUIRE(engine.load(t.commit().value()));
+        const bool compiled = engine.planGeneration() == generation + 1;
+        CHECK(engine.mixEdits() == edits + (compiled ? 0 : 1));
+        REQUIRE(engine.load(m.session));
+        return compiled;
+    };
+    CHECK_FALSE(compiles(
+        [&](auto& t) { t.template modify<model::Track>(m.a, [](auto& x) { x.mute = true; }); }));
+    CHECK_FALSE(compiles([&](auto& t) {
+        t.template modify<model::Track>(m.a, [](auto& x) { x.solo = model::Solo::Defeat; });
+    }));
+    CHECK_FALSE(compiles([&](auto& t) {
+        t.template modify<model::Route>(m.sendA, [](auto& r) { r.mute = true; });
+    }));
+    CHECK(compiles(
+        [&](auto& t) { t.template modify<model::Route>(plain, [](auto& r) { r.mute = true; }); }));
+    CHECK(compiles([&](auto& t) {
+        for (const auto& item : m.session.items)
+            if (item.value->track == m.a)
+                t.template modify<model::Item>(item.id, [](auto& x) { x.mute = true; });
+    }));
+    CHECK(compiles([&](auto& t) {
+        t.template modify<model::Track>(m.a, [](auto& x) {
+            x.mute = true;
+            x.name = "renamed";  // with anything else, the whole edit compiles
         });
     }));
     engine.stop();
