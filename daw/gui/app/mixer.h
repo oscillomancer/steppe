@@ -23,6 +23,7 @@
 
 #include "app_actions.h"
 #include "meter_feed.h"
+#include "plugin_drag.h"
 #include "selection_edit.h"
 #include "supple/ui/root.h"
 #include "supple/views/track_layout.h"
@@ -96,6 +97,9 @@ class Mixer {
         std::vector<ui::Button*> racks;  // the rack slots, above the plug-ins
     };
     const std::vector<Strip>& strips() const { return strips_; }
+    // The strip under `p` while the mixer is shown, as a place to drop
+    // something on its track (a plugin from the side panel's browser).
+    std::optional<TrackTarget> trackTargetAt(ui::Point p) const;
 
     enum class DragPhase { Begin, Move, End, Cancel };
     // A drag in progress, for the feedback layer (and tests).

@@ -230,7 +230,7 @@ Status FloatingPanel::snapshot(const std::filesystem::path& path) {
     if (!open_) return {};
     root_->damageAll();
     root_->frame(false);
-    return writePng(path, root_->readBack());
+    return writePng(path, opaque(root_->readBack()));
 }
 
 }  // namespace supple::gui

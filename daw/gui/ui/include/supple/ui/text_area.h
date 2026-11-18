@@ -30,6 +30,9 @@ class TextArea : public Node {
     std::function<void(const std::string&)> onSubmit;  // Ctrl+Enter
     std::function<void()> onCancel;                    // Escape
     std::function<void(bool focused)> onFocusChange;
+    // The gutter with the line numbers and the marks' dots. Off for prose
+    // (a notes field); set before the first layout.
+    bool lineNumbers = true;
 
     const std::string& text() const { return text_; }
     // Replaces the text (no onChange); the caret stays at the same line and

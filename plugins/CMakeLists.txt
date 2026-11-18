@@ -129,7 +129,11 @@ if(SUPPLE_BUILD_PLUGINS)
       add_test(NAME plugin.${name}.embedding
         COMMAND ${CMAKE_CTEST_COMMAND} --test-dir "${plugin_build}" --output-on-failure -R "${on_screen}"
                 --no-tests=ignore)
-      set_tests_properties(plugin.${name}.embedding PROPERTIES RESOURCE_LOCK plugin-editor-screen)
+      # tsan-skip: one at a time, on the software renderer the tsan preset
+      # draws with, they take twelve minutes; the template's own tsan preset
+      # leaves the editor out as well.
+      set_tests_properties(plugin.${name}.embedding PROPERTIES RESOURCE_LOCK plugin-editor-screen
+                           LABELS tsan-skip)
     endif()
     set(${name}_clap "${staged}/${artifact}.clap" PARENT_SCOPE)
   endfunction()

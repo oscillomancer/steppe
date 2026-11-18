@@ -200,7 +200,7 @@ FileActions::FileActions(ui::Root& root, AppActions& actions, cmd::Dispatcher& d
     actions_.addUi("ui.track.template.load", "Track: add from template…",
                    [this] { openTemplateList(Template::Track); });
     actions_.addUi("ui.file.import", "File: import…", [this] {
-        auto* req = new DialogRequest{guardDialog([this](auto paths) { import(paths); })};
+        auto* req = new DialogRequest{guardDialog([this](auto paths) { (void)import(paths); })};
         SDL_ShowOpenFileDialog(onDialog, req, window_, kImportFilter, 4, nullptr, true);
     });
 }
@@ -821,7 +821,7 @@ void FileActions::loadTemplate(const std::string& name) {
     }
 }
 
-void FileActions::import(const std::vector<std::filesystem::path>& files) {
+Status FileActions::import(const std::vector<std::filesystem::path>& files) {
     // One file: onto the selected track (or a new one) at the playhead. Several:
     // a new track each, all at the playhead — one undo step.
     const actions::Context ctx = actions_.context();
@@ -845,7 +845,11 @@ void FileActions::import(const std::vector<std::filesystem::path>& files) {
         }
         return json::Value::object();
     });
-    if (!imported) showError("import: " + imported.error().message);
+    if (!imported) {
+        showError("import: " + imported.error().message);
+        return imported.error();
+    }
+    return {};
 }
 
 struct FileActions::DiscardRequest {

@@ -118,6 +118,7 @@ void TextArea::setMarks(std::vector<Mark> marks) {
 }
 
 float TextArea::gutterWidth() const {
+    if (!lineNumbers) return 0;
     int digits = 1;
     for (int n = lineCount(); n >= 10; n /= 10) ++digits;
     return static_cast<float>(std::max(digits, 2)) * charW_ + 2 * kPad + 6;
@@ -176,10 +177,11 @@ void TextArea::paint(Canvas& c) {
         if (mark) {
             const Color tint = mark->error ? t.color("clip") : t.color("meter-hot");
             c.fillRect({b.x + g, y, b.w - g, lineH_}, tint.withAlpha(0.12f));
-            c.fillRound({b.x + 4, y + lineH_ / 2 - 3, 6, 6}, 3, tint);
+            if (lineNumbers) c.fillRound({b.x + 4, y + lineH_ / 2 - 3, 6, 6}, 3, tint);
         }
-        c.text({b.x, y, g - kPad, lineH_}, std::to_string(line + 1), Font::Mono, fontSize_,
-               t.color("ink-faint"), kRight | kMiddle);
+        if (lineNumbers)
+            c.text({b.x, y, g - kPad, lineH_}, std::to_string(line + 1), Font::Mono, fontSize_,
+                   t.color("ink-faint"), kRight | kMiddle);
     }
     c.restore();
     c.save();
