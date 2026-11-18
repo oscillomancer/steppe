@@ -1405,7 +1405,9 @@ TEST_CASE("isolation: a plugin crashing in its bridge silences its node, the ses
     REQUIRE(crash);
     CHECK(crash->isolated());
     engine.play();
-    runAhead(engine, backend, 40, 256);  // 10240 frames: both tracks sound
+    // Waits on state only: the renderer meets the crashed bridge's calls,
+    // slow under a sanitizer on a loaded machine.
+    runAheadOnState(engine, backend, 40, 256);  // 10240 frames: both tracks sound
     const auto& cap = backend.capture();
     auto peak = [&](int ch, std::size_t from, std::size_t to) {
         double m = 0;
@@ -1415,8 +1417,8 @@ TEST_CASE("isolation: a plugin crashing in its bridge silences its node, the ses
     };
     CHECK(peak(0, 5000, 10240) > 0.1);
     CHECK(peak(1, 5000, 10240) > 0.1);
-    REQUIRE(crash->setParam(1, 1.0));     // crash in its next process()
-    runAhead(engine, backend, 200, 256);  // 51200 more frames
+    REQUIRE(crash->setParam(1, 1.0));            // crash in its next process()
+    runAheadOnState(engine, backend, 200, 256);  // 51200 more frames
     CHECK(crash->failed());
     CHECK(pool.failed().size() == 1);
     CHECK(peak(0, 50000, 61440) > 0.1);   // the steady track plays on

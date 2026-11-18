@@ -278,7 +278,8 @@ instructions are in `docs/guides/installing.md`.
   running while the transport is stopped; renderer deadline/event waits
   (ADR-0028); headless main-thread service driven by notifications and
   deadlines (ADR-0030), including MIDI controls, plug-in subscriptions,
-  render-ahead output consumption, jobs, restart and autosave; smooth plan swaps (10 ms ramps);
+  render-ahead output consumption, jobs, restart and autosave; smooth plan swaps (10 ms ramps,
+  a rack's plug-in stages carried as a chain's);
   strip, send and VCA level and pan edits applied to the running plan without
   compiling, also once playrate scheduling has started (ADR-0060), FX wet and
   bypass, mute and solo edits applied the same way (ADR-0093), patch-only FX
@@ -297,7 +298,8 @@ instructions are in `docs/guides/installing.md`.
   not the uninterrupted pre-locate swap crossfade. Readiness and sample counts
   decide correctness; a watchdog abort is separately labelled and exits 124.
   Rack modules restart at locates, so the retained-pool VCA-level reproducers
-  in `tests/fuzz/plan-soak-corpus/` now pass.
+  in `tests/fuzz/plan-soak-corpus/` now pass; a rack's plug-in stages empty
+  their dry delays and oversampling filters there too, as a chain's.
   `track.move` accepts reorders under a non-root buss and moves between
   sibling folders, and refuses destinations in the moved track's own subtree.
   Its portable command regression covers undo and cycle rollback; the

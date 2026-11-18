@@ -11,6 +11,7 @@
 #include <functional>
 #include <limits>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <vector>
 
@@ -19,6 +20,8 @@
 #include "supple/engine/offline.h"
 #include "supple/engine/realtime.h"
 #include "supple/model/session.h"
+
+#include "../../clap-host/src/platform.h"
 
 using namespace supple;
 using namespace supple::engine;
@@ -1025,6 +1028,121 @@ TEST_CASE(
                                  compiled.out.begin() + ramped));
             }
         }
+}
+
+namespace {
+// The fixture library's process hold: while set, the crash fixture's
+// process() waits inside it. Opened as the host opens it, so this is the
+// library the instance pool loaded and the flag its instances read.
+struct ProcessHold {
+    void (*hold)(int) = nullptr;
+    int (*held)() = nullptr;
+    ProcessHold() {
+        auto library = host::platform::openLibrary(std::filesystem::weakly_canonical(kFixture));
+        REQUIRE(library);
+        hold = reinterpret_cast<void (*)(int)>(
+            host::platform::symbol(*library, "supple_fixture_hold_process"));
+        held = reinterpret_cast<int (*)()>(
+            host::platform::symbol(*library, "supple_fixture_held_process"));
+        REQUIRE(hold);
+        REQUIRE(held);
+    }
+    ~ProcessHold() {
+        if (hold) hold(0);
+    }
+    ProcessHold(const ProcessHold&) = delete;
+    ProcessHold& operator=(const ProcessHold&) = delete;
+};
+}  // namespace
+
+TEST_CASE(
+    "a rendered edit taken while the renderer is inside a block still gates a live one "
+    "(ADR-0093)" *
+    doctest::description("rt")) {
+    // Round 42 suggestion 1. A rendered edit published while the renderer is
+    // inside a block (it took the values at the block's start) is heard from
+    // that block's end, renderedStream_ + renderBlock, not from
+    // renderedStream_. A live edit with the callback between the two must
+    // still compile. The crash fixture on b (rendered, muted) holds the
+    // renderer there; blocks of 4096 make that window 16 cycles wide.
+    //
+    // Renderer full after 100 cycles (25600 played): rendered to 36864, the
+    // first multiple of 4096 at least 9600 ahead. It starts its next block
+    // once 27264 is played: held there 8 cycles on (27648), the first edit
+    // is published, and 40 cycles later (37888, inside 36864..40960) the
+    // second.
+    const Wet w = wetSession();
+    const Mix& m = w.m;
+    auto edit = [](const model::Session& s, auto change) {
+        model::EditTxn t(s, s.version + 1);
+        change(t);
+        return t.commit().value();
+    };
+    const model::Session base = edit(m.session, [&](model::EditTxn& t) {
+        for (Id id : {m.a, m.b}) t.modify<model::Track>(id, [](auto& x) { x.mute = true; });
+        model::FxInstance fx;
+        fx.plugin.id = "com.suppleaudio.test.crash";  // passes audio through
+        const Id hold = t.create(fx);
+        t.modify<model::Track>(m.b, [&](auto& x) { x.chain.push_back(hold); });
+    });
+    const model::Session unmuted = edit(base, [&](model::EditTxn& t) {
+        t.modify<model::Track>(m.a, [](auto& x) { x.mute = false; });
+    });
+    const model::Session vocalMuted = edit(unmuted, [&](model::EditTxn& t) {
+        t.modify<model::Track>(w.vocal, [](auto& x) { x.mute = true; });
+    });
+    ProcessHold processHold;
+    const EngineOptions options{.renderBlock = 4096, .workers = 1};
+    auto play = [&](bool compiled) {
+        auto pool = makePool();
+        MediaCache media;
+        DummyBackend backend(sawInput(kEditFrames));
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
+        REQUIRE(engine.load(base));
+        engine.play();
+        auto full = [&] {
+            REQUIRE(engine.awaitRendered(std::numeric_limits<std::int64_t>::max()));
+        };
+        runAhead(engine, backend, 100, 256);
+        full();
+        const auto generation = engine.planGeneration();
+        TwoEdits r;
+        // Into the next block, held inside it.
+        const int entered = processHold.held();
+        processHold.hold(1);
+        backend.run(8);
+        while (processHold.held() == entered) std::this_thread::yield();
+        REQUIRE(engine.load(compiled ? withMarker(unmuted, unmuted.version + 1) : unmuted));
+        r.mixEdits[0] = engine.mixEdits();
+        r.plans[0] = engine.planGeneration() - generation;
+        processHold.hold(0);
+        runAhead(engine, backend, 40, 256);
+        full();
+        REQUIRE(
+            engine.load(compiled ? withMarker(vocalMuted, vocalMuted.version + 1) : vocalMuted));
+        r.mixEdits[1] = engine.mixEdits();
+        r.plans[1] = engine.planGeneration() - generation;
+        runAhead(engine, backend, 300 - 148, 256);
+        CHECK(engine.anticipationMisses() == 0);
+        CHECK(engine.processErrors() == 0);
+        engine.stop();
+        r.out = backend.capture().channels[0];
+        return r;
+    };
+    const auto fast = play(false);
+    const auto compiled = play(true);
+    CHECK(peakOf(compiled.out, 0, kEditFrames) > 0.01);
+    CHECK(fast.mixEdits[0] == 1);
+    CHECK(fast.plans[0] == 0);
+    // Still ahead of the callback: the second compiles, and both switch as
+    // two compiled reloads do.
+    CHECK(fast.mixEdits[1] == 1);
+    CHECK(fast.plans[1] == 1);
+    std::size_t apart = 0;
+    while (apart < kEditFrames && fast.out[apart] == compiled.out[apart]) ++apart;
+    CAPTURE(apart);  // where they first differ
+    CHECK(maxDiff(fast.out, 0, compiled.out, kEditFrames) == 0.0);
 }
 
 TEST_CASE("FX wet and bypass edits while playing sound exactly like a compiled reload" *

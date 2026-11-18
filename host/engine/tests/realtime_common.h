@@ -120,4 +120,20 @@ inline void runAhead(Engine& engine, DummyBackend& backend, std::int64_t cycles,
     }
 }
 
+// As runAhead, decided by the renderer's state alone: each wait lasts until
+// it is ahead, however long a loaded machine (or a renderer waiting on a
+// crashed bridge) takes; one that never gets there is the test runner's
+// timeout. (awaitRendered is false only when its deadline passes.)
+inline void runAheadOnState(Engine& engine, DummyBackend& backend, std::int64_t cycles,
+                            std::uint32_t block) {
+    while (cycles > 0) {
+        while (!engine.awaitRendered(4096)) {
+        }
+        const std::int64_t n =
+            std::min<std::int64_t>(cycles, std::max<std::int64_t>(1, 4096 / block));
+        backend.run(n);
+        cycles -= n;
+    }
+}
+
 }  // namespace

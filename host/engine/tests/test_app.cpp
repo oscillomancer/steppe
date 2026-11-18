@@ -511,8 +511,9 @@ TEST_CASE("an isolated plugin that crashes is reported and restarted over the bu
     REQUIRE(crash);
     CHECK(crash->isolated());
     REQUIRE(crash->setParam(1, 1.0));  // crash in its next process()
-    for (int i = 0; i < 2000 && !crash->failed(); ++i)
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    // On the failure, not the clock: a loaded machine takes what it takes,
+    // and a crash never seen is the test runner's timeout.
+    while (!crash->failed()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
     auto status = call("engine.status", "{}");
     REQUIRE(status["failed_fx"].size() == 1);
     CHECK(status["failed_fx"].at(0).asString() == "fx_2");
@@ -584,9 +585,8 @@ TEST_CASE("shared bridge crash reports both fx and both restart in one new proce
     CHECK(crash->bridgePid() == oldPid);
     CHECK(dedicated->bridgePid() != oldPid);
     REQUIRE(crash->setParam(1, 1.0));
-    for (int i = 0; i < 2000 && !crash->failed(); ++i)
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    REQUIRE(crash->failed());
+    // On the failure, not the clock (as above).
+    while (!crash->failed()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
     CHECK(first->failed());
     CHECK_FALSE(dedicated->failed());
     auto status = call("engine.status", "{}");

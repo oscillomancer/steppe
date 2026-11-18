@@ -291,7 +291,8 @@ changed patch or state to it on the main thread during the compile
 (`InstancePool::get`). State crosses the swap when the executor adopts the
 new plan, matching nodes by id: fader, wet and Console 9 ramps
 (`carryMix`), held notes (`carryLiveNotes`, `carryRackMidi`), and delay
-histories. Held timeline notes carry only when the receiving instrument
+histories, a rack's plug-in stages' (wet ramp, dry delay, oversampling
+filters) as a chain's. Held timeline notes carry only when the receiving instrument
 instance is retained. Route and parent edge delay histories carry when
 source, destination, tap, kind and delay length match; changed lengths start
 empty. New plugins are instantiated and activated on the main thread before
@@ -1697,8 +1698,10 @@ harness. See the tooling README for schemas, limits and invocation details.
   thread), and the engine stops every plugin there — no timeout, no stop from
   the main thread however long the device's period. Pause and
   seek `reset()` the plugins (no hanging notes); seek re-locates event and
-  automation cursors and clears delay lines. A seek, and a play from a
-  position, also restart every rack module (`rack::Instance::restart()`)
+  automation cursors and clears delay lines, a rack's plug-in stages' dry
+  delays and oversampling filters as a chain's (`locateRackStages`). A
+  seek, and a play from a position, also restart every rack module
+  (`rack::Instance::restart()`)
   and its feedback cables' history (`rack::Schedule::restart()`), once the
   executor owns the rack (ADR-0062 §5, 2026-11-14 note), where the
   plug-ins are reset: the rack then plays as an offline render from there.
@@ -1853,7 +1856,7 @@ harness. See the tooling README for schemas, limits and invocation details.
   stages take part as in-process ones do (§2.1, §5). A node leaving the live
   region stays live while the transport plays (`keepLive`).
 - **Smooth swaps:** a plan swap carries each strip's fader ramps and Console 9 state
-  and each insert's applied wet level into the new plan
+  and each insert's applied wet level, a rack's plug-in stages' too, into the new plan
   (`carryMix`, by track and by instance, per executor); a changed volume,
   pan, mute, solo, FX wet or bypass then ramps over 10 ms instead of
   stepping (a bypassed plugin keeps running until faded out). Automated

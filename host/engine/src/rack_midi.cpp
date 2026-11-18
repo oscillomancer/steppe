@@ -918,6 +918,8 @@ void carryRackMidi(Plan& to, Plan& from, int toClass, int fromClass) SUPPLE_RT {
         node.midiRemap.clear();
         node.midiBusRemap.clear();
         node.midiOldPool = 0;
+        // A rack's notes are its modules' (pooled, kept across the swap);
+        // its plug-in stages are carried with chain stages (carryMix).
         if (node.rack) continue;
         if (const Node* old = continued(from, node, fromClass)) {
             carryPool(node, *old);
