@@ -1489,6 +1489,35 @@ TEST_CASE("the side panel's browser lists a folder's files; a file is added or d
     REQUIRE(browser.openFolder(media));
     f.root->frame(false);
 
+    // The path under the list: whole when it fits; a long one loses its
+    // start, at a separator, and keeps its last folders.
+    const std::filesystem::path deep =
+        media / "a-folder-with-a-rather-long-name" / "and-another-one-inside-it";
+    std::filesystem::create_directories(deep);
+    REQUIRE(browser.openFolder(deep));
+    f.root->frame(false);
+    CHECK(text("side.browser.files.path") == deep.string());  // what it stands for
+    const std::string shownPath = browser.shownPath();
+    const std::string ellipsis = "\xE2\x80\xA6";
+    REQUIRE(shownPath.size() > ellipsis.size() + 1);
+    CHECK(shownPath.rfind(ellipsis, 0) == 0);
+    CHECK((shownPath[ellipsis.size()] == '/' || shownPath[ellipsis.size()] == '\\'));
+    CHECK(shownPath.size() < deep.string().size());
+    const std::string last = "and-another-one-inside-it";
+    REQUIRE(shownPath.size() >= last.size());
+    CHECK(shownPath.compare(shownPath.size() - last.size(), last.size(), last) == 0);
+    CHECK(deep.string().find(shownPath.substr(ellipsis.size())) != std::string::npos);
+    browser.files.roots = [] { return std::vector<std::filesystem::path>{"/a", "/b"}; };
+    browser.openRoots();
+    f.root->frame(false);
+    CHECK(browser.shownPath().empty());
+    browser.files.roots = [&] {
+        return std::vector<std::filesystem::path>{media, media / "Loops"};
+    };
+    std::filesystem::remove_all(media / "a-folder-with-a-rather-long-name");
+    REQUIRE(browser.openFolder(media));
+    f.root->frame(false);
+
     // A folder that cannot be opened: said, and the listing stays.
     CHECK_FALSE(browser.openFolder(media / "gone"));
     CHECK(text("side.browser.files.status").find("Cannot open gone") != std::string::npos);

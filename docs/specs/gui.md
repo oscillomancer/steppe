@@ -1843,7 +1843,9 @@ folders first, in bold, then the files File > Import takes (`.wav`,
 the right, each by name without regard to case. Hidden entries (a leading
 dot) and other files are left out. Above the list are **Up** (`.up`, to
 the folder above) and the folder's name (`.folder`); under it the status
-line and the folder's whole path (`.path`). The page starts in the
+line and the folder's path (`.path`), which loses its start, at a
+separator, when it does not fit ("…/Loops/Drums"): the last folders stay
+readable. The page starts in the
 project's folder, or the user's home folder for a project not saved yet,
 and stays where the user went; a folder that has gone falls back the same
 way. The search (`.search`) narrows this folder and is cleared on entering

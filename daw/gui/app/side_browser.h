@@ -84,6 +84,9 @@ class SideBrowser {
     };
     std::size_t fileCount() const { return fileShown_.size(); }
     FileRow fileRow(std::size_t row) const;
+    // The folder's path as its line last drew it: whole, or with its start
+    // cut ("…/Loops/Drums") so that the last folders stay readable.
+    std::string shownPath() const;
 
   private:
     struct Chain {
@@ -132,7 +135,7 @@ class SideBrowser {
     ui::List* fileList_ = nullptr;
     ui::Label* fileStatus_ = nullptr;
     ui::Label* folderLabel_ = nullptr;
-    ui::Label* folderPath_ = nullptr;
+    ui::Node* folderPath_ = nullptr;
     ui::TextBlock* fileEmpty_ = nullptr;
     ui::Node* up_ = nullptr;
     std::filesystem::path folder_;        // the folder listed; empty until first shown

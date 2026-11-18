@@ -113,6 +113,47 @@ class Kinds : public ui::Node {
     std::function<void(const std::string&)> pick_;
 };
 
+// A path on one line. When it does not fit, its start is cut, at a
+// separator where there is one, so that the last folders stay readable: the
+// end of a path says where you are.
+class PathLabel : public ui::Node {
+  public:
+    explicit PathLabel(std::string id) : Node(std::move(id), ui::Role::Label) {}
+    void setText(std::string text) {
+        if (text == text_) return;
+        text_ = std::move(text);
+        invalidate();
+    }
+    const std::string& shown() const { return shown_; }
+    std::string valueText() const override { return text_; }
+    void paint(ui::Canvas& c) override {
+        const ui::Theme& t = c.theme();
+        const float size = t.type("caption");
+        shown_ = fitted(c, size, bounds().w);
+        c.text(bounds(), shown_, ui::Font::Mono, size, t.color("ink-quiet"));
+    }
+
+  private:
+    std::string fitted(const ui::Canvas& c, float size, float width) const {
+        auto fits = [&](const std::string& s) {
+            return c.textWidth(s, ui::Font::Mono, size) <= width;
+        };
+        if (fits(text_)) return text_;
+        const std::string ellipsis = "\xE2\x80\xA6";
+        // From the left, the first separator from which the rest fits.
+        for (std::size_t i = 1; i < text_.size(); ++i)
+            if ((text_[i] == '/' || text_[i] == '\\') && fits(ellipsis + text_.substr(i)))
+                return ellipsis + text_.substr(i);
+        // One long name: its end, cut on a UTF-8 boundary.
+        for (std::size_t i = 1; i < text_.size(); ++i) {
+            if ((static_cast<unsigned char>(text_[i]) & 0xC0) == 0x80) continue;
+            if (fits(ellipsis + text_.substr(i))) return ellipsis + text_.substr(i);
+        }
+        return ellipsis;
+    }
+    std::string text_, shown_;
+};
+
 std::string effectsText(int count) {
     return count == 1 ? std::string("1 effect") : std::to_string(count) + " effects";
 }
@@ -230,8 +271,7 @@ std::unique_ptr<ui::Node> SideBrowser::buildFiles() {
     fileStatus_ = &page->emplace<ui::Label>("side.browser.files.status", "", ui::Font::Ui,
                                             "caption", "ink-quiet");
     fileStatus_->layout.height = ui::SizeRule::fixed(16);
-    folderPath_ = &page->emplace<ui::Label>("side.browser.files.path", "", ui::Font::Mono,
-                                            "caption", "ink-quiet");
+    folderPath_ = &page->emplace<PathLabel>("side.browser.files.path");
     folderPath_->layout.height = ui::SizeRule::fixed(16);
     return page;
 }
@@ -266,11 +306,15 @@ void SideBrowser::openRoots() {
     if (fileSearch_ && !fileSearch_->text().empty()) fileSearch_->setText("");
     if (folderLabel_) {
         folderLabel_->setText("Computer");
-        folderPath_->setText("");
+        static_cast<PathLabel*>(folderPath_)->setText("");
         up_->enabled = false;
     }
     setFileStatus({});
     filterFiles();
+}
+
+std::string SideBrowser::shownPath() const {
+    return folderPath_ ? static_cast<const PathLabel*>(folderPath_)->shown() : std::string();
 }
 
 SideBrowser::FileRow SideBrowser::fileRow(std::size_t row) const {
@@ -320,7 +364,7 @@ bool SideBrowser::openFolder(const std::filesystem::path& folder) {
         // A root has no name of its own: its path stands for it.
         const std::string name = folder_.filename().string();
         folderLabel_->setText(name.empty() ? folder_.string() : name);
-        folderPath_->setText(folder_.string());
+        static_cast<PathLabel*>(folderPath_)->setText(folder_.string());
         up_->enabled =
             (folder_.has_parent_path() && folder_.parent_path() != folder_) || roots().size() > 1;
     }
