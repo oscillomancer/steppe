@@ -268,8 +268,19 @@ void prepare(unsigned char* memory) {
 
 // What every captured fault must show.
 void checkCapsule(const Parsed& p, bool expectEntry, std::uint32_t cell) {
+#if defined(__APPLE__)
+    // macOS walks every thread of the task (spec: bridge capsule); the fault thread is the first
+    // and the only one of its role.
+    CHECK(p.header.threadCount >= 1);
+    REQUIRE(p.heads.size() >= 1);
+    std::size_t faultThreads = 0;
+    for (const auto& head : p.heads)
+        if (head.role == static_cast<std::uint8_t>(detail::Role::Fault)) ++faultThreads;
+    CHECK(faultThreads == 1);
+#else
     CHECK(p.header.threadCount == 1);
     REQUIRE(p.heads.size() == 1);
+#endif
     CHECK(p.heads[0].role == static_cast<std::uint8_t>(detail::Role::Fault));
     CHECK(p.heads[0].missing == static_cast<std::uint8_t>(detail::Missing::None));
     CHECK(p.heads[0].registered == static_cast<std::uint8_t>(diagctx::ThreadRole::BridgeControl));

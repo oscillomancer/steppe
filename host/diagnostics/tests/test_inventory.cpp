@@ -1674,6 +1674,16 @@ capture::SlotHeader headerFor(std::uint32_t ordinal) {
     header.ordinal = ordinal;
     return header;
 }
+#if !defined(_WIN32)
+// Writes `bytes` at the start of a shared-memory object through a mapping: macOS cannot write(2)
+// or pwrite(2) the object a slot is made from, and a mapping writes it on every platform.
+void writeThroughMapping(int fd, const void* data, std::size_t bytes) {
+    void* map = ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    REQUIRE(map != MAP_FAILED);
+    std::memcpy(map, data, bytes);
+    ::munmap(map, bytes);
+}
+#endif
 // A shared-memory object of `bytes` the way the host makes one (sealed on Linux), optionally with
 // an empty slot's header for bridge `ordinal` written in it.
 Resource memory(std::size_t bytes, bool header, std::uint32_t ordinal, bool seal = true) {
@@ -1709,8 +1719,7 @@ Resource memory(std::size_t bytes, bool header, std::uint32_t ordinal, bool seal
 #endif
     if (header) {
         const auto slotHeader = headerFor(ordinal);
-        REQUIRE(::pwrite(fd, &slotHeader, sizeof slotHeader, 0) ==
-                static_cast<ssize_t>(sizeof slotHeader));
+        writeThroughMapping(fd, &slotHeader, sizeof slotHeader);
     }
     return fd;
 #endif
@@ -1749,8 +1758,7 @@ void bridgeWrites(Resource writer, const std::vector<unsigned char>& capsule, st
     std::memcpy(view, block.data(), block.size());
     UnmapViewOfFile(view);
 #else
-    REQUIRE(::pwrite(static_cast<int>(writer), block.data(), block.size(), 0) ==
-            static_cast<ssize_t>(block.size()));
+    writeThroughMapping(static_cast<int>(writer), block.data(), block.size());
 #endif
 }
 Packet slotEvent(std::uint16_t bridge) {
@@ -1969,8 +1977,7 @@ TEST_CASE("a slot header that stopped being a slot's is never read") {
         std::memcpy(view, block.data(), block.size());
         UnmapViewOfFile(view);
 #else
-        REQUIRE(::pwrite(static_cast<int>(writer), block.data(), block.size(), 0) ==
-                static_cast<ssize_t>(block.size()));
+        writeThroughMapping(static_cast<int>(writer), block.data(), block.size());
 #endif
     };
     write([](capture::SlotHeader&) {});

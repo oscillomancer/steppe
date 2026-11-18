@@ -88,7 +88,10 @@ if not sanitized:
     threads=e["threads"]
     assert threads and threads[0]["role"]=="fault" and threads[0]["state"]=="walked",threads
     assert threads[0]["registered"]=="bridge_audio" and threads[0]["entry"]=="process",threads[0]
-    assert any(t["role"]=="bridge_control" and t["state"]=="unavailable" and t["reason"]=="not_collected" for t in threads[1:]),threads
+    # Linux and Windows capture the fault thread only and list the others from the table
+    # (`not_collected`); macOS walks every thread of the task, so there the control thread is walked.
+    others="walked" if sys.platform=="darwin" else "unavailable"
+    assert any(t["role"]=="bridge_control" and t["state"]==others and (others=="walked" or t["reason"]=="not_collected") for t in threads[1:]),threads
     ids=[m["id"] for m in e["modules"]]
     assert ids and all(i is None or len(i)%2==0 for i in ids),ids
     ended=[b for b in e["bridges"] if b["id"]==e["bridge"]][0]
@@ -146,7 +149,7 @@ if not sanitized:
     def bridge_report(*args):
         reports,run=run_bridged(*args)
         exits=[r for r in reports if r["kind"]=="bridge_exit"]
-        assert len(exits)==1 and len([r for r in reports if r["kind"]=="crash"])==1,([r["kind"] for r in reports],run.stderr)
+        assert len(exits)==1 and len([r for r in reports if r["kind"]=="crash"])==1,(args,[r["kind"] for r in reports],run.stderr)
         e=exits[0]
         assert e.get("capture")=="bridge" and e["complete"] is False and e["commands"]==[],e
         ended=[b for b in e["bridges"] if b["id"]==e["bridge"]][0]["ended"]

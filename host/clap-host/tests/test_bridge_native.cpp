@@ -832,9 +832,15 @@ TEST_CASE("a bridge that faults writes its capsule into the slot the host handed
     REQUIRE(::kill(pid, SIGSEGV) == 0);  // the handler runs as for a fault, on the main thread
     for (int i = 0; i < 2000 && process->alive(); ++i) (void)waitFor({}, 5);
     REQUIRE_FALSE(process->alive());
-    // Read as the supervisor does: pread, never a mapping.
+    // Read through a mapping: macOS cannot read(2) or pread(2) the shared-memory object a slot is
+    // made from, and a mapping reads it on every platform.
     std::vector<std::uint8_t> bytes(capture::kSlotBytes);
-    REQUIRE(::pread(slot, bytes.data(), bytes.size(), 0) == static_cast<ssize_t>(bytes.size()));
+    {
+        void* map = bridge::mapMemory(slot, capture::kSlotBytes);
+        REQUIRE(map);
+        std::memcpy(bytes.data(), map, bytes.size());
+        bridge::unmapMemory(map, capture::kSlotBytes);
+    }
     bridge::closeResource(slot);
     capture::SlotHeader header;
     std::memcpy(&header, bytes.data(), sizeof header);
