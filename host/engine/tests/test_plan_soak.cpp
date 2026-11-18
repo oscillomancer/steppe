@@ -6,9 +6,11 @@
 #include <charconv>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <fstream>
 #include <iostream>
 #include <numeric>
+#include "carry_matches.h"
 #include "rack_runtime.h"
 #include "realtime_common.h"
 #include "supple/base/files.h"
@@ -289,6 +291,13 @@ struct Soak {
     std::uint64_t swaps = 0;
     std::uint64_t checkpoints = 0;
     bool automaticCheckpoints = true;
+    // Route E stage 6: each settled head compiled again with a pool of the
+    // test's own (the app's pool and its retirement checks stay untouched),
+    // the last three kept, to compare the carries' lookups with the pairwise
+    // scans they replaced.
+    InstancePool matchPool = makePool();
+    std::deque<supple::engine::detail::Plan> matchPlans;
+    supple::engine::carry_test::CarryMatches carryMatches;
 
     Soak(std::uint64_t seed, bool ahead, bool explicitCheckpoints = false)
         : options{.anticipative = ahead, .renderBlock = 128, .renderAheadMs = 20, .workers = 2} {
@@ -444,6 +453,7 @@ struct Soak {
         REQUIRE(app->head().routes.size() <= 7);
         REQUIRE(app->head().modules.size() <= 6);
         checkModel();
+        if (phase == "edits") checkCarryMatches();
         if (phase == "edits" && automaticCheckpoints) audioCheckpoint();
     }
     void audioCheckpoint(const json::Value* replay = nullptr) {
@@ -498,6 +508,23 @@ struct Soak {
         engine.seek(restore.seconds);
         backend.resume();
         watchdogContext = context;
+    }
+    // The carries pair what the scans before route E stage 6 paired: from
+    // the previous plan and from the one before it (an executor that skipped
+    // a plan), in each executor's classes: the callback's (-1), the
+    // renderer's (0), the live region's (1), the renderer's handoff into it
+    // (1 from 0), against those scans (carry_matches.h). The soak has no
+    // MIDI send and no live region: test_racks.cpp's "carries pair what the
+    // pairwise scans paired" has them.
+    void checkCarryMatches() {
+        auto compiled = supple::engine::detail::compile(app->head(), matchPool, 0, kBlock, 48000);
+        REQUIRE_MESSAGE(compiled, (compiled ? "" : compiled.error().toString()));
+        matchPlans.push_back(std::move(*compiled));
+        if (matchPlans.size() > 3) matchPlans.pop_front();
+        for (std::size_t k = 0; k + 1 < matchPlans.size(); ++k)
+            supple::engine::carry_test::check(matchPlans[k], matchPlans.back(), carryMatches);
+        INFO(trace);
+        REQUIRE(carryMatches.wrong == 0);
     }
     void step(std::string command, json::Value a = json::Value::object()) {
         call(std::move(command), std::move(a));
@@ -930,6 +957,10 @@ TEST_CASE("seeded plan-swap soak during playback in both executors" * doctest::d
                     }
                 }
                 soak.finish();
+                std::cout << "plan-soak carry matches: nodes=" << soak.carryMatches.nodes
+                          << " edges=" << soak.carryMatches.edges << std::endl;
+                REQUIRE(soak.carryMatches.nodes > 0);
+                REQUIRE(soak.carryMatches.edges > 0);
                 for (const auto& [name, count] : soak.commands) coverage[name] += count;
             } catch (const doctest::detail::TestFailureException&) {
                 if (!keepGoing || replayPath) throw;

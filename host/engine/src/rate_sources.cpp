@@ -299,37 +299,36 @@ void carryRateSources(Plan& from, Plan& to, int liveClass) SUPPLE_RT {
     if (!from.rateEnabled || !to.rateEnabled || to.rateSeekSequence != 0) return;
     for (auto& oldNode : from.nodes) {
         if (liveClass >= 0 && oldNode.live != (liveClass == 1)) continue;
-        for (auto& node : to.nodes) {
-            if (node.id != oldNode.id) continue;
-            for (auto& old : oldNode.clips)
-                for (auto& clip : node.clips) {
-                    if (old.item != clip.item || old.take != clip.take || old.data != clip.data ||
-                        old.offset != clip.offset ||
-                        old.start - old.deviceShift != clip.start - clip.deviceShift ||
-                        old.loop != clip.loop)
-                        continue;
-                    const auto oldAhead =
-                        old.takeChain >= 0
-                            ? oldNode.takeChains[static_cast<std::size_t>(old.takeChain)].latency
-                            : 0;
-                    const auto newAhead =
-                        clip.takeChain >= 0
-                            ? node.takeChains[static_cast<std::size_t>(clip.takeChain)].latency
-                            : 0;
-                    if (oldAhead - old.deviceShift != newAhead - clip.deviceShift) continue;
-                    if (!to.rateControlsChanged)
-                        clip.rateState.swap(old.rateState);
-                    else if (clip.rateState->previous) {
-                        clip.rateState->previous.swap(old.rateState);
-                        // Retire the completed fade through the old plan. These
-                        // swaps never destroy a converter on an audio executor.
-                        if (clip.rateState->previous->previous)
-                            clip.rateState->previous->previous.swap(old.rateState->previous);
-                    }
-                    break;
+        Node* const found = findNode(to, oldNode.id);
+        if (!found) continue;
+        Node& node = *found;
+        for (auto& old : oldNode.clips)
+            for (auto& clip : node.clips) {
+                if (old.item != clip.item || old.take != clip.take || old.data != clip.data ||
+                    old.offset != clip.offset ||
+                    old.start - old.deviceShift != clip.start - clip.deviceShift ||
+                    old.loop != clip.loop)
+                    continue;
+                const auto oldAhead =
+                    old.takeChain >= 0
+                        ? oldNode.takeChains[static_cast<std::size_t>(old.takeChain)].latency
+                        : 0;
+                const auto newAhead =
+                    clip.takeChain >= 0
+                        ? node.takeChains[static_cast<std::size_t>(clip.takeChain)].latency
+                        : 0;
+                if (oldAhead - old.deviceShift != newAhead - clip.deviceShift) continue;
+                if (!to.rateControlsChanged)
+                    clip.rateState.swap(old.rateState);
+                else if (clip.rateState->previous) {
+                    clip.rateState->previous.swap(old.rateState);
+                    // Retire the completed fade through the old plan. These
+                    // swaps never destroy a converter on an audio executor.
+                    if (clip.rateState->previous->previous)
+                        clip.rateState->previous->previous.swap(old.rateState->previous);
                 }
-            break;
-        }
+                break;
+            }
     }
 }
 

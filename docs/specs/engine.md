@@ -326,6 +326,19 @@ specified here as it lands); so far:
   the instance.
 - **A patch-only edit publishes no plan** (stage 3, ADR-0092): see
   "Patch-only FX edits" below.
+- **Carries look nodes and edges up by id** (stage 6). The compile indexes
+  each plan last (`indexForCarry`, main thread): its nodes sorted by id,
+  each edge's source id, each node's in-edges sorted by source id (ties in
+  `in` order). At adoption the executor finds a node's counterpart by
+  binary search (`findNode`, `carriedNode`), and an in-edge's or a MIDI
+  send's predecessor among the old node's in-edges from the same source, the
+  first in `in` order that matches (`matchInEdge`, `matchSend`). These are
+  the pairs the earlier scans of every node and edge pair found, whichever
+  earlier plan the executor carries from (the callback can skip plans, the
+  live region lags); the soak and a MIDI-send test compare them with those
+  scans. Nothing is allocated on the audio thread. At 192 tracks the
+  callback's carry compares about 7,400 entries per adoption instead of
+  75,000; its time is the carry's own work, linear in the plan.
 Returning to a version with neither patch nor state after applying saved FX
 settings recreates the factory-default instance. The old instance remains alive
 until both executors release its plan, as with a changed opaque state.

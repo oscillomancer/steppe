@@ -304,6 +304,11 @@ void resetTrackMidi(Node& node) SUPPLE_RT;
 void addRackMidi(Plan& p, Node& target, std::int64_t pos, std::uint32_t frames,
                  bool playing) SUPPLE_RT;
 void carryRackMidi(Plan& to, Plan& from, int toClass, int fromClass) SUPPLE_RT;
+// The MIDI send of `old` (in `from`) that `edge` continues: the first in
+// `old.in` order that sameSend accepts (carryRackMidi). kNoEdge: none.
+std::size_t matchSend(const Plan& to, const Edge& edge, const Plan& from,
+                      const Node& old) SUPPLE_RT;
+bool sameSend(const Plan& to, const Edge& edge, const Plan& from, const Edge& old) SUPPLE_RT;
 // The FX chain as a MIDI bus (ADR-0068), in processNode: beginMidiBus before
 // the note target's releases (which note-output stages run; releases of what
 // no longer reaches a stage; false: the pre-FX stream does not reach the

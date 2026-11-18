@@ -16,6 +16,7 @@
 
 #include <clap/ext/params.h>
 #include "bridge_patience.h"
+#include "carry_matches.h"
 #include "plan.h"
 #include "rack_runtime.h"
 #include "supple/model/groups.h"
@@ -3219,6 +3220,103 @@ TEST_CASE("MIDI bus: post-FX sends carry the bus after the chain, compensated" *
                 CHECK(bool(renderLeft(scene(true, 0), 1.0, 37) == expected));
                 CHECK(bool(renderLeft(scene(true, 0), 1.0, 512) == expected));
             }
+}
+
+TEST_CASE(
+    "carries pair what the pairwise scans paired: MIDI sends, a live region, reordered nodes "
+    "(route E stage 6)") {
+    // The soak's sequences (test_plan_soak.cpp) have no MIDI send and no live
+    // region. Here: MIDI sends from one source into two channels, two of them
+    // into one (two candidates, matched in order), an audio send into a
+    // buss, a monitored track (live) sending notes, then edits that shift every
+    // node's index, change a tap, drop a send, empty and refill the live
+    // region. Each plan is compared from the one before and the one before
+    // that (an executor that skipped a plan).
+    namespace d = supple::engine::detail;
+    auto midiRoute = [](model::EditTxn& t, Id from, Id to, int channel = 0) {
+        model::Route r;
+        r.from.track = from;
+        r.to.track = to;
+        r.midi = model::MidiRouting{channel, 0};
+        return t.create(r);
+    };
+    auto monitor = [](model::EditTxn& t, Id track, bool on) {
+        t.modify<model::Track>(track, [&](model::Track& tr) {
+            tr.record.armed = on;
+            tr.record.monitor = on ? model::Monitor::On : model::Monitor::Off;
+        });
+    };
+    std::vector<model::Session> sessions;
+    model::EditTxn t(model::Session::create({.console9 = false}), 1);
+    const Id a = addChannel(t), b = addChannel(t), c = addChannel(t), m = addChannel(t);
+    const Id x = addChannel(t);
+    t.modify<model::Track>(x, [](model::Track& tr) { tr.type = model::StripType::Buss; });
+    addFx(t, a, kEcho);
+    addFx(t, a, kSine);
+    addNotes(t, a, busNotes());
+    addFx(t, b, kSine);
+    addFx(t, c, kSine);
+    addFx(t, m, kSine);
+    const Id ab = midiRoute(t, a, b);
+    midiRoute(t, a, b, 1);  // a second candidate from a into b
+    midiRoute(t, a, c);
+    model::Route send;
+    send.from.track = a;
+    send.to.track = x;
+    const Id ax = t.create(send);
+    midiRoute(t, m, b);
+    model::Route input;
+    input.from.hwChannels = std::vector<int>{1, 2};
+    input.to.track = m;
+    const Id in = t.create(input);
+    t.modify<model::Track>(m, [&](model::Track& tr) { tr.record.input = in; });
+    monitor(t, m, true);
+    sessions.push_back(commit(t));
+    auto edit = [&](auto change) {
+        model::EditTxn e(sessions.back(), sessions.back().version + 1);
+        change(e);
+        sessions.push_back(commit(e));
+    };
+    edit([&](model::EditTxn& e) {  // a new first channel: every index shifts
+        model::Track tr;
+        tr.parent = kMaster;
+        const Id first = e.create(tr);
+        e.modify<model::Track>(
+            kMaster, [&](model::Track& x) { x.children.insert(x.children.begin(), first); });
+        midiRoute(e, first, b);
+    });
+    edit([&](model::EditTxn& e) {
+        e.modify<model::Route>(ax, [](model::Route& r) { r.tap = model::Tap::PreFader; });
+    });
+    edit([&](model::EditTxn& e) { e.remove<model::Route>(ab); });
+    edit([&](model::EditTxn& e) { monitor(e, m, false); });
+    edit([&](model::EditTxn& e) {  // live again, and c ahead of a
+        monitor(e, m, true);
+        e.modify<model::Track>(kMaster, [&](model::Track& x) {
+            auto& order = x.children;
+            order.erase(std::find(order.begin(), order.end(), c));
+            order.insert(std::find(order.begin(), order.end(), a), c);
+        });
+    });
+    auto pool = makePool();
+    std::vector<d::Plan> plans;
+    for (const auto& session : sessions) {
+        auto compiled = d::compile(session, pool, 0, 512);
+        REQUIRE(compiled);
+        plans.push_back(std::move(*compiled));
+    }
+    supple::engine::carry_test::CarryMatches matches;
+    for (std::size_t k = 1; k < plans.size(); ++k)
+        for (std::size_t back = 1; back <= std::min<std::size_t>(2, k); ++back)
+            supple::engine::carry_test::check(plans[k - back], plans[k], matches);
+    CAPTURE(matches.nodes);
+    CAPTURE(matches.edges);
+    CAPTURE(matches.sends);
+    CAPTURE(matches.live);
+    CHECK(matches.wrong == 0);
+    CHECK(matches.sends > 0);
+    CHECK(matches.live > 0);
+    CHECK(matches.edges > matches.sends);
 }
 
 TEST_CASE("MIDI bus: held notes survive plan swaps; a removed or bypassed plug-in's end" *
