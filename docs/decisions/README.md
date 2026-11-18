@@ -111,3 +111,4 @@ current state.
 | [0090](0090-offline-renders-and-bridged-plugins.md) | Offline renders wait for bridged plug-ins, and fail when one fails | Accepted |
 | [0091](0091-supervisor-end-and-launcher-stop.md) | A supervisor that ends without saying so is the launcher's stop | Accepted |
 | [0092](0092-patch-only-fx-edits.md) | Patch-only FX edits reach the running instances without a plan | Accepted |
+| [0093](0093-wet-bypass-mute-solo-on-a-running-plan.md) | FX wet and bypass, strip mute and solo reach a running plan | Accepted |

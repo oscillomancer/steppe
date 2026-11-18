@@ -291,8 +291,9 @@ instructions are in `docs/guides/installing.md`.
   deadlines (ADR-0030), including MIDI controls, plug-in subscriptions,
   render-ahead output consumption, jobs, restart and autosave; smooth plan swaps (10 ms ramps);
   strip, send and VCA level and pan edits applied to the running plan without
-  compiling, also once playrate scheduling has started (ADR-0060), patch-only
-  FX edits applied to the running instances without a plan (ADR-0092), and
+  compiling, also once playrate scheduling has started (ADR-0060), FX wet and
+  bypass, mute and solo edits applied the same way (ADR-0093), patch-only FX
+  edits applied to the running instances without a plan (ADR-0092), and
   control drags sent once per frame rather than per pointer motion;
   every node, plug-ins and bridged plug-ins included, runs with FTZ/DAZ in
   every executor, and owned audio threads prefault their stacks (ADR-0025).
@@ -1206,9 +1207,12 @@ Engine and hosting:
   latency preferences report unsupported on other platforms. Windows MCP is
   intended for piped/file input; cancelling an interactive console read can
   await a keypress during shutdown.
-- Only level and pan edits (ADR-0060) and patch-only FX edits (ADR-0092)
-  skip compiling. Mute, solo, routing, wet, bypass and other plug-in changes
-  compile the session, as does a patch edit on an FX with automation or one
+- Only level and pan edits (ADR-0060), FX wet, bypass, mute and solo edits
+  (ADR-0093) and patch-only FX edits (ADR-0092) skip compiling. Routing, item
+  mutes, a route mute that changes a send's encoding, an ADR-0093 edit that
+  in the anticipative executor changes both a live and a rendered track's
+  values (or a live track's while an earlier edit to a rendered one is still
+  ahead of the playhead), and other plug-in changes compile the session, as does a patch edit on an FX with automation or one
   that changes the plug-in's latency, parameters or ports. With playrate
   scheduling started each compile also prepares a rate plan, which costs
   several milliseconds per edit in a session of a few dozen tracks.

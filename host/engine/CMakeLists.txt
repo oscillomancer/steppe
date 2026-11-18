@@ -57,6 +57,9 @@ if(SUPPLE_BUILD_TESTS AND SUPPLE_PLATFORM_LINUX)
                    tests/test_commands.cpp tests/test_scripts.cpp tests/test_strips.cpp tests/test_playrate.cpp tests/test_mix_edits.cpp tests/test_patch_edits.cpp tests/test_pdc.cpp
                    tests/test_runtime_protection.cpp tests/test_page_faults.cpp tests/test_idle_hold.cpp tests/test_jack.cpp tests/test_workers.cpp tests/test_live_workers.cpp tests/test_meters.cpp
                    tests/test_learn.cpp tests/test_dsp.cpp tests/test_bridge_engine.cpp tests/test_offline_bridge.cpp tests/test_render.cpp tests/test_racks.cpp tests/test_rack_clip.cpp tests/test_rack_levels.cpp tests/test_module_library.cpp tests/test_rack_recipes.cpp tests/test_rack_patches.cpp tests/test_rack_patches_play.cpp tests/test_sync.cpp tests/test_crash_commands.cpp tests/test_load_overrides.cpp tests/test_suspects.cpp LABELS rt SPLIT)
+  # The longest engine file under ThreadSanitizer: it ran past the presets'
+  # 600 s on a busy machine and took 363 s alone.
+  set_tests_properties(engine.tests.test_realtime_playrate PROPERTIES TIMEOUT 1200)
   target_include_directories(engine.tests PRIVATE src ${PROJECT_SOURCE_DIR}/plugins/common/include)
   target_include_directories(engine.tests PRIVATE ${PROJECT_SOURCE_DIR}/tests/fuzz)
   add_dependencies(engine.tests clap-host-fixtures clap-host-vst3-fixtures engine-fake-jack ${PRODUCT_SLUG}-bridge)

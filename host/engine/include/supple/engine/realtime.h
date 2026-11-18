@@ -1100,12 +1100,18 @@ class Engine {
     bool loadMixValues(const model::Session& session, const std::filesystem::path& projectDir);
     std::vector<model::EnvTarget> writeHolds_, staleCurves_;
     std::uint64_t mixEdits_ = 0;
+    // ADR-0093: the stream position, in this epoch, by which the renderer has
+    // taken the last published edit it reads (loadMixValues).
+    std::uint64_t renderedAheadEpoch_ = 0;
+    std::int64_t renderedAheadUntil_ = 0;
     // ADR-0092 (main thread): the patch-only edit path of load().
     bool loadPatches(const model::Session& session, const std::filesystem::path& projectDir);
     std::uint64_t patchEdits_ = 0;
-    // Odd while loadPatches applies patches; executors read it before each
-    // block they process and stamp that block's plug-in outputs with it.
+    // Moved before and after loadPatches applies patches (odd in between);
+    // executors read it before each block they process and stamp that
+    // block's plug-in outputs with it. The app drops any other stamp.
     std::atomic<std::uint64_t> patchSeq_{0};
+    static_assert(std::atomic<std::uint64_t>::is_always_lock_free);  // read on the audio path
     bool holdsPending_ = false;       // writeHolds_ not yet in the newest plan
     bool releasesStaleCurve() const;  // a load must compile
     void applyPendingHolds();         // after a shortcut that publishes no plan

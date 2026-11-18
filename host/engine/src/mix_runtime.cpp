@@ -38,18 +38,19 @@ bool entriesMatch(const model::IdMap<T>& a, const model::IdMap<T>& b, F&& same) 
 
 // Whether `b` differs from `a` only in what a running plan takes without
 // compiling: strip levels, pans, widths and dual pans, send levels and pans that keep the send's
-// encoding, VCA levels, and the points of held volume/pan envelopes in a
+// encoding, VCA levels, FX wet and bypass, track and VCA mute and solo, route mutes that
+// keep the send's encoding, and the points of held volume/pan envelopes in a
 // writing mode. Every other field is compared whole, so a field added to one
 // of these objects can never pass as a mix edit. `changed`: something did
 // change; `stale` gains the held targets whose curves the plan no longer
 // matches. Keep the collections in step with model::Session.
 bool mixOnly(const model::Session& a, const model::Session& b,
-             const std::vector<model::EnvTarget>& holds, bool hardwareMidi, bool& changed,
+             const std::vector<model::EnvTarget>& holds, bool& changed,
              std::vector<model::EnvTarget>& stale) {
     if (!(a.project == b.project || *a.project == *b.project)) return false;
     if (!a.tempo.sameStorage(b.tempo) || !a.meters.sameStorage(b.meters) ||
         !a.items.sameStorage(b.items) || !a.takes.sameStorage(b.takes) ||
-        !a.media.sameStorage(b.media) || !a.midi.sameStorage(b.midi) || !a.fx.sameStorage(b.fx) ||
+        !a.media.sameStorage(b.media) || !a.midi.sameStorage(b.midi) ||
         !a.autoItems.sameStorage(b.autoItems) || !a.markers.sameStorage(b.markers) ||
         !a.regions.sameStorage(b.regions) || !a.racks.sameStorage(b.racks) ||
         !a.cables.sameStorage(b.cables) || a.blobs != b.blobs || a.extraSections != b.extraSections)
@@ -66,14 +67,24 @@ bool mixOnly(const model::Session& a, const model::Session& b,
             return x == y;
         });
     if (!modules) return false;
+    // An FX's wet and bypass (ADR-0093): every stage that runs it has a slot.
+    // `offline` decides whether an instance exists, so it compiles.
+    const bool fx = entriesMatch(a.fx, b.fx, [&](model::FxInstance x, const model::FxInstance& y) {
+        changed |= x.wet != y.wet || x.bypass != y.bypass;
+        x.wet = y.wet;
+        x.bypass = y.bypass;
+        return x == y;
+    });
+    if (!fx) return false;
+    // Mute and solo (ADR-0093): mute is a slot; solo is published as each
+    // node's silenced flag from model::soloSilencedTracks.
     const bool tracks =
         entriesMatch(a.tracks, b.tracks, [&](model::Track x, const model::Track& y) {
             changed |= x.volumeDb != y.volumeDb || x.pan != y.pan || x.width != y.width ||
-                       x.panLeft != y.panLeft || x.panRight != y.panRight;
-            if (hardwareMidi) {
-                changed |= x.mute != y.mute;
-                x.mute = y.mute;
-            }
+                       x.panLeft != y.panLeft || x.panRight != y.panRight || x.mute != y.mute ||
+                       x.solo != y.solo;
+            x.mute = y.mute;
+            x.solo = y.solo;
             x.volumeDb = y.volumeDb;
             x.pan = y.pan;
             x.width = y.width;  // pan positions (ADR-0066); mode and law compile
@@ -85,36 +96,46 @@ bool mixOnly(const model::Session& a, const model::Session& b,
     const bool groups =
         entriesMatch(a.groups, b.groups, [&](model::TrackGroup x, const model::TrackGroup& y) {
             if (x.vca && y.vca) {
-                changed |= x.vca->volumeDb != y.vca->volumeDb;
+                changed |= x.vca->volumeDb != y.vca->volumeDb || x.vca->mute != y.vca->mute ||
+                           x.vca->solo != y.vca->solo;
                 x.vca->volumeDb = y.vca->volumeDb;
-                if (hardwareMidi) {
-                    changed |= x.vca->mute != y.vca->mute;
-                    x.vca->mute = y.vca->mute;
-                }
+                x.vca->mute = y.vca->mute;
+                x.vca->solo = y.vca->solo;
             }
             return x == y;
         });
     if (!groups) return false;
     const bool routes =
         entriesMatch(a.routes, b.routes, [&](model::Route x, const model::Route& y) {
-            if (hardwareMidi && x.midi && !x.from.midiDevice) {
+            // A MIDI route is never encoded: its mute is a value.
+            if (x.midi && !x.from.midiDevice) {
                 changed |= x.mute != y.mute;
                 x.mute = y.mute;
                 return x == y;
             }
-            // A rack send's level (ADR-0075): it is never encoded, so any
-            // level is a mix value (publishMix, syncMix).
+            // A rack send's level and mute (ADR-0075): it is never encoded,
+            // so any level is a mix value (publishMix, syncMix).
             if (!x.midi && x.from.module && model::rackSendHome(a, x) &&
                 model::rackSendHome(b, y)) {
-                changed |= x.volumeDb != y.volumeDb;
+                changed |= x.volumeDb != y.volumeDb || x.mute != y.mute;
                 x.volumeDb = y.volumeDb;
+                x.mute = y.mute;
                 return x == y;
             }
             // Only sends between strips are plan edges; a level of exactly 0 dB
             // (with nothing else set) is summed without an encoder (plan.cpp).
             if (!x.from.track || !(x.to.track || x.to.fx)) return false;
             if ((x.volumeDb != 0) != (y.volumeDb != 0)) return false;
-            changed |= x.volumeDb != y.volumeDb || x.pan.percent != y.pan.percent;
+            // A mute decides a send's encoding unless something else encodes
+            // it anyway (plan.cpp, Edge::encode): only then is it a value.
+            const auto encoded = [](const model::Route& r) {
+                return r.tap != model::Tap::PostFader || r.volumeDb != 0 || r.pan.percent ||
+                       r.mono || r.phaseInvert;
+            };
+            if (x.mute != y.mute && !(x.to.track && encoded(x) && encoded(y))) return false;
+            changed |=
+                x.volumeDb != y.volumeDb || x.pan.percent != y.pan.percent || x.mute != y.mute;
+            x.mute = y.mute;
             x.volumeDb = y.volumeDb;
             if (x.pan.percent && y.pan.percent) x.pan = y.pan;
             return x == y;
@@ -138,6 +159,17 @@ bool mixOnly(const model::Session& a, const model::Session& b,
         if (!contains(stale, t)) stale.push_back(t);
         return true;
     });
+}
+
+// mixOnly and patchOnly list every member of model::Session. This binds
+// them all, so a member added to Session is a build error here until both
+// lists say how it is compared. Neither compares `next` (it moves only with
+// a collection), `timeMap` (derived from tempo and meters) or `version`.
+[[maybe_unused]] void listsEverySessionMember(const model::Session& s) {
+    [[maybe_unused]] const auto& [project, next, tempo, meters, timeMap, tracks, groups, items,
+                                  takes, media, midi, fx, routes, envelopes, autoItems, markers,
+                                  regions, racks, modules, cables, blobs, extraSections, version] =
+        s;
 }
 
 // Whether `b` differs from `a` only in FX patches, each FX keeping a patch:
@@ -196,9 +228,10 @@ bool Engine::loadPatches(const model::Session& session, const std::filesystem::p
     // From here the patches are applied. Whatever a plug-in reports that a
     // plan holds (latency, parameters, ports, activation, a restart) makes
     // this a compile, which finds those patches already applied. The patch
-    // sequence is odd meanwhile: plug-in outputs of blocks begun before the
-    // last patch reached its instance carry an older value, and the app
-    // drops them as it drops a replaced plan's.
+    // sequence moves before and after: plug-in outputs of blocks begun
+    // before the last patch reached its instance carry an older value, and
+    // the app drops any value other than the current one, as it drops a
+    // replaced plan's. Odd in between is only a marker.
     patchSeq_.fetch_add(1);
     struct Even {
         std::atomic<std::uint64_t>& seq;
@@ -241,10 +274,25 @@ bool Engine::loadMixValues(const model::Session& session, const std::filesystem:
     if (releasesStaleCurve()) return false;
     bool changed = false;
     std::vector<model::EnvTarget> stale = staleCurves_;
-    if (!mixOnly(*latest_, session, writeHolds_, !p->hardwareMidi.empty(), changed, stale) ||
-        !changed)
-        return false;
+    if (!mixOnly(*latest_, session, writeHolds_, changed, stale) || !changed) return false;
+    // ADR-0093: the callback takes values at its next block, the renderer
+    // where it is rendering, up to the render-ahead later in the stream. An
+    // edit both read compiles, and so does one the callback reads while an
+    // earlier one the renderer reads is still ahead of what the callback has
+    // played: until then the two would play neither session. Either way both
+    // then switch at the handover.
+    const auto changes = detail::changedExecutors(*p, session);
+    const auto epoch = epoch_.load(std::memory_order_acquire);
+    const bool renderedAhead =
+        renderedAheadEpoch_ == epoch && playedStream(epoch) < renderedAheadUntil_;
+    if (changes.live && (changes.rendered || renderedAhead)) return false;
     detail::publishMix(*p, session, writeHolds_);
+    // The renderer takes it no later than the start of its next block.
+    if (changes.rendered) {
+        renderedAheadEpoch_ = epoch;
+        renderedAheadUntil_ =
+            renderedStream_.load(std::memory_order_acquire) + options_.renderBlock;
+    }
     plugins_.racks().applyParams(session);
     holdsPending_ = false;
     staleCurves_ = std::move(stale);

@@ -4,10 +4,12 @@
 // their channels, sends reach In modules, Notes plays a track's MIDI, knob
 // envelopes move module knobs, and the output does not depend on the block.
 #include <doctest/doctest.h>
+#include <set>
 
 #include <supple/audio/audio_file.h>
 #include <chrono>
 #include <cmath>
+#include <limits>
 
 #include <supple/engine/offline.h>
 #include <supple/engine/realtime.h>
@@ -2445,6 +2447,190 @@ TEST_CASE("MIDI sends: all-notes-off releases precede a same-frame reattack" *
     }
 }
 
+TEST_CASE("MIDI sends: a source mute or a route mute while playing needs no plan" *
+          doctest::description("rt")) {
+    // ADR-0093: a post-fader MIDI send follows its source's mute, and its own,
+    // from the slots. Its source runs on the same executor as its target (the
+    // live region takes both), so the send reads the source's synced mute.
+    model::EditTxn t(model::Session::create({.console9 = false}), 1);
+    const Id source = addChannel(t), target = addChannel(t);
+    t.modify<model::Track>(source, [](auto& tr) { tr.parentSend.enabled = false; });
+    model::FxInstance synth;
+    synth.plugin.id = "com.suppleaudio.test.sine";
+    const Id fx = t.create(synth);
+    t.modify<model::Track>(target, [&](auto& tr) { tr.chain = {fx}; });
+    model::MidiSource midi;
+    midi.sequence.ppq = 960;
+    midi.sequence.length = 4 * 960;
+    for (int i = 0; i < 8; ++i)
+        midi.sequence.notes.push_back({i * 480, 470, 0, static_cast<std::uint8_t>(60 + i), 100, 0});
+    model::Take take;
+    take.source = t.create(midi);
+    const Id tk = t.create(take);
+    model::Item item;
+    item.track = source;
+    item.length = 4;
+    item.takes = {tk};
+    item.activeTake = tk;
+    t.create(item);
+    model::Route route;
+    route.from.track = source;
+    route.to.track = target;
+    route.midi = model::MidiRouting{};
+    const Id send = t.create(route);
+    const auto base = commit(t);
+    auto play = [&](const model::Session& next, const EngineOptions& options, int run) {
+        auto pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 300 * 256});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256}));
+        REQUIRE(engine.load(base));
+        engine.play();
+        auto cycles = [&](int n) {
+            for (int i = 0; i < n; ++i) {
+                if (options.anticipative)
+                    REQUIRE(engine.awaitRendered((backend.cycles() + 1) * 256));
+                backend.run(1);
+            }
+        };
+        cycles(100);
+        // A full renderer waiting for the callback: every run takes the edit
+        // from the same renderer position.
+        if (options.anticipative)
+            REQUIRE(engine.awaitRendered(std::numeric_limits<std::int64_t>::max()));
+        const auto generation = engine.planGeneration();
+        if (run == 0) REQUIRE(engine.load(next));
+        if (run == 1) {
+            model::EditTxn marker(next, next.version + 1);
+            marker.create(model::Marker{});
+            REQUIRE(engine.load(commit(marker)));
+        }
+        CHECK(engine.planGeneration() == generation + (run == 1 ? 1 : 0));
+        cycles(200);
+        CHECK(engine.processErrors() == 0);
+        engine.stop();
+        return backend.capture().channels[0];
+    };
+    const std::vector<std::pair<std::string, std::function<void(model::EditTxn&)>>> edits = {
+        {"source muted",
+         [&](auto& e) { e.template modify<model::Track>(source, [](auto& x) { x.mute = true; }); }},
+        {"send muted",
+         [&](auto& e) { e.template modify<model::Route>(send, [](auto& x) { x.mute = true; }); }},
+    };
+    for (const auto& [name, edit] : edits)
+        for (const EngineOptions& options :
+             {EngineOptions{.anticipative = false, .workers = 0}, EngineOptions{.workers = 0}}) {
+            CAPTURE(name);
+            CAPTURE(options.anticipative);
+            model::EditTxn e(base, 2);
+            edit(e);
+            const auto next = commit(e);
+            const auto fast = play(next, options, 0), compiled = play(next, options, 1),
+                       unedited = play(next, options, 2);
+            auto heard = [&](const std::vector<float>& x) {
+                for (std::size_t i = 0; i < x.size(); ++i)
+                    if (x[i] != unedited[i]) return i;
+                return x.size();
+            };
+            // No node is live, so in both executors the value edit
+            // plays sample for sample like the compiled reload (ADR-0093).
+            REQUIRE(heard(fast) < fast.size());
+            CHECK(heard(fast) >= 100 * 256);
+            CHECK(fast == compiled);
+        }
+}
+
+TEST_CASE("racks: a rack FX's wet or bypass edit while playing sounds like a compiled reload" *
+          doctest::description("rt")) {
+    // Round 42: a rack's plug-in stages have mix slots too (ADR-0093). The
+    // Transport's ramp through a VCA and a -12 dB gain into the Out.
+    model::Project project;
+    project.console9 = false;
+    model::EditTxn t(model::Session::create(project), 1);
+    const Id channel = addChannel(t);
+    const Id rack = t.create(model::Rack{channel, ""});
+    const Id transport = addModule(t, rack, "com.suppleaudio.rack.transport");
+    const Id vca = addModule(t, rack, "com.suppleaudio.rack.vca");
+    const Id gain = addPlugin(
+        t, rack, "com.suppleaudio.test.gain",
+        json::parse(R"({"schema":"supple.test-gain-patch/1.0","params":{"gain":-12}})").value());
+    const Id out = addModule(t, rack, "com.suppleaudio.rack.out");
+    cable(t, transport, "beat_phase", vca, "in");
+    cable(t, vca, "out", gain, "in_l");
+    cable(t, gain, "out_l", out, "l");
+    listen(t, out, channel);
+    const auto base = commit(t);
+    const Id gainFx = *base.modules.find(gain)->fx;
+    auto play = [&](const model::Session& next, const EngineOptions& options, int run) {
+        auto pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 300 * 256});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256}));
+        REQUIRE(engine.load(base));
+        engine.play();
+        auto cycles = [&](int n) {
+            for (int i = 0; i < n; ++i) {
+                if (options.anticipative)
+                    REQUIRE(engine.awaitRendered((backend.cycles() + 1) * 256));
+                backend.run(1);
+            }
+        };
+        cycles(100);
+        // A full renderer waiting for the callback: every run takes the edit
+        // from the same renderer position.
+        if (options.anticipative)
+            REQUIRE(engine.awaitRendered(std::numeric_limits<std::int64_t>::max()));
+        const auto generation = engine.planGeneration();
+        if (run == 0) REQUIRE(engine.load(next));
+        if (run == 1) {
+            model::EditTxn marker(next, next.version + 1);
+            marker.create(model::Marker{});
+            REQUIRE(engine.load(commit(marker)));
+        }
+        CHECK(engine.planGeneration() == generation + (run == 1 ? 1 : 0));
+        CHECK(engine.mixEdits() == (run == 0 ? 1u : 0u));
+        cycles(200);
+        CHECK(engine.processErrors() == 0);
+        engine.stop();
+        return backend.capture().channels[0];
+    };
+    for (const bool bypass : {false, true})
+        for (const EngineOptions& options :
+             {EngineOptions{.anticipative = false, .workers = 0}, EngineOptions{.workers = 0}}) {
+            CAPTURE(bypass);
+            CAPTURE(options.anticipative);
+            model::EditTxn e(base, 2);
+            e.modify<model::FxInstance>(gainFx, [&](auto& f) {
+                if (bypass)
+                    f.bypass = true;
+                else
+                    f.wet = 40;
+            });
+            const auto next = commit(e);
+            const auto fast = play(next, options, 0), compiled = play(next, options, 1),
+                       unedited = play(next, options, 2);
+            CHECK(*std::max_element(unedited.begin(), unedited.end()) > 0.01f);
+            std::size_t heard = 0;
+            while (heard < fast.size() && fast[heard] == unedited[heard]) ++heard;
+            // Nothing is live, so in both executors the value edit takes it
+            // at the block the compiled reload does. A plan swap does not
+            // carry a rack stage's wet ramp (carryStages skips rackStages),
+            // so the compiled reload jumps where the value edit ramps from
+            // the old level: the two differ only over that ramp. Once the
+            // swap carries rack stages, this is fast == compiled.
+            REQUIRE(heard < fast.size());
+            CHECK(heard >= 100 * 256);
+            std::size_t at = 0;
+            while (at < compiled.size() && compiled[at] == unedited[at]) ++at;
+            CHECK((heard == at || heard == at + 1));
+            const std::size_t ramped = std::min(fast.size(), at + 480);  // Plan::smoothFrames
+            CHECK(std::equal(fast.begin(), fast.begin() + at, compiled.begin()));
+            CHECK(std::equal(fast.begin() + ramped, fast.end(), compiled.begin() + ramped));
+        }
+}
+
 TEST_CASE("MIDI sends: solo follows a MIDI send downstream only") {
     namespace d = supple::engine::detail;
     model::EditTxn t(model::Session::create({.console9 = false}), 1);
@@ -2476,6 +2662,77 @@ TEST_CASE("MIDI sends: solo follows a MIDI send downstream only") {
     CHECK_FALSE(soloSource[source]);
     CHECK_FALSE(soloSource[target]);
     CHECK(soloSource[other]);
+}
+
+TEST_CASE("solo: a plan and the readouts silence the same tracks") {
+    // ADR-0093: one function (model::soloSilencedTracks) decides solo for the
+    // engine's plans and for effectiveTrackLevel, so they cannot disagree.
+    namespace d = supple::engine::detail;
+    model::EditTxn t(model::Session::create({.console9 = false}), 1);
+    auto child = [&](Id parent, model::StripType type = model::StripType::Channel) {
+        model::Track tr;
+        tr.parent = parent;
+        tr.type = type;
+        const Id id = t.create(tr);
+        t.modify<model::Track>(parent, [&](model::Track& m) { m.children.push_back(id); });
+        return id;
+    };
+    const Id folder = child(kMaster, model::StripType::Buss);
+    const Id a = child(folder), b = child(folder);
+    const Id c = addChannel(t);  // an audio send c -> dest
+    const Id dest = child(kMaster, model::StripType::Buss);
+    const Id e = addChannel(t), f = addChannel(t);  // a MIDI send e -> f
+    const Id g = addChannel(t), x = addChannel(t);  // g under a VCA; x defeats solo
+    model::Route send;
+    send.from.track = c;
+    send.to.track = dest;
+    t.create(send);
+    model::Route midi;
+    midi.from.track = e;
+    midi.to.track = f;
+    midi.midi = model::MidiRouting{};
+    t.create(midi);
+    model::TrackGroup group;
+    group.members = {g};
+    group.vca = model::Vca{};
+    const Id vca = t.create(group);
+    t.modify<model::Track>(x, [](auto& tr) { tr.solo = model::Solo::Defeat; });
+    const auto base = commit(t);
+    // Solos `soloed` (and the VCA if asked); returns the silenced tracks.
+    auto silenced = [&](std::vector<Id> soloed, bool vcaSolo = false,
+                        model::Solo how = model::Solo::On) {
+        model::EditTxn edit(base, 2);
+        for (Id id : soloed) edit.modify<model::Track>(id, [&](auto& tr) { tr.solo = how; });
+        if (vcaSolo) edit.modify<model::TrackGroup>(vca, [](auto& gr) { gr.vca->solo = true; });
+        const auto session = commit(edit);
+        auto pool = makePool();
+        auto plan = d::compile(session, pool, 0, 256);
+        REQUIRE(plan);
+        std::set<Id> out;
+        for (const auto& node : plan->nodes) {
+            const bool readout = model::effectiveTrackLevel(session, node.id, 0).soloSilenced;
+            CAPTURE(node.id.str());
+            CHECK(node.soloSilenced == readout);
+            CHECK(model::soloSilencedTracks(session).contains(node.id) == readout);
+            if (node.soloSilenced) out.insert(node.id);
+        }
+        return out;
+    };
+    using Set = std::set<Id>;
+    CHECK(silenced({}).empty());
+    CHECK(silenced({a}) == Set{b, c, dest, e, f, g});  // the sibling too
+    CHECK(silenced({a}, false, model::Solo::InPlace) == Set{b, c, dest, e, f, g});
+    CHECK(silenced({folder}) == Set{c, dest, e, f, g});             // its children stay
+    CHECK(silenced({c}) == Set{folder, a, b, e, f, g});             // its send's target stays
+    CHECK(silenced({dest}) == Set{folder, a, b, e, f, g});          // so does the send's source
+    CHECK(silenced({e}) == Set{folder, a, b, c, dest, g});          // MIDI: downstream
+    CHECK(silenced({f}) == Set{folder, a, b, c, dest, e, g});       // not upstream
+    CHECK(silenced({}, true) == Set{folder, a, b, c, dest, e, f});  // the VCA's member
+    // x defeats solo throughout; the master is never silenced.
+    for (const auto& set : {silenced({a}), silenced({e}), silenced({}, true)}) {
+        CHECK_FALSE(set.contains(x));
+        CHECK_FALSE(set.contains(kMaster));
+    }
 }
 
 TEST_CASE("MIDI sends: channel filter and remap leave system messages alone" *
@@ -3085,6 +3342,52 @@ TEST_CASE("rack sends: the Out joins a buss once, after its decode, never encode
     CHECK(sends == 1);
 }
 
+TEST_CASE("rack sends: a home mute, a solo or a send mute while playing needs no plan") {
+    // ADR-0093: the send follows its home channel's mute and solo flag from
+    // the slots, sample for sample as after a compiled reload.
+    const RackSend r(false, false, false);
+    auto play = [&](const model::Session& next, int run) {
+        auto pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 300 * 256});
+        Engine engine(pool, media, {.anticipative = false, .workers = 0});
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256}));
+        REQUIRE(engine.load(r.s));
+        engine.play();
+        backend.run(100);
+        const auto generation = engine.planGeneration();
+        if (run == 0) REQUIRE(engine.load(next));
+        if (run == 1) {
+            model::EditTxn t(next, next.version + 1);
+            t.create(model::Marker{});
+            REQUIRE(engine.load(commit(t)));
+        }
+        CHECK(engine.planGeneration() == generation + (run == 1 ? 1 : 0));
+        backend.run(200);
+        engine.stop();
+        return backend.capture().channels;
+    };
+    const std::vector<std::pair<std::string, std::function<void(model::EditTxn&)>>> edits = {
+        {"home muted",
+         [&](auto& t) { t.template modify<model::Track>(r.home, [](auto& x) { x.mute = true; }); }},
+        {"another soloed",
+         [&](auto& t) {
+             t.template modify<model::Track>(r.other, [](auto& x) { x.solo = model::Solo::On; });
+         }},
+        {"send muted",
+         [&](auto& t) { t.template modify<model::Route>(r.send, [](auto& x) { x.mute = true; }); }},
+    };
+    for (const auto& [name, edit] : edits) {
+        CAPTURE(name);
+        const auto next = r.with(edit);
+        const auto fast = play(next, 0), compiled = play(next, 1), unedited = play(next, 2);
+        for (std::size_t c = 0; c < 2; ++c) {
+            CHECK(fast[c] == compiled[c]);
+            CHECK(fast[c] != unedited[c]);  // heard
+        }
+    }
+}
+
 TEST_CASE("rack sends: follow the home channel's mute, mute envelope and solo") {
     // The home channel plays to the master, so the buss hears only the send.
     const RackSend r(false, false);
@@ -3391,7 +3694,10 @@ TEST_CASE("rack sends: home mute and send level are mix edits beside a hardware 
     // With a hardware MIDI route a home mute toggle is a mix-only edit
     // (ADR-0072); the send follows it from the home's slot. A level edit on
     // the send is a mix value too (no compile). Console 9 is off so that
-    // the master's decode does not bend the level ratio.
+    // the master's decode does not bend the level ratio. In the anticipative
+    // executor the hardware route makes the home live while the renderer
+    // runs the rack, which reads the home's mute for the send: the mute
+    // changes both executors' values and compiles (ADR-0093).
     const RackSend r(false, false, false);
     const auto base = r.with([&](model::EditTxn& t) {
         t.modify<model::Track>(r.home, [](auto& x) { x.volumeDb = model::kSilenceDb; });
@@ -3429,8 +3735,8 @@ TEST_CASE("rack sends: home mute and send level are mix edits beside a hardware 
         runBlocks(engine, backend, options.anticipative, 200, kBlock);
         REQUIRE(engine.load(muted));
         runBlocks(engine, backend, options.anticipative, 200, kBlock);
-        CHECK(engine.planGeneration() == generation);  // neither compiled
-        CHECK(engine.mixEdits() == 2);
+        CHECK(engine.planGeneration() == generation + (options.anticipative ? 1 : 0));
+        CHECK(engine.mixEdits() == (options.anticipative ? 1u : 2u));
         engine.stop();
         CHECK(engine.processErrors() == 0);
         const auto& L = backend.capture().channels[0];
@@ -3440,6 +3746,92 @@ TEST_CASE("rack sends: home mute and send level are mix edits beside a hardware 
               doctest::Approx(loud * std::pow(10.0, -9.0 / 20)).epsilon(0.02));  // -3 to -12 dB
         CHECK(peakIn(L, 130000, 153600) < 1e-5);  // the home's mute silences its send
     }
+}
+
+TEST_CASE("rack sends: a VCA mute over a live home compiles where the renderer runs the rack" *
+          doctest::description("rt")) {
+    // ADR-0093: beside a hardware MIDI route the home is live, while the
+    // renderer runs the rack, which reads the home's VCAs for the send. A
+    // mute of a VCA over the home changes values both executors read.
+    const RackSend r(false, false, false);
+    Id vca;
+    const auto base = r.with([&](model::EditTxn& t) {
+        model::Route hw;
+        hw.from.track = r.home;
+        hw.to.midiDevice = "No such port";
+        hw.midi = model::MidiRouting{};
+        t.create(hw);
+        model::TrackGroup group;
+        group.members = {r.home};
+        group.vca = model::Vca{0, false, false, {}, {}};
+        vca = t.create(group);
+    });
+    const auto muted = [&] {
+        model::EditTxn t(base, base.version + 1);
+        t.modify<model::TrackGroup>(vca, [](auto& g) { g.vca->mute = true; });
+        return t.commit().value();
+    }();
+    for (const EngineOptions& options :
+         {EngineOptions{.anticipative = false, .workers = 0}, EngineOptions{.workers = 0}}) {
+        CAPTURE(options.anticipative);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256}));
+        REQUIRE(engine.load(base));
+        engine.play();
+        runBlocks(engine, backend, options.anticipative, 20, 256);
+        const auto generation = engine.planGeneration();
+        REQUIRE(engine.load(muted));
+        CHECK(engine.planGeneration() == generation + (options.anticipative ? 1 : 0));
+        CHECK(engine.mixEdits() == (options.anticipative ? 0u : 1u));
+        engine.stop();
+    }
+}
+
+TEST_CASE("a key route takes no value edit: its mute compiles and it carries no VCAs") {
+    // The split check (ADR-0093) gives a key route's values to its
+    // destination, as syncMix does; no value edit reaches them while these
+    // hold.
+    model::EditTxn t(model::Session::create({.console9 = false}), 1);
+    const Id a = addChannel(t), b = addChannel(t);
+    model::FxInstance fx;
+    fx.plugin.id = "com.suppleaudio.test.keymix";
+    const Id keyMix = t.create(fx);
+    t.modify<model::Track>(b, [&](auto& x) { x.chain.push_back(keyMix); });
+    model::Route key;
+    key.from.track = a;
+    key.to.fx = keyMix;
+    key.volumeDb = -6;
+    const Id route = t.create(key);
+    model::TrackGroup group;
+    group.members = {a};
+    group.vca = model::Vca{0, false, false, {}, {}};
+    t.create(group);
+    const auto s = commit(t);
+    auto pool = makePool();
+    auto plan = supple::engine::detail::compile(s, pool, 0, 128);
+    REQUIRE(plan);
+    int keys = 0;
+    for (const auto& e : plan->edges)
+        if (e.stage >= 0) {
+            ++keys;
+            CHECK(e.vcas.empty());
+        }
+    CHECK(keys == 1);
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    Engine engine(pool, media, {.anticipative = false, .workers = 0});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+    REQUIRE(engine.load(s));
+    model::EditTxn m(s, 2);
+    m.modify<model::Route>(route, [](auto& x) { x.mute = true; });
+    const auto generation = engine.planGeneration();
+    REQUIRE(engine.load(commit(m)));
+    CHECK(engine.planGeneration() == generation + 1);
+    CHECK(engine.mixEdits() == 0);
+    engine.stop();
 }
 
 TEST_CASE("racks: transport() keeps its arithmetic at a nonzero start; gridTransport() is exact") {
