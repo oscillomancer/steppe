@@ -4,6 +4,7 @@
 // project's output and outside it, in both executors, stopped or playing.
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -11,6 +12,7 @@
 #include <fstream>
 #include <memory>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "audition_loader.h"
@@ -421,6 +423,45 @@ TEST_CASE("audition: a cancel or a newer request ends the file's decode between 
         } else {
             CHECK(woken == 0);
             CHECK_FALSE(loader.take());
+        }
+    }
+}
+
+TEST_CASE("audition: a stopping engine is silent in a cycle the device runs after the request" *
+          doctest::description("rt")) {
+    // Engine::stop asks the callback for silence, then closes the device; a
+    // device may run another cycle in between. This one runs one in stop().
+    struct LateCycle : DummyBackend {
+        using DummyBackend::DummyBackend;
+        bool late = true;
+        void stop() override {
+            if (std::exchange(late, false)) run(1);
+            DummyBackend::stop();
+        }
+    };
+    const model::Session silent = model::Session::create({.console9 = false});
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        CAPTURE(options.anticipative);
+        auto pool = makePool();
+        MediaCache media;
+        LateCycle backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 4 * kBlock});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+        REQUIRE(engine.load(silent));
+        const auto voice = rampVoice(100000);
+        REQUIRE(engine.audition(voice) != 0);
+        backend.run(2);
+        CHECK(engine.auditionState().playing);
+        engine.stop();
+        REQUIRE(backend.cycles() == 3);  // the late cycle ran
+        const auto& out = backend.capture().channels;
+        for (std::size_t c = 0; c < 2; ++c) {
+            CAPTURE(c);
+            // Heard up to the request, at unity...
+            CHECK(out[c][2 * kBlock - 1] == (c == 0 ? voice->left : voice->right)[2 * kBlock - 1]);
+            // ... and not at all in the cycle after it.
+            CHECK(std::all_of(out[c].begin() + 2 * kBlock, out[c].begin() + 3 * kBlock,
+                              [](float v) { return v == 0.0f; }));
         }
     }
 }
