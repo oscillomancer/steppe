@@ -4389,9 +4389,12 @@ struct SafeLoadRig {
     std::string build = "same", buildId = "0123abcd";
     bool stock = false, bridgeable = true, listed = true;
     int checks = 0;
+    json::Value lastArgs;  // what the last check asked about
 
-    explicit SafeLoadRig(int width = 1000, int height = 640)
-        : a(width, height), load(*a.root, *a.dispatcher, a.dir / "diagnostics") {
+    explicit SafeLoadRig(int width = 1000, int height = 640,
+                         const std::filesystem::path& scratch = {})
+        : a(width, height, gui::Platform::Driver::Offscreen, scratch),
+          load(*a.root, *a.dispatcher, a.dir / "diagnostics") {
         REQUIRE(a.ok);
         file = a.dir / "song" / "song.json";
         REQUIRE(
@@ -4401,6 +4404,7 @@ struct SafeLoadRig {
             {"project.set", json::parse(R"({"name":"Open now"})").value(), {}}));
         load.plugins = [this](const json::Value& args) -> Result<json::Value> {
             ++checks;
+            lastArgs = args;
             auto real = a.dispatcher->execute({"project.plugins", args, {}});
             if (!real) return real;
             json::Value out = *real;
@@ -4491,6 +4495,9 @@ TEST_CASE("safe-load: a suspect plug-in is asked about before File > Open loads,
     CHECK(r.a.root->focused() == r.a.root->find("safeload.bridge"));  // the default is first
     CHECK(r.name() == "Open now");  // nothing loaded while it asks
     r.a.snapshot("safe-load-dialog.png");
+    // The popup is as tall as what it holds, a two-line title included.
+    CHECK(r.a.root->find("safeload")->bounds().bottom() >=
+          r.a.root->find("safeload.cancel")->bounds().bottom());
 
     SUBCASE("Enter takes the default: a separate process, once") {
         r.a.root->key(SDLK_RETURN, 0);
@@ -4614,7 +4621,18 @@ TEST_CASE(
             {"clap", "com.acme.canary", "0123abcd", "normal", "Canary Verb", "Acme", "1.2.0", 1}};
         ask();
         CHECK(r.a.root->find("safeload"));
-        CHECK(r.rules.empty());
+        CHECK(r.rules.size() == 1);  // nothing changes until the question is answered
+        SUBCASE("answered") {
+            REQUIRE(r.a.root->click("safeload.disable"));
+            r.a.root->frame(false);
+            CHECK(r.rules.empty());
+        }
+        SUBCASE("cancelled") {
+            REQUIRE(r.a.root->click("safeload.cancel"));
+            r.a.root->frame(false);
+            CHECK(r.rules.size() == 1);
+            CHECK(r.rules[0].mode == "normal");
+        }
     }
     SUBCASE("a remembered separate process is not applied where none is possible") {
         r.bridgeable = false;
@@ -4691,5 +4709,109 @@ TEST_CASE(
         CHECK(r.name() == "Open now");  // the template holds the project as it was saved
         REQUIRE(r.overrides.size() == 1);
         CHECK(r.overrides[0].second == "disable");
+    }
+}
+
+TEST_CASE(
+    "safe-load: recovering the open project's autosave asks first, and loads the file the check "
+    "read") {
+    SafeLoadRig r;
+    r.listed = false;  // opening the file as saved asks nothing
+    auto exec = [&](const char* name, const char* args) {
+        auto done = r.a.dispatcher->execute({name, json::parse(args).value(), {}});
+        REQUIRE_MESSAGE(done, (done ? std::string() : done.error().toString()));
+    };
+    r.a.app->setFixedClock(1'000'000);
+    exec("project.set", R"({"name":"Saved"})");
+    REQUIRE(r.a.app->save(r.file));
+    exec("project.set", R"({"name":"After the save"})");
+    r.a.app->setFixedClock(1'061'000);
+    r.a.app->tick();
+    REQUIRE_FALSE(r.a.app->newerAutosave(r.file).empty());
+    r.files->openPath(r.file);
+    r.a.root->frame(false);
+    REQUIRE(r.a.root->find("file.recover.autosave.open"));
+    CHECK(r.a.app->head().project->name == "Saved");
+    r.listed = true;  // the autosave names the suspect plug-in
+    r.checks = 0;
+    REQUIRE(r.a.root->click("file.recover.autosave.open"));
+    r.a.root->frame(false);
+    if (r.a.root->find("file.confirm.discard")) {
+        REQUIRE(r.a.root->click("file.confirm.discard"));
+        r.a.root->frame(false);
+    }
+    REQUIRE(r.a.root->find("safeload"));
+    CHECK(r.checks == 1);
+    REQUIRE(r.lastArgs.find("autosave"));
+    CHECK(r.lastArgs.find("autosave")->asBool());
+    CHECK(r.a.app->head().project->name == "Saved");  // nothing loaded while it asks
+
+    SUBCASE("a choice recovers it") {
+        REQUIRE(r.a.root->click("safeload.disable"));
+        r.a.root->frame(false);
+        REQUIRE(r.overrides.size() == 1);
+        CHECK(r.overrides[0].second == "disable");
+        CHECK(r.a.app->head().project->name == "After the save");
+        CHECK(r.a.root->find("file.recovered"));
+    }
+    SUBCASE("Cancel recovers nothing and leaves the file's project open") {
+        REQUIRE(r.a.root->click("safeload.cancel"));
+        r.a.root->frame(false);
+        CHECK(r.a.app->head().project->name == "Saved");
+        CHECK(r.overrides.empty());
+        CHECK_FALSE(r.a.root->find("file.recovered"));
+    }
+}
+
+TEST_CASE("safe-load: recovering an earlier run's session asks first") {
+    auto stamp = [](std::time_t when) {
+        const std::tm local = gui::localTime(when);
+        char text[32] = {};
+        std::strftime(text, sizeof text, "%Y%m%d-%H%M%S", &local);
+        return std::string(text);
+    };
+    const std::time_t now = std::time(nullptr);
+    SafeLoadRig r(1000, 640, "unsaved/" + stamp(now) + "-1");
+    const std::string left = stamp(now - 300) + "-4242";
+    {
+        engine::AppOptions o;
+        o.workdir = r.a.dir / "earlier";
+        o.scratchDir = r.a.dir / "unsaved" / left;
+        auto earlier = engine::EngineApp::create(o);
+        REQUIRE(earlier);
+        (*earlier)->setFixedClock(1'000'000);
+        REQUIRE((*earlier)->newProject({}));
+        cmd::Dispatcher d(r.a.registry, **earlier);
+        REQUIRE(d.execute({"project.set", json::parse(R"({"name":"Sketch"})").value(), {}}));
+        (*earlier)->setFixedClock(1'060'000);
+        (*earlier)->tick();
+    }
+    REQUIRE(r.a.app->recoverableSessionCount() == 1);
+    REQUIRE(r.a.actions->run("ui.file.recover"));
+    r.a.root->frame(false);
+    REQUIRE(r.a.root->click("file.recover.open.0"));
+    r.a.root->frame(false);
+    if (r.a.root->find("file.confirm.discard")) {
+        REQUIRE(r.a.root->click("file.confirm.discard"));
+        r.a.root->frame(false);
+    }
+    REQUIRE(r.a.root->find("safeload"));
+    REQUIRE(r.lastArgs.find("session"));
+    CHECK(r.lastArgs.find("session")->asString().find(left) != std::string::npos);
+    CHECK(r.name() == "Open now");
+
+    SUBCASE("a choice recovers it") {
+        REQUIRE(r.a.root->click("safeload.bridge"));
+        r.a.root->frame(false);
+        REQUIRE(r.overrides.size() == 1);
+        CHECK(r.overrides[0].second == "bridge");
+        CHECK(r.name() == "Sketch");
+        CHECK(r.a.root->find("file.recovered"));
+    }
+    SUBCASE("Cancel leaves the session to recover later") {
+        REQUIRE(r.a.root->click("safeload.cancel"));
+        r.a.root->frame(false);
+        CHECK(r.name() == "Open now");
+        CHECK(r.a.app->recoverableSessionCount() == 1);
     }
 }

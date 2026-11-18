@@ -2603,7 +2603,7 @@ or a script opening a project gets the `project.suspect_plugin` warning and its 
 load: it goes on and reports its own error.
 
 The question is a popup on `raised`, 460 wide, 16 padding, opened over the window's centre. A bold
-`title` line, "<plug-in> was running when <product> closed"; one `small` `ink` sentence ("This
+`title` line, "<plug-in> was running when <product> closed unexpectedly"; one `small` `ink` sentence ("This
 project uses it. How should it load this time?"); one `caption` `ink-quiet` caveat ("A report cannot
 prove the plug-in was the cause", longer when the check matched the version only or could not read
 the file, and saying so when a separate process is not possible here). Then three full-width
@@ -2636,8 +2636,8 @@ applies only while `project.plugins` says the installed build is the report's (`
 through `plugin.override` without a question and said once in the status line ("<plug-in>: loaded in
 a separate process, as you chose before. Edit > Preferences lists it."); one that cannot hold here
 (a separate process where none is possible) is asked about instead. A remembered `normal` is
-evidence the plug-in was fine, so a new report for that build removes it at once (before the
-question) and the question is asked again. Remembering is rewritten by `Preferences::save`; the GUI
+evidence the plug-in was fine, so a new report for that build makes the question be asked again,
+and the entry is removed once it is answered (a cancelled question changes nothing on disk). Remembering is rewritten by `Preferences::save`; the GUI
 is its only writer.
 
 Recovery (ADR-0078) stays its own offer. No upload or global OS-reporting changes. See

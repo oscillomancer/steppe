@@ -3,6 +3,7 @@
 #include "safe_load.h"
 #include <SDL3/SDL_keycode.h>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <utility>
 #include "supple/diagnostics/reports.h"
@@ -25,6 +26,20 @@ bool flagAt(const json::Value& v, const char* key) {
     const json::Value* x = v.isObject() ? v.find(key) : nullptr;
     return x && x->isBool() && x->asBool();
 }
+
+// Wrapped text that measures at the width it is given: a parent measures its children at its own
+// full width, so a block that must wrap at the form's inner width says so itself.
+class FixedWidthText : public ui::TextBlock {
+  public:
+    FixedWidthText(std::string id, std::string text, ui::Font font, std::string size,
+                   std::string color, float width)
+        : TextBlock(std::move(id), std::move(text), font, std::move(size), std::move(color)) {
+        layout.width = ui::SizeRule::fixed(width);
+    }
+    ui::Size measure(const ui::Canvas& canvas, ui::Size available) override {
+        return TextBlock::measure(canvas, {layout.width.value, available.h});
+    }
+};
 
 // One of the choices: a full-width row, a bold label over one quiet line. It is the default when
 // it has the focus; Enter or a click picks it, Up and Down move.
@@ -107,8 +122,11 @@ void openSafeLoadDialog(ui::Root& root, const LoadQuestion& q,
     form->layout.padding = ui::Insets::all(16);
     form->layout.gap = 8;
     const std::string app(product::kName);
-    form->emplace<ui::Label>("safeload.title", q.name + " was running when " + app + " closed",
-                             ui::Font::UiBold, "title");
+    constexpr float kInner = 460 - 32;
+    // The title wraps: a long plug-in name takes two lines.
+    form->emplace<FixedWidthText>("safeload.title",
+                                  q.name + " was running when " + app + " closed unexpectedly",
+                                  ui::Font::UiBold, "title", "ink", kInner);
     // One sentence in ink, then what to keep in mind, quiet.
     std::string sentence, caveat;
     if (q.stock) {
@@ -126,8 +144,10 @@ void openSafeLoadDialog(ui::Root& root, const LoadQuestion& q,
                      : "A report cannot prove the plug-in was the cause.";
         if (!q.bridgeable) caveat += " A separate process is not available for it here.";
     }
-    form->emplace<ui::TextBlock>("safeload.sentence", sentence, ui::Font::Ui, "small", "ink");
-    form->emplace<ui::TextBlock>("safeload.caveat", caveat, ui::Font::Ui, "caption", "ink-quiet");
+    form->emplace<FixedWidthText>("safeload.sentence", sentence, ui::Font::Ui, "small", "ink",
+                                  kInner);
+    form->emplace<FixedWidthText>("safeload.caveat", caveat, ui::Font::Ui, "caption", "ink-quiet",
+                                  kInner);
     auto choose = [state, &root, done](LoadChoice choice) {
         if (state->decided) return;
         state->decided = true;
@@ -195,6 +215,7 @@ struct SafeLoad::Run {
     std::vector<Answer> answers;
     std::vector<RememberedLoad> rules;
     bool rulesChanged = false;
+    std::vector<std::array<std::string, 3>> dropped;  // remembered "normal" rules to remove
     std::function<void(const json::Value&)> proceed;
 };
 
@@ -278,9 +299,8 @@ void SafeLoad::check(json::Value args, std::function<void(const json::Value&)> p
                 });
             if (rule != run->rules.end()) {
                 if (rule->mode == "normal") {
-                    run->rules.erase(rule);
-                    // At once: a question that is then cancelled does not bring it back.
-                    if (setRemembered) (void)setRemembered(run->rules);
+                    // Dropped once the question is answered: a cancelled one changes nothing.
+                    run->dropped.push_back({q.format, q.id, q.buildId});
                 } else if (!(rule->mode == "bridge" && (!q.bridgeable || q.stock)) &&
                            (override_ && override_(q.id, rule->mode))) {
                     status(
@@ -311,6 +331,12 @@ void SafeLoad::ask(std::shared_ptr<Run> run) {
 
 void SafeLoad::finish(std::shared_ptr<Run> run) {
     asking_ = false;
+    for (const auto& d : run->dropped) {
+        run->rulesChanged |=
+            std::erase_if(run->rules, [&](const auto& r) {
+                return r.format == d[0] && r.id == d[1] && r.buildId == d[2] && r.mode == "normal";
+            }) > 0;
+    }
     for (const auto& a : run->answers) {
         const std::string mode = a.choice == LoadChoice::Bridge    ? "bridge"
                                  : a.choice == LoadChoice::Disable ? "disable"
