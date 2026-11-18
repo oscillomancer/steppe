@@ -659,6 +659,17 @@ TEST_CASE("mixer: a disabled plug-in is marked on its strip, with Enable first i
     CHECK(slot->textColor() == "ink-faint");
     CHECK(fxButton->textColor() == "meter-hot");
     f.snapshot("mixer-disabled.png");
+    // A click on it opens no editor: it says why instead.
+    {
+        const std::size_t shown = f.editors.size();
+        const ui::Point click = f.centre(f.node("mixer.fx." + p1));
+        f.pointer(ui::PointerEvent::Type::Down, click);
+        f.pointer(ui::PointerEvent::Type::Up, click);
+        CHECK(f.editors.size() == shown);
+        REQUIRE_FALSE(f.errors.empty());
+        CHECK(f.errors.back().find("is not loaded") != std::string::npos);
+        f.errors.clear();
+    }
     // Enable comes first in the slot's menu.
     const ui::Point at = f.centre(f.node("mixer.fx." + p1));
     f.pointer(ui::PointerEvent::Type::Down, at, 1, 0, 3);

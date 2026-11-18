@@ -173,7 +173,8 @@ RackScene RackScene::build(const model::Session& s, model::Id rackId, const rack
             v.instrument = fx && instrument && instrument(fx->plugin);
             v.title = moduleTitle(s, catalog, e.id);
             if (fx) v.subtitle = fx->plugin.vendor;
-            if (fx && disabled && disabled(fx->plugin))
+            v.silent = fx && disabled && disabled(fx->plugin);
+            if (v.silent)
                 v.subtitle += (v.subtitle.empty() ? "" : " \u00b7 ") + std::string("silent");
         } else if (const rack::Catalog::Entry* t = catalog.find(m.type)) {
             v.type = t->type;

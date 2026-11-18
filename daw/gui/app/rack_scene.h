@@ -49,6 +49,7 @@ struct RackScene {
         std::vector<double> values;     // each parameter's knob, physical
         std::set<std::string> learned;  // the knobs a MIDI controller turns (keys)
         bool bypass = false, plugin = false, out = false;
+        bool silent = false;          // a plugin module whose plug-in this run has disabled
         bool instrument = false;      // a plugin module's plug-in plays notes
         std::optional<model::Id> fx;  // a plugin module's
         // A plugin module's plug-in parameters that cables reach (their keys,

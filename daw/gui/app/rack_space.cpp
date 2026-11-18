@@ -815,7 +815,7 @@ void RackSpace::paintModule(ui::Canvas& c, const RackScene::Module& m, bool sele
     c.fillRound(r, kRadius, plate);
     c.restore();
     c.fillRect({r.x, r.y + head - 0.5f, r.w, 1}, t.color("rule").withAlpha(0.7f));
-    const ui::Color ink = m.bypass ? t.color("ink-faint") : t.color("ink");
+    const ui::Color ink = m.bypass || m.silent ? t.color("ink-faint") : t.color("ink");
     if (m.plugin) {
         // A plug-in shows its name, and opens on a click.
         if (words())

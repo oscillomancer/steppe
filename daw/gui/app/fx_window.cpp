@@ -1047,11 +1047,22 @@ Status FxWindow::setEach(model::Id fx, const char* field, bool value) {
 // A press on a row: alone it selects the effect (a double click also opens
 // its editor, only that one); Ctrl adds or takes it out of the selection;
 // Shift selects every row from the last one clicked.
+bool FxWindow::disabledFx(model::Id fx) const {
+    const model::FxInstance* inst = app_.head().fx.find(fx);
+    return inst && app_.loadModeOf(inst->plugin) == engine::LoadMode::Disable;
+}
+
 void FxWindow::press(model::Id fx, unsigned mods, int clicks) {
     const bool ctrl = (mods & ui::kCtrl) != 0, shift = (mods & ui::kShift) != 0;
     if (!ctrl && !shift) {
         if (clicks >= 2) {
             if (selected_ != fx || !picked_.empty()) select(fx);
+            if (disabledFx(fx)) {
+                setStatus(nameOf(fx) +
+                          " is not loaded: it was disabled for this run. Enable it "
+                          "to open its editor.");
+                return;
+            }
             if (hooks_.openEditor)
                 if (auto opened = hooks_.openEditor(fx); !opened)
                     setStatus("editor: " + opened.error().message);
@@ -1297,12 +1308,13 @@ void FxWindow::buildRow(ui::Node& body, model::Id fx, std::size_t index, bool in
                                [this, fx, offline = inst->offline] {
                                    if (setEach(fx, "offline", !offline)) refresh();
                                });
+        // A plug-in that is not loaded has no editor to open (the row's second line says why).
         l1.emplace<ui::Button>(prefix + "editor." + id, "UI", [this, fx] {
-            if (hooks_.openEditor) {
-                if (auto opened = hooks_.openEditor(fx); !opened)
-                    setStatus("editor: " + opened.error().message);
-            }
-        });
+              if (hooks_.openEditor) {
+                  if (auto opened = hooks_.openEditor(fx); !opened)
+                      setStatus("editor: " + opened.error().message);
+              }
+          }).enabled = !isDisabled;
         l1.emplace<ui::Button>(prefix + "params." + id, "params", [this, fx] {
             selected_ = fx;
             showParamsTab();

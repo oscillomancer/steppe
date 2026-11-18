@@ -184,7 +184,8 @@ class FxWindow {
     void promptSavePreset(model::Id fx);
     void hidePresetPrompt();
     void savePreset();
-    void checkFailures();  // engine.status failed_fx, at most twice a second
+    bool disabledFx(model::Id fx) const;  // its plug-in is one this run has disabled
+    void checkFailures();                 // engine.status failed_fx, at most twice a second
 
     engine::EngineApp& app_;
     cmd::Dispatcher& dispatcher_;

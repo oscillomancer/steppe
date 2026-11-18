@@ -1621,6 +1621,18 @@ TEST_CASE("a disabled plug-in is marked in the FX chain, with Enable on its row"
     CHECK(f.uiRoot().find("fx.badge." + id)->valueText().find("audio passes through") !=
           std::string::npos);
     f.snapshot("fx-disabled.png");
+    // It is not loaded, so there is no editor to open: the button is off, and a double click on
+    // the row says why in the status line.
+    CHECK_FALSE(f.uiRoot().find("fx.editor." + id)->enabled);
+    CHECK(f.uiRoot().find("fx.badge." + id)->valueText().find("disabled") == 0);
+    {
+        const ui::Rect r = f.uiRoot().find("fx.row." + id)->bounds();
+        const ui::Point at{r.x + 6, r.y + 8};
+        f.uiRoot().pointer({ui::PointerEvent::Type::Down, at, 1, 2, 0});
+        f.uiRoot().pointer({ui::PointerEvent::Type::Up, at, 1, 2, 0});
+        f.frame();
+        CHECK(f.uiRoot().find("fx.status")->valueText().find("is not loaded") != std::string::npos);
+    }
     REQUIRE(f.click("fx.enable." + id));
     REQUIRE(enabled.size() == 1);
     CHECK(enabled[0].str() == id);

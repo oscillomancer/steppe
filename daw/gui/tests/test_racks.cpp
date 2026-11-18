@@ -704,6 +704,7 @@ TEST_CASE(
     const std::string subtitle = f.racks->space()->scene().module(id)->subtitle;
     CHECK(subtitle.size() >= 6);
     CHECK(subtitle.substr(subtitle.size() - 6) == "silent");
+    CHECK(f.racks->space()->scene().module(id)->silent);
     f.snapshot("rack-plugin-disabled.png");
     // Its menu starts with Enable.
     const ui::Point body = *f.racks->space()->bodyAt(id);
@@ -720,6 +721,7 @@ TEST_CASE(
     f.racks->sync();
     f.frame();
     CHECK(f.racks->space()->scene().module(id)->subtitle.find("silent") == std::string::npos);
+    CHECK_FALSE(f.racks->space()->scene().module(id)->silent);
 }
 
 TEST_CASE("rack window: a display hears the pointer; its edits are one undo step a press") {

@@ -2661,8 +2661,11 @@ and a 3-unit bar at its left edge, and the strip's "fx" button has its text in `
 (`ui::Button::setTextColor`, beside `setEmphasis`) while the chain holds one; the slot's right-click
 menu starts with **Enable**. The FX window's row has its name in `ink-faint`, the same bar, an
 **Enable** button where a failed effect has Restart, and its second line reads "disabled after an
-unexpected close · audio passes through" in place of the isolation badge. A rack's plug-in module
-adds "· silent" to its subtitle, and its menu starts with **Enable**. A disabled plug-in in a rack is
+unexpected close · audio passes through" in place of the isolation badge. The FX row's "UI" button is off, and a double-click on the row (or a click on the
+mixer slot) opens no editor: the window's status line says "<name> is not loaded: it was disabled for this run"
+and how to enable it (the toolkit has no hover tooltips, so the reason is on screen already in the row's
+second line and the status line rather than under the pointer). A rack's plug-in module
+has its title in `ink-faint` too and adds "· silent" to its subtitle, and its menu starts with **Enable**. A disabled plug-in in a rack is
 otherwise silent and says nothing more (a project that opens with one is not asked about again). Enable
 is the action `ui.fx.enable` (an `fx` id): `plugin.override` mode `normal` for the plug-in, and the
 reports its suspicion rests on are settled as in "Load it normally". An override is not in the
