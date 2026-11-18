@@ -1503,9 +1503,9 @@ class PickList : public ui::Node {
         list_ = &emplace<ui::List>(id + ".list");
         list_->layout.height = ui::SizeRule::fraction();
         list_->rowHeight = 26;
-        auto& hint = emplace<ui::Label>(id + ".hint", "Enter chooses · Esc closes", ui::Font::Ui,
+        auto& keys = emplace<ui::Label>(id + ".hint", "Enter chooses · Esc closes", ui::Font::Ui,
                                         "caption", "ink-faint");
-        hint.layout.height = ui::SizeRule::fixed(16);
+        keys.layout.height = ui::SizeRule::fixed(16);
         search_->onChange = [this](const std::string& q) { filter(q); };
         search_->onSubmit = [this](const std::string&) { choose(); };
         search_->onCancel = [this] { root_.closePopup(); };
