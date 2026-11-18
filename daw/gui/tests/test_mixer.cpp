@@ -5,6 +5,7 @@
 // reorder-index helper the TCP shares.
 #include <SDL3/SDL_keycode.h>
 #include <doctest/doctest.h>
+#include <stb_image.h>
 #include "product_fixture.h"
 #include "test_support.h"
 
@@ -199,6 +200,48 @@ struct Fixture {
         root->damageAll();
         root->frame(false);
         (void)gui::writePng(std::filesystem::path(out) / name, root->readBack());
+    }
+    // The window against tests/golden/<name>: written by SUPPLE_UPDATE_GOLDEN=1
+    // or when missing; off Linux the picture is only checked to hold something.
+    void golden(const char* name) {
+        root->damageAll();
+        root->frame(false);
+        const gui::Image image = root->readBack();
+#if !defined(__linux__)
+        REQUIRE(image.width > 0);
+        REQUIRE(image.height > 0);
+        REQUIRE(image.rgba.size() == static_cast<std::size_t>(image.width * image.height * 4));
+        bool varied = false;
+        for (std::size_t i = 4; i < image.rgba.size(); i += 4)
+            if (image.rgba[i] != image.rgba[0] || image.rgba[i + 1] != image.rgba[1] ||
+                image.rgba[i + 2] != image.rgba[2]) {
+                varied = true;
+                break;
+            }
+        CHECK(varied);
+        return;
+#endif
+
+        const auto path = std::filesystem::path(SUPPLE_GUI_GOLDEN_DIR) / name;
+        if (std::getenv("SUPPLE_UPDATE_GOLDEN") || !std::filesystem::exists(path)) {
+            REQUIRE(gui::writePng(path, image));
+            MESSAGE("golden written: " << path.string());
+            return;
+        }
+        int w = 0, h = 0, n = 0;
+        unsigned char* data = stbi_load(path.string().c_str(), &w, &h, &n, 4);
+        REQUIRE(data);
+        REQUIRE(w == image.width);
+        REQUIRE(h == image.height);
+        std::size_t off = 0;
+        for (std::size_t i = 0; i < image.rgba.size(); i += 4) {
+            int d = 0;
+            for (int c = 0; c < 3; ++c)
+                d = std::max(d, std::abs(int(image.rgba[i + c]) - int(data[i + c])));
+            off += d > 48;
+        }
+        stbi_image_free(data);
+        CHECK(off < image.rgba.size() / 4 / 200);
     }
 };
 
@@ -1056,6 +1099,27 @@ TEST_CASE("mixer: the chain's empty part takes a double-click (plugin browser); 
     REQUIRE(f.root->click("mixer.out.tr_0"));
     REQUIRE(outputs.size() == 1);
     CHECK(outputs[0] == model::kMaster);
+}
+
+TEST_CASE("mixer: the strips match their golden picture") {
+    Fixture f;
+    if (!f.ok) return;
+    // One strip of each kind and each state a strip can be at rest in: a
+    // send, a mute, a solo, an armed input, a moved fader and pan, an empty
+    // chain. No plug-in (the stock ones are not in every build) and no level.
+    const auto drums = f.addTrack("channel", "Drums");
+    const auto bass = f.addTrack("channel", "Bass");
+    const auto vocal = f.addTrack("channel", "Lead vocal");
+    const auto band = f.addTrack("buss", "Band");
+    f.exec("route.add", R"({"from":")" + drums + R"(","to":")" + band + R"("})");
+    f.exec("track.set", R"({"track":")" + drums + R"(","volume_db":-6,"pan":-20})");
+    f.exec("track.set", R"({"track":")" + bass + R"(","mute":true})");
+    f.exec("track.set", R"({"track":")" + vocal + R"(","solo":"on"})");
+    f.exec("track.set", R"({"track":")" + vocal + R"(","armed":true})");
+    f.refresh();
+    CHECK(f.mixer->strips().size() == 5);
+    f.snapshot("mixer-strips.png");
+    f.golden("mixer-strips.png");
 }
 
 TEST_CASE("mixer: a strip shows its meter's highest peak under it; a click clears it") {
