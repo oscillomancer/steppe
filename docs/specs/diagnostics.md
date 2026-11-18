@@ -988,8 +988,13 @@ modules. Nothing reads it yet: 6c matches a bridge's capsule with it ("Bridge se
 
 ### Bridge self-capture (topic 6c)
 
-**Status: contract only (step 6c.0). Nothing below is built.** Each step of the plan marks what it
-makes true; until then the sections above describe the code. The maintainer settled the
+**Status: 6c.2 built, the rest is contract.** Built: the roles (6c.1), and the bridge's own capture
+(6c.2): the handlers, the CTC5 capsule, the cold module list and the slot's protocol (the writer's
+side), exercised for real on Linux; the Windows and macOS handlers compile and are proven by native
+CI only. Not built: the host carrying the slot to the supervisor (`AttachCaptureSlot`, the `Slot`
+event, 6c.3) and everything the supervisor does with it (6c.4). Until 6c.3 a bridge writes its
+capsule into a private slot nobody reads, so a report is still today's. Each step of the plan marks
+what it makes true; until then the sections above describe the code. The maintainer settled the
 transport, the trust rule, whether a bridge's fault counts as a suspect and the two thread roles
 (decisions 1 to 4, below); the reviewed contract of the channel's new capability and of the
 report's new fields is as written here.
@@ -1011,7 +1016,8 @@ the bridge, which writes it, and the supervisor, which reads it. Memory only, ne
 slot size is a compile-time constant, 256 KiB, checked against the capsule's maximum plus the
 execution table's 74,816 bytes), an anonymous `shm_open` object unlinked at once with its size set
 once on macOS, a pagefile-backed file mapping on Windows. Layout: a 64-byte header
-(`magic`, `version`, `state`, `length`, the bridge's ordinal) followed by the capsule. `state` is one
+(`magic` "CSLT", `version` 1, `state`, `length` of the capsule, `capacity` (the slot's size, which a
+reader checks against the one it knows), the bridge's `ordinal`) followed by the capsule. `state` is one
 atomic 32-bit word: 0 empty, 1 writing, 2 complete; the handler sets 1, writes, then publishes 2
 with a release store, so a reader that sees 2 sees the bytes, and a reader that sees 1 knows the
 bridge died mid-write and uses nothing. The slot is written once per bridge (a re-entering
@@ -1066,18 +1072,29 @@ from it beyond the slot size it knows. The report records that a bridge capsule 
 bridge-reported (`capture: "bridge"`, below) so a reader weighs it so.
 
 *What the capsule holds (CTC5).* The capsule of topic 4 (header, modules, threads with frames
-and roles, command ring: `CTC4`) plus a copy of the bridge's own execution table, 74,816 bytes,
+and roles, command ring: `CTC4`), in the same compact order, with three differences, plus a copy of
+the bridge's own execution table, 74,816 bytes. The differences: the module record is 64 bytes (bias,
+start, end, a build id of up to 32 bytes and its length, 0 for an image with no identity), since an
+ELF note or a CodeView record is not always 16 bytes; the header's `reserved` word holds the fault
+thread's id (low 32 bits), by which the parser leaves that thread out when it lists the table's
+others; and `flags` bit 4 says the table copy follows the commands (a bridge writes no commands,
+`commandCount` is 0, and its `unplaced` count is 0: the parser works it out from the table copy).
+The table is
 copied from the handler straight into the slot (never through a stack buffer, which a 64 KiB
-signal stack could not hold) with relaxed loads. The parser checks the table's magic and
+signal stack could not hold) with relaxed loads, one for each word of the table. The parser checks the table's magic and
 version as the worker's table is checked, and uses it as the worker's table is used: a thread's
 role and entry (the cell and generation of the instance it was inside), nothing else. The
 fault thread is walked from the signal context or the exception record, frames are raw
-addresses, and the frame walker is the one of `diagnostics-capture`, over a reader that cannot
-fault (`process_vm_readv` on the own process on Linux, `mach_vm_read_overwrite` on the own task,
-a guarded copy on Windows). **Other threads' frames** are collected only where the
+addresses, and the walker is the frame-pointer walker of `diagnostics-capture` over a reader that
+cannot fault (`process_vm_readv` on the own process on Linux, `mach_vm_read_overwrite` on the own
+task); on Windows, where frames are not found by frame pointers, it is the OS unwinder
+(`RtlVirtualUnwind`) over the thread's own stack, after checking the stack pointer against the
+stack's limits before each step. **Other threads' frames** are collected only where the
 platform's in-process code already does it: macOS walks the own task's threads as the worker
 does; Linux and Windows record the other registered threads by role and entry from the table copy
-with `state: unavailable` and reason `not_collected`. Collecting their frames needs a thread
+with `state: unavailable` and reason `not_collected`: the capsule holds only the fault thread, and
+the parser (6c.4) lists the table's other registered threads itself, each entry worked out from the
+thread's recorded stack range, leaving out the slot whose id is the header's. Collecting their frames needs a thread
 handshake (a signal per thread on Linux, suspend and context on Windows) that this topic does
 not take on: the fault thread is what attribution needs.
 
@@ -1109,16 +1126,23 @@ that bridge's capsule. Registration happens when the thread starts and off every
 the plug-in call entries use the same atomic scopes as the worker's (`host::Instance`, table
 `enter` and `leave`: stores only), so the `rtsan` check on the bridge's audio entry stays as it is.
 
-*Where the handlers are.* The bridge's `main` installs, once and before it reads any command,
-the same handlers the worker has (`diagnostics-capture`, no frontend and no supervisor): the
-signals SEGV, BUS, ILL, FPE and ABRT with an alternate stack per registered thread on POSIX, the
-last-chance filter and the `SIGABRT` and terminate hooks on Windows (the runtime settings of
-`8336fe69` stay). A handler writes the capsule into the slot and then **chains to the previous
+*Where the handlers are.* The bridge's `main` installs, once and before it reads any command
+(after the `--scan` branch, which loads a plug-in only to read its description),
+the handlers of `diagnostics-capture`'s `selfcapture::install` (no frontend and no supervisor):
+the signals SEGV, BUS, ILL, FPE and ABRT on POSIX, each only where its action is still the default
+(a sanitizer owns them in its builds, and the bridge then works with no capsule, as the worker
+does), with an alternate stack for each registered thread (the one the worker's handler uses,
+`registerThreadAlternateStack`); the last-chance filter, the `SIGABRT` handler and the terminate
+hook on Windows (the runtime settings of `8336fe69` stay, and the new `SIGABRT` handler ends the
+process with the same status after capturing); and the terminate hook on both. The own executable
+is recorded when the handlers go in, and each plug-in's image when it is created. A handler writes the capsule into the slot and then **chains to the previous
 action so the exit status stays the fatal one**: the host's classification of the end
 (`signal`, `exception`, `host`) and its kill rules are unchanged by capture, and a
-`bridge_exit` report without a capsule stays exactly as today's. Closing the Windows gap in which
+`bridge_exit` report without a capsule stays exactly as today's. *Not done in 6c.2:* closing the Windows gap in which
 `raise(SIGSEGV)` ends a process with an exit code (a `bridge_exit` that reads as an `exit`, so no
-report) falls out of a handler in the bridge, which can end with the exception status. The
+report). It needs a `SIGSEGV` handler, and a C runtime handler on Windows also receives the
+hardware faults of the main thread that the last-chance filter now sees with their real context;
+keeping that context needs the runtime's exception pointers, which have not been tried here. The
 handler's bound is its own: 200 ms from the fault to a published slot, measured on the monotonic
 clock, and a slot not complete by then is left `writing`. The host's kill deadlines are never
 extended to wait for a capsule, as the ADR requires.

@@ -390,13 +390,18 @@ void resolveModules(std::uint64_t deadline) {
 
 void rememberMainThread() noexcept { mainThread = mach_thread_self(); }
 
-void captureAndHold(Native& endpoint, const Packet& terminal, std::uint64_t start) noexcept {
+CapsuleData& captureOwnProcess(const Packet& terminal, std::uint64_t start) noexcept {
     capsule.header.magic = kCapsuleMagic;
     captureSelf(terminal, start + kThreadBudget);
     captureOthers(start + kThreadBudget);
     summarizeTable();
     listImages(start + kImageBudget);
     resolveModules(start + kImageBudget);
+    return capsule;
+}
+
+void captureAndHold(Native& endpoint, const Packet& terminal, std::uint64_t start) noexcept {
+    (void)captureOwnProcess(terminal, start);
     const int fd = static_cast<int>(endpoint.channel);
     // If the capsule cannot be sent in time the supervisor stops waiting at its own
     // deadline; the terminal packet it already has is what matters most.

@@ -91,6 +91,10 @@ constexpr std::size_t kCapsuleMaxBytes =
 constexpr std::uint64_t kCollectionBudget = 600'000'000ULL;
 // Monotonic nanoseconds; async-signal-safe.
 std::uint64_t monotonicNanoseconds() noexcept;
+// Gives the calling thread an alternate signal stack of its own (64 KiB, guarded, committed
+// while cold) unless it already has one, and takes it away when the thread ends. True when the
+// thread has one. Called while cold, once for each thread that registers.
+bool registerThreadAlternateStack() noexcept;
 
 // Registers to start a walk from.
 struct CapsuleRegs {
@@ -132,6 +136,10 @@ void awaitAcknowledgementFor(Native& native, std::uint64_t nanoseconds) noexcept
 // thread is walked from the handler's own frame. Allocates nothing on the heap, takes
 // no lock and formats nothing.
 void captureAndHold(Native& endpoint, const Packet& terminal, std::uint64_t start) noexcept;
+// The first part of captureAndHold, for a process that has no supervisor to send to (a bridge,
+// topic 6c): fills and returns the static capsule from this process's own threads and images,
+// within the same budgets, and does nothing else. Same restrictions as captureAndHold.
+CapsuleData& captureOwnProcess(const Packet& terminal, std::uint64_t start) noexcept;
 // Records the calling thread as the main thread; called once, on it, at install.
 void rememberMainThread() noexcept;
 #endif

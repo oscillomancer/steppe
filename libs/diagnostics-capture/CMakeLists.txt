@@ -9,22 +9,24 @@
 # cmake/LicenseIsolation.cmake fails configuration when one of their targets reaches it.
 # The headers are internal to the diagnostics code (namespace supple::diagnostics::detail).
 if(WIN32)
-  set(capture_source src/trace_windows.cpp)
+  set(capture_source src/trace_windows.cpp src/self_capture_windows.cpp)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-  set(capture_source src/capsule_posix.cpp src/trace_linux.cpp)
+  set(capture_source src/capsule_posix.cpp src/altstack_posix.cpp src/trace_linux.cpp
+    src/self_capture_posix.cpp src/self_capture_linux.cpp)
 elseif(APPLE)
-  set(capture_source src/capsule_posix.cpp src/trace_other.cpp src/capture_macos.cpp)
+  set(capture_source src/capsule_posix.cpp src/altstack_posix.cpp src/trace_other.cpp
+    src/capture_macos.cpp src/self_capture_posix.cpp src/self_capture_macos.cpp)
 else()
-  set(capture_source src/capsule_posix.cpp src/trace_other.cpp)
+  set(capture_source src/capsule_posix.cpp src/altstack_posix.cpp src/trace_other.cpp)
 endif()
-supple_add_library(diagnostics-capture SOURCES src/trace.cpp ${capture_source}
+supple_add_library(diagnostics-capture SOURCES src/trace.cpp src/self_capture.cpp ${capture_source}
   DEPS supple::core-base supple::core-json supple::diagnostics-context)
 if(WIN32)
   target_link_libraries(diagnostics-capture PRIVATE dbghelp psapi)
 endif()
 # The capture code's own tests: the walker, module identity, the capsule and its strict parser.
 # The progress listener names each case as it starts, as the diagnostics tests do.
-supple_add_tests(diagnostics-capture SOURCES tests/test_trace.cpp tests/test_capsule.cpp
+supple_add_tests(diagnostics-capture SOURCES tests/test_trace.cpp tests/test_capsule.cpp tests/test_selfcapture.cpp
   "${PROJECT_SOURCE_DIR}/tests/progress_listener.cpp")
 if(SUPPLE_BUILD_TESTS)
   target_compile_definitions(diagnostics-capture.tests PRIVATE PROGRESS_SUITE="diagnostics-capture.tests")
