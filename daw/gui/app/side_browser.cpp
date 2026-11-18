@@ -619,22 +619,31 @@ void SideBrowser::sync() {
     }
     if (!visible_ || kind_ != "media") return;
     if (app_.head().version != mediaVersion_ || app_.projectGeneration() != mediaGeneration_)
-        loadMedia();
+        loadMedia(true);
 }
 
 // The session's audio sources, by file name without regard to case. A list
 // that comes out as it was is left alone, so an edit elsewhere in the
 // project does not take the chosen row away.
-void SideBrowser::loadMedia() {
+// `whenChanged` (the loop's pass): an edit that left the project's sources
+// and its media folder as they were has nothing new to list, and the files
+// are not looked for on disk again; most edits are of that kind, a fader's
+// drag makes many of them, and a look is a file system call for each source.
+void SideBrowser::loadMedia(bool whenChanged) {
     const model::Session& s = app_.head();
+    const bool sameProject = app_.projectGeneration() == mediaGeneration_;
+    const std::filesystem::path dir = app_.mediaDir();
     mediaVersion_ = s.version;
     mediaGeneration_ = app_.projectGeneration();
+    if (whenChanged && sameProject && s.media.sameStorage(mediaSeen_) && dir == mediaDir_) return;
+    mediaSeen_ = s.media;
+    mediaDir_ = dir;
     std::vector<Media> found;
     for (const auto& e : s.media) {
         Media media;
         media.id = e.id.str();
         media.path = std::filesystem::path(e.value->path);
-        if (media.path.is_relative()) media.path = app_.mediaDir() / media.path;
+        if (media.path.is_relative()) media.path = dir / media.path;
         media.name = media.path.filename().string();
         std::string format = e.value->format;
         for (char& c : format) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -834,7 +843,7 @@ void SideBrowser::reload() {
         return;
     }
     if (kind_ == "media") {
-        loadMedia();
+        loadMedia(false);  // in view again: the files are looked for too
         return;
     }
     if (kind_ == "files" && atRoots_) {

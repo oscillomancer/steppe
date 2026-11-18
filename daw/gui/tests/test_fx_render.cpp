@@ -1771,14 +1771,35 @@ TEST_CASE("the side panel's browser lists the project's media; one is added or d
     CHECK(dropped[0].second.x == 61);
     CHECK(text("side.browser.media.status") == "Added pad.wav");
 
-    // A file that has gone is said to be missing when the page comes into
-    // view again; the others are as they were.
+    // The files are looked for when the page comes into view and when the
+    // project's sources change, not at every edit: a file that has gone is
+    // said to be missing when the page comes into view again; the others
+    // are as they were.
     std::filesystem::remove(pad);
+    (void)exec("track.add", json::parse(R"({"name":"Elsewhere"})").value());
+    pass();
+    CHECK(names() == std::vector<std::string>{"Bass.wav|WAV \u00b7 1:05",
+                                              "kick.wav|WAV \u00b7 0:12",
+                                              "pad.wav|WAV \u00b7 0:01"});
     side.hide();
     side.show("browser");
     f.root->frame(false);
     CHECK(names() == std::vector<std::string>{"Bass.wav|WAV \u00b7 1:05",
                                               "kick.wav|WAV \u00b7 0:12", "pad.wav|missing"});
+    // It comes back: still "missing" after an edit elsewhere, found again
+    // when the project takes in another source, and at an undo of that.
+    (void)tone("pad.wav", 1, 0.125f);
+    (void)exec("track.add", json::parse(R"({"name":"Elsewhere"})").value());
+    pass();
+    CHECK(browser.mediaRow(2).detail == "missing");
+    (void)import(tone("hat.wav", 3, 0.25f), 80);
+    pass();
+    CHECK(names() == std::vector<std::string>{"Bass.wav|WAV \u00b7 1:05", "hat.wav|WAV \u00b7 0:03",
+                                              "kick.wav|WAV \u00b7 0:12",
+                                              "pad.wav|WAV \u00b7 0:01"});
+    (void)exec("history.undo", json::Value::object());
+    pass();
+    CHECK(browser.mediaCount() == 3);
     // The other kinds are a click away, and the page comes back as it was.
     browser.show("files");
     f.root->frame(false);
@@ -1859,6 +1880,24 @@ TEST_CASE("the side panel's browser finds a project's own copy of its media") {
     // The copy's bytes are the source's: an item more, and still one source.
     CHECK(f.app->head().media.size() == 1);
     CHECK(f.app->head().items.size() == 2);
+
+    // Saved somewhere else, the project has another media folder: the same
+    // sources are found there from the next pass after an edit on.
+    const std::filesystem::path was = f.app->mediaDir();
+    save["path"] = (f.dir / "elsewhere" / "song.json").string();
+    (void)exec("project.save", save);
+    REQUIRE(f.app->mediaDir() != was);
+    (void)exec("track.add", json::parse(R"({"name":"Other"})").value());
+    browser.sync();
+    f.root->frame(false);
+    REQUIRE(browser.mediaCount() == 1);
+    f.root->pointer({ui::PointerEvent::Type::Down, row, 1, 1});
+    f.root->pointer({ui::PointerEvent::Type::Up, row, 1, 1});
+    f.root->frame(false);
+    REQUIRE(f.root->click("side.browser.media.add"));
+    REQUIRE(added.size() == 2);
+    CHECK(added[1] == f.app->mediaDir() / stored);
+    CHECK(browser.mediaRow(0).detail == "WAV \u00b7 0:03");  // the save took its copy along
 }
 
 // Two projects made by the same steps have the same head version: the page

@@ -134,7 +134,9 @@ class SideBrowser {
     std::unique_ptr<ui::Node> buildChains();
     std::unique_ptr<ui::Node> buildFiles();
     std::unique_ptr<ui::Node> buildMedia();
-    void loadMedia();    // from the session, when its media changed
+    // From the session. `whenChanged`: only when its sources or its media
+    // folder are not those the list was last read from.
+    void loadMedia(bool whenChanged);
     void filterMedia();  // by the search
     void addMedia(std::size_t row);
     void setMediaStatus(std::string text);
@@ -212,6 +214,10 @@ class SideBrowser {
     std::optional<Media> draggedMedia_;    // the one in a drag
     // The session the list was read from; ~0: not read yet.
     std::uint64_t mediaVersion_ = ~std::uint64_t{0}, mediaGeneration_ = ~std::uint64_t{0};
+    // Its sources (they share storage with the session's until an edit
+    // changes them) and the folder their relative paths were resolved in.
+    model::IdMap<model::MediaSource> mediaSeen_;
+    std::filesystem::path mediaDir_;
 };
 
 }  // namespace supple::gui

@@ -333,8 +333,9 @@ and the **History**. It stays closed until you ask for it:
   format and length, so you can use a recording or an imported file again
   without looking for it on disk. Add it or drag it as you would a file;
   the project keeps one copy however often you use it. A file that is no
-  longer where the project expects it is marked "missing". **Play** hears
-  one here too.
+  longer where the project expects it is marked "missing"; the page looks
+  for the files when it opens and when the project's audio changes.
+  **Play** hears one here too.
 - **View > History and command log**, or **Ctrl+H**, opens it on the History:
   the versions you can step back to, the branches, and every command with who
   ran it.

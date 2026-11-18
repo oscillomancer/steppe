@@ -2107,9 +2107,14 @@ format and the length at the right ("WAV · 0:12"; "1:02:03" from an hour),
 or "missing" when the file is not where the source says (looked for when
 the list is read). MIDI sources are not files and are not listed. The page
 reads the session when it comes into view and, while in view, at the
-loop's next pass after the project changes (`SideBrowser::sync`); a list
-that comes out the same is left alone, and the chosen row stays chosen
-while its source is listed. The search (`.search`) narrows it by name.
+loop's next pass after the project's sources or its media folder change,
+or another project opens (`SideBrowser::sync`). An edit that leaves the
+sources as they were reads nothing and looks for no file: most edits are
+of that kind, and a look is a file system call for each source. So a file
+deleted or put back on disk shows in its row when the page next comes
+into view or the project's sources next change, not before. A list that
+comes out the same is left alone, and the chosen row stays chosen while
+its source is listed. The search (`.search`) narrows it by name.
 Enter in the search, a double-click or **Add** (`.add`) puts the media on
 a track as the Files page does a file, through the same hook with the
 source's file (`item.add` on the selected track, or on a new one, at the
