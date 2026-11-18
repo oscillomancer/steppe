@@ -3694,11 +3694,29 @@ TEST_CASE("the restart notice sits under the transport and Dismiss acknowledges 
                   "The report points at that plug-in but cannot prove it was the cause.") !=
               std::string::npos);
         a.snapshot("crash-notice-plugin.png");
+        // With the viewer wired: "Show report" is the boxed button and Dismiss goes quiet.
+        dynamic_cast<gui::CrashBanner*>(a.root->find("crash.notice"))
+            ->setOnShowReport([](const std::string&) {});
+        a.root->frame(false);
+        const auto* show = dynamic_cast<ui::Button*>(a.root->find("crash.notice.show"));
+        const auto* dismiss = dynamic_cast<ui::Button*>(a.root->find("crash.notice.dismiss"));
+        REQUIRE(show);
+        REQUIRE(dismiss);
+        CHECK(show->valueText() == "Show report");
+        CHECK_FALSE(show->quiet);
+        CHECK(dismiss->quiet);
+        a.snapshot("crash-notice-plugin-viewer.png");
     }
     SUBCASE("a run that left no report says that, and why that can be") {
         REQUIRE(diagnostics::writeSampleUnreportedRun(kNoticeOne, dir, diagnostics::Role::Gui));
         NoticeShell s(a);
         CHECK(noticeText(a).find("no crash report was written") != std::string::npos);
+        // No report to show: Dismiss alone, and boxed, whether or not a viewer is wired.
+        dynamic_cast<gui::CrashBanner*>(a.root->find("crash.notice"))
+            ->setOnShowReport([](const std::string&) {});
+        a.root->frame(false);
+        CHECK(a.root->find("crash.notice.show") == nullptr);
+        CHECK_FALSE(dynamic_cast<ui::Button*>(a.root->find("crash.notice.dismiss"))->quiet);
         a.snapshot("crash-notice-no-report.png");
         REQUIRE(a.root->click("crash.notice.dismiss"));
         a.root->frame(false);
@@ -3718,10 +3736,20 @@ TEST_CASE("the restart notice sits under the transport and Dismiss acknowledges 
         ageFile(dir / (std::string(kNoticeTwo) + ".run"), 5);
         NoticeShell s(a);
         CHECK(noticeText(a).find("Canary Verb by Acme") == 0);
-        CHECK(noticeText(a).find(std::string(product::kName) +
-                                 " also closed unexpectedly 2 times before that.") !=
-              std::string::npos);
+        // The count of earlier closes is the viewer's to tell: the banner keeps to two
+        // sentences, and the button that opens the viewer carries the count.
+        CHECK(noticeText(a).find("also closed unexpectedly") == std::string::npos);
+        CHECK(a.root->find("crash.notice.show") == nullptr);  // nothing to open it with yet
+        std::string opened;
+        dynamic_cast<gui::CrashBanner*>(a.root->find("crash.notice"))
+            ->setOnShowReport([&](const std::string& incident) { opened = incident; });
+        a.root->frame(false);
+        const auto* show = a.root->find("crash.notice.show");
+        REQUIRE(show);
+        CHECK(show->valueText() == "Show reports (3)");
         a.snapshot("crash-notice-earlier.png");
+        REQUIRE(a.root->click("crash.notice.show"));
+        CHECK(opened == kNoticeThree);  // the newest report, not the newest run
         REQUIRE(a.root->click("crash.notice.dismiss"));
         a.root->frame(false);
         auto notice = diagnostics::lastRunNotice(dir, diagnostics::Role::Gui);

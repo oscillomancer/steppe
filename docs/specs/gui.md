@@ -2525,18 +2525,28 @@ status line displays detection, preparation and command errors.
 ## Crash reports and safe startup (ADR-0083; staged)
 
 **Restart notice (topic 7b; delivered).** When an earlier run ended unexpectedly and the user has
-not yet seen it, a banner (`crash.notice`) sits under the transport, above the arrangement: one
-plain statement (`crash.notice.text`) and Dismiss (`crash.notice.dismiss`). It is not modal, takes
+not yet seen it, a banner (`crash.notice`) sits under the transport, above the arrangement: two
+sentences of text (`crash.notice.text`) and the buttons (`crash.notice.show`, when there is a
+report and a viewer to open it, and `crash.notice.dismiss`). It is not modal, takes
 no focus and blocks nothing; recovery (ADR-0078) is its own offer and may show at the same time.
 The text is the diagnostics library's `lastRunNotice` (diagnostics.md, "Restart notice"): that the
 last run closed unexpectedly, naming the plug-in a report points at when it points at one
-(`fault_in_image` or `active_token` only), or saying that no report was written; how many earlier
-closes the same Dismiss covers; and that nothing was sent anywhere. The banner is for GUI runs
+(`fault_in_image` or `active_token` only), or saying that no report was written; and that nothing
+was sent anywhere. The first sentence is in full ink, with the plug-in's name in bold; the rest is
+quiet ink. How many earlier closes the same Dismiss covers is the viewer's to tell: the banner
+shows it only as the count on the viewer's button, "Show reports (3)" (one incident: "Show
+report"). The band is a `raised` strip with a 3-unit `meter-hot` bar at its left edge, a `rule`
+under it and 12 by 8 padding; the text takes the width the buttons leave, and the band is as tall
+as its lines (two at 1000 units). "Show report" is the boxed button and Dismiss goes quiet; with no
+report to show (an unreported run), or with no viewer, Dismiss is alone and boxed. The banner is for GUI runs
 only (`lastRunNotice` with `Role::Gui`): an incident of the headless engine is that service's to
 announce, and Dismiss acknowledges only the incidents the banner covered and hides it; no report or
 marker is deleted. The banner reads the folder once, at start, reading the newest few reports to
 learn their role (`kNoticeRoleReads`, 8). It is hidden, not built, when there is nothing to say, and under `--workdir`
 it reads `<workdir>/diagnostics`. Wording is provisional (P12).
+
+The paragraph is `ui::RichText`: runs of words that differ in weight or ink, broken at spaces
+across runs.
 
 Before loading an explicit project or any suspect binary, later startup UI will
 show a temporary dedicated-bridge/disabled/normal choice, remembered only on opt-in
