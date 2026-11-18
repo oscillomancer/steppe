@@ -1204,6 +1204,7 @@ TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
     gui::MouseDialog mouse(*f.root, map, {});
     const auto file = f.dir / "config" / "preferences.json";
     gui::PreferencesDialog prefs(*f.root, *f.app, mouse, gui::Preferences{}, file);
+    prefs.onLinux = true;  // the rows every platform can test
     CHECK(f.app->defaultMonitor() == model::Monitor::On);
     CHECK(f.app->copyImportedMedia());
     auto port = json::Value::object();
@@ -1246,12 +1247,23 @@ TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
         CHECK(notes[0].find("Linux only") == 0);
         CHECK(notes[0].find('/') == std::string::npos);
     }
-#if defined(__linux__)
+    // Off Linux a row is there only while its setting is on.
+    CHECK(gui::PreferencesDialog::showsLinuxOnly(true, false));
+    CHECK(gui::PreferencesDialog::showsLinuxOnly(false, true));
+    CHECK_FALSE(gui::PreferencesDialog::showsLinuxOnly(false, false));
     CHECK(f.node("prefs.latency.permission")->valueText().find("udev") != std::string::npos);
-#else
-    CHECK(f.root->find("prefs.latency.permission") == nullptr);
-    CHECK(f.node("prefs.latency.caution")->valueText().find("Linux only") == 0);
-#endif
+    // As macOS and Windows see it: neither row while both settings are off.
+    REQUIRE(f.root->click("prefs.close"));
+    prefs.onLinux = false;
+    prefs.open();
+    f.root->frame(false);
+    CHECK(f.root->find("prefs.latency.set") == nullptr);
+    CHECK(f.root->find("prefs.memory.set") == nullptr);
+    CHECK(f.root->find("prefs.threads.set") != nullptr);
+    REQUIRE(f.root->click("prefs.close"));
+    prefs.onLinux = true;
+    prefs.open();
+    f.root->frame(false);
     REQUIRE(f.root->click("prefs.close"));
     prefs.open();
     f.root->frame(false);
@@ -1527,6 +1539,7 @@ TEST_CASE("audio device: the dialog saves each choice and restarts the engine wi
     gui::MouseDialog mouse(*f.root, map, {});
     const auto file = f.dir / "config" / "preferences.json";
     gui::PreferencesDialog prefs(*f.root, *f.app, mouse, gui::Preferences{}, file);
+    prefs.onLinux = true;  // the rows every platform can test
     gui::AudioDeviceSettings initial;
     initial.backend = "portaudio";
     gui::AudioDeviceDialog audio(
@@ -1717,6 +1730,7 @@ TEST_CASE(
     gui::MouseDialog mouse(*f.root, map, {});
     const auto file = f.dir / "preferences.json";
     gui::PreferencesDialog prefs(*f.root, *f.app, mouse, {}, file);
+    prefs.onLinux = true;  // the rows every platform can test
     prefs.open();
     f.root->frame(false);
     REQUIRE(f.root->click("prefs.advanced.toggle"));  // the low-level settings
@@ -1788,6 +1802,7 @@ TEST_CASE(
     gui::MouseDialog mouse(*f.root, map, {});
     const auto file = f.dir / "preferences.json";
     gui::PreferencesDialog prefs(*f.root, *f.app, mouse, {}, file);
+    prefs.onLinux = true;  // the rows every platform can test
     prefs.open();
     f.root->frame(false);
     REQUIRE(f.root->click("prefs.advanced.toggle"));  // the low-level settings
@@ -2230,6 +2245,7 @@ TEST_CASE("preferences: stale GUI snapshots preserve engine-owned MIDI records")
     views::MouseMap map;
     gui::MouseDialog mouse(*f.root, map, {});
     gui::PreferencesDialog prefs(*f.root, *f.app, mouse, stale, file);
+    prefs.onLinux = true;  // the rows every platform can test
     CHECK(engine::midiPortSettings(f.app->midiOutputsPreferences(), "Synth").offsetMs == 12);
     REQUIRE(prefs.setAudioThreads(2));
     loaded = gui::Preferences::load(file);

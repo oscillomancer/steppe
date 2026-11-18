@@ -78,12 +78,6 @@ ui::Node& row(ui::Node& form, const std::string& id, const std::string& label) {
     return r;
 }
 
-#if defined(__linux__)
-constexpr bool kOnLinux = true;
-#else
-constexpr bool kOnLinux = false;
-#endif
-
 class RuleLine : public ui::Node {
   public:
     explicit RuleLine(std::string id) : Node(std::move(id)) {
@@ -285,6 +279,8 @@ std::vector<std::string> PreferencesDialog::memoryNotes(bool onLinux) {
             "To allow: add \"@audio - memlock unlimited\" to /etc/security/limits.d/, join audio."};
 }
 
+bool PreferencesDialog::showsLinuxOnly(bool onLinux, bool on) { return onLinux || on; }
+
 std::vector<std::string> PreferencesDialog::idleNotes(bool onLinux) {
     if (!onLinux) return {"Linux only: on this system it has no effect."};
     return {"While the engine runs, affects system idle; may increase power, heat and fan noise.",
@@ -424,50 +420,55 @@ void PreferencesDialog::open() {
             ui::Font::Ui, "small", "ink-quiet")
         .layout.height = ui::SizeRule::fixed(20);
 
-    auto& memory = row(advanced, "prefs.memory", "Lock memory (mlockall)");
-    memory_ = &memory.emplace<ui::Button>("prefs.memory.set", "Off", [this] {
-        if (auto result = setMemoryLock(!prefs_.lockMemory); !result && onError)
-            onError("preferences: " + result.error().toString());
-    });
-    memory_->layout.width = ui::SizeRule::fraction();
-    memory_->layout.height = ui::SizeRule::fixed(26);
-    for (const std::string& text : memoryNotes(kOnLinux)) {
-        auto& label = advanced.emplace<ui::Label>(
-            "prefs.memory.caution." + std::to_string(advanced.children().size()), text,
-            ui::Font::Ui, "small", "ink-quiet");
-        label.layout.height = ui::SizeRule::fixed(20);
-    }
-    for (std::size_t i = 0; i < memoryNote_.size(); ++i) {
-        auto& label = advanced.emplace<ui::Label>("prefs.memory.note." + std::to_string(i), "",
-                                                  ui::Font::Ui, "small", "ink-quiet");
-        label.layout.width = ui::SizeRule::fraction();
-        label.layout.height = ui::SizeRule::fixed(18);
-        memoryNote_[i] = &label;
-    }
-
-    auto& latency = row(advanced, "prefs.latency", "Keep CPUs out of deep idle");
-    latency_ = &latency.emplace<ui::Button>("prefs.latency.set", "Off", [this] {
-        if (auto result = setPreventDeepIdle(!prefs_.preventDeepIdle); !result && onError)
-            onError("preferences: " + result.error().toString());
-    });
-    latency_->layout.width = ui::SizeRule::fraction();
-    latency_->layout.height = ui::SizeRule::fixed(26);
-    {
-        // On Linux: the caution, then how to allow it. Elsewhere: one line.
-        const std::vector<std::string> notes = idleNotes(kOnLinux);
-        const char* ids[] = {"prefs.latency.caution", "prefs.latency.permission"};
-        for (std::size_t i = 0; i < notes.size() && i < 2; ++i)
-            advanced.emplace<ui::Label>(ids[i], notes[i], ui::Font::Ui, "small", "ink-quiet")
-                .layout.height = ui::SizeRule::fixed(20);
-    }
-    for (std::size_t i = 0; i < latencyNote_.size(); ++i) {
-        auto& label = advanced.emplace<ui::Label>("prefs.latency.note." + std::to_string(i), "",
-                                                  ui::Font::Ui, "small", "ink-quiet");
-        label.layout.width = ui::SizeRule::fraction();
-        label.layout.height = ui::SizeRule::fixed(18);
-        latencyNote_[i] = &label;
+    // Both act on Linux only. Elsewhere a row shows only while its setting
+    // is on, so that it can be turned off.
+    if (showsLinuxOnly(onLinux, prefs_.lockMemory)) {
+        auto& memory = row(advanced, "prefs.memory", "Lock memory (mlockall)");
+        memory_ = &memory.emplace<ui::Button>("prefs.memory.set", "Off", [this] {
+            if (auto result = setMemoryLock(!prefs_.lockMemory); !result && onError)
+                onError("preferences: " + result.error().toString());
+        });
+        memory_->layout.width = ui::SizeRule::fraction();
+        memory_->layout.height = ui::SizeRule::fixed(26);
+        for (const std::string& text : memoryNotes(onLinux)) {
+            auto& label = advanced.emplace<ui::Label>(
+                "prefs.memory.caution." + std::to_string(advanced.children().size()), text,
+                ui::Font::Ui, "small", "ink-quiet");
+            label.layout.height = ui::SizeRule::fixed(20);
+        }
+        for (std::size_t i = 0; i < memoryNote_.size(); ++i) {
+            auto& label = advanced.emplace<ui::Label>("prefs.memory.note." + std::to_string(i), "",
+                                                      ui::Font::Ui, "small", "ink-quiet");
+            label.layout.width = ui::SizeRule::fraction();
+            label.layout.height = ui::SizeRule::fixed(18);
+            memoryNote_[i] = &label;
+        }
     }
 
+    if (showsLinuxOnly(onLinux, prefs_.preventDeepIdle)) {
+        auto& latency = row(advanced, "prefs.latency", "Keep CPUs out of deep idle");
+        latency_ = &latency.emplace<ui::Button>("prefs.latency.set", "Off", [this] {
+            if (auto result = setPreventDeepIdle(!prefs_.preventDeepIdle); !result && onError)
+                onError("preferences: " + result.error().toString());
+        });
+        latency_->layout.width = ui::SizeRule::fraction();
+        latency_->layout.height = ui::SizeRule::fixed(26);
+        {
+            // On Linux: the caution, then how to allow it. Elsewhere: one line.
+            const std::vector<std::string> notes = idleNotes(onLinux);
+            const char* ids[] = {"prefs.latency.caution", "prefs.latency.permission"};
+            for (std::size_t i = 0; i < notes.size() && i < 2; ++i)
+                advanced.emplace<ui::Label>(ids[i], notes[i], ui::Font::Ui, "small", "ink-quiet")
+                    .layout.height = ui::SizeRule::fixed(20);
+        }
+        for (std::size_t i = 0; i < latencyNote_.size(); ++i) {
+            auto& label = advanced.emplace<ui::Label>("prefs.latency.note." + std::to_string(i), "",
+                                                      ui::Font::Ui, "small", "ink-quiet");
+            label.layout.width = ui::SizeRule::fraction();
+            label.layout.height = ui::SizeRule::fixed(18);
+            latencyNote_[i] = &label;
+        }
+    }
     root_.openPopup(std::move(form), {}, ui::Placement::Center, [this] {
         monitor_ = nullptr;
         threads_ = nullptr;

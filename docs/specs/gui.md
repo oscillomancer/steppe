@@ -2224,9 +2224,11 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   its three settings is not at its default, so that a setting in force is
   never out of sight. Whether it is open is not saved. Lock memory and
   Keep CPUs out of deep idle act on Linux only: there their notes give the
-  caution and how to allow each; on macOS and Windows one line says "Linux
-  only: on this system it has no effect." in their place
-  (`PreferencesDialog::memoryNotes`, `idleNotes`).
+  caution and how to allow each. On macOS and Windows each row is hidden
+  while its setting is off (`PreferencesDialog::showsLinuxOnly`); a setting
+  that is on shows its row, so that it can be turned off, with one line in
+  the notes' place: "Linux only: on this system it has no effect."
+  (`memoryNotes`, `idleNotes`).
   **Audio processing threads** is an advanced live/background
   override: Automatic (default) or a limit per pool including its submitting
   thread; Limit 1 is serial. The menu

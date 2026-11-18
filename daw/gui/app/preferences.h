@@ -54,6 +54,16 @@ class PreferencesDialog {
     // Linux's alone.
     static std::vector<std::string> memoryNotes(bool onLinux);
     static std::vector<std::string> idleNotes(bool onLinux);
+    // Whether one of those two rows is shown: always on Linux; elsewhere
+    // only while its setting is on (it can then be turned off).
+    static bool showsLinuxOnly(bool onLinux, bool on);
+    // Whether this is Linux, for those two rows (tests set it to see the
+    // dialog either way on any platform).
+#if defined(__linux__)
+    bool onLinux = true;
+#else
+    bool onLinux = false;
+#endif
     void setDefaultMonitor(model::Monitor m);  // applied at once and saved
     Status setMemoryLock(bool requested);
     Status setPreventDeepIdle(bool requested);

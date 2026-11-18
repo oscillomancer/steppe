@@ -53,6 +53,8 @@ sections: **Audio**, **Recording and import**, **Plug-ins** and **Editing**.
 Each takes effect when you change it. The low-level tuning (how many threads
 process audio, locking memory, keeping CPUs out of deep idle) is under
 **Advanced**: click **Show** beside it. You do not need those to get started.
+Locking memory and the CPU idle setting work on Linux only, and are listed
+only there.
 
 - **Linux:** the rate and buffer size are requests to PipeWire, which shares
   the graph with other apps. It changes the rate only while no other client
