@@ -901,7 +901,13 @@ written, and names nothing when the supervisor writes none (a repeat, the run's 
 cannot write): a reader of the id handles a missing report. `Instance::bridgeIncident()` gives it
 for a bridged instance once the bridge's end was observed, and the engine puts it in the failed fx's
 `engine.status.failed_errors[]` entry and in `fx.failed` as `incident` (docs/specs/engine.md). A
-bridge death does not wake the model by itself. A report
+bridge death does not wake the model by itself. The
+report is formatted from the inventory as it is when the end is applied (in memory) and written,
+with the folder's retention pass (which reads every report in it), on a writer thread of the
+supervisor's own (`BackgroundWriter`, `host/diagnostics/src/background.h`), so the packets behind
+the end, among them the worker's own terminal packet, do not wait for the disk. The writer runs its
+work in order; the supervisor drains it and joins it before it writes the worker's own report and
+before it ends, so no bridge report is lost to the exit and two retention passes never overlap. A report
 that cannot be written prints one line to the supervisor's standard error. The strict validator
 holds the kind to its parts: `bridge` is a listed bridge that ended by `signal` or `exception`
 with the report's `code`, `attribution` is the `bridge_exit` level and its plug-in a listed member

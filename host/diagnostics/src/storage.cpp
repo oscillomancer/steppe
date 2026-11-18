@@ -474,10 +474,11 @@ Status publishReport(const fs::path& root, const Packet& boot, const Packet* ter
     SUPPLE_TRY(privatePublish(root / (std::string(boot.incident.data(), 32) + ".json"), text));
     return pruneReports(root);
 }
-Status publishBridgeReport(const fs::path& root, const Packet& boot, const Inventory& inventory,
-                           std::uint16_t bridge) {
+std::optional<PreparedBridgeReport> prepareBridgeReport(const Packet& boot,
+                                                        const Inventory& inventory,
+                                                        std::uint16_t bridge) {
     const BridgeEntry* entry = inventory.bridge(bridge);
-    if (!entry || !entry->ended) return failure();
+    if (!entry || !entry->ended) return std::nullopt;
     // Its own incident: the worker's run goes on under the id it has, and no marker belongs to
     // this one, so a reader counts it the moment it is there. The id is the one the worker minted
     // when it announced the end, so that the application can name this report; a worker that sent
@@ -485,7 +486,7 @@ Status publishBridgeReport(const fs::path& root, const Packet& boot, const Inven
     std::string id = entry->incident;
     if (id.size() != 32) {
         auto made = incidentId();
-        if (!made) return failure();
+        if (!made) return std::nullopt;
         id = std::move(*made);
     }
     Packet own = boot;
@@ -509,10 +510,19 @@ Status publishBridgeReport(const fs::path& root, const Packet& boot, const Inven
     v["commands"] = json::Value::array();
     v["attribution"] = inventory.bridgeExitAttributionJson(bridge);
     v["dropped"] = inventory.droppedJson(nullptr);
-    const auto text = json::writeCanonical(v) + "\n";
-    if (text.size() > 4 * 1024 * 1024) return failure();
-    SUPPLE_TRY(privatePublish(root / (std::string(own.incident.data(), 32) + ".json"), text));
+    auto text = json::writeCanonical(v) + "\n";
+    if (text.size() > 4 * 1024 * 1024) return std::nullopt;
+    return PreparedBridgeReport{std::move(id), std::move(text)};
+}
+Status writeBridgeReport(const fs::path& root, const PreparedBridgeReport& report) {
+    SUPPLE_TRY(privatePublish(root / (report.id + ".json"), report.text));
     return pruneReports(root);
+}
+Status publishBridgeReport(const fs::path& root, const Packet& boot, const Inventory& inventory,
+                           std::uint16_t bridge) {
+    const auto prepared = prepareBridgeReport(boot, inventory, bridge);
+    if (!prepared) return failure();
+    return writeBridgeReport(root, *prepared);
 }
 // Private overload lets storage tests control filesystem interleavings without
 // clocks or platform-specific hooks. Ordinary callers supply no checkpoint.

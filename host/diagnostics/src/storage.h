@@ -28,6 +28,18 @@ Status publishReport(const std::filesystem::path& root, const Packet& boot, cons
 // alone. `bridge` must be an ended one in `inventory`.
 Status publishBridgeReport(const std::filesystem::path& root, const Packet& boot,
                            const Inventory& inventory, std::uint16_t bridge);
+// The same in two steps, so that the supervisor can do the second off its receive loop. The first
+// formats the report from the inventory as it is now (in memory, no file); it fails when `bridge`
+// is not an ended one or the report would exceed its size. The second writes it and applies
+// retention, which reads every report in the folder: that is the part that takes time.
+struct PreparedBridgeReport {
+    std::string id;    // the incident, 32 lowercase hex characters
+    std::string text;  // the canonical report
+};
+std::optional<PreparedBridgeReport> prepareBridgeReport(const Packet& boot,
+                                                        const Inventory& inventory,
+                                                        std::uint16_t bridge);
+Status writeBridgeReport(const std::filesystem::path& root, const PreparedBridgeReport& report);
 void removeMarker(const std::filesystem::path& root, const Packet& boot);
 // The worker removes its own marker, which it still holds open and locked, when no supervisor
 // is left to do it (ADR-0091). POSIX unlinks the file while the lock is still held, so there is

@@ -1619,7 +1619,9 @@ It is never a restart notice and takes no place in the suspect window, and reten
 5 of them apart from the 20 crash reports, so they cannot evict the report behind a suspicion. The app can name the
 report a bridge's death may have caused: the worker mints the id and sends it with the end, and the failed fx's
 `engine.status.failed_errors[]` entry and `fx.failed` carry it as `incident` once the end was observed (it may name
-no report: a repeat, the run's limit); the GUI does not show it yet (the viewer, 7c). Tested on Linux only
+no report: a repeat, the run's limit); the GUI does not show it yet (the viewer, 7c). The supervisor writes bridge reports on a thread of its own
+(drained before its own report and exit), so the disk work of a bridge report no longer holds up its receive loop;
+the writer's contract is tested, the loop's non-blocking is not (no test slows a write down). Tested on Linux only
 (unit tests, `clap-host.diagnostics-inventory` with the real bridge); the Windows exception
 classification and the macOS signal path are unproven until native CI runs. On Windows the
 `test_bridge_diagnostics` cases that end a bridge from outside (a signal, a bridge that died

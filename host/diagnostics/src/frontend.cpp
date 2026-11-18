@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include "background.h"
 #include "inventory.h"
 #include "storage.h"
 #include "supple/base/paths.h"
@@ -143,6 +144,7 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
     closeProtocolStdio();
     bool hasTerminal = false, markerUnavailable = false, ownsMarker = false;
     Inventory inventory;
+    detail::BackgroundWriter bridgeReports;
     std::optional<std::uint32_t> expected;
     Packet packet, terminal;
     TraceSnapshot trace;
@@ -162,9 +164,23 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
             const bool applied = inventory.apply(packet);
             if (applied &&
                 packet.instance.event == static_cast<std::uint8_t>(diagctx::EventKind::Bridge) &&
-                inventory.admitBridgeReport(packet.instance.bridge) && storage &&
-                !publishBridgeReport(options.directory, boot, inventory, packet.instance.bridge))
-                std::fputs("a plug-in bridge died; its local report could not be saved\n", stderr);
+                inventory.admitBridgeReport(packet.instance.bridge) && storage) {
+                // Formatted here, from the inventory as it is now; written (and the folder's
+                // retention applied, which reads every report in it) on the writer's thread, so
+                // the packets behind this one are not held up by the disk.
+                auto prepared = prepareBridgeReport(boot, inventory, packet.instance.bridge);
+                if (!prepared)
+                    std::fputs("a plug-in bridge died; its local report could not be saved\n",
+                               stderr);
+                else
+                    bridgeReports.post(
+                        [directory = options.directory, report = std::move(*prepared)] {
+                            if (!writeBridgeReport(directory, report))
+                                std::fputs(
+                                    "a plug-in bridge died; its local report could not be saved\n",
+                                    stderr);
+                        });
+            }
             continue;
         }
         if (packet.kind == Message::Terminal) {
@@ -178,6 +194,9 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
             acknowledge(native);
         }
     }
+    // Every bridge report is on disk before the worker's own is written and before this process
+    // ends, and no two retention passes overlap.
+    bridgeReports.finish();
     bool fatal = false;
     const int code = wait(native, fatal, hasTerminal ? std::nullopt : expected);
     close(native);

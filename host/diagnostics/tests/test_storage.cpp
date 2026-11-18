@@ -4,8 +4,11 @@
 #include <algorithm>
 #include <array>
 #include <barrier>
+#include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <functional>
+#include <mutex>
 #include <thread>
 #include <vector>
 #if defined(_WIN32)
@@ -17,6 +20,7 @@
 #endif
 #include <windows.h>
 #endif
+#include "../src/background.h"
 #include "../src/inventory.h"
 #include "../src/private_files.h"
 #include "../src/storage.h"
@@ -327,6 +331,84 @@ TEST_CASE("a bridge's report is written under the id the worker minted for it") 
     const auto made = jsonFiles(other.path);
     REQUIRE(made.size() == 1);
     CHECK(made[0].stem().string().size() == 32);
+}
+TEST_CASE("a bridge report is prepared in memory and written separately, to the same file") {
+    Root root;
+    const std::string id = "00112233445566778899aabbccddeeff";
+    const auto inventory = bridgeThatEnded(supple::diagctx::BridgeHow::Signal, 11, id);
+    const auto prepared = prepareBridgeReport(boot(0), inventory, 1);
+    REQUIRE(prepared);
+    CHECK(prepared->id == id);
+    CHECK(jsonFiles(root.path).empty());  // nothing on disk yet: preparing only formats
+    REQUIRE(writeBridgeReport(root.path, *prepared));
+    const auto files = jsonFiles(root.path);
+    REQUIRE(files.size() == 1);
+    CHECK(files[0].stem().string() == id);
+    CHECK(*readTextFile(files[0]) == prepared->text);
+    CHECK_FALSE(writeBridgeReport(root.path, *prepared));  // never replaces a report
+    // The same report publishBridgeReport makes (the two are one operation to its callers).
+    Root together;
+    REQUIRE(publishBridgeReport(together.path, boot(0), inventory, 1));
+    REQUIRE(jsonFiles(together.path).size() == 1);
+    CHECK(*readTextFile(jsonFiles(together.path)[0]) == prepared->text);
+    // Not a bridge that is there and ended: nothing to prepare.
+    CHECK_FALSE(prepareBridgeReport(boot(0), inventory, 2));
+    const auto running = bridgeThatEnded(supple::diagctx::BridgeHow::None, 0);
+    CHECK_FALSE(prepareBridgeReport(boot(0), running, 1));
+}
+TEST_CASE("background work is queued without waiting, runs in order off the caller's thread") {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool release = false, firstStarted = false;
+    std::vector<int> order;
+    std::vector<std::thread::id> threads;
+    {
+        BackgroundWriter writer;
+        writer.post([&] {
+            std::unique_lock lock(mutex);
+            firstStarted = true;
+            changed.notify_all();
+            changed.wait(lock, [&] { return release; });  // holds the thread until released
+            order.push_back(1);
+            threads.push_back(std::this_thread::get_id());
+        });
+        {
+            std::unique_lock lock(mutex);
+            changed.wait(lock, [&] { return firstStarted; });
+        }
+        // The first piece is still running; posting more returns at once, not after it.
+        writer.post([&] {
+            std::lock_guard lock(mutex);
+            order.push_back(2);
+        });
+        writer.post([&] {
+            std::lock_guard lock(mutex);
+            order.push_back(3);
+        });
+        {
+            std::lock_guard lock(mutex);
+            CHECK(order.empty());  // none has finished: the posts did not wait for the first
+            release = true;
+        }
+        changed.notify_all();
+        writer.finish();  // drains what is queued, then joins
+        CHECK(order == std::vector<int>{1, 2, 3});
+        REQUIRE(threads.size() == 1);
+        CHECK(threads[0] != std::this_thread::get_id());
+        // After finish, work runs at once on the caller's thread; finish again is harmless.
+        std::thread::id after;
+        writer.post([&] { after = std::this_thread::get_id(); });
+        CHECK(after == std::this_thread::get_id());
+        writer.finish();
+    }
+}
+TEST_CASE("a background writer that is destroyed first runs what it was given") {
+    std::vector<int> done;
+    {
+        BackgroundWriter writer;
+        for (int i = 0; i < 5; ++i) writer.post([&done, i] { done.push_back(i); });
+    }  // the destructor finishes
+    CHECK(done == std::vector<int>{0, 1, 2, 3, 4});
 }
 TEST_CASE("a bridge_exit report is valid only as the report of a bridge that died on its own") {
     Root root;
