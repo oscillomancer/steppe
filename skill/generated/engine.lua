@@ -1848,6 +1848,7 @@ q = nil
 ---@class Steppe.track_add_args
 ---@field type? "channel"|"buss"|"master" (default: "channel")
 ---@field name? string
+---@field color? string
 ---@field parent? string Parent track id, e.g. "tr_1".
 ---@field index? integer
 ---@field channels? integer

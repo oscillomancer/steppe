@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace supple::ui {
 
@@ -192,7 +193,35 @@ bool List::onPointer(const PointerEvent& e) {
             if (!row) return true;
             auto activate = onActivate;
             select(*row, true);
+            press_ = e.clicks >= 2 ? std::nullopt : std::optional(Press{*row, e.pos});
             if (e.clicks >= 2 && activate) activate(*row);
+            return true;
+        }
+        case PointerEvent::Type::Move: {
+            if (!press_ || !onDrag) return false;
+            auto drag = onDrag;  // the owner may rebuild the list
+            const std::size_t row = press_->row;
+            if (!press_->dragging) {
+                if (std::abs(e.pos.x - press_->at.x) <= kDragSlop &&
+                    std::abs(e.pos.y - press_->at.y) <= kDragSlop)
+                    return true;
+                press_->dragging = true;
+                drag(row, DragPhase::Begin, e.pos);
+                return true;
+            }
+            drag(row, DragPhase::Move, e.pos);
+            return true;
+        }
+        case PointerEvent::Type::Up:
+        case PointerEvent::Type::Cancel: {
+            if (!press_) return false;
+            const Press press = *std::exchange(press_, std::nullopt);
+            if (press.dragging && onDrag) {
+                auto drag = onDrag;
+                drag(press.row,
+                     e.type == PointerEvent::Type::Up ? DragPhase::End : DragPhase::Cancel,
+                     e.type == PointerEvent::Type::Up ? e.pos : press.at);
+            }
             return true;
         }
         case PointerEvent::Type::Wheel:

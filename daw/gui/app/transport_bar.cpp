@@ -123,6 +123,11 @@ void setIfChanged(ui::Button* button, const std::string& text) {
     if (button && button->valueText() != text) button->setText(text);
 }
 
+// "3 dropouts", "1 dropout": a count with its noun.
+std::string counted(std::int64_t n, const char* one, const char* many) {
+    return std::to_string(n) + " " + (n == 1 ? one : many);
+}
+
 std::string countText(int bars) { return bars > 0 ? "count " + std::to_string(bars) : "count"; }
 
 // An arc around `o` from a0 to a1 (clockwise) ending in an arrowhead.
@@ -281,6 +286,34 @@ class TransportButton : public ui::Button {
     std::string badge_;
 };
 
+EngineReadout engineReadout(const engine::EngineStatus& st) {
+    static constexpr const char* kDot = " \xc2\xb7 ";  // a middle dot between parts
+    EngineReadout out;
+    if (!st.running) {
+        out.problems = "Audio stopped";
+        return out;
+    }
+    if (st.sampleRate > 0) {
+        char buf[32];
+        std::snprintf(buf, sizeof buf, "%.1f", st.sampleRate / 1000.0);
+        std::string rate(buf);
+        if (rate.ends_with(".0")) rate.resize(rate.size() - 2);
+        out.format = rate + " kHz";
+    }
+    // The device's period (the JACK quantum) is the buffer the user set; the
+    // engine's block only splits it. A backend that reports no period runs in
+    // blocks.
+    if (const std::int64_t buffer = st.period > 0 ? st.period : st.block; buffer > 0)
+        out.format += (out.format.empty() ? "" : kDot) + counted(buffer, "sample", "samples");
+    auto problem = [&](std::int64_t n, const char* one, const char* many) {
+        if (n > 0) out.problems += (out.problems.empty() ? "" : kDot) + counted(n, one, many);
+    };
+    problem(st.xruns, "dropout", "dropouts");                      // the device ran dry
+    problem(st.anticipationMisses, "render gap", "render gaps");   // nothing rendered in time
+    problem(st.processErrors, "plug-in error", "plug-in errors");  // a plug-in would not start
+    return out;
+}
+
 TransportBar::TransportBar(engine::EngineApp& app, AppActions& actions, cmd::Dispatcher& dispatcher,
                            ui::Root& root)
     : app_(app), actions_(actions), dispatcher_(dispatcher), root_(root) {}
@@ -291,6 +324,7 @@ std::unique_ptr<ui::Node> TransportBar::build() {
     bar->layout.height = ui::SizeRule::fixed(44);
     bar->layout.padding = ui::Insets::xy(12, 0);
     bar->layout.gap = 6;
+    bar->layout.align = ui::Layout::Align::Center;  // buttons and readouts on one line
     using Symbol = TransportButton::Symbol;
     auto symbolButton = [&](const char* id, Symbol symbol, const char* text,
                             std::function<void()> click, float width = 30) {
@@ -395,8 +429,12 @@ std::unique_ptr<ui::Node> TransportBar::build() {
     rateValue_ =
         &readout.emplace<ui::Label>("transport.rate.value", "1.0", ui::Font::Mono, "caption");
     bar->emplace<ui::Node>("transport.spacer");  // takes the rest
-    engine_ =
-        &bar->emplace<ui::Label>("transport.engine", "", ui::Font::Mono, "small", "ink-quiet");
+    // Warnings first, in the warning colour and only while there are any; then
+    // what the device runs at, quiet.
+    problems_ = &bar->emplace<ui::Label>("transport.engine.problems", "", ui::Font::UiBold, "small",
+                                         "meter-hot");
+    bar->emplace<ui::Node>("transport.engine.gap").layout.width = ui::SizeRule::fixed(6);
+    engine_ = &bar->emplace<ui::Label>("transport.engine", "", ui::Font::Ui, "small", "ink-quiet");
     return bar;
 }
 
@@ -473,22 +511,9 @@ void TransportBar::sync(bool event, std::chrono::steady_clock::time_point now) {
         (!lastStatus_ || moving != moving_ || (!moving && event) ||
          ((moving || syncOn_) && now - *lastStatus_ >= std::chrono::milliseconds(250)))) {
         lastStatus_ = now;
-        const engine::EngineStatus st = app_.engineStatus();
-        if (!st.running) {
-            setIfChanged(engine_, "engine stopped");
-        } else {
-            // The device's period (the JACK quantum) is the buffer the user
-            // set; the engine's block only splits it. A backend that reports
-            // no period runs in blocks.
-            char buf[96];
-            const std::int64_t buffer = st.period > 0 ? st.period : st.block;
-            std::snprintf(buf, sizeof buf, "%.1fk/%lld  xr %lld  err %lld  mis %lld",
-                          st.sampleRate / 1000.0, static_cast<long long>(buffer),
-                          static_cast<long long>(st.xruns),
-                          static_cast<long long>(st.processErrors),
-                          static_cast<long long>(st.anticipationMisses));
-            setIfChanged(engine_, buf);
-        }
+        const EngineReadout readout = engineReadout(app_.engineStatus());
+        setIfChanged(engine_, readout.format);
+        setIfChanged(problems_, readout.problems);
     }
     moving_ = moving;
 }

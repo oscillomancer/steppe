@@ -60,6 +60,26 @@ class Lanes : public ui::Node {
     static double autoItemValue(const model::AutomationItem& ai, double value) {
         return ai.baseline + ai.amplitude * (value - ai.baseline);
     }
+    // An item's name bar (gui.md §4.3): the band across its top, in the item's
+    // colour, that carries its label and marks. An item too short for one
+    // keeps its label over the body.
+    static constexpr float kNameBar = 15;
+    static bool hasNameBar(const ui::Rect& item) { return item.h >= 2 * kNameBar; }
+    // Where an item's fades are drawn: its body, under the name bar.
+    static ui::Rect fadeArea(const ui::Rect& item);
+    // The colour an item is drawn in: its own (item.set {color}) when it has
+    // one the theme knows, else its track's (§7), else its strip type's.
+    static ui::Color itemColor(const ui::Theme& theme, const model::Item& item,
+                               const model::Track* track, model::StripType type);
+    // What an item is called: its heard take's name, or an unnamed audio
+    // take's media file. Empty when it has neither (the view then shows the
+    // item's id).
+    // The colour of a MIDI item's notes: the item's, drawn towards the ink.
+    // On the body, which is a wash of the same hue, the pure colour is hard
+    // to read (yellow on yellow in the light theme); towards the ink it is
+    // lighter on a dark ground and darker on a light one.
+    static ui::Color noteColor(const ui::Theme& theme, ui::Color item);
+    static std::string itemLabel(const model::Session& session, const model::Item& item);
     // Take lanes (comping): an item with several takes, tall enough, shows
     // each take in its own lane under its label; the heard one is lit.
     static bool showsTakeLanes(const ui::Rect& item, std::size_t takes);
@@ -85,7 +105,8 @@ class Lanes : public ui::Node {
                    const model::Take& take, const model::MediaSource& source, std::uint32_t rgba);
     void drawMidi(const ui::Rect& r, const model::Item& item, const model::Take& take,
                   const model::MidiSource& source, std::uint32_t rgba, std::uint32_t border);
-    void drawFades(const ui::Rect& r, const model::Item& item, std::uint32_t rgba);
+    void drawFades(const ui::Rect& r, const model::Item& item, std::uint32_t rgba,
+                   std::uint32_t shade);
     void drawEnvelope(ui::Canvas& c, std::size_t row, const ui::Rect& r);
 
     peaks::PeakService& peaks_;

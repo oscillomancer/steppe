@@ -9,14 +9,15 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "supple/engine/app.h"
+#include "supple/ui/list.h"
 #include "supple/ui/node.h"
 
 namespace supple::ui {
 class Root;
-class List;
 class TextField;
 class Label;
 }  // namespace supple::ui
@@ -43,6 +44,22 @@ class PluginBrowser {
     void open(std::function<void(const std::string&)> onAdd, std::string title = {});
     void close();
     bool isOpen() const { return page_ != nullptr; }
+    // The browser as part of another panel (the side panel's Browser tab,
+    // gui.md §4.14): the same search, list, favourites and rescan, sized by
+    // its parent, with no title or Close, and node ids that begin with
+    // `prefix` so that a popup browser may be open beside it. `onAdd` runs
+    // with a plugin id on Enter or a double click, and the browser stays.
+    // Built once; reload() tells it when it comes into view.
+    std::unique_ptr<ui::Node> buildEmbedded(std::string prefix,
+                                            std::function<void(const std::string&)> onAdd);
+    void reload();       // re-reads the favourites file and the scan cache
+    void focusSearch();  // typing searches
+    // A row dragged out of the list (ui::List::onDrag): the plugin's id and
+    // name, the phase and the pointer. Set before the browser is built; the
+    // owner draws the feedback and takes the drop.
+    std::function<void(const std::string& id, const std::string& name, ui::DragPhase phase,
+                       ui::Point at)>
+        onDrag;
 
     // Frame pass: runs a rescan that was requested last frame (never inside the
     // click that asked for it, so "Scanning…" paints first).
@@ -59,9 +76,10 @@ class PluginBrowser {
     // The composed text of a row — exactly what paintRow draws, so tests can
     // read a row without pixels. `name` follows a stock plugin's with what it
     // is ("Ghyll (reverb)"); `vendor` is "stock", the vendor, or "shadowed"
-    // for a copy an earlier path entry wins over.
+    // for a copy an earlier path entry wins over; `format` is "VST3" for one,
+    // else empty (the side panel's rows show it, having no id column).
     struct RowText {
-        std::string name, vendor, id;
+        std::string name, vendor, id, format;
     };
     RowText rowText(std::size_t row) const;
     std::size_t rowCount() const { return rows_.size(); }
@@ -100,6 +118,9 @@ class PluginBrowser {
     ui::Label* detailLabel_ = nullptr;
     ui::Label* title_ = nullptr;
     std::string titleText_ = "Add plugin";
+    std::pair<std::string, std::string> dragged_;  // the plugin in a drag: id, name
+    std::string prefix_ = "browser";               // of its node ids
+    bool embedded_ = false;
     std::string detail_;
     std::string scanJob_;  // the background scan being followed
 };

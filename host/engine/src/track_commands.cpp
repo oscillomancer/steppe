@@ -42,7 +42,7 @@ bool trackFeedsRack(const model::Session& s, Id track, Id rack) {
 
 struct TrackAddArgs {
     model::StripType type = model::StripType::Channel;
-    std::optional<std::string> name, parent;
+    std::optional<std::string> name, parent, color;
     std::optional<std::int64_t> index;
     std::optional<std::int64_t> channels;
 };
@@ -139,12 +139,15 @@ void registerTrackCommands(cmd::Registry& registry) {
             "parent: a buss/master id (default tr_0); masters have no parent; index: position "
             "among its siblings; name: default the first free ch_N, buss_N or mstr_N. A new "
             "channel gets the user's default monitoring (on unless set otherwise; monitoring "
-            "needs the track armed).";
+            "needs the track armed). color: a track colour's name or \"#rrggbb\", \"\" for none; "
+            "default for a channel or buss the palette colour the fewest tracks carry (red "
+            "first), for a master none.";
         c.tags = {"track"};
         c.args = schema::object<TrackAddArgs>("track_add_args")
                      .field("type", &TrackAddArgs::type, model::stripTypeSchema())
                      .defaultValue(model::StripType::Channel)
                      .field("name", &TrackAddArgs::name, schema::string())
+                     .field("color", &TrackAddArgs::color, schema::string())
                      .field("parent", &TrackAddArgs::parent, idArg("tr", "Parent track"))
                      .field("index", &TrackAddArgs::index, schema::integer().min(0))
                      .field("channels", &TrackAddArgs::channels,
@@ -154,7 +157,10 @@ void registerTrackCommands(cmd::Registry& registry) {
                        .field("track", &TrackRef::track, schema::string())
                        .build();
         c.examples = {
-            {"Add a bass track", j(R"({"name": "Bass"})"), j(R"({"track": "tr_1"})"), "empty"}};
+            {"Add a bass track", j(R"({"name": "Bass"})"), j(R"({"track": "tr_1"})"), "empty"},
+            {"Add a green buss for the drums",
+             j(R"({"name": "Drums", "type": "buss", "color": "green"})"), j(R"({"track": "tr_1"})"),
+             "empty"}};
         c.run = [](const TrackAddArgs& a, Context& ctx) -> Result<TrackRef> {
             model::EditTxn& t = app(ctx).txn();
             Id parent = model::kMaster;
@@ -175,10 +181,20 @@ void registerTrackCommands(cmd::Registry& registry) {
             if (a.type != model::StripType::Channel && a.channels.value_or(2) < 2)
                 return Error("track.channels", "busses and masters require at least two channels",
                              "/channels", "use 2..128 channels");
+            if (a.color && !model::validTrackColor(*a.color))
+                return Error("track.color", "unknown colour \"" + *a.color + "\"", "/color",
+                             "red, orange, yellow, green, teal, blue, violet, grey or \"#rrggbb\"; "
+                             "\"\" for none; omit it for the next palette colour");
             model::Track tr;
             tr.type = a.type;
             tr.name = a.name.value_or("");
             if (tr.name.empty()) tr.name = model::nextTrackName(t.preview(), a.type);
+            // A colour of its own for every new channel and buss, so its items
+            // and strip can be told from the others' at a glance (gui.md §7).
+            if (a.color)
+                tr.color = *a.color;
+            else if (a.type != model::StripType::Master)
+                tr.color = model::nextTrackColor(t.preview());
             if (a.type == model::StripType::Channel) tr.record.monitor = app(ctx).defaultMonitor();
             if (a.type != model::StripType::Master) tr.parent = parent;
             if (a.channels) tr.channels = static_cast<int>(*a.channels);

@@ -4,6 +4,8 @@
 #include <doctest/doctest.h>
 #include <stb_image.h>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -467,6 +469,80 @@ TEST_CASE("a text field edits by UTF-8 character and word, with selection and cl
     CHECK(field.text() == "hello hello 日本");
 }
 
+TEST_CASE("a list row dragged past the slop reports its drag; a click does not") {
+    REQUIRE_GL();
+    Root root(*fixture().window, fixture().fonts, Theme::dark());
+    auto content = std::make_unique<Node>("root");
+    content->layout.dir = Layout::Dir::Column;
+    auto& list = content->emplace<List>("list");
+    list.rowHeight = 20;
+    list.setCount(50);
+    struct Heard {
+        std::size_t row;
+        DragPhase phase;
+        Point at;
+    };
+    std::vector<Heard> heard;
+    std::size_t activated = 0;
+    list.onActivate = [&](std::size_t) { ++activated; };
+    root.setContent(std::move(content));
+    root.frame(false);
+    const Rect b = list.bounds();
+    const Point press{b.x + 30, b.y + 2 * 20 + 10};  // the third row
+    auto send = [&](PointerEvent::Type type, Point at, int clicks = 1) {
+        root.pointer({type, at, 1, clicks});
+    };
+    // No listener: a press and a move only select.
+    send(PointerEvent::Type::Down, press);
+    send(PointerEvent::Type::Move, {press.x + 40, press.y + 40});
+    send(PointerEvent::Type::Up, {press.x + 40, press.y + 40});
+    CHECK(list.selected() == std::optional<std::size_t>(2));
+
+    list.onDrag = [&](std::size_t row, DragPhase phase, Point at) {
+        heard.push_back({row, phase, at});
+    };
+    // A click, and a press that stays within the slop: no drag.
+    send(PointerEvent::Type::Down, press);
+    send(PointerEvent::Type::Move, {press.x + List::kDragSlop, press.y - List::kDragSlop});
+    send(PointerEvent::Type::Up, {press.x + List::kDragSlop, press.y});
+    CHECK(heard.empty());
+    // Past it: Begin once, then Move, then End where it was released, far
+    // outside the list; the row is the one pressed throughout.
+    send(PointerEvent::Type::Down, press);
+    send(PointerEvent::Type::Move, {press.x + 6, press.y});
+    send(PointerEvent::Type::Move, {press.x - 200, press.y + 300});
+    send(PointerEvent::Type::Up, {press.x - 210, press.y + 310});
+    REQUIRE(heard.size() == 3);
+    CHECK(heard[0].phase == DragPhase::Begin);
+    CHECK(heard[1].phase == DragPhase::Move);
+    CHECK(heard[2].phase == DragPhase::End);
+    for (const Heard& h : heard) CHECK(h.row == 2);
+    CHECK(heard[2].at.x == press.x - 210);
+    CHECK(heard[2].at.y == press.y + 310);
+    CHECK(list.selected() == std::optional<std::size_t>(2));
+    // Motion after the release is not a drag.
+    send(PointerEvent::Type::Move, {press.x + 50, press.y});
+    CHECK(heard.size() == 3);
+    // A gesture taken away ends it with Cancel.
+    heard.clear();
+    send(PointerEvent::Type::Down, press);
+    send(PointerEvent::Type::Move, {press.x + 20, press.y});
+    root.releaseWithin(&list);
+    REQUIRE(heard.size() == 2);
+    CHECK(heard[1].phase == DragPhase::Cancel);
+    send(PointerEvent::Type::Up, press);
+    CHECK(heard.size() == 2);
+    // A double click still activates, and its second press starts no drag.
+    heard.clear();
+    send(PointerEvent::Type::Down, press);
+    send(PointerEvent::Type::Up, press);
+    send(PointerEvent::Type::Down, press, 2);
+    send(PointerEvent::Type::Move, {press.x + 30, press.y});
+    send(PointerEvent::Type::Up, {press.x + 30, press.y}, 2);
+    CHECK(activated == 1);
+    CHECK(heard.empty());
+}
+
 TEST_CASE("a list paints only visible rows and navigates by keys") {
     REQUIRE_GL();
     Root root(*fixture().window, fixture().fonts, Theme::dark());
@@ -718,6 +794,124 @@ TEST_CASE("mixer controls: fader taper and gestures, pan, meter hold and clip, t
     CHECK(root.click("solo"));
     CHECK(soloed);
     CHECK(solo.on());
+}
+
+TEST_CASE("a disabled text field lies flat and its text is faint; it takes no click or text") {
+    REQUIRE_GL();
+    const Theme theme = Theme::dark();
+    Root root(*fixture().window, fixture().fonts, theme);
+    auto content = std::make_unique<Node>("root");
+    content->layout.dir = Layout::Dir::Row;
+    content->layout.padding = Insets::all(16);
+    content->layout.gap = 16;
+    auto make = [&](const char* id) -> TextField& {
+        auto& f = content->emplace<TextField>(id, "Bass line");
+        f.layout.width = SizeRule::fixed(120);
+        f.layout.height = SizeRule::fixed(22);
+        return f;
+    };
+    TextField& live = make("live");
+    TextField& off = make("off");
+    off.enabled = false;
+    root.setContent(std::move(content));
+    root.frame(false);
+    const gui::Image image = root.readBack();
+    const float ratio = root.pixelRatio();
+    // The light a field gives off: its red channel summed over its bounds,
+    // one unit inside (the two share an outline colour).
+    auto light = [&](const Node& node) {
+        const Rect r = node.bounds().inset(1.5f);
+        long sum = 0;
+        for (float y = r.y; y < r.bottom(); y += 1 / ratio)
+            for (float x = r.x; x < r.right(); x += 1 / ratio)
+                sum += image.rgba[(static_cast<std::size_t>(y * ratio) *
+                                       static_cast<std::size_t>(image.width) +
+                                   static_cast<std::size_t>(x * ratio)) *
+                                  4];
+        return sum;
+    };
+    CHECK(light(off) < light(live));  // a darker face and fainter text
+    CHECK_FALSE(root.click("off"));
+    CHECK(root.focused() == nullptr);
+    CHECK(root.click("live"));
+    CHECK(root.focused() == &live);
+    root.text("!");
+    CHECK(off.text() == "Bass line");
+}
+
+TEST_CASE("colour is state: an off pill and a quiet button at rest are ink alone") {
+    REQUIRE_GL();
+    const Theme theme = Theme::dark();
+    Root root(*fixture().window, fixture().fonts, theme);
+    auto content = std::make_unique<Node>("root");
+    content->layout.dir = Layout::Dir::Row;
+    content->layout.padding = Insets::all(16);
+    content->layout.gap = 16;
+    auto pill = [&](const char* id, bool on) -> Toggle& {
+        auto& t = content->emplace<Toggle>(id, "S", "solo");
+        t.pill = true;
+        t.layout.width = SizeRule::fixed(24);
+        t.layout.height = SizeRule::fixed(16);
+        t.setOn(on);
+        return t;
+    };
+    Toggle& off = pill("off", false);
+    Toggle& on = pill("on", true);
+    auto& quiet = content->emplace<Button>("quiet", "fx");
+    quiet.quiet = true;
+    auto& boxed = content->emplace<Button>("boxed", "fx");
+    root.setContent(std::move(content));
+    root.frame(false);
+    const gui::Image image = root.readBack();
+    const float ratio = root.pixelRatio();
+    auto at = [&](float x, float y) {
+        const auto i =
+            (static_cast<std::size_t>(y * ratio) * static_cast<std::size_t>(image.width) +
+             static_cast<std::size_t>(x * ratio)) *
+            4;
+        return std::array<int, 3>{image.rgba[i], image.rgba[i + 1], image.rgba[i + 2]};
+    };
+    // The share of a node's pixels that are plainly coloured: the theme's inks
+    // and grounds are warm greys, their channels within 24 of each other.
+    auto coloured = [&](const Node& node) {
+        const Rect b = node.bounds();
+        int n = 0, all = 0;
+        for (float y = b.y; y < b.bottom(); y += 1 / ratio)
+            for (float x = b.x; x < b.right(); x += 1 / ratio) {
+                const auto p = at(x, y);
+                ++all;
+                if (std::max({p[0], p[1], p[2]}) - std::min({p[0], p[1], p[2]}) > 60) ++n;
+            }
+        return static_cast<double>(n) / all;
+    };
+    CHECK(coloured(off) == 0.0);  // neither its outline nor its letter
+    CHECK(coloured(on) > 0.5);    // filled with the state's colour
+    // A quiet button has no box at rest: its edge is the surface it lies on.
+    const Rect q = quiet.bounds(), b = boxed.bounds();
+    const auto surface = at(q.x - 4, q.y + q.h / 2);
+    CHECK(at(q.x + 0.5f, q.y + q.h / 2) == surface);
+    CHECK(at(b.x + 0.5f, b.y + b.h / 2) != surface);
+    // Its text is quiet ink at rest and full ink with emphasis: more light.
+    auto light = [&](const Node& node) {
+        const Rect r = node.bounds();
+        long sum = 0;
+        for (float y = r.y; y < r.bottom(); y += 1 / ratio)
+            for (float x = r.x; x < r.right(); x += 1 / ratio) sum += at(x, y)[0];
+        return sum;
+    };
+    const long rest = light(quiet);
+    CHECK_FALSE(quiet.emphasis());
+    quiet.setEmphasis(true);
+    root.frame(false);
+    const gui::Image lit = root.readBack();
+    long sum = 0;
+    for (float y = q.y; y < q.bottom(); y += 1 / ratio)
+        for (float x = q.x; x < q.right(); x += 1 / ratio)
+            sum += lit.rgba[(static_cast<std::size_t>(y * ratio) *
+                                 static_cast<std::size_t>(lit.width) +
+                             static_cast<std::size_t>(x * ratio)) *
+                            4];
+    CHECK(sum > rest);
 }
 
 TEST_CASE("a split pan control: two bars, each its own value and home (ADR-0066)") {
@@ -1042,6 +1236,24 @@ TEST_CASE("text ellipsis removes whole UTF-8 characters") {
     text->invalidate();
     root.frame(false);
     CHECK(pixelDistance(expected, root.readBack()) == 0);
+}
+
+TEST_CASE("canvas: a character the mono face lacks is drawn from the UI face") {
+    REQUIRE_GL();
+    const Theme theme = Theme::dark();
+    Canvas canvas(fixture().window->vg(), fixture().fonts, theme);
+    auto width = [&](std::string_view text, Font font) {
+        return static_cast<double>(canvas.textWidth(text, font, 14));
+    };
+    // The mono subset has no ellipsis; a shortened value still shows one.
+    const std::string ellipsis = "\xE2\x80\xA6";
+    const double cell = width("0", Font::Mono);
+    CHECK(width("m", Font::Mono) == doctest::Approx(cell));  // it is mono
+    CHECK(width(ellipsis, Font::Mono) == doctest::Approx(width(ellipsis, Font::Ui)));
+    CHECK(width(ellipsis, Font::MonoBold) == doctest::Approx(width(ellipsis, Font::UiBold)));
+    CHECK(width(ellipsis, Font::Mono) != doctest::Approx(cell));
+    // What the face has is still its own.
+    CHECK(width("i", Font::Mono) != doctest::Approx(width("i", Font::Ui)));
 }
 
 TEST_CASE("unchanged button text and scrollbar ranges leave the content cache intact") {

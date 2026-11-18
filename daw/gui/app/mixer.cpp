@@ -970,6 +970,9 @@ void Mixer::rebuild() {
         });
         st.addFx->layout.width = ui::SizeRule::fixed(16);
         st.addFx->layout.height = ui::SizeRule::fixed(15);
+        // As in the TCP: text alone at rest, "fx" in full ink over a chain.
+        st.fx->quiet = st.addFx->quiet = true;
+        st.fx->setEmphasis(!t.chain.empty() || !t.inputChain.empty());
         frame->emplace<ColorStripe>("mixer.color." + tid, t.color);
         if (t.freeze) frame->emplace<FrozenMark>("mixer.frozen." + tid);
         // The plug-in chain (a click opens or closes the plug-in's editor); the
@@ -1326,6 +1329,16 @@ const Mixer::Strip* Mixer::stripAt(ui::Point p) const {
         if (st.node->bounds().intersect(clip).contains(p)) return &st;
     }
     return nullptr;
+}
+
+std::optional<TrackTarget> Mixer::trackTargetAt(ui::Point p) const {
+    if (!visible() || !panel_->visibleInTree()) return std::nullopt;
+    const Strip* strip = stripAt(p);
+    const auto id = strip ? model::Id::parse(strip->track) : std::nullopt;
+    if (!id || !app_.head().tracks.find(*id)) return std::nullopt;
+    const ui::Rect clip =
+        strip->node->parent() ? strip->node->parent()->bounds() : strip->node->bounds();
+    return TrackTarget{*id, strip->node->bounds().intersect(clip)};
 }
 
 void Mixer::dragStrip(const std::string& track, DragPhase phase, ui::Point p) {
@@ -1685,6 +1698,7 @@ void Mixer::update() {
         st.solo->setOn(t->solo != model::Solo::Off);
         st.polarity->enabled = st.mono->enabled = !t->freeze;
         st.addFx->enabled = !t->freeze;
+        st.fx->setEmphasis(!t->chain.empty() || !t->inputChain.empty());
         if (st.arm) st.arm->enabled = !t->freeze;
         if (st.monitor) st.monitor->enabled = !t->freeze;
         st.polarity->setOn(t->phaseInvert);

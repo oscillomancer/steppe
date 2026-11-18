@@ -100,13 +100,20 @@ Status generateSession(cmd::Dispatcher& dispatcher, const std::filesystem::path&
             fade["fade_in"] = 0.5;
             fade["fade_out"] = 0.75;
             if (i % 3 == 1) fade["mute"] = true;
-            if (i % 7 == 3) fade["locked"] = true;  // the arrange view draws the padlock
             if (auto r = run("item.set", std::move(fade)); !r) return std::move(r).error();
             if (i % 3 == 2) {
                 json::Value take = json::Value::object();
                 take["item"] = audioId;
                 take["from"] = audioTake;
                 if (auto r = run("take.add", std::move(take)); !r) return std::move(r).error();
+            }
+            // Locked last: a locked item refuses every edit, a new take among
+            // them (the 18th track has both). The arrange view draws the padlock.
+            if (i % 7 == 3) {
+                json::Value lock = json::Value::object();
+                lock["item"] = audioId;
+                lock["locked"] = true;
+                if (auto r = run("item.set", std::move(lock)); !r) return std::move(r).error();
             }
             json::Value midiItem = json::Value::object();
             midiItem["track"] = id;
