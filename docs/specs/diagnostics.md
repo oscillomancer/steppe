@@ -995,8 +995,10 @@ bridge protocol 27, 28 on Windows: `docs/specs/sandbox.md`) and tells the superv
 event (channel protocol 3), which keeps the slot with the bridge's entry and can copy its capsule
 out (`Inventory::slotCapsule`). Exercised for real on Linux, from a real plug-in fault in a real
 bridge to the capsule the supervisor read; the Windows and macOS code compiles and is proven by
-native CI only. Not built: parsing the capsule, labelling it and writing it into the report (6c.4):
-nothing reads what the supervisor holds yet, so a report is still today's.*Why the bridge captures itself.* The worker's capture works because the supervisor, its parent,
+native CI only. Built in 6c.4a: the parser (`parseBridgeCapsule`, below). Not built: labelling
+the capsule and writing it into the report (6c.4b onward): nothing reads what the supervisor holds
+yet, so a report is still today's.
+*Why the bridge captures itself.* The worker's capture works because the supervisor, its parent,
 reads the stopped worker while it waits in its handler. A bridge is a child of the worker and is
 connected to no supervisor; by the time anyone looks it is dead. Nothing can be read remotely, so
 the bridge must describe its own death, in its own fault handler, into storage that already
@@ -1092,6 +1094,31 @@ that stopped being a slot's. *Windows, not proven:* the supervisor duplicates th
 worker when it reads the packet, which may be after the worker closed it (the bridge's process
 object went) and the value was reused; the mapping check and the ordinal in the header decide
 whether what it got is the slot, and anything else is refused, but the race itself is unexercised.
+
+*The parser as built (6c.4a).* `parseBridgeCapsule(bytes, size)` in `diagnostics-capture`
+(`trace.h`), beside `parseCapsule`, with which it shares the thread reader (every role, reason,
+cell, generation and frame count validated; the fault thread first and the only one). It holds the
+bytes to what a handler writes and gives nothing otherwise: the `CTC5` magic, flags that are only
+the three the writer sets and always the table's, at least one and at most 128 threads, at most 256
+modules, `dropped` agreeing with its flag, no `unplaced` count (the parser works it out), no
+commands and no damaged or refused ones, modules whose range is not empty, whose identity is at most
+32 bytes with zeroes after it and whose reserved word is zero, the table copy whole and one this
+build wrote (`imageValid`), and no byte left over. Frames become a module index and an offset; the
+identity of a module is the lowercase hex of its id bytes (none for length 0). The header's
+`reserved` (the fault thread's id, low 32 bits) is any value: it only decides which slot of the
+table is left out. **Listing the other threads.** A capsule of exactly one thread (what Linux and
+Windows write) is completed from the table copy: every other slot with an id (not free, not being
+claimed, not repeated) and a registered role, in the table's order, as a thread of role `other`,
+`unavailable` with reason `not_collected`, with its registered role and worker number, and the
+entry it was inside as the table says: the open word of lowest address among those whose stack
+address lies in the thread's recorded stack (a thread that recorded none has none). Past 128
+threads the rest are counted in `dropped`. A capsule of several threads (macOS reads them all) is
+taken as it is and lists nothing from the table. The entries of the capsule's own threads and these
+are the words the table copy shows; an open word that no thread claimed, or that has no address, is
+counted in `unplacedEntries` (and so in `dropped.cells`), as for the worker's. A word the capsule's
+fault thread names but that the copy no longer shows as it was is left unplaced, never invented.
+Tested with hand-built capsules (every damage above, every truncation, a byte flipped anywhere in
+the first 800) and with the bytes of a real fault in a real bridge process.
 
 *Trust (decision 2).* The capsule is untrusted input of the same kind as the worker's. A bridge
 runs third-party code that can write the slot as well as the bridge's own handler can, so the

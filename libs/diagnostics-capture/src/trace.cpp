@@ -8,8 +8,10 @@
 #include <cstring>
 #include <initializer_list>
 #include <map>
+#include <memory>
 #include <utility>
 #include "supple/diagcap/capsule.h"
+#include "supple/diagcap/selfcapture.h"
 namespace supple::diagnostics::detail {
 namespace {
 constexpr std::uint64_t kMaxStep = std::uint64_t{1} << 30;  // largest frame-to-frame jump
@@ -853,14 +855,89 @@ bool traceShape(const json::Value* modules, const json::Value& threads) {
     return true;
 }
 
-std::optional<TraceSnapshot> parseCapsule(const std::uint8_t* bytes, std::size_t size) {
-    std::size_t at = 0;
-    const auto take = [&](void* out, std::size_t n) {
+namespace {
+// The bytes of a capsule, taken in order; the capsule is untrusted, so a read past the end fails.
+struct CapsuleBytes {
+    const std::uint8_t* bytes;
+    std::size_t size, at = 0;
+    bool take(void* out, std::size_t n) {
         if (n > size - at) return false;  // at <= size always
         if (n > 0) std::memcpy(out, bytes + at, n);
         at += n;
         return true;
-    };
+    }
+};
+// Overlapping ranges would make lookups ambiguous: sorted, and later ones are dropped.
+void sortRegions(Layout& layout) {
+    std::sort(layout.regions.begin(), layout.regions.end(),
+              [](const Region& a, const Region& b) { return a.start < b.start; });
+    std::vector<Region> clean;
+    for (const auto& r : layout.regions)
+        if (clean.empty() || r.start >= clean.back().end) clean.push_back(r);
+    layout.regions = std::move(clean);
+}
+// The threads of a capsule, `count` of them, validated: the fault thread is the first and the
+// only one of its role, a walked thread has frames and one that is not has none, an entry names
+// a cell and a generation the table can hold. Addresses become module-relative frames. False for
+// anything a process could not have written.
+bool readThreads(CapsuleBytes& in, std::uint32_t count, const Layout& layout,
+                 std::vector<ThreadTrace>& threads) {
+    for (std::uint32_t i = 0; i < count; ++i) {
+        CapsuleThread head;
+        if (!in.take(&head, sizeof(head)) || head.role > static_cast<std::uint8_t>(Role::Other) ||
+            head.missing > static_cast<std::uint8_t>(Missing::AccessDenied) ||
+            head.stop > static_cast<std::uint8_t>(Stop::Deadline) || head.reserved != 0 ||
+            head.registered >= diagctx::kThreadRoleCount ||
+            (head.worker != 0 && head.registered == 0) || head.frameCount > kCapsuleFrames ||
+            head.entry >= diagctx::kEntryCount)
+            return false;
+        const bool walked = head.missing == static_cast<std::uint8_t>(Missing::None);
+        if (walked != (head.frameCount > 0)) return false;
+        // An entry is only ever found for a thread that was read, with a cell the table has
+        // and a generation a word holds; without one the cell and generation are zero.
+        if (head.entry == 0 ? (head.entryCell != 0 || head.entryGeneration != 0)
+                            : (!walked || head.entryCell >= diagctx::kMaxInstances ||
+                               head.entryGeneration > diagctx::kGenerationMask))
+            return false;
+        ThreadTrace trace;
+        trace.role = static_cast<Role>(head.role);
+        trace.registered = static_cast<diagctx::ThreadRole>(head.registered);
+        trace.worker = head.worker;
+        if (head.entry != 0) {
+            trace.entry = static_cast<diagctx::Entry>(head.entry);
+            trace.entryCell = head.entryCell;
+            trace.entryGeneration = head.entryGeneration;
+        }
+        // The fault entry is the first thread and the only one.
+        if ((i == 0) != (trace.role == Role::Fault)) return false;
+        trace.missing = static_cast<Missing>(head.missing);
+        trace.walk.stop = static_cast<Stop>(head.stop);
+        for (std::uint32_t f = 0; f < head.frameCount; ++f) {
+            std::uint64_t address = 0;
+            if (!in.take(&address, sizeof(address))) return false;
+            if (f == 0) {
+                // The pc itself: outside every module it is recorded without identity.
+                const auto frame = frameAt(layout, address, false);
+                trace.walk.frames.push_back(frame ? *frame : Frame{});
+            } else {
+                // Later frames are return addresses. One outside every module is kept
+                // without identity and the walk goes on: the system libraries of the dyld
+                // shared cache are in no module, and the chain was validated in process.
+                const auto frame = frameAt(layout, address, true);
+                Frame item = frame ? *frame : Frame{};
+                item.returnAddress = true;
+                trace.walk.frames.push_back(item);
+            }
+        }
+        threads.push_back(std::move(trace));
+    }
+    return true;
+}
+}  // namespace
+
+std::optional<TraceSnapshot> parseCapsule(const std::uint8_t* bytes, std::size_t size) {
+    CapsuleBytes in{bytes, size};
+    const auto take = [&](void* out, std::size_t n) { return in.take(out, n); };
     CapsuleHeader header;
     if (!bytes || !take(&header, sizeof(header)) || header.magic != kCapsuleMagic ||
         header.moduleCount > kCapsuleModules || header.threadCount > kCapsuleThreads ||
@@ -912,64 +989,9 @@ std::optional<TraceSnapshot> parseCapsule(const std::uint8_t* bytes, std::size_t
         layout.modules.push_back(std::move(entry));
         layout.regions.push_back(Region{module.start, module.end, static_cast<int>(i)});
     }
-    std::sort(layout.regions.begin(), layout.regions.end(),
-              [](const Region& a, const Region& b) { return a.start < b.start; });
-    {  // overlapping ranges would make lookups ambiguous: later ones are dropped
-        std::vector<Region> clean;
-        for (const auto& r : layout.regions)
-            if (clean.empty() || r.start >= clean.back().end) clean.push_back(r);
-        layout.regions = std::move(clean);
-    }
+    sortRegions(layout);
     std::vector<ThreadTrace> threads;
-    for (std::uint32_t i = 0; i < header.threadCount; ++i) {
-        CapsuleThread head;
-        if (!take(&head, sizeof(head)) || head.role > static_cast<std::uint8_t>(Role::Other) ||
-            head.missing > static_cast<std::uint8_t>(Missing::AccessDenied) ||
-            head.stop > static_cast<std::uint8_t>(Stop::Deadline) || head.reserved != 0 ||
-            head.registered >= diagctx::kThreadRoleCount ||
-            (head.worker != 0 && head.registered == 0) || head.frameCount > kCapsuleFrames ||
-            head.entry >= diagctx::kEntryCount)
-            return std::nullopt;
-        const bool walked = head.missing == static_cast<std::uint8_t>(Missing::None);
-        if (walked != (head.frameCount > 0)) return std::nullopt;
-        // An entry is only ever found for a thread that was read, with a cell the table has
-        // and a generation a word holds; without one the cell and generation are zero.
-        if (head.entry == 0 ? (head.entryCell != 0 || head.entryGeneration != 0)
-                            : (!walked || head.entryCell >= diagctx::kMaxInstances ||
-                               head.entryGeneration > diagctx::kGenerationMask))
-            return std::nullopt;
-        ThreadTrace trace;
-        trace.role = static_cast<Role>(head.role);
-        trace.registered = static_cast<diagctx::ThreadRole>(head.registered);
-        trace.worker = head.worker;
-        if (head.entry != 0) {
-            trace.entry = static_cast<diagctx::Entry>(head.entry);
-            trace.entryCell = head.entryCell;
-            trace.entryGeneration = head.entryGeneration;
-        }
-        // The fault entry is the first thread and the only one.
-        if ((i == 0) != (trace.role == Role::Fault)) return std::nullopt;
-        trace.missing = static_cast<Missing>(head.missing);
-        trace.walk.stop = static_cast<Stop>(head.stop);
-        for (std::uint32_t f = 0; f < head.frameCount; ++f) {
-            std::uint64_t address = 0;
-            if (!take(&address, sizeof(address))) return std::nullopt;
-            if (f == 0) {
-                // The pc itself: outside every module it is recorded without identity.
-                const auto frame = frameAt(layout, address, false);
-                trace.walk.frames.push_back(frame ? *frame : Frame{});
-            } else {
-                // Later frames are return addresses. One outside every module is kept
-                // without identity and the walk goes on: the system libraries of the dyld
-                // shared cache are in no module, and the chain was validated in process.
-                const auto frame = frameAt(layout, address, true);
-                Frame item = frame ? *frame : Frame{};
-                item.returnAddress = true;
-                trace.walk.frames.push_back(item);
-            }
-        }
-        threads.push_back(std::move(trace));
-    }
+    if (!readThreads(in, header.threadCount, layout, threads)) return std::nullopt;
     // The ring's entries, oldest first: each a whole entry of the 64 the ring holds, so the
     // sequences rise and span fewer than 64.
     for (std::uint32_t i = 0; i < header.commandCount; ++i) {
@@ -986,7 +1008,142 @@ std::optional<TraceSnapshot> parseCapsule(const std::uint8_t* bytes, std::size_t
             command.seq, command.nameId, static_cast<diagctx::CommandOrigin>(command.origin),
             static_cast<diagctx::CommandState>(command.state)});
     }
-    if (at != size) return std::nullopt;  // trailing bytes: not a capsule we wrote
+    if (in.at != size) return std::nullopt;  // trailing bytes: not a capsule we wrote
+    // Fault first, then main, then the rest in the order they came.
+    for (const Role role : {Role::Fault, Role::Main, Role::Other})
+        for (auto& thread : threads)
+            if (thread.role == role) snapshot.threads.push_back(std::move(thread));
+    snapshot.modules = std::move(layout.modules);
+    snapshot.regions = std::move(layout.regions);
+    return snapshot;
+}
+
+std::optional<TraceSnapshot> parseBridgeCapsule(const std::uint8_t* bytes, std::size_t size) {
+    namespace sc = selfcapture;
+    CapsuleBytes in{bytes, size};
+    CapsuleHeader header;
+    // A bridge writes the capsule of a process it is part of; a plug-in in it could write the slot
+    // as well as the handler, so every field is held to what a handler writes: the three flags it
+    // sets (the table copy always), no commands, no unplaced count (worked out here), and exactly
+    // the bytes the header says. `reserved` is the fault thread's id and is any value.
+    if (!bytes || !in.take(&header, sizeof(header)) || header.magic != sc::kBridgeCapsuleMagic ||
+        header.moduleCount > sc::kMaxModules || header.threadCount == 0 ||
+        header.threadCount > kCapsuleThreads ||
+        (header.flags &
+         ~(kCapsuleModulesTruncated | kCapsuleThreadsDropped | sc::kCapsuleHasTable)) != 0 ||
+        (header.flags & sc::kCapsuleHasTable) == 0)
+        return std::nullopt;
+    constexpr std::uint32_t kMaxDropped = 1U << 20;
+    if ((header.dropped != 0) != ((header.flags & kCapsuleThreadsDropped) != 0) ||
+        header.dropped > kMaxDropped || header.unplaced != 0 || header.commandCount != 0 ||
+        header.commandsDamaged != 0 || header.commandsRefused != 0 || header.reserved2 != 0)
+        return std::nullopt;
+    TraceSnapshot snapshot;
+    snapshot.table = TableState::Read;  // checked below: a capsule without a valid table is refused
+    snapshot.dropped = header.dropped;
+    snapshot.truncatedModules = (header.flags & kCapsuleModulesTruncated) != 0;
+    snapshot.tableThreadsDropped = header.tableThreadsDropped;
+    snapshot.tableUntracked = header.tableUntracked;
+    snapshot.tableScopeOverflow = header.tableScopeOverflow;
+    Layout layout;
+    for (std::uint32_t i = 0; i < header.moduleCount; ++i) {
+        sc::BridgeModule module;
+        if (!in.take(&module, sizeof(module)) || module.start >= module.end ||
+            module.idLength > sc::kModuleIdBytes || module.reserved != 0)
+            return std::nullopt;
+        // What follows the identity is zero, as the writer left it.
+        for (std::size_t b = module.idLength; b < sc::kModuleIdBytes; ++b)
+            if (module.id[b] != 0) return std::nullopt;
+        Module entry;
+        entry.bias = module.bias;
+        if (module.idLength != 0) {
+            std::string id;
+            for (std::uint32_t b = 0; b < module.idLength; ++b) {
+                id += "0123456789abcdef"[module.id[b] >> 4];
+                id += "0123456789abcdef"[module.id[b] & 15];
+            }
+            entry.id = std::move(id);
+        }
+        layout.modules.push_back(std::move(entry));
+        layout.regions.push_back(Region{module.start, module.end, static_cast<int>(i)});
+    }
+    sortRegions(layout);
+    std::vector<ThreadTrace> threads;
+    if (!readThreads(in, header.threadCount, layout, threads)) return std::nullopt;
+    // The copy of the process's execution table, which a table this build wrote must lead.
+    auto table = std::make_unique<diagctx::TableImage>();
+    if (!in.take(table.get(), sizeof(*table)) || !diagctx::imageValid(*table)) return std::nullopt;
+    if (in.at != size) return std::nullopt;  // trailing bytes: not a capsule we wrote
+
+    // The table's open entries (execution scopes), each a word that names an instance's cell. A
+    // word belongs to the thread whose recorded stack holds its address.
+    constexpr std::size_t kWords = diagctx::kMaxInstances * 2;
+    const auto wordAt = [&](std::size_t w) {
+        const auto& cell = table->instances[w / 2];
+        return diagctx::unpackWord(w % 2 == 0 ? cell.audio : cell.main);
+    };
+    std::vector<std::uint8_t> placed(kWords, 0);
+    // What the capsule's own threads were inside is what the handler read from the live table; the
+    // word it came from is found again in the copy when it still says the same.
+    for (const auto& thread : threads) {
+        if (thread.entry == diagctx::Entry::None) continue;
+        for (const std::size_t w :
+             {std::size_t{thread.entryCell} * 2, std::size_t{thread.entryCell} * 2 + 1}) {
+            const auto word = wordAt(w);
+            if (word.kind == thread.entry && word.generation == thread.entryGeneration &&
+                word.stack != 0 && !placed[w]) {
+                placed[w] = 1;
+                break;
+            }
+        }
+    }
+    // A capsule of one thread (Linux and Windows walk only the fault thread) lists the table's
+    // other registered threads by role, each marked as not collected, with the entry the table
+    // says it was inside: the open word of lowest address on its recorded stack. The fault
+    // thread's own slot is left out (its id is the header's). A capsule that holds more threads
+    // (macOS reads them all) already has them.
+    if (threads.size() == 1) {
+        std::vector<std::uint64_t> seen;
+        for (const auto& slot : table->threads) {
+            if (slot.id == 0 || slot.id == diagctx::kClaiming ||
+                static_cast<std::uint32_t>(slot.id) == header.reserved)
+                continue;
+            const diagctx::SlotInfo info = diagctx::slotInfo(slot.info);
+            if (info.role == diagctx::ThreadRole::None ||
+                std::find(seen.begin(), seen.end(), slot.id) != seen.end())
+                continue;
+            seen.push_back(slot.id);
+            if (threads.size() >= kMaxThreads) {
+                ++snapshot.dropped;
+                continue;
+            }
+            ThreadTrace trace;
+            trace.role = Role::Other;
+            trace.missing = Missing::NotCollected;
+            trace.registered = info.role;
+            trace.worker = info.ordinal;
+            if (slot.stackLow != 0 && slot.stackHigh > slot.stackLow) {
+                std::size_t best = kWords;
+                for (std::size_t w = 0; w < kWords; ++w) {
+                    const auto word = wordAt(w);
+                    if (word.kind == diagctx::Entry::None || word.stack == 0 || placed[w] ||
+                        word.stack < slot.stackLow || word.stack >= slot.stackHigh)
+                        continue;
+                    if (best == kWords || word.stack < wordAt(best).stack) best = w;
+                }
+                if (best != kWords) {
+                    const auto word = wordAt(best);
+                    placed[best] = 1;
+                    trace.entry = word.kind;
+                    trace.entryCell = static_cast<std::uint32_t>(best / 2);
+                    trace.entryGeneration = word.generation;
+                }
+            }
+            threads.push_back(std::move(trace));
+        }
+    }
+    for (std::size_t w = 0; w < kWords; ++w)
+        if (wordAt(w).kind != diagctx::Entry::None && !placed[w]) ++snapshot.unplacedEntries;
     // Fault first, then main, then the rest in the order they came.
     for (const Role role : {Role::Fault, Role::Main, Role::Other})
         for (auto& thread : threads)

@@ -296,6 +296,18 @@ TEST_CASE("a real segmentation fault is captured and the process still ends by i
     SlotHeader header;
     std::memcpy(&header, memory, sizeof(header));
     CHECK(header.ordinal == 5);
+    // What the supervisor makes of it (6c.4): the real bytes of a real fault through the parser.
+    const auto trace = detail::parseBridgeCapsule(memory + sizeof(SlotHeader), header.length);
+    REQUIRE(trace);
+    REQUIRE_FALSE(trace->threads.empty());
+    const auto& fault = trace->threads[0];
+    CHECK(fault.role == detail::Role::Fault);
+    CHECK(fault.registered == diagctx::ThreadRole::BridgeControl);
+    CHECK(fault.entry == diagctx::Entry::Create);
+    CHECK(fault.entryCell == cell);
+    REQUIRE_FALSE(fault.walk.frames.empty());
+    CHECK(fault.walk.frames[0].module >= 0);  // the pc is in the image the bridge recorded
+    CHECK(trace->unplacedEntries == 0);       // the open Create word is the fault thread's
     ::munmap(memory, kSlotBytes);
 }
 

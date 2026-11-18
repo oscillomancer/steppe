@@ -26,7 +26,7 @@ if(WIN32)
 endif()
 # The capture code's own tests: the walker, module identity, the capsule and its strict parser.
 # The progress listener names each case as it starts, as the diagnostics tests do.
-supple_add_tests(diagnostics-capture SOURCES tests/test_trace.cpp tests/test_capsule.cpp tests/test_selfcapture.cpp
+supple_add_tests(diagnostics-capture SOURCES tests/test_trace.cpp tests/test_capsule.cpp tests/test_bridge_capsule.cpp tests/test_selfcapture.cpp
   "${PROJECT_SOURCE_DIR}/tests/progress_listener.cpp")
 if(SUPPLE_BUILD_TESTS)
   target_compile_definitions(diagnostics-capture.tests PRIVATE PROGRESS_SUITE="diagnostics-capture.tests")

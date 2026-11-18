@@ -226,6 +226,17 @@ bool traceShape(const json::Value* modules, const json::Value& threads);
 // main, then the rest in capsule order. Nothing for a malformed capsule.
 std::optional<TraceSnapshot> parseCapsule(const std::uint8_t* bytes, std::size_t size);
 
+// A bridge process's own capsule (selfcapture.h, CTC5; topic 6c): what its fault handler wrote
+// into the capture slot. Untrusted in the same way, and held to what a handler writes: its
+// magic, the table copy always present and valid, no commands, exact length. Frames become
+// module-relative; the module list is the bridge's own recorded images, with identities of up to
+// 32 bytes. A capsule of one thread (the fault thread, as Linux and Windows write it) is
+// completed from the table copy: the other registered threads are listed with `Missing::
+// NotCollected`, their role and the entry the table says they were inside, and the fault thread's
+// own slot (the header's thread id) is left out. A capsule of several threads (macOS) is taken as
+// it is. `unplacedEntries` is worked out from the table copy. Nothing for a malformed capsule.
+std::optional<TraceSnapshot> parseBridgeCapsule(const std::uint8_t* bytes, std::size_t size);
+
 // Test evidence only. A collector that cannot be tried locally (Windows) writes what it
 // saw, one line at a time, to the sink a test installed in the supervisor process; with
 // no sink nothing is formatted or written. Never set in the product.
