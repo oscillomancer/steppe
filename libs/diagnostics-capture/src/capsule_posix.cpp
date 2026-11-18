@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <cerrno>
 #include <ctime>
@@ -171,5 +172,41 @@ std::optional<std::vector<std::uint8_t>> receiveCapsule(int fd, const Packet& te
     std::vector<std::uint8_t> bytes(packet.code);
     if (!receiveAll(fd, bytes.data(), bytes.size(), deadline)) return std::nullopt;
     return bytes;
+}
+// Defined here, in the capture library, because the macOS terminal hold (capture_macos.cpp) waits
+// with it and the bridge links this library without the supervisor's sources.
+void awaitAcknowledgementFor(Native& native, std::uint64_t nanoseconds) noexcept {
+    const int fd = static_cast<int>(native.channel);
+    if (fd < 0 || fd >= FD_SETSIZE) return;
+    fd_set ready;
+    FD_ZERO(&ready);
+    FD_SET(fd, &ready);
+    // The wait is `nanoseconds` in total, a second at most in the terminal hold. A ptrace
+    // interrupt from the collector (the worker may be the very thread it stops) or any
+    // signal ends pselect early with EINTR; the remainder is waited out rather than
+    // letting the worker die mid-collection. clock_gettime and pselect are
+    // async-signal-safe.
+    timespec start{};
+    if (::clock_gettime(CLOCK_MONOTONIC, &start) != 0) {
+        // No clock: wait the stated time once, not a fixed second (macOS passes the
+        // remainder of its hold here).
+        const timespec timeout{static_cast<time_t>(nanoseconds / 1'000'000'000ULL),
+                               static_cast<long>(nanoseconds % 1'000'000'000ULL)};
+        (void)::pselect(fd + 1, &ready, nullptr, nullptr, &timeout, nullptr);
+        return;
+    }
+    const long long total = static_cast<long long>(nanoseconds);
+    for (;;) {
+        timespec now{};
+        if (::clock_gettime(CLOCK_MONOTONIC, &now) != 0) return;
+        const long long left =
+            total - ((now.tv_sec - start.tv_sec) * 1'000'000'000LL + (now.tv_nsec - start.tv_nsec));
+        if (left <= 0) return;
+        const timespec timeout{static_cast<time_t>(left / 1'000'000'000LL),
+                               static_cast<long>(left % 1'000'000'000LL)};
+        fd_set again = ready;
+        if (::pselect(fd + 1, &again, nullptr, nullptr, &timeout, nullptr) >= 0 || errno != EINTR)
+            return;
+    }
 }
 }  // namespace supple::diagnostics::detail

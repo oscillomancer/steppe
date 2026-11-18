@@ -698,4 +698,27 @@ TEST_CASE("a send or receive leaves the descriptor's blocking mode as it found i
         CHECK((::fcntl(pair.fds[1], F_GETFL) & O_NONBLOCK) == before);
     }
 }
+
+// The terminal hold's wait is in this library, not the supervisor's: macOS's capture waits with it
+// from the bridge, which links this library and nothing of the supervisor (a definition left in
+// the host's sources made every macOS link fail). Calling it here fails to link when it is not.
+TEST_CASE("the terminal hold's wait for an acknowledgement ends at its bound, or when one comes") {
+    Pair pair;
+    Native native;
+    native.channel = pair.fds[1];
+    // Nothing is sent: the wait lasts the whole bound (a lower bound the clock cannot break).
+    const std::uint64_t bound = 30'000'000ULL;
+    const std::uint64_t before = monotonicNanoseconds();
+    awaitAcknowledgementFor(native, bound);
+    CHECK(monotonicNanoseconds() - before >= bound);
+    // An acknowledgement already there ends it at once, however long the bound.
+    const char ack = 'A';
+    REQUIRE(::send(pair.fds[0], &ack, 1, 0) == 1);
+    const std::uint64_t again = monotonicNanoseconds();
+    awaitAcknowledgementFor(native, 60'000'000'000ULL);
+    CHECK(monotonicNanoseconds() - again < 30'000'000'000ULL);
+    // A descriptor that is not one ends it as well.
+    native.channel = -1;
+    awaitAcknowledgementFor(native, 60'000'000'000ULL);
+}
 #endif
