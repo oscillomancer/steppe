@@ -115,7 +115,11 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
         [this] { return arrange_ ? arrange_->follow() : views::Follow::Page; });  // ui.follow.*
     shell->add(transport_->build());
     // Under the transport: the restart notice, when the last run ended unexpectedly.
-    shell->add(std::make_unique<CrashBanner>(app_.diagnosticsDir()));
+    auto banner = std::make_unique<CrashBanner>(app_.diagnosticsDir());
+    banner->setOnShowReport([this](const std::string& incident) {
+        if (showCrashReport) showCrashReport(incident);
+    });
+    shell->add(std::move(banner));
     // The playrate's menu leads here: open in its place.
     actions.addUi("ui.master.envelopes", "Master: envelopes",
                   [this] { openEnvelopeMenu(model::kMaster, transport_->rateAnchor()); });

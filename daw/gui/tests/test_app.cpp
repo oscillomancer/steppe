@@ -26,6 +26,7 @@
 #include "appearance.h"
 #include "chrome.h"
 #include "crash_banner.h"
+#include "crash_report_text.h"
 #include "file_actions.h"
 #include "floating_panel.h"
 #include "help_actions.h"
@@ -3694,10 +3695,7 @@ TEST_CASE("the restart notice sits under the transport and Dismiss acknowledges 
                   "The report points at that plug-in but cannot prove it was the cause.") !=
               std::string::npos);
         a.snapshot("crash-notice-plugin.png");
-        // With the viewer wired: "Show report" is the boxed button and Dismiss goes quiet.
-        dynamic_cast<gui::CrashBanner*>(a.root->find("crash.notice"))
-            ->setOnShowReport([](const std::string&) {});
-        a.root->frame(false);
+        // "Show report" is the boxed button and Dismiss goes quiet.
         const auto* show = dynamic_cast<ui::Button*>(a.root->find("crash.notice.show"));
         const auto* dismiss = dynamic_cast<ui::Button*>(a.root->find("crash.notice.dismiss"));
         REQUIRE(show);
@@ -3705,16 +3703,12 @@ TEST_CASE("the restart notice sits under the transport and Dismiss acknowledges 
         CHECK(show->valueText() == "Show report");
         CHECK_FALSE(show->quiet);
         CHECK(dismiss->quiet);
-        a.snapshot("crash-notice-plugin-viewer.png");
     }
     SUBCASE("a run that left no report says that, and why that can be") {
         REQUIRE(diagnostics::writeSampleUnreportedRun(kNoticeOne, dir, diagnostics::Role::Gui));
         NoticeShell s(a);
         CHECK(noticeText(a).find("no crash report was written") != std::string::npos);
-        // No report to show: Dismiss alone, and boxed, whether or not a viewer is wired.
-        dynamic_cast<gui::CrashBanner*>(a.root->find("crash.notice"))
-            ->setOnShowReport([](const std::string&) {});
-        a.root->frame(false);
+        // No report to show: Dismiss alone, and boxed.
         CHECK(a.root->find("crash.notice.show") == nullptr);
         CHECK_FALSE(dynamic_cast<ui::Button*>(a.root->find("crash.notice.dismiss"))->quiet);
         a.snapshot("crash-notice-no-report.png");
@@ -3739,11 +3733,8 @@ TEST_CASE("the restart notice sits under the transport and Dismiss acknowledges 
         // The count of earlier closes is the viewer's to tell: the banner keeps to two
         // sentences, and the button that opens the viewer carries the count.
         CHECK(noticeText(a).find("also closed unexpectedly") == std::string::npos);
-        CHECK(a.root->find("crash.notice.show") == nullptr);  // nothing to open it with yet
         std::string opened;
-        dynamic_cast<gui::CrashBanner*>(a.root->find("crash.notice"))
-            ->setOnShowReport([&](const std::string& incident) { opened = incident; });
-        a.root->frame(false);
+        s.shell.showCrashReport = [&](const std::string& incident) { opened = incident; };
         const auto* show = a.root->find("crash.notice.show");
         REQUIRE(show);
         CHECK(show->valueText() == "Show reports (3)");
@@ -4010,4 +4001,304 @@ TEST_CASE("a plugin dragged from the browser lands on the track row or strip und
     drag.drag(plugin, "", ui::DragPhase::End, centre(tcp));
     CHECK(chain(bass) == 1);
     CHECK(steps() == before + 2);
+}
+
+// ---------------------------------------------------------------- the crash report viewer
+
+namespace {
+// What a Help action posts to the UI thread runs at once in these tests.
+void runNow(std::function<void()> f) { f(); }
+std::string rowText(App& a, std::size_t i) {
+    auto* row = a.root->find("crash.viewer.row." + std::to_string(i));
+    return row ? row->valueText() : std::string();
+}
+}  // namespace
+
+TEST_CASE("crash report text: causes in words, and a report read as far as it can be") {
+    CHECK(
+        gui::causeSentence("linux", "crash", 1, 11, true).find("segmentation fault (signal 11)") !=
+        std::string::npos);
+    CHECK(gui::causeSentence("macos", "crash", 1, 10, true).find("bus error") != std::string::npos);
+    CHECK(gui::causeSentence("linux", "crash", 1, 10, true).find("bus error") == std::string::npos);
+    CHECK(gui::causeSentence("windows", "crash", 2, 0xC0000005LL, true).find("access violation") !=
+          std::string::npos);
+    CHECK(gui::causeSentence("windows", "crash", 2, 0xC0000005LL, true).find("0xC0000005") !=
+          std::string::npos);
+    CHECK(gui::causeSentence("linux", "crash", 3, 0, true).find("std::terminate") !=
+          std::string::npos);
+    CHECK(gui::causeSentence("linux", "unexpected_exit", 0, 7, false)
+              .find("exit with the status 7") == std::string::npos);  // "It exited with ..."
+    CHECK(gui::causeSentence("linux", "unexpected_exit", 0, 7, false).find("status 7") !=
+          std::string::npos);
+    // A report with nothing but a kind reads as a report that holds little, never as an error.
+    const auto bare = json::parse(R"({"kind":"crash"})");
+    REQUIRE(bare);
+    const auto page = gui::describeReport(*bare, "");
+    CHECK(page.headline.find("closed unexpectedly") != std::string::npos);
+    CHECK(page.plugin.empty());
+    CHECK(page.text().find("Nothing is noted as missing.") != std::string::npos);
+    // A bridge's death says the app kept running, and names the plug-in that was in it.
+    const auto bridge = json::parse(
+        R"({"kind":"bridge_exit","platform":"linux","role":"gui","code":11,"cause":0,)"
+        R"("bridge":1,"plugins":[{"id":0,"name":"Canary Verb","vendor":"Acme","bridge":1}],)"
+        R"("bridges":[{"id":1,"state":"ended","ended":{"how":"signal","code":11},"instances":[0]}],)"
+        R"("attribution":{"confidence":"bridge_exit","plugin":0}})");
+    REQUIRE(bridge);
+    const auto died = gui::describeReport(*bridge, "1 Jan 2030, 09:00");
+    CHECK(died.headline.find("Canary Verb by Acme was running in a separate process") == 0);
+    CHECK(died.text().find("kept running") != std::string::npos);
+    CHECK(died.text().find("Process 1 · ended by a signal (status 11) · Canary Verb") !=
+          std::string::npos);
+    // A kind this version does not know is said to be unknown, and what it holds is still shown.
+    const auto future = json::parse(
+        R"({"kind":"from_the_future","plugins":[{"id":0,"name":"Canary Verb","vendor":"Acme"}]})");
+    REQUIRE(future);
+    const auto other = gui::describeReport(*future, "1 Jan 2030, 09:00");
+    CHECK(other.headline.find("cannot fully read") != std::string::npos);
+    CHECK(other.text().find("Canary Verb by Acme") != std::string::npos);
+}
+
+TEST_CASE("crash report text: threads, commands, limits and counters are all in the page") {
+    const auto report = json::parse(R"({
+      "kind":"crash","platform":"linux","architecture":"x86_64","role":"gui","code":11,"cause":1,
+      "native_fatal_status":true,"terminal_context":true,
+      "build":{"version":"0.6.0","commit":"abc","dirty":false},
+      "unavailable":["frames are best effort","a limit of this report"],
+      "modules":[{"format":"elf","id":"0123456789abcdef0123"},{"format":"elf","id":"aaaa"}],
+      "threads":[
+        {"ordinal":0,"role":"fault","state":"walked","stop":"end",
+         "frames":[{"module":0,"offset":"0x10","return":false},
+                   {"module":1,"offset":"0x20","return":true},
+                   {"module":null,"return":true}]},
+        {"ordinal":1,"role":"model","state":"unavailable","reason":"ptrace_denied"},
+        {"ordinal":2,"role":"a_role_from_the_future","state":"walked","stop":"depth","frames":[]}],
+      "plugins":[{"id":0,"kind":"vst3","origin":"foreign","mode":"in_process","state":"active",
+                  "build":{"format":"elf","id":"0123456789abcdef0123"},"name":"Canary Verb"}],
+      "commands":[{"seq":1,"name":"transport.play","origin":"ui","state":"ended"},
+                  {"seq":2,"name":"fx.add","origin":"mcp","state":"begun"}],
+      "attribution":{"confidence":"fault_in_image","plugin":0},
+      "dropped":{"threads":3,"plugins":0,"commands":2},
+      "a_field_from_the_future":[1,2,3]})");
+    REQUIRE(report);
+    const auto page = gui::describeReport(*report, "17 Nov 2026, 14:32");
+    const auto text = page.text();
+    CHECK(page.headline == "Canary Verb was running when Steppe closed unexpectedly.");
+    CHECK(page.subtitle.find("Saved 17 Nov 2026, 14:32") == 0);
+    CHECK(page.subtitle.find("0.6.0") != std::string::npos);
+    CHECK(text.find("segmentation fault (signal 11)") != std::string::npos);
+    // A frame in a plug-in's own file is named by the plug-in; others by their file's identity.
+    CHECK(text.find("#0  Canary Verb +0x10  (where it stopped)") != std::string::npos);
+    CHECK(text.find("#1  elf aaaa +0x20") != std::string::npos);
+    CHECK(text.find("#2  (code with no file)") != std::string::npos);
+    CHECK(text.find("Faulting thread · reached the end of its stack") != std::string::npos);
+    CHECK(text.find("Model thread · not read: the system did not allow reading it") !=
+          std::string::npos);
+    CHECK(text.find("a_role_from_the_future · stopped at the depth limit") != std::string::npos);
+    CHECK(text.find("running  fx.add  (agent (MCP))") != std::string::npos);
+    CHECK(text.find("done     transport.play  (app)") != std::string::npos);
+    // Every limit the report states and every counter that is not zero.
+    CHECK(text.find("a limit of this report") != std::string::npos);
+    CHECK(text.find("3 threads left out") != std::string::npos);
+    CHECK(text.find("2 commands left out") != std::string::npos);
+    CHECK(text.find("plug-ins left out") == std::string::npos);  // a zero counter says nothing
+    CHECK(text.find("What is missing (4)") != std::string::npos);
+}
+
+TEST_CASE("Help > Crash reports lists what earlier runs left and shows one in plain words") {
+    App a(1280, 800);
+    REQUIRE(a.ok);
+    const auto dir = a.app->diagnosticsDir();
+    gui::HelpActions help(*a.root, *a.actions, a.window->sdl(), runNow, gui::help::ownExecutable(),
+                          {}, dir);
+    std::string copied;
+    std::filesystem::path revealed;
+    help.crashReports().copyText = [&](const std::string& text) { copied = text; };
+    help.crashReports().openFolder = [&](const std::filesystem::path& p) { revealed = p; };
+    const auto layout = gui::ChromeLayout::defaults();
+    CHECK(std::find(layout.menus.back().items.begin(), layout.menus.back().items.end(),
+                    "ui.help.crash_reports") != layout.menus.back().items.end());
+    SUBCASE("with no reports it says so and offers nothing to delete") {
+        REQUIRE(a.actions->run("ui.help.crash_reports"));
+        a.root->frame(false);
+        REQUIRE(a.root->find("crash.viewer"));
+        CHECK(a.root->find("crash.viewer.empty")->valueText().find("no crash reports") !=
+              std::string::npos);
+        CHECK_FALSE(a.root->find("crash.viewer.delete_all")->visible);
+        REQUIRE(a.root->click("crash.viewer.folder"));
+        CHECK(revealed == dir);
+        a.snapshot("crash-viewer-empty.png");
+        REQUIRE(a.root->click("crash.viewer.close"));
+        CHECK_FALSE(a.root->find("crash.viewer"));
+    }
+    SUBCASE("reports newest first, the newest shown, detail folded, summary copied") {
+        REQUIRE(diagnostics::writeSampleUnreportedRun(kNoticeOne, dir, diagnostics::Role::Gui));
+        REQUIRE(diagnostics::writeSampleReport(kNoticeTwo, dir, diagnostics::Role::Gui));
+        REQUIRE(diagnostics::writeSampleCrash(kNoticeThree, "Canary Verb", "Acme", dir, {},
+                                              diagnostics::Role::Gui));
+        ageFile(dir / (std::string(kNoticeOne) + ".run"), 9);
+        ageFile(dir / (std::string(kNoticeTwo) + ".json"), 5);
+        REQUIRE(a.actions->run("ui.help.crash_reports"));
+        a.root->frame(false);
+        REQUIRE(a.root->find("crash.viewer.row.2"));
+        CHECK_FALSE(a.root->find("crash.viewer.row.3"));
+        CHECK(rowText(a, 0).find("Crash · Canary Verb") != std::string::npos);
+        CHECK(rowText(a, 1).find("Unexpected exit") != std::string::npos);
+        CHECK(rowText(a, 2).find("No report was written") != std::string::npos);
+        // The newest is shown: a plain sentence first, its plug-in named.
+        const auto headline = a.root->find("crash.viewer.headline")->valueText();
+        CHECK(headline.find("Canary Verb by Acme was running when") == 0);
+        CHECK(a.root->find("crash.viewer.sentences")->valueText().find("cannot prove") !=
+              std::string::npos);
+        // The technical detail is folded, and opens.
+        for (const auto* id : {"plugins", "threads", "limits"}) {
+            const auto* fold = a.root->find(std::string("crash.viewer.section.") + id);
+            REQUIRE(fold);
+            CHECK(fold->valueText() == "folded");
+        }
+        REQUIRE(a.root->click("crash.viewer.section.plugins.toggle"));
+        a.root->frame(false);
+        CHECK(a.root->find("crash.viewer.section.plugins")->valueText() == "open");
+        CHECK(a.root->find("crash.viewer.section.plugins.lines")
+                  ->valueText()
+                  .find("Canary Verb by Acme") != std::string::npos);
+        a.snapshot("crash-viewer-report.png");
+        // The summary holds the plain words and every section, folded or not.
+        REQUIRE(a.root->click("crash.viewer.copy"));
+        CHECK(copied.find("Canary Verb by Acme was running when") == 0);
+        CHECK(copied.find("Plug-ins (1)") != std::string::npos);
+        CHECK(copied.find("Threads (1)") != std::string::npos);
+        CHECK(copied.find("What is missing") != std::string::npos);
+        // Another row shows its own page.
+        REQUIRE(a.root->click("crash.viewer.row.2"));
+        a.root->frame(false);
+        CHECK(a.root->find("crash.viewer.headline")->valueText().find("no crash report") !=
+              std::string::npos);
+        CHECK_FALSE(a.root->find("crash.viewer.section.plugins"));
+        a.snapshot("crash-viewer-unreported.png");
+    }
+    SUBCASE("Mark as seen acknowledges; deleting asks twice") {
+        REQUIRE(diagnostics::writeSampleReport(kNoticeOne, dir, diagnostics::Role::Gui));
+        REQUIRE(diagnostics::writeSampleReport(kNoticeTwo, dir, diagnostics::Role::Gui));
+        ageFile(dir / (std::string(kNoticeOne) + ".json"), 3);
+        REQUIRE(a.actions->run("ui.help.crash_reports"));
+        a.root->frame(false);
+        REQUIRE(a.root->find("crash.viewer.seen")->visible);
+        REQUIRE(a.root->click("crash.viewer.seen"));
+        a.root->frame(false);
+        {
+            auto listing = diagnostics::listReports(dir);
+            REQUIRE(listing);
+            for (const auto& r : listing->reports)
+                CHECK(r.acknowledged == (r.incident == kNoticeTwo));
+        }
+        CHECK_FALSE(a.root->find("crash.viewer.seen")->visible);  // the shown one is seen now
+        // One click only arms it.
+        REQUIRE(a.root->click("crash.viewer.delete"));
+        CHECK(a.root->find("crash.viewer.delete")->valueText() == "Click again to delete");
+        CHECK(std::filesystem::exists(dir / (std::string(kNoticeTwo) + ".json")));
+        REQUIRE(a.root->click("crash.viewer.delete"));
+        a.root->frame(false);
+        CHECK_FALSE(std::filesystem::exists(dir / (std::string(kNoticeTwo) + ".json")));
+        CHECK(std::filesystem::exists(dir / (std::string(kNoticeOne) + ".json")));
+        CHECK(a.root->find("crash.viewer.row.0"));
+        CHECK_FALSE(a.root->find("crash.viewer.row.1"));
+        // Delete all asks twice too, and says what it will do.
+        REQUIRE(a.root->click("crash.viewer.delete_all"));
+        CHECK(a.root->find("crash.viewer.delete_all")->valueText().find("Click again") !=
+              std::string::npos);
+        CHECK(std::filesystem::exists(dir / (std::string(kNoticeOne) + ".json")));
+        REQUIRE(a.root->click("crash.viewer.delete_all"));
+        a.root->frame(false);
+        CHECK_FALSE(std::filesystem::exists(dir / (std::string(kNoticeOne) + ".json")));
+        CHECK(a.root->find("crash.viewer.empty"));
+    }
+    SUBCASE("a kind this version does not know is listed as other, never hidden") {
+        REQUIRE(diagnostics::writeSampleReport(kNoticeOne, dir, diagnostics::Role::Gui));
+        const auto path = dir / (std::string(kNoticeOne) + ".json");
+        std::string text;
+        {
+            std::ifstream in(path, std::ios::binary);
+            text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        }
+        const std::string from = "\"unexpected_exit\"";
+        const auto at = text.find(from);
+        REQUIRE(at != std::string::npos);
+        text.replace(at, from.size(), "\"from_the_future\"");
+        {
+            std::ofstream out(path, std::ios::binary | std::ios::trunc);
+            out << text;
+        }
+        REQUIRE(a.actions->run("ui.help.crash_reports"));
+        a.root->frame(false);
+        REQUIRE(a.root->find("crash.viewer.row.0"));
+        CHECK(rowText(a, 0).find("Other report") != std::string::npos);
+        CHECK(a.root->find("crash.viewer.headline")->valueText().find("cannot fully read") !=
+              std::string::npos);
+    }
+}
+
+TEST_CASE("the banner's Show report opens the viewer on the incident the banner covers") {
+    App a(1280, 800);
+    REQUIRE(a.ok);
+    const auto dir = a.app->diagnosticsDir();
+    REQUIRE(diagnostics::writeSampleReport(kNoticeOne, dir, diagnostics::Role::Gui));
+    REQUIRE(diagnostics::writeSampleCrash(kNoticeTwo, "Canary Verb", "Acme", dir, {},
+                                          diagnostics::Role::Gui));
+    ageFile(dir / (std::string(kNoticeOne) + ".json"), 6);
+    NoticeShell s(a);
+    gui::HelpActions help(*a.root, *a.actions, a.window->sdl(), runNow, gui::help::ownExecutable(),
+                          {}, dir);
+    s.shell.showCrashReport = [&](const std::string& incident) {
+        help.crashReports().open(incident);
+    };
+    REQUIRE(a.root->click("crash.notice.show"));
+    a.root->frame(false);
+    REQUIRE(a.root->find("crash.viewer"));
+    CHECK(a.root->find("crash.viewer.headline")->valueText().find("Canary Verb by Acme") == 0);
+    // Opening the viewer acknowledges nothing: the banner is still the user's to dismiss.
+    auto notice = diagnostics::lastRunNotice(dir, diagnostics::Role::Gui);
+    REQUIRE(notice);
+    CHECK(*notice);
+    // Asked for the older one by name, it shows that one.
+    help.crashReports().open(kNoticeOne);
+    a.root->frame(false);
+    CHECK(a.root->find("crash.viewer.headline")->valueText().find("closed unexpectedly") !=
+          std::string::npos);
+    CHECK(a.root->find("crash.viewer.headline")->valueText().find("Canary") == std::string::npos);
+}
+
+TEST_CASE("the crash viewer over the app, in both themes (for review: SUPPLE_TEST_SNAPSHOTS)") {
+    struct Look {
+        int width, height;
+        bool light;
+        const char* name;
+    };
+    for (const Look look : {Look{1600, 1000, false, "crash-viewer-dark-1600x1000.png"},
+                            Look{1280, 800, true, "crash-viewer-light-1280x800.png"}}) {
+        App a(look.width, look.height);
+        REQUIRE(a.ok);
+        if (look.light) a.root->setTheme(ui::Theme::light());
+        const auto dir = a.app->diagnosticsDir();
+        REQUIRE(diagnostics::writeSampleUnreportedRun(kNoticeOne, dir, diagnostics::Role::Gui));
+        REQUIRE(diagnostics::writeSampleReport(kNoticeTwo, dir, diagnostics::Role::Gui));
+        REQUIRE(diagnostics::writeSampleCrash(kNoticeThree, "Canary Verb", "Acme", dir, {},
+                                              diagnostics::Role::Gui));
+        ageFile(dir / (std::string(kNoticeOne) + ".run"), 30);
+        ageFile(dir / (std::string(kNoticeTwo) + ".json"), 6);
+        REQUIRE(diagnostics::acknowledge(kNoticeOne, dir));
+        NoticeShell s(a);
+        gui::HelpActions help(*a.root, *a.actions, a.window->sdl(), runNow,
+                              gui::help::ownExecutable(), {}, dir);
+        s.shell.showCrashReport = [&](const std::string& incident) {
+            help.crashReports().open(incident);
+        };
+        a.snapshot(look.light ? "crash-banner-light-1280x800.png"
+                              : "crash-banner-dark-1600x1000.png");
+        REQUIRE(a.root->click("crash.notice.show"));
+        a.root->frame(false);
+        REQUIRE(a.root->click("crash.viewer.section.threads.toggle"));
+        REQUIRE(a.root->click("crash.viewer.section.limits.toggle"));
+        a.root->frame(false);
+        a.snapshot(look.name);
+    }
 }

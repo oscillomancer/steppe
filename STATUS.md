@@ -1642,7 +1642,7 @@ It is never a restart notice and takes no place in the suspect window, and reten
 5 of them apart from the 20 crash reports, so they cannot evict the report behind a suspicion. The app can name the
 report a bridge's death may have caused: the worker mints the id and sends it with the end, and the failed fx's
 `engine.status.failed_errors[]` entry and `fx.failed` carry it as `incident` once the end was observed (it may name
-no report: a repeat, the run's limit); the GUI does not show it yet (the viewer, 7c). The supervisor writes bridge reports on a thread of its own
+no report: a repeat, the run's limit); the GUI's viewer lists such a report like any other, but a failed strip does not link to it yet. The supervisor writes bridge reports on a thread of its own
 (drained before its own report and exit), so the disk work of a bridge report no longer holds up its receive loop;
 the writer's contract is tested, the loop's non-blocking is not (no test slows a write down). Tested on Linux only
 (unit tests, `clap-host.diagnostics-inventory` with the real bridge); the Windows exception
@@ -1682,7 +1682,9 @@ only once its run's marker and its supervisor's hold are released; a run that en
 Agents reach it through the `crash.*` commands (list, read, acknowledge, delete, clear). The GUI shows a restart
 notice (a banner under the transport, Dismiss acknowledges; wording provisional) for GUI runs only, and a headless
 service says the same on stderr at start for engine runs only, naming itself; each dismisses only its own
-incidents, and the viewer (all roles) and the app's own safe-load questions are the next steps of topic 7. The notice
+incidents. Help > Crash reports… is the viewer (all roles: list, one report in plain words with the detail folded, copy a text
+summary, mark as seen, delete one or all, open the folder; the sample reports of the tests have little in them, so the thread, command and
+bridge sections are checked on written-out JSON, and a real report's look is checked only on Linux). The app's own safe-load questions are the next step of topic 7. The notice
 lists every report-named and marker file in the folder once at start, synchronously, and reads the newest eight
 unacknowledged reports (each at most 4 MiB) to learn their role; retention keeps the folder to about 20 reports,
 but is applied only when a report is published, so the cost is bounded by the folder's contents, not by 20.

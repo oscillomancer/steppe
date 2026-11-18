@@ -4,6 +4,7 @@
 #include <atomic>
 #include <memory>
 #include <thread>
+#include "crash_viewer.h"
 #include "file_actions.h"
 #include "help_support.h"
 
@@ -14,11 +15,14 @@ class HelpActions {
     using FolderPicker = std::function<void(std::function<void(std::filesystem::path)>,
                                             std::function<void(std::string)>)>;
     HelpActions(ui::Root& root, AppActions& actions, SDL_Window* window, DialogLifetime::Post post,
-                std::filesystem::path executable, FolderPicker picker = {});
+                std::filesystem::path executable, FolderPicker picker = {},
+                std::filesystem::path diagnostics = {});
     ~HelpActions();
     void download(bool link);
     void mcp();
     void agents();
+    // Help > Crash reports…: reads `diagnostics`, the folder the app keeps its reports in.
+    CrashViewer& crashReports() { return crash_; }
 
   private:
     struct Lifetime {
@@ -50,5 +54,6 @@ class HelpActions {
     unsigned generation_ = 0;
     help::Harness harness_ = help::Harness::Claude;
     std::filesystem::path folder_;
+    CrashViewer crash_;
 };
 }  // namespace supple::gui

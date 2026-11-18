@@ -80,7 +80,7 @@ supple_add_library(gui-persistence SOURCES app/ui_persistence.cpp
 target_include_directories(gui-persistence PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/app)
 
 # The app's pieces (shell, generator, actions UI, chrome), shared with tests.
-add_library(gui-app STATIC app/shell.cpp app/crash_banner.cpp app/generate.cpp app/app_actions.cpp app/actions_list.cpp app/chrome.cpp
+add_library(gui-app STATIC app/shell.cpp app/crash_banner.cpp app/crash_report_text.cpp app/crash_viewer.cpp app/generate.cpp app/app_actions.cpp app/actions_list.cpp app/chrome.cpp
   app/plugin_windows.cpp app/floating_panel.cpp app/screensets.cpp app/file_actions.cpp app/midi_editor.cpp app/routing_matrix.cpp app/hardware_audio_matrix.cpp app/strip_learn.cpp app/pan_menu.cpp app/mixer.cpp
   app/fx_params.cpp app/plugin_browser.cpp app/fx_window.cpp app/render_dialog.cpp app/history_panel.cpp app/side_panel.cpp app/inspector.cpp app/plugin_drag.cpp app/side_browser.cpp app/transport_bar.cpp app/plugin_scales.cpp
   app/midi_event_list.cpp app/appearance.cpp app/track_menu.cpp app/mouse_dialog.cpp app/selection_edit.cpp app/preferences.cpp app/audio_device.cpp app/timecode_dialog.cpp app/sync_dialog.cpp

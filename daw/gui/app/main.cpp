@@ -504,7 +504,12 @@ int frontendMain(int argc, char** argv) {
         o.actions.insert(o.actions.begin(), "ui.file.recover");
     gui::HelpActions helpActions(
         root, appActions, (*window)->sdl(),
-        [&](std::function<void()> f) { loop.post(std::move(f)); }, gui::help::ownExecutable());
+        [&](std::function<void()> f) { loop.post(std::move(f)); }, gui::help::ownExecutable(), {},
+        (*app)->diagnosticsDir());
+    // The restart notice's "Show report" opens the viewer on the incident it names.
+    shell.showCrashReport = [&](const std::string& incident) {
+        helpActions.crashReports().open(incident);
+    };
     appActions.addUi(
         "ui.fx.editor", "FX: open or close editor", "fx", [&](const json::Value& v) -> Status {
             const auto id = v.isString() ? model::Id::parse(v.asString()) : std::nullopt;

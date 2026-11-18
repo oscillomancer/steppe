@@ -2085,8 +2085,9 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   **Mix to new track** (`ui.item.mix-to-track`, `item.mix-to-track` on the
   selected items, engine.md) is greyed without selected items; progress and the result show in the status line as for
   Consolidate items, and only one such background item job runs at a time.
-- **Help** provides four app-local actions (not engine command-registry entries):
-  `ui.help.skill`, `ui.help.skill_link`, `ui.help.mcp`, `ui.help.agent`.
+- **Help** provides five app-local actions (not engine command-registry entries):
+  `ui.help.crash_reports` (first, the crash report viewer below), `ui.help.skill`,
+  `ui.help.skill_link`, `ui.help.mcp`, `ui.help.agent`.
   **Download skill…** and **Download skill link…** open the native folder
   picker directly, with no preset destination or intermediate panel. The chosen
   folder receives `<slug>/SKILL.md` and the rest of the bundled `host::skillDir()`.
@@ -2547,6 +2548,39 @@ it reads `<workdir>/diagnostics`. Wording is provisional (P12).
 
 The paragraph is `ui::RichText`: runs of words that differ in weight or ink, broken at spaces
 across runs.
+
+**Crash report viewer (topic 7c; delivered).** Help > Crash reports… (`ui.help.crash_reports`; the
+banner's "Show report" opens it on the incident it names) is a popup, `crash.viewer`, sized to the
+window (at most 980 by about 680 units): the title, one quiet sentence that reports stay on this
+computer and nothing in them is ever sent, a list at the left (280 units) and the shown report at
+the right, and a footer with Open folder, Delete all… and Close. The list is every report whose
+run is over and every run that left none (`listReports`), newest first, each a row of two lines:
+when it was written (local time) in bold, then what it was (Crash, Unexpected exit, Plug-in
+process stopped, Other report, or "No report was written"), with the plug-in's name when the report's
+attribution names one (`fault_in_image`, `active_token`, `bridge_exit`). A report nobody has marked
+seen has a 3-unit `meter-hot` bar at its row's left edge; the shown row has a `rule` outline (the
+`focus` outline when it has the focus), and Up and Down move through the rows. A kind this version
+does not know is listed as "Other report" and shown as far as it can be read, never hidden.
+
+The shown report starts with one plain sentence (the headline, a plug-in's name in bold), then when it
+was saved, by which build, on what, and in which app; then Copy summary (the boxed button), Mark as
+seen and Delete (quiet); then the sentences: what stopped it (a signal or Windows exception in
+words, `std::terminate`, `abort()`, or an exit status), what the report points at and how far to
+trust it ("a clue, not proof"), and that nothing was sent. The technical detail is below, every
+section folded (`ui::FoldSection`): the plug-ins the program had loaded (by their own names;
+a frame in a plug-in's file is named by the plug-in), the separate processes (`bridges`), the
+threads by role with module-relative frames (no function names), the recent commands (names and
+origin only, "running" for one that had not finished) and what is missing: every line of the
+report's `unavailable` and every `dropped` counter that is not zero. A report that lacks a section
+shows no such section; one with little in it reads as one that holds little. The text is
+`crash_report_text.{h,cpp}` (`describeReport`), which reads the report's JSON tolerantly (an unknown
+key is ignored, an unknown thread role or reason is shown as written). Copy summary puts the whole
+page as plain text on the clipboard, every line of every section (the viewer shows at most 40 lines of
+a section and says so). Mark as seen is `acknowledge` (the viewer never acknowledges by being
+opened). Delete and Delete all… ask twice: the first click changes the button's text to "Click
+again…" and says what it will do (the report, or every report and every record of a run without
+one), the second does it; choosing another row cancels the first. Open folder reveals the
+diagnostics folder in the file manager. Wording is provisional (P12).
 
 Before loading an explicit project or any suspect binary, later startup UI will
 show a temporary dedicated-bridge/disabled/normal choice, remembered only on opt-in

@@ -1372,9 +1372,13 @@ content. Before opening a project, or recovering one (`project.plugins` with `se
 `project.plugins` says which of its plug-ins a recent
 report points at, and `plugin.override` loads a plug-in on a bridge or not at all for the
 run (`bridge`, `disable`), so the project can be opened safely; `project.open` and `project.recover` warn of such a plug-in
-and load it normally unless one of those was set first. The app's own questions about a
-suspect plug-in when a project opens, and a viewer for the reports, arrive in a later step; the
-current delivery scope is listed in STATUS.md.
+and load it normally unless one of those was set first. **Help > Crash reports…** lists
+what earlier runs left, newest first (a bar marks a report you have not marked as seen), and shows one in plain
+words: what stopped Steppe, which plug-in the report points at and how far to trust that, and, folded away, the
+plug-ins that were loaded, the threads, the last commands and what the report could not record. You can copy a text
+summary, mark a report as seen, delete one report or all of them (each asks for a second click), or open the folder.
+The banner's "Show report" button opens the same window on that report. The app's own questions about a
+suspect plug-in when a project opens arrive in a later step; the current delivery scope is listed in STATUS.md.
 
 #### Stopping Steppe from a script or a service
 

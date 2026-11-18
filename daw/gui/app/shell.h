@@ -74,6 +74,8 @@ class Shell {
     const json::Value& inputs(bool force = false);
     // Shown by the app's status line when a command fails.
     std::function<void(const std::string&)> onError;
+    // The restart notice's "Show report": the app opens the crash report viewer on the incident.
+    std::function<void(const std::string& incident)> showCrashReport;
     // Model-thread recording diagnostic, shown without stopping healthy targets.
     void recordingError(const json::Value& payload);
     // The TCP's output click hands the matrix its strip and popup anchor.
