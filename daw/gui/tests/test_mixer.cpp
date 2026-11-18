@@ -667,7 +667,7 @@ TEST_CASE("mixer: a disabled plug-in is marked on its strip, with Enable first i
         f.pointer(ui::PointerEvent::Type::Up, click);
         CHECK(f.editors.size() == shown);
         REQUIRE_FALSE(f.errors.empty());
-        CHECK(f.errors.back().find("is not loaded") != std::string::npos);
+        CHECK(f.errors.back().find("not loaded") != std::string::npos);
         f.errors.clear();
     }
     // Enable comes first in the slot's menu.
@@ -1127,24 +1127,30 @@ TEST_CASE("preferences: remembered plug-in choices are listed, forgotten one by 
     gui::Preferences start;
     start.rememberedLoads = {
         {"clap", "com.acme.canary", "0123abcd", "bridge", "Canary Verb", "Acme", "1.2.0", 10},
-        {"vst3", "com.acme.other", "ff00", "disable", "Other", "", "", 20},
+        {"vst3", "com.acme.other", "ff00", "disable", "", "", "", 20},
         {"clap", "com.acme.fine", "aa", "normal", "Fine EQ", "Acme", "3.0", 30}};
     gui::PreferencesDialog prefs(*f.root, *f.app, mouse, start, file);
     std::vector<std::string> problems;
     prefs.onError = [&](const std::string& message) { problems.push_back(message); };
     prefs.open();
     f.root->frame(false);
+    // A section of its own: the heading, the count, Forget all and a rule, then a row to a choice.
     REQUIRE(f.root->find("prefs.remembered"));
-    CHECK(f.node("prefs.remembered.summary")->valueText() == "3 choices");
-    REQUIRE(f.root->click("prefs.remembered.toggle"));  // unfold
-    f.root->frame(false);
-    CHECK(f.node("prefs.remembered.row.0.name")->valueText() == "Canary Verb");
-    CHECK(f.node("prefs.remembered.row.0.who")->valueText() == "Acme \u00b7 1.2.0");
+    CHECK(f.node("prefs.remembered.title")->valueText() == "Plug-in choices");
+    CHECK(f.node("prefs.remembered.count")->valueText() == "3 choices");
+    CHECK(f.root->find("prefs.remembered.rule"));
+    CHECK(f.node("prefs.remembered.row.0.name")->valueText() == "Canary Verb  Acme \u00b7 1.2.0");
     CHECK(f.node("prefs.remembered.row.0.choice")->valueText() == "In a separate process");
-    CHECK(f.node("prefs.remembered.row.1.who")->valueText().empty());
-    CHECK(f.node("prefs.remembered.row.1.choice")->valueText() == "Not loaded");
+    CHECK(f.node("prefs.remembered.row.1.name")->valueText() == "Unknown plug-in");
+    CHECK(f.node("prefs.remembered.row.1.choice")->valueText() == "Disabled");
     CHECK(f.node("prefs.remembered.row.2.choice")->valueText() == "Normally");
-    CHECK(f.root->find("prefs.remembered.forget_all"));
+    // The columns sit on the form's grid: the choice where the other rows' controls start, Forget
+    // at the right edge, Forget all at the right of the heading.
+    CHECK(f.node("prefs.remembered.row.0.choice")->bounds().x ==
+          f.node("prefs.threads.set")->bounds().x);
+    const float edge = f.node("prefs.threads.set")->bounds().right();
+    CHECK(std::abs(f.node("prefs.remembered.row.0.forget")->bounds().right() - edge) < 2.0f);
+    CHECK(std::abs(f.node("prefs.remembered.forget_all")->bounds().right() - edge) < 2.0f);
     if (const char* out = std::getenv("SUPPLE_TEST_SNAPSHOTS")) {
         f.root->damageAll();
         f.root->frame(false);
@@ -1157,7 +1163,7 @@ TEST_CASE("preferences: remembered plug-in choices are listed, forgotten one by 
     CHECK(problems.empty());
     REQUIRE(prefs.preferences().rememberedLoads.size() == 2);
     CHECK(prefs.preferences().rememberedLoads[1].id == "com.acme.fine");
-    CHECK(f.node("prefs.remembered.row.1.name")->valueText() == "Fine EQ");
+    CHECK(f.node("prefs.remembered.row.1.name")->valueText().rfind("Fine EQ", 0) == 0);
     CHECK_FALSE(f.root->find("prefs.remembered.row.2"));
     auto saved = gui::Preferences::load(file);
     REQUIRE(saved);
@@ -1168,14 +1174,12 @@ TEST_CASE("preferences: remembered plug-in choices are listed, forgotten one by 
     CHECK(prefs.preferences().rememberedLoads.empty());
     CHECK(f.root->find("prefs.remembered.empty"));
     CHECK_FALSE(f.root->find("prefs.remembered.forget_all"));
-    CHECK(f.node("prefs.remembered.summary")->valueText() == "none");
+    CHECK(f.node("prefs.remembered.count")->valueText() == "none");
     saved = gui::Preferences::load(file);
     REQUIRE(saved);
     CHECK(saved->rememberedLoads.empty());
     // A new dialog on no choices says so too.
     prefs.open();
-    f.root->frame(false);
-    REQUIRE(f.root->click("prefs.remembered.toggle"));
     f.root->frame(false);
     CHECK(f.root->find("prefs.remembered.empty"));
 }
@@ -1679,9 +1683,9 @@ TEST_CASE(
     prefs.open();
     f.root->frame(false);
     const float offHeight = f.node("prefs")->bounds().h;
-    // No space reserved for empty notes (eight would add ~190); 560 leaves the folded section of
-    // remembered plug-in choices (topic 7d) its row.
-    CHECK(offHeight < 560);
+    // No space reserved for empty notes (eight would add ~190); 600 leaves the section of
+    // remembered plug-in choices (topic 7d) its heading and its sentence.
+    CHECK(offHeight < 600);
     CHECK_FALSE(f.node("prefs.memory.note.0")->visible);
     CHECK_FALSE(f.node("prefs.latency.note.0")->visible);
     for (const char* id : {"prefs.memory.set", "prefs.latency.set"}) {

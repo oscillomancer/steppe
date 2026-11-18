@@ -102,9 +102,9 @@ class PreferencesDialog {
     ui::Button* isolation_ = nullptr;
     ui::Button* audio_ = nullptr;
     std::array<ui::Label*, 4> latencyNote_{};
-    // The remembered plug-in choices (safe-load, topic 7d), a folded section of its own.
+    // The remembered plug-in choices (safe-load, topic 7d): a section of its own at the end.
     void rebuildRemembered();
-    ui::FoldSection* remembered_ = nullptr;
+    ui::Node* remembered_ = nullptr;
     std::string rememberedShown_;  // what the section was built from: it is rebuilt on a change
 };
 

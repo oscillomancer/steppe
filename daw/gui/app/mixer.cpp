@@ -1030,8 +1030,8 @@ void Mixer::rebuild() {
                     if (now && app_.loadModeOf(now->plugin) == engine::LoadMode::Disable) {
                         if (actions_.onError)
                             actions_.onError(label +
-                                             " is not loaded: it was disabled for this "
-                                             "run. Right-click it to enable it.");
+                                             " is disabled for this run and not loaded. "
+                                             "Right-click it to enable it.");
                         return;
                     }
                     json::Value args = json::Value::object();

@@ -80,10 +80,20 @@ ui::Node& row(ui::Node& form, const std::string& id, const std::string& label) {
 }
 
 const char* rememberedChoice(const std::string& mode) {
-    return mode == "bridge"    ? "In a separate process"
-           : mode == "disable" ? "Not loaded"
-                               : "Normally";
+    return mode == "bridge" ? "In a separate process" : mode == "disable" ? "Disabled" : "Normally";
 }
+
+// A hairline under a section's heading.
+class Hairline : public ui::Node {
+  public:
+    explicit Hairline(std::string id) : Node(std::move(id)) {
+        layout.height = ui::SizeRule::fixed(1);
+    }
+    void paint(ui::Canvas& c) override {
+        const ui::Rect b = bounds();
+        c.fillRect({b.x, b.y, b.w, 1}, c.theme().color("rule"));
+    }
+};
 
 // The list of remembered choices is as tall as its rows, up to six; more scroll.
 class RememberedScroll : public ui::ScrollView {
@@ -482,7 +492,10 @@ void PreferencesDialog::open() {
     mouse
         .emplace<ui::Button>("prefs.mouse.open", "Edit mouse modifiers…", [this] { mouse_.open(); })
         .layout.height = ui::SizeRule::fixed(26);
-    remembered_ = &form->emplace<ui::FoldSection>("prefs.remembered", "Remembered plug-in choices");
+    remembered_ = &form->emplace<ui::Node>("prefs.remembered");
+    remembered_->layout.dir = ui::Layout::Dir::Column;
+    remembered_->layout.height = ui::SizeRule::content();
+    remembered_->layout.gap = 6;
     rememberedShown_ = "\x01";  // not built yet: an empty list still gets its sentence
     root_.openPopup(std::move(form), {}, ui::Placement::Center, [this] {
         remembered_ = nullptr;
@@ -526,7 +539,9 @@ void protectionNote(const std::array<ui::Label*, 4>& labels,
 }
 }  // namespace
 
-// One row to a choice: the plug-in (bold), its maker and version, what was chosen, and Forget.
+// A section at the end of the form: its heading in bold over a rule, the count quiet after it and
+// Forget all at the right; under it one row to a choice on the form's grid: the plug-in (bold) with
+// its maker and version in quiet ink, what was chosen, and a quiet Forget at the right edge.
 void PreferencesDialog::rebuildRemembered() {
     if (!remembered_) return;
     std::string signature;
@@ -536,42 +551,73 @@ void PreferencesDialog::rebuildRemembered() {
     if (signature == rememberedShown_) return;
     rememberedShown_ = signature;
     const auto& loads = prefs_.rememberedLoads;
-    remembered_->setSummary(loads.empty() ? "none"
+    root_.releaseWithin(remembered_);
+    remembered_->clear();
+    auto& head = remembered_->emplace<ui::Node>("prefs.remembered.head");
+    head.layout.dir = ui::Layout::Dir::Row;
+    head.layout.height = ui::SizeRule::fixed(24);
+    head.layout.gap = 8;
+    head.layout.align = ui::Layout::Align::Center;
+    head.emplace<ui::Label>("prefs.remembered.title", "Plug-in choices", ui::Font::UiBold, "small",
+                            "ink");
+    head.emplace<ui::Label>("prefs.remembered.count",
+                            loads.empty() ? "none"
                                           : std::to_string(loads.size()) +
-                                                (loads.size() == 1 ? " choice" : " choices"));
-    ui::Node& body = remembered_->body();
-    root_.releaseWithin(&body);
-    body.clear();
+                                                (loads.size() == 1 ? " choice" : " choices"),
+                            ui::Font::Ui, "caption", "ink-quiet")
+        .layout.width = ui::SizeRule::fraction();
+    if (!loads.empty()) {
+        auto& all = head.emplace<ui::Button>("prefs.remembered.forget_all", "Forget all", [this] {
+            if (auto saved = setRememberedLoads({}); !saved && onError)
+                onError("preferences: " + saved.error().toString());
+        });
+        all.quiet = true;
+        all.layout.width = ui::SizeRule::fixed(90);
+        all.layout.height = ui::SizeRule::fixed(22);
+    }
+    remembered_->emplace<Hairline>("prefs.remembered.rule");
     if (loads.empty()) {
-        body.emplace<ui::Label>("prefs.remembered.empty",
-                                "Nothing is remembered. A choice made when a project opens is kept "
-                                "here if you ask for it.",
-                                ui::Font::Ui, "caption", "ink-quiet");
+        remembered_->emplace<ui::Label>("prefs.remembered.empty",
+                                        "Nothing is remembered. A choice made when a project opens "
+                                        "is kept here if you ask for it.",
+                                        ui::Font::Ui, "caption", "ink-quiet");
+        remembered_->relayout();
         return;
     }
-    auto& scroll = body.emplace<RememberedScroll>("prefs.remembered.scroll");
-    scroll.layout.width = ui::SizeRule::fraction();
-    scroll.layout.height = ui::SizeRule::content();
-    scroll.content().layout.dir = ui::Layout::Dir::Column;
-    scroll.content().layout.gap = 4;
+    // Up to six rows stand as they are; more scroll (and the bar takes its own strip).
+    ui::Node* rows = nullptr;
+    if (loads.size() > 6) {
+        auto& scroll = remembered_->emplace<RememberedScroll>("prefs.remembered.scroll");
+        scroll.layout.width = ui::SizeRule::fraction();
+        scroll.layout.height = ui::SizeRule::content();
+        scroll.content().layout.dir = ui::Layout::Dir::Column;
+        scroll.content().layout.gap = 4;
+        rows = &scroll.content();
+    } else {
+        rows = &remembered_->emplace<ui::Node>("prefs.remembered.rows");
+        rows->layout.dir = ui::Layout::Dir::Column;
+        rows->layout.height = ui::SizeRule::content();
+        rows->layout.gap = 4;
+    }
     for (std::size_t i = 0; i < loads.size(); ++i) {
         const RememberedLoad& load = loads[i];
         const std::string at = "prefs.remembered.row." + std::to_string(i);
-        auto& line = scroll.content().emplace<ui::Node>(at);
+        auto& line = rows->emplace<ui::Node>(at);
         line.layout.dir = ui::Layout::Dir::Row;
         line.layout.height = ui::SizeRule::fixed(24);
         line.layout.gap = 8;
         line.layout.align = ui::Layout::Align::Center;
-        line.emplace<ui::Label>(at + ".name", load.name.empty() ? load.id : load.name,
-                                ui::Font::UiBold, "small", "ink")
-            .layout.width = ui::SizeRule::fixed(190);
         std::string who = load.vendor;
         if (!load.version.empty()) who += (who.empty() ? "" : " \u00b7 ") + load.version;
-        line.emplace<ui::Label>(at + ".who", who, ui::Font::Ui, "caption", "ink-quiet")
-            .layout.width = ui::SizeRule::fraction();
+        // The label column of the form: the plug-in and, quietly, who made it, on one line.
+        std::vector<ui::TextRun> runs{
+            {load.name.empty() ? "Unknown plug-in" : load.name, ui::Font::UiBold, "ink"}};
+        if (!who.empty()) runs.push_back({"  " + who, ui::Font::Ui, "ink-quiet"});
+        auto& name = line.emplace<ui::RichText>(at + ".name", std::move(runs), "small");
+        name.layout.width = ui::SizeRule::fixed(200);
         line.emplace<ui::Label>(at + ".choice", rememberedChoice(load.mode), ui::Font::Ui, "small",
                                 "ink")
-            .layout.width = ui::SizeRule::fixed(150);
+            .layout.width = ui::SizeRule::fraction();
         auto& forget = line.emplace<ui::Button>(at + ".forget", "Forget", [this, i] {
             auto next = prefs_.rememberedLoads;
             if (i >= next.size()) return;
@@ -583,13 +629,6 @@ void PreferencesDialog::rebuildRemembered() {
         forget.layout.width = ui::SizeRule::fixed(60);
         forget.layout.height = ui::SizeRule::fixed(22);
     }
-    auto& all = body.emplace<ui::Button>("prefs.remembered.forget_all", "Forget all", [this] {
-        if (auto saved = setRememberedLoads({}); !saved && onError)
-            onError("preferences: " + saved.error().toString());
-    });
-    all.quiet = true;
-    all.layout.width = ui::SizeRule::fixed(90);
-    all.layout.height = ui::SizeRule::fixed(22);
     remembered_->relayout();
 }
 
