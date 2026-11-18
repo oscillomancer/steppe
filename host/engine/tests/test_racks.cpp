@@ -2473,6 +2473,96 @@ TEST_CASE("MIDI sends: a source mute or a route mute while playing needs no plan
         }
 }
 
+TEST_CASE("racks: a rack FX's wet or bypass edit while playing sounds like a compiled reload" *
+          doctest::description("rt")) {
+    // Round 42: a rack's plug-in stages have mix slots too (ADR-0093). The
+    // Transport's ramp through a VCA and a -12 dB gain into the Out.
+    model::Project project;
+    project.console9 = false;
+    model::EditTxn t(model::Session::create(project), 1);
+    const Id channel = addChannel(t);
+    const Id rack = t.create(model::Rack{channel, ""});
+    const Id transport = addModule(t, rack, "com.suppleaudio.rack.transport");
+    const Id vca = addModule(t, rack, "com.suppleaudio.rack.vca");
+    const Id gain = addPlugin(
+        t, rack, "com.suppleaudio.test.gain",
+        json::parse(R"({"schema":"supple.test-gain-patch/1.0","params":{"gain":-12}})").value());
+    const Id out = addModule(t, rack, "com.suppleaudio.rack.out");
+    cable(t, transport, "beat_phase", vca, "in");
+    cable(t, vca, "out", gain, "in_l");
+    cable(t, gain, "out_l", out, "l");
+    listen(t, out, channel);
+    const auto base = commit(t);
+    const Id gainFx = *base.modules.find(gain)->fx;
+    auto play = [&](const model::Session& next, const EngineOptions& options, int run) {
+        auto pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 300 * 256});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256}));
+        REQUIRE(engine.load(base));
+        engine.play();
+        auto cycles = [&](int n) {
+            for (int i = 0; i < n; ++i) {
+                if (options.anticipative)
+                    REQUIRE(engine.awaitRendered((backend.cycles() + 1) * 256));
+                backend.run(1);
+            }
+        };
+        cycles(100);
+        // A full renderer waiting for the callback: every run takes the edit
+        // from the same renderer position.
+        if (options.anticipative)
+            REQUIRE(engine.awaitRendered(std::numeric_limits<std::int64_t>::max()));
+        const auto generation = engine.planGeneration();
+        if (run == 0) REQUIRE(engine.load(next));
+        if (run == 1) {
+            model::EditTxn marker(next, next.version + 1);
+            marker.create(model::Marker{});
+            REQUIRE(engine.load(commit(marker)));
+        }
+        CHECK(engine.planGeneration() == generation + (run == 1 ? 1 : 0));
+        CHECK(engine.mixEdits() == (run == 0 ? 1u : 0u));
+        cycles(200);
+        CHECK(engine.processErrors() == 0);
+        engine.stop();
+        return backend.capture().channels[0];
+    };
+    for (const bool bypass : {false, true})
+        for (const EngineOptions& options :
+             {EngineOptions{.anticipative = false, .workers = 0}, EngineOptions{.workers = 0}}) {
+            CAPTURE(bypass);
+            CAPTURE(options.anticipative);
+            model::EditTxn e(base, 2);
+            e.modify<model::FxInstance>(gainFx, [&](auto& f) {
+                if (bypass)
+                    f.bypass = true;
+                else
+                    f.wet = 40;
+            });
+            const auto next = commit(e);
+            const auto fast = play(next, options, 0), compiled = play(next, options, 1),
+                       unedited = play(next, options, 2);
+            CHECK(*std::max_element(unedited.begin(), unedited.end()) > 0.01f);
+            std::size_t heard = 0;
+            while (heard < fast.size() && fast[heard] == unedited[heard]) ++heard;
+            // Nothing is live, so in both executors the value edit takes it
+            // at the block the compiled reload does. A plan swap does not
+            // carry a rack stage's wet ramp (carryStages skips rackStages),
+            // so the compiled reload jumps where the value edit ramps from
+            // the old level: the two differ only over that ramp. Once the
+            // swap carries rack stages, this is fast == compiled.
+            REQUIRE(heard < fast.size());
+            CHECK(heard >= 100 * 256);
+            std::size_t at = 0;
+            while (at < compiled.size() && compiled[at] == unedited[at]) ++at;
+            CHECK((heard == at || heard == at + 1));
+            const std::size_t ramped = std::min(fast.size(), at + 480);  // Plan::smoothFrames
+            CHECK(std::equal(fast.begin(), fast.begin() + at, compiled.begin()));
+            CHECK(std::equal(fast.begin() + ramped, fast.end(), compiled.begin() + ramped));
+        }
+}
+
 TEST_CASE("MIDI sends: solo follows a MIDI send downstream only") {
     namespace d = supple::engine::detail;
     model::EditTxn t(model::Session::create({.console9 = false}), 1);

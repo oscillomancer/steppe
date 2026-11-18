@@ -14,6 +14,7 @@
 #include <tuple>
 #include <vector>
 
+#include "supple/audio/audio_file.h"
 #include "supple/engine/app.h"
 #include "supple/engine/offline.h"
 #include "supple/engine/realtime.h"
@@ -940,6 +941,76 @@ TEST_CASE("FX wet and bypass edits while playing sound exactly like a compiled r
             });
         checkLikeCompiled(w.m.session, t.commit().value(), path);
     }
+}
+
+TEST_CASE("wet and bypass edits on input and take chains sound like a compiled reload" *
+          doctest::description("rt")) {
+    // Round 42: stages other than a track's chain have mix slots too. A take
+    // chain on a rendered audio item and an input chain on the monitored
+    // vocal, each a -12 dB gain.
+    const Wet w = wetSession();
+    const auto dir = std::filesystem::temp_directory_path() /
+                     ("supple-stages-" +
+                      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    audio::AudioData saw;
+    saw.sampleRate = 48000;
+    saw.channels.assign(2, std::vector<float>(96000));
+    for (std::size_t i = 0; i < 96000; ++i)
+        saw.channels[0][i] = saw.channels[1][i] = static_cast<float>(i % 300) / 600.0f - 0.25f;
+    REQUIRE(audio::writeWav(dir / "saw.wav", saw));
+    Id takeGain, inputGain;
+    const model::Session base = [&] {
+        model::EditTxn t(w.m.session, 3);
+        auto gain = [&] {
+            model::FxInstance fx;
+            fx.plugin.id = "com.suppleaudio.test.gain";
+            fx.patch =
+                json::parse(R"({"schema":"supple.test-gain-patch/1.0","params":{"gain":-12}})")
+                    .value();
+            return t.create(fx);
+        };
+        model::Track tr;
+        tr.parent = kMaster;
+        const Id track = t.create(tr);
+        t.modify<model::Track>(kMaster, [&](auto& x) { x.children.push_back(track); });
+        model::Take take;
+        take.source =
+            t.create(model::MediaSource{(dir / "saw.wav").string(), "", "wav", 48000, 2, 96000});
+        takeGain = gain();
+        take.chain = {takeGain};
+        const Id tk = t.create(take);
+        model::Item item;
+        item.track = track;
+        item.length = 4.0;  // beats: 2 s at 120 BPM
+        item.takes = {tk};
+        item.activeTake = tk;
+        t.create(item);
+        inputGain = gain();
+        t.modify<model::Track>(w.vocal, [&](auto& x) { x.inputChain.push_back(inputGain); });
+        return t.commit().value();
+    }();
+    auto edited = [&](std::vector<Id> fxs, bool bypass) {
+        model::EditTxn t(base, base.version + 1);
+        for (Id fx : fxs)
+            t.modify<model::FxInstance>(fx, [&](auto& f) {
+                if (bypass)
+                    f.bypass = true;
+                else
+                    f.wet = 40;
+            });
+        return t.commit().value();
+    };
+    for (const auto& [name, fxs, bypass, path] :
+         std::vector<std::tuple<std::string, std::vector<Id>, bool, Path>>{
+             {"take chain wet", {takeGain}, false, Path::Rendered},
+             {"take chain bypass", {takeGain}, true, Path::Rendered},
+             {"input chain wet", {inputGain}, false, Path::Live},
+             {"input chain bypass", {inputGain}, true, Path::Live},
+             {"take and input chain bypass", {takeGain, inputGain}, true, Path::Split}}) {
+        CAPTURE(name);
+        checkLikeCompiled(base, edited(fxs, bypass), path);
+    }
+    std::filesystem::remove_all(dir);
 }
 
 TEST_CASE("an FX wet or bypass edit compiles with anything else, or when the FX goes offline") {
