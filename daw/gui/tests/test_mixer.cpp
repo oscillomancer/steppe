@@ -1153,6 +1153,30 @@ TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
     prefs.setDefaultMonitor(model::Monitor::Off);
     CHECK(f.node("prefs.monitor.set")->valueText() == "Off");
     CHECK(f.track(f.addTrack("channel", "A")).record.monitor == model::Monitor::Off);
+    // The low-level settings are under Advanced, closed until asked for; the
+    // dialog grows to show them, and remembers while the app runs.
+    for (const char* id : {"prefs.section.audio.title", "prefs.section.recording.title",
+                           "prefs.section.plugins.title", "prefs.section.editing.title",
+                           "prefs.section.advanced.title"})
+        CHECK(f.node(id)->visible);
+    CHECK(f.node("prefs.audio")->bounds().y < f.node("prefs.monitor")->bounds().y);
+    CHECK(f.node("prefs.monitor")->bounds().y < f.node("prefs.isolation")->bounds().y);
+    CHECK_FALSE(f.node("prefs.advanced")->visible);
+    CHECK(f.node("prefs.advanced.toggle")->valueText() == "Show");
+    CHECK_FALSE(f.node("prefs.threads.set")->visibleInTree());
+    const float folded = f.node("prefs")->bounds().h;
+    CHECK(folded < 480);  // the everyday settings alone
+    REQUIRE(f.root->click("prefs.advanced.toggle"));
+    f.root->frame(false);
+    CHECK(f.node("prefs.advanced")->visible);
+    CHECK(f.node("prefs.advanced.toggle")->valueText() == "Hide");
+    CHECK(f.node("prefs")->bounds().h > folded + 100);
+    CHECK(f.node("prefs.latency.set")->bounds().bottom() <= f.node("prefs")->bounds().bottom());
+    REQUIRE(f.root->click("prefs.close"));
+    prefs.open();
+    f.root->frame(false);
+    CHECK(f.node("prefs.advanced")->visible);  // as it was left
+    f.snapshot("preferences-advanced.png");
     // Audio threads, from the menu; out of range refused.
     REQUIRE(f.root->click("prefs.threads.set"));
     auto* menu = dynamic_cast<ui::List*>(f.root->find("prefs.threads.menu"));
@@ -1615,8 +1639,10 @@ TEST_CASE(
     gui::PreferencesDialog prefs(*f.root, *f.app, mouse, {}, file);
     prefs.open();
     f.root->frame(false);
+    REQUIRE(f.root->click("prefs.advanced.toggle"));  // the low-level settings
+    f.root->frame(false);
     const float offHeight = f.node("prefs")->bounds().h;
-    CHECK(offHeight < 520);  // no space reserved for empty notes (eight would add ~190)
+    CHECK(offHeight < 760);  // no space reserved for empty notes (eight would add ~190)
     CHECK_FALSE(f.node("prefs.memory.note.0")->visible);
     CHECK_FALSE(f.node("prefs.latency.note.0")->visible);
     for (const char* id : {"prefs.memory.set", "prefs.latency.set"}) {
@@ -1683,6 +1709,8 @@ TEST_CASE(
     const auto file = f.dir / "preferences.json";
     gui::PreferencesDialog prefs(*f.root, *f.app, mouse, {}, file);
     prefs.open();
+    f.root->frame(false);
+    REQUIRE(f.root->click("prefs.advanced.toggle"));  // the low-level settings
     f.root->frame(false);
     const float offHeight = f.node("prefs")->bounds().h;
     CHECK_FALSE(f.node("prefs.latency.note.0")->visible);

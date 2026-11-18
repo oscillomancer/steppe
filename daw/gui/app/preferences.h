@@ -84,6 +84,9 @@ class PreferencesDialog {
     ui::Button* imports_ = nullptr;
     ui::Button* isolation_ = nullptr;
     ui::Button* audio_ = nullptr;
+    ui::Node* advanced_ = nullptr;  // the low-level settings, under their heading
+    ui::Button* advancedToggle_ = nullptr;
+    bool advancedOpen_ = false;  // kept while the app runs
     std::array<ui::Label*, 4> latencyNote_{};
 };
 

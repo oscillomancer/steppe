@@ -2184,6 +2184,16 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   auto; `preferences.json`, supple.preferences/1.6, sets
   `EngineApp::defaultMonitor`, so the agents' track.add follows it too), and
   a way into the mouse modifiers.
+  The dialog is in sections, each a heading over a rule
+  (`prefs.section.<name>.title`): **Audio** (the audio device), **Recording
+  and import** (Input monitoring on new tracks, Copy imported audio),
+  **Plug-ins** (Third-party plug-ins run), **Editing** (Mouse modifiers) and
+  **Advanced** (Audio processing threads, Lock memory, Keep CPUs out of deep
+  idle). Advanced (`prefs.advanced`) is closed until its **Show** is clicked
+  (`prefs.advanced.toggle`, then **Hide**); the dialog grows to hold it. It
+  stays as it was left while the app runs, and opens by itself when one of
+  its three settings is not at its default, so that a setting in force is
+  never out of sight. Whether it is open is not saved.
   **Audio processing threads** is an advanced live/background
   override: Automatic (default) or a limit per pool including its submitting
   thread; Limit 1 is serial. The menu
@@ -2197,7 +2207,7 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   means 0, and saves write canonical 1.4. Invalid types/ranges return
   `preferences.audio_threads` at `/audio_threads` with a corrective hint;
   a failed save leaves the effective and displayed thread setting unchanged.
-  **Lock process memory (mlockall)** is off by default, saved as the boolean
+  **Lock memory (mlockall)** is off by default, saved as the boolean
   `lock_memory`. Both 1.0 and 1.1 files remain readable; an absent field means
   false. Other types return `preferences.lock_memory`, `/lock_memory`, and
   "use true or false". The option applies on successful engine start or
@@ -2244,7 +2254,7 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   (absent, and in older files, false; other types report
   `preferences.render_open_folder`), set from the render dialog's After
   render section.
-  **Copy imported audio into project** (1.4): On by default, saved as the
+  **Copy imported audio** (1.4): On by default, saved as the
   boolean `copy_imported_media` (absent, and in older files, means true;
   other types report `preferences.copy_imported_media`) and applied to
   `EngineApp::setCopyImportedMedia` at once. A note says the project then

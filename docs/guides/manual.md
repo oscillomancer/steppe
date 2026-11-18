@@ -43,6 +43,12 @@ audio system, the output and input devices, the sample rate and the buffer
 size. Steppe remembers the choice and starts with it next time. Each change
 restarts the running engine at once.
 
+**Edit > Preferences…** holds the settings that apply to every project, in
+sections: **Audio**, **Recording and import**, **Plug-ins** and **Editing**.
+Each takes effect when you change it. The low-level tuning (how many threads
+process audio, locking memory, keeping CPUs out of deep idle) is under
+**Advanced**: click **Show** beside it. You do not need those to get started.
+
 - **Linux:** the rate and buffer size are requests to PipeWire, which shares
   the graph with other apps. It changes the rate only while no other client
   is playing, and only to a rate it allows. Choose **Force** to hold both on
@@ -978,7 +984,7 @@ load (adding one, opening a project, restarting one); Steppe's own plugins
 always run in the app.
 
 On Linux, while a plugin in a bridge process plays live, for example on a
-monitored track, Steppe keeps the CPUs out of deep idle, as **Edit > Preferences… > Keep CPUs out of deep idle** does whenever
+monitored track, Steppe keeps the CPUs out of deep idle, as **Edit > Preferences… > Advanced > Keep CPUs out of deep idle** does whenever
 the engine runs. A bridged plugin waits for its bridge to wake, and a CPU in
 deep idle wakes late. This is a request Steppe's process holds, not a system
 setting: it ends when no bridged plugin plays live, when the engine stops or
