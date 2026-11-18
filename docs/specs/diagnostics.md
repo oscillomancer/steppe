@@ -1229,7 +1229,10 @@ waits out the handler budget (`BridgeProcess::reap`, the budget `selfcapture::kH
 counted from the failure): a bridge that faulted as it was failed finishes its capsule or reaches
 its own bound first, and a hung one lives at most 200 ms longer than before, which costs nothing
 (it is already failed and silent; the engine does not wait for it). It is not a wait: a `reap()`
-inside the grace returns, and a later one kills. The other choice was a handler budget under 50 ms,
+inside the grace returns, and a later one kills, so the bridge's watcher thread, which announced the failure
+at its start, announces once more when the grace ends and the main thread's next service pass reaps it: a hung bridge
+is killed within the grace plus one tick with nobody asking (an engine that only ticks, with no `engine.status`
+call and no restart). The other choice was a handler budget under 50 ms,
 which was refused because the all-thread capture time on macOS has not been measured (Linux's
 fault-thread capture measured 61 to 76 us), and a bound set too low would truncate captures where
 they are largest. The kill deadlines of a call that waits are unchanged and never extended for a

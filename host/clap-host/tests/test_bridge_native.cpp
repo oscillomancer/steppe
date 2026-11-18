@@ -471,6 +471,49 @@ TEST_CASE("a bridge failed by late blocks is left to finish a capsule for the ha
     }
     CHECK(exited());
 }
+
+TEST_CASE("a hung bridge in an engine nobody queries is killed once the grace is over") {
+    // The engine's main thread services every instance on each tick and nothing else; an
+    // instance with a main-thread wake pulls only when the bridge announced something. The
+    // failure is announced once, inside the grace; the kill must not wait for anyone to ask
+    // (engine.status, a restart) after that.
+    setBridgeExecutable(BRIDGE_PATH);
+    struct Grace {
+        ~Grace() { setBridgeKillGraceForTests(-1); }
+    } restore;
+    setBridgeKillGraceForTests(50LL * 1'000'000);
+    MainThreadWake wake;
+    auto remote =
+        Instance::create(nativePlugin(FIXTURE_CLAP_PATH, "com.suppleaudio.test.crash"), {}, true);
+    REQUIRE(remote);
+    Instance& c = **remote;
+    c.setMainThreadWake(wake);
+    REQUIRE(c.activate(48000, 1, 64));
+    REQUIRE(c.startProcessing());
+    REQUIRE(c.setParam(1, 2));  // hangs in the next block
+    Audio audio;
+    const auto guard = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (!c.failed() && std::chrono::steady_clock::now() < guard) {
+        LiveBridgeDeadline deadline(steadyNanoseconds());
+        REQUIRE(c.process(audio.block()));
+    }
+    REQUIRE(c.failed());
+    const int pid = c.bridgePid();
+    REQUIRE(pid > 0);
+    auto exited = [pid] {
+        siginfo_t info{};
+        return ::waitid(P_PID, static_cast<id_t>(pid), &info, WEXITED | WNOHANG | WNOWAIT) == 0 &&
+               info.si_pid == pid;
+    };
+    // Ticks, as the engine makes them, and nothing else. The limit only ends a test that fails.
+    const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (!exited() && std::chrono::steady_clock::now() < limit) {
+        c.serviceMainThread();
+        (void)c.takeNotifications();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(exited());
+}
 #endif
 TEST_CASE("native bridge notifications ACK and rearm without periodic parent polling") {
     setBridgeExecutable(BRIDGE_PATH);

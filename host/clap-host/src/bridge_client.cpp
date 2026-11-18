@@ -268,7 +268,7 @@ void BridgeProcess::unsubscribe(RemoteInstance& instance) {
 
 void BridgeProcess::watch() {
     nameThread("bridge-parent");
-    bool watchingDeath = true, failureAnnounced = false;
+    bool watchingDeath = true, failureAnnounced = false, graceAnnounced = false;
     for (;;) {
         Waitable death;
         if (child_) death = child_->waitable();
@@ -281,7 +281,23 @@ void BridgeProcess::watch() {
 #else
             {watchingDeath ? Waitable(sock_) : Waitable{}, 0, 0}};
 #endif
-        const int ready = waitFor(descriptors, -1);
+        // A bridge failed as hung is killed by the main thread's next reap() once its grace is
+        // over, but the failure was announced at the start of the grace and the main thread
+        // looks again only when told: this thread tells it when the grace ends, so a hung
+        // bridge dies in a bounded time with nobody asking (an engine that is only ticking).
+        int timeoutMs = -1;
+        if (!graceAnnounced && failed() && failSignal_.load(std::memory_order_acquire) == kHung) {
+            const std::int64_t left =
+                killGraceNs() - (steadyNanoseconds() - hungAt_.load(std::memory_order_acquire));
+            timeoutMs = left <= 0 ? 0 : static_cast<int>((left + 999'999) / 1'000'000);
+        }
+        const int ready = waitFor(descriptors, timeoutMs);
+        if (ready == 0 && timeoutMs >= 0) {
+            graceAnnounced = true;
+            delivery_.fetch_add(1, std::memory_order_release);
+            notifySubscribers();
+            continue;
+        }
         if (ready < 0 && errno == EINTR) continue;
         if (ready < 0) {
             fail(-1);
