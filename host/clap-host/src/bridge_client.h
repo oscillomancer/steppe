@@ -46,6 +46,14 @@ void setBridgeCaptureSlotForTests(bool attach);
 // grace in nanoseconds, or a negative value for the default. Process-wide.
 void setBridgeKillGraceForTests(std::int64_t nanoseconds);
 
+// Tests only: the next `checks` liveness checks of a bridge process (BridgeProcess::alive and the
+// one ~BridgeProcess makes first) answer "alive" whatever the process says, then the real answer
+// again. A bridge that is dying of its own fault is alive until its dump is done and a test cannot
+// hold a real one there; this is how a test makes the host see one. Zero clears it. Process-wide.
+void setBridgeLivenessForTests(int checks);
+// Tests only: how many of those answers have not been given yet.
+int bridgeLivenessLeftForTests();
+
 class BridgeProcess {
   public:
     static constexpr int kHung = -2;

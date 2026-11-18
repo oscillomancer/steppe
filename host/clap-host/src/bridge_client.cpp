@@ -106,6 +106,21 @@ std::int64_t killGraceNs() {
 void setBridgeKillGraceForTests(std::int64_t nanoseconds) {
     gKillGraceNs.store(nanoseconds, std::memory_order_relaxed);
 }
+namespace {
+std::atomic<int> gForcedAlive{0};
+// One of the forced "alive" answers, if any is left (setBridgeLivenessForTests).
+bool forcedAlive() noexcept {
+    int left = gForcedAlive.load(std::memory_order_relaxed);
+    while (left > 0 &&
+           !gForcedAlive.compare_exchange_weak(left, left - 1, std::memory_order_relaxed)) {
+    }
+    return left > 0;
+}
+}  // namespace
+void setBridgeLivenessForTests(int checks) {
+    gForcedAlive.store(checks, std::memory_order_relaxed);
+}
+int bridgeLivenessLeftForTests() { return gForcedAlive.load(std::memory_order_relaxed); }
 
 void setBridgeExecutable(std::filesystem::path path) {
     std::lock_guard lock(gBridgeMutex);
@@ -441,7 +456,7 @@ RemoteInstance::~RemoteInstance() {
 BridgeProcess::~BridgeProcess() {
     // A bridge that ended before this and was never reaped ended by itself; one that is still
     // there is ended by the host closing its socket, below.
-    const bool diedFirst = child_ && !child_->alive();
+    const bool diedFirst = child_ && !forcedAlive() && !child_->alive();
     const int diedWith = diedFirst ? child_->exitStatus() : 0;
     watcherQuit_.store(true, std::memory_order_release);
     watcherWake_.notify();
@@ -544,6 +559,7 @@ void BridgeProcess::reap() {
 
 bool BridgeProcess::alive() const {
     if (pid_ <= 0) return false;
+    if (forcedAlive()) return true;
     return child_ && child_->alive();
 }
 

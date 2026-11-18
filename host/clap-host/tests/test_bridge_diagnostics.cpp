@@ -334,6 +334,54 @@ TEST_CASE("a bridge that faults as the host lets go is its own end, not the host
     CHECK((end.how == diagctx::BridgeHow::Signal || end.how == diagctx::BridgeHow::Exception));
     CHECK(end.status != 0);
 }
+
+// The host kills a bridge that is already dying of its own fault when a request finds its socket
+// closed before the process is gone (the liveness check says "alive": call() fails the bridge as
+// hung and kills it, which does nothing to a process that is exiting). The bridge's status is
+// still the fault's, and the host letting go of it must announce that, not the host's end. No
+// clock decides it: the request is in flight when the bridge faults (the instance's destruction is
+// what faults), and the liveness answers are set by the seam.
+TEST_CASE("a bridge killed by the host while it died of its own fault is still its own end") {
+    setBridgeExecutable(BRIDGE_PATH);
+    Sink sink;
+    auto process = createBridgeProcess();
+    REQUIRE(process);
+    const auto ordinal = (*process)->ordinal();
+    {
+        auto made = Instance::create(fixture("com.suppleaudio.test.crash"), {}, true, *process);
+        REQUIRE(made);
+        Instance& instance = **made;
+        REQUIRE(instance.activate(48000.0, 1, 64));
+        REQUIRE(instance.startProcessing());
+        REQUIRE(instance.setParam(1, 5.0));  // faults at its destruction, processes until then
+        std::array<float, 64> in{}, out{};
+        const float* inputs[1]{in.data()};
+        float* outputs[1]{out.data()};
+        ProcessBlock block;
+        block.inputs = inputs;
+        block.outputs = outputs;
+        block.inputChannels = block.outputChannels = 1;
+        block.frames = 64;
+        REQUIRE(instance.process(block));
+        // The Destroy request's failed reply is read as "the process is still there" (the first
+        // answer), and the host letting go finds it there too (the second).
+        setBridgeLivenessForTests(2);
+        made->reset();  // sends Destroy; the bridge faults inside it
+    }
+    // The failed request asked whether the bridge was alive (and the host killed it, the branch
+    // under test); the first answer is used. The host letting go takes the second.
+    CHECK(bridgeLivenessLeftForTests() == 1);
+    process->reset();
+    CHECK(bridgeLivenessLeftForTests() == 0);
+    setBridgeLivenessForTests(0);
+    diagctx::Event end;
+    for (const auto& event : Sink::of(diagctx::EventKind::Bridge))
+        if (event.bridge == ordinal && event.how != diagctx::BridgeHow::None) end = event;
+    CHECK(end.how != diagctx::BridgeHow::Host);
+    CHECK((end.how == diagctx::BridgeHow::Signal || end.how == diagctx::BridgeHow::Exception));
+    CHECK(end.status != 0);
+    CHECK(Sink::incidentOf(ordinal).size() == 32u);
+}
 #endif
 
 // The two cases below end a bridge with SIGKILL from outside. The Windows counterpart would end it
