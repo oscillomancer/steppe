@@ -59,9 +59,10 @@ std::optional<std::string> elfBuildId(const ReadMemory& read, std::uint64_t base
 Layout buildLayout(const std::vector<Mapping>& mappings, const ReadMemory& read);
 // CodeView identity of the PE image loaded at `base` (64-bit images only): the PDB
 // GUID in symbol-server order followed by the age as eight hex digits, 40 lowercase
-// hex characters. The PDB path is never read. `bias` receives load address minus
-// the image's preferred base once the headers parsed, even when there is no CodeView
-// record. Every offset and count read from the image is bounded.
+// hex characters. The PDB path is never read. `bias` receives the load address once the
+// headers parsed, even when there is no CodeView record: an address minus it is its RVA (the
+// loader overwrites the header's ImageBase in memory, so the preferred base is not known). Every
+// offset and count read from the image is bounded.
 std::optional<std::string> peDebugId(const ReadMemory& read, std::uint64_t base,
                                      std::uint64_t* bias = nullptr);
 

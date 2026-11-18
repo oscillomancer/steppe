@@ -159,7 +159,7 @@ void writeExpected(const char* path) {
     const auto base = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
     const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
     const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
-    const std::uintptr_t bias = base - static_cast<std::uintptr_t>(nt->OptionalHeader.ImageBase);
+    const std::uintptr_t bias = base;  // an offset into a PE image is its RVA
     const auto& directory = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
     std::string id;
     const auto* entries =

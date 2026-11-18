@@ -253,6 +253,33 @@ TEST_CASE("a capsule becomes module identity and offsets, fault first") {
     CHECK_FALSE(parseCapsule(reinterpret_cast<const std::uint8_t*>(&header), sizeof(header)));
 }
 
+TEST_CASE("every frame offset is below its module's size, whatever the load address") {
+    // A module is an image loaded somewhere; the report says where in it, never where it was
+    // loaded. A PE image's bias is its load address, an ELF or Mach-O dylib's the slide of an
+    // image linked at 0: either way an address in the image comes out below its size.
+    struct Image {
+        std::uint64_t bias, start, end;
+    };
+    for (const Image image : {Image{0x7ff91c000000, 0x7ff91c000000, 0x7ff91c200000},  // PE
+                              Image{0x7f3a10000000, 0x7f3a10001000, 0x7f3a10150000},  // ELF, PIE
+                              Image{0x1a2b34000, 0x1a2b35000, 0x1a2c00000}}) {        // Mach-O
+        auto data = fresh();
+        addModule(*data, image.bias, image.start, image.end);
+        addThread(*data, Role::Fault, Missing::None, Stop::End,
+                  {image.start, image.start + 0x1234, image.end - 1});
+        const auto bytes = encode(*data);
+        const auto snapshot = parseCapsule(bytes.data(), bytes.size());
+        REQUIRE(snapshot);
+        REQUIRE(snapshot->threads.size() == 1);
+        REQUIRE(snapshot->threads[0].walk.frames.size() == 3);
+        for (const auto& frame : snapshot->threads[0].walk.frames) {
+            REQUIRE(frame.module == 0);
+            CHECK(frame.offset < image.end - image.bias);
+            CHECK(frame.offset < 0x100000000ULL);
+        }
+    }
+}
+
 TEST_CASE("a capsule carries the role each thread registered as") {
     using supple::diagctx::ThreadRole;
     auto data = fresh();

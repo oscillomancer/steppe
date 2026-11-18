@@ -239,10 +239,13 @@ std::optional<std::string> peDebugId(const ReadMemory& read, std::uint64_t base,
     std::vector<unsigned char> optional(optionalSize);
     if (!read(base + peOffset + 24, optional.data(), optional.size())) return std::nullopt;
     if (load<std::uint16_t>(optional.data()) != 0x20b) return std::nullopt;  // PE32+
-    const auto preferred = load<std::uint64_t>(&optional[24]);
     const auto imageSize = load<std::uint32_t>(&optional[56]);
     const auto directories = load<std::uint32_t>(&optional[108]);
-    if (bias) *bias = base - preferred;
+    // The bias is the load address: a PE frame's offset is its RVA. The image's preferred base
+    // cannot be had from memory (the loader writes the address it loaded the image at over the
+    // header's ImageBase), so a link-time address is not on offer, and an offset that was one
+    // would be the absolute address.
+    if (bias) *bias = base;
     if (directories < 7 || imageSize == 0) return std::nullopt;
     const auto debugRva = load<std::uint32_t>(&optional[kDebugEntry]);
     const auto debugSize = load<std::uint32_t>(&optional[kDebugEntry + 4]);

@@ -42,7 +42,8 @@ struct CapsuleHeader {
 };
 // An image the frames fall in: [start, end) is its executable text at run time and
 // `bias` is the load address minus its link address (the slide), so an address minus
-// the bias is the link address a resolver finds in the binary.
+// the bias is the link address a resolver finds in the binary (a PE image's RVA: its bias is
+// the load address).
 struct CapsuleModule {
     std::uint64_t bias, start, end;
     std::uint8_t uuid[16];

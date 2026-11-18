@@ -128,6 +128,21 @@ if not sanitized:
     # A bad address is SIGSEGV or, on some systems, SIGBUS; on Windows it is STATUS_ACCESS_VIOLATION,
     # which a report carries as the signed 32-bit value of 0xC0000005.
     faults=(10,11) if posix else (-1073741819,)
+    # A frame is a module and an offset into it, never an address: an absolute address would give
+    # the load address away in a report the user may pass on (the spec's one rule about frames).
+    # A load address is at least 2**40 on Linux and Windows, an offset below 2**32 there; on macOS
+    # an executable's link address starts at 2**32, so only the plug-in's own dylib (linked at 0)
+    # is held to it there.
+    def frame_offsets_are_offsets(e):
+        member=[p for p in e["plugins"] if p.get("bridge")==e["bridge"] and p.get("build")]
+        ids=[m["id"] for m in e["modules"]]
+        plugin=ids.index(member[0]["build"]["id"]) if member and member[0]["build"]["id"] in ids else None
+        for t in e["threads"]:
+            for f in t.get("frames",[]):
+                if f.get("module") is None: continue
+                offset=int(f["offset"],16)
+                if sys.platform!="darwin" or f["module"]==plugin:
+                    assert offset<2**32,("a frame offset is an address",f,t["role"])
     def bridge_report(*args):
         reports,run=run_bridged(*args)
         exits=[r for r in reports if r["kind"]=="bridge_exit"]
@@ -141,6 +156,7 @@ if not sanitized:
         t=e["threads"]
         assert t and t[0]["role"]=="fault" and t[0]["state"]=="walked" and t[0]["frames"],t
         assert "\"image\"" not in json.dumps(e) and "0x" not in json.dumps(e["plugins"]),e
+        frame_offsets_are_offsets(e)
         return e,ended
     def named(e):
         member=[p for p in e["plugins"] if p.get("bridge")==e["bridge"] and p["plugin_id"]=="com.suppleaudio.test.crash"]

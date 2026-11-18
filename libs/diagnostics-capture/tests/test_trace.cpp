@@ -842,7 +842,7 @@ TEST_CASE("a PE image yields its CodeView GUID and age, symbol-server ordered, a
     const auto id = peDebugId(image.reader(), kPeBase, &bias);
     REQUIRE(id);
     CHECK(*id == "12345678abcdef0123456789abcdef0100000003");
-    CHECK(bias == 0x100000);
+    CHECK(bias == kPeBase);  // an address minus it is an RVA, never the absolute address
     // The PDB path is never read, so it cannot reach a report.
     for (const auto& [at, size] : image.reads) {
         CHECK(size <= 1024);
@@ -1041,7 +1041,7 @@ TEST_CASE("malformed or truncated PE images yield no identity and bounded reads"
     image.put(kPeBase, pe(noDebug));
     std::uint64_t bias = 0;
     CHECK_FALSE(peDebugId(image.reader(), kPeBase, &bias).has_value());
-    CHECK(bias == 0x100000);
+    CHECK(bias == kPeBase);  // an address minus it is an RVA, never the absolute address
 }
 
 TEST_CASE("a platform layout and walker replace the maps file and the frame-pointer walk") {

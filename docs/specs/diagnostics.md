@@ -411,7 +411,7 @@ called the model thread, and stays valid.) `state` is
 `deadline`, `registers_unreadable`, `maps_unreadable`, `unsupported`, `not_collected`) and
 no frames. A frame is `{module, offset, return}`: `module` an index into `modules`,
 `offset` the lowercase `0x` hex address minus the module's load bias (the link-time
-address a symbolizer expects), `return` false only for a thread's stopped pc (symbolize
+address a symbolizer expects; for a PE image the RVA), `return` false only for a thread's stopped pc (symbolize
 return addresses at offset-1). Executable memory with no file (JIT) is `{module: null,
 return}` with no offset. At most 128 frames per thread; `dropped` counts threads omitted
 beyond 128. Retention validates all of this strictly: a report with any other shape is
@@ -489,9 +489,12 @@ supervisor and is never recorded. Executable regions come from the worker's comm
 executable pages; a region with no image is generated code. Module identity is the PE
 CodeView record read from the image in the worker's memory: the PDB GUID in
 symbol-server order followed by the age as eight hex digits (40 lowercase hex characters),
-and `offset` is the address minus the load bias (load address minus the image's
-preferred base), the link-time address a symbolizer expects, as for ELF. The PDB path is
-never read. Stack-overflow and fail-fast faults keep the limits stated for the terminal hook:
+and `offset` is the address minus the image's load address: its RVA, which is what the
+resolver looks up (it adds nothing from the file's headers). It is not the link-time address
+(the preferred base plus the RVA) that the other formats give: the loader writes the address it
+loaded the image at over the header's ImageBase in memory, so the preferred base cannot be read
+from a running process, and an offset made from it came out as the absolute address. A frame's
+offset is below its image's size. The PDB path is never read. Stack-overflow and fail-fast faults keep the limits stated for the terminal hook:
 fail-fast bypasses the last-chance filter and yields no trace.
 
 macOS has no external collector: reading another process needs `task_for_pid` and an

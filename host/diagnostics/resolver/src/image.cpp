@@ -282,9 +282,9 @@ Result<SymbolTable> readPe(const Source& source, const Identity& image, const Li
             builder.skip();
             continue;
         }
-        const std::uint64_t base = info->imageBase;
-        if (!builder.add(base + rva, 0, base + section->va + section->extent(), *name))
-            return builder.finish();
+        // A report's offset into a PE image is its RVA (the capture cannot know the preferred
+        // base).
+        if (!builder.add(rva, 0, section->va + section->extent(), *name)) return builder.finish();
     }
     return builder.finish();
 }

@@ -226,12 +226,13 @@ TEST_CASE("a PE image gives the id the collector reads and its exported function
     CHECK(id.id == "123456789abcdef001020304050607080000002a");
     const auto table = read(bytes);
     CHECK(sane(table));
-    CHECK(nameOf(table, images::kPeBase + 0x1100) == "Alpha");
-    CHECK(nameOf(table, images::kPeBase + 0x11ff) == "Alpha");
-    CHECK(nameOf(table, images::kPeBase + 0x1200) == "Beta");
-    CHECK(nameOf(table, images::kPeBase + 0x1fff) == "Beta");
-    CHECK(nameOf(table, images::kPeBase + 0x2100) == "<none>");  // not in a code section
-    CHECK(table.skipped == 2);  // the forwarder and the data export
+    // A report's offset into a PE image is its RVA (the capture cannot know the preferred base).
+    CHECK(nameOf(table, 0x1100) == "Alpha");
+    CHECK(nameOf(table, 0x11ff) == "Alpha");
+    CHECK(nameOf(table, 0x1200) == "Beta");
+    CHECK(nameOf(table, 0x1fff) == "Beta");
+    CHECK(nameOf(table, 0x2100) == "<none>");  // not in a code section
+    CHECK(table.skipped == 2);                 // the forwarder and the data export
 }
 
 TEST_CASE("a PE image with no export table is matched but has no symbols") {
