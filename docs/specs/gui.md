@@ -2114,7 +2114,8 @@ of that kind, and a look is a file system call for each source. So a file
 deleted or put back on disk shows in its row when the page next comes
 into view or the project's sources next change, not before. A list that
 comes out the same is left alone, and the chosen row stays chosen while
-its source is listed. The search (`.search`) narrows it by name.
+its source is listed; another project's list starts with no row chosen,
+whatever its sources' ids. The search (`.search`) narrows it by name.
 Enter in the search, a double-click or **Add** (`.add`) puts the media on
 a track as the Files page does a file, through the same hook with the
 source's file (`item.add` on the selected track, or on a new one, at the

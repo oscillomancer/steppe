@@ -1956,14 +1956,31 @@ TEST_CASE("the side panel's browser lists the opened project's media, not the la
         f.root->frame(false);
     };
     pass();
-    CHECK(names() == std::vector<std::string>{"kick.wav|WAV · 0:02"});
+    CHECK(names() == std::vector<std::string>{"kick.wav|WAV \u00b7 0:02"});
+    // Its row is chosen.
+    auto* list = dynamic_cast<ui::List*>(f.root->find("side.browser.media.results"));
+    REQUIRE(list);
+    const ui::Node* add = f.root->find("side.browser.media.add");
+    REQUIRE(add);
+    const ui::Point row{list->bounds().x + 20, list->bounds().y + 0.5f * list->rowHeight};
+    f.root->pointer({ui::PointerEvent::Type::Down, row, 1, 1});
+    f.root->pointer({ui::PointerEvent::Type::Up, row, 1, 1});
+    f.root->frame(false);
+    REQUIRE(list->selected());
+    CHECK(add->enabled);
+    const std::string chosenId = f.app->head().media.begin()->id.str();
 
     // The other project, opened with the page in view, at the same version.
     const auto version = f.app->head().version;
     REQUIRE(f.app->open(f.dir / "two.json"));
     REQUIRE(f.app->head().version == version);
     pass();
-    CHECK(names() == std::vector<std::string>{"snare.wav|WAV · 0:05"});
+    CHECK(names() == std::vector<std::string>{"snare.wav|WAV \u00b7 0:05"});
+    // Its source has the id the first project's had, and is another file:
+    // what was chosen there is not chosen here.
+    REQUIRE(f.app->head().media.begin()->id.str() == chosenId);
+    CHECK_FALSE(list->selected());
+    CHECK_FALSE(add->enabled);
     // And an empty one.
     REQUIRE(f.app->newProject({}));
     pass();

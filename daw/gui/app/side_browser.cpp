@@ -662,9 +662,10 @@ void SideBrowser::loadMedia(bool whenChanged) {
         return x != y ? x < y : a.id < b.id;
     });
     if (found == media_) return;
-    // The chosen row stays chosen while its source is still listed.
+    // The chosen row stays chosen while its source is still listed. Another
+    // project's source with the same id is another file, and is not chosen.
     std::string chosenId;
-    if (mediaList_)
+    if (mediaList_ && sameProject)
         if (const auto row = mediaList_->selected(); row && *row < mediaShown_.size())
             chosenId = media_[mediaShown_[*row]].id;
     media_ = std::move(found);
