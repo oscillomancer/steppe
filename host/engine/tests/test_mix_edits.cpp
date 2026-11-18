@@ -904,6 +904,11 @@ void checkLikeCompiled(const model::Session& base, const model::Session& next, P
             return heardAt == at || heardAt == at + 1;
         };
         const std::size_t resumes = rendererResumesAt(options, kEditFrame);
+        // Should this fail, where each run was heard says which run moved.
+        std::size_t apart = 0;
+        while (apart < kEditFrames && fast[apart] == compiled[apart]) ++apart;
+        INFO("heard: fast " << heard(fast) << ", compiled " << heard(compiled) << "; resumes "
+                            << resumes << "; fast and compiled first differ at " << apart);
         CHECK(from(heard(compiled), resumes));
         if (path == Path::Live) {
             CHECK(from(heard(fast), kEditFrame));
