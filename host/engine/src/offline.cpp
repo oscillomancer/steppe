@@ -466,6 +466,12 @@ std::vector<std::pair<Id, Error>> InstancePool::failedErrors() const {
     return out;
 }
 
+std::string InstancePool::failureIncident(Id id) const {
+    const auto it = instances_.find(id);
+    if (it == instances_.end() || !it->second.instance || !it->second.instance->failed()) return {};
+    return it->second.instance->bridgeIncident();
+}
+
 std::vector<Id> InstancePool::bridgeThreadsRefused() const {
     std::vector<Id> out;
     for (const auto& [id, entry] : instances_)

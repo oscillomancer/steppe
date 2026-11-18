@@ -14,6 +14,7 @@
 #include <supple/audio/audio_file.h>
 #include <supple/base/files.h>
 #include <supple/base/sha256.h>
+#include <supple/diagctx/inventory.h>
 #include <supple/engine/app.h>
 #include <supple/engine/jack.h>
 #include <supple/host/clap_host.h>
@@ -543,6 +544,58 @@ TEST_CASE("an isolated plugin that crashes is reported and restarted over the bu
     REQUIRE(again);
     CHECK(again != crash);
     CHECK_FALSE(again->failed());
+    call("engine.stop", "{}");
+}
+
+namespace {
+void ignoreAnnouncements(const supple::diagctx::Event&) noexcept {}
+}  // namespace
+
+// With a diagnostics supervisor behind the process (here: a sink that only listens) a bridge that
+// dies of a signal or an exception may have caused a local crash report, and the engine says which:
+// the failed fx's entry in `failed_errors` carries its id, once the bridge's end was observed.
+TEST_CASE("a failed fx names the crash report its bridge's death may have caused") {
+    host::setBridgeExecutable(BRIDGE_PATH);
+    diagctx::setInventorySink(&ignoreAnnouncements);
+    struct Unset {
+        ~Unset() { diagctx::setInventorySink(nullptr); }
+    } unset;
+    Root root;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    auto app = makeApp(root.path);
+    cmd::Dispatcher d(registry, *app);
+    auto call = [&](std::string command, std::string_view args) {
+        auto r = d.execute({std::move(command), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return *r;
+    };
+    call("batch", R"({"steps": [
+        {"command": "track.add", "args": {"name": "Lead"}, "as": "t"},
+        {"command": "fx.add", "args": {"track": "${t.track}", "plugin": "Test Sine"}},
+        {"command": "fx.add", "args": {"track": "${t.track}", "plugin": "com.suppleaudio.test.crash"}, "as": "c"},
+        {"command": "fx.set", "args": {"fx": "${c.fx}", "isolation": "dedicated"}},
+        {"command": "item.add", "args": {"track": "${t.track}", "bar": 1, "notation": "voice lead; 1: C4:w"}}]})");
+    call("engine.start", R"({"backend": "dummy"})");
+    call("transport.play", "{}");
+    host::Instance* crash = app->instanceOf(*model::Id::parse("fx_2"));
+    REQUIRE(crash);
+    CHECK(call("engine.status", "{}")["failed_errors"].size() == 0);
+    REQUIRE(crash->setParam(1, 4.0));  // a real fault in its next process()
+    // The failure is seen first; its cause is told when the bridge's end has been observed, which
+    // the next service of the failed instance does.
+    std::string incident;
+    for (int i = 0; i < 5000 && incident.empty(); ++i) {
+        app->tick();
+        auto status = call("engine.status", "{}");
+        if (status["failed_errors"].size() == 1)
+            if (const auto* found = status["failed_errors"].at(0).find("incident"))
+                incident = found->asString();
+        if (incident.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    REQUIRE(incident.size() == 32);
+    CHECK(incident.find_first_not_of("0123456789abcdef") == std::string::npos);
+    CHECK(crash->bridgeIncident() == incident);
     call("engine.stop", "{}");
 }
 

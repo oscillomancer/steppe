@@ -1616,7 +1616,10 @@ host's account only: the bridge's own threads and fault are not collected yet (6
 attribution is the only live member or none, an exit's code is not read on POSIX, a bridge killed
 by the out-of-memory killer reads as a signal, and the 65536th bridge of a run has no ordinal.
 It is never a restart notice and takes no place in the suspect window, and retention keeps the newest
-5 of them apart from the 20 crash reports, so they cannot evict the report behind a suspicion. Tested on Linux only
+5 of them apart from the 20 crash reports, so they cannot evict the report behind a suspicion. The app can name the
+report a bridge's death may have caused: the worker mints the id and sends it with the end, and the failed fx's
+`engine.status.failed_errors[]` entry and `fx.failed` carry it as `incident` once the end was observed (it may name
+no report: a repeat, the run's limit); the GUI does not show it yet (the viewer, 7c). Tested on Linux only
 (unit tests, `clap-host.diagnostics-inventory` with the real bridge); the Windows exception
 classification and the macOS signal path are unproven until native CI runs. On Windows the
 `test_bridge_diagnostics` cases that end a bridge from outside (a signal, a bridge that died

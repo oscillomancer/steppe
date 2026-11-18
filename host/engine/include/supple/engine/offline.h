@@ -126,6 +126,11 @@ class InstancePool {
     bool restarting(model::Id id) const;
     bool restarting(const host::Instance* instance) const;
     std::vector<std::pair<model::Id, Error>> failedErrors() const;
+    // The id of the local crash report the death of this instance's bridge may have caused
+    // (ADR-0083, topic 6a), or empty: not isolated, not failed, the bridge did not die of a signal
+    // or an exception, or its end has not been observed yet (the next service of the failed
+    // instance does). The report may not exist.
+    std::string failureIncident(model::Id id) const;
     // Isolated instances whose bridge audio thread was refused its class.
     std::vector<model::Id> bridgeThreadsRefused() const;
     const Error* failure(model::Id id) const;

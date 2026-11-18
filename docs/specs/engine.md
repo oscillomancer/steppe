@@ -1456,7 +1456,10 @@ instance).
   process-wide, the cycle counters per engine.
 - Crash handling: a control thread watches the process (pidfd); on crash the
   instance becomes a **failed node** (silence; `fx.failed` event with the
-  signal and last known state kept in the model), the rest of the session
+  signal and last known state kept in the model; when the bridge died of a signal or an exception
+  and a local crash-report supervisor was there, `incident` names the report that death may have
+  caused (ADR-0083), also in `engine.status.failed_errors[]` once the bridge's end was observed;
+  the report may not exist, and `crash.read` says so), the rest of the session
   keeps playing, and `fx.restart` re-creates it from the last known state.
   In an offline render, a node that fails this way fails the render instead
   (§3, ADR-0090).

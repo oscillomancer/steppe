@@ -2402,6 +2402,8 @@ EngineStatus EngineApp::engineStatus() {
         failure["fx"] = id.str();
         failure["reason"] = error.message;
         failure["error"] = pluginErrorJson(error);
+        if (auto incident = pool_->failureIncident(id); !incident.empty())
+            failure["incident"] = std::move(incident);
         st.failedErrors.asArray().push_back(std::move(failure));
     }
     st.sync = syncReport();
