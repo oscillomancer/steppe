@@ -173,6 +173,18 @@ TEST_CASE("a bridged instance announces where it is in its bridge, an in-process
 // without killing it, so the instance is never destroyed by a request: the bridge destroys it when
 // the socket closes, and the fixture faults in its destructor. No timing decides this: the bridge
 // is alive when the host lets go, and what it did next is what the end reads as.
+// AddressSanitizer and ThreadSanitizer end a faulting bridge with their own exit (after their
+// report), not with the signal: the host rightly reads that as an exit, so there is no signal for
+// this case to observe in those builds.
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+#define SUPPLE_TEST_SANITIZER_EXITS 1
+#endif
+#endif
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+#define SUPPLE_TEST_SANITIZER_EXITS 1
+#endif
+#if !defined(SUPPLE_TEST_SANITIZER_EXITS)
 TEST_CASE("a bridge that faults as the host lets go is its own end, not the host's") {
     setBridgeExecutable(BRIDGE_PATH);
     Sink sink;
@@ -206,6 +218,7 @@ TEST_CASE("a bridge that faults as the host lets go is its own end, not the host
     CHECK((end.how == diagctx::BridgeHow::Signal || end.how == diagctx::BridgeHow::Exception));
     CHECK(end.status != 0);
 }
+#endif
 
 // The two cases below end a bridge with SIGKILL from outside. The Windows counterpart would end it
 // with TerminateProcess(OpenProcess(pid), 0xC0000005); it is not written because nothing here can
