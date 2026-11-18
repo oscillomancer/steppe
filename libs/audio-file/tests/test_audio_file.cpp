@@ -1154,3 +1154,67 @@ TEST_CASE("RF64 promotion repairs every interrupted header byte and tag mixture"
         CHECK(*supple::readFile(tornFile) == damaged);  // no unrelated repair guesses
     }
 }
+
+TEST_CASE("readAudioHead reads a file's start as readAudio decodes it, and no further") {
+    const fs::path dir =
+        fs::temp_directory_path() /
+        ("supple-head-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::create_directories(dir);
+    struct Cleanup {
+        fs::path dir;
+        ~Cleanup() { fs::remove_all(dir); }
+    } cleanup{dir};
+    const auto wide = tone(50000, 48000, 4);  // more than one 16384-frame chunk
+    REQUIRE(writeWav(dir / "wide.wav", wide));
+    REQUIRE(writeFlac(dir / "wide.flac", wide));
+    const std::array<fs::path, 4> files = {dir / "wide.wav", dir / "wide.flac",
+                                           kData / "sine440.flac", kData / "sine440.mp3"};
+    for (const auto& file : files) {
+        CAPTURE(file.string());
+        const auto whole = readAudio(file);
+        REQUIRE(whole);
+        const auto frames = static_cast<std::int64_t>(whole->frames());
+        // The whole file: the same audio, nothing cut.
+        bool cut = true;
+        auto all = readAudioHead(file, {}, &cut);
+        REQUIRE(all);
+        CHECK(all->sampleRate == whole->sampleRate);
+        CHECK(all->channels == whole->channels);
+        CHECK_FALSE(cut);
+        // Its start, two channels at most: exactly readAudio's first frames.
+        for (const std::int64_t limit : {std::int64_t{1}, frames / 2, frames - 1}) {
+            CAPTURE(limit);
+            auto head = readAudioHead(file, {.maxFrames = limit, .maxChannels = 2}, &cut);
+            REQUIRE(head);
+            REQUIRE(head->frames() == static_cast<std::size_t>(limit));
+            CHECK(head->channelCount() == std::min<std::size_t>(2, whole->channelCount()));
+            CHECK(cut);
+            for (std::size_t c = 0; c < head->channelCount(); ++c)
+                CHECK(std::equal(head->channels[c].begin(), head->channels[c].end(),
+                                 whole->channels[c].begin()));
+        }
+        // Exactly as long as the file: nothing cut.
+        auto exact = readAudioHead(file, {.maxFrames = frames}, &cut);
+        REQUIRE(exact);
+        CHECK(exact->frames() == whole->frames());
+        CHECK_FALSE(cut);
+    }
+    // Cancelled between chunks.
+    int asked = 0;
+    auto cancelled = readAudioHead(dir / "wide.wav", {.stop = [&] { return ++asked == 2; }});
+    REQUIRE_FALSE(cancelled);
+    CHECK(cancelled.error().code == "audio.cancelled");
+    CHECK(asked == 2);
+    // Not audio, and not there.
+    {
+        std::ofstream text(dir / "notes.txt");
+        text << "not audio at all";
+    }
+    auto notAudio = readAudioHead(dir / "notes.txt", {});
+    REQUIRE_FALSE(notAudio);
+    CHECK(notAudio.error().code == "audio.format");
+    auto missing = readAudioHead(dir / "missing.wav", {});
+    REQUIRE_FALSE(missing);
+    CHECK(missing.error().code == "audio.open");
+}

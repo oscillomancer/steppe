@@ -110,3 +110,4 @@ current state.
 | [0090](0090-offline-renders-and-bridged-plugins.md) | Offline renders wait for bridged plug-ins, and fail when one fails | Accepted |
 | [0092](0092-patch-only-fx-edits.md) | Patch-only FX edits reach the running instances without a plan | Accepted |
 | [0093](0093-wet-bypass-mute-solo-on-a-running-plan.md) | FX wet and bypass, strip mute and solo reach a running plan | Accepted |
+| [0094](0094-file-audition-outside-the-project.md) | A file audition plays outside the project graph | Accepted |
