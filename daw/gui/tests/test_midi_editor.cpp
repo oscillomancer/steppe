@@ -11,7 +11,6 @@
 #include <array>
 #include <filesystem>
 #include <set>
-#include <thread>
 
 #include "app_actions.h"
 #include "control_map.h"
@@ -882,10 +881,32 @@ TEST_CASE("MIDI editor: the notation panel compiles live, writes back, and follo
     f.root->focus(text);
     f.root->key(SDLK_A, ui::kCtrl);
     f.root->text("voice v; 1: D4:h F4:h");
+    // The pause is counted in the passes' time, from the first pass after
+    // the last keystroke: until that pass has run, one is due at once.
+    using std::chrono::milliseconds;
+    const auto typed = f.app->head().version;
     REQUIRE(f.editor->nextDeadline());
+    CHECK(*f.editor->nextDeadline() <= f.now);
     f.frame();
-    std::this_thread::sleep_for(std::chrono::milliseconds(350));
+    REQUIRE(f.editor->nextDeadline());
+    CHECK(*f.editor->nextDeadline() == f.now + milliseconds(300));
+    // Just short of it nothing is written, however many passes run.
+    f.now += milliseconds(299);
     f.frame();
+    f.frame();
+    CHECK(f.app->head().version == typed);
+    // A keystroke starts the pause again, from the pass after it.
+    f.root->text(" ");
+    f.now += milliseconds(200);
+    f.frame();
+    REQUIRE(f.editor->nextDeadline());
+    CHECK(*f.editor->nextDeadline() == f.now + milliseconds(300));
+    f.now += milliseconds(299);
+    f.frame();
+    CHECK(f.app->head().version == typed);
+    f.now += milliseconds(1);
+    f.frame();
+    CHECK(f.app->head().version > typed);
     CHECK_FALSE(f.editor->nextDeadline());
     auto n = f.notes();
     REQUIRE(n.size() == 2);
@@ -897,7 +918,7 @@ TEST_CASE("MIDI editor: the notation panel compiles live, writes back, and follo
     f.root->key(SDLK_END, ui::kCtrl);
     f.root->text(" Q9:zz");
     f.frame();
-    std::this_thread::sleep_for(std::chrono::milliseconds(350));
+    f.now += milliseconds(300);
     f.frame();
     CHECK(f.app->head().version == v);
     REQUIRE_FALSE(text->marks().empty());
@@ -908,7 +929,7 @@ TEST_CASE("MIDI editor: the notation panel compiles live, writes back, and follo
     f.root->key(SDLK_A, ui::kCtrl);
     f.root->text("voice v; 1: A3:w");
     f.frame();
-    std::this_thread::sleep_for(std::chrono::milliseconds(350));
+    f.now += milliseconds(300);
     f.frame();
     CHECK(text->marks().empty());
     CHECK(f.notes().size() == 1);

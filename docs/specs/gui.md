@@ -1396,7 +1396,11 @@ quantize, transpose), velocity and CC lanes, and a **notation panel**: the
 item's notation text (`libs/notation`) beside the roll, editable with live
 compile diagnostics (the compiler's located errors and hints); edits in
 either side update the other through `midi.edit` (event edits) and
-`midi.write` (notation replacement). A draft that would replace MIDI changed
+`midi.write` (notation replacement). The text compiles and is written after
+a pause of 300 ms in typing. The pause is counted in the time the loop's
+passes are given (`MidiEditor::sync(now)`), from the first pass after the
+last keystroke, which in the app is the pass that keystroke woke; a test
+steps it by its own time and waits for nothing. A draft that would replace MIDI changed
 elsewhere since it was loaded is not written by the pause, leaving the panel or
 closing the editor: the panel says so, and Ctrl+Enter applies it over the
 change. This is the

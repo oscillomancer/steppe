@@ -955,7 +955,7 @@ std::unique_ptr<ui::Node> MidiEditor::build() {
     text.onChange = [this](const std::string&) {
         textDirty_ = true;
         compilePending_ = true;
-        lastEdit_ = std::chrono::steady_clock::now();
+        typedAt_.reset();  // the next pass starts the pause again
     };
     text.onSubmit = [this](const std::string&) { compileText(true, true); };
     text.onFocusChange = [this](bool focused) {
@@ -1263,7 +1263,7 @@ void MidiEditor::compileText(bool write, bool submit) {
 }
 
 std::uint64_t MidiEditor::beginGesture() {
-    follow();
+    follow({});
     gestureGeneration_ = app_.projectGeneration();
     return app_.head().version;
 }
@@ -1271,7 +1271,7 @@ std::uint64_t MidiEditor::beginGesture() {
 Status MidiEditor::edit(json::Value ops, std::optional<std::uint64_t> expectedVersion) {
     if (expectedVersion && (*expectedVersion != app_.head().version ||
                             gestureGeneration_ != app_.projectGeneration())) {
-        follow();
+        follow({});
         return Error("gui.midi.stale", "the MIDI item changed during the gesture", "/item",
                      "start the gesture again against the current item");
     }
@@ -1462,13 +1462,14 @@ void MidiEditor::sync(std::chrono::steady_clock::time_point now) {
     } else {
         edgeClock_.reset();
     }
-    follow();
+    follow(now);
 }
 
-// The pass without its time: the editor follows the window, the session, the
-// text's pending compile and the playhead. A gesture calls it too, to start
-// from the session as it is.
-void MidiEditor::follow() {
+// The editor follows the window, the session, the text's pending compile and
+// the playhead. A gesture calls it too, to start from the session as it is:
+// with no time, since it is not a pass, and the pause after typing is not
+// counted there.
+void MidiEditor::follow(std::optional<std::chrono::steady_clock::time_point> pass) {
     if (!isOpen()) return;
     applyHeight();  // a smaller window or a taller neighbour shrinks the panel
     if (playhead_ && roll_) static_cast<RollPlayhead*>(playhead_)->place(roll_->bounds());
@@ -1492,9 +1493,15 @@ void MidiEditor::follow() {
         }
         if (replaced || !text_ || !text_->focused() || !textDirty_) reloadText();
     }
-    if (compilePending_ && std::chrono::steady_clock::now() - lastEdit_ >= kCompileDelay) {
-        compilePending_ = false;  // a failed compile waits for the next edit
-        compileText(true);
+    // The pause after typing is counted in the passes' time, from the first
+    // pass after the last keystroke (in the app, the pass that keystroke woke).
+    if (compilePending_ && pass) {
+        if (!typedAt_) {
+            typedAt_ = *pass;
+        } else if (*pass - *typedAt_ >= kCompileDelay) {
+            compilePending_ = false;  // a failed compile waits for the next edit
+            compileText(true);
+        }
     }
     if (eventList_ && listPane_ && listPane_->visible) eventList_->sync();
     if (auto t = app_.transport("get")) {
@@ -1508,7 +1515,8 @@ void MidiEditor::follow() {
 
 std::optional<std::chrono::steady_clock::time_point> MidiEditor::nextDeadline() const {
     if (!isOpen() || !compilePending_) return {};
-    return lastEdit_ + kCompileDelay;
+    // Typed in since the last pass: a pass is due at once, to start the pause.
+    return typedAt_ ? *typedAt_ + kCompileDelay : std::chrono::steady_clock::time_point{};
 }
 
 }  // namespace supple::gui

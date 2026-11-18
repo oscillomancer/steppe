@@ -106,8 +106,10 @@ class MidiEditor {
     // Every loop pass: reload when the session changed, compile the notation
     // after a pause in typing, follow the playhead. `now` is the pass's time,
     // which the caller gives (the app the clock's, a test its own); it steps
-    // the edge scroll.
+    // the edge scroll and counts the pause after typing.
     void sync(std::chrono::steady_clock::time_point now);
+    // When the next pass is due for the notation's compile: the pause's end,
+    // or at once (a time in the past) when it was typed in since the last pass.
     std::optional<std::chrono::steady_clock::time_point> nextDeadline() const;
 
     // The panel's height, set by dragging its top border (double-click resets
@@ -159,7 +161,9 @@ class MidiEditor {
     void openNoteMenu(ui::Point at, double itemBeat);
 
   private:
-    void follow();  // sync without the pass's time
+    // sync's work apart from the edge scroll. `pass`: the pass's time; none
+    // when a gesture calls it (the pause after typing is not counted then).
+    void follow(std::optional<std::chrono::steady_clock::time_point> pass);
     Status reload();
     void reloadText();
     // `submit`: the user pressed Ctrl+Enter, which also overwrites MIDI that
@@ -205,7 +209,9 @@ class MidiEditor {
     bool textConflict_ = false;        // the MIDI changed under a draft: only Ctrl+Enter writes it
     std::string baseText_;             // the item's MIDI, decompiled, when the text last matched it
     std::uint64_t typingSession_ = 0;  // one undo step per focus of the notation panel
-    std::chrono::steady_clock::time_point lastEdit_{};
+    // The first pass after the notation was last typed in: the pause before
+    // it compiles counts from there. None: typed in since the last pass.
+    std::optional<std::chrono::steady_clock::time_point> typedAt_;
 };
 
 }  // namespace supple::gui
