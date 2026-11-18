@@ -115,8 +115,12 @@ namespace {
 // The capture's one claimant: its thread id plus one (0: nobody), and whether it has ended.
 std::atomic<std::uint64_t> owner{0};
 std::atomic<bool> finished{false};
-std::atomic<std::uint64_t> holdNanoseconds{0};
-std::atomic<bool> holding{false};
+// Test seams: the handler's budget (kHandlerBudget unless a test says otherwise), a hold the
+// claiming thread keeps until the test releases it, and how many threads have waited.
+std::atomic<std::uint64_t> budgetNanoseconds{kHandlerBudget};
+std::atomic<bool> holdRequested{false}, holding{false}, holdReleased{false};
+std::atomic<std::uint32_t> waiters{0};
+std::uint64_t budget() noexcept { return budgetNanoseconds.load(std::memory_order_relaxed); }
 static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
 void pauseBriefly() noexcept {
 #if defined(_WIN32)
@@ -135,19 +139,29 @@ bool beginCapture(std::uint64_t tid) noexcept {
 void endCapture() noexcept { finished.store(true, std::memory_order_release); }
 void awaitCapture(std::uint64_t tid, std::uint64_t start) noexcept {
     if (owner.load(std::memory_order_acquire) == tid + 1) return;
-    while (!finished.load(std::memory_order_acquire) && monotonic() < start + kHandlerBudget)
+    waiters.fetch_add(1, std::memory_order_release);
+    while (!finished.load(std::memory_order_acquire) && monotonic() < start + budget())
         pauseBriefly();
 }
 void resetCaptureForTests() noexcept {
     owner.store(0);
     finished.store(false);
     holding.store(false);
-    holdNanoseconds.store(0);
+    holdRequested.store(false);
+    holdReleased.store(false);
+    waiters.store(0);
+    budgetNanoseconds.store(kHandlerBudget);
 }
-void holdCaptureForTests(std::uint64_t nanoseconds) noexcept {
-    holdNanoseconds.store(nanoseconds, std::memory_order_relaxed);
+void holdCaptureForTests() noexcept {
+    holdReleased.store(false, std::memory_order_relaxed);
+    holdRequested.store(true, std::memory_order_release);
 }
+void releaseCaptureForTests() noexcept { holdReleased.store(true, std::memory_order_release); }
 bool captureHolding() noexcept { return holding.load(std::memory_order_acquire); }
+std::uint32_t captureWaiters() noexcept { return waiters.load(std::memory_order_acquire); }
+void setHandlerBudgetForTests(std::uint64_t nanoseconds) noexcept {
+    budgetNanoseconds.store(nanoseconds, std::memory_order_relaxed);
+}
 
 bool initializeSlot(void* memory, std::size_t bytes, std::uint32_t ordinal) noexcept {
     if (!memory || bytes != kSlotBytes ||
@@ -252,10 +266,9 @@ bool publishCapsule(const CapsuleHeader& header, const BridgeModule* modules,
     auto* slot = reinterpret_cast<SlotHeader*>(memory);
     if (loadState(slot) != kSlotEmpty) return false;  // written once per bridge
     storeState(slot, kSlotWriting);
-    if (const std::uint64_t hold = holdNanoseconds.load(std::memory_order_relaxed); hold != 0) {
+    if (holdRequested.load(std::memory_order_acquire)) {
         holding.store(true, std::memory_order_release);  // tests only: a second fault lands here
-        for (const std::uint64_t until = monotonic() + hold; monotonic() < until;) {
-        }
+        while (!holdReleased.load(std::memory_order_acquire)) pauseBriefly();
         holding.store(false, std::memory_order_release);
     }
     std::size_t used = sizeof(CapsuleHeader) + std::size_t{moduleCount} * sizeof(BridgeModule);
@@ -287,7 +300,7 @@ bool publishCapsule(const CapsuleHeader& header, const BridgeModule* modules,
     copyTable(out);
     slot->length = static_cast<std::uint32_t>(used);
     // The bound is the handler's own: a slot that is not complete by then stays `writing`.
-    if (monotonic() >= start + kHandlerBudget) return false;
+    if (monotonic() >= start + budget()) return false;
     storeState(slot, kSlotComplete);
     return true;
 }
@@ -300,7 +313,7 @@ bool captureAndPublish(const Fault& fault, std::uint64_t start) noexcept {
     header.reserved = static_cast<std::uint32_t>(fault.tid);
     thread.head.role = static_cast<std::uint8_t>(detail::Role::Fault);
     thread.head.missing = static_cast<std::uint8_t>(detail::Missing::None);
-    walkFault(fault, thread, start + kHandlerBudget);
+    walkFault(fault, thread, start + budget());
     attributeFault(thread, fault.tid, fault.sp);
     summarizeTable(header);
     header.flags |= listFlags.load(std::memory_order_relaxed);

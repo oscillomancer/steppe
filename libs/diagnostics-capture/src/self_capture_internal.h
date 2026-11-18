@@ -29,11 +29,17 @@ void endCapture() noexcept;
 void awaitCapture(std::uint64_t tid, std::uint64_t start) noexcept;
 // Tests only: forgets the claim and the end, so the protocol can be run again in one process.
 void resetCaptureForTests() noexcept;
-// Tests only: the claiming thread's capture holds still this long after it marks the slot
-// `writing` (a busy wait on the clock, so a second thread can fail in the middle of it), and
-// `captureHolding` says it is doing so now.
-void holdCaptureForTests(std::uint64_t nanoseconds) noexcept;
+// Tests only. The claiming thread's capture holds still after it marks the slot `writing`, until
+// `releaseCaptureForTests` (so a second thread can fail in the middle of it, with nothing decided
+// by how long that takes); `captureHolding` says it is holding now, and `captureWaiters` how many
+// threads have begun to wait for a capture since the last reset. `setHandlerBudgetForTests`
+// replaces the handler's bound (reset restores it): a test that must not be decided by the clock
+// sets it far past anything the test lasts, or tiny to see the bound itself.
+void holdCaptureForTests() noexcept;
+void releaseCaptureForTests() noexcept;
 bool captureHolding() noexcept;
+std::uint32_t captureWaiters() noexcept;
+void setHandlerBudgetForTests(std::uint64_t nanoseconds) noexcept;
 // The platform's handlers (self_capture_posix.cpp, self_capture_windows.cpp).
 bool installHandlers() noexcept;
 #if defined(__APPLE__)

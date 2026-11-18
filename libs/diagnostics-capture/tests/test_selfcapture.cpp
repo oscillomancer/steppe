@@ -9,6 +9,7 @@
 // proven only by native CI.
 #include <doctest/doctest.h>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <thread>
@@ -134,34 +135,60 @@ TEST_CASE("the largest capsule fits the slot and the sizes are the contract's") 
 // process must not end under the first thread's write and leave the slot `writing`. The protocol
 // is portable, so every platform runs it; the faults themselves are the POSIX test below.
 TEST_CASE("a thread that fails while another captures waits for it, within the bound") {
+    // Nothing here is decided by how long it takes: the bound is set far past the test, or tiny,
+    // and the waits are for flags. The only clock is the generous limit after which a test that
+    // would hang says so instead.
     resetCaptureForTests();
     const std::uint64_t mine = 1, other = 2;
     REQUIRE(beginCapture(mine));  // the first claims it
     CHECK_FALSE(beginCapture(other));
     CHECK_FALSE(beginCapture(mine));
+    const auto limit = [] { return std::chrono::steady_clock::now() + std::chrono::seconds(30); };
     SUBCASE("it returns once the capture has ended, not before") {
-        std::atomic<bool> waiting{false}, ended{false}, sawEnd{false};
+        setHandlerBudgetForTests(3600ULL * 1'000'000'000ULL);
+        std::atomic<bool> returned{false};
         std::thread second([&] {
-            waiting.store(true);
             awaitCapture(other, monotonic());
-            sawEnd.store(ended.load());
+            returned.store(true);
         });
-        while (!waiting.load()) std::this_thread::yield();
-        for (int i = 0; i < 20; ++i) std::this_thread::yield();
-        ended.store(true);
+        for (const auto until = limit();
+             captureWaiters() == 0 && std::chrono::steady_clock::now() < until;)
+            std::this_thread::yield();
+        REQUIRE(captureWaiters() == 1);  // it is in its wait
+        for (int i = 0; i < 1000; ++i) std::this_thread::yield();
+        CHECK_FALSE(returned.load());  // and has not left it while the capture goes on
         endCapture();
         second.join();
-        CHECK(sawEnd.load());  // it did not return on its own before the end
+        CHECK(returned.load());
     }
     SUBCASE("it never waits past the bound, whatever the capture does") {
-        const std::uint64_t spent = monotonic() - kHandlerBudget;  // the handler began a budget ago
-        awaitCapture(other, spent);  // returns, the capture never ends
-        CHECK(true);
+        setHandlerBudgetForTests(1'000'000ULL);  // a millisecond; the capture never ends
+        std::atomic<bool> returned{false};
+        std::thread second([&] {
+            awaitCapture(other, monotonic());
+            returned.store(true);
+        });
+        for (const auto until = limit();
+             !returned.load() && std::chrono::steady_clock::now() < until;)
+            std::this_thread::yield();
+        CHECK(returned.load());
+        endCapture();  // only so that a thread that did not return can
+        second.join();
     }
     SUBCASE("the claiming thread, failing again inside its own handler, does not wait for itself") {
-        const std::uint64_t before = monotonic();
-        awaitCapture(mine, before);  // a wait would last the whole budget
-        CHECK(monotonic() - before < kHandlerBudget);
+        setHandlerBudgetForTests(3600ULL * 1'000'000'000ULL);  // a wait would outlast the test
+        std::atomic<bool> returned{false};
+        std::thread claimant([&] {
+            awaitCapture(mine, monotonic());
+            returned.store(true);
+        });
+        for (const auto until = limit();
+             !returned.load() && std::chrono::steady_clock::now() < until;)
+            std::this_thread::yield();
+        CHECK(returned.load());
+        endCapture();  // only so that a thread that did not return can
+        claimant.join();
+        CHECK(captureWaiters() == 0);
     }
     resetCaptureForTests();
 }
@@ -392,17 +419,26 @@ TEST_CASE("a second thread faulting in the middle of a capture does not end the 
     unsigned char* memory = sharedSlot(5);
     const int status = runChild([&] {
         prepare(memory);
-        // The first thread's capture holds still, with the slot marked writing, while another
-        // thread faults. Without the wait the second handler re-raises at once and the process
-        // ends there, with the slot left `writing`.
-        holdCaptureForTests(100'000'000ULL);
+        // The first thread's capture holds still, with the slot marked writing, until the second
+        // thread has faulted and is waiting for it (a flag, not a time). Without the wait the
+        // second handler re-raises at once and the process ends there, with the slot left
+        // `writing`. The budget is far past anything this lasts, and an alarm ends a child that
+        // hangs, which the parent then sees as no SIGSEGV.
+        ::alarm(60);
+        setHandlerBudgetForTests(3600ULL * 1'000'000'000ULL);
+        holdCaptureForTests();
         std::thread second([] {
             if (!diagctx::registerThread(diagctx::ThreadRole::BridgeAudio)) ::_exit(kBad);
             while (!captureHolding()) ::sched_yield();
             crashHere();
         });
+        std::thread release([] {
+            while (captureWaiters() == 0) ::sched_yield();
+            releaseCaptureForTests();
+        });
         crashHere();
         second.join();
+        release.join();
     });
     if (WIFEXITED(status) && WEXITSTATUS(status) == kSkip) return;
     REQUIRE(WIFSIGNALED(status));
