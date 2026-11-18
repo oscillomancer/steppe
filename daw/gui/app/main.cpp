@@ -60,6 +60,7 @@
 #include "rack_window.h"
 #include "render_dialog.h"
 #include "routing_matrix.h"
+#include "safe_load.h"
 #include "screensets.h"
 #include "shell.h"
 #include "side_browser.h"
@@ -662,6 +663,15 @@ int frontendMain(int argc, char** argv) {
         std::fprintf(stderr, "%s\n", message.c_str());
     };
     appActions.addUi("ui.preferences", "Edit: preferences…", [&] { preferences.open(); });
+    // Before File > Open, a recovery or a template loads, a plug-in a crash report points at is
+    // asked about (safe-load, topic 7d); a choice kept for its exact build is the preferences'.
+    gui::SafeLoad safeLoad(root, dispatcher, (*app)->diagnosticsDir());
+    safeLoad.remembered = [&] { return preferences.preferences().rememberedLoads; };
+    safeLoad.setRemembered = [&](std::vector<gui::RememberedLoad> loads) {
+        return preferences.setRememberedLoads(std::move(loads));
+    };
+    safeLoad.onStatus = [&](const std::string& message) { shell.setStatus(message); };
+    fileActions.setSafeLoad(&safeLoad);
     // The audio device: saved with the preferences, applied to the engine at once.
     gui::AudioDeviceDialog audioDevice(
         root, dispatcher, **app, prefs.audio,

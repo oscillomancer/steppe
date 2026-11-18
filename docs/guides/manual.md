@@ -1377,8 +1377,16 @@ what earlier runs left, newest first (a bar marks a report you have not marked a
 words: what stopped Steppe, which plug-in the report points at and how far to trust that, and, folded away, the
 plug-ins that were loaded, the threads, the last commands and what the report could not record. You can copy a text
 summary, save a copy of the report file wherever you choose (it is never sent anywhere), mark a report as seen, delete one report or all of them (each asks for a second click), or open the folder.
-The banner's "Show report" button opens the same window on that report. The app's own questions about a
-suspect plug-in when a project opens arrive in a later step; the current delivery scope is listed in STATUS.md.
+The banner's "Show report" button opens the same window on that report. 
+**When a plug-in may have closed Steppe.** If a recent report points at a plug-in your project uses, Steppe
+asks before it opens the project (File > Open, Recover, or starting from a template) how to load that plug-in
+this time: in a separate process, so that a new fault stays there; not at all, so that its tracks pass audio
+through and the project keeps the plug-in; or normally, which also marks the reports as dealt with. Nothing is
+saved in your project by this choice. A plug-in that comes with Steppe offers the last two only, since a fault in
+one is Steppe's own. Cancel, or Escape, cancels the open. Tick "Remember my choice" to have Steppe apply the
+same answer the next time without asking; it is kept for that exact version of the plug-in, so an updated plug-in
+is asked about again, and a remembered "normally" is dropped if that plug-in closes Steppe again. Remembered
+choices are saved in the preferences file.
 
 #### Stopping Steppe from a script or a service
 

@@ -36,6 +36,7 @@
 #include "mouse_dialog.h"
 #include "plugin_browser.h"
 #include "preferences.h"
+#include "safe_load.h"
 #include "screensets.h"
 #include "shell.h"
 #include "supple/audio/audio_file.h"
@@ -4371,5 +4372,324 @@ TEST_CASE("the crash viewer over the app, in both themes (for review: SUPPLE_TES
         REQUIRE(a.root->click("crash.viewer.section.limits.toggle"));
         a.root->frame(false);
         a.snapshot(look.name);
+    }
+}
+
+namespace {
+// File > Open with safe-load, the engine's answers replaced: a listing naming one suspect
+// plug-in (the real `project.plugins` supplies the file's hash), a recorder for the choices.
+struct SafeLoadRig {
+    App a;
+    std::filesystem::path file;
+    gui::SafeLoad load;
+    std::unique_ptr<gui::FileActions> files;
+    std::vector<std::pair<std::string, std::string>> overrides;
+    std::vector<std::string> settled, statuses;
+    std::vector<gui::RememberedLoad> rules;
+    std::string build = "same", buildId = "0123abcd";
+    bool stock = false, bridgeable = true, listed = true;
+    int checks = 0;
+
+    explicit SafeLoadRig(int width = 1000, int height = 640)
+        : a(width, height), load(*a.root, *a.dispatcher, a.dir / "diagnostics") {
+        REQUIRE(a.ok);
+        file = a.dir / "song" / "song.json";
+        REQUIRE(
+            a.dispatcher->execute({"project.set", json::parse(R"({"name":"Saved"})").value(), {}}));
+        REQUIRE(a.app->save(file));
+        REQUIRE(a.dispatcher->execute(
+            {"project.set", json::parse(R"({"name":"Open now"})").value(), {}}));
+        load.plugins = [this](const json::Value& args) -> Result<json::Value> {
+            ++checks;
+            auto real = a.dispatcher->execute({"project.plugins", args, {}});
+            if (!real) return real;
+            json::Value out = *real;
+            auto plugins = json::Value::array();
+            if (listed) {
+                auto p = json::Value::object();
+                p["format"] = "clap";
+                p["id"] = "com.acme.canary";
+                p["name"] = "Canary";
+                p["mode"] = "normal";
+                p["stock"] = stock;
+                p["bridgeable"] = bridgeable;
+                auto resolved = json::Value::object();
+                resolved["name"] = "Canary Verb";
+                resolved["vendor"] = "Acme";
+                resolved["version"] = "1.2.0";
+                p["resolved"] = std::move(resolved);
+                auto suspect = json::Value::object();
+                suspect["build"] = build;
+                suspect["attribution"] = "fault_in_image";
+                auto incidents = json::Value::array();
+                incidents.push_back(json::Value("aa11"));
+                suspect["incidents"] = std::move(incidents);
+                p["suspect"] = std::move(suspect);
+                plugins.push_back(std::move(p));
+            }
+            out["plugins"] = std::move(plugins);
+            return out;
+        };
+        load.reported = [this] {
+            diagnostics::Suspect s;
+            s.format = "clap";
+            s.pluginId = "com.acme.canary";
+            s.buildId = buildId;
+            s.incidents = {"aa11"};
+            return std::vector<diagnostics::Suspect>{s};
+        };
+        load.override_ = [this](const std::string& id, const std::string& mode) -> Status {
+            overrides.emplace_back(id, mode);
+            return {};
+        };
+        load.settle = [this](const std::string& incident) -> Status {
+            settled.push_back(incident);
+            return {};
+        };
+        load.remembered = [this] { return rules; };
+        load.setRemembered = [this](std::vector<gui::RememberedLoad> next) -> Status {
+            rules = std::move(next);
+            return {};
+        };
+        load.onStatus = [this](const std::string& text) { statuses.push_back(text); };
+        load.now = [] { return std::int64_t{1763400000000}; };
+        files = std::make_unique<gui::FileActions>(*a.root, *a.actions, *a.dispatcher, *a.app, a.ui,
+                                                   a.window->sdl(), [](auto task) { task(); });
+        files->setSafeLoad(&load);
+    }
+    void open() {
+        files->openPath(file);
+        a.root->frame(false);
+        // The unsaved changes ask first.
+        if (a.root->find("file.confirm.discard")) {
+            REQUIRE(a.root->click("file.confirm.discard"));
+            a.root->frame(false);
+        }
+    }
+    std::string name() const { return a.app->head().project->name; }
+};
+}  // namespace
+
+TEST_CASE("safe-load: a suspect plug-in is asked about before File > Open loads, three ways") {
+    SafeLoadRig r;
+    r.files->openPath(r.file);
+    r.a.root->frame(false);
+    // The project had unsaved changes only if the open asked; the dialog comes first either way.
+    if (!r.a.root->find("safeload") && r.a.root->find("file.confirm.discard")) {
+        REQUIRE(r.a.root->click("file.confirm.discard"));
+        r.a.root->frame(false);
+    }
+    REQUIRE(r.a.root->find("safeload"));
+    CHECK(r.a.root->find("safeload.title")->valueText().find("Canary Verb") != std::string::npos);
+    REQUIRE(r.a.root->find("safeload.bridge"));
+    REQUIRE(r.a.root->find("safeload.disable"));
+    REQUIRE(r.a.root->find("safeload.normal"));
+    REQUIRE(r.a.root->find("safeload.remember"));
+    const auto* remember = dynamic_cast<ui::Checkbox*>(r.a.root->find("safeload.remember"));
+    REQUIRE(remember);
+    CHECK(remember->text().find("Canary Verb 1.2.0") != std::string::npos);
+    CHECK(r.a.root->focused() == r.a.root->find("safeload.bridge"));  // the default is first
+    CHECK(r.name() == "Open now");  // nothing loaded while it asks
+    r.a.snapshot("safe-load-dialog.png");
+
+    SUBCASE("Enter takes the default: a separate process, once") {
+        r.a.root->key(SDLK_RETURN, 0);
+        r.a.root->frame(false);
+        REQUIRE(r.overrides.size() == 1);
+        CHECK(r.overrides[0] == std::pair<std::string, std::string>{"com.acme.canary", "bridge"});
+        CHECK(r.settled.empty());
+        CHECK(r.rules.empty());      // not remembered
+        CHECK(r.name() == "Saved");  // and the file opened
+    }
+    SUBCASE("Down then Enter disables") {
+        r.a.root->key(SDLK_DOWN, 0);
+        CHECK(r.a.root->focused() == r.a.root->find("safeload.disable"));
+        r.a.root->key(SDLK_RETURN, 0);
+        r.a.root->frame(false);
+        REQUIRE(r.overrides.size() == 1);
+        CHECK(r.overrides[0].second == "disable");
+        CHECK(r.name() == "Saved");
+    }
+    SUBCASE("Up at the top stays") {
+        r.a.root->key(SDLK_UP, 0);
+        CHECK(r.a.root->focused() == r.a.root->find("safeload.bridge"));
+    }
+    SUBCASE("Normal settles the reports and overrides nothing") {
+        REQUIRE(r.a.root->click("safeload.normal"));
+        r.a.root->frame(false);
+        CHECK(r.overrides.empty());
+        REQUIRE(r.settled.size() == 1);
+        CHECK(r.settled[0] == "aa11");
+        CHECK(r.name() == "Saved");
+    }
+    SUBCASE("Cancel cancels the open") {
+        REQUIRE(r.a.root->click("safeload.cancel"));
+        r.a.root->frame(false);
+        CHECK_FALSE(r.a.root->find("safeload"));
+        CHECK(r.overrides.empty());
+        CHECK(r.settled.empty());
+        CHECK(r.name() == "Open now");
+        CHECK_FALSE(r.load.asking());
+    }
+    SUBCASE("Escape is Cancel") {
+        r.a.key("Escape");
+        CHECK_FALSE(r.a.root->find("safeload"));
+        CHECK(r.name() == "Open now");
+        CHECK(r.overrides.empty());
+    }
+}
+
+TEST_CASE("safe-load: nothing suspect, nothing asked; a stock plug-in has two choices") {
+    SafeLoadRig r;
+    SUBCASE("no suspect") {
+        r.listed = false;
+        r.open();
+        CHECK_FALSE(r.a.root->find("safeload"));
+        CHECK(r.name() == "Saved");
+        CHECK(r.checks == 1);
+    }
+    SUBCASE("stock") {
+        r.stock = true;
+        r.bridgeable = false;
+        r.files->openPath(r.file);
+        r.a.root->frame(false);
+        if (!r.a.root->find("safeload") && r.a.root->find("file.confirm.discard")) {
+            REQUIRE(r.a.root->click("file.confirm.discard"));
+            r.a.root->frame(false);
+        }
+        REQUIRE(r.a.root->find("safeload"));
+        CHECK_FALSE(r.a.root->find("safeload.bridge"));
+        CHECK(r.a.root->find("safeload.sentence")->valueText().find("fault in") !=
+              std::string::npos);
+        CHECK(r.a.root->focused() == r.a.root->find("safeload.disable"));
+        r.a.snapshot("safe-load-dialog-stock.png");
+        REQUIRE(r.a.root->click("safeload.disable"));
+        r.a.root->frame(false);
+        REQUIRE(r.overrides.size() == 1);
+        CHECK(r.overrides[0].second == "disable");
+    }
+}
+
+TEST_CASE(
+    "safe-load: remembering is for an exact build, and a new crash undoes a remembered Normal") {
+    SafeLoadRig r;
+    auto ask = [&] {
+        r.files->openPath(r.file);
+        r.a.root->frame(false);
+        if (!r.a.root->find("safeload") && r.a.root->find("file.confirm.discard")) {
+            REQUIRE(r.a.root->click("file.confirm.discard"));
+            r.a.root->frame(false);
+        }
+    };
+    SUBCASE("a choice is kept and applied the next time without a question") {
+        ask();
+        REQUIRE(r.a.root->click("safeload.remember"));
+        REQUIRE(r.a.root->click("safeload.disable"));
+        r.a.root->frame(false);
+        REQUIRE(r.rules.size() == 1);
+        CHECK(r.rules[0].mode == "disable");
+        CHECK(r.rules[0].buildId == "0123abcd");
+        CHECK(r.rules[0].name == "Canary Verb");
+        CHECK(r.rules[0].version == "1.2.0");
+        CHECK(r.rules[0].rememberedMs == 1763400000000);
+        CHECK(r.name() == "Saved");
+        r.overrides.clear();
+        r.statuses.clear();
+        r.open();  // again: the project asks nothing
+        CHECK_FALSE(r.a.root->find("safeload"));
+        REQUIRE(r.overrides.size() == 1);
+        CHECK(r.overrides[0].second == "disable");
+        REQUIRE_FALSE(r.statuses.empty());
+        CHECK(r.statuses.back().find("Canary Verb") != std::string::npos);
+    }
+    SUBCASE("a rebuilt plug-in is asked about again") {
+        r.rules = {
+            {"clap", "com.acme.canary", "OLDBUILD", "disable", "Canary Verb", "Acme", "1.1.0", 1}};
+        ask();
+        CHECK(r.a.root->find("safeload"));
+        CHECK(r.overrides.empty());
+    }
+    SUBCASE("a remembered Normal is dropped when the build is a suspect again, and asks") {
+        r.rules = {
+            {"clap", "com.acme.canary", "0123abcd", "normal", "Canary Verb", "Acme", "1.2.0", 1}};
+        ask();
+        CHECK(r.a.root->find("safeload"));
+        CHECK(r.rules.empty());
+    }
+    SUBCASE("a remembered separate process is not applied where none is possible") {
+        r.bridgeable = false;
+        r.rules = {
+            {"clap", "com.acme.canary", "0123abcd", "bridge", "Canary Verb", "Acme", "1.2.0", 1}};
+        ask();
+        CHECK(r.a.root->find("safeload"));
+        CHECK(r.overrides.empty());
+    }
+    SUBCASE("no build id: no checkbox, nothing kept") {
+        r.buildId.clear();
+        ask();
+        REQUIRE(r.a.root->find("safeload"));
+        CHECK_FALSE(r.a.root->find("safeload.remember"));
+        REQUIRE(r.a.root->click("safeload.disable"));
+        r.a.root->frame(false);
+        CHECK(r.rules.empty());
+    }
+    SUBCASE("a build the check could not confirm cannot be kept either") {
+        r.build = "version";
+        ask();
+        REQUIRE(r.a.root->find("safeload"));
+        CHECK_FALSE(r.a.root->find("safeload.remember"));
+    }
+}
+
+TEST_CASE(
+    "the safe-load question over the app, in both themes (for review: SUPPLE_TEST_SNAPSHOTS)") {
+    struct Look {
+        int width, height;
+        bool light;
+        const char* suffix;
+    };
+    for (const Look look : {Look{1600, 1000, false, "dark-1600x1000.png"},
+                            Look{1280, 800, true, "light-1280x800.png"}}) {
+        for (const bool stock : {false, true}) {
+            SafeLoadRig r(look.width, look.height);
+            if (look.light) r.a.root->setTheme(ui::Theme::light());
+            r.stock = stock;
+            r.bridgeable = !stock;
+            NoticeShell s(r.a, true);
+            r.files->openPath(r.file);
+            r.a.root->frame(false);
+            if (!r.a.root->find("safeload") && r.a.root->find("file.confirm.discard")) {
+                REQUIRE(r.a.root->click("file.confirm.discard"));
+                r.a.root->frame(false);
+            }
+            REQUIRE(r.a.root->find("safeload"));
+            r.a.snapshot(
+                (std::string(stock ? "safe-load-stock-" : "safe-load-") + look.suffix).c_str());
+        }
+    }
+}
+
+TEST_CASE(
+    "safe-load: a project template is checked where it is saved, and cancelling loads nothing") {
+    SafeLoadRig r;
+    REQUIRE(r.a.dispatcher->execute(
+        {"project.template.save", json::parse(R"({"name":"Band"})").value(), {}}));
+    REQUIRE(
+        r.a.dispatcher->execute({"project.set", json::parse(R"({"name":"Later"})").value(), {}}));
+    r.files->loadTemplate("Band");
+    r.a.root->frame(false);
+    REQUIRE(r.a.root->find("safeload"));
+    REQUIRE(r.checks == 1);
+    SUBCASE("cancel") {
+        REQUIRE(r.a.root->click("safeload.cancel"));
+        r.a.root->frame(false);
+        CHECK(r.name() == "Later");
+    }
+    SUBCASE("a choice loads it") {
+        REQUIRE(r.a.root->click("safeload.disable"));
+        r.a.root->frame(false);
+        CHECK(r.name() == "Open now");  // the template holds the project as it was saved
+        REQUIRE(r.overrides.size() == 1);
+        CHECK(r.overrides[0].second == "disable");
     }
 }

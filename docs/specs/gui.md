@@ -2246,6 +2246,8 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   `inherit` as its instance is made (adding it, opening a project,
   `fx.restart`): one already running stays where it is. Stock plug-ins stay
   in the app, and a plug-in's own isolation wins. A note says so.
+  **Remembered load choices** (1.10, topic 7d): `plugin_overrides`, written by the safe-load question
+  (below, "Safe-load question") and read back by it; a Settings list to forget them lands with the next step.
   **Audio device** (1.5): the row shows the audio system, output device,
   rate and buffer, and opens the audio device dialog (also Edit > Audio
   device…, action `ui.audio.device`). Saved as the `audio` object:
@@ -2590,7 +2592,53 @@ again…" and says what it will do (the report, or every report and every record
 one), the second does it; choosing another row cancels the first. Open folder reveals the
 diagnostics folder in the file manager. Wording is provisional (P12).
 
-Before loading an explicit project or any suspect binary, later startup UI will
-show a temporary dedicated-bridge/disabled/normal choice, remembered only on opt-in
-(topic 7d). Then offer existing recovery independently. No upload
-or global OS-reporting changes. See diagnostics.md and STATUS for delivery scope.
+**Safe-load question (topic 7d; delivered, `safe_load.{h,cpp}`).** Before the app's own File > Open
+(a project file), the recovery actions (a session, an autosave) and a project template load, it asks
+the engine `project.plugins {path | session | autosave | template}` (never scanning, loading
+nothing) and, for each plug-in the check names as a suspect and that still loads normally this run,
+asks how to load it this time; then it loads with `project.open {expect_hash}` (or the recover
+command), so the bytes asked about are the bytes loaded. The engine itself never prompts: an agent
+or a script opening a project gets the `project.suspect_plugin` warning and its own choice
+(`plugin.override`). A check that cannot be made (a bad file, no engine answer) never stops the
+load: it goes on and reports its own error.
+
+The question is a popup on `raised`, 460 wide, 16 padding, opened over the window's centre. A bold
+`title` line, "<plug-in> was running when <product> closed"; one `small` `ink` sentence ("This
+project uses it. How should it load this time?"); one `caption` `ink-quiet` caveat ("A report cannot
+prove the plug-in was the cause", longer when the check matched the version only or could not read
+the file, and saying so when a separate process is not possible here). Then three full-width
+rows, 44 high, `panel` fill, `rule` outline, radius `s`, `raised` under the pointer, each a bold
+`small` label over one `caption` `ink-quiet` line: **Run it in a separate process** (the default, the
+first row, with the `focus` outline), **Do not load it this time** and **Load it normally**. A
+stock plug-in (it comes with the app, so the fault is the app's: the sentence says "looks like a fault
+in <product>") has two rows, Disable first; a plug-in with no bridge executable behind it has no
+separate-process row. Enter picks the focused row, Up and Down move between rows, a click picks.
+A `ui::Checkbox` "Remember my choice for <name> <version>" sits under the rows; it is not shown when
+the choice cannot be kept for an exact build (the report recorded no build id, as for every VST3 and
+every `active_token` attribution, or the check matched the version only). One quiet Cancel at the
+bottom right; Escape is the same, and cancelling cancels the open: nothing loads and no choice
+applies. Several suspects are asked one after another before anything is applied.
+
+A choice is applied through `plugin.override` (separate process: `bridge`; not loaded: `disable`);
+nothing is written to the project (a project saved while it holds is byte-for-byte the one saved
+without). Choosing **Load it normally** settles the reports the suspicion rests on (`crash.settle`,
+engine.md "Load overrides"; the reports stay in the viewer), so the next open does not ask again
+unless a newer run ends badly. A choice that cannot be applied (`plugin.override_unavailable`) is
+said in the status line and the open does not happen halfway.
+
+*Remembering* is a preference, opt-in per question: `plugin_overrides` in `preferences.json`
+(`supple.preferences/1.10`; absent and older files mean none) is an array of `{format, id, build_id,
+mode, remembered_ms}` with the plug-in's `name`, `vendor` and `version` for the list in Settings;
+`mode` is `normal`, `bridge` or `disable`, and an entry missing a key or with another mode is
+`preferences.plugin_overrides` at `/plugin_overrides/<n>`. The key is the exact build: an entry
+applies only while `project.plugins` says the installed build is the report's (`suspect.build` is
+`same`), so a rebuilt plug-in is asked about again. A remembered `bridge` or `disable` is applied
+through `plugin.override` without a question and said once in the status line ("<plug-in>: loaded in
+a separate process, as you chose before. Edit > Preferences lists it."); one that cannot hold here
+(a separate process where none is possible) is asked about instead. A remembered `normal` is
+evidence the plug-in was fine, so a new report for that build removes it at once (before the
+question) and the question is asked again. Remembering is rewritten by `Preferences::save`; the GUI
+is its only writer.
+
+Recovery (ADR-0078) stays its own offer. No upload or global OS-reporting changes. See
+diagnostics.md and STATUS for delivery scope.
