@@ -1053,9 +1053,11 @@ bridge's end and forwards it as chunked packets on the existing channel under th
 nonblocking send and deadline rules; it costs the worker a bounded send of up to 256 KiB from the
 thread that observes the end, which is why it is not the recommendation. No capsule bytes pass through the worker: the worker
 only says, as today and in order, that the bridge ended. When the supervisor applies that end it
-reads the slot: POSIX with `pread` of at most the slot size into a bounded buffer (never a map: a
-mapping that someone shrank is a fault, a read is an error), Windows by mapping read-only a
-section of fixed extent and copying. The supervisor takes the slot's descriptor only for a bridge
+reads the slot: Linux with `pread` of at most the slot size into a bounded buffer (never a map: a
+mapping that someone shrank is a fault, a read is an error; the memfd is sealed against shrinking
+anyway), macOS and Windows by mapping read-only an object of fixed extent and copying (macOS makes
+the slot with `shm_open`, an object XNU lets nobody `read` or `pread`, only map; its size is set
+once, before the slot is handed over, and every read checks it again before it maps). The supervisor takes the slot's descriptor only for a bridge
 the end event names and closes it on every path (a count of open slots is bounded by the 256
 bridges the inventory keeps, and the oldest ended one falls out with its slot). A slot that is
 empty, still `writing`, wrong in magic, version or length, or whose bytes the parser refuses,
@@ -1083,8 +1085,9 @@ asking the region) with a slot's header for that bridge; anything else leaves th
 caller, which closes it (the frontend does this at the end of every turn of its loop). The slot is
 held with the bridge's entry and closed with it, so no more than 256 are open and the oldest ended
 bridge takes its slot out with it. `slotCapsule(bridge)` copies the capsule out of a complete slot:
-POSIX `pread` of the header and then `length` bytes (never a mapping), Windows a read-only view of
-the section, copied and unmapped; it gives nothing for an empty or still-`writing` slot or a header
+Linux `pread` of the header and then `length` bytes (never a mapping), macOS a read-only mapping of
+the object and Windows a read-only view of the section, each copied and unmapped (the tests can make
+POSIX read by mapping: `readSlotsByMappingForTests`); it gives nothing for an empty or still-`writing` slot or a header
 that stopped being a slot's. *Windows, not proven:* the supervisor duplicates the handle from the
 worker when it reads the packet, which may be after the worker closed it (the bridge's process
 object went) and the value was reused; the mapping check and the ordinal in the header decide

@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include <fcntl.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <atomic>
 #include <cerrno>
 #include <cstring>
 #include <utility>
@@ -11,9 +13,21 @@
 namespace supple::diagnostics::detail {
 namespace {
 namespace capture = selfcapture;
+// Linux reads the slot with pread: a memfd sealed against shrinking, so nothing is ever mapped
+// where someone's truncation could fault the supervisor. macOS makes the slot with shm_open, an
+// object XNU does not let anyone read(2) or pread(2) (only map), so there the slot is mapped
+// read-only for the length of one copy: the object's size is set once by the host before the
+// slot is handed over and a POSIX shared-memory object of that kind cannot be resized again,
+// and every read checks the size again before it maps.
+#if defined(__linux__)
+constexpr bool kDefaultMapped = false;
+#else
+constexpr bool kDefaultMapped = true;
+#endif
+std::atomic<bool> gMapped{kDefaultMapped};
 // Reads exactly `bytes` at `offset`, however the kernel splits it. False on an error or a short
 // object (a pread past the end returns 0, never a fault).
-bool readExactly(int fd, void* out, std::size_t bytes, std::size_t offset) {
+bool readPositional(int fd, void* out, std::size_t bytes, std::size_t offset) {
     auto* at = static_cast<unsigned char*>(out);
     while (bytes > 0) {
         const ssize_t n = ::pread(fd, at, bytes, static_cast<off_t>(offset));
@@ -24,6 +38,22 @@ bool readExactly(int fd, void* out, std::size_t bytes, std::size_t offset) {
         bytes -= static_cast<std::size_t>(n);
     }
     return true;
+}
+// The same through a read-only mapping of the whole slot, unmapped before it returns.
+bool readMapped(int fd, void* out, std::size_t bytes, std::size_t offset) {
+    struct stat info{};
+    if (offset > capture::kSlotBytes || bytes > capture::kSlotBytes - offset ||
+        ::fstat(fd, &info) != 0 || info.st_size != static_cast<off_t>(capture::kSlotBytes))
+        return false;
+    void* map = ::mmap(nullptr, capture::kSlotBytes, PROT_READ, MAP_SHARED, fd, 0);
+    if (map == MAP_FAILED) return false;
+    if (bytes > 0) std::memcpy(out, static_cast<const unsigned char*>(map) + offset, bytes);
+    ::munmap(map, capture::kSlotBytes);
+    return true;
+}
+bool readExactly(int fd, void* out, std::size_t bytes, std::size_t offset) {
+    return gMapped.load(std::memory_order_relaxed) ? readMapped(fd, out, bytes, offset)
+                                                   : readPositional(fd, out, bytes, offset);
 }
 bool sharedMemoryOfSlotSize(int fd) {
     struct stat info{};
@@ -41,6 +71,10 @@ bool sharedMemoryOfSlotSize(int fd) {
 #endif
 }
 }  // namespace
+
+void readSlotsByMappingForTests(bool mapped) noexcept {
+    gMapped.store(mapped, std::memory_order_relaxed);
+}
 
 CaptureSlot::CaptureSlot(CaptureSlot&& other) noexcept
     : resource_(std::exchange(other.resource_, kNone)) {}

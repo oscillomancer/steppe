@@ -46,4 +46,11 @@ class CaptureSlot {
     std::intptr_t resource_ = kNone;
 };
 
+// Tests only: reads slots through a read-only mapping (what macOS does always, because its
+// shared-memory objects cannot be read with pread) or with pread (what Linux does). POSIX only;
+// Windows always maps.
+#if !defined(_WIN32)
+void readSlotsByMappingForTests(bool mapped) noexcept;
+#endif
+
 }  // namespace supple::diagnostics::detail

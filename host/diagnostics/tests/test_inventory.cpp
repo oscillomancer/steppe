@@ -1791,6 +1791,54 @@ TEST_CASE("a bridge's slot is kept for the bridge it names and read once the bri
     CHECK(openResources() == baseline);
 }
 
+#if !defined(_WIN32)
+namespace {
+// macOS cannot read(2) or pread(2) the shared-memory object it makes slots from, so there a slot
+// is read through a read-only mapping (round 6c-a, a). Linux can prove the same code by being
+// told to use it.
+struct MappedReads {
+    MappedReads() { readSlotsByMappingForTests(true); }
+    ~MappedReads() {
+#if defined(__linux__)
+        readSlotsByMappingForTests(false);
+#endif
+    }
+};
+}  // namespace
+TEST_CASE("a slot is read through a mapping where the object cannot be read (macOS)") {
+    MappedReads mapped;
+    const long baseline = openResources();
+    {
+        Inventory inventory;
+        REQUIRE(inventory.apply(bridgeEvent(1)));
+        Resource slot = slotMemory(1);
+        const Resource writer = duplicateOf(slot);
+        REQUIRE(inventory.apply(slotEvent(1), &slot));  // adopt reads the header by mapping
+        CHECK(slot == -1);
+        CHECK_FALSE(inventory.slotCapsule(1));  // empty
+        bridgeWrites(writer, sampleCapsule(), capture::kSlotWriting);
+        CHECK_FALSE(inventory.slotCapsule(1));  // died mid-write
+        bridgeWrites(writer, sampleCapsule(), capture::kSlotComplete);
+        const auto capsule = inventory.slotCapsule(1);
+        REQUIRE(capsule);
+        CHECK(*capsule == sampleCapsule());
+        closeResource(writer);
+    }
+    // Nothing stays mapped or open: the mapping of a read is gone when it returns.
+    CHECK(openResources() == baseline);
+    {
+        // The wrong size is refused before anything is mapped.
+        Inventory inventory;
+        REQUIRE(inventory.apply(bridgeEvent(1)));
+        Resource small = memory(capture::kSlotBytes / 2, true, 1);
+        CHECK_FALSE(inventory.apply(slotEvent(1), &small));
+        CHECK(small != -1);  // still the caller's: it closes it
+        closeResource(small);
+    }
+    CHECK(openResources() == baseline);
+}
+#endif
+
 TEST_CASE("a slot header that stopped being a slot's is never read") {
     Inventory inventory;
     REQUIRE(inventory.apply(bridgeEvent(1)));
