@@ -139,8 +139,12 @@ struct Fixture {
         return exec("fx.add", R"({"track":")" + track + R"(","plugin":")" + plugin + R"("})")["fx"]
             .asString();
     }
+    // The time of every pass the fixture makes. A test moves it on by hand:
+    // no pass reads the real clock, so nothing here depends on how long the
+    // machine has been up or how fast it runs.
+    std::chrono::steady_clock::time_point now{std::chrono::hours(1)};
     void refresh() {
-        mixer->sync();
+        mixer->sync(now);
         root->frame(false);
     }
     const model::Track& track(const std::string& id) {
@@ -961,18 +965,19 @@ TEST_CASE("mixer: a strip held at the strips' edge scrolls them, and drops out o
     // step, not a jump. The first pass of a scroll only starts the clock.
     {
         using namespace std::chrono;
-        const steady_clock::time_point t0{hours(1)};
         const auto at = [&] {
             f.root->frame(false);
             return x(last);
         };
         const float s0 = at();
-        f.mixer->sync(t0);
+        // No pass has run since this scroll began; the last one before it was
+        // the fixture's, ten seconds earlier.
+        f.mixer->sync(f.now += seconds(10));
         CHECK(at() == s0);
-        f.mixer->sync(t0 + milliseconds(25));
+        f.mixer->sync(f.now += milliseconds(25));
         const double step = static_cast<double>(s0 - at());
         CHECK(step > 0);
-        f.mixer->sync(t0 + milliseconds(25) + seconds(2));
+        f.mixer->sync(f.now += seconds(2));
         CHECK(static_cast<double>(s0 - at()) == doctest::Approx(3.0 * step).epsilon(0.02));
     }
     // Back inside it stops.
@@ -1056,18 +1061,19 @@ TEST_CASE("mixer: a plug-in held at an end of its strip's plug-in list scrolls t
     f.pointer(T::Move, {x, list.bottom() - 20});
     {
         using namespace std::chrono;
-        const steady_clock::time_point t0{hours(1)};
         const auto at = [&] {
             f.root->frame(false);
             return y(last);
         };
         const float s0 = at();
-        f.mixer->sync(t0);
+        // No pass has run since this scroll began; the last one before it was
+        // the fixture's, ten seconds earlier.
+        f.mixer->sync(f.now += seconds(10));
         CHECK(at() == s0);
-        f.mixer->sync(t0 + milliseconds(25));
+        f.mixer->sync(f.now += milliseconds(25));
         const double step = static_cast<double>(s0 - at());
         CHECK(step > 0);
-        f.mixer->sync(t0 + milliseconds(25) + seconds(2));
+        f.mixer->sync(f.now += seconds(2));
         CHECK(static_cast<double>(s0 - at()) == doctest::Approx(3.0 * step).epsilon(0.02));
     }
     // Back in the middle it stops, and off its own strip too (a held plug-in

@@ -127,8 +127,12 @@ struct Fixture {
         return *r;
     }
     json::Value notes() { return exec("midi.notes", R"({"item":")" + item + R"("})")["notes"]; }
+    // The time of every pass the fixture makes. A test moves it on by hand:
+    // no pass reads the real clock, so nothing here depends on how long the
+    // machine has been up or how fast it runs.
+    std::chrono::steady_clock::time_point now{std::chrono::hours(1)};
     void frame() {
-        editor->sync();
+        editor->sync(now);
         root->frame(false);
     }
     // Pointer input in window coordinates, the same path as SDL events.
@@ -215,12 +219,12 @@ TEST_CASE("MIDI editor: notes take their item's colour; the title names the item
     // The title names the item as the arrangement does: its id only while
     // it has no name.
     auto title = [&] { return f.root->find("midi.title")->valueText(); };
-    f.editor->sync();
+    f.editor->sync(f.now);
     f.frame();
     CHECK(title().find("Keys") != std::string::npos);
     CHECK(title().find(f.item) != std::string::npos);
     f.exec("item.set", R"({"item":")" + f.item + R"(","name":"Chords"})");
-    f.editor->sync();
+    f.editor->sync(f.now);
     f.frame();
     CHECK(title().find("Chords") != std::string::npos);
     CHECK(title().find(f.item) == std::string::npos);
@@ -509,17 +513,22 @@ TEST_CASE("MIDI editor: a note held at the roll's edge scrolls the roll and goes
     CHECK(state.topPitch == pitches);  // the pitches stayed
     // The loop's pass steps it by the time since the pass before, and by no
     // more than the cap: a frame that stalled for two seconds is a short
-    // step, not a jump. The first pass of a scroll only starts the clock.
+    // step, not a jump. The first pass of a scroll only starts the clock,
+    // however long ago the pass before it was.
     {
         using namespace std::chrono;
-        const steady_clock::time_point t0{hours(1)};
+        const ui::Point edge{roll.right() + 60, body.y};
+        f.pointer(T::Move, {roll.x + roll.w / 2, body.y});  // inside: the scroll ends
+        REQUIRE_FALSE(f.editor->autoScrolling());
+        f.now += seconds(10);
         const double s0 = state.scrollBeat;
-        f.editor->sync(t0);
+        f.pointer(T::Move, edge);  // at the edge again, and the new scroll's first pass
+        REQUIRE(f.editor->autoScrolling());
         CHECK(state.scrollBeat == s0);
-        f.editor->sync(t0 + milliseconds(25));
+        f.editor->sync(f.now += milliseconds(25));
         const double step = state.scrollBeat - s0;
         CHECK(step > 0);
-        f.editor->sync(t0 + milliseconds(25) + seconds(2));
+        f.editor->sync(f.now += seconds(2));
         CHECK(state.scrollBeat - s0 == doctest::Approx(3 * step));
     }
     // Back inside it stops, and the note lands where the pointer is.
