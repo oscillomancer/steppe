@@ -147,8 +147,12 @@ std::function<void(DialogLifetime::Paths)> DialogLifetime::guard(
             done = std::move(done)](Paths paths) {
         auto state = weak.lock();
         if (!state) return;
-        std::lock_guard lock(state->mutex);
-        if (!state->active) return;
+        {
+            // Checked here and posted outside the lock: a post that runs the work inline (a test's)
+            // takes the lock itself. The posted work checks again on the UI thread.
+            std::lock_guard lock(state->mutex);
+            if (!state->active) return;
+        }
         post([weak, done, paths = std::move(paths)] {
             auto current = weak.lock();
             if (!current) return;

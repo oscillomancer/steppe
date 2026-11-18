@@ -602,6 +602,17 @@ TEST_CASE("native dialog completions respect shutdown before posting and running
         queued.front()();
         CHECK(completions == 1);
     }
+    SUBCASE("a post that runs the work at once does not wait on the lifetime's lock") {
+        // Round 6b suggestion 1: the guard no longer holds its lock across the post, so a post
+        // that is inline (a test's, or a later one) cannot deadlock on the posted check.
+        int inlineRuns = 0;
+        auto direct = lifetime->guard([](auto task) { task(); }, [&](auto) { ++inlineRuns; });
+        direct({"example.json"});
+        CHECK(inlineRuns == 1);
+        lifetime.reset();
+        direct({"example.json"});  // after shutdown: nothing runs
+        CHECK(inlineRuns == 1);
+    }
 }
 
 TEST_CASE("hidden docks release their own focus and preserve focus elsewhere") {
