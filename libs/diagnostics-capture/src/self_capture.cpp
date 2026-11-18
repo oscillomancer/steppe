@@ -41,11 +41,14 @@ std::atomic<bool> handlersInstalled{false};
 
 unsigned char* activeSlot() noexcept { return slotMemory.load(std::memory_order_acquire); }
 
+// The state word is shared with another process, so it is accessed with the compiler's atomic
+// builtins on a plain word (std::atomic_ref is not in every standard library the product builds
+// with). A lock-free 32-bit access is plain loads and stores with the stated ordering.
 std::uint32_t loadState(SlotHeader* header) noexcept {
-    return std::atomic_ref<std::uint32_t>(header->state).load(std::memory_order_acquire);
+    return __atomic_load_n(&header->state, __ATOMIC_ACQUIRE);
 }
 void storeState(SlotHeader* header, std::uint32_t state) noexcept {
-    std::atomic_ref<std::uint32_t>(header->state).store(state, std::memory_order_release);
+    __atomic_store_n(&header->state, state, __ATOMIC_RELEASE);
 }
 
 // The execution table as plain words, one relaxed atomic load for each: the table is live and
@@ -130,9 +133,7 @@ bool attachSlot(void* memory, std::size_t bytes) noexcept {
         return false;
     SlotHeader header;
     std::memcpy(&header, memory, sizeof(header));
-    if (!slotUsable(header, bytes) ||
-        std::atomic_ref<std::uint32_t>(static_cast<SlotHeader*>(memory)->state)
-                .load(std::memory_order_acquire) != kSlotEmpty)
+    if (!slotUsable(header, bytes) || loadState(static_cast<SlotHeader*>(memory)) != kSlotEmpty)
         return false;
     // A handler that already began (state writing in the private slot) keeps writing there:
     // the pointer is read once, at the handler's start.

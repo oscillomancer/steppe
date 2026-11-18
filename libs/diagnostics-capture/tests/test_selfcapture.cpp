@@ -112,8 +112,7 @@ TEST_CASE("the slot header is written and checked field by field") {
         std::memset(memory, 0, sizeof(memory));  // never initialized
         CHECK_FALSE(attachSlot(memory, kSlotBytes));
         CHECK(initializeSlot(memory, kSlotBytes, 1));
-        std::atomic_ref<std::uint32_t>(reinterpret_cast<SlotHeader*>(memory)->state)
-            .store(kSlotComplete);  // written already
+        reinterpret_cast<SlotHeader*>(memory)->state = kSlotComplete;  // written already
         CHECK_FALSE(attachSlot(memory, kSlotBytes));
     }
 }

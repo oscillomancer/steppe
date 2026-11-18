@@ -121,8 +121,8 @@ bool identifyImage(const void* address, BridgeModule& out) {
     const auto base = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(module));
     const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(module);
     if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew <= 0) return false;
-    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(
-        reinterpret_cast<const unsigned char*>(module) + dos->e_lfanew);
+    const auto* nt = static_cast<const IMAGE_NT_HEADERS*>(
+        static_cast<const void*>(reinterpret_cast<const unsigned char*>(module) + dos->e_lfanew));
     if (nt->Signature != IMAGE_NT_SIGNATURE || nt->OptionalHeader.SizeOfImage == 0) return false;
     out = BridgeModule{};
     out.start = base;
@@ -149,6 +149,7 @@ void walkFault(const Fault& fault, detail::CapsuleThreadData& thread,
     std::uint32_t count = 0;
     thread.frames[count++] = fault.pc;
     thread.head.stop = 0;  // Stop::End
+    (void)deadline;
 #if defined(_M_X64) || defined(__x86_64__)
     if (!fault.native) {
         thread.head.frameCount = count;

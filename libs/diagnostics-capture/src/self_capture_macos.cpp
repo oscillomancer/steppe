@@ -44,8 +44,8 @@ bool identifyImage(const void* address, BridgeModule& out) {
         at += command.cmdsize;
         left -= command.cmdsize;
     }
-    return text && address >= reinterpret_cast<const void*>(out.start) &&
-           address < reinterpret_cast<const void*>(out.end);
+    const auto where = reinterpret_cast<std::uintptr_t>(address);
+    return text && where >= out.start && where < out.end;
 }
 
 bool captureAndPublishMac(const Fault& fault, std::uint64_t start) noexcept {
