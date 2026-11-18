@@ -27,7 +27,7 @@ namespace {
 // The supervisor's side of topic 6c, from inside the supervisor process: when a bridge's end
 // that the operating system caused is applied, the capture slot the bridge wrote must hold a
 // complete CTC5 capsule with the bridge's execution table copied after it. Said on stderr, for
-// host_inventory.py (the report does not carry it yet: that is step 6c.4).
+// host_inventory.py (the report is made from it: step 6c.4).
 void lookAtSlot(const supple::diagnostics::detail::Packet& packet,
                 const supple::diagnostics::detail::Inventory& inventory) {
     namespace capture = supple::diagnostics::selfcapture;
@@ -49,8 +49,12 @@ void lookAtSlot(const supple::diagnostics::detail::Packet& packet,
                 verdict = "ok";
         }
     }
-    std::fprintf(stderr, "slot bridge=%u capsule=%s bytes=%zu\n", static_cast<unsigned>(r.bridge),
-                 verdict, capsule ? capsule->size() : 0);
+    // Whether the supervisor's parser accepts it: what the report is made from.
+    const bool parsed = capsule && supple::diagnostics::detail::parseBridgeCapsule(capsule->data(),
+                                                                                   capsule->size());
+    std::fprintf(stderr, "slot bridge=%u capsule=%s bytes=%zu parsed=%s\n",
+                 static_cast<unsigned>(r.bridge), verdict, capsule ? capsule->size() : 0,
+                 parsed ? "yes" : "no");
 }
 
 [[gnu::noinline]] void fault() { *reinterpret_cast<volatile int*>(8) = 1; }

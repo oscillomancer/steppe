@@ -118,4 +118,5 @@ if not sanitized:
     # for every one of the five.
     slots=[l for l in run.stderr.decode(errors="replace").splitlines() if l.startswith("slot bridge=")]
     assert [l.split()[2] for l in slots]==["capsule=ok"]*5,(slots,run.stderr)
+    assert [l.split()[4] for l in slots]==["parsed=yes"]*5,(slots,run.stderr)  # and the parser takes it
 print("host inventory passed")
