@@ -1107,6 +1107,7 @@ class Engine {
     // executors read it before each block they process and stamp that
     // block's plug-in outputs with it. The app drops any other stamp.
     std::atomic<std::uint64_t> patchSeq_{0};
+    static_assert(std::atomic<std::uint64_t>::is_always_lock_free);  // read on the audio path
     bool holdsPending_ = false;       // writeHolds_ not yet in the newest plan
     bool releasesStaleCurve() const;  // a load must compile
     void applyPendingHolds();         // after a shortcut that publishes no plan
