@@ -8,7 +8,7 @@
 #include "supple/json/value.h"
 namespace supple::engine {
 // Shared current machine-preferences schema for engine and GUI writers.
-inline constexpr char kPreferencesSchema[] = "supple.preferences/1.9";
+inline constexpr char kPreferencesSchema[] = "supple.preferences/1.10";
 // Machine preferences, keyed by the backend's immutable port name. The JSON
 // record is retained, so members a later version adds survive edits. One
 // record per port carries everything it does: routing (ADR-0072) owns

@@ -105,7 +105,8 @@ Result<Preferences> Preferences::load(const std::filesystem::path& file) {
          schema->asString() != "supple.preferences/1.5" &&
          schema->asString() != "supple.preferences/1.6" &&
          schema->asString() != "supple.preferences/1.7" &&
-         schema->asString() != "supple.preferences/1.8"))
+         schema->asString() != "supple.preferences/1.8" &&
+         schema->asString() != "supple.preferences/1.9"))
         return Error("preferences.schema", file.string() + " is not a " + kSchema + " document",
                      "/schema");
     if (const json::Value* m = doc->find("default_monitor")) {
@@ -154,6 +155,37 @@ Result<Preferences> Preferences::load(const std::filesystem::path& file) {
             return Error("preferences.plugin_isolation",
                          "plugin_isolation must be in_process, shared_bridge or dedicated",
                          "/plugin_isolation", "use one of in_process, shared_bridge, dedicated");
+    }
+    if (const auto* v = doc->find("plugin_overrides")) {  // 1.10, topic 7d
+        if (!v->isArray())
+            return Error("preferences.plugin_overrides", "plugin_overrides must be an array",
+                         "/plugin_overrides", "remove the field to forget every remembered choice");
+        std::size_t index = 0;
+        for (const auto& item : v->asArray()) {
+            const std::string at = "/plugin_overrides/" + std::to_string(index++);
+            auto text = [&](const char* key) {
+                const auto* x = item.isObject() ? item.find(key) : nullptr;
+                return x && x->isString() ? x->asString() : std::string();
+            };
+            RememberedLoad load;
+            load.format = text("format");
+            load.id = text("id");
+            load.buildId = text("build_id");
+            load.mode = text("mode");
+            load.name = text("name");
+            load.vendor = text("vendor");
+            load.version = text("version");
+            if (const auto* ms = item.isObject() ? item.find("remembered_ms") : nullptr;
+                ms && ms->isInt())
+                load.rememberedMs = ms->asInt();
+            if (load.format.empty() || load.id.empty() || load.buildId.empty() ||
+                (load.mode != "normal" && load.mode != "bridge" && load.mode != "disable"))
+                return Error("preferences.plugin_overrides",
+                             "a remembered choice needs a format, an id, a build_id and a mode "
+                             "of normal, bridge or disable",
+                             at, "remove the entry, or forget it in Preferences");
+            out.rememberedLoads.push_back(std::move(load));
+        }
     }
     if (const auto* v = doc->find("render_open_folder")) {
         if (!v->isBool())
@@ -207,6 +239,22 @@ Status Preferences::save(const std::filesystem::path& file) const {
     doc["copy_imported_media"] = copyImports;
     doc["plugin_isolation"] = isolationName(pluginIsolation);
     doc["render_open_folder"] = renderOpenFolder;
+    if (!rememberedLoads.empty()) {
+        json::Value loads = json::Value::array();
+        for (const auto& load : rememberedLoads) {
+            json::Value item = json::Value::object();
+            item["format"] = load.format;
+            item["id"] = load.id;
+            item["build_id"] = load.buildId;
+            item["mode"] = load.mode;
+            if (!load.name.empty()) item["name"] = load.name;
+            if (!load.vendor.empty()) item["vendor"] = load.vendor;
+            if (!load.version.empty()) item["version"] = load.version;
+            item["remembered_ms"] = load.rememberedMs;
+            loads.push_back(std::move(item));
+        }
+        doc["plugin_overrides"] = std::move(loads);
+    }
     doc["audio"] = audioDeviceJson(audio);
     doc["sync"] = engine::syncSettingsJson(sync);
     // These records belong to the engine; preserve the current disk value.
@@ -239,6 +287,15 @@ PreferencesDialog::PreferencesDialog(ui::Root& root, engine::EngineApp& app, Mou
     app_.setCopyImportedMedia(prefs_.copyImports);
     if (!app_.setPluginIsolation(prefs_.pluginIsolation))
         prefs_.pluginIsolation = app_.pluginIsolation();
+}
+
+Status PreferencesDialog::setRememberedLoads(std::vector<RememberedLoad> loads) {
+    auto next = prefs_;
+    next.rememberedLoads = std::move(loads);
+    if (!file_.empty()) SUPPLE_TRY(save(next));
+    prefs_ = std::move(next);
+    refresh();
+    return {};
 }
 
 Status PreferencesDialog::save(Preferences& prefs) {

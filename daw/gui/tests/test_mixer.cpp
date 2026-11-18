@@ -1154,6 +1154,9 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
     values.sync.onLoss = "freewheel";
     values.sync.ltcOutput = true;
     values.sync.ltcOutputChannel = 4;
+    values.rememberedLoads = {{"clap", "com.acme.canary", "0123abcd", "bridge", "Canary Verb",
+                               "Acme", "1.2.0", 1763400000000},
+                              {"vst3", "com.acme.other", "ff00", "disable", "", "", "", 5}};
     REQUIRE(values.save(file));
     auto loaded = gui::Preferences::load(file);
     REQUIRE(loaded);
@@ -1167,15 +1170,16 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
     CHECK(loaded->renderOpenFolder);
     CHECK(loaded->audio == values.audio);
     CHECK(loaded->sync == values.sync);
+    CHECK(loaded->rememberedLoads == values.rememberedLoads);  // 1.10, topic 7d
     CHECK(loaded->midiOutputs.empty());  // the engine writes these records, not the GUI
     const auto bytes = readFile(file).value();
-    CHECK(std::string(bytes.begin(), bytes.end()).find("supple.preferences/1.9") !=
+    CHECK(std::string(bytes.begin(), bytes.end()).find("supple.preferences/1.10") !=
           std::string::npos);
     REQUIRE(loaded->save(file));
     CHECK(readFile(file).value() == bytes);
     // Older schemas load, with defaults for what they lack.
     for (const char* version :
-         {"1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9"}) {
+         {"1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10"}) {
         REQUIRE(writeFileAtomic(
             file, std::string("{\"schema\":\"supple.preferences/") + version + "\"}"));
         auto old = gui::Preferences::load(file);
@@ -1189,6 +1193,7 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
         CHECK_FALSE(old->renderOpenFolder);
         CHECK(old->audio == gui::AudioDeviceSettings{});
         CHECK(old->sync == engine::SyncSettings{});
+        CHECK(old->rememberedLoads.empty());
         CHECK(old->midiOutputs.empty());
     }
     // A 1.8 clock record on disk (the engine's midi.outputs.set) loads, and a
@@ -1223,6 +1228,17 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
         auto rejected = gui::Preferences::load(file);
         REQUIRE_FALSE(rejected);
         CHECK(rejected.error().path == std::string("/") + field);
+        CHECK_FALSE(rejected.error().hint.empty());
+    }
+    // A remembered choice that cannot be read names its entry.
+    for (const char* bad : {R"([{"format":"clap","id":"a","build_id":"b","mode":"maybe"}])",
+                            R"([{"format":"clap","id":"a","mode":"bridge"}])", R"({"a":1})"}) {
+        REQUIRE(writeFileAtomic(
+            file,
+            std::string(R"({"schema":"supple.preferences/1.10","plugin_overrides":)") + bad + "}"));
+        auto rejected = gui::Preferences::load(file);
+        REQUIRE_FALSE(rejected);
+        CHECK(rejected.error().path.rfind("/plugin_overrides", 0) == 0);
         CHECK_FALSE(rejected.error().hint.empty());
     }
     // So does a wrong audio device value, under /audio.
