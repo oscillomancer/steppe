@@ -1385,14 +1385,15 @@ TEST_CASE("mixer: grouped strips, a fader drag is one undo step, toggles, pan, C
     auto* fxButton = f.root->find("mixer.fxadd." + strips[0].track);
     REQUIRE(fxButton);
     CHECK(fxButton->valueText() == "fx");
-    // The colour stripe has its own row between the name and the FX slots.
+    // The track's colour is a bar across the strip's top, over the name.
     f.exec("track.set", R"({"track":")" + strips[0].track + R"(","color":"teal"})");
     mixer.sync();
     f.root->frame(false);
     auto* stripe = f.root->find("mixer.color." + strips[0].track);
     REQUIRE(stripe);
-    CHECK(stripe->bounds().y >= f.root->find("mixer.name." + strips[0].track)->bounds().bottom());
-    CHECK(stripe->bounds().bottom() <= f.root->find("mixer.fx." + strips[0].track)->bounds().y);
+    CHECK(stripe->bounds().y == strips[0].node->bounds().y);
+    CHECK(stripe->bounds().w >= strips[0].node->bounds().w - 1.5f);
+    CHECK(stripe->bounds().bottom() <= f.root->find("mixer.name." + strips[0].track)->bounds().y);
     // A right-click on the strip opens the track menu.
     const ui::Rect fxNow = f.root->find("mixer.fxadd." + strips[0].track)->bounds();  // rebuilt
     ui::PointerEvent rc;

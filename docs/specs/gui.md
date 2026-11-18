@@ -398,39 +398,63 @@ moves the rate ten cents a step. Like the on-screen knob it runs
 
 ### 4.2 Track control panel (TCP)
 
-Per strip: name (rename in place: a double-click; Enter or a click anywhere
-else keeps the edit, Escape drops it), **strip-type badge** (Channel / Buss /
-Master: colour, shape and label differ — clear at a glance, ADR-0019),
-mute/solo (rounded pills: an ink outline and letter off, filled with their
-own colour on, the colour showing under the pointer), arm (a disc: a red ring
-off, solid red armed), monitor (a speaker: an outline off, solid on, green auto),
-input (channels only for these three), polarity ("Ø") and mono pills at the
-start of the level row (ADR-0022), volume fader and pan
-(Console 9 Channel's controls on channels and busses; plain gain and
-balance on masters; the fader's dB scale comes from `libs/console9`'s
-mapping), "fx" (the chain window) with "+" beside it (the plugin browser
-alone, adding last in the chain; no count, to save room), the "out" button
-(a click opens the routing matrix; drag onto another strip to create a
-route; drop rules follow `route.strip_type`, invalid targets show why before
-the drop; a strip the track already sends to is not a target, since the
-matrix shows one send per pair), and a meter: 8 units wide
-(`TcpRowGeometry::kMeterWidth`), at the row's right edge for the row's whole
-height, with the controls ending before it. "fx", "+", "env" and "out" are
-quiet buttons (`ui::Button::quiet`): their text alone in quiet ink, a box
-under the pointer; "fx" is in full ink when the track's chain or input chain
-holds a plug-in. The input stays a boxed field, since it shows a value. The mixer's strips carry the same controls in the same
-looks (§4.4). The button row starts at the TCP's left edge with mute and
-solo (over polarity and mono) and ends at its right edge with "env" and
-"out", at any depth; a channel's input button takes the room between.
+Per track, a row of up to three lines (`TcpRowGeometry`):
+
+1. **The name line**, at every row height: the track's colour as a stripe
+   down the row's left edge; the type's mark for a buss or a master (below);
+   the name (rename in place: a double-click; Enter or a click anywhere
+   else keeps the edit, Escape drops it); and at the right the four
+   **state cells**: mute, solo, arm, monitor, in that order.
+2. **The mix line**, from 40 units, in signal order: polarity ("Ø") and
+   mono (ADR-0022), the volume fader and the pan (Console 9 Channel's
+   controls on channels and busses; plain gain and balance on masters; the
+   fader's dB scale comes from `libs/console9`'s mapping).
+3. **The connections line**, from 58 units, left to right as the signal
+   goes: the input (channels; it names the device's ports and takes the
+   room), "fx" (the chain window) with "+" beside it (the plugin browser
+   alone, adding last in the chain; no count, to save room), "env" (the
+   automation lanes' menu) and "out" (a click opens the routing matrix;
+   drag onto another strip to create a route; drop rules follow
+   `route.strip_type`, invalid targets show why before the drop; a strip
+   the track already sends to is not a target, since the matrix shows one
+   send per pair).
+
+A meter 8 units wide (`TcpRowGeometry::kMeterWidth`) stands at the row's
+right edge for the row's whole height, with the controls ending before it.
+
+**One button shape.** Mute, solo, arm, monitor, polarity and mono are
+**cells** (`ui::drawStateCell`, `ui::Toggle::cell`): a rounded rectangle,
+18 by 14 units here. Off, a cell is the ground colour with a faint outline
+and a quiet letter; under the pointer it takes a little of its state's
+colour; on, it is filled with it. Arm is a disc in its cell (a red ring off;
+a disc on the red cell armed) and monitor a speaker in its cell (an outline
+off; green with a green outline on auto; on the green cell on). The mixer's
+strips carry the same cells in the same order (§4.4).
+
+**A cell is a control's place.** A buss has no arm, monitor or input: their
+places stay empty, so mute and solo are in one column down the whole panel,
+at any depth, and the mix and connections lines start at the panel's left
+edge at any depth.
+
+**The type is a mark, not a colour** (`ui::drawTrackGlyph`). A channel, the
+usual case, has none. A buss has lines joining into one before its name (it
+sums); a master the same ending at a bar (it ends at the device). Both are
+drawn in quiet ink. A frozen track has its snowflake after the mark, and a
+track's groups are small colour tabs under the name's start.
+
+"fx", "+", "env" and "out" are quiet buttons (`ui::Button::quiet`): their
+text alone in quiet ink, a box under the pointer; "fx" is in full ink when
+the track's chain or input chain holds a plug-in. The input stays a boxed
+field, since it shows a value.
 A master that is armed or holds items has a row too, its **lane** (ADR-0057):
-the header shows only the master badge, its name, the lane mute ("M", a pill
-in the mute colour, `track.set {lane_mute}`: it silences the master's own
-items, never the master) and the arm; the master's fader, pan and FX stay in
-the mixer. A lane-muted master's items are drawn dimmed. A master with
+the header shows only the master's mark, its name, the lane mute ("M", in
+the mute cell's place and colour, `track.set {lane_mute}`: it silences the
+master's own items, never the master) and the arm in its cell; the master's
+fader, pan and FX stay in the mixer. A lane-muted master's items are drawn dimmed. A master with
 neither has no row.
-Rows shrink to 24 design units: the name, strip badge, "fx" and "+" fit
-above a four-unit bottom resize grip. The lower buttons hide below 40 units;
-the fader/pan row hides below 58. Track heights clamp to 24–400 units,
+Rows shrink to 24 design units: the name line, with its four state cells,
+fits above a four-unit bottom resize grip. The mix line hides below 40
+units; the connections line hides below 58. Track heights clamp to 24–400 units,
 including compact folders and older UI sidecars; expanded takes retain that
 minimum per take lane, plus their item name bar. MIDI key heights remain
 independent (4–48 units, §4.7).
@@ -772,22 +796,51 @@ channels, fader + pan + meters, Console 9 on/off as a project toggle with its
 level-matched behaviour explained in its tooltip. Meters update only when
 their entire ancestor chain is visible, and clear peak hold on reopening.
 
-Small "fx" and "+" buttons sit at each strip's top right (the TCP's: the
-chain window, and the plugin browser alone); a double-click on the name
-renames the strip in place, as in the TCP. Under the chain (and its sends),
-the arm, centred (channels and masters: a master records its output,
-ADR-0057); an input button (channels) and "out" (a click
-opens the routing matrix, a drag onto a buss or master makes a send; on a
-master it reads "out 1/2", "out 5" or "out —" and opens the hardware outputs
-menu instead, ADR-0056: None, the device's stereo pairs 1/2, 3/4…, then each
-output alone as mono, with the port names JACK reports; the current choice is
-checked and a pick runs `track.set {hw_output}`. While the engine is stopped
-the menu offers None and says the engine lists the outputs); then one row with the small polarity pill ("Ø"), monitoring
-(channels) and the mono pill (ADR-0022), above the pan. Everything under the
-chain has a fixed height and the chain takes what a strip's missing rows
-leave, so every strip's fader sits at the same height. Between the fader
+A strip is 92 units wide and is **one grid of four columns**: a row is four
+cells, two halves or one full width, and every button is 16 units high
+(the cells of §4.2). Top to bottom, in the order of the signal, with the
+buttons used most next to the fader:
+
+1. **The colour bar** (`mixer.color.<track>`): the track's own colour,
+   across the strip's top.
+2. **The header** (`mixer.namerow.<track>`): the type's mark for a buss or a
+   master (`mixer.type.<track>`, §4.2), a frozen track's snowflake
+   (`mixer.frozen.<track>`) and the name, which has the strip's width to
+   itself (a double-click renames the strip in place, as in the TCP).
+3. **The plug-ins**, the one part that follows the panel's height (below),
+   under their own line (`mixer.fxrow.<track>`): small "fx" at its left and
+   "+" at its right (the TCP's: the chain window, and the plugin browser
+   alone), a rule between them.
+4. **Group tabs**, when the project has groups, and **the sends**, when the
+   track has some (below).
+5. **Routing** (`mixer.io.<track>`): an input button (channels; it takes the
+   room) and "out" (a click opens the routing matrix, a drag onto a buss or
+   master makes a send; on a master it reads "out 1/2", "out 5" or "out —"
+   and opens the hardware outputs menu instead, ADR-0056: None, the
+   device's stereo pairs 1/2, 3/4…, then each output alone as mono, with
+   the port names JACK reports; the current choice is checked and a pick
+   runs `track.set {hw_output}`. While the engine is stopped the menu
+   offers None and says the engine lists the outputs).
+6. **Stereo** (`mixer.util.<track>`): polarity ("Ø") and mono (ADR-0022),
+   two halves. They act before the pan, so they sit on it.
+7. **The pan.**
+8. **The state row** (`mixer.state.<track>`): mute, solo, arm and monitor,
+   four cells in that order, directly over the fader. A buss has no arm or
+   monitor and a master no monitor (a master records its output,
+   ADR-0057): their cells stay empty, so mute and solo are at the same
+   place on every strip.
+9. **The fader and the meter** (`mixer.faderrow.<track>`), then their
+   **values**.
+
+Every type has the same rows, each of a fixed height, so every strip's
+chain is as tall and every fader sits at the same height. Between the fader
 and the meter is the meter's scale (`mixer.scale.<track>`): 0, then 6, 12,
-24 and 48 for the dB under it, at the places `ui::Meter::position` gives.
+18, 24, 36 and 48 for the dB under it, at the places `ui::Meter::position`
+gives. Each number has a tick that ends where the meter starts, and the
+meter draws the same levels as hairlines across both bars
+(`ui::Meter::setMarks`), so a level is read on the bars themselves. A bar
+is drawn in zones: its part above -6 dB in the hot colour, the rest in the
+meter colour.
 Under the fader is its value (`mixer.value.<track>`); under the meter the
 highest peak it has shown since it was last cleared (`mixer.peak.<track>`,
 `ui::Meter::maxPeakDb`), in dB with a sign and one decimal, empty until
@@ -1956,7 +2009,7 @@ inspector adds no command:
 | Follows (`inspector.timebase`) | Its track's setting, Beats, Time, or Beats, start only | A choice | `timebase` |
 | Gain (`inspector.gain_db`) | "-3.0 dB" | A number, with or without "dB" | `gain_db` |
 | Fade in, Fade out (`inspector.fade_in`, `inspector.fade_out`) | "0.400 s" | A number, with or without "s" | `fade_in`, `fade_out` |
-| Mute, Loop, Lock (`inspector.mute`, `.loop`, `.locked`) | Pills, lit when on | A click | `mute`, `loop`, `locked` |
+| Mute, Loop, Lock (`inspector.mute`, `.loop`, `.locked`) | Cells (§4.2), lit when on | A click | `mute`, `loop`, `locked` |
 | File (`inspector.file`) | An audio item's file path, then its rate, channels and length | Read only | |
 
 When the heard take plays audio, its speed and pitch follow
@@ -1966,7 +2019,7 @@ When the heard take plays audio, its speed and pitch follow
 |---|---|---|---|
 | Speed (`inspector.playrate`) | "1.000 x" | A number, with or without "x" | `playrate` |
 | Pitch (`inspector.pitch`) | "0.00 st" | A number, with or without "st" | `pitch` |
-| Keep pitch (`inspector.preserve_pitch`) | A pill, lit when on | A click | `preserve_pitch` |
+| Keep pitch (`inspector.preserve_pitch`) | A cell, lit when on | A click | `preserve_pitch` |
 
 An item with several takes lists them in its order (`inspector.takes`,
 at most six rows before it scrolls), a take without a name as "Take *n*";
@@ -1984,10 +2037,10 @@ in the field being typed in. A locked item's fields are disabled, all but
 Lock, under a line that says so. An item with no take cannot be named.
 
 **Several items** show the fields they can share: Follows, Gain, the
-fades and the three pills. Name, Start, Length, the take settings, the
+fades and the three cells. Name, Start, Length, the take settings, the
 take list and the file are for one item only. A field shows the value all
 of them have, and is empty with the placeholder "mixed" when they differ;
-a pill is lit when all have the state on. An edit runs `item.set` on each
+a cell is lit when all have the state on. An edit runs `item.set` on each
 inside one transaction (`Dispatcher::transact`, labelled "Item gain" and
 so on): one undo step, and all of them or none when the command refuses
 one. With any of them locked the fields are disabled; Lock then locks the
@@ -2344,7 +2397,7 @@ Steppe's own character, not a REAPER clone or a generic dark theme
 
 - **Words:** what the user reads calls them **tracks**. **Channel**,
   **buss** and **master** are the types of track and are named only where
-  the type matters: the add menu, the C / B / M badge, the inspector's
+  the type matters: the add menu, the inspector's
   kind, the routing matrix, and actions that make or need one type ("Add
   channel", a rack "on the selected channel"). "Strip" is this spec's and
   the code's word for a track's column in the mixer and for the model's
@@ -2361,15 +2414,19 @@ Steppe's own character, not a REAPER clone or a generic dark theme
   `--theme` and `--palette` override them for one run.
 - **Type-led hierarchy:** Inter for UI, IBM Plex Mono for every number and
   for notation; few font sizes; labels quiet, values prominent.
-- **Strip types as bindings:** Channel blue, Buss amber, Master red, in every
-  palette, on the TCP badge, the mixer strip's top edge and the routing
-  matrix's marks. Masters carry a heavier spine on the routing marks; in the
-  mixer they look like every other strip (the same thin top stripe) and sit
-  pinned at its right edge. (Busses' double
+- **Strip types as marks:** on a track's row and its mixer strip the type
+  is a small line mark before the name, in quiet ink, and only where it is
+  not the usual one: none for a channel, lines joining into one for a buss,
+  the same ending at a bar for a master (§4.2). No box, bar or colour says
+  the type there: colour on a row or a strip is the track's own. The type
+  colours (Channel blue, Buss amber, Master red, in every palette) remain
+  on the routing matrix's marks, where masters carry a heavier spine, and
+  as the colour of an uncoloured track's items. In the mixer a master looks
+  like every other strip and sits pinned at its right edge. (Busses' double
   rule from the proposal is not drawn.)
 - **Track colours, for organizing:** a small set (red, orange, yellow, green,
   teal, blue, violet, grey; `track.set {color}` also takes "#rrggbb") drawn as
-  a stripe down the TCP row's left edge, under the mixer strip's name, and
+  a stripe down the TCP row's left edge, a bar across the mixer strip's top, and
   as the colour of the track's items in the arrange view (§4.3). A new
   channel or buss comes with one: `track.add` gives it the palette colour
   the fewest tracks carry (session-model.md), whoever adds it, so a session
@@ -2392,7 +2449,7 @@ Steppe's own character, not a REAPER clone or a generic dark theme
   quiet at rest: an off toggle is an ink outline and letter, a secondary
   button its text alone. The state's colour and the button's box appear
   under the pointer, so at rest the only colour in a row is a state that is
-  on, the strip's badge and the track's own colour. The toolbar's buttons
+  on and the track's own colour. The toolbar's buttons
   are quiet in the same way, so the top row reads as menus first. A
   warning is the one thing that adds colour unasked: the engine readout
   says nothing in colour until audio stops or drops out (§4.1).

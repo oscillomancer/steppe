@@ -248,7 +248,7 @@ struct Fixture {
 
 }  // namespace
 
-TEST_CASE("mixer: a master looks like the others, and \"fx\" sits small at the strip's top right") {
+TEST_CASE("mixer: a master looks like the others; \"fx\" and \"+\" head the plug-in list") {
     Fixture f;
     if (!f.ok) return;
     const auto a = f.addTrack("channel", "A");
@@ -270,7 +270,8 @@ TEST_CASE("mixer: a master looks like the others, and \"fx\" sits small at the s
                                          image.rgba.begin() + static_cast<std::ptrdiff_t>(at) + 4);
     };
     CHECK(pixel(sm.node->bounds()) == pixel(sa.node->bounds()));
-    // Small, at the top right ("fx", then "+"), with the name beside them.
+    // The name has the strip's width; under it, small, "fx" at the left and
+    // "+" at the right head the plug-in list.
     const ui::Rect strip = sa.node->bounds(), fx = sa.fx->bounds(), plus = sa.addFx->bounds();
     CHECK(sa.fx->valueText() == "fx");
     CHECK(sa.addFx->valueText() == "+");
@@ -278,8 +279,10 @@ TEST_CASE("mixer: a master looks like the others, and \"fx\" sits small at the s
     CHECK(fx.h <= 16);
     CHECK(plus.right() >= strip.right() - 8);
     CHECK(fx.right() <= plus.x);
-    CHECK(fx.y < strip.y + 12);
-    CHECK(sa.name->bounds().right() <= fx.x + 1);
+    CHECK(fx.x <= strip.x + 8);
+    CHECK(fx.y >= sa.name->bounds().bottom() - 1);
+    CHECK(fx.bottom() <= sa.chain->bounds().y);
+    CHECK(sa.name->bounds().right() >= strip.right() - 8);
     // No plug-in count beside "fx", however long the chain.
     f.addFx(a, "Hickory");
     f.refresh();
@@ -316,35 +319,79 @@ TEST_CASE(
           f.node("mixer.fx.fx_1"));
 }
 
-TEST_CASE("mixer: the chain takes the room unused sends and arm rows would leave empty") {
+TEST_CASE("mixer: a strip is one grid: routing, stereo, pan, the state row, then the fader") {
     Fixture f;
     if (!f.ok) return;
     const auto a = f.addTrack("channel", "A");
     const auto b = f.addTrack("channel", "B");
     const auto bus = f.addTrack("buss", "Bus");
+    const std::string master = "tr_0";
     f.exec("route.add", R"({"from":")" + b + R"(","to":")" + bus + R"("})");
     f.refresh();
-    // No sends: the chain reaches down to the arm, then the input/output row.
+    auto box = [&](const std::string& id) { return f.node(id)->bounds(); };
+    // The rows under the plug-ins, top to bottom, a gap apart: routing (in
+    // and out), stereo (polarity, mono), the pan, the state row, the fader.
     CHECK_FALSE(f.node("mixer.sends." + a)->visible);
-    CHECK(f.node("mixer.rec." + a)->bounds().y - f.strip(a).chain->bounds().bottom() <= 4.5f);
-    CHECK(f.node("mixer.io." + a)->bounds().y - f.node("mixer.rec." + a)->bounds().bottom() <=
-          4.5f);
-    // Polarity, monitoring and mono share one row, before the pan.
-    CHECK(near(f.node("mixer.monitor." + a)->bounds().y + 10,
-               f.node("mixer.polarity." + a)->bounds().y + 7));
-    CHECK(f.node("mixer.polarity." + a)->bounds().right() <=
-          f.node("mixer.monitor." + a)->bounds().x);
-    CHECK(f.node("mixer.monitor." + a)->bounds().right() <= f.node("mixer.mono." + a)->bounds().x);
-    CHECK(f.node("mixer.mono." + a)->bounds().bottom() <= f.strip(a).pan->bounds().y);
-    // A send takes one row out of the chain section.
+    const std::vector<ui::Rect> rows = {f.strip(a).chain->bounds(), box("mixer.io." + a),
+                                        box("mixer.util." + a),     f.strip(a).pan->bounds(),
+                                        box("mixer.state." + a),    box("mixer.faderrow." + a)};
+    for (std::size_t i = 1; i < rows.size(); ++i)
+        CHECK_MESSAGE(near(rows[i].y - rows[i - 1].bottom(), 4), i);
+    // Every button is one height, and each row spans the strip's columns.
+    const float left = rows[1].x, right = rows[1].right();
+    for (const char* id : {"mixer.input.", "mixer.out.", "mixer.polarity.", "mixer.mono.",
+                           "mixer.mute.", "mixer.solo.", "mixer.arm.", "mixer.monitor."})
+        CHECK_MESSAGE(near(box(id + a).h, 16), id);
+    CHECK(near(box("mixer.input." + a).x, left));
+    CHECK(near(box("mixer.out." + a).right(), right));
+    // Stereo: two halves.
+    CHECK(near(box("mixer.polarity." + a).x, left));
+    CHECK(near(box("mixer.mono." + a).right(), right));
+    CHECK(near(box("mixer.polarity." + a).w, box("mixer.mono." + a).w));
+    // State: four equal cells in one order, mute, solo, arm, monitor.
+    const std::vector<ui::Rect> cells = {box("mixer.mute." + a), box("mixer.solo." + a),
+                                         box("mixer.arm." + a), box("mixer.monitor." + a)};
+    CHECK(near(cells.front().x, left));
+    CHECK(near(cells.back().right(), right));
+    for (std::size_t i = 1; i < cells.size(); ++i) {
+        CHECK_MESSAGE(near(cells[i].w, cells[0].w), i);
+        CHECK_MESSAGE(near(cells[i].x - cells[i - 1].right(), 3), i);
+        CHECK_MESSAGE(near(cells[i].y, cells[0].y), i);
+    }
+    // The four cells are two halves split again: the grid is one.
+    CHECK(near(cells[1].right(), box("mixer.polarity." + a).right()));
+    // A cell is a control's place. A buss has no arm, monitor or input and a
+    // master no monitor or input: their cells stay empty, and mute and solo
+    // are where they are on a channel.
+    CHECK_FALSE(f.root->find("mixer.arm." + bus));
+    CHECK_FALSE(f.root->find("mixer.monitor." + bus));
+    CHECK_FALSE(f.root->find("mixer.input." + bus));
+    CHECK_FALSE(f.root->find("mixer.monitor." + master));
+    CHECK(near(box("mixer.out." + bus).w, right - left));
+    for (const std::string& other : {bus, master}) {
+        const float dx = f.strip(other).node->bounds().x - f.strip(a).node->bounds().x;
+        CHECK(near(box("mixer.mute." + other).x - dx, cells[0].x));
+        CHECK(near(box("mixer.solo." + other).x - dx, cells[1].x));
+        CHECK(near(box("mixer.solo." + other).w, cells[1].w));
+    }
+    CHECK(near(box("mixer.arm." + master).x -
+                   (f.strip(master).node->bounds().x - f.strip(a).node->bounds().x),
+               cells[2].x));
+    // Every type has the same rows, so every chain is as tall and every
+    // fader lines up; a send takes one row out of its own strip's chain.
+    CHECK(near(f.strip(bus).chain->bounds().h, f.strip(a).chain->bounds().h));
+    CHECK(near(f.strip(master).chain->bounds().h, f.strip(a).chain->bounds().h));
+    CHECK(near(f.strip(bus).fader->bounds().y, f.strip(a).fader->bounds().y));
     CHECK(f.node("mixer.sends." + b)->visible);
     CHECK(near(f.strip(a).chain->bounds().h - f.strip(b).chain->bounds().h, 14 + 4));
-    // A buss has no arm row (nor an input): its chain takes that room.
-    CHECK_FALSE(f.root->find("mixer.rec." + bus));
-    CHECK_FALSE(f.root->find("mixer.input." + bus));
-    CHECK(f.root->find("mixer.out." + bus));
-    CHECK(f.strip(bus).chain->bounds().h > f.strip(a).chain->bounds().h);
-    CHECK(near(f.strip(bus).fader->bounds().y, f.strip(a).fader->bounds().y));  // faders line up
+    // The type is a mark before the name, not a colour: none on a channel.
+    CHECK_FALSE(f.root->find("mixer.type." + a));
+    CHECK(f.node("mixer.type." + bus)->valueText() == "buss");
+    CHECK(f.node("mixer.type." + master)->valueText() == "master");
+    CHECK(f.node("mixer.type." + bus)->bounds().right() <= f.strip(bus).name->bounds().x);
+    // The colour bar across the top is the track's own, the strip's width.
+    CHECK(near(box("mixer.color." + a).y, f.strip(a).node->bounds().y));
+    CHECK(box("mixer.color." + a).w >= f.strip(a).node->bounds().w - 1.5f);
 }
 
 TEST_CASE("mixer: a double-click on the strips' empty space adds a channel") {

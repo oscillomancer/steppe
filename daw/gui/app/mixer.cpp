@@ -29,14 +29,19 @@ namespace {
 const cmd::Origin kOrigin{cmd::Origin::Type::Ui, "gui", {}};
 constexpr float kStripW = 92;
 // The strip's chain section is the only one that follows the panel's height;
-// the rest (name, sends, arm, in/out, polarity/monitor/mono, pan, fader,
-// value, M/S, gaps, padding) is fixed.
+// the rest (name, sends, in/out, polarity/mono, pan, the state row, fader,
+// values, gaps, padding) is fixed.
 constexpr float kSlotH = 18, kSlotGap = 2;
 constexpr float kGripH = 5, kHeaderH = 30;
 constexpr float kFaderH = 133;  // the fader and meter row
-// The fixed rows of a channel with no sends, their gaps and the padding (each
-// send adds kSendH; busses have no arm row).
-constexpr float kStripChrome = 173;
+// A strip is a grid of four columns (gui.md §4.4): a row is four cells, two
+// halves or one full width, every button kCellH high.
+constexpr float kCellH = 16, kCellGap = 3;
+constexpr float kColourBar = 3;  // the track's colour, across the strip's top
+constexpr float kFxRowH = 14;    // "fx" and "+", over the plug-ins
+// The fixed rows of a strip with no sends, their gaps and the padding (each
+// send adds kSendH): the same for every type, so every chain is as tall.
+constexpr float kStripChrome = 152;
 constexpr float kSendH = 14;
 constexpr float kDragThreshold = 4;
 
@@ -318,18 +323,26 @@ class RackSlot : public ui::Button {
 // The dB marks of a strip's meter, beside it: 0, then how far under it.
 class MeterScale : public ui::Node {
   public:
+    // The levels it labels, in dB below full scale. Each has a tick that ends
+    // at the scale's right edge, where the meter starts, and the meter draws
+    // the same levels as lines across its bars (ui::Meter::setMarks).
+    static std::vector<float> marks() { return {0, -6, -12, -18, -24, -36, -48}; }
+    static constexpr float kTick = 4, kWidth = 24;
     explicit MeterScale(std::string id) : Node(std::move(id)) {
-        layout.width = ui::SizeRule::fixed(15);
+        layout.width = ui::SizeRule::fixed(kWidth);
         layout.height = ui::SizeRule::fraction();
     }
     void paint(ui::Canvas& c) override {
         const ui::Theme& t = c.theme();
         const ui::Rect b = bounds();
         const float top = b.y + ui::Meter::kClipLight, lane = b.h - ui::Meter::kClipLight;
-        for (int db : {0, -6, -12, -24, -48}) {
-            const float y = top + (1 - ui::Meter::position(static_cast<float>(db))) * lane;
-            c.text({b.x, y - 6, b.w, 12}, std::to_string(-db), ui::Font::Mono, t.type("caption"),
-                   t.color(db == 0 ? "ink-quiet" : "ink-faint"), ui::kRight | ui::kMiddle);
+        for (float db : marks()) {
+            const float y = std::round(top + (1 - ui::Meter::position(db)) * lane);
+            const bool zero = db == 0;
+            c.fillRect({b.right() - kTick, y, kTick, 1}, t.color(zero ? "ink-quiet" : "ink-faint"));
+            c.text({b.x, y - 6, b.w - kTick - 2, 12}, std::to_string(static_cast<int>(-db)),
+                   ui::Font::Mono, t.type("caption"), t.color(zero ? "ink-quiet" : "ink-faint"),
+                   ui::kRight | ui::kMiddle);
         }
     }
 };
@@ -651,7 +664,7 @@ class ColorStripe : public ui::Node {
   public:
     ColorStripe(std::string id, std::string colour)
         : Node(std::move(id)), colour_(std::move(colour)) {
-        layout.height = ui::SizeRule::fixed(3);
+        layout.height = ui::SizeRule::fixed(kColourBar);
     }
     void paint(ui::Canvas& c) override {
         if (const auto colour = c.theme().trackColor(colour_)) c.fillRect(bounds(), *colour);
@@ -661,28 +674,61 @@ class ColorStripe : public ui::Node {
     std::string colour_;
 };
 
-// A frozen channel's mark: a snowflake under the strip's name.
+// A frozen channel's mark: a snowflake before the strip's name, as in the
+// track panel.
 class FrozenMark : public ui::Node {
   public:
     explicit FrozenMark(std::string id) : Node(std::move(id)) {
+        layout.width = ui::SizeRule::fixed(13);
         layout.height = ui::SizeRule::fixed(14);
     }
     void paint(ui::Canvas& c) override {
         const ui::Rect b = bounds();
-        ui::drawSnowflake(c, {b.x + 9, b.y + b.h / 2}, 6.0f, c.theme().color("ink"));
+        ui::drawSnowflake(c, {b.x + 6, b.y + b.h / 2}, 6.0f, c.theme().color("ink"));
     }
 };
 
-// A strip's background: the type's colour along the top; a right-click anywhere
-// on it opens the track menu, and a drag from a part no control uses moves the
-// strip among its own kind.
+// A hairline that takes the room between two things in a row.
+class RuleLine : public ui::Node {
+  public:
+    explicit RuleLine(std::string id) : Node(std::move(id)) {
+        layout.width = ui::SizeRule::fraction();
+        layout.height = ui::SizeRule::fixed(1);
+    }
+    void paint(ui::Canvas& c) override { c.fillRect(bounds(), c.theme().color("rule")); }
+};
+
+// A buss's or master's mark before its name (ui::drawTrackGlyph); a channel
+// has none.
+class TypeMark : public ui::Node {
+  public:
+    TypeMark(std::string id, ui::TrackGlyph glyph) : Node(std::move(id)), glyph_(glyph) {
+        layout.width = ui::SizeRule::fixed(13);
+        layout.height = ui::SizeRule::fixed(14);
+    }
+    void paint(ui::Canvas& c) override {
+        const ui::Rect b = bounds();
+        ui::drawTrackGlyph(c, {b.x, b.y, 10, b.h}, glyph_, c.theme().color("ink-quiet"));
+    }
+    std::string valueText() const override {
+        return glyph_ == ui::TrackGlyph::Buss ? "buss" : "master";
+    }
+
+  private:
+    ui::TrackGlyph glyph_;
+};
+
+// A strip's background; a right-click anywhere on it opens the track menu,
+// and a drag from a part no control uses moves the strip among its own kind.
+// Its first child is the colour bar across its top (the track's own colour:
+// the type is a mark before the name, not a colour).
 class StripFrame : public ui::Node {
   public:
-    StripFrame(std::string id, std::string colorToken, std::function<void(ui::Point)> menu)
-        : Node(std::move(id)), color_(std::move(colorToken)), menu_(std::move(menu)) {
+    StripFrame(std::string id, std::function<void(ui::Point)> menu)
+        : Node(std::move(id)), menu_(std::move(menu)) {
         interactive = true;
         layout.dir = ui::Layout::Dir::Column;
-        layout.padding = ui::Insets::all(5);
+        layout.padding = ui::Insets{5, 0, 5, 5};
         layout.gap = 4;
     }
     DragTracker drag;  // notify unset: this strip cannot be dragged
@@ -691,6 +737,14 @@ class StripFrame : public ui::Node {
     // selection the strip is part of.
     std::function<void(unsigned mods)> select;
     std::function<bool()> selected;
+    void arrange(const ui::Canvas& canvas, const ui::Rect& r) override {
+        Node::arrange(canvas, r);
+        // The colour bar runs the strip's whole width, over the padding.
+        if (!children().empty()) {
+            ui::Node& bar = *children().front();
+            bar.arrange(canvas, {r.x, r.y, r.w - 1, bar.bounds().h});
+        }
+    }
     void paint(ui::Canvas& c) override {
         const ui::Theme& t = c.theme();
         c.fillRect(bounds(), t.color("panel"));
@@ -699,7 +753,6 @@ class StripFrame : public ui::Node {
             c.strokeRect({bounds().x + 0.5f, bounds().y + 0.5f, bounds().w - 1, bounds().h - 1},
                          t.color("focus"), 1.0f);
         }
-        c.fillRect({bounds().x, bounds().y, bounds().w, 4}, t.color(color_));
         c.fillRect({bounds().right() - 1, bounds().y, 1, bounds().h}, t.color("rule"));
     }
     bool onPointer(const ui::PointerEvent& e) override {
@@ -750,7 +803,6 @@ class StripFrame : public ui::Node {
     }
 
   private:
-    std::string color_;
     std::function<void(ui::Point)> menu_;
     bool deferSelect_ = false;
 };
@@ -1025,52 +1077,64 @@ void Mixer::rebuild() {
         Strip st;
         st.track = tid;
         st.type = type;
-        auto frame =
-            std::make_unique<StripFrame>("mixer.strip." + tid, type, [this, id](ui::Point p) {
-                // Strip coordinates are the window's (the row lays them out in place).
-                // On a fader, pan or button: its MIDI learn (ADR-0058).
-                if (const char* param = learnableAt(id.str(), p)) {
-                    // The pan's menu adds its mode and law (ADR-0066).
-                    if (std::string_view(param) == "pan")
-                        openPanMenu(root_, actions_, id, {p.x, p.y, 1, 1});
-                    else
-                        openStripLearnMenu(root_, actions_, {{id}, param}, {p.x, p.y, 1, 1});
-                    return;
-                }
-                trackMenu_.open(id, {p.x, p.y, 1, 1}, {});
-            });
+        auto frame = std::make_unique<StripFrame>("mixer.strip." + tid, [this, id](ui::Point p) {
+            // Strip coordinates are the window's (the row lays them out in place).
+            // On a fader, pan or button: its MIDI learn (ADR-0058).
+            if (const char* param = learnableAt(id.str(), p)) {
+                // The pan's menu adds its mode and law (ADR-0066).
+                if (std::string_view(param) == "pan")
+                    openPanMenu(root_, actions_, id, {p.x, p.y, 1, 1});
+                else
+                    openStripLearnMenu(root_, actions_, {{id}, param}, {p.x, p.y, 1, 1});
+                return;
+            }
+            trackMenu_.open(id, {p.x, p.y, 1, 1}, {});
+        });
         st.node = frame.get();
-        // The name (a double-click renames it), with "fx" (the chain) and "+"
-        // (the plugin browser) at the strip's top right, as in the TCP.
+        // The track's colour across the top, then the header: the type's mark
+        // (a buss or a master), a frozen track's snowflake and the name, which
+        // has the strip's width to itself (a double-click renames it).
+        frame->emplace<ColorStripe>("mixer.color." + tid, t.color);
         auto& nameRow = frame->emplace<ui::Node>("mixer.namerow." + tid);
         nameRow.layout.dir = ui::Layout::Dir::Row;
         nameRow.layout.height = ui::SizeRule::fixed(16);
         nameRow.layout.align = ui::Layout::Align::Center;
         nameRow.layout.gap = 2;
+        if (t.type != model::StripType::Channel)
+            nameRow.emplace<TypeMark>("mixer.type." + tid, t.type == model::StripType::Buss
+                                                               ? ui::TrackGlyph::Buss
+                                                               : ui::TrackGlyph::Master);
+        if (t.freeze) nameRow.emplace<FrozenMark>("mixer.frozen." + tid);
         auto& nameEdit = nameRow.emplace<NameEdit>(
             tid, model::trackLabel(s, id),
             [this, tid](const std::string& name) { (void)set(tid, "name", json::Value(name)); });
         st.name = nameEdit.label();
         st.rename = &nameEdit;
-        st.fx = &nameRow.emplace<ui::Button>("mixer.fxadd." + tid, "fx", [this, tid] {
+        // The plug-in list's own line: "fx" (the chain window) at its left
+        // and "+" (the plugin browser) at its right, a rule between them.
+        auto& fxRow = frame->emplace<ui::Node>("mixer.fxrow." + tid);
+        fxRow.layout.dir = ui::Layout::Dir::Row;
+        fxRow.layout.height = ui::SizeRule::fixed(kFxRowH);
+        fxRow.layout.align = ui::Layout::Align::Center;
+        fxRow.layout.gap = 4;
+        st.fx = &fxRow.emplace<ui::Button>("mixer.fxadd." + tid, "fx", [this, tid] {
             json::Value args = json::Value::object();
             args["track"] = tid;
             run("ui.fx.chain", std::move(args));
         });
         st.fx->layout.width = ui::SizeRule::fixed(22);
-        st.fx->layout.height = ui::SizeRule::fixed(15);
-        st.addFx = &nameRow.emplace<ui::Button>("mixer.addfx." + tid, "+", [this, tid] {
+        st.fx->layout.height = ui::SizeRule::fixed(kFxRowH);
+        fxRow.emplace<RuleLine>("mixer.fxrule." + tid);
+        st.addFx = &fxRow.emplace<ui::Button>("mixer.addfx." + tid, "+", [this, tid] {
             json::Value args = json::Value::object();
             args["track"] = tid;
             run("ui.fx.add", std::move(args));
         });
         st.addFx->layout.width = ui::SizeRule::fixed(16);
-        st.addFx->layout.height = ui::SizeRule::fixed(15);
+        st.addFx->layout.height = ui::SizeRule::fixed(kFxRowH);
         // As in the TCP: text alone at rest, "fx" in full ink over a chain.
         st.fx->quiet = st.addFx->quiet = true;
         st.fx->setEmphasis(!t.chain.empty() || !t.inputChain.empty());
-        frame->emplace<ColorStripe>("mixer.color." + tid, t.color);
-        if (t.freeze) frame->emplace<FrozenMark>("mixer.frozen." + tid);
         // The plug-in chain (a click opens or closes the plug-in's editor); the
         // one section that takes the room the panel's height gives.
         auto& chain = frame->emplace<FxList>("mixer.fx." + tid);
@@ -1182,44 +1246,28 @@ void Mixer::rebuild() {
             sends.addRow(std::move(row));
         }
         sends.visible = !sends.rows().empty();
-        // Channels and masters (ADR-0057: a master records its output): the arm,
-        // centred, under the plug-ins (busses give the room to the chain, so
-        // every strip's fader lines up).
-        if (t.type != model::StripType::Buss) {
-            auto& rec = frame->emplace<ui::Node>("mixer.rec." + tid);
-            rec.layout.dir = ui::Layout::Dir::Row;
-            rec.layout.height = ui::SizeRule::fixed(20);
-            rec.emplace<ui::Node>("mixer.rec.l." + tid).layout.width = ui::SizeRule::fraction();
-            st.arm = &rec.emplace<ui::ArmButton>("mixer.arm." + tid, [this, tid](bool on) {
-                (void)set(tid, "armed", json::Value(on));
-            });
-            rec.emplace<ui::Node>("mixer.rec.r." + tid).layout.width = ui::SizeRule::fraction();
-        }
-        // The record input and the output ("out": a click opens the routing
-        // matrix, a drag onto a buss or master makes a send), as in the TCP.
-        // A master's "out" picks the device outputs it plays to (ADR-0056).
+        // Routing, where the signal enters and leaves: the record input
+        // (channels) and the output ("out": a click opens the routing matrix,
+        // a drag onto a buss or master makes a send), as in the TCP. A
+        // master's "out" picks the device outputs it plays to (ADR-0056).
+        auto& io = frame->emplace<ui::Node>("mixer.io." + tid);
+        io.layout.dir = ui::Layout::Dir::Row;
+        io.layout.height = ui::SizeRule::fixed(kCellH);
+        io.layout.gap = kCellGap;
         if (t.type == model::StripType::Master) {
-            auto& io = frame->emplace<ui::Node>("mixer.io." + tid);
-            io.layout.dir = ui::Layout::Dir::Row;
-            io.layout.height = ui::SizeRule::fixed(18);
             st.out = &io.emplace<ui::Button>("mixer.out." + tid, "out");
             st.out->onClick = [this, id, button = st.out] {
                 if (pickOutput) pickOutput(id, button->bounds());
             };
             st.out->layout.width = ui::SizeRule::fraction();
-            st.out->layout.height = ui::SizeRule::fixed(18);
         } else {
-            auto& io = frame->emplace<ui::Node>("mixer.io." + tid);
-            io.layout.dir = ui::Layout::Dir::Row;
-            io.layout.height = ui::SizeRule::fixed(18);
-            io.layout.gap = 3;
             if (t.type == model::StripType::Channel) {
                 st.input = &io.emplace<ui::Button>("mixer.input." + tid, "in \u2014");
                 st.input->onClick = [this, id, button = st.input] {
                     if (pickInput) pickInput(id, button->bounds());
                 };
                 st.input->layout.width = ui::SizeRule::fraction();
-                st.input->layout.height = ui::SizeRule::fixed(18);
+                st.input->layout.height = ui::SizeRule::fixed(kCellH);
             }
             auto out = std::make_unique<DragButton>("mixer.out." + tid, "out", [this, tid] {
                 json::Value args = json::Value::object();
@@ -1231,37 +1279,24 @@ void Mixer::rebuild() {
             };
             out->layout.width = t.type == model::StripType::Channel ? ui::SizeRule::fixed(30)
                                                                     : ui::SizeRule::fraction();
-            out->layout.height = ui::SizeRule::fixed(18);
             st.out = static_cast<ui::Button*>(&io.add(std::move(out)));
         }
-        // Polarity, monitoring (channels) and mono in one row (ADR-0022): after
-        // the chain, before the pan and the fader. Polarity and mono are the
-        // TCP's small pills.
+        st.out->layout.height = ui::SizeRule::fixed(kCellH);
+        // Polarity and mono (ADR-0022), two halves: they act after the chain
+        // and before the pan, so they sit on it.
         auto& util = frame->emplace<ui::Node>("mixer.util." + tid);
         util.layout.dir = ui::Layout::Dir::Row;
-        util.layout.height = ui::SizeRule::fixed(20);
-        util.layout.gap = 3;
-        util.layout.align = ui::Layout::Align::Center;
+        util.layout.height = ui::SizeRule::fixed(kCellH);
+        util.layout.gap = kCellGap;
         st.polarity = &util.emplace<ui::Toggle>(
             "mixer.polarity." + tid, "\u00d8", "polarity",
             [this, tid](bool on) { (void)set(tid, "phase_invert", json::Value(on)); });
-        st.polarity->layout.width = ui::SizeRule::fixed(18);
-        if (t.type == model::StripType::Channel)
-            st.monitor = &util.emplace<ui::MonitorButton>("mixer.monitor." + tid, [this, tid] {
-                const auto parsed = model::Id::parse(tid);
-                const model::Track* tr = parsed ? app_.head().tracks.find(*parsed) : nullptr;
-                if (!tr) return;
-                const char* next = tr->record.monitor == model::Monitor::Off  ? "on"
-                                   : tr->record.monitor == model::Monitor::On ? "auto"
-                                                                              : "off";
-                (void)set(tid, "monitor", json::Value(std::string(next)));
-            });
         st.mono = &util.emplace<ui::Toggle>(
             "mixer.mono." + tid, "mono", "mono",
             [this, tid](bool on) { (void)set(tid, "mono", json::Value(on)); });
-        st.mono->layout.width = ui::SizeRule::fraction();
-        st.polarity->layout.height = st.mono->layout.height = ui::SizeRule::fixed(14);
-        st.polarity->pill = st.mono->pill = true;
+        st.polarity->layout.width = st.mono->layout.width = ui::SizeRule::fraction();
+        st.polarity->layout.height = st.mono->layout.height = ui::SizeRule::fixed(kCellH);
+        st.polarity->cell = st.mono->cell = true;
         st.pan = &frame->emplace<ui::PanControl>("mixer.pan." + tid);
         // Each bar sets what the strip's pan mode gives it (ADR-0066).
         auto panBar = [this, tid, id, control = st.pan](int part) {
@@ -1281,16 +1316,63 @@ void Mixer::rebuild() {
         st.pan->onChange = panBar(0);
         st.pan->onSecondChange = panBar(1);
         showPan(*st.pan, t);
+        // The state row, over the fader: mute, solo, arm, monitor, one cell
+        // each and always in that place. A buss has no arm or monitor and a
+        // master no monitor: their cells stay empty, so M and S line up
+        // across every strip (ADR-0057: a master records its output).
+        auto& state = frame->emplace<ui::Node>("mixer.state." + tid);
+        state.layout.dir = ui::Layout::Dir::Row;
+        state.layout.height = ui::SizeRule::fixed(kCellH);
+        state.layout.gap = kCellGap;
+        st.mute = &state.emplace<ui::Toggle>(
+            "mixer.mute." + tid, "M", "mute",
+            [this, tid](bool on) { (void)set(tid, "mute", json::Value(on)); });
+        st.solo =
+            &state.emplace<ui::Toggle>("mixer.solo." + tid, "S", "solo", [this, tid](bool on) {
+                (void)set(tid, "solo", json::Value(std::string(on ? "on" : "off")));
+            });
+        st.mute->cell = st.solo->cell = true;
+        ui::Node* third = nullptr;
+        ui::Node* fourth = nullptr;
+        if (t.type != model::StripType::Buss) {
+            st.arm = &state.emplace<ui::ArmButton>("mixer.arm." + tid, [this, tid](bool on) {
+                (void)set(tid, "armed", json::Value(on));
+            });
+            third = st.arm;
+        } else {
+            third = &state.emplace<ui::Node>("mixer.state.3." + tid);
+        }
+        if (t.type == model::StripType::Channel) {
+            st.monitor = &state.emplace<ui::MonitorButton>("mixer.monitor." + tid, [this, tid] {
+                const auto parsed = model::Id::parse(tid);
+                const model::Track* tr = parsed ? app_.head().tracks.find(*parsed) : nullptr;
+                if (!tr) return;
+                const char* next = tr->record.monitor == model::Monitor::Off  ? "on"
+                                   : tr->record.monitor == model::Monitor::On ? "auto"
+                                                                              : "off";
+                (void)set(tid, "monitor", json::Value(std::string(next)));
+            });
+            fourth = st.monitor;
+        } else {
+            fourth = &state.emplace<ui::Node>("mixer.state.4." + tid);
+        }
+        for (ui::Node* cell :
+             {static_cast<ui::Node*>(st.mute), static_cast<ui::Node*>(st.solo), third, fourth}) {
+            cell->layout.width = ui::SizeRule::fraction();
+            cell->layout.height = ui::SizeRule::fixed(kCellH);
+        }
         auto& faderRow = frame->emplace<ui::Node>("mixer.faderrow." + tid);
         faderRow.layout.dir = ui::Layout::Dir::Row;
         faderRow.layout.height = ui::SizeRule::fixed(kFaderH);
-        faderRow.layout.gap = 4;
+        // The fader, then the meter with its scale: the scale's ticks end
+        // where the meter starts, so its numbers belong to the meter.
         auto& spacer = faderRow.emplace<ui::Node>("mixer.spacer." + tid);
         spacer.layout.width = ui::SizeRule::fraction();
         st.fader = &faderRow.emplace<ui::Fader>("mixer.fader." + tid);
         faderRow.emplace<MeterScale>("mixer.scale." + tid);
         st.meter = &faderRow.emplace<ui::Meter>("mixer.meter." + tid);
-        st.meter->layout.width = ui::SizeRule::fixed(14);
+        st.meter->layout.width = ui::SizeRule::fixed(16);
+        st.meter->setMarks(MeterScale::marks());
         auto& spacer2 = faderRow.emplace<ui::Node>("mixer.spacer2." + tid);
         spacer2.layout.width = ui::SizeRule::fraction();
         st.fader->onChange = [this, tid, control = st.fader](double db, ui::Gesture g) {
@@ -1314,19 +1396,6 @@ void Mixer::rebuild() {
         st.value->layout.width = ui::SizeRule::fraction();
         st.peak = &values.emplace<PeakReadout>("mixer.peak." + tid, *st.meter);
         st.peak->layout.width = ui::SizeRule::fraction();
-        auto& ms = frame->emplace<ui::Node>("mixer.ms." + tid);
-        ms.layout.dir = ui::Layout::Dir::Row;
-        ms.layout.height = ui::SizeRule::fixed(20);
-        ms.layout.gap = 3;
-        st.mute = &ms.emplace<ui::Toggle>("mixer.mute." + tid, "M", "mute", [this, tid](bool on) {
-            (void)set(tid, "mute", json::Value(on));
-        });
-        st.mute->layout.width = ui::SizeRule::fraction();
-        st.solo = &ms.emplace<ui::Toggle>("mixer.solo." + tid, "S", "solo", [this, tid](bool on) {
-            (void)set(tid, "solo", json::Value(std::string(on ? "on" : "off")));
-        });
-        st.solo->layout.width = ui::SizeRule::fraction();
-        st.mute->pill = st.solo->pill = true;
         meters_.attach(tid, st.meter);
         static_cast<StripRow*>(row_)->addStrip(std::move(frame),
                                                t.type == model::StripType::Master);
@@ -1339,19 +1408,18 @@ void Mixer::rebuild() {
         Strip st;
         st.track = tid;
         st.type = "vca";
-        auto frame =
-            std::make_unique<StripFrame>("mixer.vca." + tid, "buss", [this, gid](ui::Point p) {
-                // On the fader, mute or solo: its MIDI learn (ADR-0058).
-                if (const char* param = learnableAt(gid.str(), p)) {
-                    openStripLearnMenu(root_, actions_, {{gid}, param}, {p.x, p.y, 1, 1});
-                    return;
-                }
-                trackMenu_.openGroup(gid, {}, {p.x, p.y, 1, 1});
-            });
+        auto frame = std::make_unique<StripFrame>("mixer.vca." + tid, [this, gid](ui::Point p) {
+            // On the fader, mute or solo: its MIDI learn (ADR-0058).
+            if (const char* param = learnableAt(gid.str(), p)) {
+                openStripLearnMenu(root_, actions_, {{gid}, param}, {p.x, p.y, 1, 1});
+                return;
+            }
+            trackMenu_.openGroup(gid, {}, {p.x, p.y, 1, 1});
+        });
         st.node = frame.get();
+        frame->emplace<ColorStripe>("mixer.vca.color." + tid, e.value->color);
         frame->emplace<ui::Label>("mixer.vca.name." + tid, e.value->name, ui::Font::UiBold, "small",
                                   "ink");
-        frame->emplace<ColorStripe>("mixer.vca.color." + tid, e.value->color);
         frame->emplace<ui::Label>("mixer.vca.badge." + tid, "VCA", ui::Font::Ui, "caption",
                                   "ink-quiet");
         auto& filler = frame->emplace<ui::Node>("mixer.vca.space." + tid);
@@ -1366,9 +1434,6 @@ void Mixer::rebuild() {
         env.onClick = [this, gid, b = &env] {
             if (envelopes) envelopes(gid, b->bounds());
         };
-        st.fader = &frame->emplace<ui::Fader>("mixer.vca.fader." + tid);
-        st.fader->layout.height = ui::SizeRule::fixed(kFaderH);
-        st.fader->setValue(e.value->vca->volumeDb);
         auto setVca = [this, gid](const char* field, json::Value value,
                                   const std::string& gesture = {}) {
             auto args = json::Value::object();
@@ -1379,6 +1444,25 @@ void Mixer::rebuild() {
             auto r = dispatcher_.execute({"vca.set", std::move(args), origin});
             if (!r && actions_.onError) actions_.onError(r.error().message);
         };
+        // M and S in the cells they have on every strip, over the fader.
+        auto& ms = frame->emplace<ui::Node>("mixer.vca.ms." + tid);
+        ms.layout.dir = ui::Layout::Dir::Row;
+        ms.layout.height = ui::SizeRule::fixed(kCellH);
+        ms.layout.gap = kCellGap;
+        st.mute = &ms.emplace<ui::Toggle>("mixer.vca.mute." + tid, "M", "mute",
+                                          [setVca](bool on) { setVca("mute", on); });
+        st.solo = &ms.emplace<ui::Toggle>("mixer.vca.solo." + tid, "S", "solo",
+                                          [setVca](bool on) { setVca("solo", on); });
+        st.mute->cell = st.solo->cell = true;
+        for (ui::Node* cell : {static_cast<ui::Node*>(st.mute), static_cast<ui::Node*>(st.solo),
+                               &ms.emplace<ui::Node>("mixer.vca.ms.3." + tid),
+                               &ms.emplace<ui::Node>("mixer.vca.ms.4." + tid)}) {
+            cell->layout.width = ui::SizeRule::fraction();
+            cell->layout.height = ui::SizeRule::fixed(kCellH);
+        }
+        st.fader = &frame->emplace<ui::Fader>("mixer.vca.fader." + tid);
+        st.fader->layout.height = ui::SizeRule::fixed(kFaderH);
+        st.fader->setValue(e.value->vca->volumeDb);
         st.value =
             &frame->emplace<ui::Label>("mixer.vca.value." + tid, dbText(e.value->vca->volumeDb),
                                        ui::Font::Mono, "caption", "ink-quiet");
@@ -1388,15 +1472,6 @@ void Mixer::rebuild() {
                 setVca("volume_db", db,
                        g == ui::Gesture::Move ? "vca:" + tid + ":" + std::to_string(gesture_) : "");
         };
-        auto& ms = frame->emplace<ui::Node>("mixer.vca.ms." + tid);
-        ms.layout.dir = ui::Layout::Dir::Row;
-        ms.layout.height = ui::SizeRule::fixed(20);
-        st.mute = &ms.emplace<ui::Toggle>("mixer.vca.mute." + tid, "M", "mute",
-                                          [setVca](bool on) { setVca("mute", on); });
-        st.solo = &ms.emplace<ui::Toggle>("mixer.vca.solo." + tid, "S", "solo",
-                                          [setVca](bool on) { setVca("solo", on); });
-        st.mute->layout.width = st.solo->layout.width = ui::SizeRule::fraction();
-        st.mute->pill = st.solo->pill = true;
         static_cast<StripRow*>(row_)->addStrip(std::move(frame), false);
         vcaStrips_.push_back(st);
     }

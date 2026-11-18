@@ -847,14 +847,16 @@ TEST_CASE("an old arrange sidecar clamps tiny heights and keeps the TCP top line
         arrange->trackLayout().setGlobalHeight(72);
         root.frame(false);
         const auto row = arrange->tcpRowRect(0);
-        for (const auto* name : {"name", "fx", "addfx"}) {
+        // The name line: the name and the four state cells, at any height.
+        for (const auto* name : {"name", "mute", "solo", "arm", "monitor"}) {
             const auto* control = arrange->tcpPanel().controlNode(track, name);
             REQUIRE(control);
             CHECK(control->visible);
             CHECK(control->bounds().y >= row.y);
             CHECK(control->bounds().bottom() <= row.bottom() - views::TcpRowGeometry::kResizeGrip);
         }
-        for (const auto* name : {"mute", "solo", "fader", "pan", "input", "out"}) {
+        for (const auto* name :
+             {"polarity", "mono", "fader", "pan", "input", "fx", "addfx", "env", "out"}) {
             const auto* control = arrange->tcpPanel().controlNode(track, name);
             REQUIRE(control);
             CHECK_FALSE(control->visible);
@@ -1683,13 +1685,44 @@ TEST_CASE("a TCP row's meter stands at its right edge, clear of the controls") {
     CHECK(meter.right() <= row.right());
     CHECK(meter.right() >= row.right() - 3);
     CHECK(meter.h >= row.h - 8);  // the row's whole height, less a margin
-    for (const char* what : {"fx", "addfx", "env", "out", "pan", "fader", "input", "name"}) {
+    for (const char* what : {"fx", "addfx", "env", "out", "pan", "fader", "input", "name", "mute",
+                             "solo", "arm", "monitor", "polarity", "mono"}) {
         INFO(what);
         const ui::Node* node = panel->controlNode(tr1, what);
         REQUIRE(node);
         CHECK(node->visible);
         CHECK(node->bounds().right() < meter.x);
     }
+    // Three lines, each in one order (gui.md §4.2). The name line: the name,
+    // then mute, solo, arm, monitor as four cells of one size.
+    auto box = [&](const model::Id& track, const char* what) {
+        return panel->controlNode(track, what)->bounds();
+    };
+    const std::vector<ui::Rect> cells = {box(tr1, "mute"), box(tr1, "solo"), box(tr1, "arm"),
+                                         box(tr1, "monitor")};
+    CHECK(box(tr1, "name").right() <= cells[0].x);
+    for (std::size_t i = 0; i < cells.size(); ++i) {
+        CHECK(cells[i].w == views::TcpRowGeometry::kCellWidth);
+        CHECK(cells[i].h == views::TcpRowGeometry::kCellHeight);
+        CHECK(cells[i].y == cells[0].y);
+        if (i) CHECK(cells[i].x == cells[i - 1].right() + views::TcpRowGeometry::kCellGap);
+    }
+    // The mix line: polarity, mono, the fader, the pan.
+    const std::vector<ui::Rect> mix = {box(tr1, "polarity"), box(tr1, "mono"), box(tr1, "fader"),
+                                       box(tr1, "pan")};
+    for (std::size_t i = 0; i < mix.size(); ++i) {
+        CHECK(mix[i].y >= cells[0].bottom());
+        if (i) CHECK(mix[i].x >= mix[i - 1].right());
+    }
+    // The connections line: the input, fx, +, env, out.
+    const std::vector<ui::Rect> links = {box(tr1, "input"), box(tr1, "fx"), box(tr1, "addfx"),
+                                         box(tr1, "env"), box(tr1, "out")};
+    for (std::size_t i = 0; i < links.size(); ++i) {
+        CHECK(links[i].y >= mix[0].bottom());
+        if (i) CHECK(links[i].x >= links[i - 1].right());
+    }
+    CHECK(links.back().right() == cells.back().right());  // one right edge
+    CHECK(mix.back().right() == cells.back().right());
 }
 
 TEST_CASE("golden: the TCP with one strip of each type") {

@@ -860,7 +860,7 @@ TEST_CASE("a disabled text field lies flat and its text is faint; it takes no cl
     CHECK(off.text() == "Bass line");
 }
 
-TEST_CASE("colour is state: an off pill and a quiet button at rest are ink alone") {
+TEST_CASE("colour is state: an off cell and a quiet button at rest are ink alone") {
     REQUIRE_GL();
     const Theme theme = Theme::dark();
     Root root(*fixture().window, fixture().fonts, theme);
@@ -868,16 +868,16 @@ TEST_CASE("colour is state: an off pill and a quiet button at rest are ink alone
     content->layout.dir = Layout::Dir::Row;
     content->layout.padding = Insets::all(16);
     content->layout.gap = 16;
-    auto pill = [&](const char* id, bool on) -> Toggle& {
+    auto cell = [&](const char* id, bool on) -> Toggle& {
         auto& t = content->emplace<Toggle>(id, "S", "solo");
-        t.pill = true;
+        t.cell = true;
         t.layout.width = SizeRule::fixed(24);
         t.layout.height = SizeRule::fixed(16);
         t.setOn(on);
         return t;
     };
-    Toggle& off = pill("off", false);
-    Toggle& on = pill("on", true);
+    Toggle& off = cell("off", false);
+    Toggle& on = cell("on", true);
     auto& quiet = content->emplace<Button>("quiet", "fx");
     quiet.quiet = true;
     auto& boxed = content->emplace<Button>("boxed", "fx");
