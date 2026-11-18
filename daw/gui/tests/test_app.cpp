@@ -3632,10 +3632,19 @@ struct NoticeShell {
     peaks::PeakService peaks;
     gui::MeterFeed meters;
     gui::Shell shell;
-    explicit NoticeShell(App& a)
+    // `withMenus`: the window as the app builds it, the menu row above the shell.
+    explicit NoticeShell(App& a, bool withMenus = false)
         : peaks(a.dir / "cache", [](std::function<void()> f) { f(); }),
           shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters) {
-        a.root->setContent(shell.build(*a.root, *a.actions));
+        if (!withMenus) {
+            a.root->setContent(shell.build(*a.root, *a.actions));
+        } else {
+            auto frame = std::make_unique<ui::Node>("window");
+            frame->layout.dir = ui::Layout::Dir::Column;
+            frame->add(gui::makeChrome(*a.root, *a.actions, gui::ChromeLayout::defaults()));
+            frame->add(shell.build(*a.root, *a.actions));
+            a.root->setContent(std::move(frame));
+        }
         a.root->frame(false);
     }
 };
@@ -4286,12 +4295,23 @@ TEST_CASE("the crash viewer over the app, in both themes (for review: SUPPLE_TES
         ageFile(dir / (std::string(kNoticeOne) + ".run"), 30);
         ageFile(dir / (std::string(kNoticeTwo) + ".json"), 6);
         REQUIRE(diagnostics::acknowledge(kNoticeOne, dir));
-        NoticeShell s(a);
+        NoticeShell s(a, true);
         gui::HelpActions help(*a.root, *a.actions, a.window->sdl(), runNow,
                               gui::help::ownExecutable(), {}, dir);
         s.shell.showCrashReport = [&](const std::string& incident) {
             help.crashReports().open(incident);
         };
+        // The window as the app builds it: the menu row first, then the transport, the banner
+        // under it.
+        const auto* chrome = a.root->find("chrome");
+        const auto* transport = a.root->find("transport");
+        const auto* banner = a.root->find("crash.notice");
+        REQUIRE(chrome);
+        REQUIRE(transport);
+        REQUIRE(banner);
+        CHECK(chrome->bounds().h > 0);
+        CHECK(chrome->bounds().y < transport->bounds().y);
+        CHECK(banner->bounds().y >= transport->bounds().bottom() - 1);
         a.snapshot(look.light ? "crash-banner-light-1280x800.png"
                               : "crash-banner-dark-1600x1000.png");
         REQUIRE(a.root->click("crash.notice.show"));
