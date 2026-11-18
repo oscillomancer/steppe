@@ -4,14 +4,21 @@
 // project's output and outside it, in both executors, stopped or playing.
 #include <doctest/doctest.h>
 
+#include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <memory>
+#include <thread>
 #include <vector>
 
 #include "realtime_common.h"
+#include "supple/audio/audio_file.h"
+#include "supple/engine/app.h"
 
 using namespace supple;
 using namespace supple::engine;
+namespace fs = std::filesystem;
 
 namespace {
 // A voice of `frames` that no two frames of share a value: left a rising
@@ -200,4 +207,138 @@ TEST_CASE("audition: the engine frees a voice once the callback no longer reads 
         CHECK(third.expired());
         CHECK_FALSE(engine.auditionState().playing);
     }
+}
+
+TEST_CASE("audition: a file's start plays at the device's rate on outputs 1/2, then ends") {
+    // ADR-0094 through the commands. The file is read and resampled off the
+    // model thread: audition.play answers at once (decoding), tick() hands
+    // the voice to the engine when it is ready.
+    const fs::path root =
+        fs::temp_directory_path() /
+        ("supple-audition-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    struct Cleanup {
+        fs::path dir;
+        ~Cleanup() { fs::remove_all(dir); }
+    } cleanup{root};
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    AppOptions o;
+    o.workdir = root;
+    o.chainDir = root / "chains";
+    o.presetDir = root / "presets";
+    o.templateDir = root / "templates";
+    o.projectTemplateDir = root / "project-templates";
+    o.pluginPath = {kFixture};
+    o.auditionMaxSeconds = 0.25;  // the cap, short: 11025 of the file's 22050 frames
+    auto made = EngineApp::create(o, {.console9 = false});
+    REQUIRE(made);
+    auto& app = *made;
+    cmd::Dispatcher d(registry, *app);
+    auto call = [&](std::string command, const json::Value& args) {
+        return d.execute({std::move(command), args, {cmd::Origin::Type::Test, "unit", ""}});
+    };
+    // Half a second of stereo at 44.1 kHz, every frame distinct.
+    audio::AudioData file;
+    file.sampleRate = 44100;
+    file.channels.assign(2, std::vector<float>(22050));
+    for (std::size_t i = 0; i < 22050; ++i) {
+        file.channels[0][i] = 0.5f * static_cast<float>(std::sin(0.01 * static_cast<double>(i)));
+        file.channels[1][i] = 0.25f * static_cast<float>(std::cos(0.02 * static_cast<double>(i)));
+    }
+    fs::create_directories(app->mediaDir());
+    const fs::path wav = app->mediaDir() / "take.wav";
+    REQUIRE(audio::writeWav(wav, file));
+    auto args = json::Value::object();
+    args["path"] = wav.string();
+
+    // A stopped engine refuses.
+    auto refused = call("audition.play", args);
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "engine.stopped");
+
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 64 * 256});
+    REQUIRE(app->startEngine(backend, {.sampleRate = 48000, .blockSize = 256, .outputs = 4},
+                             {.anticipative = false})
+                .ok());
+    // Files that are not there or not audio.
+    for (const char* bad : {"missing.wav", "notes.txt"}) {
+        CAPTURE(bad);
+        if (std::string(bad) == "notes.txt") std::ofstream(app->mediaDir() / bad) << "text";
+        auto badArgs = json::Value::object();
+        badArgs["path"] = bad;
+        auto r = call("audition.play", badArgs);
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "audition.file");
+    }
+    backend.run(4);  // the project plays nothing: silence before
+
+    auto played = call("audition.play", args);
+    REQUIRE(played);
+    CHECK(played->find("seconds")->asDouble() == doctest::Approx(0.25));
+    CHECK(played->find("sample_rate")->asDouble() == 44100.0);
+    CHECK(played->find("channels")->asInt() == 2);
+    CHECK(played->find("truncated")->asBool());
+    CHECK(app->auditionStatus().playing);
+    // A relative name is in the media folder: the same file.
+    auto relative = json::Value::object();
+    relative["path"] = "take.wav";
+    auto again = call("audition.play", relative);
+    REQUIRE(again);
+    CHECK(fs::equivalent(again->find("path")->asString(), wav));
+    // Decoded off this thread: wait on the state, not the clock.
+    while (app->auditionStatus().decoding) {
+        app->tick();
+        std::this_thread::yield();
+    }
+    auto got = call("audition.get", json::Value::object());
+    REQUIRE(got);
+    CHECK(got->find("playing")->asBool());  // published, taken at the next cycle
+    CHECK_FALSE(got->find("decoding")->asBool());
+    const std::int64_t start = backend.cycles() * 256;
+
+    // What it plays: the file's first 0.25 s resampled to 48 kHz.
+    auto head = audio::readAudioHead(wav, {.maxFrames = 11025});
+    REQUIRE(head);
+    auto expected = audio::resample(*head, 48000);
+    REQUIRE(expected);
+    const std::size_t frames = expected->frames();
+    while (app->auditionStatus().playing) {
+        backend.run(1);
+        app->tick();
+        REQUIRE(backend.cycles() < 64);
+    }
+    // It ended where the voice did, not later (the cycle that played its last frame).
+    CHECK(backend.cycles() * 256 - start - static_cast<std::int64_t>(frames) < 256);
+    const auto& out = backend.capture().channels;
+    for (std::size_t c = 0; c < 4; ++c) {
+        CAPTURE(c);
+        std::size_t wrong = out[c].size();
+        for (std::size_t i = 0; i < static_cast<std::size_t>(backend.cycles() * 256); ++i) {
+            const std::size_t at = i - static_cast<std::size_t>(start);
+            const bool voice = c < 2 && i >= static_cast<std::size_t>(start) && at < frames;
+            const float want = voice ? expected->channels[c][at] : 0.0f;
+            if (out[c][i] != want) {
+                wrong = i;
+                break;
+            }
+        }
+        CHECK(wrong == out[c].size());
+    }
+
+    // audition.stop ends one that plays; a new project does too.
+    REQUIRE(call("audition.play", args));
+    auto stopped = call("audition.stop", json::Value::object());
+    REQUIRE(stopped);
+    CHECK_FALSE(stopped->find("playing")->asBool());
+    CHECK_FALSE(app->auditionStatus().playing);
+    REQUIRE(call("audition.play", args));
+    while (app->auditionStatus().decoding) {
+        app->tick();
+        std::this_thread::yield();
+    }
+    CHECK(app->auditionStatus().playing);
+    REQUIRE(call("project.new", json::Value::object()));
+    CHECK_FALSE(app->auditionStatus().playing);
+    app->stopEngine();
 }

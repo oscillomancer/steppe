@@ -329,7 +329,13 @@ instructions are in `docs/guides/installing.md`.
   engine opens every output of the device (up to 64).
 - **Recording**: armed inputs to crash-readable WAV, input monitoring (needs
   the arm), MIDI monitoring and recording with overdub, loop recording into
-  takes, punch, count-in, metronome. Armed masters print their output in real
+  takes, punch, count-in, metronome. **File audition** (`audition.play`,
+  `audition.stop`, `audition.get`, ADR-0094): a WAV, FLAC or MP3 plays once on
+  outputs 1/2, stopped or playing, outside the project (no track, master or
+  meter, never in renders or recordings), fading out over 5 ms when stopped
+  or replaced. Its first ten minutes are read and resampled before it sounds,
+  so a long file starts late; it plays from its start only; nothing plays it
+  on selection; the Browser's Play button is not built yet. Armed masters print their output in real
   time onto a lane of their own (ADR-0057): the take is bit-identical to
   `render.mix` of that master in every executor; a master's items play after
   its fader, beside the live mix, with a lane mute, and are silent in the
@@ -611,7 +617,8 @@ instructions are in `docs/guides/installing.md`.
   undo step, and the browser stays; saved FX chains as a second kind,
   loaded with `fx.chain.load`; a row of either drags onto a track's row or
   mixer strip; a folder's audio and MIDI files as a third kind, added as
-  File > Import does or dragged into a lane; no audition of files, and
+  File > Import does or dragged into a lane; the Browser does not audition
+  files yet (the engine's `audition.play` does, ADR-0094), and
   rack patches and the project's own media are not in the Browser) and the History
   as tabs; its tab,
   width and open state are saved per project. Help exports the bundled
@@ -1310,7 +1317,8 @@ Engine and hosting:
   (3+) of a wide master cannot reach the device, and an output has no gain
   of its own. A key route from one output master into another master's path
   leaves the first one early at the device (a plan warning gives the
-  samples). The metronome always plays on outputs 1/2. Native CI has not yet
+  samples). The metronome and the file audition always play on outputs 1/2.
+  Native CI has not yet
   run the multi-output engine on macOS or Windows (CoreAudio and WASAPI
   opening every output of a device).
 - Overlapping gestures on a plugin without semantic parameters share one

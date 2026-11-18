@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include "supple/engine/app.h"
+#include "audition_loader.h"
 #include "file_platform.h"
 #include "media_files.h"
 #include "module_library.h"
@@ -613,6 +614,7 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
         if (!stopped) return stopped.error();
     }
     projectGeneration_.fetch_add(1, std::memory_order_acq_rel);
+    stopAudition();  // a file audition belongs to the old project's media folder (ADR-0094)
     // A control still moving belongs to the old project's effects.
     learnCommits_.clear();
     learnState_.clear();
@@ -1463,6 +1465,7 @@ void EngineApp::haltEngine() {
     // must not come back as holds or a latch tail when a successor plays or
     // records (recording, unlike play, starts no new pass).
     autoWrite_.clear();
+    stopAudition();  // the engine stopping drops it (ADR-0094)
     sourcePreparation_.reset();
     pendingSourceKey_.clear();
     preparationError_.clear();
@@ -1534,6 +1537,7 @@ void EngineApp::emitRecordingError(const RecordingError& failure) {
 
 void EngineApp::tick() {
     mainWake_.drain();  // re-arm before inspecting producer queues
+    serviceAudition();  // a decoded file audition to the engine (ADR-0094)
     std::erase_if(jobs_,
                   [](const auto& job) { return job.finished->load(std::memory_order_acquire); });
     if (sourcePreparation_)
@@ -2543,6 +2547,86 @@ void EngineApp::startPlaying(int countInBars) {
 void EngineApp::setMetronome(const MetronomeSettings& m) {
     metronome_ = m;
     if (engine_) engine_->setMetronome(m.enabled, m.volumeDb);
+}
+
+// --- file audition (ADR-0094) ---------------------------------------------------------------
+
+Result<AuditionInfo> EngineApp::playAudition(const fs::path& given) {
+    if (!engine_)
+        return Error("engine.stopped", "the engine is not running", {}, "engine.start first");
+    const fs::path path = given.is_relative() ? mediaDir() / given : given;
+    auto inspected = audio::inspect(path);
+    if (!inspected)
+        return Error("audition.file", path.string() + ": " + inspected.error().message, "/path",
+                     "give a WAV, FLAC or MP3 file: an absolute path, or a name in the "
+                     "project's media folder");
+    stopAudition();
+    const auto cap = static_cast<std::int64_t>(
+        std::floor(std::max(0.0, options_.auditionMaxSeconds) * inspected->sampleRate));
+    AuditionInfo info;
+    info.path = path.string();
+    info.sampleRate = inspected->sampleRate;
+    info.channels = inspected->channels;
+    info.truncated = inspected->frames > cap;
+    info.seconds = static_cast<double>(std::min(inspected->frames, cap)) / inspected->sampleRate;
+    if (!auditionLoader_)
+        auditionLoader_ = std::make_unique<AuditionLoader>([this] { mainWake_.notify(); });
+    auditionRate_ = engine_->config().sampleRate;
+    auditionRequest_ = auditionLoader_->request({path, cap, auditionRate_});
+    auditionDecoding_ = true;
+    auditionInfo_ = info;
+    return info;
+}
+
+void EngineApp::stopAudition() {
+    if (auditionLoader_) auditionLoader_->cancel();
+    auditionRequest_ = 0;
+    auditionDecoding_ = false;
+    auditionInfo_ = {};
+    if (engine_ && auditionVoice_ != 0) engine_->audition(nullptr);
+    auditionVoice_ = 0;
+}
+
+void EngineApp::serviceAudition() {
+    if (!auditionLoader_) return;
+    auto done = auditionLoader_->take();
+    if (!done || !auditionDecoding_ || done->generation != auditionRequest_) return;
+    auditionDecoding_ = false;
+    if (!done->voice) {
+        auto event = json::Value::object();
+        event["path"] = auditionInfo_.path;
+        event["code"] = done->voice.error().code;
+        event["message"] = done->voice.error().message;
+        emit("audition.error", std::move(event));
+        auditionInfo_ = {};
+        return;
+    }
+    // The device it was resampled for (a restart in between drops it).
+    if (!engine_ || engine_->config().sampleRate != auditionRate_) {
+        auditionInfo_ = {};
+        return;
+    }
+    auditionVoice_ = engine_->audition(std::move(*done->voice));
+    if (auditionVoice_ == 0) auditionInfo_ = {};  // an empty file: nothing plays
+}
+
+AuditionStatus EngineApp::auditionStatus() const {
+    AuditionStatus s;
+    s.decoding = auditionDecoding_;
+    bool playing = false;
+    std::int64_t position = 0;
+    if (engine_ && auditionVoice_ != 0) {
+        const AuditionState state = engine_->auditionState();
+        // Published and not yet taken by the callback, or playing.
+        playing = state.taken < auditionVoice_ || state.serial == auditionVoice_;
+        if (state.serial == auditionVoice_) position = state.position;
+    }
+    s.playing = s.decoding || playing;
+    if (!s.playing) return s;
+    s.path = auditionInfo_.path;
+    s.seconds = auditionInfo_.seconds;
+    if (playing && auditionRate_ > 0) s.position = static_cast<double>(position) / auditionRate_;
+    return s;
 }
 
 void EngineApp::setLoop(const TransportRange& loop) {
@@ -4520,6 +4604,24 @@ void EngineApp::setupFixture(cmd::Dispatcher& d, std::string_view fixture) {
         auto st = startEngine("dummy", 256);
         assert(st && "fixture engine failed");
         (void)st;
+        return;
+    }
+    if (fixture == "audition_file") {  // + media/tone.wav: two seconds of stereo at 48 kHz
+        auto st = startEngine("dummy", 256);
+        assert(st && "fixture engine failed");
+        (void)st;
+        audio::AudioData tone;
+        tone.sampleRate = 48000;
+        tone.channels.assign(2, std::vector<float>(96000));
+        for (std::size_t i = 0; i < tone.frames(); ++i)
+            tone.channels[0][i] = tone.channels[1][i] =
+                static_cast<float>(0.25 * std::sin(2 * std::numbers::pi * 440.0 *
+                                                   static_cast<double>(i) / tone.sampleRate));
+        std::error_code ec;
+        fs::create_directories(mediaDir(), ec);
+        const Status written = audio::writeWav(mediaDir() / "tone.wav", tone);
+        assert(written && "fixture audio failed");
+        (void)written;
         return;
     }
     if (fixture == "job_running") {

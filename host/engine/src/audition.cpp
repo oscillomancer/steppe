@@ -27,6 +27,7 @@ AuditionState Engine::auditionState() const {
     s.serial = auditionPlaying_.load(std::memory_order_acquire);
     s.position = auditionPosition_.load(std::memory_order_relaxed);
     s.playing = s.serial != 0;
+    s.taken = auditionTaken_.load(std::memory_order_acquire);
     return s;
 }
 
@@ -47,6 +48,7 @@ void Engine::resetAuditions() {
     auditionFadeLeft_ = 0;
     auditionKeep_.store(0, std::memory_order_release);
     auditionPlaying_.store(0, std::memory_order_release);
+    auditionTaken_.store(0, std::memory_order_release);
     auditionPosition_.store(0, std::memory_order_relaxed);
     auditionOwned_.clear();
 }
@@ -116,6 +118,7 @@ void Engine::mixAudition(float* const* out, std::uint32_t frames) SUPPLE_RT {
     if (auditionPlay_.voice) keep = std::min(keep, auditionPlay_.serial);
     if (auditionFade_.voice) keep = std::min(keep, auditionFade_.serial);
     auditionKeep_.store(keep, std::memory_order_release);
+    auditionTaken_.store(auditionSeen_ ? auditionSeen_->serial : 0, std::memory_order_release);
 }
 
 }  // namespace supple::engine

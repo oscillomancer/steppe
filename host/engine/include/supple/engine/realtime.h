@@ -162,11 +162,13 @@ struct AuditionVoice {
     std::size_t frames() const { return left.size(); }
 };
 // What the callback plays (Engine::auditionState): the voice's serial (0:
-// none) and its frame.
+// none) and its frame, and the serial of the last request it took (a voice
+// published and not yet taken is newer).
 struct AuditionState {
     std::uint64_t serial = 0;
     bool playing = false;
     std::int64_t position = 0;
+    std::uint64_t taken = 0;
 };
 
 // A short MIDI message from a device input during one callback (ADR-0016).
@@ -861,7 +863,7 @@ class Engine {
     std::deque<std::unique_ptr<AuditionRequest>> auditionOwned_;  // main thread
     std::uint64_t auditionSerial_ = 0;                            // main thread
     std::atomic<const AuditionRequest*> auditionNext_{nullptr};
-    std::atomic<std::uint64_t> auditionKeep_{0}, auditionPlaying_{0};
+    std::atomic<std::uint64_t> auditionKeep_{0}, auditionPlaying_{0}, auditionTaken_{0};
     std::atomic<std::int64_t> auditionPosition_{0};
     // Audio thread: the request last taken, the voice playing and the one
     // fading out (a newer request cuts an older fade).
