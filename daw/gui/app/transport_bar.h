@@ -29,6 +29,16 @@ namespace supple::gui {
 
 class TransportButton;
 
+// The transport bar's engine readout (gui.md §4.1), in words. `format` is what
+// the device runs at ("48 kHz · 256 samples"; empty while the engine is
+// stopped). `problems` is empty while all is well: otherwise "Audio stopped",
+// or what has gone wrong since the engine started ("3 dropouts · 1 plug-in
+// error"). A count of none is not shown.
+struct EngineReadout {
+    std::string format, problems;
+};
+EngineReadout engineReadout(const engine::EngineStatus& status);
+
 class TransportBar {
   public:
     TransportBar(engine::EngineApp& app, AppActions& actions, cmd::Dispatcher& dispatcher,
@@ -71,6 +81,7 @@ class TransportBar {
     ui::Label* position_ = nullptr;
     ui::Label* time_ = nullptr;
     ui::Label* engine_ = nullptr;
+    ui::Label* problems_ = nullptr;  // the readout's warnings; empty while all is well
     ui::Knob* rate_ = nullptr;
     ui::Label* rateValue_ = nullptr;
     ui::Node* rateReadout_ = nullptr;

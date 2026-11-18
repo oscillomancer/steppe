@@ -49,6 +49,24 @@ def main():
         assert failed.returncode != 0 and "screenset.unknown" in failed.stderr, failed.stderr
         run_app(app, project, 'ui.screenset.delete {"name": "mixing"}')
         assert "mixing" not in json.loads(ui_file.read_text(encoding="utf-8"))["screensets"]
+        # The side panel's state survives a run, the Browser tab's kind with it.
+        # The file is written only when the state changed, so each run also
+        # toggles the mixer.
+        ui = json.loads(ui_file.read_text(encoding="utf-8"))
+        ui["panels"]["side"] = {"visible": True, "tab": "browser", "width": 320.0, "browser": "files"}
+        ui_file.write_text(json.dumps(ui))
+        mixer_was = ui["panels"]["mixer"]
+        run_app(app, project, "ui.mixer")
+        panels = json.loads(ui_file.read_text(encoding="utf-8"))["panels"]
+        assert panels["mixer"] is not mixer_was, panels
+        assert panels["side"] == {"visible": True, "tab": "browser", "width": 320.0, "browser": "files"}, panels
+        # A kind the Browser does not have is ignored: it opens on its first.
+        ui["panels"]["side"]["browser"] = "nope"
+        ui_file.write_text(json.dumps(ui))
+        run_app(app, project, "ui.mixer")
+        panels = json.loads(ui_file.read_text(encoding="utf-8"))["panels"]
+        assert panels["mixer"] is not mixer_was, panels
+        assert panels["side"]["browser"] == "plugins" and panels["side"]["tab"] == "browser", panels
     print("screensets: ok")
 
 

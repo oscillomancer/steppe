@@ -47,6 +47,7 @@
 #include "generate.h"
 #include "help_actions.h"
 #include "history_panel.h"
+#include "inspector.h"
 #include "learn_dialog.h"
 #include "meter_feed.h"
 #include "midi_editor.h"
@@ -59,6 +60,8 @@
 #include "routing_matrix.h"
 #include "screensets.h"
 #include "shell.h"
+#include "side_browser.h"
+#include "side_panel.h"
 #include "supple/base/files.h"
 #include "supple/cmd/bus.h"
 #include "supple/engine/app.h"
@@ -423,8 +426,11 @@ int main(int argc, char** argv) {
     gui::AppActions appActions(registry, dispatcher, **app, uiState,
                                actions::Keymap::defaultFile(product::kSlug),
                                gui::ControlMap::defaultFile(product::kSlug));
-    appActions.onError = [](const std::string& message) {
+    // An action that fails says so in the status line (gui.md §4.1): stderr
+    // is not seen from Finder or a desktop entry. It is still written there.
+    appActions.onError = [&shell](const std::string& message) {
         std::fprintf(stderr, "%s\n", message.c_str());
+        shell.setStatus(message);
     };
     // Before the chrome: the toolbar and menus list the actions it adds.
     gui::RackWindow racks(rackPanel, appActions, dispatcher, **app, uiState);
@@ -487,6 +493,12 @@ int main(int argc, char** argv) {
         shell.openEnvelopeMenu(id, anchor);
     };
     gui::HistoryPanel history(root, appActions, dispatcher, **app);
+    // The side panel (gui.md §4.14): the inspector and the history as tabs at
+    // the window's right edge, shown only when asked.
+    gui::SidePanel side(root);
+    gui::Inspector inspector(root, **app, uiState, dispatcher, appActions);
+    history.host = [&side] { side.toggle("history"); };
+    appActions.addUi("ui.inspector", "View: inspector", [&side] { side.toggle("inspector"); });
     gui::FileActions fileActions(root, appActions, dispatcher, **app, uiState, (*window)->sdl(),
                                  [&](std::function<void()> f) { loop.post(std::move(f)); });
     fileActions.registerQuit([&] { quit = true; }, !o.offscreen && o.frames <= 0);
@@ -516,6 +528,25 @@ int main(int argc, char** argv) {
             },
             [&](model::Id rack) { racks.open(rack); }},
         gui::Favourites::defaultFile(product::kSlug));
+    // A plugin dragged out of the browser lands on the strip or the track
+    // row under the pointer (gui.md §4.14).
+    gui::PluginDrag pluginDrag(root, dispatcher);
+    pluginDrag.addTargets([&mixer](ui::Point p) { return mixer.trackTargetAt(p); });
+    pluginDrag.addTargets([&shell](ui::Point p) { return shell.trackTargetAt(p); });
+    gui::SideBrowser sideBrowser(root, **app, dispatcher, uiState, fxWindow, pluginDrag);
+    // A file from the browser: Add is File > Import's own path; a drag lands
+    // as a file dropped from outside the app does.
+    sideBrowser.files.add = [&fileActions](const std::filesystem::path& file) {
+        return fileActions.import({file});
+    };
+    sideBrowser.files.where = [&shell](ui::Point p) { return shell.fileTargetAt(p); };
+    sideBrowser.files.drop = [&shell](const std::filesystem::path& file, ui::Point at) {
+        return shell.arrange()->gestures().drop({file}, at);
+    };
+    appActions.addUi("ui.browser", "View: browser", [&] {
+        side.toggle("browser");
+        if (side.showing("browser")) sideBrowser.focusSearch();
+    });
     // A strip's rack slot opens the rack window on it.
     mixer.openRack = [&](const model::Id& rack) { racks.open(rack); };
     // MIDI learn (ADR-0027): the devices' messages reach the actions bound to
@@ -595,7 +626,13 @@ int main(int argc, char** argv) {
         center.add(shell.build(root, appActions));
         center.add(midiEditor.build());
         center.add(mixer.build());
-        body.add(history.build());
+        side.addTab("inspector", "Inspector", inspector.build(),
+                    [&inspector](bool on) { inspector.setVisible(on); });
+        side.addTab("browser", "Browser", sideBrowser.build(),
+                    [&sideBrowser](bool on) { sideBrowser.setVisible(on); });
+        side.addTab("history", "History", history.build(),
+                    [&history](bool on) { history.setVisible(on); });
+        body.add(side.build());
         root.setContent(std::move(frame));
     }
     // Arrange editing gestures (P5.6): one transaction per gesture; a later
@@ -984,12 +1021,25 @@ int main(int argc, char** argv) {
         json::Value v = json::Value::object();
         v["mixer"] = mixer.visible();
         v["history"] = history.visible();
+        v["side"] = side.save();
+        v["side"]["browser"] = sideBrowser.kind();  // the Browser tab's kind
         return v;
     };
     auto panelsLoad = [&](const json::Value& v) {
         if (const json::Value* m = v.find("mixer"); m && m->isBool()) mixer.setVisible(m->asBool());
-        if (const json::Value* h = v.find("history"); h && h->isBool())
-            history.setVisible(h->asBool());
+        if (const json::Value* state = v.find("side")) {
+            // The kind first, so that the tab reads one list when it shows.
+            if (const json::Value* kind = state->isObject() ? state->find("browser") : nullptr;
+                kind && kind->isString())
+                sideBrowser.show(kind->asString());
+            side.load(*state);
+        } else if (const json::Value* h = v.find("history"); h && h->isBool()) {
+            // A file from before the side panel: the history dock was its own.
+            if (h->asBool())
+                side.show("history");
+            else
+                side.hide();
+        }
     };
     uiFile.add("panels", panelsSave, panelsLoad);
     uiFile.add(
@@ -1168,6 +1218,7 @@ int main(int argc, char** argv) {
             racks.tick();
             mixer.sync();
             history.sync();
+            inspector.sync();
             const auto now = Clock::now();
             const auto activity = (*app)->meterActivitySequence();
             // Observe before reading; arm/recheck after the visible meters rest.
@@ -1355,6 +1406,7 @@ int main(int argc, char** argv) {
         racks.tick();
         mixer.sync();
         history.sync();
+        inspector.sync();
         meterFeed.poll();
         root.damageAll();
         root.frame(false);
@@ -1369,7 +1421,7 @@ int main(int argc, char** argv) {
             }
         }
         (*window)->forceCurrent();
-        auto written = gui::writePng(o.snapshot, root.readBack());
+        auto written = gui::writePng(o.snapshot, gui::opaque(root.readBack()));
         if (!written) {
             std::fprintf(stderr, "%s\n", written.error().toString().c_str());
             return 1;

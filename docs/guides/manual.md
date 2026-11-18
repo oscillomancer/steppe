@@ -70,6 +70,20 @@ Audio device dialog then opens and says why. Choose another device, or
 what is running: the backend, rate, buffer size, device period and output
 latency.
 
+The right end of the transport bar shows what the device is running at, for
+example **48 kHz · 256 samples**. It stays quiet while all is well. If
+something goes wrong, an amber note appears beside it and stays until the
+audio engine restarts:
+
+- **Audio stopped**: no device is running. Open **Edit > Audio device…**.
+- **dropouts**: the device asked for audio and did not get it in time. You
+  heard a click or a gap. A larger buffer size helps.
+- **render gaps**: Steppe had not finished rendering a stretch of the
+  project when it was due. A larger buffer size or fewer heavy plug-ins
+  helps.
+- **plug-in errors**: a plug-in refused to start. Its track plays without
+  it until it starts.
+
 ### Outputs and several masters
 
 Steppe opens every output of the device (up to 64; with JACK, one per
@@ -174,7 +188,8 @@ hand-edited file uses another factor, loading reports the field and allowed valu
 
 A project file keeps every branch, not just the one you are on: an agent's
 branch you have not merged yet is still there after quitting and reopening,
-with each of its steps (History panel), and it can be undone step by step or
+with each of its steps (**View > History and command log**, a tab of the
+side panel), and it can be undone step by step or
 merged into main as before. The file opens on the branch that was current when
 it was saved. Main's own undo history is not kept: after reopening, undo on
 main starts from the saved state. (Agents can keep it with
@@ -317,6 +332,79 @@ dialog says so; your choice is kept for when the device has it. It is
 silent while the transport is stopped.
 
 Real devices' timing has not been measured on every system yet.
+
+## Tracks and items
+
+### Colours and names
+
+Every new channel and buss gets a colour: the one the fewest of your tracks
+use, starting with red. The colour marks the track's left edge, its mixer
+strip and every item on the track, so you can find a part in the arrangement
+by its colour. To change it, right-click the track in the track list or the
+mixer and choose **Color…**, then one of eight colours or **None**. A track
+without a colour has blue items. Projects made before colours were given
+automatically keep their tracks as they were.
+
+An item shows its name on a bar across its top. The name is its take's. An
+item made from an audio file that has no name of its own shows the file's
+name. Where an item fades in or out, the faded part is shaded and the fade's
+curve is drawn over it. A selected item is brighter and has an outline in the
+accent colour.
+
+### The side panel
+
+A panel at the right of the window holds the **Inspector**, the **Browser**
+and the **History**. It stays closed until you ask for it:
+
+- **View > Inspector**, or the **I** key, opens it on the Inspector. The
+  Inspector names what is selected: an item with its track, a track with its
+  kind, or how many of each. Press **I** again to close the panel.
+  With one item selected it also shows the item's settings, and you can
+  change them there: its **Name**, where it **starts** (bar.beat, for
+  example `3.2`), its **length** in beats, whether it **follows** the beats
+  or the clock when the tempo changes, its **gain**, its **fades** in
+  seconds, and **Mute**, **Loop** and **Lock**. Type a value and press
+  Enter, or click elsewhere; Escape leaves it as it was. Each change is one
+  step for Undo. A locked item cannot be changed until you turn Lock off.
+  An audio item also has **Speed** (`0.5` is half speed), **Pitch** in
+  semitones and **Keep pitch**, which holds the pitch when the speed
+  changes. An item with several takes lists them; click one to hear it.
+  With several items selected, the Inspector shows the settings they can
+  share. A field is empty and says "mixed" when they differ; what you type
+  goes to all of them as one step for Undo.
+  With a track selected it shows the track's **Name**, **Colour** (click a
+  swatch, or the empty square for none; from the keyboard, Tab to the row,
+  Left and Right to move, Enter to pick), **Volume** and **Pan** (`-30` is
+  30% left), and **Notes**, a few lines of your own about the track: Enter
+  starts a new line, and the notes are kept when you click elsewhere or
+  press Ctrl+Enter. With several tracks selected, a change goes to all of
+  them.
+- **View > Browser**, or the **B** key, opens it on the Browser: the list of
+  your plug-ins, with the stock ones and your favourites first. Type to
+  search by name, maker or kind ("reverb"). Select one or more tracks, then
+  press Enter, double-click a plug-in or click **Add** to put it on them.
+  The Browser stays open, so you can add another. You can also drag a
+  plug-in from the list onto a track, in the arrangement or on its mixer
+  strip; the track it will land on is outlined. **Favourite** keeps a
+  plug-in at the top; **Rescan** looks for newly installed ones.
+  **Chains**, beside **Plug-ins** at the top of the Browser, lists the FX
+  chains you saved with **Save chain…** in a track's FX window. Add one or
+  drag it onto a track the same way; it is added after the plug-ins the
+  track already has.
+  **Files** lists the audio and MIDI files of a folder, starting in your
+  project's folder. Double-click a folder to go into it and click **Up** to
+  go back. Double-click a file, or select it and click **Add**, to put it
+  on the selected track at the playhead (on a new track when none is
+  selected); or drag it to the spot in the arrangement where you want it.
+  Drop it under the last track to make a new one.
+- **View > History and command log**, or **Ctrl+H**, opens it on the History:
+  the versions you can step back to, the branches, and every command with who
+  ran it.
+
+Click a tab to switch, **Close** to put the panel away, and drag the panel's
+left edge to make it wider or narrower. Steppe remembers per project whether
+the panel was open, which tab it showed, how wide it was and which kind the
+Browser showed.
 
 ## Rendering
 

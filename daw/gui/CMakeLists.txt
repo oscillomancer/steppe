@@ -82,7 +82,7 @@ target_include_directories(gui-persistence PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ap
 # The app's pieces (shell, generator, actions UI, chrome), shared with tests.
 add_library(gui-app STATIC app/shell.cpp app/generate.cpp app/app_actions.cpp app/actions_list.cpp app/chrome.cpp
   app/plugin_windows.cpp app/floating_panel.cpp app/screensets.cpp app/file_actions.cpp app/midi_editor.cpp app/routing_matrix.cpp app/hardware_audio_matrix.cpp app/strip_learn.cpp app/pan_menu.cpp app/mixer.cpp
-  app/fx_params.cpp app/plugin_browser.cpp app/fx_window.cpp app/render_dialog.cpp app/history_panel.cpp app/transport_bar.cpp app/plugin_scales.cpp
+  app/fx_params.cpp app/plugin_browser.cpp app/fx_window.cpp app/render_dialog.cpp app/history_panel.cpp app/side_panel.cpp app/inspector.cpp app/plugin_drag.cpp app/side_browser.cpp app/transport_bar.cpp app/plugin_scales.cpp
   app/midi_event_list.cpp app/appearance.cpp app/track_menu.cpp app/mouse_dialog.cpp app/selection_edit.cpp app/preferences.cpp app/audio_device.cpp app/timecode_dialog.cpp app/sync_dialog.cpp
   app/control_map.cpp app/learn_dialog.cpp app/help_actions.cpp app/help_support.cpp
   app/rack_controls.cpp app/rack_device.cpp app/rack_engine.cpp app/rack_face.cpp app/rack_labels.cpp app/rack_plugin_params.cpp app/rack_scene.cpp app/rack_space.cpp
@@ -127,7 +127,7 @@ if(SUPPLE_BUILD_TESTS)
   if(WIN32)
     link_libraries(ws2_32)
   endif()
-  supple_add_tests(gui-platform SOURCES tests/test_platform.cpp DEPS SDL3::SDL3 LABELS gui tsan-skip)
+  supple_add_tests(gui-platform SOURCES tests/test_platform.cpp DEPS SDL3::SDL3 LABELS gui)
   target_compile_definitions(gui-platform.tests PRIVATE
     SUPPLE_GUI_FONTS_DIR="${PROJECT_SOURCE_DIR}/assets/fonts"
     SUPPLE_GUI_SMOKE_PNG="${CMAKE_CURRENT_BINARY_DIR}/platform-smoke.png")
@@ -146,7 +146,7 @@ if(SUPPLE_BUILD_TESTS)
   endif()
   supple_add_tests(gui-service-watcher SOURCES tests/test_service_watcher.cpp LABELS gui)
   supple_add_tests(gui-peaks SOURCES tests/test_peaks.cpp LABELS gui)
-  supple_add_tests(gui-views SOURCES tests/test_views.cpp DEPS gui-app LABELS gui tsan-skip)
+  supple_add_tests(gui-views SOURCES tests/test_views.cpp DEPS gui-app LABELS gui)
   target_compile_definitions(gui-views.tests PRIVATE
     SUPPLE_GUI_FONTS_DIR="${PROJECT_SOURCE_DIR}/assets/fonts"
     SUPPLE_GUI_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/golden")
@@ -157,8 +157,8 @@ if(SUPPLE_BUILD_TESTS)
   # the slower CI runners.
   set(gui_app_sources tests/test_app.cpp tests/test_help.cpp tests/test_plugin_windows.cpp tests/test_gestures.cpp
                       tests/test_midi_editor.cpp tests/test_fx_render.cpp tests/test_ruler.cpp tests/test_tcp_sends.cpp
-                      tests/test_mixer.cpp tests/test_racks.cpp tests/test_sync.cpp)
-  supple_add_tests(gui-app SOURCES ${gui_app_sources} DEPS supple::script-compiler LABELS gui tsan-skip SPLIT)
+                      tests/test_mixer.cpp tests/test_racks.cpp tests/test_sync.cpp tests/test_side_panel.cpp)
+  supple_add_tests(gui-app SOURCES ${gui_app_sources} DEPS supple::script-compiler LABELS gui SPLIT)
   target_compile_definitions(gui-app.tests PRIVATE SUPPLE_GUI_FONTS_DIR="${PROJECT_SOURCE_DIR}/assets/fonts"
                              SUPPLE_CLAP_DIR="${CMAKE_BINARY_DIR}/plugins/clap"
                              FIXTURE_CLAP_PATH="$<TARGET_FILE:clap-host-fixtures>"
@@ -179,7 +179,7 @@ if(SUPPLE_BUILD_TESTS)
     get_filename_component(stem ${src} NAME_WE)
     set_tests_properties(gui-app.tests.${stem} PROPERTIES ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
   endforeach()
-  supple_add_tests(gui-ui SOURCES tests/test_ui.cpp DEPS SDL3::SDL3 LABELS gui tsan-skip)
+  supple_add_tests(gui-ui SOURCES tests/test_ui.cpp DEPS SDL3::SDL3 LABELS gui)
   target_compile_definitions(gui-ui.tests PRIVATE
     SUPPLE_GUI_FONTS_DIR="${PROJECT_SOURCE_DIR}/assets/fonts"
     SUPPLE_GUI_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/golden")
@@ -188,7 +188,7 @@ if(SUPPLE_BUILD_TESTS)
   add_test(NAME gui.app-offscreen
            COMMAND ${PRODUCT_SLUG} --offscreen --no-socket --frames 3 --bench
                    --snapshot ${CMAKE_CURRENT_BINARY_DIR}/app-offscreen.png)
-  set_tests_properties(gui.app-offscreen PROPERTIES LABELS "gui;tsan-skip"
+  set_tests_properties(gui.app-offscreen PROPERTIES LABELS "gui"
                        ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
   # --theme and --action (the identity mockups use both): the light theme with
   # the mixer and the history open; an unknown action fails the run.
@@ -196,32 +196,44 @@ if(SUPPLE_BUILD_TESTS)
            COMMAND ${PRODUCT_SLUG} --offscreen --no-socket --frames 2 --audio none --theme light
                    --action ui.mixer --action ui.history
                    --snapshot ${CMAKE_CURRENT_BINARY_DIR}/app-theme-actions.png)
-  set_tests_properties(gui.app-theme-actions PROPERTIES LABELS "gui;tsan-skip"
+  set_tests_properties(gui.app-theme-actions PROPERTIES LABELS "gui"
                        ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
   add_test(NAME gui.app-unknown-action
            COMMAND ${PRODUCT_SLUG} --offscreen --no-socket --frames 2 --audio none
                    --action ui.no-such-action)
-  set_tests_properties(gui.app-unknown-action PROPERTIES LABELS "gui;tsan-skip" WILL_FAIL TRUE
+  set_tests_properties(gui.app-unknown-action PROPERTIES LABELS "gui" WILL_FAIL TRUE
                        ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
   # Started from an unwritable directory (as Finder does), nothing is left there.
   add_test(NAME gui.launch-dir
            COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/integration/gui_launch_dir.py
                    $<TARGET_FILE:${PRODUCT_SLUG}>)
-  set_tests_properties(gui.launch-dir PROPERTIES LABELS "gui;tsan-skip"
+  set_tests_properties(gui.launch-dir PROPERTIES LABELS "gui"
                        ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
   # Named screensets saved into the UI file and recalled in a later run.
   add_test(NAME gui.screensets
            COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/integration/gui_screensets.py
                    $<TARGET_FILE:${PRODUCT_SLUG}> $<TARGET_FILE:${PRODUCT_SLUG}-engine>)
-  set_tests_properties(gui.screensets PROPERTIES LABELS "gui;tsan-skip"
+  set_tests_properties(gui.screensets PROPERTIES LABELS "gui"
                        ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
   # An agent drives the running GUI through its control socket and the MCP proxy.
   add_test(NAME gui.agent-over-socket
            COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/integration/gui_agent.py
                    $<TARGET_FILE:${PRODUCT_SLUG}> $<TARGET_FILE:${PRODUCT_SLUG}-mcp>
                    ${CMAKE_CURRENT_BINARY_DIR}/agent-final.png)
-  set_tests_properties(gui.agent-over-socket PROPERTIES LABELS "gui;tsan-skip"
+  set_tests_properties(gui.agent-over-socket PROPERTIES LABELS "gui"
                        ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
+  # Every test here renders with Mesa's software renderer, on the calling
+  # thread and with no shader cache thread, so that the pictures do not
+  # depend on the machine's GPU driver and ThreadSanitizer sees no driver
+  # threads (the driver is not built with it; their reports would say
+  # nothing about the app). SDL's libdbus is suppressed for the same reason.
+  # The variables mean nothing on macOS and Windows.
+  get_property(gui_tests DIRECTORY PROPERTY TESTS)
+  foreach(test ${gui_tests})
+    set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT
+                 "LIBGL_ALWAYS_SOFTWARE=1" "LP_NUM_THREADS=0" "MESA_SHADER_CACHE_DISABLE=true"
+                 "TSAN_OPTIONS=halt_on_error=1:suppressions=${PROJECT_SOURCE_DIR}/tools/ci/tsan-gui.supp")
+  endforeach()
 endif()
 
 # Imported SDL targets are directory-scoped; stage runtime artifacts here.

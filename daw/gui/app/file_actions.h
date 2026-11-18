@@ -73,7 +73,9 @@ class FileActions {
     // For tests: what a dialog would have returned.
     void openPath(const std::filesystem::path& path);
     void saveAs(const std::filesystem::path& path);  // in projectFolderPath()
-    void import(const std::vector<std::filesystem::path>& files);
+    // One file: onto the selected track (or a new one) at the playhead.
+    // Several: a new track each. One undo step; an error is shown and returned.
+    Status import(const std::vector<std::filesystem::path>& files);
     // Templates — of the project (File > Save template… / Load template…) or
     // of one strip (Track > …, the first selected track): a name prompt, and a
     // list where a click starts a new project from a template, or adds a

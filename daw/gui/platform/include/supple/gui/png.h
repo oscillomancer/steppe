@@ -15,5 +15,9 @@ namespace supple::gui {
 
 std::vector<std::uint8_t> encodePng(const Image& image);
 Status writePng(const std::filesystem::path& path, const Image& image);
+// The image as a window shows it. A framebuffer read back keeps the alpha
+// that blending left in it, which a display ignores and an image viewer does
+// not: translucent layers would look paler in the file than on screen.
+Image opaque(Image image);
 
 }  // namespace supple::gui

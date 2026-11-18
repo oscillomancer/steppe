@@ -348,6 +348,9 @@ TcpPanel::Row::Row(TcpPanel& panel, std::size_t slot)
         panel_.cb_.envelopes(*track_, env_->bounds());
     });
     out_ = &emplace<OutButton>(panel_, id + ".out", [this] { return track_; });
+    // Secondary buttons are text alone until the pointer is on them; the
+    // input stays a boxed field, since it shows a value.
+    fx_->quiet = addFx_->quiet = env_->quiet = out_->quiet = true;
 }
 
 TcpPanel::Row::~Row() = default;
@@ -391,6 +394,7 @@ void TcpPanel::Row::refresh(const model::Session& session) {
     monitor_->setMode(tr->record.monitor == model::Monitor::Off  ? ui::MonitorButton::Mode::Off
                       : tr->record.monitor == model::Monitor::On ? ui::MonitorButton::Mode::On
                                                                  : ui::MonitorButton::Mode::Auto);
+    fx_->setEmphasis(!tr->chain.empty() || !tr->inputChain.empty());
     fader_->setValue(tr->volumeDb);
     // A master's pan is a balance; a channel's or buss's follows its mode.
     const bool master = tr->type == model::StripType::Master;
@@ -492,19 +496,23 @@ void TcpPanel::Row::arrange(const ui::Canvas& canvas, const ui::Rect& r) {
         return;
     }
     meter_->visible = fx_->visible = addFx_->visible = true;
+    // The meter stands at the row's right edge, wide enough to read at a
+    // glance; the controls end a gap before it.
+    meter_->arrange(canvas, {right - TcpRowGeometry::kMeterWidth - 2, r.y + 3,
+                             TcpRowGeometry::kMeterWidth, std::max(4.0f, r.h - 6)});
+    const float edge = right - TcpRowGeometry::kMeterWidth + 3;
     // "fx" and "+" end the name line, so every row has them at any height.
     const float fxWidth = 22.0f, addWidth = 16.0f;
-    addFx_->arrange(canvas, {right - 10 - addWidth, r.y + TcpRowGeometry::kFxTop, addWidth,
+    addFx_->arrange(canvas, {edge - 10 - addWidth, r.y + TcpRowGeometry::kFxTop, addWidth,
                              TcpRowGeometry::kFxHeight});
-    fx_->arrange(canvas, {right - 12 - addWidth - fxWidth, r.y + TcpRowGeometry::kFxTop, fxWidth,
+    fx_->arrange(canvas, {edge - 12 - addWidth - fxWidth, r.y + TcpRowGeometry::kFxTop, fxWidth,
                           TcpRowGeometry::kFxHeight});
     const float mark = frozen_ ? 14.0f : 0.0f;
     nameRect_ = {x + 26 + indent + mark, r.y + TcpRowGeometry::kNameTop,
-                 std::max(20.0f, right - x - 42 - fxWidth - addWidth - indent - mark),
+                 std::max(20.0f, edge - x - 42 - fxWidth - addWidth - indent - mark),
                  TcpRowGeometry::kNameHeight};
     name_->arrange(canvas, nameRect_);
     rename_->arrange(canvas, {nameRect_.x, nameRect_.y + 1, nameRect_.w, 17});
-    meter_->arrange(canvas, {right - 5, r.y + 3, 4, std::max(4.0f, r.h - 6)});
 
     const bool controls = r.h >= 40;  // room for the button row
     const bool big = r.h >= 58;       // room for fader and pan
@@ -529,7 +537,7 @@ void TcpPanel::Row::arrange(const ui::Canvas& canvas, const ui::Rect& r) {
         n->arrange(canvas, {tx, ty - 1, 16, 16});
         tx += 18;
     }
-    const float outX = right - 38, envX = outX - 30;
+    const float outX = edge - 38, envX = outX - 30;
     if (input_->visible) {
         // The input names the device's ports; it takes the room up to "env"
         // and the picker's menu shows them whole.
@@ -542,8 +550,8 @@ void TcpPanel::Row::arrange(const ui::Canvas& canvas, const ui::Rect& r) {
     if (big) {
         polarity_->arrange(canvas, {x + 6, r.y + 42, 18, 14});
         mono_->arrange(canvas, {x + 26, r.y + 42, 36, 14});
-        fader_->arrange(canvas, {x + 66, r.y + 42, std::max(30.0f, right - x - 124), 14});
-        pan_->arrange(canvas, {right - 52, r.y + 42, 42, 14});
+        fader_->arrange(canvas, {x + 66, r.y + 42, std::max(30.0f, edge - x - 124), 14});
+        pan_->arrange(canvas, {edge - 52, r.y + 42, 42, 14});
     }
 }
 
@@ -554,6 +562,10 @@ void TcpPanel::Row::paint(ui::Canvas& c) {
     if (!tr) return;
     const ui::Rect r = bounds();
     c.fillRect(r, t.color("panel"));
+    // Selection (§4.2): the row is highlighted under its marks, and outlined
+    // over them (below).
+    const bool selected = panel_.cb_.selected && panel_.cb_.selected(*track_);
+    if (selected) c.fillRect(r, t.color("selection").withAlpha(0.55f));
     c.fillRect({r.x, r.bottom() - 1, r.w, 1}, t.color("rule").withAlpha(0.5f));
     // The track's colour (organizing): a stripe down the row's left edge.
     if (const auto colour = t.trackColor(tr->color)) c.fillRect({r.x, r.y, 4, r.h - 1}, *colour);
@@ -587,11 +599,7 @@ void TcpPanel::Row::paint(ui::Canvas& c) {
     // The row being dragged to a new place.
     if (panel_.reorder_ && panel_.reorder_->moved && panel_.reorder_->track == track_)
         c.fillRect(r, t.color("focus").withAlpha(0.12f));
-    // Selection (§4.2): the row is highlighted and outlined.
-    if (panel_.cb_.selected && panel_.cb_.selected(*track_)) {
-        c.fillRect(r, t.color("selection").withAlpha(0.55f));
-        c.strokeRect({r.x + 0.5f, r.y + 0.5f, r.w - 1, r.h - 1}, t.color("focus"), 1.0f);
-    }
+    if (selected) c.strokeRect({r.x + 0.5f, r.y + 0.5f, r.w - 1, r.h - 1}, t.color("focus"), 1.0f);
 }
 
 bool TcpPanel::Row::onPointer(const ui::PointerEvent& e) {

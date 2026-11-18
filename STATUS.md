@@ -572,10 +572,33 @@ instructions are in `docs/guides/installing.md`.
   the plugin browser, routing matrix, MIDI editor, render dialog (the
   project's render settings with dropdowns, foldable sections, presets, a
   user default, up to four outputs, delivery checks in its results, and
-  File → Mix as a job), history dock with
+  File → Mix as a job), history (a tab of the side panel) with
   branches, actions list with key bindings and macros, editable
   menus, toolbar and mouse modifiers, screensets, two palettes in dark and
-  light, preferences, and tap tempo in the tempo form. Help exports the bundled
+  light, preferences, and tap tempo in the tempo form. Items in the arrange
+  view take their track's colour and carry their name on a bar across the
+  top; an unnamed audio item shows its file's name. A new channel or buss
+  gets the palette colour the fewest tracks carry (`track.add`, for agents
+  and the GUI alike). Track rows and mixer
+  strips are quiet at rest (mute, solo, polarity and mono show their colour
+  only when on) and each row has a meter 8 units wide. The transport bar's
+  engine readout is in words ("48 kHz · 256 samples") and warns in colour
+  only of a stopped engine, dropouts, render gaps or plug-in errors; the
+  toolbar's buttons are quiet at rest. A side panel at the right edge,
+  closed until asked, holds the Inspector (what is selected; for one item
+  its name, start, length, timebase, gain, fades, mute, loop and lock as
+  fields, each one `item.set`, an audio take's speed, pitch and keep-pitch
+  through `take.set`, and the choice of the take heard; for several items
+  the fields they share, edited as one undo step; for tracks their name,
+  colour, volume, pan and notes through `track.set`), the Browser (the plugin
+  browser as a tab: a chosen plugin goes on every selected track as one
+  undo step, and the browser stays; saved FX chains as a second kind,
+  loaded with `fx.chain.load`; a row of either drags onto a track's row or
+  mixer strip; a folder's audio and MIDI files as a third kind, added as
+  File > Import does or dragged into a lane; no audition of files, and
+  rack patches and the project's own media are not in the Browser) and the History
+  as tabs; its tab,
+  width and open state are saved per project. Help exports the bundled
   skill as a copy or link, shows this copy's MCP commands and JSON, and registers
   its running-app server with Claude Code, Codex or Hermes on a background
   worker, linking the skill into that agent's user skills folder unless one of

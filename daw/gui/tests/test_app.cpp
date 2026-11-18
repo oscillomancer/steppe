@@ -1056,12 +1056,12 @@ TEST_CASE(
             writeFileAtomic(a.dir / name, std::span<const std::uint8_t>(*audio::encodeWav(tone))));
     const std::string track = a.app->head().tracks.begin()[1].id.str();  // the channel Ctrl+T added
     a.ui.selectedTracks = {track};
-    files.import({a.dir / "a.wav"});
+    REQUIRE(files.import({a.dir / "a.wav"}));
     std::size_t onTrack = 0;
     for (const auto& e : a.app->head().items) onTrack += e.value->track.str() == track;
     CHECK(onTrack == 1);
     const std::size_t tracks = a.tracks();
-    files.import({a.dir / "b.wav", a.dir / "c.wav"});
+    REQUIRE(files.import({a.dir / "b.wav", a.dir / "c.wav"}));
     CHECK(a.tracks() == tracks + 2);
     a.key("Ctrl+Z");
     CHECK(a.tracks() == tracks);  // both imports undone together
@@ -1686,6 +1686,53 @@ TEST_CASE("tap tempo fills the tempo form and applies only on Set or Enter") {
     }
     CHECK(a.app->head().timeMap->bpmAt(0) == doctest::Approx(120.2));
     CHECK(a.root->find("tempo.form") == nullptr);
+}
+
+TEST_CASE("transport: the engine readout is in words and warns only of what happened") {
+    engine::EngineStatus st;
+    // Stopped: one warning, no format.
+    CHECK(gui::engineReadout(st).problems == "Audio stopped");
+    CHECK(gui::engineReadout(st).format.empty());
+    // Running and well: the rate and the device's period, nothing else.
+    st.running = true;
+    st.sampleRate = 48000;
+    st.block = 64;
+    st.period = 256;
+    CHECK(gui::engineReadout(st).format == "48 kHz \xc2\xb7 256 samples");
+    CHECK(gui::engineReadout(st).problems.empty());
+    st.sampleRate = 44100;
+    st.period = 0;  // a backend without a period runs in blocks
+    CHECK(gui::engineReadout(st).format == "44.1 kHz \xc2\xb7 64 samples");
+    st.block = 1;
+    CHECK(gui::engineReadout(st).format == "44.1 kHz \xc2\xb7 1 sample");
+    // Only the counts that are not zero, each with its noun.
+    st.xruns = 1;
+    CHECK(gui::engineReadout(st).problems == "1 dropout");
+    st.xruns = 3;
+    st.processErrors = 1;
+    CHECK(gui::engineReadout(st).problems == "3 dropouts \xc2\xb7 1 plug-in error");
+    st.anticipationMisses = 2;
+    CHECK(gui::engineReadout(st).problems ==
+          "3 dropouts \xc2\xb7 2 render gaps \xc2\xb7 1 plug-in error");
+
+    // The bar shows the same, and its buttons and readouts share a centre line.
+    RateApp a;
+    const gui::EngineReadout now = gui::engineReadout(a.app->engineStatus());
+    auto text = [&](const char* id) {
+        auto* label = dynamic_cast<ui::Label*>(a.root->find(id));
+        REQUIRE(label);
+        return label->text();
+    };
+    CHECK(text("transport.engine") == now.format);
+    CHECK(text("transport.engine.problems") == now.problems);
+    auto middle = [&](const char* id) {
+        const ui::Rect r = a.root->find(id)->bounds();
+        return r.y + r.h / 2;
+    };
+    const float line = middle("transport.play");
+    for (const char* id : {"transport.start", "transport.position", "transport.time",
+                           "transport.meter", "transport.tempo", "transport.rate"})
+        CHECK(std::abs(middle(id) - line) <= 0.5f);
 }
 
 TEST_CASE("playrate transport: drag coalesces undo, readback and double-click reset") {
@@ -3571,4 +3618,228 @@ TEST_CASE("file actions: Save before Open autosave works after a first save") {
     CHECK(a.app->head().project->name == "Autosaved");
     CHECK(a.root->find("file.recovered"));
     CHECK(model::parseProjectFile(*readTextFile(file))->store.head()->project->name == "Current");
+}
+
+TEST_CASE("a plugin dragged from the browser lands on the track row or strip under the pointer") {
+    App a(1200, 800);
+    REQUIRE(a.ok);
+    peaks::PeakService peaks(a.dir / "cache", [](std::function<void()> f) { f(); });
+    gui::MeterFeed meters;
+    gui::Shell shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters);
+    gui::Mixer mixer(*a.root, *a.actions, *a.dispatcher, *a.app, meters);
+    struct Detach {
+        ui::Root& root;
+        ~Detach() { root.setContent(std::make_unique<ui::Node>("detached")); }
+    } detach{*a.root};
+    auto exec = [&](const char* command, const std::string& args) {
+        auto r = a.dispatcher->execute(
+            {command, json::parse(args).value(), {cmd::Origin::Type::Test, "t", {}}});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const model::Id bass =
+        *model::Id::parse(exec("track.add", R"({"name":"Bass"})")["track"].asString());
+    const model::Id keys =
+        *model::Id::parse(exec("track.add", R"({"name":"Keys"})")["track"].asString());
+    // Keys' volume is automated: its lane is a row of its own under it.
+    exec("env.add",
+         R"({"track":")" + keys.str() + R"(","param":"volume","points":[{"bar":1,"value":0}]})");
+    auto frame = std::make_unique<ui::Node>("window");
+    frame->layout.dir = ui::Layout::Dir::Column;
+    frame->add(shell.build(*a.root, *a.actions));
+    frame->add(mixer.build());
+    a.root->setContent(std::move(frame));
+    auto sync = [&] {
+        shell.sync();
+        mixer.sync();
+        a.root->frame(false);
+    };
+    sync();
+    views::ArrangeView& arrange = *shell.arrange();
+    const auto bassRow = arrange.trackLayout().indexOf(bass);
+    const auto keysRow = arrange.trackLayout().indexOf(keys);
+    REQUIRE(bassRow);
+    REQUIRE(keysRow);
+    auto centre = [](const ui::Rect& r) { return ui::Point{r.x + r.w / 2, r.y + r.h / 2}; };
+
+    // A track's row is one target, its control panel and its lane together.
+    const ui::Rect tcp = arrange.tcpRowRect(*bassRow), lane = arrange.rowRect(*bassRow);
+    const auto onPanel = shell.trackTargetAt(centre(tcp));
+    const auto onLane = shell.trackTargetAt(centre(lane));
+    REQUIRE(onPanel);
+    REQUIRE(onLane);
+    CHECK(onPanel->track == bass);
+    CHECK(onLane->track == bass);
+    CHECK(onPanel->rect.x == tcp.x);
+    CHECK(onPanel->rect.right() == lane.right());
+    CHECK(onPanel->rect.y == tcp.y);
+    CHECK(onPanel->rect.h == tcp.h);
+    CHECK(onLane->rect.x == onPanel->rect.x);
+    const auto onKeys = shell.trackTargetAt(centre(arrange.rowRect(*keysRow)));
+    REQUIRE(onKeys);
+    CHECK(onKeys->track == keys);
+    // Not a target: an automation lane, the ruler, the transport bar, the
+    // band at the panel's foot and the empty space under the last row.
+    const auto envRow = arrange.trackLayout().indexOfEnv(a.app->head().envelopes.begin()->id);
+    REQUIRE(envRow);
+    CHECK_FALSE(shell.trackTargetAt(centre(arrange.rowRect(*envRow))));
+    CHECK_FALSE(shell.trackTargetAt(centre(arrange.ruler().bounds())));
+    CHECK_FALSE(shell.trackTargetAt(centre(a.root->find("transport.play")->bounds())));
+    const ui::Rect panel = arrange.tcpPanel().bounds();
+    CHECK_FALSE(shell.trackTargetAt({panel.x + 20, panel.bottom() - 4}));
+    CHECK_FALSE(shell.trackTargetAt({lane.x + 40, arrange.lanesRect().bottom() - 4}));
+
+    // A file lands in a lane that holds items, or under the last row (a new
+    // track); not on the control panel, an automation lane or a buss.
+    const model::Id buss = *model::Id::parse(
+        exec("track.add", R"({"name":"Verb","type":"buss"})")["track"].asString());
+    sync();
+    const auto bussRow = arrange.trackLayout().indexOf(buss);
+    REQUIRE(bussRow);
+    const ui::Rect lanes = arrange.lanesRect();
+    const auto inLane = shell.fileTargetAt(centre(arrange.rowRect(*bassRow)));
+    REQUIRE(inLane);
+    CHECK(inLane->x == lanes.x);
+    CHECK(inLane->w == lanes.w);
+    CHECK(inLane->y == arrange.rowRect(*bassRow).y);
+    CHECK(inLane->h == arrange.rowRect(*bassRow).h);
+    CHECK_FALSE(shell.fileTargetAt(centre(arrange.tcpRowRect(*bassRow))));
+    CHECK_FALSE(shell.fileTargetAt(centre(arrange.rowRect(*envRow))));
+    CHECK_FALSE(shell.fileTargetAt(centre(arrange.rowRect(*bussRow))));
+    CHECK_FALSE(shell.fileTargetAt(centre(arrange.ruler().bounds())));
+    float lastBottom = lanes.y;
+    for (std::size_t i = 0; i < arrange.trackLayout().rowCount(); ++i)
+        lastBottom = std::max(lastBottom, arrange.rowRect(i).bottom());
+    REQUIRE(lastBottom + 8 < lanes.bottom());
+    const auto under = shell.fileTargetAt({lanes.x + 40, lastBottom + 4});
+    REQUIRE(under);
+    CHECK(under->y == lastBottom);
+    CHECK(under->bottom() == lanes.bottom());
+    CHECK(under->w == lanes.w);
+
+    // The mixer's strips are targets only while it is shown.
+    CHECK_FALSE(mixer.visible());
+    CHECK_FALSE(mixer.trackTargetAt({600, 700}));
+    mixer.setVisible(true);
+    sync();
+    const gui::Mixer::Strip* strip = nullptr;
+    for (const gui::Mixer::Strip& st : mixer.strips())
+        if (st.track == keys.str()) strip = &st;
+    REQUIRE(strip);
+    const auto onStrip = mixer.trackTargetAt(centre(strip->node->bounds()));
+    REQUIRE(onStrip);
+    CHECK(onStrip->track == keys);
+    CHECK(onStrip->rect.w == strip->node->bounds().w);
+    CHECK_FALSE(mixer.trackTargetAt(centre(arrange.rowRect(*bassRow))));
+
+    // The drag: a chip follows the pointer, the target is outlined, and the
+    // release runs fx.add there, whatever the command then says.
+    gui::PluginDrag drag(*a.root, *a.dispatcher);
+    drag.addTargets([&](ui::Point p) { return mixer.trackTargetAt(p); });
+    drag.addTargets([&](ui::Point p) { return shell.trackTargetAt(p); });
+    struct Drop {
+        model::Id track;
+        bool ok;
+        std::string code;
+    };
+    std::vector<Drop> drops;
+    drag.onDrop = [&](const model::Id& track, const Status& added) {
+        drops.push_back({track, added.ok(), added ? std::string() : added.error().code});
+    };
+    auto chain = [&](const model::Id& track) {
+        return a.app->head().tracks.find(track)->chain.size();
+    };
+    auto steps = [&] { return exec("history.list", "{}")["versions"].size(); };
+    const ui::Point nowhere = centre(a.root->find("transport.play")->bounds());
+    const auto overlays = a.root->overlay().children().size();
+    auto before = steps();
+
+    drag.drag("com.example.none", "Nothing", ui::DragPhase::Begin, nowhere);
+    CHECK(drag.view().active);
+    CHECK(drag.view().label == "Nothing");
+    CHECK_FALSE(drag.view().target);
+    CHECK(a.root->overlay().children().size() == overlays + 1);
+    REQUIRE(a.root->overlay().find("plugin.drag"));
+    drag.drag("com.example.none", "Nothing", ui::DragPhase::Move, centre(lane));
+    REQUIRE(drag.view().target);
+    CHECK(drag.view().target->track == bass);
+    a.snapshot("plugin-drag.png");
+    drag.drag("com.example.none", "Nothing", ui::DragPhase::Move, centre(strip->node->bounds()));
+    REQUIRE(drag.view().target);
+    CHECK(drag.view().target->track == keys);
+    // Released over nothing: no command, no report.
+    drag.drag("com.example.none", "Nothing", ui::DragPhase::End, nowhere);
+    CHECK_FALSE(drag.view().active);
+    CHECK(a.root->overlay().children().size() == overlays);
+    CHECK(drops.empty());
+    // Cancelled over a track: the same.
+    drag.drag("com.example.none", "Nothing", ui::DragPhase::Begin, nowhere);
+    drag.drag("com.example.none", "Nothing", ui::DragPhase::Move, centre(lane));
+    drag.drag("com.example.none", "Nothing", ui::DragPhase::Cancel, {});
+    CHECK_FALSE(drag.view().active);
+    CHECK(a.root->overlay().children().size() == overlays);
+    CHECK(drops.empty());
+    // A move or an end with no drag begun does nothing.
+    drag.drag("com.example.none", "Nothing", ui::DragPhase::End, centre(lane));
+    CHECK(drops.empty());
+    // Dropped on a track: the command's refusal of a plugin that is not
+    // installed reaches the owner, and nothing changed.
+    drag.drag("com.example.none", "Nothing", ui::DragPhase::Begin, nowhere);
+    drag.drag("com.example.none", "Nothing", ui::DragPhase::End, centre(lane));
+    REQUIRE(drops.size() == 1);
+    CHECK(drops[0].track == bass);
+    CHECK_FALSE(drops[0].ok);
+    CHECK_FALSE(drops[0].code.empty());
+    CHECK(chain(bass) == 0);
+    CHECK(steps() == before);
+
+    // A drag to a place (a file): the place under the pointer is outlined,
+    // and the release there hands over the point; elsewhere, nothing.
+    std::vector<ui::Point> landed;
+    const gui::PluginDrag::Place where = [&](ui::Point p) { return shell.fileTargetAt(p); };
+    auto land = [&](ui::Point p) { landed.push_back(p); };
+    const ui::Point inBass = centre(arrange.rowRect(*bassRow));
+    drag.dragTo("loop.wav", ui::DragPhase::Begin, nowhere, where, land);
+    CHECK(drag.view().active);
+    CHECK(drag.view().label == "loop.wav");
+    CHECK_FALSE(drag.view().place);
+    drag.dragTo("loop.wav", ui::DragPhase::Move, inBass, where, land);
+    REQUIRE(drag.view().place);
+    CHECK(drag.view().place->y == arrange.rowRect(*bassRow).y);
+    CHECK_FALSE(drag.view().target);
+    drag.dragTo("loop.wav", ui::DragPhase::End, inBass, where, land);
+    CHECK_FALSE(drag.view().active);
+    CHECK(a.root->overlay().children().size() == overlays);
+    REQUIRE(landed.size() == 1);
+    CHECK(landed[0].x == inBass.x);
+    drag.dragTo("loop.wav", ui::DragPhase::Begin, nowhere, where, land);
+    drag.dragTo("loop.wav", ui::DragPhase::End, centre(arrange.tcpRowRect(*bassRow)), where, land);
+    CHECK(landed.size() == 1);
+    drag.dragTo("loop.wav", ui::DragPhase::Begin, nowhere, where, land);
+    drag.dragTo("loop.wav", ui::DragPhase::Cancel, inBass, where, land);
+    CHECK(landed.size() == 1);
+    CHECK_FALSE(drag.view().active);
+
+    // With a plugin that is installed: one fx.add, one undo step, on the
+    // track under the pointer only.
+    auto listed = exec("plugin.list", "{}");
+    if (listed["plugins"].asArray().empty()) {
+        MESSAGE("skipped the successful drop: no plugins (a partial build)");
+        return;
+    }
+    const std::string plugin = listed["plugins"].asArray().front()["id"].asString();
+    drops.clear();
+    drag.drag(plugin, "", ui::DragPhase::Begin, nowhere);
+    CHECK(drag.view().label == plugin);  // unnamed: its id
+    drag.drag(plugin, "", ui::DragPhase::End, centre(strip->node->bounds()));
+    REQUIRE(drops.size() == 1);
+    CHECK(drops[0].ok);
+    CHECK(drops[0].track == keys);
+    CHECK(chain(keys) == 1);
+    CHECK(chain(bass) == 0);
+    CHECK(steps() == before + 1);
+    drag.drag(plugin, "", ui::DragPhase::Begin, nowhere);
+    drag.drag(plugin, "", ui::DragPhase::End, centre(tcp));
+    CHECK(chain(bass) == 1);
+    CHECK(steps() == before + 2);
 }

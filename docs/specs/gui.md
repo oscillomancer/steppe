@@ -137,7 +137,7 @@ Missing sections preserve first-open defaults. Invalid fields are ignored,
 sizes clamp to the panel minimum and 8192 units, and a position with no visible
 48-unit corner on a current display is discarded. Open panels adopt the new
 project's placement on project replacement. Screensets continue to store the
-mixer/history docks and arrange layout; floating panels are not screenset entries.
+mixer dock, the side panel (§4.14) and the arrange layout; floating panels are not screenset entries.
 
 Screenset names trim leading and trailing spaces and tabs. Import skips
 empty names and silently keeps the first entry when trimmed names collide.
@@ -167,11 +167,15 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   pans the rack window); key presses say whether they repeat. Text input through SDL3 text-input events (IME composition shown
   inline). Replacing multiline editor text preserves the caret's line and
   code-point column (clamped to the new text); diagnostic columns remain byte
-  offsets. Hiding a dock or panel releases focus and pointer capture within
+  offsets. The multiline editor's line-number gutter can be left out
+  (`TextArea::lineNumbers`) where it holds prose (a track's notes, §4.14). Hiding a dock or panel releases focus and pointer capture within
   its subtree (`Root::releaseWithin`), sending `Cancel` to the captured
   control. Continuous edits end as one undo step; uncommitted drag previews
   and pending button clicks are discarded. Focus and capture outside the
-  subtree are preserved. A press outside the topmost popup closes every
+  subtree are preserved. A `List` reports a row dragged out of it
+  (`onDrag`: Begin once a left press has moved more than `kDragSlop`, 4
+  units, then Move, then End at the release or Cancel) for its owner to
+  draw and to take the drop; with no listener a press only selects. A press outside the topmost popup closes every
   popup above the one it lands in (all of them when it lands in none) and
   reaches nothing else, so a dialog's menu button, or any other spot in the
   dialog, closes the open menu rather than opening a second one. A closing
@@ -215,6 +219,10 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   and a character it lacks draws as a gap: UI strings use only what it has
   (a test scans the GUI's string literals against both weights), so a rack
   path reads "Bells » Out 1" and pickers draw their chevrons (`ui::Dropdown`).
+  The bundled Plex Mono is a smaller subset (ASCII and the dashes); a
+  character it lacks is drawn from Inter of the same weight, so a shortened
+  mono value shows its ellipsis and a "·" between two mono values is not a
+  gap.
 - **Theme.** A token set (colours, type scale, spacing, radii, stroke widths,
   motion durations, strip-type colours) loaded from JSON; light and dark
   variants; widgets read tokens only, never literals. Extends the plugin
@@ -267,7 +275,9 @@ one nonlooping pass, as playback does.
 
 Meters read the engine's lossy telemetry rings (peak, RMS, and for masters
 momentary/short-term LUFS from core-analysis) at 30 Hz, with peak hold and
-clip latches as view state. The playhead reads the transport telemetry. No
+clip latches as view state. A meter is drawn in a well (the `well` token,
+darker than every surface a meter stands on), so an idle meter still shows
+where the level will be. The playhead reads the transport telemetry. No
 meter ever forces a full repaint.
 
 ## 4. Views
@@ -288,13 +298,30 @@ playing, red recording, accent for loop, punch, metronome, count-in and a
 follow mode other than the default (off or smooth; by page it is unlit) — and
 keeps its state word as its value text ("follow page",
 "follow off", "follow smooth"); position in bars|beats and
-time, tempo/meter, CPU/xrun/anticipation readouts from engine telemetry; the
-rate and buffer readout shows the device's period, e.g. the JACK quantum);
+time, tempo/meter, and at the right the engine readout in words
+(`engineReadout`): what the device runs at, quiet, as "48 kHz · 256
+samples" (the buffer is the device's period, e.g. the JACK quantum, or the
+engine's block for a backend without one); before it, in bold `meter-hot`
+and only while there is something to say, "Audio stopped" for an engine
+that is not running, or what has gone wrong since it started, each count
+with its noun and none shown at zero: dropouts (the device's xruns),
+render gaps (anticipation misses) and plug-in errors (`processErrors`);
+`engine.status` has the full telemetry; the bar's buttons, fields and
+readouts share one centre line);
 toolbar (actions, §6: only what the transport bar does not already have —
-undo, redo, add channel, the actions list by default); the arrange area (track control panel + timeline);
-bottom docks for the mixer and MIDI editor, and a history dock; separate
+undo, redo, add channel, racks and the actions list by default; set off
+from the menus by an upright rule, its buttons quiet at rest, §7); the arrange area (track control panel + timeline);
+bottom docks for the mixer and MIDI editor, and the side panel at the right
+edge (§4.14: the inspector and the history); separate
 floating windows for the FX chain, routing matrix and plugin GUIs. Render and
 other dialogs remain popups. Window layout is UI state (§1.2).
+
+The status line at the window's foot shows the strip count and the session
+version, then a note: "Preparing audio…", a preparation error, or the last
+message a view or an action reported. An action that fails (`AppActions`'
+`onError`: a menu entry, a key, a toolbar or transport button, an inspector
+field) puts its message there, and on stderr as before; the message stays
+until the next one.
 
 FX and routing are resizable utility windows owned by the main window, using
 the same SDL utility/parent mechanism as plugin editors (ADR-0005/0039).
@@ -371,8 +398,9 @@ moves the rate ten cents a step. Like the on-screen knob it runs
 Per strip: name (rename in place: a double-click; Enter or a click anywhere
 else keeps the edit, Escape drops it), **strip-type badge** (Channel / Buss /
 Master: colour, shape and label differ — clear at a glance, ADR-0019),
-mute/solo (rounded pills in their own colours), arm (a red disc: faded off,
-solid armed), monitor (a speaker: an outline off, solid on, green auto),
+mute/solo (rounded pills: an ink outline and letter off, filled with their
+own colour on, the colour showing under the pointer), arm (a disc: a red ring
+off, solid red armed), monitor (a speaker: an outline off, solid on, green auto),
 input (channels only for these three), polarity ("Ø") and mono pills at the
 start of the level row (ADR-0022), volume fader and pan
 (Console 9 Channel's controls on channels and busses; plain gain and
@@ -382,7 +410,12 @@ alone, adding last in the chain; no count, to save room), the "out" button
 (a click opens the routing matrix; drag onto another strip to create a
 route; drop rules follow `route.strip_type`, invalid targets show why before
 the drop; a strip the track already sends to is not a target, since the
-matrix shows one send per pair), meters. The mixer's strips carry the same controls in the same
+matrix shows one send per pair), and a meter: 8 units wide
+(`TcpRowGeometry::kMeterWidth`), at the row's right edge for the row's whole
+height, with the controls ending before it. "fx", "+", "env" and "out" are
+quiet buttons (`ui::Button::quiet`): their text alone in quiet ink, a box
+under the pointer; "fx" is in full ink when the track's chain or input chain
+holds a plug-in. The input stays a boxed field, since it shows a value. The mixer's strips carry the same controls in the same
 looks (§4.4). The button row starts at the TCP's left edge with mute and
 solo (over polarity and mono) and ends at its right edge with "env" and
 "out", at any depth; a channel's input button takes the room between.
@@ -499,6 +532,33 @@ changed elsewhere between the press and the release. Automation-item point,
 move and resize drags also compare the press-time amplitude, baseline, position,
 length, source length, loop state, envelope and pool. A change cancels the drag
 with `env.changed`; it does not rebase the draft onto the changed item.
+
+**Item appearance.** An item is drawn in its own colour when it has one
+(`item.set {color}`: a track colour's name or "#rrggbb"), else in its track's
+colour (§7), else in its strip type's (`Lanes::itemColor`): a body at
+about a quarter of the colour's strength, an outline, and across its top a
+15-unit **name bar** at about twice the body's strength. The bar carries the
+label in bold ink and the item's marks (padlock, snowflake, timebase badge,
+take count). The label is the heard take's name; an unnamed audio take is
+called by its media file, without the folder and the extension; an item with
+neither shows its id (`Lanes::itemLabel`). A stretched take adds its rate. An
+item that begins before the view keeps its label at the view's left edge. An
+item whose top is scrolled above the view has its bar out of sight, and its
+label and marks with it: they are not redrawn on the body. An
+item under 30 units high (a compact row) has no bar and its label sits on the
+body. Waveforms are ink; MIDI notes are the item's colour drawn 45% of the
+way to the ink (`Lanes::noteColor`), lighter than the body in a dark theme
+and darker in a light one, so a yellow item's notes read on its yellow body. A
+fade is drawn over the body, under the name bar (`Lanes::fadeArea`): its gain
+curve, and a shade over the part of the body above the curve, so the waveform
+dims where the fade takes it away. The fade handles stay at the item's top
+corners. A muted item, an item of a lane-muted master and a frozen track's
+items are dimmed. A selected item is lit by a wash of its own colour and
+outlined in the focus colour, two units wide, with a one-unit line of the
+ground inside the outline: on an orange or red item, whose body is near the
+focus colour's hue, the line keeps the outline apart from the body. All
+three are drawn on the overlay with the drag ghosts, so selecting repaints
+no lane.
 
 Gestures (P0, `reaper-ux.md` 8–13): drop files onto tracks/timeline, move,
 trim edges, split (S), duplicate, slip (Alt-drag), stretch (with the rate
@@ -1296,7 +1356,9 @@ loop takes, ADR-0014/0015) in the transport.
 
 ### 4.10 Command log and history
 
-A dock showing the command log (every command with origin — GUI, agent,
+The side panel's History tab (§4.14; `ui.history`, Ctrl+H, opens the panel
+on it and closes the panel when it is in view), showing the command log
+(every command with origin — GUI, agent,
 Lua, MCP — arguments, result/error) and the version history per branch
 (undo/redo, jump to version, branch list). Agent commands are visibly
 attributed.
@@ -1706,6 +1768,208 @@ mtc, clock_while_stopped}}`), which the engine writes on every
 `midi.outputs.set` and reads at start; a GUI save keeps them as they are
 on disk.
 
+### 4.14 Side panel and inspector
+
+A dock at the window's right edge (`SidePanel`, node `side`). It runs the
+window's height under the menu row; the transport bar, the arrange area and
+the bottom docks keep to its left. It holds one tab per tool, in this order:
+**Inspector** (`side.tab.inspector`), **Browser** (`side.tab.browser`) and
+**History** (`side.tab.history`, §4.10). One tab is in view at a time; the tab in
+view has ink text and an accent line under it, the others quiet ink. A click
+on a tab shows it. **Close** (`side.close`, a quiet button at the bar's right)
+closes the panel.
+
+The panel is **closed until asked** and never opens by itself, a selection
+included. `ui.inspector` (View > Inspector, key I), `ui.browser` (View >
+Browser, key B) and `ui.history` (View > History and command log, Ctrl+H)
+each open the panel on their tab, swap to it when another tab is in view,
+and close the panel when their tab is in view. A tab that is not in view
+reads nothing: the history reloads, the inspector reads the selection and
+the browser reads the scan cache and the favourites file when they come
+into view.
+
+Its left edge (`side.grip`) drags to set the width, 240 to 560 units, 300 by
+default; a double-click restores the default. Whether the panel is open,
+which tab is in view (remembered while closed) and the width are UI state:
+`panels.side` in the sidecar, `{"visible", "tab", "width", "browser"}`
+(`browser`: the Browser tab's kind, "plugins", "chains" or "files"), and so
+part of a screenset. A field of the wrong type or a tab the panel does not have is
+ignored. `panels.history` is still written (true while the History tab is
+in view); a sidecar from before the side panel, with `panels.history` and
+no `panels.side`, opens the panel on History when it was true.
+
+**Browser** (`SideBrowser`, node `side.browser`). A row of kinds
+(`side.browser.kinds`: **Plug-ins**, **Chains** and **Files**, the one shown raised; a
+click picks one, and with the row focused Left and Right do) over one page
+per kind. It opens on Plug-ins, or on the kind `panels.side.browser`
+names (a kind it does not have is ignored). A page
+that leaves view gives up the keyboard, and the page shown reads its list
+again when the tab or the kind comes into view. `ui.browser` puts the
+keyboard in the shown page's search field; a panel restored on this tab
+does not take it.
+
+*Plug-ins* is the plugin browser (§4.5) as a panel's content
+(`PluginBrowser::buildEmbedded`, node ids under `side.browser.plugins`):
+the same search (`.search`), list (`.results`), favourites (`.fav`), rescan
+(`.rescan`) and ordering, over the same scan cache and favourites file. It
+has no title and no Close of its own. A row is the plugin's name with what
+a stock plugin is, and at the right "stock", the vendor or "shadowed",
+followed by "· VST3" for a VST3 plugin (the popup's id column tells the
+formats apart; a panel's row has no room for it); the line under the list
+(`.detail`) gives the selected plugin's id, as `fx.add` takes it. Enter in
+the search, a double-click on a row or **Add** (`.add`) adds the plugin to
+every selected track: one `fx.add` each, inside one transaction for
+several ("Add FX"), so one undo step. The browser stays open with its
+search as typed, and its status line (`.status`) says what happened:
+"Added to *track*", "Added to *N* tracks", "Select a track first" when no
+track is selected, or the command's message. The popup browser of a
+strip's "+" (§4.5) is unchanged and may be open at the same time.
+
+*Chains* lists the saved FX chain presets (`fx.chain.list`; node ids under
+`side.browser.chains`), by name with their size at the right ("1 effect",
+"3 effects"), and a search by name (`.search`). Enter in the search, a
+double-click or **Add** (`.add`) appends the chain to every selected
+track's main chain: one `fx.chain.load {track, path}` each, inside one
+transaction for several ("Load chain"), so one undo step and all of them
+or none. The status line (`.status`) says "Loaded onto *track*", "Loaded
+onto *N* tracks", "Select a track first" or the command's message. With
+nothing saved the list's place says where chains come from (`.empty`: "No
+saved chains yet. Save one with Save chain… in a track's FX window, and it
+is listed here."); a search that finds nothing says "No chain matches."
+Replacing a chain, deleting a preset and the input and take chains stay
+with the FX window (§4.5).
+
+*Files* lists one folder (node ids under `side.browser.files`): its
+folders first, in bold, then the files File > Import takes (`.wav`,
+`.flac`, `.mp3`, `.mid`, `.midi`, whatever the case) with their type at
+the right, each by name without regard to case. Hidden entries (a leading
+dot) and other files are left out. Above the list are **Up** (`.up`, to
+the folder above) and the folder's name (`.folder`); under it the status
+line and the folder's path (`.path`), which loses its start, at a
+separator, when it does not fit ("…/Loops/Drums"): the last folders stay
+readable. The page starts in the
+project's folder, or the user's home folder for a project not saved yet,
+and stays where the user went; a folder that has gone falls back the same
+way. The search (`.search`) narrows this folder and is cleared on entering
+another. Enter, a double-click or **Add** (`.add`) on a folder goes into
+it; on a file it imports the file as File > Import does (`item.add` on the
+selected track, or on a new track named after the file when none is
+selected, at the playhead; one undo step) and the status line says "Added
+*file*" or the error. An empty folder says "No folders and no audio or
+MIDI files here."; a folder that cannot be read says why and the listing
+stays. Up from a root lists the roots as folders under the name
+"Computer" where there are several (the drives on Windows); elsewhere Up
+is disabled at the root. Files are not auditioned.
+
+A file **drags into the arrangement** (`PluginDrag::dragTo`): the chip
+carries its name, and the place it would land is outlined, the lane of a
+row that holds items or the empty space under the last row
+(`Shell::fileTargetAt`; not the control panel, a buss or an automation
+lane). The release there drops it as a file dragged in from outside the
+app (§4.3: `item.add` at the pointer's snapped position on that row, or on
+a new track under the rows); a release anywhere else does nothing. A
+folder does not drag.
+
+A row of the Plug-ins and Chains pages **drags onto a track**. A left press on a row that
+moves more than four units (`ui::List::onDrag`, `List::kDragSlop`) starts
+the drag (`PluginDrag`): a chip with the plugin's or the chain's name
+follows the pointer on the overlay layer (`plugin.drag`), and the track
+under it is outlined in the focus colour. A track is under the pointer on
+its row of the arrange view, the control panel and the lane together
+(`Shell::trackTargetAt`; not an automation lane, the ruler or the band at
+the panel's foot), or on its strip while the mixer is shown
+(`Mixer::trackTargetAt`), the strip first. The release runs one `fx.add
+{track, plugin}` or one `fx.chain.load {track, path}` on that track only,
+whatever is selected: one undo step, and the page's status line says
+"Added to *track*", "Loaded onto *track*" or the command's message. A
+release anywhere else, and a cancelled gesture, do nothing. What is
+dragged is the row the drag began on, even when the list changes under it
+(a search, a rescan that finishes). Rack patches and the project's own
+media are not in the Browser.
+
+**Inspector.** What is selected, read from the selection and the session
+each pass (`inspectorSubject`), and for one item the fields that edit it.
+It executes a command only when a field is changed. A header:
+a bar in the thing's colour (an item's as the arrange view draws it, §4.3;
+a track's own; none without one), its name in the title size
+(`inspector.title`) and a line under it (`inspector.detail`):
+
+| Selection | Title | Line |
+|---|---|---|
+| One item | Its name as the arrange view shows it (§4.3), else its id | "Audio item on *track*", "MIDI item on *track*" or "Empty item on *track*" |
+| Several items | "*N* items" | "On *track*", or "On *M* tracks" |
+| One track | Its label | "Channel", "Buss" or "Master" |
+| Several tracks | "*N* tracks" | "Selected together" |
+| Nothing | "Nothing selected" | "Click an item or a track to see it here." |
+
+Tracks are shown when they were selected last or no item is selected, else
+items. Ids the session no longer holds are left out.
+
+**Item fields** (`inspector.item`, shown for one or several selected
+items). Each change is one `item.set` per item and one undo step; the
+inspector adds no command:
+
+| Field (node) | Shows | Accepts | `item.set` |
+|---|---|---|---|
+| Name (`inspector.name`) | The active take's name; unnamed, the file's name as a placeholder | Any text | `name` |
+| Start (`inspector.start`) | "3.1.000": bar, beat of that bar's meter, thousandths of the beat, each from 1 | "3", "3.2" or "3.2.500" (`inspectorParseBars`) | `position` (beats) |
+| Length (`inspector.length`) | "32 beats" | A number, with or without "beats" | `length` |
+| Follows (`inspector.timebase`) | Its track's setting, Beats, Time, or Beats, start only | A choice | `timebase` |
+| Gain (`inspector.gain_db`) | "-3.0 dB" | A number, with or without "dB" | `gain_db` |
+| Fade in, Fade out (`inspector.fade_in`, `inspector.fade_out`) | "0.400 s" | A number, with or without "s" | `fade_in`, `fade_out` |
+| Mute, Loop, Lock (`inspector.mute`, `.loop`, `.locked`) | Pills, lit when on | A click | `mute`, `loop`, `locked` |
+| File (`inspector.file`) | An audio item's file path, then its rate, channels and length | Read only | |
+
+When the heard take plays audio, its speed and pitch follow
+(`inspector.take`), each one `take.set` on that take:
+
+| Field (node) | Shows | Accepts | `take.set` |
+|---|---|---|---|
+| Speed (`inspector.playrate`) | "1.000 x" | A number, with or without "x" | `playrate` |
+| Pitch (`inspector.pitch`) | "0.00 st" | A number, with or without "st" | `pitch` |
+| Keep pitch (`inspector.preserve_pitch`) | A pill, lit when on | A click | `preserve_pitch` |
+
+An item with several takes lists them in its order (`inspector.takes`,
+at most six rows before it scrolls), a take without a name as "Take *n*";
+the heard take has an accent dot and bold ink. A click on another row is
+`take.activate` and one undo step; the fields then show that take.
+
+A text field applies on Enter and when it is left (a click elsewhere, a
+change of selection, the tab or the panel going out of view): to the item
+it showed, never to the next. Escape restores it, and unchanged text runs
+nothing. Text that cannot be meant ("soon" for a start) and an edit the
+command refuses (a gain above +24 dB) are reported through the status line
+with the command's hint, and the field shows the session's value again.
+Edits made elsewhere, an agent's included, show at the next pass, except
+in the field being typed in. A locked item's fields are disabled, all but
+Lock, under a line that says so. An item with no take cannot be named.
+
+**Several items** show the fields they can share: Follows, Gain, the
+fades and the three pills. Name, Start, Length, the take settings, the
+take list and the file are for one item only. A field shows the value all
+of them have, and is empty with the placeholder "mixed" when they differ;
+a pill is lit when all have the state on. An edit runs `item.set` on each
+inside one transaction (`Dispatcher::transact`, labelled "Item gain" and
+so on): one undo step, and all of them or none when the command refuses
+one. With any of them locked the fields are disabled; Lock then locks the
+ones that are not (a locked item refuses to be locked again), and a second
+click unlocks them all.
+
+**Track fields** (`inspector.track`, shown for one or several selected
+tracks), each one `track.set` per track, several in one transaction:
+
+| Field (node) | Shows | Accepts | `track.set` |
+|---|---|---|---|
+| Name (`inspector.track.name`), one track only | The stored name; unnamed, its label as a placeholder | Any text | `name` |
+| Colour (`inspector.track.color`) | The eight track colours as swatches and an empty square for none; the colour all of them have is ringed | A click; or, with the row focused (Tab), Left and Right (Home, End) to move a focus ring that starts on the tracks' colour, and Enter or Space to pick | `color` |
+| Volume (`inspector.track.volume_db`) | "-6.0 dB", or empty and "mixed" | A number, with or without "dB" | `volume_db` |
+| Pan (`inspector.track.pan`) | "-30 %" (negative is left), or empty and "mixed" | A number, with or without "%" | `pan` |
+| Notes (`inspector.track.notes`), one track only | The track's notes, five lines in view, under its label and as wide as the panel, with a rule around it | Any text over several lines (a `TextArea` without line numbers: Enter is a new line, long lines scroll, they do not wrap). Ctrl+Enter or leaving the field applies it; Escape puts back the track's | `notes` |
+
+Inputs, outputs, sends and record settings stay where they are (the track
+row, the mixer strip and the routing matrix).
+
+
 ## 5. Agent panel (removed)
 
 The app has no built-in agent (ADR-0043). Agents drive it from an external
@@ -2035,7 +2299,12 @@ Steppe's own character, not a REAPER clone or a generic dark theme
   rule from the proposal is not drawn.)
 - **Track colours, for organizing:** a small set (red, orange, yellow, green,
   teal, blue, violet, grey; `track.set {color}` also takes "#rrggbb") drawn as
-  a stripe down the TCP row's left edge and under the mixer strip's name.
+  a stripe down the TCP row's left edge, under the mixer strip's name, and
+  as the colour of the track's items in the arrange view (§4.3). A new
+  channel or buss comes with one: `track.add` gives it the palette colour
+  the fewest tracks carry (session-model.md), whoever adds it, so a session
+  is told apart by colour from its first track on. "None" in the colour
+  menu takes it away.
   Picked from the track's right-click menu (Rename, Color…, Duplicate,
   Delete; the same in the TCP and the mixer) or the `ui.track.color` action.
   A pick colours every selected track when the track is one of them (the
@@ -2047,8 +2316,16 @@ Steppe's own character, not a REAPER clone or a generic dark theme
   state colour. Module faces have their own tokens (`module`,
   `module-title`, `module-well`, `jack-hole`).
 - **Calm by default:** colour reserved for state (armed, clipping, selected,
-  agent-changed), meters and waveforms in ink tones; motion only for
-  feedback. The TCP keeps its boxed toggles.
+  agent-changed) and for the user's own organizing (track colours, which
+  tint a track's items); meters and waveforms in ink tones; motion only for
+  feedback. Controls that repeat on every track row and mixer strip are
+  quiet at rest: an off toggle is an ink outline and letter, a secondary
+  button its text alone. The state's colour and the button's box appear
+  under the pointer, so at rest the only colour in a row is a state that is
+  on, the strip's badge and the track's own colour. The toolbar's buttons
+  are quiet in the same way, so the top row reads as menus first. A
+  warning is the one thing that adds colour unasked: the engine readout
+  says nothing in colour until audio stops or drops out (§4.1).
 
 ## 8. Commands and UI state
 
@@ -2089,8 +2366,23 @@ Unit tests for layout, input routing, damage, theme loading and the peak
 pyramid; golden images for widgets and each view in fixed states (offscreen,
 tolerance-aware); scripted UI tests that drive views by node id and assert
 on the resulting session (through the bus) — the same commands the agent
-uses, so a UI test can also be an agent workflow test. TSan for the
-worker/UI handoffs. Plugin GUI embedding keeps the template's host probe
+uses, so a UI test can also be an agent workflow test. The `asan` and
+`tsan` presets build the GUI and run these tests under AddressSanitizer
+with UBSan (leak checks off where a test opens GL: the driver's
+allocations outlive the process) and under ThreadSanitizer, which covers
+the worker/UI handoffs. Every GUI test, in every preset, renders with
+Mesa's software renderer on the calling thread and without its shader
+cache thread (`LIBGL_ALWAYS_SOFTWARE=1`, `LP_NUM_THREADS=0`,
+`MESA_SHADER_CACHE_DISABLE=true` in the tests' environment,
+`daw/gui/CMakeLists.txt`): the pictures do not depend on the machine's GPU
+driver, and ThreadSanitizer sees no driver threads, which are not built
+with it. The `tsan` test preset sets the same three for every other test
+that draws an editor, and leaves out the stock plugins' on-screen
+embedding probes (`plugin.<name>.embedding`, labelled `tsan-skip`).
+`tools/ci/tsan-gui.supp` suppresses the lock-order reports of libdbus,
+which SDL opens. The variables mean nothing on macOS and Windows. `rtsan`
+builds without the GUI, which adds nothing to the audio path. Plugin GUI
+embedding keeps the template's host probe
 tests (`*-linux-host-probe`).
 
 ## Platform directory roots (2026-10-14, ADR-0035)
@@ -2114,7 +2406,9 @@ Tests use dummy/none and never enable hardware opt-ins.
 SDL drivers are forced to X11/Cocoa/Windows respectively. Layout uses design
 units; SDL pixel density and Windows per-monitor display scale determine the
 framebuffer ratio. Pointer, file-drop and IME-caret coordinates use that same
-mapping. PNG snapshots contain framebuffer pixels (design size times ratio).
+mapping. PNG snapshots contain framebuffer pixels (design size times ratio)
+and are opaque (`gui::opaque`): the alpha that blending leaves in the
+framebuffer is not written, so a snapshot shows the colours the screen shows.
 Native `--offscreen` uses hidden desktop windows; Linux retains the EGL
 offscreen driver. Offscreen and finite-frame runs close without an interactive
 discard prompt, completing normal cleanup and any requested final snapshot.

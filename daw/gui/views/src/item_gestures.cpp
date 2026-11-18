@@ -173,10 +173,20 @@ class Ghost : public ui::Node {
                         x1 = v.xAt(s.timeMap->secondsAt(end));
             return ui::Rect{x0, r.y + 1, std::max(2.0f, x1 - x0), r.h - 2};
         };
-        // The selection.
+        // The selection: each selected item is lit (a wash of its own colour
+        // over its body) and outlined in the focus colour, with a hairline of
+        // the ground inside the outline: on an orange or red item the outline
+        // and the body are close in hue, and the hairline keeps them apart.
         for (model::Id id : g.selection())
             if (const model::Item* it = itemOf(s, id))
-                if (auto r = rectFor(*it, 0, 0, 0, 0)) c.strokeRect(*r, t.color("focus"), 2);
+                if (auto r = rectFor(*it, 0, 0, 0, 0)) {
+                    const model::Track* track = s.tracks.find(it->track);
+                    const ui::Color own = Lanes::itemColor(
+                        t, *it, track, track ? track->type : model::StripType::Channel);
+                    c.fillRect(*r, own.withAlpha(0.22f));
+                    c.strokeRect(*r, t.color("focus"), 2);
+                    if (r->w > 8 && r->h > 8) c.strokeRect(r->inset(2), t.color("ground"), 1);
+                }
         // Selected automation points (filled), unless a drag draws them moved.
         if (st.drag != ItemGestures::Drag::EnvPoint)
             for (model::Id pe : g.pointEnvelopes())
@@ -269,10 +279,12 @@ class Ghost : public ui::Node {
                     if (auto r = rectFor(*anchor, 0, 0, 0, 0)) {
                         const float w =
                             static_cast<float>(st.fadeSeconds * v.viewport().pixelsPerSecond);
+                        const ui::Rect body = Lanes::fadeArea(*r);  // where the fade draws
                         if (st.drag == ItemGestures::Drag::FadeIn)
-                            c.line({r->x, r->bottom()}, {r->x + w, r->y}, t.color("focus"), 2);
+                            c.line({body.x, body.bottom()}, {body.x + w, body.y}, t.color("focus"),
+                                   2);
                         else
-                            c.line({r->right() - w, r->y}, {r->right(), r->bottom()},
+                            c.line({body.right() - w, body.y}, {body.right(), body.bottom()},
                                    t.color("focus"), 2);
                     }
                 break;

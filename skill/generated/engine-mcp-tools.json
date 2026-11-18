@@ -1579,7 +1579,7 @@
   {
     "name": "track_add",
     "title": "Add a channel, buss or master strip and return its id.",
-    "description": "parent: a buss/master id (default tr_0); masters have no parent; index: position among its siblings; name: default the first free ch_N, buss_N or mstr_N. A new channel gets the user's default monitoring (on unless set otherwise; monitoring needs the track armed). See describe for errors and examples.",
+    "description": "parent: a buss/master id (default tr_0); masters have no parent; index: position among its siblings; name: default the first free ch_N, buss_N or mstr_N. A new channel gets the user's default monitoring (on unless set otherwise; monitoring needs the track armed). color: a track colour's name or \"#rrggbb\", \"\" for none; default for a channel or buss the palette colour the fewest tracks carry (red first), for a master none. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "track_add_args",
@@ -1590,6 +1590,9 @@
           "default": "channel"
         },
         "name": {
+          "type": "string"
+        },
+        "color": {
           "type": "string"
         },
         "parent": {
