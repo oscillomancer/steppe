@@ -962,7 +962,16 @@ drop can reach a strip that is out of view. The masters, pinned at the
 right, do not scroll. The drop is resolved again at every step. At an end
 of the strips it rests until the pointer moves. `Mixer::sync` advances it
 by the shared clock (§4.3); `Mixer::autoScroll(seconds)` is the
-step. A plug-in list that scrolls inside its strip does not edge-scroll.
+step.
+
+A plug-in held over its own strip within 24 units of the top or bottom of
+that strip's plug-in list, or past it, scrolls the list the same way and by
+the same step, so a drop can reach a place in a chain longer than the list
+shows; over another strip it scrolls no list. The first and last rows in
+view lie inside those zones, so the zone a plug-in is picked up in does not
+scroll until the pointer has left it once, into the list's middle or past
+its end. The insertion bar stays in the list: at its edge for a gap that is
+scrolled out of view.
 
 A plug-in list keeps the place it is scrolled to when the strips are
 rebuilt after an edit, clamped to the new chain; a new project's lists

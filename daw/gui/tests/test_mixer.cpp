@@ -1013,6 +1013,136 @@ TEST_CASE("mixer: a strip held at the strips' edge scrolls them, and drops out o
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("mixer: a plug-in held at an end of its strip's plug-in list scrolls the list") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    const auto b = f.addTrack("channel", "B");
+    std::vector<std::string> fx;
+    for (int i = 0; i < 20; ++i) fx.push_back(f.addFx(a, "Hickory"));
+    f.refresh();
+    using T = ui::PointerEvent::Type;
+    using Drop = gui::Mixer::DragView::Drop;
+    const ui::Rect list = f.strip(a).chain->bounds();
+    const std::string last = fx.back();
+    const auto slot = [&](const std::string& id) { return f.node("mixer.fx." + id)->bounds(); };
+    const auto y = [&](const std::string& id) { return slot(id).y; };
+    // A chain longer than the list shows: its last plug-in starts out of view.
+    REQUIRE(y(last) > list.bottom());
+    const float x = list.x + list.w / 2, middle = list.y + list.h / 2;
+    // The third plug-in, picked up in the list's middle: no scroll there.
+    REQUIRE(std::abs(slot(fx[2]).y + slot(fx[2]).h / 2 - middle) < list.h / 2 - 24);
+    f.pointer(T::Down, f.centre(f.node("mixer.fx." + fx[2])));
+    f.pointer(T::Move, {x, middle});
+    REQUIRE(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Fx);
+    CHECK_FALSE(f.mixer->autoScrolling());
+    CHECK_FALSE(f.mixer->autoScroll(1.0));
+    // Held at the list's bottom it scrolls on; further out is faster.
+    const float start = y(last);
+    f.pointer(T::Move, {x, list.bottom() - 4});
+    REQUIRE(f.mixer->autoScrolling());
+    f.snapshot("mixer-fx-edge-scroll-1-held.png");
+    CHECK(f.mixer->autoScroll(0.05));
+    f.root->frame(false);
+    const float once = y(last);
+    CHECK(once < start);
+    f.pointer(T::Move, {x, list.bottom() + 40});
+    CHECK(f.mixer->autoScroll(0.05));
+    f.root->frame(false);
+    CHECK(once - y(last) > start - once);
+    // The loop's pass steps it by the time since the pass before, and by no
+    // more than the cap: a frame that stalled for two seconds is a short
+    // step, not a jump. The first pass of a scroll only starts the clock.
+    f.pointer(T::Move, {x, list.bottom() - 20});
+    {
+        using namespace std::chrono;
+        const steady_clock::time_point t0{hours(1)};
+        const auto at = [&] {
+            f.root->frame(false);
+            return y(last);
+        };
+        const float s0 = at();
+        f.mixer->sync(t0);
+        CHECK(at() == s0);
+        f.mixer->sync(t0 + milliseconds(25));
+        const double step = static_cast<double>(s0 - at());
+        CHECK(step > 0);
+        f.mixer->sync(t0 + milliseconds(25) + seconds(2));
+        CHECK(static_cast<double>(s0 - at()) == doctest::Approx(3.0 * step).epsilon(0.02));
+    }
+    // Back in the middle it stops, and off its own strip too (a held plug-in
+    // scrolls no list but its own).
+    f.pointer(T::Move, {x, middle});
+    CHECK_FALSE(f.mixer->autoScrolling());
+    const float held = y(last);
+    CHECK_FALSE(f.mixer->autoScroll(1.0));
+    f.root->frame(false);
+    CHECK(y(last) == held);
+    const ui::Rect other = f.strip(b).chain->bounds();
+    f.pointer(T::Move, {other.x + other.w / 2, other.bottom() - 4});
+    CHECK(f.mixer->drag().drop == Drop::Copy);
+    CHECK_FALSE(f.mixer->autoScrolling());
+    // To the end: it stops there by itself, rests, and the drop lands after
+    // the last plug-in, which the first view did not show. The insertion bar
+    // is in view all the way.
+    f.pointer(T::Move, {x, list.bottom() + 6});
+    CHECK(f.mixer->drag().drop == Drop::Reorder);
+    CHECK(f.mixer->drag().marker.h >= 2.5f);
+    CHECK(f.mixer->drag().marker.bottom() <= list.bottom());
+    for (int i = 0; i < 400 && f.mixer->autoScroll(0.05); ++i) f.root->frame(false);
+    f.root->frame(false);
+    CHECK(slot(last).bottom() <= list.bottom() + 1);
+    CHECK_FALSE(f.mixer->autoScroll(0.05));  // nothing more until the pointer moves
+    CHECK(f.mixer->autoScrolling());         // still held at the end
+    f.snapshot("mixer-fx-edge-scroll-2-at-the-end.png");
+    const auto before = f.app->head().version;
+    f.pointer(T::Move, {x, list.bottom() - 3});
+    CHECK(f.mixer->drag().drop == Drop::Reorder);
+    f.pointer(T::Up, {x, list.bottom() - 3});
+    CHECK_FALSE(f.mixer->autoScrolling());
+    CHECK(f.app->head().version == before + 1);  // one edit
+    CHECK(f.chain(a).back() == fx[2]);
+    // The rebuilt list is where the old one was scrolled to: the plug-in is
+    // in view where it was dropped.
+    f.refresh();
+    CHECK(slot(fx[2]).bottom() <= list.bottom() + 1);
+    CHECK(slot(fx[2]).y >= list.y);
+    f.snapshot("mixer-fx-edge-scroll-3-dropped.png");
+    // A plug-in picked up in the list's last row is inside the bottom zone:
+    // that zone waits until the pointer has left it once.
+    const ui::Point low = f.centre(f.node("mixer.fx." + fx[2]));
+    REQUIRE(low.y > list.bottom() - 24);
+    f.pointer(T::Down, low);
+    f.pointer(T::Move, {low.x + 12, low.y});
+    REQUIRE(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Fx);
+    CHECK_FALSE(f.mixer->autoScrolling());
+    f.pointer(T::Move, {low.x + 12, low.y + 3});  // still in it
+    CHECK_FALSE(f.mixer->autoScrolling());
+    f.pointer(T::Move, {x, middle});
+    f.pointer(T::Move, {x, list.y + 4});  // the other zone was never held
+    REQUIRE(f.mixer->autoScrolling());
+    const float down = y(fx.front());
+    CHECK(f.mixer->autoScroll(0.05));
+    f.root->frame(false);
+    CHECK(y(fx.front()) > down);
+    f.pointer(T::Move, {low.x + 12, low.y});  // and the first one scrolls now
+    CHECK(f.mixer->autoScrolling());
+    f.root->key(SDLK_ESCAPE);
+    CHECK_FALSE(f.mixer->autoScrolling());  // a drag given up scrolls no more
+    f.pointer(T::Up, {low.x + 12, low.y});
+    // Picked up in the last row and taken straight past the list's end: it
+    // has left the zone, and scrolls.
+    f.pointer(T::Down, low);
+    f.pointer(T::Move, {low.x + 12, low.y});
+    CHECK_FALSE(f.mixer->autoScrolling());
+    f.pointer(T::Move, {low.x + 12, list.bottom() + 10});
+    CHECK(f.mixer->autoScrolling());
+    f.root->key(SDLK_ESCAPE);
+    f.pointer(T::Up, {low.x + 12, list.bottom() + 10});
+    CHECK(f.chain(a).back() == fx[2]);
+    CHECK(f.errors.empty());
+}
+
 TEST_CASE("mixer: a plug-in list keeps its place when the strips are rebuilt") {
     Fixture f;
     if (!f.ok) return;

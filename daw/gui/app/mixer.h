@@ -57,8 +57,9 @@ class Mixer {
     // steps the edge scroll.
     void sync(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
     // Edge scroll (gui.md §4.4): true while a drag is held at an edge of the
-    // strips that scroll; autoScroll advances it by `seconds` and is true
-    // when the strips moved (sync calls it with the pass's time step).
+    // strips that scroll, or a plug-in at an end of its strip's plug-in
+    // list; autoScroll advances it by `seconds` and is true when the strips
+    // or the list moved (sync calls it with the pass's time step).
     bool autoScrolling() const;
     bool autoScroll(double seconds);
 
@@ -154,8 +155,11 @@ class Mixer {
     void dragSend(const std::string& track, DragPhase phase, ui::Point p);
     void endDrag(bool commit);
     void showDragCursor();
-    void noteDragEdge(ui::Point p);
-    float edgeV_ = 0;                                // units per second
+    void noteDragEdge(ui::Point p, bool begin = false);
+    float edgeV_ = 0, edgeListV_ = 0;  // units per second: the strips'; a plug-in list's
+    // The zone of its plug-in list a plug-in was picked up in (top -1,
+    // bottom 1): it does not scroll until the pointer has left it once.
+    int edgeListHeld_ = 0;
     bool edgeIdle_ = false, edgeResolving_ = false;  // at an end; inside autoScroll
     unsigned dragMods_ = 0;                          // a plug-in drag's last modifiers
     ui::EdgeScrollClock edgeClock_;                  // the time sync steps the edge scroll by

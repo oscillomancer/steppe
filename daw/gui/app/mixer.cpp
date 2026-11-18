@@ -417,6 +417,16 @@ class FxList : public ui::Node {
     // one's place (arrange clamps it to the new content).
     float scroll() const { return scroll_; }
     void setScroll(float v) { scroll_ = v; }
+    // A scroll by `dy` units (the edge scroll): true when the list moved.
+    bool scrollBy(float dy) {
+        const float limit = std::max(0.0f, content() - bounds().h);
+        const float next = std::clamp(scroll_ + dy, 0.0f, limit);
+        if (next == scroll_) return false;
+        scroll_ = next;
+        relayout();
+        invalidate();
+        return true;
+    }
     void arrange(const ui::Canvas& canvas, const ui::Rect& b) override {
         setBounds(b);
         const bool bar = content() > b.h + 0.5f;
@@ -1591,7 +1601,7 @@ void Mixer::dragFx(const std::string& track, model::Id fx, DragPhase phase, ui::
     dragMods_ = mods;
     if (phase == DragPhase::End) return endDrag(true);
     showDragCursor();
-    noteDragEdge(p);
+    noteDragEdge(p, phase == DragPhase::Begin);
     root_.requestAnimationFrame();
 }
 
@@ -1733,10 +1743,13 @@ void Mixer::resolveFxDrop() {
     const auto index = chainMoveIndex(dragged->chainIndex, chainGap);
     d.home = !index;  // in its own chain, where it already is
     if (!index) return;
-    const float y =
-        gap < slots.size() ? slots[gap]->bounds().y - 2 : slots.back()->bounds().bottom() + 0.5f;
-    d.marker = ui::Rect{homeList->bounds().x, y - 0.5f, homeList->bounds().w, 3}.intersect(
-        homeList->bounds());
+    // The bar stays where the list shows: at its edge for a gap that is
+    // scrolled out of view.
+    const ui::Rect list = homeList->bounds();
+    const float y = std::clamp(
+        gap < slots.size() ? slots[gap]->bounds().y - 2 : slots.back()->bounds().bottom() + 0.5f,
+        list.y + 0.5f, std::max(list.y + 0.5f, list.bottom() - 2.5f));
+    d.marker = ui::Rect{list.x, y - 0.5f, list.w, 3}.intersect(list);
     d.index = *index;
     d.drop = DragView::Drop::Reorder;
 }
@@ -1840,17 +1853,38 @@ void Mixer::showDragCursor() {
 // the zone at the left or right edge of the strips that scroll, or past it,
 // scrolls them that way at the arrange view's speeds, so a drop can reach a
 // strip that is out of view. The masters, pinned at the right, do not scroll.
-void Mixer::noteDragEdge(ui::Point p) {
+// A plug-in held over its own strip, within the zone at the top or bottom of
+// the strip's plug-in list or past it, scrolls that list, so a drop can
+// reach a place in a chain longer than the list shows. The zone the drag
+// began in (`begin`: the drag's first point) waits until the pointer has
+// left it once: the first and last rows in view lie inside the zones, and
+// picking one of them up is not yet a wish to scroll.
+void Mixer::noteDragEdge(ui::Point p, bool begin) {
     const ui::Rect area = static_cast<StripRow*>(row_)->scrolledArea();
     edgeV_ = ui::edgeScrollSpeed(p.x, area.x, area.right());
+    edgeListV_ = 0;
+    int zone = 0;  // the list's zone the pointer is inside: top -1, bottom 1
+    if (const Strip* over = stripAt(p);
+        drag_->kind == DragView::Kind::Fx && over && over->track == drag_->track) {
+        const ui::Rect list = over->chain->bounds();
+        edgeListV_ = ui::edgeScrollSpeed(p.y, list.y, list.bottom());
+        if (p.y >= list.y && p.y <= list.bottom()) zone = (edgeListV_ > 0) - (edgeListV_ < 0);
+    }
+    if (begin)
+        edgeListHeld_ = zone;
+    else if (zone != edgeListHeld_)
+        edgeListHeld_ = 0;
+    if (edgeListHeld_ != 0) edgeListV_ = 0;
     if (!edgeResolving_) edgeIdle_ = false;  // the pointer moved: there may be more to scroll
 }
 
-bool Mixer::autoScrolling() const { return edgeV_ != 0 && drag_->kind != DragView::Kind::None; }
+bool Mixer::autoScrolling() const {
+    return (edgeV_ != 0 || edgeListV_ != 0) && drag_->kind != DragView::Kind::None;
+}
 
 bool Mixer::autoScroll(double seconds) {
     if (!autoScrolling()) {
-        edgeV_ = 0;
+        edgeV_ = edgeListV_ = 0;
         return false;
     }
     // At an end of the strips nothing more happens until the pointer moves.
@@ -1874,7 +1908,11 @@ bool Mixer::autoScroll(double seconds) {
             break;
     }
     edgeResolving_ = false;
-    const bool moved = static_cast<StripRow*>(row_)->scrollBy(edgeV_ * static_cast<float>(seconds));
+    bool moved = static_cast<StripRow*>(row_)->scrollBy(edgeV_ * static_cast<float>(seconds));
+    if (edgeListV_ != 0)
+        for (const Strip& st : strips_)
+            if (auto* list = dynamic_cast<FxList*>(st.chain); list && st.track == drag_->track)
+                moved = list->scrollBy(edgeListV_ * static_cast<float>(seconds)) || moved;
     edgeIdle_ = !moved && seconds > 0;
     return moved;
 }
@@ -1882,7 +1920,8 @@ bool Mixer::autoScroll(double seconds) {
 // The drag is over: drop it (one command, one undo step) or let it go.
 void Mixer::endDrag(bool commit) {
     const DragView done = *drag_;
-    edgeV_ = 0;
+    edgeV_ = edgeListV_ = 0;
+    edgeListHeld_ = 0;
     edgeIdle_ = false;
     *drag_ = DragView{};
     root_.setDragCursor(std::nullopt);

@@ -384,7 +384,9 @@ also scrolls the tracks up and down. The piano roll does the same for notes:
 hold a note or a selection rectangle at an edge and the roll scrolls in
 time, or up and down the keys. So does the mixer, sideways, for a strip, a
 plug-in or an output you are dragging to a strip that is out of view, and
-the rack window, for modules, a cable or a selection rectangle.
+the rack window, for modules, a cable or a selection rectangle. A plug-in
+held at the top or bottom of its own strip's list scrolls that list, when
+the chain is longer than the list shows.
 
 ### Splitting, copying and deleting
 

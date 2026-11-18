@@ -598,8 +598,9 @@ instructions are in `docs/guides/installing.md`.
   cell that cannot be connected. A drag held at the edge of the arrangement scrolls the view
   and takes the thing in hand with it; so do a note held at the piano
   roll's edge, a strip, plug-in or output held at the edge of the mixer's
-  strips, and modules, a cable or a marquee held at the edge of the rack
-  window's space (not a plug-in list that scrolls inside its strip). The resize,
+  strips, a plug-in held at an end of its strip's plug-in list, and
+  modules, a cable or a marquee held at the edge of the rack
+  window's space. The resize,
   text and move cursors and the edge scroll in the arrangement and the
   piano roll have been watched on a Linux desktop (Hyprland, the app
   under XWayland), where the system draws the cursor and the frame clock
