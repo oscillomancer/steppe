@@ -1645,7 +1645,7 @@ It is never a restart notice and takes no place in the suspect window, and reten
 5 of them apart from the 20 crash reports, so they cannot evict the report behind a suspicion. The app can name the
 report a bridge's death may have caused: the worker mints the id and sends it with the end, and the failed fx's
 `engine.status.failed_errors[]` entry and `fx.failed` carry it as `incident` once the end was observed (it may name
-no report: a repeat, the run's limit); the GUI's viewer lists such a report like any other, but a failed strip does not link to it yet. The supervisor writes bridge reports on a thread of its own
+no report: a repeat, the run's limit); the GUI's viewer lists such a report like any other, and a failed effect's row in the FX window has a "Show report" button beside Restart that opens the viewer on it (the mixer shows no failure yet; that waits for the strip redesign). The supervisor writes bridge reports on a thread of its own
 (drained before its own report and exit), so the disk work of a bridge report no longer holds up its receive loop;
 the writer's contract is tested, the loop's non-blocking is not (no test slows a write down). Tested on Linux only
 (unit tests, `clap-host.diagnostics-inventory` with the real bridge); the Windows exception
