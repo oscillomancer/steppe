@@ -473,6 +473,97 @@ TEST_CASE("MIDI editor: an empty roll can marquee without a note anchor") {
     CHECK(f.app->head().version == version);
 }
 
+TEST_CASE("MIDI editor: a note held at the roll's edge scrolls the roll and goes with it") {
+    Fixture f;
+    if (!f.ok) return;
+    using T = ui::PointerEvent::Type;
+    f.exec("midi.edit",
+           R"({"item":")" + f.item + R"(","ops":[{"op":"remove","notes":[0,1,2,3]}]})");
+    f.exec("midi.edit",
+           R"({"item":")" + f.item + R"(","ops":[{"op":"add","pitch":60,"start":1,"length":1}]})");
+    REQUIRE(f.editor->open(f.item));
+    f.frame();
+    auto& state = f.editor->state();
+    REQUIRE(state.notes.size() == 1);
+    const ui::Rect roll = f.editor->roll()->bounds();
+    const ui::Point body = f.at(1.5, 60);
+    REQUIRE(roll.contains(body));
+    // In the middle of the roll a drag scrolls nothing.
+    f.pointer(T::Down, body);
+    f.pointer(T::Move, {body.x + 30, body.y});
+    CHECK_FALSE(f.editor->autoScrolling());
+    CHECK_FALSE(f.editor->autoScroll(1.0));
+    // Held at the right edge the roll scrolls on and the note, still under
+    // the pointer, is later each time; further out is faster.
+    const double scroll = state.scrollBeat, pitches = state.topPitch;
+    f.pointer(T::Move, {roll.right() - 4, body.y});
+    REQUIRE(f.editor->autoScrolling());
+    const double before = state.dBeats;
+    CHECK(f.editor->autoScroll(0.5));
+    const double once = state.scrollBeat;
+    CHECK(once > scroll);
+    CHECK(state.dBeats > before);
+    f.pointer(T::Move, {roll.right() + 60, body.y});
+    CHECK(f.editor->autoScroll(0.5));
+    CHECK(state.scrollBeat - once > once - scroll);
+    CHECK(state.topPitch == pitches);  // the pitches stayed
+    // Back inside it stops, and the note lands where the pointer is.
+    const ui::Point inside{roll.x + roll.w / 2, body.y};
+    f.pointer(T::Move, inside);
+    CHECK_FALSE(f.editor->autoScrolling());
+    const double held = state.scrollBeat, moved = state.dBeats;
+    CHECK_FALSE(f.editor->autoScroll(1.0));
+    CHECK(state.scrollBeat == held);
+    CHECK(moved > 1.0);
+    f.pointer(T::Up, inside);
+    f.frame();
+    REQUIRE(state.notes.size() == 1);
+    CHECK(state.notes[0].start == doctest::Approx(1 + moved));
+    CHECK(state.notes[0].pitch == 60);
+    CHECK_FALSE(f.editor->autoScrolling());
+
+    // Rows: a move held at the bottom scrolls down the keys; changing a
+    // note's length there does not.
+    const double top = state.topPitch;
+    const ui::Point again = f.at(state.notes[0].start + 0.5, 60);
+    REQUIRE(roll.contains(again));
+    f.pointer(T::Down, again);
+    f.pointer(T::Move, {again.x, roll.bottom() - 3});
+    REQUIRE(f.editor->autoScrolling());
+    CHECK(f.editor->autoScroll(0.25));
+    CHECK(state.topPitch < top);
+    f.pointer(T::Cancel, {again.x, roll.bottom() - 3});
+    f.root->capture(nullptr);
+    CHECK_FALSE(f.editor->autoScrolling());  // a drag given up scrolls no more
+    state.topPitch = top;
+    state.scrollBeat = state.notes[0].start - 1;
+    f.frame();
+    const ui::Point end{f.at(state.notes[0].start + 1, 60).x - 2, f.at(0, 60).y};
+    REQUIRE(roll.contains(end));
+    f.pointer(T::Down, end);
+    f.pointer(T::Move, {end.x - 20, roll.bottom() - 3});
+    CHECK(state.drag == gui::RollState::Drag::ResizeEnd);
+    CHECK_FALSE(f.editor->autoScrolling());
+    f.pointer(T::Cancel, {end.x - 20, roll.bottom() - 3});
+    f.root->capture(nullptr);
+
+    // Leftwards the roll stops half a beat before the item's start (a
+    // marquee from empty space, held at the left edge).
+    state.scrollBeat = 1.0;
+    f.frame();
+    const ui::Point empty{roll.x + roll.w / 2, roll.y + roll.h / 2};
+    f.pointer(T::Down, empty);
+    f.pointer(T::Move, {roll.x + 3, empty.y - 20});
+    REQUIRE(state.drag == gui::RollState::Drag::Marquee);
+    REQUIRE(f.editor->autoScrolling());
+    CHECK(f.editor->autoScroll(10.0));
+    CHECK(state.scrollBeat == -0.5);
+    CHECK_FALSE(f.editor->autoScroll(1.0));  // nothing more to scroll
+    CHECK(state.scrollBeat == -0.5);
+    f.pointer(T::Cancel, {roll.x + 3, empty.y - 20});
+    f.root->capture(nullptr);
+}
+
 TEST_CASE("MIDI editor: selected notes painted on top win overlapping hit tests") {
     Fixture f;
     if (!f.ok) return;

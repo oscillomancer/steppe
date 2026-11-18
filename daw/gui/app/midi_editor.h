@@ -126,6 +126,11 @@ class MidiEditor {
     // Tests and the actions.
     RollState& state() { return state_; }
     ui::Node* roll() const { return roll_; }
+    // Edge scroll in the piano roll (gui.md §4.7): true while a drag is held
+    // at an edge of the roll; autoScroll advances it by `seconds` and is
+    // true when the view moved (sync calls it with the frame's time).
+    bool autoScrolling() const;
+    bool autoScroll(double seconds);
     ui::TextArea* notation() const { return text_; }
     MidiEventList* eventList() const { return eventList_.get(); }
     std::uint64_t beginGesture();
@@ -176,6 +181,7 @@ class MidiEditor {
     ui::Node* listPane_ = nullptr;
     ui::Node* rollPane_ = nullptr;
     ui::Node* roll_ = nullptr;
+    std::optional<std::chrono::steady_clock::time_point> edgeAt_;  // the edge scroll's last step
     ui::Node* keys_ = nullptr;
     ui::Node* velocity_ = nullptr;
     ui::Node* ccLane_ = nullptr;

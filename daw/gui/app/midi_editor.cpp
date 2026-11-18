@@ -213,6 +213,74 @@ class Roll : public ui::Node {
     }
 
     bool onPointer(const ui::PointerEvent& e) override {
+        const bool handled = handle(e);
+        noteDrag(e);
+        return handled;
+    }
+
+    // Edge scroll, as in the arrange view (gui.md §4.3): a note drag or a
+    // marquee held within kEdgeZone of the roll's left or right edge, or
+    // past it, scrolls in time; a move and a marquee also scroll the
+    // pitches at the top and bottom. The press point goes with the content
+    // and the drag's last event is delivered again, so the notes in hand
+    // stay under the pointer.
+    static constexpr float kEdgeZone = 24;
+    bool autoScrolling() const { return edgeVx_ != 0 || edgeVy_ != 0; }
+    bool autoScroll(double seconds) {
+        if (!autoScrolling()) return false;
+        if (!scrollsAtEdge()) {
+            edgeVx_ = edgeVy_ = 0;
+            return false;
+        }
+        const double beat = s_.scrollBeat, top = s_.topPitch;
+        s_.scrollBeat += static_cast<double>(edgeVx_) * seconds / s_.pixelsPerBeat;
+        // Leftwards it stops just before the item's start, where the view opens.
+        if (edgeVx_ < 0) s_.scrollBeat = std::max(s_.scrollBeat, std::min(beat, kLeftLimit));
+        s_.topPitch = std::clamp(
+            top - static_cast<double>(edgeVy_) * seconds / static_cast<double>(s_.rowHeight), 12.0,
+            127.0);
+        const auto dx = static_cast<float>((s_.scrollBeat - beat) * s_.pixelsPerBeat);
+        const auto dy = static_cast<float>((top - s_.topPitch) * static_cast<double>(s_.rowHeight));
+        if (dx == 0 && dy == 0) return false;  // at an end of the view's range
+        press_.x -= dx;
+        press_.y -= dy;
+        handle(last_);
+        repaintAll();
+        return true;
+    }
+
+  private:
+    static constexpr double kLeftLimit = -0.5;  // beats before the item's start
+    bool scrollsAtEdge() const {
+        return s_.drag == RollState::Drag::Move || s_.drag == RollState::Drag::ResizeEnd ||
+               s_.drag == RollState::Drag::ResizeStart || s_.drag == RollState::Drag::Marquee;
+    }
+    void noteDrag(const ui::PointerEvent& e) {
+        using T = ui::PointerEvent::Type;
+        if (!scrollsAtEdge() || e.type != T::Move) {
+            if (!scrollsAtEdge() || e.type == T::Up || e.type == T::Cancel) edgeVx_ = edgeVy_ = 0;
+            return;
+        }
+        auto along = [](float at, float from, float to) {
+            auto speed = [](float depth) {
+                return depth <= 0 ? 0.0f : std::min(2400.0f, 120.0f + 30.0f * depth);
+            };
+            return at > to - kEdgeZone     ? speed(at - (to - kEdgeZone))
+                   : at < from + kEdgeZone ? -speed(from + kEdgeZone - at)
+                                           : 0.0f;
+        };
+        const ui::Rect b = bounds();
+        const bool rows = s_.drag == RollState::Drag::Move || s_.drag == RollState::Drag::Marquee;
+        edgeVx_ = along(e.pos.x, b.x, b.right());
+        edgeVy_ = rows ? along(e.pos.y, b.y, b.bottom()) : 0.0f;
+        last_ = e;
+        if (autoScrolling() && root()) root()->requestAnimationFrame();  // sync advances it
+    }
+    float edgeVx_ = 0, edgeVy_ = 0;  // design units per second
+    ui::PointerEvent last_;
+
+  public:
+    bool handle(const ui::PointerEvent& e) {
         const Geometry g{s_, bounds()};
         using T = ui::PointerEvent::Type;
         if (e.type == T::Cancel) {
@@ -1382,8 +1450,30 @@ void MidiEditor::openNoteMenu(ui::Point at, double itemBeat) {
                     ui::Rect{at.x, at.y, 0, 0}, ui::Placement::Below);
 }
 
+bool MidiEditor::autoScrolling() const {
+    return roll_ && static_cast<const Roll*>(roll_)->autoScrolling();
+}
+
+bool MidiEditor::autoScroll(double seconds) {
+    if (!roll_ || !static_cast<Roll*>(roll_)->autoScroll(seconds)) return false;
+    if (keys_) keys_->invalidate();
+    if (velocity_) velocity_->invalidate();
+    return true;
+}
+
 void MidiEditor::sync() {
     if (!isOpen()) return;
+    // A drag held at the roll's edge scrolls by the time since the last pass
+    // (at most 50 ms of it, so a stalled frame is not a jump).
+    if (autoScrolling()) {
+        const auto now = std::chrono::steady_clock::now();
+        const double seconds =
+            edgeAt_ ? std::min(0.05, std::chrono::duration<double>(now - *edgeAt_).count()) : 0.0;
+        edgeAt_ = now;
+        if (autoScroll(seconds) || seconds == 0) root_.requestAnimationFrame();
+    } else {
+        edgeAt_.reset();
+    }
     applyHeight();  // a smaller window or a taller neighbour shrinks the panel
     if (playhead_ && roll_) static_cast<RollPlayhead*>(playhead_)->place(roll_->bounds());
     const bool replaced = app_.projectGeneration() != projectGeneration_;

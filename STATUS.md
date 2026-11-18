@@ -594,8 +594,8 @@ instructions are in `docs/guides/installing.md`.
   edges, an I-beam over text, the move cursor on a thing being moved (not
   yet: cursors in the rack, the routing matrix and for drops that are
   refused). A drag held at the edge of the arrangement scrolls the view
-  and takes the thing in hand with it (not yet in the piano roll, the
-  rack or the mixer). The transport bar's
+  and takes the thing in hand with it, and so does a note held at the
+  piano roll's edge (not yet in the rack or the mixer). The transport bar's
   engine readout is in words ("48 kHz · 256 samples") and warns in colour
   only of a stopped engine, dropouts, render gaps or plug-in errors; the
   toolbar's buttons are quiet at rest. A side panel at the right edge,

@@ -378,7 +378,9 @@ the arrangement: the view scrolls that way, faster the further out you
 hold it, and stops when you bring the pointer back in. This works for
 items, their ends and fades, automation points, a selection rectangle,
 and the loop range, markers and regions in the ruler. An item being moved
-also scrolls the tracks up and down.
+also scrolls the tracks up and down. The piano roll does the same for notes:
+hold a note or a selection rectangle at an edge and the roll scrolls in
+time, or up and down the keys.
 
 ### A track's buttons
 

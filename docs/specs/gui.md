@@ -1349,6 +1349,16 @@ octave), Left/Right move it a grid step, Q quantizes it (every note when
 none is selected), Escape clears it. With the event list shown, the delete
 action removes its selected rows, notes and CC events alike.
 
+**Edge scroll**, as in the arrange view (§4.3, the same zone and speeds): a
+note move, a change of a note's start or end, or a marquee held within 24
+units of the roll's left or right edge, or past it, scrolls the roll in
+time, and the notes in hand stay under the pointer. A move and a marquee
+also scroll the pitches at the roll's top and bottom, within the range the
+wheel has. Leftwards it stops half a beat before the item's start.
+`MidiEditor::sync` advances it by frame time (at most 50 ms a pass);
+`MidiEditor::autoScroll(seconds)` is the step, which tests drive without a
+clock. Velocity and controller drags do not scroll.
+
 The panel's top border is a drag handle: dragging resizes the panel (up is
 taller; up to nearly the whole window, always leaving the transport and a strip
 of arrange, and clamped again whenever the window shrinks or a neighbouring
