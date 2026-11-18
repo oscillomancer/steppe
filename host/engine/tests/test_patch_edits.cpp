@@ -4,6 +4,7 @@
 // stage 3, ADR-0092): dummy devices and the fixture plug-ins only.
 #include <doctest/doctest.h>
 
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -153,6 +154,10 @@ TEST_CASE("a patch-only edit while playing sounds exactly like a compiled reload
                         backend.run(n);
                 };
                 cycles(100);
+                // A full renderer waiting for the callback: every run takes
+                // the edit from the same renderer position.
+                if (options.anticipative)
+                    REQUIRE(engine.awaitRendered(std::numeric_limits<std::int64_t>::max()));
                 const auto generation = engine.planGeneration();
                 if (run == 0) REQUIRE(engine.load(next));
                 if (run == 1) REQUIRE(engine.load(withMarker(next, 4)));
