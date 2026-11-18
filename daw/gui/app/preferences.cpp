@@ -9,12 +9,39 @@
 #include "supple/json/parse.h"
 #include "supple/json/write.h"
 #include "supple/ui/popup.h"
+#include "supple/ui/scroll_view.h"
 #include "supple/ui/widgets.h"
 
 namespace supple::gui {
 namespace {
 
 constexpr const char* kSchema = engine::kPreferencesSchema;
+
+// The dialog's column. It asks for the height its settings need; the popup
+// keeps it inside the window, and when that leaves less, the settings'
+// scroll view takes what is left under the header, which stays in place.
+class Form : public ui::Node {
+  public:
+    using Node::Node;
+    ui::ScrollView* scroll = nullptr;
+    float limit = 0;  // the most the settings may take; 0: what the window leaves
+    ui::Size measure(const ui::Canvas& c, ui::Size available) override {
+        scroll->layout.maxHeight = limit > 0 ? limit : 1e9f;
+        const ui::Size all = Node::measure(c, available);
+        const float body = std::min(scroll->measure(c, available).h, scroll->layout.maxHeight);
+        rest_ = all.h - body;  // the header, the gaps and the padding
+        return all;
+    }
+    void arrange(const ui::Canvas& c, const ui::Rect& r) override {
+        scroll->layout.maxHeight =
+            std::min(scroll->layout.maxHeight, std::max(kLeast, r.h - rest_));
+        Node::arrange(c, r);
+    }
+
+  private:
+    static constexpr float kLeast = 80;
+    float rest_ = 0;
+};
 
 Error threadLimitError() {
     return Error("preferences.audio_threads", "audio processing thread limit is out of range",
@@ -289,7 +316,7 @@ std::vector<std::string> PreferencesDialog::idleNotes(bool onLinux) {
 
 void PreferencesDialog::open() {
     if (root_.popupOpen()) root_.closePopups();
-    auto form = std::make_unique<ui::Node>("prefs");
+    auto form = std::make_unique<Form>("prefs");
     form->layout.dir = ui::Layout::Dir::Column;
     form->layout.width = ui::SizeRule::fixed(640);
     form->layout.height = ui::SizeRule::content();
@@ -303,16 +330,24 @@ void PreferencesDialog::open() {
         ui::SizeRule::fraction();
     header.emplace<ui::Button>("prefs.close", "Close", [this] { root_.closePopups(); });
 
-    section(*form, "prefs.section.audio", "Audio");
-    auto& audio = row(*form, "prefs.audio", "Audio device");
+    // The settings scroll when the window is too low to hold them all; the
+    // header and its Close stay in place.
+    auto& scroll = form->emplace<ui::ScrollView>("prefs.scroll");
+    scroll.layout.height = ui::SizeRule::content();
+    form->scroll = &scroll;
+    form->limit = bodyLimit;
+    ui::Node* body = &scroll.content();
+    body->layout.gap = 6;
+    section(*body, "prefs.section.audio", "Audio");
+    auto& audio = row(*body, "prefs.audio", "Audio device");
     audio_ = &audio.emplace<ui::Button>("prefs.audio.open", "", [this] {
         if (onAudioDevice) onAudioDevice();
     });
     audio_->layout.width = ui::SizeRule::fraction();
     audio_->layout.height = ui::SizeRule::fixed(26);
 
-    section(*form, "prefs.section.recording", "Recording and import");
-    auto& monitor = row(*form, "prefs.monitor", "Input monitoring on new tracks");
+    section(*body, "prefs.section.recording", "Recording and import");
+    auto& monitor = row(*body, "prefs.monitor", "Input monitoring on new tracks");
     monitor_ = &monitor.emplace<ui::Button>("prefs.monitor.set", "");
     monitor_->layout.width = ui::SizeRule::fraction();
     monitor_->layout.height = ui::SizeRule::fixed(26);
@@ -330,21 +365,21 @@ void PreferencesDialog::open() {
             monitor_->bounds());
     };
 
-    auto& imports = row(*form, "prefs.imports", "Copy imported audio");
+    auto& imports = row(*body, "prefs.imports", "Copy imported audio");
     imports_ = &imports.emplace<ui::Button>("prefs.imports.set", "On", [this] {
         if (auto result = setCopyImports(!prefs_.copyImports); !result && onError)
             onError("preferences: " + result.error().toString());
     });
     imports_->layout.width = ui::SizeRule::fraction();
     imports_->layout.height = ui::SizeRule::fixed(26);
-    form->emplace<ui::Label>(
+    body->emplace<ui::Label>(
             "prefs.imports.note",
             "The project keeps working when the original file is moved or deleted.", ui::Font::Ui,
             "small", "ink-quiet")
         .layout.height = ui::SizeRule::fixed(20);
 
-    section(*form, "prefs.section.plugins", "Plug-ins");
-    auto& isolation = row(*form, "prefs.isolation", "Third-party plug-ins run");
+    section(*body, "prefs.section.plugins", "Plug-ins");
+    auto& isolation = row(*body, "prefs.isolation", "Third-party plug-ins run");
     isolation_ = &isolation.emplace<ui::Button>("prefs.isolation.set", "");
     isolation_->layout.width = ui::SizeRule::fraction();
     isolation_->layout.height = ui::SizeRule::fixed(26);
@@ -365,14 +400,14 @@ void PreferencesDialog::open() {
             ui::makeMenu("prefs.isolation.menu", std::move(items), [this] { root_.closePopup(); }),
             isolation_->bounds());
     };
-    form->emplace<ui::Label>("prefs.isolation.note",
+    body->emplace<ui::Label>("prefs.isolation.note",
                              "Applies as plug-ins load. Stock plug-ins always run in the app; a "
                              "plug-in's own setting wins.",
                              ui::Font::Ui, "small", "ink-quiet")
         .layout.height = ui::SizeRule::fixed(20);
 
-    section(*form, "prefs.section.editing", "Editing");
-    auto& mouse = row(*form, "prefs.mouse", "Mouse modifiers");
+    section(*body, "prefs.section.editing", "Editing");
+    auto& mouse = row(*body, "prefs.mouse", "Mouse modifiers");
     mouse
         .emplace<ui::Button>("prefs.mouse.open", "Edit mouse modifiers…", [this] { mouse_.open(); })
         .layout.height = ui::SizeRule::fixed(26);
@@ -382,13 +417,13 @@ void PreferencesDialog::open() {
     // setting in force is never out of sight.
     advancedOpen_ = advancedOpen_ || prefs_.audioThreads != Preferences{}.audioThreads ||
                     prefs_.lockMemory || prefs_.preventDeepIdle;
-    auto& fold = section(*form, "prefs.section.advanced", "Advanced");
+    auto& fold = section(*body, "prefs.section.advanced", "Advanced");
     advancedToggle_ = &fold.emplace<ui::Button>("prefs.advanced.toggle", "", [this] {
         advancedOpen_ = !advancedOpen_;
         refresh();
     });
     advancedToggle_->quiet = true;
-    auto& advanced = form->emplace<ui::Node>("prefs.advanced");
+    auto& advanced = body->emplace<ui::Node>("prefs.advanced");
     advanced.layout.dir = ui::Layout::Dir::Column;
     advanced.layout.height = ui::SizeRule::content();
     advanced.layout.gap = 6;

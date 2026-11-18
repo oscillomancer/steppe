@@ -34,6 +34,7 @@
 #include "supple/ui/list.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/root.h"
+#include "supple/ui/scroll_view.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
 #include "supple/views/mouse_map.h"
@@ -1264,9 +1265,54 @@ TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
     prefs.onLinux = true;
     prefs.open();
     f.root->frame(false);
+    // The window here holds it all: nothing to scroll.
+    auto* scroll = dynamic_cast<ui::ScrollView*>(f.node("prefs.scroll"));
+    REQUIRE(scroll);
+    CHECK(scroll->contentHeight() <= scroll->bounds().h + 0.5f);
     REQUIRE(f.root->click("prefs.close"));
+    // With less room than the settings need, the dialog stops growing and
+    // the settings scroll under the header; the wheel brings the last one up.
+    prefs.bodyLimit = 240;
     prefs.open();
     f.root->frame(false);
+    scroll = dynamic_cast<ui::ScrollView*>(f.node("prefs.scroll"));
+    REQUIRE(scroll);
+    CHECK(scroll->bounds().h == doctest::Approx(240));
+    CHECK(scroll->contentHeight() > 400);
+    CHECK(f.node("prefs")->bounds().h < 320);
+    CHECK(f.node("prefs.close")->bounds().bottom() <= scroll->bounds().y);
+    const float before = f.node("prefs.latency.set")->bounds().y;
+    CHECK(before > scroll->bounds().bottom());  // out of view
+    ui::PointerEvent wheel;
+    wheel.type = ui::PointerEvent::Type::Wheel;
+    wheel.pos = f.centre(scroll);
+    wheel.wheelY = -20;
+    f.root->pointer(wheel);
+    f.root->frame(false);
+    CHECK(f.node("prefs.latency.set")->bounds().bottom() <= scroll->bounds().bottom() + 0.5f);
+    CHECK(f.node("prefs.close")->bounds().bottom() <= scroll->bounds().y);  // the header stayed
+    f.snapshot("preferences-scrolled.png");
+    REQUIRE(f.root->click("prefs.close"));
+    prefs.bodyLimit = 0;
+    prefs.open();
+    f.root->frame(false);
+    // The window is the limit otherwise: in one too low for the settings the
+    // dialog stays inside it and they scroll; it grows back with the window.
+    const float whole = f.node("prefs")->bounds().h;
+    f.window->setSize(1400, 420);
+    f.root->frame(false);
+    scroll = dynamic_cast<ui::ScrollView*>(f.node("prefs.scroll"));
+    CHECK(f.node("prefs")->bounds().y >= 8);
+    CHECK(f.node("prefs")->bounds().bottom() < 420);
+    CHECK(scroll->bounds().bottom() <= f.node("prefs")->bounds().bottom());
+    CHECK(scroll->contentHeight() > scroll->bounds().h + 100);
+    CHECK(f.node("prefs.close")->bounds().bottom() <= scroll->bounds().y);
+    f.snapshot("preferences-low-window.png");
+    f.window->setSize(1400, 900);
+    f.root->frame(false);
+    CHECK(near(f.node("prefs")->bounds().h, whole));
+    scroll = dynamic_cast<ui::ScrollView*>(f.node("prefs.scroll"));
+    CHECK(scroll->contentHeight() <= scroll->bounds().h + 0.5f);
     CHECK(f.node("prefs.advanced")->visible);  // as it was left
     f.snapshot("preferences-advanced.png");
     // Audio threads, from the menu; out of range refused.

@@ -55,6 +55,7 @@ process audio, locking memory, keeping CPUs out of deep idle) is under
 **Advanced**: click **Show** beside it. You do not need those to get started.
 Locking memory and the CPU idle setting work on Linux only, and are listed
 only there.
+In a low window the settings scroll under the dialog's heading.
 
 - **Linux:** the rate and buffer size are requests to PipeWire, which shares
   the graph with other apps. It changes the rate only while no other client

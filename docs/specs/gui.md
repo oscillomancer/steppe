@@ -2219,7 +2219,13 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   **Plug-ins** (Third-party plug-ins run), **Editing** (Mouse modifiers) and
   **Advanced** (Audio processing threads, Lock memory, Keep CPUs out of deep
   idle). Advanced (`prefs.advanced`) is closed until its **Show** is clicked
-  (`prefs.advanced.toggle`, then **Hide**); the dialog grows to hold it. It
+  (`prefs.advanced.toggle`, then **Hide**); the dialog grows to hold it,
+  up to what the window leaves a popup (its height less 16 units): past
+  that the settings scroll under the heading and its Close, which stay in
+  place (`prefs.scroll`, a `ui::ScrollView` whose height follows its content
+  up to `layout.maxHeight`, set by the dialog's column from the room it is
+  given; the wheel or its bar). A window resized while the dialog is open
+  is followed. It
   stays as it was left while the app runs, and opens by itself when one of
   its three settings is not at its default, so that a setting in force is
   never out of sight. Whether it is open is not saved. Lock memory and

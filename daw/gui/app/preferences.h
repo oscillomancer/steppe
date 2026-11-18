@@ -64,6 +64,9 @@ class PreferencesDialog {
 #else
     bool onLinux = false;
 #endif
+    // The most room the settings under the header may take before they
+    // scroll, in design units. 0: what the window leaves (tests set it).
+    float bodyLimit = 0;
     void setDefaultMonitor(model::Monitor m);  // applied at once and saved
     Status setMemoryLock(bool requested);
     Status setPreventDeepIdle(bool requested);
