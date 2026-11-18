@@ -35,6 +35,7 @@
 #include "supple/model/source_mapping.h"
 #include "supple/ui/root.h"
 #include "supple/ui/text_field.h"
+#include "supple/ui/widgets.h"
 #include "supple/views/arrange.h"
 #include "supple/views/envelope_edit.h"
 #include "supple/views/envelope_lane.h"
@@ -847,14 +848,16 @@ TEST_CASE("an old arrange sidecar clamps tiny heights and keeps the TCP top line
         arrange->trackLayout().setGlobalHeight(72);
         root.frame(false);
         const auto row = arrange->tcpRowRect(0);
-        for (const auto* name : {"name", "fx", "addfx"}) {
+        // The name line: the name and the four state cells, at any height.
+        for (const auto* name : {"name", "mute", "solo", "arm", "monitor"}) {
             const auto* control = arrange->tcpPanel().controlNode(track, name);
             REQUIRE(control);
             CHECK(control->visible);
             CHECK(control->bounds().y >= row.y);
             CHECK(control->bounds().bottom() <= row.bottom() - views::TcpRowGeometry::kResizeGrip);
         }
-        for (const auto* name : {"mute", "solo", "fader", "pan", "input", "out"}) {
+        for (const auto* name :
+             {"polarity", "mono", "fader", "pan", "input", "fx", "addfx", "env", "out"}) {
             const auto* control = arrange->tcpPanel().controlNode(track, name);
             REQUIRE(control);
             CHECK_FALSE(control->visible);
@@ -1435,6 +1438,16 @@ void press(ui::Root& root, ui::Node* node, int clicks = 1, unsigned mods = 0) {
     root.pointer({ui::PointerEvent::Type::Up, at, 1, clicks, mods});
 }
 
+// A press on a row's own ground, between its mix and connections lines: at
+// the default height a row's centre is on its fader.
+void pressRow(ui::Root& root, ui::Node* row, int clicks = 1, unsigned mods = 0) {
+    using G = views::TcpRowGeometry;
+    const ui::Rect b = row->bounds();
+    const ui::Point at{b.x + b.w / 2, b.y + (G::kMixTop + G::kCellHeight + G::kLinkTop) / 2};
+    root.pointer({ui::PointerEvent::Type::Down, at, 1, clicks, mods});
+    root.pointer({ui::PointerEvent::Type::Up, at, 1, clicks, mods});
+}
+
 // A control's rect as it is laid out (the toolkit arranges a container's
 // children in the container's own space, so this is the point to press).
 void pressAt(ui::Root& root, const ui::Node& node) {
@@ -1650,17 +1663,17 @@ TEST_CASE("TCP selection follows click, Ctrl+click and Shift+click") {
     const model::Id tr1 = *model::Id::parse("tr_1");
     const model::Id tr3 = *model::Id::parse("tr_3");
     REQUIRE(panel->rowNode(tr1));
-    press(root, panel->rowNode(tr1));
+    pressRow(root, panel->rowNode(tr1));
     CHECK(tcp.is("tr_1"));
     CHECK(tcp.selected.size() == 1);
-    press(root, panel->rowNode(tr3), 1, ui::kCtrl);
+    pressRow(root, panel->rowNode(tr3), 1, ui::kCtrl);
     CHECK(tcp.is("tr_1"));
     CHECK(tcp.is("tr_3"));
-    press(root, panel->rowNode(tr3), 1, ui::kCtrl);  // toggles off
+    pressRow(root, panel->rowNode(tr3), 1, ui::kCtrl);  // toggles off
     CHECK_FALSE(tcp.is("tr_3"));
-    press(root, panel->rowNode(tr1));
-    press(root, panel->rowNode(tr3), 1, ui::kShift);  // extends
-    CHECK(tcp.selected.size() == 3);                  // tr_1..tr_3
+    pressRow(root, panel->rowNode(tr1));
+    pressRow(root, panel->rowNode(tr3), 1, ui::kShift);  // extends
+    CHECK(tcp.selected.size() == 3);                     // tr_1..tr_3
     CHECK(tcp.error.empty());
 }
 
@@ -1683,13 +1696,57 @@ TEST_CASE("a TCP row's meter stands at its right edge, clear of the controls") {
     CHECK(meter.right() <= row.right());
     CHECK(meter.right() >= row.right() - 3);
     CHECK(meter.h >= row.h - 8);  // the row's whole height, less a margin
-    for (const char* what : {"fx", "addfx", "env", "out", "pan", "fader", "input", "name"}) {
+    for (const char* what : {"fx", "addfx", "env", "out", "pan", "fader", "input", "name", "mute",
+                             "solo", "arm", "monitor", "polarity", "mono"}) {
         INFO(what);
         const ui::Node* node = panel->controlNode(tr1, what);
         REQUIRE(node);
         CHECK(node->visible);
         CHECK(node->bounds().right() < meter.x);
     }
+    // Three lines, each in one order (gui.md §4.2). The name line: the name,
+    // then arm, monitor, mute, solo as four cells of one size.
+    auto box = [&](const model::Id& track, const char* what) {
+        return panel->controlNode(track, what)->bounds();
+    };
+    const std::vector<ui::Rect> cells = {box(tr1, "arm"), box(tr1, "monitor"), box(tr1, "mute"),
+                                         box(tr1, "solo")};
+    using G = views::TcpRowGeometry;
+    CHECK(box(tr1, "name").right() <= cells[0].x);
+    for (std::size_t i = 0; i < cells.size(); ++i) {
+        CHECK(cells[i].w == G::kCellWidth);
+        CHECK(cells[i].h == G::kCellHeight);
+        CHECK(cells[i].y == cells[0].y);
+        if (i) CHECK(cells[i].x == cells[i - 1].right() + G::kCellGap);
+    }
+    // The mix line: polarity, mono, the fader, the pan.
+    const std::vector<ui::Rect> mix = {box(tr1, "polarity"), box(tr1, "mono"), box(tr1, "fader"),
+                                       box(tr1, "pan")};
+    for (std::size_t i = 0; i < mix.size(); ++i) {
+        CHECK(mix[i].y >= cells[0].bottom());
+        if (i) CHECK(mix[i].x >= mix[i - 1].right());
+    }
+    // The connections line: the input, fx, +, env, out.
+    const std::vector<ui::Rect> links = {box(tr1, "input"), box(tr1, "fx"), box(tr1, "addfx"),
+                                         box(tr1, "env"), box(tr1, "out")};
+    for (std::size_t i = 0; i < links.size(); ++i) {
+        CHECK(links[i].y >= mix[0].bottom());
+        if (i) CHECK(links[i].x >= links[i - 1].right());
+    }
+    // The routing buttons are boxed in both views; "fx" and "+" are text
+    // alone until the pointer is on them.
+    for (const char* what : {"env", "out"}) {
+        const auto* button = dynamic_cast<const ui::Button*>(panel->controlNode(tr1, what));
+        REQUIRE(button);
+        CHECK_FALSE(button->quiet);
+    }
+    for (const char* what : {"fx", "addfx"}) {
+        const auto* button = dynamic_cast<const ui::Button*>(panel->controlNode(tr1, what));
+        REQUIRE(button);
+        CHECK(button->quiet);
+    }
+    CHECK(links.back().right() == cells.back().right());  // one right edge
+    CHECK(mix.back().right() == cells.back().right());
 }
 
 TEST_CASE("golden: the TCP with one strip of each type") {
@@ -1740,7 +1797,7 @@ TEST_CASE("golden: the TCP with one strip of each type") {
     root.frame(false);
     golden(root, "tcp-strips.png");
     // Scrolled to the end, the last strip clears the foot's "mixer" and
-    // "+ strip"; rows never paint or take clicks there.
+    // "+ track"; rows never paint or take clicks there.
     auto* panel = static_cast<views::TcpPanel*>(root.find("tcp"));
     const ui::Rect foot = root.find("tcp.foot")->bounds();
     REQUIRE(panel->rowNode(*model::Id::parse(child)));
@@ -1820,7 +1877,7 @@ TEST_CASE("a double-click on the TCP's empty space adds a channel; on a row it d
     root.pointer({ui::PointerEvent::Type::Down, {rows.x + rows.w / 2, rows.bottom() - 10}, 1, 1});
     root.pointer({ui::PointerEvent::Type::Up, {rows.x + rows.w / 2, rows.bottom() - 10}, 1, 1});
     CHECK(s.app->head().tracks.size() == before + 1);
-    // A right-click there: the "+ strip" menu at the pointer; its second row adds a buss.
+    // A right-click there: the "+ track" menu at the pointer; its second row adds a buss.
     const ui::Point at{rows.x + rows.w / 2, rows.bottom() - 10};
     root.pointer({ui::PointerEvent::Type::Down, at, 3, 1});
     root.pointer({ui::PointerEvent::Type::Up, at, 3, 1});

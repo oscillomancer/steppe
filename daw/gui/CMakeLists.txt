@@ -82,7 +82,7 @@ target_include_directories(gui-persistence PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ap
 # The app's pieces (shell, generator, actions UI, chrome), shared with tests.
 add_library(gui-app STATIC app/shell.cpp app/crash_banner.cpp app/crash_report_text.cpp app/crash_viewer.cpp app/safe_load.cpp app/generate.cpp app/app_actions.cpp app/actions_list.cpp app/chrome.cpp
   app/plugin_windows.cpp app/floating_panel.cpp app/screensets.cpp app/file_actions.cpp app/midi_editor.cpp app/routing_matrix.cpp app/hardware_audio_matrix.cpp app/strip_learn.cpp app/pan_menu.cpp app/mixer.cpp
-  app/fx_params.cpp app/plugin_browser.cpp app/fx_window.cpp app/render_dialog.cpp app/history_panel.cpp app/side_panel.cpp app/inspector.cpp app/plugin_drag.cpp app/side_browser.cpp app/transport_bar.cpp app/plugin_scales.cpp
+  app/fx_params.cpp app/plugin_browser.cpp app/fx_window.cpp app/fx_attention.cpp app/render_dialog.cpp app/history_panel.cpp app/side_panel.cpp app/inspector.cpp app/plugin_drag.cpp app/side_browser.cpp app/transport_bar.cpp app/plugin_scales.cpp
   app/midi_event_list.cpp app/appearance.cpp app/track_menu.cpp app/mouse_dialog.cpp app/selection_edit.cpp app/preferences.cpp app/audio_device.cpp app/timecode_dialog.cpp app/sync_dialog.cpp
   app/control_map.cpp app/learn_dialog.cpp app/help_actions.cpp app/help_support.cpp
   app/rack_controls.cpp app/rack_device.cpp app/rack_engine.cpp app/rack_face.cpp app/rack_labels.cpp app/rack_plugin_params.cpp app/rack_scene.cpp app/rack_space.cpp
@@ -179,6 +179,9 @@ if(SUPPLE_BUILD_TESTS)
     get_filename_component(stem ${src} NAME_WE)
     set_tests_properties(gui-app.tests.${stem} PROPERTIES ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
   endforeach()
+  # The longest of them: past the presets' 600 s on a slow macOS CI runner and
+  # more than half of it under ThreadSanitizer on a busy machine.
+  set_tests_properties(gui-app.tests.test_gestures PROPERTIES TIMEOUT 1200)
   supple_add_tests(gui-ui SOURCES tests/test_ui.cpp DEPS SDL3::SDL3 LABELS gui)
   target_compile_definitions(gui-ui.tests PRIVATE
     SUPPLE_GUI_FONTS_DIR="${PROJECT_SOURCE_DIR}/assets/fonts"

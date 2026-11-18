@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "app_actions.h"
+#include "fx_attention.h"
 #include "meter_feed.h"
 #include "plugin_drag.h"
 #include "selection_edit.h"
@@ -50,7 +51,8 @@ class Mixer {
     void toggle();
     void setVisible(bool visible);
     bool visible() const;
-    void sync();  // every loop pass
+    void sync();                                     // every loop pass
+    FxAttention& attention() { return attention_; }  // the marks' source (tests set its status)
 
     // The panel's height (UI state, persisted with the panels): clamped to what
     // the window can give it; the default fits about five plug-ins.
@@ -88,6 +90,7 @@ class Mixer {
         ui::MonitorButton* monitor = nullptr;
         ui::Label* value = nullptr;
         ui::Meter* meter = nullptr;
+        ui::Node* peak = nullptr;        // the meter's highest peak, in dB; a click clears it
         ui::Button* fx = nullptr;        // "fx" at the strip's top right: the chain
         ui::Button* addFx = nullptr;     // "+" beside it: the plugin browser
         ui::Button* input = nullptr;     // channels: the record input
@@ -166,7 +169,7 @@ class Mixer {
     ui::Root::OverlayHandle ghost_;
     std::string structure_;
     std::uint64_t version_ = ~0ull;
-    std::uint64_t overridesVersion_ = ~0ull;  // the engine's load overrides, as last drawn
+    FxAttention attention_{app_};  // disabled and failed plug-ins: the marks' one rule
     std::uint64_t projectGeneration_ = ~std::uint64_t{0};
     std::uint64_t gesture_ = 0;  // a serial per drag: separate drags are separate undo steps
 };

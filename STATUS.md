@@ -593,7 +593,21 @@ instructions are in `docs/guides/installing.md`.
   gets the palette colour the fewest tracks carry (`track.add`, for agents
   and the GUI alike). Track rows and mixer
   strips are quiet at rest (mute, solo, polarity and mono show their colour
-  only when on) and each row has a meter 8 units wide. The transport bar's
+  only when on) and each row has a meter 8 units wide. Rows and strips carry
+  the same buttons in one order (arm, monitor, mute, solo; then polarity and
+  mono), a buss's missing ones leaving their places empty; a buss or a
+  master is told by a mark before its name, and colour on a row or strip is
+  the track's own. A new project's rows are as low as their three lines
+  allow. A mixer strip's meter has a dB scale (0, 12, 24, 36, 48) with
+  lines across its bars, and every meter's bar goes from green through
+  yellow and orange to red just under 0 dB. The pointer's shape says what
+  a press would do: resize arrows at an item's ends and fade corners, a
+  note's ends, the loop range's ends, a row's lower edge and the panels'
+  edges, an I-beam over text, the move cursor on a thing being moved (not
+  yet: cursors in the rack, the routing matrix and for drops that are
+  refused). A drag held at the edge of the arrangement scrolls the view
+  and takes the thing in hand with it, and so does a note held at the
+  piano roll's edge (not yet in the rack or the mixer). The transport bar's
   engine readout is in words ("48 kHz · 256 samples") and warns in colour
   only of a stopped engine, dropouts, render gaps or plug-in errors; the
   toolbar's buttons are quiet at rest. A side panel at the right edge,
@@ -1441,6 +1455,11 @@ Session and editing:
   macOS/Windows CI has not run on it yet.
 
 GUI:
+- ThreadSanitizer does not run the stock plugins' on-screen embedding probes
+  (`plugin.<name>.embedding`, labelled `tsan-skip`): one at a time, on the
+  software renderer the `tsan` preset draws with, they take twelve minutes.
+  They run in every other preset that builds the GUI, and the DAW's own GUI
+  tests run under `tsan`.
 - Automation-item point editing requires an amplitude magnitude above 0.000000001; restore
   the amplitude before editing a flattened item.
 - Plan compilation (including media decoding/resampling), Lua execution and
@@ -1646,7 +1665,7 @@ It is never a restart notice and takes no place in the suspect window, and reten
 5 of them apart from the 20 crash reports, so they cannot evict the report behind a suspicion. The app can name the
 report a bridge's death may have caused: the worker mints the id and sends it with the end, and the failed fx's
 `engine.status.failed_errors[]` entry and `fx.failed` carry it as `incident` once the end was observed (it may name
-no report: a repeat, the run's limit); the GUI's viewer lists such a report like any other, and a failed effect's row in the FX window has a "Show report" button beside Restart that opens the viewer on it (the mixer shows no failure yet; that waits for the strip redesign). The supervisor writes bridge reports on a thread of its own
+no report: a repeat, the run's limit); the GUI's viewer lists such a report like any other, and a failed effect's row in the FX window has a "Show report" button beside Restart that opens the viewer on it (the mixer's slot shows a failed plug-in too: the slot's solid outline, a red bar down its left edge and " (failed)"). The supervisor writes bridge reports on a thread of its own
 (drained before its own report and exit), so the disk work of a bridge report no longer holds up its receive loop;
 the writer's contract is tested, the loop's non-blocking is not (no test slows a write down). Tested on Linux only
 (unit tests, `clap-host.diagnostics-inventory` with the real bridge); the Windows exception
@@ -1688,7 +1707,7 @@ notice (a banner under the transport, Dismiss acknowledges; wording provisional)
 service says the same on stderr at start for engine runs only, naming itself; each dismisses only its own
 incidents. Help > Crash reports… is the viewer (all roles: list, one report in plain words with the detail folded, copy a text
 summary, mark as seen, delete one or all, open the folder; the sample reports of the tests have little in them, so the thread, command and
-bridge sections are checked on written-out JSON, and a real report's look is checked only on Linux). The app's own safe-load question (File > Open, recovery and template loads; separate process, not loaded or normal; remembered per exact build in preferences `plugin_overrides`, 1.10) is delivered on Linux; a failed effect links to its report, and a disabled plug-in is marked in the mixer, the FX window and racks, with Enable. Edit > Preferences lists the remembered choices, with Forget and Forget all. The notice
+bridge sections are checked on written-out JSON, and a real report's look is checked only on Linux). The app's own safe-load question (File > Open, recovery and template loads; separate process, not loaded or normal; remembered per exact build in preferences `plugin_overrides`, 1.10) is delivered on Linux; a failed effect links to its report, and a disabled plug-in is marked in the mixer (its slot: a bar inside the outline, " (disabled)"; "fx" in the warning colour, in the mixer and the track list, while the chain holds a disabled or failed one), the FX window and racks, with Enable. Edit > Preferences lists the remembered choices, with Forget and Forget all. The notice
 lists every report-named and marker file in the folder once at start, synchronously, and reads the newest eight
 unacknowledged reports (each at most 4 MiB) to learn their role; retention keeps the folder to about 20 reports,
 but is applied only when a report is published, so the cost is bounded by the folder's contents, not by 20.

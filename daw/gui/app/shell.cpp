@@ -226,6 +226,10 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
     };
     tcp.fx = [runFor](const model::Id& track) { runFor("ui.fx.chain", track); };
     tcp.addFx = [runFor](const model::Id& track) { runFor("ui.fx.add", track); };
+    tcp.fxNeedsAttention = [this](const model::Id& track) {
+        const model::Track* t = app_.head().tracks.find(track);
+        return t && attention_.chainNeeds(app_.head(), *t);
+    };
     tcp.addSend = [this](const model::Id& from, const model::Id& to) {
         json::Value args = json::Value::object();
         args["from"] = from.str();
@@ -306,6 +310,8 @@ void Shell::sync(bool event) {
     const model::Session& s = app_.head();
     const bool replaced = app_.projectGeneration() != projectGeneration_;
     const bool moved = replaced || s.version != shownVersion_;
+    // A load override or a failed plug-in changes "fx" without a new project version.
+    if (attention_.poll() && arrange_) arrange_->tcpPanel().refresh();
     if (ui_.selectedTracks != shownSelection_) {  // the mixer selects too
         shownSelection_ = ui_.selectedTracks;
         if (arrange_) arrange_->tcpPanel().invalidate();
@@ -329,16 +335,16 @@ void Shell::sync(bool event) {
             changes = &previous->changes;
         shownVersion_ = s.version;
         projectGeneration_ = app_.projectGeneration();
-        const int strips = static_cast<int>(s.tracks.size());
-        counts_->setText(std::to_string(strips) + (strips == 1 ? " strip  " : " strips  ") +
+        const std::size_t tracks = views::countTracks(s);
+        counts_->setText(std::to_string(tracks) + (tracks == 1 ? " track  " : " tracks  ") +
                          "version " + std::to_string(s.version));
         arrange_->show(s, changes, projectGeneration_);
     }
     const auto note = app_.preparingAudio()              ? std::string("Preparing audio…")
                       : !app_.preparationError().empty() ? app_.preparationError()
                                                          : editStatus_;
-    const int strips = static_cast<int>(s.tracks.size());
-    counts_->setText(std::to_string(strips) + (strips == 1 ? " strip  " : " strips  ") +
+    const std::size_t tracks = views::countTracks(s);
+    counts_->setText(std::to_string(tracks) + (tracks == 1 ? " track  " : " tracks  ") +
                      "version " + std::to_string(s.version) + (note.empty() ? "" : " · " + note));
     std::vector<model::Id> selected;
     for (const auto& text : ui_.selectedItems)

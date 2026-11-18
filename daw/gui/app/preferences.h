@@ -63,6 +63,24 @@ class PreferencesDialog {
                       std::filesystem::path file);
     void open();
     bool isOpen() const;
+    // The lines under Lock memory and under Keep CPUs out of deep idle: on
+    // Linux the cautions and how to allow each; elsewhere that it is
+    // Linux's alone.
+    static std::vector<std::string> memoryNotes(bool onLinux);
+    static std::vector<std::string> idleNotes(bool onLinux);
+    // Whether one of those two rows is shown: always on Linux; elsewhere
+    // only while its setting is on (it can then be turned off).
+    static bool showsLinuxOnly(bool onLinux, bool on);
+    // Whether this is Linux, for those two rows (tests set it to see the
+    // dialog either way on any platform).
+#if defined(__linux__)
+    bool onLinux = true;
+#else
+    bool onLinux = false;
+#endif
+    // The most room the settings under the header may take before they
+    // scroll, in design units. 0: what the window leaves (tests set it).
+    float bodyLimit = 0;
     void setDefaultMonitor(model::Monitor m);  // applied at once and saved
     Status setMemoryLock(bool requested);
     Status setPreventDeepIdle(bool requested);
@@ -101,6 +119,9 @@ class PreferencesDialog {
     ui::Button* imports_ = nullptr;
     ui::Button* isolation_ = nullptr;
     ui::Button* audio_ = nullptr;
+    ui::Node* advanced_ = nullptr;  // the low-level settings, under their heading
+    ui::Button* advancedToggle_ = nullptr;
+    bool advancedOpen_ = false;  // kept while the app runs
     std::array<ui::Label*, 4> latencyNote_{};
     // The remembered plug-in choices (safe-load, topic 7d): a section of its own at the end.
     void rebuildRemembered();

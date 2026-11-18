@@ -3957,7 +3957,7 @@ Result:
 
 Real-time engine state: backend, rate, block, device period, latency, xruns.
 
-preparing_audio: source preparation is pending; the previous ready plan stays audible. prepared_version is the last compiled version, preparation_version the pending target (zero when idle); preparation_error explains a failed preparation. plan_latency: plugin delay plus prepared MIDI audio lead in frames; midi_lead_frames reports the latter. midi_inputs/midi_outputs give per-port enabled/timing/loss/warnings, and for outputs what each sends (clock, transport, spp, mtc), as midi.inputs.get/midi.outputs.get. device_latency: frames from the engine's outputs to the device. restart_needed: the device changed rate or went away; engine.stop and engine.start again. midi_devices_changed is advisory: MIDI topology changed but audio keeps running. midi_devices_message asks for an explicit engine restart to pick up the new set; existing port names stay fixed. midi_out_dropped counts hardware output rejections, queue/device loss and pending events discarded at shutdown. midi_output_warnings lists outputs skipped at start; midi_output_latency is signed audio-minus-MIDI latency per output, in frames. sync: external sync (sync.get has the same status with the settings). midi_dropped: MIDI input messages/packets rejected or lost to bounded queues (JACK and native; zero for the dummy backend). midi_warnings lists inputs skipped at start, with device, numeric os_error, message and corrective hint. meter_drops: entries a full ring dropped (the renderer's, the audio callback's) — a strip's peak/RMS missed a block, never audio. dropped/voice_dropped count lost plug-in output/voice records. memory_lock reports requested/active and an optional OS error with errno and a corrective hint, including while stopped. Bridges are excluded. cpu_idle_latency reports the owned 20 microsecond request with the same status/error fields, and automatic: held without the option because a bridged plug-in plays live (Linux; an automatic failure is no warning). It affects system idle while held and leaves CPU frequency policy unchanged. thp_opt_out: active, advised_only, inherited (the process was already kept out when the engine started; left as it was, not undone at stop) and an optional error, Linux only (khugepaged collapsing memory would stall audio threads). audio_page_faults: page faults since the engine started; scope audio_threads counts the callback's and live helpers' (Linux), process the whole process's (macOS, Windows, where major is omitted), none while stopped; saturated: the platform's counter stopped at its limit (macOS 32-bit counts), so minor is 0 and major omitted, not counts. live_helpers is the enabled live helper capacity. scheduling: each thread class's policy (none, normal, fifo, rr, high) and priority as applied at start: the device callback, live helpers, renderer and background helpers (real-time below a real-time callback when permitted). workgroup: whether the live helpers joined the device's audio workgroup (macOS CoreAudio; state none, ready, joined, partial or failed, with the helper counts and the last refusal's OS error, message and hint). warnings includes scheduling fallbacks and plan warnings with corrective actions. failed_errors adds structured code, message, path and hint to each failure, and `incident`, the id of the local crash report the bridge's death may have caused (crash.read; the report may not exist), when it died of a signal or an exception. failed_fx: isolated plugins whose process crashed or hung (silent now; fx.restart re-creates them). bridge_late: callback cycles in which a bridged plugin had not answered by the cycle's bridge deadline (its period or 2 ms, whichever is larger); its output was silent for that cycle, and xruns counts each of these cycles too. bridge_threads_refused: isolated plugins whose bridge audio thread was refused the scheduling it asked for (it runs at what it had and can fall behind under load; grant real-time scheduling to the user and restart the engine).
+preparing_audio: source preparation is pending; the previous ready plan stays audible. prepared_version is the last compiled version, preparation_version the pending target (zero when idle); preparation_error explains a failed preparation. plan_latency: plugin delay plus prepared MIDI audio lead in frames; midi_lead_frames reports the latter. midi_inputs/midi_outputs give per-port enabled/timing/loss/warnings, and for outputs what each sends (clock, transport, spp, mtc), as midi.inputs.get/midi.outputs.get. device_latency: frames from the engine's outputs to the device. restart_needed: the device changed rate or went away; engine.stop and engine.start again. midi_devices_changed is advisory: MIDI topology changed but audio keeps running. midi_devices_message asks for an explicit engine restart to pick up the new set; existing port names stay fixed. midi_out_dropped counts hardware output rejections, queue/device loss and pending events discarded at shutdown. midi_output_warnings lists outputs skipped at start; midi_output_latency is signed audio-minus-MIDI latency per output, in frames. sync: external sync (sync.get has the same status with the settings). midi_dropped: MIDI input messages/packets rejected or lost to bounded queues (JACK and native; zero for the dummy backend). midi_warnings lists inputs skipped at start, with device, numeric os_error, message and corrective hint. meter_drops: entries a full ring dropped (the renderer's, the audio callback's) — a track's peak/RMS missed a block, never audio. dropped/voice_dropped count lost plug-in output/voice records. memory_lock reports requested/active and an optional OS error with errno and a corrective hint, including while stopped. Bridges are excluded. cpu_idle_latency reports the owned 20 microsecond request with the same status/error fields, and automatic: held without the option because a bridged plug-in plays live (Linux; an automatic failure is no warning). It affects system idle while held and leaves CPU frequency policy unchanged. thp_opt_out: active, advised_only, inherited (the process was already kept out when the engine started; left as it was, not undone at stop) and an optional error, Linux only (khugepaged collapsing memory would stall audio threads). audio_page_faults: page faults since the engine started; scope audio_threads counts the callback's and live helpers' (Linux), process the whole process's (macOS, Windows, where major is omitted), none while stopped; saturated: the platform's counter stopped at its limit (macOS 32-bit counts), so minor is 0 and major omitted, not counts. live_helpers is the enabled live helper capacity. scheduling: each thread class's policy (none, normal, fifo, rr, high) and priority as applied at start: the device callback, live helpers, renderer and background helpers (real-time below a real-time callback when permitted). workgroup: whether the live helpers joined the device's audio workgroup (macOS CoreAudio; state none, ready, joined, partial or failed, with the helper counts and the last refusal's OS error, message and hint). warnings includes scheduling fallbacks and plan warnings with corrective actions. failed_errors adds structured code, message, path and hint to each failure, and `incident`, the id of the local crash report the bridge's death may have caused (crash.read; the report may not exist), when it died of a signal or an exception. failed_fx: isolated plugins whose process crashed or hung (silent now; fx.restart re-creates them). bridge_late: callback cycles in which a bridged plugin had not answered by the cycle's bridge deadline (its period or 2 ms, whichever is larger); its output was silent for that cycle, and xruns counts each of these cycles too. bridge_threads_refused: isolated plugins whose bridge audio thread was refused the scheduling it asked for (it runs at what it had and can fall behind under load; grant real-time scheduling to the user and restart the engine).
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -8520,9 +8520,9 @@ Result:
 
 ## `item.mix-to-track@1`
 
-Mix the selected items through their strips onto a new muted channel.
+Mix the selected items through their tracks onto a new muted channel.
 
-Background job. Only the given items sound; each plays through its channel's full strip (take FX, item gain/fades, track FX, automation, fader, pan, Console 9 encode), and the sum is decoded by a neutral Console 9 Buss, as a fresh buss fed by those channels hears it. Sends, parent busses, mute switches and solo are ignored. Span: earliest item start to latest end, no tail. Result: a project-rate stereo float WAV in the media folder on a new muted channel after the last source (under their common parent, else the main master), one item at the span's start. Source items stay. One undo step; job.get returns track, item and file.
+Background job. Only the given items sound; each plays through its channel in full (take FX, item gain/fades, track FX, automation, fader, pan, Console 9 encode), and the sum is decoded by a neutral Console 9 Buss, as a fresh buss fed by those channels hears it. Sends, parent busses, mute switches and solo are ignored. Span: earliest item start to latest end, no tail. Result: a project-rate stereo float WAV in the media folder on a new muted channel after the last source (under their common parent, else the main master), one item at the span's start. Source items stay. One undo step; job.get returns track, item and file.
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -12273,7 +12273,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `author` | string |  |  |  |  |
 | `notes` | string |  |  |  |  |
 | `console9` | boolean |  |  |  |  |
-| `pan_law` | object |  |  |  | Channels' and busses' pan law unless a strip sets its own: db is the centre's cut (0, -2.5, -3, -4.5 or -6; default 0); boost keeps the centre at 0 dB and raises the sides instead |
+| `pan_law` | object |  |  |  | Channels' and busses' pan law unless a track sets its own: db is the centre's cut (0, -2.5, -3, -4.5 or -6; default 0); boost keeps the centre at 0 dB and raises the sides instead |
 | `history_budget_bytes` | integer |  | 1.0.. |  | Estimated retained history byte budget; default 1 GiB. Leases and branch boundaries may exceed it. |
 | `render` | object |  |  |  | Render settings (session-model §1.10); every member optional |
 | `timebase` | string |  |  |  |  |
@@ -14718,7 +14718,7 @@ Result:
 
 ## `route.add@1`
 
-Send audio between strips, or MIDI between channels and rack modules.
+Send audio between tracks, or MIDI between channels and rack modules.
 
 The destination must not feed the source. Master accepts routes. With fx instead of to, the send feeds that plug-in's sidechain (key) input — e.g. a kick keying a compressor on the bass; it is delay-compensated, and soloing the keyed track does not stop the key. MIDI sends use channel or Note Out sources and channel or Notes destinations, midi: {} (all channels unchanged); from_channel filters and to_channel remaps, 0..16 with 0 meaning all/original. to_midi selects a hardware MIDI output by exact name instead of to. Missing outputs warn while audio keeps playing. A rack's Out module (from: mo_N) sends audio to a buss or master: a rack send, added after the destination's Console 9 decode, never encoded, with level and mute only; it follows the mute and solo of the rack's home channel (ADR-0075).
 
@@ -15230,7 +15230,7 @@ Result:
 
 Read audio or MIDI endpoints, existing sends and blocked pairs.
 
-mode: audio (default), midi or hardware_midi (channels/Note Out and hardware inputs to channels/hardware outputs). MIDI sources are channels and Note Out; destinations are channels and Notes, with no audio controls. Audio sources: strips in tree order (depth, parent, parent_send). destinations: strips (kind track), plug-in keys (kind key: fx with a sidechain input) and racks' In modules (kind module: mo_N, named "<rack> » <In>", with rack and home track), each strip's keys and In modules after it. Each channel's rack Out modules follow it among sources (type rack_out, named "<rack> » <Out>", with rack and home track): they send only to busses and masters (their rule), added after the decode, never encoded (ADR-0075). A pair is blocked when the source's rule applies (masters feed only keys), the destination's rule applies (channels take only hardware audio), it is the same strip, or it is listed in cycles (the destination already feeds the source; for an In module, its rack's Outs reach the source; path names its ids, names the same by name). sends: existing routes per pair (to: a strip, an fx or an In module). Otherwise route.add accepts the pair (an In module: route.add {from, to: mo_N}). A source's channels past 2 are auxiliary (ADR-0020); channel_names names those a multi-out plug-in writes ({"3": "Kick"}), and route.add {channels: {from: [3, 4], to: [1, 2]}} sends that pair.
+mode: audio (default), midi or hardware_midi (channels/Note Out and hardware inputs to channels/hardware outputs). MIDI sources are channels and Note Out; destinations are channels and Notes, with no audio controls. Audio sources: tracks in tree order (depth, parent, parent_send). destinations: tracks (kind track), plug-in keys (kind key: fx with a sidechain input) and racks' In modules (kind module: mo_N, named "<rack> » <In>", with rack and home track), each track's keys and In modules after it. Each channel's rack Out modules follow it among sources (type rack_out, named "<rack> » <Out>", with rack and home track): they send only to busses and masters (their rule), added after the decode, never encoded (ADR-0075). A pair is blocked when the source's rule applies (masters feed only keys), the destination's rule applies (channels take only hardware audio), it is the same track, or it is listed in cycles (the destination already feeds the source; for an In module, its rack's Outs reach the source; path names its ids, names the same by name). sends: existing routes per pair (to: a track, an fx or an In module). Otherwise route.add accepts the pair (an In module: route.add {from, to: mo_N}). A source's channels past 2 are auxiliary (ADR-0020); channel_names names those a multi-out plug-in writes ({"3": "Kick"}), and route.add {channels: {from: [3, 4], to: [1, 2]}} sends that pair.
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -15366,7 +15366,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Errors
 
-- `route.channels`: the map pairs channels the strips do not have Hint: pair 1 and 2: {from: [1, 2], to: [2, 1]}
+- `route.channels`: the map pairs channels the tracks do not have Hint: pair 1 and 2: {from: [1, 2], to: [2, 1]}
 - `route.endpoint`: MIDI sends need channel or note-module endpoints Hint: send channel/Note Out MIDI to a channel or Notes module
 - `route.midi`: audio controls do not apply to MIDI routes Hint: use mute and MIDI channel routing
 - `route.rack_send`: a rack send has level and mute only Hint: pan, polarity and channel routing belong in the rack or on the buss
@@ -16857,7 +16857,7 @@ Result:
 
 ## `track.add@1`
 
-Add a channel, buss or master strip and return its id.
+Add a track (a channel, buss or master) and return its id.
 
 parent: a buss/master id (default tr_0); masters have no parent; index: position among its siblings; name: default the first free ch_N, buss_N or mstr_N. A new channel gets the user's default monitoring (on unless set otherwise; monitoring needs the track armed). color: a track colour's name or "#rrggbb", "" for none; default for a channel or buss the palette colour the fewest tracks carry (red first), for a master none.
 
@@ -17750,9 +17750,9 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `midi_channel` | integer |  | 0.0..16.0 |  |  |
 | `record_mode` | string |  |  |  |  |
 | `monitor` | string |  |  |  |  |
-| `parent_send` | boolean |  |  |  | The implicit send to the parent buss/master (off: only explicit sends leave the strip) |
+| `parent_send` | boolean |  |  |  | The implicit send to the parent buss/master (off: only explicit sends leave the track) |
 | `timebase` | string |  |  |  | What this channel's items follow when the tempo changes (those that inherit it): project, beats, time or beats_position; they keep their place now |
-| `channels` | integer |  | 1.0..128.0 |  | 1-2: the strip's main pair; up to 128 adds auxiliary channels 3-128 for routes and plug-in pins (a detector on 3/4, a multi-out instrument's outputs), outside the fader, pan and parent send |
+| `channels` | integer |  | 1.0..128.0 |  | 1-2: the track's main pair; up to 128 adds auxiliary channels 3-128 for routes and plug-in pins (a detector on 3/4, a multi-out instrument's outputs), outside the fader, pan and parent send |
 | `hw_output` | array |  |  |  | Masters: the device outputs the main pair plays to: [l, r], [mono] or [] for none (engine.inputs lists them). Default: tr_0 [1, 2], other masters [] |
 | `lane_mute` | boolean |  |  |  | Masters: silence the master's own items (its prints) and nothing else |
 | `chain_midi` | string |  |  |  | What the FX chain does with MIDI: bus (default; plug-ins hear and feed it in order) or instrument (only the first plug-in with a note input hears the track's MIDI; plug-ins' note output goes nowhere) |
@@ -17855,7 +17855,7 @@ Result:
 
 ```
 
-**Narrow a stereo strip to half width, a little right** (`song`)
+**Narrow a stereo track to half width, a little right** (`song`)
 
 ```json
 {
@@ -17874,7 +17874,7 @@ Result:
 
 ```
 
-**Give a strip the -3 dB pan law** (`song`)
+**Give a track the -3 dB pan law** (`song`)
 
 ```json
 {
@@ -18038,7 +18038,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 
 ### Examples
 
-**Delete the bass strip** (`song_with_saved_template`)
+**Delete the bass track** (`song_with_saved_template`)
 
 ```json
 {
@@ -18130,7 +18130,7 @@ Result:
 
 ## `track.template.load@1`
 
-Add a strip from a track template (settings and FX) in one undo step.
+Add a track from a track template (settings and FX) in one undo step.
 
 Give exactly one of name (in the user's track-templates directory) or path. parent defaults to the master. Every plugin and state is checked before the model changes.
 
@@ -18175,7 +18175,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Examples
 
-**Add the saved bass strip** (`song_with_saved_template`)
+**Add the saved bass track** (`song_with_saved_template`)
 
 ```json
 {
@@ -18196,9 +18196,9 @@ Result:
 
 ## `track.template.save@1`
 
-Save a strip (settings and FX chains) as a named track template.
+Save a track (settings and FX chains) as a named track template.
 
-Writes a supple.track-template/1.0 file to the user's track-templates directory: the strip's type, name, colour, notes, level, pan and monitoring, and its main and input chains as fx.chain.save stores them (semantic patches or base64 state). Not routing or items. replace: true overwrites an existing name.
+Writes a supple.track-template/1.0 file to the user's track-templates directory: the track's type, name, colour, notes, level, pan and monitoring, and its main and input chains as fx.chain.save stores them (semantic patches or base64 state). Not routing or items. replace: true overwrites an existing name.
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -18239,7 +18239,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 
 ### Examples
 
-**Save the bass strip** (`song_with_chain`)
+**Save the bass track** (`song_with_chain`)
 
 ```json
 {
@@ -19165,7 +19165,7 @@ Result:
 
 Set the project's master playrate ratio and preserve-pitch flag.
 
-rate: finite 0.25..4.0 (default 1); preserve_pitch defaults false in a new project. Omitted fields keep their values. Updates during a drag use Origin.gesture like strip faders, and write/touch/latch capture tr_0/playrate coarsely: unlike strip levels (ADR-0061), the curve keeps playing while it is written (no hold or touch return). Recording requires unity. Settings are saved/undoable. File sources convert before take FX and live input mixing; instruments retain their pitch. Scalar edits ramp and converter changes crossfade for 10 ms after priming. Edits include the render horizon and compensated source lookahead; newer requests coalesce while a transition finishes. Long-latency take chains can exceed the usual 200 ms response. effective_rate follows audible output, independently of requested_rate.
+rate: finite 0.25..4.0 (default 1); preserve_pitch defaults false in a new project. Omitted fields keep their values. Updates during a drag use Origin.gesture like track faders, and write/touch/latch capture tr_0/playrate coarsely: unlike track levels (ADR-0061), the curve keeps playing while it is written (no hold or touch return). Recording requires unity. Settings are saved/undoable. File sources convert before take FX and live input mixing; instruments retain their pitch. Scalar edits ramp and converter changes crossfade for 10 ms after priming. Edits include the render horizon and compensated source lookahead; newer requests coalesce while a transition finishes. Long-latency take chains can exceed the usual 200 ms response. effective_rate follows audible output, independently of requested_rate.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 

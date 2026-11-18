@@ -1231,7 +1231,7 @@ q = nil
 ---@field author? string
 ---@field notes? string
 ---@field console9? boolean
----@field pan_law? table Channels' and busses' pan law unless a strip sets its own: db is the centre's cut (0, -2.5, -3, -4.5 or -6; default 0); boost keeps the centre at 0 dB and raises the sides instead
+---@field pan_law? table Channels' and busses' pan law unless a track sets its own: db is the centre's cut (0, -2.5, -3, -4.5 or -6; default 0); boost keeps the centre at 0 dB and raises the sides instead
 ---@field history_budget_bytes? integer Estimated retained history byte budget; default 1 GiB. Leases and branch boundaries may exceed it.
 ---@field render? table Render settings (session-model §1.10); every member optional
 ---@field timebase? "time"|"beats"|"beats_position"
@@ -1965,9 +1965,9 @@ q = nil
 ---@field midi_channel? integer
 ---@field record_mode? "input"|"midi_overdub"|"midi_replace"
 ---@field monitor? "off"|"on"|"auto"
----@field parent_send? boolean The implicit send to the parent buss/master (off: only explicit sends leave the strip)
+---@field parent_send? boolean The implicit send to the parent buss/master (off: only explicit sends leave the track)
 ---@field timebase? "project"|"time"|"beats"|"beats_position" What this channel's items follow when the tempo changes (those that inherit it): project, beats, time or beats_position; they keep their place now
----@field channels? integer 1-2: the strip's main pair; up to 128 adds auxiliary channels 3-128 for routes and plug-in pins (a detector on 3/4, a multi-out instrument's outputs), outside the fader, pan and parent send
+---@field channels? integer 1-2: the track's main pair; up to 128 adds auxiliary channels 3-128 for routes and plug-in pins (a detector on 3/4, a multi-out instrument's outputs), outside the fader, pan and parent send
 ---@field hw_output? integer[] Masters: the device outputs the main pair plays to: [l, r], [mono] or [] for none (engine.inputs lists them). Default: tr_0 [1, 2], other masters []
 ---@field lane_mute? boolean Masters: silence the master's own items (its prints) and nothing else
 ---@field chain_midi? "bus"|"instrument" What the FX chain does with MIDI: bus (default; plug-ins hear and feed it in order) or instrument (only the first plug-in with a note input hears the track's MIDI; plug-ins' note output goes nowhere)
@@ -2348,7 +2348,7 @@ q = nil
 ---@field ["explode-takes"] fun(args: Steppe.item_explode_takes_args): Steppe.item_explode_takes_result Spread an item's takes onto new tracks, or one after another on its track.
 ---@field export fun(args: Steppe.item_export_args): Steppe.item_export_result Write an item's raw audio (WAV) or its MIDI (SMF) to a file.
 ---@field heal fun(args: Steppe.item_heal_args): table Heal compatible consecutive audio pieces without rendering.
----@field ["mix-to-track"] fun(args: Steppe.item_mix_to_track_args): table Mix the selected items through their strips onto a new muted channel.
+---@field ["mix-to-track"] fun(args: Steppe.item_mix_to_track_args): table Mix the selected items through their tracks onto a new muted channel.
 ---@field move fun(args: Steppe.item_move_args): Steppe.item_move_result Move an item in time (position in beats or bar) and/or to another track.
 ---@field paste fun(args: Steppe.item_paste_args): Steppe.item_paste_result Copy items as they were in a version (a clipboard) to tracks and beats.
 ---@field remove fun(args: Steppe.item_remove_args): Steppe.item_remove_result Remove an item with its takes (unpooled sources go too).
@@ -2491,7 +2491,7 @@ q = nil
 ---@field run fun(args?: Steppe.render_queue_run_args): table Run every queued render in order; each one leaves the queue when it is done.
 
 ---@class Steppe.route
----@field add fun(args: Steppe.route_add_args): Steppe.route_add_result Send audio between strips, or MIDI between channels and rack modules.
+---@field add fun(args: Steppe.route_add_args): Steppe.route_add_result Send audio between tracks, or MIDI between channels and rack modules.
 ---@field list fun(): Steppe.route_list_result List sends with endpoints and mixer settings.
 ---@field matrix fun(args?: Steppe.route_matrix_args): table Read audio or MIDI endpoints, existing sends and blocked pairs.
 ---@field remove fun(args: Steppe.route_remove_args): Steppe.route_remove_result Remove a send.
@@ -2540,7 +2540,7 @@ q = nil
 ---@field set fun(args: Steppe.timesig_set_args): Steppe.timesig_set_result Set the meter from a bar on, e.g. {"bar": 9, "meter": "3/4"}.
 
 ---@class Steppe.track
----@field add fun(args?: Steppe.track_add_args): Steppe.track_add_result Add a channel, buss or master strip and return its id.
+---@field add fun(args?: Steppe.track_add_args): Steppe.track_add_result Add a track (a channel, buss or master) and return its id.
 ---@field describe fun(args: Steppe.track_describe_args): Steppe.track_describe_result Describe track groups and requested/applied effective gain at a time.
 ---@field duplicate fun(args: Steppe.track_duplicate_args): Steppe.track_duplicate_result Duplicate channels or busses with their FX, items, sends and automation.
 ---@field freeze fun(args: Steppe.track_freeze_args): table Freeze a channel's items and FX to pre-fader audio and release its plugins.
@@ -2561,8 +2561,8 @@ q = nil
 ---@class Steppe.track.template
 ---@field delete fun(args: Steppe.track_template_delete_args): Steppe.track_template_delete_result Delete a saved track template by name.
 ---@field list fun(): Steppe.track_template_list_result List saved track templates by name, path and effect count.
----@field load fun(args?: Steppe.track_template_load_args): Steppe.track_template_load_result Add a strip from a track template (settings and FX) in one undo step.
----@field save fun(args: Steppe.track_template_save_args): Steppe.track_template_save_result Save a strip (settings and FX chains) as a named track template.
+---@field load fun(args?: Steppe.track_template_load_args): Steppe.track_template_load_result Add a track from a track template (settings and FX) in one undo step.
+---@field save fun(args: Steppe.track_template_save_args): Steppe.track_template_save_result Save a track (settings and FX chains) as a named track template.
 
 ---@class Steppe.transport
 ---@field get fun(): Steppe.transport_get_result The play position and whether it is playing.

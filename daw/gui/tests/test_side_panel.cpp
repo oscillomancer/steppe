@@ -213,6 +213,8 @@ TEST_CASE("side panel: its width drags, clamps and resets; its state saves and r
     f.pass();
     const ui::Rect grip = f.node("side.grip")->bounds();
     const ui::Point at{grip.x + grip.w / 2, grip.y + grip.h / 2};
+    f.root->pointer({ui::PointerEvent::Type::Move, at});
+    CHECK(f.root->cursor() == ui::Cursor::ResizeHorizontal);  // the panel's edge is dragged
     f.root->pointer({ui::PointerEvent::Type::Down, at, 1});
     f.root->pointer({ui::PointerEvent::Type::Move, {at.x - 80, at.y}, 1});
     f.root->pointer({ui::PointerEvent::Type::Up, {at.x - 80, at.y}, 1});
@@ -375,6 +377,13 @@ TEST_CASE("inspector: positions read and write as bar.beat.thousandths, in the b
     CHECK(*gui::inspectorParseBars("3", four) == 8);
     CHECK(*gui::inspectorParseBars(" 3.2 ", four) == 9);
     CHECK(*gui::inspectorParseBars("3.2.500", four) == 9.5);
+    // The third part is a fraction of the beat, not a count of thousandths:
+    // fewer digits mean the same as with zeros after them.
+    CHECK(*gui::inspectorParseBars("3.2.5", four) == 9.5);
+    CHECK(*gui::inspectorParseBars("3.2.50", four) == 9.5);
+    CHECK(*gui::inspectorParseBars("3.2.05", four) == doctest::Approx(9.05));
+    CHECK(*gui::inspectorParseBars("3.2.005", four) == doctest::Approx(9.005));
+    CHECK(*gui::inspectorParseBars("3.2.0", four) == 9.0);
     for (const double beat : {0.0, 1.0, 7.25, 123.456})
         CHECK(*gui::inspectorParseBars(gui::inspectorBarsText(beat, four), four) ==
               doctest::Approx(beat).epsilon(1e-9));
@@ -673,7 +682,7 @@ TEST_CASE("inspector: several items show what they share; one edit is one undo s
     for (const auto& id : {a, b, c}) CHECK_FALSE(f.item(id).mute);
     CHECK(f.text("inspector.mute") == "off");
 
-    // A pill is lit only when all have the state; with one locked the
+    // A cell is lit only when all have the state; with one locked the
     // fields are off, and Lock locks, then unlocks, them all.
     f.exec("item.set", R"({"item":")" + b + R"(","locked":true})");
     f.pass();

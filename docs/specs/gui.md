@@ -160,6 +160,23 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   factor.
 - **Input.** Hit testing front-to-back, pointer capture during drags,
   hover, wheel with precision (trackpad deltas), modifiers, double-click.
+  **Cursors**: the pointer's shape says what a press would do, or what the
+  drag in hand is doing. After every pointer event the root asks the node
+  the events go to (the one under the pointer, or the one holding a drag),
+  then its parents, for `Node::cursorAt`; the first answer other than the
+  arrow is shown (`Root::cursor`, `gui::Window::setCursor`, SDL's system
+  cursors, so each desktop draws its own; one pointer for all the app's
+  windows; nothing under the offscreen driver). The shapes are the arrow,
+  the I-beam, the horizontal and vertical resize arrows, the four-way move
+  and "not allowed". A disabled node has no cursor of its own. Where they
+  apply: a text field or text area (I-beam); the docks' top edges, a track
+  row's lower edge (vertical) and the side panel's edge (horizontal); an
+  item's ends and fade corners, unless it is locked, and an automation
+  item's end; the ends of the loop and punch ranges in the ruler; a note's
+  ends in the piano roll. A press on an item, a note, a range, a region or
+  a marker keeps the arrow until it moves, then shows the move cursor; a
+  trim, slip, fade or warp in hand keeps the horizontal arrows wherever
+  the pointer goes.
   Keyboard: focus chain, Tab navigation, shortcuts resolved by the actions
   system (§6) with context sections (arrange, MIDI editor, mixer, text
   field). Key releases reach the focused node and its parents
@@ -316,8 +333,11 @@ edge (§4.14: the inspector and the history); separate
 floating windows for the FX chain, routing matrix and plugin GUIs. Render and
 other dialogs remain popups. Window layout is UI state (§1.2).
 
-The status line at the window's foot shows the strip count and the session
-version, then a note: "Preparing audio…", a preparation error, or the last
+The status line at the window's foot shows the track count ("7 tracks")
+and the session version. The count is of channels and busses
+(`views::countTracks`): a master is not counted, and an automation lane is
+a row of its track; the track list's heading ("Tracks 7") says the same
+number. Then a note: "Preparing audio…", a preparation error, or the last
 message a view or an action reported. An action that fails (`AppActions`'
 `onError`: a menu entry, a key, a toolbar or transport button, an inspector
 field) puts its message there, and on stderr as before; the message stays
@@ -395,39 +415,68 @@ moves the rate ten cents a step. Like the on-screen knob it runs
 
 ### 4.2 Track control panel (TCP)
 
-Per strip: name (rename in place: a double-click; Enter or a click anywhere
-else keeps the edit, Escape drops it), **strip-type badge** (Channel / Buss /
-Master: colour, shape and label differ — clear at a glance, ADR-0019),
-mute/solo (rounded pills: an ink outline and letter off, filled with their
-own colour on, the colour showing under the pointer), arm (a disc: a red ring
-off, solid red armed), monitor (a speaker: an outline off, solid on, green auto),
-input (channels only for these three), polarity ("Ø") and mono pills at the
-start of the level row (ADR-0022), volume fader and pan
-(Console 9 Channel's controls on channels and busses; plain gain and
-balance on masters; the fader's dB scale comes from `libs/console9`'s
-mapping), "fx" (the chain window) with "+" beside it (the plugin browser
-alone, adding last in the chain; no count, to save room), the "out" button
-(a click opens the routing matrix; drag onto another strip to create a
-route; drop rules follow `route.strip_type`, invalid targets show why before
-the drop; a strip the track already sends to is not a target, since the
-matrix shows one send per pair), and a meter: 8 units wide
-(`TcpRowGeometry::kMeterWidth`), at the row's right edge for the row's whole
-height, with the controls ending before it. "fx", "+", "env" and "out" are
-quiet buttons (`ui::Button::quiet`): their text alone in quiet ink, a box
-under the pointer; "fx" is in full ink when the track's chain or input chain
-holds a plug-in. The input stays a boxed field, since it shows a value. The mixer's strips carry the same controls in the same
-looks (§4.4). The button row starts at the TCP's left edge with mute and
-solo (over polarity and mono) and ends at its right edge with "env" and
-"out", at any depth; a channel's input button takes the room between.
+Per track, a row of up to three lines (`TcpRowGeometry`):
+
+1. **The name line**, at every row height: the track's colour as a stripe
+   down the row's left edge; the type's mark for a buss or a master (below);
+   the name (rename in place: a double-click; Enter or a click anywhere
+   else keeps the edit, Escape drops it); and at the right the four
+   **state cells**: arm, monitor, mute, solo, in that order.
+2. **The mix line**, from 40 units, in signal order: polarity ("Ø") and
+   mono (ADR-0022), the volume fader and the pan (Console 9 Channel's
+   controls on channels and busses; plain gain and balance on masters; the
+   fader's dB scale comes from `libs/console9`'s mapping).
+3. **The connections line**, from 58 units, left to right as the signal
+   goes: the input (channels; it names the device's ports and takes the
+   room), "fx" (the chain window) with "+" beside it (the plugin browser
+   alone, adding last in the chain; no count, to save room), "env" (the
+   automation lanes' menu) and "out" (a click opens the routing matrix;
+   drag onto another strip to create a route; drop rules follow
+   `route.strip_type`, invalid targets show why before the drop; a strip
+   the track already sends to is not a target, since the matrix shows one
+   send per pair).
+
+A meter 8 units wide (`TcpRowGeometry::kMeterWidth`) stands at the row's
+right edge for the row's whole height, with the controls ending before it.
+
+**One button shape.** Arm, monitor, mute, solo, polarity and mono are
+**cells** (`ui::drawStateCell`, `ui::Toggle::cell`): a rounded rectangle,
+18 by 14 units here. Off, a cell is the ground colour with a faint outline
+and a quiet letter; under the pointer it takes a little of its state's
+colour; on, it is filled with it. Arm is a ring in its cell (red, off; a
+disc on the red cell, armed) and monitor a speaker in its cell (a faint
+outline off; solid in full ink on, which is where a new channel starts and
+so not a colour; green with a green outline on auto). The mixer's strips
+carry the same cells in the same order (§4.4).
+
+**A cell is a control's place.** A buss has no arm, monitor or input: their
+places stay empty, so mute and solo are in one column down the whole panel,
+at any depth, and the mix and connections lines start at the panel's left
+edge at any depth.
+
+**The type is a mark, not a colour** (`ui::drawTrackGlyph`). A channel, the
+usual case, has none. A buss has lines joining into one before its name (it
+sums); a master the same ending at a bar (it ends at the device). Both are
+drawn in quiet ink. A frozen track has its snowflake after the mark, and a
+track's groups are small colour tabs under the name's start.
+
+"fx" and "+" are quiet buttons (`ui::Button::quiet`): their text alone in
+quiet ink, a box under the pointer; "fx" is in full ink when the track's
+chain or input chain holds a plug-in. The input, "env" and "out" are boxed,
+as the input and "out" are on a mixer strip, so the routing buttons look
+the same in both views.
 A master that is armed or holds items has a row too, its **lane** (ADR-0057):
-the header shows only the master badge, its name, the lane mute ("M", a pill
-in the mute colour, `track.set {lane_mute}`: it silences the master's own
-items, never the master) and the arm; the master's fader, pan and FX stay in
-the mixer. A lane-muted master's items are drawn dimmed. A master with
+the header shows only the master's mark, its name, the lane mute ("M", in
+the mute cell's place and colour, `track.set {lane_mute}`: it silences the
+master's own items, never the master) and the arm in its cell; the master's
+fader, pan and FX stay in the mixer. A lane-muted master's items are drawn dimmed. A master with
 neither has no row.
-Rows shrink to 24 design units: the name, strip badge, "fx" and "+" fit
-above a four-unit bottom resize grip. The lower buttons hide below 40 units;
-the fader/pan row hides below 58. Track heights clamp to 24–400 units,
+A new project's rows are 60 units high (`TrackLayout::kDefaultHeight`), the
+lowest that shows all three lines clear of the resize grip; a project whose
+UI sidecar holds a row height keeps it.
+Rows shrink to 24 design units: the name line, with its four state cells,
+fits above a four-unit bottom resize grip. The mix line hides below 40
+units; the connections line hides below 58. Track heights clamp to 24–400 units,
 including compact folders and older UI sidecars; expanded takes retain that
 minimum per take lane, plus their item name bar. MIDI key heights remain
 independent (4–48 units, §4.7).
@@ -452,7 +501,7 @@ parent: an insertion marker shows the drop, Escape cancels, and the release is
 one `track.move {track, index}` (`views::reorderIndex` computes the index;
 no-op drops commit nothing). A buss cannot be dropped between channels, and
 a track does not change parent by dragging. The panel's foot ("mixer",
-"+ strip") is a band the rows never cover; the tracks scroll far enough for
+"+ track") is a band the rows never cover; the tracks scroll far enough for
 the last one to clear it. Adding a strip
 offers exactly **Channel, Buss or Master** (`track.add {type}`); a
 double-click on the panel's empty space (or the mixer's, §4.4) adds a channel
@@ -533,6 +582,11 @@ move and resize drags also compare the press-time amplitude, baseline, position,
 length, source length, loop state, envelope and pool. A change cancels the drag
 with `env.changed`; it does not rebase the draft onto the changed item.
 
+**Empty project.** The lanes of a project without a track are bare: no text
+is drawn there. Both ways to begin work from the start: a file dropped on
+the empty lanes makes a track, and "+ track" is in the track panel's foot,
+which no customization removes.
+
 **Item appearance.** An item is drawn in its own colour when it has one
 (`item.set {color}`: a track colour's name or "#rrggbb"), else in its track's
 colour (§7), else in its strip type's (`Lanes::itemColor`): a body at
@@ -580,6 +634,21 @@ the anchor where the first step of the run found it. The run ends when anything
 else moves the view in time (a scroll, follow, the scrollbar), the cursor
 moves, or (with the pointer anchor) the pointer moves. Horizontal zoom is continuous;
 vertical track height per track and global.
+
+**Edge scroll.** A drag in the lanes or the ruler that is held within 24
+units of the lanes' left or right edge (`ArrangeView::kEdgeZone`), or past
+it, scrolls the view in time that way: 120 units per second at the zone's
+start, 30 more for each unit further out, at most 2400. The thing in hand
+stays under the pointer, so it moves along the timeline as the view does
+(the press point goes with the content: `ItemGestures::scrolled`), and the
+drop lands where the pointer is. A move, a take dragged out of its item
+and a marquee also scroll the rows at the lanes' top and bottom; a trim,
+slip, fade or point drag stays on its row. It stops when the pointer
+returns inside, at the release, when the drag is cancelled, and at the
+timeline's start. The view advances by frame time (`ArrangeView::poll`,
+at most 50 ms a frame) and asks for frames only while it moves;
+`ArrangeView::autoScroll(seconds)` is the step, which tests drive
+without a clock.
 By default Alt+wheel anywhere over the arrange view, and Ctrl+wheel over the
 TCP, adds eight design units per notch to every track row, including hidden tracks and compact folders, preserving
 mixed heights and clamping each independently. Fractional wheel deltas work
@@ -764,25 +833,71 @@ channels, fader + pan + meters, Console 9 on/off as a project toggle with its
 level-matched behaviour explained in its tooltip. Meters update only when
 their entire ancestor chain is visible, and clear peak hold on reopening.
 
-Small "fx" and "+" buttons sit at each strip's top right (the TCP's: the
-chain window, and the plugin browser alone); a double-click on the name
-renames the strip in place, as in the TCP. Under the chain (and its sends),
-the arm, centred (channels and masters: a master records its output,
-ADR-0057); an input button (channels) and "out" (a click
-opens the routing matrix, a drag onto a buss or master makes a send; on a
-master it reads "out 1/2", "out 5" or "out —" and opens the hardware outputs
-menu instead, ADR-0056: None, the device's stereo pairs 1/2, 3/4…, then each
-output alone as mono, with the port names JACK reports; the current choice is
-checked and a pick runs `track.set {hw_output}`. While the engine is stopped
-the menu offers None and says the engine lists the outputs); then one row with the small polarity pill ("Ø"), monitoring
-(channels) and the mono pill (ADR-0022), above the pan. Everything under the
-chain has a fixed height and the chain takes what a strip's missing rows
-leave, so every strip's fader sits at the same height. The strip's plug-in chain lists every plug-in,
+A strip is 92 units wide and is **one grid of four columns**: a row is four
+cells, two halves or one full width, and every button is 16 units high
+(the cells of §4.2). Top to bottom, in the order of the signal, with the
+buttons used most next to the fader:
+
+1. **The colour bar** (`mixer.color.<track>`): the track's own colour,
+   across the strip's top.
+2. **The header** (`mixer.namerow.<track>`): the type's mark for a buss or a
+   master (`mixer.type.<track>`, §4.2), a frozen track's snowflake
+   (`mixer.frozen.<track>`) and the name, which has the strip's width to
+   itself (a double-click renames the strip in place, as in the TCP).
+3. **The plug-ins**, the one part that follows the panel's height (below),
+   under their own line (`mixer.fxrow.<track>`): small "fx" at its left and
+   "+" at its right (the TCP's: the chain window, and the plugin browser
+   alone), a rule between them.
+4. **Group tabs**, when the project has groups, and **the sends**, when the
+   track has some (below).
+5. **Routing** (`mixer.io.<track>`): an input button (channels; it takes the
+   room) and "out" (a click opens the routing matrix, a drag onto a buss or
+   master makes a send; on a master it reads "out 1/2", "out 5" or "out —"
+   and opens the hardware outputs menu instead, ADR-0056: None, the
+   device's stereo pairs 1/2, 3/4…, then each output alone as mono, with
+   the port names JACK reports; the current choice is checked and a pick
+   runs `track.set {hw_output}`. While the engine is stopped the menu
+   offers None and says the engine lists the outputs).
+6. **Stereo** (`mixer.util.<track>`): polarity ("Ø") and mono (ADR-0022),
+   two halves. They act before the pan, so they sit on it.
+7. **The pan.**
+8. **The state row** (`mixer.state.<track>`): arm, monitor, mute and solo,
+   four cells in that order, directly over the fader. A buss has no arm or
+   monitor and a master no monitor (a master records its output,
+   ADR-0057): their cells stay empty (`mixer.state.1.<track>`,
+   `mixer.state.2.<track>`), so mute and solo are at the same place on
+   every strip. Each takes a click anywhere in its cell.
+9. **The fader and the meter** (`mixer.faderrow.<track>`), then their
+   **values**.
+
+Every type has the same rows, each of a fixed height, so every strip's
+chain is as tall and every fader sits at the same height. Between the fader
+and the meter is the meter's scale (`mixer.scale.<track>`): 0, then 12,
+24, 36 and 48 for the dB under it, at the places `ui::Meter::position`
+gives. Each number has a tick that ends where the meter starts, and the
+meter draws the same levels as hairlines across both bars
+(`ui::Meter::setMarks`), so a level is read on the bars themselves. A
+bar's colour belongs to the level, not to the bar (`ui::Meter::colorAt`,
+every meter): the meter colour (green) up to -18 dB, the hot colour
+(yellow) at -9, orange at -4 and the clip colour (red) from -1 dB up,
+blended between them, so a bar that reaches 0 dB shows all four. The peak
+is fainter than the RMS over it while both are green and at full strength
+from yellow up.
+Under the fader is its value (`mixer.value.<track>`); under the meter the
+highest peak it has shown since it was last cleared (`mixer.peak.<track>`,
+`ui::Meter::maxPeakDb`), in dB with a sign and one decimal, empty until
+there is one and in the clip colour over 0 dB. A click on that number or
+on the meter clears it, with the held peaks and the clip lights; so does
+reopening the mixer. The strip's plug-in chain lists every plug-in,
 after a channel's rack slots: one line per rack whose Out feeds the channel
 (`racks::racksFeeding`), in route order, with the rack's name on a rack
 module's face and a faint "rack". A click on one opens the rack window on
 the rack (a double-click's second press does nothing more); a right-click
-is the strip's. The chain scrolls when it is
+is the strip's. A bypassed plug-in's name is dimmed and struck through; an
+offline one's is dimmed inside a dashed outline (their `valueText` ends in
+" (bypassed)" or " (offline)"). An empty chain is bare: no text is drawn in
+it.
+The chain scrolls when it is
 longer than its section, and takes the room a strip's
 unused rows would leave (sends show only when there are some, two rows of
 them, scrolled by the wheel or a bar when there are more; busses have no arm
@@ -794,7 +909,7 @@ Alt+click on a plug-in removes it
 (`fx.remove`, one undo step); a double-click on the chain's empty part opens
 the plugin browser for that strip. A double-click on the strips' empty space
 (not on a strip) adds a channel; a right-click there offers Channel, Buss or
-Master, as the TCP's "+ strip". A right-click on a strip's fader, pan, mute,
+Master, as the TCP's "+ track". A right-click on a strip's fader, pan, mute,
 solo, arm, polarity, mono or monitoring button offers its MIDI learn, as in
 the TCP (§4.2); elsewhere on the strip, the track menu. A send dragged from "out" draws a wire from the
 button and outlines the strip it would feed, as in the TCP. The
@@ -1218,6 +1333,19 @@ LLM-native differentiator: the same text an agent writes is visible and
 editable by the human. The event list edits notes and CC events;
 double-click editing requires a row hit and edits that row. Roll gesture
 anchors use exact model timing rather than the rounded `midi.notes` query.
+
+**Roll appearance.** The notes are drawn in the colour their item has in
+the arrangement (`views::Lanes::itemColor`: the item's own, else its
+track's, else its strip type's), so the roll and the item it edits look
+alike; the velocity lane's stems take the same colour. A selected note is
+in the focus colour with an ink outline. Velocity shows as fullness: a
+note keeps 45% of its colour at velocity 0 and all of it at 127, the rest
+drawn towards the ground. The rows of the white keys are on the panel
+colour and those of the black keys on the darker ground, as on the
+keyboard at the left; the line under each C is stronger. The title names
+the track and the item as the arrangement labels it ("MIDI · Rhodes —
+Chords · 4 notes · grid 1/16"), with the item's id only while it has no
+name.
 A right-click on the grid (on a note: that note joins or is the selection)
 opens **Delete**, **Copy**, **Cut**, **Paste** (at the pointer's beat on the
 grid, pitches as copied) and **Duplicate** for the selected notes; the same
@@ -1228,6 +1356,16 @@ that section too: Up/Down transpose the selection a semitone (Shift: an
 octave), Left/Right move it a grid step, Q quantizes it (every note when
 none is selected), Escape clears it. With the event list shown, the delete
 action removes its selected rows, notes and CC events alike.
+
+**Edge scroll**, as in the arrange view (§4.3, the same zone and speeds): a
+note move, a change of a note's start or end, or a marquee held within 24
+units of the roll's left or right edge, or past it, scrolls the roll in
+time, and the notes in hand stay under the pointer. A move and a marquee
+also scroll the pitches at the roll's top and bottom, within the range the
+wheel has. Leftwards it stops half a beat before the item's start.
+`MidiEditor::sync` advances it by frame time (at most 50 ms a pass);
+`MidiEditor::autoScroll(seconds)` is the step, which tests drive without a
+clock. Velocity and controller drags do not scroll.
 
 The panel's top border is a drag handle: dragging resizes the panel (up is
 taller; up to nearly the whole window, always leaving the transport and a strip
@@ -1830,8 +1968,14 @@ every selected track: one `fx.add` each, inside one transaction for
 several ("Add FX"), so one undo step. The browser stays open with its
 search as typed, and its status line (`.status`) says what happened:
 "Added to *track*", "Added to *N* tracks", "Select a track first" when no
-track is selected, or the command's message. The popup browser of a
-strip's "+" (§4.5) is unchanged and may be open at the same time.
+track is selected, or the command's message. **Add waits for a chosen
+row** on all three pages: a page opens with no row chosen and its Add
+disabled, so that a stray click cannot put the list's first row on every
+selected track. A click on a row or the arrow keys choose one; a search
+chooses its first hit, so typing and Enter still adds; with the search
+empty Enter does nothing. The popup browser of a
+strip's "+" (§4.5) is for one track and is unchanged (it opens on its first
+row); it may be open at the same time.
 
 *Chains* lists the saved FX chain presets (`fx.chain.list`; node ids under
 `side.browser.chains`), by name with their size at the right ("1 effect",
@@ -1920,12 +2064,12 @@ inspector adds no command:
 | Field (node) | Shows | Accepts | `item.set` |
 |---|---|---|---|
 | Name (`inspector.name`) | The active take's name; unnamed, the file's name as a placeholder | Any text | `name` |
-| Start (`inspector.start`) | "3.1.000": bar, beat of that bar's meter, thousandths of the beat, each from 1 | "3", "3.2" or "3.2.500" (`inspectorParseBars`) | `position` (beats) |
+| Start (`inspector.start`) | "3.1.000": bar, beat of that bar's meter, thousandths of the beat, each from 1 | "3", "3.2" or "3.2.500"; the third part is the digits after the beat's decimal point, up to three, so "3.2.5" is "3.2.500" and "3.2.005" five thousandths (`inspectorParseBars`) | `position` (beats) |
 | Length (`inspector.length`) | "32 beats" | A number, with or without "beats" | `length` |
 | Follows (`inspector.timebase`) | Its track's setting, Beats, Time, or Beats, start only | A choice | `timebase` |
 | Gain (`inspector.gain_db`) | "-3.0 dB" | A number, with or without "dB" | `gain_db` |
 | Fade in, Fade out (`inspector.fade_in`, `inspector.fade_out`) | "0.400 s" | A number, with or without "s" | `fade_in`, `fade_out` |
-| Mute, Loop, Lock (`inspector.mute`, `.loop`, `.locked`) | Pills, lit when on | A click | `mute`, `loop`, `locked` |
+| Mute, Loop, Lock (`inspector.mute`, `.loop`, `.locked`) | Cells (§4.2), lit when on | A click | `mute`, `loop`, `locked` |
 | File (`inspector.file`) | An audio item's file path, then its rate, channels and length | Read only | |
 
 When the heard take plays audio, its speed and pitch follow
@@ -1935,7 +2079,7 @@ When the heard take plays audio, its speed and pitch follow
 |---|---|---|---|
 | Speed (`inspector.playrate`) | "1.000 x" | A number, with or without "x" | `playrate` |
 | Pitch (`inspector.pitch`) | "0.00 st" | A number, with or without "st" | `pitch` |
-| Keep pitch (`inspector.preserve_pitch`) | A pill, lit when on | A click | `preserve_pitch` |
+| Keep pitch (`inspector.preserve_pitch`) | A cell, lit when on | A click | `preserve_pitch` |
 
 An item with several takes lists them in its order (`inspector.takes`,
 at most six rows before it scrolls), a take without a name as "Take *n*";
@@ -1953,10 +2097,10 @@ in the field being typed in. A locked item's fields are disabled, all but
 Lock, under a line that says so. An item with no take cannot be named.
 
 **Several items** show the fields they can share: Follows, Gain, the
-fades and the three pills. Name, Start, Length, the take settings, the
+fades and the three cells. Name, Start, Length, the take settings, the
 take list and the file are for one item only. A field shows the value all
 of them have, and is empty with the placeholder "mixed" when they differ;
-a pill is lit when all have the state on. An edit runs `item.set` on each
+a cell is lit when all have the state on. An edit runs `item.set` on each
 inside one transaction (`Dispatcher::transact`, labelled "Item gain" and
 so on): one undo step, and all of them or none when the command refuses
 one. With any of them locked the fields are disabled; Lock then locks the
@@ -2180,6 +2324,28 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   auto; `preferences.json`, supple.preferences/1.6, sets
   `EngineApp::defaultMonitor`, so the agents' track.add follows it too), and
   a way into the mouse modifiers.
+  The dialog is in sections, each a heading over a rule
+  (`prefs.section.<name>.title`): **Audio** (the audio device), **Recording
+  and import** (Input monitoring on new tracks, Copy imported audio),
+  **Plug-ins** (Third-party plug-ins run), **Editing** (Mouse modifiers) and
+  **Advanced** (Audio processing threads, Lock memory, Keep CPUs out of deep
+  idle). Advanced (`prefs.advanced`) is closed until its **Show** is clicked
+  (`prefs.advanced.toggle`, then **Hide**); the dialog grows to hold it,
+  up to what the window leaves a popup (its height less 16 units): past
+  that the settings scroll under the heading and its Close, which stay in
+  place (`prefs.scroll`, a `ui::ScrollView` whose height follows its content
+  up to `layout.maxHeight`, set by the dialog's column from the room it is
+  given; the wheel or its bar). A window resized while the dialog is open
+  is followed. It
+  stays as it was left while the app runs, and opens by itself when one of
+  its three settings is not at its default, so that a setting in force is
+  never out of sight. Whether it is open is not saved. Lock memory and
+  Keep CPUs out of deep idle act on Linux only: there their notes give the
+  caution and how to allow each. On macOS and Windows each row is hidden
+  while its setting is off (`PreferencesDialog::showsLinuxOnly`); a setting
+  that is on shows its row, so that it can be turned off, with one line in
+  the notes' place: "Linux only: on this system it has no effect."
+  (`memoryNotes`, `idleNotes`).
   **Audio processing threads** is an advanced live/background
   override: Automatic (default) or a limit per pool including its submitting
   thread; Limit 1 is serial. The menu
@@ -2193,7 +2359,7 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   means 0, and saves write canonical 1.4. Invalid types/ranges return
   `preferences.audio_threads` at `/audio_threads` with a corrective hint;
   a failed save leaves the effective and displayed thread setting unchanged.
-  **Lock process memory (mlockall)** is off by default, saved as the boolean
+  **Lock memory (mlockall)** is off by default, saved as the boolean
   `lock_memory`. Both 1.0 and 1.1 files remain readable; an absent field means
   false. Other types return `preferences.lock_memory`, `/lock_memory`, and
   "use true or false". The option applies on successful engine start or
@@ -2240,7 +2406,7 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   (absent, and in older files, false; other types report
   `preferences.render_open_folder`), set from the render dialog's After
   render section.
-  **Copy imported audio into project** (1.4): On by default, saved as the
+  **Copy imported audio** (1.4): On by default, saved as the
   boolean `copy_imported_media` (absent, and in older files, means true;
   other types report `preferences.copy_imported_media`) and applied to
   `EngineApp::setCopyImportedMedia` at once. A note says the project then
@@ -2300,6 +2466,15 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
 Steppe's own character, not a REAPER clone or a generic dark theme
 (`tools/gui/mockups.py` renders mockups of it):
 
+- **Words:** what the user reads calls them **tracks**. **Channel**,
+  **buss** and **master** are the types of track and are named only where
+  the type matters: the add menu, the inspector's
+  kind, the routing matrix, and actions that make or need one type ("Add
+  channel", a rack "on the selected channel"). "Strip" is this spec's and
+  the code's word for a track's column in the mixer and for the model's
+  type (`StripType`, ADR-0019); it appears in no label, message or tooltip
+  (a test scans the GUI's string literals for it). Command, action and
+  node ids keep their names.
 - **Material:** paper and ink — warm neutral grounds (light: off-white
   paper; dark: deep warm graphite, not blue-black), ink text, fine ruled lines
   for grids (the quire: gathered, ruled sheets). **Dark is the default.**
@@ -2310,15 +2485,19 @@ Steppe's own character, not a REAPER clone or a generic dark theme
   `--theme` and `--palette` override them for one run.
 - **Type-led hierarchy:** Inter for UI, IBM Plex Mono for every number and
   for notation; few font sizes; labels quiet, values prominent.
-- **Strip types as bindings:** Channel blue, Buss amber, Master red, in every
-  palette, on the TCP badge, the mixer strip's top edge and the routing
-  matrix's marks. Masters carry a heavier spine on the routing marks; in the
-  mixer they look like every other strip (the same thin top stripe) and sit
-  pinned at its right edge. (Busses' double
+- **Strip types as marks:** on a track's row and its mixer strip the type
+  is a small line mark before the name, in quiet ink, and only where it is
+  not the usual one: none for a channel, lines joining into one for a buss,
+  the same ending at a bar for a master (§4.2). No box, bar or colour says
+  the type there: colour on a row or a strip is the track's own. The type
+  colours (Channel blue, Buss amber, Master red, in every palette) remain
+  on the routing matrix's marks, where masters carry a heavier spine, and
+  as the colour of an uncoloured track's items. In the mixer a master looks
+  like every other strip and sits pinned at its right edge. (Busses' double
   rule from the proposal is not drawn.)
 - **Track colours, for organizing:** a small set (red, orange, yellow, green,
   teal, blue, violet, grey; `track.set {color}` also takes "#rrggbb") drawn as
-  a stripe down the TCP row's left edge, under the mixer strip's name, and
+  a stripe down the TCP row's left edge, a bar across the mixer strip's top, and
   as the colour of the track's items in the arrange view (§4.3). A new
   channel or buss comes with one: `track.add` gives it the palette colour
   the fewest tracks carry (session-model.md), whoever adds it, so a session
@@ -2338,10 +2517,11 @@ Steppe's own character, not a REAPER clone or a generic dark theme
   agent-changed) and for the user's own organizing (track colours, which
   tint a track's items); meters and waveforms in ink tones; motion only for
   feedback. Controls that repeat on every track row and mixer strip are
-  quiet at rest: an off toggle is an ink outline and letter, a secondary
-  button its text alone. The state's colour and the button's box appear
+  quiet at rest: an off toggle is a faint outline and a quiet letter, and
+  "fx" and "+" are their text alone (a row's "env" and "out" are boxed, as
+  routing is on a strip). The state's colour and a text button's box appear
   under the pointer, so at rest the only colour in a row is a state that is
-  on, the strip's badge and the track's own colour. The toolbar's buttons
+  on and the track's own colour. The toolbar's buttons
   are quiet in the same way, so the top row reads as menus first. A
   warning is the one thing that adds colour unasked: the engine readout
   says nothing in colour until audio stops or drops out (§4.1).
@@ -2678,16 +2858,33 @@ evidence the plug-in was fine, so a new report for that build makes the question
 and the entry is removed once it is answered (a cancelled question changes nothing on disk). Remembering is rewritten by `Preferences::save`; the GUI
 is its only writer.
 
-**Disabled plug-ins are marked (topic 7d; delivered, the mixer part being revised).** One word for
+**Disabled and failed plug-ins are marked (topic 7d; delivered).** One word for
 the state everywhere: the question says "Disable it this time", the marks say "disabled",
 Preferences says "Disabled", and **Enable** is its opposite. A plug-in this run has disabled
 (`plugin.override` mode `disable`: the question, an agent, or a remembered choice;
 `engine.status.disabled_fx`) is marked wherever its fx shows, in the one colour the feature has
-(`meter-hot`, the banner's bar): the mixer strip's plug-in slot has its name in `ink-faint` and a bar
-at its left edge, and the strip's "fx" button has its text in `meter-hot`
-(`ui::Button::setTextColor`, beside `setEmphasis`) while the chain holds one; the slot's right-click
-menu starts with **Enable**. (The mixer's slot, its words and its "fx" rule follow the strip
-redesign; they are rebuilt on it.) The FX window's row has its name in `ink-quiet`, a 2-unit bar at
+(`meter-hot`, the banner's bar). A plug-in that failed (`engine.status.failed_fx`: its separate
+process closed or stopped answering) is marked the same way in `clip`.
+
+*The mixer's slot has four states of the one 18-unit slot,* each in the slot's place and size.
+Bypassed: the name dimmed and struck through, a solid outline. Offline: the name dimmed inside a
+dashed outline, no strike. **Disabled: the solid outline, no strike, the name in `ink-quiet` and a
+2-unit bar in `meter-hot` down the slot's left edge, inside the outline** (it does not shift the
+slot). **Failed: the same slot with the bar in `clip`.** The words follow the others'
+(`valueText` ends " (bypassed)", " (offline)", " (disabled)" or " (failed)"), and disabled and
+failed win over offline and bypassed since they are the ones that need the person; disabled wins over
+failed (a disabled plug-in is not loaded). A click on a disabled slot puts "<name> is disabled for
+this run and not loaded. Right-click it to enable it." in the status line, on a failed one "<name>
+failed: its separate process closed or stopped answering. Restart it in the FX window."; the slot's
+right-click menu of a disabled plug-in starts with **Enable**. One rule gives "fx" its warning
+colour, in the mixer's strip and in the track list's row alike: **the track's chain (or input chain)
+holds a plug-in that is disabled or failed** (`FxAttention::chainNeeds`, `ui::Button::setTextColor`,
+beside `setEmphasis`; the track list takes it through `TcpCallbacks::fxNeedsAttention`). In the
+mixer "fx" sits at the left of the plug-in list's own line (`mixer.fxrow.<track>`, the button `mixer.fxadd.<track>`),
+so it is the one sign the strip keeps when the slot is scrolled out of the list. The marks follow
+the engine, not the project: `FxAttention` reads `engine.status` at most twice a second and the
+overrides' version, and a change rebuilds the strips and refreshes the rows.
+The FX window's row has its name in `ink-quiet`, a 2-unit bar at
 its left edge, and **Enable** as its one boxed button in that state: bypass, offline, UI, params and
 presets are off (faint) since they act on a plug-in that is not loaded, and Remove goes quiet. Its
 second line reads "disabled after an unexpected close · audio passes through" in `ink-quiet` (a

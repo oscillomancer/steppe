@@ -1034,6 +1034,27 @@ TEST_CASE("the side panel's browser adds to the selected tracks, and stays") {
         CHECK_MESSAGE(r.right() <= panel.right(), id);
     }
 
+    // Add waits for a chosen row: here it goes to every selected track, so a
+    // stray click must not put the list's first plug-in on all of them.
+    {
+        ui::Node* add = f.root->find("side.browser.plugins.add");
+        CHECK_FALSE(list->selected());
+        CHECK_FALSE(add->enabled);
+        f.ui.selectedTracks = {one.str(), two.str()};
+        CHECK_FALSE(f.root->click("side.browser.plugins.add"));
+        f.root->focus(search);
+        f.root->key(SDLK_RETURN, 0);  // Enter in an empty search: nothing either
+        f.root->frame(false);
+        CHECK(f.app->head().tracks.find(one)->chain.empty());
+        CHECK(f.app->head().tracks.find(two)->chain.empty());
+        // The arrow keys choose a row from the search, and Add is on.
+        f.root->key(SDLK_DOWN, 0);
+        f.root->frame(false);
+        CHECK(list->selected());
+        CHECK(add->enabled);
+        f.ui.selectedTracks.clear();
+    }
+
     auto typed = [&](const std::string& text) {
         f.root->focus(search);
         search->setText("");
@@ -1200,6 +1221,23 @@ TEST_CASE("the side panel's browser has kinds: saved FX chains go on tracks by A
     CHECK(browser.chainRow(0).detail == "1 effect");
     CHECK(browser.chainRow(1).name == "Vocal bus");
     CHECK(browser.chainRow(1).detail == "2 effects");
+    // Add waits for a chosen row: nothing loads onto the selected tracks
+    // from a click on it, or from Enter in an empty search.
+    {
+        ui::Node* add = f.root->find("side.browser.chains.add");
+        CHECK_FALSE(add->enabled);
+        f.ui.selectedTracks = {one.str(), two.str()};
+        const auto steps = f.historyCount();
+        CHECK_FALSE(f.root->click("side.browser.chains.add"));
+        browser.focusSearch();
+        f.root->key(SDLK_RETURN, 0);
+        f.root->frame(false);
+        CHECK(f.historyCount() == steps);
+        f.root->key(SDLK_DOWN, 0);  // the arrow keys choose a row
+        f.root->frame(false);
+        CHECK(add->enabled);
+        f.ui.selectedTracks.clear();
+    }
 
     // The search narrows by name; nothing found says so.
     browser.focusSearch();
@@ -1377,6 +1415,23 @@ TEST_CASE("the side panel's browser lists a folder's files; a file is added or d
         f.root->pointer({ui::PointerEvent::Type::Up, at, 1, 2});
         f.root->frame(false);
     };
+    // Add waits for a chosen row; one click chooses it.
+    {
+        ui::Node* add = f.root->find("side.browser.files.add");
+        CHECK_FALSE(list->selected());
+        CHECK_FALSE(add->enabled);
+        CHECK_FALSE(f.root->click("side.browser.files.add"));
+        CHECK(added.empty());
+        f.root->pointer({ui::PointerEvent::Type::Down, rowPoint(3), 1, 1});
+        f.root->pointer({ui::PointerEvent::Type::Up, rowPoint(3), 1, 1});
+        f.root->frame(false);
+        CHECK(add->enabled);
+        REQUIRE(f.root->click("side.browser.files.add"));
+        f.root->frame(false);
+        REQUIRE(added.size() == 1);
+        CHECK(added[0] == media / "b.wav");
+        added.clear();
+    }
     // A double click on a folder goes into it; Up comes back.
     doubleClick(0);
     CHECK(browser.folder() == media / "Loops");

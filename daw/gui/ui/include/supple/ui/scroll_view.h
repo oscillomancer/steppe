@@ -65,6 +65,10 @@ class ScrollView : public Node {
     float scroll() const { return scroll_; }
     float contentHeight() const { return contentHeight_; }
 
+    // Its content's size and the bar's width: a view whose height rule is
+    // `content` is as tall as what it holds, up to its layout.maxHeight,
+    // and scrolls past that.
+    Size measure(const Canvas& canvas, Size available) override;
     void arrange(const Canvas& canvas, const Rect& bounds) override;
     bool onPointer(const PointerEvent& e) override;
 

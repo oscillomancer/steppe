@@ -32,6 +32,7 @@ class SideGrip : public ui::Node {
         if (live) c.fillRect({r.x + 1, r.y + r.h / 2 - 16, 2, 32}, t.color("focus"));
     }
     void onHover(bool) override { invalidate(); }
+    ui::Cursor cursorAt(ui::Point) const override { return ui::Cursor::ResizeHorizontal; }
     bool onPointer(const ui::PointerEvent& e) override {
         if (e.type == ui::PointerEvent::Type::Down && e.button == 1) {
             if (e.clicks >= 2) {

@@ -164,7 +164,7 @@ std::unique_ptr<ui::Node> PluginBrowser::buildPage() {
                t.color("ink-quiet"), ui::kRight | ui::kMiddle);
     };
     search_->onChange = [this](const std::string&) { sortAndFilter(); };
-    search_->onSubmit = [this](const std::string&) { activate(list_->selected().value_or(0)); };
+    search_->onSubmit = [this](const std::string&) { activateChosen(); };
     search_->onOtherKey = [this](const ui::KeyEvent& e) { return list_->onKey(e); };
     list_->onActivate = [this](std::size_t row) { activate(row); };
     list_->onSelect = [this](std::size_t) { updateDetail(); };
@@ -213,8 +213,7 @@ std::unique_ptr<ui::Node> PluginBrowser::buildPage() {
     rescan.quiet = favourite.quiet = embedded_;
     if (embedded_)
         footer.emplace<ui::Node>(id("footer.rest")).layout.width = ui::SizeRule::fraction();
-    footer.emplace<ui::Button>(id("add"), "Add",
-                               [this] { activate(list_->selected().value_or(0)); });
+    add_ = &footer.emplace<ui::Button>(id("add"), "Add", [this] { activateChosen(); });
     if (embedded_) {
         // The status has a line of its own: the footer is three buttons wide.
         status_ = &page->emplace<ui::Label>(id("status"), "", ui::Font::Ui, "caption", "ink-quiet");
@@ -265,7 +264,16 @@ PluginBrowser::RowText PluginBrowser::rowText(std::size_t row) const {
 
 // The selected plugin's own file: a shadowed copy is the one a `fx.add` would
 // not use, which is why it is called out.
+void PluginBrowser::activateChosen() {
+    if (const auto row = list_->selected())
+        activate(*row);
+    else if (!embedded_)
+        activate(0);
+}
+
 void PluginBrowser::updateDetail() {
+    // In the panel Add waits for a chosen row.
+    if (add_) add_->enabled = !embedded_ || (list_ && list_->selected().has_value());
     std::string text;
     if (const auto row = list_ ? list_->selected() : std::nullopt; row && *row < rows_.size()) {
         const Entry& entry = *rows_[*row].entry;
@@ -296,6 +304,7 @@ void PluginBrowser::open(std::function<void(const std::string&)> onAdd, std::str
         page_ = nullptr;
         search_ = nullptr;
         list_ = nullptr;
+        add_ = nullptr;
         status_ = nullptr;
         detailLabel_ = nullptr;
         title_ = nullptr;
@@ -402,7 +411,11 @@ void PluginBrowser::sortAndFilter() {
     for (const Row& r : rows_) shown_.push_back(r.entry->id);
     if (list_) {
         list_->setCount(rows_.size());
-        list_->select(rows_.empty() ? std::nullopt : std::optional<std::size_t>(0));
+        // The popup opens for one track and starts on its first row. In the
+        // panel Add goes to every selected track, so a row is chosen first:
+        // by a click, the arrow keys, or a search (its first hit).
+        const bool first = !rows_.empty() && (!embedded_ || (search_ && !search_->text().empty()));
+        list_->select(first ? std::optional<std::size_t>(0) : std::nullopt);
         list_->invalidate();
     }
     updateDetail();

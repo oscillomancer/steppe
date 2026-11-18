@@ -12,6 +12,7 @@
 #include <string>
 
 #include "app_actions.h"
+#include "fx_attention.h"
 #include "meter_feed.h"
 #include "plugin_drag.h"
 #include "selection_edit.h"
@@ -53,6 +54,7 @@ class Shell {
     void installOverlay(ui::Root& root);
     // Brings the view up to the model's head version; invalidates what changed.
     void sync(bool event = true);
+    FxAttention& attention() { return attention_; }  // the marks' source (tests set its status)
     std::optional<std::chrono::steady_clock::time_point> nextDeadline() const;
     views::ArrangeView* arrange() const { return arrange_; }
     // The track row under `p`, its control panel and its lane together, as
@@ -87,7 +89,7 @@ class Shell {
     // The channel count menu (the ui.track.channels action; the track menu's Channels…).
     Status openChannelsMenu(const model::Id& track, const ui::Rect& anchor);
     // Adds a strip of a type ("channel", "buss", "master") and selects it: the
-    // TCP's "+ strip", and a double-click on the TCP's or the mixer's empty space.
+    // TCP's "+ track", and a double-click on the TCP's or the mixer's empty space.
     void addStrip(std::string_view type);
     // The record input picker at `anchor` and what a strip's input button says
     // (the TCP's and the mixer's): the port names, "midi *", or "in —".
@@ -112,6 +114,7 @@ class Shell {
     std::vector<std::string> shownSelection_;  // the track selection the TCP shows
     engine::EngineApp& app_;
     cmd::Dispatcher& dispatcher_;
+    FxAttention attention_{app_};           // the "fx" mark's rule (disabled or failed plug-ins)
     AppActions* actions_ = nullptr;         // from build()
     SelectionEdit selectionEdit_;           // a strip control on a selected track: all of them
     std::unique_ptr<TrackMenu> trackMenu_;  // made in build() (needs the root)

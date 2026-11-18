@@ -25,18 +25,6 @@
 namespace supple::views {
 namespace {
 
-std::string_view typeToken(model::StripType t) {
-    switch (t) {
-        case model::StripType::Channel:
-            return "channel";
-        case model::StripType::Buss:
-            return "buss";
-        case model::StripType::Master:
-            return "master";
-    }
-    return "ink";
-}
-
 const char* monitorToken(model::Monitor m) {
     switch (m) {
         case model::Monitor::Off:
@@ -159,6 +147,7 @@ class TcpPanel::Row : public ui::Node {
     void arrange(const ui::Canvas& canvas, const ui::Rect& r) override;
     void paint(ui::Canvas& canvas) override;
     bool onPointer(const ui::PointerEvent& e) override;
+    ui::Cursor cursorAt(ui::Point p) const override;
     bool onKey(const ui::KeyEvent& e) override;
 
   private:
@@ -247,7 +236,7 @@ TcpPanel::Row::Row(TcpPanel& panel, std::size_t slot)
         args["lane_mute"] = on;
         setTrack(std::move(args), {});
     });
-    laneMute_->pill = true;
+    laneMute_->cell = true;
     solo_ = &emplace<ui::Toggle>(id + ".solo", "S", "solo", [this, setTrack](bool on) {
         json::Value args = trackArg(*track_);
         args["solo"] = on ? "on" : "off";
@@ -264,7 +253,7 @@ TcpPanel::Row::Row(TcpPanel& panel, std::size_t slot)
         args["mono"] = on;
         setTrack(std::move(args), {});
     });
-    mute_->pill = solo_->pill = polarity_->pill = mono_->pill = true;
+    mute_->cell = solo_->cell = polarity_->cell = mono_->cell = true;
     arm_ = &emplace<ui::ArmButton>(id + ".arm", [this, setTrack](bool on) {
         json::Value args = trackArg(*track_);
         args["armed"] = on;
@@ -350,7 +339,7 @@ TcpPanel::Row::Row(TcpPanel& panel, std::size_t slot)
     out_ = &emplace<OutButton>(panel_, id + ".out", [this] { return track_; });
     // Secondary buttons are text alone until the pointer is on them; the
     // input stays a boxed field, since it shows a value.
-    fx_->quiet = addFx_->quiet = env_->quiet = out_->quiet = true;
+    fx_->quiet = addFx_->quiet = true;  // "env" and "out" are boxed, as "out" is in the mixer
 }
 
 TcpPanel::Row::~Row() = default;
@@ -395,6 +384,8 @@ void TcpPanel::Row::refresh(const model::Session& session) {
                       : tr->record.monitor == model::Monitor::On ? ui::MonitorButton::Mode::On
                                                                  : ui::MonitorButton::Mode::Auto);
     fx_->setEmphasis(!tr->chain.empty() || !tr->inputChain.empty());
+    fx_->setTextColor(
+        panel_.cb_.fxNeedsAttention && panel_.cb_.fxNeedsAttention(*track_) ? "meter-hot" : "");
     fader_->setValue(tr->volumeDb);
     // A master's pan is a balance; a channel's or buss's follows its mode.
     const bool master = tr->type == model::StripType::Master;
@@ -474,84 +465,74 @@ ui::Node* TcpPanel::Row::control(std::string_view what) const {
 }
 
 void TcpPanel::Row::arrange(const ui::Canvas& canvas, const ui::Rect& r) {
+    using G = TcpRowGeometry;
     setBounds(r);
     const float x = r.x, right = r.right();
     const float indent = 14.0f * static_cast<float>(depth_);
-    laneMute_->visible = false;
-    if (master_) {  // a master's lane (ADR-0057): its name, arm and the lane's mute
-        for (ui::Node* n :
-             std::initializer_list<ui::Node*>{mute_, solo_, monitor_, input_, env_, out_, fader_,
-                                              pan_, polarity_, mono_, meter_, fx_, addFx_})
-            n->visible = false;
-        nameRect_ = {x + 26 + indent, r.y + TcpRowGeometry::kNameTop,
-                     std::max(20.0f, right - x - 36 - indent), TcpRowGeometry::kNameHeight};
-        name_->arrange(canvas, nameRect_);
-        rename_->arrange(canvas, {nameRect_.x, nameRect_.y + 1, nameRect_.w, 17});
-        const bool controls = r.h >= 40;
-        laneMute_->visible = arm_->visible = controls;
-        if (controls) {
-            laneMute_->arrange(canvas, {x + 6, r.y + 22, 19, 14});
-            arm_->arrange(canvas, {x + 27, r.y + 21, 16, 16});
-        }
-        return;
-    }
-    meter_->visible = fx_->visible = addFx_->visible = true;
-    // The meter stands at the row's right edge, wide enough to read at a
-    // glance; the controls end a gap before it.
-    meter_->arrange(canvas, {right - TcpRowGeometry::kMeterWidth - 2, r.y + 3,
-                             TcpRowGeometry::kMeterWidth, std::max(4.0f, r.h - 6)});
-    const float edge = right - TcpRowGeometry::kMeterWidth + 3;
-    // "fx" and "+" end the name line, so every row has them at any height.
-    const float fxWidth = 22.0f, addWidth = 16.0f;
-    addFx_->arrange(canvas, {edge - 10 - addWidth, r.y + TcpRowGeometry::kFxTop, addWidth,
-                             TcpRowGeometry::kFxHeight});
-    fx_->arrange(canvas, {edge - 12 - addWidth - fxWidth, r.y + TcpRowGeometry::kFxTop, fxWidth,
-                          TcpRowGeometry::kFxHeight});
-    const float mark = frozen_ ? 14.0f : 0.0f;
-    nameRect_ = {x + 26 + indent + mark, r.y + TcpRowGeometry::kNameTop,
-                 std::max(20.0f, edge - x - 42 - fxWidth - addWidth - indent - mark),
-                 TcpRowGeometry::kNameHeight};
+    // The meter stands at the row's right edge; the controls end a gap
+    // before it.
+    const float edge = right - G::kMeterWidth - 7;
+    // The name line's four cells: arm, monitor, mute, solo. A cell is a
+    // control's place: a buss has no arm or monitor and their cells stay
+    // empty, so M and S are in one column down the whole panel.
+    const float cells = edge - 4 * G::kCellWidth - 3 * G::kCellGap;
+    auto cell = [&](int column) {
+        return ui::Rect{cells + static_cast<float>(column) * (G::kCellWidth + G::kCellGap),
+                        r.y + G::kStateTop, G::kCellWidth, G::kCellHeight};
+    };
+    const float mark = (master_ || !channel_ ? G::kMark : 0.0f) + (frozen_ ? G::kMark : 0.0f);
+    nameRect_ = {x + G::kLeft + indent + mark, r.y + G::kNameTop,
+                 std::max(20.0f, cells - 6 - (x + G::kLeft + indent + mark)), G::kNameHeight};
     name_->arrange(canvas, nameRect_);
     rename_->arrange(canvas, {nameRect_.x, nameRect_.y + 1, nameRect_.w, 17});
+    laneMute_->visible = master_;
+    mute_->visible = solo_->visible = !master_;
+    arm_->visible = channel_ || master_;
+    monitor_->visible = channel_;
+    if (master_) {  // a master's lane (ADR-0057): its name, the lane's mute and arm
+        for (ui::Node* n : std::initializer_list<ui::Node*>{input_, env_, out_, fader_, pan_,
+                                                            polarity_, mono_, meter_, fx_, addFx_})
+            n->visible = false;
+        arm_->arrange(canvas, cell(0));
+        laneMute_->arrange(canvas, cell(2));
+        return;
+    }
+    meter_->visible = true;
+    meter_->arrange(canvas,
+                    {right - G::kMeterWidth - 2, r.y + 3, G::kMeterWidth, std::max(4.0f, r.h - 6)});
+    if (arm_->visible) arm_->arrange(canvas, cell(0));
+    if (monitor_->visible) monitor_->arrange(canvas, cell(1));
+    mute_->arrange(canvas, cell(2));
+    solo_->arrange(canvas, cell(3));
 
-    const bool controls = r.h >= 40;  // room for the button row
-    const bool big = r.h >= 58;       // room for fader and pan
-    const float ty = r.y + 22;
-    mute_->visible = controls;
-    solo_->visible = controls;
-    arm_->visible = controls && channel_;
-    monitor_->visible = controls && channel_;
-    input_->visible = controls && channel_;
-    env_->visible = controls;
-    out_->visible = controls;
-    // Mute and solo start at the left edge (over polarity and mono); env and
-    // out end at the right edge (under "+"), whatever the strip's depth.
-    float tx = x + 6;
-    for (ui::Node* n : {static_cast<ui::Node*>(mute_), static_cast<ui::Node*>(solo_)}) {
-        n->arrange(canvas, {tx, ty, 19, 14});
-        tx += 21;
+    // The mix line, in signal order: polarity and mono, the fader, the pan.
+    const bool mix = r.h >= G::kMixHeight;
+    fader_->visible = pan_->visible = polarity_->visible = mono_->visible = mix;
+    if (mix) {
+        const float y = r.y + G::kMixTop;
+        polarity_->arrange(canvas, {x + G::kLeft, y, G::kCellWidth, G::kCellHeight});
+        mono_->arrange(canvas, {x + G::kLeft + G::kCellWidth + G::kCellGap, y, 34, G::kCellHeight});
+        const float faderX = x + G::kLeft + G::kCellWidth + G::kCellGap + 34 + 6;
+        pan_->arrange(canvas, {edge - 42, y, 42, G::kCellHeight});
+        fader_->arrange(canvas, {faderX, y, std::max(30.0f, edge - 42 - 8 - faderX), 14});
     }
-    // Arm and monitor are drawn controls, a little taller than the buttons.
-    for (ui::Node* n : {static_cast<ui::Node*>(arm_), static_cast<ui::Node*>(monitor_)}) {
-        if (!n->visible) continue;
-        n->arrange(canvas, {tx, ty - 1, 16, 16});
-        tx += 18;
-    }
-    const float outX = edge - 38, envX = outX - 30;
-    if (input_->visible) {
-        // The input names the device's ports; it takes the room up to "env"
+    // The connections line, left to right as the signal goes: the input,
+    // the plug-ins ("fx" and "+"), the automation ("env") and the output.
+    const bool links = r.h >= G::kFullHeight;
+    input_->visible = links && channel_;
+    fx_->visible = addFx_->visible = env_->visible = out_->visible = links;
+    if (links) {
+        const float y = r.y + G::kLinkTop;
+        const float outX = edge - 28, envX = outX - 30, addX = envX - 18, fxX = addX - 24;
+        out_->arrange(canvas, {outX, y, 28, G::kCellHeight});
+        env_->arrange(canvas, {envX, y, 28, G::kCellHeight});
+        addFx_->arrange(canvas, {addX, y, 16, G::kCellHeight});
+        fx_->arrange(canvas, {fxX, y, 22, G::kCellHeight});
+        // The input names the device's ports; it takes the room up to "fx",
         // and the picker's menu shows them whole.
-        input_->arrange(canvas, {tx, ty, std::max(12.0f, envX - 2 - tx), 14});
-    }
-    if (env_->visible) env_->arrange(canvas, {envX, ty, 28, 14});
-    if (out_->visible) out_->arrange(canvas, {outX, ty, 28, 14});
-    // The level row, in signal order: polarity and mono, the fader, the pan.
-    fader_->visible = pan_->visible = polarity_->visible = mono_->visible = big;
-    if (big) {
-        polarity_->arrange(canvas, {x + 6, r.y + 42, 18, 14});
-        mono_->arrange(canvas, {x + 26, r.y + 42, 36, 14});
-        fader_->arrange(canvas, {x + 66, r.y + 42, std::max(30.0f, edge - x - 124), 14});
-        pan_->arrange(canvas, {edge - 52, r.y + 42, 42, 14});
+        if (input_->visible)
+            input_->arrange(canvas, {x + G::kLeft, y, std::max(12.0f, fxX - 6 - (x + G::kLeft)),
+                                     G::kCellHeight});
     }
 }
 
@@ -575,31 +556,39 @@ void TcpPanel::Row::paint(ui::Canvas& c) {
         c.fillRect({px, r.y, 1, r.h}, t.color("rule"));
         c.fillRect({px, r.y + r.h / 2 - 3, 6, 1}, t.color("rule"));
     }
-    // The strip-type badge: colour and letter differ per type (ADR-0019, §7).
-    const ui::Rect badge{r.x + 6 + 14.0f * static_cast<float>(depth_),
-                         r.y + TcpRowGeometry::kBadgeTop, TcpRowGeometry::kBadgeSize,
-                         TcpRowGeometry::kBadgeSize};
-    c.fillRound(badge, tr->type == model::StripType::Master ? t.radius("s") : 2.0f,
-                t.color(typeToken(tr->type)));
-    c.text(badge,
-           std::string(1, static_cast<char>(std::toupper(model::stripTypeName(tr->type).front()))),
-           ui::Font::UiBold, t.type("caption"), t.color("panel"), ui::kCenter | ui::kMiddle);
-    float tabX = badge.x;
+    // The type's mark before the name (a buss or a master; a channel, the
+    // usual case, has none), then the track's groups as small colour tabs
+    // under the name's start.
+    const float lead = r.x + TcpRowGeometry::kLeft + 14.0f * static_cast<float>(depth_);
+    if (tr->type != model::StripType::Channel)
+        ui::drawTrackGlyph(
+            c, {lead, r.y + TcpRowGeometry::kNameTop, 10, TcpRowGeometry::kNameHeight},
+            tr->type == model::StripType::Buss ? ui::TrackGlyph::Buss : ui::TrackGlyph::Master,
+            t.color("ink-quiet"));
+    float tabX = lead;
     for (auto id : model::trackGroups(panel_.session_, *track_)) {
         const auto& group = *panel_.session_.groups.find(id);
         const auto color = t.trackColor(group.color).value_or(t.color("focus"));
-        c.fillRect({tabX, badge.bottom() + 1, 5, 3}, color.withAlpha(group.active ? 1.f : .3f));
+        c.fillRect({tabX, r.y + TcpRowGeometry::kNameTop + TcpRowGeometry::kNameHeight - 1, 5, 2},
+                   color.withAlpha(group.active ? 1.f : .3f));
         tabX += 7;
-        if (tabX > badge.x + 21) break;
+        if (tabX > lead + 21) break;
     }
     // A frozen channel: a snowflake before its name.
     if (frozen_)
-        ui::drawSnowflake(c, {nameRect_.x - 8, nameRect_.y + nameRect_.h / 2}, 6.0f,
+        ui::drawSnowflake(c, {nameRect_.x - 7, nameRect_.y + nameRect_.h / 2}, 6.0f,
                           t.color("ink"));
     // The row being dragged to a new place.
     if (panel_.reorder_ && panel_.reorder_->moved && panel_.reorder_->track == track_)
         c.fillRect(r, t.color("focus").withAlpha(0.12f));
     if (selected) c.strokeRect({r.x + 0.5f, r.y + 0.5f, r.w - 1, r.h - 1}, t.color("focus"), 1.0f);
+}
+
+// The bottom edge sets the row's height.
+ui::Cursor TcpPanel::Row::cursorAt(ui::Point p) const {
+    const bool grip = track_.has_value() && panel_.cb_.resizeTrack &&
+                      p.y >= bounds().bottom() - TcpRowGeometry::kResizeGrip;
+    return resizing_ || grip ? ui::Cursor::ResizeVertical : ui::Cursor::Arrow;
 }
 
 bool TcpPanel::Row::onPointer(const ui::PointerEvent& e) {
@@ -726,7 +715,7 @@ class RowsHost : public ui::Node {
 };
 
 // The panel's foot: an opaque band under the rows' area with "mixer" and
-// "+ strip" at its right.
+// "+ track" at its right.
 class Foot : public ui::Node {
   public:
     Foot() : Node("tcp.foot") {}
@@ -757,7 +746,7 @@ TcpPanel::TcpPanel(const TrackLayout& rowLayout, const Viewport& view, TcpCallba
         if (cb_.mixer) cb_.mixer();
     });
     add_ = &foot_->emplace<ui::Button>(
-        "tcp.add", "+ strip", [this] { openAddMenu(add_->bounds(), ui::Placement::Above); });
+        "tcp.add", "+ track", [this] { openAddMenu(add_->bounds(), ui::Placement::Above); });
     add_->layout.width = ui::SizeRule::fixed(56);
     add_->layout.height = ui::SizeRule::fixed(18);
 }
@@ -1178,8 +1167,8 @@ void TcpPanel::paint(ui::Canvas& c) {
 }
 
 // A double-click on the panel's empty space (no row, not the foot's buttons)
-// adds a channel, as "+ strip" > Channel does; a right-click there opens the
-// "+ strip" menu at the pointer.
+// adds a channel, as "+ track" > Channel does; a right-click there opens the
+// "+ track" menu at the pointer.
 bool TcpPanel::onPointer(const ui::PointerEvent& e) {
     const bool doubleClick = e.button == 1 && e.clicks >= 2;
     if (e.type != ui::PointerEvent::Type::Down || !(doubleClick || e.button == 3) || !cb_.addStrip)
