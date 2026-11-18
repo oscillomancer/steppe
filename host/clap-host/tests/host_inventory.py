@@ -184,10 +184,25 @@ if not sanitized:
                     (6,"active_token","bridge_audio","process",(6,)),
                     (7,"fault_in_image","bridge_audio",None,faults),
                     (9,"active_token","bridge_audio","process",(6,))]
+    reports_by_mode={}
     for mode,level,registered,entry,codes in scenarios:
         e,ended=bridge_report("bridged-one",str(mode))
+        reports_by_mode[mode]=e
         member=named(e)
         label=(mode,e["attribution"],e["threads"][0],ended)
+        if mode==7 and sys.platform=="darwin":
+            # Each frame of the overflowing recursion holds a 4096-byte buffer, which macOS's
+            # compiler probes with ___chkstk_darwin, a system library's function: the guard page
+            # is hit there, so the fault is in a system library called from the plug-in
+            # (`active_token`, the spec's label for that), not in the plug-in's own code. Either is
+            # right; what is said must be consistent with where the fault frame is.
+            assert e["attribution"]["confidence"] in ("fault_in_image","active_token"),label
+            level=e["attribution"]["confidence"]
+            ids=[m["id"] for m in e["modules"]]
+            plugin_build=member["build"]["id"] if member.get("build") else None
+            fault_module=e["threads"][0]["frames"][0].get("module")
+            inside=plugin_build is not None and fault_module is not None and ids[fault_module]==plugin_build
+            assert inside==(level=="fault_in_image"),label
         assert e["attribution"]=={"confidence":level,"plugin":member["id"]},label
         assert e["code"] in codes and ended["how"]==("signal" if posix else "exception"),label
         assert e["threads"][0].get("registered")==registered,label
@@ -199,6 +214,17 @@ if not sanitized:
             # The plug-in's own thread is not one the bridge registered; the audio thread that
             # was waiting on it is listed beside it, inside the entry it was in.
             assert member["executing"]==[{"entry":"process","thread":member["executing"][0]["thread"],"match":"other_thread"}],member
+    # A frame's offset is the same in every process: it does not depend on where the system put
+    # the image this time (ASLR moves the bridge's executable and the plug-in's library between
+    # runs, and an address that was not made relative would move with them). This is the check
+    # that tells an offset from an address where a size cannot (macOS link addresses are large).
+    def located(e):
+        ids=[m["id"] for m in e["modules"]]
+        return [(ids[f["module"]],f["offset"]) for f in e["threads"][0]["frames"]
+                if f.get("module") is not None and ids[f["module"]]]
+    again,_=bridge_report("bridged-one","4")
+    first,second=located(reports_by_mode[4]),located(again)
+    assert first and first[:len(second)]==second[:len(first)],("frame offsets depend on the load address",first,second)
     # Two plug-ins of one binary share a bridge, and the one that faults is named, not the other.
     e,ended=bridge_report("bridged-shared")
     crash=named(e)
