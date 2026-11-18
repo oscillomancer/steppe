@@ -125,7 +125,9 @@ if not sanitized:
     # (the instruction is in the build the bridge recorded), or in the system's code under the
     # plug-in's entry (abort, a raised signal, std::terminate), which the open entry still names.
     posix=sys.platform!="win32"
-    faults=(10,11)  # a bad address is SIGSEGV or, on some systems, SIGBUS
+    # A bad address is SIGSEGV or, on some systems, SIGBUS; on Windows it is STATUS_ACCESS_VIOLATION,
+    # which a report carries as the signed 32-bit value of 0xC0000005.
+    faults=(10,11) if posix else (-1073741819,)
     def bridge_report(*args):
         reports,run=run_bridged(*args)
         exits=[r for r in reports if r["kind"]=="bridge_exit"]
