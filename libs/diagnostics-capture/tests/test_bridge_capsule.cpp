@@ -169,6 +169,52 @@ TEST_CASE("the table's words are the table's: a changed fault word is unplaced, 
     CHECK(trace->unplacedEntries == 1);
 }
 
+TEST_CASE("an open word is given to one thread, whatever stack ranges overlap") {
+    SUBCASE("a range over the fault thread's word does not take it again") {
+        auto b = good();
+        // The control thread's recorded stack now covers only the word the capsule's own fault
+        // thread already holds (cell 3 at 0x9800); the word it was inside (cell 5) is on nobody's.
+        slot(*b.table, 0, 99, diagctx::ThreadRole::BridgeControl, 0, 0x9000, 0xa000);
+        const auto trace = parsed(b);
+        REQUIRE(trace);
+        REQUIRE(trace->threads.size() == 3);
+        CHECK(trace->threads[0].entry == diagctx::Entry::Process);
+        CHECK(trace->threads[0].entryCell == 3);
+        CHECK(trace->threads[1].registered == diagctx::ThreadRole::BridgeControl);
+        CHECK(trace->threads[1].entry == diagctx::Entry::None);
+        CHECK(trace->unplacedEntries == 1);
+    }
+    SUBCASE("two threads whose ranges cover the same word: the first listed has it") {
+        auto b = good();
+        // Slots 0 and 2 record the same stack, which holds one open word (cell 5, 0x7400); the
+        // word of the capsule's fault thread (cell 3) is in neither.
+        slot(*b.table, 2, 101, diagctx::ThreadRole::BridgeAudio, 2, 0x7000, 0x8000);
+        const auto trace = parsed(b);
+        REQUIRE(trace);
+        REQUIRE(trace->threads.size() == 3);
+        CHECK(trace->threads[1].registered == diagctx::ThreadRole::BridgeControl);
+        CHECK(trace->threads[1].entry == diagctx::Entry::Create);
+        CHECK(trace->threads[1].entryCell == 5);
+        CHECK(trace->threads[2].registered == diagctx::ThreadRole::BridgeAudio);
+        CHECK(trace->threads[2].entry == diagctx::Entry::None);
+        CHECK(trace->unplacedEntries == 0);
+    }
+    SUBCASE("overlapping ranges share the words between them, each word once") {
+        auto b = good();
+        // Both stacks cover both words 0x7400 (cell 5) and 0x7800 (cell 6): the first listed
+        // takes the lower, the second the one left.
+        open(*b.table, 6, true, diagctx::Entry::Process, 4, 0x7800);
+        slot(*b.table, 2, 101, diagctx::ThreadRole::BridgeAudio, 2, 0x7000, 0x8000);
+        const auto trace = parsed(b);
+        REQUIRE(trace);
+        REQUIRE(trace->threads.size() == 3);
+        CHECK(trace->threads[1].entryCell == 5);
+        CHECK(trace->threads[2].entryCell == 6);
+        CHECK(trace->threads[2].entry == diagctx::Entry::Process);
+        CHECK(trace->unplacedEntries == 0);
+    }
+}
+
 TEST_CASE("a table's free, claiming, repeated and unroled slots are not threads") {
     auto b = good();
     slot(*b.table, 3, diagctx::kClaiming, diagctx::ThreadRole::Model, 0, 0, 0);
