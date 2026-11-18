@@ -1100,6 +1100,10 @@ class Engine {
     bool loadMixValues(const model::Session& session, const std::filesystem::path& projectDir);
     std::vector<model::EnvTarget> writeHolds_, staleCurves_;
     std::uint64_t mixEdits_ = 0;
+    // ADR-0093: the stream position, in this epoch, by which the renderer has
+    // taken the last published edit it reads (loadMixValues).
+    std::uint64_t renderedAheadEpoch_ = 0;
+    std::int64_t renderedAheadUntil_ = 0;
     // ADR-0092 (main thread): the patch-only edit path of load().
     bool loadPatches(const model::Session& session, const std::filesystem::path& projectDir);
     std::uint64_t patchEdits_ = 0;

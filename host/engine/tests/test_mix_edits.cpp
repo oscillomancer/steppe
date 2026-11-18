@@ -917,6 +917,111 @@ void checkLikeCompiled(const model::Session& base, const model::Session& next, P
 }
 }  // namespace
 
+namespace {
+// Two edits while playing: `first` at cycle 100 and `second` `gap` cycles
+// later, as value edits where the engine allows (compiled: both reloads
+// forced). The renderer is full before each, so every run takes them from
+// the same positions. Returns channel 0 of 300 cycles and the counts after
+// each edit.
+struct TwoEdits {
+    std::vector<float> out;
+    std::uint64_t mixEdits[2] = {}, plans[2] = {};
+};
+TwoEdits playTwo(const model::Session& base, const model::Session& first,
+                 const model::Session& second, const EngineOptions& options, bool compiled,
+                 int gap) {
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend(sawInput(kEditFrames));
+    Engine engine(pool, media, options);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
+    REQUIRE(engine.load(base));
+    engine.play();
+    const auto cycles = [&](int n) {
+        if (options.anticipative)
+            runAhead(engine, backend, n, 256);
+        else
+            backend.run(n);
+        if (options.anticipative)
+            REQUIRE(engine.awaitRendered(std::numeric_limits<std::int64_t>::max()));
+    };
+    cycles(100);
+    TwoEdits r;
+    const auto generation = engine.planGeneration();
+    const model::Session* edits[2] = {&first, &second};
+    for (int i = 0; i < 2; ++i) {
+        if (i == 1) cycles(gap);
+        const model::Session& s = *edits[i];
+        REQUIRE(engine.load(compiled ? withMarker(s, s.version + 1) : s));
+        r.mixEdits[i] = engine.mixEdits();
+        r.plans[i] = engine.planGeneration() - generation;
+    }
+    cycles(200 - gap);
+    CHECK(engine.anticipationMisses() == 0);
+    CHECK(engine.processErrors() == 0);
+    engine.stop();
+    r.out = backend.capture().channels[0];
+    return r;
+}
+}  // namespace
+
+TEST_CASE(
+    "a rendered edit and then a live one switch together while the first is ahead "
+    "(ADR-0093)" *
+    doctest::description("rt")) {
+    // Round 42b: a and b muted, the vocal playing. One edit unmutes a (the
+    // renderer's values), the next mutes the vocal (the callback's). The
+    // callback takes the second at its next block, the renderer took the
+    // first where it was rendering, up to the render-ahead later in the
+    // stream; in between all three would be silent, which neither session
+    // is. So while the first is still ahead of what the callback played, the
+    // second compiles, and the two switch together as two compiled reloads
+    // do. That holds after the renderer has taken the first, too (gap 8).
+    const Wet w = wetSession();
+    const Mix& m = w.m;
+    auto edit = [](const model::Session& s, auto change) {
+        model::EditTxn t(s, s.version + 1);
+        change(t);
+        return t.commit().value();
+    };
+    const model::Session base = edit(m.session, [&](model::EditTxn& t) {
+        for (Id id : {m.a, m.b}) t.modify<model::Track>(id, [](auto& x) { x.mute = true; });
+    });
+    const model::Session unmuted = edit(base, [&](model::EditTxn& t) {
+        t.modify<model::Track>(m.a, [](auto& x) { x.mute = false; });
+    });
+    const model::Session vocalMuted = edit(unmuted, [&](model::EditTxn& t) {
+        t.modify<model::Track>(w.vocal, [](auto& x) { x.mute = true; });
+    });
+    // The render-ahead is 10240 frames here, 40 cycles: at gap 60 the
+    // callback has played past where the renderer took the first edit.
+    for (const int gap : {0, 8, 60})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 1}}) {
+            CAPTURE(gap);
+            CAPTURE(options.anticipative);
+            const auto fast = playTwo(base, unmuted, vocalMuted, options, false, gap);
+            const auto compiled = playTwo(base, unmuted, vocalMuted, options, true, gap);
+            CHECK(peakOf(compiled.out, 0, kEditFrames) > 0.01);
+            CHECK(fast.mixEdits[0] == 1);
+            CHECK(fast.plans[0] == 0);
+            const bool together = options.anticipative && gap < 60;
+            CHECK(fast.mixEdits[1] == (together ? 1u : 2u));
+            CHECK(fast.plans[1] == (together ? 1u : 0u));
+            if (!options.anticipative || together) {
+                CHECK(maxDiff(fast.out, 0, compiled.out, kEditFrames) == 0.0);
+            } else {
+                // A live-only edit after the first was played: the vocal is
+                // muted from its next block, the compiled reload from where
+                // the renderer resumes; equal before and after that.
+                const std::size_t at = kEditFrame + std::size_t(gap) * 256;
+                const std::size_t ramped = rendererResumesAt(options, at) + 480;
+                CHECK(std::equal(fast.out.begin(), fast.out.begin() + at, compiled.out.begin()));
+                CHECK(std::equal(fast.out.begin() + ramped, fast.out.end(),
+                                 compiled.out.begin() + ramped));
+            }
+        }
+}
+
 TEST_CASE("FX wet and bypass edits while playing sound exactly like a compiled reload" *
           doctest::description("rt")) {
     // ADR-0093: no plan; the stage's own ramp crossfades, as after a compile.

@@ -275,9 +275,24 @@ bool Engine::loadMixValues(const model::Session& session, const std::filesystem:
     bool changed = false;
     std::vector<model::EnvTarget> stale = staleCurves_;
     if (!mixOnly(*latest_, session, writeHolds_, changed, stale) || !changed) return false;
-    if (detail::splitsExecutors(*p, session))
-        return false;  // ADR-0093: both switch at the handover
+    // ADR-0093: the callback takes values at its next block, the renderer
+    // where it is rendering, up to the render-ahead later in the stream. An
+    // edit both read compiles, and so does one the callback reads while an
+    // earlier one the renderer reads is still ahead of what the callback has
+    // played: until then the two would play neither session. Either way both
+    // then switch at the handover.
+    const auto changes = detail::changedExecutors(*p, session);
+    const auto epoch = epoch_.load(std::memory_order_acquire);
+    const bool renderedAhead =
+        renderedAheadEpoch_ == epoch && playedStream(epoch) < renderedAheadUntil_;
+    if (changes.live && (changes.rendered || renderedAhead)) return false;
     detail::publishMix(*p, session, writeHolds_);
+    // The renderer takes it no later than the start of its next block.
+    if (changes.rendered) {
+        renderedAheadEpoch_ = epoch;
+        renderedAheadUntil_ =
+            renderedStream_.load(std::memory_order_acquire) + options_.renderBlock;
+    }
     plugins_.racks().applyParams(session);
     holdsPending_ = false;
     staleCurves_ = std::move(stale);

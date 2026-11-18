@@ -1186,7 +1186,8 @@ Engine and hosting:
   (ADR-0093) and patch-only FX edits (ADR-0092) skip compiling. Routing, item
   mutes, a route mute that changes a send's encoding, an ADR-0093 edit that
   in the anticipative executor changes both a live and a rendered track's
-  values, and other plug-in changes compile the session, as does a patch edit on an FX with automation or one
+  values (or a live track's while an earlier edit to a rendered one is still
+  ahead of the playhead), and other plug-in changes compile the session, as does a patch edit on an FX with automation or one
   that changes the plug-in's latency, parameters or ports. With playrate
   scheduling started each compile also prepares a rate plan, which costs
   several milliseconds per edit in a session of a few dozen tracks.

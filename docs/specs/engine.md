@@ -438,12 +438,17 @@ compiled reload. A live node takes it at its next callback block, the
 render-ahead rounded up to a render block earlier than the reload reaches
 it, and the two are identical once the reload's ramp is done. A renderer still filling renders with the
 old plan while the compile runs, so a compiled reload is only ever later.
-An edit that changes these values both where the callback reads them and
+In the anticipative executor (`detail::changedExecutors`, ADR-0093) an edit
+compiles when it changes these values both where the callback reads them and
 where the renderer does (a node's executor, an edge's owner, a hardware MIDI
-route's source) compiles in the anticipative executor
-(`detail::splitsExecutors`): the two would take it at different stream
-positions, and in between play neither session's mix, such as silence when
-solo moves from a monitored track to a rendered one.
+route's source), or where the callback reads them while an earlier edit the
+renderer reads is still ahead of the playhead: the callback has not yet
+played, in that epoch, to where the renderer was rendering when it was
+published plus one render block. The two take values at different stream
+positions, and in between would play neither session's mix, such as silence
+when solo moves from a monitored track to a rendered one, in one edit or
+two. ADR-0060's level and pan edits and ADR-0092's patch edits are not
+gated.
 
 **Patch-only FX edits (ADR-0092).** A session that differs from the last one
 `Engine::load` took only in FX `patch` values, each of those FX having a

@@ -55,26 +55,54 @@ fields copied from the new version), slots and seqlock:
 
 Item mute still compiles, because it decides which events a plan holds.
 
-### An edit that changes both executors' values compiles
+### When an edit may take the value path in the anticipative executor
 
-In the anticipative executor, the callback takes a value edit at its next
-block and the renderer at the next block it renders, up to the render-ahead
-later in the stream. An edit that changes these fields both on a node, edge
-or stage the callback reads and on one the renderer reads would therefore
-play, in between, a mix that neither session has. Moving solo from a
-monitored track to a rendered one would silence both until the renderer took
-it (about 200 ms with a full renderer); the reverse would play both. Such an
-edit compiles, so both executors switch at the handover
-(`detail::splitsExecutors`, on the main thread, before anything is
-published). It compares each value the new session would publish with the
-one its slot holds, and tells the readers apart as `syncMix` does: a node's
-executor, an edge's owner, a hardware MIDI route's source.
+The callback takes a value edit at its next block. The renderer takes it at
+the next block it renders, up to the render-ahead later in the stream. So
+values the callback reads and values the renderer reads change at different
+stream positions, and in between the output can be a mix that neither
+session has. Moving solo from a monitored track to a rendered one would
+silence both until the renderer took it (about 200 ms with a full renderer);
+the reverse would play both. Two edits made one after the other split the
+same way: unmuting a rendered track and then muting the monitored one would
+silence both for as long.
 
-Every edit that still takes the value path changes one executor's values,
-so its output is the old session's up to one point and the new session's
-after it. The in-callback executor has one executor and is unaffected.
-ADR-0060's level and pan edits are not gated this way: they blend rather
-than silence, as that ADR describes.
+`detail::changedExecutors` tells, on the main thread before anything is
+published, whose values an edit changes. It compares each value the new
+session would publish with the one its slot holds, and tells the readers
+apart as `syncMix` does: a node's executor, an edge's owner, a hardware MIDI
+route's source. An edit that passes ADR-0060's detection takes the value
+path unless:
+
+- **it changes values both executors read**, or
+- **it changes values the callback reads while an earlier edit that changed
+  values the renderer reads is still ahead of the playhead**: in the same
+  epoch, the callback has not yet played to where the renderer was rendering
+  when that edit was published, plus one render block (by then the renderer
+  has taken it). This holds after the renderer has taken the earlier edit
+  too: it took it ahead of what plays.
+
+Either edit compiles instead, so both executors switch at the handover. The
+reverse order needs no wait: an edit only the renderer reads, after one only
+the callback read, is taken later in the stream than the earlier one was.
+
+So every value edit's output is the previous session's up to one point and
+the new session's after it, and the points of successive edits come in
+order. The in-callback executor has one executor and is unaffected.
+
+**Not gated:**
+- ADR-0060's level and pan edits. They have the same shape, in one edit or
+  in two (a rendered track's fader, then a live one's), and blend rather
+  than silence, as that ADR describes. A live fader pulled to the bottom
+  just after a rendered track was unmuted does sound like the case above;
+  gating level edits too would send a live fader drag after any recent
+  rendered edit to the compile.
+- ADR-0092's patch edits. A patch reaches its instance on the main thread
+  whether it is taken as a patch edit or by a compile, so a live instance
+  plays it from its next block and a rendered one after the chunks already
+  rendered, either way (ADR-0092). Two patch edits, or a patch after a mute,
+  split exactly as their compiled reloads do; the patch path changes
+  nothing there.
 
 The alternative was to let live nodes take a value edit at the stream
 position where the renderer takes it. That keeps these edits off the
@@ -128,8 +156,8 @@ compile's; only the stages' `bypass` and `wet` differ.
     hands over later than it would have, never earlier. A value edit is
     therefore never heard later than a compiled reload made at the same
     moment.
-  - An edit that changes both executors' values compiles (above), so it is
-    a compiled reload.
+  - An edit that would split the executors compiles (above), so it is a
+    compiled reload.
   - The tests fill the renderer before the edit, so every run starts from
     the same renderer position, and check the exact case. Comparing runs
     without that compares different renderer positions, by whole render

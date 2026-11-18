@@ -3807,8 +3807,8 @@ void publishMix(Plan& p, const model::Session& s, std::span<const model::EnvTarg
     mix.sequence.store(sequence + 2, std::memory_order_release);
 }
 
-bool splitsExecutors(const Plan& p, const model::Session& s) {
-    if (!p.split) return false;
+ExecutorChanges changedExecutors(const Plan& p, const model::Session& s) {
+    if (!p.split) return {};
     const MixSlots& mix = *p.mix;
     constexpr auto relaxed = std::memory_order_relaxed;
     // Who reads a value is who syncMix copies it for: a node's executor, an
@@ -3861,7 +3861,7 @@ bool splitsExecutors(const Plan& p, const model::Session& s) {
             touch(p.nodes[route.source]);
         touchVcas(route.vcas, p.nodes[route.source]);
     }
-    return live && rendered;
+    return {live, rendered};
 }
 
 void syncMix(Plan& p, int liveClass) SUPPLE_RT {
