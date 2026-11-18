@@ -297,7 +297,8 @@ instructions are in `docs/guides/installing.md`.
   not the uninterrupted pre-locate swap crossfade. Readiness and sample counts
   decide correctness; a watchdog abort is separately labelled and exits 124.
   Rack modules restart at locates, so the retained-pool VCA-level reproducers
-  in `tests/fuzz/plan-soak-corpus/` now pass.
+  in `tests/fuzz/plan-soak-corpus/` now pass; a rack's plug-in stages empty
+  their dry delays and oversampling filters there too, as a chain's.
   `track.move` accepts reorders under a non-root buss and moves between
   sibling folders, and refuses destinations in the moved track's own subtree.
   Its portable command regression covers undo and cycle rollback; the

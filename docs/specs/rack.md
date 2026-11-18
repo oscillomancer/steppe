@@ -712,8 +712,9 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   relocation and play start, the live region's fresh entry and a node
   joining it), also restart every module of the rack
   (`RackNode::resetModules`, deferred and retained the same way, applied
-  first), so real time equals an offline render from there. A loop wrap,
-  and an executor's adoption of a plan, keep module state.
+  first), and empty its plug-in stages' dry delays and oversampling filters
+  as a chain's, so real time equals an offline render from there. A loop
+  wrap, and an executor's adoption of a plan, keep module state.
   With anticipation off, the callback owns all modules; offline plans have
   private instances and need no ownership check. The callback and renderer
   graphs remain disjoint within each plan; ownership protects shared

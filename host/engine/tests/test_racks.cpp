@@ -2563,6 +2563,103 @@ TEST_CASE("racks: a rack FX's wet or bypass edit while playing sounds like a com
         }
 }
 
+// A seek starts a rack's plug-in stages afresh, as a chain's: their dry
+// delay and oversampling filters hold nothing from before it, so real time
+// is the offline render from there, a plan swap at the seek too.
+TEST_CASE("racks: a seek clears a rack plug-in stage's dry delay and oversampling filters" *
+          doctest::description("rt")) {
+    struct Case {
+        const char* name;
+        bool latent = false;
+        double wet = 100;
+        int oversampling = 1;
+    };
+    const Case cases[] = {
+        {"latent effect at 50% wet: its dry delay", true, 50},
+        {"oversampled x4 effect: its filters", false, 100, 4},
+    };
+    for (const Case& c : cases)
+        for (const bool swap : {false, true})
+            for (const bool anticipative : {false, true}) {
+                const std::string name = c.name;
+                CAPTURE(name);
+                CAPTURE(swap);
+                CAPTURE(anticipative);
+                model::Project project;
+                project.console9 = false;
+                model::EditTxn t(model::Session::create(project), 1);
+                const Id channel = addChannel(t);
+                const Id rack = t.create(model::Rack{channel, ""});
+                const Id lfo = addModule(t, rack, "com.suppleaudio.rack.lfo",
+                                         json::parse(R"({"rate": 3.7})").value());
+                const Id out = addModule(t, rack, "com.suppleaudio.rack.out");
+                const Id plugin =
+                    addPlugin(t, rack, "com.suppleaudio.test.gain",
+                              json::parse(c.latent ? R"({"schema":"supple.test-gain-patch/1.0",)"
+                                                     R"("params":{"gain":-6,"latency":"short"}})"
+                                                   : R"({"schema":"supple.test-gain-patch/1.0",)"
+                                                     R"("params":{"gain":-6}})")
+                                  .value());
+                cable(t, lfo, "out", plugin, "in_l");
+                cable(t, plugin, "out_l", out, "l");
+                listen(t, out, channel);
+                const Id fx = *t.preview().modules.find(plugin)->fx;
+                t.modify<model::FxInstance>(fx, [&](auto& f) {
+                    f.wet = c.wet;
+                    f.oversampling = c.oversampling;
+                });
+                const auto scene = commit(t);
+                const std::int64_t seek = 3217;
+                InstancePool offlinePool = makePool();
+                const auto reference = renderOffline(scene, offlinePool,
+                                                     {.startSeconds = double(seek) / 48000,
+                                                      .endSeconds = double(seek + 8192) / 48000,
+                                                      .threads = 1});
+                REQUIRE(reference);
+                REQUIRE(reference->audio.frames() == 8192);
+                InstancePool pool = makePool();
+                MediaCache media;
+                DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 20000});
+                Engine engine(pool, media, {.anticipative = anticipative, .workers = 0});
+                REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+                REQUIRE(engine.load(scene));
+                engine.play();
+                runCycles(engine, backend, anticipative, 32, 128);
+                engine.seek(double(seek) / 48000);
+                if (swap) {
+                    const auto generation = engine.planGeneration();
+                    model::EditTxn marker(scene, scene.version + 1);
+                    marker.create(model::Marker{});
+                    REQUIRE(engine.load(commit(marker)));
+                    CHECK(engine.planGeneration() == generation + 1);
+                }
+                runCycles(engine, backend, anticipative, 64, 128);
+                engine.stop();
+                CHECK(engine.processErrors() == 0);
+                // From the seek on, after the output latency (the rack's
+                // compensation), sample for sample.
+                const auto latency = static_cast<std::size_t>(engine.outputLatency());
+                const auto& cap = backend.capture().channels[0];
+                const auto& ref = reference->audio.channels[0];
+                std::size_t first = ref.size(), count = 0;
+                for (std::size_t i = 0; i < ref.size() - latency; ++i)
+                    if (cap[32 * 128 + latency + i] != ref[i]) {
+                        first = std::min(first, i);
+                        ++count;
+                    }
+                CAPTURE(first);  // where real time first differs from the offline render
+                CHECK(count == 0);
+                // Before that, the latency the seek fills: the stage holds
+                // nothing from before the seek, so it is silent. (The
+                // oversampling filters pass some of what follows the seek
+                // ahead of their padded latency.)
+                double stale = 0;
+                for (std::size_t i = 0; i < latency; ++i)
+                    stale = std::max(stale, std::fabs(double(cap[32 * 128 + i])));
+                if (c.oversampling == 1) CHECK(stale == 0.0);
+            }
+}
+
 TEST_CASE("MIDI sends: solo follows a MIDI send downstream only") {
     namespace d = supple::engine::detail;
     model::EditTxn t(model::Session::create({.console9 = false}), 1);

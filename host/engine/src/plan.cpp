@@ -3327,6 +3327,16 @@ void locateTake(Node& n, TakeChain& tc, std::int64_t pos, bool wrap, bool keepPl
 void locateTakes(Node& n, std::int64_t pos, bool wrap, bool keepPlaying = false) SUPPLE_RT {
     for (TakeChain& tc : n.takeChains) locateTake(n, tc, pos, wrap, keepPlaying);
 }
+// A rack's plug-in stages at a locate, as a chain's: what they hold outside
+// the plug-in starts afresh unless a swap just carried it (their notes are
+// their modules', which locateRack and the module restart look after). A
+// loop wrap (wrapTo) keeps it.
+void locateRackStages(Node& n) SUPPLE_RT {
+    for (Stage& st : n.rackStages) {
+        if (!st.preserveDryOnLocate) clearStageDelays(st);
+        st.preserveDryOnLocate = false;
+    }
+}
 }  // namespace
 
 void locateNode(Plan& p, Node& n, std::int64_t pos, bool restartConsole) SUPPLE_RT {
@@ -3362,6 +3372,7 @@ void locateNode(Plan& p, Node& n, std::int64_t pos, bool restartConsole) SUPPLE_
                           &n.autoPanBoost, &n.autoMute})
         a->cursor = 0;
     n.vcas.reset();
+    locateRackStages(n);
     for (Stage& st : n.chain) {
         if (restartConsole && !n.releaseHeld) {
             st.voices.clear();
@@ -3435,6 +3446,7 @@ void locate(Plan& p, std::int64_t pos, bool restartConsole) SUPPLE_RT {
                               &n.autoPanRight, &n.autoPanBoost, &n.autoMute})
             a->cursor = 0;
         n.vcas.reset();
+        locateRackStages(n);
         for (Stage& st : n.chain) {
             if (restartConsole && !n.releaseHeld) {
                 st.voices.clear();

@@ -1697,8 +1697,10 @@ harness. See the tooling README for schemas, limits and invocation details.
   thread), and the engine stops every plugin there — no timeout, no stop from
   the main thread however long the device's period. Pause and
   seek `reset()` the plugins (no hanging notes); seek re-locates event and
-  automation cursors and clears delay lines. A seek, and a play from a
-  position, also restart every rack module (`rack::Instance::restart()`)
+  automation cursors and clears delay lines, a rack's plug-in stages' dry
+  delays and oversampling filters as a chain's (`locateRackStages`). A
+  seek, and a play from a position, also restart every rack module
+  (`rack::Instance::restart()`)
   and its feedback cables' history (`rack::Schedule::restart()`), once the
   executor owns the rack (ADR-0062 §5, 2026-11-14 note), where the
   plug-ins are reset: the rack then plays as an offline render from there.
