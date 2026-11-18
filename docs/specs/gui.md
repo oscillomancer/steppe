@@ -2563,7 +2563,7 @@ seen has a 3-unit `meter-hot` bar at its row's left edge; the shown row has a `r
 does not know is listed as "Other report" and shown as far as it can be read, never hidden.
 
 The shown report starts with one plain sentence (the headline, a plug-in's name in bold), then when it
-was saved, by which build, on what, and in which app; then Copy summary (the boxed button), Mark as
+was saved, by which build, on what, and in which app; then Copy summary (the boxed button), Save a copy…, Mark as
 seen and Delete (quiet); then the sentences: what stopped it (a signal or Windows exception in
 words, `std::terminate`, `abort()`, or an exit status), what the report points at and how far to
 trust it ("a clue, not proof"), and that nothing was sent. The technical detail is below, every
@@ -2576,7 +2576,9 @@ shows no such section; one with little in it reads as one that holds little. The
 `crash_report_text.{h,cpp}` (`describeReport`), which reads the report's JSON tolerantly (an unknown
 key is ignored, an unknown thread role or reason is shown as written). Copy summary puts the whole
 page as plain text on the clipboard, every line of every section (the viewer shows at most 40 lines of
-a section and says so). Mark as seen is `acknowledge` (the viewer never acknowledges by being
+a section and says so). Save a copy… (P3; reports only, not a run that left none) writes the report file as it is to a place the
+user picks in the system's save dialog, suggesting `<slug>-crash-<first 8 of the incident>.json`; it is the only
+way a report leaves the folder and nothing is uploaded. Mark as seen is `acknowledge` (the viewer never acknowledges by being
 opened). Delete and Delete all… ask twice: the first click changes the button's text to "Click
 again…" and says what it will do (the report, or every report and every record of a run without
 one), the second does it; choosing another row cancels the first. Open folder reveals the

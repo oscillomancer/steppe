@@ -5,9 +5,11 @@
 #include <algorithm>
 #include <chrono>
 #include <ctime>
+#include <fstream>
 #include <utility>
 #include "render_dialog.h"
 #include "supple/json/parse.h"
+#include "supple/product.h"
 #include "supple/ui/canvas.h"
 #include "supple/ui/forms.h"
 #include "supple/ui/popup.h"
@@ -75,6 +77,19 @@ class ReportRow : public ui::Node {
     std::function<void()> pick_;
     std::function<void(int)> step_;
 };
+
+struct SaveRequest {
+    std::function<void(DialogLifetime::Paths)> done;
+};
+void SDLCALL saveAnswer(void* userdata, const char* const* files, int) {
+    std::unique_ptr<SaveRequest> request(static_cast<SaveRequest*>(userdata));
+    DialogLifetime::Paths paths;
+    if (files)
+        for (const char* const* f = files; *f; ++f)
+            paths.emplace_back(std::u8string_view(reinterpret_cast<const char8_t*>(*f)));
+    if (!paths.empty()) request->done(std::move(paths));  // nothing: cancelled
+}
+const SDL_DialogFileFilter kReportFilter[] = {{"Crash reports", "json"}, {"All files", "*"}};
 
 // Lines drawn as they are, in the mono face: indentation kept, long lines cut by an ellipsis.
 class LinesBlock : public ui::Node {
@@ -169,8 +184,9 @@ std::string timeText(fs::file_time_type time) {
     return text;
 }
 
-CrashViewer::CrashViewer(ui::Root& root, AppActions& actions, fs::path directory)
-    : root_(root), directory_(std::move(directory)) {
+CrashViewer::CrashViewer(ui::Root& root, AppActions& actions, fs::path directory,
+                         SDL_Window* window, DialogLifetime::Post post)
+    : root_(root), window_(window), post_(std::move(post)), directory_(std::move(directory)) {
     copyText = [](const std::string& text) { (void)SDL_SetClipboardText(text.c_str()); };
     openFolder = [](const fs::path& dir) {
         const std::string url = fileUrl(dir.generic_string());
@@ -354,6 +370,10 @@ void CrashViewer::showPage(const Entry& entry) {
         if (copyText) copyText(page_.text());
         status("Copied to the clipboard.");
     });
+    auto& save =
+        actions.emplace<ui::Button>("crash.viewer.save", "Save a copy…", [this] { saveCopy(); });
+    save.quiet = true;
+    save.visible = !entry.unreported;
     auto& seen = actions.emplace<ui::Button>("crash.viewer.seen", "Mark as seen", [this] {
         if (selected_ >= entries_.size()) return;
         const std::string incident = entries_[selected_].incident;
@@ -396,6 +416,35 @@ void CrashViewer::showPage(const Entry& entry) {
     }
     root_.relayout();
     root_.damageAll();
+}
+
+// The report file as it is, to a place the user picks: the only way a report leaves the folder.
+// Nothing is uploaded; the copy is a file the user then does what they like with.
+void CrashViewer::saveCopy() {
+    if (selected_ >= entries_.size() || entries_[selected_].unreported) return;
+    const std::string incident = entries_[selected_].incident;
+    const std::string name =
+        std::string(product::kSlug) + "-crash-" + incident.substr(0, 8) + ".json";
+    const fs::path documents = mediaHome().parent_path();
+    std::error_code ec;
+    const fs::path start =
+        !documents.empty() && fs::is_directory(documents, ec) ? documents / name : fs::path(name);
+    auto answer = dialogs_.guard(post_, [this, incident](DialogLifetime::Paths paths) {
+        auto text = diagnostics::readReport(incident, directory_);
+        if (!text) return status("Could not save a copy: " + text.error().message);
+        std::ofstream out(paths.front(), std::ios::binary | std::ios::trunc);
+        out << *text;
+        out.close();
+        if (!out)
+            return status("Could not save a copy to " + paths.front().filename().string() + ".");
+        status("Saved a copy as " + paths.front().filename().string() + ".");
+    });
+    const auto startText = start.u8string();
+    const std::string startPath(startText.begin(), startText.end());
+    if (saveDialog) return saveDialog(startPath, std::move(answer));
+    if (!window_ || !post_) return status("No file dialog is available here.");
+    SDL_ShowSaveFileDialog(saveAnswer, new SaveRequest{std::move(answer)}, window_, kReportFilter,
+                           2, startPath.c_str());
 }
 
 void CrashViewer::armDelete(bool all) {

@@ -4016,7 +4016,18 @@ TEST_CASE("a plugin dragged from the browser lands on the track row or strip und
 
 namespace {
 // What a Help action posts to the UI thread runs at once in these tests.
-void runNow(std::function<void()> f) { f(); }
+// What a dialog's answer posts to the UI thread: held until the test pumps it (running it inside
+// the dialog's own guard would take its lock twice).
+std::vector<std::function<void()>>& posted() {
+    static std::vector<std::function<void()>> queue;
+    return queue;
+}
+void runNow(std::function<void()> f) { posted().push_back(std::move(f)); }
+void pumpPosted() {
+    auto queue = std::move(posted());
+    posted().clear();
+    for (auto& f : queue) f();
+}
 std::string rowText(App& a, std::size_t i) {
     auto* row = a.root->find("crash.viewer.row." + std::to_string(i));
     return row ? row->valueText() : std::string();
@@ -4184,6 +4195,46 @@ TEST_CASE("Help > Crash reports lists what earlier runs left and shows one in pl
               std::string::npos);
         CHECK_FALSE(a.root->find("crash.viewer.section.plugins"));
         a.snapshot("crash-viewer-unreported.png");
+    }
+    SUBCASE(
+        "Save a copy writes the report as it is where the user picks; an unreported run has none") {
+        REQUIRE(diagnostics::writeSampleCrash(kNoticeOne, "Canary Verb", "Acme", dir, {},
+                                              diagnostics::Role::Gui));
+        REQUIRE(diagnostics::writeSampleUnreportedRun(kNoticeTwo, dir, diagnostics::Role::Gui));
+        ageFile(dir / (std::string(kNoticeTwo) + ".run"), 4);
+        const auto target = a.dir / "copy" / "report.json";
+        std::filesystem::create_directories(target.parent_path());
+        std::string suggested;
+        help.crashReports().saveDialog = [&](const std::string& start, auto done) {
+            suggested = start;
+            done({target});
+        };
+        REQUIRE(a.actions->run("ui.help.crash_reports"));
+        a.root->frame(false);
+        REQUIRE(a.root->find("crash.viewer.save")->visible);
+        REQUIRE(a.root->click("crash.viewer.save"));
+        pumpPosted();
+        a.root->frame(false);
+        // The dialog was offered a name that says what it is, and the copy is the file itself.
+        CHECK(suggested.find(std::string(product::kSlug) + "-crash-00000000.json") !=
+              std::string::npos);
+        const auto original = diagnostics::readReport(kNoticeOne, dir);
+        REQUIRE(original);
+        std::ifstream in(target, std::ios::binary);
+        const std::string copy((std::istreambuf_iterator<char>(in)),
+                               std::istreambuf_iterator<char>());
+        CHECK(copy == *original);
+        CHECK(
+            a.root->find("crash.viewer.status")->valueText().find("Saved a copy as report.json") !=
+            std::string::npos);
+        // Nothing else in the folder changed: saving a copy is not acknowledging.
+        auto listing = diagnostics::listReports(dir);
+        REQUIRE(listing);
+        CHECK_FALSE(listing->reports[0].acknowledged);
+        // The run that left no report has nothing to copy.
+        REQUIRE(a.root->click("crash.viewer.row.1"));
+        a.root->frame(false);
+        CHECK_FALSE(a.root->find("crash.viewer.save")->visible);
     }
     SUBCASE("Mark as seen acknowledges; deleting asks twice") {
         REQUIRE(diagnostics::writeSampleReport(kNoticeOne, dir, diagnostics::Role::Gui));

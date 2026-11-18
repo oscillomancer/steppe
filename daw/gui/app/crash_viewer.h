@@ -12,6 +12,7 @@
 #include <vector>
 #include "app_actions.h"
 #include "crash_report_text.h"
+#include "file_actions.h"
 #include "supple/diagnostics/reports.h"
 #include "supple/ui/root.h"
 
@@ -20,12 +21,17 @@ namespace supple::gui {
 class CrashViewer {
   public:
     // `directory` is the diagnostics folder; empty reads nothing (no folder, no reports).
-    CrashViewer(ui::Root& root, AppActions& actions, std::filesystem::path directory);
+    // `window` and `post` are for the system's save dialog (its answer is posted to the UI thread).
+    CrashViewer(ui::Root& root, AppActions& actions, std::filesystem::path directory,
+                SDL_Window* window = nullptr, DialogLifetime::Post post = {});
     // Opens the viewer on `incident` (or the newest report when it is empty or not listed).
     void open(const std::string& incident = {});
     // The clipboard and the file manager, replaceable by tests.
     std::function<void(const std::string&)> copyText;
     std::function<void(const std::filesystem::path&)> openFolder;
+    // "Save a copy…": the system's save dialog by default; `start` is the suggested path.
+    std::function<void(const std::string& start, std::function<void(DialogLifetime::Paths)>)>
+        saveDialog;
 
   private:
     struct Entry {
@@ -42,10 +48,14 @@ class CrashViewer {
     void select(std::size_t index);  // shows one entry's page
     void showPage(const Entry& entry);
     void status(const std::string& text);
+    void saveCopy();
     void armDelete(bool all);
     void doDelete();
     void deleteAll();
     ui::Root& root_;
+    SDL_Window* window_;
+    DialogLifetime::Post post_;
+    DialogLifetime dialogs_;
     std::filesystem::path directory_;
     std::vector<Entry> entries_;
     std::size_t selected_ = 0;
