@@ -171,6 +171,25 @@ void announceState(std::uint32_t cell, InstanceState state) noexcept {
     sink(event);
 }
 
+void announceChild(std::uint32_t cell, std::uint32_t childCell, std::uint16_t childGeneration,
+                   std::uint64_t childImage) noexcept {
+    std::unique_lock<std::mutex> lock;
+    const auto sink = enter(lock);
+    if (!sink || cell >= kMaxInstances || childCell >= kMaxInstances) return;
+    Event event;
+    event.event = EventKind::Child;
+    event.cell = cell;
+    event.generation = generationOfCell(cell);
+    event.image = childImage;
+    event.childCell = childCell;
+    event.childGeneration = childGeneration;
+    sink(event);
+}
+
+std::uint16_t cellGeneration(std::uint32_t cell) noexcept {
+    return cell < kMaxInstances ? generationOfCell(cell) : std::uint16_t{0};
+}
+
 void announceRemove(std::uint32_t cell) noexcept {
     std::unique_lock<std::mutex> lock;
     const auto sink = enter(lock);

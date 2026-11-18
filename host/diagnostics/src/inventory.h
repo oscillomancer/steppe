@@ -66,6 +66,18 @@ constexpr std::size_t kMaxBridges = 256;
 // (topic 6a), so a plug-in that crashes its bridge in a loop cannot evict the reports that matter.
 constexpr std::size_t kMaxBridgeReports = 3;
 
+// Where a bridged instance is inside its bridge process (topic 6b), as the host said when the
+// bridge answered Create: the instance's cell and generation in the bridge's own table and an
+// address in the plug-in's binary in the bridge's address space. Private, never reported: it
+// matches what the bridge's table says to the instance the host knows, and `image` is an address
+// of another process, so it must never be looked up among the worker's own modules.
+struct ChildIdentity {
+    std::uint32_t cell = 0;
+    std::uint16_t generation = 0;
+    std::uint64_t image = 0;
+    bool set() const noexcept { return image != 0 || cell != 0 || generation != 0; }
+};
+
 struct PluginEntry {
     std::uint32_t ordinal = 0;  // the report's id: order of first announcement
     std::uint32_t cell = 0;
@@ -76,6 +88,7 @@ struct PluginEntry {
     diagctx::InstanceState state = diagctx::InstanceState::None;
     std::uint16_t bridge = 0;                            // 0: this process, n: bridge n
     std::uint64_t image = 0;                             // never reported
+    ChildIdentity child;                                 // never reported; bridged only
     std::array<std::string, diagctx::kTextFields> text;  // name, vendor, version, id; checked
 };
 
@@ -112,6 +125,12 @@ class Inventory {
     // The entry of a cell and generation, live first, then the latest retired one; null if the
     // inventory never heard of it.
     const PluginEntry* find(std::uint32_t cell, std::uint16_t generation) const;
+    // The bridged instance that is at `cell` and `generation` of bridge `bridge`'s own table
+    // (topic 6b): live first (the newest if the host reused a cell), then the latest retired one;
+    // null when none was said to be there. This is how a bridge's execution table is matched to
+    // the plug-ins of a report.
+    const PluginEntry* findInBridge(std::uint16_t bridge, std::uint32_t cell,
+                                    std::uint16_t generation) const;
     // Live and retired entries by ordinal.
     std::vector<const PluginEntry*> entries() const;
 

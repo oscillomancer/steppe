@@ -79,6 +79,9 @@ enum class EventKind : std::uint8_t {
     Names,    // four command names (topic 5d): `cell` is the id of the first, `identity` holds them
     Bridge,   // a bridge process started or ended (topic 6a): `bridge`, and for an end
               // `how`/`status`
+    Child,    // a bridged instance's identity inside its bridge (topic 6b): `cell` and
+              // `generation` are the host's own, `childCell`, `childGeneration` and `image` the
+              // bridge process's
 };
 // How a bridge process ended, as the host classified it when it observed the end (topic 6a).
 // None is the other event: the bridge started. Host: the host killed it (a hung or abandoned
@@ -103,6 +106,11 @@ struct Event {
     std::uint16_t bridge = 0;
     BridgeHow how = BridgeHow::None;  // Bridge events: None = started, else how it ended
     std::int32_t status = 0;          // Bridge events, an end: the native status (signal, code)
+    // Child events (topic 6b): the instance's cell and generation in the bridge process's own
+    // table, and (in `image`) an address in the plug-in's binary there. Private to the channel:
+    // the supervisor matches a bridge's capsule to the instance with them and never records them.
+    std::uint32_t childCell = 0;
+    std::uint16_t childGeneration = 0;
     Identity identity;
 };
 
@@ -124,6 +132,16 @@ void announce(std::uint32_t cell, InstanceKind kind, InstanceOrigin origin, Inst
 void announceBridge(std::uint16_t bridge, BridgeHow how = BridgeHow::None,
                     std::int32_t status = 0) noexcept;
 void announceState(std::uint32_t cell, InstanceState state) noexcept;
+// What a bridged instance is in its bridge process (topic 6b): `cell` is the host's cell of the
+// instance, `childCell` its cell in the bridge's table, `childGeneration` that cell's generation
+// there and `childImage` an address in the plug-in's binary in the bridge's address space. Cold,
+// from the thread that created the instance, after the bridge answered Create. Ignored when
+// either cell is out of range (the table had no room for it).
+void announceChild(std::uint32_t cell, std::uint32_t childCell, std::uint16_t childGeneration,
+                   std::uint64_t childImage) noexcept;
+// The generation `cell` has now: what an announcement made this moment would carry. 0 for a cell
+// out of range. The bridge says it in its Create reply (topic 6b).
+std::uint16_t cellGeneration(std::uint32_t cell) noexcept;
 // The image `announce` last gave for `cell` (0: none, or a cell out of range). It stays after
 // the instance is removed, until the cell is announced again: a retired instance's module is
 // still one the report names. Atomic loads only, so a terminal handler may call it. macOS,

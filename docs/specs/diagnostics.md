@@ -910,6 +910,34 @@ sets, an integer code in 32 bits, every listed instance a listed plug-in whose `
 ordinal, and every plug-in's `bridge` a listed one unless `dropped.bridges` says some were left
 out.
 
+### The child's identity (topic 6b)
+
+A bridged instance exists twice: as the host's own cell (its entry is `bridge_call`, announced as
+above) and as a cell in the bridge process's own execution table, where the plug-in's real entries
+run. The bridge says where the second is when it answers `Create` (bridge protocol 26 on POSIX,
+27 on Windows, `docs/specs/sandbox.md`), and the host passes it on so that what a bridge's table
+says can be matched to the instance the report lists.
+
+*Announcing.* A new event kind `Child` (`diagctx::announceChild`) carries the host's `cell` and
+`generation` for the instance and, new in `diagctx::Event` and in the packet's `InstanceRecord`,
+`childCell` and `childGeneration` (the instance's cell and that cell's generation in the bridge's
+table) and, in `image`, an address in the plug-in's binary in the bridge's address space. It is
+announced once, by the thread that creates the instance, after the bridge answered `Create`; it
+takes the same lock as every announcement, so none can run on an audio path. The fields mean
+nothing in any other event: an `Add`, a `Bridge` event or a name chunk with a `childCell` or a
+`childGeneration` is damaged.
+
+*Supervisor.* The `Inventory` keeps the three values on the instance's entry as private matching
+data (`PluginEntry::child`), and `findInBridge(bridge, cell, generation)` answers which instance
+of the report was at that place of that bridge's table (a live one first, the newest if two claim
+it, then the latest destroyed one). A `Child` event is refused, counted and ignored unless it
+names an instance that was announced, with that generation, as bridged and in a bridge, with both
+cells and generations in the table's range and nothing else in the record set. Describing an
+instance again (`Add` with the same generation) keeps where it is; a new incarnation of the cell
+does not inherit it. Nothing of it is ever in a report: not the cell, not the generation, and not
+the address, which belongs to another process and must never be looked up among the worker's own
+modules. Nothing reads it yet: 6c matches a bridge's capsule with it.
+
 ### Command breadcrumbs (topic 5d)
 
 The report says which registered commands the model thread had begun. `libs/command-bus`

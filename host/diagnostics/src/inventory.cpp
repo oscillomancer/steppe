@@ -75,6 +75,8 @@ void send(const diagctx::Event& event) noexcept {
     record.bridge = event.bridge;
     record.how = static_cast<std::uint8_t>(event.how);
     record.status = event.status;
+    record.childCell = event.childCell;
+    record.childGeneration = event.childGeneration;
     const std::string_view fields[diagctx::kTextFields]{event.identity.name, event.identity.vendor,
                                                         event.identity.version, event.identity.id};
     for (std::size_t i = 0; i < diagctx::kTextFields; ++i) {
@@ -232,7 +234,8 @@ void Inventory::retire(PluginEntry entry) {
 bool Inventory::applyNames(const InstanceRecord& r) {
     if (r.cell % diagctx::kNamesPerChunk != 0 || r.cell >= diagctx::kMaxCommandNames ||
         r.generation != 0 || r.kind != 0 || r.origin != 0 || r.mode != 0 || r.state != 0 ||
-        r.image != 0 || r.bridge != 0 || r.how != 0 || r.status != 0)
+        r.image != 0 || r.bridge != 0 || r.how != 0 || r.status != 0 || r.childCell != 0 ||
+        r.childGeneration != 0)
         return false;
     bool any = false;
     for (std::size_t i = 0; i < diagctx::kNamesPerChunk; ++i) {
@@ -289,7 +292,7 @@ BridgeEntry* Inventory::touchBridge(std::uint16_t id) {
 bool Inventory::applyBridge(const InstanceRecord& r) {
     if (r.bridge == 0 || r.cell != 0 || r.generation != 0 || r.kind != 0 || r.origin != 0 ||
         r.mode != 0 || r.state != 0 || r.image != 0 || r.how >= diagctx::kBridgeHowCount ||
-        (r.how == 0 && r.status != 0))
+        (r.how == 0 && r.status != 0) || r.childCell != 0 || r.childGeneration != 0)
         return false;
     for (const auto length : r.length)
         if (length != 0) return false;
@@ -332,6 +335,7 @@ bool Inventory::apply(const Packet& packet) {
             for (const auto length : r.length)
                 if (length > diagctx::kMaxText) return reject();
             if (r.how != 0 || r.status != 0) return reject();  // only a Bridge event has them
+            if (r.childCell != 0 || r.childGeneration != 0) return reject();  // nor a Child's
             PluginEntry entry;
             entry.cell = r.cell;
             entry.generation = r.generation;
@@ -346,6 +350,7 @@ bool Inventory::apply(const Packet& packet) {
                 entry.text[i] = cleanText(r.text[i], r.length[i]);
             if (slot && slot->generation == r.generation) {
                 entry.ordinal = slot->ordinal;  // the same instance, described again
+                entry.child = slot->child;      // where it is in its bridge is not part of that
             } else {
                 // The cell was reused: whoever held it is gone, whether or not it said so.
                 if (slot) retire(std::move(*slot));
@@ -373,6 +378,21 @@ bool Inventory::apply(const Packet& packet) {
             }
             return true;
         }
+        case diagctx::EventKind::Child: {
+            // Where a bridged instance is inside its bridge process (topic 6b). It describes an
+            // instance that was announced as bridged, in a bridge, with its cell and generation
+            // in that process's table; nothing else in the record may be set.
+            if (!slot || slot->generation != r.generation ||
+                slot->mode != diagctx::InstanceMode::Bridged || slot->bridge == 0 ||
+                r.childCell >= kMaxPlugins || r.childGeneration > diagctx::kGenerationMask ||
+                r.kind != 0 || r.origin != 0 || r.mode != 0 || r.state != 0 || r.bridge != 0 ||
+                r.how != 0 || r.status != 0)
+                return reject();
+            for (const auto length : r.length)
+                if (length != 0) return reject();
+            slot->child = {r.childCell, r.childGeneration, r.image};
+            return true;
+        }
         case diagctx::EventKind::Names:
         case diagctx::EventKind::Bridge:
             break;  // handled above, before the cell checks
@@ -385,6 +405,22 @@ const PluginEntry* Inventory::find(std::uint32_t cell, std::uint16_t generation)
     if (const auto& slot = live_[cell]; slot && slot->generation == generation) return &*slot;
     for (auto it = retired_.rbegin(); it != retired_.rend(); ++it)
         if (it->cell == cell && it->generation == generation) return &*it;
+    return nullptr;
+}
+
+const PluginEntry* Inventory::findInBridge(std::uint16_t bridge, std::uint32_t cell,
+                                           std::uint16_t generation) const {
+    if (bridge == 0) return nullptr;
+    const PluginEntry* found = nullptr;
+    for (const auto& slot : live_)
+        if (slot && slot->bridge == bridge && slot->child.set() && slot->child.cell == cell &&
+            slot->child.generation == generation && (!found || slot->ordinal > found->ordinal))
+            found = &*slot;
+    if (found) return found;
+    for (auto it = retired_.rbegin(); it != retired_.rend(); ++it)
+        if (it->bridge == bridge && it->child.set() && it->child.cell == cell &&
+            it->child.generation == generation)
+            return &*it;
     return nullptr;
 }
 

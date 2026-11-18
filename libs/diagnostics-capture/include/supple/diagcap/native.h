@@ -35,6 +35,11 @@ struct InstanceRecord {
     std::uint8_t how = 0;
     std::int32_t status = 0;
     std::uint64_t image = 0;  // private: an address inside the plug-in's binary
+    // Topic 6b. A Child event (`event` = diagctx::EventKind::Child) names the instance by `cell`
+    // and `generation` and says where it is inside its bridge process: its cell and generation
+    // in that process's table, and in `image` an address of the plug-in's binary there.
+    std::uint32_t childCell = 0;
+    std::uint16_t childGeneration = 0;
     char text[4][64]{};
 };
 struct Packet {

@@ -75,6 +75,17 @@ Packet bridgeEvent(std::uint16_t bridge, diagctx::BridgeHow how = diagctx::Bridg
     p.instance.status = status;
     return p;
 }
+Packet childEvent(std::uint32_t cell, std::uint16_t generation, std::uint32_t childCell,
+                  std::uint16_t childGeneration, std::uint64_t image) {
+    Packet p = base();
+    p.instance.event = static_cast<std::uint8_t>(diagctx::EventKind::Child);
+    p.instance.cell = cell;
+    p.instance.generation = generation;
+    p.instance.childCell = childCell;
+    p.instance.childGeneration = childGeneration;
+    p.instance.image = image;
+    return p;
+}
 using diagctx::EventKind;
 using diagctx::InstanceState;
 }  // namespace
@@ -1345,4 +1356,133 @@ TEST_CASE(
         R"({"threads":0,"unregistered_threads":0,"plugins":0,"commands":0,"cells":0,"messages":0,"untracked":"0"})")));
     CHECK_FALSE(droppedShape(parse(
         R"({"threads":0,"unregistered_threads":0,"plugins":0,"commands":0,"cells":0,"messages":0,"untracked":0,"extra":0})")));
+}
+
+TEST_CASE(
+    "a bridged instance's place in its bridge is kept, found by bridge and cell, never shown") {
+    Inventory inventory;
+    REQUIRE(inventory.apply(bridgeEvent(2)));
+    REQUIRE(inventory.apply(addIn(5, 1, 2)));
+    REQUIRE(inventory.apply(addIn(6, 1, 3, "Other")));
+    REQUIRE(inventory.apply(childEvent(5, 1, 4, 7, 0x55550000)));
+    REQUIRE(inventory.apply(childEvent(6, 1, 4, 7, 0x66660000)));  // the same cell in bridge 3
+    const auto* first = inventory.findInBridge(2, 4, 7);
+    const auto* second = inventory.findInBridge(3, 4, 7);
+    REQUIRE(first);
+    REQUIRE(second);
+    CHECK(first->cell == 5);
+    CHECK(second->cell == 6);
+    CHECK(first->child.image == 0x55550000);
+    CHECK(first->image == 0x7000);  // the host's own image is not touched by the bridge's
+    CHECK(inventory.findInBridge(2, 4, 8) == nullptr);  // another generation of that cell
+    CHECK(inventory.findInBridge(2, 5, 7) == nullptr);
+    CHECK(inventory.findInBridge(0, 4, 7) == nullptr);  // bridge 0 is this process
+    CHECK(inventory.findInBridge(9, 4, 7) == nullptr);
+    // Nothing of it is in the report: not the cell, the generation or the address.
+    const auto text = json::writeCanonical(inventory.pluginsJson(nullptr));
+    CHECK(text.find("55550000") == std::string::npos);
+    CHECK(text.find("1431633920") == std::string::npos);  // 0x55550000 in decimal
+    CHECK(pluginsShape(inventory.pluginsJson(nullptr), 0));
+    // Describing the instance again keeps where it is; a new incarnation of the cell does not.
+    REQUIRE(inventory.apply(addIn(5, 1, 2)));
+    CHECK(inventory.findInBridge(2, 4, 7));
+    REQUIRE(inventory.apply(addIn(5, 2, 2)));
+    CHECK(inventory.findInBridge(2, 4, 7) != nullptr);        // the retired one still answers...
+    CHECK(inventory.findInBridge(2, 4, 7)->generation == 1);  // ...and it is the old one
+}
+
+TEST_CASE("a destroyed bridged instance is still found by its place, and a live one is preferred") {
+    Inventory inventory;
+    REQUIRE(inventory.apply(addIn(5, 1, 2)));
+    REQUIRE(inventory.apply(childEvent(5, 1, 4, 7, 0x1000)));
+    REQUIRE(inventory.apply(change(5, 1, EventKind::Remove, InstanceState::Destroyed)));
+    const auto* retired = inventory.findInBridge(2, 4, 7);
+    REQUIRE(retired);
+    CHECK(retired->state == InstanceState::Destroyed);
+    // The same place taken again (the host reuses its own cell as the bridge reuses its own).
+    REQUIRE(inventory.apply(addIn(8, 1, 2, "Newer")));
+    REQUIRE(inventory.apply(childEvent(8, 1, 4, 7, 0x1000)));
+    const auto* live = inventory.findInBridge(2, 4, 7);
+    REQUIRE(live);
+    CHECK(live->cell == 8);
+    CHECK(live->state != InstanceState::Destroyed);
+    // Two live ones in the same place (the bridge's Remove was slow to reach us): the newer.
+    REQUIRE(inventory.apply(addIn(10, 1, 2, "Newest")));
+    REQUIRE(inventory.apply(childEvent(10, 1, 4, 7, 0x1000)));
+    CHECK(inventory.findInBridge(2, 4, 7)->cell == 10);
+}
+
+TEST_CASE("a damaged Child record is refused and changes nothing") {
+    const auto setup = [](Inventory& inventory) {
+        REQUIRE(inventory.apply(addIn(5, 1, 2)));
+        REQUIRE(inventory.apply(add(6, 1, InstanceState::Active)));  // in process
+        auto claimed = addIn(7, 1, 2);  // says it is in a bridge, but not that it is bridged
+        claimed.instance.mode = static_cast<std::uint8_t>(diagctx::InstanceMode::InProcess);
+        REQUIRE(inventory.apply(claimed));
+    };
+    const Packet good = childEvent(5, 1, 4, 7, 0x1000);
+    {
+        Inventory inventory;
+        setup(inventory);
+        REQUIRE(inventory.apply(good));
+        CHECK(inventory.rejected() == 0);
+    }
+    const auto refused = [&](auto&& change) {
+        Packet damaged = good;
+        change(damaged.instance);
+        Inventory inventory;
+        setup(inventory);
+        const bool applied = inventory.apply(damaged);
+        return !applied && inventory.rejected() == 1 && inventory.findInBridge(2, 4, 7) == nullptr;
+    };
+    CHECK(refused([](InstanceRecord& r) { r.cell = 9; }));        // never announced
+    CHECK(refused([](InstanceRecord& r) { r.cell = 6; }));        // in process: nothing to say
+    CHECK(refused([](InstanceRecord& r) { r.cell = 7; }));        // not announced as bridged
+    CHECK(refused([](InstanceRecord& r) { r.generation = 2; }));  // another incarnation
+    CHECK(
+        refused([](InstanceRecord& r) { r.childCell = static_cast<std::uint32_t>(kMaxPlugins); }));
+    CHECK(refused([](InstanceRecord& r) { r.childCell = 0xffffffffu; }));
+    CHECK(refused([](InstanceRecord& r) { r.childGeneration = diagctx::kGenerationMask + 1; }));
+    CHECK(refused([](InstanceRecord& r) { r.kind = 1; }));
+    CHECK(refused([](InstanceRecord& r) { r.origin = 1; }));
+    CHECK(refused([](InstanceRecord& r) { r.mode = 2; }));
+    CHECK(refused([](InstanceRecord& r) { r.state = 2; }));
+    CHECK(refused([](InstanceRecord& r) { r.bridge = 2; }));
+    CHECK(refused([](InstanceRecord& r) { r.how = 1; }));
+    CHECK(refused([](InstanceRecord& r) { r.status = 1; }));
+    CHECK(refused([](InstanceRecord& r) { r.length[0] = 1; }));
+    // The child's fields mean nothing in any other event: an Add, a Bridge event, or a name chunk
+    // carrying them is damaged.
+    Inventory inventory;
+    auto withCell = add(1, 0, InstanceState::Active);
+    withCell.instance.childCell = 1;
+    CHECK_FALSE(inventory.apply(withCell));
+    auto withGeneration = addIn(1, 0, 2);
+    withGeneration.instance.childGeneration = 1;
+    CHECK_FALSE(inventory.apply(withGeneration));
+    auto inBridgeEvent = bridgeEvent(3);
+    inBridgeEvent.instance.childCell = 1;
+    CHECK_FALSE(inventory.apply(inBridgeEvent));
+    CHECK(inventory.bridges().empty());
+}
+
+TEST_CASE("every byte of a Child record, replaced, is refused or leaves the place in range") {
+    const Packet good = childEvent(5, 1, 4, 7, 0x1000);
+    for (std::size_t at = 0; at < sizeof(InstanceRecord); ++at)
+        for (const unsigned char value : {0x00, 0x01, 0x07, 0x7f, 0x80, 0xff}) {
+            Packet damaged = good;
+            reinterpret_cast<unsigned char*>(&damaged.instance)[at] = value;
+            Inventory inventory;
+            REQUIRE(inventory.apply(addIn(5, 1, 2)));
+            (void)inventory.apply(damaged);
+            for (const auto* entry : inventory.entries()) {
+                CHECK(entry->cell == 5);
+                CHECK(entry->mode == diagctx::InstanceMode::Bridged);
+                if (entry->child.set()) {
+                    CHECK(entry->child.cell < kMaxPlugins);
+                    CHECK(entry->child.generation <= diagctx::kGenerationMask);
+                }
+            }
+            CHECK(inventory.entries().size() == 1);  // never a second entry out of one packet
+        }
 }
