@@ -248,6 +248,11 @@ Steppe offers the last two only, since a fault in one is Steppe's own. Cancel, o
 version of the plug-in, so an updated plug-in is asked about again, and a remembered "normally" is dropped if that
 plug-in closes Steppe again. Remembered choices are saved in the preferences file.
 
+Two limits of that question. It looks at the project as saved, at the latest step of each branch: a plug-in
+that only an older step of the history uses is not asked about, and loads normally if you undo back to that
+step. And a project template is checked and then loaded by its name, so a template file that is changed
+between the question and the load is loaded without the question.
+
 A plug-in you disabled is marked in the mixer (its slot keeps its outline, its name goes dim and
 an amber bar runs down the slot's left edge; a plug-in that failed, because its separate process closed or
 stopped answering, has the same slot with a red bar; and a track's "fx" turns amber while its chain holds a

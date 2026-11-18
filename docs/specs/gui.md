@@ -2843,6 +2843,15 @@ override was set back, the restart that setting it made of that plug-in's instan
 that stayed open (the engine restarts them for any change of mode). Cancel at any question changes
 nothing, in the engine or on disk.
 
+*Two limits of the check* (round 6b; known, not closed). (1) It reads the head of every branch, not the
+history steps behind them (`project.plugins`' description says so): a plug-in that only an older step
+names loads without the question when the person undoes or restores to that step. (2) A project
+template is checked at its path but loaded by name, and `project.template.load` takes no hash: a
+template file that changes between the check and the load is loaded as it then is, unchecked. File >
+Open and the two recoveries are bound to the checked bytes (`expect_hash`, `autosave_file`); templates
+are not. Closing (2) means `project.template.load` taking the path or a hash; closing (1) means
+checking the steps too.
+
 *Remembering* is a preference, opt-in per question: `plugin_overrides` in `preferences.json`
 (`supple.preferences/1.10`; absent and older files mean none) is an array of `{format, id, build_id,
 mode, remembered_ms}` with the plug-in's `name`, `vendor` and `version` for the list in Settings;
