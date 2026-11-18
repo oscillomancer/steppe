@@ -93,7 +93,7 @@ class Lanes : public ui::Node {
     // middle of the lanes (gui.md §4.3): two lines, gone with the first row.
     static constexpr const char* kEmptyTitle = "This project is empty.";
     static constexpr const char* kEmptyHint =
-        "Drop audio or MIDI files here, or click + strip at the bottom left to add a track.";
+        "Drop audio or MIDI files here, or click + track at the bottom left.";
     bool showsEmptyHint() const { return layout_.rowCount() == 0; }
 
     // What the last paint drew (benchmarks, tests).

@@ -726,7 +726,7 @@ class RowsHost : public ui::Node {
 };
 
 // The panel's foot: an opaque band under the rows' area with "mixer" and
-// "+ strip" at its right.
+// "+ track" at its right.
 class Foot : public ui::Node {
   public:
     Foot() : Node("tcp.foot") {}
@@ -757,7 +757,7 @@ TcpPanel::TcpPanel(const TrackLayout& rowLayout, const Viewport& view, TcpCallba
         if (cb_.mixer) cb_.mixer();
     });
     add_ = &foot_->emplace<ui::Button>(
-        "tcp.add", "+ strip", [this] { openAddMenu(add_->bounds(), ui::Placement::Above); });
+        "tcp.add", "+ track", [this] { openAddMenu(add_->bounds(), ui::Placement::Above); });
     add_->layout.width = ui::SizeRule::fixed(56);
     add_->layout.height = ui::SizeRule::fixed(18);
 }
@@ -1178,8 +1178,8 @@ void TcpPanel::paint(ui::Canvas& c) {
 }
 
 // A double-click on the panel's empty space (no row, not the foot's buttons)
-// adds a channel, as "+ strip" > Channel does; a right-click there opens the
-// "+ strip" menu at the pointer.
+// adds a channel, as "+ track" > Channel does; a right-click there opens the
+// "+ track" menu at the pointer.
 bool TcpPanel::onPointer(const ui::PointerEvent& e) {
     const bool doubleClick = e.button == 1 && e.clicks >= 2;
     if (e.type != ui::PointerEvent::Type::Down || !(doubleClick || e.button == 3) || !cb_.addStrip)

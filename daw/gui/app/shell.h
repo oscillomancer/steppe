@@ -85,7 +85,7 @@ class Shell {
     // The channel count menu (the ui.track.channels action; the track menu's Channels…).
     Status openChannelsMenu(const model::Id& track, const ui::Rect& anchor);
     // Adds a strip of a type ("channel", "buss", "master") and selects it: the
-    // TCP's "+ strip", and a double-click on the TCP's or the mixer's empty space.
+    // TCP's "+ track", and a double-click on the TCP's or the mixer's empty space.
     void addStrip(std::string_view type);
     // The record input picker at `anchor` and what a strip's input button says
     // (the TCP's and the mixer's): the port names, "midi *", or "in —".

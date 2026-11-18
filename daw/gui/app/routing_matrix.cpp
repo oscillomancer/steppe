@@ -89,15 +89,15 @@ std::string MatrixModel::blocked(std::size_t row, std::size_t col) const {
     if (s.type == "rack_out" && (d.kind != "track" || d.type == "channel"))
         return s.rule.empty() ? "a rack's Out sends to busses and masters" : s.rule;
     if (s.pair != 1 && d.kind == "key")
-        return "a key takes a strip's main pair; the plug-in's pins can read others";
+        return "a key takes a track's main pair; the plug-in's pins can read others";
     if (s.type == "rack_out") {
         // a buss or master: open unless it feeds back (below)
     } else if (d.kind == "track") {
-        if (s.id == d.id) return "a strip cannot send to itself";
+        if (s.id == d.id) return "a track cannot send to itself";
         if (!s.rule.empty()) return s.rule;
         if (!d.rule.empty()) return d.rule;
     } else if (d.kind == "key") {
-        if (s.id == d.track) return "a strip cannot key a plug-in in its own chain";
+        if (s.id == d.track) return "a track cannot key a plug-in in its own chain";
     } else if (!s.rule.empty()) {  // an In module: masters are terminal
         return s.rule;
     }

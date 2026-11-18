@@ -25,7 +25,7 @@ Command names follow the product name. In a build tree, the app is
 
 A new project is empty, and says so in the middle of the window. To begin,
 drop audio or MIDI files onto the arrangement (each makes a track), or click
-**+ strip** at the bottom left to add a track. The **Browser** (press **B**)
+**+ track** at the bottom left. The **Browser** (press **B**)
 lists plug-ins, saved FX chains and files to add.
 
 The last of the transport buttons sets how the view follows the playhead.
@@ -560,9 +560,9 @@ Right move it.
 
 The same menu sets the **pan law**: how much a centred mono signal is cut.
 **Project** follows the project's law, set in **Project** in the menu bar;
-the others (0, −2.5, −3, −4.5 and −6 dB) give the strip its own. 0 dB, the
+the others (0, −2.5, −3, −4.5 and −6 dB) give the track its own. 0 dB, the
 default, never cuts or boosts, so a centred signal keeps its level through
-any number of busses. A cut law applies at every strip a centred signal
+any number of busses. A cut law applies at every track a centred signal
 passes. **Gain compensation (boost pans)** keeps the centre at 0 dB and
 boosts the sides instead, which can clip a loud recording. A master's pan is
 a plain balance, with no mode or law.
@@ -679,8 +679,8 @@ choose **Only the instrument hears MIDI**. Projects saved before this version
 open that way on every channel with two or more plug-ins, so they sound as
 they did; switch it back to hear the new routing.
 
-**View > Routing matrix**, or a strip's **out** button, opens a grid of what
-feeds what: a row per strip (and per output pair of a multi-out instrument),
+**View > Routing matrix**, or a track's **out** button, opens a grid of what
+feeds what: a row per track (and per output pair of a multi-out instrument),
 a column per destination. A square with a dot is a send; a crossed-out square
 is not allowed, and hovering it says why.
 
@@ -691,7 +691,7 @@ empty corner above the row names, or press Ctrl+A, to select every square.
 
 Double-click a square to put a send there. **Add** puts a send on every
 selected square that can have one, and **Remove** (or Delete) removes the
-sends on every selected square. On a strip's parent square these turn the
+sends on every selected square. On a track's parent square these turn the
 parent send on and off.
 
 Every control under the grid acts on all the sends you have selected: the

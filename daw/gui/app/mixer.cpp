@@ -933,7 +933,7 @@ std::unique_ptr<ui::Node> Mixer::build() {
     header.emplace<ui::Button>("mixer.close", "Close", [this] { setVisible(false); });
     auto row = std::make_unique<StripRow>();
     row->onDoubleClick = [this] { addStrip("channel"); };
-    // A right-click on the empty space: the TCP's "+ strip" menu.
+    // A right-click on the empty space: the TCP's "+ track" menu.
     row->onContextMenu = [this](ui::Point p) {
         std::vector<ui::MenuItem> items;
         for (const char* type : {"Channel", "Buss", "Master"}) {

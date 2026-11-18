@@ -369,7 +369,7 @@ TEST_CASE("mixer: a double-click on the strips' empty space adds a channel") {
     REQUIRE(f.mixer->strips().size() >= 3);
     const auto& added = f.track(f.mixer->strips()[1].track);
     CHECK(added.type == model::StripType::Channel);
-    // A right-click there: channel, buss or master (the TCP's "+ strip" menu).
+    // A right-click there: channel, buss or master (the TCP's "+ track" menu).
     const ui::Point at{strip.right() + 200, strip.y + strip.h / 2};
     ui::PointerEvent right;
     right.type = ui::PointerEvent::Type::Down;

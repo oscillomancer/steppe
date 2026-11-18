@@ -556,8 +556,8 @@ Status ItemGestures::pasteClip(const Clip& c, double atBeat, std::optional<model
     args["version"] = static_cast<std::int64_t>(c.version);
     if (placements.asArray().empty())
         return Error("gui.clipboard.targets",
-                     "paste dropped " + std::to_string(dropped) + " items: no target channel", {},
-                     "select a target channel with enough following channels");
+                     "paste dropped " + std::to_string(dropped) + " items: no target track", {},
+                     "select a target track with enough tracks below it");
     args["items"] = std::move(placements);
     auto r = run(label, {{"item.paste", std::move(args)}});
     if (!r) return std::move(r).error();
@@ -568,7 +568,7 @@ Status ItemGestures::pasteClip(const Clip& c, double atBeat, std::optional<model
     changed();
     if (dropped && onError)
         onError(Error("gui.clipboard.targets", "paste dropped " + std::to_string(dropped) +
-                                                   " items without a target channel"));
+                                                   " items without a target track"));
     return {};
 }
 

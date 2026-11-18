@@ -316,7 +316,8 @@ edge (§4.14: the inspector and the history); separate
 floating windows for the FX chain, routing matrix and plugin GUIs. Render and
 other dialogs remain popups. Window layout is UI state (§1.2).
 
-The status line at the window's foot shows the strip count and the session
+The status line at the window's foot shows the track count ("8 tracks":
+every track of the session, the masters with them) and the session
 version, then a note: "Preparing audio…", a preparation error, or the last
 message a view or an action reported. An action that fails (`AppActions`'
 `onError`: a menu entry, a key, a toolbar or transport button, an inspector
@@ -452,7 +453,7 @@ parent: an insertion marker shows the drop, Escape cancels, and the release is
 one `track.move {track, index}` (`views::reorderIndex` computes the index;
 no-op drops commit nothing). A buss cannot be dropped between channels, and
 a track does not change parent by dragging. The panel's foot ("mixer",
-"+ strip") is a band the rows never cover; the tracks scroll far enough for
+"+ track") is a band the rows never cover; the tracks scroll far enough for
 the last one to clear it. Adding a strip
 offers exactly **Channel, Buss or Master** (`track.add {type}`); a
 double-click on the panel's empty space (or the mixer's, §4.4) adds a channel
@@ -535,11 +536,10 @@ with `env.changed`; it does not rebase the draft onto the changed item.
 
 **Empty project.** While the project has no track row, the lanes show two
 centred lines in quiet ink, a little above the middle: "This project is
-empty." and "Drop audio or MIDI files here, or click + strip at the bottom
-left to add a track." (`views::Lanes::kEmptyTitle`, `kEmptyHint`). Both
-things it names always work: a file dropped on the empty lanes makes a
-track, and "+ strip" is in the track panel's foot, which no customization
-removes. The lines go with the first row.
+empty." and "Drop audio or MIDI files here, or click + track at the bottom
+left." (`views::Lanes::kEmptyTitle`, `kEmptyHint`). Both things it names
+always work: a file dropped on the empty lanes makes a track, and
+"+ track" is in the track panel's foot, which no customization removes. The lines go with the first row.
 
 **Item appearance.** An item is drawn in its own colour when it has one
 (`item.set {color}`: a track colour's name or "#rrggbb"), else in its track's
@@ -815,7 +815,7 @@ Alt+click on a plug-in removes it
 (`fx.remove`, one undo step); a double-click on the chain's empty part opens
 the plugin browser for that strip. A double-click on the strips' empty space
 (not on a strip) adds a channel; a right-click there offers Channel, Buss or
-Master, as the TCP's "+ strip". A right-click on a strip's fader, pan, mute,
+Master, as the TCP's "+ track". A right-click on a strip's fader, pan, mute,
 solo, arm, polarity, mono or monitoring button offers its MIDI learn, as in
 the TCP (§4.2); elsewhere on the strip, the track menu. A send dragged from "out" draws a wire from the
 button and outlines the strip it would feed, as in the TCP. The
@@ -2325,6 +2325,15 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
 Steppe's own character, not a REAPER clone or a generic dark theme
 (`tools/gui/mockups.py` renders mockups of it):
 
+- **Words:** what the user reads calls them **tracks**. **Channel**,
+  **buss** and **master** are the types of track and are named only where
+  the type matters: the add menu, the C / B / M badge, the inspector's
+  kind, the routing matrix, and actions that make or need one type ("Add
+  channel", a rack "on the selected channel"). "Strip" is this spec's and
+  the code's word for a track's column in the mixer and for the model's
+  type (`StripType`, ADR-0019); it appears in no label, message or tooltip
+  (a test scans the GUI's string literals for it). Command, action and
+  node ids keep their names.
 - **Material:** paper and ink — warm neutral grounds (light: off-white
   paper; dark: deep warm graphite, not blue-black), ink text, fine ruled lines
   for grids (the quire: gathered, ruled sheets). **Dark is the default.**

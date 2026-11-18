@@ -1210,7 +1210,7 @@ void ArrangeView::setViewport(const Viewport& v) {
 }
 
 // The rows plus room past the last one, so it can scroll clear of the track
-// panel's foot (its "mixer" and "+ strip" band).
+// panel's foot (its "mixer" and "+ track" band).
 float ArrangeView::scrollHeight() const {
     return layout_.contentHeight() + (tcp_ ? TcpPanel::kFootHeight : 0.0f);
 }

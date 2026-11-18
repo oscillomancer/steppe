@@ -3197,6 +3197,52 @@ TEST_CASE("every character in the GUI's strings is in the UI font") {
     CHECK(missing.empty());
 }
 
+// The user's word is "track"; channel, buss and master are its types. "Strip"
+// is the mixer's picture of a track in the code and the spec, and is not said
+// in the UI: no string with a space in it (a label, a message, a tooltip:
+// ids have none) holds the word.
+TEST_CASE("the GUI's strings say track, never strip") {
+    const std::filesystem::path gui =
+        std::filesystem::path(SUPPLE_GUI_GOLDEN_DIR).parent_path().parent_path();
+    std::size_t scanned = 0;
+    std::vector<std::string> found;
+    auto word = [](std::string text, const std::string& w) {
+        for (char& ch : text) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        auto letter = [&](std::size_t i) {
+            return i < text.size() && std::isalpha(static_cast<unsigned char>(text[i]));
+        };
+        for (std::size_t at = text.find(w); at != std::string::npos; at = text.find(w, at + 1)) {
+            std::size_t end = at + w.size();
+            if (end < text.size() && text[end] == 's') ++end;  // the plural
+            if ((at == 0 || !letter(at - 1)) && !letter(end)) return true;
+        }
+        return false;
+    };
+    for (const auto& e : std::filesystem::recursive_directory_iterator(gui)) {
+        const auto ext = e.path().extension();
+        if (!e.is_regular_file() || (ext != ".cpp" && ext != ".h")) continue;
+        if (e.path().generic_string().find("/tests/") != std::string::npos) continue;
+        std::ifstream in(e.path());
+        std::string line;
+        for (int n = 1; std::getline(in, line); ++n) {
+            line = line.substr(0, line.find("//"));  // comments are not shown
+            for (std::size_t q = line.find('"'); q != std::string::npos;) {
+                std::size_t end = q + 1;
+                while (end < line.size() && line[end] != '"') end += line[end] == '\\' ? 2 : 1;
+                if (end >= line.size()) break;
+                const std::string text = line.substr(q + 1, end - q - 1);
+                ++scanned;
+                if (text.find(' ') != std::string::npos && word(text, "strip"))
+                    found.push_back(e.path().filename().string() + ":" + std::to_string(n) + ": " +
+                                    text);
+                q = line.find('"', end + 1);
+            }
+        }
+    }
+    CHECK(scanned > 1000);
+    for (const std::string& f : found) FAIL_CHECK(f);
+}
+
 TEST_CASE("input menu: No input clears channels in a mixed strip selection") {
     App a;
     if (!a.ok) return;
@@ -3640,10 +3686,10 @@ TEST_CASE("an empty project says how to start; the line goes with the first trac
     // toolbar's buttons can be taken out; this one cannot).
     const ui::Rect area = lanes.bounds();
     CHECK(shell.fileTargetAt({area.x + area.w / 2, area.y + area.h / 2}));
-    CHECK(std::string(views::Lanes::kEmptyHint).find("+ strip") != std::string::npos);
+    CHECK(std::string(views::Lanes::kEmptyHint).find("+ track") != std::string::npos);
     bool named = false;
     std::function<void(ui::Node&)> walk = [&](ui::Node& node) {
-        if (node.valueText() == "+ strip") named = true;
+        if (node.valueText() == "+ track") named = true;
         for (auto& child : node.children()) walk(*child);
     };
     walk(*a.root->content());

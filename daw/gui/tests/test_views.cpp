@@ -1740,7 +1740,7 @@ TEST_CASE("golden: the TCP with one strip of each type") {
     root.frame(false);
     golden(root, "tcp-strips.png");
     // Scrolled to the end, the last strip clears the foot's "mixer" and
-    // "+ strip"; rows never paint or take clicks there.
+    // "+ track"; rows never paint or take clicks there.
     auto* panel = static_cast<views::TcpPanel*>(root.find("tcp"));
     const ui::Rect foot = root.find("tcp.foot")->bounds();
     REQUIRE(panel->rowNode(*model::Id::parse(child)));
@@ -1820,7 +1820,7 @@ TEST_CASE("a double-click on the TCP's empty space adds a channel; on a row it d
     root.pointer({ui::PointerEvent::Type::Down, {rows.x + rows.w / 2, rows.bottom() - 10}, 1, 1});
     root.pointer({ui::PointerEvent::Type::Up, {rows.x + rows.w / 2, rows.bottom() - 10}, 1, 1});
     CHECK(s.app->head().tracks.size() == before + 1);
-    // A right-click there: the "+ strip" menu at the pointer; its second row adds a buss.
+    // A right-click there: the "+ track" menu at the pointer; its second row adds a buss.
     const ui::Point at{rows.x + rows.w / 2, rows.bottom() - 10};
     root.pointer({ui::PointerEvent::Type::Down, at, 3, 1});
     root.pointer({ui::PointerEvent::Type::Up, at, 3, 1});
