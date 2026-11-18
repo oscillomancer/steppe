@@ -49,6 +49,10 @@ class PluginDrag {
     // What a drop did or why it did nothing, for the browser's status line:
     // the track it went on, or the command's error.
     std::function<void(const model::Id& track, const Status& result)> onDrop;
+    // Where the dragged things lie (the browser they are picked from). Over
+    // it the pointer is the move cursor, as over every place a thing can
+    // land: its own place refuses nothing. Elsewhere it is "not allowed".
+    std::function<ui::Rect()> home;
 
     // The drag in progress, for the feedback layer and tests.
     struct View {
@@ -62,6 +66,7 @@ class PluginDrag {
 
   private:
     void end();
+    void showCursor(bool lands, ui::Point at);
     ui::Root& root_;
     cmd::Dispatcher& dispatcher_;
     std::vector<Finder> finders_;

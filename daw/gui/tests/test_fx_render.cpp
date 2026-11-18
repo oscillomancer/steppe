@@ -1181,7 +1181,7 @@ TEST_CASE("the side panel's browser has kinds: saved FX chains go on tracks by A
     };
     auto text = [&](const char* id) { return f.root->find(id)->valueText(); };
 
-    // Plug-ins first; a click on the row's middle third shows Chains.
+    // Plug-ins first; a click on the row's second quarter shows Chains.
     CHECK(browser.kind() == "plugins");
     CHECK(text("side.browser.kinds") == "Plug-ins");
     CHECK(inView("side.browser.plugins.search"));
@@ -1194,7 +1194,7 @@ TEST_CASE("the side panel's browser has kinds: saved FX chains go on tracks by A
         f.root->frame(false);
     };
     f.root->focus(f.root->find("side.browser.plugins.search"));
-    pick(0.5f);
+    pick(0.375f);
     CHECK(browser.kind() == "chains");
     CHECK(text("side.browser.kinds") == "Chains");
     CHECK(inView("side.browser.chains.search"));
@@ -1213,8 +1213,8 @@ TEST_CASE("the side panel's browser has kinds: saved FX chains go on tracks by A
     REQUIRE(f.run("fx.add", f.args({{"track", source.str()}, {"plugin", f.pluginId("Hickory")}})));
     REQUIRE(f.run("fx.chain.save", f.args({{"track", source.str()}, {"name", "Vocal bus"}})));
     CHECK(browser.chainCount() == 0);  // not read while nothing asked
-    pick(0.17f);
-    pick(0.5f);
+    pick(0.125f);
+    pick(0.375f);
     REQUIRE(browser.chainCount() == 2);
     CHECK_FALSE(inView("side.browser.chains.empty"));
     CHECK(browser.chainRow(0).name == "Clean");
@@ -1282,6 +1282,11 @@ TEST_CASE("the side panel's browser has kinds: saved FX chains go on tracks by A
     CHECK(drag.view().active);
     CHECK(drag.view().label == "Vocal bus");
     CHECK_FALSE(drag.view().target);
+    // Still over the Browser it came from, the pointer is the move cursor:
+    // its own place refuses nothing.
+    f.root->pointer({ui::PointerEvent::Type::Move, {row.x + 8, row.y}, 1});
+    CHECK_FALSE(drag.view().target);
+    CHECK(f.root->cursor() == ui::Cursor::Move);
     f.root->pointer({ui::PointerEvent::Type::Move, {50, 50}, 1});
     REQUIRE(drag.view().target);
     CHECK(drag.view().target->track == two);
@@ -1588,6 +1593,271 @@ TEST_CASE("the side panel's browser lists a folder's files; a file is added or d
     CHECK(browser.folder() != media / "zeta");
     std::error_code ec;
     CHECK(std::filesystem::is_directory(browser.folder(), ec));
+}
+
+// gui.md §4.14, Media: the audio the project already holds, put on a track
+// again without a second copy or a second source.
+TEST_CASE("the side panel's browser lists the project's media; one is added or dragged") {
+    Fixture f;
+    if (!f.ok) return;
+    auto exec = [&](const char* command, const json::Value& args) {
+        auto r = f.run(command, args);
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    // Three files outside the project: twelve seconds, 65 seconds, a third.
+    const std::filesystem::path sounds = f.dir / "sounds";
+    std::filesystem::create_directories(sounds);
+    auto tone = [&](const char* name, int seconds, float level) {
+        audio::AudioData audio;
+        audio.sampleRate = 8000;
+        audio.channels.assign(1,
+                              std::vector<float>(static_cast<std::size_t>(8000 * seconds), level));
+        REQUIRE(audio::writeWav(sounds / name, audio));
+        return sounds / name;
+    };
+    const auto kick = tone("kick.wav", 12, 0.25f);
+    const auto bass = tone("Bass.wav", 65, 0.5f);
+    const auto pad = tone("pad.wav", 1, 0.125f);
+    const std::string track =
+        exec("track.add", json::parse(R"({"name":"Keys"})").value())["track"].asString();
+    auto import = [&](const std::filesystem::path& file, double position) {
+        json::Value add = json::Value::object();
+        add["track"] = track;
+        add["audio_file"] = file.string();
+        add["position"] = position;
+        return exec("item.add", add);
+    };
+
+    gui::PluginDrag drag(*f.root, *f.dispatcher);
+    gui::SideBrowser browser(*f.root, *f.app, *f.dispatcher, f.ui, *f.fx, drag);
+    std::vector<std::filesystem::path> added;
+    std::vector<std::pair<std::filesystem::path, ui::Point>> dropped;
+    bool refuse = false;
+    // As the app's hook: the file goes on a track through item.add.
+    browser.files.add = [&](const std::filesystem::path& file) -> Status {
+        if (refuse) return Error("test.refused", "that file cannot be read");
+        added.push_back(file);
+        (void)import(file, 64.0 * static_cast<double>(added.size()));
+        return {};
+    };
+    browser.files.where = [](ui::Point p) -> std::optional<ui::Rect> {
+        if (p.x >= 100) return std::nullopt;
+        return ui::Rect{0, 0, 100, 400};
+    };
+    browser.files.drop = [&](const std::filesystem::path& file, ui::Point at) -> Status {
+        dropped.emplace_back(file, at);
+        return {};
+    };
+    gui::SidePanel side(*f.root);
+    side.addTab("browser", "Browser", browser.build(), [&](bool on) { browser.setVisible(on); });
+    f.root->find("window")->add(side.build());
+    side.show("browser");
+    browser.show("media");
+    f.root->frame(false);
+    auto text = [&](const char* id) { return f.root->find(id)->valueText(); };
+    auto names = [&] {
+        std::vector<std::string> out;
+        for (std::size_t i = 0; i < browser.mediaCount(); ++i) {
+            const auto row = browser.mediaRow(i);
+            out.push_back(row.name + "|" + row.detail);
+        }
+        return out;
+    };
+    auto pass = [&] {  // the loop's
+        browser.sync();
+        f.root->frame(false);
+    };
+    CHECK(text("side.browser.kinds") == "Media");
+    const ui::Node* results = f.root->find("side.browser.media.results");
+    REQUIRE(results);
+    REQUIRE(results->visibleInTree());
+    CHECK_FALSE(f.root->find("side.browser.files.results")->visibleInTree());
+
+    // A project with no audio: no rows, and Add waits.
+    ui::Node* add = f.root->find("side.browser.media.add");
+    REQUIRE(add);
+    CHECK(browser.mediaCount() == 0);
+    CHECK_FALSE(add->enabled);
+    f.snapshot("side-browser-media-empty.png");
+
+    // The project takes in audio: the page in view lists it at the loop's
+    // next pass, by name whatever the case, with its format and length.
+    (void)import(kick, 0);
+    (void)import(bass, 32);
+    CHECK(browser.mediaCount() == 0);
+    pass();
+    CHECK(names() ==
+          std::vector<std::string>{"Bass.wav|WAV \u00b7 1:05", "kick.wav|WAV \u00b7 0:12"});
+    REQUIRE(f.app->head().media.size() == 2);
+
+    // Add waits for a chosen row; one click chooses it, and the chosen row
+    // stays chosen when the project changes elsewhere.
+    auto* list = dynamic_cast<ui::List*>(f.root->find("side.browser.media.results"));
+    REQUIRE(list);
+    auto rowPoint = [&](std::size_t row) {
+        return ui::Point{list->bounds().x + 20,
+                         list->bounds().y + (static_cast<float>(row) + 0.5f) * list->rowHeight};
+    };
+    CHECK_FALSE(list->selected());
+    CHECK_FALSE(f.root->click("side.browser.media.add"));
+    CHECK(added.empty());
+    f.root->pointer({ui::PointerEvent::Type::Down, rowPoint(1), 1, 1});
+    f.root->pointer({ui::PointerEvent::Type::Up, rowPoint(1), 1, 1});
+    f.root->frame(false);
+    CHECK(add->enabled);
+    (void)exec("track.add", json::parse(R"({"name":"Other"})").value());
+    pass();
+    REQUIRE(list->selected());
+    CHECK(*list->selected() == 1);
+    // A source added that sorts before it: the same source stays chosen.
+    (void)import(pad, 48);
+    pass();
+    CHECK(names() == std::vector<std::string>{"Bass.wav|WAV \u00b7 1:05",
+                                              "kick.wav|WAV \u00b7 0:12",
+                                              "pad.wav|WAV \u00b7 0:01"});
+    REQUIRE(list->selected());
+    CHECK(browser.mediaRow(*list->selected()).name == "kick.wav");
+
+    // Add puts the chosen media on a track: the file the source names, so
+    // the project gains an item and no second source.
+    const std::size_t items = f.app->head().items.size();
+    REQUIRE(f.root->click("side.browser.media.add"));
+    pass();
+    REQUIRE(added.size() == 1);
+    CHECK(added[0] == kick);
+    CHECK(text("side.browser.media.status") == "Added kick.wav");
+    CHECK(f.app->head().items.size() == items + 1);
+    CHECK(f.app->head().media.size() == 3);
+    f.snapshot("side-browser-media.png");
+    // What the import refuses is said, and nothing is claimed.
+    refuse = true;
+    REQUIRE(f.root->click("side.browser.media.add"));
+    f.root->frame(false);
+    CHECK(added.size() == 1);
+    CHECK(text("side.browser.media.status") == "that file cannot be read");
+    refuse = false;
+
+    // The search narrows the list; Enter adds the one found.
+    browser.focusSearch();
+    CHECK(f.root->focused() == f.root->find("side.browser.media.search"));
+    f.root->text("BASS");
+    f.root->frame(false);
+    CHECK(names() == std::vector<std::string>{"Bass.wav|WAV \u00b7 1:05"});
+    f.root->key(SDLK_RETURN, 0);
+    pass();
+    REQUIRE(added.size() == 2);
+    CHECK(added[1] == bass);
+    CHECK(f.app->head().media.size() == 3);
+    for (int i = 0; i < 4; ++i) f.root->key(SDLK_BACKSPACE, 0);
+    f.root->frame(false);
+    CHECK(browser.mediaCount() == 3);
+
+    // It drags into the arrangement as a file does.
+    const ui::Point row = rowPoint(2);
+    f.root->pointer({ui::PointerEvent::Type::Down, row, 1});
+    f.root->pointer({ui::PointerEvent::Type::Move, {row.x - 30, row.y}, 1});
+    CHECK(drag.view().active);
+    CHECK(drag.view().label == "pad.wav");
+    CHECK_FALSE(drag.view().place);
+    f.root->pointer({ui::PointerEvent::Type::Move, {60, 70}, 1});
+    REQUIRE(drag.view().place);
+    f.root->pointer({ui::PointerEvent::Type::Up, {61, 71}, 1});
+    f.root->frame(false);
+    CHECK_FALSE(drag.view().active);
+    REQUIRE(dropped.size() == 1);
+    CHECK(dropped[0].first == pad);
+    CHECK(dropped[0].second.x == 61);
+    CHECK(text("side.browser.media.status") == "Added pad.wav");
+
+    // A file that has gone is said to be missing when the page comes into
+    // view again; the others are as they were.
+    std::filesystem::remove(pad);
+    side.hide();
+    side.show("browser");
+    f.root->frame(false);
+    CHECK(names() == std::vector<std::string>{"Bass.wav|WAV \u00b7 1:05",
+                                              "kick.wav|WAV \u00b7 0:12", "pad.wav|missing"});
+    // The other kinds are a click away, and the page comes back as it was.
+    browser.show("files");
+    f.root->frame(false);
+    CHECK_FALSE(results->visibleInTree());
+    // On the kinds row Right goes on from Files to Media, the last.
+    f.root->focus(f.root->find("side.browser.kinds"));
+    f.root->key(SDLK_RIGHT, 0);
+    f.root->frame(false);
+    CHECK(browser.kind() == "media");
+    f.root->key(SDLK_RIGHT, 0);
+    CHECK(browser.kind() == "media");
+    CHECK(results->visibleInTree());
+    CHECK(browser.mediaCount() == 3);
+}
+
+// A saved project that copies what it imports names its media relative to
+// its media folder: the page finds the file there.
+TEST_CASE("the side panel's browser finds a project's own copy of its media") {
+    Fixture f;
+    if (!f.ok) return;
+    auto exec = [&](const char* command, const json::Value& args) {
+        auto r = f.run(command, args);
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    f.app->setCopyImportedMedia(true);
+    json::Value save = json::Value::object();
+    save["path"] = (f.dir / "song" / "song.json").string();
+    (void)exec("project.save", save);
+    REQUIRE_FALSE(f.app->projectDir().empty());
+    audio::AudioData audio;
+    audio.sampleRate = 8000;
+    audio.channels.assign(1, std::vector<float>(8000 * 3, 0.25f));
+    std::filesystem::create_directories(f.dir / "sounds");
+    const auto outside = f.dir / "sounds" / "clap.wav";
+    REQUIRE(audio::writeWav(outside, audio));
+    const std::string track =
+        exec("track.add", json::parse(R"({"name":"Keys"})").value())["track"].asString();
+    auto import = [&](const std::filesystem::path& file, double position) {
+        json::Value add = json::Value::object();
+        add["track"] = track;
+        add["audio_file"] = file.string();
+        add["position"] = position;
+        (void)exec("item.add", add);
+    };
+    import(outside, 0);
+    REQUIRE(f.app->head().media.size() == 1);
+    const std::string stored = f.app->head().media.begin()->value->path;
+    REQUIRE(std::filesystem::path(stored).is_relative());  // the project's own copy
+
+    gui::PluginDrag drag(*f.root, *f.dispatcher);
+    gui::SideBrowser browser(*f.root, *f.app, *f.dispatcher, f.ui, *f.fx, drag);
+    std::vector<std::filesystem::path> added;
+    browser.files.add = [&](const std::filesystem::path& file) -> Status {
+        added.push_back(file);
+        import(file, 32);
+        return {};
+    };
+    gui::SidePanel side(*f.root);
+    side.addTab("browser", "Browser", browser.build(), [&](bool on) { browser.setVisible(on); });
+    f.root->find("window")->add(side.build());
+    side.show("browser");
+    browser.show("media");
+    f.root->frame(false);
+    REQUIRE(browser.mediaCount() == 1);
+    CHECK(browser.mediaRow(0).name == "clap.wav");
+    CHECK(browser.mediaRow(0).detail == "WAV \u00b7 0:03");  // found, not "missing"
+    auto* list = dynamic_cast<ui::List*>(f.root->find("side.browser.media.results"));
+    REQUIRE(list);
+    const ui::Point row{list->bounds().x + 20, list->bounds().y + 0.5f * list->rowHeight};
+    f.root->pointer({ui::PointerEvent::Type::Down, row, 1, 1});
+    f.root->pointer({ui::PointerEvent::Type::Up, row, 1, 1});
+    f.root->frame(false);
+    REQUIRE(f.root->click("side.browser.media.add"));
+    REQUIRE(added.size() == 1);
+    CHECK(added[0] == f.app->mediaDir() / stored);
+    CHECK(added[0] != outside);
+    // The copy's bytes are the source's: an item more, and still one source.
+    CHECK(f.app->head().media.size() == 1);
+    CHECK(f.app->head().items.size() == 2);
 }
 
 TEST_CASE("the plugin browser finds a stock plugin by what it is") {

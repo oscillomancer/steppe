@@ -42,6 +42,7 @@ void Shell::recordingError(const json::Value& payload) {
 
 void Shell::setStatus(const std::string& text) {
     editStatus_ = text;
+    ++noteSerial_;
     if (counts_) counts_->setText(text);
 }
 namespace {
@@ -254,6 +255,20 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
     return shell;
 }
 
+std::string Shell::hoverName() const {
+    if (hovered_.empty()) return {};
+    std::string name = hovered_.name;
+    std::string keys;
+    if (actions_ && !hovered_.action.empty()) {
+        if (const actions::Action* a = actions_->registry().find(hovered_.action);
+            a && name.empty())
+            name = a->name;
+        keys = actions_->keysFor(hovered_.action, true);
+    }
+    if (name.empty()) return {};  // an action this build does not have
+    return keys.empty() ? name : name + " (" + keys + ")";
+}
+
 std::optional<TrackTarget> Shell::trackTargetAt(ui::Point p) const {
     if (!arrange_ || !arrange_->tcpPanel().visibleInTree()) return std::nullopt;
     // The rows as shown: the control panel and the lanes side by side,
@@ -327,7 +342,15 @@ void Shell::sync(bool event) {
                          "version " + std::to_string(s.version));
         arrange_->show(s, changes, projectGeneration_);
     }
-    const auto note = app_.preparingAudio()              ? std::string("Preparing audio…")
+    // A named control under the pointer is said in the note's place, until
+    // the pointer leaves it or a newer note arrives.
+    if (const ui::Hint hint = root_ ? root_->hint() : ui::Hint{}; hint != hovered_) {
+        hovered_ = hint;
+        hoveredAtNote_ = noteSerial_;
+    }
+    const std::string name = noteSerial_ == hoveredAtNote_ ? hoverName() : std::string{};
+    const auto note = !name.empty()                      ? name
+                      : app_.preparingAudio()            ? std::string("Preparing audio…")
                       : !app_.preparationError().empty() ? app_.preparationError()
                                                          : editStatus_;
     const std::size_t tracks = views::countTracks(s);

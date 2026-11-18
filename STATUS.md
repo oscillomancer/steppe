@@ -595,11 +595,26 @@ instructions are in `docs/guides/installing.md`.
   yellow and orange to red just under 0 dB. The pointer's shape says what
   a press would do: resize arrows at an item's ends and fade corners, a
   note's ends, the loop range's ends, a row's lower edge and the panels'
-  edges, an I-beam over text, the move cursor on a thing being moved (not
-  yet: cursors in the rack, the routing matrix and for drops that are
-  refused). A drag held at the edge of the arrangement scrolls the view
-  and takes the thing in hand with it, and so does a note held at the
-  piano roll's edge (not yet in the rack or the mixer). The transport bar's
+  edges, an I-beam over text, the move cursor on a thing being moved, in
+  the rack too; a thing carried to a drop (a plug-in, a strip, a track
+  row, a rack module) shows the move cursor where it would land and "not
+  allowed" over a place that refuses it, as does a routing matrix
+  cell that cannot be connected. The status line names the control the
+  pointer rests on and the keys bound to its action (a track's controls in
+  the track list and the mixer, the transport bar, the toolbar; the side
+  panel, the MIDI editor's header and the floating windows have no names
+  yet). A drag held at the edge of the arrangement scrolls the view
+  and takes the thing in hand with it; so do a note held at the piano
+  roll's edge, a strip, plug-in or output held at the edge of the mixer's
+  strips, a plug-in held at an end of its strip's plug-in list, and
+  modules, a cable or a marquee held at the edge of the rack
+  window's space. The resize,
+  text and move cursors and the edge scroll in the arrangement and the
+  piano roll have been watched on a Linux desktop (Hyprland, the app
+  under XWayland), where the system draws the cursor and the frame clock
+  paces the scroll; the cursors of carried things, the edge scroll in the
+  mixer and the rack, and all of it on macOS and Windows are verified by
+  tests only. The transport bar's
   engine readout is in words ("48 kHz · 256 samples") and warns in colour
   only of a stopped engine, dropouts, render gaps or plug-in errors; the
   toolbar's buttons are quiet at rest. A side panel at the right edge,
@@ -613,8 +628,10 @@ instructions are in `docs/guides/installing.md`.
   undo step, and the browser stays; saved FX chains as a second kind,
   loaded with `fx.chain.load`; a row of either drags onto a track's row or
   mixer strip; a folder's audio and MIDI files as a third kind, added as
-  File > Import does or dragged into a lane; no audition of files, and
-  rack patches and the project's own media are not in the Browser) and the History
+  File > Import does or dragged into a lane; the audio the project already
+  holds as a fourth kind, Media, added or dragged the same way without a
+  second copy; no audition of files, MIDI sources and how often a source is
+  used are not listed, and rack patches are not in the Browser) and the History
   as tabs; its tab,
   width and open state are saved per project. Help exports the bundled
   skill as a copy or link, shows this copy's MCP commands and JSON, and registers
@@ -1487,8 +1504,6 @@ GUI:
   Script-player headless pictures (`dsp.preview`) use framework 1.24.0's
   EGL, Metal and WGL renderers. Native CI requires pictures and pointer edits;
   missing devices/drivers return `dsp.no_picture` with a corrective hint.
-- No autoscroll during drags; no resize cursor; plugins can be dropped onto
-  mixer strips but not onto track-panel rows.
 
 Plugins:
 - Bracken, Ghyll, Pollia, Umber and Withy discard non-finite inputs before their recursive

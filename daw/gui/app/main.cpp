@@ -1219,6 +1219,7 @@ int main(int argc, char** argv) {
             mixer.sync();
             history.sync();
             inspector.sync();
+            sideBrowser.sync();
             const auto now = Clock::now();
             const auto activity = (*app)->meterActivitySequence();
             // Observe before reading; arm/recheck after the visible meters rest.
@@ -1407,6 +1408,7 @@ int main(int argc, char** argv) {
         mixer.sync();
         history.sync();
         inspector.sync();
+        sideBrowser.sync();
         meterFeed.poll();
         root.damageAll();
         root.frame(false);

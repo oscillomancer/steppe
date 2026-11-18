@@ -242,6 +242,11 @@ while the track is armed). **M** mutes it and **S** solos it. **Ø** inverts
 polarity and **mono** sums left and right. A button that is on is filled
 with its colour; one that is off is an outline.
 
+Rest the pointer on a button and the status line under the arrangement says
+what it is called, and the keys that do the same when it has any: "Mute",
+"Transport: play/stop (Space)". This works for a track's buttons, fader and
+pan in the track list and the mixer, the transport bar and the toolbar.
+
 In the track list the first four are at the right of the track's name, at
 any row height. Under them is a line with **Ø**, **mono**, the fader and
 the pan, and then a line with the input, **fx**, **+**, **env** and **out**.
@@ -317,6 +322,11 @@ and the **History**. It stays closed until you ask for it:
   on the selected track at the playhead (on a new track when none is
   selected); or drag it to the spot in the arrangement where you want it.
   Drop it under the last track to make a new one.
+  **Media** lists the audio your project already holds, each file with its
+  format and length, so you can use a recording or an imported file again
+  without looking for it on disk. Add it or drag it as you would a file;
+  the project keeps one copy however often you use it. A file that is no
+  longer where the project expects it is marked "missing".
 - **View > History and command log**, or **Ctrl+H**, opens it on the History:
   the versions you can step back to, the branches, and every command with who
   ran it.
@@ -353,6 +363,12 @@ held it adds them to what is selected. `Ctrl+A` selects every item.
 - **Stretch:** Alt-drag an audio item's right end, and the audio plays
   faster or slower to fit the new length.
 
+**Crossfades** make themselves. Move, copy or trim an item so that it
+overlaps another on the same track, and the earlier item fades out while
+the later one fades in over the overlap, as part of the same step of undo.
+An item placed wholly inside another gets no fades. To change a crossfade,
+drag the fade corners of the two items as you would any fade.
+
 Drags land on the grid, which follows the zoom: as fine as a sixteenth of a
 beat when you are zoomed far in, as coarse as 32 beats when zoomed far out.
 Hold Shift to place something off the grid.
@@ -363,7 +379,11 @@ arrows: drag there to trim the item or draw a fade. Over the middle it
 stays an arrow: drag to move the item. The same sideways arrows show at
 the ends of the loop range in the ruler and of a note in the piano roll,
 and up-and-down arrows at a track row's lower edge and at the top edge of
-the mixer and the MIDI editor, which set their height.
+the mixer and the MIDI editor, which set their height. While you carry
+something to drop it (a plug-in out of the browser, a mixer strip, a track
+row, a module for a rack), the pointer is a four-way arrow where letting go
+would put it, and a "not allowed" sign over a place that will not take it.
+The routing matrix shows the same sign over a cell that cannot be connected.
 
 To drag something further than the window shows, hold it at the edge of
 the arrangement: the view scrolls that way, faster the further out you
@@ -372,7 +392,11 @@ items, their ends and fades, automation points, a selection rectangle,
 and the loop range, markers and regions in the ruler. An item being moved
 also scrolls the tracks up and down. The piano roll does the same for notes:
 hold a note or a selection rectangle at an edge and the roll scrolls in
-time, or up and down the keys.
+time, or up and down the keys. So does the mixer, sideways, for a strip, a
+plug-in or an output you are dragging to a strip that is out of view, and
+the rack window, for modules, a cable or a selection rectangle. A plug-in
+held at the top or bottom of its own strip's list scrolls that list, when
+the chain is longer than the list shows.
 
 ### Splitting, copying and deleting
 
@@ -472,8 +496,21 @@ somewhere else while you typed, the panel says so and `Ctrl+Enter` applies
 your text over that change.
 
 **List** swaps the roll for a list of the item's events, notes and
-controller values alike. Double-click a row to edit it; `Delete` removes the
-selected rows.
+controller values alike, one to a row:
+
+| Column | What it shows | To change it, type |
+| --- | --- | --- |
+| Position | Where the event is, as bar.beat.tick (960 ticks to a beat) | `3.2.480` |
+| Type | "Note", or "CC" and the controller's number | (not editable) |
+| Length | A note's length, as beats.ticks | `1.0`, `0.480` |
+| Pitch / CC | A note's pitch by name, or the controller's number | `C#4` or `61`; `7` |
+| Vel / value | A note's velocity (1 to 127) or the controller's value (0 to 127) | `96` |
+| Channel | The MIDI channel | (not editable) |
+
+Double-click a cell to edit it, then press Enter (Escape leaves it as it
+was). A value the list cannot use is refused, and the line under the list
+says what form it wants. **+ Note** under the list adds a note, and `Delete`
+removes the selected rows.
 
 ## Plugins
 

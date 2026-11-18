@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "app_actions.h"
+#include "supple/ui/edge_scroll.h"
 #include "supple/ui/root.h"
 #include "supple/ui/text_area.h"
 
@@ -103,8 +104,9 @@ class MidiEditor {
     void close();
     bool isOpen() const { return !state_.item.empty(); }
     // Every loop pass: reload when the session changed, compile the notation
-    // after a pause in typing, follow the playhead.
-    void sync();
+    // after a pause in typing, follow the playhead. `now` is the pass's time
+    // (tests pass their own); it steps the edge scroll.
+    void sync(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
     std::optional<std::chrono::steady_clock::time_point> nextDeadline() const;
 
     // The panel's height, set by dragging its top border (double-click resets
@@ -181,7 +183,7 @@ class MidiEditor {
     ui::Node* listPane_ = nullptr;
     ui::Node* rollPane_ = nullptr;
     ui::Node* roll_ = nullptr;
-    std::optional<std::chrono::steady_clock::time_point> edgeAt_;  // the edge scroll's last step
+    ui::EdgeScrollClock edgeClock_;  // the time sync steps the edge scroll by
     ui::Node* keys_ = nullptr;
     ui::Node* velocity_ = nullptr;
     ui::Node* ccLane_ = nullptr;

@@ -192,7 +192,8 @@ class RackWindow {
     bool browserVisible_ = true;
     int gesture_ = 0;
     std::optional<std::chrono::steady_clock::time_point> nextTelemetry_;
-    racks::Watchers watchers_;  // the modules in view (telemetry)
+    ui::EdgeScrollClock edgeClock_;  // the time tick steps the edge scroll by
+    racks::Watchers watchers_;       // the modules in view (telemetry)
     RackSpace* space_ = nullptr;
     RackTabs* tabs_ = nullptr;
     RackBrowser* browser_ = nullptr;
