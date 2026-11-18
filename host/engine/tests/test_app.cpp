@@ -554,6 +554,17 @@ void ignoreAnnouncements(const supple::diagctx::Event&) noexcept {}
 // With a diagnostics supervisor behind the process (here: a sink that only listens) a bridge that
 // dies of a signal or an exception may have caused a local crash report, and the engine says which:
 // the failed fx's entry in `failed_errors` carries its id, once the bridge's end was observed.
+// AddressSanitizer and ThreadSanitizer end a faulting bridge with their own exit (after their
+// report), not with the signal: the host rightly reads an exit, which names no report.
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+#define SUPPLE_TEST_SANITIZER_EXITS 1
+#endif
+#endif
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+#define SUPPLE_TEST_SANITIZER_EXITS 1
+#endif
+#if !defined(SUPPLE_TEST_SANITIZER_EXITS)
 TEST_CASE("a failed fx names the crash report its bridge's death may have caused") {
     host::setBridgeExecutable(BRIDGE_PATH);
     diagctx::setInventorySink(&ignoreAnnouncements);
@@ -598,6 +609,7 @@ TEST_CASE("a failed fx names the crash report its bridge's death may have caused
     CHECK(crash->bridgeIncident() == incident);
     call("engine.stop", "{}");
 }
+#endif
 
 TEST_CASE("shared bridge crash reports both fx and both restart in one new process") {
     host::setBridgeExecutable(BRIDGE_PATH);

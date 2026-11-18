@@ -261,7 +261,7 @@ Inventory bridgeThatEnded(supple::diagctx::BridgeHow how, std::int32_t status,
         r.bridge = 1;
         r.how = static_cast<std::uint8_t>(how);
         r.status = status;
-        std::memcpy(r.text[3], incident.data(), incident.size());
+        if (!incident.empty()) std::memcpy(r.text[3], incident.data(), incident.size());
         r.length[3] = static_cast<std::uint8_t>(incident.size());
     });
     return inventory;
