@@ -37,6 +37,7 @@
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/control_names.h"
 #include "supple/views/mouse_map.h"
 
 using namespace supple;
@@ -407,6 +408,36 @@ TEST_CASE("mixer: a strip is one grid: routing, stereo, pan, the state row, then
     // The colour bar across the top is the track's own, the strip's width.
     CHECK(near(box("mixer.color." + a).y, f.strip(a).node->bounds().y));
     CHECK(box("mixer.color." + a).w >= f.strip(a).node->bounds().w - 1.5f);
+}
+
+// gui.md §2, Names: a strip's controls are called what the track's row calls them.
+TEST_CASE("mixer: a strip's controls have the names the track panel gives its row's") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    f.refresh();
+    auto over = [&](const std::string& id) {
+        f.pointer(ui::PointerEvent::Type::Move, f.centre(f.node(id)));
+        return f.root->hint();
+    };
+    namespace names = views::names;
+    CHECK(over("mixer.mute." + a) == names::kMute);
+    CHECK(over("mixer.solo." + a) == names::kSolo);
+    CHECK(over("mixer.polarity." + a) == names::kPolarity);
+    CHECK(over("mixer.mono." + a) == names::kMono);
+    CHECK(over("mixer.pan." + a) == names::kPan);
+    CHECK(over("mixer.fader." + a) == names::kVolume);
+    CHECK(over("mixer.input." + a) == names::kInput);
+    CHECK(over("mixer.out." + a) == names::kRouting);
+    CHECK(over("mixer.fxadd." + a) == names::kChain);
+    CHECK(over("mixer.addfx." + a) == names::kAddFx);
+    CHECK(over("mixer.arm." + a).name == "Arm for recording");
+    CHECK(over("mixer.monitor." + a).name.starts_with("Monitor the input: "));
+    // A master's "out" picks a hardware output; it does not open the routing.
+    CHECK(over("mixer.out.tr_0") == names::kHardwareOutput);
+    // A strip's name, and the mixer's empty space, are called nothing.
+    f.pointer(ui::PointerEvent::Type::Move, f.empty(a));
+    CHECK(f.root->hint().empty());
 }
 
 TEST_CASE("mixer: a double-click on the strips' empty space adds a channel") {

@@ -242,6 +242,11 @@ while the track is armed). **M** mutes it and **S** solos it. **Ø** inverts
 polarity and **mono** sums left and right. A button that is on is filled
 with its colour; one that is off is an outline.
 
+Rest the pointer on a button and the status line under the arrangement says
+what it is called, and the keys that do the same when it has any: "Mute",
+"Transport: play/stop (Space)". This works for a track's buttons, fader and
+pan in the track list and the mixer, the transport bar and the toolbar.
+
 In the track list the first four are at the right of the track's name, at
 any row height. Under them is a line with **Ø**, **mono**, the fader and
 the pan, and then a line with the input, **fx**, **+**, **env** and **out**.

@@ -454,6 +454,13 @@ void Root::updateCursor(Point at) {
     window_.setCursor(cursor);
 }
 
+Hint Root::hint() const {
+    if (dragCursor_ || !lastPointer_) return {};
+    for (const Node* n = attached(captured_) ? captured_ : hovered_; n; n = n->parent())
+        if (Hint h = n->hintAt(*lastPointer_); !h.empty()) return h;
+    return {};
+}
+
 void Root::setDragCursor(std::optional<Cursor> cursor) {
     if (cursor == dragCursor_) return;
     dragCursor_ = cursor;

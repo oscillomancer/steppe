@@ -815,6 +815,62 @@ TEST_CASE("the pointer's shape is the cursor of the node under it, its parents o
     move({mid(field).x + 1, mid(field).y});
     CHECK(root.cursor() == Cursor::Arrow);
 }
+// gui.md §2, Names: what the pointer rests on is called by its own name, or
+// by the first of its parents that has one.
+TEST_CASE("the root names the node under the pointer, or the first parent with a name") {
+    if (!fixture().ok) return;
+    Root root(*fixture().window, fixture().fonts, Theme::dark());
+    auto content = std::make_unique<Node>("root");
+    content->layout.dir = Layout::Dir::Row;
+    content->layout.padding = Insets::all(8);
+    content->layout.gap = 8;
+    auto& group = content->emplace<Box>("group");
+    group.interactive = true;
+    group.layout.dir = Layout::Dir::Column;
+    group.layout.width = SizeRule::fixed(100);
+    group.hint = {"Group", {}};
+    auto& inner = group.emplace<Box>("inner");  // a child with no name of its own
+    inner.interactive = true;
+    auto& named = content->emplace<Button>("named", "M");
+    named.layout.width = SizeRule::fixed(100);
+    named.hint = {"Mute", "track.mute"};
+    auto& plain = content->emplace<Box>("plain");
+    plain.interactive = true;
+    plain.layout.width = SizeRule::fixed(100);
+    root.setContent(std::move(content));
+    root.frame(false);
+    auto move = [&](Point at) { root.pointer({PointerEvent::Type::Move, at}); };
+    auto mid = [](const Node& n) {
+        return Point{n.bounds().x + n.bounds().w / 2, n.bounds().y + n.bounds().h / 2};
+    };
+    CHECK(root.hint().empty());  // before any pointer event
+    move(mid(named));
+    CHECK(root.hint() == Hint{"Mute", "track.mute"});
+    move(mid(inner));
+    CHECK(root.hint() == Hint{"Group", {}});
+    move(mid(plain));
+    CHECK(root.hint().empty());
+    // A pressed control keeps its name wherever the pointer is dragged.
+    root.pointer({PointerEvent::Type::Down, mid(named), 1});
+    move(mid(plain));
+    CHECK(root.hint() == Hint{"Mute", "track.mute"});
+    root.pointer({PointerEvent::Type::Up, mid(plain), 1});
+    move(mid(plain));
+    CHECK(root.hint().empty());
+    // A drag that carries a thing over other nodes names none of them.
+    move(mid(named));
+    root.setDragCursor(Cursor::Move);
+    CHECK(root.hint().empty());
+    root.setDragCursor(std::nullopt);
+    CHECK(root.hint() == Hint{"Mute", "track.mute"});
+    // The arm and monitor buttons name themselves; the monitor says its mode.
+    ArmButton arm("arm");
+    CHECK(arm.hintAt({}).name == "Arm for recording");
+    MonitorButton monitor("monitor");
+    CHECK(monitor.hintAt({}).name == "Monitor the input: off");
+    monitor.setMode(MonitorButton::Mode::Auto);
+    CHECK(monitor.hintAt({}).name == "Monitor the input: auto");
+}
 
 TEST_CASE("mixer controls: fader taper and gestures, pan, meter hold and clip, toggle") {
     // The taper round-trips over its range; -inf at the bottom.

@@ -595,7 +595,11 @@ instructions are in `docs/guides/installing.md`.
   the rack too; a thing carried to a drop (a plug-in, a strip, a track
   row, a rack module) shows the move cursor where it would land and "not
   allowed" over a place that refuses it, as does a routing matrix
-  cell that cannot be connected. A drag held at the edge of the arrangement scrolls the view
+  cell that cannot be connected. The status line names the control the
+  pointer rests on and the keys bound to its action (a track's controls in
+  the track list and the mixer, the transport bar, the toolbar; the side
+  panel, the MIDI editor's header and the floating windows have no names
+  yet). A drag held at the edge of the arrangement scrolls the view
   and takes the thing in hand with it; so do a note held at the piano
   roll's edge, a strip, plug-in or output held at the edge of the mixer's
   strips, a plug-in held at an end of its strip's plug-in list, and

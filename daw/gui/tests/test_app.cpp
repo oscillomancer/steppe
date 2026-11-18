@@ -234,6 +234,114 @@ TEST_CASE("recording writer errors stay visible while healthy targets continue")
     a.root->setContent(std::make_unique<ui::Node>("detached"));
 }
 
+// gui.md §2, Names: the status line says what the pointer rests on, and the
+// keys that do the same.
+TEST_CASE("the status line names the control under the pointer and its keys") {
+    App a;
+    if (!a.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    peaks::PeakService peaks(a.dir / "cache", [](std::function<void()> f) { f(); });
+    gui::MeterFeed meters;
+    gui::Shell shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters);
+    auto frame = std::make_unique<ui::Node>("window");
+    frame->layout.dir = ui::Layout::Dir::Column;
+    frame->add(gui::makeChrome(*a.root, *a.actions, gui::ChromeLayout::defaults()));
+    frame->add(shell.build(*a.root, *a.actions));
+    a.root->setContent(std::move(frame));
+    a.actions->addUi("ui.mixer", "View: mixer", [] {});  // the mixer's, which is not built here
+    a.key("Ctrl+T");                                     // a channel
+    shell.sync();
+    a.root->frame(false);
+    const ui::Node* status = a.root->find("status");
+    REQUIRE(status);
+    const std::string plain = status->valueText();  // the counts alone
+    CHECK(plain.find("1 track") != std::string::npos);
+    std::optional<model::Id> track;
+    for (const auto& e : a.app->head().tracks)
+        if (e.value->type == model::StripType::Channel) track = e.id;
+    REQUIRE(track);
+    auto& tcp = shell.arrange()->tcpPanel();
+    // The pointer comes to rest on a node; what the line then says after the counts.
+    auto rest = [&](const ui::Node* n) {
+        REQUIRE(n);
+        const ui::Rect b = n->bounds();
+        a.root->pointer({ui::PointerEvent::Type::Move, {b.x + b.w / 2, b.y + b.h / 2}});
+        shell.sync();
+        a.root->frame(false);
+        const std::string text = status->valueText();
+        REQUIRE(text.starts_with(plain));
+        return text.substr(plain.size());
+    };
+
+    // A row's buttons have names of their own.
+    CHECK(rest(tcp.controlNode(*track, "mute")) == " · Mute");
+    a.snapshot("status-names-1-mute.png");
+    CHECK(rest(tcp.controlNode(*track, "solo")) == " · Solo");
+    CHECK(rest(tcp.controlNode(*track, "polarity")) == " · Invert polarity");
+    CHECK(rest(tcp.controlNode(*track, "arm")) == " · Arm for recording");
+    CHECK(rest(tcp.controlNode(*track, "fader")) == " · Volume");
+    CHECK(rest(tcp.controlNode(*track, "env")) == " · Automation lanes");
+    // The monitor button says its mode, and the mode a click leaves it in.
+    const ui::Node* monitor = tcp.controlNode(*track, "monitor");
+    const std::string before = rest(monitor);
+    CHECK(before == " · Monitor the input: " + monitor->valueText());
+    const ui::Rect mb = monitor->bounds();
+    a.root->pointer({ui::PointerEvent::Type::Down, {mb.x + mb.w / 2, mb.y + mb.h / 2}, 1});
+    a.root->pointer({ui::PointerEvent::Type::Up, {mb.x + mb.w / 2, mb.y + mb.h / 2}, 1});
+    shell.sync();
+    a.root->frame(false);
+    CHECK(status->valueText() == plain.substr(0, plain.find("version")) + "version " +
+                                     std::to_string(a.app->head().version) +
+                                     " · Monitor the input: " + monitor->valueText());
+    CHECK(status->valueText().substr(status->valueText().find(" · ")) != before);
+    const std::string counts = status->valueText().substr(0, status->valueText().find(" · "));
+    auto after = [&](const ui::Node* n) {
+        REQUIRE(n);
+        const ui::Rect b = n->bounds();
+        a.root->pointer({ui::PointerEvent::Type::Move, {b.x + b.w / 2, b.y + b.h / 2}});
+        shell.sync();
+        a.root->frame(false);
+        const std::string text = status->valueText();
+        REQUIRE(text.starts_with(counts));
+        return text.substr(counts.size());
+    };
+
+    // A button that runs an action says the action's name and every key bound to it.
+    CHECK(after(a.root->find("transport.play")) == " · Transport: play/stop (Space)");
+    a.snapshot("status-names-2-play.png");
+    CHECK(after(a.root->find("transport.start")) == " · Transport: go to start (Home, W)");
+    CHECK(after(a.root->find("tool.history.undo")) ==
+          " · " + a.actions->registry().find("history.undo")->name + " (Ctrl+Z)");
+    CHECK(after(a.root->find("tcp.mixer")) == " · View: mixer (Ctrl+M, Alt+D)");
+    // A row's button that an action can also reach says the keys once they are bound.
+    CHECK(after(tcp.controlNode(*track, "fx")) == " · Plug-in chain");
+    CHECK(after(a.root->find("transport.metronome")) == " · Metronome");
+
+    // Off every named control the line is as it was: the counts, then the last note.
+    CHECK(after(a.root->find("transport.position")) == "");
+    shell.setStatus("Saved");
+    CHECK(after(a.root->find("transport.position")) == " · Saved");
+    // A name takes the note's place while the pointer rests on its control…
+    CHECK(after(tcp.controlNode(*track, "solo")) == " · Solo");
+    // …but a note that arrives while it rests there shows (a press's error is
+    // not hidden behind the button's name), until the pointer goes elsewhere.
+    shell.setStatus("Solo failed");
+    CHECK(after(tcp.controlNode(*track, "solo")) == " · Solo failed");
+    CHECK(after(tcp.controlNode(*track, "mute")) == " · Mute");
+    CHECK(after(a.root->find("transport.position")) == " · Solo failed");
+    // A carried thing (a drag with its own cursor) is not a pointer at rest.
+    CHECK(after(tcp.controlNode(*track, "mute")) == " · Mute");
+    a.root->setDragCursor(ui::Cursor::Move);
+    shell.sync();
+    CHECK(status->valueText() == counts + " · Solo failed");
+    a.root->setDragCursor(std::nullopt);
+    shell.sync();
+    CHECK(status->valueText() == counts + " · Mute");
+    a.root->setContent(std::make_unique<ui::Node>("detached"));
+}
+
 struct RateApp : App {
     std::unique_ptr<gui::TransportBar> bar;
     std::vector<std::string> errors;

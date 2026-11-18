@@ -21,6 +21,7 @@
 #include "supple/ui/popup.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/control_names.h"
 #include "supple/views/track_layout.h"
 
 namespace supple::gui {
@@ -1433,6 +1434,19 @@ void Mixer::rebuild(bool keepLists) {
         st.value->layout.width = ui::SizeRule::fraction();
         st.peak = &values.emplace<PeakReadout>("mixer.peak." + tid, *st.meter);
         st.peak->layout.width = ui::SizeRule::fraction();
+        // What the status line calls each control, as on the track's row.
+        namespace names = views::names;
+        st.fx->hint = names::kChain;
+        st.addFx->hint = names::kAddFx;
+        st.out->hint =
+            t.type == model::StripType::Master ? names::kHardwareOutput : names::kRouting;
+        if (st.input) st.input->hint = names::kInput;
+        st.polarity->hint = names::kPolarity;
+        st.mono->hint = names::kMono;
+        st.pan->hint = names::kPan;
+        st.mute->hint = names::kMute;
+        st.solo->hint = names::kSolo;
+        st.fader->hint = names::kVolume;
         meters_.attach(tid, st.meter);
         static_cast<StripRow*>(row_)->addStrip(std::move(frame),
                                                t.type == model::StripType::Master);
@@ -1499,6 +1513,11 @@ void Mixer::rebuild(bool keepLists) {
             cell->layout.height = ui::SizeRule::fixed(kCellH);
         }
         st.fader = &frame->emplace<ui::Fader>("mixer.vca.fader." + tid);
+        members.hint = {"The group's tracks", {}};
+        env.hint = views::names::kEnvelopes;
+        st.mute->hint = views::names::kMute;
+        st.solo->hint = views::names::kSolo;
+        st.fader->hint = views::names::kVolume;
         st.fader->layout.height = ui::SizeRule::fixed(kFaderH);
         st.fader->setValue(e.value->vca->volumeDb);
         st.value =

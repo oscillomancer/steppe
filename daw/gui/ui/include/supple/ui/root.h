@@ -98,6 +98,11 @@ class Root {
     // The pointer's shape: the cursorAt of the node its events go to, kept
     // up to date after every pointer event and shown on the window.
     Cursor cursor() const { return cursor_; }
+    // The name of what the pointer rests on (Node::hintAt), for a status
+    // line: of the node its events go to, or the first of its parents that
+    // has one. Nothing while the pointer is outside the window, or while a
+    // drag carries a thing over other nodes.
+    Hint hint() const;
     // A drag that carries a thing over other nodes (a plug-in out of the
     // browser, a mixer strip) says what a release would do: Move where it
     // would land, NotAllowed where it would do nothing. While set it

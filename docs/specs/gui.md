@@ -197,6 +197,25 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   browser, and a track row dragged to a new place (the row answers that
   one itself). Files dragged in from the desktop keep the desktop's own
   cursor.
+  **Names**: a control can say what it is called (`Node::hint`, a
+  `ui::Hint`: a name, and the id of the action a press runs when it runs
+  one). `Root::hint()` asks the node the pointer's events go to, then its
+  parents, for `Node::hintAt`, and gives the first that is not empty;
+  nothing before the first pointer event, once the pointer has left the
+  window, or while a drag carries a thing (`Root::setDragCursor`). A
+  pressed control keeps its name while it holds the pointer. The main
+  window's status line shows it (§4.1). Named: a track's controls, the same
+  words on its row and on its mixer strip (`views/control_names.h`: Mute,
+  Solo, Invert polarity, Mono, Volume, Pan, Record input, Automation
+  lanes, Plug-in chain, Add a plug-in, Output routing; a master's
+  Hardware output, and "Mute the master's own items" on its lane); the
+  arm ("Arm for recording") and the monitor button, which says its mode
+  ("Monitor the input: auto"); an automation lane's mode, on and hide; a
+  VCA strip's controls; the track list's "+ track"; the transport bar's
+  punch, metronome, count-in, time signature, tempo and playrate. A
+  button that runs an action and has no name of its own takes the
+  action's (the toolbar's buttons, the transport's start, play, record,
+  loop and follow, the track list's "mixer").
   Keyboard: focus chain, Tab navigation, shortcuts resolved by the actions
   system (§6) with context sections (arrange, MIDI editor, mixer, text
   field). Key releases reach the focused node and its parents
@@ -362,6 +381,15 @@ message a view or an action reported. An action that fails (`AppActions`'
 `onError`: a menu entry, a key, a toolbar or transport button, an inspector
 field) puts its message there, and on stderr as before; the message stays
 until the next one.
+While the pointer rests on a control that has a name (§2, Names), the name
+takes the note's place: "7 tracks  version 12 · Mute", and with the keys
+bound to the control's action after it, every binding, as the actions list
+shows them: "Transport: play/stop (Space)", "Transport: go to start (Home,
+W)". An action with no key shows its name alone; a control whose action
+this build does not have shows nothing. The note comes back when the
+pointer leaves the control. A note that arrives while the pointer rests
+there (the press's own error) shows at once and stays until the pointer is
+over something else. Only names and keys are said, no instructions.
 
 FX and routing are resizable utility windows owned by the main window, using
 the same SDL utility/parent mechanism as plugin editors (ADR-0005/0039).

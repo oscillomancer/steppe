@@ -3,6 +3,7 @@
 // Copyright (c) 2026 Supple Audio
 #include "supple/views/tcp.h"
 
+#include "supple/views/control_names.h"
 #include "supple/views/envelope_lane.h"
 
 #include <SDL3/SDL_keycode.h>
@@ -340,6 +341,19 @@ TcpPanel::Row::Row(TcpPanel& panel, std::size_t slot)
     // Secondary buttons are text alone until the pointer is on them; the
     // input stays a boxed field, since it shows a value.
     fx_->quiet = addFx_->quiet = true;  // "env" and "out" are boxed, as "out" is in the mixer
+    // What the status line calls each while the pointer rests on it.
+    mute_->hint = names::kMute;
+    laneMute_->hint = names::kLaneMute;
+    solo_->hint = names::kSolo;
+    polarity_->hint = names::kPolarity;
+    mono_->hint = names::kMono;
+    fader_->hint = names::kVolume;
+    pan_->hint = names::kPan;
+    fx_->hint = names::kChain;
+    addFx_->hint = names::kAddFx;
+    input_->hint = names::kInput;
+    env_->hint = names::kEnvelopes;
+    out_->hint = names::kRouting;
 }
 
 TcpPanel::Row::~Row() = default;
@@ -753,6 +767,8 @@ TcpPanel::TcpPanel(const TrackLayout& rowLayout, const Viewport& view, TcpCallba
         "tcp.add", "+ track", [this] { openAddMenu(add_->bounds(), ui::Placement::Above); });
     add_->layout.width = ui::SizeRule::fixed(56);
     add_->layout.height = ui::SizeRule::fixed(18);
+    mixer_->hint = {{}, "ui.mixer"};  // the action's own name and keys
+    add_->hint = {"Add a track", {}};
 }
 
 // The three strip types, offered by the "+" and by a right-click on the panel's
@@ -982,6 +998,9 @@ class TcpPanel::EnvRow : public ui::Node {
                                        [this](bool on) { set("active", json::Value(on)); });
         hide_ = &emplace<ui::Button>(id + ".hide", "hide",
                                      [this] { set("visible", json::Value(false)); });
+        mode_->hint = {"Automation mode", {}};
+        active_->hint = {"Envelope on or off", {}};
+        hide_->hint = {"Hide the lane", {}};
     }
     void bind(const model::Id& env, int depth, const model::Session& session) {
         env_ = env;
