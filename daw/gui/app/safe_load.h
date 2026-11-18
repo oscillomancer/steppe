@@ -60,6 +60,10 @@ class SafeLoad {
     // own error. Closing a question without choosing cancels: `proceed` never runs.
     void check(json::Value args, std::function<void(const json::Value& found)> proceed);
 
+    // "Enable" on a plug-in this run has disabled: loads it normally, as the question's third row
+    // does, and settles the reports its suspicion rests on. An error is `plugin.override`'s.
+    Status enable(const std::string& pluginId, const std::string& format = {});
+
     // Whether a question is open.
     bool asking() const { return asking_; }
 

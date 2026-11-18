@@ -149,7 +149,8 @@ std::string moduleTitle(const model::Session& s, const rack::Catalog& catalog, m
 }
 
 RackScene RackScene::build(const model::Session& s, model::Id rackId, const rack::Catalog& catalog,
-                           const std::function<bool(const model::PluginRef&)>& instrument) {
+                           const std::function<bool(const model::PluginRef&)>& instrument,
+                           const std::function<bool(const model::PluginRef&)>& disabled) {
     RackScene scene;
     scene.rack = rackId;
     if (!s.racks.find(rackId)) return scene;
@@ -172,6 +173,8 @@ RackScene RackScene::build(const model::Session& s, model::Id rackId, const rack
             v.instrument = fx && instrument && instrument(fx->plugin);
             v.title = moduleTitle(s, catalog, e.id);
             if (fx) v.subtitle = fx->plugin.vendor;
+            if (fx && disabled && disabled(fx->plugin))
+                v.subtitle += (v.subtitle.empty() ? "" : " \u00b7 ") + std::string("silent");
         } else if (const rack::Catalog::Entry* t = catalog.find(m.type)) {
             v.type = t->type;
             v.title = moduleTitle(s, catalog, e.id);

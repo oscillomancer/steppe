@@ -526,6 +526,14 @@ int frontendMain(int argc, char** argv) {
                 gui::openLearnDialog(fxPanel.root(), appActions, **app, std::move(request));
             },
             [&](model::Id rack) { racks.open(rack); },
+            // Enable, on a disabled plug-in's row: the action below.
+            [&](model::Id fx) {
+                json::Value args = json::Value::object();
+                args["fx"] = fx.str();
+                if (const actions::Action* a = appActions.registry().find("ui.fx.enable"))
+                    if (auto r = appActions.run(*a, args); !r && shell.onError)
+                        shell.onError(r.error().message);
+            },
             // The viewer is a popup of the main window: bring that window up first.
             [&](const std::string& incident) {
                 SDL_RaiseWindow((*window)->sdl());
@@ -677,6 +685,21 @@ int frontendMain(int argc, char** argv) {
     };
     safeLoad.onStatus = [&](const std::string& message) { shell.setStatus(message); };
     fileActions.setSafeLoad(&safeLoad);
+    // Enable, on a plug-in this run has disabled (the strip's menu, the FX window's row).
+    appActions.addUi(
+        "ui.fx.enable", "FX: enable a disabled plug-in", "fx", [&](const json::Value& v) -> Status {
+            const auto id = v.isString() ? model::Id::parse(v.asString()) : std::nullopt;
+            const model::FxInstance* fx = id ? (*app)->head().fx.find(*id) : nullptr;
+            if (!fx) return Error("gui.fx_enable", "an effect id like fx_3", "/fx");
+            return safeLoad.enable(fx->plugin.id);
+        });
+    racks.enableFx = [&](model::Id fx) {
+        json::Value args = json::Value::object();
+        args["fx"] = fx.str();
+        if (const actions::Action* a = appActions.registry().find("ui.fx.enable"))
+            if (auto r = appActions.run(*a, args); !r && shell.onError)
+                shell.onError(r.error().message);
+    };
     // The audio device: saved with the preferences, applied to the engine at once.
     gui::AudioDeviceDialog audioDevice(
         root, dispatcher, **app, prefs.audio,

@@ -329,6 +329,18 @@ void SafeLoad::ask(std::shared_ptr<Run> run) {
         [this] { asking_ = false; });  // cancelled: the open does not happen
 }
 
+Status SafeLoad::enable(const std::string& pluginId, const std::string& format) {
+    if (!override_) return {};
+    SUPPLE_TRY(override_(pluginId, "normal"));
+    // The person's own word that it loads: what a report suspected of it is resolved.
+    if (reported && settle)
+        for (const auto& suspect : reported())
+            if (suspect.pluginId == pluginId && (format.empty() || suspect.format == format))
+                for (const auto& incident : suspect.incidents) (void)settle(incident);
+    status(pluginId + ": loaded normally again.");
+    return {};
+}
+
 void SafeLoad::finish(std::shared_ptr<Run> run) {
     asking_ = false;
     for (const auto& d : run->dropped) {

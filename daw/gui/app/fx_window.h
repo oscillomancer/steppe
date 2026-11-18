@@ -50,6 +50,8 @@ class FxWindow {
         std::function<void(LearnRequest)> openLearn = {};
         // The rack window on a rack (a channel's Rack device's Open).
         std::function<void(model::Id rack)> openRack = {};
+        // Enable a plug-in this run has disabled (plugin.override normal), given one of its fx.
+        std::function<void(model::Id fx)> enableFx = {};
         // The crash viewer on a report, for a failed effect whose bridge's death left one.
         std::function<void(const std::string& incident)> showCrashReport = {};
     };
@@ -218,6 +220,7 @@ class FxWindow {
     };
     std::map<std::string, NotesOut> notesOut_;
     std::set<std::string> failed_;                  // engine.status failed_fx
+    std::uint64_t overridesVersion_ = 0;            // the engine's load overrides, as last drawn
     std::map<std::string, std::string> incidents_;  // failed fx -> its crash incident
     std::string presetChain_ = "main";
     bool chainMenuOpen_ = false;  // the Load chain… menu is showing

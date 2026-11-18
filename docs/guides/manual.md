@@ -1388,6 +1388,12 @@ same answer the next time without asking; it is kept for that exact version of t
 is asked about again, and a remembered "normally" is dropped if that plug-in closes Steppe again. Remembered
 choices are saved in the preferences file.
 
+A plug-in you chose not to load is marked in the mixer (its name goes faint with an amber bar, and the
+track's "fx" turns amber), in the FX window ("disabled after an unexpected close · audio passes through") and in
+a rack (its module says "silent"). Right-click it in the mixer or a rack, or press Enable in the FX window, to
+load it again. The choice lasts until you quit Steppe. If a failed plug-in left a report, its row in the FX window has
+a Show report button.
+
 #### Stopping Steppe from a script or a service
 
 Steppe runs as two processes, a supervisor that you start and a worker that does the

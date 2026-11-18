@@ -439,6 +439,9 @@ class EngineApp : public cmd::Host {
     // the project says. Main thread; not in the project, not in history, kept
     // across open and new; every pool made takes a copy. ------------------------
     const LoadOverrides& loadOverrides() const { return overrides_; }
+    // Rises with every change of an override, for a view that shows one (the model's own version
+    // does not move: an override is not in the project).
+    std::uint64_t loadOverridesVersion() const { return overridesVersion_; }
     // How a plug-in reference loads now: by the key it carries, else by the
     // catalogue entry it names (the catalogue as it stands, never a scan).
     LoadMode loadModeOf(const model::PluginRef& ref) const;
@@ -1004,6 +1007,7 @@ class EngineApp : public cmd::Host {
     std::mutex recordingFinalizeMutex_;  // sidecar publication vs scratch relocation, never RT
     std::map<std::string, std::unique_ptr<host::Instance>> scratch_;
     LoadOverrides overrides_;
+    std::uint64_t overridesVersion_ = 0;
     std::size_t instancesMade_ = 0;
     // Topic 7d. The plug-ins earlier projects of this run ran in process (the pool that made
     // them is replaced with the project), and the ones this run already said it suspects.

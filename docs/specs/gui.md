@@ -2646,5 +2646,20 @@ evidence the plug-in was fine, so a new report for that build makes the question
 and the entry is removed once it is answered (a cancelled question changes nothing on disk). Remembering is rewritten by `Preferences::save`; the GUI
 is its only writer.
 
+**Disabled plug-ins are marked (topic 7d; delivered).** A plug-in this run has disabled
+(`plugin.override` mode `disable`: the question's second row, an agent, or a remembered choice;
+`engine.status.disabled_fx`) is marked wherever its fx shows, in the one colour the feature has
+(`meter-hot`, an amber bar as the banner's): the mixer strip's plug-in slot has its name in `ink-faint`
+and a 3-unit bar at its left edge, and the strip's "fx" button has its text in `meter-hot`
+(`ui::Button::setTextColor`, beside `setEmphasis`) while the chain holds one; the slot's right-click
+menu starts with **Enable**. The FX window's row has its name in `ink-faint`, the same bar, an
+**Enable** button where a failed effect has Restart, and its second line reads "disabled after an
+unexpected close · audio passes through" in place of the isolation badge. A rack's plug-in module
+adds "· silent" to its subtitle, and its menu starts with **Enable**. A disabled plug-in in a rack is
+otherwise silent and says nothing more (a project that opens with one is not asked about again). Enable
+is the action `ui.fx.enable` (an `fx` id): `plugin.override` mode `normal` for the plug-in, and the
+reports its suspicion rests on are settled as in "Load it normally". An override is not in the
+project, so the windows follow `EngineApp::loadOverridesVersion()` as well as the project's version.
+
 Recovery (ADR-0078) stays its own offer. No upload or global OS-reporting changes. See
 diagnostics.md and STATUS for delivery scope.

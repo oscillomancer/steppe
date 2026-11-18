@@ -155,6 +155,19 @@ class FxSlot : public DragButton {
     const std::size_t chainIndex;         // its place in the track's chain
     std::function<void()> remove;         // Alt+click
     std::function<void(ui::Point)> menu;  // a right-click (not the track's menu)
+    // A plug-in this run has disabled (plugin.override): its name faint, a 3-unit amber bar at the
+    // slot's left edge.
+    void markDisabled() {
+        disabled_ = true;
+        setTextColor("ink-faint");
+    }
+    bool disabled() const { return disabled_; }
+    void paint(ui::Canvas& canvas) override {
+        DragButton::paint(canvas);
+        if (!disabled_) return;
+        const ui::Rect b = bounds();
+        canvas.fillRect({b.x, b.y + 1, 3.0f, b.h - 2}, canvas.theme().color("meter-hot"));
+    }
     bool onPointer(const ui::PointerEvent& e) override {
         if (e.type == ui::PointerEvent::Type::Down && e.button == 1 && (e.mods & ui::kAlt) &&
             remove) {
@@ -167,6 +180,9 @@ class FxSlot : public DragButton {
         }
         return DragButton::onPointer(e);
     }
+
+  private:
+    bool disabled_ = false;
 };
 
 // A strip's name: a double-click edits it in place; Enter or a click anywhere
@@ -874,7 +890,8 @@ std::string Mixer::structure() const {
             const model::FxInstance* f = s.fx.find(fx);
             out += fx.str() + ",";
             if (f)
-                out += std::to_string(f->bypass) + std::to_string(f->offline) + ":" +
+                out += std::to_string(f->bypass) + std::to_string(f->offline) +
+                       (app_.loadModeOf(f->plugin) == engine::LoadMode::Disable ? "D" : "") + ":" +
                        std::to_string(f->label.size()) + ":" + f->label + ":" +
                        std::to_string(f->plugin.name.size()) + ":" + f->plugin.name;
         }
@@ -993,6 +1010,7 @@ void Mixer::rebuild() {
                                                        });
                 st.racks.push_back(&chain.addRack(std::move(slot)));
             }
+        bool anyDisabled = false;
         for (std::size_t at = 0; at < t.chain.size(); ++at) {
             const model::Id fx = t.chain[at];
             const model::FxInstance* f = s.fx.find(fx);
@@ -1020,8 +1038,14 @@ void Mixer::rebuild() {
             };
             slot->remove = [this, fx] { removeFx(fx); };
             slot->enabled = !t.freeze;
+            if (app_.loadModeOf(f->plugin) == engine::LoadMode::Disable) {
+                slot->markDisabled();
+                anyDisabled = true;
+            }
             chain.addSlot(std::move(slot));
         }
+        // A disabled plug-in in the chain: "fx" in the feature's colour, as the banner's bar.
+        if (anyDisabled) st.fx->setTextColor("meter-hot");
         frame->select = [this, tid](unsigned mods) {
             std::vector<std::string> shown;
             for (const Strip& x : strips_) shown.push_back(x.track);
@@ -1520,14 +1544,30 @@ void Mixer::resolveFxDrop() {
 
 // A plug-in's own menu (a right-click on it in the chain).
 void Mixer::openFxMenu(model::Id fx, const ui::Rect& slot, ui::Point at) {
-    if (!app_.head().fx.find(fx)) return;
-    std::vector<ui::MenuItem> items(3);
-    items[0].label = "Rename…";
-    items[0].run = [this, fx, slot] { openFxRename(fx, slot); };
-    items[1].label = "Duplicate";
-    items[1].run = [this, fx] { duplicateFx(fx); };
-    items[2].label = "Delete";
-    items[2].run = [this, fx] { removeFx(fx); };
+    const model::FxInstance* inst = app_.head().fx.find(fx);
+    if (!inst) return;
+    std::vector<ui::MenuItem> items;
+    // First, for a plug-in this run has disabled: loading it again is the likeliest thing wanted.
+    if (app_.loadModeOf(inst->plugin) == engine::LoadMode::Disable) {
+        ui::MenuItem enable;
+        enable.label = "Enable";
+        enable.run = [this, fx] {
+            json::Value args = json::Value::object();
+            args["fx"] = fx.str();
+            run("ui.fx.enable", std::move(args));
+        };
+        items.push_back(std::move(enable));
+    }
+    ui::MenuItem rename, duplicate, remove;
+    rename.label = "Rename…";
+    rename.run = [this, fx, slot] { openFxRename(fx, slot); };
+    duplicate.label = "Duplicate";
+    duplicate.run = [this, fx] { duplicateFx(fx); };
+    remove.label = "Delete";
+    remove.run = [this, fx] { removeFx(fx); };
+    items.push_back(std::move(rename));
+    items.push_back(std::move(duplicate));
+    items.push_back(std::move(remove));
     root_.openPopup(
         ui::makeMenu("mixer.fxmenu." + fx.str(), std::move(items), [this] { root_.closePopup(); }),
         ui::Rect{at.x, at.y, 0, 0}, ui::Placement::Below);
@@ -1720,9 +1760,11 @@ void Mixer::sync() {
     applyHeight();  // the window may have been resized
     if (actions_.ui().selectedTracks != shownSelection_) showSelection();  // the TCP changed it
     const bool replaced = app_.projectGeneration() != projectGeneration_;
-    if (!replaced && app_.head().version == version_) return;
+    const bool overridden = app_.loadOverridesVersion() != overridesVersion_;
+    if (!replaced && !overridden && app_.head().version == version_) return;
     projectGeneration_ = app_.projectGeneration();
     version_ = app_.head().version;
+    overridesVersion_ = app_.loadOverridesVersion();
     const std::string now = structure();
     if (replaced || now != structure_) {
         structure_ = now;

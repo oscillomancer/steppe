@@ -220,6 +220,7 @@ Result<bool> EngineApp::setLoadOverride(const host::PluginInfo& info, LoadMode m
                          "/mode", "use mode \"disable\" or \"normal\"");
     }
     if (!overrides_.set(info.format, info.id, mode)) return false;
+    ++overridesVersion_;
     pool_->setOverrides(overrides_);
     // A probe made before is of the wrong kind now (in process, or bridged).
     std::erase_if(scratch_, [&](const auto& entry) {

@@ -1592,6 +1592,47 @@ TEST_CASE("the FX chain badges each effect's state, and a failed one offers a re
     CHECK(f.uiRoot().find("fx.restart." + fx.str()) == nullptr);
 }
 
+TEST_CASE("a disabled plug-in is marked in the FX chain, with Enable on its row") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<model::Id> enabled;
+    gui::FxWindow::Hooks hooks;
+    hooks.enableFx = [&](model::Id fx) { enabled.push_back(fx); };
+    f.fx =
+        std::make_unique<gui::FxWindow>(*f.app, *f.dispatcher, *f.root, *f.panel, std::move(hooks),
+                                        gui::Favourites::defaultFile(gui::test::slug()));
+    const model::Id track = f.addTrack("Guitar");
+    REQUIRE(f.fx->open(track));
+    f.click("fx.add");
+    f.type("Hickory");
+    f.key("Return");
+    REQUIRE(f.fx->chain().size() == 1);
+    const std::string id = f.fx->chain()[0].str();
+    CHECK(f.uiRoot().find("fx.enable." + id) == nullptr);
+    CHECK(f.uiRoot().find("fx.badge." + id)->valueText() == "in-process (default)");
+    REQUIRE(
+        f.run("plugin.override", f.args({{"plugin", f.pluginId("Hickory")}, {"mode", "disable"}})));
+    f.fx->tick();  // the window follows the override with no change to the project
+    f.frame();
+    REQUIRE(f.uiRoot().find("fx.enable." + id));
+    CHECK(
+        f.uiRoot().find("fx.badge." + id)->valueText().find("disabled after an unexpected close") ==
+        0);
+    CHECK(f.uiRoot().find("fx.badge." + id)->valueText().find("audio passes through") !=
+          std::string::npos);
+    f.snapshot("fx-disabled.png");
+    REQUIRE(f.click("fx.enable." + id));
+    REQUIRE(enabled.size() == 1);
+    CHECK(enabled[0].str() == id);
+    // Loaded again: the marker goes with no other change.
+    REQUIRE(
+        f.run("plugin.override", f.args({{"plugin", f.pluginId("Hickory")}, {"mode", "normal"}})));
+    f.fx->tick();
+    f.frame();
+    CHECK(f.uiRoot().find("fx.enable." + id) == nullptr);
+    CHECK(f.uiRoot().find("fx.badge." + id)->valueText() == "in-process (default)");
+}
+
 TEST_CASE("a failed effect links to the report its bridge's death left") {
     Fixture f;
     if (!f.ok) return;

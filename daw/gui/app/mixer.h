@@ -166,6 +166,7 @@ class Mixer {
     ui::Root::OverlayHandle ghost_;
     std::string structure_;
     std::uint64_t version_ = ~0ull;
+    std::uint64_t overridesVersion_ = ~0ull;  // the engine's load overrides, as last drawn
     std::uint64_t projectGeneration_ = ~std::uint64_t{0};
     std::uint64_t gesture_ = 0;  // a serial per drag: separate drags are separate undo steps
 };

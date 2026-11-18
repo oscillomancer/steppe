@@ -89,8 +89,11 @@ struct RackScene {
     // Rack `rack` of `s` (an empty scene when it is not there).
     // `instrument` says whether a plugin module's plug-in plays notes (its
     // face then shows the note inputs).
+    // `disabled` says whether a plug-in module's plug-in is one this run has disabled (it is silent
+    // then, and says so).
     static RackScene build(const model::Session& s, model::Id rack, const rack::Catalog& catalog,
-                           const std::function<bool(const model::PluginRef&)>& instrument = {});
+                           const std::function<bool(const model::PluginRef&)>& instrument = {},
+                           const std::function<bool(const model::PluginRef&)>& disabled = {});
 
     const Module* module(model::Id id) const;
     Module* module(model::Id id);

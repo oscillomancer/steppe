@@ -59,6 +59,7 @@ struct Fixture {
     std::unique_ptr<gui::MeterFeed> feed;
     std::unique_ptr<gui::Mixer> mixer;
     std::vector<std::string> editors, errors;  // ui.fx.editor calls; reported errors
+    std::vector<std::string> enables;          // ui.fx.enable calls
     bool ok = false;
 
     Fixture(std::shared_ptr<engine::RuntimeProtectionOps> operations = {}) {
@@ -100,6 +101,11 @@ struct Fixture {
         actions->addUi("ui.fx.editor", "FX: open or close editor", "fx",
                        [this](const json::Value& v) -> Status {
                            editors.push_back(v.asString());
+                           return {};
+                       });
+        actions->addUi("ui.fx.enable", "FX: enable a disabled plug-in", "fx",
+                       [this](const json::Value& v) -> Status {
+                           enables.push_back(v.asString());
                            return {};
                        });
         actions->onError = [this](const std::string& e) { errors.push_back(e); };
@@ -626,6 +632,49 @@ TEST_CASE("mixer: a plug-in's right-click menu renames that instance") {
     CHECK(f.app->head().fx.find(*model::Id::parse(p1))->label == "Lead trim");
     CHECK(f.node("mixer.fx." + p1)->valueText() == "Lead trim");
     CHECK(f.errors.empty());
+}
+
+TEST_CASE("mixer: a disabled plug-in is marked on its strip, with Enable first in its menu") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    const auto p1 = f.addFx(a, "Hickory");
+    f.refresh();
+    auto* slot = dynamic_cast<ui::Button*>(f.node("mixer.fx." + p1));
+    auto* fxButton = dynamic_cast<ui::Button*>(f.node("mixer.fxadd." + a));
+    REQUIRE(slot);
+    REQUIRE(fxButton);
+    CHECK(slot->textColor().empty());
+    CHECK(fxButton->textColor().empty());
+    {
+        // Nothing in the project changes, and the strip follows (an override is not in the model).
+        const auto version = f.app->head().version;
+        f.exec("plugin.override", R"({"plugin":"Hickory","mode":"disable"})");
+        CHECK(f.app->head().version == version);
+    }
+    f.refresh();
+    slot = dynamic_cast<ui::Button*>(f.node("mixer.fx." + p1));
+    fxButton = dynamic_cast<ui::Button*>(f.node("mixer.fxadd." + a));
+    REQUIRE(slot);
+    CHECK(slot->textColor() == "ink-faint");
+    CHECK(fxButton->textColor() == "meter-hot");
+    f.snapshot("mixer-disabled.png");
+    // Enable comes first in the slot's menu.
+    const ui::Point at = f.centre(f.node("mixer.fx." + p1));
+    f.pointer(ui::PointerEvent::Type::Down, at, 1, 0, 3);
+    f.pointer(ui::PointerEvent::Type::Up, at, 1, 0, 3);
+    ui::Node* menu = f.node("mixer.fxmenu." + p1);
+    const ui::Point first{menu->bounds().x + 40, menu->bounds().y + 13};
+    f.pointer(ui::PointerEvent::Type::Move, first);
+    f.pointer(ui::PointerEvent::Type::Down, first);
+    f.pointer(ui::PointerEvent::Type::Up, first);
+    REQUIRE(f.enables.size() == 1);
+    CHECK(f.enables[0] == p1);
+    // Loaded again: the marks go, and the menu has its three rows.
+    f.exec("plugin.override", R"({"plugin":"Hickory","mode":"normal"})");
+    f.refresh();
+    CHECK(dynamic_cast<ui::Button*>(f.node("mixer.fx." + p1))->textColor().empty());
+    CHECK(dynamic_cast<ui::Button*>(f.node("mixer.fxadd." + a))->textColor().empty());
 }
 
 TEST_CASE("mixer: a plug-in's right-click menu duplicates it after itself or deletes it") {

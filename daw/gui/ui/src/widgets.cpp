@@ -68,6 +68,12 @@ void Button::setEmphasis(bool on) {
     invalidate();
 }
 
+void Button::setTextColor(std::string token) {
+    if (token == textColor_) return;
+    textColor_ = std::move(token);
+    invalidate();
+}
+
 void Button::paint(Canvas& canvas) {
     const Theme& t = canvas.theme();
     const Rect b = bounds();
@@ -79,9 +85,10 @@ void Button::paint(Canvas& canvas) {
         }
         if (focused()) canvas.strokeRound(b, t.radius("s"), t.color("focus"));
         canvas.text(b, text_, Font::UiBold, t.type("small"),
-                    t.color(!enabled           ? "ink-faint"
-                            : lit || emphasis_ ? "ink"
-                                               : "ink-quiet"),
+                    t.color(!enabled              ? "ink-faint"
+                            : !textColor_.empty() ? textColor_.c_str()
+                            : lit || emphasis_    ? "ink"
+                                                  : "ink-quiet"),
                     kCenter | kMiddle);
         return;
     }
@@ -92,7 +99,10 @@ void Button::paint(Canvas& canvas) {
     canvas.fillRound(b, t.radius("s"), face);
     canvas.strokeRound(b, t.radius("s"), focused() ? t.color("focus") : t.color("rule"));
     canvas.text(b, text_, Font::UiBold, t.type("small"),
-                enabled ? t.color("ink") : t.color("ink-faint"), kCenter | kMiddle);
+                !enabled              ? t.color("ink-faint")
+                : !textColor_.empty() ? t.color(textColor_.c_str())
+                                      : t.color("ink"),
+                kCenter | kMiddle);
 }
 
 bool Button::onPointer(const PointerEvent& e) {

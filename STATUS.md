@@ -1687,7 +1687,7 @@ notice (a banner under the transport, Dismiss acknowledges; wording provisional)
 service says the same on stderr at start for engine runs only, naming itself; each dismisses only its own
 incidents. Help > Crash reports… is the viewer (all roles: list, one report in plain words with the detail folded, copy a text
 summary, mark as seen, delete one or all, open the folder; the sample reports of the tests have little in them, so the thread, command and
-bridge sections are checked on written-out JSON, and a real report's look is checked only on Linux). The app's own safe-load question (File > Open, recovery and template loads; separate process, not loaded or normal; remembered per exact build in preferences `plugin_overrides`, 1.10) is delivered on Linux; the Settings list for remembered choices, the failed-track link and the disabled marker are next. The notice
+bridge sections are checked on written-out JSON, and a real report's look is checked only on Linux). The app's own safe-load question (File > Open, recovery and template loads; separate process, not loaded or normal; remembered per exact build in preferences `plugin_overrides`, 1.10) is delivered on Linux; a failed effect links to its report, and a disabled plug-in is marked in the mixer, the FX window and racks, with Enable. The Settings list for remembered choices is next. The notice
 lists every report-named and marker file in the folder once at start, synchronously, and reads the newest eight
 unacknowledged reports (each at most 4 MiB) to learn their role; retention keeps the folder to about 20 reports,
 but is applied only when a report is published, so the cost is bounded by the folder's contents, not by 20.

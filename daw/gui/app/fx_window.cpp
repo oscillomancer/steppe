@@ -52,12 +52,14 @@ class Row : public ui::Node {
     bool selected = false;
     bool dragged = false;                          // being dragged: dimmed
     bool markerTop = false, markerBottom = false;  // where a dragged row would land
+    bool disabledMark = false;  // a plug-in this run has disabled: a 3-unit amber bar at the left
     std::function<void(Phase, ui::Point)> onDrag;  // unset: the row stays put
     void paint(ui::Canvas& c) override {
         const ui::Theme& t = c.theme();
         if (selected) c.fillRound(bounds(), t.radius("s"), t.color("selection").withAlpha(0.55f));
         if (dragged) c.fillRound(bounds(), t.radius("s"), t.color("ground").withAlpha(0.5f));
         const ui::Rect b = bounds();
+        if (disabledMark) c.fillRect({b.x, b.y + 1, 3.0f, b.h - 2}, t.color("meter-hot"));
         if (markerTop) c.fillRect({b.x, b.y - 3, b.w, 3}, t.color("focus"));
         if (markerBottom) c.fillRect({b.x, b.bottom(), b.w, 3}, t.color("focus"));
     }
@@ -952,7 +954,9 @@ void FxWindow::tick(bool event) {
             root().damageAll();
         }
     }
-    if (page_ && (replaced || app_.head().version != shownVersion_)) refresh();
+    const bool overridden = app_.loadOverridesVersion() != overridesVersion_;
+    overridesVersion_ = app_.loadOverridesVersion();
+    if (page_ && (replaced || overridden || app_.head().version != shownVersion_)) refresh();
     // The Rack devices' knobs follow their Macros (automation as it plays).
     std::vector<model::Id> macros;
     if (page_)
@@ -1252,6 +1256,8 @@ void FxWindow::buildRow(ui::Node& body, model::Id fx, std::size_t index, bool in
             dragRow(fx, static_cast<int>(phase), p);
         };
     const bool isFailed = failed_.count(id) != 0;
+    const bool isDisabled = app_.loadModeOf(inst->plugin) == engine::LoadMode::Disable;
+    row.disabledMark = isDisabled;
 
     {
         auto& l1 = line(row, prefix + "line1." + id);
@@ -1259,12 +1265,16 @@ void FxWindow::buildRow(ui::Node& body, model::Id fx, std::size_t index, bool in
         std::snprintf(number, sizeof number, "%zu.", index + 1);
         l1.emplace<ui::Label>(prefix + "number." + id, number, ui::Font::Mono, "caption",
                               "ink-quiet");
-        auto& name =
-            l1.emplace<ui::Label>(prefix + "name." + id, nameOf(fx), ui::Font::Ui, "small");
+        auto& name = l1.emplace<ui::Label>(prefix + "name." + id, nameOf(fx), ui::Font::Ui, "small",
+                                           isDisabled ? "ink-faint" : "ink");
         name.layout.width = ui::SizeRule::fixed(160);
         auto& latency = l1.emplace<ui::Label>(prefix + "latency." + id, latencyOf(fx),
                                               ui::Font::Mono, "caption", "ink-quiet");
         latency.layout.width = ui::SizeRule::fixed(80);
+        // A disabled plug-in has nothing to restart: what is wanted is to load it again.
+        if (isDisabled && hooks_.enableFx)
+            l1.emplace<ui::Button>(prefix + "enable." + id, "Enable",
+                                   [this, fx] { hooks_.enableFx(fx); });
         if (isFailed)
             l1.emplace<ui::Button>(prefix + "restart." + id, "Restart", [this, fx] {
                 json::Value args = json::Value::object();
@@ -1323,11 +1333,18 @@ void FxWindow::buildRow(ui::Node& body, model::Id fx, std::size_t index, bool in
     }
     {
         auto& l2 = line(row, prefix + "line2." + id);
-        auto& badge = l2.emplace<ui::Label>(
-            prefix + "badge." + id, badgeText(*inst, app_.effectiveIsolation(fx), isFailed),
-            ui::Font::Mono, "caption", isFailed ? "clip" : "ink-faint");
+        // A disabled plug-in does not run anywhere: what the badge would say is replaced by why.
+        auto& badge =
+            isDisabled
+                ? l2.emplace<ui::Label>(prefix + "badge." + id,
+                                        "disabled after an unexpected close \u00b7 audio passes "
+                                        "through",
+                                        ui::Font::Ui, "caption", "ink-quiet")
+                : l2.emplace<ui::Label>(prefix + "badge." + id,
+                                        badgeText(*inst, app_.effectiveIsolation(fx), isFailed),
+                                        ui::Font::Mono, "caption", isFailed ? "clip" : "ink-faint");
         // Room for the longest: "shared bridge (default) · offline · failed".
-        badge.layout.width = ui::SizeRule::fixed(296);
+        badge.layout.width = ui::SizeRule::fixed(isDisabled ? 340 : 296);
         // Beside the state it explains (line 1 has no room): a failed effect's report.
         if (isFailed && hooks_.showCrashReport && !incidentOf(id).empty())
             l2.emplace<ui::Button>(
