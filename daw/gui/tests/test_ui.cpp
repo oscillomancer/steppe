@@ -807,8 +807,10 @@ TEST_CASE("mixer controls: fader taper and gestures, pan, meter hold and clip, t
     // orange and, from just under 0 dB up, red; blended between them.
     {
         const Theme theme = Theme::dark();
-        auto same = [](Color a, Color b) {
-            return std::abs(a.r - b.r) + std::abs(a.g - b.g) + std::abs(a.b - b.b) < 0.01f;
+        auto same = [](Color one, Color other) {
+            return std::abs(one.r - other.r) + std::abs(one.g - other.g) +
+                       std::abs(one.b - other.b) <
+                   0.01f;
         };
         const Color green = theme.color("meter"), yellow = theme.color("meter-hot"),
                     red = theme.color("clip");
