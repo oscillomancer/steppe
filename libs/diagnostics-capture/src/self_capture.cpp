@@ -4,6 +4,9 @@
 #include <cstddef>
 #include <cstring>
 #include <mutex>
+#if !defined(_WIN32)
+#include <time.h>
+#endif
 #include "self_capture_internal.h"
 #include "supple/diagcap/trace.h"
 #include "supple/diagctx/scope.h"
@@ -108,6 +111,44 @@ std::uint64_t monotonic() noexcept {
 #endif
 }
 
+namespace {
+// The capture's one claimant: its thread id plus one (0: nobody), and whether it has ended.
+std::atomic<std::uint64_t> owner{0};
+std::atomic<bool> finished{false};
+std::atomic<std::uint64_t> holdNanoseconds{0};
+std::atomic<bool> holding{false};
+static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
+void pauseBriefly() noexcept {
+#if defined(_WIN32)
+    Sleep(1);
+#else
+    const timespec millisecond{0, 1'000'000};
+    (void)::nanosleep(&millisecond, nullptr);  // async-signal-safe
+#endif
+}
+}  // namespace
+
+bool beginCapture(std::uint64_t tid) noexcept {
+    std::uint64_t none = 0;
+    return owner.compare_exchange_strong(none, tid + 1, std::memory_order_acq_rel);
+}
+void endCapture() noexcept { finished.store(true, std::memory_order_release); }
+void awaitCapture(std::uint64_t tid, std::uint64_t start) noexcept {
+    if (owner.load(std::memory_order_acquire) == tid + 1) return;
+    while (!finished.load(std::memory_order_acquire) && monotonic() < start + kHandlerBudget)
+        pauseBriefly();
+}
+void resetCaptureForTests() noexcept {
+    owner.store(0);
+    finished.store(false);
+    holding.store(false);
+    holdNanoseconds.store(0);
+}
+void holdCaptureForTests(std::uint64_t nanoseconds) noexcept {
+    holdNanoseconds.store(nanoseconds, std::memory_order_relaxed);
+}
+bool captureHolding() noexcept { return holding.load(std::memory_order_acquire); }
+
 bool initializeSlot(void* memory, std::size_t bytes, std::uint32_t ordinal) noexcept {
     if (!memory || bytes != kSlotBytes ||
         (reinterpret_cast<std::uintptr_t>(memory) % alignof(SlotHeader)) != 0)
@@ -211,6 +252,12 @@ bool publishCapsule(const CapsuleHeader& header, const BridgeModule* modules,
     auto* slot = reinterpret_cast<SlotHeader*>(memory);
     if (loadState(slot) != kSlotEmpty) return false;  // written once per bridge
     storeState(slot, kSlotWriting);
+    if (const std::uint64_t hold = holdNanoseconds.load(std::memory_order_relaxed); hold != 0) {
+        holding.store(true, std::memory_order_release);  // tests only: a second fault lands here
+        for (const std::uint64_t until = monotonic() + hold; monotonic() < until;) {
+        }
+        holding.store(false, std::memory_order_release);
+    }
     std::size_t used = sizeof(CapsuleHeader) + std::size_t{moduleCount} * sizeof(BridgeModule);
     for (std::uint32_t i = 0; i < threadCount; ++i)
         used +=

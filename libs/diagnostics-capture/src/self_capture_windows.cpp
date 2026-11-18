@@ -31,7 +31,6 @@
 // after checking that the stack pointer lies on the thread's own stack.
 namespace supple::diagnostics::selfcapture {
 namespace {
-std::atomic<unsigned> claimed{0};
 LPTOP_LEVEL_EXCEPTION_FILTER priorFilter = nullptr;
 [[maybe_unused]] std::terminate_handler priorTerminate = nullptr;
 std::atomic<bool> terminateHooked{false};
@@ -78,9 +77,15 @@ LONG WINAPI lastChance(EXCEPTION_POINTERS* exception) {
     if (exception && exception->ExceptionRecord &&
         exception->ExceptionRecord->ExceptionCode == kCppExceptionCode && priorFilter)
         return priorFilter(exception);  // the runtime makes it std::terminate; the hook records
-    if (!claimed.exchange(1, std::memory_order_relaxed) && exception && exception->ContextRecord) {
+    if (exception && exception->ContextRecord) {
         const std::uint64_t start = monotonic();
-        (void)captureAndPublish(faultFrom(exception->ContextRecord), start);
+        const std::uint64_t tid = GetCurrentThreadId();
+        if (beginCapture(tid)) {
+            (void)captureAndPublish(faultFrom(exception->ContextRecord), start);
+            endCapture();
+        } else {
+            awaitCapture(tid, start);  // another thread is writing: the process ends after it
+        }
     }
     // The fault stays fatal and the status stays the exception's: the filter we replaced runs
     // as it would have, and a request to resume the faulting code is refused.
@@ -89,22 +94,30 @@ LONG WINAPI lastChance(EXCEPTION_POINTERS* exception) {
 }
 
 void abortSignal(int) {
-    if (!claimed.exchange(1, std::memory_order_relaxed)) {
-        const std::uint64_t start = monotonic();
+    const std::uint64_t start = monotonic();
+    const std::uint64_t tid = GetCurrentThreadId();
+    if (beginCapture(tid)) {
         CONTEXT context{};
         RtlCaptureContext(&context);
         (void)captureAndPublish(faultFrom(&context), start);
+        endCapture();
+    } else {
+        awaitCapture(tid, start);
     }
     // Ends at once, as the bridge's abort handler did before capture (CI 44242073297).
     TerminateProcess(GetCurrentProcess(), kFailFast);
 }
 
 [[noreturn]] void terminateHook() noexcept {
-    if (!claimed.exchange(1, std::memory_order_relaxed)) {
-        const std::uint64_t start = monotonic();
+    const std::uint64_t start = monotonic();
+    const std::uint64_t tid = GetCurrentThreadId();
+    if (beginCapture(tid)) {
         CONTEXT context{};
         RtlCaptureContext(&context);
         (void)captureAndPublish(faultFrom(&context), start);
+        endCapture();
+    } else {
+        awaitCapture(tid, start);
     }
     if (priorTerminate) priorTerminate();
     std::abort();

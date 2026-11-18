@@ -1173,7 +1173,16 @@ action so the exit status stays the fatal one**: the host's classification of th
 `raise(SIGSEGV)` ends a process with an exit code (a `bridge_exit` that reads as an `exit`, so no
 report). It needs a `SIGSEGV` handler, and a C runtime handler on Windows also receives the
 hardware faults of the main thread that the last-chance filter now sees with their real context;
-keeping that context needs the runtime's exception pointers, which have not been tried here. The
+keeping that context needs the runtime's exception pointers, which have not been tried here. *One capture a process, and a second failing thread waits (round 6c-a).* The first thread to fail
+claims the capture (one atomic compare-and-swap, with its thread id); a thread that fails while it
+is being made does not end the process under it, which would leave the slot `writing`: it waits,
+sleeping a millisecond at a time (`nanosleep`, `Sleep`), until the capture has ended or until
+200 ms after its own handler began, and only then lets the process die as it would have (re-raise,
+`abort`, or the chained filter). The claiming thread failing again inside its own handler does not
+wait for itself. This needs the POSIX handlers to be reachable by a second fault, so they are
+installed without `SA_RESETHAND` (the handler restores the default action itself when it re-raises;
+a fault on the claiming thread inside the handler meets its own signal blocked, which the kernel
+answers by ending the process). The wait is the only one the handler ever makes. The
 handler's bound is its own: 200 ms from the fault to a published slot, measured on the monotonic
 clock, and a slot not complete by then is left `writing`. The host's kill deadlines are never
 extended to wait for a capsule, as the ADR requires.

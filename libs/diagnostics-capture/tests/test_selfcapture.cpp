@@ -8,14 +8,18 @@
 // evidence that it allocates, locks, opens and writes nothing. Windows and macOS handlers are
 // proven only by native CI.
 #include <doctest/doctest.h>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <thread>
 #include <vector>
+#include "../src/self_capture_internal.h"
 #include "supple/diagcap/selfcapture.h"
 #include "supple/diagcap/trace.h"
 #include "supple/diagctx/scope.h"
 #include "supple/diagctx/table.h"
 #if !defined(_WIN32)
+#include <sched.h>
 #include <signal.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
@@ -124,6 +128,42 @@ TEST_CASE("the largest capsule fits the slot and the sizes are the contract's") 
     CHECK(sizeof(BridgeModule) == 64);
     CHECK(diagctx::kTableBytes == 74816);
     CHECK(sizeof(SlotHeader) + kBridgeCapsuleMaxBytes <= kSlotBytes);
+}
+
+// A thread that fails while another is making the capsule waits for it (round 6c-a, b): the
+// process must not end under the first thread's write and leave the slot `writing`. The protocol
+// is portable, so every platform runs it; the faults themselves are the POSIX test below.
+TEST_CASE("a thread that fails while another captures waits for it, within the bound") {
+    resetCaptureForTests();
+    const std::uint64_t mine = 1, other = 2;
+    REQUIRE(beginCapture(mine));  // the first claims it
+    CHECK_FALSE(beginCapture(other));
+    CHECK_FALSE(beginCapture(mine));
+    SUBCASE("it returns once the capture has ended, not before") {
+        std::atomic<bool> waiting{false}, ended{false}, sawEnd{false};
+        std::thread second([&] {
+            waiting.store(true);
+            awaitCapture(other, monotonic());
+            sawEnd.store(ended.load());
+        });
+        while (!waiting.load()) std::this_thread::yield();
+        for (int i = 0; i < 20; ++i) std::this_thread::yield();
+        ended.store(true);
+        endCapture();
+        second.join();
+        CHECK(sawEnd.load());  // it did not return on its own before the end
+    }
+    SUBCASE("it never waits past the bound, whatever the capture does") {
+        const std::uint64_t spent = monotonic() - kHandlerBudget;  // the handler began a budget ago
+        awaitCapture(other, spent);  // returns, the capture never ends
+        CHECK(true);
+    }
+    SUBCASE("the claiming thread, failing again inside its own handler, does not wait for itself") {
+        const std::uint64_t before = monotonic();
+        awaitCapture(mine, before);  // a wait would last the whole budget
+        CHECK(monotonic() - before < kHandlerBudget);
+    }
+    resetCaptureForTests();
 }
 
 #if !defined(_WIN32)
@@ -333,6 +373,31 @@ TEST_CASE("a second fault in a bridge leaves the first capsule as it was") {
     Parsed p;
     REQUIRE(parse(memory, p));
     CHECK(p.frames[0][0] == reinterpret_cast<std::uintptr_t>(&markerFunction));  // the first one
+    ::munmap(memory, kSlotBytes);
+}
+
+TEST_CASE("a second thread faulting in the middle of a capture does not end the process under it") {
+    unsigned char* memory = sharedSlot(5);
+    const int status = runChild([&] {
+        prepare(memory);
+        // The first thread's capture holds still, with the slot marked writing, while another
+        // thread faults. Without the wait the second handler re-raises at once and the process
+        // ends there, with the slot left `writing`.
+        holdCaptureForTests(100'000'000ULL);
+        std::thread second([] {
+            if (!diagctx::registerThread(diagctx::ThreadRole::BridgeAudio)) ::_exit(kBad);
+            while (!captureHolding()) ::sched_yield();
+            crashHere();
+        });
+        crashHere();
+        second.join();
+    });
+    if (WIFEXITED(status) && WEXITSTATUS(status) == kSkip) return;
+    REQUIRE(WIFSIGNALED(status));
+    CHECK(WTERMSIG(status) == SIGSEGV);
+    Parsed p;
+    REQUIRE(parse(memory, p));  // complete: the second thread waited
+    checkCapsule(p, false, 0);
     ::munmap(memory, kSlotBytes);
 }
 

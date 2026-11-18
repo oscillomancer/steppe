@@ -32,9 +32,7 @@
 // no lock, no stdio, no C++ runtime beyond the terminate hook's own call.
 namespace supple::diagnostics::selfcapture {
 namespace {
-std::atomic<unsigned> claimed{0};
 [[maybe_unused]] std::terminate_handler priorTerminate = nullptr;
-static_assert(std::atomic<unsigned>::is_always_lock_free);
 
 // The signal's default action, delivered again: the process ends with the signal as its
 // status, which is how the host classifies the end (signal, not an exit code).
@@ -80,21 +78,29 @@ void registersOf(const void* context, Fault& fault) noexcept {
 }
 
 [[maybe_unused]] void fatalSignal(int signal, siginfo_t*, void* context) {
-    if (claimed.exchange(1, std::memory_order_relaxed)) reraise(signal);
     const std::uint64_t start = monotonic();
     Fault fault;
     fault.tid = diagctx::currentThreadId();
+    if (!beginCapture(fault.tid)) {
+        // Another thread is writing the capsule: the process ends once it has, or at the bound.
+        awaitCapture(fault.tid, start);
+        reraise(signal);
+    }
     registersOf(context, fault);
     (void)captureAndPublish(fault, start);
+    endCapture();
     reraise(signal);
 }
 
 // std::terminate: no registers, so the walk starts from this frame, as the worker's does.
 [[maybe_unused, noreturn]] void terminateHook() noexcept {
-    if (claimed.exchange(1, std::memory_order_relaxed)) std::abort();
     const std::uint64_t start = monotonic();
     Fault fault;
     fault.tid = diagctx::currentThreadId();
+    if (!beginCapture(fault.tid)) {
+        awaitCapture(fault.tid, start);
+        std::abort();
+    }
     const auto frame = reinterpret_cast<std::uintptr_t>(__builtin_frame_address(0));
     fault.pc = reinterpret_cast<std::uintptr_t>(__builtin_return_address(0));
     fault.sp = frame;
@@ -103,6 +109,7 @@ void registersOf(const void* context, Fault& fault) noexcept {
     fault.pc &= 0x0000ffffffffffffULL;
 #endif
     (void)captureAndPublish(fault, start);
+    endCapture();
     // The program's own terminate handler runs as it would have; if it returns, abort.
     if (priorTerminate) priorTerminate();
     std::abort();
@@ -125,7 +132,12 @@ bool installHandlers() noexcept {
         // which the handler restores and raises, so the exit status stays the fatal one.
         if (::sigaction(signal, nullptr, &prior) != 0 || prior.sa_handler != SIG_DFL) continue;
         action.sa_sigaction = fatalSignal;
-        action.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESETHAND;
+        // No SA_RESETHAND: the handler puts the default action back itself when it re-raises, and
+        // until then a second thread's fault must reach it (and wait for the capture) instead of
+        // finding the default action and ending the process under the first thread's write. A
+        // fault inside the handler on the same thread meets the signal blocked, which the kernel
+        // answers by ending the process: no loop.
+        action.sa_flags = SA_SIGINFO | SA_ONSTACK;
         (void)sigemptyset(&action.sa_mask);
         installed |= ::sigaction(signal, &action, nullptr) == 0;
     }

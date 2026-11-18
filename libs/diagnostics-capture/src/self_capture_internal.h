@@ -14,6 +14,26 @@ bool identifyImage(const void* address, BridgeModule& out);
 // `deadline` (monotonic nanoseconds). Allocation-free, lock-free, cannot fault.
 void walkFault(const Fault& fault, detail::CapsuleThreadData& thread,
                std::uint64_t deadline) noexcept;
+// One capture is made per process, by the first thread that fails; a thread that fails while it is
+// being made must not end the process under it (the slot would be left `writing`), so it waits for
+// the capture to end, for no longer than the handler's own bound, before it lets the process die.
+// Async-signal-safe: atomics, the clock and a short sleep.
+//   beginCapture: true for the first caller, which captures and then calls endCapture, whatever
+//                 came of it. False for every other.
+//   awaitCapture: for a caller that lost: returns when the capture has ended or `start` (the
+//                 caller's own handler-start clock reading) plus the handler budget has passed;
+//                 at once when `tid` is the claiming thread itself (a fault inside its own
+//                 handler cannot wait for itself).
+bool beginCapture(std::uint64_t tid) noexcept;
+void endCapture() noexcept;
+void awaitCapture(std::uint64_t tid, std::uint64_t start) noexcept;
+// Tests only: forgets the claim and the end, so the protocol can be run again in one process.
+void resetCaptureForTests() noexcept;
+// Tests only: the claiming thread's capture holds still this long after it marks the slot
+// `writing` (a busy wait on the clock, so a second thread can fail in the middle of it), and
+// `captureHolding` says it is doing so now.
+void holdCaptureForTests(std::uint64_t nanoseconds) noexcept;
+bool captureHolding() noexcept;
 // The platform's handlers (self_capture_posix.cpp, self_capture_windows.cpp).
 bool installHandlers() noexcept;
 #if defined(__APPLE__)
