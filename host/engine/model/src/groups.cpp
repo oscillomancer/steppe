@@ -3,6 +3,7 @@
 #include "supple/model/groups.h"
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <set>
 
 namespace supple::model {
@@ -159,6 +160,52 @@ double groupParameterAt(const Session& s, Id object, std::string_view param, dou
         }
     return fallback;
 }
+std::set<Id> soloSilencedTracks(const Session& s) {
+    std::set<Id> soloed, silenced;
+    for (const auto& e : s.tracks) {
+        bool solo = e.value->solo == Solo::On || e.value->solo == Solo::InPlace;
+        for (Id id : vcaControllers(s, e.id)) solo |= s.groups.find(id)->vca->solo;
+        if (solo) soloed.insert(e.id);
+    }
+    if (soloed.empty()) return silenced;
+    std::map<Id, std::vector<Id>> down, up;  // signal flow
+    for (const auto& e : s.tracks)
+        if (e.value->parent && e.value->parentSend.enabled) {
+            down[e.id].push_back(*e.value->parent);
+            up[*e.value->parent].push_back(e.id);
+        }
+    for (const auto& e : s.routes)
+        if (e.value->from.track && e.value->to.track) {
+            // A MIDI send keeps what its soloed source plays audible, but a
+            // soloed destination does not bring back its source's sound: the
+            // MIDI arrives whether or not the source is heard (ADR-0067).
+            down[*e.value->from.track].push_back(*e.value->to.track);
+            if (!e.value->midi) up[*e.value->to.track].push_back(*e.value->from.track);
+        } else if (const auto home = rackSendHome(s, *e.value)) {
+            // A rack send is its home channel's send (ADR-0075).
+            down[*home].push_back(*e.value->to.track);
+            up[*e.value->to.track].push_back(*home);
+        }
+    std::set<Id> audible = soloed;
+    for (auto* flow : {&down, &up}) {
+        std::vector<Id> pending(soloed.begin(), soloed.end());
+        std::set<Id> seen;
+        while (!pending.empty()) {
+            const Id at = pending.back();
+            pending.pop_back();
+            for (Id next : (*flow)[at])
+                if (seen.insert(next).second) {
+                    audible.insert(next);
+                    pending.push_back(next);
+                }
+        }
+    }
+    for (const auto& e : s.tracks)
+        if (!audible.contains(e.id) && e.value->solo != Solo::Defeat &&
+            e.value->type != StripType::Master)
+            silenced.insert(e.id);
+    return silenced;
+}
 EffectiveLevel effectiveTrackLevel(const Session& s, Id track, double seconds) {
     EffectiveLevel out;
     const auto* t = s.tracks.find(track);
@@ -179,42 +226,7 @@ EffectiveLevel effectiveTrackLevel(const Session& s, Id track, double seconds) {
     const double ceiling =
         t->type == StripType::Master && control.empty() ? out.requestedDb : kFaderCeilingDb;
     out.appliedDb = std::clamp(out.requestedDb, kSilenceDb, std::max(kSilenceDb, ceiling));
-    std::set<Id> soloed;
-    for (const auto& e : s.tracks) {
-        bool solo = e.value->solo == Solo::On || e.value->solo == Solo::InPlace;
-        for (Id id : vcaControllers(s, e.id)) solo |= s.groups.find(id)->vca->solo;
-        if (solo) soloed.insert(e.id);
-    }
-    std::set<Id> audible = soloed;
-    for (bool forward : {false, true}) {
-        std::vector<Id> pending(soloed.begin(), soloed.end());
-        std::set<Id> visited;
-        while (!pending.empty()) {
-            const Id at = pending.back();
-            pending.pop_back();
-            if (!visited.insert(at).second) continue;
-            auto edge = [&](Id from, Id to) {
-                if ((forward ? from : to) == at) {
-                    Id next = forward ? to : from;
-                    audible.insert(next);
-                    pending.push_back(next);
-                }
-            };
-            for (const auto& e : s.tracks)
-                if (e.value->parent && e.value->parentSend.enabled) edge(e.id, *e.value->parent);
-            // A MIDI send keeps what its soloed source plays audible, but a
-            // soloed destination does not bring back its source's sound: the
-            // MIDI arrives whether or not the source is heard (ADR-0067).
-            for (const auto& e : s.routes)
-                if (e.value->from.track && e.value->to.track && (forward || !e.value->midi))
-                    edge(*e.value->from.track, *e.value->to.track);
-            // A rack send is its home channel's send (ADR-0075).
-            for (const auto& e : s.routes)
-                if (const auto home = rackSendHome(s, *e.value)) edge(*home, *e.value->to.track);
-        }
-    }
-    out.soloSilenced = !soloed.empty() && !audible.contains(track) && t->solo != Solo::Defeat &&
-                       t->type != StripType::Master;
+    out.soloSilenced = soloSilencedTracks(s).contains(track);
     return out;
 }
 }  // namespace supple::model

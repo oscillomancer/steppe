@@ -666,61 +666,12 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         pe.e.to = pe.to;
         p.edges.push_back(std::move(pe.e));
     }
-    // Solo: with any track soloed, a track stays audible only if it is soloed,
-    // solo-defeated, the master, or on a soloed track's signal path: what
-    // feeds it (soloing a bus or folder keeps its sources and children) and
-    // where it goes (soloing a source keeps its folders, buses and the master).
-    // Siblings that merely share a folder with a soloed track are silenced.
+    // Solo (model::soloSilencedTracks, which the readouts share). A rack is
+    // heard through its channels.
     {
-        std::set<Id> soloed;
-        for (const auto& e : s.tracks)
-            if (e.value->solo == model::Solo::On || e.value->solo == model::Solo::InPlace)
-                soloed.insert(e.id);
-        for (const auto& e : s.tracks)
-            for (Id controller : model::vcaControllers(s, e.id))
-                if (s.groups.find(controller)->vca->solo) soloed.insert(e.id);
-        if (!soloed.empty()) {
-            std::map<Id, std::vector<Id>> down, up;  // signal flow
-            for (const auto& e : s.tracks)
-                if (e.value->parent && e.value->parentSend.enabled) {
-                    down[e.id].push_back(*e.value->parent);
-                    up[*e.value->parent].push_back(e.id);
-                }
-            // A MIDI send floods down only: soloing its source keeps what
-            // it plays audible; soloing the destination does not bring back
-            // the source's own sound, since MIDI sends ignore solo
-            // (ADR-0067; model::effectiveTrackLevel agrees).
-            for (const auto& e : s.routes)
-                if (e.value->from.track && e.value->to.track) {
-                    down[*e.value->from.track].push_back(*e.value->to.track);
-                    if (!e.value->midi) up[*e.value->to.track].push_back(*e.value->from.track);
-                } else if (const auto home = model::rackSendHome(s, *e.value)) {
-                    // A rack send is its home channel's send (ADR-0075).
-                    down[*home].push_back(*e.value->to.track);
-                    up[*e.value->to.track].push_back(*home);
-                }
-            std::set<Id> audible = soloed;
-            auto flood = [&](std::map<Id, std::vector<Id>>& g) {
-                std::vector<Id> stack(soloed.begin(), soloed.end());
-                std::set<Id> seen;
-                while (!stack.empty()) {
-                    const Id id = stack.back();
-                    stack.pop_back();
-                    for (Id nxt : g[id])
-                        if (seen.insert(nxt).second) {
-                            audible.insert(nxt);
-                            stack.push_back(nxt);
-                        }
-                }
-            };
-            flood(down);
-            flood(up);
-            for (Node& n : p.nodes) {
-                if (n.rack) continue;  // a rack is heard through its channels
-                const model::Track& t = *s.tracks.find(n.id);
-                n.soloSilenced = !audible.count(n.id) && t.solo != model::Solo::Defeat && !n.master;
-            }
-        }
+        const std::set<Id> silenced = model::soloSilencedTracks(s);
+        for (Node& n : p.nodes)
+            if (!n.rack) n.soloSilenced = silenced.contains(n.id);
     }
     p.masterPlayrate = s.project->playrate;
     p.rateEnabled = p.masterPlayrate.rate != 1 || model::activePlayrateEnvelope(s).has_value();

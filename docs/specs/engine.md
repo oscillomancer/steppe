@@ -3035,7 +3035,10 @@ absorbing. Clamp the final effective gain to the existing Console 9 ceiling
 sum and applied level are queryable. Ordinary unassigned master behavior is
 unchanged. Mute is the OR of member and controller mute; VCA solo adds its
 transitive track members to the ordinary solo seed set, retaining solo-defeat
-and signal-path reachability. Member fader/envelope data never moves.
+and signal-path reachability. One function decides solo silencing,
+`model::soloSilencedTracks`: plans and `model::effectiveTrackLevel` both call
+it, so the audio and the readouts cannot disagree (ADR-0093). Member
+fader/envelope data never moves.
 
 The combined control is applied before encoding, at the member's fader.
 Post-fader send encoders first clamp the combined source/VCA level at the

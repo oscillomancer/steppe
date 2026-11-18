@@ -4,6 +4,7 @@
 // their channels, sends reach In modules, Notes plays a track's MIDI, knob
 // envelopes move module knobs, and the output does not depend on the block.
 #include <doctest/doctest.h>
+#include <set>
 
 #include <supple/audio/audio_file.h>
 #include <chrono>
@@ -2408,6 +2409,77 @@ TEST_CASE("MIDI sends: solo follows a MIDI send downstream only") {
     CHECK_FALSE(soloSource[source]);
     CHECK_FALSE(soloSource[target]);
     CHECK(soloSource[other]);
+}
+
+TEST_CASE("solo: a plan and the readouts silence the same tracks") {
+    // ADR-0093: one function (model::soloSilencedTracks) decides solo for the
+    // engine's plans and for effectiveTrackLevel, so they cannot disagree.
+    namespace d = supple::engine::detail;
+    model::EditTxn t(model::Session::create({.console9 = false}), 1);
+    auto child = [&](Id parent, model::StripType type = model::StripType::Channel) {
+        model::Track tr;
+        tr.parent = parent;
+        tr.type = type;
+        const Id id = t.create(tr);
+        t.modify<model::Track>(parent, [&](model::Track& m) { m.children.push_back(id); });
+        return id;
+    };
+    const Id folder = child(kMaster, model::StripType::Buss);
+    const Id a = child(folder), b = child(folder);
+    const Id c = addChannel(t);  // an audio send c -> dest
+    const Id dest = child(kMaster, model::StripType::Buss);
+    const Id e = addChannel(t), f = addChannel(t);  // a MIDI send e -> f
+    const Id g = addChannel(t), x = addChannel(t);  // g under a VCA; x defeats solo
+    model::Route send;
+    send.from.track = c;
+    send.to.track = dest;
+    t.create(send);
+    model::Route midi;
+    midi.from.track = e;
+    midi.to.track = f;
+    midi.midi = model::MidiRouting{};
+    t.create(midi);
+    model::TrackGroup group;
+    group.members = {g};
+    group.vca = model::Vca{};
+    const Id vca = t.create(group);
+    t.modify<model::Track>(x, [](auto& tr) { tr.solo = model::Solo::Defeat; });
+    const auto base = commit(t);
+    // Solos `soloed` (and the VCA if asked); returns the silenced tracks.
+    auto silenced = [&](std::vector<Id> soloed, bool vcaSolo = false,
+                        model::Solo how = model::Solo::On) {
+        model::EditTxn edit(base, 2);
+        for (Id id : soloed) edit.modify<model::Track>(id, [&](auto& tr) { tr.solo = how; });
+        if (vcaSolo) edit.modify<model::TrackGroup>(vca, [](auto& gr) { gr.vca->solo = true; });
+        const auto session = commit(edit);
+        auto pool = makePool();
+        auto plan = d::compile(session, pool, 0, 256);
+        REQUIRE(plan);
+        std::set<Id> out;
+        for (const auto& node : plan->nodes) {
+            const bool readout = model::effectiveTrackLevel(session, node.id, 0).soloSilenced;
+            CAPTURE(node.id.str());
+            CHECK(node.soloSilenced == readout);
+            CHECK(model::soloSilencedTracks(session).contains(node.id) == readout);
+            if (node.soloSilenced) out.insert(node.id);
+        }
+        return out;
+    };
+    using Set = std::set<Id>;
+    CHECK(silenced({}).empty());
+    CHECK(silenced({a}) == Set{b, c, dest, e, f, g});  // the sibling too
+    CHECK(silenced({a}, false, model::Solo::InPlace) == Set{b, c, dest, e, f, g});
+    CHECK(silenced({folder}) == Set{c, dest, e, f, g});             // its children stay
+    CHECK(silenced({c}) == Set{folder, a, b, e, f, g});             // its send's target stays
+    CHECK(silenced({dest}) == Set{folder, a, b, e, f, g});          // so does the send's source
+    CHECK(silenced({e}) == Set{folder, a, b, c, dest, g});          // MIDI: downstream
+    CHECK(silenced({f}) == Set{folder, a, b, c, dest, e, g});       // not upstream
+    CHECK(silenced({}, true) == Set{folder, a, b, c, dest, e, f});  // the VCA's member
+    // x defeats solo throughout; the master is never silenced.
+    for (const auto& set : {silenced({a}), silenced({e}), silenced({}, true)}) {
+        CHECK_FALSE(set.contains(x));
+        CHECK_FALSE(set.contains(kMaster));
+    }
 }
 
 TEST_CASE("MIDI sends: channel filter and remap leave system messages alone" *
