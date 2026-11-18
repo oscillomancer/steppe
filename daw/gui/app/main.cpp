@@ -360,9 +360,11 @@ int main(int argc, char** argv) {
     loop.setWaker([p = platform->get()] { p->wake(); });
     std::unique_ptr<rpc::Server> server;
     gui::Shell* eventShell = nullptr;
+    gui::SideBrowser* eventBrowser = nullptr;
     auto publish = [&] {
         for (auto& [topic, payload] : (*app)->takeEvents()) {
             if (eventShell && topic == "record.error") eventShell->recordingError(payload);
+            if (eventBrowser && topic == "audition.error") eventBrowser->auditionFailed(payload);
             if (server) server->publish(topic, payload);
         }
     };
@@ -534,6 +536,7 @@ int main(int argc, char** argv) {
     pluginDrag.addTargets([&mixer](ui::Point p) { return mixer.trackTargetAt(p); });
     pluginDrag.addTargets([&shell](ui::Point p) { return shell.trackTargetAt(p); });
     gui::SideBrowser sideBrowser(root, **app, dispatcher, uiState, fxWindow, pluginDrag);
+    eventBrowser = &sideBrowser;  // a file it plays that cannot be read after all
     // A file from the browser: Add is File > Import's own path; a drag lands
     // as a file dropped from outside the app does.
     sideBrowser.files.add = [&fileActions](const std::filesystem::path& file) {

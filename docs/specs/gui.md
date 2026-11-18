@@ -2087,7 +2087,7 @@ selected, at the playhead; one undo step) and the status line says "Added
 MIDI files here."; a folder that cannot be read says why and the listing
 stays. Up from a root lists the roots as folders under the name
 "Computer" where there are several (the drives on Windows); elsewhere Up
-is disabled at the root. Files are not auditioned.
+is disabled at the root. **Play** (below) hears an audio file first.
 
 A file **drags into the arrangement** (`PluginDrag::dragTo`): the chip
 carries its name, and the place it would land is outlined, the lane of a
@@ -2115,6 +2115,35 @@ playhead; one undo step): `item.add` finds the source by the file's hash,
 so the project gains an item and no second source or copy. A row drags
 into the arrangement as a file does. The status line (`.status`) says
 "Added *file*" or the error. An empty list says nothing.
+
+**Play** (`side.browser.files.play`, `side.browser.media.play`), beside
+Add on the Files and Media pages, lets the chosen audio file be heard
+before it is added: `audition.play` with the file's path (engine.md "File
+audition", ADR-0094), on the device's outputs 1/2, outside the project,
+whether the transport is stopped or playing. It is disabled with no row
+chosen, on a folder and on a MIDI file (there is no instrument to play it
+on). While the file plays the button reads **Stop**, and the page's status
+line says "Reading *file*…" until the file has been read and sounds, then
+"Playing *file*"; for a file longer than the engine's cap, "the first
+10:00 of *file*". Nothing plays on selection alone.
+
+- The Browser stops it (`audition.stop`) at a second press; when another
+  row is chosen or none is (a click, the arrow keys, a search, another
+  folder); when the file is added or dropped into the arrangement; when
+  another kind is shown; and when the Browser goes out of view (another
+  tab, the panel closed).
+- It ends by itself at the file's end, when the engine stops and when
+  another project is opened. The Browser reads the engine's state once per
+  pass of the loop (`SideBrowser::sync`, `EngineApp::auditionStatus`): the
+  button reads Play again at the pass after the end, and the status line
+  stops saying it plays.
+- A file that something else plays in its place (an agent's
+  `audition.play`) is not the Browser's: the button reads Play again and
+  the other file is left playing.
+- An error is said in the status line: the command's (`engine.stopped`,
+  `audition.file`), or the engine's `audition.error` event for a file that
+  could not be read after all.
+- Play keeps its width as Stop, and Add beside it is as wide.
 
 A row of the Plug-ins and Chains pages **drags onto a track**. A left press on a row that
 moves more than four units (`ui::List::onDrag`, `List::kDragSlop`) starts

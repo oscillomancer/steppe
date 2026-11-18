@@ -335,7 +335,7 @@ instructions are in `docs/guides/installing.md`.
   meter, never in renders or recordings), fading out over 5 ms when stopped
   or replaced. Its first ten minutes are read and resampled before it sounds,
   so a long file starts late; it plays from its start only; nothing plays it
-  on selection; the Browser's Play button is not built yet. Armed masters print their output in real
+  on selection; the Browser's Play button is how the GUI reaches it. Armed masters print their output in real
   time onto a lane of their own (ADR-0057): the take is bit-identical to
   `render.mix` of that master in every executor; a master's items play after
   its fader, beside the live mix, with a lane mute, and are silent in the
@@ -634,9 +634,11 @@ instructions are in `docs/guides/installing.md`.
   mixer strip; a folder's audio and MIDI files as a third kind, added as
   File > Import does or dragged into a lane; the audio the project already
   holds as a fourth kind, Media, added or dragged the same way without a
-  second copy; the Browser does not audition files yet (the engine's
-  `audition.play` does, ADR-0094), MIDI sources and how often a source is
-  used are not listed, and rack patches are not in the Browser) and the History
+  second copy; Play on the Files and Media pages hears the chosen audio
+  file before it is added (`audition.play`, ADR-0094: on outputs 1/2, from
+  its start, its first ten minutes, not on selection alone, no MIDI files,
+  no position shown and no level control); MIDI sources and how often a
+  source is used are not listed, and rack patches are not in the Browser) and the History
   as tabs; its tab,
   width and open state are saved per project. Help exports the bundled
   skill as a copy or link, shows this copy's MCP commands and JSON, and registers
