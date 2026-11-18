@@ -53,6 +53,7 @@
 #include "supple/ui/list.h"
 #include "supple/ui/root.h"
 #include "supple/ui/scroll_view.h"
+#include "supple/ui/shortcut.h"
 #include "supple/ui/text_field.h"
 #include "supple/views/envelope_lane.h"
 #include "tap_tempo_button.h"
@@ -312,9 +313,11 @@ TEST_CASE("the status line names the control under the pointer and its keys") {
     CHECK(after(a.root->find("transport.play")) == " · Transport: play/stop (Space)");
     a.snapshot("status-names-2-play.png");
     CHECK(after(a.root->find("transport.start")) == " · Transport: go to start (Home, W)");
+    // The primary modifier is said as the platform says it (Cmd on macOS).
     CHECK(after(a.root->find("tool.history.undo")) ==
-          " · " + a.actions->registry().find("history.undo")->name + " (Ctrl+Z)");
-    CHECK(after(a.root->find("tcp.mixer")) == " · View: mixer (Ctrl+M, Alt+D)");
+          " · " + a.actions->registry().find("history.undo")->name +
+              ui::shortcutLabel(" (Ctrl+Z)"));
+    CHECK(after(a.root->find("tcp.mixer")) == ui::shortcutLabel(" · View: mixer (Ctrl+M, Alt+D)"));
     // A row's button that an action can also reach says the keys once they are bound.
     CHECK(after(tcp.controlNode(*track, "fx")) == " · Plug-in chain");
     CHECK(after(a.root->find("transport.metronome")) == " · Metronome");
