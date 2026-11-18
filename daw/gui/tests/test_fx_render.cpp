@@ -1624,6 +1624,11 @@ TEST_CASE("a disabled plug-in is marked in the FX chain, with Enable on its row"
     // It is not loaded, so there is no editor to open: the button is off, and a double click on
     // the row says why in the status line.
     CHECK_FALSE(f.uiRoot().find("fx.editor." + id)->enabled);
+    // Everything that acts on a plug-in that is not loaded is off; Enable and Remove are not.
+    for (const char* button : {"bypass", "offline", "params", "presets"})
+        CHECK_FALSE(f.uiRoot().find(std::string("fx.") + button + "." + id)->enabled);
+    CHECK(f.uiRoot().find("fx.enable." + id)->enabled);
+    CHECK(f.uiRoot().find("fx.remove." + id)->enabled);
     CHECK(f.uiRoot().find("fx.badge." + id)->valueText().find("disabled") == 0);
     {
         const ui::Rect r = f.uiRoot().find("fx.row." + id)->bounds();
@@ -1631,7 +1636,7 @@ TEST_CASE("a disabled plug-in is marked in the FX chain, with Enable on its row"
         f.uiRoot().pointer({ui::PointerEvent::Type::Down, at, 1, 2, 0});
         f.uiRoot().pointer({ui::PointerEvent::Type::Up, at, 1, 2, 0});
         f.frame();
-        CHECK(f.uiRoot().find("fx.status")->valueText().find("is not loaded") != std::string::npos);
+        CHECK(f.uiRoot().find("fx.status")->valueText().find("not loaded") != std::string::npos);
     }
     REQUIRE(f.click("fx.enable." + id));
     REQUIRE(enabled.size() == 1);
@@ -1682,6 +1687,15 @@ TEST_CASE("a failed effect links to the report its bridge's death left") {
     f.frame();
     REQUIRE(f.uiRoot().find("fx.report." + id));
     CHECK(f.uiRoot().find("fx.report." + id)->valueText() == "Show report");
+    // Next to Restart on the first line; the mode stays quiet and only "failed" is red.
+    CHECK(f.uiRoot().find("fx.report." + id)->parent() ==
+          f.uiRoot().find("fx.restart." + id)->parent());
+    CHECK(f.uiRoot().find("fx.badge." + id)->valueText() == "in-process (default) \u00b7 failed");
+    const auto* badge = dynamic_cast<ui::RichText*>(f.uiRoot().find("fx.badge." + id));
+    REQUIRE(badge);
+    REQUIRE(badge->runs().size() == 2);
+    CHECK(badge->runs()[0].colorToken == "ink-quiet");
+    CHECK(badge->runs()[1].colorToken == "clip");
     f.snapshot("fx-failed-report.png");
     CHECK(f.fx->incidentOf(id) == "0123456789abcdef0123456789abcdef");
     REQUIRE(f.click("fx.report." + id));

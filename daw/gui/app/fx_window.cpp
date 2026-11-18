@@ -59,7 +59,7 @@ class Row : public ui::Node {
         if (selected) c.fillRound(bounds(), t.radius("s"), t.color("selection").withAlpha(0.55f));
         if (dragged) c.fillRound(bounds(), t.radius("s"), t.color("ground").withAlpha(0.5f));
         const ui::Rect b = bounds();
-        if (disabledMark) c.fillRect({b.x, b.y + 1, 3.0f, b.h - 2}, t.color("meter-hot"));
+        if (disabledMark) c.fillRect({b.x, b.y + 1, 2.0f, b.h - 2}, t.color("meter-hot"));
         if (markerTop) c.fillRect({b.x, b.y - 3, b.w, 3}, t.color("focus"));
         if (markerBottom) c.fillRect({b.x, b.bottom(), b.w, 3}, t.color("focus"));
     }
@@ -1059,8 +1059,8 @@ void FxWindow::press(model::Id fx, unsigned mods, int clicks) {
             if (selected_ != fx || !picked_.empty()) select(fx);
             if (disabledFx(fx)) {
                 setStatus(nameOf(fx) +
-                          " is not loaded: it was disabled for this run. Enable it "
-                          "to open its editor.");
+                          " is disabled for this run and not loaded. Enable it to "
+                          "open its editor.");
                 return;
             }
             if (hooks_.openEditor)
@@ -1277,11 +1277,11 @@ void FxWindow::buildRow(ui::Node& body, model::Id fx, std::size_t index, bool in
         l1.emplace<ui::Label>(prefix + "number." + id, number, ui::Font::Mono, "caption",
                               "ink-quiet");
         auto& name = l1.emplace<ui::Label>(prefix + "name." + id, nameOf(fx), ui::Font::Ui, "small",
-                                           isDisabled ? "ink-faint" : "ink");
-        name.layout.width = ui::SizeRule::fixed(160);
+                                           isDisabled ? "ink-quiet" : "ink");
+        name.layout.width = ui::SizeRule::fixed(110);
         auto& latency = l1.emplace<ui::Label>(prefix + "latency." + id, latencyOf(fx),
                                               ui::Font::Mono, "caption", "ink-quiet");
-        latency.layout.width = ui::SizeRule::fixed(80);
+        latency.layout.width = ui::SizeRule::fixed(64);
         // A disabled plug-in has nothing to restart: what is wanted is to load it again.
         if (isDisabled && hooks_.enableFx)
             l1.emplace<ui::Button>(prefix + "enable." + id, "Enable",
@@ -1297,17 +1297,27 @@ void FxWindow::buildRow(ui::Node& body, model::Id fx, std::size_t index, bool in
                     refresh();
                 }
             });
+        // The two answers to a failure side by side: restart it, or read what it left.
+        if (isFailed && hooks_.showCrashReport && !incidentOf(id).empty())
+            l1.emplace<ui::Button>(
+                  prefix + "report." + id, "Show report",
+                  [this, report = incidentOf(id)] { hooks_.showCrashReport(report); })
+                .quiet = true;
 
         // Bypass, offline and remove act on every selected effect when the
         // row is one of several selected (gui.md §4.5).
+        // Acting on a plug-in that is not loaded means nothing: those buttons are off, and Enable
+        // is the one boxed button the row has.
         l1.emplace<ui::Button>(prefix + "bypass." + id, inst->bypass ? "bypassed" : "bypass",
                                [this, fx, bypass = inst->bypass] {
                                    if (setEach(fx, "bypass", !bypass)) refresh();
-                               });
+                               })
+            .enabled = !isDisabled;
         l1.emplace<ui::Button>(prefix + "offline." + id, inst->offline ? "offlined" : "offline",
                                [this, fx, offline = inst->offline] {
                                    if (setEach(fx, "offline", !offline)) refresh();
-                               });
+                               })
+            .enabled = !isDisabled;
         // A plug-in that is not loaded has no editor to open (the row's second line says why).
         l1.emplace<ui::Button>(prefix + "editor." + id, "UI", [this, fx] {
               if (hooks_.openEditor) {
@@ -1316,11 +1326,13 @@ void FxWindow::buildRow(ui::Node& body, model::Id fx, std::size_t index, bool in
               }
           }).enabled = !isDisabled;
         l1.emplace<ui::Button>(prefix + "params." + id, "params", [this, fx] {
-            selected_ = fx;
-            showParamsTab();
-        });
-        l1.emplace<ui::Button>(prefix + "presets." + id, "presets", [this, fx] { presetMenu(fx); });
-        l1.emplace<ui::Button>(prefix + "remove." + id, "Remove", [this, fx] {
+              selected_ = fx;
+              showParamsTab();
+          }).enabled = !isDisabled;
+        l1.emplace<ui::Button>(prefix + "presets." + id, "presets", [this, fx] {
+              presetMenu(fx);
+          }).enabled = !isDisabled;
+        auto& remove = l1.emplace<ui::Button>(prefix + "remove." + id, "Remove", [this, fx] {
             const std::vector<model::Id> each = targets(fx);
             auto removed = dispatcher_.transact(
                 each.size() > 1 ? "Remove effects" : "Remove effect", kUiOrigin,
@@ -1342,27 +1354,32 @@ void FxWindow::buildRow(ui::Node& body, model::Id fx, std::size_t index, bool in
             }
             refresh();
         });
+        remove.quiet = isDisabled;  // Enable is the one boxed button of a disabled row
     }
     {
         auto& l2 = line(row, prefix + "line2." + id);
         // A disabled plug-in does not run anywhere: what the badge would say is replaced by why.
-        auto& badge =
-            isDisabled
-                ? l2.emplace<ui::Label>(prefix + "badge." + id,
-                                        "disabled after an unexpected close \u00b7 audio passes "
-                                        "through",
-                                        ui::Font::Ui, "caption", "ink-quiet")
-                : l2.emplace<ui::Label>(prefix + "badge." + id,
-                                        badgeText(*inst, app_.effectiveIsolation(fx), isFailed),
-                                        ui::Font::Mono, "caption", isFailed ? "clip" : "ink-faint");
+        // A failed one says "failed" in red after the mode in quiet ink, and no more red than that.
+        ui::Node* badge = nullptr;
+        if (isDisabled) {
+            badge = &l2.emplace<ui::Label>(prefix + "badge." + id,
+                                           "disabled after an unexpected close \u00b7 audio passes "
+                                           "through",
+                                           ui::Font::Ui, "caption", "ink-quiet");
+        } else if (isFailed) {
+            badge = &l2.emplace<ui::RichText>(
+                prefix + "badge." + id,
+                std::vector<ui::TextRun>{{badgeText(*inst, app_.effectiveIsolation(fx), false),
+                                          ui::Font::Mono, "ink-quiet"},
+                                         {" \u00b7 failed", ui::Font::Mono, "clip"}},
+                "caption");
+        } else {
+            badge = &l2.emplace<ui::Label>(prefix + "badge." + id,
+                                           badgeText(*inst, app_.effectiveIsolation(fx), false),
+                                           ui::Font::Mono, "caption", "ink-faint");
+        }
         // Room for the longest: "shared bridge (default) · offline · failed".
-        badge.layout.width = ui::SizeRule::fixed(isDisabled ? 340 : 296);
-        // Beside the state it explains (line 1 has no room): a failed effect's report.
-        if (isFailed && hooks_.showCrashReport && !incidentOf(id).empty())
-            l2.emplace<ui::Button>(
-                  prefix + "report." + id, "Show report",
-                  [this, report = incidentOf(id)] { hooks_.showCrashReport(report); })
-                .quiet = true;
+        badge->layout.width = ui::SizeRule::fixed(isDisabled ? 340 : 296);
         auto* wetLabel = &l2.emplace<ui::Label>(prefix + "wetlabel." + id, "", ui::Font::Mono,
                                                 "caption", "ink-quiet");
         wetLabel->layout.width = ui::SizeRule::fixed(76);
