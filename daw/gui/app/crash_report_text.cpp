@@ -253,10 +253,29 @@ ReportPage describeReport(const json::Value& report, const std::string& saved) {
                                                num(report, "code"),
                                                flag(report, "native_fatal_status")));
     }
+    // A separate process that wrote down where it stopped itself (the report's `capture`): said
+    // as that, since a plug-in runs in that process and could have written the account too.
+    const bool ownAccount = kind == "bridge_exit" && str(report, "capture") == "bridge";
     if (kind == "bridge_exit") {
         page.sentences.push_back(std::string(product::kName) +
                                  " kept running. A plug-in's separate process is the host's "
                                  "protection against exactly this.");
+        if (ownAccount && level == "fault_in_image") {
+            page.sentences.push_back(
+                "The process wrote down where it stopped itself: inside " +
+                (points ? who(namedName, namedVendor) + "'s" : std::string("a listed plug-in's")) +
+                " code. A plug-in runs in that process and could have written that account too, "
+                "so it points at the plug-in but does not prove it.");
+        } else if (ownAccount && level == "active_token") {
+            page.sentences.push_back(
+                std::string(points ? who(namedName, namedVendor) : "A plug-in") +
+                " was running on the thread that stopped, but where it stopped was in code the "
+                "report could not identify. The process wrote that account itself: a clue, not "
+                "proof.");
+        } else if (ownAccount) {
+            page.sentences.push_back(
+                "The process wrote down where it stopped itself (below). It names no plug-in.");
+        }
     } else if (level == "fault_in_image") {
         page.sentences.push_back(
             "The program stopped inside " +
@@ -361,7 +380,10 @@ ReportPage describeReport(const json::Value& report, const std::string& saved) {
         s.count = threads->size();
         s.note =
             "Where each thread was. A frame is a place in a program or plug-in file, as an offset "
-            "from where that file was loaded; no names of functions are kept.";
+            "from where that file was loaded; no names of functions are kept." +
+            std::string(ownAccount ? " The process that stopped wrote these itself, and could read "
+                                     "only the thread that stopped."
+                                   : "");
         for (const auto& t : *threads) {
             std::string head = threadRole(str(t, "role"));
             if (str(t, "state") == "walked") {

@@ -4244,6 +4244,44 @@ TEST_CASE("crash report text: causes in words, and a report read as far as it ca
     CHECK(died.text().find("kept running") != std::string::npos);
     CHECK(died.text().find("Process 1 · ended by a signal (status 11) · Canary Verb") !=
           std::string::npos);
+    // A bridge that wrote its own account says so, and does not claim more than that.
+    const auto own = [](const char* level, const char* plugin) {
+        return json::parse(
+            std::string(R"({"kind":"bridge_exit","platform":"linux","role":"gui","code":11,)"
+                        R"("cause":0,"bridge":1,"capture":"bridge",)"
+                        R"("modules":[{"format":"elf","id":"aabb"}],)"
+                        R"("threads":[{"ordinal":0,"role":"fault","state":"walked","stop":"end",)"
+                        R"("frames":[{"module":0,"offset":"0x10","return":false}]},)"
+                        R"({"ordinal":1,"role":"bridge_control","state":"unavailable",)"
+                        R"("reason":"not_collected","frames":[]}],)"
+                        R"("plugins":[{"id":0,"name":"Canary Verb","vendor":"Acme","bridge":1,)"
+                        R"("build":{"format":"elf","id":"aabb"}}],)"
+                        R"("bridges":[{"id":1,"state":"ended","ended":{"how":"signal","code":11},)"
+                        R"("instances":[0]}],"attribution":{"confidence":")") +
+            level + R"(","plugin":)" + plugin + "}}");
+    };
+    const auto image = own("fault_in_image", "0");
+    REQUIRE(image);
+    const auto inImage = gui::describeReport(*image, "1 Jan 2030, 09:00");
+    CHECK(inImage.headline.find("Canary Verb by Acme was running in a separate process") == 0);
+    CHECK(inImage.text().find("The process wrote down where it stopped itself: inside Canary Verb "
+                              "by Acme's code.") != std::string::npos);
+    CHECK(inImage.text().find("could have written that account too") != std::string::npos);
+    CHECK(inImage.text().find("does not prove it") != std::string::npos);
+    CHECK(inImage.text().find("wrote these itself") != std::string::npos);  // the threads' note
+    CHECK(inImage.text().find("#0  Canary Verb +0x10  (where it stopped)") != std::string::npos);
+    CHECK(inImage.text().find("Plug-in process: control thread · not read: it was not collected") !=
+          std::string::npos);
+    const auto token = own("active_token", "0");
+    REQUIRE(token);
+    CHECK(gui::describeReport(*token, "").text().find("a clue, not proof") != std::string::npos);
+    const auto nobody = own("bridge_exit", "null");
+    REQUIRE(nobody);
+    const auto none = gui::describeReport(*nobody, "");
+    CHECK(none.text().find("It names no plug-in.") != std::string::npos);
+    CHECK(none.headline.find("A separate process that runs plug-ins stopped.") == 0);
+    // A bridge report without the capsule says none of this.
+    CHECK(died.text().find("wrote down where it stopped itself") == std::string::npos);
     // A kind this version does not know is said to be unknown, and what it holds is still shown.
     const auto future = json::parse(
         R"({"kind":"from_the_future","plugins":[{"id":0,"name":"Canary Verb","vendor":"Acme"}]})");

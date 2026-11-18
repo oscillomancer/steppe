@@ -2768,7 +2768,12 @@ was saved, by which build, on what, and in which app; then Copy summary (the box
 seen (quiet), and Delete (quiet, at the far end); then the sentences: what stopped it (a signal or Windows exception in
 words, `std::terminate`, `abort()`, or an exit status), what the report points at and how far to
 trust it ("a clue, not proof"), and that nothing was sent: the first sentence in `small` `ink`, the rest under
-it in `caption`, `ink-quiet`. The technical detail is below, every
+it in `caption`, `ink-quiet`. For a separate process that stopped and wrote down where it stopped itself (the
+report's `capture` is `bridge`; topic 6c) the page says that, after "kept running": "The process wrote down where it
+stopped itself: inside *the plug-in's* code. A plug-in runs in that process and could have written that account too, so
+it points at the plug-in but does not prove it" (`fault_in_image`; for `active_token`, "a clue, not proof"; with no plug-in
+named, "It names no plug-in"), and the threads' note adds that the process wrote them itself and could read only the thread
+that stopped; the headline names the plug-in as for any report of that kind. The technical detail is below, every
 section folded: a heading with the title in bold over a `rule`, its count quiet after it and Show or Hide at
 the right (the whole row takes the click), and a body that starts at the heading's left edge, with the data (plug-ins,
 frames, commands) in the mono face and full `ink` on an inset in the `well` colour, and the explanations as `caption` lines: the plug-ins the program had loaded (by their own names;
