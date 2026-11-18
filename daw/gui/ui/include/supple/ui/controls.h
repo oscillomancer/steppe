@@ -154,6 +154,17 @@ class Meter : public Node {
     void reset();
     bool clipped() const { return clip_[0] || clip_[1]; }
     float shownPeakDb(int channel) const { return peakDb_[channel]; }
+    // The highest peak of either channel since reset(), clearPeak() or a
+    // click, in dB (kNoPeak: none yet). `onPeak` runs when it moves by a
+    // tenth of a dB or clears: a readout beside the meter follows it.
+    static constexpr float kNoPeak = -150;
+    float maxPeakDb() const { return maxDb_; }
+    void clearPeak();  // the maximum, the held peaks and the clip lights
+    std::function<void()> onPeak;
+    // Where `db` sits along a lane: 0 at the floor (-60 dB), 1 at +6 dB. A
+    // vertical meter's lanes start kClipLight under its top edge.
+    static float position(float db);
+    static constexpr float kClipLight = 4;
     void paint(Canvas& canvas) override;
     bool onPointer(const PointerEvent& e) override;
     void tick(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
@@ -163,6 +174,7 @@ class Meter : public Node {
   private:
     bool vertical_;
     float peakDb_[2] = {-150, -150}, rmsDb_[2] = {-150, -150}, holdDb_[2] = {-150, -150};
+    float maxDb_ = kNoPeak;
     std::chrono::steady_clock::time_point holdAt_[2]{}, last_{};
     bool clip_[2] = {false, false};
 };

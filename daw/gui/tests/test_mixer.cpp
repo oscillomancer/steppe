@@ -1058,6 +1058,35 @@ TEST_CASE("mixer: the chain's empty part takes a double-click (plugin browser); 
     CHECK(outputs[0] == model::kMaster);
 }
 
+TEST_CASE("mixer: a strip shows its meter's highest peak under it; a click clears it") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    f.refresh();
+    REQUIRE(f.strip(a).meter);
+    REQUIRE(f.strip(a).peak);
+    REQUIRE(f.node("mixer.scale." + a));
+    CHECK(f.strip(a).peak->valueText().empty());  // nothing heard yet
+    const float half[2] = {0.5f, 0.25f}, quiet[2] = {0.1f, 0.1f}, rms[2] = {0.1f, 0.1f};
+    f.strip(a).meter->push(half, rms);
+    CHECK(f.strip(a).peak->valueText() == "-6.0");
+    f.strip(a).meter->push(quiet, rms);
+    CHECK(f.strip(a).peak->valueText() == "-6.0");  // the highest, not the last
+    const float over[2] = {0.5f, 1.2f};
+    f.strip(a).meter->push(over, rms);
+    CHECK(f.strip(a).peak->valueText() == "+1.6");
+    f.root->frame(false);
+    f.snapshot("mixer-peak.png");
+    // The value under the fader is beside it, as before.
+    CHECK(f.strip(a).value->valueText() == "+0.0");
+    CHECK(f.strip(a).value->bounds().right() <= f.strip(a).peak->bounds().x + 0.5f);
+    const ui::Point at = f.centre(f.strip(a).peak);
+    f.pointer(ui::PointerEvent::Type::Down, at);
+    f.pointer(ui::PointerEvent::Type::Up, at);
+    CHECK(f.strip(a).peak->valueText().empty());
+    CHECK_FALSE(f.strip(a).meter->clipped());
+}
+
 TEST_CASE("mixer: an empty chain's line adds a plug-in; a bypassed or offline one says so") {
     Fixture f;
     if (!f.ok) return;

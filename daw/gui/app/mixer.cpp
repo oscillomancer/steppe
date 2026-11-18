@@ -315,6 +315,57 @@ class RackSlot : public ui::Button {
     std::string name_;
 };
 
+// The dB marks of a strip's meter, beside it: 0, then how far under it.
+class MeterScale : public ui::Node {
+  public:
+    explicit MeterScale(std::string id) : Node(std::move(id)) {
+        layout.width = ui::SizeRule::fixed(15);
+        layout.height = ui::SizeRule::fraction();
+    }
+    void paint(ui::Canvas& c) override {
+        const ui::Theme& t = c.theme();
+        const ui::Rect b = bounds();
+        const float top = b.y + ui::Meter::kClipLight, lane = b.h - ui::Meter::kClipLight;
+        for (int db : {0, -6, -12, -24, -48}) {
+            const float y = top + (1 - ui::Meter::position(static_cast<float>(db))) * lane;
+            c.text({b.x, y - 6, b.w, 12}, std::to_string(-db), ui::Font::Mono, t.type("caption"),
+                   t.color(db == 0 ? "ink-quiet" : "ink-faint"), ui::kRight | ui::kMiddle);
+        }
+    }
+};
+
+// The highest peak a strip's meter has shown, in dB, under the meter: empty
+// until there is one, in the clip colour over 0 dB. A click clears it, as a
+// click on the meter does.
+class PeakReadout : public ui::Node {
+  public:
+    PeakReadout(std::string id, ui::Meter& meter) : Node(std::move(id), ui::Role::Label) {
+        interactive = true;
+        meter_ = &meter;
+        meter.onPeak = [this] { invalidate(); };
+    }
+    std::string valueText() const override {
+        const float db = meter_->maxPeakDb();
+        if (db <= ui::Meter::kNoPeak) return {};
+        char buf[24];
+        std::snprintf(buf, sizeof buf, "%+.1f", static_cast<double>(db));
+        return buf;
+    }
+    void paint(ui::Canvas& c) override {
+        const ui::Theme& t = c.theme();
+        c.text(bounds(), valueText(), ui::Font::Mono, t.type("caption"),
+               t.color(meter_->maxPeakDb() > 0 ? "clip" : "ink-quiet"), ui::kCenter | ui::kMiddle);
+    }
+    bool onPointer(const ui::PointerEvent& e) override {
+        if (e.type != ui::PointerEvent::Type::Down || e.button != 1) return false;
+        meter_->clearPeak();
+        return true;
+    }
+
+  private:
+    ui::Meter* meter_;
+};
+
 // A strip's plug-ins, one per row, scrolled by the wheel or a bar when the
 // chain is longer than the room the panel gives it.
 class FxList : public ui::Node {
@@ -1258,7 +1309,9 @@ void Mixer::rebuild() {
         auto& spacer = faderRow.emplace<ui::Node>("mixer.spacer." + tid);
         spacer.layout.width = ui::SizeRule::fraction();
         st.fader = &faderRow.emplace<ui::Fader>("mixer.fader." + tid);
+        faderRow.emplace<MeterScale>("mixer.scale." + tid);
         st.meter = &faderRow.emplace<ui::Meter>("mixer.meter." + tid);
+        st.meter->layout.width = ui::SizeRule::fixed(14);
         auto& spacer2 = faderRow.emplace<ui::Node>("mixer.spacer2." + tid);
         spacer2.layout.width = ui::SizeRule::fraction();
         st.fader->onChange = [this, tid, control = st.fader](double db, ui::Gesture g) {
@@ -1272,10 +1325,16 @@ void Mixer::rebuild() {
                           : "",
                       bool(control->gestureModifiers() & ui::kAlt));
         };
-        st.value = &frame->emplace<ui::Label>("mixer.value." + tid, dbText(t.volumeDb),
+        // Under the fader its value; under the meter the highest peak shown.
+        auto& values = frame->emplace<ui::Node>("mixer.values." + tid);
+        values.layout.dir = ui::Layout::Dir::Row;
+        values.layout.height = ui::SizeRule::fixed(14);
+        st.value = &values.emplace<ui::Label>("mixer.value." + tid, dbText(t.volumeDb),
                                               ui::Font::Mono, "caption", "ink-quiet");
         st.value->align = ui::kCenter | ui::kMiddle;
-        st.value->layout.height = ui::SizeRule::fixed(14);
+        st.value->layout.width = ui::SizeRule::fraction();
+        st.peak = &values.emplace<PeakReadout>("mixer.peak." + tid, *st.meter);
+        st.peak->layout.width = ui::SizeRule::fraction();
         auto& ms = frame->emplace<ui::Node>("mixer.ms." + tid);
         ms.layout.dir = ui::Layout::Dir::Row;
         ms.layout.height = ui::SizeRule::fixed(20);

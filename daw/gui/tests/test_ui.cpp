@@ -787,9 +787,30 @@ TEST_CASE("mixer controls: fader taper and gestures, pan, meter hold and clip, t
     meter.push(peak, rms);
     CHECK(meter.clipped());
     CHECK(meter.shownPeakDb(1) == doctest::Approx(20 * std::log10(0.5)).epsilon(0.01));
+    // Its highest peak stays until a click or a reset, and is told in tenths.
+    int told = 0;
+    meter.onPeak = [&] { ++told; };
+    CHECK(meter.maxPeakDb() == doctest::Approx(20 * std::log10(1.2)).epsilon(0.01));
+    const float lower[2] = {0.25f, 0.25f};
+    meter.push(lower, rms);
+    CHECK(meter.maxPeakDb() == doctest::Approx(20 * std::log10(1.2)).epsilon(0.01));
+    CHECK(told == 0);
+    const float barely[2] = {1.2001f, 0.5f}, higher[2] = {1.5f, 0.5f};
+    meter.push(barely, rms);
+    CHECK(told == 0);  // under a tenth of a dB: nothing new to show
+    meter.push(higher, rms);
+    CHECK(told == 1);
+    CHECK(Meter::position(-60) == doctest::Approx(0));
+    CHECK(Meter::position(6) == doctest::Approx(1));
+    CHECK(Meter::position(0) > Meter::position(-6));
     root.frame(false);
     CHECK(root.click("meter"));
     CHECK_FALSE(meter.clipped());
+    CHECK(meter.maxPeakDb() == Meter::kNoPeak);
+    CHECK(told == 2);
+    meter.reset();  // nothing held: nothing to tell
+    CHECK(told == 2);
+    meter.onPeak = {};
     // Toggle.
     CHECK(root.click("solo"));
     CHECK(soloed);

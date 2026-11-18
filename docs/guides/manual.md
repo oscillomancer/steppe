@@ -351,6 +351,15 @@ name. Where an item fades in or out, the faded part is shaded and the fade's
 curve is drawn over it. A selected item is brighter and has an outline in the
 accent colour.
 
+### Levels in the mixer
+
+Each mixer strip has a meter beside its fader. The numbers along the meter
+are decibels: **0** is full scale, and 6, 12, 24 and 48 are that far under
+it. The number under the fader is the fader's own setting. The number under
+the meter is the highest peak the track has reached since you last cleared
+it; it turns red when the peak went over 0 dB, as the light at the top of
+the meter does. Click that number or the meter to clear both.
+
 ### The side panel
 
 A panel at the right of the window holds the **Inspector**, the **Browser**

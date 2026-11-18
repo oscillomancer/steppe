@@ -537,13 +537,27 @@ void Meter::reset() {
         peakDb_[ch] = rmsDb_[ch] = holdDb_[ch] = -150;
         clip_[ch] = false;
     }
+    const bool had = maxDb_ > kNoPeak;
+    maxDb_ = kNoPeak;
     invalidate();
+    if (had && onPeak) onPeak();
 }
+
+void Meter::clearPeak() {
+    clip_[0] = clip_[1] = false;
+    holdDb_[0] = holdDb_[1] = -150;
+    const bool had = maxDb_ > kNoPeak;
+    maxDb_ = kNoPeak;
+    invalidate();
+    if (had && onPeak) onPeak();
+}
+
+float Meter::position(float db) { return meterPos(db); }
 
 void Meter::push(const float peak[2], const float rms[2],
                  std::chrono::steady_clock::time_point now) {
     tick(now);
-    bool moved = false;
+    bool moved = false, told = false;
     for (int ch = 0; ch < 2; ++ch) {
         const float p = toDb(peak[ch]), r = toDb(rms[ch]);
         if (p > peakDb_[ch]) {
@@ -559,8 +573,14 @@ void Meter::push(const float peak[2], const float rms[2],
             holdAt_[ch] = now;
         }
         if (peak[ch] >= 1.0f) clip_[ch] = true;
+        if (p > maxDb_) {
+            // Told in tenths: a readout has nothing new to show for less.
+            if (std::round(p * 10) != std::round(maxDb_ * 10)) told = true;
+            maxDb_ = p;
+        }
     }
     if (moved) invalidate();
+    if (told && onPeak) onPeak();
 }
 
 void Meter::tick(std::chrono::steady_clock::time_point now) {
@@ -645,9 +665,7 @@ void Meter::paint(Canvas& c) {
 
 bool Meter::onPointer(const PointerEvent& e) {
     if (e.type == PointerEvent::Type::Down && e.button == 1) {
-        clip_[0] = clip_[1] = false;
-        holdDb_[0] = holdDb_[1] = -150;
-        invalidate();
+        clearPeak();
         return true;
     }
     return false;

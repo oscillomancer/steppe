@@ -777,7 +777,15 @@ checked and a pick runs `track.set {hw_output}`. While the engine is stopped
 the menu offers None and says the engine lists the outputs); then one row with the small polarity pill ("Ø"), monitoring
 (channels) and the mono pill (ADR-0022), above the pan. Everything under the
 chain has a fixed height and the chain takes what a strip's missing rows
-leave, so every strip's fader sits at the same height. The strip's plug-in chain lists every plug-in,
+leave, so every strip's fader sits at the same height. Between the fader
+and the meter is the meter's scale (`mixer.scale.<track>`): 0, then 6, 12,
+24 and 48 for the dB under it, at the places `ui::Meter::position` gives.
+Under the fader is its value (`mixer.value.<track>`); under the meter the
+highest peak it has shown since it was last cleared (`mixer.peak.<track>`,
+`ui::Meter::maxPeakDb`), in dB with a sign and one decimal, empty until
+there is one and in the clip colour over 0 dB. A click on that number or
+on the meter clears it, with the held peaks and the clip lights; so does
+reopening the mixer. The strip's plug-in chain lists every plug-in,
 after a channel's rack slots: one line per rack whose Out feeds the channel
 (`racks::racksFeeding`), in route order, with the rack's name on a rack
 module's face and a faint "rack". A click on one opens the rack window on
