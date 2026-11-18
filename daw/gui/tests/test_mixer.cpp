@@ -1058,6 +1058,52 @@ TEST_CASE("mixer: the chain's empty part takes a double-click (plugin browser); 
     CHECK(outputs[0] == model::kMaster);
 }
 
+TEST_CASE("mixer: an empty chain's line adds a plug-in; a bypassed or offline one says so") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::string> added;
+    f.actions->addUi("ui.fx.add", "FX: add plugin…", "track", [&](const json::Value& v) -> Status {
+        added.push_back(v.isString() ? v.asString() : v.find("track")->asString());
+        return {};
+    });
+    const auto a = f.addTrack("channel", "A");
+    const auto b = f.addTrack("channel", "B");
+    const auto p1 = f.addFx(b, "Hickory");
+    const auto p2 = f.addFx(b, "Hickory");
+    const auto p3 = f.addFx(b, "Hickory");
+    f.exec("fx.set", R"({"fx":")" + p2 + R"(","bypass":true})");
+    f.exec("fx.set", R"({"fx":")" + p3 + R"(","offline":true})");
+    f.refresh();
+    // The empty chain's first row is the line; one click, and a double-click's
+    // second press opens nothing more.
+    const ui::Rect chain = f.strip(a).chain->bounds();
+    const ui::Point line{chain.x + chain.w / 2, chain.y + 9};
+    f.pointer(ui::PointerEvent::Type::Down, line);
+    f.pointer(ui::PointerEvent::Type::Up, line);
+    CHECK(added == std::vector<std::string>{a});
+    f.pointer(ui::PointerEvent::Type::Down, line, 2);
+    f.pointer(ui::PointerEvent::Type::Up, line);
+    CHECK(added == std::vector<std::string>{a});
+    // Under the line the chain's empty part is as it was: a double-click.
+    const ui::Point below{line.x, chain.y + 40};
+    f.pointer(ui::PointerEvent::Type::Down, below);
+    f.pointer(ui::PointerEvent::Type::Up, below);
+    CHECK(added.size() == 1);
+    f.pointer(ui::PointerEvent::Type::Down, below, 2);
+    f.pointer(ui::PointerEvent::Type::Up, below);
+    CHECK(added == std::vector<std::string>{a, a});
+    // A plug-in's name is its own; its state is told apart from it.
+    const std::string name = f.node("mixer.fx." + p1)->valueText();
+    CHECK(name.find('~') == std::string::npos);
+    CHECK(name.find('(') == std::string::npos);
+    CHECK(f.node("mixer.fx." + p2)->valueText() == name + " (bypassed)");
+    CHECK(f.node("mixer.fx." + p3)->valueText() == name + " (offline)");
+    f.exec("fx.set", R"({"fx":")" + p2 + R"(","bypass":false})");
+    f.refresh();
+    CHECK(f.node("mixer.fx." + p2)->valueText() == name);
+    f.snapshot("mixer-chain-states.png");
+}
+
 TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
     Fixture f;
     if (!f.ok) return;

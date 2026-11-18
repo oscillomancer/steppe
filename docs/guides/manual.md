@@ -940,11 +940,13 @@ for other hosts is listed as shadowed and never loaded. `--plugin-path P`
 (repeatable) replaces the whole list.
 
 To add an effect or instrument, use the **+** beside **fx** on a track or
-mixer strip. The **fx** button opens the
+mixer strip, or click **+ plug-in** at the top of a strip that has none. The
+**fx** button opens the
 track's FX chain, including when it is empty. In the mixer, right-click a
 plugin to rename, duplicate or delete it; a duplicate keeps the plugin's
 current settings and goes right after it. Alt-click (Option-click on macOS)
-also deletes a plugin.
+also deletes a plugin. A bypassed plugin's name is dimmed and struck through
+on its strip; one taken offline is dimmed inside a dashed outline.
 The chain window's **<** and **>** at the top left step to the previous or
 next track, bus or master in mixer order, and clicking its title lists them
 all to pick from.

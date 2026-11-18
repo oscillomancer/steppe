@@ -782,7 +782,12 @@ after a channel's rack slots: one line per rack whose Out feeds the channel
 (`racks::racksFeeding`), in route order, with the rack's name on a rack
 module's face and a faint "rack". A click on one opens the rack window on
 the rack (a double-click's second press does nothing more); a right-click
-is the strip's. The chain scrolls when it is
+is the strip's. A bypassed plug-in's name is dimmed and struck through; an
+offline one's is dimmed inside a dashed outline (their `valueText` ends in
+" (bypassed)" or " (offline)"). An empty chain shows one quiet line at its
+top, "+ plug-in", lit under the pointer: a click on it opens the plugin
+browser for the strip, as the strip's "+" does (a frozen track has none).
+The chain scrolls when it is
 longer than its section, and takes the room a strip's
 unused rows would leave (sends show only when there are some, two rows of
 them, scrolled by the wheel or a bar when there are more; busses have no arm

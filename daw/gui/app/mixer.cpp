@@ -155,6 +155,51 @@ class FxSlot : public DragButton {
     const std::size_t chainIndex;         // its place in the track's chain
     std::function<void()> remove;         // Alt+click
     std::function<void(ui::Point)> menu;  // a right-click (not the track's menu)
+    // What the plug-in is doing: a bypassed one's name is dimmed and struck
+    // through; an offline (unloaded) one's is dimmed inside a dashed outline.
+    enum class State { On, Bypassed, Offline };
+    State state = State::On;
+    std::string valueText() const override {
+        const std::string name = Button::valueText();
+        return state == State::Bypassed  ? name + " (bypassed)"
+               : state == State::Offline ? name + " (offline)"
+                                         : name;
+    }
+    void paint(ui::Canvas& c) override {
+        const ui::Theme& t = c.theme();
+        const ui::Rect b = bounds();
+        const ui::Color face = !enabled    ? t.color("panel")
+                               : pressed() ? t.color("selection")
+                               : hovered() ? t.color("raised")
+                                           : t.color("panel");
+        c.fillRound(b, t.radius("s"), face);
+        if (state == State::Offline && !focused()) {
+            // Dashes, three units on and three off, along each edge.
+            const ui::Color ink = t.color("ink-faint");
+            for (float x = b.x + 2; x < b.right() - 2; x += 6) {
+                const float end = std::min(x + 3, b.right() - 2);
+                c.line({x, b.y + 0.5f}, {end, b.y + 0.5f}, ink);
+                c.line({x, b.bottom() - 0.5f}, {end, b.bottom() - 0.5f}, ink);
+            }
+            for (float y = b.y + 2; y < b.bottom() - 2; y += 6) {
+                const float end = std::min(y + 3, b.bottom() - 2);
+                c.line({b.x + 0.5f, y}, {b.x + 0.5f, end}, ink);
+                c.line({b.right() - 0.5f, y}, {b.right() - 0.5f, end}, ink);
+            }
+        } else {
+            c.strokeRound(b, t.radius("s"), focused() ? t.color("focus") : t.color("rule"));
+        }
+        const std::string name = Button::valueText();
+        const float size = t.type("small");
+        c.text(b, name, ui::Font::UiBold, size,
+               t.color(enabled && state == State::On ? "ink" : "ink-faint"),
+               ui::kCenter | ui::kMiddle);
+        if (state == State::Bypassed) {
+            const float w = std::min(b.w - 4, c.textWidth(name, ui::Font::UiBold, size));
+            const float mid = b.x + b.w / 2, y = std::round(b.y + b.h / 2) + 0.5f;
+            c.line({mid - w / 2, y}, {mid + w / 2, y}, t.color("ink-quiet"));
+        }
+    }
     bool onPointer(const ui::PointerEvent& e) override {
         if (e.type == ui::PointerEvent::Type::Down && e.button == 1 && (e.mods & ui::kAlt) &&
             remove) {
@@ -325,7 +370,27 @@ class FxList : public ui::Node {
         }
     }
     std::function<void()> onDoubleClick;  // on the list's empty part: add a plug-in
+    // An empty chain says where plug-ins go: one quiet line at its top, lit
+    // under the pointer; a click on it adds one, as the strip's "+" does.
+    std::function<void()> onAdd;
+    bool empty() const { return racks_.empty() && slots_.empty(); }
+    ui::Rect hint() const { return {bounds().x, bounds().y, bounds().w, kSlotH}; }
+    void paint(ui::Canvas& c) override {
+        if (!empty() || !onAdd) return;
+        const ui::Theme& t = c.theme();
+        c.text(hint(), "+ plug-in", ui::Font::Ui, t.type("caption"),
+               t.color(hovered() ? "ink-quiet" : "ink-faint"), ui::kCenter | ui::kMiddle);
+    }
+    void onHover(bool) override {
+        if (empty()) invalidate();
+    }
     bool onPointer(const ui::PointerEvent& e) override {
+        if (e.type == ui::PointerEvent::Type::Down && e.button == 1 && empty() && onAdd &&
+            hint().contains(e.pos)) {
+            // The second press of a double-click has nothing more to open.
+            if (e.clicks == 1) onAdd();
+            return true;
+        }
         if (e.type == ui::PointerEvent::Type::Down && e.button == 1 && e.clicks >= 2 &&
             onDoubleClick &&
             std::none_of(slots_.begin(), slots_.end(),
@@ -984,6 +1049,7 @@ void Mixer::rebuild() {
             args["track"] = tid;
             run("ui.fx.add", std::move(args));
         };
+        if (!t.freeze) chain.onAdd = chain.onDoubleClick;  // a frozen chain takes none
         // The racks that feed it (their Outs route to its input), first.
         if (t.type == model::StripType::Channel)
             for (model::Id rack : racks::racksFeeding(s, id)) {
@@ -1000,10 +1066,6 @@ void Mixer::rebuild() {
             std::string label = f->label.empty()
                                     ? (f->plugin.name.empty() ? f->plugin.id : f->plugin.name)
                                     : f->label;
-            if (f->offline)
-                label = "(" + label + ")";
-            else if (f->bypass)
-                label = "~" + label;
             auto slot = std::make_unique<FxSlot>(
                 "mixer.fx." + fx.str(), label,
                 [this, fx] {
@@ -1020,6 +1082,9 @@ void Mixer::rebuild() {
             };
             slot->remove = [this, fx] { removeFx(fx); };
             slot->enabled = !t.freeze;
+            slot->state = f->offline  ? FxSlot::State::Offline
+                          : f->bypass ? FxSlot::State::Bypassed
+                                      : FxSlot::State::On;
             chain.addSlot(std::move(slot));
         }
         frame->select = [this, tid](unsigned mods) {
