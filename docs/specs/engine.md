@@ -21,7 +21,8 @@ The model thread (or a worker it delegates to) compiles a version into a
 new plan, compiled complete from the session; instances, recycled rings and
 state carry over from the previous one (§1.6).
 Its DSP state belongs to the executors, and strip, send and VCA levels and
-pans arrive through its mix slots (ADR-0060, §1.6) without a new plan.
+pans arrive through its mix slots (ADR-0060, §1.6) without a new plan, as
+patch-only FX edits reach the instances (ADR-0092, §1.6).
 
 ### 1.1 Nodes
 
@@ -283,7 +284,7 @@ before constructing its latency request.
 Every compile is complete: `Engine::load` builds a whole new plan from the
 session, every node, stage, buffer and event list, except for the edits that
 publish values instead (mix values below, ADR-0060, and the playrate scalar,
-ADR-0046). Plugin instances are not rebuilt: the instance pool keeps each
+ADR-0046) and patch-only FX edits (below, ADR-0092). Plugin instances are not rebuilt: the instance pool keeps each
 FX's instance while its plug-in and isolation stay the same, and applies a
 changed patch or state to it on the main thread during the compile
 (`InstancePool::get`). State crosses the swap when the executor adopts the
@@ -321,6 +322,8 @@ specified here as it lands); so far:
   when it recreates the instance and when the app acknowledges a patch or
   state the plug-in produced, since the object then no longer describes
   the instance.
+- **A patch-only edit publishes no plan** (stage 3, ADR-0092): see
+  "Patch-only FX edits" below.
 Returning to a version with neither patch nor state after applying saved FX
 settings recreates the factory-default instance. The old instance remains alive
 until both executors release its plan, as with a changed opaque state.
@@ -413,6 +416,33 @@ session from the first block whose copy completes. The edit
 publishes no plan, prepares no rate transition and changes no epoch, also
 after rate scheduling has started (§ Master playrate); a plan still queued
 for adoption takes the values when it is adopted.
+
+**Patch-only FX edits (ADR-0092).** A session that differs from the last one
+`Engine::load` took only in FX `patch` values, each of those FX having a
+patch before and after, is not compiled. Every other collection must have
+the same storage, and each changed FX is compared whole with its patch taken
+from the new one, so a change of anything else (wet, bypass, pins, a
+plug-in, a name elsewhere) compiles; an unchanged session compiles. The
+edit also compiles when a guard of the mix-value path holds (a deferred or
+rate-seeking edit, a queued scalar, a notification reload), when an edited
+FX has no instance the pool can patch (none, failed, waiting on a restart,
+another plug-in or isolation, configured from a state blob), belongs to a
+frozen track or has an active envelope (a new plan resends automated values
+at its first block), or when any instance has automation its plug-in
+cleared (a compile restores it). Otherwise `InstancePool::applyPatch` applies
+each patch as `get()` would and services the instance; a rescan of the
+parameter list (INFO, ALL or no flags; a values or text rescan is not one) or
+a clear, a latency change, a restart request or failure, a change of
+activation or of ports then makes it a compile, which finds the patches
+applied. When the patch is heard is unchanged: it reaches the instance on
+the main thread inside `load` as before, and a plan swap neither drops nor
+re-renders chunks rendered ahead, so a live node plays it from its next
+block and a node the renderer runs after the chunks it had rendered. The
+real-time output is bit-identical to a compiled reload of the same edit at
+the same block. The patch sequence (`Engine::patchSequence()`) is odd while
+patches are applied and moves by two per edit; every executor reads it
+before processing a block and stamps that block's plug-in outputs with it
+(see plug-in outputs below). `Engine::patchEdits()` counts these edits.
 
 ## 2. Real-time execution
 
@@ -749,9 +779,9 @@ first use, and no plug-in code runs early to warm it.
   a render with a failure first ends the watch (a call ended by its kill can
   return before the watch has recorded the kill), and a stop or cancel asked
   for by the time the outcome is decided is the outcome.
-  `setRenderWatchTestHooks` (tests only, set while no render runs) holds
-  the watch after its kills until the render ends it, which orders that
-  race the same way every time.
+  `setRenderWatchTestHooks` (internal `src/render_watch.h`, tests only, set
+  while no render runs) holds the watch after its kills until the render
+  ends it, which orders that race the same way every time.
   Instance creation, before that point, keeps its control-plane timeouts
   (20 s for `Create`).
 - Once a render has succeeded, each plugin's read-only parameters (meters,
@@ -1987,6 +2017,11 @@ Bridged wake and clear forwarding need the control-protocol extension below.
 
 Rescan requests rebuild an immutable plan from the current parameter list and
 schema; envelopes are resolved again, including their value-domain conversion.
+A rescan of values or their text only (`CLAP_PARAM_RESCAN_VALUES`, `_TEXT`)
+rebuilds it only when the FX has an active envelope, whose values the new
+plan sends again, or had automation cleared, which the rescan re-enables: a
+plan holds no parameter values (ADR-0092). A rescan without flags counts as
+one of the list.
 Missing/read-only parameters stop receiving events and produce a warning naming
 the FX and parameter. Clear `ALL`/`AUTOMATIONS` suppresses only the matching
 parameter's automation until a subsequent rescan or explicit engine load. Clear
@@ -1996,7 +2031,9 @@ re-enables it; a clear after a rescan remains effective. Changes are heard at
 normal plan-adoption boundaries, including the anticipative edit horizon.
 
 `Engine::takePluginOutputs()` is main-thread only. Each record contains FX id,
-plan generation, transport epoch, timeline sample, stream sample, the entire
+plan generation, the patch sequence read before its block was processed
+(ADR-0092; idle flush records: when drained), transport epoch, timeline
+sample, stream sample, the entire
 `host::OutputEvent`, and idle/anticipative markers. Note ends and plug-in
 note/MIDI output (ADR-0068) are not published there. Timeline coordinates subtract
 the stage's input timeline shift (§1.3); idle flush records use the service-time
@@ -2036,7 +2073,9 @@ The app-side consumer belongs in `EngineApp::tick()` after engine main servicing
 1. Drain the take API and publish cumulative event/voice drop counts in
    `engine.status` and `engine.stats`. On a changed drop count, close incomplete
    gestures and resynchronize parameter values on main; do not invent missing
-   automation points. Reject removed FX and superseded plan/transport epochs.
+   automation points. Reject removed FX, superseded plan/transport epochs and
+   records whose patch sequence is not the engine's current one (produced
+   before a patch-only edit, or while it applied, ADR-0092).
    For anticipative records, use `streamSample`/`playedStream(epoch)` to delay
    timeline recording until that stream position has played (discard abandoned
    seeks). Idle records apply immediately.

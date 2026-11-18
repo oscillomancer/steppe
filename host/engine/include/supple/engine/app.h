@@ -1068,7 +1068,7 @@ class EngineApp : public cmd::Host {
     using OutputKey = std::pair<model::Id, std::uint32_t>;
     std::map<OutputKey, OutputGesture> outputGestures_;
     std::deque<PluginOutput> pendingOutputs_;
-    std::uint64_t outputGeneration_ = 0, outputEpoch_ = 0;
+    std::uint64_t outputGeneration_ = 0, outputPatches_ = 0, outputEpoch_ = 0;
     std::uint64_t outputDrops_ = 0, voiceDrops_ = 0, consumerDrops_ = 0;
     bool outputOverflow_ = false;
     // Whose outputs were dropped since the last recovery (all: unknown).

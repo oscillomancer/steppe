@@ -110,3 +110,4 @@ current state.
 | [0089](0089-endpoint-lock-ownership.md) | A server owns its control endpoint by holding its lock | Accepted |
 | [0090](0090-offline-renders-and-bridged-plugins.md) | Offline renders wait for bridged plug-ins, and fail when one fails | Accepted |
 | [0091](0091-supervisor-end-and-launcher-stop.md) | A supervisor that ends without saying so is the launcher's stop | Accepted |
+| [0092](0092-patch-only-fx-edits.md) | Patch-only FX edits reach the running instances without a plan | Accepted |
