@@ -1542,6 +1542,103 @@ TEST_CASE("cursors: an item's ends and fade corners, a locked item, a move, a ro
     CHECK(over({rb.x + 100, rb.y + (G::kMixTop + G::kCellHeight + G::kLinkTop) / 2}) == C::Arrow);
 }
 
+TEST_CASE("a drag held at the lanes' edge scrolls the view and takes the item with it") {
+    Fixture f;
+    if (!f.ok) return;
+    using T = ui::PointerEvent::Type;
+    using views::ArrangeView;
+    auto& g = f.view->gestures();
+    const model::Id a = f.itemOnRow(0);
+    const ui::Rect r = f.rectOf(a);
+    const ui::Rect lanes = f.view->lanesRect();
+    const ui::Point body{r.x + r.w / 2, r.y + r.h / 2};
+    const double position = f.item(a).position;
+    const double start = f.view->viewport().startSeconds;
+    // In the middle of the lanes a drag scrolls nothing, however long it waits.
+    f.pointer(T::Down, body);
+    f.pointer(T::Move, {body.x + 40, body.y});
+    CHECK_FALSE(f.view->autoScrolling());
+    CHECK_FALSE(f.view->autoScroll(1.0));
+    CHECK(f.view->viewport().startSeconds == start);
+    // Held in the zone at the right edge it scrolls on, and the item, still
+    // under the pointer, is further along the timeline each time.
+    const ui::Point edge{lanes.right() - 4, body.y};
+    f.pointer(T::Move, edge);
+    REQUIRE(f.view->autoScrolling());
+    const double before = g.state().deltaBeats;
+    CHECK(f.view->autoScroll(0.5));
+    const double once = f.view->viewport().startSeconds;
+    CHECK(once > start);
+    CHECK(g.state().deltaBeats > before);
+    CHECK(f.view->autoScroll(0.5));
+    CHECK(f.view->viewport().startSeconds > once);
+    // Further out is faster: the same time scrolls more.
+    const double near = f.view->viewport().startSeconds;
+    f.pointer(T::Move, {lanes.right() + 60, body.y});
+    CHECK(f.view->autoScroll(0.5));
+    CHECK(f.view->viewport().startSeconds - near > near - once);
+    // Back inside, it stops; the drop lands where the pointer is.
+    f.pointer(T::Move, {lanes.x + lanes.w / 2, body.y});
+    CHECK_FALSE(f.view->autoScrolling());
+    const double held = f.view->viewport().startSeconds;
+    CHECK_FALSE(f.view->autoScroll(1.0));
+    CHECK(f.view->viewport().startSeconds == held);
+    const double delta = g.state().deltaBeats;
+    const auto steps = f.steps();
+    f.pointer(T::Up, {lanes.x + lanes.w / 2, body.y});
+    f.sync();
+    CHECK(f.steps() == steps + 1);
+    CHECK(f.item(a).position == doctest::Approx(position + delta));
+    CHECK(f.view->timeAt(lanes.x + lanes.w / 2) >
+          f.app->head().timeMap->secondsAt(position) + 1.0);  // it went past the old view
+    CHECK_FALSE(f.view->autoScrolling());
+
+    // At the left edge of a view already at the project's start there is
+    // nothing to scroll: no move, and no frames asked for.
+    views::Viewport home = f.view->viewport();
+    home.startSeconds = 0;
+    f.view->setViewport(home);
+    f.root->frame(false);
+    const model::Id other = f.itemOnRow(1);  // still near the start
+    const ui::Rect r2 = f.rectOf(other);
+    REQUIRE(f.view->lanesRect().contains({r2.x + r2.w / 2, r2.y + r2.h / 2}));
+    f.pointer(T::Down, {r2.x + r2.w / 2, r2.y + r2.h / 2});
+    f.pointer(T::Move, {lanes.x + 3, r2.y + r2.h / 2});
+    CHECK(f.view->autoScrolling());
+    CHECK_FALSE(f.view->autoScroll(1.0));
+    CHECK(f.view->viewport().startSeconds == 0);
+    f.pointer(T::Cancel, {lanes.x + 3, r2.y + r2.h / 2});
+    f.root->capture(nullptr);
+    CHECK_FALSE(f.view->autoScrolling());  // a drag given up scrolls no more
+
+    // Rows: with more tracks than fit, a move held at the bottom scrolls
+    // down; a trim, which stays on its row, does not.
+    f.view->trackLayout().setGlobalHeight(200);
+    f.root->frame(false);
+    const ui::Rect tall = f.rectOf(other);
+    const ui::Rect lanes2 = f.view->lanesRect();
+    const ui::Point mid{tall.x + tall.w / 2, tall.y + tall.h / 2};
+    REQUIRE(f.view->viewport().scrollY == 0);
+    f.pointer(T::Down, mid);
+    f.pointer(T::Move, {mid.x, lanes2.bottom() - 3});
+    REQUIRE(f.view->autoScrolling());
+    CHECK(f.view->autoScroll(0.25));
+    CHECK(f.view->viewport().scrollY > 0);
+    f.pointer(T::Cancel, {mid.x, lanes2.bottom() - 3});
+    f.root->capture(nullptr);
+    f.sync();
+    views::Viewport top = f.view->viewport();
+    top.scrollY = 0;
+    f.view->setViewport(top);
+    f.root->frame(false);
+    const ui::Rect again = f.rectOf(other);
+    f.pointer(T::Down, {again.right() - 2, again.y + again.h / 2});
+    f.pointer(T::Move, {again.right() - 30, lanes2.bottom() - 3});
+    CHECK_FALSE(f.view->autoScrolling());
+    f.pointer(T::Cancel, {again.right() - 30, lanes2.bottom() - 3});
+    f.root->capture(nullptr);
+}
+
 TEST_CASE("left trim moves every take offset at its own play rate in one undo step") {
     Fixture f;
     REQUIRE(f.ok);

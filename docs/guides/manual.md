@@ -373,6 +373,13 @@ the ends of the loop range in the ruler and of a note in the piano roll,
 and up-and-down arrows at a track row's lower edge and at the top edge of
 the mixer and the MIDI editor, which set their height.
 
+To drag something further than the window shows, hold it at the edge of
+the arrangement: the view scrolls that way, faster the further out you
+hold it, and stops when you bring the pointer back in. This works for
+items, their ends and fades, automation points, a selection rectangle,
+and the loop range, markers and regions in the ruler. An item being moved
+also scrolls the tracks up and down.
+
 ### A track's buttons
 
 A track has the same buttons in the same order in the track list and on its

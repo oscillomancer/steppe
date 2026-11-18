@@ -632,6 +632,21 @@ the anchor where the first step of the run found it. The run ends when anything
 else moves the view in time (a scroll, follow, the scrollbar), the cursor
 moves, or (with the pointer anchor) the pointer moves. Horizontal zoom is continuous;
 vertical track height per track and global.
+
+**Edge scroll.** A drag in the lanes or the ruler that is held within 24
+units of the lanes' left or right edge (`ArrangeView::kEdgeZone`), or past
+it, scrolls the view in time that way: 120 units per second at the zone's
+start, 30 more for each unit further out, at most 2400. The thing in hand
+stays under the pointer, so it moves along the timeline as the view does
+(the press point goes with the content: `ItemGestures::scrolled`), and the
+drop lands where the pointer is. A move, a take dragged out of its item
+and a marquee also scroll the rows at the lanes' top and bottom; a trim,
+slip, fade or point drag stays on its row. It stops when the pointer
+returns inside, at the release, when the drag is cancelled, and at the
+timeline's start. The view advances by frame time (`ArrangeView::poll`,
+at most 50 ms a frame) and asks for frames only while it moves;
+`ArrangeView::autoScroll(seconds)` is the step, which tests drive
+without a clock.
 By default Alt+wheel anywhere over the arrange view, and Ctrl+wheel over the
 TCP, adds eight design units per notch to every track row, including hidden tracks and compact folders, preserving
 mixed heights and clamping each independently. Fractional wheel deltas work

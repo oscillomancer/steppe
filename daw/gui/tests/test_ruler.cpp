@@ -206,6 +206,32 @@ TEST_CASE("ruler: loop selection, seek, edges, body and cancellation are transpo
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("ruler: a range drawn to the lanes' edge scrolls on, and ends where the pointer is") {
+    RulerFixture f;
+    const ui::Rect lanes = f.view->lanesRect();
+    const double shown = f.view->timeAt(lanes.right());  // the last time in view
+    f.pointer(Pointer::Down, f.at(2));
+    f.pointer(Pointer::Move, f.at(4));
+    CHECK_FALSE(f.view->autoScrolling());
+    const ui::Point edge{lanes.right() - 2, f.at(2).y};
+    f.pointer(Pointer::Move, edge);
+    REQUIRE(f.view->autoScrolling());
+    const double start = f.view->viewport().startSeconds;
+    CHECK(f.view->autoScroll(1.0));
+    CHECK(f.view->autoScroll(1.0));
+    CHECK(f.view->viewport().startSeconds > start);
+    const double under = f.view->timeAt(edge.x);
+    CHECK(under > shown);
+    f.pointer(Pointer::Up, edge);
+    f.sync();
+    CHECK_FALSE(f.view->autoScrolling());
+    // The range starts where it was pressed, at beat 2, and reaches the
+    // pointer, past what the view showed at the press (snapped to the grid).
+    CHECK(f.app->loop().start == doctest::Approx(1));
+    CHECK(f.app->loop().end > shown);
+    CHECK(f.app->loop().end == doctest::Approx(under).epsilon(0.05));
+}
+
 TEST_CASE("ruler: enabled reversed selection, tiny drag and grid at different zooms") {
     RulerFixture f;
     f.loop(2, 4, true);

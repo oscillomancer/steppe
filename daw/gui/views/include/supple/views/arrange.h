@@ -93,6 +93,18 @@ class ArrangeView : public ui::Node {
     // true when the playhead moved (the app loop keeps its wait short then).
     bool poll(bool force = false);  // force after input/model service, bypassing the throttle
 
+    // Edge scroll: a drag in the lanes or the ruler held within kEdgeZone of
+    // an edge of the lanes, or past it, scrolls the view that way, faster
+    // the further out, and the thing in hand goes with the pointer. The
+    // lanes' moves and marquees also scroll the rows. noteDrag is told of
+    // each pointer event of a drag (by the view and its ruler); autoScroll
+    // advances the scroll by `seconds` and is true when the view moved
+    // (poll calls it with the time since the last frame).
+    static constexpr float kEdgeZone = 24;
+    void noteDrag(const ui::PointerEvent& e, bool ruler);
+    bool autoScroll(double seconds);
+    bool autoScrolling() const { return edge_.vx != 0 || edge_.vy != 0; }
+
     const Viewport& viewport() const { return view_; }
     void setViewport(const Viewport& v);
     const TrackLayout& trackLayout() const { return layout_; }
@@ -190,6 +202,12 @@ class ArrangeView : public ui::Node {
     ui::ScrollBar* hbar_ = nullptr;
     ui::ScrollBar* vbar_ = nullptr;
     double lastPollMs_ = -1e9;
+    struct EdgeScroll {
+        float vx = 0, vy = 0;   // design units per second
+        ui::PointerEvent last;  // the drag's latest event, delivered again after a scroll
+        bool ruler = false;     // the drag is the ruler's, not the lanes'
+        double atMs = 0;        // when it last advanced
+    } edge_;
     ui::Root::OverlayHandle overlay_;
     std::shared_ptr<ArrangeView*> alive_;
     bool overlayInstalled_ = false;
