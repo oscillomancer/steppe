@@ -832,7 +832,10 @@ buttons used most next to the fader:
    monitor and a master no monitor (a master records its output,
    ADR-0057): their cells stay empty (`mixer.state.1.<track>`,
    `mixer.state.2.<track>`), so mute and solo are at the same place on
-   every strip.
+   every strip. The arm's disc is 16 units across, as tall as the pills
+   beside it, and the speaker 14 (`ArmButton::margin`,
+   `MonitorButton::margin`: two units more than in the TCP, where the pills
+   are 14 high); each takes a click anywhere in its cell.
 9. **The fader and the meter** (`mixer.faderrow.<track>`), then their
    **values**.
 

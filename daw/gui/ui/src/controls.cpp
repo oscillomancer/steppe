@@ -849,7 +849,7 @@ void ArmButton::paint(Canvas& c) {
     const Theme& t = c.theme();
     const Rect b = bounds();
     const Point centre{b.x + b.w / 2, b.y + b.h / 2};
-    const float r = std::max(2.0f, std::min(b.w, b.h) / 2 - 1);
+    const float r = std::max(2.0f, std::min(b.w, b.h) / 2 - margin);
     const Color red = t.color("armed");
     if (on()) {
         c.fillCircle(centre, r, red);
@@ -906,7 +906,7 @@ void MonitorButton::paint(Canvas& c) {
     if (focused()) c.strokeRound(b, t.radius("s"), t.color("focus"));
     // The speaker in a square that fits the button, left of its centre so the
     // waves have room.
-    const float s = std::min(b.w, b.h) - 4;
+    const float s = std::min(b.w, b.h) - 2 * margin;
     const float x = b.x + (b.w - s) / 2, y = b.y + (b.h - s) / 2;
     const std::vector<Point> speaker = {
         {x + s * 0.08f, y + s * 0.36f}, {x + s * 0.28f, y + s * 0.36f},

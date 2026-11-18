@@ -1327,9 +1327,11 @@ void Mixer::rebuild() {
         ui::Node* first = nullptr;
         ui::Node* second = nullptr;
         if (t.type != model::StripType::Buss) {
-            st.arm = &state.emplace<ui::ArmButton>("mixer.arm." + tid, [this, tid](bool on) {
+            auto& arm = state.emplace<ui::ArmButton>("mixer.arm." + tid, [this, tid](bool on) {
                 (void)set(tid, "armed", json::Value(on));
             });
+            arm.margin = 0;  // as tall as the M and S pills beside it
+            st.arm = &arm;
             first = st.arm;
         } else {
             first = &state.emplace<ui::Node>("mixer.state.1." + tid);
@@ -1344,6 +1346,7 @@ void Mixer::rebuild() {
                                                                               : "off";
                 (void)set(tid, "monitor", json::Value(std::string(next)));
             });
+            st.monitor->margin = 1;  // two units larger, as the arm disc is
             second = st.monitor;
         } else {
             second = &state.emplace<ui::Node>("mixer.state.2." + tid);

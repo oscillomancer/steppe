@@ -225,6 +225,9 @@ class ArmButton : public Toggle {
   public:
     explicit ArmButton(std::string id, std::function<void(bool)> onToggle = {});
     void paint(Canvas& canvas) override;
+    // The room left around the disc inside the button's bounds. 0 makes the
+    // disc as tall as a pill of the same height beside it.
+    float margin = 1;
 };
 
 // A frozen track's mark: a six-armed snowflake of `radius` around `centre`.
@@ -237,6 +240,9 @@ class MonitorButton : public Node {
     enum class Mode { Off, On, Auto };
     explicit MonitorButton(std::string id, std::function<void()> onClick = {});
     std::function<void()> onClick;
+    // The room left around the speaker inside the button's bounds, on each
+    // side. The whole of the bounds takes the click either way.
+    float margin = 2;
     void setMode(Mode mode);
     Mode mode() const { return mode_; }
     void paint(Canvas& canvas) override;

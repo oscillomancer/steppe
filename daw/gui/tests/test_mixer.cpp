@@ -358,6 +358,24 @@ TEST_CASE("mixer: a strip is one grid: routing, stereo, pan, the state row, then
         CHECK_MESSAGE(near(cells[i].x - cells[i - 1].right(), 3), i);
         CHECK_MESSAGE(near(cells[i].y, cells[0].y), i);
     }
+    // The arm's disc is as tall as the pills beside it and the speaker two
+    // units larger than the toolkit's own, to match; both take a click
+    // anywhere in their cell.
+    {
+        auto* arm = dynamic_cast<ui::ArmButton*>(f.root->find("mixer.arm." + a));
+        REQUIRE(arm);
+        CHECK(arm->margin == 0);
+        CHECK(f.strip(a).monitor->margin == 1);
+        CHECK(near(cells[0].h, cells[2].h));
+        const bool was = f.strip(a).arm->on();
+        f.pointer(ui::PointerEvent::Type::Down, {cells[0].x + 1, cells[0].y + 1});
+        f.pointer(ui::PointerEvent::Type::Up, {cells[0].x + 1, cells[0].y + 1});
+        f.refresh();
+        CHECK(f.strip(a).arm->on() != was);
+        f.pointer(ui::PointerEvent::Type::Down, {cells[0].x + 1, cells[0].y + 1});
+        f.pointer(ui::PointerEvent::Type::Up, {cells[0].x + 1, cells[0].y + 1});
+        f.refresh();
+    }
     // The four cells are two halves split again: the grid is one.
     CHECK(near(cells[1].right(), box("mixer.polarity." + a).right()));
     // A cell is a control's place. A buss has no arm, monitor or input and a
