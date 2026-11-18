@@ -1386,7 +1386,8 @@ saved in your project by this choice. A plug-in that comes with Steppe offers th
 one is Steppe's own. Cancel, or Escape, cancels the open. Tick "Remember my choice" to have Steppe apply the
 same answer the next time without asking; it is kept for that exact version of the plug-in, so an updated plug-in
 is asked about again, and a remembered "normally" is dropped if that plug-in closes Steppe again. Remembered
-choices are saved in the preferences file.
+choices are saved in the preferences file, and **Edit > Preferences… > Remembered plug-in choices** lists them:
+Forget removes one (Steppe asks again the next time a report points at that plug-in), Forget all removes every one.
 
 A plug-in you chose not to load is marked in the mixer (its name goes faint with an amber bar, and the
 track's "fx" turns amber), in the FX window ("disabled after an unexpected close · audio passes through") and in

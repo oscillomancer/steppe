@@ -18,6 +18,7 @@
 #include "audio_device.h"
 #include "mouse_dialog.h"
 #include "supple/engine/app.h"
+#include "supple/ui/forms.h"
 #include "supple/ui/root.h"
 
 namespace supple::gui {
@@ -101,6 +102,10 @@ class PreferencesDialog {
     ui::Button* isolation_ = nullptr;
     ui::Button* audio_ = nullptr;
     std::array<ui::Label*, 4> latencyNote_{};
+    // The remembered plug-in choices (safe-load, topic 7d), a folded section of its own.
+    void rebuildRemembered();
+    ui::FoldSection* remembered_ = nullptr;
+    std::string rememberedShown_;  // what the section was built from: it is rebuilt on a change
 };
 
 }  // namespace supple::gui

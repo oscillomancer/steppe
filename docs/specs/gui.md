@@ -2253,7 +2253,14 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   `fx.restart`): one already running stays where it is. Stock plug-ins stay
   in the app, and a plug-in's own isolation wins. A note says so.
   **Remembered load choices** (1.10, topic 7d): `plugin_overrides`, written by the safe-load question
-  (below, "Safe-load question") and read back by it; a Settings list to forget them lands with the next step.
+  (below, "Safe-load question") and read back by it. The last section of the dialog is its list: a
+  `ui::FoldSection` "Remembered plug-in choices" (folded; its summary says how many, "none" for
+  none), whose rows are 24 high: the plug-in's name in bold `ink`, its maker and version in quiet
+  `caption`, what was chosen in `ink` at the right ("In a separate process", "Not loaded", "Normally")
+  and a quiet **Forget**. A quiet **Forget all** follows the rows, and appears only with rows; with
+  none, one quiet sentence says nothing is remembered. More than six rows scroll. Forgetting is
+  saved at once (`PreferencesDialog::setRememberedLoads`) and takes effect the next time a project
+  opens: the plug-in is asked about again if a report still points at it.
   **Audio device** (1.5): the row shows the audio system, output device,
   rate and buffer, and opens the audio device dialog (also Edit > Audio
   device…, action `ui.audio.device`). Saved as the `audio` object:

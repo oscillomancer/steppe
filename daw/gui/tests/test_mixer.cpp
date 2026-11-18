@@ -1107,6 +1107,68 @@ TEST_CASE("mixer: the chain's empty part takes a double-click (plugin browser); 
     CHECK(outputs[0] == model::kMaster);
 }
 
+TEST_CASE("preferences: remembered plug-in choices are listed, forgotten one by one or all") {
+    Fixture f;
+    if (!f.ok) return;
+    views::MouseMap map;
+    gui::MouseDialog mouse(*f.root, map, {});
+    const auto file = f.dir / "config" / "preferences.json";
+    gui::Preferences start;
+    start.rememberedLoads = {
+        {"clap", "com.acme.canary", "0123abcd", "bridge", "Canary Verb", "Acme", "1.2.0", 10},
+        {"vst3", "com.acme.other", "ff00", "disable", "Other", "", "", 20},
+        {"clap", "com.acme.fine", "aa", "normal", "Fine EQ", "Acme", "3.0", 30}};
+    gui::PreferencesDialog prefs(*f.root, *f.app, mouse, start, file);
+    std::vector<std::string> problems;
+    prefs.onError = [&](const std::string& message) { problems.push_back(message); };
+    prefs.open();
+    f.root->frame(false);
+    REQUIRE(f.root->find("prefs.remembered"));
+    CHECK(f.node("prefs.remembered.summary")->valueText() == "3 choices");
+    REQUIRE(f.root->click("prefs.remembered.toggle"));  // unfold
+    f.root->frame(false);
+    CHECK(f.node("prefs.remembered.row.0.name")->valueText() == "Canary Verb");
+    CHECK(f.node("prefs.remembered.row.0.who")->valueText() == "Acme \u00b7 1.2.0");
+    CHECK(f.node("prefs.remembered.row.0.choice")->valueText() == "In a separate process");
+    CHECK(f.node("prefs.remembered.row.1.who")->valueText().empty());
+    CHECK(f.node("prefs.remembered.row.1.choice")->valueText() == "Not loaded");
+    CHECK(f.node("prefs.remembered.row.2.choice")->valueText() == "Normally");
+    CHECK(f.root->find("prefs.remembered.forget_all"));
+    if (const char* out = std::getenv("SUPPLE_TEST_SNAPSHOTS")) {
+        f.root->damageAll();
+        f.root->frame(false);
+        (void)gui::writePng(std::filesystem::path(out) / "prefs-remembered.png",
+                            f.root->readBack());
+    }
+    // Forget the middle one: saved, the rest keep their order.
+    REQUIRE(f.root->click("prefs.remembered.row.1.forget"));
+    f.root->frame(false);
+    CHECK(problems.empty());
+    REQUIRE(prefs.preferences().rememberedLoads.size() == 2);
+    CHECK(prefs.preferences().rememberedLoads[1].id == "com.acme.fine");
+    CHECK(f.node("prefs.remembered.row.1.name")->valueText() == "Fine EQ");
+    CHECK_FALSE(f.root->find("prefs.remembered.row.2"));
+    auto saved = gui::Preferences::load(file);
+    REQUIRE(saved);
+    CHECK(saved->rememberedLoads.size() == 2);
+    // Forget all: the sentence stands where the rows were, and no button to clear nothing.
+    REQUIRE(f.root->click("prefs.remembered.forget_all"));
+    f.root->frame(false);
+    CHECK(prefs.preferences().rememberedLoads.empty());
+    CHECK(f.root->find("prefs.remembered.empty"));
+    CHECK_FALSE(f.root->find("prefs.remembered.forget_all"));
+    CHECK(f.node("prefs.remembered.summary")->valueText() == "none");
+    saved = gui::Preferences::load(file);
+    REQUIRE(saved);
+    CHECK(saved->rememberedLoads.empty());
+    // A new dialog on no choices says so too.
+    prefs.open();
+    f.root->frame(false);
+    REQUIRE(f.root->click("prefs.remembered.toggle"));
+    f.root->frame(false);
+    CHECK(f.root->find("prefs.remembered.empty"));
+}
+
 TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
     Fixture f;
     if (!f.ok) return;
@@ -1606,7 +1668,9 @@ TEST_CASE(
     prefs.open();
     f.root->frame(false);
     const float offHeight = f.node("prefs")->bounds().h;
-    CHECK(offHeight < 520);  // no space reserved for empty notes (eight would add ~190)
+    // No space reserved for empty notes (eight would add ~190); 560 leaves the folded section of
+    // remembered plug-in choices (topic 7d) its row.
+    CHECK(offHeight < 560);
     CHECK_FALSE(f.node("prefs.memory.note.0")->visible);
     CHECK_FALSE(f.node("prefs.latency.note.0")->visible);
     for (const char* id : {"prefs.memory.set", "prefs.latency.set"}) {
