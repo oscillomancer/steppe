@@ -524,6 +524,78 @@ TEST_CASE("rack window: a module held at the space's edge pans the view and goes
     f.pointer(T::Up, {b.right() - 2, empty.y}, 2);
 }
 
+TEST_CASE("rack window: a cable held at the space's edge pans the view, and still lands") {
+    Fixture f;
+    if (!f.ok) return;
+    Patch p(f);
+    f.racks->open();
+    f.frame();
+    using T = ui::PointerEvent::Type;
+    gui::RackSpace& space = *f.racks->space();
+    const model::Id osc = *model::Id::parse(p.osc), vca = *model::Id::parse(p.vca);
+    const ui::Rect b = space.bounds();
+    const gui::RackSpace::View v0 = space.view();
+    const std::size_t cables = f.app->head().cables.size();
+    const auto steps = f.exec("history.list", "{}")["versions"].size();
+    // A cable taken from the oscillator's sub output: in the middle of the
+    // space it pans nothing.
+    const ui::Point out = *space.jackAt(osc, "sub", true);
+    f.pointer(T::Move, out, 0);
+    f.pointer(T::Down, out);
+    f.pointer(T::Move, {b.x + b.w / 2, b.y + b.h / 2}, 0);
+    CHECK_FALSE(space.autoScrolling());
+    CHECK_FALSE(space.autoScroll(1.0));
+    CHECK(space.view() == v0);
+    // Held at the right edge the view pans on, sideways only; the cable
+    // hangs from its jack, which goes with the modules.
+    const ui::Point edge{b.right() - 4, b.y + b.h / 2};
+    f.pointer(T::Move, edge, 0);
+    REQUIRE(space.autoScrolling());
+    CHECK(space.autoScroll(0.05));
+    const double once = space.view().x;
+    CHECK(once > v0.x);
+    CHECK(space.view().y == v0.y);
+    CHECK(static_cast<double>(space.jackAt(osc, "sub", true)->x) ==
+          doctest::Approx(static_cast<double>(out.x) - (once - v0.x) * space.view().zoom));
+    // The window's tick steps it as it steps modules in hand.
+    {
+        namespace ch = std::chrono;
+        const ch::steady_clock::time_point t0{ch::hours(1)};
+        f.racks->tick(t0);
+        CHECK(space.view().x == once);
+        f.racks->tick(t0 + ch::milliseconds(25));
+        CHECK(space.view().x > once);
+    }
+    // At the bottom edge it pans down.
+    const double y0 = space.view().y;
+    f.pointer(T::Move, {b.x + b.w / 2, b.bottom() - 4}, 0);
+    REQUIRE(space.autoScrolling());
+    CHECK(space.autoScroll(0.05));
+    CHECK(space.view().y > y0);
+    // Back inside it stops, and the cable lands on the VCA's input where the
+    // pan has left it: one cable more, in one undo step.
+    const ui::Point in = *space.jackAt(vca, "in", false);
+    REQUIRE(b.contains(in));
+    REQUIRE(in.x > b.x + 24);
+    REQUIRE(in.x < b.right() - 24);
+    REQUIRE(in.y > b.y + 24);
+    REQUIRE(in.y < b.bottom() - 24);
+    f.pointer(T::Move, in, 0);
+    CHECK_FALSE(space.autoScrolling());
+    const gui::RackSpace::View held = space.view();
+    CHECK_FALSE(space.autoScroll(1.0));
+    CHECK(space.view() == held);
+    f.pointer(T::Up, in);
+    CHECK_FALSE(space.autoScrolling());
+    REQUIRE(f.app->head().cables.size() == cables + 1);
+    bool lands = false;
+    for (const auto& e : f.app->head().cables)
+        lands = lands || (e.value->from.object == osc && e.value->from.key == "sub" &&
+                          e.value->to.object == vca && e.value->to.key == "in");
+    CHECK(lands);
+    CHECK(f.exec("history.list", "{}")["versions"].size() == steps + 1);
+}
+
 TEST_CASE(
     "rack window: a drag moves the selection, one undo step; the wheel zooms at the pointer") {
     Fixture f;
