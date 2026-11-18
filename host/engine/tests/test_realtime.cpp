@@ -3857,6 +3857,12 @@ TEST_CASE("a hung bridged plug-in on a live track fails within the bound; the re
     constexpr int kCycles = 200;  // 533 ms
     Engine::BridgeOverruns overruns;
     host::BridgeTiming::Calls liveCalls;
+    // The cycles until the hung plug-in had started, and the late cycles by
+    // then. Its start is asked in the callback with the live deadline, so a
+    // loaded machine can answer it cycles later; each cycle asks again
+    // (ADR-0081) and counts as late (CI 44201655657).
+    int started = 0;
+    std::uint64_t lateBeforeHang = 0;
     auto run = [&](bool hung, InstancePool& pool, Engine*& out, std::uint64_t& late) {
         host::resetBridgeTiming();
         MediaCache media;
@@ -3867,12 +3873,16 @@ TEST_CASE("a hung bridged plug-in on a live track fails within the bound; the re
         REQUIRE(engine.load(session));
         engine.play();
         if (hung) {
-            // It plays from the start; from the next block it hangs in process().
-            backend.run(1);
+            // It plays once started; from the next block it hangs in process().
             REQUIRE(pool.find(crash));
-            REQUIRE(pool.find(crash)->processing());
+            while (started < kCycles / 2 && !pool.find(crash)->processing()) {
+                backend.run(1);
+                ++started;
+            }
+            REQUIRE_MESSAGE(pool.find(crash)->processing(), "its start was never answered");
+            lateBeforeHang = engine.bridgeLateCycles();
             REQUIRE(pool.find(crash)->setParam(1, 2));
-            backend.run(kCycles - 1);
+            backend.run(kCycles - started);
         } else {
             backend.run(kCycles);
         }
@@ -3907,25 +3917,29 @@ TEST_CASE("a hung bridged plug-in on a live track fails within the bound; the re
     // longer than its period), so only what the deadline guarantees is
     // checked: each late cycle waited at least its period, so no more than
     // 50 ms of periods, and the two cycles at its ends, were late.
-    CHECK(late >= 1);
-    CHECK(late <= 50 * 48000 / 1000 / kBlock + 2);
+    CHECK(late - lateBeforeHang >= 1);
+    CHECK(late - lateBeforeHang <= 50 * 48000 / 1000 / kBlock + 2);
     CHECK(late < static_cast<std::uint64_t>(kCycles));
-    // The other track played on exactly as with the hung one muted (after
-    // the first block, which the hung track also played).
+    // The other track played on exactly as with the hung one muted, from the
+    // block it hung in (before it, the hung track played or, its start late,
+    // passed audio through).
+    const auto from = static_cast<std::size_t>(started) * kBlock;
     auto referencePool = makePool();
     const auto reference = run(false, referencePool, none, referenceLate);
     CHECK(referenceLate == 0);
     double peak = 0;
     for (float x : reference.channels[0]) peak = std::max(peak, double(std::fabs(x)));
     REQUIRE(peak > 0.01);
-    CHECK(maxDiff(played.channels[0], kBlock,
-                  std::vector<float>(reference.channels[0].begin() + kBlock,
-                                     reference.channels[0].end()),
-                  (kCycles - 1) * kBlock) == 0);
-    CHECK(maxDiff(played.channels[1], kBlock,
-                  std::vector<float>(reference.channels[1].begin() + kBlock,
-                                     reference.channels[1].end()),
-                  (kCycles - 1) * kBlock) == 0);
+    CHECK(maxDiff(
+              played.channels[0], from,
+              std::vector<float>(reference.channels[0].begin() + static_cast<std::ptrdiff_t>(from),
+                                 reference.channels[0].end()),
+              kCycles * kBlock - from) == 0);
+    CHECK(maxDiff(
+              played.channels[1], from,
+              std::vector<float>(reference.channels[1].begin() + static_cast<std::ptrdiff_t>(from),
+                                 reference.channels[1].end()),
+              kCycles * kBlock - from) == 0);
 }
 
 TEST_CASE("recording header errors retain the first error and spare other targets") {
