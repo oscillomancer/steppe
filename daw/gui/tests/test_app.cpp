@@ -4479,6 +4479,55 @@ TEST_CASE("Help > Crash reports lists what earlier runs left and shows one in pl
         a.root->frame(false);
         CHECK_FALSE(a.root->find("crash.viewer.save")->visible);
     }
+    SUBCASE(
+        "Save a copy over a file the user chose to replace leaves it whole when the write fails") {
+        REQUIRE(diagnostics::writeSampleCrash(kNoticeOne, "Canary Verb", "Acme", dir, {},
+                                              diagnostics::Role::Gui));
+        const auto target = a.dir / "copy" / "report.json";
+        std::filesystem::create_directories(target.parent_path());
+        const std::string previous = "what the user already had there\n";
+        {
+            std::ofstream out(target, std::ios::binary);
+            out << previous;
+        }
+        help.crashReports().saveDialog = [&](const std::string&, auto done) { done({target}); };
+        // The write is refused when it syncs, as a full disk refuses it part-way.
+        int refused = 0;
+        setFileSyncHookForTesting([&](const std::filesystem::path& f) {
+            if (f.parent_path() != target.parent_path()) return true;
+            ++refused;
+            return false;
+        });
+        REQUIRE(a.actions->run("ui.help.crash_reports"));
+        a.root->frame(false);
+        REQUIRE(a.root->click("crash.viewer.save"));
+        pumpPosted();
+        a.root->frame(false);
+        setFileSyncHookForTesting({});
+        CHECK(refused >= 1);
+        const auto readTarget = [&] {
+            std::ifstream in(target, std::ios::binary);
+            return std::string((std::istreambuf_iterator<char>(in)),
+                               std::istreambuf_iterator<char>());
+        };
+        CHECK(readTarget() == previous);
+        CHECK(a.root->find("crash.viewer.status")->valueText().find("Could not save a copy") !=
+              std::string::npos);
+        // The failed attempt left nothing beside it.
+        std::size_t files = 0;
+        for (const auto& entry : std::filesystem::directory_iterator(target.parent_path())) {
+            (void)entry;
+            ++files;
+        }
+        CHECK(files == 1);
+        // And once the disk takes it, the same choice replaces the file with the report.
+        REQUIRE(a.root->click("crash.viewer.save"));
+        pumpPosted();
+        a.root->frame(false);
+        const auto original = diagnostics::readReport(kNoticeOne, dir);
+        REQUIRE(original);
+        CHECK(readTarget() == *original);
+    }
     SUBCASE("Mark as seen acknowledges; deleting asks twice") {
         REQUIRE(diagnostics::writeSampleReport(kNoticeOne, dir, diagnostics::Role::Gui));
         REQUIRE(diagnostics::writeSampleReport(kNoticeTwo, dir, diagnostics::Role::Gui));

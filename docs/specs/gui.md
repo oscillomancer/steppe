@@ -2787,7 +2787,8 @@ key is ignored, an unknown thread role or reason is shown as written). Copy summ
 page as plain text on the clipboard, every line of every section (the viewer shows at most 40 lines of
 a section and says so). Save a copy… (P3; reports only, not a run that left none) writes the report file as it is to a place the
 user picks in the system's save dialog, suggesting `<slug>-crash-<first 8 of the incident>.json`; it is the only
-way a report leaves the folder and nothing is uploaded. Mark as seen is `acknowledge` (the viewer never acknowledges by being
+way a report leaves the folder and nothing is uploaded. The copy is written with `writeFileAtomic`, so a file the user
+chose to replace stays whole when the write fails (a full disk) and the status line says it could not save. Mark as seen is `acknowledge` (the viewer never acknowledges by being
 opened). Delete and Delete all… ask twice: the first click changes the button's text to "Click
 again…" and says what it will do (the report, or every report and every record of a run without
 one), the second does it; choosing another row cancels the first. Open folder reveals the

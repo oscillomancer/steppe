@@ -5,9 +5,9 @@
 #include <algorithm>
 #include <chrono>
 #include <ctime>
-#include <fstream>
 #include <utility>
 #include "render_dialog.h"
+#include "supple/base/files.h"
 #include "supple/json/parse.h"
 #include "supple/product.h"
 #include "supple/ui/canvas.h"
@@ -598,10 +598,9 @@ void CrashViewer::saveCopy() {
     auto answer = dialogs_.guard(post_, [this, incident](DialogLifetime::Paths paths) {
         auto text = diagnostics::readReport(incident, directory_);
         if (!text) return status("Could not save a copy: " + text.error().message);
-        std::ofstream out(paths.front(), std::ios::binary | std::ios::trunc);
-        out << *text;
-        out.close();
-        if (!out)
+        // Written beside the chosen file and renamed over it: a file the user chose to replace
+        // stays whole when the write fails part-way (a full disk), instead of being cut short.
+        if (!writeFileAtomic(paths.front(), *text))
             return status("Could not save a copy to " + paths.front().filename().string() + ".");
         status("Saved a copy as " + paths.front().filename().string() + ".");
     });
