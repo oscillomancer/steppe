@@ -204,10 +204,19 @@ TEST_CASE("a slot being released cannot be claimed over, so the next thread keep
         state.store(1);
         testing::waitFor([&] { return state.load() == 2; }, "state == 2");
     });
-    std::thread a([] { (void)registerThread(ThreadRole::Recorder, 1); });
     std::uint64_t idB = 0;
-    std::atomic<bool> release{false}, bRegistered{false};
+    std::atomic<bool> release{false}, bRegistered{false}, bRunning{false};
+    std::thread a([&] {
+        (void)registerThread(ThreadRole::Recorder, 1);
+        // On Windows a thread's thread_local destructors (here the release, and its hook) run as
+        // the thread exits with the loader lock held, which a thread that is still starting cannot
+        // get. A that left before B was running would wait in its hook for a B that cannot start
+        // until A is gone: a deadlock that only the wait's 30 s bound ended (CI 44497871339). So A
+        // leaves only once B is running user code.
+        testing::waitFor([&] { return bRunning.load(); }, "B running");
+    });
     std::thread b([&] {
+        bRunning.store(true);
         testing::waitFor([&] { return state.load() == 1; }, "state == 1");
         idB = currentThreadId();
         (void)registerThread(ThreadRole::AudioLive, 2);

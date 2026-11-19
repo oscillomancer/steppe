@@ -8,6 +8,7 @@
 #include <doctest/doctest.h>
 
 #include <chrono>
+#include <string>
 #include <thread>
 
 namespace supple::diagctx::testing {
@@ -19,7 +20,9 @@ bool waitFor(Done&& done, const char* what, std::chrono::seconds limit = std::ch
     const auto deadline = std::chrono::steady_clock::now() + limit;
     while (!done()) {
         if (std::chrono::steady_clock::now() >= deadline) {
-            FAIL_CHECK("gave up after " << limit.count() << " s waiting for " << what);
+            // `what` goes in as a string: a bare `const char*` printed as "1" in the Windows CI log
+            // (run 44497871339), which hid which wait had given up.
+            FAIL_CHECK("gave up after " << limit.count() << " s waiting for " << std::string(what));
             return false;
         }
         std::this_thread::yield();
