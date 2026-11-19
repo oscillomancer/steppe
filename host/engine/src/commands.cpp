@@ -64,6 +64,7 @@ void registerHistoryCommands(cmd::Registry& registry);
 void registerEnvelopeCommands(cmd::Registry& registry);
 void registerDeviceCommands(cmd::Registry& registry);
 void registerTransportCommands(cmd::Registry& registry);
+void registerAuditionCommands(cmd::Registry& registry);
 
 // Exposed to rack.probe (rack_probe.cpp).
 Result<std::pair<model::MidiSource, double>> notationSource(const model::Session& s,
@@ -113,6 +114,7 @@ void registerEngineCommands(cmd::Registry& registry) {
     registerEnvelopeCommands(registry);
     registerDeviceCommands(registry);
     registerTransportCommands(registry);
+    registerAuditionCommands(registry);
 }
 
 // --- describe ----------------------------------------------------------------------------------

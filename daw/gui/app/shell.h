@@ -120,6 +120,12 @@ class Shell {
     std::unique_ptr<TrackMenu> trackMenu_;  // made in build() (needs the root)
     UiState& ui_;
     std::string status_, editStatus_;
+    // The name and keys of the control the pointer rests on, which the
+    // status line says in the note's place; a note set since the pointer
+    // came to rest there shows instead (a press's error is not hidden).
+    std::string hoverName() const;
+    ui::Hint hovered_;
+    std::uint64_t noteSerial_ = 0, hoveredAtNote_ = 0;
     std::uint64_t shownVersion_ = ~std::uint64_t{0};
     std::uint64_t projectGeneration_ = ~std::uint64_t{0};
     ui::Label* counts_ = nullptr;

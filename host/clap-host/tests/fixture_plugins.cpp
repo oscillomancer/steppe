@@ -1491,6 +1491,11 @@ struct Crash {
         if (mode.load() == 5) badWrite();
     }
 };
+// Tests (supple_fixture_hold_process): while held, an in-process crash
+// instance's process() waits there, spinning, after counting its entry: a
+// renderer held in the middle of a block until the test lets it go.
+std::atomic<bool> gHoldProcess{false};
+std::atomic<int> gHeldProcess{0};
 Crash* C(const clap_plugin_t* p) { return static_cast<Crash*>(p->plugin_data); }
 
 uint32_t CLAP_ABI crashParamCount(const clap_plugin_t*) { return 1; }
@@ -1540,6 +1545,11 @@ const void* CLAP_ABI crashExt(const clap_plugin_t*, const char* id) {
 bool CLAP_ABI crashActivate(const clap_plugin_t*, double, uint32_t, uint32_t) { return true; }
 clap_process_status CLAP_ABI crashProcess(const clap_plugin_t* pl, const clap_process_t* p) {
     crashEvents(pl, p->in_events);
+    if (gHoldProcess.load(std::memory_order_acquire)) {
+        gHeldProcess.fetch_add(1, std::memory_order_acq_rel);
+        while (gHoldProcess.load(std::memory_order_acquire)) {  // spin, as mode 2
+        }
+    }
     if (C(pl)->mode.load() == 1) std::raise(SIGSEGV);
     if (C(pl)->mode.load() == 4) badWrite();
     if (C(pl)->mode.load() == 6) std::abort();  // what the host makes of abort() differs
@@ -2001,6 +2011,15 @@ extern "C" CLAP_EXPORT int supple_fixture_patch_starts() {
 
 extern "C" CLAP_EXPORT const clap_plugin_entry_t clap_entry = {CLAP_VERSION_INIT, entryInit,
                                                                entryDeinit, entryFactory};
+
+// Holds (1) or lets go (0) every in-process crash instance's process(), and
+// how many process() calls have entered a hold so far.
+extern "C" CLAP_EXPORT void supple_fixture_hold_process(int hold) {
+    gHoldProcess.store(hold != 0, std::memory_order_release);
+}
+extern "C" CLAP_EXPORT int supple_fixture_held_process() {
+    return gHeldProcess.load(std::memory_order_acquire);
+}
 
 extern "C" CLAP_EXPORT void supple_fixture_wait_patch_start(int previous) {
     while (gPatchStarts.load(std::memory_order_acquire) == previous) gPatchStarts.wait(previous);

@@ -38,6 +38,7 @@
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/control_names.h"
 #include "supple/views/mouse_map.h"
 
 using namespace supple;
@@ -146,8 +147,12 @@ struct Fixture {
         return exec("fx.add", R"({"track":")" + track + R"(","plugin":")" + plugin + R"("})")["fx"]
             .asString();
     }
+    // The time of every pass the fixture makes. A test moves it on by hand:
+    // no pass reads the real clock, so nothing here depends on how long the
+    // machine has been up or how fast it runs.
+    std::chrono::steady_clock::time_point now{std::chrono::hours(1)};
     void refresh() {
-        mixer->sync();
+        mixer->sync(now);
         root->frame(false);
     }
     const model::Track& track(const std::string& id) {
@@ -412,6 +417,36 @@ TEST_CASE("mixer: a strip is one grid: routing, stereo, pan, the state row, then
     CHECK(box("mixer.color." + a).w >= f.strip(a).node->bounds().w - 1.5f);
 }
 
+// gui.md §2, Names: a strip's controls are called what the track's row calls them.
+TEST_CASE("mixer: a strip's controls have the names the track panel gives its row's") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    f.refresh();
+    auto over = [&](const std::string& id) {
+        f.pointer(ui::PointerEvent::Type::Move, f.centre(f.node(id)));
+        return f.root->hint();
+    };
+    namespace names = views::names;
+    CHECK(over("mixer.mute." + a) == names::kMute);
+    CHECK(over("mixer.solo." + a) == names::kSolo);
+    CHECK(over("mixer.polarity." + a) == names::kPolarity);
+    CHECK(over("mixer.mono." + a) == names::kMono);
+    CHECK(over("mixer.pan." + a) == names::kPan);
+    CHECK(over("mixer.fader." + a) == names::kVolume);
+    CHECK(over("mixer.input." + a) == names::kInput);
+    CHECK(over("mixer.out." + a) == names::kRouting);
+    CHECK(over("mixer.fxadd." + a) == names::kChain);
+    CHECK(over("mixer.addfx." + a) == names::kAddFx);
+    CHECK(over("mixer.arm." + a).name == "Arm for recording");
+    CHECK(over("mixer.monitor." + a).name.starts_with("Monitor the input: "));
+    // A master's "out" picks a hardware output; it does not open the routing.
+    CHECK(over("mixer.out.tr_0") == names::kHardwareOutput);
+    // A strip's name, and the mixer's empty space, are called nothing.
+    f.pointer(ui::PointerEvent::Type::Move, f.empty(a));
+    CHECK(f.root->hint().empty());
+}
+
 TEST_CASE("mixer: a double-click on the strips' empty space adds a channel") {
     Fixture f;
     if (!f.ok) return;
@@ -628,11 +663,16 @@ TEST_CASE("mixer: a click on a plug-in still opens it; a drag within the chain r
     const ui::Point again = f.centre(f.node("mixer.fx." + p1));
     f.drag(again, {again.x, f.node("mixer.fx." + p2)->bounds().y - 1});
     CHECK(f.chain(a) == std::vector<std::string>{p1, p2, p3});
-    // Dropped where it already is: nothing.
+    // Dropped where it already is: nothing, and the pointer does not call
+    // its own place refused.
     f.refresh();
     const auto steps = f.steps();
     const ui::Point same = f.centre(f.node("mixer.fx." + p2));
-    f.drag(same, {same.x + 20, same.y});
+    f.drag(same, {same.x + 20, same.y}, false);
+    CHECK(f.mixer->drag().drop == gui::Mixer::DragView::Drop::None);
+    CHECK(f.mixer->drag().home);
+    CHECK(f.root->cursor() == ui::Cursor::Move);
+    f.pointer(ui::PointerEvent::Type::Up, {same.x + 20, same.y});
     CHECK(f.steps() == steps);
     // Escape cancels the drag, and the release after it is no click.
     const ui::Point esc = f.centre(f.node("mixer.fx." + p1));
@@ -644,8 +684,12 @@ TEST_CASE("mixer: a click on a plug-in still opens it; a drag within the chain r
     CHECK(f.chain(a) == std::vector<std::string>{p1, p2, p3});
     CHECK(f.steps() == steps);
     CHECK(f.editors.size() == 2);
-    // Dropped somewhere that is nobody's strip: cancelled.
-    f.drag(f.centre(f.node("mixer.fx." + p1)), {700, 20});
+    // Dropped somewhere that is nobody's strip: cancelled, and "not allowed"
+    // on the way.
+    f.drag(f.centre(f.node("mixer.fx." + p1)), {700, 20}, false);
+    CHECK_FALSE(f.mixer->drag().home);
+    CHECK(f.root->cursor() == ui::Cursor::NotAllowed);
+    f.pointer(ui::PointerEvent::Type::Up, {700, 20});
     CHECK(f.chain(a) == std::vector<std::string>{p1, p2, p3});
     CHECK(f.steps() == steps);
     CHECK(f.errors.empty());
@@ -1028,7 +1072,19 @@ TEST_CASE("mixer: dragging a strip's empty part reorders it among its own kind, 
     CHECK(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Strip);
     f.snapshot("mixer-drag-strip.png");
     CHECK(f.mixer->drag().drop == gui::Mixer::DragView::Drop::Reorder);
+    CHECK(f.root->cursor() == ui::Cursor::Move);  // a release here moves it
+    f.pointer(ui::PointerEvent::Type::Move, f.empty(bus));
+    CHECK(f.mixer->drag().drop == gui::Mixer::DragView::Drop::None);
+    CHECK(f.root->cursor() == ui::Cursor::NotAllowed);  // not among the busses
+    // Over its own place a release changes nothing, and nothing refuses it.
+    f.pointer(ui::PointerEvent::Type::Move, f.empty(a));
+    CHECK(f.mixer->drag().drop == gui::Mixer::DragView::Drop::None);
+    CHECK(f.mixer->drag().home);
+    CHECK(f.root->cursor() == ui::Cursor::Move);
+    f.pointer(ui::PointerEvent::Type::Move, {rc.x + rc.w - 10, rc.y + 200});
+    CHECK(f.root->cursor() == ui::Cursor::Move);
     f.pointer(ui::PointerEvent::Type::Up, {rc.x + rc.w - 10, rc.y + 200});
+    CHECK_FALSE(f.root->dragCursor());
     CHECK(f.children(master) == std::vector<std::string>{b, c, a, bus});  // not after the buss
     CHECK(f.steps() == before + 1);
     f.refresh();
@@ -1044,7 +1100,9 @@ TEST_CASE("mixer: dragging a strip's empty part reorders it among its own kind, 
     f.drag(f.empty(c), f.empty(master));
     CHECK(f.children(master) == std::vector<std::string>{c, b, a, bus});
     f.drag(f.empty(c), f.empty(a), false);
+    CHECK(f.root->dragCursor());
     f.root->key(SDLK_ESCAPE);
+    CHECK_FALSE(f.root->dragCursor());  // given up: the pointer is the nodes' again
     f.pointer(ui::PointerEvent::Type::Up, f.empty(a));
     CHECK(f.children(master) == std::vector<std::string>{c, b, a, bus});
     // A drag of the empty bottom (nobody's strip): cancelled.
@@ -1084,6 +1142,433 @@ TEST_CASE("mixer: dragging one of several selected strips moves them all, one un
     f.pointer(ui::PointerEvent::Type::Down, f.empty(b));
     f.pointer(ui::PointerEvent::Type::Up, f.empty(b));
     CHECK(f.ui.selectedTracks == std::vector<std::string>{b});
+    CHECK(f.errors.empty());
+}
+
+TEST_CASE("mixer: a strip held at the strips' edge scrolls them, and drops out of first view") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::string> ids;
+    for (int i = 0; i < 30; ++i) ids.push_back(f.addTrack("channel", "T"));
+    f.refresh();
+    using T = ui::PointerEvent::Type;
+    const ui::Rect area = f.node("mixer.scrolled")->bounds();
+    const std::string first = ids.front(), last = ids.back();
+    // More strips than fit: the last one starts out of view.
+    REQUIRE(f.strip(last).node->bounds().x > area.right());
+    const auto x = [&](const std::string& id) { return f.strip(id).node->bounds().x; };
+    const float y = f.empty(first).y;
+    // In the middle a drag scrolls nothing.
+    f.pointer(T::Down, f.empty(first));
+    f.pointer(T::Move, {area.x + area.w / 2, y});
+    REQUIRE(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Strip);
+    CHECK_FALSE(f.mixer->autoScrolling());
+    CHECK_FALSE(f.mixer->autoScroll(1.0));
+    // Held at the right edge the strips scroll on; further out is faster.
+    const float start = x(last);
+    f.pointer(T::Move, {area.right() - 4, y});
+    REQUIRE(f.mixer->autoScrolling());
+    // The insertion bar stays among the strips that scroll, off the master.
+    CHECK(f.mixer->drag().marker.right() <= area.right());
+    f.snapshot("mixer-edge-scroll-1-held.png");
+    CHECK(f.mixer->autoScroll(0.25));
+    f.root->frame(false);
+    const float once = x(last);
+    CHECK(once < start);
+    f.pointer(T::Move, {area.right() + 40, y});
+    CHECK(f.mixer->autoScroll(0.25));
+    f.root->frame(false);
+    CHECK(once - x(last) > start - once);
+    // The loop's pass steps it by the time since the pass before, and by no
+    // more than the cap: a frame that stalled for two seconds is a short
+    // step, not a jump. The first pass of a scroll only starts the clock.
+    {
+        using namespace std::chrono;
+        const auto at = [&] {
+            f.root->frame(false);
+            return x(last);
+        };
+        const float s0 = at();
+        // No pass has run since this scroll began; the last one before it was
+        // the fixture's, ten seconds earlier.
+        f.mixer->sync(f.now += seconds(10));
+        CHECK(at() == s0);
+        f.mixer->sync(f.now += milliseconds(25));
+        const double step = static_cast<double>(s0 - at());
+        CHECK(step > 0);
+        f.mixer->sync(f.now += seconds(2));
+        CHECK(static_cast<double>(s0 - at()) == doctest::Approx(3.0 * step).epsilon(0.02));
+    }
+    // Back inside it stops.
+    f.pointer(T::Move, {area.x + area.w / 2, y});
+    CHECK_FALSE(f.mixer->autoScrolling());
+    const float held = x(last);
+    CHECK_FALSE(f.mixer->autoScroll(1.0));
+    f.root->frame(false);
+    CHECK(x(last) == held);
+    // To the end: it stops there by itself, rests, and the drop lands after
+    // the last strip, which the first view did not show.
+    f.pointer(T::Move, {area.right() - 2, y});
+    for (int i = 0; i < 400 && f.mixer->autoScroll(0.05); ++i) f.root->frame(false);
+    f.root->frame(false);
+    CHECK(f.strip(last).node->bounds().right() <= area.right() + 1);
+    CHECK_FALSE(f.mixer->autoScroll(0.05));  // nothing more until the pointer moves
+    CHECK(f.mixer->autoScrolling());         // still held at the edge
+    f.snapshot("mixer-edge-scroll-2-at-the-end.png");
+    const auto before = f.app->head().version;
+    f.pointer(T::Move, {area.right() - 3, y});
+    CHECK(f.mixer->drag().drop == gui::Mixer::DragView::Drop::Reorder);
+    f.pointer(T::Up, {area.right() - 3, y});
+    CHECK_FALSE(f.mixer->autoScrolling());
+    CHECK(f.app->head().version == before + 1);  // one edit
+    CHECK(f.children("tr_0").back() == first);
+    f.refresh();
+    // And back: held at the left edge the strips return to the start.
+    const float scrolled = x(ids[1]);
+    f.pointer(T::Down, f.empty(first));
+    f.pointer(T::Move, {area.x + 3, y});
+    REQUIRE(f.mixer->autoScrolling());
+    CHECK(f.mixer->autoScroll(0.25));
+    f.root->frame(false);
+    CHECK(x(ids[1]) > scrolled);
+    f.root->key(SDLK_ESCAPE);
+    CHECK_FALSE(f.mixer->autoScrolling());  // a drag given up scrolls no more
+    f.pointer(T::Up, {area.x + 3, y});
+    CHECK(f.errors.empty());
+}
+
+TEST_CASE("mixer: a plug-in held at an end of its strip's plug-in list scrolls the list") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    const auto b = f.addTrack("channel", "B");
+    std::vector<std::string> fx;
+    for (int i = 0; i < 20; ++i) fx.push_back(f.addFx(a, "Hickory"));
+    // The other strip's chain is longer than its list shows too.
+    std::vector<std::string> others;
+    for (int i = 0; i < 12; ++i) others.push_back(f.addFx(b, "Hickory"));
+    f.refresh();
+    using T = ui::PointerEvent::Type;
+    using Drop = gui::Mixer::DragView::Drop;
+    const ui::Rect list = f.strip(a).chain->bounds();
+    const std::string last = fx.back();
+    const auto slot = [&](const std::string& id) { return f.node("mixer.fx." + id)->bounds(); };
+    const auto y = [&](const std::string& id) { return slot(id).y; };
+    // A chain longer than the list shows: its last plug-in starts out of view.
+    REQUIRE(y(last) > list.bottom());
+    REQUIRE(y(others.back()) > f.strip(b).chain->bounds().bottom());
+    const float otherAt = y(others.front());
+    const float x = list.x + list.w / 2, middle = list.y + list.h / 2;
+    // The third plug-in, picked up in the list's middle: no scroll there.
+    REQUIRE(std::abs(slot(fx[2]).y + slot(fx[2]).h / 2 - middle) < list.h / 2 - 24);
+    f.pointer(T::Down, f.centre(f.node("mixer.fx." + fx[2])));
+    f.pointer(T::Move, {x, middle});
+    REQUIRE(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Fx);
+    CHECK_FALSE(f.mixer->autoScrolling());
+    CHECK_FALSE(f.mixer->autoScroll(1.0));
+    // Held at the list's bottom it scrolls on; further out is faster.
+    const float start = y(last);
+    f.pointer(T::Move, {x, list.bottom() - 4});
+    REQUIRE(f.mixer->autoScrolling());
+    f.snapshot("mixer-fx-edge-scroll-1-held.png");
+    CHECK(f.mixer->autoScroll(0.05));
+    f.root->frame(false);
+    const float once = y(last);
+    CHECK(once < start);
+    f.pointer(T::Move, {x, list.bottom() + 40});
+    CHECK(f.mixer->autoScroll(0.05));
+    f.root->frame(false);
+    CHECK(once - y(last) > start - once);
+    // Only the dragged plug-in's own list scrolls: the other strip's, which
+    // could scroll as far, stays where it is.
+    CHECK(y(others.front()) == otherAt);
+    // The loop's pass steps it by the time since the pass before, and by no
+    // more than the cap: a frame that stalled for two seconds is a short
+    // step, not a jump. The first pass of a scroll only starts the clock.
+    f.pointer(T::Move, {x, list.bottom() - 20});
+    {
+        using namespace std::chrono;
+        const auto at = [&] {
+            f.root->frame(false);
+            return y(last);
+        };
+        const float s0 = at();
+        // No pass has run since this scroll began; the last one before it was
+        // the fixture's, ten seconds earlier.
+        f.mixer->sync(f.now += seconds(10));
+        CHECK(at() == s0);
+        f.mixer->sync(f.now += milliseconds(25));
+        const double step = static_cast<double>(s0 - at());
+        CHECK(step > 0);
+        f.mixer->sync(f.now += seconds(2));
+        CHECK(static_cast<double>(s0 - at()) == doctest::Approx(3.0 * step).epsilon(0.02));
+    }
+    // Back in the middle it stops, and off its own strip too (a held plug-in
+    // scrolls no list but its own).
+    f.pointer(T::Move, {x, middle});
+    CHECK_FALSE(f.mixer->autoScrolling());
+    const float held = y(last);
+    CHECK_FALSE(f.mixer->autoScroll(1.0));
+    f.root->frame(false);
+    CHECK(y(last) == held);
+    const ui::Rect other = f.strip(b).chain->bounds();
+    f.pointer(T::Move, {other.x + other.w / 2, other.bottom() - 4});
+    CHECK(f.mixer->drag().drop == Drop::Copy);
+    CHECK_FALSE(f.mixer->autoScrolling());
+    // To the end: it stops there by itself, rests, and the drop lands after
+    // the last plug-in, which the first view did not show. The insertion bar
+    // is in view all the way.
+    f.pointer(T::Move, {x, list.bottom() + 6});
+    CHECK(f.mixer->drag().drop == Drop::Reorder);
+    CHECK(f.mixer->drag().marker.h >= 2.5f);
+    CHECK(f.mixer->drag().marker.bottom() <= list.bottom());
+    for (int i = 0; i < 400 && f.mixer->autoScroll(0.05); ++i) f.root->frame(false);
+    f.root->frame(false);
+    CHECK(slot(last).bottom() <= list.bottom() + 1);
+    CHECK_FALSE(f.mixer->autoScroll(0.05));  // nothing more until the pointer moves
+    CHECK(f.mixer->autoScrolling());         // still held at the end
+    CHECK(y(others.front()) == otherAt);     // and the other strip's list has not moved
+    f.snapshot("mixer-fx-edge-scroll-2-at-the-end.png");
+    const auto before = f.app->head().version;
+    f.pointer(T::Move, {x, list.bottom() - 3});
+    CHECK(f.mixer->drag().drop == Drop::Reorder);
+    f.pointer(T::Up, {x, list.bottom() - 3});
+    CHECK_FALSE(f.mixer->autoScrolling());
+    CHECK(f.app->head().version == before + 1);  // one edit
+    CHECK(f.chain(a).back() == fx[2]);
+    // The rebuilt list is where the old one was scrolled to: the plug-in is
+    // in view where it was dropped.
+    f.refresh();
+    CHECK(slot(fx[2]).bottom() <= list.bottom() + 1);
+    CHECK(slot(fx[2]).y >= list.y);
+    f.snapshot("mixer-fx-edge-scroll-3-dropped.png");
+    // A plug-in picked up in the list's last row is inside the bottom zone:
+    // that zone waits until the pointer has left it once.
+    const ui::Point low = f.centre(f.node("mixer.fx." + fx[2]));
+    REQUIRE(low.y > list.bottom() - 24);
+    f.pointer(T::Down, low);
+    f.pointer(T::Move, {low.x + 12, low.y});
+    REQUIRE(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Fx);
+    CHECK_FALSE(f.mixer->autoScrolling());
+    f.pointer(T::Move, {low.x + 12, low.y + 3});  // still in it
+    CHECK_FALSE(f.mixer->autoScrolling());
+    f.pointer(T::Move, {x, middle});
+    f.pointer(T::Move, {x, list.y + 4});  // the other zone was never held
+    REQUIRE(f.mixer->autoScrolling());
+    const float down = y(fx.front());
+    CHECK(f.mixer->autoScroll(0.05));
+    f.root->frame(false);
+    CHECK(y(fx.front()) > down);
+    f.pointer(T::Move, {low.x + 12, low.y});  // and the first one scrolls now
+    CHECK(f.mixer->autoScrolling());
+    f.root->key(SDLK_ESCAPE);
+    CHECK_FALSE(f.mixer->autoScrolling());  // a drag given up scrolls no more
+    f.pointer(T::Up, {low.x + 12, low.y});
+    // Picked up in the last row and taken straight past the list's end: it
+    // has left the zone, and scrolls.
+    f.pointer(T::Down, low);
+    f.pointer(T::Move, {low.x + 12, low.y});
+    CHECK_FALSE(f.mixer->autoScrolling());
+    f.pointer(T::Move, {low.x + 12, list.bottom() + 10});
+    CHECK(f.mixer->autoScrolling());
+    f.root->key(SDLK_ESCAPE);
+    f.pointer(T::Up, {low.x + 12, list.bottom() + 10});
+    CHECK(f.chain(a).back() == fx[2]);
+    CHECK(f.errors.empty());
+}
+
+TEST_CASE("mixer: a plug-in or an output held over a pinned master scrolls no strips") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::string> ids;
+    for (int i = 0; i < 30; ++i) ids.push_back(f.addTrack("channel", "T"));
+    const auto m2 = f.addTrack("master", "M2");
+    const std::string first = ids.front();
+    const auto fx = f.addFx(first, "Hickory");
+    f.refresh();
+    using T = ui::PointerEvent::Type;
+    using Drop = gui::Mixer::DragView::Drop;
+    const ui::Rect area = f.node("mixer.scrolled")->bounds();
+    // More strips than fit, and the masters pinned past the edge of the
+    // strips that scroll.
+    REQUIRE(f.strip(ids.back()).node->bounds().x > area.right());
+    const ui::Point master = f.centre(f.node("mixer.faderrow." + m2));
+    REQUIRE(master.x > area.right());
+    const auto x = [&] {
+        f.root->frame(false);
+        return f.strip(ids[1]).node->bounds().x;
+    };
+    const float x0 = x();
+    const auto rests = [&] {
+        CHECK_FALSE(f.mixer->autoScrolling());
+        CHECK_FALSE(f.mixer->autoScroll(0.25));
+        CHECK(x() == x0);
+    };
+    // A plug-in: at the edge of the strips that scroll it would scroll them;
+    // over the master, where it can be dropped, it scrolls nothing.
+    f.pointer(T::Down, f.centre(f.node("mixer.fx." + fx)));
+    f.pointer(T::Move, {area.right() - 4, master.y});
+    REQUIRE(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Fx);
+    CHECK(f.mixer->autoScrolling());
+    f.pointer(T::Move, master);
+    CHECK(f.mixer->drag().drop == Drop::Copy);
+    CHECK(f.mixer->drag().target == m2);
+    rests();
+    f.root->key(SDLK_ESCAPE);
+    f.pointer(T::Up, master);
+    // An output, held over the master to send to it.
+    f.pointer(T::Down, f.centre(f.node("mixer.out." + first)));
+    f.pointer(T::Move, master);
+    REQUIRE(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Send);
+    CHECK(f.mixer->drag().drop == Drop::Copy);
+    CHECK(f.mixer->drag().target == m2);
+    rests();
+    f.root->key(SDLK_ESCAPE);
+    f.pointer(T::Up, master);
+    // A strip there is past the edge of its own kind's strips: they scroll
+    // on, so that it can be put last.
+    f.pointer(T::Down, f.empty(first));
+    f.pointer(T::Move, {master.x, f.empty(first).y});
+    REQUIRE(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Strip);
+    CHECK(f.mixer->autoScrolling());
+    CHECK(f.mixer->autoScroll(0.25));
+    CHECK(x() < x0);
+    f.root->key(SDLK_ESCAPE);
+    f.pointer(T::Up, master);
+    CHECK(f.errors.empty());
+}
+
+TEST_CASE("mixer: a drag held still at the edge shows its target as the strips scroll under it") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::string> ids;
+    for (int i = 0; i < 30; ++i) ids.push_back(f.addTrack("channel", "T"));
+    const std::string first = ids.front();
+    const auto fx = f.addFx(first, "Hickory");
+    f.refresh();
+    using T = ui::PointerEvent::Type;
+    using namespace std::chrono;
+    using DragView = gui::Mixer::DragView;
+    const ui::Rect area = f.node("mixer.scrolled")->bounds();
+    REQUIRE(f.strip(ids.back()).node->bounds().x > area.right());
+    const ui::Point edge{area.right() - 4, f.empty(first).y};
+    const ui::Point middle{area.x + area.w / 2, edge.y};
+    // The strip under a point, from where the layout has put the strips.
+    const auto over = [&](ui::Point p) {
+        for (const auto& s : f.mixer->strips())
+            if (s.node->bounds().contains(p)) return s.track;
+        return std::string();
+    };
+    const auto pass = [&](milliseconds step) {  // the loop's
+        f.mixer->sync(f.now += step);
+        f.root->frame(false);
+    };
+    const auto same = [](const ui::Rect& a, const ui::Rect& b) {
+        return a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h;
+    };
+
+    // A plug-in held at the right edge, and not moved again: the strips
+    // scroll under it, and the strip it would be copied to is the one that
+    // has come under the pointer.
+    f.pointer(T::Down, f.centre(f.node("mixer.fx." + fx)));
+    f.pointer(T::Move, edge);
+    REQUIRE(f.mixer->drag().kind == DragView::Kind::Fx);
+    REQUIRE(f.mixer->autoScrolling());
+    const std::string began = over(edge);
+    REQUIRE_FALSE(began.empty());
+    CHECK(f.mixer->drag().target == began);
+    for (int i = 0; i < 200 && (over(edge).empty() || over(edge) == began); ++i)
+        pass(milliseconds(25));
+    const std::string now = over(edge);
+    REQUIRE_FALSE(now.empty());
+    REQUIRE(now != began);
+    pass(milliseconds(0));  // a pass that takes no time moves nothing
+    REQUIRE(over(edge) == now);
+    CHECK(f.mixer->drag().drop == DragView::Drop::Copy);
+    CHECK(f.mixer->drag().target == now);
+    const ui::Rect strip = f.strip(now).node->bounds();
+    CHECK(same(f.mixer->drag().marker, strip.intersect(f.strip(now).node->parent()->bounds())));
+    f.snapshot("mixer-edge-scroll-3-still-pointer.png");
+    f.root->key(SDLK_ESCAPE);
+    f.pointer(T::Up, edge);
+
+    // A strip held there: the insertion bar and the moves a release would
+    // make are those a fresh look at the same point gives.
+    std::string held;
+    for (const auto& id : ids)
+        if (held.empty() && f.strip(id).node->bounds().x >= area.x + 8) held = id;
+    REQUIRE_FALSE(held.empty());
+    f.pointer(T::Down, f.empty(held));
+    f.pointer(T::Move, edge);
+    REQUIRE(f.mixer->drag().kind == DragView::Kind::Strip);
+    REQUIRE(f.mixer->autoScrolling());
+    const auto moves = [&] {
+        std::vector<std::pair<std::string, std::size_t>> out;
+        for (const auto& m : f.mixer->drag().moves) out.emplace_back(m.track.str(), m.index);
+        return out;
+    };
+    const auto moves0 = moves();
+    REQUIRE_FALSE(moves0.empty());
+    const float x0 = f.strip(ids.back()).node->bounds().x;
+    for (int i = 0; i < 12; ++i) pass(milliseconds(25));
+    CHECK(x0 - f.strip(ids.back()).node->bounds().x > 96 + 48);  // more than a strip and a half
+    pass(milliseconds(0));
+    const DragView still = f.mixer->drag();
+    const auto stillMoves = moves();
+    CHECK(still.drop == DragView::Drop::Reorder);
+    CHECK(stillMoves != moves0);
+    f.pointer(T::Move, edge);  // the fresh look
+    CHECK(f.mixer->drag().drop == still.drop);
+    CHECK(same(f.mixer->drag().marker, still.marker));
+    CHECK(moves() == stillMoves);
+
+    // Leaving the zone ends the scroll's clock: held at the edge again after
+    // a pause in the middle, the first pass only starts it, however long the
+    // pause was.
+    const auto at = [&] {
+        f.root->frame(false);
+        return f.strip(ids.back()).node->bounds().x;
+    };
+    f.pointer(T::Move, middle);
+    CHECK_FALSE(f.mixer->autoScrolling());
+    pass(milliseconds(10));
+    f.pointer(T::Move, edge);
+    REQUIRE(f.mixer->autoScrolling());
+    const float s0 = at();
+    pass(seconds(10));
+    CHECK(at() == s0);
+    pass(milliseconds(25));
+    CHECK(at() < s0);
+    f.root->key(SDLK_ESCAPE);
+    f.pointer(T::Up, edge);
+    CHECK(f.errors.empty());
+}
+
+TEST_CASE("mixer: a plug-in list keeps its place when the strips are rebuilt") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    const auto b = f.addTrack("channel", "B");
+    std::vector<std::string> fx;
+    for (int i = 0; i < 12; ++i) fx.push_back(f.addFx(a, "Hickory"));
+    f.refresh();
+    ui::PointerEvent wheel;
+    wheel.type = ui::PointerEvent::Type::Wheel;
+    wheel.pos = f.centre(f.node("mixer.fx." + fx[2]));
+    wheel.wheelY = -3;
+    f.root->pointer(wheel);
+    f.root->frame(false);
+    const ui::Node* old = f.node("mixer.fx." + fx[0]);
+    const float y = old->bounds().y;
+    REQUIRE(y < f.strip(a).chain->bounds().y - 10);
+    // Another strip gets a plug-in: every strip is rebuilt.
+    f.addFx(b, "Hickory");
+    f.refresh();
+    CHECK(f.node("mixer.fx." + fx[0])->bounds().y == y);
+    // A chain that got shorter than the list shows comes back to its top.
+    for (int i = 3; i < 12; ++i) f.exec("fx.remove", R"({"fx":")" + fx[i] + R"("})");
+    f.refresh();
+    CHECK(f.node("mixer.fx." + fx[0])->bounds().y == f.strip(a).chain->bounds().y);
     CHECK(f.errors.empty());
 }
 
@@ -1243,10 +1728,18 @@ TEST_CASE("mixer: \"out\" opens the routing matrix; a drag onto a buss makes one
         sent = sent || (e.value->from.track && e.value->from.track->str() == a &&
                         e.value->to.track && e.value->to.track->str() == bus);
     CHECK(sent);
-    // A second drag onto a strip it already feeds marks nothing and adds nothing.
-    f.drag(f.centre(f.node("mixer.out." + a)), f.centre(f.node("mixer.faderrow." + bus)), false);
+    // A second drag onto a strip it already feeds marks nothing and adds
+    // nothing: the buss refuses it. Over its own strip nothing refuses it.
+    f.pointer(ui::PointerEvent::Type::Down, f.centre(f.node("mixer.out." + a)));
+    f.pointer(ui::PointerEvent::Type::Move, f.centre(f.node("mixer.faderrow." + a)));
+    CHECK(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Send);
+    CHECK(f.mixer->drag().home);
+    CHECK(f.root->cursor() == ui::Cursor::Move);
+    f.pointer(ui::PointerEvent::Type::Move, f.centre(f.node("mixer.faderrow." + bus)));
     CHECK(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Send);
     CHECK(f.mixer->drag().drop == gui::Mixer::DragView::Drop::None);
+    CHECK_FALSE(f.mixer->drag().home);
+    CHECK(f.root->cursor() == ui::Cursor::NotAllowed);
     f.pointer(ui::PointerEvent::Type::Up, f.centre(f.node("mixer.faderrow." + bus)));
     CHECK(f.steps() == before + 1);
     CHECK(f.app->head().routes.size() == 1);

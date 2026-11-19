@@ -289,7 +289,8 @@ instructions are in `docs/guides/installing.md`.
   running while the transport is stopped; renderer deadline/event waits
   (ADR-0028); headless main-thread service driven by notifications and
   deadlines (ADR-0030), including MIDI controls, plug-in subscriptions,
-  render-ahead output consumption, jobs, restart and autosave; smooth plan swaps (10 ms ramps);
+  render-ahead output consumption, jobs, restart and autosave; smooth plan swaps (10 ms ramps,
+  a rack's plug-in stages carried as a chain's);
   strip, send and VCA level and pan edits applied to the running plan without
   compiling, also once playrate scheduling has started (ADR-0060), FX wet and
   bypass, mute and solo edits applied the same way (ADR-0093), patch-only FX
@@ -308,7 +309,8 @@ instructions are in `docs/guides/installing.md`.
   not the uninterrupted pre-locate swap crossfade. Readiness and sample counts
   decide correctness; a watchdog abort is separately labelled and exits 124.
   Rack modules restart at locates, so the retained-pool VCA-level reproducers
-  in `tests/fuzz/plan-soak-corpus/` now pass.
+  in `tests/fuzz/plan-soak-corpus/` now pass; a rack's plug-in stages empty
+  their dry delays and oversampling filters there too, as a chain's.
   `track.move` accepts reorders under a non-root buss and moves between
   sibling folders, and refuses destinations in the moved track's own subtree.
   Its portable command regression covers undo and cycle rollback; the
@@ -340,7 +342,14 @@ instructions are in `docs/guides/installing.md`.
   engine opens every output of the device (up to 64).
 - **Recording**: armed inputs to crash-readable WAV, input monitoring (needs
   the arm), MIDI monitoring and recording with overdub, loop recording into
-  takes, punch, count-in, metronome. Armed masters print their output in real
+  takes, punch, count-in, metronome. **File audition** (`audition.play`,
+  `audition.stop`, `audition.get`, ADR-0094): a WAV, FLAC or MP3 plays once on
+  outputs 1/2, stopped or playing, outside the project (no track, master or
+  meter, never in renders or recordings), fading out over 5 ms when stopped
+  or replaced. Its first 28,800,000 frames (counted at the higher of the
+  file's and the device's rates: ten minutes at 48 kHz, 2.5 at 192 kHz) are
+  read and resampled before it sounds, so a long file starts late; it plays from its start only; nothing plays it
+  on selection; the Browser's Play button is how the GUI reaches it. Armed masters print their output in real
   time onto a lane of their own (ADR-0057): the take is bit-identical to
   `render.mix` of that master in every executor; a master's items play after
   its fader, beside the live mix, with a lane mute, and are silent in the
@@ -604,11 +613,26 @@ instructions are in `docs/guides/installing.md`.
   yellow and orange to red just under 0 dB. The pointer's shape says what
   a press would do: resize arrows at an item's ends and fade corners, a
   note's ends, the loop range's ends, a row's lower edge and the panels'
-  edges, an I-beam over text, the move cursor on a thing being moved (not
-  yet: cursors in the rack, the routing matrix and for drops that are
-  refused). A drag held at the edge of the arrangement scrolls the view
-  and takes the thing in hand with it, and so does a note held at the
-  piano roll's edge (not yet in the rack or the mixer). The transport bar's
+  edges, an I-beam over text, the move cursor on a thing being moved, in
+  the rack too; a thing carried to a drop (a plug-in, a strip, a track
+  row, a rack module) shows the move cursor where it would land and "not
+  allowed" over a place that refuses it, as does a routing matrix
+  cell that cannot be connected. The status line names the control the
+  pointer rests on and the keys bound to its action (a track's controls in
+  the track list and the mixer, the transport bar, the toolbar; the side
+  panel, the MIDI editor's header and the floating windows have no names
+  yet). A drag held at the edge of the arrangement scrolls the view
+  and takes the thing in hand with it; so do a note held at the piano
+  roll's edge, a strip, plug-in or output held at the edge of the mixer's
+  strips, a plug-in held at an end of its strip's plug-in list, and
+  modules, a cable or a marquee held at the edge of the rack
+  window's space. The resize,
+  text and move cursors and the edge scroll in the arrangement and the
+  piano roll have been watched on a Linux desktop (Hyprland, the app
+  under XWayland), where the system draws the cursor and the frame clock
+  paces the scroll; the cursors of carried things, the edge scroll in the
+  mixer and the rack, and all of it on macOS and Windows are verified by
+  tests only. The transport bar's
   engine readout is in words ("48 kHz · 256 samples") and warns in colour
   only of a stopped engine, dropouts, render gaps or plug-in errors; the
   toolbar's buttons are quiet at rest. A side panel at the right edge,
@@ -622,8 +646,14 @@ instructions are in `docs/guides/installing.md`.
   undo step, and the browser stays; saved FX chains as a second kind,
   loaded with `fx.chain.load`; a row of either drags onto a track's row or
   mixer strip; a folder's audio and MIDI files as a third kind, added as
-  File > Import does or dragged into a lane; no audition of files, and
-  rack patches and the project's own media are not in the Browser) and the History
+  File > Import does or dragged into a lane; the audio the project already
+  holds as a fourth kind, Media, added or dragged the same way without a
+  second copy; Play on the Files and Media pages hears the chosen audio
+  file before it is added (`audition.play`, ADR-0094: on outputs 1/2, from
+  its start, its first 28,800,000 frames (ten minutes at 48 kHz, 2.5 at
+  192 kHz), not on selection alone, no MIDI files,
+  no position shown and no level control); MIDI sources and how often a
+  source is used are not listed, and rack patches are not in the Browser) and the History
   as tabs; its tab,
   width and open state are saved per project. Help exports the bundled
   skill as a copy or link, shows this copy's MCP commands and JSON, and registers
@@ -1321,7 +1351,8 @@ Engine and hosting:
   (3+) of a wide master cannot reach the device, and an output has no gain
   of its own. A key route from one output master into another master's path
   leaves the first one early at the device (a plan warning gives the
-  samples). The metronome always plays on outputs 1/2. Native CI has not yet
+  samples). The metronome and the file audition always play on outputs 1/2.
+  Native CI has not yet
   run the multi-output engine on macOS or Windows (CoreAudio and WASAPI
   opening every output of a device).
 - Overlapping gestures on a plugin without semantic parameters share one
@@ -1496,8 +1527,6 @@ GUI:
   Script-player headless pictures (`dsp.preview`) use framework 1.24.0's
   EGL, Metal and WGL renderers. Native CI requires pictures and pointer edits;
   missing devices/drivers return `dsp.no_picture` with a corrective hint.
-- No autoscroll during drags; no resize cursor; plugins can be dropped onto
-  mixer strips but not onto track-panel rows.
 
 Plugins:
 - Bracken, Ghyll, Pollia, Umber and Withy discard non-finite inputs before their recursive

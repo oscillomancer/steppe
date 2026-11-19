@@ -58,6 +58,7 @@
 #include "supple/ui/list.h"
 #include "supple/ui/root.h"
 #include "supple/ui/scroll_view.h"
+#include "supple/ui/shortcut.h"
 #include "supple/ui/text_field.h"
 #include "supple/views/envelope_lane.h"
 #include "tap_tempo_button.h"
@@ -236,6 +237,116 @@ TEST_CASE("recording writer errors stay visible while healthy targets continue")
     CHECK(status->valueText().find("Vocal-1.wav") != std::string::npos);
     CHECK(status->valueText().find("kept") != std::string::npos);
     a.snapshot("recording-write-error.png");
+    a.root->setContent(std::make_unique<ui::Node>("detached"));
+}
+
+// gui.md §2, Names: the status line says what the pointer rests on, and the
+// keys that do the same.
+TEST_CASE("the status line names the control under the pointer and its keys") {
+    App a;
+    if (!a.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    peaks::PeakService peaks(a.dir / "cache", [](std::function<void()> f) { f(); });
+    gui::MeterFeed meters;
+    gui::Shell shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters);
+    auto frame = std::make_unique<ui::Node>("window");
+    frame->layout.dir = ui::Layout::Dir::Column;
+    frame->add(gui::makeChrome(*a.root, *a.actions, gui::ChromeLayout::defaults()));
+    frame->add(shell.build(*a.root, *a.actions));
+    a.root->setContent(std::move(frame));
+    a.actions->addUi("ui.mixer", "View: mixer", [] {});  // the mixer's, which is not built here
+    a.key("Ctrl+T");                                     // a channel
+    shell.sync();
+    a.root->frame(false);
+    const ui::Node* status = a.root->find("status");
+    REQUIRE(status);
+    const std::string plain = status->valueText();  // the counts alone
+    CHECK(plain.find("1 track") != std::string::npos);
+    std::optional<model::Id> track;
+    for (const auto& e : a.app->head().tracks)
+        if (e.value->type == model::StripType::Channel) track = e.id;
+    REQUIRE(track);
+    auto& tcp = shell.arrange()->tcpPanel();
+    // The pointer comes to rest on a node; what the line then says after the counts.
+    auto rest = [&](const ui::Node* n) {
+        REQUIRE(n);
+        const ui::Rect b = n->bounds();
+        a.root->pointer({ui::PointerEvent::Type::Move, {b.x + b.w / 2, b.y + b.h / 2}});
+        shell.sync();
+        a.root->frame(false);
+        const std::string text = status->valueText();
+        REQUIRE(text.starts_with(plain));
+        return text.substr(plain.size());
+    };
+
+    // A row's buttons have names of their own.
+    CHECK(rest(tcp.controlNode(*track, "mute")) == " · Mute");
+    a.snapshot("status-names-1-mute.png");
+    CHECK(rest(tcp.controlNode(*track, "solo")) == " · Solo");
+    CHECK(rest(tcp.controlNode(*track, "polarity")) == " · Invert polarity");
+    CHECK(rest(tcp.controlNode(*track, "arm")) == " · Arm for recording");
+    CHECK(rest(tcp.controlNode(*track, "fader")) == " · Volume");
+    CHECK(rest(tcp.controlNode(*track, "env")) == " · Automation lanes");
+    // The monitor button says its mode, and the mode a click leaves it in.
+    const ui::Node* monitor = tcp.controlNode(*track, "monitor");
+    const std::string before = rest(monitor);
+    CHECK(before == " · Monitor the input: " + monitor->valueText());
+    const ui::Rect mb = monitor->bounds();
+    a.root->pointer({ui::PointerEvent::Type::Down, {mb.x + mb.w / 2, mb.y + mb.h / 2}, 1});
+    a.root->pointer({ui::PointerEvent::Type::Up, {mb.x + mb.w / 2, mb.y + mb.h / 2}, 1});
+    shell.sync();
+    a.root->frame(false);
+    CHECK(status->valueText() == plain.substr(0, plain.find("version")) + "version " +
+                                     std::to_string(a.app->head().version) +
+                                     " · Monitor the input: " + monitor->valueText());
+    CHECK(status->valueText().substr(status->valueText().find(" · ")) != before);
+    const std::string counts = status->valueText().substr(0, status->valueText().find(" · "));
+    auto after = [&](const ui::Node* n) {
+        REQUIRE(n);
+        const ui::Rect b = n->bounds();
+        a.root->pointer({ui::PointerEvent::Type::Move, {b.x + b.w / 2, b.y + b.h / 2}});
+        shell.sync();
+        a.root->frame(false);
+        const std::string text = status->valueText();
+        REQUIRE(text.starts_with(counts));
+        return text.substr(counts.size());
+    };
+
+    // A button that runs an action says the action's name and every key bound to it.
+    CHECK(after(a.root->find("transport.play")) == " · Transport: play/stop (Space)");
+    a.snapshot("status-names-2-play.png");
+    CHECK(after(a.root->find("transport.start")) == " · Transport: go to start (Home, W)");
+    // The primary modifier is said as the platform says it (Cmd on macOS).
+    CHECK(after(a.root->find("tool.history.undo")) ==
+          " · " + a.actions->registry().find("history.undo")->name +
+              ui::shortcutLabel(" (Ctrl+Z)"));
+    CHECK(after(a.root->find("tcp.mixer")) == ui::shortcutLabel(" · View: mixer (Ctrl+M, Alt+D)"));
+    // A row's button that an action can also reach says the keys once they are bound.
+    CHECK(after(tcp.controlNode(*track, "fx")) == " · Plug-in chain");
+    CHECK(after(a.root->find("transport.metronome")) == " · Metronome");
+
+    // Off every named control the line is as it was: the counts, then the last note.
+    CHECK(after(a.root->find("transport.position")) == "");
+    shell.setStatus("Saved");
+    CHECK(after(a.root->find("transport.position")) == " · Saved");
+    // A name takes the note's place while the pointer rests on its control…
+    CHECK(after(tcp.controlNode(*track, "solo")) == " · Solo");
+    // …but a note that arrives while it rests there shows (a press's error is
+    // not hidden behind the button's name), until the pointer goes elsewhere.
+    shell.setStatus("Solo failed");
+    CHECK(after(tcp.controlNode(*track, "solo")) == " · Solo failed");
+    CHECK(after(tcp.controlNode(*track, "mute")) == " · Mute");
+    CHECK(after(a.root->find("transport.position")) == " · Solo failed");
+    // A carried thing (a drag with its own cursor) is not a pointer at rest.
+    CHECK(after(tcp.controlNode(*track, "mute")) == " · Mute");
+    a.root->setDragCursor(ui::Cursor::Move);
+    shell.sync();
+    CHECK(status->valueText() == counts + " · Solo failed");
+    a.root->setDragCursor(std::nullopt);
+    shell.sync();
+    CHECK(status->valueText() == counts + " · Mute");
     a.root->setContent(std::make_unique<ui::Node>("detached"));
 }
 
@@ -4019,7 +4130,8 @@ TEST_CASE("a plugin dragged from the browser lands on the track row or strip und
     a.root->setContent(std::move(frame));
     auto sync = [&] {
         shell.sync();
-        mixer.sync();
+        mixer.sync(
+            std::chrono::steady_clock::time_point{std::chrono::hours(1)});  // nothing is held
         a.root->frame(false);
     };
     sync();
@@ -4128,9 +4240,13 @@ TEST_CASE("a plugin dragged from the browser lands on the track row or strip und
     CHECK_FALSE(drag.view().target);
     CHECK(a.root->overlay().children().size() == overlays + 1);
     REQUIRE(a.root->overlay().find("plugin.drag"));
+    // The pointer: "not allowed" where a release would do nothing, the move
+    // cursor over a track.
+    CHECK(a.root->cursor() == ui::Cursor::NotAllowed);
     drag.drag("com.example.none", "Nothing", ui::DragPhase::Move, centre(lane));
     REQUIRE(drag.view().target);
     CHECK(drag.view().target->track == bass);
+    CHECK(a.root->cursor() == ui::Cursor::Move);
     a.snapshot("plugin-drag.png");
     drag.drag("com.example.none", "Nothing", ui::DragPhase::Move, centre(strip->node->bounds()));
     REQUIRE(drag.view().target);
@@ -4138,12 +4254,23 @@ TEST_CASE("a plugin dragged from the browser lands on the track row or strip und
     // Released over nothing: no command, no report.
     drag.drag("com.example.none", "Nothing", ui::DragPhase::End, nowhere);
     CHECK_FALSE(drag.view().active);
+    CHECK_FALSE(a.root->dragCursor());  // the pointer is the nodes' again
     CHECK(a.root->overlay().children().size() == overlays);
     CHECK(drops.empty());
-    // Cancelled over a track: the same.
+    // Cancelled over a track: the same. Over the place the thing was picked
+    // from (the browser gives it) the pointer is the move cursor: its own
+    // place refuses nothing.
     drag.drag("com.example.none", "Nothing", ui::DragPhase::Begin, nowhere);
+    CHECK(a.root->dragCursor() == ui::Cursor::NotAllowed);
+    drag.home = [&] { return a.root->find("transport.play")->bounds(); };
+    drag.drag("com.example.none", "Nothing", ui::DragPhase::Move, nowhere);
+    CHECK_FALSE(drag.view().target);
+    CHECK(a.root->dragCursor() == ui::Cursor::Move);
+    drag.home = {};
     drag.drag("com.example.none", "Nothing", ui::DragPhase::Move, centre(lane));
+    CHECK(a.root->dragCursor() == ui::Cursor::Move);
     drag.drag("com.example.none", "Nothing", ui::DragPhase::Cancel, {});
+    CHECK_FALSE(a.root->dragCursor());
     CHECK_FALSE(drag.view().active);
     CHECK(a.root->overlay().children().size() == overlays);
     CHECK(drops.empty());

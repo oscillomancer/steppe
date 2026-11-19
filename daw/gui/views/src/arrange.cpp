@@ -39,11 +39,6 @@ constexpr float kMinBeatLabelPx = 62;
 // The breathing space every pair of ruler labels keeps (design units).
 constexpr float kLabelGap = 12;
 
-double steadyMs() {
-    using namespace std::chrono;
-    return duration<double, std::milli>(steady_clock::now().time_since_epoch()).count();
-}
-
 // A stored position in its timebase as seconds (Timebase::Time is already
 // seconds).
 double atSeconds(const time::TimeMap& tm, double pos, model::Timebase tb) {
@@ -1193,16 +1188,18 @@ void ArrangeView::show(const model::Session& session, const std::vector<model::C
     }
 }
 
-bool ArrangeView::poll(bool force) {
-    const double now = steadyMs();
-    // A drag held at an edge scrolls by the time since the last frame (at
-    // most 50 ms of it, so a stalled frame is not a jump).
+bool ArrangeView::poll(bool force, std::chrono::steady_clock::time_point at) {
+    const double now = std::chrono::duration<double, std::milli>(at.time_since_epoch()).count();
+    // A drag held at an edge scrolls by the time since the last pass (capped,
+    // so a stalled frame is not a jump; nothing on the scroll's first pass).
     bool scrolled = false;
     if (autoScrolling()) {
-        scrolled = autoScroll(std::min(50.0, now - edge_.atMs) / 1000.0);
-        edge_.atMs = now;
-        if (scrolled)
+        const double seconds = edge_.clock.step(at);
+        scrolled = autoScroll(seconds);
+        if (scrolled || seconds == 0)
             if (ui::Root* r = root()) r->requestAnimationFrame();
+    } else {
+        edge_.clock.reset();
     }
     if (!transportSource_) return scrolled;
     if (!force && now - lastPollMs_ < 15.0) return scrolled;
@@ -1422,15 +1419,6 @@ void ArrangeView::loadLayout(const json::Value& v) {
 
 ui::Cursor ArrangeView::cursorAt(ui::Point p) const { return gestures_->cursorAt(p); }
 
-namespace {
-// An edge scroll's speed, by how far the pointer is into the edge zone or
-// past the edge: slow enough at the zone's start to place something just
-// out of view, fast enough further out to cross a long project.
-float edgeSpeed(float depth) {
-    return depth <= 0 ? 0.0f : std::min(2400.0f, 120.0f + 30.0f * depth);
-}
-}  // namespace
-
 void ArrangeView::noteDrag(const ui::PointerEvent& e, bool ruler) {
     const bool dragging =
         ruler ? ruler_ && ruler_->dragging() : gestures_->state().drag != ItemGestures::Drag::None;
@@ -1442,18 +1430,13 @@ void ArrangeView::noteDrag(const ui::PointerEvent& e, bool ruler) {
         return;
     }
     const ui::Rect lanes = lanesRect();
-    auto along = [](float at, float from, float to) {
-        return at > to - kEdgeZone     ? edgeSpeed(at - (to - kEdgeZone))
-               : at < from + kEdgeZone ? -edgeSpeed(from + kEdgeZone - at)
-                                       : 0.0f;
-    };
-    const bool was = autoScrolling();
-    edge_.vx = along(e.pos.x, lanes.x, lanes.right());
-    edge_.vy = !ruler && gestures_->dragCrossesRows() ? along(e.pos.y, lanes.y, lanes.bottom()) : 0;
+    edge_.vx = ui::edgeScrollSpeed(e.pos.x, lanes.x, lanes.right());
+    edge_.vy = !ruler && gestures_->dragCrossesRows()
+                   ? ui::edgeScrollSpeed(e.pos.y, lanes.y, lanes.bottom())
+                   : 0;
     edge_.last = e;
     edge_.ruler = ruler;
     if (!autoScrolling()) return;
-    if (!was) edge_.atMs = steadyMs();
     if (ui::Root* r = root()) r->requestAnimationFrame();  // poll advances it
 }
 

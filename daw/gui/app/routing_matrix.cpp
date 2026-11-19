@@ -312,6 +312,15 @@ class Grid : public ui::Node {
         c.fillRect({b.x, cells.y - 1, b.w, 1}, t.color("rule"));
     }
 
+    // A cell that cannot be connected says so before the click (gui.md §2):
+    // the cells drawn struck through, with no send to select.
+    ui::Cursor cursorAt(ui::Point p) const override {
+        const auto cell = cellAt(p);
+        if (!cell || !m_.sendsAt(cell->first, cell->second).empty()) return ui::Cursor::Arrow;
+        return m_.blocked(cell->first, cell->second).empty() ? ui::Cursor::Arrow
+                                                             : ui::Cursor::NotAllowed;
+    }
+
     bool onPointer(const ui::PointerEvent& e) override {
         using T = ui::PointerEvent::Type;
         if (e.type == T::Move || e.type == T::Enter) {

@@ -926,8 +926,13 @@ void RackWindow::open(std::optional<model::Id> rack) {
     bh.add = [this](const std::string& type) { (void)addModule(type); };
     bh.menu = [this](const std::string& type, ui::Point at) { browserMenu(type, at); };
     bh.dragOver = [this](const std::string& name, std::optional<ui::Point> at) {
-        if (space_)
-            space_->dragTypeOver(name, at && space_->bounds().contains(*at) ? at : std::nullopt);
+        const bool lands = space_ && at && space_->bounds().contains(*at);
+        if (space_) space_->dragTypeOver(name, lands ? at : std::nullopt);
+        // In hand: the move cursor over the space and over the list it came
+        // from (no point: back over the list), "not allowed" elsewhere.
+        root().setDragCursor(
+            name.empty() ? std::nullopt
+                         : std::optional(lands || !at ? ui::Cursor::Move : ui::Cursor::NotAllowed));
     };
     bh.drop = [this](const std::string& type, ui::Point at) {
         if (space_ && space_->bounds().contains(at)) (void)addModule(type, space_->toSpace(at));
@@ -1216,6 +1221,14 @@ void RackWindow::watch(bool on) {
 
 bool RackWindow::tick(std::chrono::steady_clock::time_point now) {
     if (plugins_ && plugins_->isOpen()) plugins_->tick();
+    // A drag held at the space's edge pans by the time since the last pass
+    // (capped, so a stalled frame is not a jump).
+    if (space_ && space_->autoScrolling()) {
+        const double seconds = edgeClock_.step(now);
+        if (space_->autoScroll(seconds) || seconds == 0) root().requestAnimationFrame();
+    } else {
+        edgeClock_.reset();
+    }
     const bool captured = pollCapture();  // with the window closed too
     bool shown = captured;
     if (isOpen() && waitsForPlay() != waiting_) {  // played or stopped, from anywhere
@@ -1497,9 +1510,9 @@ class PickList : public ui::Node {
         list_ = &emplace<ui::List>(id + ".list");
         list_->layout.height = ui::SizeRule::fraction();
         list_->rowHeight = 26;
-        auto& hint = emplace<ui::Label>(id + ".hint", "Enter chooses · Esc closes", ui::Font::Ui,
+        auto& keys = emplace<ui::Label>(id + ".hint", "Enter chooses · Esc closes", ui::Font::Ui,
                                         "caption", "ink-faint");
-        hint.layout.height = ui::SizeRule::fixed(16);
+        keys.layout.height = ui::SizeRule::fixed(16);
         search_->onChange = [this](const std::string& q) { filter(q); };
         search_->onSubmit = [this](const std::string&) { choose(); };
         search_->onCancel = [this] { root_.closePopup(); };

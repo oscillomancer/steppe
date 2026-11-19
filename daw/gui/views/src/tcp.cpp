@@ -3,6 +3,7 @@
 // Copyright (c) 2026 Supple Audio
 #include "supple/views/tcp.h"
 
+#include "supple/views/control_names.h"
 #include "supple/views/envelope_lane.h"
 
 #include <SDL3/SDL_keycode.h>
@@ -340,6 +341,19 @@ TcpPanel::Row::Row(TcpPanel& panel, std::size_t slot)
     // Secondary buttons are text alone until the pointer is on them; the
     // input stays a boxed field, since it shows a value.
     fx_->quiet = addFx_->quiet = true;  // "env" and "out" are boxed, as "out" is in the mixer
+    // What the status line calls each while the pointer rests on it.
+    mute_->hint = names::kMute;
+    laneMute_->hint = names::kLaneMute;
+    solo_->hint = names::kSolo;
+    polarity_->hint = names::kPolarity;
+    mono_->hint = names::kMono;
+    fader_->hint = names::kVolume;
+    pan_->hint = names::kPan;
+    fx_->hint = names::kChain;
+    addFx_->hint = names::kAddFx;
+    input_->hint = names::kInput;
+    env_->hint = names::kEnvelopes;
+    out_->hint = names::kRouting;
 }
 
 TcpPanel::Row::~Row() = default;
@@ -588,7 +602,13 @@ void TcpPanel::Row::paint(ui::Canvas& c) {
 ui::Cursor TcpPanel::Row::cursorAt(ui::Point p) const {
     const bool grip = track_.has_value() && panel_.cb_.resizeTrack &&
                       p.y >= bounds().bottom() - TcpRowGeometry::kResizeGrip;
-    return resizing_ || grip ? ui::Cursor::ResizeVertical : ui::Cursor::Arrow;
+    if (resizing_) return ui::Cursor::ResizeVertical;
+    // A row in hand: the move cursor where a release would move it and over
+    // its own place, "not allowed" elsewhere when it has nowhere to go (no
+    // other row of its kind beside it).
+    if (const auto& r = panel_.reorder_; r && r->moved && track_ && r->track == *track_)
+        return r->moves.empty() && !r->home ? ui::Cursor::NotAllowed : ui::Cursor::Move;
+    return grip ? ui::Cursor::ResizeVertical : ui::Cursor::Arrow;
 }
 
 bool TcpPanel::Row::onPointer(const ui::PointerEvent& e) {
@@ -749,6 +769,8 @@ TcpPanel::TcpPanel(const TrackLayout& rowLayout, const Viewport& view, TcpCallba
         "tcp.add", "+ track", [this] { openAddMenu(add_->bounds(), ui::Placement::Above); });
     add_->layout.width = ui::SizeRule::fixed(56);
     add_->layout.height = ui::SizeRule::fixed(18);
+    mixer_->hint = {{}, "ui.mixer"};  // the action's own name and keys
+    add_->hint = {"Add a track", {}};
 }
 
 // The three strip types, offered by the "+" and by a right-click on the panel's
@@ -888,6 +910,8 @@ void TcpPanel::moveReorder(ui::Point p) {
 void TcpPanel::updateReorder(ui::Point p) {
     Reorder& r = *reorder_;
     r.moves.clear();
+    const auto own = layout_.indexOf(r.track);
+    r.home = own && rowRect(*own).contains({rowRect(*own).x, p.y});  // still over its own row
     auto selected = [this](model::Id id) { return cb_.selected && cb_.selected(id); };
     const std::vector<model::Id> group = reorderGroup(session_, r.track, selected);
     const model::Track* t = session_.tracks.find(r.track);
@@ -920,6 +944,7 @@ void TcpPanel::updateReorder(ui::Point p) {
         markerY = *end;
     }
     r.moves = reorderMoves(session_, r.track, selected, before);
+    r.home = r.home || r.moves.empty();  // or over the slot it is already in
     r.markerY = markerY;
 }
 
@@ -975,6 +1000,9 @@ class TcpPanel::EnvRow : public ui::Node {
                                        [this](bool on) { set("active", json::Value(on)); });
         hide_ = &emplace<ui::Button>(id + ".hide", "hide",
                                      [this] { set("visible", json::Value(false)); });
+        mode_->hint = {"Automation mode", {}};
+        active_->hint = {"Envelope on or off", {}};
+        hide_->hint = {"Hide the lane", {}};
     }
     void bind(const model::Id& env, int depth, const model::Session& session) {
         env_ = env;

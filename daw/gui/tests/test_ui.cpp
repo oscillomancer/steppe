@@ -14,6 +14,7 @@
 #include "supple/gui/png.h"
 #include "supple/json/parse.h"
 #include "supple/ui/controls.h"
+#include "supple/ui/edge_scroll.h"
 #include "supple/ui/forms.h"
 #include "supple/ui/list.h"
 #include "supple/ui/popup.h"
@@ -790,10 +791,86 @@ TEST_CASE("the pointer's shape is the cursor of the node under it, its parents o
     CHECK(root.cursor() == Cursor::ResizeHorizontal);
     root.pointer({PointerEvent::Type::Up, mid(field), 1});
     CHECK(root.cursor() == Cursor::Text);
+    // A drag that carries a thing sets the pointer itself, at once and over
+    // any node; given back, the node under the pointer has its say again.
+    root.setDragCursor(Cursor::NotAllowed);
+    CHECK(root.cursor() == Cursor::NotAllowed);
+    CHECK(fixture().window->cursor() == Cursor::NotAllowed);
+    move(mid(plain));
+    CHECK(root.cursor() == Cursor::NotAllowed);
+    root.setDragCursor(Cursor::Move);
+    CHECK(root.cursor() == Cursor::Move);
+    move(mid(field));
+    CHECK(root.cursor() == Cursor::Move);
+    root.setDragCursor(std::nullopt);
+    CHECK(root.cursor() == Cursor::Text);
+    // One left behind by an owner that went away ends with the next press.
+    root.setDragCursor(Cursor::NotAllowed);
+    root.pointer({PointerEvent::Type::Down, mid(plain), 1});
+    CHECK_FALSE(root.dragCursor());
+    CHECK(root.cursor() == Cursor::Arrow);
+    root.pointer({PointerEvent::Type::Up, mid(plain), 1});
+    move(mid(field));
     // A disabled node has no cursor of its own.
     field.enabled = false;
     move({mid(field).x + 1, mid(field).y});
     CHECK(root.cursor() == Cursor::Arrow);
+}
+// gui.md §2, Names: what the pointer rests on is called by its own name, or
+// by the first of its parents that has one.
+TEST_CASE("the root names the node under the pointer, or the first parent with a name") {
+    if (!fixture().ok) return;
+    Root root(*fixture().window, fixture().fonts, Theme::dark());
+    auto content = std::make_unique<Node>("root");
+    content->layout.dir = Layout::Dir::Row;
+    content->layout.padding = Insets::all(8);
+    content->layout.gap = 8;
+    auto& group = content->emplace<Box>("group");
+    group.interactive = true;
+    group.layout.dir = Layout::Dir::Column;
+    group.layout.width = SizeRule::fixed(100);
+    group.hint = {"Group", {}};
+    auto& inner = group.emplace<Box>("inner");  // a child with no name of its own
+    inner.interactive = true;
+    auto& named = content->emplace<Button>("named", "M");
+    named.layout.width = SizeRule::fixed(100);
+    named.hint = {"Mute", "track.mute"};
+    auto& plain = content->emplace<Box>("plain");
+    plain.interactive = true;
+    plain.layout.width = SizeRule::fixed(100);
+    root.setContent(std::move(content));
+    root.frame(false);
+    auto move = [&](Point at) { root.pointer({PointerEvent::Type::Move, at}); };
+    auto mid = [](const Node& n) {
+        return Point{n.bounds().x + n.bounds().w / 2, n.bounds().y + n.bounds().h / 2};
+    };
+    CHECK(root.hint().empty());  // before any pointer event
+    move(mid(named));
+    CHECK(root.hint() == Hint{"Mute", "track.mute"});
+    move(mid(inner));
+    CHECK(root.hint() == Hint{"Group", {}});
+    move(mid(plain));
+    CHECK(root.hint().empty());
+    // A pressed control keeps its name wherever the pointer is dragged.
+    root.pointer({PointerEvent::Type::Down, mid(named), 1});
+    move(mid(plain));
+    CHECK(root.hint() == Hint{"Mute", "track.mute"});
+    root.pointer({PointerEvent::Type::Up, mid(plain), 1});
+    move(mid(plain));
+    CHECK(root.hint().empty());
+    // A drag that carries a thing over other nodes names none of them.
+    move(mid(named));
+    root.setDragCursor(Cursor::Move);
+    CHECK(root.hint().empty());
+    root.setDragCursor(std::nullopt);
+    CHECK(root.hint() == Hint{"Mute", "track.mute"});
+    // The arm and monitor buttons name themselves; the monitor says its mode.
+    ArmButton arm("arm");
+    CHECK(arm.hintAt({}).name == "Arm for recording");
+    MonitorButton monitor("monitor");
+    CHECK(monitor.hintAt({}).name == "Monitor the input: off");
+    monitor.setMode(MonitorButton::Mode::Auto);
+    CHECK(monitor.hintAt({}).name == "Monitor the input: auto");
 }
 
 TEST_CASE("mixer controls: fader taper and gestures, pan, meter hold and clip, toggle") {
@@ -914,6 +991,70 @@ TEST_CASE("mixer controls: fader taper and gestures, pan, meter hold and clip, t
     CHECK(root.click("solo"));
     CHECK(soloed);
     CHECK(solo.on());
+}
+
+TEST_CASE("a vertical meter draws its scale's levels as lines, on the well and on a bar") {
+    REQUIRE_GL();
+    const Theme theme = Theme::dark();
+    Root root(*fixture().window, fixture().fonts, theme);
+    auto content = std::make_unique<Node>("root");
+    content->layout.dir = Layout::Dir::Row;
+    content->layout.padding = Insets::all(8);
+    auto& meter = content->emplace<Meter>("meter");
+    meter.layout.width = SizeRule::fixed(12);
+    meter.layout.height = SizeRule::fixed(164);
+    root.setContent(std::move(content));
+    root.frame(false);
+    REQUIRE(meter.bounds().h == 164);
+    // A pixel's colour is the token's, within what blending and rounding give.
+    auto shows = [&](const gui::Image& image, float x, float y, const char* token) {
+        const float ratio = root.pixelRatio();
+        const auto i =
+            (static_cast<std::size_t>(y * ratio) * static_cast<std::size_t>(image.width) +
+             static_cast<std::size_t>(x * ratio)) *
+            4;
+        const Color want = theme.color(token);
+        return std::abs(image.rgba[i] - static_cast<int>(std::lround(want.r * 255))) +
+                   std::abs(image.rgba[i + 1] - static_cast<int>(std::lround(want.g * 255))) +
+                   std::abs(image.rgba[i + 2] - static_cast<int>(std::lround(want.b * 255))) <=
+               6;
+    };
+    // Where the meter draws the line of `db`: the middle of its one-unit row,
+    // in the left lane.
+    auto row = [&](float db) {
+        const Rect b = meter.bounds();
+        return Point{b.x + 2, std::round(b.y + Meter::kClipLight +
+                                         (1 - Meter::position(db)) * (b.h - Meter::kClipLight)) +
+                                  0.5f};
+    };
+    const std::vector<float> marks{0, -12, -24, -36, -48};
+    // Without a scale an idle meter is its well, but for the line at 0 dB.
+    root.frame(false);
+    const gui::Image bare = root.readBack();
+    for (float db : marks)
+        CHECK_MESSAGE(shows(bare, row(db).x, row(db).y, db == 0 ? "ink-faint" : "well"), db);
+    // With one, each level is a line in the panel's colour, and the well
+    // shows between the lines.
+    meter.setMarks(marks);
+    root.frame(false);
+    const gui::Image scaled = root.readBack();
+    for (float db : marks) {
+        CHECK_MESSAGE(shows(scaled, row(db).x, row(db).y, db == 0 ? "ink-faint" : "panel"), db);
+        CHECK_MESSAGE(shows(scaled, row(db).x, row(db).y + 4, "well"), db);
+        CHECK_MESSAGE(shows(scaled, row(db).x, row(db).y - 4, "well"), db);
+    }
+    // A bar does not hide them: at -6 dB it covers the lines from -12 down,
+    // which still show, and it shows between them.
+    const float level[2] = {0.5f, 0.5f};
+    meter.push(level, level);
+    root.frame(false);
+    const gui::Image lit = root.readBack();
+    for (float db : marks) {
+        if (db == 0) continue;
+        CHECK_MESSAGE(shows(lit, row(db).x, row(db).y, "panel"), db);
+        CHECK_FALSE_MESSAGE(shows(lit, row(db).x, row(db).y + 4, "panel"), db);
+        CHECK_FALSE_MESSAGE(shows(lit, row(db).x, row(db).y + 4, "well"), db);
+    }
 }
 
 TEST_CASE("a disabled text field lies flat and its text is faint; it takes no click or text") {
@@ -1728,4 +1869,27 @@ TEST_CASE("rich text wraps across runs, keeps the spaces between them and grows 
     root.frame(false);
     CHECK(text.bounds().h < wide);
     CHECK(text.valueText() == "Short");
+}
+
+TEST_CASE("edge scroll: the speed by depth, and a clock that caps a stalled frame") {
+    // No scroll in the middle; from the zone's start it grows with depth, the
+    // same at both ends, and stops growing far outside.
+    CHECK(ui::edgeScrollSpeed(300, 100, 500) == 0);
+    CHECK(ui::edgeScrollSpeed(500 - ui::kEdgeScrollZone, 100, 500) == 0);
+    CHECK(ui::edgeScrollSpeed(480, 100, 500) == doctest::Approx(240));  // 4 units in
+    CHECK(ui::edgeScrollSpeed(120, 100, 500) == doctest::Approx(-240));
+    CHECK(ui::edgeScrollSpeed(500, 100, 500) > ui::edgeScrollSpeed(480, 100, 500));
+    CHECK(ui::edgeScrollSpeed(560, 100, 500) > ui::edgeScrollSpeed(500, 100, 500));  // past it
+    CHECK(ui::edgeScrollSpeed(5000, 100, 500) == 2400);
+    CHECK(ui::edgeScrollSpeed(-5000, 100, 500) == -2400);
+
+    using namespace std::chrono;
+    ui::EdgeScrollClock clock;
+    const steady_clock::time_point t0{hours(1)};
+    CHECK(clock.step(t0) == 0);  // the first pass only starts it
+    CHECK(clock.step(t0 + milliseconds(16)) == doctest::Approx(0.016));
+    CHECK(clock.step(t0 + milliseconds(16) + seconds(2)) == ui::EdgeScrollClock::kMaxStep);
+    CHECK(clock.step(t0) == 0);  // a time that went back is no step
+    clock.reset();
+    CHECK(clock.step(t0 + seconds(9)) == 0);  // a new scroll starts again
 }

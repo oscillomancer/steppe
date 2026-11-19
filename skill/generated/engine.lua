@@ -53,6 +53,33 @@ q = nil
 ---@class Steppe.audio_warp_reset_args
 ---@field items string[]
 
+---@class Steppe.audition_get_result
+---@field playing boolean
+---@field decoding boolean
+---@field path string
+---@field seconds number
+---@field position number
+---@field warnings? table[]
+
+---@class Steppe.audition_play_args
+---@field path string
+
+---@class Steppe.audition_play_result
+---@field path string
+---@field seconds number
+---@field sample_rate number
+---@field channels integer
+---@field truncated boolean
+---@field warnings? table[]
+
+---@class Steppe.audition_stop_result
+---@field playing boolean
+---@field decoding boolean
+---@field path string
+---@field seconds number
+---@field position number
+---@field warnings? table[]
+
 ---@class Steppe.autoitem_add_args
 ---@field env string Envelope id, e.g. "en_1".
 ---@field position? number
@@ -2225,6 +2252,11 @@ q = nil
 ---@field detach fun(args: Steppe.audio_warp_detach_args): table Detach selected items from jointly processed warp bundles.
 ---@field reset fun(args: Steppe.audio_warp_reset_args): table Remove selected items' warping while keeping detected hits.
 
+---@class Steppe.audition
+---@field get fun(): Steppe.audition_get_result Whether a file audition plays: its path, length and position (seconds).
+---@field play fun(args: Steppe.audition_play_args): Steppe.audition_play_result Play an audio file once on outputs 1/2, outside the project.
+---@field stop fun(): Steppe.audition_stop_result Stop the file audition (fading out over 5 ms); returns its state.
+
 ---@class Steppe.autoitem
 ---@field add fun(args: Steppe.autoitem_add_args): table Put an automation item on an envelope: a block that replaces it there.
 ---@field duplicate fun(args: Steppe.autoitem_duplicate_args): table Copy an automation item (pooled by default: edits to either reach both).
@@ -2596,6 +2628,7 @@ q = nil
 ---@class Steppe
 ---@field analyze Steppe.analyze Commands named analyze.*
 ---@field audio Steppe.audio Commands named audio.*
+---@field audition Steppe.audition Commands named audition.*
 ---@field autoitem Steppe.autoitem Commands named autoitem.*
 ---@field branch Steppe.branch Commands named branch.*
 ---@field cable Steppe.cable Commands named cable.*

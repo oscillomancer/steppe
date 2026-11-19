@@ -1563,13 +1563,25 @@ TEST_CASE("a drag held at the lanes' edge scrolls the view and takes the item wi
     // Held in the zone at the right edge it scrolls on, and the item, still
     // under the pointer, is further along the timeline each time.
     const ui::Point edge{lanes.right() - 4, body.y};
+    // How far (beats) the item in hand is from where the pointer holds it:
+    // no more than the snap to the grid allows.
+    const auto beatAt = [&](float x) { return f.app->head().timeMap->beatAt(f.view->timeAt(x)); };
+    const double grab = beatAt(body.x) - position;
+    const auto pinned = [&](ui::Point pointer) {
+        return position + g.state().deltaBeats - (beatAt(pointer.x) - grab);
+    };
     f.pointer(T::Move, edge);
     REQUIRE(f.view->autoScrolling());
+    CHECK(std::abs(pinned(edge)) <= g.gridBeats() / 2);
     const double before = g.state().deltaBeats;
     CHECK(f.view->autoScroll(0.5));
     const double once = f.view->viewport().startSeconds;
     CHECK(once > start);
     CHECK(g.state().deltaBeats > before);
+    // The item stayed under the pointer: it moved by what the view scrolled,
+    // many grid steps.
+    CHECK(g.state().deltaBeats - before > 10 * g.gridBeats());
+    CHECK(std::abs(pinned(edge)) <= g.gridBeats() / 2);
     CHECK(f.view->autoScroll(0.5));
     CHECK(f.view->viewport().startSeconds > once);
     // Further out is faster: the same time scrolls more.
@@ -1577,6 +1589,22 @@ TEST_CASE("a drag held at the lanes' edge scrolls the view and takes the item wi
     f.pointer(T::Move, {lanes.right() + 60, body.y});
     CHECK(f.view->autoScroll(0.5));
     CHECK(f.view->viewport().startSeconds - near > near - once);
+    CHECK(std::abs(pinned({lanes.right() + 60, body.y})) <= g.gridBeats() / 2);
+    // The loop's pass steps it by the time since the pass before, and by no
+    // more than the cap: a frame that stalled for two seconds is a short
+    // step, not a jump. The first pass of a scroll only starts the clock.
+    {
+        using namespace std::chrono;
+        const steady_clock::time_point t0{hours(1)};
+        const double s0 = f.view->viewport().startSeconds;
+        f.view->poll(true, t0);
+        CHECK(f.view->viewport().startSeconds == s0);
+        f.view->poll(true, t0 + milliseconds(25));
+        const double step = f.view->viewport().startSeconds - s0;
+        CHECK(step > 0);
+        f.view->poll(true, t0 + milliseconds(25) + seconds(2));
+        CHECK(f.view->viewport().startSeconds - s0 == doctest::Approx(3 * step));
+    }
     // Back inside, it stops; the drop lands where the pointer is.
     f.pointer(T::Move, {lanes.x + lanes.w / 2, body.y});
     CHECK_FALSE(f.view->autoScrolling());

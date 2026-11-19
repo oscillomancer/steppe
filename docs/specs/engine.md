@@ -291,7 +291,8 @@ changed patch or state to it on the main thread during the compile
 (`InstancePool::get`). State crosses the swap when the executor adopts the
 new plan, matching nodes by id: fader, wet and Console 9 ramps
 (`carryMix`), held notes (`carryLiveNotes`, `carryRackMidi`), and delay
-histories. Held timeline notes carry only when the receiving instrument
+histories, a rack's plug-in stages' (wet ramp, dry delay, oversampling
+filters) as a chain's. Held timeline notes carry only when the receiving instrument
 instance is retained. Route and parent edge delay histories carry when
 source, destination, tap, kind and delay length match; changed lengths start
 empty. New plugins are instantiated and activated on the main thread before
@@ -711,6 +712,34 @@ into another's path can pull the first earlier; the plan then warns with the
 sample count. The metronome plays on outputs 1/2. Offline renders of any
 master use that master's own shift and latency, so the device output of each
 master equals its offline render at `outputLatency`.
+
+**File audition** (ADR-0094). `Engine::audition(voice)` (main thread) plays
+an `AuditionVoice` (decoded audio at the device's rate; `right` empty: mono)
+from its first sample at the next cycle: the callback adds it to outputs 1/2
+in `Engine::cycle`, after `cycleTransport` and before LTC (`runSync`) and the
+hardware MIDI lead's delay, in both executors, stopped, playing or counting
+in. It is outside the plan: no track, master, plug-in, Console 9 stage or
+meter sees it, renders never run the callback and recordings never contain
+it. A new voice or a stop (`audition(nullptr)`) fades what played over 5 ms
+(`kAuditionFadeSeconds`; a third request inside a fade cuts the older fade).
+A stopping engine adds nothing and `Engine::stop` drops the voice. Each
+request is immutable with a serial, published through one atomic pointer;
+the callback stores the smallest serial it may still read (`auditionKeep_`:
+the request it took, the voice playing, the one fading) and `service()`
+frees requests below it. `auditionState()` (any thread) gives the playing
+voice's serial (0: none), its frame and the serial last taken; the end of a
+voice notifies the main thread. `EngineApp::playAudition` reads the file's
+start with `audio::readAudioHead` (two channels), up to
+`AppOptions::auditionMaxFrames` (28,800,000) counted at the higher of the
+file's and the device's rates, so neither the decoded file nor the voice is
+longer (about 230 MB of stereo float; ten minutes at 48 kHz, 2.5 at 192 kHz;
+`truncated` when the file is longer), and resamples it to the device's rate on its own worker
+(`AuditionLoader`: one replaceable request, cancelled by a newer one or
+`stopAudition`, its result taken in `tick()`), then publishes the voice; a
+device restart before then drops it. `auditionStatus()` is what the GUI
+reads each frame (`playing` from `audition.play` until the end, `decoding`
+before the first sound). `stopAudition` runs when the engine halts and when a
+project is replaced.
 
 **Meters**. Per strip, the peak and the mean square of the strip's signal
 **after the fader and after the pan law, before the Console 9 encode**
@@ -1550,6 +1579,13 @@ bus and exposes it through the control protocol (Unix socket), Lua and MCP (prox
 `bridge_timing` (the live bridged calls' waits and why cycles overran, §5),
 anticipation misses, meter drops), `engine.settings.set {render_ahead_ms,
 worker_threads, automation_resolution, …}`.
+`audition.play {path}` (a WAV, FLAC or MP3, absolute or a name in the
+project's media folder; returns `path`, `seconds`, `sample_rate`,
+`channels`, `truncated`), `audition.stop` and `audition.get` (q: `playing`,
+`decoding`, `path`, `seconds`, `position`) play a file on outputs 1/2
+outside the project ("File audition" above, ADR-0094); errors
+`engine.stopped` and `audition.file`, a failed decode the event
+`audition.error {path, code, message}`.
 `OfflineResult::graph` supplies compiled graph text: input edges and residual
 padding, `lat_in` (the forward arrival diagnostic), `lat_chain` (compensated
 chain latency), and `timeline_shift` (processing position minus node-input
@@ -1760,8 +1796,10 @@ harness. See the tooling README for schemas, limits and invocation details.
   thread), and the engine stops every plugin there — no timeout, no stop from
   the main thread however long the device's period. Pause and
   seek `reset()` the plugins (no hanging notes); seek re-locates event and
-  automation cursors and clears delay lines. A seek, and a play from a
-  position, also restart every rack module (`rack::Instance::restart()`)
+  automation cursors and clears delay lines, a rack's plug-in stages' dry
+  delays and oversampling filters as a chain's (`locateRackStages`). A
+  seek, and a play from a position, also restart every rack module
+  (`rack::Instance::restart()`)
   and its feedback cables' history (`rack::Schedule::restart()`), once the
   executor owns the rack (ADR-0062 §5, 2026-11-14 note), where the
   plug-ins are reset: the rack then plays as an offline render from there.
@@ -1916,7 +1954,7 @@ harness. See the tooling README for schemas, limits and invocation details.
   stages take part as in-process ones do (§2.1, §5). A node leaving the live
   region stays live while the transport plays (`keepLive`).
 - **Smooth swaps:** a plan swap carries each strip's fader ramps and Console 9 state
-  and each insert's applied wet level into the new plan
+  and each insert's applied wet level, a rack's plug-in stages' too, into the new plan
   (`carryMix`, by track and by instance, per executor); a changed volume,
   pan, mute, solo, FX wet or bypass then ramps over 10 ms instead of
   stepping (a bypassed plugin keeps running until faded out). Automated

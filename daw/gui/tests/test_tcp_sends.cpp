@@ -853,6 +853,7 @@ TEST_CASE("TCP: Escape cancels a row drag; a plain click or a no-op drop commits
     f.pointer(Pointer::Move, above(f, f.a));
     f.root->frame(false);
     REQUIRE(f.root->find("tcp.reorder-ghost"));
+    CHECK(f.root->cursor() == ui::Cursor::Move);  // a release here moves the row
     f.root->key(SDLK_ESCAPE);
     f.pointer(Pointer::Up, above(f, f.a));
     f.sync();
@@ -864,13 +865,20 @@ TEST_CASE("TCP: Escape cancels a row drag; a plain click or a no-op drop commits
     // Dropping a track where it already is (just below itself) is not an edit.
     f.pointer(Pointer::Down, emptyPartOf(f, c));
     f.pointer(Pointer::Move, below(f, c));
+    CHECK(f.root->cursor() == ui::Cursor::Move);  // its own place refuses nothing
     f.pointer(Pointer::Up, below(f, c));
+    CHECK(f.root->cursor() != ui::Cursor::Move);
     f.sync();
     CHECK(f.history() == before);
-    // A buss with no other buss has nowhere to go among the channels.
+    // A buss with no other buss has nowhere to go among the channels, and
+    // the pointer says so.
     f.pointer(Pointer::Down, emptyPartOf(f, f.b));
+    f.pointer(Pointer::Move, {emptyPartOf(f, f.b).x + 6, emptyPartOf(f, f.b).y});
+    CHECK(f.root->cursor() == ui::Cursor::Move);  // still over its own row
     f.pointer(Pointer::Move, above(f, f.a));
+    CHECK(f.root->cursor() == ui::Cursor::NotAllowed);
     f.pointer(Pointer::Up, above(f, f.a));
+    CHECK(f.root->cursor() != ui::Cursor::NotAllowed);
     f.sync();
     CHECK(f.history() == before);
     CHECK(trackRows(f) == std::vector<model::Id>{f.a, c, f.b});

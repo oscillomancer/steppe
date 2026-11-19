@@ -17,7 +17,9 @@
 // (SelectionEdit); a fader or pan drag, a reorder or a copy is one undo step.
 #pragma once
 
+#include <chrono>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -26,6 +28,7 @@
 #include "meter_feed.h"
 #include "plugin_drag.h"
 #include "selection_edit.h"
+#include "supple/ui/edge_scroll.h"
 #include "supple/ui/root.h"
 #include "supple/views/track_layout.h"
 #include "track_menu.h"
@@ -51,7 +54,15 @@ class Mixer {
     void toggle();
     void setVisible(bool visible);
     bool visible() const;
-    void sync();                                     // every loop pass
+    // Every loop pass. `now` is the pass's time, which the caller gives (the
+    // app the clock's, a test its own); it steps the edge scroll.
+    void sync(std::chrono::steady_clock::time_point now);
+    // Edge scroll (gui.md §4.4): true while a drag is held at an edge of the
+    // strips that scroll, or a plug-in at an end of its strip's plug-in
+    // list; autoScroll advances it by `seconds` and is true when the strips
+    // or the list moved (sync calls it with the pass's time step).
+    bool autoScrolling() const;
+    bool autoScroll(double seconds);
     FxAttention& attention() { return attention_; }  // the marks' source (tests set its status)
 
     // The panel's height (UI state, persisted with the panels): clamped to what
@@ -109,6 +120,9 @@ class Mixer {
     struct DragView {
         enum class Kind { None, Strip, Fx, Send } kind = Kind::None;
         enum class Drop { None, Reorder, Copy } drop = Drop::None;
+        // Drop::None over the dragged thing's own place: a release changes
+        // nothing there, but nothing refuses it either.
+        bool home = false;
         bool active = false;  // past the movement threshold
         std::string track;    // the dragged strip, or the plug-in's own strip
         std::string fx;       // the dragged plug-in
@@ -129,8 +143,9 @@ class Mixer {
     void addStrip(const std::string& type);
     float maxHeight() const;
     void applyHeight();
-    void rebuild();
+    void rebuild(bool keepLists);  // keepLists: the plug-in lists stay scrolled where they are
     void update();
+    void follow();  // sync without the pass's time: the session, the selection, the height
     void dragStrip(const std::string& track, DragPhase phase, ui::Point p);
     void dragFx(const std::string& track, model::Id fx, DragPhase phase, ui::Point p,
                 unsigned mods);
@@ -142,6 +157,15 @@ class Mixer {
     void removeSend(model::Id route);
     void dragSend(const std::string& track, DragPhase phase, ui::Point p);
     void endDrag(bool commit);
+    void showDragCursor();
+    void noteDragEdge(ui::Point p, bool begin = false);
+    float edgeV_ = 0, edgeListV_ = 0;  // units per second: the strips'; a plug-in list's
+    // The zone of its plug-in list a plug-in was picked up in (top -1,
+    // bottom 1): it does not scroll until the pointer has left it once.
+    int edgeListHeld_ = 0;
+    bool edgeIdle_ = false, edgeResolving_ = false;  // at an end; inside autoScroll
+    unsigned dragMods_ = 0;                          // a plug-in drag's last modifiers
+    ui::EdgeScrollClock edgeClock_;                  // the time sync steps the edge scroll by
     void resolveStripDrop();
     void resolveFxDrop();
     const Strip* stripAt(ui::Point p) const;

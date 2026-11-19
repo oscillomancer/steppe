@@ -98,6 +98,17 @@ class Root {
     // The pointer's shape: the cursorAt of the node its events go to, kept
     // up to date after every pointer event and shown on the window.
     Cursor cursor() const { return cursor_; }
+    // The name of what the pointer rests on (Node::hintAt), for a status
+    // line: of the node its events go to, or the first of its parents that
+    // has one. Nothing while the pointer is outside the window, or while a
+    // drag carries a thing over other nodes.
+    Hint hint() const;
+    // A drag that carries a thing over other nodes (a plug-in out of the
+    // browser, a mixer strip) says what a release would do: Move where it
+    // would land, NotAllowed where it would do nothing. While set it
+    // replaces the nodes' answer; nullopt gives the pointer back to them.
+    void setDragCursor(std::optional<Cursor> cursor);
+    std::optional<Cursor> dragCursor() const { return dragCursor_; }
     // Where the pointer was last seen over this root (keys act on the panel
     // under it); empty before any pointer event.
     std::optional<Point> lastPointer() const { return lastPointer_; }
@@ -167,6 +178,7 @@ class Root {
     std::optional<Point> lastPointer_;
     Node* captured_ = nullptr;
     Cursor cursor_ = Cursor::Arrow;
+    std::optional<Cursor> dragCursor_;
     void updateCursor(Point at);
     std::optional<PointerEvent> pendingMotion_;  // for captured_ (handle)
     std::vector<Rect> damage_;

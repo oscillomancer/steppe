@@ -276,6 +276,7 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
         return Error("engine.config", "the engine needs a block size and two outputs", {},
                      "provide a positive block_size and at least two output channels");
     hardwareMidi_ = std::make_unique<detail::HardwareMidiRuntime>();
+    resetAuditions();  // the callback starts with nothing to play (ADR-0094)
     shutDown_ = false;
     shutdownRequested_ = false;
     // Before the backend starts: its callbacks push meter entries at once.
@@ -553,6 +554,7 @@ void Engine::stop() {
     plan_ = nullptr;
     livePlan_ = nullptr;
     syncRt_ = nullptr;  // no callback runs now
+    resetAuditions();   // a voice playing is dropped (ADR-0094)
     syncNext_.store(nullptr);
     syncAdopted_.store(nullptr);
     syncRuntimes_.clear();
@@ -1221,6 +1223,7 @@ std::optional<RackLatencyInfo> Engine::rackLatencies(model::Id id, std::uint64_t
 }
 
 void Engine::service() {
+    reclaimAuditions();  // voices the callback has moved past (ADR-0094)
     // Sync runtimes the callback has moved past (ADR-0071).
     if (const auto* adopted = syncAdopted_.load(std::memory_order_acquire)) {
         const auto at = std::find_if(syncRuntimes_.begin(), syncRuntimes_.end(),
@@ -1683,6 +1686,9 @@ void Engine::cycle(const float* const* in, float* const* out, std::uint32_t fram
     const double timelineBefore = rtTimeline_.load(std::memory_order_relaxed);
     const auto epochBefore = timelineEpoch_.load(std::memory_order_acquire);
     cycleTransport(in, out, frames);
+    // After the project's output, before LTC (runSync) and the hardware
+    // MIDI lead's delay (~InCycle), which apply to every channel.
+    mixAudition(out, frames);
     runSync(in, out, frames, timelineBefore, epochBefore, syncPlayed_);
     syncDevice_ += frames;
 }

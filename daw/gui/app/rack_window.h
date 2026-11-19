@@ -47,7 +47,9 @@ class RackWindow {
     bool isOpen() const { return space_ != nullptr; }
     void sync();  // reload when the session changed while open
     // Telemetry: reads what the visible modules show; true when it changed.
-    bool tick(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
+    // `now` is the pass's time, which the caller gives (the app the clock's,
+    // a test its own); it steps the space's edge scroll.
+    bool tick(std::chrono::steady_clock::time_point now);
     std::optional<std::chrono::steady_clock::time_point> nextDeadline() const;
     // A new rack on `track` (a channel; none: the selected channel, else a
     // new one), shown.
@@ -195,7 +197,8 @@ class RackWindow {
     bool browserVisible_ = true;
     int gesture_ = 0;
     std::optional<std::chrono::steady_clock::time_point> nextTelemetry_;
-    racks::Watchers watchers_;  // the modules in view (telemetry)
+    ui::EdgeScrollClock edgeClock_;  // the time tick steps the edge scroll by
+    racks::Watchers watchers_;       // the modules in view (telemetry)
     RackSpace* space_ = nullptr;
     RackTabs* tabs_ = nullptr;
     RackBrowser* browser_ = nullptr;

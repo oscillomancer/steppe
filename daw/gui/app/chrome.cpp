@@ -351,6 +351,7 @@ void fillChrome(ui::Node& bar, ui::Root& root, AppActions& actions, const Chrome
             "tool." + id, shortName(*a), [&actions, id] { actions.invoke(id); }, context);
         b.layout.height = ui::SizeRule::fixed(26);
         b.quiet = true;
+        b.hint = {{}, id};  // the status line says the action's whole name and its keys
     }
 }
 

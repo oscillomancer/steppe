@@ -219,12 +219,11 @@ class Roll : public ui::Node {
     }
 
     // Edge scroll, as in the arrange view (gui.md §4.3): a note drag or a
-    // marquee held within kEdgeZone of the roll's left or right edge, or
+    // marquee held within the zone at the roll's left or right edge, or
     // past it, scrolls in time; a move and a marquee also scroll the
     // pitches at the top and bottom. The press point goes with the content
     // and the drag's last event is delivered again, so the notes in hand
     // stay under the pointer.
-    static constexpr float kEdgeZone = 24;
     bool autoScrolling() const { return edgeVx_ != 0 || edgeVy_ != 0; }
     bool autoScroll(double seconds) {
         if (!autoScrolling()) return false;
@@ -261,18 +260,10 @@ class Roll : public ui::Node {
             if (!scrollsAtEdge() || e.type == T::Up || e.type == T::Cancel) edgeVx_ = edgeVy_ = 0;
             return;
         }
-        auto along = [](float at, float from, float to) {
-            auto speed = [](float depth) {
-                return depth <= 0 ? 0.0f : std::min(2400.0f, 120.0f + 30.0f * depth);
-            };
-            return at > to - kEdgeZone     ? speed(at - (to - kEdgeZone))
-                   : at < from + kEdgeZone ? -speed(from + kEdgeZone - at)
-                                           : 0.0f;
-        };
         const ui::Rect b = bounds();
         const bool rows = s_.drag == RollState::Drag::Move || s_.drag == RollState::Drag::Marquee;
-        edgeVx_ = along(e.pos.x, b.x, b.right());
-        edgeVy_ = rows ? along(e.pos.y, b.y, b.bottom()) : 0.0f;
+        edgeVx_ = ui::edgeScrollSpeed(e.pos.x, b.x, b.right());
+        edgeVy_ = rows ? ui::edgeScrollSpeed(e.pos.y, b.y, b.bottom()) : 0.0f;
         last_ = e;
         if (autoScrolling() && root()) root()->requestAnimationFrame();  // sync advances it
     }
@@ -964,7 +955,7 @@ std::unique_ptr<ui::Node> MidiEditor::build() {
     text.onChange = [this](const std::string&) {
         textDirty_ = true;
         compilePending_ = true;
-        lastEdit_ = std::chrono::steady_clock::now();
+        typedAt_.reset();  // the next pass starts the pause again
     };
     text.onSubmit = [this](const std::string&) { compileText(true, true); };
     text.onFocusChange = [this](bool focused) {
@@ -1272,7 +1263,7 @@ void MidiEditor::compileText(bool write, bool submit) {
 }
 
 std::uint64_t MidiEditor::beginGesture() {
-    sync();
+    follow({});
     gestureGeneration_ = app_.projectGeneration();
     return app_.head().version;
 }
@@ -1280,7 +1271,7 @@ std::uint64_t MidiEditor::beginGesture() {
 Status MidiEditor::edit(json::Value ops, std::optional<std::uint64_t> expectedVersion) {
     if (expectedVersion && (*expectedVersion != app_.head().version ||
                             gestureGeneration_ != app_.projectGeneration())) {
-        sync();
+        follow({});
         return Error("gui.midi.stale", "the MIDI item changed during the gesture", "/item",
                      "start the gesture again against the current item");
     }
@@ -1461,19 +1452,25 @@ bool MidiEditor::autoScroll(double seconds) {
     return true;
 }
 
-void MidiEditor::sync() {
+void MidiEditor::sync(std::chrono::steady_clock::time_point now) {
     if (!isOpen()) return;
     // A drag held at the roll's edge scrolls by the time since the last pass
-    // (at most 50 ms of it, so a stalled frame is not a jump).
+    // (capped, so a stalled frame is not a jump).
     if (autoScrolling()) {
-        const auto now = std::chrono::steady_clock::now();
-        const double seconds =
-            edgeAt_ ? std::min(0.05, std::chrono::duration<double>(now - *edgeAt_).count()) : 0.0;
-        edgeAt_ = now;
+        const double seconds = edgeClock_.step(now);
         if (autoScroll(seconds) || seconds == 0) root_.requestAnimationFrame();
     } else {
-        edgeAt_.reset();
+        edgeClock_.reset();
     }
+    follow(now);
+}
+
+// The editor follows the window, the session, the text's pending compile and
+// the playhead. A gesture calls it too, to start from the session as it is:
+// with no time, since it is not a pass, and the pause after typing is not
+// counted there.
+void MidiEditor::follow(std::optional<std::chrono::steady_clock::time_point> pass) {
+    if (!isOpen()) return;
     applyHeight();  // a smaller window or a taller neighbour shrinks the panel
     if (playhead_ && roll_) static_cast<RollPlayhead*>(playhead_)->place(roll_->bounds());
     const bool replaced = app_.projectGeneration() != projectGeneration_;
@@ -1496,9 +1493,15 @@ void MidiEditor::sync() {
         }
         if (replaced || !text_ || !text_->focused() || !textDirty_) reloadText();
     }
-    if (compilePending_ && std::chrono::steady_clock::now() - lastEdit_ >= kCompileDelay) {
-        compilePending_ = false;  // a failed compile waits for the next edit
-        compileText(true);
+    // The pause after typing is counted in the passes' time, from the first
+    // pass after the last keystroke (in the app, the pass that keystroke woke).
+    if (compilePending_ && pass) {
+        if (!typedAt_) {
+            typedAt_ = *pass;
+        } else if (*pass - *typedAt_ >= kCompileDelay) {
+            compilePending_ = false;  // a failed compile waits for the next edit
+            compileText(true);
+        }
     }
     if (eventList_ && listPane_ && listPane_->visible) eventList_->sync();
     if (auto t = app_.transport("get")) {
@@ -1512,7 +1515,8 @@ void MidiEditor::sync() {
 
 std::optional<std::chrono::steady_clock::time_point> MidiEditor::nextDeadline() const {
     if (!isOpen() || !compilePending_) return {};
-    return lastEdit_ + kCompileDelay;
+    // Typed in since the last pass: a pass is due at once, to start the pause.
+    return typedAt_ ? *typedAt_ + kCompileDelay : std::chrono::steady_clock::time_point{};
 }
 
 }  // namespace supple::gui
