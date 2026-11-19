@@ -402,6 +402,7 @@ void InstancePool::restart(Id id) {
     if (auto it = instances_.find(id); it != instances_.end()) {
         if (it->second.instance) retire(std::move(it->second.instance));
         instances_.erase(it);
+        ++availabilityChanges_;
     }
 }
 
@@ -424,6 +425,9 @@ host::Instance::Notifications InstancePool::service(Id id) {
     auto it = instances_.find(id);
     if (it == instances_.end() || !it->second.instance) return {};
     auto& entry = it->second;
+    const bool wasRestarting = entry.restarting, wasActive = entry.instance->active(),
+               wasFailed = entry.failure.has_value();
+    const std::uint32_t wasLatency = entry.rawLatency;
     // A restart requested while processing happens here once it has stopped.
     entry.instance->serviceMainThread();
     auto notes = entry.instance->takeNotifications();
@@ -447,6 +451,9 @@ host::Instance::Notifications InstancePool::service(Id id) {
         entry.failure->path = "/fx/" + id.str();
         entry.failure->hint = "Use fx.restart to recreate this instance from its saved state";
     }
+    if (entry.restarting != wasRestarting || entry.instance->active() != wasActive ||
+        entry.failure.has_value() != wasFailed || entry.rawLatency != wasLatency)
+        ++availabilityChanges_;
     if (notes.paramsRescan) entry.clearedAutomation.clear();
     for (const auto& clear : notes.paramsClear)
         if (clear.flags & (CLAP_PARAM_CLEAR_ALL | CLAP_PARAM_CLEAR_AUTOMATIONS)) {

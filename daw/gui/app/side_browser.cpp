@@ -721,16 +721,16 @@ std::string SideBrowser::playingText(const std::string& name, double seconds, bo
     return reading ? "Reading " + what + "\u2026" : "Playing " + what;
 }
 
-std::optional<SideBrowser::Playable> SideBrowser::playable() const {
-    if (kind_ == "files" && fileList_) {
+std::optional<SideBrowser::Playable> SideBrowser::playable(std::string_view kind) const {
+    if (kind == "files" && fileList_) {
         const auto row = fileList_->selected();
         if (!row || *row >= fileShown_.size()) return std::nullopt;
         const Entry& entry = entries_[fileShown_[*row]];
-        // A MIDI file has no instrument here to play it.
+        // Not a folder, and not a MIDI file: it has no instrument here to play it.
         if (entry.folder || entry.kind == "MIDI") return std::nullopt;
         return Playable{entry.path, entry.name};
     }
-    if (kind_ == "media" && mediaList_) {
+    if (kind == "media" && mediaList_) {
         const auto row = mediaList_->selected();
         if (!row || *row >= mediaShown_.size()) return std::nullopt;
         const Media& media = media_[mediaShown_[*row]];
@@ -751,7 +751,7 @@ void SideBrowser::togglePlay() {
         stopPlay();
         return;
     }
-    const auto file = playable();
+    const auto file = playable(kind_);
     if (!file) return;
     json::Value args = json::Value::object();
     args["path"] = file->path.string();
@@ -785,7 +785,7 @@ void SideBrowser::stopPlay() {
 
 void SideBrowser::playFollows() {
     if (auditioned_.empty()) return;
-    const auto file = playable();
+    const auto file = playable(kind_);
     if (!file || file->path != auditioned_) stopPlay();
 }
 
@@ -893,14 +893,9 @@ void SideBrowser::chosen() {
     if (chainAdd_ && chainList_) chainAdd_->enabled = chainList_->selected().has_value();
     if (fileAdd_ && fileList_) fileAdd_->enabled = fileList_->selected().has_value();
     if (mediaAdd_ && mediaList_) mediaAdd_->enabled = mediaList_->selected().has_value();
-    // Play is for an audio file: not a folder, not a MIDI file.
-    if (filePlay_ && fileList_) {
-        const auto row = fileList_->selected();
-        const Entry* entry =
-            row && *row < fileShown_.size() ? &entries_[fileShown_[*row]] : nullptr;
-        filePlay_->enabled = entry && !entry->folder && entry->kind != "MIDI";
-    }
-    if (mediaPlay_ && mediaList_) mediaPlay_->enabled = mediaList_->selected().has_value();
+    // Play is for an audio file: what a press would play, or nothing.
+    if (filePlay_) filePlay_->enabled = playable("files").has_value();
+    if (mediaPlay_) mediaPlay_->enabled = playable("media").has_value();
     root_.damageAll();
 }
 

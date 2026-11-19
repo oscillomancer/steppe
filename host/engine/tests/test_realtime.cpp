@@ -31,6 +31,7 @@
 
 #include <supple/audio/audio_file.h>
 #include <supple/base/files.h>
+#include <supple/clap/semantic_params.h>
 #include <supple/engine/jack.h>
 #include <supple/engine/realtime.h>
 #include <supple/host/clap_host.h>
@@ -68,6 +69,10 @@ struct EngineTestAccess {
     static std::size_t plans(const Engine& e) { return e.plans_.size(); }
     static void secondCompile(Engine& e, void (*change)(detail::Plan&)) {
         e.secondCompileForTests_ = change;
+    }
+    static void betweenCompiles(Engine& e, void (*hook)(void*), void* context) {
+        e.betweenCompilesForTests_ = hook;
+        e.betweenCompilesContext_ = context;
     }
     static void afterCollect(Engine& e, void (*hook)(void*), void* context) {
         e.afterCollectForTests_ = hook;
@@ -6513,6 +6518,67 @@ TEST_CASE("realtime: a second compile that differs fails the load (verifyPlans, 
         REQUIRE(engine.load(marked));
         CHECK(engine.verifiedPlans() == 2);
         CHECK(engine.planGeneration() == generation + 1);
+        engine.stop();
+    }
+}
+
+TEST_CASE(
+    "realtime: a restart asked for between the verifier's compiles is compiled again (route E)" *
+    doctest::description("rt")) {
+    // Each compile services the instances it takes and leaves a restarting
+    // one off the executors, so a plug-in that asks for a restart (from any
+    // thread) between the verifier's two compiles makes them differ. That
+    // is a valid load, not an engine fault (round 46 F1): the later compile
+    // becomes the plan and is checked against another.
+    const auto s = synthSession(0, "com.suppleaudio.test.gain");
+    Id gain;
+    for (const auto& e : s.fx)
+        if (e.value->plugin.id == "com.suppleaudio.test.gain") gain = e.id;
+    model::EditTxn t(s, s.version + 1);
+    t.create(model::Marker{});
+    const auto marked = t.commit().value();
+    for (bool ahead : {false, true}) {
+        INFO("anticipative " << ahead);
+        auto pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        Engine engine(
+            pool, media,
+            {.anticipative = ahead, .renderBlock = 256, .workers = 0, .verifyPlans = true});
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256}));
+        REQUIRE(engine.load(s));
+        REQUIRE(engine.awaitPlan());
+        engine.play();
+        if (ahead)
+            runAhead(engine, backend, 8, 256);
+        else
+            backend.run(8);
+        engine.service();
+        host::Instance* instance = pool.find(gain);
+        REQUIRE(instance);
+        REQUIRE(instance->processing());
+        REQUIRE_FALSE(pool.restarting(gain));
+        EngineTestAccess::betweenCompiles(
+            engine,
+            [](void* context) {
+                // A latency change: the fixture asks for a restart.
+                auto* in = static_cast<host::Instance*>(context);
+                REQUIRE(in->setPatch(
+                    in->latency() == 0
+                        ? R"({"schema": "supple.test-gain-patch/1.0", "params": {"latency": "short"}})"
+                        : R"({"schema": "supple.test-gain-patch/1.0", "params": {"latency": "none"}})",
+                    CLAP_SUPPLE_SET_REPLACE));
+                REQUIRE(in->restartPending());
+            },
+            instance);
+        const auto generation = engine.planGeneration();
+        const auto loaded = engine.load(marked);
+        EngineTestAccess::betweenCompiles(engine, nullptr, nullptr);
+        INFO((loaded ? std::string() : loaded.error().message));
+        REQUIRE(loaded);
+        CHECK(engine.verifiedPlans() == 2);
+        CHECK(engine.planGeneration() == generation + 1);
+        CHECK(pool.restarting(gain));  // the published plan leaves it off, as the request asks
         engine.stop();
     }
 }

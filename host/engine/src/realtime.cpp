@@ -723,17 +723,31 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
         }
     }
     if (options_.verifyPlans) {
-        // Route E stage 5: the same session compiled again gives the same plan.
-        auto again = build();
-        if (!again) return std::move(again).error();
-        if (secondCompileForTests_) secondCompileForTests_(**again);
-        const auto difference =
-            detail::firstDifference(detail::dumpPlan(*plan), detail::dumpPlan(**again));
-        if (!difference.empty())
-            return Error(
-                "engine.plan_differs",
-                "a second compile of the same session gave a different plan: " + difference, {},
-                "an engine fault, not the session's: report it with the project");
+        // Route E stage 5: the same session compiled again gives the same
+        // plan. A compile services each instance it takes, so a plug-in
+        // that asked for a restart, or one the executors have since stopped,
+        // can change the second (round 46 F1): then the later compile is
+        // the plan, checked against another, a few times at most.
+        for (int tries = 0;; ++tries) {
+            const auto changes = plugins_.availabilityChanges();
+            if (tries == 0 && betweenCompilesForTests_)
+                betweenCompilesForTests_(betweenCompilesContext_);
+            auto again = build();
+            if (!again) return std::move(again).error();
+            if (plugins_.availabilityChanges() != changes && tries < 3) {
+                plan = std::move(*again);
+                continue;
+            }
+            if (secondCompileForTests_) secondCompileForTests_(**again);
+            const auto difference =
+                detail::firstDifference(detail::dumpPlan(*plan), detail::dumpPlan(**again));
+            if (!difference.empty())
+                return Error(
+                    "engine.plan_differs",
+                    "a second compile of the same session gave a different plan: " + difference, {},
+                    "an engine fault, not the session's: report it with the project");
+            break;
+        }
         ++verifiedPlans_;
     }
     // Bridged FX on live nodes run in the callback under its bridge deadline
