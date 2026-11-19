@@ -326,6 +326,8 @@ specified here as it lands); so far:
   the instance.
 - **A patch-only edit publishes no plan** (stage 3, ADR-0092): see
   "Patch-only FX edits" below.
+- **A context-only edit publishes no plan** (ADR-0095): see "Context edits"
+  below.
 - **A plan has a canonical dump** (stage 5; `plan_dump.h`). `dumpPlan`
   (main thread, before publication) writes every field of a prepared plan
   that compile and prepare decide, one per line in plan order: nodes and
@@ -531,6 +533,18 @@ positions, and in between would play neither session's mix, such as silence
 when solo moves from a monitored track to a rendered one, in one edit or
 two. ADR-0060's level and pan edits and ADR-0092's patch edits are not
 gated.
+
+**Context edits (ADR-0095).** The plan does not read the context track (the
+`cx` collection), so a session that differs from the last one `Engine::load`
+took only in that collection is not compiled: every other collection, the
+project, the blobs and the unknown sections have the same storage, and
+`latest_` takes the new session. It is a shortcut of its own, tried before
+the scalar, mix and patch ones; the three equivalence checks do not list the
+context, because each of them qualifies a fast path only when something it
+handles changed, so an edit that changes nothing they handle falls through
+them to a compile. A context edit that comes with any other change compiles
+as that change does. When something in the plan reads the context (a note
+source, a rack module), an edit compiles only if the plan reads it.
 
 **Patch-only FX edits (ADR-0092).** A session that differs from the last one
 `Engine::load` took only in FX `patch` values, each of those FX having a

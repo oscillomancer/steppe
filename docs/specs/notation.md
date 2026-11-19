@@ -271,7 +271,11 @@ position, root position: the root in the voice's `octave` (default 3), each
 further chord tone the interval above the root from the table (so 9ths etc.
 sit above the octave), pitches sorted ascending. Slash chords `{C/E}` add
 the bass note in the octave below the root. `octave` applies to chord
-symbols only. Qualities (intervals in semitones from
+symbols only. The parser, the voicing and the quality table belong to
+`libs/harmony` (`specs/harmony.md` §2), which the compiler calls; the context
+track stores the same symbols (ADR-0095), with each quality in its canonical
+spelling (`maj` is the empty quality, `min` is `m`, `+` is `aug`, `sus` is
+`sus4`, `M7` is `maj7`, `min7` is `m7`, `ø` is `m7b5`). Qualities (intervals in semitones from
 the root):
 
 | symbol | intervals | symbol | intervals |
