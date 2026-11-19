@@ -77,6 +77,13 @@ namespace {
 // to model::Project can never pass as a scalar edit. Keep the collections in
 // step with model::Session.
 bool scalarOnly(const model::Session& a, const model::Session& b) {
+    {  // This list names every Session member: one added to Session is a build
+       // error here until scalarOnly says how it is compared.
+        [[maybe_unused]] const auto& [project, next, tempo, meters, timeMap, tracks, groups, items,
+                                      takes, media, midi, fx, routes, envelopes, autoItems, markers,
+                                      regions, racks, modules, cables, blobs, extraSections,
+                                      version] = a;
+    }
     model::Project x = *a.project;
     x.playrate.rate = b.project->playrate.rate;
     return x == *b.project && a.tempo.sameStorage(b.tempo) && a.meters.sameStorage(b.meters) &&
@@ -85,8 +92,9 @@ bool scalarOnly(const model::Session& a, const model::Session& b) {
            a.media.sameStorage(b.media) && a.midi.sameStorage(b.midi) && a.fx.sameStorage(b.fx) &&
            a.routes.sameStorage(b.routes) && a.envelopes.sameStorage(b.envelopes) &&
            a.autoItems.sameStorage(b.autoItems) && a.markers.sameStorage(b.markers) &&
-           a.regions.sameStorage(b.regions) && a.blobs == b.blobs &&
-           a.extraSections == b.extraSections;
+           a.regions.sameStorage(b.regions) && a.racks.sameStorage(b.racks) &&
+           a.modules.sameStorage(b.modules) && a.cables.sameStorage(b.cables) &&
+           a.blobs == b.blobs && a.extraSections == b.extraSections;
 }
 }  // namespace
 

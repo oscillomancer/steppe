@@ -85,9 +85,13 @@ EntryInfo entryInfo(const Session& s, Id id) {
             return info(s.modules, id);
         case Kind::Cable:
             return info(s.cables, id);
-        default:
+        // Kinds with no Session collection. No `default`: a new kind must be
+        // placed here or above, or the build fails (-Wswitch).
+        case Kind::Lane:
+        case Kind::RenderJob:
             return {};
     }
+    return {};
 }
 
 // The object's JSON form (null when absent), for field-level comparisons.
@@ -133,9 +137,11 @@ json::Value objectJson(const Session& s, Id id) {
             return enc(s.modules);
         case Kind::Cable:
             return enc(s.cables);
-        default:
+        case Kind::Lane:
+        case Kind::RenderJob:
             return {};
     }
+    return {};
 }
 
 // The JSON Schema of an object's encoding: it marks the ID fields.
@@ -184,9 +190,11 @@ const json::Value* objectSchema(const Session& s, Id id) {
             return &schemaFor(s.modules);
         case Kind::Cable:
             return &schemaFor(s.cables);
-        default:
+        case Kind::Lane:
+        case Kind::RenderJob:
             return nullptr;
     }
+    return nullptr;
 }
 
 // Structural lists that a replayed command recomputes on the target (a track
