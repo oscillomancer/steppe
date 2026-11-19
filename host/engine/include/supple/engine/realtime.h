@@ -531,6 +531,10 @@ struct EngineOptions {
     enum class Background { Auto, Normal, Fifo };
     Background background = Background::Auto;
     int backgroundPriority = 0;  // Fifo; 0: Engine::kBackgroundPriority
+    // Tests (route E stage 5): compile each plan a second time and compare
+    // the two (engine.md "Edits are being made cheaper"); a difference fails
+    // the load with engine.plan_differs. It doubles each compile's time.
+    bool verifyPlans = false;
 };
 
 // Output values remain in the host event domain (VST3 normalized). Main-thread
@@ -599,6 +603,8 @@ class Engine {
     const std::vector<model::EnvTarget>& writeHolds() const { return writeHolds_; }
     // Edits load() applied to the running plan without compiling (ADR-0060).
     std::uint64_t mixEdits() const { return mixEdits_; }  // main thread
+    // Main thread: the plans verifyPlans compiled twice and found equal.
+    std::uint64_t verifiedPlans() const { return verifiedPlans_; }
     // Patch-only FX edits load() applied to the instances without compiling
     // (ADR-0092).
     std::uint64_t patchEdits() const { return patchEdits_; }  // main thread
@@ -1036,6 +1042,9 @@ class Engine {
     // old plans are collected, where an executor may adopt a newer plan.
     void (*afterCollectForTests_)(void*) = nullptr;
     void* afterCollectContext_ = nullptr;
+    // Tests only (EngineTestAccess): changes the verifier's second compile
+    // (EngineOptions::verifyPlans) before the two are compared.
+    void (*secondCompileForTests_)(detail::Plan&) = nullptr;
     bool bridgedLive_ = false;  // main thread (bridgedLive())
     std::atomic<std::uint64_t> stoppedGen_{0};
     // The session the engine plays: the newest published plan's, or a mix or
@@ -1153,6 +1162,7 @@ class Engine {
     bool loadMixValues(const model::Session& session, const std::filesystem::path& projectDir);
     std::vector<model::EnvTarget> writeHolds_, staleCurves_;
     std::uint64_t mixEdits_ = 0;
+    std::uint64_t verifiedPlans_ = 0;
     // ADR-0093: the stream position, in this epoch, by which the renderer has
     // taken the last published edit it reads (loadMixValues).
     std::uint64_t renderedAheadEpoch_ = 0;

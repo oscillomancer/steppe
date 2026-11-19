@@ -6,9 +6,11 @@
 #include <charconv>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <fstream>
 #include <iostream>
 #include <numeric>
+#include "carry_matches.h"
 #include "rack_runtime.h"
 #include "realtime_common.h"
 #include "supple/base/files.h"
@@ -283,15 +285,32 @@ struct Soak {
     std::string phase = "setup";
     std::map<std::string, model::Counters> highWater;
     std::map<std::string, std::size_t> commands;
-    std::string initial, rack, rackOut, clock, vca, buss;
+    std::string initial, rack, rackOut, clock, vca, buss, rackPlugin, rackPluginFx;
+    // Route E stage 5: each settled head from the edits on, played again at
+    // the end with and without plan swaps that change nothing.
+    std::vector<model::Session> heads;
+    std::vector<std::string> headCommands;  // the journal row that made each
+    std::string lastCommand;
     EngineOptions options;
     bool passed = false;
     std::uint64_t swaps = 0;
+    std::uint64_t verified = 0;
     std::uint64_t checkpoints = 0;
     bool automaticCheckpoints = true;
+    // Route E stage 6: each settled head compiled again with a pool of the
+    // test's own (the app's pool and its retirement checks stay untouched),
+    // the last three kept, to compare the carries' lookups with the pairwise
+    // scans they replaced.
+    InstancePool matchPool = makePool();
+    std::deque<supple::engine::detail::Plan> matchPlans;
+    supple::engine::carry_test::CarryMatches carryMatches;
 
     Soak(std::uint64_t seed, bool ahead, bool explicitCheckpoints = false)
-        : options{.anticipative = ahead, .renderBlock = 128, .renderAheadMs = 20, .workers = 2} {
+        : options{.anticipative = ahead,
+                  .renderBlock = 128,
+                  .renderAheadMs = 20,
+                  .workers = 2,
+                  .verifyPlans = true} {
         automaticCheckpoints = !explicitCheckpoints;
         root = std::filesystem::temp_directory_path() /
                ("supple-plan-soak-" +
@@ -348,7 +367,19 @@ struct Soak {
                                       "\",\"type\":\"vca\",\"params\":{\"level\":-30}}"))["module"]
                   .asString();
         connect(clock + ".playing", vca + ".in");
-        connect(vca + ".out", rackOut + ".l");
+        // A latent plug-in module at half wet: what a plan swap must carry of
+        // a rack's plug-in stage (its dry delay, a wet or bypass ramp) is
+        // audible here, and the edits below move its bypass and latency.
+        rackPlugin =
+            call("module.add", args("{\"rack\":\"" + rack +
+                                    "\",\"plugin\":\"com.suppleaudio.test.gain\"}"))["module"]
+                .asString();
+        rackPluginFx = app->head().modules.find(*Id::parse(rackPlugin))->fx->str();
+        call("fx.patch.merge", args("{\"fx\":\"" + rackPluginFx +
+                                    "\",\"patch\":{\"params\":{\"latency\":\"short\"}}}"));
+        call("fx.set", args("{\"fx\":\"" + rackPluginFx + "\",\"wet\":50}"));
+        connect(vca + ".out", rackPlugin + ".in_l");
+        connect(rackPlugin + ".out_l", rackOut + ".l");
         call("env.add",
              args(R"({"track":"tr_2","param":"volume","points":[{"beat":0,"value":-24}]})"));
         initial = content(app->head());
@@ -361,6 +392,8 @@ struct Soak {
         settle();
         // Setup is fixed; replay starts with its initial window, then the edits.
         phase = "edits";
+        heads.push_back(app->head());
+        headCommands.push_back("(setup)");
         commands.clear();
         trace.clear();
         journal.close();
@@ -387,6 +420,7 @@ struct Soak {
         row["args"] = a;
         const auto line = json::writeCompact(row) + "\n";
         trace += line;
+        lastCommand = line;
         journal << line << std::flush;  // flushed BEFORE dispatch, also survives a sanitizer abort
         REQUIRE(journal.good());
         ++commands[command];
@@ -442,8 +476,13 @@ struct Soak {
         REQUIRE(app->head().fx.size() <= 8);
         REQUIRE(app->head().items.size() <= 9);
         REQUIRE(app->head().routes.size() <= 7);
-        REQUIRE(app->head().modules.size() <= 6);
+        REQUIRE(app->head().modules.size() <= 7);
         checkModel();
+        if (phase == "edits" && app->head().version != heads.back().version) {
+            heads.push_back(app->head());
+            headCommands.push_back(lastCommand);
+        }
+        if (phase == "edits") checkCarryMatches();
         if (phase == "edits" && automaticCheckpoints) audioCheckpoint();
     }
     void audioCheckpoint(const json::Value* replay = nullptr) {
@@ -499,6 +538,23 @@ struct Soak {
         backend.resume();
         watchdogContext = context;
     }
+    // The carries pair what the scans before route E stage 6 paired: from
+    // the previous plan and from the one before it (an executor that skipped
+    // a plan), in each executor's classes: the callback's (-1), the
+    // renderer's (0), the live region's (1), the renderer's handoff into it
+    // (1 from 0), against those scans (carry_matches.h). The soak has no
+    // MIDI send and no live region: test_racks.cpp's "carries pair what the
+    // pairwise scans paired" has them.
+    void checkCarryMatches() {
+        auto compiled = supple::engine::detail::compile(app->head(), matchPool, 0, kBlock, 48000);
+        REQUIRE_MESSAGE(compiled, (compiled ? "" : compiled.error().toString()));
+        matchPlans.push_back(std::move(*compiled));
+        if (matchPlans.size() > 3) matchPlans.pop_front();
+        for (std::size_t k = 0; k + 1 < matchPlans.size(); ++k)
+            supple::engine::carry_test::check(matchPlans[k], matchPlans.back(), carryMatches);
+        INFO(trace);
+        REQUIRE(carryMatches.wrong == 0);
+    }
     void step(std::string command, json::Value a = json::Value::object()) {
         call(std::move(command), std::move(a));
         settle();
@@ -516,14 +572,19 @@ struct Soak {
             return id.n != 0 && id.n != 3 && id.n != 4 && t.type == model::StripType::Channel;
         });
         auto extraTracks = ids(s.tracks, [](Id id, const auto&) { return id.n > 4; });
-        auto gains =
-            ids(s.fx, [](Id, const auto& f) { return f.plugin.id == "com.suppleaudio.test.gain"; });
+        auto gains = ids(s.fx, [&](Id id, const auto& f) {
+            return f.plugin.id == "com.suppleaudio.test.gain" && id.str() != rackPluginFx;
+        });
+        // Bypass and patch edits reach the rack's plug-in too (it stays).
+        auto tunable = gains;
+        tunable.push_back(rackPluginFx);
         auto items = ids(s.items, [](Id id, const auto&) { return id.n != 1; });
         auto sends = ids(s.routes, [](Id, const auto& route) {
             return !route.to.track || route.to.track->n != 4;
         });
         auto modules = ids(s.modules, [&](Id id, const auto&) {
-            return id.str() != rackOut && id.str() != clock && id.str() != vca;
+            return id.str() != rackOut && id.str() != clock && id.str() != vca &&
+                   id.str() != rackPlugin;
         });
         auto choose = [&](const auto& values) { return values[r.pick(values.size())]; };
         auto a = json::Value::object();
@@ -576,20 +637,12 @@ struct Soak {
                 step("fx.remove", a);
                 break;
             case 5:
-                if (gains.empty()) {
-                    addFx();
-                    break;
-                }
-                a["fx"] = choose(gains);
+                a["fx"] = choose(tunable);
                 a["bypass"] = bool(r.pick(2));
                 step("fx.set", a);
                 break;
             case 6:
-                if (gains.empty()) {
-                    addFx();
-                    break;
-                }
-                a["fx"] = choose(gains);
+                a["fx"] = choose(tunable);
                 a["patch"] = args("{\"params\":{\"gain\":" + std::to_string(-int(r.pick(19))) +
                                   ",\"latency\":\"" + (r.pick(2) ? "short" : "none") + "\"}}");
                 step("fx.patch.merge", a);
@@ -733,6 +786,8 @@ struct Soak {
         REQUIRE_FALSE(backend.bad());
         auto& engine = *app->engine();
         swaps = engine.planGeneration();
+        verified = engine.verifiedPlans();
+        REQUIRE(verified > 0);  // each compile checked against a second (route E stage 5)
         engine.stop();
         REQUIRE(EngineTestAccess::plans(engine) == 0);
         REQUIRE(EngineTestAccess::pending(engine) == 0);
@@ -783,7 +838,7 @@ struct Soak {
         std::size_t count = 0;
         for (const auto& [name, n] : commands) count += n;
         std::cout << "plan-soak completed commands=" << count << " published_plans=" << swaps
-                  << " audio_checkpoints=" << checkpoints
+                  << " verified_plans=" << verified << " audio_checkpoints=" << checkpoints
                   << " retired_plans=0 retired_fx=0 retired_modules=0" << std::endl;
         passed = true;
     }
@@ -808,6 +863,122 @@ struct Soak {
         }
     }
 };
+
+// Route E stage 5: a plan swap that changes nothing is inaudible. The soak's
+// heads play in turn on a manual device, one every kStepCycles callbacks
+// from a fixed cycle, the renderer full at each load, so that every run
+// takes each plan at the same position of both executors. With `noOps`, two
+// swaps that change nothing follow each edit: a marker added two cycles
+// after it (inside its 10 ms ramps) and removed at cycle 13. The two runs
+// must be the same, sample for sample: whatever a swap fails to carry
+// (a ramp, a delay history, a voice, a rack's plug-in stage) is heard.
+constexpr std::int64_t kStepCycles = 24, kMarkerAt = 2, kUnmarkAt = 13;
+struct Played {
+    std::vector<std::vector<float>> channels;
+    std::uint64_t noOps = 0;  // swaps that changed nothing
+};
+Played playHeads(const std::vector<model::Session>& heads, bool ahead, bool noOps) {
+    auto pool = makePool();
+    MediaCache media;
+    const auto frames = static_cast<std::int64_t>(heads.size()) * kStepCycles * kBlock;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = frames});
+    Engine engine(pool, media,
+                  {.anticipative = ahead,
+                   .renderBlock = 128,
+                   .renderAheadMs = 20,
+                   .workers = 2,
+                   .verifyPlans = true});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+    Played played;
+    std::int64_t cycle = 0;
+    // The renderer has rendered all it may: what it does next is decided
+    // by the callback's position alone, the same in every run.
+    const auto full = [&] {
+        untilReady("no-change swap: renderer full", [&] {
+            return EngineTestAccess::rendered(engine, std::numeric_limits<std::int64_t>::max());
+        });
+    };
+    // Both runs hear the engine's notifications at the same cycles, so a
+    // no-op compile never takes one early, and act on them as far as they
+    // go before the next callback. A plug-in restart (a latency change) is
+    // two steps: service() takes the plug-in off the executors, and a later
+    // one restarts it once it has stopped processing. The renderer stops it
+    // on its own thread as soon as it adopts the plan without it, so this
+    // waits for that adoption (and for the renderer to render all it may)
+    // before each service(), and services until nothing more is published:
+    // where a restart completes is then decided by the callback alone.
+    const auto settle = [&] {
+        for (int pass = 0;; ++pass) {
+            REQUIRE(pass < 8);
+            planReady(engine);
+            full();
+            const auto generation = engine.planGeneration();
+            engine.service();
+            if (engine.planGeneration() == generation) return;
+        }
+    };
+    const auto runTo = [&](std::int64_t until) {
+        runReady(engine, backend, until - cycle);
+        cycle = until;
+        settle();
+    };
+    const auto load = [&](const model::Session& s, bool compiles) {
+        full();  // it adopts at the same position in every run
+        const auto generation = engine.planGeneration();
+        REQUIRE(engine.load(s));
+        if (compiles) REQUIRE(engine.planGeneration() == generation + 1);
+        settle();
+    };
+    REQUIRE(engine.load(heads[0]));
+    engine.setLoop(0, 0.25, true);
+    engine.play();
+    for (std::size_t i = 0; i < heads.size(); ++i) {
+        const std::int64_t start = static_cast<std::int64_t>(i) * kStepCycles;
+        if (i > 0) load(heads[i], false);
+        runTo(start + kMarkerAt);
+        if (noOps) {
+            model::EditTxn t(heads[i], heads[i].version + 1);
+            t.create(model::Marker{});
+            load(t.commit().value(), true);
+        }
+        runTo(start + kUnmarkAt);
+        if (noOps) load(heads[i], true);
+        played.noOps += noOps ? 2 : 0;
+        runTo(start + kStepCycles);
+    }
+    engine.stop();
+    CHECK(engine.processErrors() == 0);
+    CHECK(engine.anticipationMisses() == 0);
+    CHECK(engine.verifiedPlans() > 0);
+    played.channels = backend.capture().channels;
+    return played;
+}
+
+std::uint64_t checkNoChangeSwaps(const std::vector<model::Session>& heads,
+                                 const std::vector<std::string>& commands, bool ahead) {
+    const auto plain = playHeads(heads, ahead, false);
+    const auto swapped = playHeads(heads, ahead, true);
+    REQUIRE(plain.channels.size() == swapped.channels.size());
+    bool sounded = false;
+    for (std::size_t c = 0; c < plain.channels.size(); ++c) {
+        const auto& a = plain.channels[c];
+        const auto& b = swapped.channels[c];
+        REQUIRE(a.size() == b.size());
+        std::size_t first = 0;
+        while (first < a.size() &&
+               std::bit_cast<std::uint32_t>(a[first]) == std::bit_cast<std::uint32_t>(b[first]))
+            ++first;
+        const auto step = first / (kStepCycles * kBlock);
+        INFO("the head's edit: " << (step < commands.size() ? commands[step] : "(none)"));
+        INFO("channel=" << c << " frame=" << first << " head=" << step
+                        << " cycle in step=" << (first / kBlock) % kStepCycles
+                        << " max difference=" << maxDiff(b, 0, a, a.size()));
+        CHECK_MESSAGE(first == a.size(), "plan-soak NO-CHANGE SWAP AUDIBLE");
+        sounded |= std::any_of(a.begin(), a.end(), [](float v) { return std::fabs(v) > 1e-4f; });
+    }
+    CHECK(sounded);
+    return swapped.noOps;
+}
 
 void replayBypassCheckpoint() {
     Soak soak(202611150122, false, true);
@@ -930,6 +1101,16 @@ TEST_CASE("seeded plan-swap soak during playback in both executors" * doctest::d
                     }
                 }
                 soak.finish();
+                std::cout << "plan-soak carry matches: nodes=" << soak.carryMatches.nodes
+                          << " edges=" << soak.carryMatches.edges << std::endl;
+                // A seeded run compares many plans; a short replay may compile one.
+                if (!replayPath) {
+                    REQUIRE(soak.carryMatches.nodes > 0);
+                    REQUIRE(soak.carryMatches.edges > 0);
+                }
+                const auto noOps = checkNoChangeSwaps(soak.heads, soak.headCommands, ahead);
+                std::cout << "plan-soak no-change swaps: heads=" << soak.heads.size()
+                          << " swaps=" << noOps << std::endl;
                 for (const auto& [name, count] : soak.commands) coverage[name] += count;
             } catch (const doctest::detail::TestFailureException&) {
                 if (!keepGoing || replayPath) throw;

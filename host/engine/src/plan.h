@@ -323,6 +323,7 @@ struct ChunkRing {
 struct Edge {
     std::size_t from = 0;     // node index
     std::size_t to = 0;       // node index of the destination
+    Id fromId{};              // the source node's id (indexForCarry)
     std::optional<Id> route;  // empty for parent sends
     // A key route (ADR-0018): the destination chain stage whose sidechain
     // input this feeds (-1: the node's input sum).
@@ -769,6 +770,9 @@ struct Node {
     bool midiReleaseTimeline = false, midiSends = false, hardwareMidiSource = false;
 
     Id id;  // a track's, or a rack's (rk_*)
+    // `in` by the source node's id, ties in `in` order (indexForCarry): an
+    // adoption's candidates for an in-edge's predecessor (inEdgesFrom).
+    std::vector<std::uint32_t> inBySource;
     // A rack (ADR-0062): its runtime, its Out modules' audio this block and
     // the sends its In modules take. No chain, fader or Console 9 stage.
     std::shared_ptr<RackNode> rack;
@@ -950,6 +954,14 @@ struct Plan {
     // is live whenever anything is, and all of them share outputLatency.
     std::vector<OutputTap> outputs;
     std::vector<Edge> edges;
+    // Every node by id, sorted (indexForCarry): an adoption finds a node's
+    // counterpart in log n steps, whichever earlier plan it carries from.
+    // Node ids are unique within a plan (asserted in debug builds).
+    struct NodeKey {
+        Id id;
+        std::uint32_t node = 0;
+    };
+    std::vector<NodeKey> nodeIndex;
     bool linearConsole = false;
     model::Playrate masterPlayrate;
     Automation rateEnvelope;
@@ -1195,6 +1207,23 @@ void carryMix(Plan& from, Plan& to, int liveClass) SUPPLE_RT;
 // renderer hands a node moving into the live region over with its state
 // (toClass 1, fromClass 0), where the callback continues it.
 void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT;
+// The carries' lookups (route E stage 6). The compile indexes a plan last
+// (indexForCarry, main thread); on the audio thread the lookups only read
+// it: binary searches, no allocation, whichever earlier plan is `from`.
+void indexForCarry(Plan& p);
+const Node* findNode(const Plan& p, Id id) SUPPLE_RT;
+Node* findNode(Plan& p, Id id) SUPPLE_RT;
+// `node`'s counterpart in `from` that carries into it: the same id, of
+// `fromClass` (-1: either).
+Node* carriedNode(Plan& from, const Node& node, int fromClass) SUPPLE_RT;
+// `old`'s in-edges from the node with id `source`, in `old.in` order.
+std::span<const std::uint32_t> inEdgesFrom(const Plan& from, const Node& old, Id source) SUPPLE_RT;
+inline constexpr std::size_t kNoEdge = std::numeric_limits<std::size_t>::max();
+// The in-edge of `old` (in `from`) that `edge`, an in-edge of `n`, continues:
+// the first in `old.in` order with the same source, route, tap and kind, a
+// key route into the same FX (carryMix). kNoEdge: none.
+std::size_t matchInEdge(const Edge& edge, const Node& n, const Plan& from,
+                        const Node& old) SUPPLE_RT;
 
 // A strip's static fader gain (masters: plain gain; channels and busses: the
 // Console 9 fader law) and a send's (route plus, post fader, source level).

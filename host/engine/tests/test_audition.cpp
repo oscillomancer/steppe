@@ -4,14 +4,18 @@
 // project's output and outside it, in both executors, stopped or playing.
 #include <doctest/doctest.h>
 
+#include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <thread>
+#include <utility>
 #include <vector>
 
+#include "audition_loader.h"
 #include "realtime_common.h"
 #include "supple/audio/audio_file.h"
 #include "supple/engine/app.h"
@@ -368,4 +372,96 @@ TEST_CASE("audition: a file's start plays at the device's rate on outputs 1/2, t
     REQUIRE(call("project.new", json::Value::object()));
     CHECK_FALSE(app->auditionStatus().playing);
     app->stopEngine();
+}
+
+TEST_CASE("audition: a cancel or a newer request ends the file's decode between chunks") {
+    // A read asks whether to stop before each chunk (16384 frames); this
+    // file has three. The cancel, or the newer request, is made from the
+    // read's first ask, so it lands mid-read whatever the timing. The read
+    // must end at that ask and its result be dropped. One that read on would
+    // ask three times and hand over the whole file.
+    const fs::path root =
+        fs::temp_directory_path() /
+        ("supple-audition-cancel-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::create_directories(root);
+    struct Cleanup {
+        fs::path dir;
+        ~Cleanup() { fs::remove_all(dir); }
+    } cleanup{root};
+    audio::AudioData file;
+    file.sampleRate = 48000;
+    file.channels.assign(2, std::vector<float>(3 * 16384, 0.25f));
+    const fs::path wav = root / "long.wav";
+    REQUIRE(audio::writeWav(wav, file));
+    for (const bool newer : {false, true}) {
+        CAPTURE(newer);
+        std::atomic<int> asks{0}, woken{0};
+        AuditionLoader* self = nullptr;
+        AuditionLoader loader([&] { ++woken; },
+                              [&](std::uint64_t generation) {
+                                  if (generation != 1 || asks++ != 0) return;  // the first read
+                                  if (newer)
+                                      self->request({root / "missing.wav", 1 << 20, 48000});
+                                  else
+                                      self->cancel();
+                              });
+        self = &loader;
+        REQUIRE(loader.request({wav, 1 << 20, 48000}) == 1);
+        // Decided by the loader's state: the first read dropped, or handed over.
+        while (loader.discarded() == 0 && (newer || woken == 0)) std::this_thread::yield();
+        CHECK(asks == 1);
+        CHECK(loader.discarded() == 1);
+        if (newer) {
+            // The newer request is answered: the missing file's error.
+            while (woken == 0) std::this_thread::yield();
+            auto done = loader.take();
+            REQUIRE(done);
+            CHECK(done->generation == 2);
+            REQUIRE_FALSE(done->voice);
+            CHECK(done->voice.error().code == "audio.open");
+        } else {
+            CHECK(woken == 0);
+            CHECK_FALSE(loader.take());
+        }
+    }
+}
+
+TEST_CASE("audition: a stopping engine is silent in a cycle the device runs after the request" *
+          doctest::description("rt")) {
+    // Engine::stop asks the callback for silence, then closes the device; a
+    // device may run another cycle in between. This one runs one in stop().
+    struct LateCycle : DummyBackend {
+        using DummyBackend::DummyBackend;
+        bool late = true;
+        void stop() override {
+            if (std::exchange(late, false)) run(1);
+            DummyBackend::stop();
+        }
+    };
+    const model::Session silent = model::Session::create({.console9 = false});
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        CAPTURE(options.anticipative);
+        auto pool = makePool();
+        MediaCache media;
+        LateCycle backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 4 * kBlock});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+        REQUIRE(engine.load(silent));
+        const auto voice = rampVoice(100000);
+        REQUIRE(engine.audition(voice) != 0);
+        backend.run(2);
+        CHECK(engine.auditionState().playing);
+        engine.stop();
+        REQUIRE(backend.cycles() == 3);  // the late cycle ran
+        const auto& out = backend.capture().channels;
+        for (std::size_t c = 0; c < 2; ++c) {
+            CAPTURE(c);
+            // Heard up to the request, at unity...
+            CHECK(out[c][2 * kBlock - 1] == (c == 0 ? voice->left : voice->right)[2 * kBlock - 1]);
+            // ... and not at all in the cycle after it.
+            CHECK(std::all_of(out[c].begin() + 2 * kBlock, out[c].begin() + 3 * kBlock,
+                              [](float v) { return v == 0.0f; }));
+        }
+    }
 }

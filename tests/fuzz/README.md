@@ -97,6 +97,12 @@ covers track add/remove/move, FX add/remove/bypass/patch and latency changes,
 audio and rack sends, items add/move/split/remove, tempo ramps, envelope points,
 connected rack module add/remove/knobs/bypass, loop/seek, undo/redo and branch
 switches. The seed also selects Console 9 and its deterministic dither seed.
+The fixed setup's rack plays its VCA through a plug-in module (the gain
+fixture, latent, at half wet); the FX bypass and patch edits reach that
+plug-in too, but it is never removed. The engine runs with
+`EngineOptions::verifyPlans`: every compile is checked against a second
+compile of the same session, and a difference fails the edit with
+`engine.plan_differs` and the first differing line of the plan dump.
 
 ```sh
 cmake --preset dev
@@ -144,6 +150,26 @@ Capture storage is prepared while parked, never allocated in the RT entry.
 These windows detect wrong audio in intermediate project states that a later
 edit repairs. Their locate resets DSP history: they do not assert equality for
 arbitrary uninterrupted playback history or the pre-locate swap crossfade.
+
+**Swaps that change nothing (route E stage 5).** After the final checks each
+scenario plays its settled project states again, in its executor, on a manual
+dummy device with a fixed loop (0 to 0.25 s): a new state every 24 callbacks.
+It plays them twice: once as they are, and once with two plan swaps that
+change nothing after each edit, a marker added two callbacks after the edit
+(inside its 10 ms ramps) and removed at callback 13. Both runs must match
+sample for sample. At each load and each service point the anticipative
+renderer has first adopted the latest plan and rendered all it may (decided
+by its state), and the harness services until nothing more is published, so
+both runs take every plan, and every step of a plug-in restart, at the same
+position. (A restart's second step waits for the plug-in to stop, which the
+renderer does on its own thread when it adopts the plan without it; servicing
+before that adoption let the restart land two callbacks apart in the two
+runs, seen once under ASan with other tests running.)
+A failure prints `plan-soak NO-CHANGE SWAP AUDIBLE`, the first differing
+frame, the project state's index, the callback within its step and the
+journal row of the edit that made that state. Removing the carry of a rack's
+plug-in stages (`af08ccfd`) fails this pass in both executors at the first
+swap; none of the soak's other checks catches it.
 
 Every correctness decision uses readiness, callback/sample counts or values.
 No readiness assertion uses a timed `awaitPlan`/`awaitRendered` result. A
@@ -195,6 +221,14 @@ does not repair engine failures.
 assertion so a timed diagnostic run can cover its entire requested duration.
 Every failure still counts and the process exits nonzero; sanitizer aborts and
 crashes remain fatal. Normal tests and replay stop at the first failed check.
+
+Each file in `plan-soak-corpus/` is its own ctest entry,
+`engine-plan-soak.replay.<file name>`, run by every preset and native CI with
+`SUPPLE_SOAK_REPLAY` set to it (`host/engine/CMakeLists.txt` finds the files,
+so a new one is a test once CMake reconfigures). Each takes about a second in
+`dev`, `gcc` and `rtsan` and up to 6 s under ASan and TSan. The files are
+checked out with LF endings on every platform (`.gitattributes`): the replay
+reads them line by line.
 
 `plan-soak-corpus/retirement-checkpoint.jsonl` minimises a harness fault found
 under ASan and TSan. Its optional header `probe: retirement-checkpoint` selects

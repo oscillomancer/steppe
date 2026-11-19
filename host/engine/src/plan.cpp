@@ -985,6 +985,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         mix.vcas[v.slot].volumeDb.store(v.volumeDb, std::memory_order_relaxed);
         mix.vcas[v.slot].mute.store(v.mute, std::memory_order_relaxed);
     }
+    indexForCarry(p);
     return p;
 }
 
@@ -3509,27 +3510,88 @@ void wrapTo(Plan& p, std::int64_t pos, int liveClass) SUPPLE_RT {
     }
 }
 
+void indexForCarry(Plan& p) {
+    p.nodeIndex.clear();
+    p.nodeIndex.reserve(p.nodes.size());
+    for (std::size_t i = 0; i < p.nodes.size(); ++i)
+        p.nodeIndex.push_back({p.nodes[i].id, static_cast<std::uint32_t>(i)});
+    std::sort(p.nodeIndex.begin(), p.nodeIndex.end(),
+              [](const Plan::NodeKey& a, const Plan::NodeKey& b) { return a.id < b.id; });
+    // The lookups binary-search these ids: a plan has one node per id.
+    assert(std::adjacent_find(p.nodeIndex.begin(), p.nodeIndex.end(),
+                              [](const Plan::NodeKey& a, const Plan::NodeKey& b) {
+                                  return a.id == b.id;
+                              }) == p.nodeIndex.end());
+    for (Edge& e : p.edges) e.fromId = p.nodes[e.from].id;
+    for (Node& n : p.nodes) {
+        n.inBySource.clear();
+        n.inBySource.reserve(n.in.size());
+        for (const std::size_t e : n.in) n.inBySource.push_back(static_cast<std::uint32_t>(e));
+        std::stable_sort(n.inBySource.begin(), n.inBySource.end(),
+                         [&](std::uint32_t a, std::uint32_t b) {
+                             return p.edges[a].fromId < p.edges[b].fromId;
+                         });
+    }
+}
+
+const Node* findNode(const Plan& p, Id id) SUPPLE_RT {
+    const auto at = std::lower_bound(p.nodeIndex.begin(), p.nodeIndex.end(), id,
+                                     [](const Plan::NodeKey& k, Id v) { return k.id < v; });
+    return at != p.nodeIndex.end() && at->id == id ? &p.nodes[at->node] : nullptr;
+}
+
+Node* findNode(Plan& p, Id id) SUPPLE_RT {
+    return const_cast<Node*>(findNode(std::as_const(p), id));
+}
+
+Node* carriedNode(Plan& from, const Node& node, int fromClass) SUPPLE_RT {
+    Node* const old = findNode(from, node.id);
+    return old && (fromClass < 0 || old->live == (fromClass == 1)) ? old : nullptr;
+}
+
+std::span<const std::uint32_t> inEdgesFrom(const Plan& from, const Node& old, Id source) SUPPLE_RT {
+    const auto& index = old.inBySource;
+    const auto first = std::partition_point(
+        index.begin(), index.end(), [&](std::uint32_t e) { return from.edges[e].fromId < source; });
+    const auto last = std::partition_point(
+        first, index.end(), [&](std::uint32_t e) { return from.edges[e].fromId == source; });
+    return {first, last};
+}
+
+std::size_t matchInEdge(const Edge& edge, const Node& n, const Plan& from,
+                        const Node& old) SUPPLE_RT {
+    for (const std::uint32_t oi : inEdgesFrom(from, old, edge.fromId)) {
+        const Edge& previous = from.edges[oi];
+        if (edge.route != previous.route || edge.tap != previous.tap ||
+            (edge.stage >= 0) != (previous.stage >= 0))
+            continue;
+        if (edge.stage >= 0 && n.chain[static_cast<std::size_t>(edge.stage)].fx !=
+                                   old.chain[static_cast<std::size_t>(previous.stage)].fx)
+            continue;
+        return oi;
+    }
+    return kNoEdge;
+}
+
 void carryLiveNotes(Plan& from, Plan& to, bool liveOnly) SUPPLE_RT {
     for (Node& old : from.nodes) {
         if (!old.midiIn) continue;
         const bool sounding = std::any_of(old.liveHeld.begin(), old.liveHeld.end(),
                                           [](std::uint8_t c) { return c != 0; });
         if (!sounding) continue;
-        for (Node& n : to.nodes) {
-            if (n.id != old.id) continue;
-            if (liveOnly && !n.live) break;
-            // Auto monitoring does not hear the input while playing, so a
-            // change of mode may stop it: what it held ends either way.
-            const bool sameRoute = n.midiIn && n.midiIn->ports == old.midiIn->ports &&
-                                   n.midiIn->fromChannel == old.midiIn->fromChannel &&
-                                   n.midiIn->toChannel == old.midiIn->toChannel &&
-                                   n.tapeAuto == old.tapeAuto;
-            if (sameRoute)
-                n.liveHeld = old.liveHeld;  // still live: its note-offs will come
-            else
-                n.releaseLive = true;  // the device's voices end at the next block's start
-            break;
-        }
+        Node* const found = findNode(to, old.id);
+        if (!found || (liveOnly && !found->live)) continue;
+        Node& n = *found;
+        // Auto monitoring does not hear the input while playing, so a
+        // change of mode may stop it: what it held ends either way.
+        const bool sameRoute = n.midiIn && n.midiIn->ports == old.midiIn->ports &&
+                               n.midiIn->fromChannel == old.midiIn->fromChannel &&
+                               n.midiIn->toChannel == old.midiIn->toChannel &&
+                               n.tapeAuto == old.tapeAuto;
+        if (sameRoute)
+            n.liveHeld = old.liveHeld;  // still live: its note-offs will come
+        else
+            n.releaseLive = true;  // the device's voices end at the next block's start
     }
 }
 
@@ -3572,171 +3634,159 @@ void carryMix(Plan& from, Plan& to, int liveClass) SUPPLE_RT {
 void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
     for (Node& n : to.nodes) {
         if (toClass >= 0 && n.live != (toClass == 1)) continue;
-        for (Node& old : from.nodes) {  // (plans are small; a swap is rare)
-            if (old.id != n.id) continue;
-            // Only what this executor processed (the other one writes the rest).
-            if (fromClass >= 0 && old.live != (fromClass == 1)) break;
-            // A locate may still be waiting for pooled module ownership.
-            // Keep that reset through another plan adoption by this executor.
-            if (n.rack && old.rack) {
-                n.rack->resetNotes |= old.rack->resetNotes;
-                n.rack->resetModules |= old.rack->resetModules;
+        // Only what this executor processed (the other one writes the rest).
+        Node* const counterpart = carriedNode(from, n, fromClass);
+        if (!counterpart) continue;
+        Node& old = *counterpart;
+        // A locate may still be waiting for pooled module ownership.
+        // Keep that reset through another plan adoption by this executor.
+        if (n.rack && old.rack) {
+            n.rack->resetNotes |= old.rack->resetNotes;
+            n.rack->resetModules |= old.rack->resetModules;
+        }
+        // Each in-edge's predecessor among the old node's in-edges from
+        // the same source (matchInEdge).
+        for (std::size_t ei : n.in) {
+            Edge& edge = to.edges[ei];
+            const std::size_t oi = matchInEdge(edge, n, from, old);
+            if (oi == kNoEdge) continue;
+            Edge& previous = from.edges[oi];
+            if (edge.delay.length == previous.delay.length) {
+                for (int c = 0; c < 2; ++c) std::swap(edge.delay.buf[c], previous.delay.buf[c]);
+                edge.delay.pos = previous.delay.pos;
+                edge.preserveDelayOnLocate = true;
             }
-            // Match inside the destination's incoming edges: scanning every
-            // node to rediscover each edge's destination would be cubic.
-            for (std::size_t ei : n.in) {
-                Edge& edge = to.edges[ei];
-                for (std::size_t oi : old.in) {
-                    Edge& previous = from.edges[oi];
-                    if (edge.route != previous.route || edge.tap != previous.tap ||
-                        (edge.stage >= 0) != (previous.stage >= 0) ||
-                        to.nodes[edge.from].id != from.nodes[previous.from].id)
-                        continue;
-                    if (edge.stage >= 0 &&
-                        n.chain[static_cast<std::size_t>(edge.stage)].fx !=
-                            old.chain[static_cast<std::size_t>(previous.stage)].fx)
-                        continue;
-                    if (edge.delay.length == previous.delay.length) {
-                        for (int c = 0; c < 2; ++c)
-                            std::swap(edge.delay.buf[c], previous.delay.buf[c]);
-                        edge.delay.pos = previous.delay.pos;
-                        edge.preserveDelayOnLocate = true;
-                    }
-                    for (auto& link : edge.auxLinks)
-                        for (auto& oldLink : previous.auxLinks)
-                            if (link.from == oldLink.from && link.to == oldLink.to &&
-                                link.delay.length == oldLink.delay.length) {
-                                std::swap(link.delay.buf, oldLink.delay.buf);
-                                link.delay.pos = oldLink.delay.pos;
-                                link.preserveDelayOnLocate = true;
-                                break;
-                            }
-                    break;
-                }
-            }
-            if (n.type == old.type) {
-                n.fader = old.fader;
-                n.utility = old.utility;
-                n.encoder.carry(old.encoder, to.smoothFrames);
-                n.keyEncoder.carry(old.keyEncoder, to.smoothFrames);
-                n.keyFader = old.keyFader;
-                n.decoder.carry(old.decoder, to.smoothFrames);
-                for (std::size_t ei : n.out)
-                    for (std::size_t oi : old.out) {
-                        Edge& e = to.edges[ei];
-                        const Edge& oe = from.edges[oi];
-                        if (e.route == oe.route && e.tap == oe.tap) {
-                            e.fader = oe.fader;
-                            e.encoder.carry(oe.encoder, to.smoothFrames);
-                            break;
-                        }
-                    }
-            }
-            if (n.noteTarget >= 0 && old.noteTarget >= 0 &&
-                n.chain[static_cast<std::size_t>(n.noteTarget)].instance &&
-                n.chain[static_cast<std::size_t>(n.noteTarget)].instance ==
-                    old.chain[static_cast<std::size_t>(old.noteTarget)].instance) {
-                for (std::size_t k = 0; k < n.held.size(); ++k)
-                    n.held[k] = static_cast<std::uint8_t>(std::min(255, n.held[k] + old.held[k]));
-                n.releaseHeld = n.releaseHeld || old.releaseHeld;
-            }
-            n.releaseLive = n.releaseLive || old.releaseLive;
-            auto carryStages = [&](std::vector<Stage>& chain, std::vector<Stage>& oldChain) {
-                for (Stage& st : chain)
-                    for (Stage& os : oldChain)
-                        if (st.instance && os.instance == st.instance) {
-                            st.nextNoteId = os.nextNoteId;
-                            st.sleeping = os.sleeping;
-                            for (const auto& voice : os.voices) {
-                                if (st.voices.size() == st.voices.capacity()) {
-                                    ++st.voiceDropped;
-                                    break;
-                                }
-                                auto carried = voice;
-                                if (carried.origin.item == kBusNoteOrigin) {
-                                    // A bus note follows its bus id, remapped
-                                    // after the pools (carryRackMidi).
-                                } else if (carried.origin.item == kRackNoteOrigin) {
-                                    // A routed note follows its voice slot,
-                                    // remapped after the pool (carryRackMidi).
-                                    if (st.rackMidiBase < 0) {
-                                        carried.release = true;
-                                        carried.live = false;
-                                    }
-                                } else if (carried.sourceId >= 0) {
-                                    NoteSource source;
-                                    source.origin = carried.origin;
-                                    source.port = carried.port;
-                                    source.channel = carried.channel;
-                                    source.key = carried.key;
-                                    source.ordinal = carried.sourceOrdinal;
-                                    const auto found = std::lower_bound(
-                                        st.noteSourceIndex.begin(), st.noteSourceIndex.end(),
-                                        source, [](const auto& a, const auto& b) {
-                                            return a.address() < b.address();
-                                        });
-                                    if (found != st.noteSourceIndex.end() &&
-                                        found->address() == source.address())
-                                        carried.sourceId = found->id;
-                                    else
-                                        carried.release = true;
-                                }
-                                st.voices.push_back(carried);
-                            }
-                            st.appliedWet = os.appliedWet;
-                            st.rampFromWet = os.rampFromWet;
-                            st.rampToWet = os.rampToWet;
-                            st.wetRampLeft = os.wetRampLeft;
-                            auto carryDelay = [](Delay& dst, Delay& src) {
-                                if (dst.length != src.length) return false;
-                                std::swap(dst.buf[0], src.buf[0]);
-                                std::swap(dst.buf[1], src.buf[1]);
-                                dst.pos = src.pos;
-                                return true;
-                            };
-                            if (carryDelay(st.dry, os.dry)) {
-                                st.preserveDryOnLocate = true;
-                                carryDelay(st.align, os.align);
-                                if (st.os == os.os && carryDelay(st.osPad, os.osPad))
-                                    std::swap(st.osFilters, os.osFilters);
-                            }
-                            if (st.chanDelay.size() == os.chanDelay.size() &&
-                                std::equal(std::begin(st.outPin), std::end(st.outPin),
-                                           std::begin(os.outPin))) {
-                                for (std::size_t c = 0; c < st.chanDelay.size(); ++c) {
-                                    MonoDelay& delay = st.chanDelay[c];
-                                    MonoDelay& oldDelay = os.chanDelay[c];
-                                    if (delay.length != oldDelay.length) continue;
-                                    std::swap(delay.buf, oldDelay.buf);
-                                    delay.pos = oldDelay.pos;
-                                }
-                            }
-                            break;
-                        }
-            };
-            // A rack's plug-in stages as a chain's, by instance: wet ramp,
-            // dry delay, oversampling filters. (Their notes are their
-            // modules', which the rack pool keeps; the voices are empty.)
-            carryStages(n.rackStages, old.rackStages);
-            carryStages(n.inputChain, old.inputChain);
-            carryStages(n.chain, old.chain);
-            // A take chain playing on keeps playing (no reset at the swap).
-            for (TakeChain& tc : n.takeChains)
-                for (TakeChain& otc : old.takeChains)
-                    if (otc.take == tc.take) {
-                        tc.active = otc.active;
-                        tc.held = otc.held;
-                        // Past an early wrap, in the old chain's coordinates:
-                        // a new latency or item shift wraps afresh.
-                        if (tc.latency == otc.latency && n.itemShift == old.itemShift) {
-                            tc.aheadFrom = otc.aheadFrom;
-                            tc.aheadLoop = otc.aheadLoop;
-                        }
-                        carryStages(tc.chain, otc.chain);
+            for (auto& link : edge.auxLinks)
+                for (auto& oldLink : previous.auxLinks)
+                    if (link.from == oldLink.from && link.to == oldLink.to &&
+                        link.delay.length == oldLink.delay.length) {
+                        std::swap(link.delay.buf, oldLink.delay.buf);
+                        link.delay.pos = oldLink.delay.pos;
+                        link.preserveDelayOnLocate = true;
                         break;
                     }
-            break;
         }
+        if (n.type == old.type) {
+            n.fader = old.fader;
+            n.utility = old.utility;
+            n.encoder.carry(old.encoder, to.smoothFrames);
+            n.keyEncoder.carry(old.keyEncoder, to.smoothFrames);
+            n.keyFader = old.keyFader;
+            n.decoder.carry(old.decoder, to.smoothFrames);
+            for (std::size_t ei : n.out)
+                for (std::size_t oi : old.out) {
+                    Edge& e = to.edges[ei];
+                    const Edge& oe = from.edges[oi];
+                    if (e.route == oe.route && e.tap == oe.tap) {
+                        e.fader = oe.fader;
+                        e.encoder.carry(oe.encoder, to.smoothFrames);
+                        break;
+                    }
+                }
+        }
+        if (n.noteTarget >= 0 && old.noteTarget >= 0 &&
+            n.chain[static_cast<std::size_t>(n.noteTarget)].instance &&
+            n.chain[static_cast<std::size_t>(n.noteTarget)].instance ==
+                old.chain[static_cast<std::size_t>(old.noteTarget)].instance) {
+            for (std::size_t k = 0; k < n.held.size(); ++k)
+                n.held[k] = static_cast<std::uint8_t>(std::min(255, n.held[k] + old.held[k]));
+            n.releaseHeld = n.releaseHeld || old.releaseHeld;
+        }
+        n.releaseLive = n.releaseLive || old.releaseLive;
+        auto carryStages = [&](std::vector<Stage>& chain, std::vector<Stage>& oldChain) {
+            for (Stage& st : chain)
+                for (Stage& os : oldChain)
+                    if (st.instance && os.instance == st.instance) {
+                        st.nextNoteId = os.nextNoteId;
+                        st.sleeping = os.sleeping;
+                        for (const auto& voice : os.voices) {
+                            if (st.voices.size() == st.voices.capacity()) {
+                                ++st.voiceDropped;
+                                break;
+                            }
+                            auto carried = voice;
+                            if (carried.origin.item == kBusNoteOrigin) {
+                                // A bus note follows its bus id, remapped
+                                // after the pools (carryRackMidi).
+                            } else if (carried.origin.item == kRackNoteOrigin) {
+                                // A routed note follows its voice slot,
+                                // remapped after the pool (carryRackMidi).
+                                if (st.rackMidiBase < 0) {
+                                    carried.release = true;
+                                    carried.live = false;
+                                }
+                            } else if (carried.sourceId >= 0) {
+                                NoteSource source;
+                                source.origin = carried.origin;
+                                source.port = carried.port;
+                                source.channel = carried.channel;
+                                source.key = carried.key;
+                                source.ordinal = carried.sourceOrdinal;
+                                const auto found = std::lower_bound(
+                                    st.noteSourceIndex.begin(), st.noteSourceIndex.end(), source,
+                                    [](const auto& a, const auto& b) {
+                                        return a.address() < b.address();
+                                    });
+                                if (found != st.noteSourceIndex.end() &&
+                                    found->address() == source.address())
+                                    carried.sourceId = found->id;
+                                else
+                                    carried.release = true;
+                            }
+                            st.voices.push_back(carried);
+                        }
+                        st.appliedWet = os.appliedWet;
+                        st.rampFromWet = os.rampFromWet;
+                        st.rampToWet = os.rampToWet;
+                        st.wetRampLeft = os.wetRampLeft;
+                        auto carryDelay = [](Delay& dst, Delay& src) {
+                            if (dst.length != src.length) return false;
+                            std::swap(dst.buf[0], src.buf[0]);
+                            std::swap(dst.buf[1], src.buf[1]);
+                            dst.pos = src.pos;
+                            return true;
+                        };
+                        if (carryDelay(st.dry, os.dry)) {
+                            st.preserveDryOnLocate = true;
+                            carryDelay(st.align, os.align);
+                            if (st.os == os.os && carryDelay(st.osPad, os.osPad))
+                                std::swap(st.osFilters, os.osFilters);
+                        }
+                        if (st.chanDelay.size() == os.chanDelay.size() &&
+                            std::equal(std::begin(st.outPin), std::end(st.outPin),
+                                       std::begin(os.outPin))) {
+                            for (std::size_t c = 0; c < st.chanDelay.size(); ++c) {
+                                MonoDelay& delay = st.chanDelay[c];
+                                MonoDelay& oldDelay = os.chanDelay[c];
+                                if (delay.length != oldDelay.length) continue;
+                                std::swap(delay.buf, oldDelay.buf);
+                                delay.pos = oldDelay.pos;
+                            }
+                        }
+                        break;
+                    }
+        };
+        // A rack's plug-in stages as a chain's, by instance: wet ramp,
+        // dry delay, oversampling filters. (Their notes are their
+        // modules', which the rack pool keeps; the voices are empty.)
+        carryStages(n.rackStages, old.rackStages);
+        carryStages(n.inputChain, old.inputChain);
+        carryStages(n.chain, old.chain);
+        // A take chain playing on keeps playing (no reset at the swap).
+        for (TakeChain& tc : n.takeChains)
+            for (TakeChain& otc : old.takeChains)
+                if (otc.take == tc.take) {
+                    tc.active = otc.active;
+                    tc.held = otc.held;
+                    // Past an early wrap, in the old chain's coordinates:
+                    // a new latency or item shift wraps afresh.
+                    if (tc.latency == otc.latency && n.itemShift == old.itemShift) {
+                        tc.aheadFrom = otc.aheadFrom;
+                        tc.aheadLoop = otc.aheadLoop;
+                    }
+                    carryStages(tc.chain, otc.chain);
+                    break;
+                }
     }
     carryRackMidi(to, from, toClass, fromClass);
 }
