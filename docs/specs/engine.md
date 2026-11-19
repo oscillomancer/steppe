@@ -358,8 +358,9 @@ only.
 
 Renders stay deterministic and real time equals offline at any block size,
 in both executors and through the bridge: every grid point and delay is a
-function of the timeline position, the memo starts empty after each reset,
-and racks restart their modules at every locate (rack.md §6).
+function of the stage's absolute position, a reset makes the memo stale so
+the first grid point after it sends every modulated parameter, and racks
+restart their modules at every locate (rack.md §6).
 
 ### 1.5 Transport and time
 
