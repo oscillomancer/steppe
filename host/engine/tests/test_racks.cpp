@@ -4120,3 +4120,296 @@ TEST_CASE("racks: transport() keeps its arithmetic at a nonzero start; gridTrans
         CHECK(apart > 0);  // the two arithmetics do differ here
     }
 }
+
+// Route E's compile profile, step 3: a compile reuses the buffers of plans
+// no executor can reach any more. A reused buffer still holds what its last
+// plan left there; the pool fills it with loud garbage when it takes it
+// (EngineOptions::poisonRecycledBuffers), so a reuse that fails to clear it
+// is heard. Each run below must be the run without reuse, sample for
+// sample, in both executors: edits and seeks at the same callbacks, the
+// renderer full before each and every notification acted on after.
+namespace {
+using PoolAction = std::function<model::Session(Engine&, const model::Session&)>;
+struct PoolRun {
+    std::vector<float> left, right;
+    std::uint64_t reused = 0, made = 0;
+};
+PoolRun playPooled(const model::Session& start, const std::vector<std::pair<int, PoolAction>>& at,
+                   int cycles, bool ahead, bool pooled) {
+    constexpr std::uint32_t kBlock = 256;
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend(
+        {.mode = DummyBackend::Mode::Manual, .captureFrames = std::int64_t(cycles) * kBlock});
+    Engine engine(pool, media,
+                  engine::test::patient({.anticipative = ahead,
+                                         .renderAheadMs = 20,
+                                         .workers = 0,
+                                         .recycleBuffers = pooled,
+                                         .poisonRecycledBuffers = pooled}));
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+    // Decided by state: a wait that never ends is the runner's timeout.
+    const auto full = [&] {
+        while (!engine.awaitRendered(std::numeric_limits<std::int64_t>::max())) {
+        }
+    };
+    const auto settle = [&] {
+        for (int pass = 0;; ++pass) {
+            REQUIRE(pass < 8);
+            while (!engine.awaitPlan()) {
+            }
+            full();
+            const auto generation = engine.planGeneration();
+            engine.service();
+            if (engine.planGeneration() == generation) return;
+        }
+    };
+    model::Session session = start;
+    REQUIRE(engine.load(session));
+    engine.play();
+    settle();
+    int cycle = 0;
+    const auto runTo = [&](int until) {
+        for (; cycle < until; ++cycle) {
+            if (ahead)
+                while (!engine.awaitRendered((backend.cycles() + 1) * kBlock)) {
+                }
+            backend.run(1);
+        }
+        full();
+        settle();
+    };
+    for (const auto& [when, action] : at) {
+        runTo(when);
+        session = action(engine, session);
+        settle();
+    }
+    runTo(cycles);
+    CHECK(engine.processErrors() == 0);
+    CHECK(engine.bridgeLateCycles() == 0);
+    PoolRun run;
+    run.reused = engine.buffersReused();
+    run.made = engine.buffersMade();
+    engine.stop();
+    run.left = backend.capture().channels[0];
+    run.right = backend.capture().channels[1];
+    return run;
+}
+
+// The run with reuse is the run without, in both executors; reuse happened.
+void samePooled(const model::Session& start, const std::vector<std::pair<int, PoolAction>>& at,
+                int cycles) {
+    for (const bool ahead : {false, true}) {
+        CAPTURE(ahead);
+        const auto fresh = playPooled(start, at, cycles, ahead, false);
+        const auto reused = playPooled(start, at, cycles, ahead, true);
+        CHECK(fresh.reused == 0);
+        CHECK(reused.reused > 0);
+        CHECK(*std::max_element(fresh.left.begin(), fresh.left.end()) > 0.01f);
+        for (const auto channel : {&PoolRun::left, &PoolRun::right}) {
+            const auto& a = fresh.*channel;
+            const auto& b = reused.*channel;
+            std::size_t first = 0;
+            while (first < a.size() && first < b.size() &&
+                   std::bit_cast<std::uint32_t>(a[first]) == std::bit_cast<std::uint32_t>(b[first]))
+                ++first;
+            CAPTURE(first);  // where the run with reuse first differs
+            CHECK(first == a.size());
+            CHECK(a.size() == b.size());
+        }
+    }
+}
+
+model::Session marked(const model::Session& s) {
+    model::EditTxn t(s, s.version + 1);
+    t.create(model::Marker{});
+    return commit(t);
+}
+
+// A new latent gain at half wet at the end of the first strip's chain: a
+// stage nothing is carried into, whose dry delay plays out what its buffer
+// held, the stale tail a reuse must never let through.
+PoolAction insertGain() {
+    return [](Engine& engine, const model::Session& s) {
+        model::EditTxn t(s, s.version + 1);
+        Id strip;
+        for (const auto& e : s.tracks)
+            if (e.value->parent == kMaster && e.value->chain.size() >= 2 && strip == Id{})
+                strip = e.id;
+        REQUIRE(strip != Id{});
+        const Id gain = addFx(t, strip, "com.suppleaudio.test.gain", true);
+        t.modify<model::FxInstance>(gain, [](auto& f) { f.wet = 50; });
+        auto next = commit(t);
+        REQUIRE(engine.load(next));
+        return next;
+    };
+}
+
+PoolAction compileEdit() {
+    return [](Engine& engine, const model::Session& s) {
+        const auto generation = engine.planGeneration();
+        auto next = marked(s);
+        REQUIRE(engine.load(next));
+        REQUIRE(engine.planGeneration() == generation + 1);
+        return next;
+    };
+}
+
+// A latent gain at half wet (its dry delay holds 64 frames of history) on
+// a sine with a note per beat (voices), and the same gain in a rack, fed by
+// a VCA on the beat phase.
+model::Session pooledSession(bool bridged) {
+    model::Project project;
+    project.console9 = false;
+    model::EditTxn t(model::Session::create(project), 1);
+    const Id synth = addChannel(t);
+    addFx(t, synth, "com.suppleaudio.test.sine");
+    const Id gain = addFx(t, synth, "com.suppleaudio.test.gain", true);
+    t.modify<model::FxInstance>(gain, [](auto& f) { f.wet = 50; });
+    addNotes(t, synth, busNotes());
+    const Id channel = addChannel(t);
+    const Id rack = t.create(model::Rack{channel, ""});
+    const Id transport = addModule(t, rack, "com.suppleaudio.rack.transport");
+    const Id out = addModule(t, rack, "com.suppleaudio.rack.out");
+    const Id plugin = addPlugin(t, rack, "com.suppleaudio.test.gain",
+                                json::parse(R"({"schema":"supple.test-gain-patch/1.0",)"
+                                            R"("params":{"gain":-6,"latency":"short"}})")
+                                    .value());
+    const Id vca = addModule(t, rack, "com.suppleaudio.rack.vca");
+    cable(t, transport, "beat_phase", vca, "in");
+    cable(t, vca, "out", plugin, "in_l");
+    cable(t, plugin, "out_l", out, "l");
+    listen(t, out, channel);
+    const Id fx = *t.preview().modules.find(plugin)->fx;
+    t.modify<model::FxInstance>(fx, [&](auto& f) {
+        f.wet = 50;
+        if (bridged) f.isolation = model::Isolation::SharedBridge;
+    });
+    return commit(t);
+}
+}  // namespace
+
+TEST_CASE("reused buffers: plan swaps carry a rack plug-in stage into them (compile step 3)" *
+          doctest::description("rt")) {
+    // Compiled swaps while playing, a few callbacks apart: from the second
+    // on, the new plan's buffers are the retired ones, poisoned. The carry
+    // fills the dry delays; a gain inserted at callback 76 has none carried,
+    // and its dry delay must start silent, as when fresh.
+    host::setBridgeExecutable(BRIDGE_PATH);
+    for (const bool bridged : {false, true}) {
+        CAPTURE(bridged);
+        samePooled(pooledSession(bridged),
+                   {{40, compileEdit()},
+                    {52, compileEdit()},
+                    {64, compileEdit()},
+                    {76, insertGain()},
+                    {88, compileEdit()}},
+                   170);
+    }
+}
+
+TEST_CASE("reused buffers: a seek hears nothing they held (compile step 3)" *
+          doctest::description("rt")) {
+    // Swaps fill the pool; then a seek, alone and with a swap at it, starts
+    // every stage afresh: the dry delays, held voices and sums must hold
+    // nothing from before it, though their buffers held garbage.
+    const PoolAction seek = [](Engine& engine, const model::Session& s) {
+        engine.seek(0.5);
+        return s;
+    };
+    const PoolAction seekAndSwap = [](Engine& engine, const model::Session& s) {
+        engine.seek(1.25);
+        auto next = marked(s);
+        REQUIRE(engine.load(next));
+        return next;
+    };
+    samePooled(pooledSession(false),
+               {{30, compileEdit()},
+                {42, compileEdit()},
+                {54, seek},
+                {80, compileEdit()},
+                {92, seekAndSwap}},
+               170);
+}
+
+TEST_CASE("reused buffers: plans with fewer and then more channels (compile step 3)" *
+          doctest::description("rt")) {
+    // A four-channel strip (two auxiliary channels, each with its buffer and
+    // a delay per channel at the latent stage) drops to two channels, then a
+    // whole strip goes, then both come back: the pool holds buffers of sizes
+    // and counts the next plan does not need, then too few.
+    model::Session start = pooledSession(false);
+    Id synth;
+    for (const auto& e : start.tracks)
+        if (e.value->parent == kMaster && !e.value->chain.empty()) synth = e.id;
+    REQUIRE(synth != Id{});
+    {
+        model::EditTxn t(start, start.version + 1);
+        t.modify<model::Track>(synth, [](auto& tr) { tr.channels = 4; });
+        start = commit(t);
+    }
+    const auto channels = [synth](int n) -> PoolAction {
+        return [synth, n](Engine& engine, const model::Session& s) {
+            model::EditTxn t(s, s.version + 1);
+            t.modify<model::Track>(synth, [n](auto& tr) { tr.channels = n; });
+            auto next = commit(t);
+            REQUIRE(engine.load(next));
+            return next;
+        };
+    };
+    Id spare;
+    const PoolAction addStrip = [&spare](Engine& engine, const model::Session& s) {
+        model::EditTxn t(s, s.version + 1);
+        spare = addChannel(t);
+        // Latent at half wet: its dry delay plays what its buffer holds first.
+        const Id gain = addFx(t, spare, "com.suppleaudio.test.gain", true);
+        t.modify<model::FxInstance>(gain, [](auto& f) { f.wet = 50; });
+        auto next = commit(t);
+        REQUIRE(engine.load(next));
+        return next;
+    };
+    const PoolAction removeStrip = [&spare](Engine& engine, const model::Session& s) {
+        model::EditTxn t(s, s.version + 1);
+        for (const Id fx : s.tracks.find(spare)->chain) t.remove<model::FxInstance>(fx);
+        t.modify<model::Track>(kMaster, [&](auto& m) { std::erase(m.children, spare); });
+        t.remove<model::Track>(spare);
+        auto next = commit(t);
+        REQUIRE(engine.load(next));
+        return next;
+    };
+    samePooled(start,
+               {{30, addStrip},
+                {42, compileEdit()},
+                {54, channels(2)},
+                {66, removeStrip},
+                {78, compileEdit()},
+                {90, channels(4)},
+                {102, addStrip}},
+               180);
+}
+
+TEST_CASE("reused buffers: a steady compile allocates none (compile step 3)") {
+    // Cost by count: once a plan has retired, compiling the same session
+    // again takes every buffer from the pool.
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    Engine engine(pool, media, {.anticipative = false, .workers = 0});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256}));
+    model::Session s = pooledSession(false);
+    REQUIRE(engine.load(s));
+    engine.play();
+    for (int i = 0; i < 4; ++i) {  // swaps, each adopted, the one before retired
+        backend.run(2);
+        engine.service();
+        s = marked(s);
+        REQUIRE(engine.load(s));
+    }
+    backend.run(2);
+    engine.service();
+    const auto made = engine.buffersMade(), reused = engine.buffersReused();
+    REQUIRE(engine.load(marked(s)));
+    CHECK(engine.buffersMade() == made);
+    CHECK(engine.buffersReused() > reused);
+    engine.stop();
+}

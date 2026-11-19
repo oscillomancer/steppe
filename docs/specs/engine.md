@@ -377,6 +377,25 @@ specified here as it lands); so far:
   and numbers each run, where it kept a map of counts per stage, and the
   chain's note target copies the MIDI stage's sources (the same events). A
   test compares every stage's sources and index with the map-based build.
+- **A compile reuses retired plans' buffers** (step 3; `buffer_pool.h`).
+  When `collectPlans` retires a plan (no executor can reach it, the rule
+  its rings follow) the engine's `BufferPool` takes its stage, node, edge,
+  rack-binding and record-tap buffers, its voice lists and its output event
+  storage; the next `prepare` takes buffers of the size it needs from there
+  and clears each as a new one would be (zeros, empty, default events), and
+  allocates only what the pool lacks. After each collection the pool keeps
+  as many of each size as the last `prepare` took. Offline renders allocate
+  as before. A reused buffer never sounds: its contents are cleared on the
+  main thread, and the executors also clear an uncarried stage's delays when
+  they adopt a plan, so the first guard alone is checked at the plan: a
+  retired plan's buffers, filled with garbage as they enter the pool, serve
+  a compile of the same session that must hand each out fresh, take all of
+  them from the pool and dump as a compile without it. Engine tests fill the
+  pool the same way (`EngineOptions::poisonRecycledBuffers`) and compare runs
+  with and without reuse (`recycleBuffers`) sample for sample in both
+  executors, across plan swaps that carry a rack's plug-in stage, a newly
+  inserted latent stage, seeks, and plans with fewer and more channels and
+  strips; a steady compile allocates none.
 Returning to a version with neither patch nor state after applying saved FX
 settings recreates the factory-default instance. The old instance remains alive
 until both executors release its plan, as with a changed opaque state.

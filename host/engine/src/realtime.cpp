@@ -239,9 +239,16 @@ Engine::Engine(InstancePool& plugins, MediaCache& media, EngineOptions options)
     options_.renderAheadMs = std::clamp(options_.renderAheadMs, 10.0, 2000.0);
     processing_.reserve(kMaxInstances);
     liveProcessing_.reserve(kMaxInstances);
+    if (options_.recycleBuffers) {
+        bufferPool_ = std::make_unique<detail::BufferPool>();
+        bufferPool_->poisonForTests = options_.poisonRecycledBuffers;
+    }
 }
 
 Engine::~Engine() { stop(); }
+
+std::uint64_t Engine::buffersReused() const { return bufferPool_ ? bufferPool_->reused() : 0; }
+std::uint64_t Engine::buffersMade() const { return bufferPool_ ? bufferPool_->made() : 0; }
 
 void Engine::setMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences outputs) {
     midiInputsPreferences_ = std::move(inputs);
@@ -690,6 +697,7 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
         built->media = &media_;
         built->rateBackendLatency = backend_->status().outputLatency;
         built->rateEnabled |= rateScheduling_.load(std::memory_order_acquire);
+        built->buffers = bufferPool_.get();
         auto sources = media_.prepareSources(session, projectDir, config_.sampleRate);
         if (!sources) return sources.error();
         built->preparedSources = *sources;
@@ -1201,6 +1209,12 @@ std::uint64_t Engine::collectPlans() {
                 });
                 if (!retained) instance->setAudioWake(nullptr);
             }
+    }
+    // Their buffers serve the next compiles (as their rings, above).
+    if (bufferPool_) {
+        for (const auto& p : plans_)
+            if (retired(p)) bufferPool_->harvest(*p);
+        bufferPool_->trim();
     }
     std::erase_if(plans_, retired);
     if (std::none_of(plans_.begin(), plans_.end(), [](const auto& p) { return p->hardwareLead; }))

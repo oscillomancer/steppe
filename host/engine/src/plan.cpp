@@ -1019,6 +1019,9 @@ std::int64_t layoutChain(std::vector<Stage>& chain, bool allowParallel, std::siz
 
 // Activates instances, measures latencies, sizes buffers and delays.
 Status prepare(Plan& p, const Session& s) {
+    // Buffers come from retired plans where the engine keeps a pool, each
+    // cleared as a new one would be (step 3 of the compile profile).
+    BufferPool::Scope buffers(p.buffers);
     if (!p.preparedSources && p.media) {
         auto prepared = p.media->prepareSources(s, p.projectDir, p.rate);
         if (!prepared) return prepared.error();
@@ -1061,9 +1064,9 @@ Status prepare(Plan& p, const Session& s) {
                 st.osPad.init(pad);
                 st.latency = (high + pad) / os;
                 for (int c = 0; c < 2; ++c) {
-                    st.osIn[c].assign(block * os, 0.0f);
-                    st.osOut[c].assign(block * os, 0.0f);
-                    st.osKey[c].assign(st.keyed ? block * os : 0, 0.0f);
+                    zeroed(st.osIn[c], block * os);
+                    zeroed(st.osOut[c], block * os);
+                    zeroed(st.osKey[c], st.keyed ? block * os : 0);
                 }
             } else {
                 st.latency = in.latency();
@@ -1082,11 +1085,12 @@ Status prepare(Plan& p, const Session& s) {
         st.dryBuf.init(block);
         st.key.init(st.keyed ? block : 0);
         if (st.instance && st.instance->acceptsNotes()) {
-            st.voices.reserve(4096);
-            st.pendingVoices.reserve(4096);
+            reservedVoices(st.voices, 4096);
+            reservedVoices(st.pendingVoices, 4096);
         }
         // A note-output plug-in's events feed the MIDI bus (ADR-0068).
-        st.outStorage.resize(st.instance && st.instance->outputsNotes() ? kBusOutputEvents : 256);
+        sizedOutputs(st.outStorage,
+                     st.instance && st.instance->outputsNotes() ? kBusOutputEvents : 256);
         st.outEvents.storage = st.outStorage;
         return {};
     };
@@ -1123,7 +1127,8 @@ Status prepare(Plan& p, const Session& s) {
             const std::size_t auxOuts = st.instance ? st.instance->auxOutputChannels() : 0;
             if (st.auxOutPin.size() > auxOuts) st.auxOutPin.resize(auxOuts);
             while (!st.auxOutPin.empty() && st.auxOutPin.back() < 0) st.auxOutPin.pop_back();
-            st.auxOut.assign(st.auxOutPin.size(), std::vector<float>(block, 0.0f));
+            st.auxOut.resize(st.auxOutPin.size());
+            for (auto& buffer : st.auxOut) zeroed(buffer, block);
             st.auxOutPtr.clear();
             for (auto& buffer : st.auxOut) st.auxOutPtr.push_back(buffer.data());
             st.chanDelay.clear();
@@ -1138,7 +1143,8 @@ Status prepare(Plan& p, const Session& s) {
                                     double(n.freeze->latencyFrames) / s.project->sampleRate, p.rate)
                               : layoutChain(n.chain, n.auxCount == 0, block);
         if (n.rack) prepareRackLatencies(n, s);
-        n.aux.assign(static_cast<std::size_t>(n.auxCount), std::vector<float>(block, 0.0f));
+        n.aux.resize(static_cast<std::size_t>(n.auxCount));
+        for (auto& buffer : n.aux) zeroed(buffer, block);
         n.sum.init(block);
         n.preFx.init(block);
         if (n.recordRack)
@@ -1148,7 +1154,7 @@ Status prepare(Plan& p, const Session& s) {
         n.post.init(block);
         n.items.init(n.postItems ? block : 0);
         n.mix.init(n.postItems ? block : 0);
-        if (!n.vcas.empty()) n.auxPostGain.resize(block);
+        if (!n.vcas.empty()) zeroed(n.auxPostGain, block);
         if (n.postKeyed) n.postKey.init(block);
     }
     for (RecordTap& tap : p.recordTaps) tap.pulled.init(block);
@@ -1284,7 +1290,7 @@ Status prepare(Plan& p, const Session& s) {
             if (e.rackPadding) e.delay.init(e.delay.length + e.rackPadding);
             e.tmp.init(block);
             if (e.encode || e.rackSend) e.encoded.init(block);
-            e.auxTmp.assign(e.auxLinks.empty() ? 0 : block, 0.0f);
+            zeroed(e.auxTmp, e.auxLinks.empty() ? 0 : block);
         }
     }
     // A key route from one output master into another's path can pull the

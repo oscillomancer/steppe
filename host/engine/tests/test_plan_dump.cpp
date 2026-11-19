@@ -389,3 +389,65 @@ TEST_CASE("plan: each stage's note sources are those of the reference build") {
     CHECK(stages > 0);
     CHECK(repeats > 0);
 }
+
+TEST_CASE("plan: a compile hands out retired plans' buffers cleared, the plan unchanged (step 3)") {
+    // A retired plan's buffers, filled with garbage as they enter the pool,
+    // serve the next compile of the same session: each it hands out holds
+    // what a new one would (zeros, no voices, default events), every one
+    // comes from the pool, and the plan dumps as one compiled without it.
+    // (The executors also clear a stage's delays when they adopt a plan, so
+    // a reuse that skipped this would not always be heard.)
+    const auto s = richSession();
+    auto pool = makePool();
+    MediaCache media;
+    const auto fresh = d::dumpPlan(prepared(s, pool, media));
+    d::BufferPool buffers;
+    buffers.poisonForTests = true;
+    const auto pooled = [&] {
+        auto compiled = d::compile(s, pool, 0, 128, 48000);
+        REQUIRE(compiled);
+        d::Plan p = std::move(*compiled);
+        p.media = &media;
+        p.buffers = &buffers;
+        REQUIRE(d::prepare(p, s));
+        return p;
+    };
+    struct Count final : d::BufferVisitor {
+        std::size_t floats_ = 0, voices_ = 0, outputs_ = 0, dirty = 0;
+        void floats(std::vector<float>& v) override {
+            floats_ += v.empty() ? 0 : 1;
+            dirty += std::any_of(v.begin(), v.end(), [](float x) { return x != 0.0f; });
+        }
+        void voices(std::vector<d::HeldVoice>& v) override {
+            voices_ += v.capacity() ? 1 : 0;
+            dirty += !v.empty();
+        }
+        void outputs(std::vector<host::OutputEvent>& v) override {
+            outputs_ += v.empty() ? 0 : 1;
+            dirty += std::any_of(v.begin(), v.end(), [](const host::OutputEvent& e) {
+                return e.kind != host::OutputEvent{}.kind;
+            });
+        }
+    };
+    d::Plan first = pooled();
+    const auto made = buffers.made();
+    CHECK(made > 0);
+    CHECK(buffers.reused() == 0);
+    Count before;
+    d::visitPooledBuffers(first, before);
+    CHECK(before.floats_ > 0);
+    CHECK(before.voices_ > 0);
+    CHECK(before.outputs_ > 0);
+    buffers.harvest(first);
+    buffers.trim();
+    d::Plan second = pooled();
+    CHECK(buffers.made() == made);  // every buffer from the pool
+    CHECK(buffers.reused() == made);
+    Count after;
+    d::visitPooledBuffers(second, after);
+    CHECK(after.dirty == 0);
+    CHECK(after.floats_ == before.floats_);
+    CHECK(after.voices_ == before.voices_);
+    CHECK(after.outputs_ == before.outputs_);
+    CHECK(d::firstDifference(fresh, d::dumpPlan(second)).empty());
+}
