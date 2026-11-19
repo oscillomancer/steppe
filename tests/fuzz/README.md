@@ -222,6 +222,14 @@ assertion so a timed diagnostic run can cover its entire requested duration.
 Every failure still counts and the process exits nonzero; sanitizer aborts and
 crashes remain fatal. Normal tests and replay stop at the first failed check.
 
+Each file in `plan-soak-corpus/` is its own ctest entry,
+`engine-plan-soak.replay.<file name>`, run by every preset and native CI with
+`SUPPLE_SOAK_REPLAY` set to it (`host/engine/CMakeLists.txt` finds the files,
+so a new one is a test once CMake reconfigures). Each takes about a second in
+`dev`, `gcc` and `rtsan` and up to 6 s under ASan and TSan. The files are
+checked out with LF endings on every platform (`.gitattributes`): the replay
+reads them line by line.
+
 `plan-soak-corpus/retirement-checkpoint.jsonl` minimises a harness fault found
 under ASan and TSan. Its optional header `probe: retirement-checkpoint` selects
 a deterministic schedule probe: publish one replacement plan, acknowledge it

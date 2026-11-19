@@ -177,6 +177,15 @@ if(SUPPLE_BUILD_TESTS)
   add_test(NAME engine-plan-soak.tests COMMAND engine-plan-soak.tests)
   set_tests_properties(engine-plan-soak.tests PROPERTIES LABELS "engine;rt"
     ENVIRONMENT "RTSAN_OPTIONS=halt_on_error=1;UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1")
+  # The regression corpus (tests/fuzz/README.md): each file, present or
+  # added later, replays as its own test.
+  file(GLOB _soak_replays CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/tests/fuzz/plan-soak-corpus/*.jsonl)
+  foreach(_replay ${_soak_replays})
+    get_filename_component(_name ${_replay} NAME_WE)
+    add_test(NAME engine-plan-soak.replay.${_name} COMMAND engine-plan-soak.tests)
+    set_tests_properties(engine-plan-soak.replay.${_name} PROPERTIES LABELS "engine;rt"
+      ENVIRONMENT "SUPPLE_SOAK_REPLAY=${_replay};RTSAN_OPTIONS=halt_on_error=1;UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1")
+  endforeach()
 endif()
 
 if(SUPPLE_BUILD_TESTS)
