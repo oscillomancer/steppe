@@ -905,7 +905,14 @@ bridge's settings and handlers do not reach (its `raise(SIGSEGV)` ends the proce
 report: a known limit, STATUS.md). *`raise` of a fault signal.* The runtime's `raise()` calls a handler
 installed with `signal()` on the raising thread (the runtime's documented behaviour; with no handler it is
 `_exit(3)`), and the bridge installs one for `SIGSEGV`, `SIGILL` and `SIGFPE` (`self_capture_windows.cpp`,
-`faultSignal`). It captures from the raising thread's own context (`RtlCaptureContext`: the handler's frame,
+`faultSignal`). The runtime keeps those three actions per thread (a thread starts on the defaults and
+`signal` changes only the calling thread's table; `SIGABRT`'s is the process's, which is why its handler
+covers every thread), so the bridge installs them on its main thread as the handlers go in and on every
+thread it registers, from the thread hook that already sets the terminate handler and the stack guarantee
+(Microsoft's C runtime source, `signal.cpp` and `per_thread_data.cpp`; the first CI run that installed them
+on the main thread only, 44497871339, still saw a plug-in's audio thread end with exit code 3). A thread the
+bridge did not register, one a plug-in makes itself, keeps the default: its `raise(SIGSEGV)` still ends the
+process with code 3 and no report (its hardware faults are unaffected: they reach the last-chance filter). It captures from the raising thread's own context (`RtlCaptureContext`: the handler's frame,
 then the runtime's, then the plug-in's) and ends the process with `TerminateProcess` and the status the
 signal stands for: `0xC0000005` (access violation), `0xC000001D` (illegal instruction), `0xC0000094` (integer
 divide by zero; `SIGFPE` carries no finer code). The host therefore reads an `exception` with that status, as it

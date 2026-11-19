@@ -49,12 +49,16 @@ bool readOwn(std::uint64_t address, void* out, std::size_t bytes) {
 }
 
 [[noreturn]] void terminateHook() noexcept;
+void installFaultSignals() noexcept;
 void threadHook() noexcept {
     // Room on the stack for the handler after an overflow, and our terminate hook on this thread
     // (the runtime keeps the handler per thread).
     ULONG bytes = 64 * 1024;
     (void)SetThreadStackGuarantee(&bytes);
     if (terminateHooked.load(std::memory_order_acquire)) (void)std::set_terminate(terminateHook);
+    // The runtime keeps the SIGSEGV, SIGILL and SIGFPE actions per thread too (SIGABRT's is the
+    // process's): a thread starts with the defaults, whatever the thread that installed ours has.
+    installFaultSignals();
 }
 
 Fault faultFrom(const CONTEXT* context) noexcept {
@@ -158,6 +162,19 @@ void faultSignal(int signalNumber) {
         awaitCapture(tid, start);
     }
     TerminateProcess(GetCurrentProcess(), status);
+}
+
+// Per thread: the runtime keeps the actions for these three signals in the thread's own table
+// (a thread starts on the default one, and `signal` changes only the calling thread's), so every
+// thread that can run a plug-in installs them as it registers (`threadHook`), the main thread as
+// the handlers go in. A thread nobody registered (one a plug-in makes itself) keeps the runtime's
+// default: its `raise(SIGSEGV)` still ends the process with exit code 3. The runtime resets a
+// handler to the default before it calls it, which is fine: the handler ends the process.
+void installFaultSignals() noexcept {
+    if (!exceptionPointersOfThread) return;
+    (void)std::signal(SIGSEGV, faultSignal);
+    (void)std::signal(SIGILL, faultSignal);
+    (void)std::signal(SIGFPE, faultSignal);
 }
 
 [[noreturn]] void terminateHook() noexcept {
@@ -271,15 +288,10 @@ bool installHandlers() noexcept {
     // Replaces the bridge's earlier SIGABRT handler (which only ended the process with the same
     // status): this one captures first and then ends it the same way.
     (void)std::signal(SIGABRT, abortSignal);
-    // The runtime resets a handler to the default before it calls it, which is fine: the handler
-    // ends the process. Where the runtime's exception pointers cannot be found, nothing is
-    // installed: a handler would then turn a main-thread fault's context into this frame's.
+    // Where the runtime's exception pointers cannot be found, nothing is installed: a handler
+    // would then turn a main-thread fault's context into this frame's.
     exceptionPointersOfThread = findExceptionPointers();
-    if (exceptionPointersOfThread) {
-        (void)std::signal(SIGSEGV, faultSignal);
-        (void)std::signal(SIGILL, faultSignal);
-        (void)std::signal(SIGFPE, faultSignal);
-    }
+    installFaultSignals();  // this thread's; each registered thread's follows from threadHook
     priorTerminate = std::set_terminate(terminateHook);
     terminateHooked.store(true, std::memory_order_release);
     ULONG bytes = 64 * 1024;
