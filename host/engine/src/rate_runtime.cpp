@@ -85,8 +85,9 @@ bool scalarOnly(const model::Session& a, const model::Session& b) {
            a.media.sameStorage(b.media) && a.midi.sameStorage(b.midi) && a.fx.sameStorage(b.fx) &&
            a.routes.sameStorage(b.routes) && a.envelopes.sameStorage(b.envelopes) &&
            a.autoItems.sameStorage(b.autoItems) && a.markers.sameStorage(b.markers) &&
-           a.regions.sameStorage(b.regions) && a.blobs == b.blobs &&
-           a.extraSections == b.extraSections;
+           a.regions.sameStorage(b.regions) && a.racks.sameStorage(b.racks) &&
+           a.modules.sameStorage(b.modules) && a.cables.sameStorage(b.cables) &&
+           a.blobs == b.blobs && a.extraSections == b.extraSections;
 }
 }  // namespace
 
