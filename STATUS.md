@@ -290,7 +290,10 @@ instructions are in `docs/guides/installing.md`.
   (ADR-0028); headless main-thread service driven by notifications and
   deadlines (ADR-0030), including MIDI controls, plug-in subscriptions,
   render-ahead output consumption, jobs, restart and autosave; smooth plan swaps (10 ms ramps,
-  a rack's plug-in stages carried as a chain's);
+  a rack's plug-in stages carried as a chain's, nodes and edges matched by
+  lookup by id rather than by scanning every pair; a swap that changes nothing
+  is tested inaudible, and a compiled plan has a canonical dump that tests
+  compare with a second compile);
   strip, send and VCA level and pan edits applied to the running plan without
   compiling, also once playrate scheduling has started (ADR-0060), FX wet and
   bypass, mute and solo edits applied the same way (ADR-0093), patch-only FX
@@ -305,11 +308,20 @@ instructions are in `docs/guides/installing.md`.
   validation of this harness is pending. Intermediate 1024-frame locate windows
   compare the running engine's paced output with private offline renders after
   every settled edit, cycling through beats 0–3; journals retain exact windows
-  for replay. The comparison covers intermediate project states after a locate,
-  not the uninterrupted pre-locate swap crossfade. Readiness and sample counts
+  for replay. Those windows follow a locate; the uninterrupted swaps are
+  covered by a second pass (route E stage 5): each sequence's project states
+  play again on a manual device, once as they are and once with two plan
+  swaps that change nothing after each edit (one inside the edit's 10 ms
+  ramps), and the two must match sample for sample in both executors. The
+  soak's rack has a latent plug-in module at half wet, so a swap that failed
+  to carry a rack's plug-in stage is heard there. Every compile in the soak
+  is checked against a second compile of the same session (the plan dump,
+  `EngineOptions::verifyPlans`). Readiness and sample counts
   decide correctness; a watchdog abort is separately labelled and exits 124.
-  Rack modules restart at locates, so the retained-pool VCA-level reproducers
-  in `tests/fuzz/plan-soak-corpus/` now pass; a rack's plug-in stages empty
+  Each file in `tests/fuzz/plan-soak-corpus/` replays as its own ctest entry
+  (`engine-plan-soak.replay.<name>`) in every preset. Rack modules restart at
+  locates, so the retained-pool VCA-level reproducers there pass; a rack's
+  plug-in stages empty
   their dry delays and oversampling filters there too, as a chain's.
   `track.move` accepts reorders under a non-root buss and moves between
   sibling folders, and refuses destinations in the moved track's own subtree.

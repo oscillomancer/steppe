@@ -1098,6 +1098,13 @@ TEST_CASE(
         MediaCache media;
         DummyBackend backend(sawInput(kEditFrames));
         Engine engine(pool, media, options);
+        // Released on every way out, before the engine joins its renderer: a
+        // REQUIRE failing while the hold is set would otherwise leave the
+        // renderer waiting in it, and ~Engine waiting for the renderer.
+        struct Release {
+            ProcessHold& h;
+            ~Release() { h.hold(0); }
+        } release{processHold};
         REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
         REQUIRE(engine.load(base));
         engine.play();

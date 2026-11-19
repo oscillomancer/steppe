@@ -326,6 +326,40 @@ specified here as it lands); so far:
   the instance.
 - **A patch-only edit publishes no plan** (stage 3, ADR-0092): see
   "Patch-only FX edits" below.
+- **A plan has a canonical dump** (stage 5; `plan_dump.h`). `dumpPlan`
+  (main thread, before publication) writes every field of a prepared plan
+  that compile and prepare decide, one per line in plan order: nodes and
+  their stages, lanes, latencies, pins, delay lengths and buffer sizes,
+  events, clips and take chains, edges, racks, the live and frontier sets,
+  the task graphs, the instances (named by FX or module, never by address)
+  and the mix slots. Runtime state (cursors, ramps, voices, held notes,
+  queues, buffer contents, meters, the executors' handoff fields) is left
+  out. Each struct it walks is first decomposed into all its fields by name,
+  so a field added to `Plan`, `Node`, `Stage`, `Edge` or the others stops
+  the file compiling until it is dumped or named as runtime state. With
+  `EngineOptions::verifyPlans` (tests; off by default) the engine compiles
+  each plan a second time and fails the load with `engine.plan_differs` and
+  the first differing line when the two dumps differ, publishing nothing
+  (a test changes the second compile to see it); the plan-swap soak runs
+  with it on. This is the check a partial compile (stage 7) will be
+  held to. The soak also plays its sequences again on a manual device with
+  two plan swaps that change nothing after each edit, a marker added inside
+  the edit's ramps and removed later, and wants the output unchanged sample
+  for sample in both executors: whatever a swap fails to carry is heard.
+- **Carries look nodes and edges up by id** (stage 6). The compile indexes
+  each plan last (`indexForCarry`, main thread): its nodes sorted by id
+  (a plan has one node per id, asserted there in debug builds), each edge's
+  source id, each node's in-edges sorted by source id (ties in
+  `in` order). At adoption the executor finds a node's counterpart by
+  binary search (`findNode`, `carriedNode`), and an in-edge's or a MIDI
+  send's predecessor among the old node's in-edges from the same source, the
+  first in `in` order that matches (`matchInEdge`, `matchSend`). These are
+  the pairs the earlier scans of every node and edge pair found, whichever
+  earlier plan the executor carries from (the callback can skip plans, the
+  live region lags); the soak and a MIDI-send test compare them with those
+  scans, the latter also with a key route retargeted to another FX. Nothing is allocated on the audio thread. At 192 tracks the
+  callback's carry compares about 7,400 entries per adoption instead of
+  75,000; its time is the carry's own work, linear in the plan.
 Returning to a version with neither patch nor state after applying saved FX
 settings recreates the factory-default instance. The old instance remains alive
 until both executors release its plan, as with a changed opaque state.

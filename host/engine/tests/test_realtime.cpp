@@ -66,6 +66,9 @@ struct EngineTestAccess {
         e.liveWorkersReady_.store(e.liveWorkers_.get());
     }
     static std::size_t plans(const Engine& e) { return e.plans_.size(); }
+    static void secondCompile(Engine& e, void (*change)(detail::Plan&)) {
+        e.secondCompileForTests_ = change;
+    }
     static void afterCollect(Engine& e, void (*hook)(void*), void* context) {
         e.afterCollectForTests_ = hook;
         e.afterCollectContext_ = context;
@@ -6472,4 +6475,44 @@ TEST_CASE("one bridged FX's patch edit costs bridge requests independent of its 
     CAPTURE(small);
     CAPTURE(large);
     CHECK(large <= small + 4);  // not 4x as many instances, 4x (or 16x) the requests
+}
+
+TEST_CASE("realtime: a second compile that differs fails the load (verifyPlans, route E)" *
+          doctest::description("rt")) {
+    // The verifier's own failure path, which route E stage 7 relies on: a
+    // plan its second compile does not reproduce is refused, with the first
+    // line that differs, and never published.
+    const auto s = model::Session::create({.console9 = false});
+    model::EditTxn t(s, s.version + 1);
+    t.create(model::Marker{});
+    const auto marked = t.commit().value();
+    for (bool ahead : {false, true}) {
+        INFO("anticipative " << ahead);
+        auto pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        Engine engine(
+            pool, media,
+            {.anticipative = ahead, .renderBlock = 128, .workers = 0, .verifyPlans = true});
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        REQUIRE(engine.load(s));
+        REQUIRE(engine.verifiedPlans() == 1);
+        const auto generation = engine.planGeneration();
+        EngineTestAccess::secondCompile(
+            engine, [](detail::Plan& p) { p.warnings.push_back("only in the second compile"); });
+        const auto refused = engine.load(marked);
+        REQUIRE_FALSE(refused);
+        CHECK(refused.error().code == "engine.plan_differs");
+        INFO(refused.error().message);
+        CHECK(refused.error().message.find("plan warnings ") != std::string::npos);
+        CHECK(refused.error().message.find("only in the second compile") != std::string::npos);
+        CHECK(engine.verifiedPlans() == 1);
+        CHECK(engine.planGeneration() == generation);
+        // The same session loads once the compiles agree again.
+        EngineTestAccess::secondCompile(engine, nullptr);
+        REQUIRE(engine.load(marked));
+        CHECK(engine.verifiedPlans() == 2);
+        CHECK(engine.planGeneration() == generation + 1);
+        engine.stop();
+    }
 }
