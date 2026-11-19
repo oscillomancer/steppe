@@ -339,8 +339,9 @@ specified here as it lands); so far:
   the file compiling until it is dumped or named as runtime state. With
   `EngineOptions::verifyPlans` (tests; off by default) the engine compiles
   each plan a second time and fails the load with `engine.plan_differs` and
-  the first differing line when the two dumps differ; the plan-swap soak
-  runs with it on. This is the check a partial compile (stage 7) will be
+  the first differing line when the two dumps differ, publishing nothing
+  (a test changes the second compile to see it); the plan-swap soak runs
+  with it on. This is the check a partial compile (stage 7) will be
   held to. The soak also plays its sequences again on a manual device with
   two plan swaps that change nothing after each edit, a marker added inside
   the edit's ramps and removed later, and wants the output unchanged sample

@@ -724,6 +724,7 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
         // Route E stage 5: the same session compiled again gives the same plan.
         auto again = build();
         if (!again) return std::move(again).error();
+        if (secondCompileForTests_) secondCompileForTests_(**again);
         const auto difference =
             detail::firstDifference(detail::dumpPlan(*plan), detail::dumpPlan(**again));
         if (!difference.empty())

@@ -1042,6 +1042,9 @@ class Engine {
     // old plans are collected, where an executor may adopt a newer plan.
     void (*afterCollectForTests_)(void*) = nullptr;
     void* afterCollectContext_ = nullptr;
+    // Tests only (EngineTestAccess): changes the verifier's second compile
+    // (EngineOptions::verifyPlans) before the two are compared.
+    void (*secondCompileForTests_)(detail::Plan&) = nullptr;
     bool bridgedLive_ = false;  // main thread (bridgedLive())
     std::atomic<std::uint64_t> stoppedGen_{0};
     // The session the engine plays: the newest published plan's, or a mix or
