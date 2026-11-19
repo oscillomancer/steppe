@@ -48,6 +48,12 @@ std::vector<MacroGroup> macroGroups(
 // The racks whose Outs feed `track` (its record input), in route order.
 std::vector<model::Id> racksFeeding(const model::Session& s, model::Id track);
 
+// Whether a Mod Out input carries 0..1 (ADR-0096, "Range"): it has a cable
+// and every cable into it comes from a unipolar, gate or phase output. An
+// unpatched input, or one fed by any other output, carries -1..1.
+bool unipolarSource(const model::Session& s, const rack::Catalog& catalog,
+                    const model::ModSource& source);
+
 // A knob's right-click rows, in the strips' parameter menu's order and
 // wording (gui.md §4.2): MIDI learn… (and Remove MIDI learn), Show or Hide
 // lane, Reset to the default, then a choice's values. `current`: its value

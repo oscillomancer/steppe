@@ -2767,6 +2767,128 @@ TEST_CASE(
     CHECK_FALSE(views::holdsItem(s, modulated, nullptr));
 }
 
+TEST_CASE("modulated targets have lanes keyed by target, with or without an envelope") {
+    // As the model tests build them (routes come from files until the
+    // commands land): channel A homes a rack whose LFO and ADSR feed a Mod
+    // Out; channel B is modulated; A sends to a buss.
+    model::EditTxn txn(model::Session::create(), 1);
+    auto addTrack = [&](model::StripType type) {
+        model::Track tr;
+        tr.type = type;
+        tr.parent = model::kMaster;
+        const auto id = txn.create(tr);
+        txn.modify<model::Track>(model::kMaster, [&](auto& m) { m.children.push_back(id); });
+        return id;
+    };
+    const auto a = addTrack(model::StripType::Channel);
+    const auto b = addTrack(model::StripType::Channel);
+    const auto buss = addTrack(model::StripType::Buss);
+    txn.modify<model::Track>(b, [](model::Track& t) {
+        t.volumeDb = -6;
+        t.panMode = model::PanMode::Width;
+    });
+    const auto rack = txn.create(model::Rack{a, "Modulators"});
+    model::RackModule mod;
+    mod.rack = rack;
+    mod.type = "com.suppleaudio.rack.lfo";
+    const auto lfo = txn.create(mod);
+    mod.type = std::string(model::kModOutModule);
+    const auto modOut = txn.create(mod);
+    txn.create(model::Cable{{lfo, "out"}, {modOut, "in_1"}, std::nullopt, ""});
+    model::Route send;
+    send.from.track = a;
+    send.to.track = buss;
+    const auto sendId = txn.create(send);
+    auto route = [&](std::string input, model::Id object, std::string param, double depth,
+                     bool lane = true, bool enabled = true) {
+        model::Modulation m;
+        m.source = {modOut, std::move(input)};
+        m.target = {object, std::move(param)};
+        m.depth = depth;
+        m.lane = lane;
+        m.enabled = enabled;
+        return txn.create(m);
+    };
+    route("in_1", b, "volume", 6);                            // a lane without an envelope
+    route("in_2", b, "volume", 3, true, false);               // disabled: the lane, not the band
+    route("in_2", b, "pan", 30);                              // in_2 counts as 0..1 below
+    const auto width = route("in_1", b, "width", 50, false);  // lane false: none
+    route("in_1", sendId, "volume", -12);                     // under the strip it leaves
+    model::Envelope env;
+    env.target = {b, "pan"};
+    env.points = {{0, 0}};
+    const auto panEnv = txn.create(env);  // the pan lane is its envelope's: one lane
+    auto s = txn.commit();
+    REQUIRE_MESSAGE(s, (s ? "" : s.error().toString()));
+    views::TrackLayout layout;
+    REQUIRE(layout.show(*s));
+    // A, its send's level lane, B, its volume (no envelope) then pan, the buss.
+    REQUIRE(layout.rowCount() == 6);
+    const auto sendLane = layout.indexOfTarget({sendId, "volume"});
+    REQUIRE(sendLane);
+    CHECK(*sendLane == 1);
+    CHECK(layout.rows()[1].track == a);
+    CHECK_FALSE(layout.rows()[1].env);
+    const auto volume = layout.indexOfTarget({b, "volume"});
+    const auto pan = layout.indexOfTarget({b, "pan"});
+    REQUIRE(volume);
+    REQUIRE(pan);
+    CHECK(*volume == 3);
+    CHECK(*pan == 4);
+    CHECK(layout.rows()[3].lane());
+    CHECK_FALSE(layout.rows()[3].env);
+    CHECK(layout.rows()[4].env == panEnv);
+    CHECK(layout.indexOfEnv(panEnv) == 4);
+    CHECK_FALSE(layout.indexOfTarget({b, "width"}));
+    CHECK(layout.heightOf(3) == doctest::Approx(static_cast<double>(layout.envHeight())));
+    CHECK_FALSE(views::holdsItem(*s, layout.rows()[3], nullptr));
+    // The bands, in the lanes' units: ±6 dB (the disabled route adds
+    // nothing), 0..30 on the pan from a 0..1 source, -12..12 dB on the send.
+    const views::UnipolarSource unipolar = [](const model::Session&, const model::ModSource& src) {
+        return src.input == "in_2";
+    };
+    const auto vScale = layout.scaleOf(model::EnvTarget{b, "volume"});
+    REQUIRE(vScale);
+    const auto vBand = views::modulationBand(*s, {b, "volume"}, *vScale, unipolar);
+    REQUIRE(vBand);
+    CHECK(vBand->low == -6);
+    CHECK(vBand->high == 6);
+    CHECK(views::targetValue(*s, {b, "volume"}, *vScale) == -6);
+    const auto pBand = views::modulationBand(*s, {b, "pan"},
+                                             *layout.scaleOf(model::EnvTarget{b, "pan"}), unipolar);
+    REQUIRE(pBand);
+    CHECK(pBand->low == 0);
+    CHECK(pBand->high == 30);
+    const auto sBand = views::modulationBand(*s, {sendId, "volume"}, *vScale, {});
+    REQUIRE(sBand);
+    CHECK(sBand->low == -12);
+    CHECK(sBand->high == 12);
+    CHECK_FALSE(views::modulationBand(*s, {buss, "volume"}, *vScale, unipolar));
+    // Turning a route's lane on adds its target's lane; a hidden envelope on
+    // a modulated target gives the lane its curve.
+    model::EditTxn more(*s, 2);
+    more.modify<model::Modulation>(width, [](model::Modulation& m) { m.lane = true; });
+    env.target = {b, "volume"};
+    env.visible = false;
+    const auto hiddenVolume = more.create(env);
+    auto s2 = more.commit();
+    REQUIRE(s2);
+    REQUIRE(layout.show(*s2));
+    REQUIRE(layout.rowCount() == 7);
+    CHECK(layout.indexOfTarget({b, "width"}));
+    CHECK(layout.rows()[*layout.indexOfTarget({b, "volume"})].env == hiddenVolume);
+    // Without routes asking for one, the lane goes.
+    model::EditTxn off(*s2, 3);
+    for (const auto& m : s2->modulations)
+        off.modify<model::Modulation>(m.id, [](model::Modulation& r) { r.lane = false; });
+    auto s3 = off.commit();
+    REQUIRE(s3);
+    REQUIRE(layout.show(*s3));
+    CHECK(layout.rowCount() == 4);  // A, B, its pan envelope's lane, the buss
+    CHECK(layout.indexOfEnv(panEnv));
+    CHECK_FALSE(layout.indexOfTarget({b, "volume"}));
+}
+
 TEST_CASE("master automation lanes are visible while hidden track lanes remain hidden") {
     model::EditTxn txn(model::Session::create(), 1);
     model::Track track;

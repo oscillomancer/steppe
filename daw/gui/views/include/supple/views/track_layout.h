@@ -156,6 +156,12 @@ class TrackLayout {
     std::function<std::optional<EnvScale>(const model::Envelope&)> pluginScales;
     // A lane's scale: a mixer parameter's, else the plugin's.
     std::optional<EnvScale> scaleOf(const model::Envelope& env) const;
+    std::optional<EnvScale> scaleOf(const model::EnvTarget& target) const;
+    // A modulation route's signal range (the app reads the rack catalog);
+    // empty: every source -1..1. The lanes' bands read it.
+    UnipolarSource unipolarSource;
+    // The lane row of a target (with or without an envelope).
+    std::optional<std::size_t> indexOfTarget(const model::EnvTarget& target) const;
     // Called when the rows or a height changed (the view re-clamps its scroll,
     // refreshes its scroll bars and repaints).
     std::function<void()> onChanged;
@@ -172,6 +178,8 @@ class TrackLayout {
     std::vector<TrackRow> rows_;
     std::map<model::Id, std::size_t> trackRows_, envRows_;
     std::set<model::Id> scaledEnvs_;
+    // The targets a modulation route asks a lane for (compared on a change).
+    std::set<std::pair<model::Id, std::string>> modLanes_;
     std::map<model::Id, float> heights_;
     std::set<model::Id> expanded_;
     std::set<model::Id> masterLanes_;  // the masters with a row (ADR-0057)

@@ -205,10 +205,22 @@ bool TrackLayout::show(const model::Session& session, const std::vector<model::C
                     env->target.object.kind == model::Kind::Module);
         };
         geometry |= (lane(after) && scaleOf(*after).has_value()) != scaledEnvs_.contains(id);
+        // A modulated target's lane holds its envelope, hidden or not.
+        if (!before != !after) {
+            const model::EnvTarget& target = (after ? after : before)->target;
+            geometry |= modLanes_.contains({target.object, target.param});
+        }
         geometry |=
             lane(before) != lane(after) || (lane(before) && lane(after) &&
                                             (before->target.object != after->target.object ||
                                              before->target.param != after->target.param));
+    }
+    // A modulated target's lane comes and goes with its routes' `lane`.
+    if (!session.modulations.sameStorage(session_.modulations)) {
+        std::set<std::pair<model::Id, std::string>> wanted;
+        for (const auto& m : session.modulations)
+            if (m.value->lane) wanted.emplace(m.value->target.object, m.value->target.param);
+        geometry |= wanted != modLanes_;
     }
     // Changing the plug-in can change whether its parameter lanes have scales.
     for (auto id : changedObjects(session_.fx, session.fx, changes)) {
@@ -253,15 +265,33 @@ bool TrackLayout::show(const model::Session& session, const std::vector<model::C
     // A rack module's knobs automate on its rack's home channel (ADR-0062).
     for (const auto& m : session_.modules)
         if (const model::Rack* rk = session_.racks.find(m.value->rack)) owners[m.id] = rk->track;
+    // A lane per target: a visible envelope's, or a modulated parameter's
+    // whose routes ask for one (ADR-0096 `lane`), with its envelope if any.
+    // Envelopes' lanes come first in their order, then modulated ones'.
     struct Lane {
         int order;
-        model::Id env;
-        const model::EnvTarget* target;
-        bool operator<(const Lane& o) const {
-            return std::tie(order, env) < std::tie(o.order, o.env);
+        std::optional<model::Id> env;
+        model::EnvTarget target;
+        auto key() const {
+            return std::tuple(order, !env.has_value(), env, target.object, target.param);
         }
+        bool operator<(const Lane& o) const { return key() < o.key(); }
     };
     std::map<model::Id, std::vector<Lane>> lanes;
+    std::set<std::pair<model::Id, std::string>> laned;  // targets with a lane
+    modLanes_.clear();
+    for (const auto& m : session_.modulations)
+        if (m.value->lane) modLanes_.emplace(m.value->target.object, m.value->target.param);
+    auto ownerOf = [&](model::Id object) -> std::optional<model::Id> {
+        if (object.kind == model::Kind::Fx || object.kind == model::Kind::Route ||
+            object.kind == model::Kind::Module) {
+            const auto found = owners.find(object);
+            if (found == owners.end()) return std::nullopt;
+            object = found->second;
+        }
+        if (object.kind == model::Kind::Track || object.kind == model::Kind::Group) return object;
+        return std::nullopt;
+    };
     for (const auto& envelope : session_.envelopes) {
         if (!envelope.value->visible || !scaleOf(*envelope.value)) continue;
         if (envelope.value->target.object.kind == model::Kind::Track ||
@@ -270,16 +300,25 @@ bool TrackLayout::show(const model::Session& session, const std::vector<model::C
             envelope.value->target.object.kind == model::Kind::Route ||
             envelope.value->target.object.kind == model::Kind::Module)
             scaledEnvs_.insert(envelope.id);
-        auto owner = envelope.value->target.object;
-        if (owner.kind == model::Kind::Fx || owner.kind == model::Kind::Route ||
-            owner.kind == model::Kind::Module) {
-            const auto found = owners.find(owner);
-            if (found == owners.end()) continue;
-            owner = found->second;
+        const model::EnvTarget& target = envelope.value->target;
+        if (const auto owner = ownerOf(target.object)) {
+            lanes[*owner].push_back({envOrder(*envelope.value), envelope.id, target});
+            laned.emplace(target.object, target.param);
         }
-        if (owner.kind == model::Kind::Track || owner.kind == model::Kind::Group)
-            lanes[owner].push_back(
-                {envOrder(*envelope.value), envelope.id, &envelope.value->target});
+    }
+    for (const auto& [object, param] : modLanes_) {
+        if (laned.contains({object, param})) continue;
+        const model::EnvTarget target{object, param};
+        const auto owner = ownerOf(object);
+        if (!owner || !scaleOf(target)) continue;
+        // A hidden envelope on the target still gives its lane the curve.
+        std::optional<model::Id> env;
+        for (const auto& e : session_.envelopes)
+            if (e.value->target == target) env = e.id;
+        model::Envelope probe;
+        probe.target = target;
+        lanes[*owner].push_back({envOrder(probe), env, target});
+        laned.emplace(object, param);
     }
     for (auto& [track, entries] : lanes) std::sort(entries.begin(), entries.end());
     masterLanes_ = masterLanes(session_);
@@ -298,8 +337,8 @@ bool TrackLayout::show(const model::Session& session, const std::vector<model::C
         if (row || master)
             if (const auto found = lanes.find(id); found != lanes.end())
                 for (const auto& lane : found->second) {
-                    envRows_[lane.env] = rows_.size();
-                    rows_.push_back({id, t->type, depth, *lane.target, lane.env});
+                    if (lane.env) envRows_[*lane.env] = rows_.size();
+                    rows_.push_back({id, t->type, depth, lane.target, lane.env});
                 }
         if (t->folderCompact == 2) return;  // a collapsed folder hides its children
         // A master's children stay at its depth, lane or not.
@@ -309,8 +348,8 @@ bool TrackLayout::show(const model::Session& session, const std::vector<model::C
     for (const auto& g : session_.groups)
         if (g.value->vca)
             for (const auto& lane : lanes[g.id]) {
-                envRows_[lane.env] = rows_.size();
-                rows_.push_back({g.id, model::StripType::Buss, 0, *lane.target, lane.env});
+                if (lane.env) envRows_[*lane.env] = rows_.size();
+                rows_.push_back({g.id, model::StripType::Buss, 0, lane.target, lane.env});
             }
     for (model::Id master : session_.project->masters) visit(master, 0);
     // Drop overrides for tracks that are gone (they would never be read again).
@@ -351,6 +390,18 @@ std::optional<std::size_t> TrackLayout::indexOf(model::Id track) const {
 std::optional<std::size_t> TrackLayout::indexOfEnv(model::Id env) const {
     const auto found = envRows_.find(env);
     return found == envRows_.end() ? std::nullopt : std::optional(found->second);
+}
+
+std::optional<EnvScale> TrackLayout::scaleOf(const model::EnvTarget& target) const {
+    model::Envelope probe;
+    probe.target = target;
+    return scaleOf(probe);
+}
+
+std::optional<std::size_t> TrackLayout::indexOfTarget(const model::EnvTarget& target) const {
+    for (std::size_t i = 0; i < rows_.size(); ++i)
+        if (rows_[i].target == target) return i;
+    return std::nullopt;
 }
 
 std::optional<EnvScale> TrackLayout::scaleOf(const model::Envelope& env) const {

@@ -7,13 +7,14 @@
 // (the app supplies it, see TrackLayout::pluginScales).
 #pragma once
 
+#include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 
-#include <memory>
-
 #include "supple/model/session.h"
 #include "supple/params/params.h"
+#include "supple/ui/controls.h"
 
 namespace supple::views {
 
@@ -40,6 +41,26 @@ double envValueAt(const model::Envelope& env, double beat, double fallback);
 // The order lanes appear under their track: volume, pan, mute, then others,
 // then its sends' (volume, pan, mute).
 int envOrder(const model::Envelope& env);
+
+// Modulation (ADR-0096). Whether a route's source input carries 0..1 (every
+// cable into it from a unipolar, gate or phase output); the app supplies it
+// from the rack catalog, and without it every source counts as -1..1.
+using UnipolarSource = std::function<bool(const model::Session&, const model::ModSource&)>;
+// Whether some route on `target` asks for its lane (`lane`, enabled or not).
+bool modulationLane(const model::Session& session, const model::EnvTarget& target);
+// The band the enabled routes on `target` draw on its lane: the offsets they
+// can add, in the lane's value unit (dB for a volume, percent for a pan or
+// width, a plug-in parameter's plain value: depth x its range), each route
+// over its signal's range (ui::modulationSpan). nullopt when no enabled route
+// moves it or the scale has no such unit (a switch, the playrate).
+std::optional<ui::ModulationView> modulationBand(const model::Session& session,
+                                                 const model::EnvTarget& target,
+                                                 const EnvScale& scale,
+                                                 const UnipolarSource& unipolar);
+// A parameter's value without automation: a strip's volume, pan, width or
+// pan bar, a send's level; the scale's reference for the rest.
+double targetValue(const model::Session& session, const model::EnvTarget& target,
+                   const EnvScale& scale);
 
 // Samples visible automation directly, without expanding repeated source points.
 class EnvelopeCurve {

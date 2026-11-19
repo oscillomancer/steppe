@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <vector>
 
 #include "supple/model/env_shape.h"
 #include "supple/ui/controls.h"
@@ -239,6 +240,53 @@ int envOrder(const model::Envelope& env) {
     const std::string& p = env.target.param;
     const int order = p == "volume" ? 0 : p == "pan" ? 1 : p == "mute" ? 2 : 3;
     return env.target.object.kind == model::Kind::Route ? 4 + order : order;
+}
+
+bool modulationLane(const model::Session& session, const model::EnvTarget& target) {
+    for (const auto& m : session.modulations)
+        if (m.value->lane && m.value->target == target) return true;
+    return false;
+}
+
+std::optional<ui::ModulationView> modulationBand(const model::Session& session,
+                                                 const model::EnvTarget& target,
+                                                 const EnvScale& scale,
+                                                 const UnipolarSource& unipolar) {
+    double unit = 1;  // the lane's value per unit of depth
+    switch (scale.kind) {
+        case EnvScale::Kind::Volume:
+        case EnvScale::Kind::Pan:
+        case EnvScale::Kind::Percent:
+            break;
+        case EnvScale::Kind::Plugin:
+            if (!scale.param) return std::nullopt;
+            unit = scale.param->spec.max - scale.param->spec.min;
+            break;
+        default:
+            return std::nullopt;
+    }
+    std::vector<ui::ModulationRoute> routes;
+    for (const auto& m : session.modulations)
+        if (m.value->enabled && m.value->target == target)
+            routes.push_back(
+                {m.value->depth * unit, unipolar && unipolar(session, m.value->source)});
+    if (routes.empty()) return std::nullopt;
+    return ui::modulationSpan(routes);
+}
+
+double targetValue(const model::Session& session, const model::EnvTarget& target,
+                   const EnvScale& scale) {
+    const std::string& p = target.param;
+    if (const model::Track* tr = session.tracks.find(target.object)) {
+        if (p == "volume") return tr->volumeDb;
+        if (p == "pan") return tr->pan;
+        if (p == "width") return tr->width;
+        if (p == "pan_left") return tr->panLeft;
+        if (p == "pan_right") return tr->panRight;
+    }
+    if (const model::Route* r = session.routes.find(target.object); r && p == "volume")
+        return r->volumeDb;
+    return scale.reference();
 }
 
 std::string envTitle(const model::Envelope& env, const model::Session& session) {

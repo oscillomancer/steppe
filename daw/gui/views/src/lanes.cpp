@@ -328,13 +328,44 @@ void Lanes::drawEnvelope(ui::Canvas& c, std::size_t row, const ui::Rect& r) {
     const model::Session& s = layout_.session();
     c.fillRect(r, t.color("ground").withAlpha(0.6f));
     c.fillRect({r.x, r.bottom() - 1, r.w, 1}, t.color("rule").withAlpha(0.4f));
-    // A lane without an envelope (a modulated parameter) is empty
-    // until it has one.
-    const auto& rowEnv = layout_.rows()[row].env;
-    const model::Envelope* env = rowEnv ? s.envelopes.find(*rowEnv) : nullptr;
-    const auto scale = env ? layout_.scaleOf(*env) : std::nullopt;
-    if (!env || !scale) return;
-    const model::Id envId = *rowEnv;
+    const TrackRow& lane = layout_.rows()[row];
+    const model::Envelope* env = lane.env ? s.envelopes.find(*lane.env) : nullptr;
+    const auto scale = env           ? layout_.scaleOf(*env)
+                       : lane.target ? layout_.scaleOf(*lane.target)
+                                     : std::nullopt;
+    if (!scale) return;
+    // Modulation (ADR-0096): the band its routes can add around the base,
+    // faint signal-cv under the curve, as a modulated control's span.
+    const auto band = lane.target ? modulationBand(s, *lane.target, *scale, layout_.unipolarSource)
+                                  : std::nullopt;
+    const ui::Rect area = envArea(r);
+    const float bx0 = std::max(area.x, bounds().x), bx1 = std::min(area.right(), bounds().right());
+    auto drawBand = [&](const std::function<double(float)>& baseAt) {
+        if (!band) return;
+        const ui::Color cv = t.color("signal-cv").withAlpha(0.35f);
+        auto y = [&](double value) {
+            return area.bottom() -
+                   static_cast<float>(std::clamp(scale->toNorm(value), 0.0, 1.0)) * area.h;
+        };
+        for (float x = bx0; x < bx1; x += 3) {
+            const double base = baseAt(x);
+            const float top = y(base + band->high), bottom = y(base + band->low);
+            c.fillRect({x, top, std::min(3.0f, bx1 - x), std::max(1.0f, bottom - top)}, cv);
+        }
+    };
+    if (!env) {
+        // A modulated parameter without automation: its value, and the band.
+        const double base = lane.target ? targetValue(s, *lane.target, *scale) : 0.0;
+        drawBand([base](float) { return base; });
+        const float y = area.bottom() - static_cast<float>(scale->toNorm(base)) * area.h;
+        c.fillRect({bx0, y, std::max(0.0f, bx1 - bx0), 1}, t.color(typeToken(lane.type)));
+        model::Envelope probe;  // named as an envelope on the target would be
+        if (lane.target) probe.target = *lane.target;
+        c.text({r.x + 6, r.y, 200, 14}, envTitle(probe, s), ui::Font::Ui, t.type("caption"),
+               t.color("ink-quiet"));
+        return;
+    }
+    const model::Id envId = *lane.env;
     double fallback = scale->reference();
     if (const model::Track* tr = s.tracks.find(env->target.object))
         fallback = env->target.param == "playrate" ? s.project->playrate.rate
@@ -355,6 +386,10 @@ void Lanes::drawEnvelope(ui::Canvas& c, std::size_t row, const ui::Rect& r) {
     // the curve, a header band (name or pool), a tick at each loop pass.
     const double visibleFrom = s.timeMap->beatAt(std::max(0.0, timeAt(bounds().x)));
     const double visibleTo = s.timeMap->beatAt(std::max(0.0, timeAt(bounds().right())));
+    const EnvelopeCurve played(s, envId, *scale, visibleFrom, visibleTo);
+    drawBand([&](float x) {
+        return played.valueAt(s.timeMap->beatAt(std::max(0.0, timeAt(x))), fallback);
+    });
     std::vector<std::pair<double, double>> covered;
     for (const auto& e : s.autoItems) {
         const model::AutomationItem& ai = *e.value;
@@ -390,7 +425,6 @@ void Lanes::drawEnvelope(ui::Canvas& c, std::size_t row, const ui::Rect& r) {
             if (glyphs > 8192) break;
         }
     }
-    const EnvelopeCurve played(s, envId, *scale, visibleFrom, visibleTo);
     const float x0 = std::max(a.x, bounds().x), x1 = std::min(a.right(), bounds().right());
     ui::Point prev{};
     bool have = false;

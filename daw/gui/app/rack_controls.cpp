@@ -87,6 +87,24 @@ std::vector<model::Id> racksFeeding(const model::Session& s, model::Id track) {
     return out;
 }
 
+bool unipolarSource(const model::Session& s, const rack::Catalog& catalog,
+                    const model::ModSource& source) {
+    using Signal = script::detail::PortModel::Signal;
+    bool cabled = false;
+    for (const auto& c : s.cables) {
+        if (c.value->to.object != source.module || c.value->to.key != source.input) continue;
+        cabled = true;
+        const model::RackModule* m = s.modules.find(c.value->from.object);
+        const rack::Catalog::Entry* e = m ? catalog.find(m->type) : nullptr;
+        const int port = e && e->type ? e->type->output(c.value->from.key) : -1;
+        if (port < 0) return false;
+        const Signal signal = e->type->output(port).signal;
+        if (signal != Signal::Unipolar && signal != Signal::Gate && signal != Signal::Phase)
+            return false;
+    }
+    return cabled;
+}
+
 std::vector<ui::MenuItem> knobMenu(const model::Session& s, model::Id module,
                                    const sd::ParamModel& p, double current, KnobMenuHooks hooks) {
     // The strips' parameter menu's order and wording (gui.md §4.2): MIDI

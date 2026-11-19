@@ -898,10 +898,29 @@ after one that took points only, the keys take the points.
 parameter it shows (`views::TrackRow::target`, the envelope's addressing),
 with that parameter's envelope when it has one; code asks whether a row is a
 lane with `TrackRow::lane()`, so a lane without an envelope (a modulated
-parameter, once modulation exists) never passes for a track row and never takes an item.
-Lanes are made only from visible envelopes until modulation lands; a lane
-without an envelope is drawn empty, has no header controls and takes no
-press. A click on a point selects it (Ctrl+click adds or
+parameter) never passes for a track row and never takes an item. A target
+has a lane when its envelope is visible, or when one of its modulation routes
+has `lane` true (ADR-0096; enabled or not) and the target has a scale: a
+strip's volume, pan, width or pan bars, a send's level, a described plug-in
+parameter. Such a lane holds the target's envelope even while that envelope
+is hidden. A target has one lane however many routes and envelopes reach it.
+Under each track, envelope lanes come first, in their order, then
+modulated-only lanes by target. Its row sits under the strip that owns the
+target, as an envelope's lane does (an FX's track, the strip a send leaves).
+Turning the last route's `lane` off removes the lane.
+**The band.** On a modulated target's lane, the enabled routes' span
+(`views::modulationBand`, summed as a control's span, §2) is drawn around
+the base in faint `signal-cv`, under the curve and any automation items. The
+base is the envelope's played value where there is an envelope, and
+otherwise the parameter's own value (`views::targetValue`), drawn as a line in
+the curve's colour under the lane's caption (the envelope lane's title). Depth is in the lane's unit: dB for a volume, percent
+for a pan or width, depth × the parameter's range for a plug-in. The
+band clamps to the lane. The app tells the band which sources are 0..1
+(`TrackLayout::unipolarSource`, from the rack catalog: every cable into the
+Mod Out input from a unipolar, gate or phase output), so their band runs one
+way from the base. A switch or the playrate draws no band. Until telemetry
+reports the live offset (M2), the lane shows no live value. A lane without an
+envelope has no header controls yet and takes no press. A click on a point selects it (Ctrl+click adds or
 removes one) and a click on empty space adds a point there, selected.
 Dragging a selected point moves every selected point, in every lane, by the
 same time and the same share of its lane's height (one `env.points.set` per

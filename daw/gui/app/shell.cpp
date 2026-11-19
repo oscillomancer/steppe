@@ -7,6 +7,7 @@
 #include "pan_menu.h"
 #include "param_menu.h"
 #include "plugin_scales.h"
+#include "rack_controls.h"
 #include "strip_learn.h"
 #include "track_menu.h"
 
@@ -256,6 +257,12 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
         [scales = std::make_shared<PluginScales>(dispatcher_, &app_)](const model::Envelope& env) {
             return (*scales)(env);
         };
+    // A modulated lane's band spans 0..1 sources one way (ADR-0096).
+    arrange_->trackLayout().unipolarSource = [this](const model::Session& s,
+                                                    const model::ModSource& source) {
+        const auto catalog = racks::catalog(app_);
+        return catalog && racks::unipolarSource(s, *catalog, source);
+    };
     counts_ = &shell->emplace<ui::Label>("status", status_, ui::Font::Mono, "small", "ink-quiet");
     counts_->layout.width = ui::SizeRule::fraction();
     counts_->layout.height = ui::SizeRule::fixed(26);
