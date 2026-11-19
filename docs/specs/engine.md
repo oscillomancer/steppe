@@ -356,7 +356,7 @@ specified here as it lands); so far:
   the pairs the earlier scans of every node and edge pair found, whichever
   earlier plan the executor carries from (the callback can skip plans, the
   live region lags); the soak and a MIDI-send test compare them with those
-  scans. Nothing is allocated on the audio thread. At 192 tracks the
+  scans, the latter also with a key route retargeted to another FX. Nothing is allocated on the audio thread. At 192 tracks the
   callback's carry compares about 7,400 entries per adoption instead of
   75,000; its time is the carry's own work, linear in the plan.
 Returning to a version with neither patch nor state after applying saved FX

@@ -15,6 +15,7 @@ namespace supple::engine::carry_test {
 struct CarryMatches {
     std::uint64_t nodes = 0, edges = 0, sends = 0, live = 0;  // pairs found
     std::uint64_t wrong = 0;                                  // lookups that differ
+    std::uint64_t otherFx = 0;  // key edges whose route now feeds another FX
 };
 
 // `from` -> `to` in each executor's classes: the callback's (-1), the
@@ -48,8 +49,10 @@ inline void check(detail::Plan& from, detail::Plan& to, CarryMatches& out) {
                         continue;
                     if (edge.stage >= 0 &&
                         n.chain[static_cast<std::size_t>(edge.stage)].fx !=
-                            scanned->chain[static_cast<std::size_t>(previous.stage)].fx)
+                            scanned->chain[static_cast<std::size_t>(previous.stage)].fx) {
+                        ++out.otherFx;
                         continue;
+                    }
                     audio = oi;
                     break;
                 }

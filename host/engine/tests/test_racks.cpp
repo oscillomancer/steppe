@@ -3230,8 +3230,10 @@ TEST_CASE(
     // into one (two candidates, matched in order), an audio send into a
     // buss, a monitored track (live) sending notes, then edits that shift every
     // node's index, change a tap, drop a send, empty and refill the live
-    // region. Each plan is compared from the one before and the one before
-    // that (an executor that skipped a plan).
+    // region, and retarget a key route to another FX on the same channel
+    // (the route keeps its id: the old key edge must not carry into the new
+    // FX's key input). Each plan is compared from the one before and the one
+    // before that (an executor that skipped a plan).
     namespace d = supple::engine::detail;
     auto midiRoute = [](model::EditTxn& t, Id from, Id to, int channel = 0) {
         model::Route r;
@@ -3257,6 +3259,12 @@ TEST_CASE(
     addFx(t, b, kSine);
     addFx(t, c, kSine);
     addFx(t, m, kSine);
+    const Id keyed = addFx(t, c, "com.suppleaudio.test.keymix");
+    const Id rekeyed = addFx(t, c, "com.suppleaudio.test.keymix");
+    model::Route key;
+    key.from.track = b;
+    key.to.fx = keyed;
+    const Id bc = t.create(key);
     const Id ab = midiRoute(t, a, b);
     midiRoute(t, a, b, 1);  // a second candidate from a into b
     midiRoute(t, a, c);
@@ -3290,6 +3298,9 @@ TEST_CASE(
         e.modify<model::Route>(ax, [](model::Route& r) { r.tap = model::Tap::PreFader; });
     });
     edit([&](model::EditTxn& e) { e.remove<model::Route>(ab); });
+    edit([&](model::EditTxn& e) {
+        e.modify<model::Route>(bc, [&](model::Route& r) { r.to.fx = rekeyed; });
+    });
     edit([&](model::EditTxn& e) { monitor(e, m, false); });
     edit([&](model::EditTxn& e) {  // live again, and c ahead of a
         monitor(e, m, true);
@@ -3314,7 +3325,9 @@ TEST_CASE(
     CAPTURE(matches.edges);
     CAPTURE(matches.sends);
     CAPTURE(matches.live);
+    CAPTURE(matches.otherFx);
     CHECK(matches.wrong == 0);
+    CHECK(matches.otherFx > 0);
     CHECK(matches.sends > 0);
     CHECK(matches.live > 0);
     CHECK(matches.edges > matches.sends);
