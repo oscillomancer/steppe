@@ -4,6 +4,7 @@
 #include "supple/model/audio_warp.h"
 
 #include "supple/views/envelope_lane.h"
+#include "supple/views/item_body.h"
 
 #include <algorithm>
 #include <cmath>
@@ -598,6 +599,9 @@ void Lanes::drawFades(const ui::Rect& r, const model::Item& item, std::uint32_t 
               item.fadeOut.curve);
 }
 
+// The shared body drawing (item_body.h), placed by the timeline: content
+// seconds and beats from the item's start, through the zoom, the scroll and
+// the tempo map.
 void Lanes::drawAudio(const ui::GlFrame& frame, const ui::Rect& r, const model::Item& item,
                       const model::Take& take, const model::MediaSource& source,
                       std::uint32_t rgba) {
@@ -606,102 +610,27 @@ void Lanes::drawAudio(const ui::GlFrame& frame, const ui::Rect& r, const model::
         ++stats_.pending;  // a placeholder until the worker delivers (onReady repaints)
         return;
     }
-    const int channels = std::max(1, pyramid->channels());
-    const ui::Rect vis = r.intersect(frame.clip);
-    if (vis.empty() || r.h < 4) return;
-    const float px = 1.0f / frame.ratio;  // one device pixel in design units
-    const double rate = pyramid->sampleRate();
-    const double sourceSeconds = static_cast<double>(pyramid->frames()) / rate;
-    const model::AudioWarpMap timeMap(take);
-    const double speed = model::audioSpeed(take);  // pitch unpreserved: faster or slower
-    const double framesPerUnit = rate * speed / view_.pixelsPerSecond;
-    const peaks::Level& level = pyramid->pick(framesPerUnit * static_cast<double>(px));
-    const float gain = static_cast<float>(dbToGain(item.gainDb + take.gainDb));
-    const float laneH = r.h / static_cast<float>(channels);
     const double itemStart = model::itemSpan(layout_.session(), item).startSec;
-    for (int c = 0; c < channels; ++c) {
-        const float mid = r.y + laneH * (static_cast<float>(c) + 0.5f), half = laneH * 0.5f - 1;
-        strips_->beginRun();
-        // Columns by index: an accumulated fractional step would drift off
-        // the device pixels.
-        const auto first = static_cast<long>(std::floor(vis.x * frame.ratio));
-        for (long i = first;; ++i) {
-            const float x = static_cast<float>(i) / frame.ratio;
-            if (x >= vis.right()) break;
-            // The waveform and playback share original-source coordinates.
-            double s0 = item.loop ? take.startOffset + (timeAt(x) - itemStart) * speed
-                                  : timeMap.sourceAt(timeAt(x) - itemStart);
-            double s1 = item.loop ? take.startOffset + (timeAt(x + px) - itemStart) * speed
-                                  : timeMap.sourceAt(timeAt(x + px) - itemStart);
-            if (item.loop && sourceSeconds > 0) {
-                const double wrap = std::floor(s0 / sourceSeconds) * sourceSeconds;
-                s0 -= wrap;
-                s1 -= wrap;
-            }
-            const peaks::Span sp = pyramid->range(level, c, s0 * rate, s1 * rate);
-            float top = mid - std::clamp(sp.max * gain, -1.0f, 1.0f) * half;
-            float bottom = mid - std::clamp(sp.min * gain, -1.0f, 1.0f) * half;
-            if (bottom - top < px) {  // silence still shows a hairline
-                const float centre = (top + bottom) / 2;
-                top = centre - px / 2;
-                bottom = centre + px / 2;
-            }
-            strips_->pair(x, top, bottom, rgba);
-            ++stats_.columns;
-        }
-        strips_->endRun();
-    }
+    const AudioWindow window{[&](float x) { return timeAt(x) - itemStart; }, view_.pixelsPerSecond,
+                             item.loop};
+    const float gain = static_cast<float>(dbToGain(item.gainDb + take.gainDb));
+    stats_.columns += drawAudioBody(*strips_, frame, r, *pyramid, take, window, gain, rgba);
 }
 
 void Lanes::drawMidi(const ui::Rect& r, const model::Item& item, const model::Take& take,
                      const model::MidiSource& source, std::uint32_t rgba, std::uint32_t border) {
-    const midi::Sequence& seq = source.sequence;
-    if (seq.notes.empty() || r.h < 4) return;
     const time::TimeMap& tm = *layout_.session().timeMap;
     const model::ItemSpan span = model::itemSpan(layout_.session(), item);
     const double itemBeat = span.startBeat;
-    const double ppq = seq.ppq > 0 ? seq.ppq : 960;
-    const model::SourceBeatMapping mapping{take.startOffset,
-                                           take.playrate > 0 ? take.playrate : 1.0,
-                                           static_cast<double>(seq.length) / ppq};
-    const bool looping = item.loop && mapping.sourceLength > 0;
-    int lo = 127, hi = 0;
-    double end = 0;
-    bool hasNotes = false;
-    for (const midi::Note& n : seq.notes) {
-        if (looping && n.start >= seq.length) continue;
-        hasNotes = true;
-        lo = std::min(lo, static_cast<int>(n.pitch));
-        hi = std::max(hi, static_cast<int>(n.pitch));
-        end = std::max(end, (static_cast<double>(n.start) + static_cast<double>(n.length)) / ppq /
-                                mapping.rate);
-    }
-    if (!hasNotes) return;
-    const double tail = std::max(0.0, end - mapping.period());
-    const int pitches = hi - lo + 3;  // a free row above and below
-    const float noteH = std::max(1.0f, std::min(8.0f, r.h / static_cast<float>(pitches)));
-    const float usedH = noteH * static_cast<float>(pitches);
-    const float top = r.y + (r.h - usedH) / 2;
-    const double visibleFrom =
-        std::max(0.0, tm.beatAt(std::max(0.0, timeAt(bounds().x))) - itemBeat);
-    const double visibleTo =
-        std::min(tm.beatAt(span.endSec) - itemBeat,
-                 tm.beatAt(std::max(0.0, timeAt(bounds().right()))) - itemBeat);
-    std::size_t glyphs = 0;
-    for (const double base : mapping.visibleOrigins(tm.beatAt(span.endSec) - itemBeat, looping,
-                                                    visibleFrom, visibleTo, tail))
-        for (const midi::Note& n : seq.notes) {
-            if (looping && n.start >= seq.length) continue;
-            const double b0 = base + static_cast<double>(n.start) / ppq / mapping.rate;
-            const double b1 = b0 + static_cast<double>(n.length) / ppq / mapping.rate;
-            if (b1 <= visibleFrom || b0 >= visibleTo) continue;
-            if (++glyphs > 8192) return;
-            const double s0 = tm.secondsAt(itemBeat + std::max(0.0, b0));
-            const double s1 = std::min(tm.secondsAt(itemBeat + b1), span.endSec);
-            const float y = top + static_cast<float>(hi + 1 - n.pitch) * noteH;
-            notes_->add({xAt(s0), y, std::max(1.0f, xAt(s1) - xAt(s0)), noteH}, rgba, border);
-            ++stats_.notes;
-        }
+    MidiWindow window;
+    window.xAt = [&](double beat) { return xAt(tm.secondsAt(itemBeat + beat)); };
+    window.length = tm.beatAt(span.endSec) - itemBeat;
+    window.from = std::max(0.0, tm.beatAt(std::max(0.0, timeAt(bounds().x))) - itemBeat);
+    window.to =
+        std::min(window.length, tm.beatAt(std::max(0.0, timeAt(bounds().right()))) - itemBeat);
+    window.end = xAt(span.endSec);
+    window.loop = item.loop;
+    stats_.notes += drawMidiBody(*notes_, r, take, source, window, rgba, border);
 }
 
 }  // namespace supple::views

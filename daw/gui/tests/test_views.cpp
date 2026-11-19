@@ -23,6 +23,7 @@
 #include <tuple>
 #include <vector>
 #include "supple/base/files.h"
+#include "supple/views/item_body.h"
 #include "test_support.h"
 #include "ui_persistence.h"
 
@@ -1313,6 +1314,53 @@ TEST_CASE("golden: items with fades, muted items and multi-take items") {
     arrange->setViewport(v);
     settle(root, arrange->lanes());
     golden(root, "arrange-items.png");
+}
+
+TEST_CASE("item bodies draw from a take and a content window, without an item") {
+    Gl& g = gl();
+    if (!g.ok) return;
+    // A cell 100 units wide showing four beats, as a clip cell will: a
+    // one-beat take with an eighth note, looped, gives a note per beat.
+    const ui::Rect cell{10, 0, 100, 40};
+    model::MidiSource source;
+    source.sequence.ppq = 960;
+    source.sequence.length = 960;
+    source.sequence.notes.push_back({0, 480, 0, 60, 96, 0});
+    model::Take take;
+    views::MidiWindow window;
+    window.xAt = [&](double beat) { return cell.x + static_cast<float>(beat * 25); };
+    window.length = 4;
+    window.from = 0;
+    window.to = 4;
+    window.end = cell.right();
+    window.loop = true;
+    auto notes = ui::RectRenderer::create();
+    REQUIRE(notes);
+    CHECK(views::drawMidiBody(*notes, cell, take, source, window, 0xffffffffu, 0) == 4);
+    window.from = 2;  // half of it in view
+    CHECK(views::drawMidiBody(*notes, cell, take, source, window, 0xffffffffu, 0) == 2);
+    window.loop = false;  // once: the one note, out of view now
+    CHECK(views::drawMidiBody(*notes, cell, take, source, window, 0xffffffffu, 0) == 0);
+    CHECK(notes->count() == 6);
+    // Two seconds of stereo across the same cell: a column per unit and
+    // channel, only where the frame's clip reaches.
+    audio::AudioData audio;
+    audio.sampleRate = 48000;
+    audio.channels.assign(2, std::vector<float>(96000, 0.25f));
+    const peaks::Pyramid pyramid = peaks::Pyramid::build(audio);
+    views::AudioWindow seconds{[&](float x) { return static_cast<double>(x - cell.x) / 50.0; },
+                               50.0, false};
+    auto strips = ui::StripRenderer::create();
+    REQUIRE(strips);
+    ui::GlFrame frame;
+    frame.width = 200;
+    frame.height = 100;
+    frame.clip = {0, 0, 200, 100};
+    CHECK(views::drawAudioBody(*strips, frame, cell, pyramid, take, seconds, 1.0f, 0xffffffffu) ==
+          200);
+    frame.clip = {0, 0, 60, 100};
+    CHECK(views::drawAudioBody(*strips, frame, cell, pyramid, take, seconds, 1.0f, 0xffffffffu) ==
+          100);
 }
 
 // --- the track control panel (P5.5) -------------------------------------------------

@@ -650,7 +650,13 @@ label and marks with it: they are not redrawn on the body. An
 item under 30 units high (a compact row) has no bar and its label sits on the
 body. Waveforms are ink; MIDI notes are the item's colour drawn 45% of the
 way to the ink (`Lanes::noteColor`), lighter than the body in a dark theme
-and darker in a light one, so a yellow item's notes read on its yellow body. A
+and darker in a light one, so a yellow item's notes read on its yellow body.
+The waveform and the notes are drawn by `views::drawAudioBody` and
+`views::drawMidiBody` (`item_body.h`), which know a take, a rect and a
+content window (where each second or beat of the body's content lands, its
+length, the part in view, whether the take loops) but not the item, so
+anything that shows a take's content in a box draws it the same way; the
+lanes build the window from the timeline. A
 fade is drawn over the body, under the name bar (`Lanes::fadeArea`): its gain
 curve, and a shade over the part of the body above the curve, so the waveform
 dims where the fade takes it away. The fade handles stay at the item's top
