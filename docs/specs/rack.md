@@ -134,8 +134,10 @@ Both ends are in the same rack. At most one cable joins the same two ends.
 - No cycle through the mixer: a track that reaches a rack's In module
   (directly or through other routes and racks) is not fed by that rack's
   Out modules. (`rack.cycle`)
-- Limits: 64 racks, 512 modules and 4096 cables per rack, 32 Out and 32 In
-  modules per rack.
+- Limits: 64 racks, 512 modules and 4096 cables per rack, 32 Out, 32 In
+  and 32 Mod Out modules per rack.
+- A modulation route's source is a Mod Out module and one of its inputs
+  (session-model "Modulation"). Removing the module removes its routes.
 
 ### 2.6 Migration
 
@@ -543,14 +545,17 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
 | `notes` | out `pitch`, `gate`, `velocity` (unipolar), `pressure` (unipolar), `retrigger` (gate), poly; `bend` (cv), `modwheel` (unipolar) mono | `voices` 1..16 (8), `mode` (`rotate`, `reuse`, `reset`, `mono_last`, `mono_low`, `mono_high`), `bend_range` semitones 0..24 (2) | MIDI from `source` (default: the home track): its MIDI items, incoming MIDI sends and monitored live input, plus explicit sends to the module; None disables the source; auto monitors while stopped or recording |
 | `notes_out` (id suffix `notes-out`) | in `pitch`, `gate`, `velocity` (poly) | `channel` 1..16 (1), displayed **MIDI channel** | Note Out plays a channel's instrument through `route.add {from: {module: mo_N}, to: {track: tr_X}, midi: {}}`; the short type alias `notes_out` is accepted by module commands |
 | `transport` | out `playing` (gate), `reset` (trigger at play and locate), `bar` and `beat` (triggers), `clock` (trigger at `division`), `bar_phase`, `beat_phase` (phase), `tempo` (cv: bpm / 300) | `division` (1/1 … 1/64, dotted, triplets; 1/16) , `swing` % 0..75 (0) | From the timeline: positions are exact at every frame |
+| `mod_out` (id suffix `mod-out`) | in `in_1` .. `in_16` (cv, normal 0) | none | Each input is a modulation source (ADR-0096): channel 0 of its cables, clamped to −1..1, sampled at each grid point and held. Modulation routes (`mr_*`, session-model "Modulation") take it to parameters outside the rack. An input shows the label of the module feeding it (first cable by id), else "Mod N", and reports 0..1 when every cable into it comes from a unipolar, gate or phase output, else −1..1. Bypassed, every input holds 0 |
 | `plugin` | in `in_l`, `in_r` (audio, `in_r` normalled to `in_l`; poly cables summed), `pitch`, `gate`, `velocity` (poly, normal 0.8); out `out_l`, `out_r` (audio) | the plug-in's, as cable targets `fx_N.<key>` | Its `fx` is an ordinary FX instance in no chain; clicking the module opens its editor. Each gate channel is a voice: rising to 0.5 or above plays key round(60 + 12 × pitch) at its velocity, falling below 0.25 (or its cable going) ends it |
 
 ## 6. Engine integration (`host/engine`)
 
-- **Node.** Each rack with at least one module compiles to a rack node in
-  the plan's node list, topologically after the tracks that send to its In
-  modules and before the channels its Out modules feed. Racks without a
-  path to any output are not compiled. A rack node has no strip stages.
+- **Node.** Every rack compiles to a rack node in the plan's node list,
+  whether or not anything hears it, topologically after the tracks that send
+  to its In modules and before the channels its Out modules feed and the
+  targets of its Mod Outs' modulation routes. A rack node has no strip
+  stages. *(Corrected 2026-11-19: this said racks without a path to an
+  output were not compiled; the compile has always built every rack.)*
 - **Edges.** A send to an In module is an edge into the rack node at its
   tap; a channel's record input from an Out module is an edge from the rack
   node into the channel's input sum (linear, no Console 9 stage). A rack
@@ -562,7 +567,8 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   latency. When the destination is live and the rack renders ahead, the
   frontier ring carries the send's output.
 - **Timing.** Read-ahead PDC treats the node as a strip whose latency is the
-  maximum of its routed audio Outs and Note Outs (ADR-0064). Each Out's
+  maximum of its routed audio Outs and Note Outs (ADR-0064), and of its Mod
+  Outs that feed an enabled modulation route (ADR-0096). Each Out's
   latency is the maximum sum of prepared plug-in stage latencies, including
   oversampling, along
   paths in the DAG left after removing the scheduler's feedback cables.
@@ -652,7 +658,13 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   frontier. The recorder places the samples by the channel's input timeline
   and input-FX latency, with its usual padding and take rules (engine.md §4).
 - **Live.** A rack is live when it consumes live MIDI or a live track sends
-  to it; liveness propagates to what it feeds.
+  to it; liveness propagates to what it feeds. A rack whose Mod Out feeds a
+  live target is live too (ADR-0096, engine.md §1.4.1).
+- **Modulation.** A Mod Out's inputs leave the rack through modulation
+  routes (engine.md §1.4.1): the route's edge is compensated as a sidechain
+  into its target stage, and the target's stage sends CLAP `param_mod` on
+  its own automation grid. A rack whose only way out is an enabled
+  modulation route counts as having an output.
 - **Freeze.** Freezing a rack's home channel prints what the channel hears.
   Rack sends are not in the print: the rack keeps running for them
   (ADR-0075), so freezing does not reduce the rack's CPU. While the home is
@@ -704,7 +716,9 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   may precede the callback's adoption of its predecessor: it cannot bind,
   process or reset modules still owned by the callback. Until all modules
   are available, that rack's plan-local audio and Note Out results are
-  silent. Claims retry at block boundaries without waiting. A locate's
+  silent, except that its Mod Outs hold their last values and the
+  modulation emitters they feed send nothing for that block (ADR-0096).
+  Claims retry at block boundaries without waiting. A locate's
   Notes/Note Out reset is deferred until ownership is obtained, retained
   through continuing plan swaps, and applied before any bindings or MIDI.
   A seek, and a play from a position (where plug-ins are reset: the
@@ -722,7 +736,8 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   graphs remain disjoint within each plan; ownership protects shared
   instances across different plans.
 - **Errors.** `rack.cycle`, `rack.unknown_type`, `rack.port`, `rack.param`,
-  `rack.limit` at edit time; plan warnings for missing types.
+  `rack.limit` at edit time; plan warnings for missing types. Modulation
+  routes have their own (`modulation.*`, session-model "Modulation").
 
 ## 7. Commands
 
