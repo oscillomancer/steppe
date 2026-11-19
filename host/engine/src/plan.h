@@ -227,6 +227,10 @@ struct Chunk {
     }
 };
 
+// ChunkRings constructed in this process (route E stage 1 counts them).
+std::uint64_t chunkRingAllocations();
+void countChunkRing();
+
 // Single producer (the renderer), single consumer (the audio callback).
 struct ChunkRing {
     std::vector<Chunk> chunks;
@@ -237,6 +241,7 @@ struct ChunkRing {
     // `channels`: 2, or the device's outputs for the root ring.
     ChunkRing(std::size_t capacity, std::uint32_t frames, bool metadata = false,
               std::uint32_t channels = 2) {
+        countChunkRing();
         chunks.resize(std::bit_ceil(std::max<std::size_t>(capacity, 4)));
         mask = chunks.size() - 1;
         for (Chunk& c : chunks) {
@@ -248,6 +253,20 @@ struct ChunkRing {
                 c.rates.resize(frames + 1, 1.);
             }
         }
+    }
+    // A frontier or record ring of this shape (route E stage 1): stereo, no
+    // metadata, `capacity` chunks rounded up as the constructor does.
+    bool fits(std::size_t capacity, std::uint32_t frames) const {
+        return chunks.size() == std::bit_ceil(std::max<std::size_t>(capacity, 4)) &&
+               chunks.front().l.size() == frames && chunks.front().extra.empty() &&
+               chunks.front().timeline.empty();
+    }
+    // Main thread, while no executor can reach the ring: empty again. Old
+    // chunk contents stay; the producer writes every field of a chunk before
+    // it publishes it, and the consumer reads only published ones.
+    void restart() {
+        write.store(0, std::memory_order_relaxed);
+        read.store(0, std::memory_order_relaxed);
     }
     // Producer: the next free chunk, or null when the ring is full.
     Chunk* slot() {
@@ -304,6 +323,7 @@ struct ChunkRing {
 struct Edge {
     std::size_t from = 0;     // node index
     std::size_t to = 0;       // node index of the destination
+    Id fromId{};              // the source node's id (indexForCarry)
     std::optional<Id> route;  // empty for parent sends
     // A key route (ADR-0018): the destination chain stage whose sidechain
     // input this feeds (-1: the node's input sum).
@@ -750,6 +770,9 @@ struct Node {
     bool midiReleaseTimeline = false, midiSends = false, hardwareMidiSource = false;
 
     Id id;  // a track's, or a rack's (rk_*)
+    // `in` by the source node's id, ties in `in` order (indexForCarry): an
+    // adoption's candidates for an in-edge's predecessor (inEdgesFrom).
+    std::vector<std::uint32_t> inBySource;
     // A rack (ADR-0062): its runtime, its Out modules' audio this block and
     // the sends its In modules take. No chain, fader or Console 9 stage.
     std::shared_ptr<RackNode> rack;
@@ -819,6 +842,7 @@ struct Node {
     UtilityControl utility;
     bool soloSilenced = false;
     bool postKeyed = false;
+    std::uint32_t stageSlot = 0;  // its first stage's MixSlots::stages entry (forEachStage order)
     ConsoleStage<console9::Buss> decoder;
     ConsoleStage<console9::Channel> encoder;
     FaderControl fader;
@@ -898,6 +922,7 @@ struct MixSlots {
         std::atomic<double> volumeDb{0}, pan{0};  // a route's pan resolved against its source
         std::atomic<double> width{100}, panLeft{-100}, panRight{100};  // strips (ADR-0066)
         std::atomic<bool> mute{false};
+        std::atomic<bool> soloSilenced{false};  // strips (ADR-0093)
         std::atomic<bool> holdVolume{false}, holdPan{false};
         std::atomic<bool> holdWidth{false}, holdPanLeft{false}, holdPanRight{false},
             holdPanBoost{false};
@@ -907,6 +932,14 @@ struct MixSlots {
     std::unique_ptr<Value[]> vcas;      // per VCA group (pan unused)
     std::unique_ptr<Value[]> hardware;  // per hardware MIDI route
     std::vector<Id> vcaIds;             // main thread: the group of each VCA slot
+    // FX wet and bypass (ADR-0093), per stage, node by node in forEachStage
+    // order from Node::stageSlot; stageFx is each slot's FX (main thread).
+    struct StageValue {
+        std::atomic<double> wet{1};
+        std::atomic<bool> bypass{false};
+    };
+    std::unique_ptr<StageValue[]> stages;
+    std::vector<Id> stageFx;
     std::atomic<std::uint64_t> sequence{0};
     std::array<std::uint64_t, 2> seen{};  // per executor class (0: renderer or all, 1: live)
 };
@@ -921,6 +954,14 @@ struct Plan {
     // is live whenever anything is, and all of them share outputLatency.
     std::vector<OutputTap> outputs;
     std::vector<Edge> edges;
+    // Every node by id, sorted (indexForCarry): an adoption finds a node's
+    // counterpart in log n steps, whichever earlier plan it carries from.
+    // Node ids are unique within a plan (asserted in debug builds).
+    struct NodeKey {
+        Id id;
+        std::uint32_t node = 0;
+    };
+    std::vector<NodeKey> nodeIndex;
     bool linearConsole = false;
     model::Playrate masterPlayrate;
     Automation rateEnvelope;
@@ -1166,6 +1207,23 @@ void carryMix(Plan& from, Plan& to, int liveClass) SUPPLE_RT;
 // renderer hands a node moving into the live region over with its state
 // (toClass 1, fromClass 0), where the callback continues it.
 void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT;
+// The carries' lookups (route E stage 6). The compile indexes a plan last
+// (indexForCarry, main thread); on the audio thread the lookups only read
+// it: binary searches, no allocation, whichever earlier plan is `from`.
+void indexForCarry(Plan& p);
+const Node* findNode(const Plan& p, Id id) SUPPLE_RT;
+Node* findNode(Plan& p, Id id) SUPPLE_RT;
+// `node`'s counterpart in `from` that carries into it: the same id, of
+// `fromClass` (-1: either).
+Node* carriedNode(Plan& from, const Node& node, int fromClass) SUPPLE_RT;
+// `old`'s in-edges from the node with id `source`, in `old.in` order.
+std::span<const std::uint32_t> inEdgesFrom(const Plan& from, const Node& old, Id source) SUPPLE_RT;
+inline constexpr std::size_t kNoEdge = std::numeric_limits<std::size_t>::max();
+// The in-edge of `old` (in `from`) that `edge`, an in-edge of `n`, continues:
+// the first in `old.in` order with the same source, route, tap and kind, a
+// key route into the same FX (carryMix). kNoEdge: none.
+std::size_t matchInEdge(const Edge& edge, const Node& n, const Plan& from,
+                        const Node& old) SUPPLE_RT;
 
 // A strip's static fader gain (masters: plain gain; channels and busses: the
 // Console 9 fader law) and a send's (route plus, post fader, source level).
@@ -1174,6 +1232,18 @@ double sendGain(double routeDb, model::Tap tap, double sourceDb) SUPPLE_RT;
 // Mix-value publication (ADR-0060). `holds`: the volume/pan targets a write
 // pass holds (ADR-0061). Main thread, before or after the plan is published.
 void publishMix(Plan& p, const model::Session& s, std::span<const model::EnvTarget> holds);
+// Main thread (ADR-0093): whether publishing `s` into a split plan would
+// change a mute, solo, route mute, wet or bypass that the callback reads, and
+// one that the renderer reads. The callback takes values at its next block
+// and the renderer at its own position, up to the render-ahead later in the
+// stream, so an edit that changes both compiles (Engine::loadMixValues): in
+// between the output would be neither session's. Compared with the values
+// the slots hold, which only the main thread writes. Both false outside a
+// split plan.
+struct ExecutorChanges {
+    bool live = false, rendered = false;
+};
+ExecutorChanges changedExecutors(const Plan& p, const model::Session& s);
 // An executor's copy of the published values into the nodes and edges its
 // class reads (`liveClass` as for wrapTo), at the start of a block.
 void syncMix(Plan& p, int liveClass) SUPPLE_RT;
@@ -1190,5 +1260,22 @@ host::Transport transportAt(const Plan& p, std::int64_t sample, const LoopRange*
 // The song at a time on the timeline, in seconds: tempo, beat, bar and meter
 // from the tempo map (transportAt without playrate or loop).
 host::Transport transportAtSeconds(const Plan& p, double seconds) SUPPLE_RT;
+
+// Whether a plug-in's parameter rescan can change what a plan holds of it:
+// its parameter list (INFO or ALL, or a rescan without flags). A rescan of
+// values or their text, which a plug-in reports after a patch or a preset,
+// cannot: a plan holds no values (ADR-0092).
+inline bool rescansParamList(const host::Instance::Notifications& n) {
+    constexpr std::uint32_t kValues = CLAP_PARAM_RESCAN_VALUES | CLAP_PARAM_RESCAN_TEXT;
+    return n.paramsRescan && (n.paramsRescanFlags == 0 || (n.paramsRescanFlags & ~kValues) != 0);
+}
+
+// Whether an active envelope automates the FX: a new plan resends its lanes'
+// values at its first block, covering what the plug-in changed meanwhile.
+inline bool automated(const model::Session& s, model::Id fx) {
+    for (const auto& envelope : s.envelopes)
+        if (envelope.value->target.object == fx && envelope.value->active) return true;
+    return false;
+}
 
 }  // namespace supple::engine::detail

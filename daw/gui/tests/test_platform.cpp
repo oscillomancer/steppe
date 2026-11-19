@@ -138,6 +138,14 @@ TEST_CASE("the platform wake event can be pushed from another thread") {
     CHECK(woke);
 }
 
+TEST_CASE("an opaque image keeps its colours and drops the framebuffer's alpha") {
+    const gui::Image image = gui::opaque({2, 1, {10, 20, 30, 0, 40, 50, 60, 128}});
+    CHECK(image.width == 2);
+    CHECK(image.height == 1);
+    CHECK(image.rgba == std::vector<std::uint8_t>{10, 20, 30, 255, 40, 50, 60, 255});
+    CHECK(gui::opaque({0, 0, {}}).rgba.empty());
+}
+
 TEST_CASE("PNG encoding refuses invalid dimensions and truncated RGBA data") {
     CHECK(gui::encodePng({0, 1, {}}).empty());
     CHECK(gui::encodePng({-1, 1, {}}).empty());

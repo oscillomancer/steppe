@@ -3,6 +3,7 @@
 #include "shell.h"
 #include <supple/model/groups.h>
 
+#include "crash_banner.h"
 #include "pan_menu.h"
 #include "plugin_scales.h"
 #include "strip_learn.h"
@@ -42,6 +43,7 @@ void Shell::recordingError(const json::Value& payload) {
 
 void Shell::setStatus(const std::string& text) {
     editStatus_ = text;
+    ++noteSerial_;
     if (counts_) counts_->setText(text);
 }
 namespace {
@@ -113,6 +115,12 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
     transport_->setFollow(
         [this] { return arrange_ ? arrange_->follow() : views::Follow::Page; });  // ui.follow.*
     shell->add(transport_->build());
+    // Under the transport: the restart notice, when the last run ended unexpectedly.
+    auto banner = std::make_unique<CrashBanner>(app_.diagnosticsDir());
+    banner->setOnShowReport([this](const std::string& incident) {
+        if (showCrashReport) showCrashReport(incident);
+    });
+    shell->add(std::move(banner));
     // The playrate's menu leads here: open in its place.
     actions.addUi("ui.master.envelopes", "Master: envelopes",
                   [this] { openEnvelopeMenu(model::kMaster, transport_->rateAnchor()); });
@@ -219,6 +227,10 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
     };
     tcp.fx = [runFor](const model::Id& track) { runFor("ui.fx.chain", track); };
     tcp.addFx = [runFor](const model::Id& track) { runFor("ui.fx.add", track); };
+    tcp.fxNeedsAttention = [this](const model::Id& track) {
+        const model::Track* t = app_.head().tracks.find(track);
+        return t && attention_.chainNeeds(app_.head(), *t);
+    };
     tcp.addSend = [this](const model::Id& from, const model::Id& to) {
         json::Value args = json::Value::object();
         args["from"] = from.str();
@@ -254,6 +266,57 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
     return shell;
 }
 
+std::string Shell::hoverName() const {
+    if (hovered_.empty()) return {};
+    std::string name = hovered_.name;
+    std::string keys;
+    if (actions_ && !hovered_.action.empty()) {
+        if (const actions::Action* a = actions_->registry().find(hovered_.action);
+            a && name.empty())
+            name = a->name;
+        keys = actions_->keysFor(hovered_.action, true);
+    }
+    if (name.empty()) return {};  // an action this build does not have
+    return keys.empty() ? name : name + " (" + keys + ")";
+}
+
+std::optional<TrackTarget> Shell::trackTargetAt(ui::Point p) const {
+    if (!arrange_ || !arrange_->tcpPanel().visibleInTree()) return std::nullopt;
+    // The rows as shown: the control panel and the lanes side by side,
+    // without the band at the panel's foot, which rows pass under.
+    const ui::Rect tcp = arrange_->tcpPanel().bounds(), lanes = arrange_->lanesRect();
+    const ui::Rect area{tcp.x, tcp.y, lanes.right() - tcp.x, tcp.h};
+    if (!area.contains(p)) return std::nullopt;
+    if (p.x < tcp.right() && p.y >= tcp.bottom() - views::TcpPanel::kFootHeight)
+        return std::nullopt;
+    const auto& rows = arrange_->trackLayout().rows();
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        const ui::Rect row = arrange_->tcpRowRect(i);
+        if (p.y < row.y || p.y >= row.bottom()) continue;
+        if (rows[i].env || !app_.head().tracks.find(rows[i].track)) return std::nullopt;
+        return TrackTarget{rows[i].track, ui::Rect{area.x, row.y, area.w, row.h}.intersect(area)};
+    }
+    return std::nullopt;
+}
+
+std::optional<ui::Rect> Shell::fileTargetAt(ui::Point p) const {
+    if (!arrange_ || !arrange_->tcpPanel().visibleInTree()) return std::nullopt;
+    const ui::Rect lanes = arrange_->lanesRect();
+    if (!lanes.contains(p)) return std::nullopt;
+    const auto& rows = arrange_->trackLayout().rows();
+    float below = lanes.y;
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        const ui::Rect row = arrange_->rowRect(i);
+        below = std::max(below, row.bottom());
+        if (p.y < row.y || p.y >= row.bottom()) continue;
+        // A buss or an automation lane holds no items (ADR-0057).
+        if (!views::holdsItem(app_.head(), rows[i], nullptr)) return std::nullopt;
+        return row.intersect(lanes);
+    }
+    if (p.y < below) return std::nullopt;
+    return ui::Rect{lanes.x, below, lanes.w, lanes.bottom() - below};
+}
+
 void Shell::installOverlay(ui::Root& root) {
     if (arrange_) arrange_->installOverlay(root);
 }
@@ -262,6 +325,8 @@ void Shell::sync(bool event) {
     const model::Session& s = app_.head();
     const bool replaced = app_.projectGeneration() != projectGeneration_;
     const bool moved = replaced || s.version != shownVersion_;
+    // A load override or a failed plug-in changes "fx" without a new project version.
+    if (attention_.poll() && arrange_) arrange_->tcpPanel().refresh();
     if (ui_.selectedTracks != shownSelection_) {  // the mixer selects too
         shownSelection_ = ui_.selectedTracks;
         if (arrange_) arrange_->tcpPanel().invalidate();
@@ -285,16 +350,24 @@ void Shell::sync(bool event) {
             changes = &previous->changes;
         shownVersion_ = s.version;
         projectGeneration_ = app_.projectGeneration();
-        const int strips = static_cast<int>(s.tracks.size());
-        counts_->setText(std::to_string(strips) + (strips == 1 ? " strip  " : " strips  ") +
+        const std::size_t tracks = views::countTracks(s);
+        counts_->setText(std::to_string(tracks) + (tracks == 1 ? " track  " : " tracks  ") +
                          "version " + std::to_string(s.version));
         arrange_->show(s, changes, projectGeneration_);
     }
-    const auto note = app_.preparingAudio()              ? std::string("Preparing audio…")
+    // A named control under the pointer is said in the note's place, until
+    // the pointer leaves it or a newer note arrives.
+    if (const ui::Hint hint = root_ ? root_->hint() : ui::Hint{}; hint != hovered_) {
+        hovered_ = hint;
+        hoveredAtNote_ = noteSerial_;
+    }
+    const std::string name = noteSerial_ == hoveredAtNote_ ? hoverName() : std::string{};
+    const auto note = !name.empty()                      ? name
+                      : app_.preparingAudio()            ? std::string("Preparing audio…")
                       : !app_.preparationError().empty() ? app_.preparationError()
                                                          : editStatus_;
-    const int strips = static_cast<int>(s.tracks.size());
-    counts_->setText(std::to_string(strips) + (strips == 1 ? " strip  " : " strips  ") +
+    const std::size_t tracks = views::countTracks(s);
+    counts_->setText(std::to_string(tracks) + (tracks == 1 ? " track  " : " tracks  ") +
                      "version " + std::to_string(s.version) + (note.empty() ? "" : " · " + note));
     std::vector<model::Id> selected;
     for (const auto& text : ui_.selectedItems)

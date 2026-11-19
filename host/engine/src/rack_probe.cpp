@@ -392,6 +392,7 @@ void registerRackProbe(cmd::Registry& registry) {
         if (!copy) return std::move(copy).error();
         InstancePool pool([&e](const model::PluginRef& ref) { return e.findPlugin(ref.id); },
                           e.options().identity);
+        pool.setOverrides(e.loadOverrides());
         auto catalog = std::make_shared<rack::Catalog>(*e.modules());
         catalog->add(detail::probeModuleType());
         OfflineSettings settings;
@@ -604,9 +605,11 @@ void registerRackCapture(cmd::Registry& registry) {
         settings.projectDir = e.projectDir();
         settings.modules = std::move(catalog);
         auto render = [copy = std::move(*copy), resolver = std::move(resolver),
-                       identity = e.options().identity, id, a, start, fromBeat,
+                       identity = e.options().identity, overrides = e.loadOverrides(), id, a, start,
+                       fromBeat,
                        beats](const OfflineSettings& renderSettings) -> Result<CaptureResult> {
             InstancePool pool(resolver, identity);
+            pool.setOverrides(overrides);
             auto rendered = renderOffline(copy, pool, renderSettings);
             if (!rendered) return std::move(rendered).error();
             const rack::Instance* in = pool.racks().find(id);

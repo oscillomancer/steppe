@@ -1,0 +1,7 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 Supple Audio
+#pragma once
+namespace supple::diagnostics::detail {
+inline constexpr const char* kCommit = "@diagnostics_commit@";
+inline constexpr bool kDirty = @diagnostics_dirty@;
+}

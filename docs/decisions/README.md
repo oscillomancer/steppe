@@ -101,9 +101,15 @@ current state.
 | [0080](0080-midi-recording-recovery.md) | MIDI takes survive a crash through a journal | Accepted |
 | [0081](0081-live-bridged-plugins.md) | Bridged plug-ins run on live nodes, with a bounded wait | Accepted |
 | [0082](0082-audio-media-durability.md) | Audio takes and published media survive a crash | Accepted |
+| [0083](0083-local-crash-reports.md) | Local crash reports and external supervision | Accepted |
 | [0084](0084-audio-thread-page-faults.md) | Audio threads take no page faults the app can prevent | Accepted |
 | [0085](0085-live-helpers-park-while-bridged.md) | Live helpers park while a bridged call blocks | Accepted |
 | [0086](0086-idle-hold-for-live-bridged-plugins.md) | The idle-latency request is held while a bridged plug-in plays live | Accepted |
 | [0087](0087-control-boundary-budgets.md) | Bounded local control input and output | Accepted |
 | [0088](0088-lost-bridged-output-ends-held-notes.md) | A bridged block's lost output ends the notes it held | Accepted |
 | [0089](0089-endpoint-lock-ownership.md) | A server owns its control endpoint by holding its lock | Accepted |
+| [0090](0090-offline-renders-and-bridged-plugins.md) | Offline renders wait for bridged plug-ins, and fail when one fails | Accepted |
+| [0091](0091-supervisor-end-and-launcher-stop.md) | A supervisor that ends without saying so is the launcher's stop | Accepted |
+| [0092](0092-patch-only-fx-edits.md) | Patch-only FX edits reach the running instances without a plan | Accepted |
+| [0093](0093-wet-bypass-mute-solo-on-a-running-plan.md) | FX wet and bypass, strip mute and solo reach a running plan | Accepted |
+| [0094](0094-file-audition-outside-the-project.md) | A file audition plays outside the project graph | Accepted |

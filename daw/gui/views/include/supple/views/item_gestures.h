@@ -107,6 +107,22 @@ class ItemGestures {
 
     // From ArrangeView::onPointer (everything but the wheel); true when used.
     bool pointer(const ui::PointerEvent& e);
+    // The pointer's shape at `p`: what the drag in hand is doing, or what a
+    // press there would start (an item's edge or fade corner, an automation
+    // item's end).
+    ui::Cursor cursorAt(ui::Point p) const;
+    // The view scrolled by (dx, dy) units under a drag in hand: the press
+    // point goes with the content, so the drag still measures from the
+    // same time and row.
+    void scrolled(float dx, float dy) {
+        press_.x -= dx;
+        press_.y -= dy;
+    }
+    // A drag that can cross rows (a move, a take leaving its item, a marquee).
+    bool dragCrossesRows() const {
+        return state_.drag == Drag::Move || state_.drag == Drag::TakeOut ||
+               state_.drag == Drag::Marquee;
+    }
     void installOverlay(ui::Root& root);  // the ghost / selection layer
     // Files dropped at a window point: one transaction (an item per file, on
     // the channel under the point, further files on new tracks below).

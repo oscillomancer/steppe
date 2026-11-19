@@ -45,6 +45,7 @@
 namespace supple::engine {
 struct RackClip;
 class SourcePreparation;
+class AuditionLoader;
 
 namespace detail {
 class RuntimeProtection;
@@ -76,6 +77,14 @@ struct AppOptions {
     // Rack presets (rack.preset.*): <rackPresetDir>/<name>.json. Empty =
     // <workdir>/rack-presets; the app passes <data>/<slug>/rack-presets.
     std::filesystem::path rackPresetDir;
+    // Where the crash reports of earlier runs are (crash.* commands, ADR-0083): the folder the
+    // diagnostics frontend writes to. Empty = <workdir>/diagnostics; the apps pass
+    // diagnostics::defaultDirectory() when they have no --workdir, so tests never read the user's.
+    std::filesystem::path diagnosticsDir;
+    // A service (--mcp, --rpc) says once per plug-in, on standard error, when a project it opens
+    // holds a plug-in an earlier crash report points at (topic 7d); never a prompt, and one-shot
+    // exec and the tests say nothing. The warning project.suspect_plugin is given either way.
+    bool warnSuspectsOnStderr = false;
     // An unsaved project's own folder (the GUI's, one per run): its media (the
     // recordings) and autosaves live in <scratchDir>/<media_dir> and
     // <scratchDir>/autosave-<n>.json until the first save moves the media
@@ -96,6 +105,25 @@ struct AppOptions {
     // pass while the main thread seeks (the dummy backend's manual mode;
     // tests, which must not pass or fail by the wall clock).
     std::optional<double> syncLocateSeconds;
+    // The file audition's cap (ADR-0094), in frames so that its memory is
+    // bounded at any rate: neither the decoded file nor the voice resampled to
+    // the device's rate is longer (ten minutes at 48 kHz, 2.5 at 192 kHz;
+    // about 230 MB of stereo float).
+    std::int64_t auditionMaxFrames = 28'800'000;
+};
+
+// A file audition (audition.*, ADR-0094): transient, never saved.
+struct AuditionInfo {
+    std::string path;  // as resolved
+    double seconds = 0, sampleRate = 0;
+    int channels = 0;
+    bool truncated = false;  // longer than the cap: its start plays
+};
+struct AuditionStatus {
+    bool playing = false;   // from audition.play until it ends or stops
+    bool decoding = false;  // read and resampled before the first sound
+    std::string path;
+    double seconds = 0, position = 0;
 };
 
 // Meter entries a full ring dropped (P5.3c): the renderer's ring and the audio
@@ -218,6 +246,8 @@ struct EngineStatus {
     } audioPageFaults;
     MeterDrops meterDrops;              // meter entries dropped by a full ring
     std::vector<std::string> failedFx;  // isolated instances whose bridge crashed or hung
+    // fx of a plug-in this run has disabled (plugin.override): placeholders now.
+    std::vector<std::string> disabledFx;
     // Isolated instances whose bridge audio thread was refused its scheduling
     // class (ADR-0026, ADR-0081).
     std::vector<std::string> bridgeThreadsRefused;
@@ -381,7 +411,80 @@ class EngineApp : public cmd::Host {
     // The same id/name fallback for immutable render-job catalogues.
     static Result<host::PluginInfo> findPlugin(std::span<const host::PluginInfo> catalogue,
                                                std::string_view idOrName);
+    // Refuses a plug-in this run has disabled (plugin.disabled); lookupPlugin
+    // finds it all the same, for the commands that manage overrides.
     Result<host::PluginInfo> findPlugin(std::string_view idOrName);
+    Result<host::PluginInfo> lookupPlugin(std::string_view idOrName);
+    // --- crash safe-load (topic 7d) -----------------------------------------------------
+    // One plug-in a project names, as project.plugins reports it.
+    struct ProjectPlugin {
+        std::string format, id, name, vendor, version;  // as the file names it (id: as resolved)
+        std::int64_t uses = 0;                          // its fx in the saved (current) branch
+        std::vector<std::string> branches;              // the branches whose head uses it
+        std::optional<host::PluginInfo> resolved;       // the catalogue as it stands, never a scan
+        LoadMode mode = LoadMode::Normal;               // this run's override
+        bool stock = false, bridgeable = false;
+        // A crash report points at it and the installed file is that build (or that version
+        // when the report names no build, or it could not be checked): which, and why.
+        std::string suspectBuild;  // "", same, version or unreadable
+        std::string attribution;   // fault_in_image or active_token
+        std::vector<std::string> incidents;
+    };
+    struct ProjectPlugins {
+        std::string path, hash;  // hash: "sha256:" of the bytes read, for open's expectHash
+        // What was read: "file", "template", "session" or "autosave" (project.recover's two
+        // sources); `autosave` is the autosave file it read ("" when a session has none).
+        std::string source = "file", autosave;
+        bool catalogueEmpty = false;
+        std::vector<ProjectPlugin> plugins;
+    };
+    // The plug-ins a project file names, without loading any: every branch's head, not the
+    // history steps behind them, de-duplicated by (format, id) as the catalogue resolves it.
+    // `asTemplate`: a template (folder or file) rather than a project file.
+    Result<ProjectPlugins> projectPlugins(const std::filesystem::path& file, bool asTemplate,
+                                          std::vector<schema::Warning>* warnings = nullptr);
+    // The same for what project.recover would open, without opening it: a left-behind
+    // `session` (empty: the open project's own autosave newer than its file, `autosaveFile`
+    // naming one as recoverAutosave does). Reads the autosave recover would, so a crash's
+    // likeliest next step is checked before anything is instantiated.
+    Result<ProjectPlugins> recoverPlugins(const std::string& session,
+                                          const std::string& autosaveFile,
+                                          std::vector<schema::Warning>* warnings = nullptr);
+    // At a clean end of the run: the plug-ins that ran in this process, activated, loaded
+    // normally (this project's and earlier ones'), settle the reports that suspected exactly
+    // that build (E12). Bridged and disabled ones never do. Writes only `.settled` markers.
+    void settleCleanSuspects();
+
+    // --- load overrides (topic 7d): how this run loads a named plug-in, whatever
+    // the project says. Main thread; not in the project, not in history, kept
+    // across open and new; every pool made takes a copy. ------------------------
+    const LoadOverrides& loadOverrides() const { return overrides_; }
+    // Rises with every change of an override, for a view that shows one (the model's own version
+    // does not move: an override is not in the project).
+    std::uint64_t loadOverridesVersion() const { return overridesVersion_; }
+    // How a plug-in reference loads now: by the key it carries, else by the
+    // catalogue entry it names (the catalogue as it stands, never a scan).
+    LoadMode loadModeOf(const model::PluginRef& ref) const;
+    // Sets one plug-in's mode. Bridge is refused with plugin.override_unavailable
+    // when there is no bridge executable or the plug-in is a stock one. A change
+    // drops the probes made for that plug-in and retires its instances: the next
+    // plan plays fresh ones (a disabled one a pass-through placeholder, in a rack
+    // silence). Returns whether anything changed.
+    Result<bool> setLoadOverride(const host::PluginInfo& info, LoadMode mode);
+    // Where a probe of `info` is made: on a dedicated bridge under Bridge, else in
+    // this process; a disabled plug-in is refused. Every probe, scratch or
+    // per-call, is made here.
+    Result<std::unique_ptr<host::Instance>> makeInstance(const host::PluginInfo& info);
+    // The cached probe fx.describe and the like use for a plug-in named as an fx
+    // names it (null before any): whether it runs on a bridge is what an override
+    // decides. For tests and diagnostics.
+    const host::Instance* scratchProbe(std::string_view fxPluginId) const {
+        const auto it = scratch_.find(std::string(fxPluginId));
+        return it == scratch_.end() ? nullptr : it->second.get();
+    }
+    // How many probes makeInstance has made, so a test can tell that a load made one
+    // process where it once made one per fx.
+    std::size_t instancesMade() const { return instancesMade_; }
     InstancePool& instances() { return *pool_; }
     MediaCache& media() { return media_; }
     // The plugin's semantic schema (null for plugins without the extension).
@@ -405,6 +508,11 @@ class EngineApp : public cmd::Host {
     struct PluginModValidation {
         const model::Session& session;
         std::map<const model::FxInstance*, Result<std::unique_ptr<host::Instance>>> probes;
+        // Under a bridge override (one process per probe): the shared probes, see
+        // validatePluginMod. restoredFor: which fx's state a plug-in's scratch probe holds.
+        std::map<std::string, std::unique_ptr<host::Instance>> pristine = {};
+        std::map<std::string, const model::FxInstance*> restoredFor = {};
+        std::map<const model::FxInstance*, Error> failures = {};
     };
     // Cable checks use the live FX or a private probe restored from its saved state.
     Status validatePluginMod(model::Id id, const model::FxInstance& fx, const std::string& key,
@@ -429,8 +537,10 @@ class EngineApp : public cmd::Host {
     // A branches section that cannot be restored opens main alone with a
     // project.history warning; the first save over that file keeps a copy of
     // it (<file>.pre-branches.bak).
-    Status open(const std::filesystem::path& path,
-                std::vector<schema::Warning>* warnings = nullptr);
+    // `expectHash` (project.plugins' `hash`): refuses a file whose bytes are not the ones that
+    // were checked (project.changed), so the plug-in check and the load read the same file.
+    Status open(const std::filesystem::path& path, std::vector<schema::Warning>* warnings = nullptr,
+                std::string_view expectHash = {});
     Status newProject(model::Project project);
     // A project template (project.template.*): `folder` receives project.json
     // (the head, without history) and media/ with a copy of every audio file
@@ -526,6 +636,10 @@ class EngineApp : public cmd::Host {
     std::filesystem::path rackPresetDir() const {
         return options_.rackPresetDir.empty() ? options_.workdir / "rack-presets"
                                               : options_.rackPresetDir;
+    }
+    std::filesystem::path diagnosticsDir() const {
+        return options_.diagnosticsDir.empty() ? options_.workdir / "diagnostics"
+                                               : options_.diagnosticsDir;
     }
     const std::shared_ptr<const rack::Catalog>& modules() const { return modules_; }
     // Makes `catalog` the one racks use: racks playing a type whose code
@@ -682,6 +796,14 @@ class EngineApp : public cmd::Host {
     const TransportRange& loop() const { return loop_; }
     const MetronomeSettings& metronome() const { return metronome_; }
     void setMetronome(const MetronomeSettings& m);  // reaches the engine now and on every start
+    // File audition (ADR-0094): the file's start (AppOptions::auditionMaxFrames),
+    // read and resampled to the device's rate off the model and audio threads,
+    // then played once on outputs 1/2, outside the project. A relative path
+    // is in the project's media folder. A new one, stopAudition, the engine
+    // stopping and a project replaced end it. Main thread.
+    Result<AuditionInfo> playAudition(const std::filesystem::path& path);
+    void stopAudition();
+    AuditionStatus auditionStatus() const;  // the GUI reads it each frame
     const TransportRange& punch() const { return punch_; }
     // External sync (ADR-0071): the settings reach the engine now and on
     // every start; tick() turns what the engine hears into transport changes
@@ -841,6 +963,16 @@ class EngineApp : public cmd::Host {
     void startPlaying(int countInBars);  // engine play(), after a count-in when > 0
     explicit EngineApp(AppOptions options);
     Result<host::Instance*> scratch(const model::FxInstance& fx);
+    Result<host::Instance*> scratch(const host::PluginInfo& info, std::string key);
+    // A probe for a one-off job on `fx`: a fresh instance, except under Bridge when
+    // the fx carries a saved state or patch (loading it replaces everything), where
+    // the cached bridged scratch probe is borrowed so that a call does not spawn a
+    // process of its own.
+    struct Probe {
+        std::unique_ptr<host::Instance> own;
+        host::Instance* use = nullptr;
+    };
+    Result<Probe> probeFor(const host::PluginInfo& info, const model::FxInstance& fx);
     bool inRecordDir(const std::filesystem::path& file) const;
     void headChanged();         // reload the real-time engine
     void noteUnplayedEdit();    // a deferred edit failed to compile: engine.error
@@ -902,9 +1034,34 @@ class EngineApp : public cmd::Host {
     std::vector<JobThread> jobs_;
     std::mutex recordingFinalizeMutex_;  // sidecar publication vs scratch relocation, never RT
     std::map<std::string, std::unique_ptr<host::Instance>> scratch_;
+    LoadOverrides overrides_;
+    std::uint64_t overridesVersion_ = 0;
+    std::size_t instancesMade_ = 0;
+    // Topic 7d. The plug-ins earlier projects of this run ran in process (the pool that made
+    // them is replaced with the project), and the ones this run already said it suspects.
+    std::vector<InstancePool::Ran> ranBefore_;
+    std::set<std::string> suspectsWarned_;
+    using NamedHead = std::pair<std::string, std::shared_ptr<const model::Session>>;
+    std::vector<ProjectPlugin> gatherPlugins(const std::vector<NamedHead>& heads,
+                                             const std::string& current) const;
+    void annotateSuspects(std::vector<ProjectPlugin>& plugins);
+    // The suspect warnings for a project about to be loaded (open and both recoveries).
+    void warnStoreSuspects(const model::VersionStore& store, std::vector<schema::Warning>* out);
+    Result<std::vector<std::filesystem::path>> autosaveCandidates(const std::string& name) const;
+    void warnSuspects(const std::vector<ProjectPlugin>& plugins,
+                      std::vector<schema::Warning>* warnings);
+    void harvestRan();
     Status moveScratchMedia(const std::filesystem::path& dest,
                             const std::function<Status()>& publish);
     std::unique_ptr<SourcePreparation> sourcePreparation_;
+    // File audition (ADR-0094): the decoder, the request it serves, the
+    // engine's serial for the voice published (0: none), what plays.
+    std::unique_ptr<AuditionLoader> auditionLoader_;
+    std::uint64_t auditionRequest_ = 0, auditionVoice_ = 0;
+    bool auditionDecoding_ = false;
+    double auditionRate_ = 0;
+    AuditionInfo auditionInfo_;
+    void serviceAudition();
     std::string pendingSourceKey_, preparationError_;
     // The last source key and what it was computed from: most edits (a fader,
     // a plug-in parameter) share these collections, so the key is reused. An
@@ -951,7 +1108,7 @@ class EngineApp : public cmd::Host {
     using OutputKey = std::pair<model::Id, std::uint32_t>;
     std::map<OutputKey, OutputGesture> outputGestures_;
     std::deque<PluginOutput> pendingOutputs_;
-    std::uint64_t outputGeneration_ = 0, outputEpoch_ = 0;
+    std::uint64_t outputGeneration_ = 0, outputPatches_ = 0, outputEpoch_ = 0;
     std::uint64_t outputDrops_ = 0, voiceDrops_ = 0, consumerDrops_ = 0;
     bool outputOverflow_ = false;
     // Whose outputs were dropped since the last recovery (all: unknown).

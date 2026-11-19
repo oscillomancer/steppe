@@ -30,6 +30,28 @@ float meterPos(float db) {
     return std::clamp((db - kMeterFloor) / (kMeterTop - kMeterFloor), 0.0f, 1.0f);
 }
 
+// The meter's colour at a level: green up to kMeterGreenDb, yellow at
+// kMeterYellowDb, orange at kMeterOrangeDb and red from kMeterRedDb, just
+// under 0 dB, upwards; blended between them.
+constexpr float kMeterGreenDb = -18, kMeterYellowDb = -9, kMeterOrangeDb = -4, kMeterRedDb = -1;
+
+Color blend(Color a, Color b, float t) {
+    return {a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, 1.0f};
+}
+
+Color levelColor(const Theme& t, float db) {
+    const Color green = t.color("meter"), yellow = t.color("meter-hot"), red = t.color("clip");
+    const Color orange = blend(yellow, red, 0.5f);
+    if (db <= kMeterGreenDb) return green;
+    if (db <= kMeterYellowDb)
+        return blend(green, yellow, (db - kMeterGreenDb) / (kMeterYellowDb - kMeterGreenDb));
+    if (db <= kMeterOrangeDb)
+        return blend(yellow, orange, (db - kMeterYellowDb) / (kMeterOrangeDb - kMeterYellowDb));
+    if (db < kMeterRedDb)
+        return blend(orange, red, (db - kMeterOrangeDb) / (kMeterRedDb - kMeterOrangeDb));
+    return red;
+}
+
 }  // namespace
 
 double faderPosition(double db) { return fader::position(db); }
@@ -537,13 +559,29 @@ void Meter::reset() {
         peakDb_[ch] = rmsDb_[ch] = holdDb_[ch] = -150;
         clip_[ch] = false;
     }
+    const bool had = maxDb_ > kNoPeak;
+    maxDb_ = kNoPeak;
     invalidate();
+    if (had && onPeak) onPeak();
 }
+
+void Meter::clearPeak() {
+    clip_[0] = clip_[1] = false;
+    holdDb_[0] = holdDb_[1] = -150;
+    const bool had = maxDb_ > kNoPeak;
+    maxDb_ = kNoPeak;
+    invalidate();
+    if (had && onPeak) onPeak();
+}
+
+float Meter::position(float db) { return meterPos(db); }
+
+Color Meter::colorAt(const Theme& theme, float db) { return levelColor(theme, db); }
 
 void Meter::push(const float peak[2], const float rms[2],
                  std::chrono::steady_clock::time_point now) {
     tick(now);
-    bool moved = false;
+    bool moved = false, told = false;
     for (int ch = 0; ch < 2; ++ch) {
         const float p = toDb(peak[ch]), r = toDb(rms[ch]);
         if (p > peakDb_[ch]) {
@@ -559,8 +597,14 @@ void Meter::push(const float peak[2], const float rms[2],
             holdAt_[ch] = now;
         }
         if (peak[ch] >= 1.0f) clip_[ch] = true;
+        if (p > maxDb_) {
+            // Told in tenths: a readout has nothing new to show for less.
+            if (std::round(p * 10) != std::round(maxDb_ * 10)) told = true;
+            maxDb_ = p;
+        }
     }
     if (moved) invalidate();
+    if (told && onPeak) onPeak();
 }
 
 void Meter::tick(std::chrono::steady_clock::time_point now) {
@@ -599,24 +643,47 @@ bool Meter::moving() const {
 void Meter::paint(Canvas& c) {
     const Theme& t = c.theme();
     const Rect b = bounds();
-    c.fillRect(b, t.color("ground"));
+    // A well, darker than any surface a meter stands on, so an idle meter
+    // still shows where the level will be.
+    c.fillRect(b, t.color("well"));
     const float gap = 1;
     for (int ch = 0; ch < 2; ++ch) {
         Rect lane =
             vertical_
                 ? Rect{b.x + static_cast<float>(ch) * (b.w / 2), b.y + 4, b.w / 2 - gap, b.h - 4}
                 : Rect{b.x + 4, b.y + static_cast<float>(ch) * (b.h / 2), b.w - 4, b.h / 2 - gap};
-        auto fill = [&](float db, Color col) {
-            const float p = meterPos(db);
-            if (p <= 0) return;
+        // From `from` up to `to` along the lane, both as positions 0..1.
+        auto span = [&](float from, float to, Color col) {
+            if (to <= from) return;
             if (vertical_)
-                c.fillRect({lane.x, lane.bottom() - p * lane.h, lane.w, p * lane.h}, col);
+                c.fillRect({lane.x, lane.bottom() - to * lane.h, lane.w, (to - from) * lane.h},
+                           col);
             else
-                c.fillRect({lane.x, lane.y, p * lane.w, lane.h}, col);
+                c.fillRect({lane.x + from * lane.w, lane.y, (to - from) * lane.w, lane.h}, col);
         };
-        fill(peakDb_[ch],
-             peakDb_[ch] > -6 ? t.color("meter-hot") : t.color("meter").withAlpha(0.55f));
-        fill(rmsDb_[ch], t.color("meter"));
+        // A bar's colour belongs to the level, not to the bar: green low
+        // down, through yellow and orange, to red from just under 0 dB up
+        // (levelColor). The steady green and red parts are one rectangle
+        // each; between them the colour changes in thin bands.
+        // The peak is fainter than the RMS over it where both are green;
+        // from yellow up it is at full strength, so a warm colour is never
+        // a dim one.
+        const float warm = meterPos(kMeterGreenDb), red = meterPos(kMeterRedDb);
+        const float band = 2.0f / std::max(1.0f, vertical_ ? lane.h : lane.w);
+        auto fill = [&](float db, float alpha) {
+            const float p = meterPos(db);
+            span(0, std::min(p, warm), levelColor(t, kMeterGreenDb).withAlpha(alpha));
+            for (float at = warm; at < std::min(p, red); at += band) {
+                const float to = std::min({at + band, p, red});
+                const float mid = kMeterFloor + (at + to) / 2 * (kMeterTop - kMeterFloor);
+                const float rise = std::clamp(
+                    (mid - kMeterGreenDb) / (kMeterYellowDb - kMeterGreenDb), 0.0f, 1.0f);
+                span(at, to, levelColor(t, mid).withAlpha(alpha + (1 - alpha) * rise));
+            }
+            span(red, p, levelColor(t, kMeterRedDb));
+        };
+        fill(peakDb_[ch], 0.55f);
+        fill(rmsDb_[ch], 1.0f);
         if (holdDb_[ch] > kMeterFloor) {
             const float p = meterPos(holdDb_[ch]);
             if (vertical_)
@@ -627,25 +694,36 @@ void Meter::paint(Canvas& c) {
                            t.color(holdDb_[ch] > 0 ? "clip" : "ink"));
         }
         // Clip indicator at the top (or end).
-        const Color clipCol = clip_[ch] ? t.color("clip") : t.color("panel");
+        const Color clipCol = clip_[ch] ? t.color("clip") : t.color("rule");
         if (vertical_)
             c.fillRect({lane.x, b.y, lane.w, 3}, clipCol);
         else
             c.fillRect({b.x, lane.y, 3, lane.h}, clipCol);
     }
+    // The scale's levels, as lines across both lanes in the panel's colour,
+    // which shows on the empty well and on a bar alike: a level is read
+    // where the bar crosses its line.
+    if (vertical_)
+        for (float db : marks_)
+            if (db != 0)
+                c.fillRect({b.x, std::round(b.y + 4 + (1 - meterPos(db)) * (b.h - 4)), b.w, 1},
+                           t.color("panel"));
     // 0 dB mark.
     const float z = meterPos(0);
     if (vertical_)
-        c.fillRect({b.x, b.y + 4 + (1 - z) * (b.h - 4), b.w, 1}, t.color("ink-faint"));
+        c.fillRect({b.x, std::round(b.y + 4 + (1 - z) * (b.h - 4)), b.w, 1}, t.color("ink-faint"));
     else
         c.fillRect({b.x + 4 + z * (b.w - 4), b.y, 1, b.h}, t.color("ink-faint"));
 }
 
+void Meter::setMarks(std::vector<float> db) {
+    marks_ = std::move(db);
+    invalidate();
+}
+
 bool Meter::onPointer(const PointerEvent& e) {
     if (e.type == PointerEvent::Type::Down && e.button == 1) {
-        clip_[0] = clip_[1] = false;
-        holdDb_[0] = holdDb_[1] = -150;
-        invalidate();
+        clearPeak();
         return true;
     }
     return false;
@@ -675,22 +753,42 @@ Size Toggle::measure(const Canvas& canvas, Size) {
     return {canvas.textWidth(text_, Font::UiBold, canvas.theme().type("caption")) + 10, 20};
 }
 
+Color drawStateCell(Canvas& c, const Rect& b, Color colour, bool on, bool hot, bool pressed,
+                    bool focused) {
+    const Theme& t = c.theme();
+    const float r = t.radius("s");
+    // Colour is the state: a cell that is off is quiet ink, and shows its
+    // colour only under the pointer (gui.md §7).
+    hot = hot && !on;
+    if (on) {
+        c.fillRound(b, r, colour);
+    } else {
+        c.fillRound(b, r, pressed ? t.color("selection") : t.color("ground"));
+        if (hot) c.fillRound(b, r, colour.withAlpha(0.15f));
+        c.strokeRound(b, r, hot ? colour.withAlpha(0.7f) : t.color("ink-faint"));
+    }
+    if (focused) c.strokeRound(b.inset(-1), r + 1, t.color("focus"));
+    return on ? t.color("ground") : hot ? colour : t.color("ink-quiet");
+}
+
+void drawTrackGlyph(Canvas& c, const Rect& box, TrackGlyph glyph, Color ink) {
+    // Drawn on whole pixels in a 10-unit square, centred in the box.
+    const float x = std::round(box.x + (box.w - 10) / 2), y = std::round(box.y + (box.h - 10) / 2);
+    const float mid = y + 5;
+    const float join = x + 4.5f, end = glyph == TrackGlyph::Master ? x + 8 : x + 10;
+    c.line({x, y + 1}, {join, mid}, ink, 1.2f);
+    c.line({x, y + 9}, {join, mid}, ink, 1.2f);
+    c.line({join, mid}, {end, mid}, ink, 1.2f);
+    if (glyph == TrackGlyph::Master) c.fillRect({x + 8, y + 1, 2, 8}, ink);
+}
+
 void Toggle::paint(Canvas& c) {
     const Theme& t = c.theme();
     const Rect b = bounds();
-    if (pill) {
-        const float r = std::min(b.w, b.h) / 2;
-        const Color colour = t.color(onColor_);
-        if (on_) {
-            c.fillRound(b, r, colour);
-        } else {
-            c.fillRound(b, r, pressed_ ? t.color("selection") : t.color("ground"));
-            if (hovered()) c.fillRound(b, r, colour.withAlpha(0.15f));
-            c.strokeRound(b, r, colour.withAlpha(0.55f));
-        }
-        if (focused()) c.strokeRound(b.inset(-1), r + 1, t.color("focus"));
-        c.text(b, text_, Font::UiBold, t.type("caption"),
-               on_ ? t.color("ground") : colour.withAlpha(0.9f), kCenter | kMiddle);
+    if (cell) {
+        const Color ink =
+            drawStateCell(c, b, t.color(onColor_), on_, hovered() || pressed_, pressed_, focused());
+        c.text(b, text_, Font::UiBold, t.type("caption"), ink, kCenter | kMiddle);
         return;
     }
     const Color face = on_         ? t.color(onColor_)
@@ -748,23 +846,22 @@ ArmButton::ArmButton(std::string id, std::function<void(bool)> toggle)
     : Toggle(std::move(id), "", "armed", std::move(toggle)) {
     layout.width = SizeRule::fixed(20);
     layout.height = SizeRule::fixed(20);
+    hint.name = "Arm for recording";
 }
 
 void ArmButton::paint(Canvas& c) {
     const Theme& t = c.theme();
     const Rect b = bounds();
-    const Point centre{b.x + b.w / 2, b.y + b.h / 2};
-    const float r = std::max(2.0f, std::min(b.w, b.h) / 2 - 1);
     const Color red = t.color("armed");
-    if (on()) {
-        c.fillCircle(centre, r, red);
-        c.fillCircle({centre.x - r * 0.3f, centre.y - r * 0.3f}, r * 0.3f,
-                     Color{1, 1, 1, 0.25f});  // a little shine
-    } else {
-        c.fillCircle(centre, r, red.withAlpha(pressed() ? 0.5f : hovered() ? 0.4f : 0.28f));
-        c.strokeCircle(centre, r, red.withAlpha(0.6f));
-    }
-    if (focused()) c.strokeCircle(centre, r + 2, t.color("focus"));
+    const Color ink = drawStateCell(c, b, red, on(), hovered() || pressed(), pressed(), focused());
+    // The disc says what the button is, since it has no letter: off, a ring
+    // that keeps a little of the red; armed, a disc on the red cell.
+    const Point centre{b.x + b.w / 2, b.y + b.h / 2};
+    const float r = std::max(2.0f, std::min(b.w, b.h) / 2 - 3);
+    if (on())
+        c.fillCircle(centre, r, ink);
+    else
+        c.strokeCircle(centre, r, red.withAlpha(hovered() || pressed() ? 1.0f : 0.7f), 1.3f);
 }
 
 // ----------------------------------------------------------------- MonitorButton
@@ -776,6 +873,8 @@ MonitorButton::MonitorButton(std::string id, std::function<void()> click)
     layout.width = SizeRule::fixed(20);
     layout.height = SizeRule::fixed(20);
 }
+
+Hint MonitorButton::hintAt(Point) const { return {"Monitor the input: " + valueText(), {}}; }
 
 void MonitorButton::setMode(Mode mode) {
     if (mode == mode_) return;
@@ -803,9 +902,16 @@ void drawSnowflake(Canvas& c, Point centre, float radius, Color ink) {
 void MonitorButton::paint(Canvas& c) {
     const Theme& t = c.theme();
     const Rect b = bounds();
-    if (pressed_ || hovered())
-        c.fillRound(b, t.radius("s"), pressed_ ? t.color("selection") : t.color("raised"));
-    if (focused()) c.strokeRound(b, t.radius("s"), t.color("focus"));
+    // Monitoring on is where a new channel starts, so it is no alarm: the
+    // cell is never filled. Off, a faint outline of a speaker; on, the
+    // speaker solid in full ink; auto, the speaker and the outline in green.
+    const Color green = t.color("meter");
+    Color cellInk = drawStateCell(c, b, green, false, hovered() || pressed_, pressed_, focused());
+    if (mode_ == Mode::On && !(hovered() || pressed_)) cellInk = t.color("ink");
+    if (mode_ == Mode::Auto) {
+        c.strokeRound(b, t.radius("s"), green.withAlpha(0.8f));
+        cellInk = green;
+    }
     // The speaker in a square that fits the button, left of its centre so the
     // waves have room.
     const float s = std::min(b.w, b.h) - 4;
@@ -814,9 +920,7 @@ void MonitorButton::paint(Canvas& c) {
         {x + s * 0.08f, y + s * 0.36f}, {x + s * 0.28f, y + s * 0.36f},
         {x + s * 0.54f, y + s * 0.12f}, {x + s * 0.54f, y + s * 0.88f},
         {x + s * 0.28f, y + s * 0.64f}, {x + s * 0.08f, y + s * 0.64f}};
-    const Color ink = mode_ == Mode::Auto ? t.color("meter")
-                      : mode_ == Mode::On ? t.color("ink")
-                                          : t.color("ink-quiet");
+    const Color ink = cellInk;
     if (mode_ == Mode::Off) {
         c.strokePath(speaker, ink, 1.2f);
         return;

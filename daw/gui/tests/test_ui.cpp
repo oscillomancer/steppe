@@ -4,6 +4,8 @@
 #include <doctest/doctest.h>
 #include <stb_image.h>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -12,10 +14,12 @@
 #include "supple/gui/png.h"
 #include "supple/json/parse.h"
 #include "supple/ui/controls.h"
+#include "supple/ui/edge_scroll.h"
 #include "supple/ui/forms.h"
 #include "supple/ui/list.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/root.h"
+#include "supple/ui/scroll_view.h"
 #include "supple/ui/shortcut.h"
 #include "supple/ui/text_area.h"
 #include "supple/ui/text_field.h"
@@ -467,6 +471,80 @@ TEST_CASE("a text field edits by UTF-8 character and word, with selection and cl
     CHECK(field.text() == "hello hello 日本");
 }
 
+TEST_CASE("a list row dragged past the slop reports its drag; a click does not") {
+    REQUIRE_GL();
+    Root root(*fixture().window, fixture().fonts, Theme::dark());
+    auto content = std::make_unique<Node>("root");
+    content->layout.dir = Layout::Dir::Column;
+    auto& list = content->emplace<List>("list");
+    list.rowHeight = 20;
+    list.setCount(50);
+    struct Heard {
+        std::size_t row;
+        DragPhase phase;
+        Point at;
+    };
+    std::vector<Heard> heard;
+    std::size_t activated = 0;
+    list.onActivate = [&](std::size_t) { ++activated; };
+    root.setContent(std::move(content));
+    root.frame(false);
+    const Rect b = list.bounds();
+    const Point press{b.x + 30, b.y + 2 * 20 + 10};  // the third row
+    auto send = [&](PointerEvent::Type type, Point at, int clicks = 1) {
+        root.pointer({type, at, 1, clicks});
+    };
+    // No listener: a press and a move only select.
+    send(PointerEvent::Type::Down, press);
+    send(PointerEvent::Type::Move, {press.x + 40, press.y + 40});
+    send(PointerEvent::Type::Up, {press.x + 40, press.y + 40});
+    CHECK(list.selected() == std::optional<std::size_t>(2));
+
+    list.onDrag = [&](std::size_t row, DragPhase phase, Point at) {
+        heard.push_back({row, phase, at});
+    };
+    // A click, and a press that stays within the slop: no drag.
+    send(PointerEvent::Type::Down, press);
+    send(PointerEvent::Type::Move, {press.x + List::kDragSlop, press.y - List::kDragSlop});
+    send(PointerEvent::Type::Up, {press.x + List::kDragSlop, press.y});
+    CHECK(heard.empty());
+    // Past it: Begin once, then Move, then End where it was released, far
+    // outside the list; the row is the one pressed throughout.
+    send(PointerEvent::Type::Down, press);
+    send(PointerEvent::Type::Move, {press.x + 6, press.y});
+    send(PointerEvent::Type::Move, {press.x - 200, press.y + 300});
+    send(PointerEvent::Type::Up, {press.x - 210, press.y + 310});
+    REQUIRE(heard.size() == 3);
+    CHECK(heard[0].phase == DragPhase::Begin);
+    CHECK(heard[1].phase == DragPhase::Move);
+    CHECK(heard[2].phase == DragPhase::End);
+    for (const Heard& h : heard) CHECK(h.row == 2);
+    CHECK(heard[2].at.x == press.x - 210);
+    CHECK(heard[2].at.y == press.y + 310);
+    CHECK(list.selected() == std::optional<std::size_t>(2));
+    // Motion after the release is not a drag.
+    send(PointerEvent::Type::Move, {press.x + 50, press.y});
+    CHECK(heard.size() == 3);
+    // A gesture taken away ends it with Cancel.
+    heard.clear();
+    send(PointerEvent::Type::Down, press);
+    send(PointerEvent::Type::Move, {press.x + 20, press.y});
+    root.releaseWithin(&list);
+    REQUIRE(heard.size() == 2);
+    CHECK(heard[1].phase == DragPhase::Cancel);
+    send(PointerEvent::Type::Up, press);
+    CHECK(heard.size() == 2);
+    // A double click still activates, and its second press starts no drag.
+    heard.clear();
+    send(PointerEvent::Type::Down, press);
+    send(PointerEvent::Type::Up, press);
+    send(PointerEvent::Type::Down, press, 2);
+    send(PointerEvent::Type::Move, {press.x + 30, press.y});
+    send(PointerEvent::Type::Up, {press.x + 30, press.y}, 2);
+    CHECK(activated == 1);
+    CHECK(heard.empty());
+}
+
 TEST_CASE("a list paints only visible rows and navigates by keys") {
     REQUIRE_GL();
     Root root(*fixture().window, fixture().fonts, Theme::dark());
@@ -653,6 +731,148 @@ TEST_CASE("text area replacement preserves the UTF-8 caret column") {
     CHECK(area.caretLineColumn() == std::pair{1, 3});  // same code-point column
 }
 
+TEST_CASE("the pointer's shape is the cursor of the node under it, its parents or a drag") {
+    if (!fixture().ok) return;
+    Root root(*fixture().window, fixture().fonts, Theme::dark());
+    // A node whose right 10 units resize it, and which holds a drag.
+    struct Edge : Node {
+        using Node::Node;
+        bool dragging = false;
+        Cursor cursorAt(Point p) const override {
+            return dragging || p.x >= bounds().right() - 10 ? Cursor::ResizeHorizontal
+                                                            : Cursor::Arrow;
+        }
+        bool onPointer(const PointerEvent& e) override {
+            if (e.type == PointerEvent::Type::Down) dragging = p(e) >= bounds().right() - 10;
+            if (e.type == PointerEvent::Type::Up) dragging = false;
+            return true;
+        }
+        static float p(const PointerEvent& e) { return e.pos.x; }
+    };
+    auto content = std::make_unique<Node>("root");
+    content->layout.dir = Layout::Dir::Row;
+    content->layout.padding = Insets::all(8);
+    content->layout.gap = 8;
+    auto& edge = content->emplace<Edge>("edge");
+    edge.interactive = true;
+    edge.layout.dir = Layout::Dir::Column;
+    edge.layout.width = SizeRule::fixed(100);
+    auto& inner = edge.emplace<Box>("inner");  // a child with nothing to say
+    inner.interactive = true;
+    auto& field = content->emplace<TextField>("field", "text");
+    field.layout.width = SizeRule::fixed(100);
+    auto& plain = content->emplace<Box>("plain");
+    plain.interactive = true;
+    plain.layout.width = SizeRule::fixed(100);
+    root.setContent(std::move(content));
+    root.frame(false);
+    auto move = [&](Point at) { root.pointer({PointerEvent::Type::Move, at}); };
+    auto mid = [](const Node& n) {
+        return Point{n.bounds().x + n.bounds().w / 2, n.bounds().y + n.bounds().h / 2};
+    };
+    CHECK(root.cursor() == Cursor::Arrow);
+    move(mid(plain));
+    CHECK(root.cursor() == Cursor::Arrow);
+    move(mid(field));
+    CHECK(root.cursor() == Cursor::Text);
+    CHECK(fixture().window->cursor() == Cursor::Text);  // shown on the window
+    // The child covers its parent and says nothing: the parent's edge shows.
+    const Rect e = edge.bounds();
+    REQUIRE(root.hovered() != &edge);
+    move({e.x + 20, e.y + 10});
+    CHECK(root.hovered() == &inner);
+    CHECK(root.cursor() == Cursor::Arrow);
+    move({e.right() - 3, e.y + 10});
+    CHECK(root.cursor() == Cursor::ResizeHorizontal);
+    // A drag keeps its holder's cursor wherever the pointer goes, and the
+    // release gives the node under the pointer its say again.
+    root.pointer({PointerEvent::Type::Down, {e.right() - 3, e.y + 10}, 1});
+    move(mid(field));
+    CHECK(root.cursor() == Cursor::ResizeHorizontal);
+    root.pointer({PointerEvent::Type::Up, mid(field), 1});
+    CHECK(root.cursor() == Cursor::Text);
+    // A drag that carries a thing sets the pointer itself, at once and over
+    // any node; given back, the node under the pointer has its say again.
+    root.setDragCursor(Cursor::NotAllowed);
+    CHECK(root.cursor() == Cursor::NotAllowed);
+    CHECK(fixture().window->cursor() == Cursor::NotAllowed);
+    move(mid(plain));
+    CHECK(root.cursor() == Cursor::NotAllowed);
+    root.setDragCursor(Cursor::Move);
+    CHECK(root.cursor() == Cursor::Move);
+    move(mid(field));
+    CHECK(root.cursor() == Cursor::Move);
+    root.setDragCursor(std::nullopt);
+    CHECK(root.cursor() == Cursor::Text);
+    // One left behind by an owner that went away ends with the next press.
+    root.setDragCursor(Cursor::NotAllowed);
+    root.pointer({PointerEvent::Type::Down, mid(plain), 1});
+    CHECK_FALSE(root.dragCursor());
+    CHECK(root.cursor() == Cursor::Arrow);
+    root.pointer({PointerEvent::Type::Up, mid(plain), 1});
+    move(mid(field));
+    // A disabled node has no cursor of its own.
+    field.enabled = false;
+    move({mid(field).x + 1, mid(field).y});
+    CHECK(root.cursor() == Cursor::Arrow);
+}
+// gui.md §2, Names: what the pointer rests on is called by its own name, or
+// by the first of its parents that has one.
+TEST_CASE("the root names the node under the pointer, or the first parent with a name") {
+    if (!fixture().ok) return;
+    Root root(*fixture().window, fixture().fonts, Theme::dark());
+    auto content = std::make_unique<Node>("root");
+    content->layout.dir = Layout::Dir::Row;
+    content->layout.padding = Insets::all(8);
+    content->layout.gap = 8;
+    auto& group = content->emplace<Box>("group");
+    group.interactive = true;
+    group.layout.dir = Layout::Dir::Column;
+    group.layout.width = SizeRule::fixed(100);
+    group.hint = {"Group", {}};
+    auto& inner = group.emplace<Box>("inner");  // a child with no name of its own
+    inner.interactive = true;
+    auto& named = content->emplace<Button>("named", "M");
+    named.layout.width = SizeRule::fixed(100);
+    named.hint = {"Mute", "track.mute"};
+    auto& plain = content->emplace<Box>("plain");
+    plain.interactive = true;
+    plain.layout.width = SizeRule::fixed(100);
+    root.setContent(std::move(content));
+    root.frame(false);
+    auto move = [&](Point at) { root.pointer({PointerEvent::Type::Move, at}); };
+    auto mid = [](const Node& n) {
+        return Point{n.bounds().x + n.bounds().w / 2, n.bounds().y + n.bounds().h / 2};
+    };
+    CHECK(root.hint().empty());  // before any pointer event
+    move(mid(named));
+    CHECK(root.hint() == Hint{"Mute", "track.mute"});
+    move(mid(inner));
+    CHECK(root.hint() == Hint{"Group", {}});
+    move(mid(plain));
+    CHECK(root.hint().empty());
+    // A pressed control keeps its name wherever the pointer is dragged.
+    root.pointer({PointerEvent::Type::Down, mid(named), 1});
+    move(mid(plain));
+    CHECK(root.hint() == Hint{"Mute", "track.mute"});
+    root.pointer({PointerEvent::Type::Up, mid(plain), 1});
+    move(mid(plain));
+    CHECK(root.hint().empty());
+    // A drag that carries a thing over other nodes names none of them.
+    move(mid(named));
+    root.setDragCursor(Cursor::Move);
+    CHECK(root.hint().empty());
+    root.setDragCursor(std::nullopt);
+    CHECK(root.hint() == Hint{"Mute", "track.mute"});
+    // The arm and monitor buttons name themselves; the monitor says its mode.
+    ArmButton arm("arm");
+    CHECK(arm.hintAt({}).name == "Arm for recording");
+    MonitorButton monitor("monitor");
+    CHECK(monitor.hintAt({}).name == "Monitor the input: off");
+    monitor.setMode(MonitorButton::Mode::Auto);
+    CHECK(monitor.hintAt({}).name == "Monitor the input: auto");
+}
+
 TEST_CASE("mixer controls: fader taper and gestures, pan, meter hold and clip, toggle") {
     // The taper round-trips over its range; -inf at the bottom.
     for (double db = -60; db <= 12; db += 0.5)
@@ -711,13 +931,248 @@ TEST_CASE("mixer controls: fader taper and gestures, pan, meter hold and clip, t
     meter.push(peak, rms);
     CHECK(meter.clipped());
     CHECK(meter.shownPeakDb(1) == doctest::Approx(20 * std::log10(0.5)).epsilon(0.01));
+    // Its highest peak stays until a click or a reset, and is told in tenths.
+    int told = 0;
+    meter.onPeak = [&] { ++told; };
+    CHECK(meter.maxPeakDb() == doctest::Approx(20 * std::log10(1.2)).epsilon(0.01));
+    const float lower[2] = {0.25f, 0.25f};
+    meter.push(lower, rms);
+    CHECK(meter.maxPeakDb() == doctest::Approx(20 * std::log10(1.2)).epsilon(0.01));
+    CHECK(told == 0);
+    const float barely[2] = {1.2001f, 0.5f}, higher[2] = {1.5f, 0.5f};
+    meter.push(barely, rms);
+    CHECK(told == 0);  // under a tenth of a dB: nothing new to show
+    meter.push(higher, rms);
+    CHECK(told == 1);
+    CHECK(Meter::position(-60) == doctest::Approx(0));
+    CHECK(Meter::position(6) == doctest::Approx(1));
+    CHECK(Meter::position(0) > Meter::position(-6));
+    // A bar's colour belongs to the level: green low down, then yellow,
+    // orange and, from just under 0 dB up, red; blended between them.
+    {
+        const Theme theme = Theme::dark();
+        auto same = [](Color one, Color other) {
+            return std::abs(one.r - other.r) + std::abs(one.g - other.g) +
+                       std::abs(one.b - other.b) <
+                   0.01f;
+        };
+        const Color green = theme.color("meter"), yellow = theme.color("meter-hot"),
+                    red = theme.color("clip");
+        CHECK(same(Meter::colorAt(theme, -60), green));
+        CHECK(same(Meter::colorAt(theme, -18), green));
+        CHECK(same(Meter::colorAt(theme, -9), yellow));
+        CHECK(same(Meter::colorAt(theme, -1), red));
+        CHECK(same(Meter::colorAt(theme, 0), red));
+        CHECK(same(Meter::colorAt(theme, 6), red));
+        // Orange sits between yellow and red, and the steps between are blends.
+        const Color orange = Meter::colorAt(theme, -4);
+        CHECK(orange.g < yellow.g);
+        CHECK(orange.g > red.g);
+        const Color between = Meter::colorAt(theme, -13.5f);
+        CHECK(between.r > green.r);
+        CHECK(between.r < yellow.r);
+        // It never goes back towards green on the way up.
+        float last = Meter::colorAt(theme, -60).g;
+        for (float db = -60; db <= 6; db += 0.5f) {
+            const float g = Meter::colorAt(theme, db).g;
+            CHECK(g <= last + 1e-4f);
+            last = g;
+        }
+    }
     root.frame(false);
     CHECK(root.click("meter"));
     CHECK_FALSE(meter.clipped());
+    CHECK(meter.maxPeakDb() == Meter::kNoPeak);
+    CHECK(told == 2);
+    meter.reset();  // nothing held: nothing to tell
+    CHECK(told == 2);
+    meter.onPeak = {};
     // Toggle.
     CHECK(root.click("solo"));
     CHECK(soloed);
     CHECK(solo.on());
+}
+
+TEST_CASE("a vertical meter draws its scale's levels as lines, on the well and on a bar") {
+    REQUIRE_GL();
+    const Theme theme = Theme::dark();
+    Root root(*fixture().window, fixture().fonts, theme);
+    auto content = std::make_unique<Node>("root");
+    content->layout.dir = Layout::Dir::Row;
+    content->layout.padding = Insets::all(8);
+    auto& meter = content->emplace<Meter>("meter");
+    meter.layout.width = SizeRule::fixed(12);
+    meter.layout.height = SizeRule::fixed(164);
+    root.setContent(std::move(content));
+    root.frame(false);
+    REQUIRE(meter.bounds().h == 164);
+    // A pixel's colour is the token's, within what blending and rounding give.
+    auto shows = [&](const gui::Image& image, float x, float y, const char* token) {
+        const float ratio = root.pixelRatio();
+        const auto i =
+            (static_cast<std::size_t>(y * ratio) * static_cast<std::size_t>(image.width) +
+             static_cast<std::size_t>(x * ratio)) *
+            4;
+        const Color want = theme.color(token);
+        return std::abs(image.rgba[i] - static_cast<int>(std::lround(want.r * 255))) +
+                   std::abs(image.rgba[i + 1] - static_cast<int>(std::lround(want.g * 255))) +
+                   std::abs(image.rgba[i + 2] - static_cast<int>(std::lround(want.b * 255))) <=
+               6;
+    };
+    // Where the meter draws the line of `db`: the middle of its one-unit row,
+    // in the left lane.
+    auto row = [&](float db) {
+        const Rect b = meter.bounds();
+        return Point{b.x + 2, std::round(b.y + Meter::kClipLight +
+                                         (1 - Meter::position(db)) * (b.h - Meter::kClipLight)) +
+                                  0.5f};
+    };
+    const std::vector<float> marks{0, -12, -24, -36, -48};
+    // Without a scale an idle meter is its well, but for the line at 0 dB.
+    root.frame(false);
+    const gui::Image bare = root.readBack();
+    for (float db : marks)
+        CHECK_MESSAGE(shows(bare, row(db).x, row(db).y, db == 0 ? "ink-faint" : "well"), db);
+    // With one, each level is a line in the panel's colour, and the well
+    // shows between the lines.
+    meter.setMarks(marks);
+    root.frame(false);
+    const gui::Image scaled = root.readBack();
+    for (float db : marks) {
+        CHECK_MESSAGE(shows(scaled, row(db).x, row(db).y, db == 0 ? "ink-faint" : "panel"), db);
+        CHECK_MESSAGE(shows(scaled, row(db).x, row(db).y + 4, "well"), db);
+        CHECK_MESSAGE(shows(scaled, row(db).x, row(db).y - 4, "well"), db);
+    }
+    // A bar does not hide them: at -6 dB it covers the lines from -12 down,
+    // which still show, and it shows between them.
+    const float level[2] = {0.5f, 0.5f};
+    meter.push(level, level);
+    root.frame(false);
+    const gui::Image lit = root.readBack();
+    for (float db : marks) {
+        if (db == 0) continue;
+        CHECK_MESSAGE(shows(lit, row(db).x, row(db).y, "panel"), db);
+        CHECK_FALSE_MESSAGE(shows(lit, row(db).x, row(db).y + 4, "panel"), db);
+        CHECK_FALSE_MESSAGE(shows(lit, row(db).x, row(db).y + 4, "well"), db);
+    }
+}
+
+TEST_CASE("a disabled text field lies flat and its text is faint; it takes no click or text") {
+    REQUIRE_GL();
+    const Theme theme = Theme::dark();
+    Root root(*fixture().window, fixture().fonts, theme);
+    auto content = std::make_unique<Node>("root");
+    content->layout.dir = Layout::Dir::Row;
+    content->layout.padding = Insets::all(16);
+    content->layout.gap = 16;
+    auto make = [&](const char* id) -> TextField& {
+        auto& f = content->emplace<TextField>(id, "Bass line");
+        f.layout.width = SizeRule::fixed(120);
+        f.layout.height = SizeRule::fixed(22);
+        return f;
+    };
+    TextField& live = make("live");
+    TextField& off = make("off");
+    off.enabled = false;
+    root.setContent(std::move(content));
+    root.frame(false);
+    const gui::Image image = root.readBack();
+    const float ratio = root.pixelRatio();
+    // The light a field gives off: its red channel summed over its bounds,
+    // one unit inside (the two share an outline colour).
+    auto light = [&](const Node& node) {
+        const Rect r = node.bounds().inset(1.5f);
+        long sum = 0;
+        for (float y = r.y; y < r.bottom(); y += 1 / ratio)
+            for (float x = r.x; x < r.right(); x += 1 / ratio)
+                sum += image.rgba[(static_cast<std::size_t>(y * ratio) *
+                                       static_cast<std::size_t>(image.width) +
+                                   static_cast<std::size_t>(x * ratio)) *
+                                  4];
+        return sum;
+    };
+    CHECK(light(off) < light(live));  // a darker face and fainter text
+    CHECK_FALSE(root.click("off"));
+    CHECK(root.focused() == nullptr);
+    CHECK(root.click("live"));
+    CHECK(root.focused() == &live);
+    root.text("!");
+    CHECK(off.text() == "Bass line");
+}
+
+TEST_CASE("colour is state: an off pill and a quiet button at rest are ink alone") {
+    REQUIRE_GL();
+    const Theme theme = Theme::dark();
+    Root root(*fixture().window, fixture().fonts, theme);
+    auto content = std::make_unique<Node>("root");
+    content->layout.dir = Layout::Dir::Row;
+    content->layout.padding = Insets::all(16);
+    content->layout.gap = 16;
+    auto pill = [&](const char* id, bool on) -> Toggle& {
+        auto& t = content->emplace<Toggle>(id, "S", "solo");
+        t.cell = true;
+        t.layout.width = SizeRule::fixed(24);
+        t.layout.height = SizeRule::fixed(16);
+        t.setOn(on);
+        return t;
+    };
+    Toggle& off = pill("off", false);
+    Toggle& on = pill("on", true);
+    auto& quiet = content->emplace<Button>("quiet", "fx");
+    quiet.quiet = true;
+    auto& boxed = content->emplace<Button>("boxed", "fx");
+    root.setContent(std::move(content));
+    root.frame(false);
+    const gui::Image image = root.readBack();
+    const float ratio = root.pixelRatio();
+    auto at = [&](float x, float y) {
+        const auto i =
+            (static_cast<std::size_t>(y * ratio) * static_cast<std::size_t>(image.width) +
+             static_cast<std::size_t>(x * ratio)) *
+            4;
+        return std::array<int, 3>{image.rgba[i], image.rgba[i + 1], image.rgba[i + 2]};
+    };
+    // The share of a node's pixels that are plainly coloured: the theme's inks
+    // and grounds are warm greys, their channels within 24 of each other.
+    auto coloured = [&](const Node& node) {
+        const Rect b = node.bounds();
+        int n = 0, all = 0;
+        for (float y = b.y; y < b.bottom(); y += 1 / ratio)
+            for (float x = b.x; x < b.right(); x += 1 / ratio) {
+                const auto p = at(x, y);
+                ++all;
+                if (std::max({p[0], p[1], p[2]}) - std::min({p[0], p[1], p[2]}) > 60) ++n;
+            }
+        return static_cast<double>(n) / all;
+    };
+    CHECK(coloured(off) == 0.0);  // neither its outline nor its letter
+    CHECK(coloured(on) > 0.5);    // filled with the state's colour
+    // A quiet button has no box at rest: its edge is the surface it lies on.
+    const Rect q = quiet.bounds(), b = boxed.bounds();
+    const auto surface = at(q.x - 4, q.y + q.h / 2);
+    CHECK(at(q.x + 0.5f, q.y + q.h / 2) == surface);
+    CHECK(at(b.x + 0.5f, b.y + b.h / 2) != surface);
+    // Its text is quiet ink at rest and full ink with emphasis: more light.
+    auto light = [&](const Node& node) {
+        const Rect r = node.bounds();
+        long sum = 0;
+        for (float y = r.y; y < r.bottom(); y += 1 / ratio)
+            for (float x = r.x; x < r.right(); x += 1 / ratio) sum += at(x, y)[0];
+        return sum;
+    };
+    const long rest = light(quiet);
+    CHECK_FALSE(quiet.emphasis());
+    quiet.setEmphasis(true);
+    root.frame(false);
+    const gui::Image lit = root.readBack();
+    long sum = 0;
+    for (float y = q.y; y < q.bottom(); y += 1 / ratio)
+        for (float x = q.x; x < q.right(); x += 1 / ratio)
+            sum += lit.rgba[(static_cast<std::size_t>(y * ratio) *
+                                 static_cast<std::size_t>(lit.width) +
+                             static_cast<std::size_t>(x * ratio)) *
+                            4];
+    CHECK(sum > rest);
 }
 
 TEST_CASE("a split pan control: two bars, each its own value and home (ADR-0066)") {
@@ -1044,6 +1499,24 @@ TEST_CASE("text ellipsis removes whole UTF-8 characters") {
     CHECK(pixelDistance(expected, root.readBack()) == 0);
 }
 
+TEST_CASE("canvas: a character the mono face lacks is drawn from the UI face") {
+    REQUIRE_GL();
+    const Theme theme = Theme::dark();
+    Canvas canvas(fixture().window->vg(), fixture().fonts, theme);
+    auto width = [&](std::string_view text, Font font) {
+        return static_cast<double>(canvas.textWidth(text, font, 14));
+    };
+    // The mono subset has no ellipsis; a shortened value still shows one.
+    const std::string ellipsis = "\xE2\x80\xA6";
+    const double cell = width("0", Font::Mono);
+    CHECK(width("m", Font::Mono) == doctest::Approx(cell));  // it is mono
+    CHECK(width(ellipsis, Font::Mono) == doctest::Approx(width(ellipsis, Font::Ui)));
+    CHECK(width(ellipsis, Font::MonoBold) == doctest::Approx(width(ellipsis, Font::UiBold)));
+    CHECK(width(ellipsis, Font::Mono) != doctest::Approx(cell));
+    // What the face has is still its own.
+    CHECK(width("i", Font::Mono) != doctest::Approx(width("i", Font::Ui)));
+}
+
 TEST_CASE("unchanged button text and scrollbar ranges leave the content cache intact") {
     REQUIRE_GL();
     Root root(*fixture().window, fixture().fonts, Theme::dark());
@@ -1364,4 +1837,59 @@ TEST_CASE("a control's drag reaches its callback once per frame, the latest posi
     root.frame(false);
     REQUIRE(calls.size() == before + 1);
     CHECK(calls.back().second == Gesture::End);
+}
+
+TEST_CASE("rich text wraps across runs, keeps the spaces between them and grows with its lines") {
+    REQUIRE_GL();
+    Root root(*fixture().window, fixture().fonts, Theme::dark());
+    auto content = std::make_unique<Node>("root");
+    content->layout.dir = Layout::Dir::Row;
+    content->layout.align = Layout::Align::Start;
+    auto& column = content->emplace<Node>("column");
+    column.layout.dir = Layout::Dir::Column;
+    column.layout.width = SizeRule::fixed(300);
+    auto& text = column.emplace<RichText>(
+        "rich", std::vector<TextRun>{{"The ", Font::Ui, "ink"},
+                                     {"Canary Verb", Font::UiBold, "ink"},
+                                     {" was running when it closed, and what follows is quiet.",
+                                      Font::Ui, "ink-quiet"}});
+    root.setContent(std::move(content));
+    root.frame(false);
+    CHECK(text.valueText() ==
+          "The Canary Verb was running when it closed, and what follows is quiet.");
+    const float wide = text.bounds().h;
+    CHECK(wide > 0);
+    // A narrower paragraph is taller.
+    column.layout.width = SizeRule::fixed(120);
+    root.relayout();
+    root.frame(false);
+    CHECK(text.bounds().h > wide);
+    // A single word is a single line, of the height of one line of text.
+    text.setRuns({{"Short", Font::UiBold, "ink"}});
+    root.frame(false);
+    CHECK(text.bounds().h < wide);
+    CHECK(text.valueText() == "Short");
+}
+
+TEST_CASE("edge scroll: the speed by depth, and a clock that caps a stalled frame") {
+    // No scroll in the middle; from the zone's start it grows with depth, the
+    // same at both ends, and stops growing far outside.
+    CHECK(ui::edgeScrollSpeed(300, 100, 500) == 0);
+    CHECK(ui::edgeScrollSpeed(500 - ui::kEdgeScrollZone, 100, 500) == 0);
+    CHECK(ui::edgeScrollSpeed(480, 100, 500) == doctest::Approx(240));  // 4 units in
+    CHECK(ui::edgeScrollSpeed(120, 100, 500) == doctest::Approx(-240));
+    CHECK(ui::edgeScrollSpeed(500, 100, 500) > ui::edgeScrollSpeed(480, 100, 500));
+    CHECK(ui::edgeScrollSpeed(560, 100, 500) > ui::edgeScrollSpeed(500, 100, 500));  // past it
+    CHECK(ui::edgeScrollSpeed(5000, 100, 500) == 2400);
+    CHECK(ui::edgeScrollSpeed(-5000, 100, 500) == -2400);
+
+    using namespace std::chrono;
+    ui::EdgeScrollClock clock;
+    const steady_clock::time_point t0{hours(1)};
+    CHECK(clock.step(t0) == 0);  // the first pass only starts it
+    CHECK(clock.step(t0 + milliseconds(16)) == doctest::Approx(0.016));
+    CHECK(clock.step(t0 + milliseconds(16) + seconds(2)) == ui::EdgeScrollClock::kMaxStep);
+    CHECK(clock.step(t0) == 0);  // a time that went back is no step
+    clock.reset();
+    CHECK(clock.step(t0 + seconds(9)) == 0);  // a new scroll starts again
 }

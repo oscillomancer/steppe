@@ -82,6 +82,8 @@ class Checkbox : public Node {
     std::function<void(bool)> onToggle;
     void setChecked(bool checked);  // no callback
     bool checked() const { return checked_; }
+    // The theme colour of the box's outline (a dialog whose box must read on its panel).
+    std::string outline = "rule";
     void setText(std::string text);
     const std::string& text() const { return text_; }
     void toggle();  // as the user would

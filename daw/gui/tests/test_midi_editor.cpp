@@ -11,7 +11,6 @@
 #include <array>
 #include <filesystem>
 #include <set>
-#include <thread>
 
 #include "app_actions.h"
 #include "control_map.h"
@@ -29,6 +28,7 @@
 #include "supple/ui/text_area.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/lanes.h"
 #include "supple/views/mouse_map.h"
 
 using namespace supple;
@@ -126,8 +126,12 @@ struct Fixture {
         return *r;
     }
     json::Value notes() { return exec("midi.notes", R"({"item":")" + item + R"("})")["notes"]; }
+    // The time of every pass the fixture makes. A test moves it on by hand:
+    // no pass reads the real clock, so nothing here depends on how long the
+    // machine has been up or how fast it runs.
+    std::chrono::steady_clock::time_point now{std::chrono::hours(1)};
     void frame() {
-        editor->sync();
+        editor->sync(now);
         root->frame(false);
     }
     // Pointer input in window coordinates, the same path as SDL events.
@@ -179,6 +183,51 @@ struct Fixture {
 };
 
 }  // namespace
+
+TEST_CASE("MIDI editor: notes take their item's colour; the title names the item") {
+    Fixture f;
+    if (!f.ok) return;
+    const ui::Theme theme = ui::Theme::dark();
+    auto same = [](ui::Color a, ui::Color b) { return a.r == b.r && a.g == b.g && a.b == b.b; };
+    REQUIRE(f.editor->open(f.item));
+    f.frame();
+    REQUIRE(f.editor->state().color);
+    const model::Session& s = f.app->head();
+    const model::Item* item = s.items.find(*model::Id::parse(f.item));
+    REQUIRE(item);
+    const std::string track = item->track.str();
+    const std::string given = s.tracks.find(item->track)->color;
+    REQUIRE(theme.trackColor(given));  // a new track comes with a colour
+    // The track's colour, as the item has in the arrangement: not the accent.
+    CHECK(same(f.editor->state().color(theme), *theme.trackColor(given)));
+    CHECK_FALSE(same(f.editor->state().color(theme), theme.color("accent")));
+    // It follows the track, and the item's own colour wins over it.
+    const char* other = given == "blue" ? "green" : "blue";
+    REQUIRE(theme.trackColor(other));
+    f.exec("track.set", R"({"track":")" + track + R"(","color":")" + other + R"("})");
+    CHECK(same(f.editor->state().color(theme), *theme.trackColor(other)));
+    f.exec("item.set", R"({"item":")" + f.item + R"(","color":")" + given + R"("})");
+    CHECK(same(f.editor->state().color(theme), *theme.trackColor(given)));
+    // Without a colour anywhere: the strip type's, as the arrangement draws it.
+    f.exec("item.set", R"({"item":")" + f.item + R"(","color":""})");
+    f.exec("track.set", R"({"track":")" + track + R"(","color":""})");
+    const model::Item* now = f.app->head().items.find(*model::Id::parse(f.item));
+    CHECK(same(f.editor->state().color(theme),
+               views::Lanes::itemColor(theme, *now, f.app->head().tracks.find(now->track),
+                                       model::StripType::Channel)));
+    // The title names the item as the arrangement does: its id only while
+    // it has no name.
+    auto title = [&] { return f.root->find("midi.title")->valueText(); };
+    f.editor->sync(f.now);
+    f.frame();
+    CHECK(title().find("Keys") != std::string::npos);
+    CHECK(title().find(f.item) != std::string::npos);
+    f.exec("item.set", R"({"item":")" + f.item + R"(","name":"Chords"})");
+    f.editor->sync(f.now);
+    f.frame();
+    CHECK(title().find("Chords") != std::string::npos);
+    CHECK(title().find(f.item) == std::string::npos);
+}
 
 TEST_CASE("MIDI editor: Alt+E shows and hides it on the item it had last") {
     Fixture f;
@@ -427,6 +476,117 @@ TEST_CASE("MIDI editor: an empty roll can marquee without a note anchor") {
     CHECK(f.app->head().version == version);
 }
 
+TEST_CASE("MIDI editor: a note held at the roll's edge scrolls the roll and goes with it") {
+    Fixture f;
+    if (!f.ok) return;
+    using T = ui::PointerEvent::Type;
+    f.exec("midi.edit",
+           R"({"item":")" + f.item + R"(","ops":[{"op":"remove","notes":[0,1,2,3]}]})");
+    f.exec("midi.edit",
+           R"({"item":")" + f.item + R"(","ops":[{"op":"add","pitch":60,"start":1,"length":1}]})");
+    REQUIRE(f.editor->open(f.item));
+    f.frame();
+    auto& state = f.editor->state();
+    REQUIRE(state.notes.size() == 1);
+    const ui::Rect roll = f.editor->roll()->bounds();
+    const ui::Point body = f.at(1.5, 60);
+    REQUIRE(roll.contains(body));
+    // In the middle of the roll a drag scrolls nothing.
+    f.pointer(T::Down, body);
+    f.pointer(T::Move, {body.x + 30, body.y});
+    CHECK_FALSE(f.editor->autoScrolling());
+    CHECK_FALSE(f.editor->autoScroll(1.0));
+    // Held at the right edge the roll scrolls on and the note, still under
+    // the pointer, is later each time; further out is faster.
+    const double scroll = state.scrollBeat, pitches = state.topPitch;
+    f.pointer(T::Move, {roll.right() - 4, body.y});
+    REQUIRE(f.editor->autoScrolling());
+    const double before = state.dBeats;
+    CHECK(f.editor->autoScroll(0.5));
+    const double once = state.scrollBeat;
+    CHECK(once > scroll);
+    CHECK(state.dBeats > before);
+    f.pointer(T::Move, {roll.right() + 60, body.y});
+    CHECK(f.editor->autoScroll(0.5));
+    CHECK(state.scrollBeat - once > once - scroll);
+    CHECK(state.topPitch == pitches);  // the pitches stayed
+    // The loop's pass steps it by the time since the pass before, and by no
+    // more than the cap: a frame that stalled for two seconds is a short
+    // step, not a jump. The first pass of a scroll only starts the clock,
+    // however long ago the pass before it was.
+    {
+        using namespace std::chrono;
+        const ui::Point edge{roll.right() + 60, body.y};
+        f.pointer(T::Move, {roll.x + roll.w / 2, body.y});  // inside: the scroll ends
+        REQUIRE_FALSE(f.editor->autoScrolling());
+        f.now += seconds(10);
+        const double s0 = state.scrollBeat;
+        f.pointer(T::Move, edge);  // at the edge again, and the new scroll's first pass
+        REQUIRE(f.editor->autoScrolling());
+        CHECK(state.scrollBeat == s0);
+        f.editor->sync(f.now += milliseconds(25));
+        const double step = state.scrollBeat - s0;
+        CHECK(step > 0);
+        f.editor->sync(f.now += seconds(2));
+        CHECK(state.scrollBeat - s0 == doctest::Approx(3 * step));
+    }
+    // Back inside it stops, and the note lands where the pointer is.
+    const ui::Point inside{roll.x + roll.w / 2, body.y};
+    f.pointer(T::Move, inside);
+    CHECK_FALSE(f.editor->autoScrolling());
+    const double held = state.scrollBeat, moved = state.dBeats;
+    CHECK_FALSE(f.editor->autoScroll(1.0));
+    CHECK(state.scrollBeat == held);
+    CHECK(moved > 1.0);
+    f.pointer(T::Up, inside);
+    f.frame();
+    REQUIRE(state.notes.size() == 1);
+    CHECK(state.notes[0].start == doctest::Approx(1 + moved));
+    CHECK(state.notes[0].pitch == 60);
+    CHECK_FALSE(f.editor->autoScrolling());
+
+    // Rows: a move held at the bottom scrolls down the keys; changing a
+    // note's length there does not.
+    const double top = state.topPitch;
+    const ui::Point again = f.at(state.notes[0].start + 0.5, 60);
+    REQUIRE(roll.contains(again));
+    f.pointer(T::Down, again);
+    f.pointer(T::Move, {again.x, roll.bottom() - 3});
+    REQUIRE(f.editor->autoScrolling());
+    CHECK(f.editor->autoScroll(0.25));
+    CHECK(state.topPitch < top);
+    f.pointer(T::Cancel, {again.x, roll.bottom() - 3});
+    f.root->capture(nullptr);
+    CHECK_FALSE(f.editor->autoScrolling());  // a drag given up scrolls no more
+    state.topPitch = top;
+    state.scrollBeat = state.notes[0].start - 1;
+    f.frame();
+    const ui::Point end{f.at(state.notes[0].start + 1, 60).x - 2, f.at(0, 60).y};
+    REQUIRE(roll.contains(end));
+    f.pointer(T::Down, end);
+    f.pointer(T::Move, {end.x - 20, roll.bottom() - 3});
+    CHECK(state.drag == gui::RollState::Drag::ResizeEnd);
+    CHECK_FALSE(f.editor->autoScrolling());
+    f.pointer(T::Cancel, {end.x - 20, roll.bottom() - 3});
+    f.root->capture(nullptr);
+
+    // Leftwards the roll stops half a beat before the item's start (a
+    // marquee from empty space, held at the left edge).
+    state.scrollBeat = 1.0;
+    f.frame();
+    const ui::Point empty{roll.x + roll.w / 2, roll.y + roll.h / 2};
+    f.pointer(T::Down, empty);
+    f.pointer(T::Move, {roll.x + 3, empty.y - 20});
+    REQUIRE(state.drag == gui::RollState::Drag::Marquee);
+    REQUIRE(f.editor->autoScrolling());
+    CHECK(f.editor->autoScroll(10.0));
+    CHECK(state.scrollBeat == -0.5);
+    CHECK_FALSE(f.editor->autoScroll(1.0));  // nothing more to scroll
+    CHECK(state.scrollBeat == -0.5);
+    f.pointer(T::Cancel, {roll.x + 3, empty.y - 20});
+    f.root->capture(nullptr);
+}
+
 TEST_CASE("MIDI editor: selected notes painted on top win overlapping hit tests") {
     Fixture f;
     if (!f.ok) return;
@@ -443,6 +603,13 @@ TEST_CASE("MIDI editor: selected notes painted on top win overlapping hit tests"
     CHECK(state.selected == std::set<std::size_t>{0});
     f.pointer(ui::PointerEvent::Type::Up, f.at(0.4, 60));
     CHECK(state.selected == std::set<std::size_t>{0});
+    // A note's ends set its length and say so; its body keeps the arrow.
+    f.pointer(ui::PointerEvent::Type::Move, f.at(0.4, 60));
+    CHECK(f.root->cursor() == ui::Cursor::Arrow);
+    f.pointer(ui::PointerEvent::Type::Move, {f.at(1, 60).x - 2, f.at(1, 60).y});
+    CHECK(f.root->cursor() == ui::Cursor::ResizeHorizontal);
+    f.pointer(ui::PointerEvent::Type::Move, {f.at(0, 60).x + 2, f.at(0, 60).y});
+    CHECK(f.root->cursor() == ui::Cursor::ResizeHorizontal);
 }
 
 TEST_CASE("MIDI editor: external note removal cancels a captured drag") {
@@ -714,10 +881,32 @@ TEST_CASE("MIDI editor: the notation panel compiles live, writes back, and follo
     f.root->focus(text);
     f.root->key(SDLK_A, ui::kCtrl);
     f.root->text("voice v; 1: D4:h F4:h");
+    // The pause is counted in the passes' time, from the first pass after
+    // the last keystroke: until that pass has run, one is due at once.
+    using std::chrono::milliseconds;
+    const auto typed = f.app->head().version;
     REQUIRE(f.editor->nextDeadline());
+    CHECK(*f.editor->nextDeadline() <= f.now);
     f.frame();
-    std::this_thread::sleep_for(std::chrono::milliseconds(350));
+    REQUIRE(f.editor->nextDeadline());
+    CHECK(*f.editor->nextDeadline() == f.now + milliseconds(300));
+    // Just short of it nothing is written, however many passes run.
+    f.now += milliseconds(299);
     f.frame();
+    f.frame();
+    CHECK(f.app->head().version == typed);
+    // A keystroke starts the pause again, from the pass after it.
+    f.root->text(" ");
+    f.now += milliseconds(200);
+    f.frame();
+    REQUIRE(f.editor->nextDeadline());
+    CHECK(*f.editor->nextDeadline() == f.now + milliseconds(300));
+    f.now += milliseconds(299);
+    f.frame();
+    CHECK(f.app->head().version == typed);
+    f.now += milliseconds(1);
+    f.frame();
+    CHECK(f.app->head().version > typed);
     CHECK_FALSE(f.editor->nextDeadline());
     auto n = f.notes();
     REQUIRE(n.size() == 2);
@@ -729,7 +918,7 @@ TEST_CASE("MIDI editor: the notation panel compiles live, writes back, and follo
     f.root->key(SDLK_END, ui::kCtrl);
     f.root->text(" Q9:zz");
     f.frame();
-    std::this_thread::sleep_for(std::chrono::milliseconds(350));
+    f.now += milliseconds(300);
     f.frame();
     CHECK(f.app->head().version == v);
     REQUIRE_FALSE(text->marks().empty());
@@ -740,7 +929,7 @@ TEST_CASE("MIDI editor: the notation panel compiles live, writes back, and follo
     f.root->key(SDLK_A, ui::kCtrl);
     f.root->text("voice v; 1: A3:w");
     f.frame();
-    std::this_thread::sleep_for(std::chrono::milliseconds(350));
+    f.now += milliseconds(300);
     f.frame();
     CHECK(text->marks().empty());
     CHECK(f.notes().size() == 1);
@@ -1315,17 +1504,17 @@ TEST_CASE("mixer: grouped strips, a fader drag is one undo step, toggles, pan, C
     const auto route =
         f.exec("route.add", R"({"from":")" + strips[0].track + R"(","to":")" + buss + R"("})")["id"]
             .asString();
-    mixer.sync();
+    mixer.sync(f.now);
     auto* send = dynamic_cast<ui::Button*>(f.root->find("mixer.send." + route));
     REQUIRE(send);
     const auto originalSend = send->valueText();
     auto* originalFader = strips[0].fader;
     f.exec("route.set", R"({"route":")" + route + R"(","volume_db":-12})");
-    mixer.sync();
+    mixer.sync(f.now);
     CHECK(send->valueText().find("-12.0") != std::string::npos);
     CHECK(strips[0].fader == originalFader);
     f.exec("history.undo", "{}");
-    mixer.sync();
+    mixer.sync(f.now);
     CHECK(send->valueText() == originalSend);
     f.root->frame(false);
     // The masters stay pinned to the right edge; the others start at the left.
@@ -1339,14 +1528,15 @@ TEST_CASE("mixer: grouped strips, a fader drag is one undo step, toggles, pan, C
     auto* fxButton = f.root->find("mixer.fxadd." + strips[0].track);
     REQUIRE(fxButton);
     CHECK(fxButton->valueText() == "fx");
-    // The colour stripe has its own row between the name and the FX slots.
+    // The track's colour is a bar across the strip's top, over the name.
     f.exec("track.set", R"({"track":")" + strips[0].track + R"(","color":"teal"})");
-    mixer.sync();
+    mixer.sync(f.now);
     f.root->frame(false);
     auto* stripe = f.root->find("mixer.color." + strips[0].track);
     REQUIRE(stripe);
-    CHECK(stripe->bounds().y >= f.root->find("mixer.name." + strips[0].track)->bounds().bottom());
-    CHECK(stripe->bounds().bottom() <= f.root->find("mixer.fx." + strips[0].track)->bounds().y);
+    CHECK(stripe->bounds().y == strips[0].node->bounds().y);
+    CHECK(stripe->bounds().w >= strips[0].node->bounds().w - 1.5f);
+    CHECK(stripe->bounds().bottom() <= f.root->find("mixer.name." + strips[0].track)->bounds().y);
     // A right-click on the strip opens the track menu.
     const ui::Rect fxNow = f.root->find("mixer.fxadd." + strips[0].track)->bounds();  // rebuilt
     ui::PointerEvent rc;
@@ -1379,7 +1569,7 @@ TEST_CASE("mixer: grouped strips, a fader drag is one undo step, toggles, pan, C
     for (int i = 1; i <= 10; ++i)
         f.pointer(ui::PointerEvent::Type::Move, {cap.x, cap.y + static_cast<float>(i) * 3});
     f.pointer(ui::PointerEvent::Type::Up, {cap.x, cap.y + 30});
-    mixer.sync();
+    mixer.sync(f.now);
     CHECK(track(keys)->volumeDb < -3);
     CHECK(steps() == s0 + 1);
     const double dragged = track(keys)->volumeDb;
@@ -1391,7 +1581,7 @@ TEST_CASE("mixer: grouped strips, a fader drag is one undo step, toggles, pan, C
     CHECK(steps() == s0 + 2);
     f.exec("history.undo", "{}");
     CHECK(track(keys)->volumeDb == doctest::Approx(dragged));  // only the second drag undone
-    mixer.sync();
+    mixer.sync(f.now);
     // Double-click: unity, its own step.
     f.pointer(ui::PointerEvent::Type::Down, cap2, 2);
     f.pointer(ui::PointerEvent::Type::Up, cap2);
@@ -1416,10 +1606,10 @@ TEST_CASE("mixer: grouped strips, a fader drag is one undo step, toggles, pan, C
     CHECK(f.app->head().project->console9 == !c9);
     // Changes from elsewhere reach the strips; a new track adds a strip.
     f.exec("track.set", R"({"track":")" + keys + R"(","volume_db":-12})");
-    mixer.sync();
+    mixer.sync(f.now);
     CHECK(strips[0].fader->value() == doctest::Approx(-12.0));
     f.exec("track.add", R"({"name":"Bass"})");
-    mixer.sync();
+    mixer.sync(f.now);
     CHECK(mixer.strips().size() == 4);
     // Meters: readings land on the strip's meter.
     readings = {{keys, {0.5f, 0.25f}, {0.3f, 0.1f}}};
@@ -1823,6 +2013,17 @@ TEST_CASE("routing matrix clamps scrolling when channel rows are deleted") {
     REQUIRE(status);
     CHECK(status->valueText().find(matrix.model().blocked(0, 0)) != std::string::npos);
     CHECK(status->valueText().find("not allowed") != std::string::npos);
+    // The pointer says so too, and only over a cell that cannot be connected
+    // (cells are 22 units).
+    CHECK(matrix.grid()->cursorAt(hover.pos) == ui::Cursor::NotAllowed);
+    std::size_t open = 0;
+    while (open < matrix.model().destinations.size() && !matrix.model().blocked(0, open).empty())
+        ++open;
+    REQUIRE(open < matrix.model().destinations.size());
+    CHECK(matrix.grid()->cursorAt({hover.pos.x + 22 * static_cast<float>(open), hover.pos.y}) ==
+          ui::Cursor::Arrow);
+    CHECK(matrix.grid()->cursorAt({bounds.x + 20, bounds.y + 123}) ==
+          ui::Cursor::Arrow);  // a label
 }
 
 TEST_CASE("audit3: empty event-list double-click never edits the old selection") {

@@ -47,7 +47,9 @@ class RackWindow {
     bool isOpen() const { return space_ != nullptr; }
     void sync();  // reload when the session changed while open
     // Telemetry: reads what the visible modules show; true when it changed.
-    bool tick(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
+    // `now` is the pass's time, which the caller gives (the app the clock's,
+    // a test its own); it steps the space's edge scroll.
+    bool tick(std::chrono::steady_clock::time_point now);
     std::optional<std::chrono::steady_clock::time_point> nextDeadline() const;
     // A new rack on `track` (a channel; none: the selected channel, else a
     // new one), shown.
@@ -55,6 +57,8 @@ class RackWindow {
     std::optional<model::Id> rack() const { return rack_; }
     // Opens a plug-in's editor window (the app's PluginWindows).
     std::function<Status(model::Id fx)> openEditor;
+    // Enable a plug-in this run has disabled (plugin.override normal), given one of its fx.
+    std::function<void(model::Id fx)> enableFx;
     // Space pressed and released in the space: the transport, as elsewhere.
     std::function<void()> spaceTap;
     // The plug-in browser's favourites (empty: none saved; tests).
@@ -186,13 +190,15 @@ class RackWindow {
     UiState& ui_;
     std::shared_ptr<const rack::Catalog> catalog_;
     std::uint64_t version_ = ~std::uint64_t{0};
+    std::uint64_t overridesVersion_ = ~std::uint64_t{0};  // the engine's load overrides, as drawn
     std::uint64_t projectGeneration_ = ~std::uint64_t{0};
     std::optional<model::Id> rack_;
     std::map<model::Id, RackSpace::View> views_;
     bool browserVisible_ = true;
     int gesture_ = 0;
     std::optional<std::chrono::steady_clock::time_point> nextTelemetry_;
-    racks::Watchers watchers_;  // the modules in view (telemetry)
+    ui::EdgeScrollClock edgeClock_;  // the time tick steps the edge scroll by
+    racks::Watchers watchers_;       // the modules in view (telemetry)
     RackSpace* space_ = nullptr;
     RackTabs* tabs_ = nullptr;
     RackBrowser* browser_ = nullptr;

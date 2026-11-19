@@ -720,13 +720,6 @@ void addRackMidi(Plan& p, Node& target, std::int64_t pos, std::uint32_t frames,
 
 namespace {
 // The old node a carried node continues (null: none).
-const Node* continued(const Plan& from, const Node& node, int fromClass) SUPPLE_RT {
-    for (const auto& old : from.nodes)
-        if (old.id == node.id)
-            return fromClass >= 0 && old.live != bool(fromClass) ? nullptr : &old;
-    return nullptr;
-}
-
 // A track's pool: held voices keep their slots where they still fit. Item
 // notes follow their musical identity, keys their key; routed voices wait
 // for the send that delivered them (carryEdge), else end as orphans.
@@ -818,6 +811,8 @@ void carryBus(Node& node, const Node& old) SUPPLE_RT {
 
 // A send that continues unchanged (same route, tap, channels, delay and
 // ends): its voices, queue and the target slots they hold.
+}  // namespace
+
 bool sameSend(const Plan& to, const Edge& edge, const Plan& from, const Edge& old) SUPPLE_RT {
     if (!old.midi || edge.route != old.route || edge.tap != old.tap ||
         edge.midiFrom != old.midiFrom || edge.midiTo != old.midiTo ||
@@ -844,6 +839,15 @@ bool sameSend(const Plan& to, const Edge& edge, const Plan& from, const Edge& ol
         return false;
     return true;
 }
+
+std::size_t matchSend(const Plan& to, const Edge& edge, const Plan& from,
+                      const Node& old) SUPPLE_RT {
+    for (const std::uint32_t oi : inEdgesFrom(from, old, edge.fromId))
+        if (sameSend(to, edge, from, from.edges[oi])) return oi;
+    return kNoEdge;
+}
+
+namespace {
 
 void carryEdge(Plan& to, Edge& edge, const Plan& from, const Edge& old) SUPPLE_RT {
     const auto& source = to.nodes[edge.from];
@@ -918,24 +922,23 @@ void carryRackMidi(Plan& to, Plan& from, int toClass, int fromClass) SUPPLE_RT {
         node.midiRemap.clear();
         node.midiBusRemap.clear();
         node.midiOldPool = 0;
+        // A rack's notes are its modules' (pooled, kept across the swap);
+        // its plug-in stages are carried with chain stages (carryMix).
         if (node.rack) continue;
-        if (const Node* old = continued(from, node, fromClass)) {
+        if (const Node* old = carriedNode(from, node, fromClass)) {
             carryPool(node, *old);
             carryBus(node, *old);
         }
     }
     for (auto& node : to.nodes) {
         if (toClass >= 0 && node.live != bool(toClass)) continue;
-        const Node* old = continued(from, node, fromClass);
+        const Node* old = carriedNode(from, node, fromClass);
         if (!old) continue;
         for (std::size_t ei : node.in) {
             auto& edge = to.edges[ei];
             if (!edge.midi) continue;
-            for (std::size_t oi : old->in)
-                if (sameSend(to, edge, from, from.edges[oi])) {
-                    carryEdge(to, edge, from, from.edges[oi]);
-                    break;
-                }
+            if (const std::size_t oi = matchSend(to, edge, from, *old); oi != kNoEdge)
+                carryEdge(to, edge, from, from.edges[oi]);
         }
     }
 }

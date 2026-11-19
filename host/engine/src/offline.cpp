@@ -5,6 +5,7 @@
 #include "rack_runtime.h"
 
 #include "plan.h"
+#include "render_watch.h"
 #include "stretch.h"
 #include "supple/model/freeze.h"
 
@@ -12,7 +13,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
+#include <mutex>
 #include <numbers>
 #include <optional>
 #include <set>
@@ -20,6 +23,7 @@
 
 #include "supple/base/thread.h"
 #include "supple/clap/semantic_params.h"
+#include "supple/diagctx/table.h"
 #include "supple/dsp/dsp.h"
 #include "supple/model/numeric.h"
 #include "supple/params/params.h"
@@ -171,12 +175,7 @@ void InstancePool::setStockDir(std::filesystem::path dir) {
     stockDir_ = std::optional<std::filesystem::path>(ec ? std::move(dir) : std::move(canonical));
 }
 
-model::Isolation InstancePool::resolveIsolation(const model::FxInstance& fx,
-                                                const host::PluginInfo& info,
-                                                bool* fallback) const {
-    if (fallback) *fallback = false;
-    if (fx.isolation != model::Isolation::Inherit) return fx.isolation;
-    if (defaultIsolation_ == model::Isolation::InProcess) return model::Isolation::InProcess;
+bool InstancePool::isStock(const host::PluginInfo& info) const {
     if (!stockDir_) {
         std::error_code ec;
         auto dir = host::stockPluginDir();
@@ -186,12 +185,25 @@ model::Isolation InstancePool::resolveIsolation(const model::FxInstance& fx,
         }
         stockDir_ = std::move(dir);
     }
-    if (*stockDir_ && !info.path.empty()) {
-        std::error_code ec;
-        const auto path = std::filesystem::weakly_canonical(info.path, ec);
-        const auto inside = (ec ? info.path : path).lexically_relative(**stockDir_);
-        if (!inside.empty() && *inside.begin() != "..") return model::Isolation::InProcess;
-    }
+    if (!*stockDir_ || info.path.empty()) return false;
+    std::error_code ec;
+    const auto path = std::filesystem::weakly_canonical(info.path, ec);
+    const auto inside = (ec ? info.path : path).lexically_relative(**stockDir_);
+    return !inside.empty() && *inside.begin() != "..";
+}
+
+model::Isolation InstancePool::resolveIsolation(const model::FxInstance& fx,
+                                                const host::PluginInfo& info,
+                                                bool* fallback) const {
+    if (fallback) *fallback = false;
+    // The run's override first: a plug-in the user chose to bridge is bridged
+    // whatever its fx or the preference says. With no bridge executable the
+    // instance is refused at creation rather than loaded in process; the
+    // command that sets the override has already said so.
+    if (overrides_.mode(info) == LoadMode::Bridge) return model::Isolation::Dedicated;
+    if (fx.isolation != model::Isolation::Inherit) return fx.isolation;
+    if (defaultIsolation_ == model::Isolation::InProcess) return model::Isolation::InProcess;
+    if (isStock(info)) return model::Isolation::InProcess;
     if (host::bridgeExecutable().empty()) {
         if (fallback) *fallback = true;
         return model::Isolation::InProcess;
@@ -202,11 +214,38 @@ model::Isolation InstancePool::resolveIsolation(const model::FxInstance& fx,
 model::Isolation InstancePool::effectiveIsolation(Id id, const model::FxInstance& fx) const {
     if (auto it = instances_.find(id); it != instances_.end() && it->second.instance)
         return it->second.effective;
-    if (fx.isolation != model::Isolation::Inherit) return fx.isolation;
-    if (defaultIsolation_ == model::Isolation::InProcess) return model::Isolation::InProcess;
+    if (fx.isolation != model::Isolation::Inherit && overrides_.empty()) return fx.isolation;
+    if (defaultIsolation_ == model::Isolation::InProcess && overrides_.empty() &&
+        fx.isolation == model::Isolation::Inherit)
+        return model::Isolation::InProcess;
     auto info = resolve_(fx.plugin);
     if (!info) return model::Isolation::InProcess;  // nothing to make: nothing bridged
     return resolveIsolation(fx, *info, nullptr);
+}
+
+void InstancePool::restartPlugin(std::string_view format, std::string_view id) {
+    for (auto it = instances_.begin(); it != instances_.end();) {
+        if (it->second.instance && it->second.instance->info().format == format &&
+            it->second.instance->info().id == id) {
+            retire(std::move(it->second.instance));
+            it = instances_.erase(it);
+        } else
+            ++it;
+    }
+}
+
+std::vector<InstancePool::Ran> InstancePool::ranInProcess() const {
+    std::map<LoadOverrides::Key, Ran> ran;
+    for (const auto& [id, e] : instances_)
+        if (e.instance && e.activated && e.effective == model::Isolation::InProcess && !e.failure &&
+            !e.instance->failed()) {
+            const auto key = LoadOverrides::Key(e.instance->info().format, e.instance->info().id);
+            auto [it, fresh] = ran.try_emplace(key, Ran{e.instance->info(), e.activatedAt});
+            if (!fresh && e.activatedAt < it->second.since) it->second.since = e.activatedAt;
+        }
+    std::vector<Ran> out;
+    for (auto& [key, entry] : ran) out.push_back(std::move(entry));
+    return out;
 }
 
 std::vector<model::Id> InstancePool::isolationFallbacks() const {
@@ -218,12 +257,24 @@ std::vector<model::Id> InstancePool::isolationFallbacks() const {
 
 Result<host::Instance*> InstancePool::get(Id id, const model::FxInstance& fx,
                                           const Session& session) {
-    std::string desired;
-    if (fx.patch)
-        desired = "patch:" + json::writeCompact(*fx.patch);
-    else if (fx.state)
-        desired = "blob:" + *fx.state;
     auto& e = instances_[id];
+    // Route E stage 2: the session's object for this FX, if `fx` is it. One
+    // the instance was last configured from (the pool keeps it, so its
+    // address is not reused) carries the same patch and state: nothing to
+    // serialize. Any other, or a copy, is compared by its text.
+    const auto* stored = session.fx.entry(id);
+    const std::shared_ptr<const model::FxInstance> own =
+        stored && stored->value.get() == &fx ? stored->value : nullptr;
+    const bool unchanged = own && e.instance && e.appliedFx == own;
+    std::string desired;
+    if (unchanged) {
+        desired = e.appliedState;
+    } else if (fx.patch) {
+        desired = "patch:" + json::writeCompact(*fx.patch);
+        ++patchSerializations_;
+    } else if (fx.state) {
+        desired = "blob:" + *fx.state;
+    }
     // A new state blob is loaded into a fresh instance when the current one
     // may be processing: CLAP's state.load runs on the main thread and a
     // plugin need not guard its DSP against a concurrent process() (semantic
@@ -243,6 +294,10 @@ Result<host::Instance*> InstancePool::get(Id id, const model::FxInstance& fx,
         if (!info) {
             instances_.erase(id);
             return std::move(info).error();
+        }
+        if (overrides_.mode(*info) == LoadMode::Disable) {
+            instances_.erase(id);
+            return LoadOverrides::disabled(*info);
         }
         bool fallback = false;
         const model::Isolation effective = resolveIsolation(fx, *info, &fallback);
@@ -272,13 +327,14 @@ Result<host::Instance*> InstancePool::get(Id id, const model::FxInstance& fx,
         e.effective = effective;
         e.fallback = fallback;
         e.appliedState.clear();
+        e.appliedFx.reset();
         e.failure.reset();
         e.clearedAutomation.clear();
     }
     if (desired != e.appliedState && !desired.empty()) {
         if (fx.patch) {
-            SUPPLE_TRY(
-                e.instance->setPatch(json::writeCompact(*fx.patch), CLAP_SUPPLE_SET_REPLACE));
+            SUPPLE_TRY(e.instance->setPatch(std::string_view(desired).substr(6),  // "patch:"
+                                            CLAP_SUPPLE_SET_REPLACE));
         } else {
             auto it = session.blobs.find(*fx.state);
             if (it == session.blobs.end())
@@ -290,8 +346,40 @@ Result<host::Instance*> InstancePool::get(Id id, const model::FxInstance& fx,
         }
         e.appliedState = desired;
     }
+    e.appliedFx = own;
     service(id);
     return e.instance.get();
+}
+
+bool InstancePool::patchable(Id id, const model::FxInstance& fx) const {
+    const auto it = instances_.find(id);
+    if (it == instances_.end()) return false;
+    const Entry& e = it->second;
+    return e.instance && !e.instance->failed() && !e.failure && !e.restarting && fx.patch &&
+           e.pluginId == fx.plugin.id && e.isolation == fx.isolation &&
+           e.appliedState.starts_with("patch:");
+}
+
+Result<host::Instance::Notifications> InstancePool::applyPatch(Id id, const model::FxInstance& fx,
+                                                               const Session& session) {
+    if (!patchable(id, fx))
+        return Error("engine.patch_unpatchable", id.str() + " needs a compile for its patch",
+                     "/fx/" + id.str(), "reload the session");
+    Entry& e = instances_[id];
+    const auto* stored = session.fx.entry(id);
+    const std::shared_ptr<const model::FxInstance> own =
+        stored && stored->value.get() == &fx ? stored->value : nullptr;
+    if (!own || e.appliedFx != own) {
+        auto desired = "patch:" + json::writeCompact(*fx.patch);
+        ++patchSerializations_;
+        if (desired != e.appliedState) {
+            SUPPLE_TRY(e.instance->setPatch(std::string_view(desired).substr(6),  // "patch:"
+                                            CLAP_SUPPLE_SET_REPLACE));
+            e.appliedState = std::move(desired);
+        }
+    }
+    e.appliedFx = own;
+    return service(id);
 }
 
 void InstancePool::prune(const Session& session, std::uint64_t liveGeneration) {
@@ -314,6 +402,7 @@ void InstancePool::restart(Id id) {
     if (auto it = instances_.find(id); it != instances_.end()) {
         if (it->second.instance) retire(std::move(it->second.instance));
         instances_.erase(it);
+        ++availabilityChanges_;
     }
 }
 
@@ -336,11 +425,16 @@ host::Instance::Notifications InstancePool::service(Id id) {
     auto it = instances_.find(id);
     if (it == instances_.end() || !it->second.instance) return {};
     auto& entry = it->second;
+    const bool wasRestarting = entry.restarting, wasActive = entry.instance->active(),
+               wasFailed = entry.failure.has_value();
+    const std::uint32_t wasLatency = entry.rawLatency;
     // A restart requested while processing happens here once it has stopped.
     entry.instance->serviceMainThread();
     auto notes = entry.instance->takeNotifications();
     entry.restarting = entry.instance->restartPending();
     if (entry.instance->active()) {
+        if (!entry.activated) entry.activatedAt = std::filesystem::file_time_type::clock::now();
+        entry.activated = true;
         const std::uint32_t latency = entry.instance->latency();
         notes.latencyChanged |= latency != entry.rawLatency;
         entry.rawLatency = latency;
@@ -357,6 +451,9 @@ host::Instance::Notifications InstancePool::service(Id id) {
         entry.failure->path = "/fx/" + id.str();
         entry.failure->hint = "Use fx.restart to recreate this instance from its saved state";
     }
+    if (entry.restarting != wasRestarting || entry.instance->active() != wasActive ||
+        entry.failure.has_value() != wasFailed || entry.rawLatency != wasLatency)
+        ++availabilityChanges_;
     if (notes.paramsRescan) entry.clearedAutomation.clear();
     for (const auto& clear : notes.paramsClear)
         if (clear.flags & (CLAP_PARAM_CLEAR_ALL | CLAP_PARAM_CLEAR_AUTOMATIONS)) {
@@ -408,6 +505,12 @@ std::vector<std::pair<Id, Error>> InstancePool::failedErrors() const {
     return out;
 }
 
+std::string InstancePool::failureIncident(Id id) const {
+    const auto it = instances_.find(id);
+    if (it == instances_.end() || !it->second.instance || !it->second.instance->failed()) return {};
+    return it->second.instance->bridgeIncident();
+}
+
 std::vector<Id> InstancePool::bridgeThreadsRefused() const {
     std::vector<Id> out;
     for (const auto& [id, entry] : instances_)
@@ -423,14 +526,30 @@ bool InstancePool::automationCleared(Id id, std::uint32_t param) const {
                      param) != it->second.clearedAutomation.end();
 }
 
+// Both forget the session object the instance was configured from: it no
+// longer describes the instance, so the next get() compares by text.
 void InstancePool::acknowledgeOutputPatch(Id id, const json::Value& patch) {
-    if (auto it = instances_.find(id); it != instances_.end() && it->second.instance)
+    if (auto it = instances_.find(id); it != instances_.end() && it->second.instance) {
         it->second.appliedState = "patch:" + json::writeCompact(patch);
+        it->second.appliedFx.reset();
+    }
 }
 
 void InstancePool::acknowledgeOutputState(Id id, const std::string& hash) {
-    if (auto it = instances_.find(id); it != instances_.end() && it->second.instance)
+    if (auto it = instances_.find(id); it != instances_.end() && it->second.instance) {
         it->second.appliedState = "blob:" + hash;
+        it->second.appliedFx.reset();
+    }
+}
+
+bool InstancePool::automationCleared(Id id) const {
+    const auto it = instances_.find(id);
+    return it != instances_.end() && !it->second.clearedAutomation.empty();
+}
+
+bool InstancePool::anyAutomationCleared() const {
+    return std::any_of(instances_.begin(), instances_.end(),
+                       [](const auto& entry) { return !entry.second.clearedAutomation.empty(); });
 }
 
 void InstancePool::resetAutomation(Id id) {
@@ -529,6 +648,93 @@ void MediaCache::trimVariants(std::size_t samples) {
 
 using namespace detail;
 
+namespace {
+// ADR-0090: a render's bridged calls wait with its own deadline, from its
+// first activation to its last stopProcessing, and the process-wide one
+// returns after it.
+class RenderDeadlines {
+  public:
+    RenderDeadlines(std::vector<host::Instance*> list, int ms) : instances_(std::move(list)) {
+        for (host::Instance* in : instances_) in->setCallDeadlineMs(std::max(ms, 1));
+    }
+    ~RenderDeadlines() {
+        for (host::Instance* in : instances_) in->setCallDeadlineMs(0);
+    }
+    RenderDeadlines(const RenderDeadlines&) = delete;
+    RenderDeadlines& operator=(const RenderDeadlines&) = delete;
+
+  private:
+    std::vector<host::Instance*> instances_;
+};
+
+// ADR-0090: a stop or a cancel kills the render's own bridges, so a render
+// blocked in a bridged call (activation, reset, flush, start, a block or
+// stopProcessing) returns within a wait step instead of at its deadline.
+// Every caller gives a render a pool of its own, so no one else uses them.
+// The watch looks every 10 ms; what it does is decided by the request, not
+// the clock. It runs only while the render has bridged instances.
+RenderWatchTestHooks gWatchHooks;  // tests only, set while no render runs
+
+class RenderWatch {
+  public:
+    RenderWatch(std::vector<host::Instance*> list, const OfflineSettings& opt)
+        : instances_(std::move(list)), opt_(opt) {
+        std::erase_if(instances_, [](host::Instance* in) { return !in->isolated(); });
+        if (instances_.empty()) return;
+        thread_ = std::thread([this] {
+            nameThread("render-watch");
+            std::unique_lock lock(mutex_);
+            while (!finished_) {
+                if (requested(opt_)) {
+                    for (host::Instance* in : instances_) in->abandonBridge();
+                    if (gWatchHooks.killed) gWatchHooks.killed(gWatchHooks.context);
+                    abandoned_.store(true, std::memory_order_release);
+                    return;
+                }
+                wake_.wait_for(lock, std::chrono::milliseconds(10));
+            }
+        });
+    }
+    ~RenderWatch() { finish(); }
+    RenderWatch(const RenderWatch&) = delete;
+    RenderWatch& operator=(const RenderWatch&) = delete;
+    // A stop or a cancel was asked for.
+    static bool requested(const OfflineSettings& opt) {
+        return opt.stopToken.stop_requested() ||
+               (opt.cancelFlag && opt.cancelFlag->load(std::memory_order_relaxed));
+    }
+    // Ends the watch; after it, abandoned() no longer changes.
+    void finish() {
+        if (gWatchHooks.finishing) gWatchHooks.finishing(gWatchHooks.context);
+        {
+            std::lock_guard lock(mutex_);
+            finished_ = true;
+        }
+        wake_.notify_one();
+        if (thread_.joinable()) thread_.join();
+    }
+    // The watch killed the render's bridges.
+    bool abandoned() const { return abandoned_.load(std::memory_order_acquire); }
+
+  private:
+    std::vector<host::Instance*> instances_;
+    const OfflineSettings& opt_;
+    std::mutex mutex_;
+    std::condition_variable wake_;
+    bool finished_ = false;
+    std::atomic<bool> abandoned_{false};
+    std::thread thread_;
+};
+
+Error renderCancelled() {
+    return Error("job.cancelled", "offline render cancelled", {},
+                 "submit a new render job if its output is still wanted; the cancelled job "
+                 "cannot resume");
+}
+}  // namespace
+
+void setRenderWatchTestHooks(const RenderWatchTestHooks& hooks) { gWatchHooks = hooks; }
+
 Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                                     const OfflineSettings& opt) {
     static_assert(std::atomic<double>::is_always_lock_free);
@@ -594,6 +800,11 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
     auto compiled = detail::compile(selectedSession, pool, opt.startSeconds, opt.blockSize);
     if (!compiled) return std::move(compiled).error();
     Plan& p = *compiled;
+    // From here every bridged call of the render has its deadline and its
+    // stop (ADR-0090): activation in prepare() included.
+    const RenderDeadlines deadlines(p.instances, opt.bridgeDeadlineMs);
+    RenderWatch watch(p.instances, opt);
+    if (RenderWatch::requested(opt)) return renderCancelled();
     if (!opt.applyMasterPlayrate) p.rateEnabled = false;
     MediaCache localMedia;
     p.projectDir = opt.projectDir;
@@ -625,7 +836,38 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
     auto sources = p.media->prepareSources(sourceSession, p.projectDir, p.rate);
     if (!sources) return sources.error();
     p.preparedSources = *sources;
-    SUPPLE_TRY(prepare(p, selectedSession));
+    if (auto prepared = prepare(p, selectedSession); !prepared) {
+        watch.finish();
+        // A stop while it activated: the watch killed what it waited for.
+        if (watch.abandoned()) return renderCancelled();
+        return std::move(prepared).error();
+    }
+    // ADR-0090: a plug-in that fails while the render runs fails the
+    // render; one that had failed before keeps its behaviour.
+    struct Watched {
+        host::Instance* instance;
+        Id fx;
+        bool failedBefore;
+    };
+    std::vector<Watched> watched;
+    for (const Node& node : p.nodes)
+        forEachStage(node, [&](const Stage& st) {
+            if (st.instance) watched.push_back({st.instance, st.fx, st.instance->failed()});
+        });
+    const auto failing = [&] {
+        return std::any_of(watched.begin(), watched.end(), [](const Watched& w) {
+            return !w.failedBefore && w.instance->failed();
+        });
+    };
+    const auto failedNow = [&] {
+        std::vector<const Watched*> out;
+        for (const Watched& w : watched)
+            if (!w.failedBefore && w.instance->failed() &&
+                std::none_of(out.begin(), out.end(),
+                             [&](const Watched* seen) { return seen->instance == w.instance; }))
+                out.push_back(&w);
+        return out;
+    };
     auto master = std::find_if(p.nodes.begin(), p.nodes.end(),
                                [&](const Node& node) { return node.id == opt.master; });
     if (master == p.nodes.end() || !master->master)
@@ -745,6 +987,7 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
     std::thread audio([&] {
         auto progressAt = std::chrono::steady_clock::time_point::min();
         nameThread("audio-offline");
+        (void)diagctx::registerThread(diagctx::ThreadRole::AudioOffline);
         const auto primed = detail::prepareRateSources(p, 0, 0);
         if (!primed) {
             preparationError = primed.error();
@@ -757,8 +1000,7 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
         }
         if (!startFailed) {
             for (std::int64_t pos = 0; pos < total;) {
-                if (opt.stopToken.stop_requested() ||
-                    (opt.cancelFlag && opt.cancelFlag->load(std::memory_order_relaxed))) {
+                if (RenderWatch::requested(opt)) {
                     cancelled = true;
                     break;
                 }
@@ -769,6 +1011,9 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                     failed = true;
                     break;
                 }
+                // A failed plug-in's output went silent (ADR-0013 §6): the
+                // render fails below.
+                if (failing()) break;
                 const Stereo& tap = opt.tap == model::Tap::PreFx      ? selected->preFx
                                     : opt.tap == model::Tap::PreFader ? selected->preFader
                                                                       : selected->post;
@@ -830,22 +1075,46 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
     for (host::Instance* in : instances) {
         for (auto& line : in->takeLog()) r.log.push_back(in->info().name + ": " + line);
     }
-    for (const auto& fx : s.fx)
-        if (host::Instance* in = pool.find(fx.id); in && !in->failed())
-            if (auto readouts = instanceReadouts(*in); readouts && readouts->size() > 0)
-                r.meters[fx.id.str()] = std::move(*readouts);
     if (preparationError) return *preparationError;
+    // A call the watch's kill ended can return before the watch has said it
+    // killed: a failed render waits for the watch to end first (the join
+    // orders its kills before abandoned()), and a stop or cancel asked for
+    // by then is the outcome too.
+    const auto lost = failedNow();
+    if (startFailed || failed || !lost.empty()) watch.finish();
+    // Cancelled between blocks, or stopped while a bridged call waited: the
+    // job's outcome, whatever the abandoned bridges' instances say.
+    if (cancelled || watch.abandoned() || RenderWatch::requested(opt)) return renderCancelled();
+    // Failed starting, processing or stopping: the render's audio is not
+    // what the session plays (ADR-0090).
+    if (!lost.empty()) {
+        const Watched& first = *lost.front();
+        std::string message = first.instance->info().name + " (" + first.fx.str() +
+                              ") failed during the render: " + first.instance->failure();
+        for (std::size_t i = 1; i < lost.size(); ++i)
+            message += (i == 1 ? "; so did " : ", ") + lost[i]->instance->info().name + " (" +
+                       lost[i]->fx.str() + ")";
+        return Error("engine.fx_failed", message, "/fx/" + first.fx.str(),
+                     "render again: an offline render starts its own plug-in instances; if the "
+                     "FX fails again, bypass or replace it");
+    }
     if (startFailed)
         return Error("engine.start_failed", "a plugin refused to start processing", {},
                      "restart or replace the FX that refused processing with a plugin supporting "
                      "the render sample rate and block size");
-    if (cancelled)
-        return Error("job.cancelled", "offline render cancelled", {},
-                     "submit a new render job if its output is still wanted; the cancelled job "
-                     "cannot resume");
     if (failed)
         return Error("engine.process_error", "a plugin reported a processing error", {},
                      "bypass or replace the failing FX and render the range again");
+    // Read once the render is known good: a readout is a bridged request too,
+    // and a failed instance has none (ADR-0090).
+    for (const auto& fx : s.fx)
+        if (host::Instance* in = pool.find(fx.id); in && !in->failed())
+            if (auto readouts = instanceReadouts(*in); readouts && readouts->size() > 0)
+                r.meters[fx.id.str()] = std::move(*readouts);
+    // The watch covered the requests above too; a stop during them still
+    // cancels the render.
+    watch.finish();
+    if (watch.abandoned()) return renderCancelled();
     for (const Node& n : p.nodes) {
         std::string line = n.id.str() + " in=[";
         for (std::size_t k = 0; k < n.in.size(); ++k) {

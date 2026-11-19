@@ -926,8 +926,13 @@ void RackWindow::open(std::optional<model::Id> rack) {
     bh.add = [this](const std::string& type) { (void)addModule(type); };
     bh.menu = [this](const std::string& type, ui::Point at) { browserMenu(type, at); };
     bh.dragOver = [this](const std::string& name, std::optional<ui::Point> at) {
-        if (space_)
-            space_->dragTypeOver(name, at && space_->bounds().contains(*at) ? at : std::nullopt);
+        const bool lands = space_ && at && space_->bounds().contains(*at);
+        if (space_) space_->dragTypeOver(name, lands ? at : std::nullopt);
+        // In hand: the move cursor over the space and over the list it came
+        // from (no point: back over the list), "not allowed" elsewhere.
+        root().setDragCursor(
+            name.empty() ? std::nullopt
+                         : std::optional(lands || !at ? ui::Cursor::Move : ui::Cursor::NotAllowed));
     };
     bh.drop = [this](const std::string& type, ui::Point at) {
         if (space_ && space_->bounds().contains(at)) (void)addModule(type, space_->toSpace(at));
@@ -1109,6 +1114,7 @@ Status RackWindow::reload() {
     catalog_ = racks::catalog(app_);
     projectGeneration_ = app_.projectGeneration();
     version_ = s.version;
+    overridesVersion_ = app_.loadOverridesVersion();
     if (rack_ && !s.racks.find(*rack_)) rack_.reset();
     if (!rack_ && !s.racks.empty()) rack_ = s.racks.begin()->id;
     refreshTabs();
@@ -1131,8 +1137,13 @@ Status RackWindow::reload() {
     if (rack_)
         for (const auto& e : s.modules)
             plugins = plugins || (e.value->rack == *rack_ && e.value->fx);
+    const std::function<bool(const model::PluginRef&)> disabled =
+        [this](const model::PluginRef& ref) {
+            return app_.loadModeOf(ref) == engine::LoadMode::Disable;
+        };
     RackScene scene = rack_ ? RackScene::build(s, *rack_, *catalog_,
-                                               plugins ? std::function(instrument) : nullptr)
+                                               plugins ? std::function(instrument) : nullptr,
+                                               plugins ? disabled : nullptr)
                             : RackScene{};
     // Cables that close a loop carry the previous frame; they are drawn so.
     if (rack_ && !scene.cables.empty()) {
@@ -1196,7 +1207,8 @@ void RackWindow::show(std::optional<model::Id> rack) {
 
 void RackWindow::sync() {
     if (!isOpen()) return;
-    if (app_.projectGeneration() != projectGeneration_ || app_.head().version != version_) {
+    if (app_.projectGeneration() != projectGeneration_ || app_.head().version != version_ ||
+        app_.loadOverridesVersion() != overridesVersion_) {
         error_.clear();
         (void)reload();
     }
@@ -1209,6 +1221,14 @@ void RackWindow::watch(bool on) {
 
 bool RackWindow::tick(std::chrono::steady_clock::time_point now) {
     if (plugins_ && plugins_->isOpen()) plugins_->tick();
+    // A drag held at the space's edge pans by the time since the last pass
+    // (capped, so a stalled frame is not a jump).
+    if (space_ && space_->autoScrolling()) {
+        const double seconds = edgeClock_.step(now);
+        if (space_->autoScroll(seconds) || seconds == 0) root().requestAnimationFrame();
+    } else {
+        edgeClock_.reset();
+    }
     const bool captured = pollCapture();  // with the window closed too
     bool shown = captured;
     if (isOpen() && waitsForPlay() != waiting_) {  // played or stopped, from anywhere
@@ -1490,9 +1510,9 @@ class PickList : public ui::Node {
         list_ = &emplace<ui::List>(id + ".list");
         list_->layout.height = ui::SizeRule::fraction();
         list_->rowHeight = 26;
-        auto& hint = emplace<ui::Label>(id + ".hint", "Enter chooses · Esc closes", ui::Font::Ui,
+        auto& keys = emplace<ui::Label>(id + ".hint", "Enter chooses · Esc closes", ui::Font::Ui,
                                         "caption", "ink-faint");
-        hint.layout.height = ui::SizeRule::fixed(16);
+        keys.layout.height = ui::SizeRule::fixed(16);
         search_->onChange = [this](const std::string& q) { filter(q); };
         search_->onSubmit = [this](const std::string&) { choose(); };
         search_->onCancel = [this] { root_.closePopup(); };
@@ -2078,6 +2098,11 @@ void RackWindow::moduleMenu(model::Id module, ui::Point at) {
         args[field] = std::move(v);
         (void)exec("module.set", std::move(args));
     };
+    // First, for a plug-in this run has disabled: its module is silent until it loads again.
+    if (m->fx && enableFx)
+        if (const model::FxInstance* inst = app_.head().fx.find(*m->fx);
+            inst && app_.loadModeOf(inst->plugin) == engine::LoadMode::Disable)
+            items.push_back({"Enable", "", [this, fx = *m->fx] { enableFx(fx); }});
     if (m->fx && openEditor)
         items.push_back({"Open editor", "", [this, fx = *m->fx] {
                              if (auto r = openEditor(fx); !r) report(r.error());

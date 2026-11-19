@@ -257,7 +257,7 @@ void Checkbox::paint(Canvas& canvas) {
     const Rect b = bounds();
     const Rect box{b.x + 2, b.y + (b.h - 14) / 2, 14, 14};
     canvas.fillRound(box, 2, checked_ && enabled ? t.color("accent") : t.color("panel"));
-    canvas.strokeRound(box, 2, focused() ? t.color("focus") : t.color("rule"));
+    canvas.strokeRound(box, 2, focused() ? t.color("focus") : t.color(outline));
     if (checked_) {
         const Color mark = enabled ? t.color("ground") : t.color("ink-faint");
         canvas.line({box.x + 3, box.y + 7}, {box.x + 6, box.y + 10.5f}, mark, 2);

@@ -35,6 +35,11 @@ class ScrollBar : public Node {
     std::optional<float> grab_;  // pointer offset into the thumb while dragging
 };
 
+// A drag out of a control, as its owner hears it: Begin once the pointer has
+// moved past the slop, Move after it, End on release, Cancel when the gesture
+// was taken away.
+enum class DragPhase { Begin, Move, End, Cancel };
+
 class List : public Node {
   public:
     explicit List(std::string id);
@@ -44,6 +49,11 @@ class List : public Node {
     std::function<void(std::size_t)> onActivate;  // Enter, double click
     // A right press on a row: it is selected first; `at` is the press point.
     std::function<void(std::size_t, Point at)> onContext;
+    // A left press on a row that then moves more than kDragSlop units drags
+    // that row; the owner draws the feedback and takes the drop. Unset, a
+    // press only selects.
+    std::function<void(std::size_t row, DragPhase phase, Point at)> onDrag;
+    static constexpr float kDragSlop = 4;
 
     void setCount(std::size_t count);
     std::size_t count() const { return count_; }
@@ -68,6 +78,12 @@ class List : public Node {
     float scroll_ = 0;
     std::size_t painted_ = 0;
     ScrollBar* bar_ = nullptr;
+    struct Press {
+        std::size_t row;
+        Point at;
+        bool dragging = false;
+    };
+    std::optional<Press> press_;  // a left press on a row, until its release
 };
 
 }  // namespace supple::ui

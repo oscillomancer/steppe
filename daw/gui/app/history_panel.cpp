@@ -46,7 +46,7 @@ std::unique_ptr<ui::Node> HistoryPanel::build() {
     auto panel = std::make_unique<ui::Node>("history");
     panel_ = panel.get();
     panel->layout.dir = ui::Layout::Dir::Column;
-    panel->layout.width = ui::SizeRule::fixed(360);
+    if (!host) panel->layout.width = ui::SizeRule::fixed(360);
     panel->layout.padding = ui::Insets::all(8);
     panel->layout.gap = 6;
     panel->visible = false;
@@ -58,10 +58,13 @@ std::unique_ptr<ui::Node> HistoryPanel::build() {
         r.layout.align = ui::Layout::Align::Center;
         return r;
     };
-    auto& header = row(*panel, "history.header");
-    auto& title = header.emplace<ui::Label>("history.title", "History", ui::Font::UiBold, "body");
-    title.layout.width = ui::SizeRule::fraction();
-    header.emplace<ui::Button>("history.close", "Close", [this] { setVisible(false); });
+    if (!host) {  // the side panel's tab bar names and closes it otherwise
+        auto& header = row(*panel, "history.header");
+        auto& title =
+            header.emplace<ui::Label>("history.title", "History", ui::Font::UiBold, "body");
+        title.layout.width = ui::SizeRule::fraction();
+        header.emplace<ui::Button>("history.close", "Close", [this] { setVisible(false); });
+    }
 
     // Branches.
     auto& branchRow = row(*panel, "history.branchrow");
@@ -159,7 +162,12 @@ std::unique_ptr<ui::Node> HistoryPanel::build() {
     return panel;
 }
 
-void HistoryPanel::toggle() { setVisible(!visible()); }
+void HistoryPanel::toggle() {
+    if (host)
+        host();
+    else
+        setVisible(!visible());
+}
 bool HistoryPanel::visible() const { return panel_ && panel_->visible; }
 
 void HistoryPanel::setVisible(bool visible) {

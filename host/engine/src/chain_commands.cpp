@@ -205,7 +205,7 @@ Result<std::vector<json::Value>> encodeEffects(EngineApp& app, const model::Sess
                                  "capture the plugin state again");
                 bytes = blob->second->data;
             } else {
-                auto probe = host::Instance::create(*info, app.options().identity);
+                auto probe = app.makeInstance(*info);
                 if (!probe) return std::move(probe).error();
                 for (const auto& [param, v] : fx.params) SUPPLE_TRY((*probe)->setParam(param, v));
                 auto state = (*probe)->saveState();
@@ -253,7 +253,7 @@ Result<std::vector<PreparedFx>> prepareEffects(EngineApp& app,
                     "provide base64 state from a saved instance of this plugin and omit patch");
             auto bytes = base64Decode(*fx->state);
             if (!bytes) return std::move(bytes).error().at(at + "/state");
-            auto probe = host::Instance::create(*info, app.options().identity);
+            auto probe = app.makeInstance(*info);
             if (!probe) return std::move(probe).error().at(at + "/plugin");
             SUPPLE_TRY((*probe)->loadState(*bytes));
             p.fx.state = stateHash(*bytes);
@@ -400,10 +400,10 @@ void registerTemplateCommands(cmd::Registry& registry) {
         c.name = "track.template.save";
         c.kind = cmd::Kind::Action;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Save a strip (settings and FX chains) as a named track template.";
+        c.summary = "Save a track (settings and FX chains) as a named track template.";
         c.description =
             "Writes a supple.track-template/1.0 file to the user's track-templates directory: "
-            "the strip's type, name, colour, notes, level, pan and monitoring, and its main and "
+            "the track's type, name, colour, notes, level, pan and monitoring, and its main and "
             "input chains as fx.chain.save stores them (semantic patches or base64 state). Not "
             "routing or items. replace: true overwrites an existing name.";
         c.tags = {"track", "presets"};
@@ -418,7 +418,7 @@ void registerTemplateCommands(cmd::Registry& registry) {
                        .field("path", &SaveResult::path, schema::string())
                        .field("effects", &SaveResult::effects, schema::integer().min(0))
                        .build();
-        c.examples = {{"Save the bass strip", j(R"({"track":"tr_1","name":"Bass"})"),
+        c.examples = {{"Save the bass track", j(R"({"track":"tr_1","name":"Bass"})"),
                        j(R"({"path":"<any>","effects":2})"), "song_with_chain"}};
         c.run = [](const TemplateSaveArgs& a, cmd::Context& ctx) -> Result<SaveResult> {
             auto& app = ctx.service<EngineApp>();
@@ -462,7 +462,7 @@ void registerTemplateCommands(cmd::Registry& registry) {
             const auto text = json::writeCanonical(templateSchema().encode(doc)) + "\n";
             if (text.size() > kMaxFile)
                 return Error("template.size", "template exceeds the 64 MiB file limit", "/track",
-                             "save a strip with smaller plugin states");
+                             "save a track with smaller plugin states");
             SUPPLE_TRY(writePreset(*path, text, a.replace));
             return SaveResult{path->string(),
                               static_cast<std::int64_t>(doc.chain.size() + doc.inputChain.size())};
@@ -474,7 +474,7 @@ void registerTemplateCommands(cmd::Registry& registry) {
         c.name = "track.template.load";
         c.kind = cmd::Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Add a strip from a track template (settings and FX) in one undo step.";
+        c.summary = "Add a track from a track template (settings and FX) in one undo step.";
         c.description =
             "Give exactly one of name (in the user's track-templates directory) or path. parent "
             "defaults to the master. Every plugin and state is checked before the model changes.";
@@ -490,7 +490,7 @@ void registerTemplateCommands(cmd::Registry& registry) {
                 .field("track", &TemplateLoadResult::track, schema::string())
                 .field("effects", &TemplateLoadResult::effects, schema::arrayOf(schema::string()))
                 .build();
-        c.examples = {{"Add the saved bass strip", j(R"({"name":"Bass"})"),
+        c.examples = {{"Add the saved bass track", j(R"({"name":"Bass"})"),
                        j(R"({"track":"<any>","effects":["<any>","<any>"]})"),
                        "song_with_saved_template"}};
         c.run = [](const TemplateLoadArgs& a, cmd::Context& ctx) -> Result<TemplateLoadResult> {
@@ -605,7 +605,7 @@ void registerTemplateCommands(cmd::Registry& registry) {
                        .build();
         c.errors = {{"template.unknown", "no template has that name",
                      "use a name from track.template.list"}};
-        c.examples = {{"Delete the bass strip", j(R"({"name":"Bass"})"), j(R"({"path":"<any>"})"),
+        c.examples = {{"Delete the bass track", j(R"({"name":"Bass"})"), j(R"({"path":"<any>"})"),
                        "song_with_saved_template"}};
         c.run = [](const NameArgs& a, cmd::Context& ctx) -> Result<PathResult> {
             auto path = templatePath(ctx.service<EngineApp>(), a.name);
@@ -1173,7 +1173,7 @@ void registerPresetCommands(cmd::Registry& registry) {
                 return Error("fx.preset_invalid", mine->path.string() + ": the state is not base64",
                              "/name", "save the preset again");
             // The plugin checks the state on a probe before the model changes.
-            auto probe = host::Instance::create(*info, app.options().identity);
+            auto probe = app.makeInstance(*info);
             if (!probe) return std::move(probe).error();
             if (auto loaded = (*probe)->loadState(*bytes); !loaded)
                 return Error("fx.preset_invalid",

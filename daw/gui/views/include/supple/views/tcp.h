@@ -60,6 +60,9 @@ struct TcpCallbacks {
     // adding to the end of the chain.
     std::function<void(const model::Id& track)> fx;
     std::function<void(const model::Id& track)> addFx;
+    // Whether the track's chain holds a plug-in that is disabled or failed: "fx" takes the
+    // warning colour. The app owns the rule (it knows the engine); unset means no mark.
+    std::function<bool(const model::Id& track)> fxNeedsAttention;
     // A right-click on the row: the track's menu (rename, colour, delete) at
     // the pointer, in window coordinates; `rename` starts the in-place rename.
     std::function<void(const model::Id& track, const ui::Rect& anchor,
@@ -88,7 +91,7 @@ class TcpPanel : public ui::Node {
     TcpPanel(const TrackLayout& layout, const Viewport& view, TcpCallbacks callbacks);
     ~TcpPanel() override;
 
-    // The band at the panel's foot ("mixer", "+ strip") that rows never cover;
+    // The band at the panel's foot ("mixer", "+ track") that rows never cover;
     // the arrange view scrolls this much further so the last row clears it.
     static constexpr float kFootHeight = 26;
 
@@ -143,6 +146,9 @@ class TcpPanel : public ui::Node {
         // The track.move steps the drop would take (the dragged track and the
         // selected tracks of its parent and type), empty when it changes nothing.
         std::vector<TrackMove> moves;
+        // Over the row's own place (its own row, or the slot it is already
+        // in): a release changes nothing, and nothing refuses it.
+        bool home = false;
         float markerY = 0;  // the insertion marker, in window coordinates
     };
     void beginReorder(const model::Id& track, ui::Point press);
@@ -156,7 +162,7 @@ class TcpPanel : public ui::Node {
     model::Session session_;
     ui::Node* rowsHost_ = nullptr;     // the rows, clipped above the foot
     ui::Node* foot_ = nullptr;         // the foot band with its two buttons
-    ui::Button* add_ = nullptr;        // "+ strip", at the panel's foot
+    ui::Button* add_ = nullptr;        // "+ track", at the panel's foot
     ui::Button* mixer_ = nullptr;      // "mixer" beside it
     std::vector<Row*> rows_;           // a pool: only visible rows exist
     std::vector<EnvRow*> envRows_;     // the same for automation lanes

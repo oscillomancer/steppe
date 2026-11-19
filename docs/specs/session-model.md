@@ -987,9 +987,14 @@ and naming. All `edit` unless marked (q) query or (a) action.
 - **session**: `session.describe {scope, detail}` (q), `session.query
   {kind, filter, fields}` (q), `session.get {id, fields}` (q).
 - **tempo/meter**: `tempo.set {points}`, `tempo.add`, `tempo.remove`,
-  `timesig.set {bar, numerator, denominator}`, `timesig.remove`,
+  `timesig.set {bar, meter: "3/4"}`, `timesig.remove`,
   `time.convert {from, to, value}` (q).
-- **tracks**: `track.add {name, type: channel|buss|master, parent, index, channels, template?}`,
+- **tracks**: `track.add {name, type: channel|buss|master, parent, index, channels, color, template?}`
+  (a channel or buss that names no `color` gets the palette colour the fewest
+  tracks carry, the earliest in the palette among equals, grey left out:
+  `model::nextTrackColor`, a function of the session alone; a master gets
+  none; `""` asks for none; the channel `rack.add` creates is coloured the
+  same way),
   `track.remove`, `track.move {parent, index}`, `track.set {fields}`,
   `track.duplicate {tracks}` (each copy right after its original: settings,
   both chains with live settings, items and takes — unpooled MIDI copied —,
@@ -1101,6 +1106,10 @@ and naming. All `edit` unless marked (q) query or (a) action.
   fails with `record.loop` at the take's `loop_end`; each punch endpoint, in
   every take's frames, is within the same 2^48, and an enabled punch ends
   after it starts, or the call fails with `record.punch` at that endpoint.
+- **audition** (a): `audition.play {path}`, `audition.stop`, `audition.get`
+  (q): an audio file heard once on the device's outputs 1/2, outside the
+  session; not an undo step, and nothing of it is saved (engine.md "File
+  audition", ADR-0094).
 - **render** (a): `render.mix {master}` (one master for the call; default the `masters` setting, else tr_0), `render.stems`, `render.regions` (matrix),
   `render.items`, `render.dry-run` (q: resolved file list), `render.job.*`;
   `format` (wav|flac), `secondary` (a second file in another format/bit depth

@@ -50,6 +50,10 @@ class FxWindow {
         std::function<void(LearnRequest)> openLearn = {};
         // The rack window on a rack (a channel's Rack device's Open).
         std::function<void(model::Id rack)> openRack = {};
+        // Enable a plug-in this run has disabled (plugin.override normal), given one of its fx.
+        std::function<void(model::Id fx)> enableFx = {};
+        // The crash viewer on a report, for a failed effect whose bridge's death left one.
+        std::function<void(const std::string& incident)> showCrashReport = {};
     };
 
     FxWindow(engine::EngineApp& app, cmd::Dispatcher& dispatcher, ui::Root& mainRoot,
@@ -66,6 +70,20 @@ class FxWindow {
     // The plugin browser alone, adding to that track's chain, or with no
     // track given to every selected track's (ui.fx.add).
     Status openToAdd(const UiState& ui, const json::Value& prompt);
+    // The side panel's Browser tab (gui.md §4.14): the plugin browser as a
+    // panel's content, node ids under `side.browser`. What is chosen goes on
+    // every track selected in `ui` (which must outlive the window) as one
+    // undo step, the browser stays, and its status line says what happened.
+    // Built once.
+    // `drag`, when given, hears a row dragged out of its list.
+    std::unique_ptr<ui::Node> buildSideBrowser(
+        const UiState& ui, std::function<void(const std::string& plugin, const std::string& name,
+                                              ui::DragPhase, ui::Point)>
+                               drag = {});
+    PluginBrowser& sideBrowser() { return *sideBrowser_; }
+    // Adds a plugin to every selected track, as one undo step. Says which
+    // tracks it went on.
+    Result<std::vector<model::Id>> addToSelection(const UiState& ui, const std::string& pluginId);
     void close();
     bool isOpen() const { return page_ != nullptr; }
 
@@ -106,6 +124,11 @@ class FxWindow {
     void openChainMidiMenu(const ui::Rect& anchor);  // the track's chain_midi
     // Engine-reported failures (engine.status failed_fx), by effect id.
     const std::set<std::string>& failed() const { return failed_; }
+    // Takes the failures (and the incident each left, when it left one) from an engine status;
+    // `tick` does this with the engine's own, a test with one it made.
+    void applyFailures(const engine::EngineStatus& status);
+    // The incident id the failed effect's report has, empty when it has none.
+    std::string incidentOf(const std::string& fx) const;
     void select(model::Id fx);  // alone: any multi-selection ends
     // The selected effect, `delta` places along the track's chain (fx.move;
     // ui.fx.move_up/down, Alt+Up/Down).
@@ -144,7 +167,7 @@ class FxWindow {
     void dragRow(model::Id fx, int phase, ui::Point p);  // phase: Row::Phase
     void openBrowser(bool input = false);
     void addFx(const std::string& pluginId);
-    void addFxTo(const std::vector<model::Id>& tracks, const std::string& pluginId);
+    Status addFxTo(const std::vector<model::Id>& tracks, const std::string& pluginId);
     void promptSaveChain();
     void hideSavePrompt();
     void saveChain();
@@ -161,7 +184,8 @@ class FxWindow {
     void promptSavePreset(model::Id fx);
     void hidePresetPrompt();
     void savePreset();
-    void checkFailures();  // engine.status failed_fx, at most twice a second
+    bool disabledFx(model::Id fx) const;  // its plug-in is one this run has disabled
+    void checkFailures();                 // engine.status failed_fx, at most twice a second
 
     engine::EngineApp& app_;
     cmd::Dispatcher& dispatcher_;
@@ -171,6 +195,7 @@ class FxWindow {
     Hooks hooks_;
     std::unique_ptr<PluginBrowser> browser_;
     std::unique_ptr<PluginBrowser> mainBrowser_;
+    std::unique_ptr<PluginBrowser> sideBrowser_;
     std::unique_ptr<ParamPanel> params_;
 
     model::Id track_, selected_;
@@ -195,7 +220,9 @@ class FxWindow {
         bool value = false, accepts = false;  // note output, note input
     };
     std::map<std::string, NotesOut> notesOut_;
-    std::set<std::string> failed_;  // engine.status failed_fx
+    std::set<std::string> failed_;                  // engine.status failed_fx
+    std::uint64_t overridesVersion_ = 0;            // the engine's load overrides, as last drawn
+    std::map<std::string, std::string> incidents_;  // failed fx -> its crash incident
     std::string presetChain_ = "main";
     bool chainMenuOpen_ = false;  // the Load chain… menu is showing
     bool trackMenuOpen_ = false;  // the title's track menu is showing

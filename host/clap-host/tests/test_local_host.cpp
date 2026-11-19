@@ -13,6 +13,7 @@
 #include <vector>
 #include "../src/platform.h"
 #include "../src/unicode.h"
+#include "scope_probe.h"
 #include "supple/clap/semantic_params.h"
 #include "supple/host/clap_host.h"
 #include "supple/json/json.h"
@@ -731,4 +732,110 @@ TEST_CASE("claimOwner takes a free instance for exactly one owner") {
         REQUIRE(winners.load() == 1);
         in.setOwner(nullptr);
     }
+}
+
+TEST_CASE("every call into an in-process plug-in runs inside a scope for its instance") {
+    using diagctx::Entry;
+    namespace probe = scopeprobe;
+    const auto info = find("com.suppleaudio.test.gain");  // scans, then lets the library go
+    probe::Observer observer(FIXTURE_CLAP_PATH);
+    const auto before = diagctx::table().header.untracked.load();
+
+    auto made = Instance::create(info, {});
+    REQUIRE(made);
+    Instance& instance = **made;
+    auto seen = observer.take();
+    // init runs inside the instance's Create entry, and loading the library inside that: the
+    // library's own scope is the deeper one.
+    const auto init = probe::phase(seen, "library_init");
+    REQUIRE(init.size() == 1);
+    REQUIRE(init[0].count == 2);
+    const auto outer =
+        init[0].open[0].word.kind == Entry::Create ? init[0].open[0] : init[0].open[1];
+    const auto inner =
+        init[0].open[0].word.kind == Entry::Create ? init[0].open[1] : init[0].open[0];
+    CHECK(outer.word.kind == Entry::Create);
+    CHECK(inner.word.kind == Entry::LibraryOpen);
+    CHECK(outer.cell != inner.cell);
+    CHECK_FALSE(outer.audio);
+    CHECK_FALSE(inner.audio);
+    CHECK(inner.word.stack < outer.word.stack);  // deeper
+    CHECK(outer.word.stack > init[0].observerFrame);
+    const std::uint32_t cell = outer.cell;
+    const std::uint16_t generation = outer.word.generation;
+    CHECK(probe::onlyOpen(seen, "init", Entry::Create, false));
+    CHECK(probe::phase(seen, "init")[0].open[0].cell == cell);
+
+    // Every entry after that: one word open, of the right kind and on the right word, in this
+    // instance's cell, in its generation, above the observer that looks.
+    REQUIRE(instance.paramValue(0));
+    REQUIRE(instance.activate(48000, 1, 64));
+    REQUIRE(instance.startProcessing());
+    Buffers buffer(64);
+    std::fill(buffer.l.begin(), buffer.l.end(), 1.0f);
+    std::fill(buffer.r.begin(), buffer.r.end(), 1.0f);
+    REQUIRE(instance.process(buffer.block(64)));
+    instance.reset();
+    auto state = instance.saveState();
+    REQUIRE(state);
+    REQUIRE(instance.loadState(*state));
+    instance.stopProcessing();
+    instance.deactivate();
+    seen = observer.take();
+    struct Expect {
+        const char* phase;
+        Entry kind;
+        bool audio;
+    };
+    for (const Expect& e :
+         {Expect{"param_value", Entry::Params, false}, Expect{"activate", Entry::Activate, false},
+          Expect{"start", Entry::StartProcessing, true}, Expect{"process", Entry::Process, true},
+          Expect{"reset", Entry::Reset, true}, Expect{"state_save", Entry::State, false},
+          Expect{"state_load", Entry::State, false}, Expect{"stop", Entry::StopProcessing, true},
+          Expect{"deactivate", Entry::Deactivate, false}}) {
+        CAPTURE(std::string(e.phase));
+        CHECK(probe::onlyOpen(seen, e.phase, e.kind, e.audio));
+        for (const auto& s : probe::phase(seen, e.phase)) {
+            CHECK(s.open[0].cell == cell);
+            CHECK(s.open[0].word.generation == generation);
+            CHECK(s.open[0].word.stack > s.observerFrame);
+        }
+    }
+    // Nothing is left open between calls.
+    for (const auto& cells : {&diagctx::table().instances[cell]})
+        CHECK(diagctx::unpackWord(cells->main.load()).kind == Entry::None);
+    CHECK(diagctx::unpackWord(diagctx::table().instances[cell].audio.load()).kind == Entry::None);
+
+    made->reset();  // destroy, then the library goes with the last instance
+    seen = observer.take();
+    CHECK(probe::onlyOpen(seen, "destroy", Entry::Destroy, false));
+    CHECK(probe::phase(seen, "destroy")[0].open[0].cell == cell);
+    CHECK(probe::onlyOpen(seen, "library_deinit", Entry::LibraryClose, false));
+    // The instance's cell and the library's are free again, idle.
+    for (std::uint32_t c = 0; c < diagctx::kMaxInstances; ++c) {
+        CHECK(diagctx::unpackWord(diagctx::table().instances[c].audio.load()).kind == Entry::None);
+        CHECK(diagctx::unpackWord(diagctx::table().instances[c].main.load()).kind == Entry::None);
+    }
+    CHECK(diagctx::table().header.untracked.load() == before);
+    const auto reused = diagctx::acquireCell();
+    CHECK(reused <= cell);  // the lowest free cell: this instance's is free again
+    diagctx::releaseCell(reused);
+}
+
+TEST_CASE("a failed create gives its cell back") {
+    const auto info = find("com.suppleaudio.test.gain");
+    PluginInfo broken = info;
+    broken.id = "com.suppleaudio.test.does-not-exist";
+    const std::uint32_t free = diagctx::acquireCell();  // the cell the next claim would take
+    diagctx::releaseCell(free);
+    CHECK_FALSE(Instance::create(broken, {}));
+    const std::uint32_t after = diagctx::acquireCell();
+    CHECK(after == free);  // the failed create left nothing claimed
+    diagctx::releaseCell(after);
+    // And an instance that does exist holds exactly one.
+    auto made = Instance::create(info, {});
+    REQUIRE(made);
+    const std::uint32_t next = diagctx::acquireCell();
+    CHECK(next != free);
+    diagctx::releaseCell(next);
 }

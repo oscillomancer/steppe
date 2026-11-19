@@ -5,12 +5,14 @@
 // reorder-index helper the TCP shares.
 #include <SDL3/SDL_keycode.h>
 #include <doctest/doctest.h>
+#include <stb_image.h>
 #include "product_fixture.h"
 #include "test_support.h"
 
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <string>
@@ -33,8 +35,10 @@
 #include "supple/ui/list.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/root.h"
+#include "supple/ui/scroll_view.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/control_names.h"
 #include "supple/views/mouse_map.h"
 
 using namespace supple;
@@ -59,6 +63,7 @@ struct Fixture {
     std::unique_ptr<gui::MeterFeed> feed;
     std::unique_ptr<gui::Mixer> mixer;
     std::vector<std::string> editors, errors;  // ui.fx.editor calls; reported errors
+    std::vector<std::string> enables;          // ui.fx.enable calls
     bool ok = false;
 
     Fixture(std::shared_ptr<engine::RuntimeProtectionOps> operations = {}) {
@@ -102,6 +107,11 @@ struct Fixture {
                            editors.push_back(v.asString());
                            return {};
                        });
+        actions->addUi("ui.fx.enable", "FX: enable a disabled plug-in", "fx",
+                       [this](const json::Value& v) -> Status {
+                           enables.push_back(v.asString());
+                           return {};
+                       });
         actions->onError = [this](const std::string& e) { errors.push_back(e); };
         feed = std::make_unique<gui::MeterFeed>([] { return std::vector<gui::StripReading>{}; });
         mixer = std::make_unique<gui::Mixer>(*root, *actions, *dispatcher, *app, *feed);
@@ -137,8 +147,12 @@ struct Fixture {
         return exec("fx.add", R"({"track":")" + track + R"(","plugin":")" + plugin + R"("})")["fx"]
             .asString();
     }
+    // The time of every pass the fixture makes. A test moves it on by hand:
+    // no pass reads the real clock, so nothing here depends on how long the
+    // machine has been up or how fast it runs.
+    std::chrono::steady_clock::time_point now{std::chrono::hours(1)};
     void refresh() {
-        mixer->sync();
+        mixer->sync(now);
         root->frame(false);
     }
     const model::Track& track(const std::string& id) {
@@ -200,11 +214,53 @@ struct Fixture {
         root->frame(false);
         (void)gui::writePng(std::filesystem::path(out) / name, root->readBack());
     }
+    // The window against tests/golden/<name>: written by SUPPLE_UPDATE_GOLDEN=1
+    // or when missing; off Linux the picture is only checked to hold something.
+    void golden(const char* name) {
+        root->damageAll();
+        root->frame(false);
+        const gui::Image image = root->readBack();
+#if !defined(__linux__)
+        REQUIRE(image.width > 0);
+        REQUIRE(image.height > 0);
+        REQUIRE(image.rgba.size() == static_cast<std::size_t>(image.width * image.height * 4));
+        bool varied = false;
+        for (std::size_t i = 4; i < image.rgba.size(); i += 4)
+            if (image.rgba[i] != image.rgba[0] || image.rgba[i + 1] != image.rgba[1] ||
+                image.rgba[i + 2] != image.rgba[2]) {
+                varied = true;
+                break;
+            }
+        CHECK(varied);
+        return;
+#endif
+
+        const auto path = std::filesystem::path(SUPPLE_GUI_GOLDEN_DIR) / name;
+        if (std::getenv("SUPPLE_UPDATE_GOLDEN") || !std::filesystem::exists(path)) {
+            REQUIRE(gui::writePng(path, image));
+            MESSAGE("golden written: " << path.string());
+            return;
+        }
+        int w = 0, h = 0, n = 0;
+        unsigned char* data = stbi_load(path.string().c_str(), &w, &h, &n, 4);
+        REQUIRE(data);
+        REQUIRE(w == image.width);
+        REQUIRE(h == image.height);
+        std::size_t off = 0;
+        for (std::size_t i = 0; i < image.rgba.size(); i += 4) {
+            int d = 0;
+            for (int c = 0; c < 3; ++c)
+                d = std::max(d, std::abs(int(image.rgba[i + c]) - int(data[i + c])));
+            off += d > 48;
+        }
+        stbi_image_free(data);
+        CHECK(off < image.rgba.size() / 4 / 200);
+    }
 };
 
 }  // namespace
 
-TEST_CASE("mixer: a master looks like the others, and \"fx\" sits small at the strip's top right") {
+TEST_CASE("mixer: a master looks like the others; \"fx\" and \"+\" head the plug-in list") {
     Fixture f;
     if (!f.ok) return;
     const auto a = f.addTrack("channel", "A");
@@ -226,7 +282,8 @@ TEST_CASE("mixer: a master looks like the others, and \"fx\" sits small at the s
                                          image.rgba.begin() + static_cast<std::ptrdiff_t>(at) + 4);
     };
     CHECK(pixel(sm.node->bounds()) == pixel(sa.node->bounds()));
-    // Small, at the top right ("fx", then "+"), with the name beside them.
+    // The name has the strip's width; under it, small, "fx" at the left and
+    // "+" at the right head the plug-in list.
     const ui::Rect strip = sa.node->bounds(), fx = sa.fx->bounds(), plus = sa.addFx->bounds();
     CHECK(sa.fx->valueText() == "fx");
     CHECK(sa.addFx->valueText() == "+");
@@ -234,8 +291,10 @@ TEST_CASE("mixer: a master looks like the others, and \"fx\" sits small at the s
     CHECK(fx.h <= 16);
     CHECK(plus.right() >= strip.right() - 8);
     CHECK(fx.right() <= plus.x);
-    CHECK(fx.y < strip.y + 12);
-    CHECK(sa.name->bounds().right() <= fx.x + 1);
+    CHECK(fx.x <= strip.x + 8);
+    CHECK(fx.y >= sa.name->bounds().bottom() - 1);
+    CHECK(fx.bottom() <= sa.chain->bounds().y);
+    CHECK(sa.name->bounds().right() >= strip.right() - 8);
     // No plug-in count beside "fx", however long the chain.
     f.addFx(a, "Hickory");
     f.refresh();
@@ -272,35 +331,120 @@ TEST_CASE(
           f.node("mixer.fx.fx_1"));
 }
 
-TEST_CASE("mixer: the chain takes the room unused sends and arm rows would leave empty") {
+TEST_CASE("mixer: a strip is one grid: routing, stereo, pan, the state row, then the fader") {
     Fixture f;
     if (!f.ok) return;
     const auto a = f.addTrack("channel", "A");
     const auto b = f.addTrack("channel", "B");
     const auto bus = f.addTrack("buss", "Bus");
+    const std::string master = "tr_0";
     f.exec("route.add", R"({"from":")" + b + R"(","to":")" + bus + R"("})");
     f.refresh();
-    // No sends: the chain reaches down to the arm, then the input/output row.
+    auto box = [&](const std::string& id) { return f.node(id)->bounds(); };
+    // The rows under the plug-ins, top to bottom, a gap apart: routing (in
+    // and out), stereo (polarity, mono), the pan, the state row, the fader.
     CHECK_FALSE(f.node("mixer.sends." + a)->visible);
-    CHECK(f.node("mixer.rec." + a)->bounds().y - f.strip(a).chain->bounds().bottom() <= 4.5f);
-    CHECK(f.node("mixer.io." + a)->bounds().y - f.node("mixer.rec." + a)->bounds().bottom() <=
-          4.5f);
-    // Polarity, monitoring and mono share one row, before the pan.
-    CHECK(near(f.node("mixer.monitor." + a)->bounds().y + 10,
-               f.node("mixer.polarity." + a)->bounds().y + 7));
-    CHECK(f.node("mixer.polarity." + a)->bounds().right() <=
-          f.node("mixer.monitor." + a)->bounds().x);
-    CHECK(f.node("mixer.monitor." + a)->bounds().right() <= f.node("mixer.mono." + a)->bounds().x);
-    CHECK(f.node("mixer.mono." + a)->bounds().bottom() <= f.strip(a).pan->bounds().y);
-    // A send takes one row out of the chain section.
+    const std::vector<ui::Rect> rows = {f.strip(a).chain->bounds(), box("mixer.io." + a),
+                                        box("mixer.util." + a),     f.strip(a).pan->bounds(),
+                                        box("mixer.state." + a),    box("mixer.faderrow." + a)};
+    for (std::size_t i = 1; i < rows.size(); ++i)
+        CHECK_MESSAGE(near(rows[i].y - rows[i - 1].bottom(), 4), i);
+    // Every button is one height, and each row spans the strip's columns.
+    const float left = rows[1].x, right = rows[1].right();
+    for (const char* id : {"mixer.input.", "mixer.out.", "mixer.polarity.", "mixer.mono.",
+                           "mixer.mute.", "mixer.solo.", "mixer.arm.", "mixer.monitor."})
+        CHECK_MESSAGE(near(box(id + a).h, 16), id);
+    CHECK(near(box("mixer.input." + a).x, left));
+    CHECK(near(box("mixer.out." + a).right(), right));
+    // Stereo: two halves.
+    CHECK(near(box("mixer.polarity." + a).x, left));
+    CHECK(near(box("mixer.mono." + a).right(), right));
+    CHECK(near(box("mixer.polarity." + a).w, box("mixer.mono." + a).w));
+    // State: four equal cells in one order, arm, monitor, mute, solo.
+    const std::vector<ui::Rect> cells = {box("mixer.arm." + a), box("mixer.monitor." + a),
+                                         box("mixer.mute." + a), box("mixer.solo." + a)};
+    CHECK(near(cells.front().x, left));
+    CHECK(near(cells.back().right(), right));
+    for (std::size_t i = 1; i < cells.size(); ++i) {
+        CHECK_MESSAGE(near(cells[i].w, cells[0].w), i);
+        CHECK_MESSAGE(near(cells[i].x - cells[i - 1].right(), 3), i);
+        CHECK_MESSAGE(near(cells[i].y, cells[0].y), i);
+    }
+    // Every cell takes a click anywhere inside it: its corner arms the track.
+    {
+        const bool was = f.strip(a).arm->on();
+        f.pointer(ui::PointerEvent::Type::Down, {cells[0].x + 1, cells[0].y + 1});
+        f.pointer(ui::PointerEvent::Type::Up, {cells[0].x + 1, cells[0].y + 1});
+        f.refresh();
+        CHECK(f.strip(a).arm->on() != was);
+        f.pointer(ui::PointerEvent::Type::Down, {cells[0].x + 1, cells[0].y + 1});
+        f.pointer(ui::PointerEvent::Type::Up, {cells[0].x + 1, cells[0].y + 1});
+        f.refresh();
+    }
+    // The four cells are two halves split again: the grid is one.
+    CHECK(near(cells[1].right(), box("mixer.polarity." + a).right()));
+    // A cell is a control's place. A buss has no arm, monitor or input and a
+    // master no monitor or input: their cells stay empty, and mute and solo
+    // are where they are on a channel.
+    CHECK_FALSE(f.root->find("mixer.arm." + bus));
+    CHECK_FALSE(f.root->find("mixer.monitor." + bus));
+    CHECK_FALSE(f.root->find("mixer.input." + bus));
+    CHECK_FALSE(f.root->find("mixer.monitor." + master));
+    CHECK(near(box("mixer.out." + bus).w, right - left));
+    for (const std::string& other : {bus, master}) {
+        const float dx = f.strip(other).node->bounds().x - f.strip(a).node->bounds().x;
+        CHECK(near(box("mixer.mute." + other).x - dx, cells[2].x));
+        CHECK(near(box("mixer.solo." + other).x - dx, cells[3].x));
+        CHECK(near(box("mixer.solo." + other).w, cells[3].w));
+    }
+    CHECK(near(box("mixer.arm." + master).x -
+                   (f.strip(master).node->bounds().x - f.strip(a).node->bounds().x),
+               cells[0].x));
+    // Every type has the same rows, so every chain is as tall and every
+    // fader lines up; a send takes one row out of its own strip's chain.
+    CHECK(near(f.strip(bus).chain->bounds().h, f.strip(a).chain->bounds().h));
+    CHECK(near(f.strip(master).chain->bounds().h, f.strip(a).chain->bounds().h));
+    CHECK(near(f.strip(bus).fader->bounds().y, f.strip(a).fader->bounds().y));
     CHECK(f.node("mixer.sends." + b)->visible);
     CHECK(near(f.strip(a).chain->bounds().h - f.strip(b).chain->bounds().h, 14 + 4));
-    // A buss has no arm row (nor an input): its chain takes that room.
-    CHECK_FALSE(f.root->find("mixer.rec." + bus));
-    CHECK_FALSE(f.root->find("mixer.input." + bus));
-    CHECK(f.root->find("mixer.out." + bus));
-    CHECK(f.strip(bus).chain->bounds().h > f.strip(a).chain->bounds().h);
-    CHECK(near(f.strip(bus).fader->bounds().y, f.strip(a).fader->bounds().y));  // faders line up
+    // The type is a mark before the name, not a colour: none on a channel.
+    CHECK_FALSE(f.root->find("mixer.type." + a));
+    CHECK(f.node("mixer.type." + bus)->valueText() == "buss");
+    CHECK(f.node("mixer.type." + master)->valueText() == "master");
+    CHECK(f.node("mixer.type." + bus)->bounds().right() <= f.strip(bus).name->bounds().x);
+    // The colour bar across the top is the track's own, the strip's width.
+    CHECK(near(box("mixer.color." + a).y, f.strip(a).node->bounds().y));
+    CHECK(box("mixer.color." + a).w >= f.strip(a).node->bounds().w - 1.5f);
+}
+
+// gui.md §2, Names: a strip's controls are called what the track's row calls them.
+TEST_CASE("mixer: a strip's controls have the names the track panel gives its row's") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    f.refresh();
+    auto over = [&](const std::string& id) {
+        f.pointer(ui::PointerEvent::Type::Move, f.centre(f.node(id)));
+        return f.root->hint();
+    };
+    namespace names = views::names;
+    CHECK(over("mixer.mute." + a) == names::kMute);
+    CHECK(over("mixer.solo." + a) == names::kSolo);
+    CHECK(over("mixer.polarity." + a) == names::kPolarity);
+    CHECK(over("mixer.mono." + a) == names::kMono);
+    CHECK(over("mixer.pan." + a) == names::kPan);
+    CHECK(over("mixer.fader." + a) == names::kVolume);
+    CHECK(over("mixer.input." + a) == names::kInput);
+    CHECK(over("mixer.out." + a) == names::kRouting);
+    CHECK(over("mixer.fxadd." + a) == names::kChain);
+    CHECK(over("mixer.addfx." + a) == names::kAddFx);
+    CHECK(over("mixer.arm." + a).name == "Arm for recording");
+    CHECK(over("mixer.monitor." + a).name.starts_with("Monitor the input: "));
+    // A master's "out" picks a hardware output; it does not open the routing.
+    CHECK(over("mixer.out.tr_0") == names::kHardwareOutput);
+    // A strip's name, and the mixer's empty space, are called nothing.
+    f.pointer(ui::PointerEvent::Type::Move, f.empty(a));
+    CHECK(f.root->hint().empty());
 }
 
 TEST_CASE("mixer: a double-click on the strips' empty space adds a channel") {
@@ -326,7 +470,7 @@ TEST_CASE("mixer: a double-click on the strips' empty space adds a channel") {
     REQUIRE(f.mixer->strips().size() >= 3);
     const auto& added = f.track(f.mixer->strips()[1].track);
     CHECK(added.type == model::StripType::Channel);
-    // A right-click there: channel, buss or master (the TCP's "+ strip" menu).
+    // A right-click there: channel, buss or master (the TCP's "+ track" menu).
     const ui::Point at{strip.right() + 200, strip.y + strip.h / 2};
     ui::PointerEvent right;
     right.type = ui::PointerEvent::Type::Down;
@@ -446,6 +590,8 @@ TEST_CASE("mixer: dragging the top edge resizes only the chain section; double-c
     const float meter = f.strip(a).meter->bounds().h;
     const float chain = f.strip(a).chain->bounds().h;
     const float edge = f.node("mixer.grip")->bounds().y + 2;
+    f.pointer(ui::PointerEvent::Type::Move, {700, edge});
+    CHECK(f.root->cursor() == ui::Cursor::ResizeVertical);  // the panel's top edge is dragged
     f.drag({700, edge}, {700, edge - 120});
     CHECK(near(panel->bounds().h, standard + 120));
     CHECK(near(f.mixer->height(), standard + 120));
@@ -517,11 +663,16 @@ TEST_CASE("mixer: a click on a plug-in still opens it; a drag within the chain r
     const ui::Point again = f.centre(f.node("mixer.fx." + p1));
     f.drag(again, {again.x, f.node("mixer.fx." + p2)->bounds().y - 1});
     CHECK(f.chain(a) == std::vector<std::string>{p1, p2, p3});
-    // Dropped where it already is: nothing.
+    // Dropped where it already is: nothing, and the pointer does not call
+    // its own place refused.
     f.refresh();
     const auto steps = f.steps();
     const ui::Point same = f.centre(f.node("mixer.fx." + p2));
-    f.drag(same, {same.x + 20, same.y});
+    f.drag(same, {same.x + 20, same.y}, false);
+    CHECK(f.mixer->drag().drop == gui::Mixer::DragView::Drop::None);
+    CHECK(f.mixer->drag().home);
+    CHECK(f.root->cursor() == ui::Cursor::Move);
+    f.pointer(ui::PointerEvent::Type::Up, {same.x + 20, same.y});
     CHECK(f.steps() == steps);
     // Escape cancels the drag, and the release after it is no click.
     const ui::Point esc = f.centre(f.node("mixer.fx." + p1));
@@ -533,8 +684,12 @@ TEST_CASE("mixer: a click on a plug-in still opens it; a drag within the chain r
     CHECK(f.chain(a) == std::vector<std::string>{p1, p2, p3});
     CHECK(f.steps() == steps);
     CHECK(f.editors.size() == 2);
-    // Dropped somewhere that is nobody's strip: cancelled.
-    f.drag(f.centre(f.node("mixer.fx." + p1)), {700, 20});
+    // Dropped somewhere that is nobody's strip: cancelled, and "not allowed"
+    // on the way.
+    f.drag(f.centre(f.node("mixer.fx." + p1)), {700, 20}, false);
+    CHECK_FALSE(f.mixer->drag().home);
+    CHECK(f.root->cursor() == ui::Cursor::NotAllowed);
+    f.pointer(ui::PointerEvent::Type::Up, {700, 20});
     CHECK(f.chain(a) == std::vector<std::string>{p1, p2, p3});
     CHECK(f.steps() == steps);
     CHECK(f.errors.empty());
@@ -626,6 +781,187 @@ TEST_CASE("mixer: a plug-in's right-click menu renames that instance") {
     CHECK(f.app->head().fx.find(*model::Id::parse(p1))->label == "Lead trim");
     CHECK(f.node("mixer.fx." + p1)->valueText() == "Lead trim");
     CHECK(f.errors.empty());
+}
+
+TEST_CASE("mixer: a disabled plug-in is marked on its strip, with Enable first in its menu") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    const auto p1 = f.addFx(a, "Hickory");
+    f.refresh();
+    auto* slot = dynamic_cast<ui::Button*>(f.node("mixer.fx." + p1));
+    auto* fxButton = dynamic_cast<ui::Button*>(f.node("mixer.fxadd." + a));
+    REQUIRE(slot);
+    REQUIRE(fxButton);
+    CHECK(slot->valueText().find("(disabled)") == std::string::npos);
+    CHECK(fxButton->textColor().empty());
+    {
+        // Nothing in the project changes, and the strip follows (an override is not in the model).
+        const auto version = f.app->head().version;
+        f.exec("plugin.override", R"({"plugin":"Hickory","mode":"disable"})");
+        CHECK(f.app->head().version == version);
+    }
+    f.refresh();
+    slot = dynamic_cast<ui::Button*>(f.node("mixer.fx." + p1));
+    fxButton = dynamic_cast<ui::Button*>(f.node("mixer.fxadd." + a));
+    REQUIRE(slot);
+    CHECK(slot->valueText().ends_with(" (disabled)"));
+    CHECK(fxButton->textColor() == "meter-hot");
+    f.snapshot("mixer-disabled.png");
+    // A click on it opens no editor: it says why instead.
+    {
+        const std::size_t shown = f.editors.size();
+        const ui::Point click = f.centre(f.node("mixer.fx." + p1));
+        f.pointer(ui::PointerEvent::Type::Down, click);
+        f.pointer(ui::PointerEvent::Type::Up, click);
+        CHECK(f.editors.size() == shown);
+        REQUIRE_FALSE(f.errors.empty());
+        CHECK(f.errors.back().find("not loaded") != std::string::npos);
+        f.errors.clear();
+    }
+    // Enable comes first in the slot's menu.
+    const ui::Point at = f.centre(f.node("mixer.fx." + p1));
+    f.pointer(ui::PointerEvent::Type::Down, at, 1, 0, 3);
+    f.pointer(ui::PointerEvent::Type::Up, at, 1, 0, 3);
+    ui::Node* menu = f.node("mixer.fxmenu." + p1);
+    const ui::Point first{menu->bounds().x + 40, menu->bounds().y + 13};
+    f.pointer(ui::PointerEvent::Type::Move, first);
+    f.pointer(ui::PointerEvent::Type::Down, first);
+    f.pointer(ui::PointerEvent::Type::Up, first);
+    REQUIRE(f.enables.size() == 1);
+    CHECK(f.enables[0] == p1);
+    // Loaded again: the marks go, and the menu has its three rows.
+    f.exec("plugin.override", R"({"plugin":"Hickory","mode":"normal"})");
+    f.refresh();
+    CHECK(dynamic_cast<ui::Button*>(f.node("mixer.fx." + p1))->valueText().find("(disabled)") ==
+          std::string::npos);
+    CHECK(dynamic_cast<ui::Button*>(f.node("mixer.fxadd." + a))->textColor().empty());
+}
+
+namespace {
+// The pixel at the middle of a slot's left edge, inside its outline: the bar's place.
+std::array<int, 3> barPixel(Fixture& f, const std::string& slot) {
+    f.root->damageAll();
+    f.root->frame(false);
+    const gui::Image image = f.root->readBack();
+    const ui::Rect b = f.node(slot)->bounds();
+    const int x = static_cast<int>(b.x) + 2, y = static_cast<int>(b.y + b.h / 2);
+    const std::size_t at = (static_cast<std::size_t>(y) * static_cast<std::size_t>(image.width) +
+                            static_cast<std::size_t>(x)) *
+                           4;
+    return {image.rgba[at], image.rgba[at + 1], image.rgba[at + 2]};
+}
+bool is(const std::array<int, 3>& pixel, const ui::Color& c) {
+    return std::abs(pixel[0] - static_cast<int>(std::lround(c.r * 255))) <= 2 &&
+           std::abs(pixel[1] - static_cast<int>(std::lround(c.g * 255))) <= 2 &&
+           std::abs(pixel[2] - static_cast<int>(std::lround(c.b * 255))) <= 2;
+}
+}  // namespace
+
+TEST_CASE(
+    "mixer: a slot is disabled or failed in the same place and size, a bar inside its outline") {
+    Fixture f;
+    if (!f.ok) return;
+    // A frozen clock: the marks follow what the test applies, not the real engine status.
+    f.mixer->attention().now = [] { return std::chrono::steady_clock::time_point{}; };
+    const auto a = f.addTrack("channel", "A");
+    const auto p1 = f.addFx(a, "Hickory");
+    const auto p2 = f.addFx(a, "Hickory");
+    const auto p3 = f.addFx(a, "Hickory");
+    f.exec("fx.set", R"({"fx":")" + p1 + R"(","bypass":true})");
+    f.exec("fx.set", R"({"fx":")" + p2 + R"(","offline":true})");
+    f.refresh();
+    const ui::Theme& theme = f.root->theme();
+    const ui::Rect before = f.node("mixer.fx." + p3)->bounds();
+    const auto beforeX = static_cast<double>(before.x), beforeW = static_cast<double>(before.w),
+               beforeH = static_cast<double>(before.h);
+    CHECK(f.node("mixer.fx." + p1)->valueText().ends_with(" (bypassed)"));
+    CHECK(f.node("mixer.fx." + p2)->valueText().ends_with(" (offline)"));
+    CHECK_FALSE(is(barPixel(f, "mixer.fx." + p1), theme.color("meter-hot")));
+    CHECK(f.node("mixer.fxadd." + a)->valueText() == "fx");
+    CHECK(dynamic_cast<ui::Button*>(f.node("mixer.fxadd." + a))->textColor().empty());
+
+    SUBCASE("disabled wins over bypassed and over offline; the bar is amber") {
+        f.exec("plugin.override", R"({"plugin":"Hickory","mode":"disable"})");
+        f.refresh();
+        for (const auto& id : {p1, p2, p3}) {
+            CHECK(f.node("mixer.fx." + id)->valueText().ends_with(" (disabled)"));
+            CHECK(is(barPixel(f, "mixer.fx." + id), theme.color("meter-hot")));
+        }
+        // The slot keeps its place and its 18-unit height.
+        CHECK(static_cast<double>(f.node("mixer.fx." + p3)->bounds().h) ==
+              doctest::Approx(beforeH));
+        CHECK(static_cast<double>(f.node("mixer.fx." + p3)->bounds().x) ==
+              doctest::Approx(beforeX));
+        CHECK(static_cast<double>(f.node("mixer.fx." + p3)->bounds().w) ==
+              doctest::Approx(beforeW));
+        CHECK(beforeH == doctest::Approx(18.0));
+        f.snapshot("mixer-slot-states-disabled.png");
+    }
+    SUBCASE(
+        "failed: the same slot, a red bar, \" (failed)\", and it wins over offline and bypassed") {
+        engine::EngineStatus status;
+        status.failedFx = {p1, p2};
+        f.mixer->attention().apply(status);
+        f.refresh();
+        CHECK(f.node("mixer.fx." + p1)->valueText().ends_with(" (failed)"));
+        CHECK(f.node("mixer.fx." + p2)->valueText().ends_with(" (failed)"));
+        CHECK(is(barPixel(f, "mixer.fx." + p1), theme.color("clip")));
+        CHECK_FALSE(f.node("mixer.fx." + p3)->valueText().ends_with(" (failed)"));
+        CHECK(static_cast<double>(f.node("mixer.fx." + p3)->bounds().h) ==
+              doctest::Approx(beforeH));
+        // "fx" is in the warning colour while the chain holds one: failed counts as disabled does.
+        CHECK(dynamic_cast<ui::Button*>(f.node("mixer.fxadd." + a))->textColor() == "meter-hot");
+        // A click opens no editor, and says why.
+        const std::size_t shown = f.editors.size();
+        const ui::Point click = f.centre(f.node("mixer.fx." + p1));
+        f.pointer(ui::PointerEvent::Type::Down, click);
+        f.pointer(ui::PointerEvent::Type::Up, click);
+        CHECK(f.editors.size() == shown);
+        REQUIRE_FALSE(f.errors.empty());
+        CHECK(f.errors.back().find("failed") != std::string::npos);
+        f.errors.clear();
+        f.snapshot("mixer-slot-states-failed.png");
+        // Restarted (no longer failed): the marks go.
+        f.mixer->attention().apply(engine::EngineStatus{});
+        f.refresh();
+        CHECK(f.node("mixer.fx." + p1)->valueText().ends_with(" (bypassed)"));
+        CHECK(dynamic_cast<ui::Button*>(f.node("mixer.fxadd." + a))->textColor().empty());
+    }
+    SUBCASE("all the states in one strip, for the picture") {
+        // Another plug-in for the ones that are not disabled: an override is per plug-in.
+        std::string other;
+        const auto listed = f.exec("plugin.list", "{}");
+        for (const auto& p : listed.find("plugins")->asArray())
+            if (other.empty() && p.find("name")->asString() != "Hickory")
+                other = p.find("id")->asString();
+        if (other.empty()) return;  // a partial build has one plug-in only
+        const auto q1 =
+            f.exec("fx.add", R"({"track":")" + a + R"(","plugin":")" + other + R"("})")["fx"]
+                .asString();
+        const auto q2 =
+            f.exec("fx.add", R"({"track":")" + a + R"(","plugin":")" + other + R"("})")["fx"]
+                .asString();
+        f.exec("fx.set", R"({"fx":")" + q1 + R"(","bypass":true})");
+        engine::EngineStatus status;
+        status.failedFx = {q2};
+        f.mixer->attention().apply(status);
+        f.exec("plugin.override", R"({"plugin":"Hickory","mode":"disable"})");
+        f.refresh();
+        CHECK(f.node("mixer.fx." + q1)->valueText().ends_with(" (bypassed)"));
+        CHECK(f.node("mixer.fx." + q2)->valueText().ends_with(" (failed)"));
+        CHECK(f.node("mixer.fx." + p1)->valueText().ends_with(" (disabled)"));
+        f.snapshot("mixer-slot-states.png");
+    }
+    SUBCASE("a disabled plug-in that is also listed failed reads as disabled") {
+        f.exec("plugin.override", R"({"plugin":"Hickory","mode":"disable"})");
+        engine::EngineStatus status;
+        status.failedFx = {p1};
+        f.mixer->attention().apply(status);
+        f.refresh();
+        CHECK(f.node("mixer.fx." + p1)->valueText().ends_with(" (disabled)"));
+        CHECK(is(barPixel(f, "mixer.fx." + p1), theme.color("meter-hot")));
+    }
 }
 
 TEST_CASE("mixer: a plug-in's right-click menu duplicates it after itself or deletes it") {
@@ -736,7 +1072,19 @@ TEST_CASE("mixer: dragging a strip's empty part reorders it among its own kind, 
     CHECK(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Strip);
     f.snapshot("mixer-drag-strip.png");
     CHECK(f.mixer->drag().drop == gui::Mixer::DragView::Drop::Reorder);
+    CHECK(f.root->cursor() == ui::Cursor::Move);  // a release here moves it
+    f.pointer(ui::PointerEvent::Type::Move, f.empty(bus));
+    CHECK(f.mixer->drag().drop == gui::Mixer::DragView::Drop::None);
+    CHECK(f.root->cursor() == ui::Cursor::NotAllowed);  // not among the busses
+    // Over its own place a release changes nothing, and nothing refuses it.
+    f.pointer(ui::PointerEvent::Type::Move, f.empty(a));
+    CHECK(f.mixer->drag().drop == gui::Mixer::DragView::Drop::None);
+    CHECK(f.mixer->drag().home);
+    CHECK(f.root->cursor() == ui::Cursor::Move);
+    f.pointer(ui::PointerEvent::Type::Move, {rc.x + rc.w - 10, rc.y + 200});
+    CHECK(f.root->cursor() == ui::Cursor::Move);
     f.pointer(ui::PointerEvent::Type::Up, {rc.x + rc.w - 10, rc.y + 200});
+    CHECK_FALSE(f.root->dragCursor());
     CHECK(f.children(master) == std::vector<std::string>{b, c, a, bus});  // not after the buss
     CHECK(f.steps() == before + 1);
     f.refresh();
@@ -752,7 +1100,9 @@ TEST_CASE("mixer: dragging a strip's empty part reorders it among its own kind, 
     f.drag(f.empty(c), f.empty(master));
     CHECK(f.children(master) == std::vector<std::string>{c, b, a, bus});
     f.drag(f.empty(c), f.empty(a), false);
+    CHECK(f.root->dragCursor());
     f.root->key(SDLK_ESCAPE);
+    CHECK_FALSE(f.root->dragCursor());  // given up: the pointer is the nodes' again
     f.pointer(ui::PointerEvent::Type::Up, f.empty(a));
     CHECK(f.children(master) == std::vector<std::string>{c, b, a, bus});
     // A drag of the empty bottom (nobody's strip): cancelled.
@@ -792,6 +1142,433 @@ TEST_CASE("mixer: dragging one of several selected strips moves them all, one un
     f.pointer(ui::PointerEvent::Type::Down, f.empty(b));
     f.pointer(ui::PointerEvent::Type::Up, f.empty(b));
     CHECK(f.ui.selectedTracks == std::vector<std::string>{b});
+    CHECK(f.errors.empty());
+}
+
+TEST_CASE("mixer: a strip held at the strips' edge scrolls them, and drops out of first view") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::string> ids;
+    for (int i = 0; i < 30; ++i) ids.push_back(f.addTrack("channel", "T"));
+    f.refresh();
+    using T = ui::PointerEvent::Type;
+    const ui::Rect area = f.node("mixer.scrolled")->bounds();
+    const std::string first = ids.front(), last = ids.back();
+    // More strips than fit: the last one starts out of view.
+    REQUIRE(f.strip(last).node->bounds().x > area.right());
+    const auto x = [&](const std::string& id) { return f.strip(id).node->bounds().x; };
+    const float y = f.empty(first).y;
+    // In the middle a drag scrolls nothing.
+    f.pointer(T::Down, f.empty(first));
+    f.pointer(T::Move, {area.x + area.w / 2, y});
+    REQUIRE(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Strip);
+    CHECK_FALSE(f.mixer->autoScrolling());
+    CHECK_FALSE(f.mixer->autoScroll(1.0));
+    // Held at the right edge the strips scroll on; further out is faster.
+    const float start = x(last);
+    f.pointer(T::Move, {area.right() - 4, y});
+    REQUIRE(f.mixer->autoScrolling());
+    // The insertion bar stays among the strips that scroll, off the master.
+    CHECK(f.mixer->drag().marker.right() <= area.right());
+    f.snapshot("mixer-edge-scroll-1-held.png");
+    CHECK(f.mixer->autoScroll(0.25));
+    f.root->frame(false);
+    const float once = x(last);
+    CHECK(once < start);
+    f.pointer(T::Move, {area.right() + 40, y});
+    CHECK(f.mixer->autoScroll(0.25));
+    f.root->frame(false);
+    CHECK(once - x(last) > start - once);
+    // The loop's pass steps it by the time since the pass before, and by no
+    // more than the cap: a frame that stalled for two seconds is a short
+    // step, not a jump. The first pass of a scroll only starts the clock.
+    {
+        using namespace std::chrono;
+        const auto at = [&] {
+            f.root->frame(false);
+            return x(last);
+        };
+        const float s0 = at();
+        // No pass has run since this scroll began; the last one before it was
+        // the fixture's, ten seconds earlier.
+        f.mixer->sync(f.now += seconds(10));
+        CHECK(at() == s0);
+        f.mixer->sync(f.now += milliseconds(25));
+        const double step = static_cast<double>(s0 - at());
+        CHECK(step > 0);
+        f.mixer->sync(f.now += seconds(2));
+        CHECK(static_cast<double>(s0 - at()) == doctest::Approx(3.0 * step).epsilon(0.02));
+    }
+    // Back inside it stops.
+    f.pointer(T::Move, {area.x + area.w / 2, y});
+    CHECK_FALSE(f.mixer->autoScrolling());
+    const float held = x(last);
+    CHECK_FALSE(f.mixer->autoScroll(1.0));
+    f.root->frame(false);
+    CHECK(x(last) == held);
+    // To the end: it stops there by itself, rests, and the drop lands after
+    // the last strip, which the first view did not show.
+    f.pointer(T::Move, {area.right() - 2, y});
+    for (int i = 0; i < 400 && f.mixer->autoScroll(0.05); ++i) f.root->frame(false);
+    f.root->frame(false);
+    CHECK(f.strip(last).node->bounds().right() <= area.right() + 1);
+    CHECK_FALSE(f.mixer->autoScroll(0.05));  // nothing more until the pointer moves
+    CHECK(f.mixer->autoScrolling());         // still held at the edge
+    f.snapshot("mixer-edge-scroll-2-at-the-end.png");
+    const auto before = f.app->head().version;
+    f.pointer(T::Move, {area.right() - 3, y});
+    CHECK(f.mixer->drag().drop == gui::Mixer::DragView::Drop::Reorder);
+    f.pointer(T::Up, {area.right() - 3, y});
+    CHECK_FALSE(f.mixer->autoScrolling());
+    CHECK(f.app->head().version == before + 1);  // one edit
+    CHECK(f.children("tr_0").back() == first);
+    f.refresh();
+    // And back: held at the left edge the strips return to the start.
+    const float scrolled = x(ids[1]);
+    f.pointer(T::Down, f.empty(first));
+    f.pointer(T::Move, {area.x + 3, y});
+    REQUIRE(f.mixer->autoScrolling());
+    CHECK(f.mixer->autoScroll(0.25));
+    f.root->frame(false);
+    CHECK(x(ids[1]) > scrolled);
+    f.root->key(SDLK_ESCAPE);
+    CHECK_FALSE(f.mixer->autoScrolling());  // a drag given up scrolls no more
+    f.pointer(T::Up, {area.x + 3, y});
+    CHECK(f.errors.empty());
+}
+
+TEST_CASE("mixer: a plug-in held at an end of its strip's plug-in list scrolls the list") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    const auto b = f.addTrack("channel", "B");
+    std::vector<std::string> fx;
+    for (int i = 0; i < 20; ++i) fx.push_back(f.addFx(a, "Hickory"));
+    // The other strip's chain is longer than its list shows too.
+    std::vector<std::string> others;
+    for (int i = 0; i < 12; ++i) others.push_back(f.addFx(b, "Hickory"));
+    f.refresh();
+    using T = ui::PointerEvent::Type;
+    using Drop = gui::Mixer::DragView::Drop;
+    const ui::Rect list = f.strip(a).chain->bounds();
+    const std::string last = fx.back();
+    const auto slot = [&](const std::string& id) { return f.node("mixer.fx." + id)->bounds(); };
+    const auto y = [&](const std::string& id) { return slot(id).y; };
+    // A chain longer than the list shows: its last plug-in starts out of view.
+    REQUIRE(y(last) > list.bottom());
+    REQUIRE(y(others.back()) > f.strip(b).chain->bounds().bottom());
+    const float otherAt = y(others.front());
+    const float x = list.x + list.w / 2, middle = list.y + list.h / 2;
+    // The third plug-in, picked up in the list's middle: no scroll there.
+    REQUIRE(std::abs(slot(fx[2]).y + slot(fx[2]).h / 2 - middle) < list.h / 2 - 24);
+    f.pointer(T::Down, f.centre(f.node("mixer.fx." + fx[2])));
+    f.pointer(T::Move, {x, middle});
+    REQUIRE(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Fx);
+    CHECK_FALSE(f.mixer->autoScrolling());
+    CHECK_FALSE(f.mixer->autoScroll(1.0));
+    // Held at the list's bottom it scrolls on; further out is faster.
+    const float start = y(last);
+    f.pointer(T::Move, {x, list.bottom() - 4});
+    REQUIRE(f.mixer->autoScrolling());
+    f.snapshot("mixer-fx-edge-scroll-1-held.png");
+    CHECK(f.mixer->autoScroll(0.05));
+    f.root->frame(false);
+    const float once = y(last);
+    CHECK(once < start);
+    f.pointer(T::Move, {x, list.bottom() + 40});
+    CHECK(f.mixer->autoScroll(0.05));
+    f.root->frame(false);
+    CHECK(once - y(last) > start - once);
+    // Only the dragged plug-in's own list scrolls: the other strip's, which
+    // could scroll as far, stays where it is.
+    CHECK(y(others.front()) == otherAt);
+    // The loop's pass steps it by the time since the pass before, and by no
+    // more than the cap: a frame that stalled for two seconds is a short
+    // step, not a jump. The first pass of a scroll only starts the clock.
+    f.pointer(T::Move, {x, list.bottom() - 20});
+    {
+        using namespace std::chrono;
+        const auto at = [&] {
+            f.root->frame(false);
+            return y(last);
+        };
+        const float s0 = at();
+        // No pass has run since this scroll began; the last one before it was
+        // the fixture's, ten seconds earlier.
+        f.mixer->sync(f.now += seconds(10));
+        CHECK(at() == s0);
+        f.mixer->sync(f.now += milliseconds(25));
+        const double step = static_cast<double>(s0 - at());
+        CHECK(step > 0);
+        f.mixer->sync(f.now += seconds(2));
+        CHECK(static_cast<double>(s0 - at()) == doctest::Approx(3.0 * step).epsilon(0.02));
+    }
+    // Back in the middle it stops, and off its own strip too (a held plug-in
+    // scrolls no list but its own).
+    f.pointer(T::Move, {x, middle});
+    CHECK_FALSE(f.mixer->autoScrolling());
+    const float held = y(last);
+    CHECK_FALSE(f.mixer->autoScroll(1.0));
+    f.root->frame(false);
+    CHECK(y(last) == held);
+    const ui::Rect other = f.strip(b).chain->bounds();
+    f.pointer(T::Move, {other.x + other.w / 2, other.bottom() - 4});
+    CHECK(f.mixer->drag().drop == Drop::Copy);
+    CHECK_FALSE(f.mixer->autoScrolling());
+    // To the end: it stops there by itself, rests, and the drop lands after
+    // the last plug-in, which the first view did not show. The insertion bar
+    // is in view all the way.
+    f.pointer(T::Move, {x, list.bottom() + 6});
+    CHECK(f.mixer->drag().drop == Drop::Reorder);
+    CHECK(f.mixer->drag().marker.h >= 2.5f);
+    CHECK(f.mixer->drag().marker.bottom() <= list.bottom());
+    for (int i = 0; i < 400 && f.mixer->autoScroll(0.05); ++i) f.root->frame(false);
+    f.root->frame(false);
+    CHECK(slot(last).bottom() <= list.bottom() + 1);
+    CHECK_FALSE(f.mixer->autoScroll(0.05));  // nothing more until the pointer moves
+    CHECK(f.mixer->autoScrolling());         // still held at the end
+    CHECK(y(others.front()) == otherAt);     // and the other strip's list has not moved
+    f.snapshot("mixer-fx-edge-scroll-2-at-the-end.png");
+    const auto before = f.app->head().version;
+    f.pointer(T::Move, {x, list.bottom() - 3});
+    CHECK(f.mixer->drag().drop == Drop::Reorder);
+    f.pointer(T::Up, {x, list.bottom() - 3});
+    CHECK_FALSE(f.mixer->autoScrolling());
+    CHECK(f.app->head().version == before + 1);  // one edit
+    CHECK(f.chain(a).back() == fx[2]);
+    // The rebuilt list is where the old one was scrolled to: the plug-in is
+    // in view where it was dropped.
+    f.refresh();
+    CHECK(slot(fx[2]).bottom() <= list.bottom() + 1);
+    CHECK(slot(fx[2]).y >= list.y);
+    f.snapshot("mixer-fx-edge-scroll-3-dropped.png");
+    // A plug-in picked up in the list's last row is inside the bottom zone:
+    // that zone waits until the pointer has left it once.
+    const ui::Point low = f.centre(f.node("mixer.fx." + fx[2]));
+    REQUIRE(low.y > list.bottom() - 24);
+    f.pointer(T::Down, low);
+    f.pointer(T::Move, {low.x + 12, low.y});
+    REQUIRE(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Fx);
+    CHECK_FALSE(f.mixer->autoScrolling());
+    f.pointer(T::Move, {low.x + 12, low.y + 3});  // still in it
+    CHECK_FALSE(f.mixer->autoScrolling());
+    f.pointer(T::Move, {x, middle});
+    f.pointer(T::Move, {x, list.y + 4});  // the other zone was never held
+    REQUIRE(f.mixer->autoScrolling());
+    const float down = y(fx.front());
+    CHECK(f.mixer->autoScroll(0.05));
+    f.root->frame(false);
+    CHECK(y(fx.front()) > down);
+    f.pointer(T::Move, {low.x + 12, low.y});  // and the first one scrolls now
+    CHECK(f.mixer->autoScrolling());
+    f.root->key(SDLK_ESCAPE);
+    CHECK_FALSE(f.mixer->autoScrolling());  // a drag given up scrolls no more
+    f.pointer(T::Up, {low.x + 12, low.y});
+    // Picked up in the last row and taken straight past the list's end: it
+    // has left the zone, and scrolls.
+    f.pointer(T::Down, low);
+    f.pointer(T::Move, {low.x + 12, low.y});
+    CHECK_FALSE(f.mixer->autoScrolling());
+    f.pointer(T::Move, {low.x + 12, list.bottom() + 10});
+    CHECK(f.mixer->autoScrolling());
+    f.root->key(SDLK_ESCAPE);
+    f.pointer(T::Up, {low.x + 12, list.bottom() + 10});
+    CHECK(f.chain(a).back() == fx[2]);
+    CHECK(f.errors.empty());
+}
+
+TEST_CASE("mixer: a plug-in or an output held over a pinned master scrolls no strips") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::string> ids;
+    for (int i = 0; i < 30; ++i) ids.push_back(f.addTrack("channel", "T"));
+    const auto m2 = f.addTrack("master", "M2");
+    const std::string first = ids.front();
+    const auto fx = f.addFx(first, "Hickory");
+    f.refresh();
+    using T = ui::PointerEvent::Type;
+    using Drop = gui::Mixer::DragView::Drop;
+    const ui::Rect area = f.node("mixer.scrolled")->bounds();
+    // More strips than fit, and the masters pinned past the edge of the
+    // strips that scroll.
+    REQUIRE(f.strip(ids.back()).node->bounds().x > area.right());
+    const ui::Point master = f.centre(f.node("mixer.faderrow." + m2));
+    REQUIRE(master.x > area.right());
+    const auto x = [&] {
+        f.root->frame(false);
+        return f.strip(ids[1]).node->bounds().x;
+    };
+    const float x0 = x();
+    const auto rests = [&] {
+        CHECK_FALSE(f.mixer->autoScrolling());
+        CHECK_FALSE(f.mixer->autoScroll(0.25));
+        CHECK(x() == x0);
+    };
+    // A plug-in: at the edge of the strips that scroll it would scroll them;
+    // over the master, where it can be dropped, it scrolls nothing.
+    f.pointer(T::Down, f.centre(f.node("mixer.fx." + fx)));
+    f.pointer(T::Move, {area.right() - 4, master.y});
+    REQUIRE(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Fx);
+    CHECK(f.mixer->autoScrolling());
+    f.pointer(T::Move, master);
+    CHECK(f.mixer->drag().drop == Drop::Copy);
+    CHECK(f.mixer->drag().target == m2);
+    rests();
+    f.root->key(SDLK_ESCAPE);
+    f.pointer(T::Up, master);
+    // An output, held over the master to send to it.
+    f.pointer(T::Down, f.centre(f.node("mixer.out." + first)));
+    f.pointer(T::Move, master);
+    REQUIRE(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Send);
+    CHECK(f.mixer->drag().drop == Drop::Copy);
+    CHECK(f.mixer->drag().target == m2);
+    rests();
+    f.root->key(SDLK_ESCAPE);
+    f.pointer(T::Up, master);
+    // A strip there is past the edge of its own kind's strips: they scroll
+    // on, so that it can be put last.
+    f.pointer(T::Down, f.empty(first));
+    f.pointer(T::Move, {master.x, f.empty(first).y});
+    REQUIRE(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Strip);
+    CHECK(f.mixer->autoScrolling());
+    CHECK(f.mixer->autoScroll(0.25));
+    CHECK(x() < x0);
+    f.root->key(SDLK_ESCAPE);
+    f.pointer(T::Up, master);
+    CHECK(f.errors.empty());
+}
+
+TEST_CASE("mixer: a drag held still at the edge shows its target as the strips scroll under it") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::string> ids;
+    for (int i = 0; i < 30; ++i) ids.push_back(f.addTrack("channel", "T"));
+    const std::string first = ids.front();
+    const auto fx = f.addFx(first, "Hickory");
+    f.refresh();
+    using T = ui::PointerEvent::Type;
+    using namespace std::chrono;
+    using DragView = gui::Mixer::DragView;
+    const ui::Rect area = f.node("mixer.scrolled")->bounds();
+    REQUIRE(f.strip(ids.back()).node->bounds().x > area.right());
+    const ui::Point edge{area.right() - 4, f.empty(first).y};
+    const ui::Point middle{area.x + area.w / 2, edge.y};
+    // The strip under a point, from where the layout has put the strips.
+    const auto over = [&](ui::Point p) {
+        for (const auto& s : f.mixer->strips())
+            if (s.node->bounds().contains(p)) return s.track;
+        return std::string();
+    };
+    const auto pass = [&](milliseconds step) {  // the loop's
+        f.mixer->sync(f.now += step);
+        f.root->frame(false);
+    };
+    const auto same = [](const ui::Rect& a, const ui::Rect& b) {
+        return a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h;
+    };
+
+    // A plug-in held at the right edge, and not moved again: the strips
+    // scroll under it, and the strip it would be copied to is the one that
+    // has come under the pointer.
+    f.pointer(T::Down, f.centre(f.node("mixer.fx." + fx)));
+    f.pointer(T::Move, edge);
+    REQUIRE(f.mixer->drag().kind == DragView::Kind::Fx);
+    REQUIRE(f.mixer->autoScrolling());
+    const std::string began = over(edge);
+    REQUIRE_FALSE(began.empty());
+    CHECK(f.mixer->drag().target == began);
+    for (int i = 0; i < 200 && (over(edge).empty() || over(edge) == began); ++i)
+        pass(milliseconds(25));
+    const std::string now = over(edge);
+    REQUIRE_FALSE(now.empty());
+    REQUIRE(now != began);
+    pass(milliseconds(0));  // a pass that takes no time moves nothing
+    REQUIRE(over(edge) == now);
+    CHECK(f.mixer->drag().drop == DragView::Drop::Copy);
+    CHECK(f.mixer->drag().target == now);
+    const ui::Rect strip = f.strip(now).node->bounds();
+    CHECK(same(f.mixer->drag().marker, strip.intersect(f.strip(now).node->parent()->bounds())));
+    f.snapshot("mixer-edge-scroll-3-still-pointer.png");
+    f.root->key(SDLK_ESCAPE);
+    f.pointer(T::Up, edge);
+
+    // A strip held there: the insertion bar and the moves a release would
+    // make are those a fresh look at the same point gives.
+    std::string held;
+    for (const auto& id : ids)
+        if (held.empty() && f.strip(id).node->bounds().x >= area.x + 8) held = id;
+    REQUIRE_FALSE(held.empty());
+    f.pointer(T::Down, f.empty(held));
+    f.pointer(T::Move, edge);
+    REQUIRE(f.mixer->drag().kind == DragView::Kind::Strip);
+    REQUIRE(f.mixer->autoScrolling());
+    const auto moves = [&] {
+        std::vector<std::pair<std::string, std::size_t>> out;
+        for (const auto& m : f.mixer->drag().moves) out.emplace_back(m.track.str(), m.index);
+        return out;
+    };
+    const auto moves0 = moves();
+    REQUIRE_FALSE(moves0.empty());
+    const float x0 = f.strip(ids.back()).node->bounds().x;
+    for (int i = 0; i < 12; ++i) pass(milliseconds(25));
+    CHECK(x0 - f.strip(ids.back()).node->bounds().x > 96 + 48);  // more than a strip and a half
+    pass(milliseconds(0));
+    const DragView still = f.mixer->drag();
+    const auto stillMoves = moves();
+    CHECK(still.drop == DragView::Drop::Reorder);
+    CHECK(stillMoves != moves0);
+    f.pointer(T::Move, edge);  // the fresh look
+    CHECK(f.mixer->drag().drop == still.drop);
+    CHECK(same(f.mixer->drag().marker, still.marker));
+    CHECK(moves() == stillMoves);
+
+    // Leaving the zone ends the scroll's clock: held at the edge again after
+    // a pause in the middle, the first pass only starts it, however long the
+    // pause was.
+    const auto at = [&] {
+        f.root->frame(false);
+        return f.strip(ids.back()).node->bounds().x;
+    };
+    f.pointer(T::Move, middle);
+    CHECK_FALSE(f.mixer->autoScrolling());
+    pass(milliseconds(10));
+    f.pointer(T::Move, edge);
+    REQUIRE(f.mixer->autoScrolling());
+    const float s0 = at();
+    pass(seconds(10));
+    CHECK(at() == s0);
+    pass(milliseconds(25));
+    CHECK(at() < s0);
+    f.root->key(SDLK_ESCAPE);
+    f.pointer(T::Up, edge);
+    CHECK(f.errors.empty());
+}
+
+TEST_CASE("mixer: a plug-in list keeps its place when the strips are rebuilt") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    const auto b = f.addTrack("channel", "B");
+    std::vector<std::string> fx;
+    for (int i = 0; i < 12; ++i) fx.push_back(f.addFx(a, "Hickory"));
+    f.refresh();
+    ui::PointerEvent wheel;
+    wheel.type = ui::PointerEvent::Type::Wheel;
+    wheel.pos = f.centre(f.node("mixer.fx." + fx[2]));
+    wheel.wheelY = -3;
+    f.root->pointer(wheel);
+    f.root->frame(false);
+    const ui::Node* old = f.node("mixer.fx." + fx[0]);
+    const float y = old->bounds().y;
+    REQUIRE(y < f.strip(a).chain->bounds().y - 10);
+    // Another strip gets a plug-in: every strip is rebuilt.
+    f.addFx(b, "Hickory");
+    f.refresh();
+    CHECK(f.node("mixer.fx." + fx[0])->bounds().y == y);
+    // A chain that got shorter than the list shows comes back to its top.
+    for (int i = 3; i < 12; ++i) f.exec("fx.remove", R"({"fx":")" + fx[i] + R"("})");
+    f.refresh();
+    CHECK(f.node("mixer.fx." + fx[0])->bounds().y == f.strip(a).chain->bounds().y);
     CHECK(f.errors.empty());
 }
 
@@ -951,10 +1728,18 @@ TEST_CASE("mixer: \"out\" opens the routing matrix; a drag onto a buss makes one
         sent = sent || (e.value->from.track && e.value->from.track->str() == a &&
                         e.value->to.track && e.value->to.track->str() == bus);
     CHECK(sent);
-    // A second drag onto a strip it already feeds marks nothing and adds nothing.
-    f.drag(f.centre(f.node("mixer.out." + a)), f.centre(f.node("mixer.faderrow." + bus)), false);
+    // A second drag onto a strip it already feeds marks nothing and adds
+    // nothing: the buss refuses it. Over its own strip nothing refuses it.
+    f.pointer(ui::PointerEvent::Type::Down, f.centre(f.node("mixer.out." + a)));
+    f.pointer(ui::PointerEvent::Type::Move, f.centre(f.node("mixer.faderrow." + a)));
+    CHECK(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Send);
+    CHECK(f.mixer->drag().home);
+    CHECK(f.root->cursor() == ui::Cursor::Move);
+    f.pointer(ui::PointerEvent::Type::Move, f.centre(f.node("mixer.faderrow." + bus)));
     CHECK(f.mixer->drag().kind == gui::Mixer::DragView::Kind::Send);
     CHECK(f.mixer->drag().drop == gui::Mixer::DragView::Drop::None);
+    CHECK_FALSE(f.mixer->drag().home);
+    CHECK(f.root->cursor() == ui::Cursor::NotAllowed);
     f.pointer(ui::PointerEvent::Type::Up, f.centre(f.node("mixer.faderrow." + bus)));
     CHECK(f.steps() == before + 1);
     CHECK(f.app->head().routes.size() == 1);
@@ -1058,6 +1843,190 @@ TEST_CASE("mixer: the chain's empty part takes a double-click (plugin browser); 
     CHECK(outputs[0] == model::kMaster);
 }
 
+TEST_CASE("preferences: remembered plug-in choices are listed, forgotten one by one or all") {
+    Fixture f;
+    if (!f.ok) return;
+    views::MouseMap map;
+    gui::MouseDialog mouse(*f.root, map, {});
+    const auto file = f.dir / "config" / "preferences.json";
+    gui::Preferences start;
+    start.rememberedLoads = {
+        {"clap", "com.acme.canary", "0123abcd", "bridge", "Canary Verb", "Acme", "1.2.0", 10},
+        {"vst3", "com.acme.other", "ff00", "disable", "", "", "", 20},
+        {"clap", "com.acme.fine", "aa", "normal", "Fine EQ", "Acme", "3.0", 30}};
+    gui::PreferencesDialog prefs(*f.root, *f.app, mouse, start, file);
+    std::vector<std::string> problems;
+    prefs.onError = [&](const std::string& message) { problems.push_back(message); };
+    prefs.open();
+    f.root->frame(false);
+    // A section of its own: the heading, the count, Forget all and a rule, then a row to a choice.
+    REQUIRE(f.root->find("prefs.remembered"));
+    CHECK(f.node("prefs.remembered.head.title")->valueText() == "Plug-in choices");
+    CHECK(f.node("prefs.remembered.count")->valueText() == "3 choices");
+    CHECK(f.root->find("prefs.remembered.head.rule"));
+    CHECK(f.node("prefs.remembered.row.0.name")->valueText() == "Canary Verb  Acme \u00b7 1.2.0");
+    CHECK(f.node("prefs.remembered.row.0.choice")->valueText() == "In a separate process");
+    CHECK(f.node("prefs.remembered.row.1.name")->valueText() == "Unknown plug-in");
+    CHECK(f.node("prefs.remembered.row.1.choice")->valueText() == "Disabled");
+    CHECK(f.node("prefs.remembered.row.2.choice")->valueText() == "Normally");
+    // The columns sit on the form's grid: the choice where the other rows' controls start, Forget
+    // at the right edge, Forget all at the right of the heading.
+    CHECK(f.node("prefs.remembered.row.0.choice")->bounds().x ==
+          f.node("prefs.monitor.set")->bounds().x);
+    const float edge = f.node("prefs.monitor.set")->bounds().right();
+    CHECK(std::abs(f.node("prefs.remembered.row.0.forget")->bounds().right() - edge) < 2.0f);
+    CHECK(std::abs(f.node("prefs.remembered.forget_all")->bounds().right() - edge) < 2.0f);
+    if (const char* out = std::getenv("SUPPLE_TEST_SNAPSHOTS")) {
+        f.root->damageAll();
+        f.root->frame(false);
+        (void)gui::writePng(std::filesystem::path(out) / "prefs-remembered.png",
+                            f.root->readBack());
+    }
+    // Forget the middle one: saved, the rest keep their order.
+    REQUIRE(f.root->click("prefs.remembered.row.1.forget"));
+    f.root->frame(false);
+    CHECK(problems.empty());
+    REQUIRE(prefs.preferences().rememberedLoads.size() == 2);
+    CHECK(prefs.preferences().rememberedLoads[1].id == "com.acme.fine");
+    CHECK(f.node("prefs.remembered.row.1.name")->valueText().rfind("Fine EQ", 0) == 0);
+    CHECK_FALSE(f.root->find("prefs.remembered.row.2"));
+    auto saved = gui::Preferences::load(file);
+    REQUIRE(saved);
+    CHECK(saved->rememberedLoads.size() == 2);
+    // Forget all: the sentence stands where the rows were, and no button to clear nothing.
+    REQUIRE(f.root->click("prefs.remembered.forget_all"));
+    f.root->frame(false);
+    CHECK(prefs.preferences().rememberedLoads.empty());
+    CHECK(f.root->find("prefs.remembered.empty"));
+    CHECK_FALSE(f.root->find("prefs.remembered.forget_all"));
+    CHECK(f.node("prefs.remembered.count")->valueText() == "none");
+    saved = gui::Preferences::load(file);
+    REQUIRE(saved);
+    CHECK(saved->rememberedLoads.empty());
+    // A new dialog on no choices says so too.
+    prefs.open();
+    f.root->frame(false);
+    CHECK(f.root->find("prefs.remembered.empty"));
+}
+
+TEST_CASE("mixer: the strips match their golden picture") {
+    Fixture f;
+    if (!f.ok) return;
+    // One strip of each kind and each state a strip can be at rest in: a
+    // send, a mute, a solo, an armed input, a moved fader and pan, an empty
+    // chain. No plug-in (the stock ones are not in every build) and no level.
+    const auto drums = f.addTrack("channel", "Drums");
+    const auto bass = f.addTrack("channel", "Bass");
+    const auto vocal = f.addTrack("channel", "Lead vocal");
+    const auto band = f.addTrack("buss", "Band");
+    f.exec("route.add", R"({"from":")" + drums + R"(","to":")" + band + R"("})");
+    f.exec("track.set", R"({"track":")" + drums + R"(","volume_db":-6,"pan":-20})");
+    f.exec("track.set", R"({"track":")" + bass + R"(","mute":true})");
+    f.exec("track.set", R"({"track":")" + vocal + R"(","solo":"on"})");
+    f.exec("track.set", R"({"track":")" + vocal + R"(","armed":true})");
+    f.refresh();
+    CHECK(f.mixer->strips().size() == 5);
+    f.snapshot("mixer-strips.png");
+    f.golden("mixer-strips.png");
+}
+
+TEST_CASE("mixer: meters at rising levels, for the picture: green, yellow, orange, red") {
+    Fixture f;
+    if (!f.ok) return;
+    // Six channels at -30, -18, -12, -6, -2 and +1 dB peak (the RMS 6 dB
+    // under): the bars show where on the scale each colour begins.
+    const float levels[] = {-30, -18, -12, -6, -2, 1};
+    std::vector<std::string> tracks;
+    for (const float level : levels) {
+        char name[16];
+        std::snprintf(name, sizeof name, "%+.0f dB", static_cast<double>(level));
+        tracks.push_back(f.addTrack("channel", name));
+    }
+    f.refresh();
+    for (std::size_t i = 0; i < tracks.size(); ++i) {
+        const float peak = std::pow(10.0f, levels[i] / 20), rms = peak / 2;
+        const float p[2] = {peak, peak * 0.7f}, r[2] = {rms, rms * 0.7f};
+        f.strip(tracks[i]).meter->push(p, r);
+    }
+    f.root->frame(false);
+    f.snapshot("mixer-levels.png");
+    CHECK(f.strip(tracks.back()).meter->clipped());
+    CHECK_FALSE(f.strip(tracks.front()).meter->clipped());
+    // The scale has five marks, and the meter draws the same.
+    CHECK(f.strip(tracks[0]).meter->marks() == std::vector<float>{0, -12, -24, -36, -48});
+}
+
+TEST_CASE("mixer: a strip shows its meter's highest peak under it; a click clears it") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    f.refresh();
+    REQUIRE(f.strip(a).meter);
+    REQUIRE(f.strip(a).peak);
+    REQUIRE(f.node("mixer.scale." + a));
+    CHECK(f.strip(a).peak->valueText().empty());  // nothing heard yet
+    const float half[2] = {0.5f, 0.25f}, quiet[2] = {0.1f, 0.1f}, rms[2] = {0.1f, 0.1f};
+    f.strip(a).meter->push(half, rms);
+    CHECK(f.strip(a).peak->valueText() == "-6.0");
+    f.strip(a).meter->push(quiet, rms);
+    CHECK(f.strip(a).peak->valueText() == "-6.0");  // the highest, not the last
+    const float over[2] = {0.5f, 1.2f};
+    f.strip(a).meter->push(over, rms);
+    CHECK(f.strip(a).peak->valueText() == "+1.6");
+    f.root->frame(false);
+    f.snapshot("mixer-peak.png");
+    // The value under the fader is beside it, as before.
+    CHECK(f.strip(a).value->valueText() == "+0.0");
+    CHECK(f.strip(a).value->bounds().right() <= f.strip(a).peak->bounds().x + 0.5f);
+    const ui::Point at = f.centre(f.strip(a).peak);
+    f.pointer(ui::PointerEvent::Type::Down, at);
+    f.pointer(ui::PointerEvent::Type::Up, at);
+    CHECK(f.strip(a).peak->valueText().empty());
+    CHECK_FALSE(f.strip(a).meter->clipped());
+}
+
+TEST_CASE("mixer: an empty chain is bare and a double-click adds; bypassed and offline say so") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::string> added;
+    f.actions->addUi("ui.fx.add", "FX: add plugin…", "track", [&](const json::Value& v) -> Status {
+        added.push_back(v.isString() ? v.asString() : v.find("track")->asString());
+        return {};
+    });
+    const auto a = f.addTrack("channel", "A");
+    const auto b = f.addTrack("channel", "B");
+    const auto p1 = f.addFx(b, "Hickory");
+    const auto p2 = f.addFx(b, "Hickory");
+    const auto p3 = f.addFx(b, "Hickory");
+    f.exec("fx.set", R"({"fx":")" + p2 + R"(","bypass":true})");
+    f.exec("fx.set", R"({"fx":")" + p3 + R"(","offline":true})");
+    f.refresh();
+    // An empty chain shows no text. One click on it, at its top as anywhere,
+    // does nothing; a double-click adds a plug-in, as the strip's "+" does.
+    const ui::Rect chain = f.strip(a).chain->bounds();
+    for (const float y : {9.0f, 40.0f}) {
+        const ui::Point at{chain.x + chain.w / 2, chain.y + y};
+        const std::size_t before = added.size();
+        f.pointer(ui::PointerEvent::Type::Down, at);
+        f.pointer(ui::PointerEvent::Type::Up, at);
+        CHECK(added.size() == before);
+        f.pointer(ui::PointerEvent::Type::Down, at, 2);
+        f.pointer(ui::PointerEvent::Type::Up, at);
+        CHECK(added.size() == before + 1);
+    }
+    CHECK(added == std::vector<std::string>{a, a});
+    // A plug-in's name is its own; its state is told apart from it.
+    const std::string name = f.node("mixer.fx." + p1)->valueText();
+    CHECK(name.find('~') == std::string::npos);
+    CHECK(name.find('(') == std::string::npos);
+    CHECK(f.node("mixer.fx." + p2)->valueText() == name + " (bypassed)");
+    CHECK(f.node("mixer.fx." + p3)->valueText() == name + " (offline)");
+    f.exec("fx.set", R"({"fx":")" + p2 + R"(","bypass":false})");
+    f.refresh();
+    CHECK(f.node("mixer.fx." + p2)->valueText() == name);
+    f.snapshot("mixer-chain-states.png");
+}
+
 TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
     Fixture f;
     if (!f.ok) return;
@@ -1065,6 +2034,7 @@ TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
     gui::MouseDialog mouse(*f.root, map, {});
     const auto file = f.dir / "config" / "preferences.json";
     gui::PreferencesDialog prefs(*f.root, *f.app, mouse, gui::Preferences{}, file);
+    prefs.onLinux = true;  // the rows every platform can test
     CHECK(f.app->defaultMonitor() == model::Monitor::On);
     CHECK(f.app->copyImportedMedia());
     auto port = json::Value::object();
@@ -1078,6 +2048,104 @@ TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
     prefs.setDefaultMonitor(model::Monitor::Off);
     CHECK(f.node("prefs.monitor.set")->valueText() == "Off");
     CHECK(f.track(f.addTrack("channel", "A")).record.monitor == model::Monitor::Off);
+    // The low-level settings are under Advanced, closed until asked for; the
+    // dialog grows to show them, and remembers while the app runs.
+    for (const char* id : {"prefs.section.audio.title", "prefs.section.recording.title",
+                           "prefs.section.plugins.title", "prefs.section.editing.title",
+                           "prefs.section.advanced.title"})
+        CHECK(f.node(id)->visible);
+    CHECK(f.node("prefs.audio")->bounds().y < f.node("prefs.monitor")->bounds().y);
+    CHECK(f.node("prefs.monitor")->bounds().y < f.node("prefs.isolation")->bounds().y);
+    CHECK_FALSE(f.node("prefs.advanced")->visible);
+    CHECK(f.node("prefs.advanced.toggle")->valueText() == "Show");
+    CHECK_FALSE(f.node("prefs.threads.set")->visibleInTree());
+    const float folded = f.node("prefs")->bounds().h;
+    // The everyday settings alone, the section of remembered plug-in choices (topic 7d) with its
+    // sentence among them.
+    CHECK(folded < 540);
+    REQUIRE(f.root->click("prefs.advanced.toggle"));
+    f.root->frame(false);
+    CHECK(f.node("prefs.advanced")->visible);
+    CHECK(f.node("prefs.advanced.toggle")->valueText() == "Hide");
+    CHECK(f.node("prefs")->bounds().h > folded + 100);
+    CHECK(f.node("prefs.latency.set")->bounds().bottom() <= f.node("prefs")->bounds().bottom());
+    // Their notes name Linux's files on Linux only; elsewhere one line says
+    // that the setting is Linux's.
+    CHECK(gui::PreferencesDialog::memoryNotes(true).size() == 3);
+    CHECK(gui::PreferencesDialog::idleNotes(true).size() == 2);
+    for (const auto& notes :
+         {gui::PreferencesDialog::memoryNotes(false), gui::PreferencesDialog::idleNotes(false)}) {
+        REQUIRE(notes.size() == 1);
+        CHECK(notes[0].find("Linux only") == 0);
+        CHECK(notes[0].find('/') == std::string::npos);
+    }
+    // Off Linux a row is there only while its setting is on.
+    CHECK(gui::PreferencesDialog::showsLinuxOnly(true, false));
+    CHECK(gui::PreferencesDialog::showsLinuxOnly(false, true));
+    CHECK_FALSE(gui::PreferencesDialog::showsLinuxOnly(false, false));
+    CHECK(f.node("prefs.latency.permission")->valueText().find("udev") != std::string::npos);
+    // As macOS and Windows see it: neither row while both settings are off.
+    REQUIRE(f.root->click("prefs.close"));
+    prefs.onLinux = false;
+    prefs.open();
+    f.root->frame(false);
+    CHECK(f.root->find("prefs.latency.set") == nullptr);
+    CHECK(f.root->find("prefs.memory.set") == nullptr);
+    CHECK(f.root->find("prefs.threads.set") != nullptr);
+    REQUIRE(f.root->click("prefs.close"));
+    prefs.onLinux = true;
+    prefs.open();
+    f.root->frame(false);
+    // The window here holds it all: nothing to scroll.
+    auto* scroll = dynamic_cast<ui::ScrollView*>(f.node("prefs.scroll"));
+    REQUIRE(scroll);
+    CHECK(scroll->contentHeight() <= scroll->bounds().h + 0.5f);
+    REQUIRE(f.root->click("prefs.close"));
+    // With less room than the settings need, the dialog stops growing and
+    // the settings scroll under the header; the wheel brings the last one up.
+    prefs.bodyLimit = 240;
+    prefs.open();
+    f.root->frame(false);
+    scroll = dynamic_cast<ui::ScrollView*>(f.node("prefs.scroll"));
+    REQUIRE(scroll);
+    CHECK(scroll->bounds().h == doctest::Approx(240));
+    CHECK(scroll->contentHeight() > 400);
+    CHECK(f.node("prefs")->bounds().h < 320);
+    CHECK(f.node("prefs.close")->bounds().bottom() <= scroll->bounds().y);
+    const float before = f.node("prefs.latency.set")->bounds().y;
+    CHECK(before > scroll->bounds().bottom());  // out of view
+    ui::PointerEvent wheel;
+    wheel.type = ui::PointerEvent::Type::Wheel;
+    wheel.pos = f.centre(scroll);
+    wheel.wheelY = -20;
+    f.root->pointer(wheel);
+    f.root->frame(false);
+    CHECK(f.node("prefs.latency.set")->bounds().bottom() <= scroll->bounds().bottom() + 0.5f);
+    CHECK(f.node("prefs.close")->bounds().bottom() <= scroll->bounds().y);  // the header stayed
+    f.snapshot("preferences-scrolled.png");
+    REQUIRE(f.root->click("prefs.close"));
+    prefs.bodyLimit = 0;
+    prefs.open();
+    f.root->frame(false);
+    // The window is the limit otherwise: in one too low for the settings the
+    // dialog stays inside it and they scroll; it grows back with the window.
+    const float whole = f.node("prefs")->bounds().h;
+    f.window->setSize(1400, 420);
+    f.root->frame(false);
+    scroll = dynamic_cast<ui::ScrollView*>(f.node("prefs.scroll"));
+    CHECK(f.node("prefs")->bounds().y >= 8);
+    CHECK(f.node("prefs")->bounds().bottom() < 420);
+    CHECK(scroll->bounds().bottom() <= f.node("prefs")->bounds().bottom());
+    CHECK(scroll->contentHeight() > scroll->bounds().h + 100);
+    CHECK(f.node("prefs.close")->bounds().bottom() <= scroll->bounds().y);
+    f.snapshot("preferences-low-window.png");
+    f.window->setSize(1400, 900);
+    f.root->frame(false);
+    CHECK(near(f.node("prefs")->bounds().h, whole));
+    scroll = dynamic_cast<ui::ScrollView*>(f.node("prefs.scroll"));
+    CHECK(scroll->contentHeight() <= scroll->bounds().h + 0.5f);
+    CHECK(f.node("prefs.advanced")->visible);  // as it was left
+    f.snapshot("preferences-advanced.png");
     // Audio threads, from the menu; out of range refused.
     REQUIRE(f.root->click("prefs.threads.set"));
     auto* menu = dynamic_cast<ui::List*>(f.root->find("prefs.threads.menu"));
@@ -1154,6 +2222,9 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
     values.sync.onLoss = "freewheel";
     values.sync.ltcOutput = true;
     values.sync.ltcOutputChannel = 4;
+    values.rememberedLoads = {{"clap", "com.acme.canary", "0123abcd", "bridge", "Canary Verb",
+                               "Acme", "1.2.0", 1763400000000},
+                              {"vst3", "com.acme.other", "ff00", "disable", "", "", "", 5}};
     REQUIRE(values.save(file));
     auto loaded = gui::Preferences::load(file);
     REQUIRE(loaded);
@@ -1167,15 +2238,16 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
     CHECK(loaded->renderOpenFolder);
     CHECK(loaded->audio == values.audio);
     CHECK(loaded->sync == values.sync);
+    CHECK(loaded->rememberedLoads == values.rememberedLoads);  // 1.10, topic 7d
     CHECK(loaded->midiOutputs.empty());  // the engine writes these records, not the GUI
     const auto bytes = readFile(file).value();
-    CHECK(std::string(bytes.begin(), bytes.end()).find("supple.preferences/1.9") !=
+    CHECK(std::string(bytes.begin(), bytes.end()).find("supple.preferences/1.10") !=
           std::string::npos);
     REQUIRE(loaded->save(file));
     CHECK(readFile(file).value() == bytes);
     // Older schemas load, with defaults for what they lack.
     for (const char* version :
-         {"1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9"}) {
+         {"1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10"}) {
         REQUIRE(writeFileAtomic(
             file, std::string("{\"schema\":\"supple.preferences/") + version + "\"}"));
         auto old = gui::Preferences::load(file);
@@ -1189,6 +2261,7 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
         CHECK_FALSE(old->renderOpenFolder);
         CHECK(old->audio == gui::AudioDeviceSettings{});
         CHECK(old->sync == engine::SyncSettings{});
+        CHECK(old->rememberedLoads.empty());
         CHECK(old->midiOutputs.empty());
     }
     // A 1.8 clock record on disk (the engine's midi.outputs.set) loads, and a
@@ -1223,6 +2296,17 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
         auto rejected = gui::Preferences::load(file);
         REQUIRE_FALSE(rejected);
         CHECK(rejected.error().path == std::string("/") + field);
+        CHECK_FALSE(rejected.error().hint.empty());
+    }
+    // A remembered choice that cannot be read names its entry.
+    for (const char* bad : {R"([{"format":"clap","id":"a","build_id":"b","mode":"maybe"}])",
+                            R"([{"format":"clap","id":"a","mode":"bridge"}])", R"({"a":1})"}) {
+        REQUIRE(writeFileAtomic(
+            file,
+            std::string(R"({"schema":"supple.preferences/1.10","plugin_overrides":)") + bad + "}"));
+        auto rejected = gui::Preferences::load(file);
+        REQUIRE_FALSE(rejected);
+        CHECK(rejected.error().path.rfind("/plugin_overrides", 0) == 0);
         CHECK_FALSE(rejected.error().hint.empty());
     }
     // So does a wrong audio device value, under /audio.
@@ -1348,6 +2432,7 @@ TEST_CASE("audio device: the dialog saves each choice and restarts the engine wi
     gui::MouseDialog mouse(*f.root, map, {});
     const auto file = f.dir / "config" / "preferences.json";
     gui::PreferencesDialog prefs(*f.root, *f.app, mouse, gui::Preferences{}, file);
+    prefs.onLinux = true;  // the rows every platform can test
     gui::AudioDeviceSettings initial;
     initial.backend = "portaudio";
     gui::AudioDeviceDialog audio(
@@ -1538,10 +2623,13 @@ TEST_CASE(
     gui::MouseDialog mouse(*f.root, map, {});
     const auto file = f.dir / "preferences.json";
     gui::PreferencesDialog prefs(*f.root, *f.app, mouse, {}, file);
+    prefs.onLinux = true;  // the rows every platform can test
     prefs.open();
     f.root->frame(false);
+    REQUIRE(f.root->click("prefs.advanced.toggle"));  // the low-level settings
+    f.root->frame(false);
     const float offHeight = f.node("prefs")->bounds().h;
-    CHECK(offHeight < 520);  // no space reserved for empty notes (eight would add ~190)
+    CHECK(offHeight < 760);  // no space reserved for empty notes (eight would add ~190)
     CHECK_FALSE(f.node("prefs.memory.note.0")->visible);
     CHECK_FALSE(f.node("prefs.latency.note.0")->visible);
     for (const char* id : {"prefs.memory.set", "prefs.latency.set"}) {
@@ -1607,7 +2695,10 @@ TEST_CASE(
     gui::MouseDialog mouse(*f.root, map, {});
     const auto file = f.dir / "preferences.json";
     gui::PreferencesDialog prefs(*f.root, *f.app, mouse, {}, file);
+    prefs.onLinux = true;  // the rows every platform can test
     prefs.open();
+    f.root->frame(false);
+    REQUIRE(f.root->click("prefs.advanced.toggle"));  // the low-level settings
     f.root->frame(false);
     const float offHeight = f.node("prefs")->bounds().h;
     CHECK_FALSE(f.node("prefs.latency.note.0")->visible);
@@ -2047,6 +3138,7 @@ TEST_CASE("preferences: stale GUI snapshots preserve engine-owned MIDI records")
     views::MouseMap map;
     gui::MouseDialog mouse(*f.root, map, {});
     gui::PreferencesDialog prefs(*f.root, *f.app, mouse, stale, file);
+    prefs.onLinux = true;  // the rows every platform can test
     CHECK(engine::midiPortSettings(f.app->midiOutputsPreferences(), "Synth").offsetMs == 12);
     REQUIRE(prefs.setAudioThreads(2));
     loaded = gui::Preferences::load(file);

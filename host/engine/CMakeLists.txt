@@ -6,17 +6,17 @@ add_subdirectory(model)
 find_package(ZLIB REQUIRED)
 
 supple_add_library(engine
-  SOURCES src/transients.cpp src/audio_commands.cpp src/prepared_sources.cpp src/offline.cpp src/plan.cpp src/workers.cpp src/live_workers.cpp src/realtime.cpp src/recording.cpp
+  SOURCES src/transients.cpp src/audio_commands.cpp src/prepared_sources.cpp src/offline.cpp src/plan.cpp src/plan_dump.cpp src/workers.cpp src/live_workers.cpp src/realtime.cpp src/audition.cpp src/recording.cpp
           src/stretch.cpp src/playrate_dsp.cpp src/playrate_timeline.cpp src/rate_sources.cpp src/rate_runtime.cpp src/mix_runtime.cpp src/meters.cpp src/runtime_protection.cpp src/media_files.cpp
           src/rack_runtime.cpp src/rack_midi.cpp src/midi_bus.cpp src/rack_clip_commands.cpp src/rack_level_commands.cpp src/rack_commands.cpp src/module_library.cpp src/module_commands.cpp src/rack_probe.cpp src/app.cpp src/session_lock.cpp src/plugin_outputs.cpp src/commands.cpp src/project_commands.cpp src/tempo_commands.cpp src/track_commands.cpp src/item_commands.cpp src/fx_commands.cpp src/history_commands.cpp
-          src/envelope_commands.cpp src/device_commands.cpp src/transport_commands.cpp src/route_commands.cpp src/log_commands.cpp src/ruler_commands.cpp
+          src/envelope_commands.cpp src/device_commands.cpp src/transport_commands.cpp src/audition_commands.cpp src/route_commands.cpp src/log_commands.cpp src/crash_report_commands.cpp src/suspects.cpp src/ruler_commands.cpp
           src/plugin_commands.cpp src/group_commands.cpp src/midi_commands.cpp src/analysis_commands.cpp
           src/freeze_commands.cpp src/consolidate_commands.cpp src/export_commands.cpp src/mix_commands.cpp src/heal_commands.cpp src/render_commands.cpp src/render_settings.cpp src/render_chain.cpp src/chain_commands.cpp src/take_commands.cpp src/learn.cpp src/control_learn.cpp src/dsp_commands.cpp
           src/midi_control.cpp src/midi_ports.cpp src/hardware_midi.cpp src/midi_port_commands.cpp src/midi_output.cpp src/midi_input.cpp src/portaudio_backend.cpp src/portaudio_native.cpp src/sync_runtime.cpp src/sync_commands.cpp src/midi_clock_outputs.cpp
-  DEPS supple::model supple::clap-host supple::audio-file supple::timeline supple::semantic-params-abi
+  DEPS supple::model supple::clap-host supple::diagnostics-context supple::audio-file supple::timeline supple::semantic-params-abi
        supple::command-bus supple::lua-bus supple::notation supple::core-params supple::core-analysis
        supple::core-dsp supple::signalsmith-stretch supple::console9 supple::rack
-  PRIVATE_DEPS supple::rack-stock supple::product-info supple::script-compiler supple::sandbox-render supple::audio-codecs ZLIB::ZLIB ${CMAKE_DL_LIBS})
+  PRIVATE_DEPS supple::diagnostics supple::image-identity supple::rack-stock supple::product-info supple::script-compiler supple::sandbox-render supple::audio-codecs ZLIB::ZLIB ${CMAKE_DL_LIBS})
 
 target_include_directories(engine SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/third_party/portaudio-19.7.0/include)
 if(APPLE)
@@ -53,11 +53,14 @@ if(SUPPLE_BUILD_TESTS AND SUPPLE_PLATFORM_LINUX)
   # no signature for -fsanitize=function to check).
   target_compile_options(engine-fake-jack PRIVATE $<$<CXX_COMPILER_ID:Clang>:-fno-sanitize=function>)
 
-  supple_add_tests(engine SOURCES tests/bridge_patience.cpp tests/test_item_edits.cpp tests/test_audio_warp.cpp tests/test_offline.cpp tests/test_freeze.cpp tests/test_instance_pool.cpp tests/test_autosave.cpp tests/test_take_copy.cpp tests/test_groups.cpp tests/test_media_files.cpp tests/test_recording_shutdown.cpp tests/test_realtime.cpp tests/test_realtime_arming.cpp tests/test_realtime_lookahead.cpp tests/test_realtime_playrate.cpp tests/test_app.cpp
-                   tests/test_commands.cpp tests/test_scripts.cpp tests/test_strips.cpp tests/test_playrate.cpp tests/test_mix_edits.cpp tests/test_pdc.cpp
+  supple_add_tests(engine SOURCES tests/bridge_patience.cpp tests/test_item_edits.cpp tests/test_audio_warp.cpp tests/test_offline.cpp tests/test_freeze.cpp tests/test_instance_pool.cpp tests/test_autosave.cpp tests/test_take_copy.cpp tests/test_groups.cpp tests/test_media_files.cpp tests/test_recording_shutdown.cpp tests/test_realtime.cpp tests/test_audition.cpp tests/test_realtime_arming.cpp tests/test_realtime_lookahead.cpp tests/test_realtime_playrate.cpp tests/test_app.cpp
+                   tests/test_commands.cpp tests/test_scripts.cpp tests/test_strips.cpp tests/test_plan_dump.cpp tests/test_playrate.cpp tests/test_mix_edits.cpp tests/test_patch_edits.cpp tests/test_pdc.cpp
                    tests/test_runtime_protection.cpp tests/test_page_faults.cpp tests/test_idle_hold.cpp tests/test_jack.cpp tests/test_workers.cpp tests/test_live_workers.cpp tests/test_meters.cpp
-                   tests/test_learn.cpp tests/test_dsp.cpp tests/test_bridge_engine.cpp tests/test_render.cpp tests/test_racks.cpp tests/test_rack_clip.cpp tests/test_rack_levels.cpp tests/test_module_library.cpp tests/test_rack_recipes.cpp tests/test_rack_patches.cpp tests/test_rack_patches_play.cpp tests/test_sync.cpp LABELS rt SPLIT)
-  target_include_directories(engine.tests PRIVATE src)
+                   tests/test_learn.cpp tests/test_dsp.cpp tests/test_bridge_engine.cpp tests/test_offline_bridge.cpp tests/test_render.cpp tests/test_racks.cpp tests/test_rack_clip.cpp tests/test_rack_levels.cpp tests/test_module_library.cpp tests/test_rack_recipes.cpp tests/test_rack_patches.cpp tests/test_rack_patches_play.cpp tests/test_sync.cpp tests/test_crash_commands.cpp tests/test_load_overrides.cpp tests/test_suspects.cpp LABELS rt SPLIT)
+  # The longest engine file under ThreadSanitizer: it ran past the presets'
+  # 600 s on a busy machine and took 363 s alone.
+  set_tests_properties(engine.tests.test_realtime_playrate PROPERTIES TIMEOUT 1200)
+  target_include_directories(engine.tests PRIVATE src ${PROJECT_SOURCE_DIR}/plugins/common/include)
   target_include_directories(engine.tests PRIVATE ${PROJECT_SOURCE_DIR}/tests/fuzz)
   add_dependencies(engine.tests clap-host-fixtures clap-host-vst3-fixtures engine-fake-jack ${PRODUCT_SLUG}-bridge)
   target_compile_definitions(engine.tests PRIVATE FIXTURE_CLAP_PATH="$<TARGET_FILE:clap-host-fixtures>"
@@ -71,8 +74,8 @@ if(SUPPLE_BUILD_TESTS AND SUPPLE_PLATFORM_LINUX)
 endif()
 
 if(SUPPLE_BUILD_TESTS AND NOT SUPPLE_PLATFORM_LINUX)
-  supple_add_tests(engine SOURCES tests/bridge_patience.cpp tests/test_item_edits.cpp tests/test_audio_warp.cpp tests/test_native_engine.cpp tests/test_freeze.cpp tests/test_instance_pool.cpp tests/test_autosave.cpp tests/test_take_copy.cpp tests/test_groups.cpp tests/test_media_files.cpp tests/test_recording_shutdown.cpp tests/test_bridge_engine.cpp tests/test_page_faults.cpp tests/test_idle_hold.cpp tests/test_playrate.cpp tests/test_mix_edits.cpp tests/test_pdc.cpp tests/test_render.cpp tests/test_racks.cpp tests/test_rack_clip.cpp tests/test_rack_levels.cpp tests/test_module_library.cpp tests/test_rack_recipes.cpp tests/test_rack_patches.cpp tests/test_rack_patches_play.cpp tests/test_sync.cpp LABELS rt SPLIT)
-  target_include_directories(engine.tests PRIVATE src)
+  supple_add_tests(engine SOURCES tests/bridge_patience.cpp tests/test_item_edits.cpp tests/test_audio_warp.cpp tests/test_native_engine.cpp tests/test_freeze.cpp tests/test_instance_pool.cpp tests/test_autosave.cpp tests/test_take_copy.cpp tests/test_groups.cpp tests/test_plan_dump.cpp tests/test_media_files.cpp tests/test_recording_shutdown.cpp tests/test_audition.cpp tests/test_bridge_engine.cpp tests/test_offline_bridge.cpp tests/test_page_faults.cpp tests/test_idle_hold.cpp tests/test_playrate.cpp tests/test_mix_edits.cpp tests/test_patch_edits.cpp tests/test_pdc.cpp tests/test_render.cpp tests/test_racks.cpp tests/test_rack_clip.cpp tests/test_rack_levels.cpp tests/test_module_library.cpp tests/test_rack_recipes.cpp tests/test_rack_patches.cpp tests/test_rack_patches_play.cpp tests/test_sync.cpp tests/test_crash_commands.cpp tests/test_load_overrides.cpp tests/test_suspects.cpp LABELS rt SPLIT)
+  target_include_directories(engine.tests PRIVATE src ${PROJECT_SOURCE_DIR}/plugins/common/include)
   add_dependencies(engine.tests clap-host-fixtures ${PRODUCT_SLUG}-scanner ${PRODUCT_SLUG}-bridge)
   target_compile_definitions(engine.tests PRIVATE FIXTURE_CLAP_PATH="$<TARGET_FILE:clap-host-fixtures>" BRIDGE_PATH="$<TARGET_FILE:${PRODUCT_SLUG}-bridge>"
                              STOCK_CLAP_DIR="${CMAKE_BINARY_DIR}/plugins/clap"
@@ -80,6 +83,8 @@ if(SUPPLE_BUILD_TESTS AND NOT SUPPLE_PLATFORM_LINUX)
 endif()
 
 if(SUPPLE_BUILD_TESTS)
+  # The crash.* commands' tests write sample reports with the diagnostics library.
+  target_link_libraries(engine.tests PRIVATE supple::diagnostics supple::image-identity)
   # A fresh process fixes the media staging serial at zero for each collision.
   foreach(mode import folder import-case folder-case)
     add_test(NAME engine.media-staging.${mode}
@@ -174,6 +179,15 @@ if(SUPPLE_BUILD_TESTS)
   add_test(NAME engine-plan-soak.tests COMMAND engine-plan-soak.tests)
   set_tests_properties(engine-plan-soak.tests PROPERTIES LABELS "engine;rt"
     ENVIRONMENT "RTSAN_OPTIONS=halt_on_error=1;UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1")
+  # The regression corpus (tests/fuzz/README.md): each file, present or
+  # added later, replays as its own test.
+  file(GLOB _soak_replays CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/tests/fuzz/plan-soak-corpus/*.jsonl)
+  foreach(_replay ${_soak_replays})
+    get_filename_component(_name ${_replay} NAME_WE)
+    add_test(NAME engine-plan-soak.replay.${_name} COMMAND engine-plan-soak.tests)
+    set_tests_properties(engine-plan-soak.replay.${_name} PROPERTIES LABELS "engine;rt"
+      ENVIRONMENT "SUPPLE_SOAK_REPLAY=${_replay};RTSAN_OPTIONS=halt_on_error=1;UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1")
+  endforeach()
 endif()
 
 if(SUPPLE_BUILD_TESTS)
@@ -216,3 +230,5 @@ add_executable(engine-playrate-project-bench bench/playrate_project_bench.cpp)
 target_include_directories(engine-playrate-project-bench PRIVATE src)
 target_link_libraries(engine-playrate-project-bench PRIVATE supple::engine)
 supple_target_defaults(engine-playrate-project-bench)
+
+target_link_libraries(${PRODUCT_SLUG}-engine PRIVATE supple::diagnostics)

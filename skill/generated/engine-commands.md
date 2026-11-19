@@ -360,6 +360,224 @@ Result:
 
 ```
 
+## `audition.get@1`
+
+Whether a file audition plays: its path, length and position (seconds).
+
+
+
+Kind: `query`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "audition_status",
+  "properties": {
+    "playing": {
+      "type": "boolean"
+    },
+    "decoding": {
+      "type": "boolean"
+    },
+    "path": {
+      "type": "string"
+    },
+    "seconds": {
+      "type": "number"
+    },
+    "position": {
+      "type": "number"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["playing", "decoding", "path", "seconds", "position"],
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**Nothing playing** (`empty`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "playing": false,
+  "decoding": false,
+  "path": "",
+  "seconds": 0.0,
+  "position": 0.0
+}
+
+```
+
+## `audition.play@1`
+
+Play an audio file once on outputs 1/2, outside the project.
+
+A WAV, FLAC or MP3 file plays from its start, once, on the device's outputs 1 and 2 (mono on both; a wider file's first two channels), whether the transport is stopped or playing. It does not pass the project's tracks, masters or meters, and renders and recordings never contain it. The file's start, up to 28,800,000 frames at the higher of its rate and the device's (ten minutes at 48 kHz, 2.5 at 192 kHz), is read and resampled to the device's rate before it sounds (decoding: true meanwhile; truncated: true when the file is longer). path: absolute, or a name in the project's media folder. A second call replaces what plays; it ends at the file's end, with audition.stop, when the engine stops or another project is opened. Not an undo step, not saved.
+
+Kind: `action`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `path` | string |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "audition",
+  "properties": {
+    "path": {
+      "type": "string"
+    },
+    "seconds": {
+      "type": "number"
+    },
+    "sample_rate": {
+      "type": "number"
+    },
+    "channels": {
+      "type": "integer"
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["path", "seconds", "sample_rate", "channels", "truncated"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `engine.stopped`: the engine is not running Hint: engine.start first
+- `audition.file`: the file is missing, unreadable or not WAV, FLAC or MP3 Hint: give a WAV, FLAC or MP3 file: an absolute path, or a name in the project's media folder
+
+### Examples
+
+**A file in the project's media folder** (`audition_file`)
+
+```json
+{
+  "path": "tone.wav"
+}
+
+```
+
+Result:
+
+```json
+{
+  "path": "<any>",
+  "seconds": 2.0,
+  "sample_rate": 48000.0,
+  "channels": 2,
+  "truncated": false
+}
+
+```
+
+## `audition.stop@1`
+
+Stop the file audition (fading out over 5 ms); returns its state.
+
+Stopping when nothing plays is not an error. Not an undo step.
+
+Kind: `action`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "audition_status",
+  "properties": {
+    "playing": {
+      "type": "boolean"
+    },
+    "decoding": {
+      "type": "boolean"
+    },
+    "path": {
+      "type": "string"
+    },
+    "seconds": {
+      "type": "number"
+    },
+    "position": {
+      "type": "number"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["playing", "decoding", "path", "seconds", "position"],
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**Nothing playing** (`engine_running`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "playing": false,
+  "decoding": false,
+  "path": "",
+  "seconds": 0.0,
+  "position": 0.0
+}
+
+```
+
 ## `autoitem.add@1`
 
 Put an automation item on an envelope: a block that replaces it there.
@@ -1326,6 +1544,273 @@ Result:
 
 ```json
 {}
+
+```
+
+## `crash.acknowledge@1`
+
+Mark a crash report, or a run that left none, as seen.
+
+Writes a small marker beside the report; the report itself is never changed. An acknowledged report no longer counts for the restart notice. It does not end the suspicion of a plug-in: seen is not resolved, and crash.settle does that. Repeating it changes nothing.
+
+Kind: `action`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `incident` | string |  |  |  | A report's incident id, from crash.list. |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `crash.no_report`: no finished report or ended run has that incident id Hint: list the reports with crash.list
+
+### Examples
+
+**Acknowledge a report** (`song_with_crash_report`)
+
+```json
+{
+  "incident": "0123456789abcdef0123456789abcdef"
+}
+
+```
+
+Result:
+
+```json
+{
+  "incident": "0123456789abcdef0123456789abcdef",
+  "acknowledged": true
+}
+
+```
+
+## `crash.clear@1`
+
+Delete every finished crash report and record of an ended run.
+
+Removes what crash.list shows as over: reports and unreported runs, with their acknowledgements. It cannot be undone. Live runs, reports still being written and files that are not valid reports are left alone. Returns how many incidents went.
+
+Kind: `action`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**Clear the reports** (`song_with_crash_report`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "deleted": 1
+}
+
+```
+
+## `crash.delete@1`
+
+Delete one crash report, or the record of a run that left none.
+
+Removes the report file, its acknowledgement and an idle run marker. It cannot be undone. A run that is still live or a report still being written is refused.
+
+Kind: `action`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `incident` | string |  |  |  | A report's incident id, from crash.list. |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `crash.no_report`: no finished report or ended run has that incident id Hint: list the reports with crash.list
+
+### Examples
+
+**Delete a report** (`song_with_crash_report`)
+
+```json
+{
+  "incident": "0123456789abcdef0123456789abcdef"
+}
+
+```
+
+Result:
+
+```json
+{
+  "incident": "0123456789abcdef0123456789abcdef",
+  "deleted": true
+}
+
+```
+
+## `crash.list@1`
+
+The crash reports earlier runs left, newest first.
+
+Each report says when it was written, which build and role, how the run ended (kind: crash, unexpected_exit, bridge_exit for a plug-in bridge process that died while the app lived, or other for a kind this build does not know), the attribution level (fault_in_image, active_token, concurrent_activity, recent_command, bridge_exit, unknown; a stated confidence, not a verdict) and the plug-in it names, if any, as the plug-in described itself. unreported lists runs that ended and left no report (the supervisor died or could not write). A report counts once its run has ended: reports_pending are still being written; live_runs are running now, this one included. ignored counts files that are not valid reports. limit caps each list (default 50); the _total fields count them all. Reports hold plug-in and command names, never project content.
+
+Kind: `query`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `limit` | integer |  | 1.0..200.0 |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**The reports left behind** (`song_with_crash_report`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "reports": "<any>",
+  "reports_total": 1,
+  "unreported": [],
+  "unreported_total": 0,
+  "live_runs": 0,
+  "reports_pending": 0,
+  "ignored": 0
+}
+
+```
+
+## `crash.read@1`
+
+One crash report in full.
+
+The report as the supervisor wrote it (schema supple.crash-report/1.0): the run, the plug-ins it had announced, the threads with module-relative frames, the last commands, the attribution and everything it could not collect (unavailable, dropped). Frames are not symbolised: the offline resolver does that. Reports are tens of kilobytes and at most 4 MiB.
+
+Kind: `query`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `incident` | string |  |  |  | A report's incident id, from crash.list. |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `crash.no_report`: no finished report has that incident id Hint: list the reports with crash.list
+
+### Examples
+
+**Read a report** (`song_with_crash_report`)
+
+```json
+{
+  "incident": "0123456789abcdef0123456789abcdef"
+}
+
+```
+
+Result:
+
+```json
+{
+  "incident": "0123456789abcdef0123456789abcdef",
+  "report": "<any>"
+}
+
+```
+
+## `crash.settle@1`
+
+Mark the suspicion a crash report raised as resolved.
+
+Writes a small marker beside the report; the report itself is never changed. A settled report no longer makes its plug-in a suspect (project.plugins, project.open's project.suspect_plugin warning). Use it once the plug-in was loaded normally and ran well, or when the person chose to load it normally; crash.acknowledge only says the report was seen. A report whose run has not ended cannot be settled. Repeating it changes nothing.
+
+Kind: `action`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `incident` | string |  |  |  | A report's incident id, from crash.list. |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `crash.no_report`: no finished report has that incident id Hint: list the reports with crash.list
+
+### Examples
+
+**Settle a report** (`song_with_crash_report`)
+
+```json
+{
+  "incident": "0123456789abcdef0123456789abcdef"
+}
+
+```
+
+Result:
+
+```json
+{
+  "incident": "0123456789abcdef0123456789abcdef",
+  "settled": true
+}
 
 ```
 
@@ -3422,6 +3907,13 @@ Kind: `action`. Exposure: `mcp-tool`.
         "type": "string"
       }
     },
+    "disabled_fx": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "fx whose plug-in this run has disabled (plugin.override): the strip passes audio through"
+    },
     "bridge_threads_refused": {
       "type": "array",
       "items": {
@@ -3544,6 +4036,7 @@ Kind: `action`. Exposure: `mcp-tool`.
     "audio_page_faults",
     "meter_drops",
     "failed_fx",
+    "disabled_fx",
     "bridge_threads_refused",
     "dropped",
     "voice_dropped",
@@ -3668,6 +4161,7 @@ Result:
     "callback": 0
   },
   "failed_fx": [],
+  "disabled_fx": [],
   "bridge_threads_refused": [],
   "dropped": 0,
   "voice_dropped": 0,
@@ -3681,7 +4175,7 @@ Result:
 
 Real-time engine state: backend, rate, block, device period, latency, xruns.
 
-preparing_audio: source preparation is pending; the previous ready plan stays audible. prepared_version is the last compiled version, preparation_version the pending target (zero when idle); preparation_error explains a failed preparation. plan_latency: plugin delay plus prepared MIDI audio lead in frames; midi_lead_frames reports the latter. midi_inputs/midi_outputs give per-port enabled/timing/loss/warnings, and for outputs what each sends (clock, transport, spp, mtc), as midi.inputs.get/midi.outputs.get. device_latency: frames from the engine's outputs to the device. restart_needed: the device changed rate or went away; engine.stop and engine.start again. midi_devices_changed is advisory: MIDI topology changed but audio keeps running. midi_devices_message asks for an explicit engine restart to pick up the new set; existing port names stay fixed. midi_out_dropped counts hardware output rejections, queue/device loss and pending events discarded at shutdown. midi_output_warnings lists outputs skipped at start; midi_output_latency is signed audio-minus-MIDI latency per output, in frames. sync: external sync (sync.get has the same status with the settings). midi_dropped: MIDI input messages/packets rejected or lost to bounded queues (JACK and native; zero for the dummy backend). midi_warnings lists inputs skipped at start, with device, numeric os_error, message and corrective hint. meter_drops: entries a full ring dropped (the renderer's, the audio callback's) — a strip's peak/RMS missed a block, never audio. dropped/voice_dropped count lost plug-in output/voice records. memory_lock reports requested/active and an optional OS error with errno and a corrective hint, including while stopped. Bridges are excluded. cpu_idle_latency reports the owned 20 microsecond request with the same status/error fields, and automatic: held without the option because a bridged plug-in plays live (Linux; an automatic failure is no warning). It affects system idle while held and leaves CPU frequency policy unchanged. thp_opt_out: active, advised_only, inherited (the process was already kept out when the engine started; left as it was, not undone at stop) and an optional error, Linux only (khugepaged collapsing memory would stall audio threads). audio_page_faults: page faults since the engine started; scope audio_threads counts the callback's and live helpers' (Linux), process the whole process's (macOS, Windows, where major is omitted), none while stopped; saturated: the platform's counter stopped at its limit (macOS 32-bit counts), so minor is 0 and major omitted, not counts. live_helpers is the enabled live helper capacity. scheduling: each thread class's policy (none, normal, fifo, rr, high) and priority as applied at start: the device callback, live helpers, renderer and background helpers (real-time below a real-time callback when permitted). workgroup: whether the live helpers joined the device's audio workgroup (macOS CoreAudio; state none, ready, joined, partial or failed, with the helper counts and the last refusal's OS error, message and hint). warnings includes scheduling fallbacks and plan warnings with corrective actions. failed_errors adds structured code, message, path and hint to each failure. failed_fx: isolated plugins whose process crashed or hung (silent now; fx.restart re-creates them). bridge_late: callback cycles in which a bridged plugin had not answered by the cycle's bridge deadline (its period or 2 ms, whichever is larger); its output was silent for that cycle, and xruns counts each of these cycles too. bridge_threads_refused: isolated plugins whose bridge audio thread was refused the scheduling it asked for (it runs at what it had and can fall behind under load; grant real-time scheduling to the user and restart the engine).
+preparing_audio: source preparation is pending; the previous ready plan stays audible. prepared_version is the last compiled version, preparation_version the pending target (zero when idle); preparation_error explains a failed preparation. plan_latency: plugin delay plus prepared MIDI audio lead in frames; midi_lead_frames reports the latter. midi_inputs/midi_outputs give per-port enabled/timing/loss/warnings, and for outputs what each sends (clock, transport, spp, mtc), as midi.inputs.get/midi.outputs.get. device_latency: frames from the engine's outputs to the device. restart_needed: the device changed rate or went away; engine.stop and engine.start again. midi_devices_changed is advisory: MIDI topology changed but audio keeps running. midi_devices_message asks for an explicit engine restart to pick up the new set; existing port names stay fixed. midi_out_dropped counts hardware output rejections, queue/device loss and pending events discarded at shutdown. midi_output_warnings lists outputs skipped at start; midi_output_latency is signed audio-minus-MIDI latency per output, in frames. sync: external sync (sync.get has the same status with the settings). midi_dropped: MIDI input messages/packets rejected or lost to bounded queues (JACK and native; zero for the dummy backend). midi_warnings lists inputs skipped at start, with device, numeric os_error, message and corrective hint. meter_drops: entries a full ring dropped (the renderer's, the audio callback's) — a track's peak/RMS missed a block, never audio. dropped/voice_dropped count lost plug-in output/voice records. memory_lock reports requested/active and an optional OS error with errno and a corrective hint, including while stopped. Bridges are excluded. cpu_idle_latency reports the owned 20 microsecond request with the same status/error fields, and automatic: held without the option because a bridged plug-in plays live (Linux; an automatic failure is no warning). It affects system idle while held and leaves CPU frequency policy unchanged. thp_opt_out: active, advised_only, inherited (the process was already kept out when the engine started; left as it was, not undone at stop) and an optional error, Linux only (khugepaged collapsing memory would stall audio threads). audio_page_faults: page faults since the engine started; scope audio_threads counts the callback's and live helpers' (Linux), process the whole process's (macOS, Windows, where major is omitted), none while stopped; saturated: the platform's counter stopped at its limit (macOS 32-bit counts), so minor is 0 and major omitted, not counts. live_helpers is the enabled live helper capacity. scheduling: each thread class's policy (none, normal, fifo, rr, high) and priority as applied at start: the device callback, live helpers, renderer and background helpers (real-time below a real-time callback when permitted). workgroup: whether the live helpers joined the device's audio workgroup (macOS CoreAudio; state none, ready, joined, partial or failed, with the helper counts and the last refusal's OS error, message and hint). warnings includes scheduling fallbacks and plan warnings with corrective actions. failed_errors adds structured code, message, path and hint to each failure, and `incident`, the id of the local crash report the bridge's death may have caused (crash.read; the report may not exist), when it died of a signal or an exception. failed_fx: isolated plugins whose process crashed or hung (silent now; fx.restart re-creates them). bridge_late: callback cycles in which a bridged plugin had not answered by the cycle's bridge deadline (its period or 2 ms, whichever is larger); its output was silent for that cycle, and xruns counts each of these cycles too. bridge_threads_refused: isolated plugins whose bridge audio thread was refused the scheduling it asked for (it runs at what it had and can fall behind under load; grant real-time scheduling to the user and restart the engine).
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -4191,6 +4685,13 @@ Kind: `query`. Exposure: `mcp-exec`.
         "type": "string"
       }
     },
+    "disabled_fx": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "fx whose plug-in this run has disabled (plugin.override): the strip passes audio through"
+    },
     "bridge_threads_refused": {
       "type": "array",
       "items": {
@@ -4313,6 +4814,7 @@ Kind: `query`. Exposure: `mcp-exec`.
     "audio_page_faults",
     "meter_drops",
     "failed_fx",
+    "disabled_fx",
     "bridge_threads_refused",
     "dropped",
     "voice_dropped",
@@ -4441,6 +4943,7 @@ Result:
     "callback": 0
   },
   "failed_fx": [],
+  "disabled_fx": [],
   "bridge_threads_refused": [],
   "dropped": 0,
   "voice_dropped": 0,
@@ -5539,6 +6042,10 @@ Kind: `query`. Exposure: `mcp-tool`.
     "isolation_effective": {
       "type": "string",
       "description": "Where the instance runs: in_process, shared_bridge or dedicated; inherit resolves to the plug-in isolation preference (stock plug-ins in process), as the instance is made"
+    },
+    "override": {
+      "type": "string",
+      "description": "This run's plugin.override for the plug-in, when it is not normal: bridge (it runs on a dedicated bridge) or disable (it is not loaded: the strip passes audio through, a rack module is silent, and there is no isolation_effective or parameter section)"
     },
     "outputs_notes": {
       "type": "boolean",
@@ -8231,9 +8738,9 @@ Result:
 
 ## `item.mix-to-track@1`
 
-Mix the selected items through their strips onto a new muted channel.
+Mix the selected items through their tracks onto a new muted channel.
 
-Background job. Only the given items sound; each plays through its channel's full strip (take FX, item gain/fades, track FX, automation, fader, pan, Console 9 encode), and the sum is decoded by a neutral Console 9 Buss, as a fresh buss fed by those channels hears it. Sends, parent busses, mute switches and solo are ignored. Span: earliest item start to latest end, no tail. Result: a project-rate stereo float WAV in the media folder on a new muted channel after the last source (under their common parent, else the main master), one item at the span's start. Source items stay. One undo step; job.get returns track, item and file.
+Background job. Only the given items sound; each plays through its channel in full (take FX, item gain/fades, track FX, automation, fader, pan, Console 9 encode), and the sum is decoded by a neutral Console 9 Buss, as a fresh buss fed by those channels hears it. Sends, parent busses, mute switches and solo are ignored. Span: earliest item start to latest end, no tail. Result: a project-rate stereo float WAV in the media folder on a new muted channel after the last source (under their common parent, else the main master), one item at the span's start. Source items stay. One undo step; job.get returns track, item and file.
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -10670,6 +11177,176 @@ Result:
 
 ```
 
+## `plugin.override@1`
+
+Load a plug-in normally, on a bridge, or not at all for this run.
+
+A safety choice for a plug-in suspected of crashing: mode bridge runs it in a dedicated bridge process (a crash then stays there; a live bridge can drop blocks under load), disable does not load it (its strips pass audio through and a rack module of it is silent), normal loads it as the project says. It holds until the app quits, is not in the project or its history, and is not saved: a project saved while it holds is byte-for-byte the one saved without. Instances of the plug-in restart, so state that was never saved is lost and held notes end. Stock plug-ins cannot be bridged, and bridge needs the bridge executable; both are refused with plugin.override_unavailable.
+
+Kind: `action`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `plugin` | string |  |  |  | id or name, as plugin.list shows it |
+| `mode` | string |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "plugin_override_result",
+  "properties": {
+    "plugin": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "format": {
+      "type": "string"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["normal", "bridge", "disable"]
+    },
+    "changed": {
+      "type": "boolean",
+      "description": "false: it was set that way already"
+    },
+    "fx": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "the fx of this plug-in in the project now"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["plugin", "name", "format", "mode", "changed", "fx"],
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**Load normally** (`empty`)
+
+```json
+{
+  "plugin": "com.suppleaudio.test.gain",
+  "mode": "normal"
+}
+
+```
+
+Result:
+
+```json
+{
+  "plugin": "com.suppleaudio.test.gain",
+  "name": "<any>",
+  "format": "clap",
+  "mode": "normal",
+  "changed": false,
+  "fx": []
+}
+
+```
+
+## `plugin.overrides@1`
+
+List the plug-ins this run bridges or has disabled.
+
+What plugin.override set, with the fx of each plug-in in the project now. bridge_available: a bridge executable was found, so mode bridge can be set.
+
+Kind: `query`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "plugin_override_list",
+  "properties": {
+    "overrides": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "plugin_override_entry",
+        "properties": {
+          "plugin": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["normal", "bridge", "disable"]
+          },
+          "fx": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": ["plugin", "name", "format", "mode", "fx"],
+        "additionalProperties": false
+      }
+    },
+    "bridge_available": {
+      "type": "boolean"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["overrides", "bridge_available"],
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**None set** (`empty`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "overrides": [],
+  "bridge_available": "<any>"
+}
+
+```
+
 ## `plugin.scan@1`
 
 Rescan configured plugin paths and return the available plugins.
@@ -11126,7 +11803,7 @@ Result:
 
 Open a project file and its branches (replaces the current project).
 
-recoverable > 0: recordings a crash left out of the project; project.recoverable lists them and project.recover puts them back. autosave_available: a newer autosave exists next to the file (it is not loaded silently). branch: the branch current when saved. warnings: project.history when the saved branches could not be restored (main opens alone; the first save over the file keeps a copy of it); also project module copies that could not be read or compiled, and name types using a library version instead or left unavailable.
+recoverable > 0: recordings a crash left out of the project; project.recoverable lists them and project.recover puts them back. autosave_available: a newer autosave exists next to the file (it is not loaded silently). branch: the branch current when saved. warnings: project.history when the saved branches could not be restored (main opens alone; the first save over the file keeps a copy of it); also project module copies that could not be read or compiled, and name types using a library version instead or left unavailable; project.suspect_plugin when a crash report points at a plug-in the project holds (it loads normally: the engine never prompts or changes how a plug-in loads by itself; plugin.override first to protect the run).
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -11135,6 +11812,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `path` | string |  |  |  |  |
+| `expect_hash` | string |  |  |  | The hash project.plugins returned: the file is opened only if its bytes are those it checked (project.changed otherwise) |
 
 ### Result
 
@@ -11263,11 +11941,68 @@ Result:
 
 ```
 
+## `project.plugins@1`
+
+The plug-ins a project, or a recovery, names, and any a crash report suspects.
+
+Reads the file as project.open would and loads nothing: no plug-in, no probe. Every branch's head is read, not the history steps behind them. plugins lists each (format, id) once with the name, vendor and version the file saves, uses (its fx in the saved branch), branches, mode (this run's plugin.override), stock and bridgeable, and resolved: the installed plug-in (id, name, vendor, version, path) from the catalogue as it stands, or null (not installed, or the catalogue is empty: catalogue_empty says it is, and no scan was started; plugin.scan first). suspect is null, or says that a crash report points at it and the installed file is that build (build same), that version when the report names no build (version), or could not be checked against it (unreadable): attribution (fault_in_image or active_token) and the incidents, newest first. A plug-in is never loaded to find out. hash is the SHA-256 of the file's bytes: pass it to project.open as expect_hash so the check and the load read the same file. template: true reads a project template (a folder or file) instead. Recovery is checked the same way, before it opens anything: session reads the autosave project.recover {session} would open, autosave: true the one project.recover {autosave: true} would (autosave_file names one, as there). The result's source says which, and autosave names the file read: pass it to project.recover as autosave_file so the check and the load read one file. Give exactly one of path, session and autosave. project.open and project.recover also warn (project.suspect_plugin) of a plug-in still on the normal load.
+
+Kind: `query`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `path` | string |  |  |  |  |
+| `template` | boolean |  |  |  |  |
+| `session` | string |  |  |  | A session project.recoverable lists |
+| `autosave` | boolean |  |  |  | The open project's newer autosave |
+| `autosave_file` | string |  |  |  | With autosave: which one, as offered |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `file.open`: the file cannot be read Hint: check the path
+- `schema.invalid`: the file has problems Hint: details list each with its path
+- `project.plugins_args`: the source is not exactly one of path, session, autosave Hint: give one
+- `recover.unknown_session`: no unsaved project of that name was left behind Hint: project.recoverable lists them
+- `recover.no_autosave`: no autosave is newer than the saved file Hint: open the project as saved
+
+### Examples
+
+**Which plug-ins** (`saved`)
+
+```json
+{
+  "path": "example-project.json"
+}
+
+```
+
+Result:
+
+```json
+{
+  "source": "file",
+  "path": "<any>",
+  "hash": "<any>",
+  "catalogue_empty": "<any>",
+  "plugins": "<any>"
+}
+
+```
+
 ## `project.recover@1`
 
 Put back what a crash left behind: recordings, or an unsaved project.
 
-files: as project.recoverable lists them (omit for all). Each becomes an item on the track it was recorded on (or track) at the position it was recorded, in one undo step. session: instead opens that unsaved project from its newest readable autosave in place of the current one (unsaved changes are lost: save first), still unsaved, and puts back its leftover recordings as one more undo step. autosave: instead opens the saved project's autosave newer than its file (project.get autosave_available) in place of what is open, keeping its path: it is unsaved until saved over the file. autosave_file names the autosave to open (as project.recover returned or a client offered it); it must be newer than the file as this project was opened.
+files: as project.recoverable lists them (omit for all). Each becomes an item on the track it was recorded on (or track) at the position it was recorded, in one undo step. session: instead opens that unsaved project from its newest readable autosave in place of the current one (unsaved changes are lost: save first), still unsaved, and puts back its leftover recordings as one more undo step. autosave: instead opens the saved project's autosave newer than its file (project.get autosave_available) in place of what is open, keeping its path: it is unsaved until saved over the file. autosave_file names the autosave to open (as project.recover returned or a client offered it); it must be newer than the file as this project was opened. A plug-in an earlier crash report points at raises project.suspect_plugin among the result's warnings (project.plugins session or autosave says so before the call), and loads normally.
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -11756,7 +12491,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `author` | string |  |  |  |  |
 | `notes` | string |  |  |  |  |
 | `console9` | boolean |  |  |  |  |
-| `pan_law` | object |  |  |  | Channels' and busses' pan law unless a strip sets its own: db is the centre's cut (0, -2.5, -3, -4.5 or -6; default 0); boost keeps the centre at 0 dB and raises the sides instead |
+| `pan_law` | object |  |  |  | Channels' and busses' pan law unless a track sets its own: db is the centre's cut (0, -2.5, -3, -4.5 or -6; default 0); boost keeps the centre at 0 dB and raises the sides instead |
 | `history_budget_bytes` | integer |  | 1.0.. |  | Estimated retained history byte budget; default 1 GiB. Leases and branch boundaries may exceed it. |
 | `render` | object |  |  |  | Render settings (session-model §1.10); every member optional |
 | `timebase` | string |  |  |  |  |
@@ -14201,7 +14936,7 @@ Result:
 
 ## `route.add@1`
 
-Send audio between strips, or MIDI between channels and rack modules.
+Send audio between tracks, or MIDI between channels and rack modules.
 
 The destination must not feed the source. Master accepts routes. With fx instead of to, the send feeds that plug-in's sidechain (key) input — e.g. a kick keying a compressor on the bass; it is delay-compensated, and soloing the keyed track does not stop the key. MIDI sends use channel or Note Out sources and channel or Notes destinations, midi: {} (all channels unchanged); from_channel filters and to_channel remaps, 0..16 with 0 meaning all/original. to_midi selects a hardware MIDI output by exact name instead of to. Missing outputs warn while audio keeps playing. A rack's Out module (from: mo_N) sends audio to a buss or master: a rack send, added after the destination's Console 9 decode, never encoded, with level and mute only; it follows the mute and solo of the rack's home channel (ADR-0075).
 
@@ -14713,7 +15448,7 @@ Result:
 
 Read audio or MIDI endpoints, existing sends and blocked pairs.
 
-mode: audio (default), midi or hardware_midi (channels/Note Out and hardware inputs to channels/hardware outputs). MIDI sources are channels and Note Out; destinations are channels and Notes, with no audio controls. Audio sources: strips in tree order (depth, parent, parent_send). destinations: strips (kind track), plug-in keys (kind key: fx with a sidechain input) and racks' In modules (kind module: mo_N, named "<rack> » <In>", with rack and home track), each strip's keys and In modules after it. Each channel's rack Out modules follow it among sources (type rack_out, named "<rack> » <Out>", with rack and home track): they send only to busses and masters (their rule), added after the decode, never encoded (ADR-0075). A pair is blocked when the source's rule applies (masters feed only keys), the destination's rule applies (channels take only hardware audio), it is the same strip, or it is listed in cycles (the destination already feeds the source; for an In module, its rack's Outs reach the source; path names its ids, names the same by name). sends: existing routes per pair (to: a strip, an fx or an In module). Otherwise route.add accepts the pair (an In module: route.add {from, to: mo_N}). A source's channels past 2 are auxiliary (ADR-0020); channel_names names those a multi-out plug-in writes ({"3": "Kick"}), and route.add {channels: {from: [3, 4], to: [1, 2]}} sends that pair.
+mode: audio (default), midi or hardware_midi (channels/Note Out and hardware inputs to channels/hardware outputs). MIDI sources are channels and Note Out; destinations are channels and Notes, with no audio controls. Audio sources: tracks in tree order (depth, parent, parent_send). destinations: tracks (kind track), plug-in keys (kind key: fx with a sidechain input) and racks' In modules (kind module: mo_N, named "<rack> » <In>", with rack and home track), each track's keys and In modules after it. Each channel's rack Out modules follow it among sources (type rack_out, named "<rack> » <Out>", with rack and home track): they send only to busses and masters (their rule), added after the decode, never encoded (ADR-0075). A pair is blocked when the source's rule applies (masters feed only keys), the destination's rule applies (channels take only hardware audio), it is the same track, or it is listed in cycles (the destination already feeds the source; for an In module, its rack's Outs reach the source; path names its ids, names the same by name). sends: existing routes per pair (to: a track, an fx or an In module). Otherwise route.add accepts the pair (an In module: route.add {from, to: mo_N}). A source's channels past 2 are auxiliary (ADR-0020); channel_names names those a multi-out plug-in writes ({"3": "Kick"}), and route.add {channels: {from: [3, 4], to: [1, 2]}} sends that pair.
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -14849,7 +15584,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Errors
 
-- `route.channels`: the map pairs channels the strips do not have Hint: pair 1 and 2: {from: [1, 2], to: [2, 1]}
+- `route.channels`: the map pairs channels the tracks do not have Hint: pair 1 and 2: {from: [1, 2], to: [2, 1]}
 - `route.endpoint`: MIDI sends need channel or note-module endpoints Hint: send channel/Note Out MIDI to a channel or Notes module
 - `route.midi`: audio controls do not apply to MIDI routes Hint: use mute and MIDI channel routing
 - `route.rack_send`: a rack send has level and mute only Hint: pan, polarity and channel routing belong in the rack or on the buss
@@ -16340,9 +17075,9 @@ Result:
 
 ## `track.add@1`
 
-Add a channel, buss or master strip and return its id.
+Add a track (a channel, buss or master) and return its id.
 
-parent: a buss/master id (default tr_0); masters have no parent; index: position among its siblings; name: default the first free ch_N, buss_N or mstr_N. A new channel gets the user's default monitoring (on unless set otherwise; monitoring needs the track armed).
+parent: a buss/master id (default tr_0); masters have no parent; index: position among its siblings; name: default the first free ch_N, buss_N or mstr_N. A new channel gets the user's default monitoring (on unless set otherwise; monitoring needs the track armed). color: a track colour's name or "#rrggbb", "" for none; default for a channel or buss the palette colour the fewest tracks carry (red first), for a master none.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -16352,6 +17087,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | --- | --- | --- | --- | --- | --- |
 | `type` | string |  |  | "channel" |  |
 | `name` | string |  |  |  |  |
+| `color` | string |  |  |  |  |
 | `parent` | string |  |  |  | Parent track id, e.g. "tr_1". |
 | `index` | integer |  | 0.0.. |  |  |
 | `channels` | integer |  | 1.0..128.0 |  |  |
@@ -16386,6 +17122,26 @@ Kind: `edit`. Exposure: `mcp-tool`.
 ```json
 {
   "name": "Bass"
+}
+
+```
+
+Result:
+
+```json
+{
+  "track": "tr_1"
+}
+
+```
+
+**Add a green buss for the drums** (`empty`)
+
+```json
+{
+  "name": "Drums",
+  "type": "buss",
+  "color": "green"
 }
 
 ```
@@ -17212,9 +17968,9 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `midi_channel` | integer |  | 0.0..16.0 |  |  |
 | `record_mode` | string |  |  |  |  |
 | `monitor` | string |  |  |  |  |
-| `parent_send` | boolean |  |  |  | The implicit send to the parent buss/master (off: only explicit sends leave the strip) |
+| `parent_send` | boolean |  |  |  | The implicit send to the parent buss/master (off: only explicit sends leave the track) |
 | `timebase` | string |  |  |  | What this channel's items follow when the tempo changes (those that inherit it): project, beats, time or beats_position; they keep their place now |
-| `channels` | integer |  | 1.0..128.0 |  | 1-2: the strip's main pair; up to 128 adds auxiliary channels 3-128 for routes and plug-in pins (a detector on 3/4, a multi-out instrument's outputs), outside the fader, pan and parent send |
+| `channels` | integer |  | 1.0..128.0 |  | 1-2: the track's main pair; up to 128 adds auxiliary channels 3-128 for routes and plug-in pins (a detector on 3/4, a multi-out instrument's outputs), outside the fader, pan and parent send |
 | `hw_output` | array |  |  |  | Masters: the device outputs the main pair plays to: [l, r], [mono] or [] for none (engine.inputs lists them). Default: tr_0 [1, 2], other masters [] |
 | `lane_mute` | boolean |  |  |  | Masters: silence the master's own items (its prints) and nothing else |
 | `chain_midi` | string |  |  |  | What the FX chain does with MIDI: bus (default; plug-ins hear and feed it in order) or instrument (only the first plug-in with a note input hears the track's MIDI; plug-ins' note output goes nowhere) |
@@ -17317,7 +18073,7 @@ Result:
 
 ```
 
-**Narrow a stereo strip to half width, a little right** (`song`)
+**Narrow a stereo track to half width, a little right** (`song`)
 
 ```json
 {
@@ -17336,7 +18092,7 @@ Result:
 
 ```
 
-**Give a strip the -3 dB pan law** (`song`)
+**Give a track the -3 dB pan law** (`song`)
 
 ```json
 {
@@ -17500,7 +18256,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 
 ### Examples
 
-**Delete the bass strip** (`song_with_saved_template`)
+**Delete the bass track** (`song_with_saved_template`)
 
 ```json
 {
@@ -17592,7 +18348,7 @@ Result:
 
 ## `track.template.load@1`
 
-Add a strip from a track template (settings and FX) in one undo step.
+Add a track from a track template (settings and FX) in one undo step.
 
 Give exactly one of name (in the user's track-templates directory) or path. parent defaults to the master. Every plugin and state is checked before the model changes.
 
@@ -17637,7 +18393,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Examples
 
-**Add the saved bass strip** (`song_with_saved_template`)
+**Add the saved bass track** (`song_with_saved_template`)
 
 ```json
 {
@@ -17658,9 +18414,9 @@ Result:
 
 ## `track.template.save@1`
 
-Save a strip (settings and FX chains) as a named track template.
+Save a track (settings and FX chains) as a named track template.
 
-Writes a supple.track-template/1.0 file to the user's track-templates directory: the strip's type, name, colour, notes, level, pan and monitoring, and its main and input chains as fx.chain.save stores them (semantic patches or base64 state). Not routing or items. replace: true overwrites an existing name.
+Writes a supple.track-template/1.0 file to the user's track-templates directory: the track's type, name, colour, notes, level, pan and monitoring, and its main and input chains as fx.chain.save stores them (semantic patches or base64 state). Not routing or items. replace: true overwrites an existing name.
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -17701,7 +18457,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 
 ### Examples
 
-**Save the bass strip** (`song_with_chain`)
+**Save the bass track** (`song_with_chain`)
 
 ```json
 {
@@ -18627,7 +19383,7 @@ Result:
 
 Set the project's master playrate ratio and preserve-pitch flag.
 
-rate: finite 0.25..4.0 (default 1); preserve_pitch defaults false in a new project. Omitted fields keep their values. Updates during a drag use Origin.gesture like strip faders, and write/touch/latch capture tr_0/playrate coarsely: unlike strip levels (ADR-0061), the curve keeps playing while it is written (no hold or touch return). Recording requires unity. Settings are saved/undoable. File sources convert before take FX and live input mixing; instruments retain their pitch. Scalar edits ramp and converter changes crossfade for 10 ms after priming. Edits include the render horizon and compensated source lookahead; newer requests coalesce while a transition finishes. Long-latency take chains can exceed the usual 200 ms response. effective_rate follows audible output, independently of requested_rate.
+rate: finite 0.25..4.0 (default 1); preserve_pitch defaults false in a new project. Omitted fields keep their values. Updates during a drag use Origin.gesture like track faders, and write/touch/latch capture tr_0/playrate coarsely: unlike track levels (ADR-0061), the curve keeps playing while it is written (no hold or touch return). Recording requires unity. Settings are saved/undoable. File sources convert before take FX and live input mixing; instruments retain their pitch. Scalar edits ramp and converter changes crossfade for 10 ms after priming. Edits include the render horizon and compensated source lookahead; newer requests coalesce while a transition finishes. Long-latency take chains can exceed the usual 200 ms response. effective_rate follows audible output, independently of requested_rate.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 

@@ -6,6 +6,7 @@
 #include "bridge_child.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <map>
 #include <memory>
@@ -26,13 +27,42 @@ struct RemotePorts {
     std::uint32_t inChannels = 0, outChannels = 0, keyChannels = 0;
     std::vector<AudioPortInfo> auxOutputs;  // ADR-0021
     bool acceptsNotes = false, outputsNotes = false, semantic = false, editor = false;
+    // The instance's place in the bridge's own execution table and an address in the plug-in's
+    // binary there (ADR-0083, topic 6b); 0xffffffff, 0, 0 when the bridge's table had no room.
+    std::uint32_t childCell = 0xffffffffu;
+    std::uint16_t childGeneration = 0;
+    std::uint64_t childImage = 0;
 };
 
 class RemoteInstance;
 
+// Tests only: whether a new bridge is handed a capture slot as it starts (true), so that a test
+// can send the operation itself. Process-wide.
+void setBridgeCaptureSlotForTests(bool attach);
+
+// How long after a bridge was failed as hung by late blocks (ADR-0081) the main thread leaves it
+// alive before it kills it: the bridge's own handler budget (selfcapture::kHandlerBudget), so
+// that a bridge that faulted as it was failed is not cut off mid-capsule. Tests only: a different
+// grace in nanoseconds, or a negative value for the default. Process-wide.
+void setBridgeKillGraceForTests(std::int64_t nanoseconds);
+
+// Tests only: the next `checks` liveness decisions of a bridge process answer "alive" whatever
+// the process says, then the real answer again. There are two kinds: the one a failed socket
+// request makes (BridgeProcess::call, to tell a hung bridge from a gone one) and the one
+// ~BridgeProcess makes first (to tell a bridge that ended before it from one it ends). Each takes
+// an answer whatever the process says, and no other check does (alive() and the waits of the
+// command channel ask the process itself), so how many are left depends on the call sequence, not
+// on timing. A bridge that is dying of its own fault is alive until its dump is done and a test
+// cannot hold a real one there; this is how a test makes the host see one. Zero clears it.
+// Process-wide.
+void setBridgeLivenessForTests(int checks);
+// Tests only: how many of those answers have not been given yet.
+int bridgeLivenessLeftForTests();
+
 class BridgeProcess {
   public:
     static constexpr int kHung = -2;
+    static constexpr int kAbandoned = -4;  // abandon(): its user no longer wants an answer
     static Result<std::shared_ptr<BridgeProcess>> spawn();
     ~BridgeProcess();
     Result<std::vector<std::uint8_t>> call(bridge::Op op, std::uint32_t instance,
@@ -45,7 +75,19 @@ class BridgeProcess {
     void reap();  // main thread
     bool alive() const;
     void killBridge();
+    // Any thread: fails this bridge as abandoned and kills it. A wait on it
+    // off the callback returns within one wait step (10 ms); a control
+    // request sees its socket close.
+    void abandon();
     int pid() const { return pid_.load(); }
+    // This bridge's ordinal in the run (ADR-0083, topic 6a): 1, 2, ...; 0 when it has none (a
+    // process adopted by a test, or the 65536th of a run).
+    std::uint16_t ordinal() const { return ordinal_; }
+    // The id of the local crash report this bridge's death may have caused (ADR-0083, topic 6a):
+    // set when the end was observed (reap(), main thread) and was a signal or an exception while a
+    // diagnostics supervisor was there to write one; empty otherwise. The report may still not
+    // exist (a repeat, the run's limit, a full folder): a reader of the id handles that.
+    std::string incident() const;
 
   private:
     friend struct BridgeTestAccess;
@@ -53,6 +95,9 @@ class BridgeProcess {
     static constexpr int kProtocolViolation = -3;
     BridgeProcess() = default;
     Status initializeNotifications();
+    // Topic 6c: creates the bridge's capture slot and hands it over; any failure leaves the
+    // bridge working with no capsule (the report is then the one of the host's account alone).
+    void attachCaptureSlot();
     void watch();
     void notifySubscribers();
     void subscribe(RemoteInstance& instance, MainThreadWake& wake);
@@ -88,6 +133,21 @@ class BridgeProcess {
     std::mutex requests_;  // control calls from instances on the main thread
     std::atomic<bool> failed_{false};
     std::atomic<int> failSignal_{0};
+    std::atomic<std::int64_t> hungAt_{0};  // steady ns when it was failed as kHung
+    // Topic 6a. The host sets `hostKilled_` before every kill, so that an end it caused is told
+    // from one the operating system or the plug-in caused. The end is announced once, from
+    // reap() on the main thread, or from the destructor when nobody reaped.
+    std::uint16_t ordinal_ = 0;
+    // Topic 6c: the capture slot's memory object while this process holds it. POSIX closes it as
+    // soon as it is sent (the descriptor in flight keeps the object); Windows keeps the handle
+    // until the process object goes, because the supervisor duplicates it from this process.
+    bridge::Resource slot_ = bridge::noResource;
+    std::atomic<bool> hostKilled_{false}, endAnnounced_{false};
+    // Topic 6a: the id of the crash report a signal or exception end may have caused (written once
+    // by announceEnd, then published by the release store of `incidentReady_`).
+    std::array<char, 32> incident_{};
+    std::atomic<bool> incidentReady_{false};
+    void announceEnd(int why, bool hostEnded) noexcept;
 };
 
 class RemoteInstance {
@@ -128,6 +188,14 @@ class RemoteInstance {
         return needsAudioFlush_.load(std::memory_order_acquire);
     }
     bool restartPending() const { return restartPending_; }  // as of the last service()
+    // This instance's deadline off the callback; 0: bridgeDeadlineMs().
+    // Atomic: any thread may set it at any time, and a wait already under
+    // way keeps the deadline it started with.
+    void setCallDeadlineMs(int ms) {
+        callDeadlineMs_.store(std::max(ms, 0), std::memory_order_relaxed);
+    }
+    int callDeadlineMs() const { return callDeadlineMs_.load(std::memory_order_relaxed); }
+    void abandon() { process_->abandon(); }  // any thread (BridgeProcess::abandon)
     bool processRequested() const SUPPLE_RT {
         return processRequested_.load(std::memory_order_acquire);
     }
@@ -164,6 +232,12 @@ class RemoteInstance {
     // The bridge's audio thread did not get the class its last command asked for.
     bool classRefused() const { return classRefused_.load(std::memory_order_relaxed); }
     std::string failure() const;
+    // Main thread: the end of a failed bridge is observed here, so the id does not wait for some
+    // other call to touch the bridge (the engine, which has a wake, does not pull a failed one).
+    std::string incident() const {
+        if (process_->failed()) process_->reap();
+        return process_->incident();
+    }
     int bridgePid() const { return process_->pid(); }
 
   private:
@@ -234,6 +308,7 @@ class RemoteInstance {
     std::atomic<bool> needsAudioFlush_{false};
     std::atomic<bool> processRequested_{false};
     std::atomic<bool> classRefused_{false};
+    std::atomic<int> callDeadlineMs_{0};  // 0: the process-wide deadline
 };
 
 std::filesystem::path bridgeExecutable();

@@ -3,6 +3,8 @@
 #include <supple/base/paths.h>
 #include <supple/model/groups.h>
 #include "audio_edit.h"
+#include "supple/diagnostics/frontend.h"
+#include "supple/diagnostics/reports.h"
 // <slug>: the DAW with a window (docs/specs/gui.md). The UI thread is the
 // model thread: it pumps the command bus's loop (socket requests, the service
 // tick) between SDL events, and draws only when something changed.
@@ -47,6 +49,7 @@
 #include "generate.h"
 #include "help_actions.h"
 #include "history_panel.h"
+#include "inspector.h"
 #include "learn_dialog.h"
 #include "meter_feed.h"
 #include "midi_editor.h"
@@ -57,8 +60,11 @@
 #include "rack_window.h"
 #include "render_dialog.h"
 #include "routing_matrix.h"
+#include "safe_load.h"
 #include "screensets.h"
 #include "shell.h"
+#include "side_browser.h"
+#include "side_panel.h"
 #include "supple/base/files.h"
 #include "supple/cmd/bus.h"
 #include "supple/engine/app.h"
@@ -253,18 +259,7 @@ double percentile(std::vector<double> v, double p) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
-#if defined(_WIN32)
-    // Preserve redirected handles from CTest/pipes. Only reopen streams with
-    // no inherited handle when launched from a terminal without redirection.
-    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
-        FILE* stream = nullptr;
-        if (_fileno(stdout) < 0 && GetFileType(GetStdHandle(STD_OUTPUT_HANDLE)) == FILE_TYPE_CHAR)
-            (void)freopen_s(&stream, "CONOUT$", "w", stdout);
-        if (_fileno(stderr) < 0 && GetFileType(GetStdHandle(STD_ERROR_HANDLE)) == FILE_TYPE_CHAR)
-            (void)freopen_s(&stream, "CONOUT$", "w", stderr);
-    }
-#endif
+int frontendMain(int argc, char** argv) {
     Options o;
     if (!parse(argc, argv, o)) return usage();
 
@@ -324,6 +319,8 @@ int main(int argc, char** argv) {
     if (o.workdir.empty()) options.rackPresetDir = dataFolder() / "rack-presets";
     // Render presets and the render default likewise (ADR-0055).
     if (o.workdir.empty()) options.renderPresetDir = dataFolder() / "render-presets";
+    // Earlier runs' crash reports, where the diagnostics frontend wrote them.
+    if (o.workdir.empty()) options.diagnosticsDir = supple::diagnostics::defaultDirectory();
     auto app = engine::EngineApp::create(options);
     if (!app) {
         std::fprintf(stderr, "%s\n", app.error().toString().c_str());
@@ -357,9 +354,11 @@ int main(int argc, char** argv) {
     loop.setWaker([p = platform->get()] { p->wake(); });
     std::unique_ptr<rpc::Server> server;
     gui::Shell* eventShell = nullptr;
+    gui::SideBrowser* eventBrowser = nullptr;
     auto publish = [&] {
         for (auto& [topic, payload] : (*app)->takeEvents()) {
             if (eventShell && topic == "record.error") eventShell->recordingError(payload);
+            if (eventBrowser && topic == "audition.error") eventBrowser->auditionFailed(payload);
             if (server) server->publish(topic, payload);
         }
     };
@@ -423,8 +422,11 @@ int main(int argc, char** argv) {
     gui::AppActions appActions(registry, dispatcher, **app, uiState,
                                actions::Keymap::defaultFile(product::kSlug),
                                gui::ControlMap::defaultFile(product::kSlug));
-    appActions.onError = [](const std::string& message) {
+    // An action that fails says so in the status line (gui.md §4.1): stderr
+    // is not seen from Finder or a desktop entry. It is still written there.
+    appActions.onError = [&shell](const std::string& message) {
         std::fprintf(stderr, "%s\n", message.c_str());
+        shell.setStatus(message);
     };
     // Before the chrome: the toolbar and menus list the actions it adds.
     gui::RackWindow racks(rackPanel, appActions, dispatcher, **app, uiState);
@@ -487,6 +489,12 @@ int main(int argc, char** argv) {
         shell.openEnvelopeMenu(id, anchor);
     };
     gui::HistoryPanel history(root, appActions, dispatcher, **app);
+    // The side panel (gui.md §4.14): the inspector and the history as tabs at
+    // the window's right edge, shown only when asked.
+    gui::SidePanel side(root);
+    gui::Inspector inspector(root, **app, uiState, dispatcher, appActions);
+    history.host = [&side] { side.toggle("history"); };
+    appActions.addUi("ui.inspector", "View: inspector", [&side] { side.toggle("inspector"); });
     gui::FileActions fileActions(root, appActions, dispatcher, **app, uiState, (*window)->sdl(),
                                  [&](std::function<void()> f) { loop.post(std::move(f)); });
     fileActions.registerQuit([&] { quit = true; }, !o.offscreen && o.frames <= 0);
@@ -499,7 +507,12 @@ int main(int argc, char** argv) {
         o.actions.insert(o.actions.begin(), "ui.file.recover");
     gui::HelpActions helpActions(
         root, appActions, (*window)->sdl(),
-        [&](std::function<void()> f) { loop.post(std::move(f)); }, gui::help::ownExecutable());
+        [&](std::function<void()> f) { loop.post(std::move(f)); }, gui::help::ownExecutable(), {},
+        (*app)->diagnosticsDir());
+    // The restart notice's "Show report" opens the viewer on the incident it names.
+    shell.showCrashReport = [&](const std::string& incident) {
+        helpActions.crashReports().open(incident);
+    };
     appActions.addUi(
         "ui.fx.editor", "FX: open or close editor", "fx", [&](const json::Value& v) -> Status {
             const auto id = v.isString() ? model::Id::parse(v.asString()) : std::nullopt;
@@ -514,8 +527,41 @@ int main(int argc, char** argv) {
             [&](gui::LearnRequest request) {
                 gui::openLearnDialog(fxPanel.root(), appActions, **app, std::move(request));
             },
-            [&](model::Id rack) { racks.open(rack); }},
+            [&](model::Id rack) { racks.open(rack); },
+            // Enable, on a disabled plug-in's row: the action below.
+            [&](model::Id fx) {
+                json::Value args = json::Value::object();
+                args["fx"] = fx.str();
+                if (const actions::Action* a = appActions.registry().find("ui.fx.enable"))
+                    if (auto r = appActions.run(*a, args); !r && shell.onError)
+                        shell.onError(r.error().message);
+            },
+            // The viewer is a popup of the main window: bring that window up first.
+            [&](const std::string& incident) {
+                SDL_RaiseWindow((*window)->sdl());
+                helpActions.crashReports().open(incident);
+            }},
         gui::Favourites::defaultFile(product::kSlug));
+    // A plugin dragged out of the browser lands on the strip or the track
+    // row under the pointer (gui.md §4.14).
+    gui::PluginDrag pluginDrag(root, dispatcher);
+    pluginDrag.addTargets([&mixer](ui::Point p) { return mixer.trackTargetAt(p); });
+    pluginDrag.addTargets([&shell](ui::Point p) { return shell.trackTargetAt(p); });
+    gui::SideBrowser sideBrowser(root, **app, dispatcher, uiState, fxWindow, pluginDrag);
+    eventBrowser = &sideBrowser;  // a file it plays that cannot be read after all
+    // A file from the browser: Add is File > Import's own path; a drag lands
+    // as a file dropped from outside the app does.
+    sideBrowser.files.add = [&fileActions](const std::filesystem::path& file) {
+        return fileActions.import({file});
+    };
+    sideBrowser.files.where = [&shell](ui::Point p) { return shell.fileTargetAt(p); };
+    sideBrowser.files.drop = [&shell](const std::filesystem::path& file, ui::Point at) {
+        return shell.arrange()->gestures().drop({file}, at);
+    };
+    appActions.addUi("ui.browser", "View: browser", [&] {
+        side.toggle("browser");
+        if (side.showing("browser")) sideBrowser.focusSearch();
+    });
     // A strip's rack slot opens the rack window on it.
     mixer.openRack = [&](const model::Id& rack) { racks.open(rack); };
     // MIDI learn (ADR-0027): the devices' messages reach the actions bound to
@@ -595,7 +641,13 @@ int main(int argc, char** argv) {
         center.add(shell.build(root, appActions));
         center.add(midiEditor.build());
         center.add(mixer.build());
-        body.add(history.build());
+        side.addTab("inspector", "Inspector", inspector.build(),
+                    [&inspector](bool on) { inspector.setVisible(on); });
+        side.addTab("browser", "Browser", sideBrowser.build(),
+                    [&sideBrowser](bool on) { sideBrowser.setVisible(on); });
+        side.addTab("history", "History", history.build(),
+                    [&history](bool on) { history.setVisible(on); });
+        body.add(side.build());
         root.setContent(std::move(frame));
     }
     // Arrange editing gestures (P5.6): one transaction per gesture; a later
@@ -627,6 +679,30 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "%s\n", message.c_str());
     };
     appActions.addUi("ui.preferences", "Edit: preferences…", [&] { preferences.open(); });
+    // Before File > Open, a recovery or a template loads, a plug-in a crash report points at is
+    // asked about (safe-load, topic 7d); a choice kept for its exact build is the preferences'.
+    gui::SafeLoad safeLoad(root, dispatcher, (*app)->diagnosticsDir());
+    safeLoad.remembered = [&] { return preferences.preferences().rememberedLoads; };
+    safeLoad.setRemembered = [&](std::vector<gui::RememberedLoad> loads) {
+        return preferences.setRememberedLoads(std::move(loads));
+    };
+    safeLoad.onStatus = [&](const std::string& message) { shell.setStatus(message); };
+    fileActions.setSafeLoad(&safeLoad);
+    // Enable, on a plug-in this run has disabled (the strip's menu, the FX window's row).
+    appActions.addUi(
+        "ui.fx.enable", "FX: enable a disabled plug-in", "fx", [&](const json::Value& v) -> Status {
+            const auto id = v.isString() ? model::Id::parse(v.asString()) : std::nullopt;
+            const model::FxInstance* fx = id ? (*app)->head().fx.find(*id) : nullptr;
+            if (!fx) return Error("gui.fx_enable", "an effect id like fx_3", "/fx");
+            return safeLoad.enable(fx->plugin.id);
+        });
+    racks.enableFx = [&](model::Id fx) {
+        json::Value args = json::Value::object();
+        args["fx"] = fx.str();
+        if (const actions::Action* a = appActions.registry().find("ui.fx.enable"))
+            if (auto r = appActions.run(*a, args); !r && shell.onError)
+                shell.onError(r.error().message);
+    };
     // The audio device: saved with the preferences, applied to the engine at once.
     gui::AudioDeviceDialog audioDevice(
         root, dispatcher, **app, prefs.audio,
@@ -984,12 +1060,25 @@ int main(int argc, char** argv) {
         json::Value v = json::Value::object();
         v["mixer"] = mixer.visible();
         v["history"] = history.visible();
+        v["side"] = side.save();
+        v["side"]["browser"] = sideBrowser.kind();  // the Browser tab's kind
         return v;
     };
     auto panelsLoad = [&](const json::Value& v) {
         if (const json::Value* m = v.find("mixer"); m && m->isBool()) mixer.setVisible(m->asBool());
-        if (const json::Value* h = v.find("history"); h && h->isBool())
-            history.setVisible(h->asBool());
+        if (const json::Value* state = v.find("side")) {
+            // The kind first, so that the tab reads one list when it shows.
+            if (const json::Value* kind = state->isObject() ? state->find("browser") : nullptr;
+                kind && kind->isString())
+                sideBrowser.show(kind->asString());
+            side.load(*state);
+        } else if (const json::Value* h = v.find("history"); h && h->isBool()) {
+            // A file from before the side panel: the history dock was its own.
+            if (h->asBool())
+                side.show("history");
+            else
+                side.hide();
+        }
     };
     uiFile.add("panels", panelsSave, panelsLoad);
     uiFile.add(
@@ -1161,14 +1250,17 @@ int main(int argc, char** argv) {
             uiFile.tick((*app)->projectPath(), (*app)->projectGeneration());
         });
         timed([&] {
+            // The pass's time: what steps an edge scroll and paces the meters.
+            const auto now = Clock::now();
             shell.sync(event);
-            midiEditor.sync();
+            midiEditor.sync(now);
             routing.sync();
             racks.sync();
-            racks.tick();
-            mixer.sync();
+            racks.tick(now);
+            mixer.sync(now);
             history.sync();
-            const auto now = Clock::now();
+            inspector.sync();
+            sideBrowser.sync();
             const auto activity = (*app)->meterActivitySequence();
             // Observe before reading; arm/recheck after the visible meters rest.
             if (event || !meterFrame || now >= *meterFrame) {
@@ -1187,7 +1279,7 @@ int main(int argc, char** argv) {
             if (audioDevice.isOpen()) audioDevice.refresh();
             if (timecodeDialog.isOpen()) timecodeDialog.refresh();
             syncDialog.refresh();
-            if (shell.arrange()->poll(event)) root.requestAnimationFrame();
+            if (shell.arrange()->poll(event, now)) root.requestAnimationFrame();
         });
         return next;
     };
@@ -1348,14 +1440,17 @@ int main(int argc, char** argv) {
     if (server) server->stop();
     (void)uiFile.flush((*app)->projectPath());
     if (!o.snapshot.empty()) {  // the final state, for tests and bug reports
+        const auto now = Clock::now();
         shell.sync();
-        midiEditor.sync();
+        midiEditor.sync(now);
         routing.sync();
         racks.sync();
-        racks.tick();
-        mixer.sync();
+        racks.tick(now);
+        mixer.sync(now);
         history.sync();
-        meterFeed.poll();
+        inspector.sync();
+        sideBrowser.sync();
+        meterFeed.poll(now);
         root.damageAll();
         root.frame(false);
         for (const auto& [name, panel] :
@@ -1369,7 +1464,7 @@ int main(int argc, char** argv) {
             }
         }
         (*window)->forceCurrent();
-        auto written = gui::writePng(o.snapshot, root.readBack());
+        auto written = gui::writePng(o.snapshot, gui::opaque(root.readBack()));
         if (!written) {
             std::fprintf(stderr, "%s\n", written.error().toString().c_str());
             return 1;
@@ -1390,4 +1485,20 @@ int main(int argc, char** argv) {
             peaks.stats().built, peaks.stats().loaded, (*window)->renderer().c_str());
     }
     return serviceFailed ? 1 : 0;
+}
+
+int main(int argc, char** argv) {
+#if defined(_WIN32)
+    // Preserve redirected handles from CTest/pipes. Only reopen streams with
+    // no inherited handle when launched from a terminal without redirection.
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        FILE* stream = nullptr;
+        if (_fileno(stdout) < 0 && GetFileType(GetStdHandle(STD_OUTPUT_HANDLE)) == FILE_TYPE_CHAR)
+            (void)freopen_s(&stream, "CONOUT$", "w", stdout);
+        if (_fileno(stderr) < 0 && GetFileType(GetStdHandle(STD_ERROR_HANDLE)) == FILE_TYPE_CHAR)
+            (void)freopen_s(&stream, "CONOUT$", "w", stderr);
+    }
+#endif
+    return supple::diagnostics::runFrontend(argc, argv, supple::diagnostics::Role::Gui,
+                                            frontendMain);
 }

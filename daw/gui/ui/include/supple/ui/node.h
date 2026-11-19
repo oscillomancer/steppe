@@ -15,6 +15,8 @@
 
 namespace supple::ui {
 
+using Cursor = gui::Cursor;
+
 class Root;
 struct GlFrame;
 
@@ -74,6 +76,15 @@ struct Layout {
     Insets padding;
 };
 
+// A control's name ("Mute"), and the id of the action a press on it runs, if
+// it runs one: the app says the action's keys after the name, and the
+// action's own name when `name` is empty.
+struct Hint {
+    std::string name, action;
+    bool empty() const { return name.empty() && action.empty(); }
+    bool operator==(const Hint&) const = default;
+};
+
 class Node {
   public:
     explicit Node(std::string id = {}, Role role = Role::Group) : id_(std::move(id)), role_(role) {}
@@ -125,6 +136,22 @@ class Node {
     bool focusable = false;
     bool interactive = false;  // receives pointer events (else they pass through)
     virtual Node* hitTest(Point p);
+    // The pointer's shape at `p` over this node: what a press there would
+    // do, or what the drag this node holds is doing. Asked of the node the
+    // pointer's events go to and then of its parents, as the events are;
+    // the first answer other than Arrow is shown (Root::cursor).
+    virtual Cursor cursorAt(Point p) const {
+        (void)p;
+        return Cursor::Arrow;
+    }
+    // What the node is called, for the window's status line while the
+    // pointer rests on it (Root::hint). Asked as cursorAt is: of the node
+    // the pointer is over, then of its parents, until one has a name.
+    Hint hint;
+    virtual Hint hintAt(Point p) const {
+        (void)p;
+        return hint;
+    }
     virtual bool onPointer(const PointerEvent& e) {
         (void)e;
         return false;

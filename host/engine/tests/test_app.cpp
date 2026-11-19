@@ -14,6 +14,7 @@
 #include <supple/audio/audio_file.h>
 #include <supple/base/files.h>
 #include <supple/base/sha256.h>
+#include <supple/diagctx/inventory.h>
 #include <supple/engine/app.h>
 #include <supple/engine/jack.h>
 #include <supple/host/clap_host.h>
@@ -511,8 +512,9 @@ TEST_CASE("an isolated plugin that crashes is reported and restarted over the bu
     REQUIRE(crash);
     CHECK(crash->isolated());
     REQUIRE(crash->setParam(1, 1.0));  // crash in its next process()
-    for (int i = 0; i < 2000 && !crash->failed(); ++i)
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    // On the failure, not the clock: a loaded machine takes what it takes,
+    // and a crash never seen is the test runner's timeout.
+    while (!crash->failed()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
     auto status = call("engine.status", "{}");
     REQUIRE(status["failed_fx"].size() == 1);
     CHECK(status["failed_fx"].at(0).asString() == "fx_2");
@@ -545,6 +547,70 @@ TEST_CASE("an isolated plugin that crashes is reported and restarted over the bu
     CHECK_FALSE(again->failed());
     call("engine.stop", "{}");
 }
+
+// With a diagnostics supervisor behind the process (here: a sink that only listens) a bridge that
+// dies of a signal or an exception may have caused a local crash report, and the engine says which:
+// the failed fx's entry in `failed_errors` carries its id, once the bridge's end was observed.
+// AddressSanitizer and ThreadSanitizer end a faulting bridge with their own exit (after their
+// report), not with the signal: the host rightly reads an exit, which names no report.
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+#define SUPPLE_TEST_SANITIZER_EXITS 1
+#endif
+#endif
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+#define SUPPLE_TEST_SANITIZER_EXITS 1
+#endif
+#if !defined(SUPPLE_TEST_SANITIZER_EXITS)
+namespace {
+void ignoreAnnouncements(const supple::diagctx::Event&) noexcept {}
+}  // namespace
+
+TEST_CASE("a failed fx names the crash report its bridge's death may have caused") {
+    host::setBridgeExecutable(BRIDGE_PATH);
+    diagctx::setInventorySink(&ignoreAnnouncements);
+    struct Unset {
+        ~Unset() { diagctx::setInventorySink(nullptr); }
+    } unset;
+    Root root;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    auto app = makeApp(root.path);
+    cmd::Dispatcher d(registry, *app);
+    auto call = [&](std::string command, std::string_view args) {
+        auto r = d.execute({std::move(command), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return *r;
+    };
+    call("batch", R"({"steps": [
+        {"command": "track.add", "args": {"name": "Lead"}, "as": "t"},
+        {"command": "fx.add", "args": {"track": "${t.track}", "plugin": "Test Sine"}},
+        {"command": "fx.add", "args": {"track": "${t.track}", "plugin": "com.suppleaudio.test.crash"}, "as": "c"},
+        {"command": "fx.set", "args": {"fx": "${c.fx}", "isolation": "dedicated"}},
+        {"command": "item.add", "args": {"track": "${t.track}", "bar": 1, "notation": "voice lead; 1: C4:w"}}]})");
+    call("engine.start", R"({"backend": "dummy"})");
+    call("transport.play", "{}");
+    host::Instance* crash = app->instanceOf(*model::Id::parse("fx_2"));
+    REQUIRE(crash);
+    CHECK(call("engine.status", "{}")["failed_errors"].size() == 0);
+    REQUIRE(crash->setParam(1, 4.0));  // a real fault in its next process()
+    // The failure is seen first; its cause is told when the bridge's end has been observed, which
+    // the next service of the failed instance does.
+    std::string incident;
+    for (int i = 0; i < 5000 && incident.empty(); ++i) {
+        app->tick();
+        auto status = call("engine.status", "{}");
+        if (status["failed_errors"].size() == 1)
+            if (const auto* found = status["failed_errors"].at(0).find("incident"))
+                incident = found->asString();
+        if (incident.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    REQUIRE(incident.size() == 32);
+    CHECK(incident.find_first_not_of("0123456789abcdef") == std::string::npos);
+    CHECK(crash->bridgeIncident() == incident);
+    call("engine.stop", "{}");
+}
+#endif
 
 TEST_CASE("shared bridge crash reports both fx and both restart in one new process") {
     host::setBridgeExecutable(BRIDGE_PATH);
@@ -584,9 +650,8 @@ TEST_CASE("shared bridge crash reports both fx and both restart in one new proce
     CHECK(crash->bridgePid() == oldPid);
     CHECK(dedicated->bridgePid() != oldPid);
     REQUIRE(crash->setParam(1, 1.0));
-    for (int i = 0; i < 2000 && !crash->failed(); ++i)
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    REQUIRE(crash->failed());
+    // On the failure, not the clock (as above).
+    while (!crash->failed()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
     CHECK(first->failed());
     CHECK_FALSE(dedicated->failed());
     auto status = call("engine.status", "{}");
@@ -1739,6 +1804,65 @@ TEST_CASE("stem render job publishes files and analysis summaries") {
     auto status = d.execute({"job.get", get, kTest});
     REQUIRE(status);
     CHECK(status->find("status")->asString() == "done");
+}
+
+TEST_CASE("a render job that fails at a later task lists the files it wrote") {
+    // Review round 34: a multi-task job keeps the files of the tasks it
+    // finished; its result must say which they are. The second stem's
+    // track holds a plug-in that refuses to start (the edge fixture,
+    // configuration byte 1), so its render fails after the first file.
+    Root root;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    auto app = makeApp(root.path);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_item");
+    auto added = d.execute({"track.add", j(R"({"name":"Refuses"})"), kTest});
+    REQUIRE(added);
+    const std::string refusing = added->find("track")->asString();
+    json::Value fxArgs = json::Value::object();
+    fxArgs["track"] = refusing;
+    fxArgs["plugin"] = "com.suppleaudio.test.edge";
+    auto fx = d.execute({"fx.add", fxArgs, kTest});
+    REQUIRE(fx);
+    const auto fxId = model::Id::parse(fx->find("fx")->asString());
+    REQUIRE(fxId);
+    auto setup = app->beginTransaction(kTest, "Refusing start");
+    REQUIRE(setup);
+    const std::string hash = "sha256:" + std::string(64, '1');
+    app->txn().putBlob(hash, std::make_shared<const model::Blob>(model::Blob{{1, 0, 0, 0}}));
+    app->txn().modify<model::FxInstance>(*fxId, [&](auto& value) {
+        value.patch.reset();
+        value.state = hash;
+    });
+    REQUIRE(app->commitTransaction(*setup));
+    auto started = d.execute(
+        {"render.stems", j(R"({"end_beat":4,"job":true,"pattern":"partial-{track}"})"), kTest});
+    REQUIRE(started);
+    json::Value args = json::Value::object();
+    args["job"] = started->find("job")->asString();
+    args["timeout_s"] = 30;
+    auto done = d.execute({"job.wait", args, kTest});
+    REQUIRE_MESSAGE(done, (done ? std::string() : done.error().toString()));
+    CHECK(done->find("status")->asString() == "failed");
+    CHECK(done->find("error")->find("code")->asString() == "engine.start_failed");
+    const json::Value* result = done->find("result");
+    REQUIRE(result);
+    const json::Value* files = result->find("files");
+    REQUIRE(files);
+    REQUIRE(files->size() == 1);
+    const std::string path = files->at(0).find("path")->asString();
+    CHECK(fs::exists(path));
+    CHECK(path.find("Refuses") == std::string::npos);  // the first track's
+    CHECK_FALSE(files->at(0).find("render")->asString().empty());
+    CHECK(result->find("unfinished_task_files") == nullptr);
+    // job.get answers the same.
+    json::Value get = json::Value::object();
+    get["job"] = args["job"];
+    auto status = d.execute({"job.get", get, kTest});
+    REQUIRE(status);
+    REQUIRE(status->find("result"));
+    CHECK(*status->find("result") == *result);
 }
 
 TEST_CASE("offline render reports progress and honors cancellation between blocks") {
@@ -3289,6 +3413,50 @@ TEST_CASE("app rejects plug-in outputs from a replaced plan and a removed FX") {
     app->tick();
     CHECK(app->head().version == removed);
     CHECK_FALSE(app->head().fx.contains(fx));
+    app->stopEngine();
+}
+
+TEST_CASE("a plug-in output from before a patch-only edit is not committed over it") {
+    // A patch-only edit compiles no plan (ADR-0092), so the plan generation
+    // no longer tells outputs the plug-in produced before the edit from
+    // those after it: the patch sequence they carry does.
+    struct Control {
+        void (*edit)(const clap_plugin_t*, double, std::uint32_t);
+        std::uint32_t (*deliveries)(const clap_plugin_t*);
+    };
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    REQUIRE(bus.execute({"track.add", j(R"({"name":"Gain"})"), kTest}));
+    REQUIRE(bus.execute({"fx.add", j(R"({"track":"tr_1","plugin":"Test Gain"})"), kTest}));
+    REQUIRE(bus.execute(
+        {"fx.patch.merge", j(R"({"fx":"fx_1","patch":{"params":{"gain":-6}}})"), kTest}));
+    const auto fx = *model::Id::parse("fx_1");
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(
+        app->startEngine(backend, {.sampleRate = 48000, .blockSize = 64}, {.anticipative = false}));
+    REQUIRE(app->transport("play"));
+    backend.run(1);
+    app->tick();
+    auto* instance = app->instanceOf(fx);
+    const auto* plugin = instance->raw();
+    const auto* control =
+        static_cast<const Control*>(plugin->get_extension(plugin, "supple.test.gain-control"));
+    REQUIRE(control);
+    control->edit(plugin, -12, host::OutputEvent::IsLive);
+    backend.run(1);  // the plug-in reports -12, not yet drained
+    const auto edits = app->engine()->patchEdits();
+    REQUIRE(bus.execute(
+        {"fx.patch.merge", j(R"({"fx":"fx_1","patch":{"params":{"gain":-3}}})"), kTest}));
+    REQUIRE(app->engine()->patchEdits() == edits + 1);
+    app->tick();
+    backend.run(1);
+    app->tick();
+    CHECK(app->head().fx.find(fx)->patch->find("params")->find("gain")->asDouble() ==
+          doctest::Approx(-3));
+    CHECK(instance->paramValue(0).value() == doctest::Approx((-3 + 60) / 72.0));
     app->stopEngine();
 }
 

@@ -30,6 +30,13 @@ void closeResource(Resource resource);
 Resource createMemory(std::size_t size);
 void* mapMemory(Resource resource, std::size_t size);
 void unmapMemory(void* map, std::size_t size);
+// Maps a capture slot (ADR-0083 topic 6c) that another process sent: only a shared-memory object
+// of exactly `size` bytes is one. POSIX: a regular object of that size (Linux: a memfd sealed
+// against shrinking and growing, so the mapping cannot become a fault); Windows: a file-mapping
+// section whose whole extent is `size`. The mapping is read-write and shared; the caller closes
+// `resource` either way. Null for anything else (a pipe, an event, a file of another size, an
+// unsealed memfd).
+void* mapCaptureSlot(Resource resource, std::size_t size);
 bool validNotification(Resource resource);
 bool signalNotification(Resource resource);
 inline Resource notificationTarget(const WakeEvent& event) {

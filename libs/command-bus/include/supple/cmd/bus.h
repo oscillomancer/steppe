@@ -118,6 +118,9 @@ struct Command {
 };
 
 struct CommandInfo {
+    // Index in registration order, set by Registry::add: what a crash report's command
+    // breadcrumbs record in place of the name (ADR-0083, topic 5d).
+    std::uint32_t id = 0;
     std::string name;
     int version = 1;
     Kind kind = Kind::Query;
@@ -175,12 +178,15 @@ class Registry {
     }
     const CommandInfo* find(std::string_view name, int version = 0) const;
     std::vector<const CommandInfo*> all() const;
+    // The name of each command by id (a name once per version: the same name twice).
+    std::vector<std::string_view> namesById() const;
     Error unknown(std::string_view name) const;
     json::Value exportJson() const;
 
   private:
     void addInfo(CommandInfo info);
     std::map<std::pair<std::string, int>, CommandInfo> commands_;
+    std::uint32_t nextId_ = 0;
 };
 
 struct Invocation {
@@ -222,7 +228,9 @@ class JobManager {
     // makes the result visible. A concurrent cancel cannot publish afterwards.
     Status completeWith(std::string_view id, json::Value result,
                         const std::function<void()>& publish);
-    Status fail(std::string_view id, Error error);
+    // `result`, when given, is what the job did before it failed (a render
+    // job's files written so far); the failed job's snapshot carries it.
+    Status fail(std::string_view id, Error error, std::optional<json::Value> result = {});
     // A late completion may attach a result to an already cancelled job (for
     // example render.stale_target); this never changes its cancelled status.
     Status cancel(std::string_view id, std::optional<json::Value> result = {});
@@ -298,10 +306,7 @@ class Host {
 
 class Dispatcher {
   public:
-    Dispatcher(const Registry& registry, Host& host) : registry_(registry), host_(host) {
-        jobs_.setWaker([this] { host_.workQueued(); });
-        host_.dispatcherAttached(this);
-    }
+    Dispatcher(const Registry& registry, Host& host);
     ~Dispatcher();
     Dispatcher(const Dispatcher&) = delete;
     Dispatcher& operator=(const Dispatcher&) = delete;
@@ -345,6 +350,9 @@ class Dispatcher {
     JobManager jobs_;
     std::uint64_t sequence_ = 0;
     std::vector<Admission> admissions_;
+    // The process's first dispatcher records the commands it begins in the execution table
+    // (ADR-0083, topic 5d); any other would write ids of a different registry into the ring.
+    bool breadcrumbs_ = false;
     int transactionDepth_ = 0;  // > 0: commands join the open transact() transaction
     std::optional<Error> transactionFailure_;
     std::mutex postedMutex_;

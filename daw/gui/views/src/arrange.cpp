@@ -29,6 +29,7 @@ namespace {
 constexpr float kTcpWidth = 220;
 constexpr float kBeatRowH = 22;    // bars | beats
 constexpr float kTimeRowH = 15;    // m:ss.mmm
+constexpr float kRangeEdge = 5;    // px beside a loop or punch range's end that drag it
 constexpr float kTempoRowH = 20;   // tempo and meter flags
 constexpr float kRegionRowH = 15;  // regions
 constexpr float kMarkerRowH = 16;  // markers
@@ -37,11 +38,6 @@ constexpr float kRulerHeight = kBeatRowH + kTimeRowH + kTempoRowH + kRegionRowH 
 constexpr float kMinBeatLabelPx = 62;
 // The breathing space every pair of ruler labels keeps (design units).
 constexpr float kLabelGap = 12;
-
-double steadyMs() {
-    using namespace std::chrono;
-    return duration<double, std::milli>(steady_clock::now().time_since_epoch()).count();
-}
 
 // A stored position in its timebase as seconds (Timebase::Time is already
 // seconds).
@@ -108,7 +104,43 @@ class Ruler : public ui::Node {
         args["end"] = view_.session().timeMap->beatAt(view_.loopEnd());
         execute("region.add", std::move(args));
     }
-    bool onPointer(const ui::PointerEvent& e) override;
+    bool onPointer(const ui::PointerEvent& e) override {
+        const bool handled = handle(e);
+        view_.noteDrag(e, true);  // a drag held at the lanes' edge scrolls in time
+        return handled;
+    }
+    bool handle(const ui::PointerEvent& e);
+    bool dragging() const { return drag_ != Drag::None; }
+    void scrolled(float dx) { press_.x -= dx; }  // the press goes with the content
+    // The ends of the loop range (bars row) and the punch range (time row)
+    // are dragged; so is a range, a region or a marker once it moves.
+    ui::Cursor cursorAt(ui::Point p) const override {
+        switch (drag_) {
+            case Drag::LoopLeft:
+            case Drag::LoopRight:
+            case Drag::RegionLeft:
+            case Drag::RegionRight:
+                return ui::Cursor::ResizeHorizontal;
+            case Drag::LoopMove:
+            case Drag::RegionMove:
+            case Drag::Marker:
+                return moved_ ? ui::Cursor::Move : ui::Cursor::Arrow;
+            case Drag::LoopNew:
+                return ui::Cursor::Arrow;
+            case Drag::None:
+                break;
+        }
+        const float y = p.y - bounds().y;
+        if (y < 0 || y >= kBeatRowH + kTimeRowH) return ui::Cursor::Arrow;
+        const bool punch = y >= kBeatRowH;
+        const double start = punch ? view_.punchStart() : view_.loopStart();
+        const double end = punch ? view_.punchEnd() : view_.loopEnd();
+        if (end <= start) return ui::Cursor::Arrow;
+        return std::abs(p.x - view_.xAt(start)) <= kRangeEdge ||
+                       std::abs(p.x - view_.xAt(end)) <= kRangeEdge
+                   ? ui::Cursor::ResizeHorizontal
+                   : ui::Cursor::Arrow;
+    }
     bool onKey(const ui::KeyEvent& e) override {
         if (e.key != SDLK_ESCAPE || drag_ == Drag::None) return false;
         drag_ = Drag::None;
@@ -602,7 +634,7 @@ class Ruler : public ui::Node {
     }
 };
 
-bool Ruler::onPointer(const ui::PointerEvent& e) {
+bool Ruler::handle(const ui::PointerEvent& e) {
     if (e.type == ui::PointerEvent::Type::Cancel) {
         drag_ = Drag::None;
         moved_ = false;
@@ -635,9 +667,9 @@ bool Ruler::onPointer(const ui::PointerEvent& e) {
             const float left = view_.xAt(rangeStart), right = view_.xAt(rangeEnd);
             drag_ = Drag::LoopNew;
             if (originalEnd_ > originalStart_) {
-                if (std::abs(e.pos.x - left) <= 5)
+                if (std::abs(e.pos.x - left) <= kRangeEdge)
                     drag_ = Drag::LoopLeft;
-                else if (std::abs(e.pos.x - right) <= 5)
+                else if (std::abs(e.pos.x - right) <= kRangeEdge)
                     drag_ = Drag::LoopRight;
                 else if (e.pos.x > left && e.pos.x < right)
                     drag_ = Drag::LoopMove;
@@ -850,12 +882,17 @@ bool Ruler::onPointer(const ui::PointerEvent& e) {
 class TcpHeader : public ui::Node {
   public:
     explicit TcpHeader(ArrangeView& view) : Node("tcp-header"), view_(view) {}
+    // Channels and busses: not the master, and not the automation lanes
+    // that are rows under their tracks.
+    std::string valueText() const override {
+        return "Tracks  " + std::to_string(countTracks(view_.trackLayout().session()));
+    }
     void paint(ui::Canvas& c) override {
         c.fillRect(bounds(), c.theme().color("panel"));
         c.fillRect({bounds().x, bounds().bottom() - 1, bounds().w, 1}, c.theme().color("rule"));
-        c.text({bounds().x + 12, bounds().y, bounds().w - 20, bounds().h},
-               "Tracks  " + std::to_string(view_.trackLayout().rowCount()), ui::Font::UiBold,
-               c.theme().type("caption"), c.theme().color("ink-quiet"), ui::kLeft | ui::kMiddle);
+        c.text({bounds().x + 12, bounds().y, bounds().w - 20, bounds().h}, valueText(),
+               ui::Font::UiBold, c.theme().type("caption"), c.theme().color("ink-quiet"),
+               ui::kLeft | ui::kMiddle);
     }
 
   private:
@@ -961,6 +998,9 @@ ArrangeView::ArrangeView(peaks::PeakService& peaks, Resolve resolve, TransportSo
     };
     forward.addFx = [this](const model::Id& id) {
         if (tcpCallbacks_.addFx) tcpCallbacks_.addFx(id);
+    };
+    forward.fxNeedsAttention = [this](const model::Id& id) {
+        return tcpCallbacks_.fxNeedsAttention && tcpCallbacks_.fxNeedsAttention(id);
     };
     forward.mixer = [this] {
         if (tcpCallbacks_.mixer) tcpCallbacks_.mixer();
@@ -1148,10 +1188,21 @@ void ArrangeView::show(const model::Session& session, const std::vector<model::C
     }
 }
 
-bool ArrangeView::poll(bool force) {
-    if (!transportSource_) return false;
-    const double now = steadyMs();
-    if (!force && now - lastPollMs_ < 15.0) return false;
+bool ArrangeView::poll(bool force, std::chrono::steady_clock::time_point at) {
+    const double now = std::chrono::duration<double, std::milli>(at.time_since_epoch()).count();
+    // A drag held at an edge scrolls by the time since the last pass (capped,
+    // so a stalled frame is not a jump; nothing on the scroll's first pass).
+    bool scrolled = false;
+    if (autoScrolling()) {
+        const double seconds = edge_.clock.step(at);
+        scrolled = autoScroll(seconds);
+        if (scrolled || seconds == 0)
+            if (ui::Root* r = root()) r->requestAnimationFrame();
+    } else {
+        edge_.clock.reset();
+    }
+    if (!transportSource_) return scrolled;
+    if (!force && now - lastPollMs_ < 15.0) return scrolled;
     lastPollMs_ = now;
     const Transport t = transportSource_();
     const bool wasPlaying = transport_.playing;
@@ -1165,7 +1216,7 @@ bool ArrangeView::poll(bool force) {
         setPlayhead(t.seconds);
         return true;
     }
-    return t.playing != wasPlaying;
+    return scrolled || t.playing != wasPlaying;
 }
 
 void ArrangeView::setPlayhead(double seconds) {
@@ -1210,7 +1261,7 @@ void ArrangeView::setViewport(const Viewport& v) {
 }
 
 // The rows plus room past the last one, so it can scroll clear of the track
-// panel's foot (its "mixer" and "+ strip" band).
+// panel's foot (its "mixer" and "+ track" band).
 float ArrangeView::scrollHeight() const {
     return layout_.contentHeight() + (tcp_ ? TcpPanel::kFootHeight : 0.0f);
 }
@@ -1366,8 +1417,65 @@ void ArrangeView::loadLayout(const json::Value& v) {
                 trackLayout().setTakesExpanded(*id, true);
 }
 
+ui::Cursor ArrangeView::cursorAt(ui::Point p) const { return gestures_->cursorAt(p); }
+
+void ArrangeView::noteDrag(const ui::PointerEvent& e, bool ruler) {
+    const bool dragging =
+        ruler ? ruler_ && ruler_->dragging() : gestures_->state().drag != ItemGestures::Drag::None;
+    if (!dragging || e.type != ui::PointerEvent::Type::Move) {
+        // A wheel turn or another node's event leaves a drag's scroll alone.
+        if (!dragging || e.type == ui::PointerEvent::Type::Up ||
+            e.type == ui::PointerEvent::Type::Cancel)
+            edge_ = {};
+        return;
+    }
+    const ui::Rect lanes = lanesRect();
+    edge_.vx = ui::edgeScrollSpeed(e.pos.x, lanes.x, lanes.right());
+    edge_.vy = !ruler && gestures_->dragCrossesRows()
+                   ? ui::edgeScrollSpeed(e.pos.y, lanes.y, lanes.bottom())
+                   : 0;
+    edge_.last = e;
+    edge_.ruler = ruler;
+    if (!autoScrolling()) return;
+    if (ui::Root* r = root()) r->requestAnimationFrame();  // poll advances it
+}
+
+bool ArrangeView::autoScroll(double seconds) {
+    if (!autoScrolling()) return false;
+    const bool dragging = edge_.ruler ? ruler_ && ruler_->dragging()
+                                      : gestures_->state().drag != ItemGestures::Drag::None;
+    if (!dragging) {
+        edge_ = {};
+        return false;
+    }
+    const Viewport before = view_;
+    Viewport next = view_;
+    next.startSeconds = std::max(
+        0.0, next.startSeconds + static_cast<double>(edge_.vx) * seconds / next.pixelsPerSecond);
+    next.scrollY += edge_.vy * static_cast<float>(seconds);
+    setViewport(next);  // clamps both
+    const auto dx =
+        static_cast<float>((view_.startSeconds - before.startSeconds) * view_.pixelsPerSecond);
+    const float dy = view_.scrollY - before.scrollY;
+    if (dx == 0 && dy == 0) return false;  // at the project's start, or the rows' end
+    // The press point goes with the content and the pointer stays where it
+    // is: the same event again is a move by what was scrolled.
+    if (edge_.ruler) {
+        ruler_->scrolled(dx);
+        ruler_->handle(edge_.last);
+    } else {
+        gestures_->scrolled(dx, dy);
+        gestures_->pointer(edge_.last);
+    }
+    return true;
+}
+
 bool ArrangeView::onPointer(const ui::PointerEvent& e) {
-    if (e.type != ui::PointerEvent::Type::Wheel) return gestures_->pointer(e);
+    if (e.type != ui::PointerEvent::Type::Wheel) {
+        const bool handled = gestures_->pointer(e);
+        noteDrag(e, false);
+        return handled;
+    }
     // The mouse map says what the wheel does: over the TCP its tcp.wheel
     // bindings (plain scrolls the tracks, Ctrl and Alt resize them), over the
     // lanes and the ruler its arrange.wheel ones (plain zooms at the project

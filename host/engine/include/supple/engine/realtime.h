@@ -18,6 +18,7 @@
 #include <chrono>
 #include <climits>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -151,6 +152,23 @@ struct BackendConfig {
     std::uint32_t inputs = 0, outputs = 2;
     bool midiInputs = false;   // open the device's MIDI inputs too (ADR-0016)
     bool midiOutputs = false;  // open hardware MIDI destinations (ADR-0069)
+};
+
+// A file audition (ADR-0094): decoded audio at the device's rate, played on
+// outputs 1/2 after the project's output and outside it. Immutable once
+// published. `right` empty: mono, played on both.
+struct AuditionVoice {
+    std::vector<float> left, right;
+    std::size_t frames() const { return left.size(); }
+};
+// What the callback plays (Engine::auditionState): the voice's serial (0:
+// none) and its frame, and the serial of the last request it took (a voice
+// published and not yet taken is newer).
+struct AuditionState {
+    std::uint64_t serial = 0;
+    bool playing = false;
+    std::int64_t position = 0;
+    std::uint64_t taken = 0;
 };
 
 // A short MIDI message from a device input during one callback (ADR-0016).
@@ -513,13 +531,19 @@ struct EngineOptions {
     enum class Background { Auto, Normal, Fifo };
     Background background = Background::Auto;
     int backgroundPriority = 0;  // Fifo; 0: Engine::kBackgroundPriority
+    // Tests (route E stage 5): compile each plan a second time and compare
+    // the two (engine.md "Edits are being made cheaper"); a difference fails
+    // the load with engine.plan_differs. It doubles each compile's time.
+    bool verifyPlans = false;
 };
 
 // Output values remain in the host event domain (VST3 normalized). Main-thread
 // consumers convert them, honor DontRecord and never echo them back to DSP.
 struct PluginOutput {
     model::Id fx;
-    std::uint64_t planGeneration = 0, epoch = 0;
+    // The plan that produced it, and the patch sequence when its block began
+    // (ADR-0092): odd while patches are being applied.
+    std::uint64_t planGeneration = 0, epoch = 0, patchSequence = 0;
     std::int64_t timelineSample = 0, streamSample = 0;
     host::OutputEvent event;
     bool idle = false, anticipative = false;
@@ -579,6 +603,11 @@ class Engine {
     const std::vector<model::EnvTarget>& writeHolds() const { return writeHolds_; }
     // Edits load() applied to the running plan without compiling (ADR-0060).
     std::uint64_t mixEdits() const { return mixEdits_; }  // main thread
+    // Main thread: the plans verifyPlans compiled twice and found equal.
+    std::uint64_t verifiedPlans() const { return verifiedPlans_; }
+    // Patch-only FX edits load() applied to the instances without compiling
+    // (ADR-0092).
+    std::uint64_t patchEdits() const { return patchEdits_; }  // main thread
     void play();
     void pause();  // stops the transport; plugin state is reset (no hanging notes)
     void seek(double seconds);
@@ -601,6 +630,15 @@ class Engine {
     // count ends. The clicks sound with the metronome off too (at its level).
     // pause() cancels it. Live output only.
     void playCountIn(std::int64_t frames, std::int64_t beatFrames, int beatsPerBar);
+    // File audition (ADR-0094). Main thread: `voice` plays from its first
+    // sample at the next cycle, on outputs 1/2 after the project's output,
+    // in either executor, stopped or playing; what played fades out over
+    // 5 ms. Null or empty stops. Returns the voice's serial (0 for a stop).
+    // A stop of the engine drops it; renders, recordings and meters never
+    // contain it.
+    std::uint64_t audition(std::shared_ptr<const AuditionVoice> voice);
+    // Any thread: the voice playing and its frame.
+    AuditionState auditionState() const;
     // Main thread (one consumer): the control messages the devices sent since
     // the last call (ADR-0027), oldest first, appended to `out`; at most
     // kControlRing are held between calls (more are counted as dropped).
@@ -724,6 +762,9 @@ class Engine {
     std::int64_t playedStream(std::uint64_t epoch) const;
     std::optional<RackLatencyInfo> rackLatencies(model::Id rack, std::uint64_t version) const;
     std::uint64_t planGeneration() const { return publishedGen_; }  // main thread
+    // Moves by two with each patch-only edit (ADR-0092): plug-in outputs that
+    // carry another value were produced before it. Main thread.
+    std::uint64_t patchSequence() const { return patchSeq_.load(std::memory_order_relaxed); }
     // Main thread (ADR-0086): the last plan load() published has the device
     // callback process a bridged plug-in (one on a live node, or any with
     // the in-callback executor). False when stopped.
@@ -767,6 +808,7 @@ class Engine {
     friend struct EngineTestAccess;  // defined by the tests alone
     friend struct OutputTestAccess;  // likewise (test_app.cpp)
     friend struct RecordingErrorTestAccess;
+    friend struct RateTestAccess;  // likewise (test_module_library.cpp)
     void cycle(const float* const* in, float* const* out, std::uint32_t frames) SUPPLE_RT;
     // cycle() after its bookkeeping: count-in, then the transport's work.
     void cycleTransport(const float* const* in, float* const* out, std::uint32_t frames) SUPPLE_RT;
@@ -808,6 +850,32 @@ class Engine {
     // that play timeline frames from `pos`. Audio thread.
     void addClicks(const detail::Plan& p, float* const* out, std::uint32_t offset, std::int64_t pos,
                    std::uint32_t k) SUPPLE_RT;
+    // File audition (ADR-0094): requests the main thread publishes, each an
+    // immutable voice (or a stop) with a serial; it frees those below the
+    // smallest serial the callback still reads (auditionKeep_).
+    struct AuditionRequest {
+        std::shared_ptr<const AuditionVoice> voice;  // null: a stop
+        std::uint64_t serial = 0;
+    };
+    struct AuditionPlay {
+        const AuditionVoice* voice = nullptr;
+        std::size_t position = 0;
+        std::uint64_t serial = 0;
+    };
+    static constexpr double kAuditionFadeSeconds = 0.005;
+    void mixAudition(float* const* out, std::uint32_t frames) SUPPLE_RT;
+    void reclaimAuditions();  // main thread
+    void resetAuditions();    // main thread, no callback running
+    std::deque<std::unique_ptr<AuditionRequest>> auditionOwned_;  // main thread
+    std::uint64_t auditionSerial_ = 0;                            // main thread
+    std::atomic<const AuditionRequest*> auditionNext_{nullptr};
+    std::atomic<std::uint64_t> auditionKeep_{0}, auditionPlaying_{0}, auditionTaken_{0};
+    std::atomic<std::int64_t> auditionPosition_{0};
+    // Audio thread: the request last taken, the voice playing and the one
+    // fading out (a newer request cuts an older fade).
+    const AuditionRequest* auditionSeen_ = nullptr;
+    AuditionPlay auditionPlay_, auditionFade_;
+    std::uint32_t auditionFadeLeft_ = 0, auditionFadeFrames_ = 0;
     std::atomic<bool> metroOn_{false};
     std::atomic<float> metroGain_{0.5f};
     // The click sounding now (audio thread only).
@@ -898,8 +966,17 @@ class Engine {
     // generation an executor may use, as read for that decision.
     std::uint64_t collectPlans();
     Status loadNow(const model::Session& session, const std::filesystem::path& projectDir);
+    // The oldest plan generation an executor may still be using.
+    std::uint64_t oldestInUse() const;
+    // Route E stage 1: the rings of plans older than `oldest` (one reading
+    // of oldestInUse()) go to the pool, from which load() takes a ring of
+    // the shape it needs.
+    void recycleRings(std::uint64_t oldest);
+    std::unique_ptr<detail::ChunkRing> takeRing(std::size_t capacity, std::uint32_t frames);
+    // `patchSequence`: read before the block was processed.
     void publishPluginOutputs(detail::Plan& plan, bool renderer, std::uint64_t epoch,
-                              std::int64_t pos, std::int64_t stream) SUPPLE_RT;
+                              std::int64_t pos, std::int64_t stream,
+                              std::uint64_t patchSequence) SUPPLE_RT;
 
     void pushControlMidi() SUPPLE_RT;
     std::unique_ptr<SpscRing<ControlMidiEvent, kControlRing>> controlMidi_ =
@@ -940,6 +1017,7 @@ class Engine {
     // Plans: published by the main thread, freed once no executor can use
     // them (both acknowledged a newer generation).
     std::vector<std::unique_ptr<detail::Plan>> plans_;
+    std::vector<std::unique_ptr<detail::ChunkRing>> ringPool_;  // main thread (recycleRings)
     std::atomic<detail::Plan*> latestPlan_{nullptr};
     std::atomic<detail::Plan*> handPlan_{nullptr};  // renderer -> callback (ADR-0014)
     std::atomic<std::uint64_t> callbackGen_{0};     // the callback's plan generation
@@ -964,6 +1042,13 @@ class Engine {
     // old plans are collected, where an executor may adopt a newer plan.
     void (*afterCollectForTests_)(void*) = nullptr;
     void* afterCollectContext_ = nullptr;
+    // Tests only (EngineTestAccess): changes the verifier's second compile
+    // (EngineOptions::verifyPlans) before the two are compared.
+    void (*secondCompileForTests_)(detail::Plan&) = nullptr;
+    // Tests only (EngineTestAccess): runs between the verifier's two
+    // compiles, where a plug-in may ask for a restart.
+    void (*betweenCompilesForTests_)(void*) = nullptr;
+    void* betweenCompilesContext_ = nullptr;
     bool bridgedLive_ = false;  // main thread (bridgedLive())
     std::atomic<std::uint64_t> stoppedGen_{0};
     // The session the engine plays: the newest published plan's, or a mix or
@@ -972,6 +1057,9 @@ class Engine {
     // puts back if the deferred edit fails to compile (review 37 F1).
     std::shared_ptr<const model::Session> latest_;
     std::optional<std::shared_ptr<const model::Session>> rateDeferredFrom_;
+    // Whether a refused playrate move was pending when the deferral began:
+    // the restore puts it back with rateDeferredFrom_ (review 37c F1).
+    bool rateDeferredScalarPending_ = false;
     std::optional<Error> unplayedEdit_;  // takeUnplayedEdit()
     // The session the newest published plan was compiled from: what the
     // prune keeps, whatever latest_ names.
@@ -1078,6 +1166,19 @@ class Engine {
     bool loadMixValues(const model::Session& session, const std::filesystem::path& projectDir);
     std::vector<model::EnvTarget> writeHolds_, staleCurves_;
     std::uint64_t mixEdits_ = 0;
+    std::uint64_t verifiedPlans_ = 0;
+    // ADR-0093: the stream position, in this epoch, by which the renderer has
+    // taken the last published edit it reads (loadMixValues).
+    std::uint64_t renderedAheadEpoch_ = 0;
+    std::int64_t renderedAheadUntil_ = 0;
+    // ADR-0092 (main thread): the patch-only edit path of load().
+    bool loadPatches(const model::Session& session, const std::filesystem::path& projectDir);
+    std::uint64_t patchEdits_ = 0;
+    // Moved before and after loadPatches applies patches (odd in between);
+    // executors read it before each block they process and stamp that
+    // block's plug-in outputs with it. The app drops any other stamp.
+    std::atomic<std::uint64_t> patchSeq_{0};
+    static_assert(std::atomic<std::uint64_t>::is_always_lock_free);  // read on the audio path
     bool holdsPending_ = false;       // writeHolds_ not yet in the newest plan
     bool releasesStaleCurve() const;  // a load must compile
     void applyPendingHolds();         // after a shortcut that publishes no plan

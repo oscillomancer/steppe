@@ -9,6 +9,7 @@
 #include <stb_image.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -34,6 +35,7 @@
 #include "supple/model/source_mapping.h"
 #include "supple/ui/root.h"
 #include "supple/ui/text_field.h"
+#include "supple/ui/widgets.h"
 #include "supple/views/arrange.h"
 #include "supple/views/envelope_edit.h"
 #include "supple/views/envelope_lane.h"
@@ -42,6 +44,10 @@
 using namespace supple;
 
 namespace {
+
+// The time of the arrangement's passes here: no test in this file holds a
+// drag at an edge, and a forced pass is not throttled, so one time serves.
+constexpr std::chrono::steady_clock::time_point kPass{std::chrono::hours(1)};
 
 // One offscreen window shared by the tests (GL contexts are not free).
 struct Gl {
@@ -291,7 +297,7 @@ TEST_CASE("smooth following moves the picture in whole pixels, so nothing in it 
     auto shot = [&](double seconds) {
         transport.playing = true;
         transport.seconds = seconds;
-        arrange->poll(true);
+        arrange->poll(true, kPass);
         root.damageAll();
         root.frame(false);
         return root.readBack();
@@ -305,9 +311,11 @@ TEST_CASE("smooth following moves the picture in whole pixels, so nothing in it 
     const gui::Image first = shot(from);
     const double firstStart = arrange->viewport().startSeconds;
     REQUIRE(firstStart > 0);
-    // The ruler and the lanes, less a margin at each side for what scrolls in.
+    // The ruler and the lanes, less a margin at each side for what scrolls in
+    // and for what does not scroll: an item that begins before the view keeps
+    // its label at the view's left edge.
     const ui::Rect ruler = arrange->ruler().bounds(), lanes = arrange->lanesRect();
-    const int x0 = static_cast<int>((lanes.x + 60) * root.pixelRatio());
+    const int x0 = static_cast<int>((lanes.x + 120) * root.pixelRatio());
     const int x1 = static_cast<int>((lanes.right() - 60) * root.pixelRatio());
     const int y0 = static_cast<int>(ruler.y * root.pixelRatio());
     const int y1 = static_cast<int>(lanes.bottom() * root.pixelRatio());
@@ -652,7 +660,7 @@ TEST_CASE("the view follows the playhead by page, not at all, or smoothly while 
         arrange->setViewport(v);
         transport.playing = playing;
         transport.seconds = seconds;
-        arrange->poll(true);
+        arrange->poll(true, kPass);
         return arrange->viewport().startSeconds;
     };
     // Page (the default): nothing moves until the playhead leaves the view,
@@ -674,7 +682,7 @@ TEST_CASE("the view follows the playhead by page, not at all, or smoothly while 
     CHECK(at(500, true, 10) == doctest::Approx(500 - width / 2).epsilon(0.01));  // a seek
     // Stopped, moving the cursor only pages: a click past the middle stays put.
     transport.playing = false;
-    arrange->poll(true);
+    arrange->poll(true, kPass);
     CHECK(at(10 + width * 0.8, false, 10) == doctest::Approx(10));
     CHECK(at(10 + width * 1.5, false, 10) ==
           doctest::Approx(10 + width * 1.5 - width * 0.25).epsilon(0.01));
@@ -844,14 +852,16 @@ TEST_CASE("an old arrange sidecar clamps tiny heights and keeps the TCP top line
         arrange->trackLayout().setGlobalHeight(72);
         root.frame(false);
         const auto row = arrange->tcpRowRect(0);
-        for (const auto* name : {"name", "fx", "addfx"}) {
+        // The name line: the name and the four state cells, at any height.
+        for (const auto* name : {"name", "mute", "solo", "arm", "monitor"}) {
             const auto* control = arrange->tcpPanel().controlNode(track, name);
             REQUIRE(control);
             CHECK(control->visible);
             CHECK(control->bounds().y >= row.y);
             CHECK(control->bounds().bottom() <= row.bottom() - views::TcpRowGeometry::kResizeGrip);
         }
-        for (const auto* name : {"mute", "solo", "fader", "pan", "input", "out"}) {
+        for (const auto* name :
+             {"polarity", "mono", "fader", "pan", "input", "fx", "addfx", "env", "out"}) {
             const auto* control = arrange->tcpPanel().controlNode(track, name);
             REQUIRE(control);
             CHECK_FALSE(control->visible);
@@ -913,6 +923,19 @@ TEST_CASE("the zoom keys' step keeps the playhead's time in place") {
     CHECK(arrange->playheadX() == doctest::Approx(static_cast<double>(x)));
     arrange->zoomStep(false);
     CHECK(arrange->viewport().pixelsPerSecond == doctest::Approx(40));
+}
+
+TEST_CASE("the generated session builds past its first locked item with two takes") {
+    // Track 18 is the first whose audio item is both locked (every seventh
+    // from the fourth) and given a second take (every third from the third);
+    // the benchmark's session has 64 tracks.
+    Session s;
+    REQUIRE(s.build(24));
+    const model::Session head = s.app->head();
+    std::size_t lockedWithTakes = 0;
+    for (const auto& e : head.items)
+        if (e.value->locked && e.value->takes.size() == 2) ++lockedWithTakes;
+    CHECK(lockedWithTakes == 1);  // of 24 tracks, only the 18th
 }
 
 TEST_CASE("the arrangement renders a frame with 1000 generated tracks") {
@@ -1021,6 +1044,256 @@ TEST_CASE("locked items are marked") {
     for (std::size_t i = 0; i < plain.rgba.size(); i += 4)
         if (std::abs(int(plain.rgba[i]) - int(marked.rgba[i])) > 8) ++diff;
     CHECK(diff > 0);  // the padlock paints somewhere
+}
+
+namespace {
+// One channel with one item of one take: the track's colour, the take's
+// name and its media path are the test's to choose.
+struct OneItem {
+    model::Session session;
+    model::Id track, item;
+};
+OneItem oneItem(const std::string& trackColor, const std::string& takeName,
+                const std::string& mediaPath, int emptyTracksAfter = 0) {
+    model::Session s = model::Session::create();
+    model::EditTxn txn(s, 1);
+    model::Track track;
+    track.type = model::StripType::Channel;
+    track.parent = model::kMaster;
+    track.name = "T";
+    track.color = trackColor;
+    const model::Id tid = txn.create(track);
+    txn.modify<model::Track>(model::kMaster, [&](model::Track& m) { m.children.push_back(tid); });
+    for (int i = 0; i < emptyTracksAfter; ++i) {  // rows to scroll by
+        model::Track more;
+        more.type = model::StripType::Channel;
+        more.parent = model::kMaster;
+        more.name = "E";
+        const model::Id id = txn.create(more);
+        txn.modify<model::Track>(model::kMaster,
+                                 [&](model::Track& m) { m.children.push_back(id); });
+    }
+    model::Take take;
+    take.name = takeName;
+    if (!mediaPath.empty()) {
+        model::MediaSource media;
+        media.path = mediaPath;
+        media.format = "wav";
+        media.sampleRate = 48000;
+        media.channels = 1;
+        media.frames = 48000;
+        take.source = txn.create(media);
+    }
+    const model::Id takeId = txn.create(take);
+    model::Item item;
+    item.track = tid;
+    item.length = 8;
+    const model::Id iid = txn.create(item);
+    txn.modify<model::Item>(iid, [&](model::Item& i) {
+        i.takes.push_back(takeId);
+        i.activeTake = takeId;
+    });
+    auto committed = txn.commit();
+    REQUIRE(committed);
+    return {*committed, tid, iid};
+}
+}  // namespace
+
+TEST_CASE("an item is called by its take, else by its audio file") {
+    const OneItem named = oneItem("", "Verse 1", "audio/vox take 3.wav");
+    CHECK(views::Lanes::itemLabel(named.session, *named.session.items.find(named.item)) ==
+          "Verse 1");
+    const OneItem unnamed = oneItem("", "", "audio/vox take 3.wav");
+    CHECK(views::Lanes::itemLabel(unnamed.session, *unnamed.session.items.find(unnamed.item)) ==
+          "vox take 3");
+    // Either separator ends the folder, on every platform; a leading dot is
+    // not an extension.
+    const OneItem windows = oneItem("", "", "C:\\Audio\\kick.01.wav");
+    CHECK(views::Lanes::itemLabel(windows.session, *windows.session.items.find(windows.item)) ==
+          "kick.01");
+    const OneItem hidden = oneItem("", "", "media/.take");
+    CHECK(views::Lanes::itemLabel(hidden.session, *hidden.session.items.find(hidden.item)) ==
+          ".take");
+    // Nothing to call it by: the view falls back to the item's id.
+    const OneItem bare = oneItem("", "", "");
+    CHECK(views::Lanes::itemLabel(bare.session, *bare.session.items.find(bare.item)).empty());
+}
+
+TEST_CASE("an item's fades are drawn under its name bar, when it has one") {
+    const ui::Rect tall{10, 20, 100, 70};
+    CHECK(views::Lanes::hasNameBar(tall));
+    const ui::Rect body = views::Lanes::fadeArea(tall);
+    CHECK(body.x == tall.x);
+    CHECK(body.w == tall.w);
+    CHECK(body.y == tall.y + views::Lanes::kNameBar);
+    CHECK(body.bottom() == tall.bottom());
+    const ui::Rect compact{10, 20, 100, 22};  // a 24-unit row: no room for a bar
+    CHECK_FALSE(views::Lanes::hasNameBar(compact));
+    CHECK(views::Lanes::fadeArea(compact).y == compact.y);
+    CHECK(views::Lanes::fadeArea(compact).h == compact.h);
+}
+
+TEST_CASE("an item takes its track's colour, or its strip type's without one") {
+    const ui::Theme theme = ui::Theme::dark();
+    const OneItem green = oneItem("green", "", "");
+    const OneItem custom = oneItem("#102030", "", "");
+    const OneItem plain = oneItem("", "", "");
+    auto colorOf = [&](const OneItem& o) {
+        return ui::packRgba(views::Lanes::itemColor(theme, *o.session.items.find(o.item),
+                                                    o.session.tracks.find(o.track),
+                                                    model::StripType::Channel));
+    };
+    CHECK(colorOf(green) == ui::packRgba(theme.color("track-green")));
+    CHECK(colorOf(custom) == ui::packRgba(ui::Color::hex(0x102030)));
+    CHECK(colorOf(plain) == ui::packRgba(theme.color("channel")));
+    const model::Item bare;
+    CHECK(ui::packRgba(views::Lanes::itemColor(theme, bare, nullptr, model::StripType::Master)) ==
+          ui::packRgba(theme.color("master")));
+    // An item's own colour (item.set {color}) comes before its track's; one
+    // the theme does not know leaves the track's.
+    model::Item own = *green.session.items.find(green.item);
+    own.color = "violet";
+    CHECK(ui::packRgba(views::Lanes::itemColor(theme, own, green.session.tracks.find(green.track),
+                                               model::StripType::Channel)) ==
+          ui::packRgba(theme.color("track-violet")));
+    own.color = "#0a0b0c";
+    CHECK(ui::packRgba(views::Lanes::itemColor(theme, own, green.session.tracks.find(green.track),
+                                               model::StripType::Channel)) ==
+          ui::packRgba(ui::Color::hex(0x0a0b0c)));
+    own.color = "no such colour";
+    CHECK(ui::packRgba(views::Lanes::itemColor(theme, own, green.session.tracks.find(green.track),
+                                               model::StripType::Channel)) ==
+          ui::packRgba(theme.color("track-green")));
+
+    // And the picture follows: the name bar of an item on a green track is
+    // green, on an uncoloured channel the channels' blue.
+    Gl& g = gl();
+    if (!g.ok) return;
+    peaks::PeakService peaks(std::filesystem::temp_directory_path() / "supple-arrange-color-cache",
+                             [](std::function<void()>) {});
+    auto nameBarPixel = [&](const OneItem& o) {
+        ui::Root root(*g.window, g.fonts, theme);
+        auto arrange = std::make_unique<views::ArrangeView>(
+            peaks, [](const model::MediaSource&) { return std::filesystem::path{}; },
+            views::TransportSource{});
+        views::ArrangeView* view = arrange.get();
+        arrange->show(o.session);
+        arrange->setViewport({0, 60, 0});
+        arrange->setFollow(views::Follow::Off);
+        root.setContent(std::move(arrange));
+        root.damageAll();
+        root.frame(false);
+        const ui::Rect r = view->lanes().itemRect(0, *o.session.items.find(o.item));
+        REQUIRE(views::Lanes::hasNameBar(r));
+        const gui::Image image = root.readBack();
+        const float ratio = static_cast<float>(image.width) / g.window->width();
+        // Right of the label, in the middle of the bar.
+        const auto x = static_cast<std::size_t>((r.x + r.w * 0.75f) * ratio);
+        const auto y = static_cast<std::size_t>((r.y + views::Lanes::kNameBar / 2) * ratio);
+        const std::size_t i = (y * static_cast<std::size_t>(image.width) + x) * 4;
+        return std::array<int, 3>{image.rgba[i], image.rgba[i + 1], image.rgba[i + 2]};
+    };
+    const auto onGreen = nameBarPixel(green);
+    const auto onPlain = nameBarPixel(plain);
+    CHECK(onGreen[1] > onGreen[0]);  // green over red and blue
+    CHECK(onGreen[1] > onGreen[2]);
+    CHECK(onPlain[2] > onPlain[1]);  // blue over green and red
+    CHECK(onPlain[2] > onPlain[0]);
+}
+
+TEST_CASE("an item's label goes with its name bar: with the bar above the view it is not drawn") {
+    Gl& g = gl();
+    if (!g.ok) return;
+    peaks::PeakService peaks(std::filesystem::temp_directory_path() / "supple-arrange-label-cache",
+                             [](std::function<void()>) {});
+    // Two sessions alike but for the take's name, on enough rows to scroll.
+    const OneItem wide = oneItem("green", "WWWWWWWWWW", "media/a.wav", 16);
+    const OneItem thin = oneItem("green", "iiii", "media/a.wav", 16);
+    auto render = [&](const OneItem& o, float scrollY) {
+        ui::Root root(*g.window, g.fonts, ui::Theme::dark());
+        auto arrange = std::make_unique<views::ArrangeView>(
+            peaks, [](const model::MediaSource&) { return std::filesystem::path{}; },
+            views::TransportSource{});
+        views::ArrangeView* view = arrange.get();
+        arrange->show(o.session);
+        arrange->setFollow(views::Follow::Off);
+        root.setContent(std::move(arrange));
+        root.frame(false);
+        view->setViewport({0, 60, scrollY});
+        root.damageAll();
+        root.frame(false);
+        CHECK(view->viewport().scrollY == scrollY);  // the rows did scroll
+        // The lanes only: the track panel shows the same name in both.
+        const ui::Rect lanes = view->lanes().bounds();
+        const gui::Image image = root.readBack();
+        const float ratio = static_cast<float>(image.width) / g.window->width();
+        std::vector<std::uint8_t> out;
+        for (auto y = static_cast<std::size_t>(lanes.y * ratio);
+             y < static_cast<std::size_t>(lanes.bottom() * ratio); ++y)
+            for (auto x = static_cast<std::size_t>(lanes.x * ratio);
+                 x < static_cast<std::size_t>(lanes.right() * ratio); ++x)
+                for (std::size_t k = 0; k < 3; ++k)
+                    out.push_back(
+                        image.rgba[(y * static_cast<std::size_t>(image.width) + x) * 4 + k]);
+        return out;
+    };
+    CHECK(render(wide, 0) != render(thin, 0));    // the bar is in view: the names show
+    CHECK(render(wide, 30) == render(thin, 30));  // the bar is above it: no name on the body
+}
+
+TEST_CASE("a MIDI item's notes are its colour drawn towards the ink: apart from its body") {
+    for (const ui::Theme& theme : {ui::Theme::dark(), ui::Theme::light()}) {
+        const ui::Color ink = theme.color("ink");
+        for (const char* name : {"track-yellow", "track-red", "track-blue", "channel"}) {
+            const ui::Color item = theme.color(name);
+            const ui::Color note = views::Lanes::noteColor(theme, item);
+            auto distance = [](ui::Color a, ui::Color b) {
+                return std::abs(a.r - b.r) + std::abs(a.g - b.g) + std::abs(a.b - b.b);
+            };
+            // Nearer the ink than the item's own colour is, and still the
+            // item's hue: nearer the item than the ink.
+            CHECK(distance(note, ink) < distance(item, ink));
+            CHECK(distance(note, item) < distance(note, ink));
+            CHECK(note.a == item.a);
+        }
+    }
+}
+
+TEST_CASE("a selected item's outline is set off from its body by a hairline of the ground") {
+    Gl& g = gl();
+    if (!g.ok) return;
+    const ui::Theme theme = ui::Theme::dark();
+    peaks::PeakService peaks(std::filesystem::temp_directory_path() / "supple-arrange-ring-cache",
+                             [](std::function<void()>) {});
+    const OneItem o = oneItem("orange", "Bass", "media/a.wav");  // the focus colour's own hue
+    ui::Root root(*g.window, g.fonts, theme);
+    auto arrange = std::make_unique<views::ArrangeView>(
+        peaks, [](const model::MediaSource&) { return std::filesystem::path{}; },
+        views::TransportSource{});
+    views::ArrangeView* view = arrange.get();
+    arrange->show(o.session);
+    arrange->setViewport({0, 60, 0});
+    arrange->setFollow(views::Follow::Off);
+    root.setContent(std::move(arrange));
+    REQUIRE(view->installOverlay(root));
+    view->gestures().setSelection({o.item});
+    root.damageAll();
+    root.frame(false);
+    const ui::Rect r = view->lanes().itemRect(0, *o.session.items.find(o.item));
+    const gui::Image image = root.readBack();
+    const float ratio = static_cast<float>(image.width) / g.window->width();
+    auto red = [&](float x, float y) {
+        return image
+            .rgba[(static_cast<std::size_t>(y * ratio) * static_cast<std::size_t>(image.width) +
+                   static_cast<std::size_t>(x * ratio)) *
+                  4];
+    };
+    const float y = r.y + r.h * 0.75f;  // under the name bar, clear of the label
+    const int outline = red(r.x + 1.0f, y), hairline = red(r.x + 2.5f, y),
+              body = red(r.x + 6.0f, y);
+    CHECK(outline > body + 40);  // the outline is brighter than the body
+    CHECK(hairline < body);      // and a darker line lies between them
+    CHECK(hairline < outline - 80);
 }
 
 // --- golden images ------------------------------------------------------------------
@@ -1165,6 +1438,16 @@ struct TcpHarness {
 void press(ui::Root& root, ui::Node* node, int clicks = 1, unsigned mods = 0) {
     const ui::Rect b = node->bounds();
     const ui::Point at{b.x + b.w / 2, b.y + b.h / 2};
+    root.pointer({ui::PointerEvent::Type::Down, at, 1, clicks, mods});
+    root.pointer({ui::PointerEvent::Type::Up, at, 1, clicks, mods});
+}
+
+// A press on a row's own ground, between its mix and connections lines: at
+// the default height a row's centre is on its fader.
+void pressRow(ui::Root& root, ui::Node* row, int clicks = 1, unsigned mods = 0) {
+    using G = views::TcpRowGeometry;
+    const ui::Rect b = row->bounds();
+    const ui::Point at{b.x + b.w / 2, b.y + (G::kMixTop + G::kCellHeight + G::kLinkTop) / 2};
     root.pointer({ui::PointerEvent::Type::Down, at, 1, clicks, mods});
     root.pointer({ui::PointerEvent::Type::Up, at, 1, clicks, mods});
 }
@@ -1384,18 +1667,90 @@ TEST_CASE("TCP selection follows click, Ctrl+click and Shift+click") {
     const model::Id tr1 = *model::Id::parse("tr_1");
     const model::Id tr3 = *model::Id::parse("tr_3");
     REQUIRE(panel->rowNode(tr1));
-    press(root, panel->rowNode(tr1));
+    pressRow(root, panel->rowNode(tr1));
     CHECK(tcp.is("tr_1"));
     CHECK(tcp.selected.size() == 1);
-    press(root, panel->rowNode(tr3), 1, ui::kCtrl);
+    pressRow(root, panel->rowNode(tr3), 1, ui::kCtrl);
     CHECK(tcp.is("tr_1"));
     CHECK(tcp.is("tr_3"));
-    press(root, panel->rowNode(tr3), 1, ui::kCtrl);  // toggles off
+    pressRow(root, panel->rowNode(tr3), 1, ui::kCtrl);  // toggles off
     CHECK_FALSE(tcp.is("tr_3"));
-    press(root, panel->rowNode(tr1));
-    press(root, panel->rowNode(tr3), 1, ui::kShift);  // extends
-    CHECK(tcp.selected.size() == 3);                  // tr_1..tr_3
+    pressRow(root, panel->rowNode(tr1));
+    pressRow(root, panel->rowNode(tr3), 1, ui::kShift);  // extends
+    CHECK(tcp.selected.size() == 3);                     // tr_1..tr_3
     CHECK(tcp.error.empty());
+}
+
+TEST_CASE("a TCP row's meter stands at its right edge, clear of the controls") {
+    Gl& g = gl();
+    if (!g.ok) return;
+    Session s;
+    REQUIRE(s.build(3));
+    ui::Root root(*g.window, g.fonts, ui::Theme::dark());
+    TcpHarness tcp;
+    views::ArrangeView* arrange = tcp.mount(root, s);
+    arrange->setViewport({0, 40, 0});
+    root.frame(false);
+    auto* panel = &arrange->tcpPanel();
+    const model::Id tr1 = *model::Id::parse("tr_1");
+    REQUIRE(panel->rowNode(tr1));
+    const ui::Rect row = panel->rowNode(tr1)->bounds();
+    const ui::Rect meter = panel->controlNode(tr1, "meter")->bounds();
+    CHECK(meter.w == views::TcpRowGeometry::kMeterWidth);
+    CHECK(meter.right() <= row.right());
+    CHECK(meter.right() >= row.right() - 3);
+    CHECK(meter.h >= row.h - 8);  // the row's whole height, less a margin
+    for (const char* what : {"fx", "addfx", "env", "out", "pan", "fader", "input", "name", "mute",
+                             "solo", "arm", "monitor", "polarity", "mono"}) {
+        INFO(what);
+        const ui::Node* node = panel->controlNode(tr1, what);
+        REQUIRE(node);
+        CHECK(node->visible);
+        CHECK(node->bounds().right() < meter.x);
+    }
+    // Three lines, each in one order (gui.md §4.2). The name line: the name,
+    // then arm, monitor, mute, solo as four cells of one size.
+    auto box = [&](const model::Id& track, const char* what) {
+        return panel->controlNode(track, what)->bounds();
+    };
+    const std::vector<ui::Rect> cells = {box(tr1, "arm"), box(tr1, "monitor"), box(tr1, "mute"),
+                                         box(tr1, "solo")};
+    using G = views::TcpRowGeometry;
+    CHECK(box(tr1, "name").right() <= cells[0].x);
+    for (std::size_t i = 0; i < cells.size(); ++i) {
+        CHECK(cells[i].w == G::kCellWidth);
+        CHECK(cells[i].h == G::kCellHeight);
+        CHECK(cells[i].y == cells[0].y);
+        if (i) CHECK(cells[i].x == cells[i - 1].right() + G::kCellGap);
+    }
+    // The mix line: polarity, mono, the fader, the pan.
+    const std::vector<ui::Rect> mix = {box(tr1, "polarity"), box(tr1, "mono"), box(tr1, "fader"),
+                                       box(tr1, "pan")};
+    for (std::size_t i = 0; i < mix.size(); ++i) {
+        CHECK(mix[i].y >= cells[0].bottom());
+        if (i) CHECK(mix[i].x >= mix[i - 1].right());
+    }
+    // The connections line: the input, fx, +, env, out.
+    const std::vector<ui::Rect> links = {box(tr1, "input"), box(tr1, "fx"), box(tr1, "addfx"),
+                                         box(tr1, "env"), box(tr1, "out")};
+    for (std::size_t i = 0; i < links.size(); ++i) {
+        CHECK(links[i].y >= mix[0].bottom());
+        if (i) CHECK(links[i].x >= links[i - 1].right());
+    }
+    // The routing buttons are boxed in both views; "fx" and "+" are text
+    // alone until the pointer is on them.
+    for (const char* what : {"env", "out"}) {
+        const auto* button = dynamic_cast<const ui::Button*>(panel->controlNode(tr1, what));
+        REQUIRE(button);
+        CHECK_FALSE(button->quiet);
+    }
+    for (const char* what : {"fx", "addfx"}) {
+        const auto* button = dynamic_cast<const ui::Button*>(panel->controlNode(tr1, what));
+        REQUIRE(button);
+        CHECK(button->quiet);
+    }
+    CHECK(links.back().right() == cells.back().right());  // one right edge
+    CHECK(mix.back().right() == cells.back().right());
 }
 
 TEST_CASE("golden: the TCP with one strip of each type") {
@@ -1446,7 +1801,7 @@ TEST_CASE("golden: the TCP with one strip of each type") {
     root.frame(false);
     golden(root, "tcp-strips.png");
     // Scrolled to the end, the last strip clears the foot's "mixer" and
-    // "+ strip"; rows never paint or take clicks there.
+    // "+ track"; rows never paint or take clicks there.
     auto* panel = static_cast<views::TcpPanel*>(root.find("tcp"));
     const ui::Rect foot = root.find("tcp.foot")->bounds();
     REQUIRE(panel->rowNode(*model::Id::parse(child)));
@@ -1526,7 +1881,7 @@ TEST_CASE("a double-click on the TCP's empty space adds a channel; on a row it d
     root.pointer({ui::PointerEvent::Type::Down, {rows.x + rows.w / 2, rows.bottom() - 10}, 1, 1});
     root.pointer({ui::PointerEvent::Type::Up, {rows.x + rows.w / 2, rows.bottom() - 10}, 1, 1});
     CHECK(s.app->head().tracks.size() == before + 1);
-    // A right-click there: the "+ strip" menu at the pointer; its second row adds a buss.
+    // A right-click there: the "+ track" menu at the pointer; its second row adds a buss.
     const ui::Point at{rows.x + rows.w / 2, rows.bottom() - 10};
     root.pointer({ui::PointerEvent::Type::Down, at, 3, 1});
     root.pointer({ui::PointerEvent::Type::Up, at, 3, 1});

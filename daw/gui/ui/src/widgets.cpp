@@ -62,9 +62,36 @@ Size Button::measure(const Canvas& canvas, Size) {
     return {canvas.textWidth(text_, Font::UiBold, t.type("small")) + 2 * t.space("m"), 28};
 }
 
+void Button::setEmphasis(bool on) {
+    if (on == emphasis_) return;
+    emphasis_ = on;
+    invalidate();
+}
+
+void Button::setTextColor(std::string token) {
+    if (token == textColor_) return;
+    textColor_ = std::move(token);
+    invalidate();
+}
+
 void Button::paint(Canvas& canvas) {
     const Theme& t = canvas.theme();
     const Rect b = bounds();
+    if (quiet) {
+        const bool lit = enabled && (pressed_ || hovered());
+        if (lit) {
+            canvas.fillRound(b, t.radius("s"), t.color(pressed_ ? "selection" : "raised"));
+            canvas.strokeRound(b, t.radius("s"), t.color("rule"));
+        }
+        if (focused()) canvas.strokeRound(b, t.radius("s"), t.color("focus"));
+        canvas.text(b, text_, Font::UiBold, t.type("small"),
+                    t.color(!enabled              ? "ink-faint"
+                            : !textColor_.empty() ? textColor_.c_str()
+                            : lit || emphasis_    ? "ink"
+                                                  : "ink-quiet"),
+                    kCenter | kMiddle);
+        return;
+    }
     const Color face = !enabled    ? t.color("panel")
                        : pressed_  ? t.color("selection")
                        : hovered() ? t.color("raised")
@@ -72,7 +99,10 @@ void Button::paint(Canvas& canvas) {
     canvas.fillRound(b, t.radius("s"), face);
     canvas.strokeRound(b, t.radius("s"), focused() ? t.color("focus") : t.color("rule"));
     canvas.text(b, text_, Font::UiBold, t.type("small"),
-                enabled ? t.color("ink") : t.color("ink-faint"), kCenter | kMiddle);
+                !enabled              ? t.color("ink-faint")
+                : !textColor_.empty() ? t.color(textColor_.c_str())
+                                      : t.color("ink"),
+                kCenter | kMiddle);
 }
 
 bool Button::onPointer(const PointerEvent& e) {

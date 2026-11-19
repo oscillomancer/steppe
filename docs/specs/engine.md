@@ -18,9 +18,12 @@ processing, flexible isolation).
 
 The model thread (or a worker it delegates to) compiles a version into a
 `RenderPlan` whose graph and setup are immutable: a structural change means a
-new plan (built incrementally from the previous one where possible, §1.6).
+new plan, compiled complete from the session; instances, recycled rings and
+state carry over from the previous one (§1.6).
 Its DSP state belongs to the executors, and strip, send and VCA levels and
-pans arrive through its mix slots (ADR-0060, §1.6) without a new plan.
+pans, FX wet and bypass, and mute and solo arrive through its mix slots
+(ADR-0060, ADR-0093, §1.6) without a new plan, as patch-only FX edits reach the
+instances (ADR-0092, §1.6).
 
 ### 1.1 Nodes
 
@@ -277,16 +280,90 @@ beat zero). Callers must still validate finite positions and leave room for
 block and latency arithmetic. JACK validates requested rates in 1..768000 Hz
 before constructing its latency request.
 
-### 1.6 Incremental rebuild and plan swap
+### 1.6 Plan rebuild and swap
 
-The compiler diffs the new version against the one the current plan was built
-from (session-model §4). Unchanged nodes keep their plugin instances and
-state (their DSP objects are moved into the new plan). Held timeline notes
-carry only when the receiving instrument instance is retained. Route and parent
-edge delay histories carry when source, destination, tap, kind and delay length
-match; changed lengths start empty. New plugins are
-instantiated and activated on the main thread before the swap; parameter
-changes on existing instances become param events rather than rebuilds.
+Every compile is complete: `Engine::load` builds a whole new plan from the
+session, every node, stage, buffer and event list, except for the edits that
+publish values instead (mix values below, ADR-0060, and the playrate scalar,
+ADR-0046) and patch-only FX edits (below, ADR-0092). Plugin instances are not rebuilt: the instance pool keeps each
+FX's instance while its plug-in and isolation stay the same, and applies a
+changed patch or state to it on the main thread during the compile
+(`InstancePool::get`). State crosses the swap when the executor adopts the
+new plan, matching nodes by id: fader, wet and Console 9 ramps
+(`carryMix`), held notes (`carryLiveNotes`, `carryRackMidi`), and delay
+histories, a rack's plug-in stages' (wet ramp, dry delay, oversampling
+filters) as a chain's. Held timeline notes carry only when the receiving instrument
+instance is retained. Route and parent edge delay histories carry when
+source, destination, tap, kind and delay length match; changed lengths start
+empty. New plugins are instantiated and activated on the main thread before
+the swap. Edits are being made cheaper in stages (route E: rings, then the
+FX identity test, then patch edits without a plan swap, each stage
+specified here as it lands); so far:
+
+- **Rings are recycled** (stage 1). A frontier or record ring of a plan
+  both executors have left goes to a main-thread pool when plans are
+  collected, and the next compile takes a ring of the shape it needs from
+  there, resetting its indices; old chunk contents are never read, since
+  the producer writes every field of a chunk before publishing it. A ring
+  of a plan an executor may still adopt or play is never reused. The pool
+  keeps as many rings as the plans still in use hold. Every ring has room
+  for the render-ahead time at 192 kHz in chunks of the render quantum,
+  plus two. At lower rates that room is the slack for short chunks: no
+  chunk crosses a loop wrap, so a loop shorter than the quantum makes every
+  chunk that short. The renderer still gets its whole lead with a loop down
+  to the render-ahead time divided by the ring's chunk count (about 3 ms
+  with the defaults, at any rate); a shorter loop holds it closer to the
+  callback. A recycled ring is not zero-filled again: its pages were
+  committed when it was first built.
+- **An unchanged FX is not serialized** (stage 2). `InstancePool::get`
+  remembers the session's FX object it last configured an instance from
+  (and keeps it, so the address is not reused). Given that same object
+  again it knows the patch and state are unchanged; given another, or a
+  copy that is not the session's, it compares the patch's canonical text
+  as before, and applies that text when it differs. It forgets the object
+  when it recreates the instance and when the app acknowledges a patch or
+  state the plug-in produced, since the object then no longer describes
+  the instance.
+- **A patch-only edit publishes no plan** (stage 3, ADR-0092): see
+  "Patch-only FX edits" below.
+- **A plan has a canonical dump** (stage 5; `plan_dump.h`). `dumpPlan`
+  (main thread, before publication) writes every field of a prepared plan
+  that compile and prepare decide, one per line in plan order: nodes and
+  their stages, lanes, latencies, pins, delay lengths and buffer sizes,
+  events, clips and take chains, edges, racks, the live and frontier sets,
+  the task graphs, the instances (named by FX or module, never by address)
+  and the mix slots. Runtime state (cursors, ramps, voices, held notes,
+  queues, buffer contents, meters, the executors' handoff fields) is left
+  out. Each struct it walks is first decomposed into all its fields by name,
+  so a field added to `Plan`, `Node`, `Stage`, `Edge` or the others stops
+  the file compiling until it is dumped or named as runtime state. With
+  `EngineOptions::verifyPlans` (tests; off by default) the engine compiles
+  each plan a second time and fails the load with `engine.plan_differs` and
+  the first differing line when the two dumps differ, publishing nothing
+  (a test changes the second compile to see it); the plan-swap soak runs
+  with it on. A compile services the instances it takes, so a plug-in
+  restart asked for or completed between the two changes the second: the
+  pool counts those changes (`InstancePool::availabilityChanges`), and when
+  the count moved the later compile becomes the plan and is checked against
+  another, up to three times, instead of refusing the load. This is the
+  check a partial compile (stage 7) will be held to. The soak also plays its sequences again on a manual device with
+  two plan swaps that change nothing after each edit, a marker added inside
+  the edit's ramps and removed later, and wants the output unchanged sample
+  for sample in both executors: whatever a swap fails to carry is heard.
+- **Carries look nodes and edges up by id** (stage 6). The compile indexes
+  each plan last (`indexForCarry`, main thread): its nodes sorted by id
+  (a plan has one node per id, asserted there in debug builds), each edge's
+  source id, each node's in-edges sorted by source id (ties in
+  `in` order). At adoption the executor finds a node's counterpart by
+  binary search (`findNode`, `carriedNode`), and an in-edge's or a MIDI
+  send's predecessor among the old node's in-edges from the same source, the
+  first in `in` order that matches (`matchInEdge`, `matchSend`). These are
+  the pairs the earlier scans of every node and edge pair found, whichever
+  earlier plan the executor carries from (the callback can skip plans, the
+  live region lags); the soak and a MIDI-send test compare them with those
+  scans, the latter also with a key route retargeted to another FX. Nothing is allocated on the audio thread. At 192 tracks the
+  callback's carry compares about 7,400 entries per adoption instead of
+  75,000; its time is the carry's own work, linear in the plan.
 Returning to a version with neither patch nor state after applying saved FX
 settings recreates the factory-default instance. The old instance remains alive
 until both executors release its plan, as with a changed opaque state.
@@ -353,17 +430,23 @@ earlier collection does not imply that collection already freed its old plan.
 
 **Mix-value edits (ADR-0060).** A session that differs from the last one
 `Engine::load` took only in strip `volume_db`/`pan`/`width`/`pan_left`/`pan_right`,
-send `volume_db`/`pan` and VCA `volume_db` (and in the points of envelopes a
-write pass holds, including the new pan targets, §1.4) is not compiled. The comparison copies each changed track, route, group
-and envelope with those fields taken from the new one and compares the whole
-object, so any other change (mute, solo, a name, an FX or a route's tap)
-compiles. A send whose level moves to or from exactly 0 dB, or whose pan
+send `volume_db`/`pan`, VCA `volume_db`, and since ADR-0093 FX `wet`/`bypass`
+(not `offline`, which decides whether an instance exists), track `mute` and
+`solo`, VCA `mute` and `solo`, and route `mute` where the send is encoded
+anyway (a tap before the fader, a level other than 0 dB, its own pan, mono
+or polarity; MIDI routes and rack sends are never encoded) (and in the
+points of envelopes a write pass holds, including the new pan targets,
+§1.4) is not compiled. The comparison copies each changed track, route,
+group, FX and envelope with those fields taken from the new one and
+compares the whole object, so any other change (a name, an item's mute, an
+FX's plug-in or pins, a route's tap) compiles. A send whose level moves to or from exactly 0 dB, or whose pan
 starts or stops following its source, compiles: that decides whether it is
 encoded. A rack send is never encoded, so any change of its `volume_db` is
 a mix value (ADR-0075). An unchanged session is a maintenance reload and compiles too. A
 qualifying edit writes the values into the newest plan's mix slots (per
-node, per route edge, per VCA; parent sends carry no values) between an odd
-and an even sequence number. Each executor, at the start of a block
+node, per route edge, per VCA, per stage for wet and bypass, numbered node by
+node in `forEachStage` order from `Node::stageSlot`; parent sends carry no
+values) between an odd and an even sequence number. Each executor, at the start of a block
 (`syncMix`, `SUPPLE_RT`), copies the slots its nodes and edges read when the
 sequence moved: a node's own values; an edge's for its encoder (source side)
 or, for a key route, its destination; the source level a send's static gain
@@ -379,6 +462,60 @@ session from the first block whose copy completes. The edit
 publishes no plan, prepares no rate transition and changes no epoch, also
 after rate scheduling has started (§ Master playrate); a plan still queued
 for adoption takes the values when it is adopted.
+A solo edit publishes each strip's silenced flag, from
+`model::soloSilencedTracks` (the function compile uses), and a rack send
+copies its home channel's mute and flag. A stage's wet and bypass reach it
+the same way, and its own wet ramp crossfades the change as after a compile. No compile-time decision depends
+on them: a stage's latency, dry delay, MIDI bus slot and note target are
+the same bypassed or not, and whether it takes part in the MIDI bus is
+decided each block (ADR-0093). In the anticipative executor a rendered node
+takes a value edit at the next block the renderer renders, and a compiled
+reload hands over at the renderer's position. With the renderer full and
+waiting for the callback when the edit is made, both start at the same
+block, so an edit heard only on rendered nodes is bit-identical to the
+compiled reload. A live node takes it at its next callback block, the
+render-ahead rounded up to a render block earlier than the reload reaches
+it, and the two are identical once the reload's ramp is done. A renderer still filling renders with the
+old plan while the compile runs, so a compiled reload is only ever later.
+In the anticipative executor (`detail::changedExecutors`, ADR-0093) an edit
+compiles when it changes these values both where the callback reads them and
+where the renderer does (a node's executor, an edge's owner, a hardware MIDI
+route's source), or where the callback reads them while an earlier edit the
+renderer reads is still ahead of the playhead: the callback has not yet
+played, in that epoch, to where the renderer was rendering when it was
+published plus one render block. The two take values at different stream
+positions, and in between would play neither session's mix, such as silence
+when solo moves from a monitored track to a rendered one, in one edit or
+two. ADR-0060's level and pan edits and ADR-0092's patch edits are not
+gated.
+
+**Patch-only FX edits (ADR-0092).** A session that differs from the last one
+`Engine::load` took only in FX `patch` values, each of those FX having a
+patch before and after, is not compiled. Every other collection must have
+the same storage, and each changed FX is compared whole with its patch taken
+from the new one, so a change of anything else (wet, bypass, pins, a
+plug-in, a name elsewhere) compiles; an unchanged session compiles. The
+edit also compiles when a guard of the mix-value path holds (a deferred or
+rate-seeking edit, a queued scalar, a notification reload), when an edited
+FX has no instance the pool can patch (none, failed, waiting on a restart,
+another plug-in or isolation, configured from a state blob), belongs to a
+frozen track or has an active envelope (a new plan resends automated values
+at its first block), or when any instance has automation its plug-in
+cleared (a compile restores it). Otherwise `InstancePool::applyPatch` applies
+each patch as `get()` would and services the instance; a rescan of the
+parameter list (INFO, ALL or no flags; a values or text rescan is not one) or
+a clear, a latency change, a restart request or failure, a change of
+activation or of ports then makes it a compile, which finds the patches
+applied. When the patch is heard is unchanged: it reaches the instance on
+the main thread inside `load` as before, and a plan swap neither drops nor
+re-renders chunks rendered ahead, so a live node plays it from its next
+block and a node the renderer runs after the chunks it had rendered. The
+real-time output is bit-identical to a compiled reload of the same edit at
+the same block. The patch sequence (`Engine::patchSequence()`) moves by one
+before the patches are applied and by one after; every executor reads it
+before processing a block and stamps that block's plug-in outputs with it,
+and the app drops outputs stamped with any value other than the current
+one (see plug-in outputs below). `Engine::patchEdits()` counts these edits.
 
 ## 2. Real-time execution
 
@@ -614,6 +751,34 @@ sample count. The metronome plays on outputs 1/2. Offline renders of any
 master use that master's own shift and latency, so the device output of each
 master equals its offline render at `outputLatency`.
 
+**File audition** (ADR-0094). `Engine::audition(voice)` (main thread) plays
+an `AuditionVoice` (decoded audio at the device's rate; `right` empty: mono)
+from its first sample at the next cycle: the callback adds it to outputs 1/2
+in `Engine::cycle`, after `cycleTransport` and before LTC (`runSync`) and the
+hardware MIDI lead's delay, in both executors, stopped, playing or counting
+in. It is outside the plan: no track, master, plug-in, Console 9 stage or
+meter sees it, renders never run the callback and recordings never contain
+it. A new voice or a stop (`audition(nullptr)`) fades what played over 5 ms
+(`kAuditionFadeSeconds`; a third request inside a fade cuts the older fade).
+A stopping engine adds nothing and `Engine::stop` drops the voice. Each
+request is immutable with a serial, published through one atomic pointer;
+the callback stores the smallest serial it may still read (`auditionKeep_`:
+the request it took, the voice playing, the one fading) and `service()`
+frees requests below it. `auditionState()` (any thread) gives the playing
+voice's serial (0: none), its frame and the serial last taken; the end of a
+voice notifies the main thread. `EngineApp::playAudition` reads the file's
+start with `audio::readAudioHead` (two channels), up to
+`AppOptions::auditionMaxFrames` (28,800,000) counted at the higher of the
+file's and the device's rates, so neither the decoded file nor the voice is
+longer (about 230 MB of stereo float; ten minutes at 48 kHz, 2.5 at 192 kHz;
+`truncated` when the file is longer), and resamples it to the device's rate on its own worker
+(`AuditionLoader`: one replaceable request, cancelled by a newer one or
+`stopAudition`, its result taken in `tick()`), then publishes the voice; a
+device restart before then drops it. `auditionStatus()` is what the GUI
+reads each frame (`playing` from `audition.play` until the end, `decoding`
+before the first sound). `stopAudition` runs when the engine halts and when a
+project is replaced.
+
 **Meters**. Per strip, the peak and the mean square of the strip's signal
 **after the fader and after the pan law, before the Console 9 encode**
 (`sum × pan matrix × faderGain` — what a user expects at unity: a −6 dBFS
@@ -673,7 +838,9 @@ is not required; per-platform executor equivalence remains required.
 
 Audio sample buffers (node and stage buffers, delays, the render-ahead and
 frontier rings) are zero-filled on the main thread when a plan or ring is
-built, which commits their pages before any callback uses them. Owned audio
+built, which commits their pages before any callback uses them. A recycled
+ring (§1.6) is not zero-filled again; its pages were committed when it was
+first built. Owned audio
 threads (live helpers, background workers, including an offline render's, the
 renderer and the bridge's audio threads) call `rt::prefaultStack()` once
 before their first job: it touches the 128 KiB of stack below the caller and
@@ -686,10 +853,43 @@ first use, and no plug-in code runs early to warm it.
 - Runs a **separate plan instance** with its **own plugin instances**
   (created from the version's state/patches), so rendering never disturbs
   playback and A/B renders of two branches can run side by side.
-- As a render ends, each plugin's read-only parameters (meters, readouts)
-  are read from its instance (`OfflineResult::meters`, by FX id); a
-  `render.mix` keeps them on the main thread for `fx.meters {from:
-  "render"}` until the next one. Other renders keep none.
+- **Bridged plug-ins (ADR-0090).** Once it has made its instances, a
+  render gives each bridged one a call deadline of its own,
+  `OfflineSettings::bridgeDeadlineMs` (`kOfflineBridgeDeadlineMs`, 60 s;
+  lifecycle commands 5/2 of it plus 2 s), in place of the live paths'
+  process-wide 2 s, and restores that when it returns, whatever it
+  returns. Its control requests (activation, the readouts below) get at
+  least the lifecycle value. An instance that fails while the render runs
+  (starting, processing or stopping: missed deadline, crash, exit) stops
+  the block loop and fails the render with `engine.fx_failed`: message
+  naming the plug-in, its fx id and the reason (and any others that
+  failed with it), path `/fx/<id>`, a hint to render again or bypass or
+  replace the FX. No caller then has audio to write. An instance already
+  failed when the render begins keeps its behaviour: a restart failure is
+  a warned, compensated pass-through; a failed bridged instance refuses to
+  start (`engine.start_failed`).
+- **Stop and cancel.** The block loop checks `OfflineSettings::cancelFlag`
+  and `stopToken` between blocks. From the same point as the deadline, a
+  watch thread also checks them every 10 ms while the render has bridged
+  instances; on either it kills the render's own bridges
+  (`host::Instance::abandonBridge`), so a render waiting in a bridged call
+  (activation, reset, flush, start, a block, stop, a readout) returns at
+  once. Every caller gives a render its own instance pool, so no other
+  user shares those bridges. A render stopped or cancelled either way
+  returns `job.cancelled`, ahead of any failure of the instances it killed:
+  a render with a failure first ends the watch (a call ended by its kill can
+  return before the watch has recorded the kill), and a stop or cancel asked
+  for by the time the outcome is decided is the outcome.
+  `setRenderWatchTestHooks` (internal `src/render_watch.h`, tests only, set
+  while no render runs) holds the watch after its kills until the render
+  ends it, which orders that race the same way every time.
+  Instance creation, before that point, keeps its control-plane timeouts
+  (20 s for `Create`).
+- Once a render has succeeded, each plugin's read-only parameters (meters,
+  readouts) are read from its instance (`OfflineResult::meters`, by FX id);
+  a failed or cancelled render reads none. A `render.mix` keeps them on the
+  main thread for `fx.meters {from: "render"}` until the next one. Other
+  renders keep none.
 - Fixed block size (default 512; setting), no anticipative split, all nodes
   in topological order, optionally parallel across independent nodes —
   results must be **bit-identical for any worker count** (fixed summation
@@ -705,6 +905,16 @@ first use, and no plug-in code runs early to warm it.
   queue; results reported as files + analysis summaries. `render.mix`,
   `render.stems`, `render.regions` and `render.dry-run` share one
   implementation and one argument set (ADR-0055).
+- **A job that stops early** (`render.mix`, `render.stems`,
+  `render.regions` and `render.queue.run` with `job: true`) keeps the files
+  it has written, and its snapshot lists them in `result` beside `error`
+  (failed) or alone (cancelled): `files` holds the entry of every task it
+  finished, as a finished job's `files` does (path, outputs, render id,
+  …; across all queued renders for `render.queue.run`), and
+  `unfinished_task_files` the paths a task that did not finish had already
+  written (an output or a loudness report before a later one failed). With
+  nothing written there is no `result`. A call without `job` returns only
+  the error.
 - **Settings** (ADR-0055, session-model §1.10). Every member of
   `project.render` is also a command argument of the same name. The legacy
   arguments `format`, `bit_depth` and `secondary` remain:
@@ -1088,8 +1298,69 @@ set runs it in process and `engine.status.warnings` says so. An instance
 keeps its process until it is made again (fx.restart, the plug-in replaced,
 a project opened), so changing the default never reloads a running
 plug-in. `fx.describe isolation_effective` says where it runs. Offline
-renders, render snapshots and rack probes make their own instances in
-process, as before; isolation does not change the output.
+renders, render snapshots and rack probes make their own instances: one on
+`inherit` runs in process there, one set to `shared_bridge` or `dedicated`
+runs bridged; isolation does not change the output.
+
+**Load overrides (topic 7d, ADR-0081 note, ADR-0083).** How this run loads a
+named plug-in, whatever the project says: `plugin.override {plugin, mode}`
+with `mode` `normal`, `bridge` or `disable`, and `plugin.overrides` to list
+them with the fx of each plug-in in the project. They exist so that a plug-in
+a crash report points at can be loaded safely, by the person at the keyboard
+or by an agent; nothing sets one on its own. The map is keyed `(format,
+plug-in id)`, is owned by the app and changed on the main thread, lives as long
+as the app (it survives `project.open` and `project.new`), and is in no project
+file, no history step and no save: a project saved while one holds is the
+project saved without it, byte for byte.
+- **A value type, copied into every pool.** `LoadOverrides` is copied into the
+  app's `InstancePool`, a render's pool, a render snapshot's, a rack probe's
+  and a capture's when the pool is made, on the main thread, so no job thread
+  reads the app's map. Every probe the app makes itself
+  (`EngineApp::makeInstance`: `fx.describe`, `fx.param.set`, latency, plug-in
+  modules' validation at open, MIDI learn, chain and preset loading) goes
+  through the same override.
+- **`disable`** is enforced where a plug-in is found (`findPlugin`, and
+  `InstancePool::get` for pools that resolve from a catalogue copy): both
+  answer `plugin.disabled`, so the existing missing-plug-in paths apply. A
+  strip plays the pass-through placeholder with its stage (wet, bypass ramps,
+  sidechain routing, latency 0) and the plan warns; a rack module of it is
+  silent; an offline render equals the render with that plug-in missing. The
+  project keeps the fx. `fx.describe` answers from the session and the override:
+  `override: "disable"`, a description saying so, no `isolation_effective`, no
+  parameter section. `engine.status.disabled_fx` lists the fx. `fx.add` of the
+  plug-in and anything that would load it answers `plugin.disabled`.
+- **`bridge`** makes every instance of the plug-in on a dedicated bridge,
+  ahead of the fx's own isolation and the preference
+  (`InstancePool::resolveIsolation`). It is refused with
+  `plugin.override_unavailable` when no bridge executable was found (rather
+  than the quiet in-process fallback of `inherit`, which is wrong for a safety
+  choice) and for a stock plug-in (a stock plug-in is a Steppe fault: disable
+  only). Rack plug-in modules go through the same pool and are bridged too;
+  tests compare the render with the live run in both executors. Offline
+  output is bit-identical to in process; live, a bridged plug-in runs under
+  the ADR-0081 deadline, so on a loaded machine a late block is silent live
+  and present offline. A per-call probe (`fx.param.set`, latency) of a
+  plug-in whose fx has a saved patch or state borrows the cached bridged
+  probe (one process per plug-in id, not one per call); with neither, a
+  fresh bridged probe is made.
+- **A changed override plays a fresh instance.** `plugin.override` drops the
+  cached probe of that plug-in, retires its instances in the app's pool
+  (`InstancePool::restartPlugin`, as `fx.restart` does: the old ones live until
+  both executors have adopted a newer plan) and recompiles. Whatever state
+  was never saved is lost and held notes end. Setting the mode a plug-in
+  already has changes nothing.
+- **Probes at load.** Opening a project validates each cable into a plug-in module with a probe
+  restored from that fx's state. Under a bridge override a probe is a process, so a plug-in's fx
+  with a state share its one cached scratch probe (each fx's state is restored onto it before its
+  check) and those with none share one pristine probe of the load, instead of one process per fx.
+  A fresh fx under a bridge override, one with neither a state nor a patch, has nothing to restore
+  onto a shared probe, so a `setPlainParams` call (`fx.set` of plain parameters) on it, and a
+  latency measurement made while it has no state, each make a bridge process of their own. The
+  first `setPlainParams` saves the fx's state, and from then on it shares the cached probe, so
+  this lasts for one or a few calls per fx.
+- **Which plug-ins to protect.** `project.plugins`, `project.open`'s
+  `project.suspect_plugin` warning, `crash.settle` and the clean-run settlement that
+  decide it are in `docs/specs/diagnostics.md` "Safe-load in the engine".
 
 The bridge is native on Linux, macOS and Windows (ADR-0037). Linux retains
 memfd, SCM_RIGHTS, shared futexes and pidfd behavior. macOS uses unlinked
@@ -1319,8 +1590,13 @@ instance).
   process-wide, the cycle counters per engine.
 - Crash handling: a control thread watches the process (pidfd); on crash the
   instance becomes a **failed node** (silence; `fx.failed` event with the
-  signal and last known state kept in the model), the rest of the session
+  signal and last known state kept in the model; when the bridge died of a signal or an exception
+  and a local crash-report supervisor was there, `incident` names the report that death may have
+  caused (ADR-0083), also in `engine.status.failed_errors[]` once the bridge's end was observed;
+  the report may not exist, and `crash.read` says so), the rest of the session
   keeps playing, and `fx.restart` re-creates it from the last known state.
+  In an offline render, a node that fails this way fails the render instead
+  (§3, ADR-0090).
 - Acceptance: a deliberately crashing test plugin (a CLAP that segfaults on
   a given parameter value) in `dedicated` mode does not stop the engine; a
   real-time capture around the crash shows only that node going silent.
@@ -1341,6 +1617,13 @@ bus and exposes it through the control protocol (Unix socket), Lua and MCP (prox
 `bridge_timing` (the live bridged calls' waits and why cycles overran, §5),
 anticipation misses, meter drops), `engine.settings.set {render_ahead_ms,
 worker_threads, automation_resolution, …}`.
+`audition.play {path}` (a WAV, FLAC or MP3, absolute or a name in the
+project's media folder; returns `path`, `seconds`, `sample_rate`,
+`channels`, `truncated`), `audition.stop` and `audition.get` (q: `playing`,
+`decoding`, `path`, `seconds`, `position`) play a file on outputs 1/2
+outside the project ("File audition" above, ADR-0094); errors
+`engine.stopped` and `audition.file`, a failed decode the event
+`audition.error {path, code, message}`.
 `OfflineResult::graph` supplies compiled graph text: input edges and residual
 padding, `lat_in` (the forward arrival diagnostic), `lat_chain` (compensated
 chain latency), and `timeline_shift` (processing position minus node-input
@@ -1551,8 +1834,10 @@ harness. See the tooling README for schemas, limits and invocation details.
   thread), and the engine stops every plugin there — no timeout, no stop from
   the main thread however long the device's period. Pause and
   seek `reset()` the plugins (no hanging notes); seek re-locates event and
-  automation cursors and clears delay lines. A seek, and a play from a
-  position, also restart every rack module (`rack::Instance::restart()`)
+  automation cursors and clears delay lines, a rack's plug-in stages' dry
+  delays and oversampling filters as a chain's (`locateRackStages`). A
+  seek, and a play from a position, also restart every rack module
+  (`rack::Instance::restart()`)
   and its feedback cables' history (`rack::Schedule::restart()`), once the
   executor owns the rack (ADR-0062 §5, 2026-11-14 note), where the
   plug-ins are reset: the rack then plays as an offline render from there.
@@ -1707,7 +1992,7 @@ harness. See the tooling README for schemas, limits and invocation details.
   stages take part as in-process ones do (§2.1, §5). A node leaving the live
   region stays live while the transport plays (`keepLive`).
 - **Smooth swaps:** a plan swap carries each strip's fader ramps and Console 9 state
-  and each insert's applied wet level into the new plan
+  and each insert's applied wet level, a rack's plug-in stages' too, into the new plan
   (`carryMix`, by track and by instance, per executor); a changed volume,
   pan, mute, solo, FX wet or bypass then ramps over 10 ms instead of
   stepping (a bypassed plugin keeps running until faded out). Automated
@@ -1842,6 +2127,11 @@ Bridged wake and clear forwarding need the control-protocol extension below.
 
 Rescan requests rebuild an immutable plan from the current parameter list and
 schema; envelopes are resolved again, including their value-domain conversion.
+A rescan of values or their text only (`CLAP_PARAM_RESCAN_VALUES`, `_TEXT`)
+rebuilds it only when the FX has an active envelope, whose values the new
+plan sends again, or had automation cleared, which the rescan re-enables: a
+plan holds no parameter values (ADR-0092). A rescan without flags counts as
+one of the list.
 Missing/read-only parameters stop receiving events and produce a warning naming
 the FX and parameter. Clear `ALL`/`AUTOMATIONS` suppresses only the matching
 parameter's automation until a subsequent rescan or explicit engine load. Clear
@@ -1851,7 +2141,9 @@ re-enables it; a clear after a rescan remains effective. Changes are heard at
 normal plan-adoption boundaries, including the anticipative edit horizon.
 
 `Engine::takePluginOutputs()` is main-thread only. Each record contains FX id,
-plan generation, transport epoch, timeline sample, stream sample, the entire
+plan generation, the patch sequence read before its block was processed
+(ADR-0092; idle flush records: when drained), transport epoch, timeline
+sample, stream sample, the entire
 `host::OutputEvent`, and idle/anticipative markers. Note ends and plug-in
 note/MIDI output (ADR-0068) are not published there. Timeline coordinates subtract
 the stage's input timeline shift (§1.3); idle flush records use the service-time
@@ -1891,7 +2183,9 @@ The app-side consumer belongs in `EngineApp::tick()` after engine main servicing
 1. Drain the take API and publish cumulative event/voice drop counts in
    `engine.status` and `engine.stats`. On a changed drop count, close incomplete
    gestures and resynchronize parameter values on main; do not invent missing
-   automation points. Reject removed FX and superseded plan/transport epochs.
+   automation points. Reject removed FX, superseded plan/transport epochs and
+   records whose patch sequence is not the engine's current one (produced
+   before a patch-only edit, or while it applied, ADR-0092).
    For anticipative records, use `streamSample`/`playedStream(epoch)` to delay
    timeline recording until that stream position has played (discard abandoned
    seeks). Idle records apply immediately.
@@ -2786,10 +3080,14 @@ Each structural edit then prepares a rate plan; level and pan edits do not
 (ADR-0060, §1.6).
 While a prepared rate plan covers audio not yet played, `load()` defers a
 structural edit: it returns success at once, and the edit compiles once that
-span has played (in `service()`, or in whichever `load()` comes first). If
-that compile fails, the edit never played. The engine then keeps the session
+span has played (in `service()`, or in whichever `load()` comes first). That
+load always compiles: neither the scalar nor the mix shortcut takes it, even
+when a playrate move is still pending from a full queue (the compile carries
+the pending value). If that compile fails, the edit never played. The engine then keeps the session
 it plays as its latest, for later reloads, the mix and scalar shortcuts and
-the instance prune, and adds a warning. `takeUnplayedEdit()` returns the error
+the instance prune, with a playrate move that a full queue refused before
+the deferral still pending (it is published once the queue has room), and
+adds a warning. `takeUnplayedEdit()` returns the error
 once; `EngineApp` emits it as `engine.error` and reports the version that
 plays as `prepared_version`. The project's head keeps the edit: undoing or
 changing it reloads. Whatever the engine names as latest, the instance pool
@@ -2910,7 +3208,10 @@ absorbing. Clamp the final effective gain to the existing Console 9 ceiling
 sum and applied level are queryable. Ordinary unassigned master behavior is
 unchanged. Mute is the OR of member and controller mute; VCA solo adds its
 transitive track members to the ordinary solo seed set, retaining solo-defeat
-and signal-path reachability. Member fader/envelope data never moves.
+and signal-path reachability. One function decides solo silencing,
+`model::soloSilencedTracks`: plans and `model::effectiveTrackLevel` both call
+it, so the audio and the readouts cannot disagree (ADR-0093). Member
+fader/envelope data never moves.
 
 The combined control is applied before encoding, at the member's fader.
 Post-fader send encoders first clamp the combined source/VCA level at the
@@ -3497,9 +3798,10 @@ writes to a new preferences file. An explicit correction merges into the raw
 object, preserving its other fields, then validates strictly before replacing it.
 Command edits still use strict validation.
 
-Hardware routes preserve scalar-rate and mix-only edit paths. With hardware
-routes, route/source/VCA mute values join the existing atomic mix publication;
-the callback updates its hardware gate consumers without a plan compile.
+Hardware routes preserve scalar-rate and mix-only edit paths. Route, source
+and VCA mute values are part of the atomic mix publication (in every session
+since ADR-0093); the callback updates its hardware gate consumers without a
+plan compile.
 Fader edits retain the running plan and prepared audio history.
 
 ### The FX chain's MIDI bus (ADR-0068)
@@ -3563,3 +3865,9 @@ stages reserves what it did before. A stage with note ports and no audio
 ports (`midiOnly`) runs with no audio buffers; the audio passes it through
 its compensation delay, and it is never oversampled. Bus notes keep the
 chain's input time; post-FX taps add `latChain`.
+
+## Local crash diagnostics (ADR-0083)
+
+The frontend supervisor and terminal handoff contract is in `diagnostics.md`.
+A terminal audio fault never returns to DSP, saves or destroys engine state.
+Normal RT rules stay absolute; diagnostics-only hangs never kill the engine.

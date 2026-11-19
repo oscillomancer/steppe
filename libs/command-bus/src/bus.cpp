@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include <supple/base/closest.h>
 #include <supple/cmd/bus.h>
+#include <supple/diagctx/commands.h>
 #include <supple/product.h>
 #include <algorithm>
 #include <charconv>
@@ -602,12 +603,18 @@ Registry::Registry() {
         "\"timeout_clamped_s\": 30. Otherwise the result is what job.status returns.";
     commands_.at({"job.list", 1}).examples.front().result["jobs"] = json::Value::array();
 }
+std::vector<std::string_view> Registry::namesById() const {
+    std::vector<std::string_view> names(nextId_);
+    for (const auto& [key, info] : commands_) names[info.id] = info.name;
+    return names;
+}
 void Registry::addInfo(CommandInfo info) {
     info.resultSchema = replySchema(std::move(info.resultSchema));
     assert(validName(info.name) && info.version > 0 && info.summary.size() <= 80);
     assert(info.exposure == Exposure::Internal || !info.examples.empty());
     auto key = std::pair{info.name, info.version};
     assert(!commands_.contains(key));
+    info.id = nextId_++;
     commands_.emplace(std::move(key), std::move(info));
 }
 const CommandInfo* Registry::find(std::string_view name, int version) const {
@@ -679,6 +686,40 @@ Result<json::Value> Dispatcher::guarded(Admission admission,
         ~Pop() { entries.pop_back(); }
     } pop{admissions_};
     return body();
+}
+
+namespace {
+diagctx::CommandOrigin breadcrumbOrigin(Origin::Type type) {
+    switch (type) {
+        case Origin::Type::Ui:
+            return diagctx::CommandOrigin::Ui;
+        case Origin::Type::Lua:
+            return diagctx::CommandOrigin::Script;
+        case Origin::Type::Mcp:
+            return diagctx::CommandOrigin::Mcp;
+        case Origin::Type::Rpc:
+            return diagctx::CommandOrigin::Rpc;
+        case Origin::Type::Test:
+            return diagctx::CommandOrigin::Test;
+        case Origin::Type::Internal:
+            return diagctx::CommandOrigin::Internal;
+        case Origin::Type::Agent:
+            return diagctx::CommandOrigin::Agent;
+    }
+    return diagctx::CommandOrigin::Internal;
+}
+}  // namespace
+
+Dispatcher::Dispatcher(const Registry& registry, Host& host) : registry_(registry), host_(host) {
+    jobs_.setWaker([this] { host_.workQueued(); });
+    // The names go out once, now that the registry is built (a process without a diagnostics
+    // supervisor sends nothing); the ring then holds ids only.
+    if (diagctx::claimCommands()) {
+        breadcrumbs_ = true;
+        const auto names = registry_.namesById();
+        diagctx::announceCommandNames(names);
+    }
+    host_.dispatcherAttached(this);
 }
 
 Result<json::Value> Dispatcher::execute(const Invocation& invocation) {
@@ -804,6 +845,11 @@ Result<json::Value> Dispatcher::dispatch(const Invocation& invocation, bool inBa
                                 "/command", "available versions: " + versions));
         return finish(registry_.unknown(name));
     }
+    // A registered command: it enters the crash report's breadcrumbs (its id and origin
+    // category, never its arguments), and leaves them on every path out of here. An unknown
+    // name returned above and never enters.
+    const diagctx::CommandScope breadcrumb(breadcrumbs_, info->id,
+                                           breadcrumbOrigin(invocation.origin.type));
     auto validation = info->validate(invocation.args);
     if (!validation) {
         Error error("command.invalid_args", "invalid arguments for " + name, "/args",

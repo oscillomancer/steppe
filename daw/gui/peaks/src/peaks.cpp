@@ -249,7 +249,8 @@ Result<Pyramid> Pyramid::deserialize(std::span<const std::uint8_t> in) {
         if (count > (std::uint64_t{1} << 34) || in.size() < bytes) return bad();
         l.count = static_cast<std::size_t>(count);
         l.buckets.resize(l.count * channels);
-        std::memcpy(l.buckets.data(), in.data(), static_cast<std::size_t>(bytes));
+        // A level of an empty file has no buckets, and memcpy takes no null.
+        if (bytes != 0) std::memcpy(l.buckets.data(), in.data(), static_cast<std::size_t>(bytes));
         in = in.subspan(static_cast<std::size_t>(bytes));
         p.levels_.push_back(std::move(l));
     }

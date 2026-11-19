@@ -198,6 +198,10 @@ schema::Schema<EngineStatus> engineStatusSchema() {
         .field("audio_page_faults", &EngineStatus::audioPageFaults, audioPageFaultsSchema())
         .field("meter_drops", &EngineStatus::meterDrops, meterDropsSchema())
         .field("failed_fx", &EngineStatus::failedFx, schema::arrayOf(schema::string()))
+        .field("disabled_fx", &EngineStatus::disabledFx,
+               schema::arrayOf(schema::string())
+                   .doc("fx whose plug-in this run has disabled (plugin.override): the strip "
+                        "passes audio through"))
         .field("bridge_threads_refused", &EngineStatus::bridgeThreadsRefused,
                schema::arrayOf(schema::string()))
         .field("dropped", &EngineStatus::dropped, schema::integer())
@@ -342,7 +346,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
                      "memory_lock": {"requested": false, "active": false},
                      "cpu_idle_latency": {"requested": false, "active": false, "automatic": false},
                      "thp_opt_out": "<any>", "audio_page_faults": "<any>",
-                     "meter_drops": {"renderer": 0, "callback": 0}, "failed_fx": [],
+                     "meter_drops": {"renderer": 0, "callback": 0}, "failed_fx": [], "disabled_fx": [],
                      "bridge_threads_refused": [],
                      "dropped": 0, "voice_dropped": 0, "failed_errors": [], "sync": "<any>"})"),
              "empty"}};
@@ -476,7 +480,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
             "start, with "
             "device, numeric os_error, message and corrective hint. meter_drops: entries a full "
             "ring "
-            "dropped (the renderer's, the audio callback's) — a strip's peak/RMS missed a block, "
+            "dropped (the renderer's, the audio callback's) — a track's peak/RMS missed a block, "
             "never audio. dropped/voice_dropped count lost plug-in output/voice records. "
             "memory_lock reports requested/active and an optional OS error with errno and a "
             "corrective hint, including while stopped. Bridges are excluded. cpu_idle_latency "
@@ -500,7 +504,9 @@ void registerDeviceCommands(cmd::Registry& registry) {
             "failed, with the helper counts and the last refusal's OS error, message and hint). "
             "warnings includes scheduling fallbacks and "
             "plan warnings with corrective actions. failed_errors adds structured code, "
-            "message, path and hint to each failure. "
+            "message, path and hint to each failure, and `incident`, the id of the local crash "
+            "report the bridge's death may have caused (crash.read; the report may not exist), "
+            "when it died of a signal or an exception. "
             "failed_fx: isolated plugins whose "
             "process crashed or hung (silent now; fx.restart re-creates them). "
             "bridge_late: callback cycles in which a bridged plugin had not answered by the "
@@ -532,7 +538,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
                      "thp_opt_out": {"active": false, "advised_only": false, "inherited": false},
                      "audio_page_faults": {"scope": "none", "minor": 0, "major": 0, "threads": 0,
                                            "saturated": false},
-                     "meter_drops": {"renderer": 0, "callback": 0}, "failed_fx": [],
+                     "meter_drops": {"renderer": 0, "callback": 0}, "failed_fx": [], "disabled_fx": [],
                      "bridge_threads_refused": [],
                      "dropped": 0, "voice_dropped": 0, "failed_errors": [], "sync": "<any>"})"),
                        "empty"}};

@@ -30,6 +30,9 @@ class TextArea : public Node {
     std::function<void(const std::string&)> onSubmit;  // Ctrl+Enter
     std::function<void()> onCancel;                    // Escape
     std::function<void(bool focused)> onFocusChange;
+    // The gutter with the line numbers and the marks' dots. Off for prose
+    // (a notes field); set before the first layout.
+    bool lineNumbers = true;
 
     const std::string& text() const { return text_; }
     // Replaces the text (no onChange); the caret stays at the same line and
@@ -48,6 +51,7 @@ class TextArea : public Node {
     Size measure(const Canvas& canvas, Size available) override;
     void paint(Canvas& canvas) override;
     bool onPointer(const PointerEvent& e) override;
+    Cursor cursorAt(Point) const override { return Cursor::Text; }
     bool onKey(const KeyEvent& e) override;
     bool onText(std::string_view text) override;
     bool onComposition(std::string_view text, int cursor) override;

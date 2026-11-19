@@ -16,6 +16,7 @@
 #include <type_traits>
 
 #include "supple/base/thread.h"
+#include "supple/diagctx/table.h"
 #include "supple/host/clap_host.h"
 
 #include <cstring>
@@ -25,6 +26,7 @@
 #include "midi_output.h"
 
 #include "plan.h"
+#include "plan_dump.h"
 #include "rack_runtime.h"
 #include "recording.h"
 #include "sync_runtime.h"
@@ -275,6 +277,7 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
         return Error("engine.config", "the engine needs a block size and two outputs", {},
                      "provide a positive block_size and at least two output channels");
     hardwareMidi_ = std::make_unique<detail::HardwareMidiRuntime>();
+    resetAuditions();  // the callback starts with nothing to play (ADR-0094)
     shutDown_ = false;
     shutdownRequested_ = false;
     // Before the backend starts: its callbacks push meter entries at once.
@@ -405,6 +408,7 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
         rendererWakeAt_.store(INT64_MAX);
         renderer_ = std::thread([this, first, rendererStartup, native] {
             nameThread("audio-render");
+            (void)diagctx::registerThread(diagctx::ThreadRole::AudioRender);
             rt::prefaultStack();  // ADR-0025
             const bool elevated = rendererStartup && rendererStartup->enter(0);
             detail::ThreadStartup::Cleanup cleanup{elevated ? native : nullptr};
@@ -551,6 +555,7 @@ void Engine::stop() {
     plan_ = nullptr;
     livePlan_ = nullptr;
     syncRt_ = nullptr;  // no callback runs now
+    resetAuditions();   // a voice playing is dropped (ADR-0094)
     syncNext_.store(nullptr);
     syncAdopted_.store(nullptr);
     syncRuntimes_.clear();
@@ -584,7 +589,8 @@ void Engine::stop() {
     timelineEpoch_.store(0);
     rateClockSequence_.store(0);
     for (auto& word : rateClockWords_) word.store(0);
-    plans_.clear();  // nothing runs a plan now
+    plans_.clear();     // nothing runs a plan now
+    ringPool_.clear();  // nor holds a ring for the next edit
     hardwareMidi_->releaseHistory(true);
     callbackGen_.store(0);
     workers_.reset();
@@ -603,6 +609,9 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
     // A failure before the deferral is decided leaves the edit deferred.
     if (!loaded && rateDeferredFrom_ && !rateDeferred_) {
         latest_ = *std::exchange(rateDeferredFrom_, std::nullopt);
+        // A refused playrate move in that session is pending again: the
+        // compile that cleared it never published it (review 37c F1).
+        scalarPending_ = rateDeferredScalarPending_;
         unplayedEdit_ = loaded.error();
     }
     return loaded;
@@ -618,6 +627,10 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
         return {};
     }
     if (!compile && loadMixValues(session, projectDir)) return {};
+    if (!compile && loadPatches(session, projectDir)) {
+        applyPendingHolds();
+        return {};
+    }
     const auto controlEpoch = epoch_.load(std::memory_order_acquire);
     const auto lead =
         options_.anticipative
@@ -626,7 +639,10 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
     if (!rateSeekTarget_ && wantPlaying_.load(std::memory_order_acquire) &&
         rateSafeEpoch_.load(std::memory_order_acquire) == controlEpoch &&
         playedStream(controlEpoch) + lead < rateSafeStream_.load(std::memory_order_acquire)) {
-        if (!rateDeferredFrom_) rateDeferredFrom_ = latest_;  // what keeps playing meanwhile
+        if (!rateDeferredFrom_) {
+            rateDeferredFrom_ = latest_;  // what keeps playing meanwhile
+            rateDeferredScalarPending_ = scalarPending_;
+        }
         latest_ = std::make_shared<const model::Session>(session);
         rateDeferredDir_ = projectDir;
         rateDeferred_ = true;
@@ -706,6 +722,34 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
             plan = std::move(*again);
         }
     }
+    if (options_.verifyPlans) {
+        // Route E stage 5: the same session compiled again gives the same
+        // plan. A compile services each instance it takes, so a plug-in
+        // that asked for a restart, or one the executors have since stopped,
+        // can change the second (round 46 F1): then the later compile is
+        // the plan, checked against another, a few times at most.
+        for (int tries = 0;; ++tries) {
+            const auto changes = plugins_.availabilityChanges();
+            if (tries == 0 && betweenCompilesForTests_)
+                betweenCompilesForTests_(betweenCompilesContext_);
+            auto again = build();
+            if (!again) return std::move(again).error();
+            if (plugins_.availabilityChanges() != changes && tries < 3) {
+                plan = std::move(*again);
+                continue;
+            }
+            if (secondCompileForTests_) secondCompileForTests_(**again);
+            const auto difference =
+                detail::firstDifference(detail::dumpPlan(*plan), detail::dumpPlan(**again));
+            if (!difference.empty())
+                return Error(
+                    "engine.plan_differs",
+                    "a second compile of the same session gave a different plan: " + difference, {},
+                    "an engine fault, not the session's: report it with the project");
+            break;
+        }
+        ++verifiedPlans_;
+    }
     // Bridged FX on live nodes run in the callback under its bridge deadline
     // (ADR-0081): no stage is passed through for being isolated.
     if (std::any_of(plan->nodes.begin(), plan->nodes.end(),
@@ -729,13 +773,20 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
             "live plugin instances");
     if (options_.anticipative) {
         const auto quantum = plan->rateEnabled ? 64u : options_.renderBlock;
+        // Every ring keeps room for the render-ahead time in whole chunks at
+        // up to 192 kHz. At lower rates that is the slack for short chunks:
+        // no chunk crosses a loop wrap, so a loop shorter than a chunk fills
+        // a ring with chunks that short, and a ring sized to the lead at the
+        // device's rate would fill first (round 36 F1). Frontier and record
+        // rings come from retired plans when their shape fits (route E
+        // stage 1), so their size costs only when one is first built.
         const auto chunks =
             static_cast<std::size_t>(std::ceil(options_.renderAheadMs / 1000. * 192000. / quantum));
+        recycleRings(oldestInUse());
         if (plan->anyLive) {
             plan->split = true;
             for (std::size_t i = 0; i < plan->frontier.size(); ++i)
-                plan->frontierRings.push_back(
-                    std::make_unique<detail::ChunkRing>(chunks + 2, quantum));
+                plan->frontierRings.push_back(takeRing(chunks + 2, quantum));
         } else if (plan->rateEnabled) {
             plan->rateOutput =
                 std::make_unique<detail::ChunkRing>(chunks + 2, quantum, true, deviceOutputs_);
@@ -745,8 +796,7 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
         for (detail::RecordTap& tap : plan->recordTaps)
             if (!plan->split || !plan->nodes[tap.node].live) {
                 tap.ring = static_cast<int>(plan->recordRings.size());
-                plan->recordRings.push_back(
-                    std::make_unique<detail::ChunkRing>(chunks + 2, quantum));
+                plan->recordRings.push_back(takeRing(chunks + 2, quantum));
             }
     }
     // What the recorder takes for each recorded master: the node the callback
@@ -1099,12 +1149,47 @@ bool Engine::awaitRendererHeld(double timeoutSeconds) {
     return true;
 }
 
-std::uint64_t Engine::collectPlans() {
-    // The oldest generation an executor may still be using.
+std::uint64_t Engine::oldestInUse() const {
     const std::uint64_t rendered = stoppedGen_.load(std::memory_order_acquire);
-    const std::uint64_t oldest =
-        options_.anticipative ? std::min(rendered, callbackGen_.load(std::memory_order_acquire))
-                              : rendered;
+    return options_.anticipative ? std::min(rendered, callbackGen_.load(std::memory_order_acquire))
+                                 : rendered;
+}
+
+void Engine::recycleRings(std::uint64_t oldest) {
+    if (plans_.empty()) return;
+    for (const auto& p : plans_) {
+        // As collectPlans retires plans: no executor reaches these rings again.
+        if (p->generation >= oldest || p.get() == plans_.back().get()) continue;
+        for (auto* rings : {&p->frontierRings, &p->recordRings})
+            for (auto& ring : *rings)
+                if (ring) ringPool_.push_back(std::move(ring));
+    }
+    // Keep as many as the plans still in use hold: what edits at this pace
+    // have needed at once.
+    std::size_t keep = 0;
+    for (const auto& p : plans_)
+        if (p->generation >= oldest || p.get() == plans_.back().get())
+            keep += p->frontierRings.size() + p->recordRings.size();
+    if (ringPool_.size() > keep)
+        ringPool_.erase(ringPool_.begin(),
+                        ringPool_.begin() + static_cast<std::ptrdiff_t>(ringPool_.size() - keep));
+}
+
+std::unique_ptr<detail::ChunkRing> Engine::takeRing(std::size_t capacity, std::uint32_t frames) {
+    for (auto it = ringPool_.rbegin(); it != ringPool_.rend(); ++it)
+        if ((*it)->fits(capacity, frames)) {
+            auto ring = std::move(*it);
+            ringPool_.erase(std::next(it).base());
+            ring->restart();
+            return ring;
+        }
+    return std::make_unique<detail::ChunkRing>(capacity, frames);
+}
+
+std::uint64_t Engine::collectPlans() {
+    // One reading decides both the rings recycled and the plans freed.
+    const std::uint64_t oldest = oldestInUse();
+    recycleRings(oldest);
     // The newest plan always stays (an executor may be about to adopt it).
     const auto retired = [&](const auto& p) {
         return p->generation < oldest && p.get() != plans_.back().get();
@@ -1167,6 +1252,7 @@ std::optional<RackLatencyInfo> Engine::rackLatencies(model::Id id, std::uint64_t
 }
 
 void Engine::service() {
+    reclaimAuditions();  // voices the callback has moved past (ADR-0094)
     // Sync runtimes the callback has moved past (ADR-0071).
     if (const auto* adopted = syncAdopted_.load(std::memory_order_acquire)) {
         const auto at = std::find_if(syncRuntimes_.begin(), syncRuntimes_.end(),
@@ -1235,6 +1321,7 @@ void Engine::service() {
                 output.fx = fx;
                 output.planGeneration = generation;
                 output.epoch = epoch_.load(std::memory_order_acquire);
+                output.patchSequence = patchSeq_.load(std::memory_order_relaxed);
                 output.timelineSample = clock.sample;
                 output.event = event;
                 output.idle = true;
@@ -1247,15 +1334,22 @@ void Engine::service() {
             serviced.insert(instance);
             const bool active = instance->active();
             const bool restarting = plugins_.restarting(fx.id);
+            const bool cleared = plugins_.automationCleared(fx.id);
             auto notes = plugins_.service(fx.id);
             if (notes.stateDirty &&
                 std::find(dirtyStates_.begin(), dirtyStates_.end(), fx.id) == dirtyStates_.end())
                 dirtyStates_.push_back(fx.id);
             // A restart waiting on processing takes the plug-in off the
             // executors; once restarted, its (new) latency is compensated.
-            reload |= notes.paramsRescan || !notes.paramsClear.empty() ||
-                      notes.restartError.has_value() || active != instance->active() ||
-                      notes.latencyChanged || restarting != plugins_.restarting(fx.id);
+            // A values rescan matters only to automation (ADR-0092): one the
+            // plug-in had cleared plays again, and an envelope's values are
+            // sent again over what the plug-in changed.
+            const bool rescan =
+                detail::rescansParamList(notes) ||
+                (notes.paramsRescan && (cleared || detail::automated(*latest_, fx.id)));
+            reload |= rescan || !notes.paramsClear.empty() || notes.restartError.has_value() ||
+                      active != instance->active() || notes.latencyChanged ||
+                      restarting != plugins_.restarting(fx.id);
             drainIdle(*instance, fx.id, publishedGen_);
         }
         // Replaced instances still belong to older executor plans. Keep their
@@ -1349,7 +1443,8 @@ void Engine::noteDroppedFx(model::Id fx) SUPPLE_RT {
 }
 
 void Engine::publishPluginOutputs(detail::Plan& p, bool renderer, std::uint64_t epoch,
-                                  std::int64_t pos, std::int64_t stream) SUPPLE_RT {
+                                  std::int64_t pos, std::int64_t stream,
+                                  std::uint64_t patchSequence) SUPPLE_RT {
     auto& queue = renderer ? *rendererOutputs_ : *callbackOutputs_;
     bool changed = false;
     for (auto& node : p.nodes) {
@@ -1376,6 +1471,7 @@ void Engine::publishPluginOutputs(detail::Plan& p, bool renderer, std::uint64_t 
                 output.fx = st.fx;
                 output.planGeneration = p.generation;
                 output.epoch = epoch;
+                output.patchSequence = patchSequence;
                 output.timelineSample = time::samplesAt(p.startSeconds, p.rate) +
                                         static_cast<std::int64_t>(std::llround(p.rateSample(
                                             pos + event.time - st.inputLatency, node.live)));
@@ -1619,6 +1715,9 @@ void Engine::cycle(const float* const* in, float* const* out, std::uint32_t fram
     const double timelineBefore = rtTimeline_.load(std::memory_order_relaxed);
     const auto epochBefore = timelineEpoch_.load(std::memory_order_acquire);
     cycleTransport(in, out, frames);
+    // After the project's output, before LTC (runSync) and the hardware
+    // MIDI lead's delay (~InCycle), which apply to every channel.
+    mixAudition(out, frames);
     runSync(in, out, frames, timelineBefore, epochBefore, syncPlayed_);
     syncDevice_ += frames;
 }
@@ -1925,10 +2024,11 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
         // Stopped: plugins keep running (monitored input is heard, editors
         // answer, a sampler loads what its editor picked: it does so only in
         // process()), nothing plays.
+        const auto patchSequence = patchSeq_.load(std::memory_order_acquire);
         if (detail::processCallbackBlock(liveWorkersReady_.load(std::memory_order_acquire), *plan,
                                          pos_, frames, false, false, &processing_)) {
             hardwareMidi_->collect(*plan, pos_, frames, midiBase, false, rtEpoch_);
-            publishPluginOutputs(*plan, false, rtEpoch_, pos_, rtStream_.load());
+            publishPluginOutputs(*plan, false, rtEpoch_, pos_, rtStream_.load(), patchSequence);
             writeDevice(*plan, out, 0, frames);
             // Metering (P5.3c): monitored input is heard as it is produced —
             // there is no play position ahead of it to wait for.
@@ -1958,13 +2058,14 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
         const float* const* ins = in ? inAt.data() : nullptr;
         plan->deviceIn = ins;  // monitored input for this part of the cycle
         plan->deviceMidiOffset = midiBase + done;
+        const auto patchSequence = patchSeq_.load(std::memory_order_acquire);
         if (!detail::processCallbackBlock(liveWorkersReady_.load(std::memory_order_acquire), *plan,
                                           pos_, k, true, false, &processing_, &loopC_)) {
             ok = false;
             break;
         }
         hardwareMidi_->collect(*plan, pos_, k, midiBase + done, true, rtEpoch_);
-        publishPluginOutputs(*plan, false, rtEpoch_, pos_, meterStream);
+        publishPluginOutputs(*plan, false, rtEpoch_, pos_, meterStream, patchSequence);
         writeDevice(*plan, out, done, k);
         addClicks(*plan, out, done, pos_, k);
         if (detail::Recorder* r = recorder_.load()) {
@@ -2660,13 +2761,14 @@ void Engine::rendererLoop(std::uint64_t seen) {
         if (idleWork) {
             const auto now = std::chrono::steady_clock::now();
             if (now >= stoppedRenderDeadline(idleNext, idleLast, requested())) {
+                const auto patchSequence = patchSeq_.load(std::memory_order_acquire);
                 const bool ok = detail::processRendererBlock(workers_.get(), *plan_, pos_, block,
                                                              self, &loopR_, false);
                 if (!ok) {
                     processErrors_.fetch_add(1);
                     notifyMain();
                 }
-                publishPluginOutputs(*plan_, true, seen, pos_, streamLocal_);
+                publishPluginOutputs(*plan_, true, seen, pos_, streamLocal_, patchSequence);
                 // An early block replaces the next regular block; repeated
                 // requests must not push its deadline ever farther ahead.
                 idleNext = now < idleNext ? now + blockTime
@@ -2703,6 +2805,7 @@ void Engine::rendererLoop(std::uint64_t seen) {
                 std::min(renderFrames, static_cast<std::uint32_t>(64 - streamLocal_ % 64));
         const std::uint32_t n = detail::rateUntil(*plan_, pos_, renderFrames, loopR_,
                                                   0);  // no chunk crosses a loop wrap
+        const auto patchSequence = patchSeq_.load(std::memory_order_acquire);
         const bool ok = [&] {
             BenchProbe::Timer timer(options_.benchProbe, false, n);
             return detail::processRendererBlock(workers_.get(), *plan_, pos_, n, self, &loopR_);
@@ -2711,7 +2814,7 @@ void Engine::rendererLoop(std::uint64_t seen) {
             processErrors_.fetch_add(1);
             notifyMain();
         }
-        publishPluginOutputs(*plan_, true, seen, pos_, streamLocal_);
+        publishPluginOutputs(*plan_, true, seen, pos_, streamLocal_, patchSequence);
         auto fill = [&](detail::Chunk* c, const detail::Stereo& from) {
             if (ok) {
                 std::copy_n(from.l.begin(), n, c->l.begin());
@@ -3004,6 +3107,7 @@ std::uint32_t Engine::liveRender(const float* const* in, float* const* out, std:
     p.deviceRecording = recorder_.load() != nullptr;
     p.deviceMidi = deviceMidi_;
     p.deviceMidiOffset = offset;
+    const auto patchSequence = patchSeq_.load(std::memory_order_acquire);
     const bool ok = detail::processCallbackBlock(liveWorkersReady_.load(std::memory_order_acquire),
                                                  p, livePos_, k, playing, true, self, &loopC_);
     if (!ok) {
@@ -3011,7 +3115,7 @@ std::uint32_t Engine::liveRender(const float* const* in, float* const* out, std:
         notifyMain();
     }
     if (ok) hardwareMidi_->collect(p, livePos_, k, offset, playing, rtEpoch_);
-    publishPluginOutputs(p, false, rtEpoch_, livePos_, liveStream_);
+    publishPluginOutputs(p, false, rtEpoch_, livePos_, liveStream_, patchSequence);
     // Metering (P5.3c): the callback measures the live nodes it just played, at
     // the position it played them from. While the transport is stopped nothing
     // is rendered ahead, so a monitored input is heard as it is produced.

@@ -135,5 +135,68 @@ class McpTools(unittest.TestCase):
             self.assertIn("--tools core|all", result.stderr)
 
 
+@unittest.skipIf(sys.platform == "win32", "a private folder needs the app's own ACLs on Windows")
+class LastRunNotice(unittest.TestCase):
+    """A service says, on stderr only, that the last run ended unexpectedly (topic 7b, P10)."""
+    INCIDENT = "0" * 31 + "1"
+
+    def folder(self, root):
+        diagnostics = Path(root) / "diagnostics"
+        diagnostics.mkdir(mode=0o700)
+        # A run marker nobody holds and no report beside it: a run that ended with none written.
+        marker = diagnostics / (self.INCIDENT + ".run")
+        marker.write_text('{"role":"engine","schema":"supple.crash-run/1.0"}\n')
+        marker.chmod(0o600)
+
+    def serve(self, root):
+        return subprocess.run([BINARY, "--mcp", "--workdir", root], input="", capture_output=True,
+                              text=True, check=True)
+
+    def test_service_says_so_once_acknowledged_no_more(self):
+        with tempfile.TemporaryDirectory(prefix="supple-notice-") as root:
+            self.folder(root)
+            first = self.serve(root)
+            self.assertIn("closed unexpectedly last time", first.stderr)
+            self.assertIn("no crash report was written", first.stderr)
+            self.assertIn("crash.acknowledge with an incident id", first.stderr)
+            self.assertEqual(first.stdout, "")  # the protocol stream carries nothing of it
+            # A one-shot call does not repeat it, and can read and dismiss it.
+            listed = subprocess.run(
+                [BINARY, "exec", json.dumps({"command": "crash.list", "args": {}}),
+                 "--workdir", root], capture_output=True, text=True, check=True)
+            self.assertEqual(listed.stderr, "")
+            self.assertEqual(json.loads(listed.stdout)["unreported"][0]["incident"], self.INCIDENT)
+            subprocess.run(
+                [BINARY, "exec", json.dumps({"command": "crash.acknowledge",
+                                             "args": {"incident": self.INCIDENT}}),
+                 "--workdir", root], capture_output=True, text=True, check=True)
+            self.assertEqual(self.serve(root).stderr, "")
+            self.assertTrue((Path(root) / "diagnostics" / (self.INCIDENT + ".run")).exists())
+
+    def test_the_apps_own_incident_is_not_the_services_to_announce(self):
+        with tempfile.TemporaryDirectory(prefix="supple-notice-") as root:
+            diagnostics = Path(root) / "diagnostics"
+            diagnostics.mkdir(mode=0o700)
+            marker = diagnostics / ("0" * 31 + "2.run")
+            marker.write_text('{"role":"gui","schema":"supple.crash-run/1.0"}\n')
+            marker.chmod(0o600)
+            self.assertEqual(self.serve(root).stderr, "")  # the GUI's banner announces it
+            # An explicit acknowledgement by name still works for any role.
+            subprocess.run(
+                [BINARY, "exec", json.dumps({"command": "crash.acknowledge",
+                                             "args": {"incident": "0" * 31 + "2"}}),
+                 "--workdir", root], capture_output=True, text=True, check=True)
+            self.assertTrue((diagnostics / ("0" * 31 + "2.ack")).exists())
+
+    def test_the_service_says_which_app_closed(self):
+        with tempfile.TemporaryDirectory(prefix="supple-notice-") as root:
+            self.folder(root)
+            self.assertIn("engine closed unexpectedly last time", self.serve(root).stderr)
+
+    def test_nothing_left_behind_says_nothing(self):
+        with tempfile.TemporaryDirectory(prefix="supple-notice-") as root:
+            self.assertEqual(self.serve(root).stderr, "")
+
+
 if __name__ == "__main__":
     unittest.main()

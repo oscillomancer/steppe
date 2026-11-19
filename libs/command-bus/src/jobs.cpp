@@ -27,8 +27,7 @@ json::Value JobManager::snapshot(const Job& job) {
     value["status"] = job.status;
     value["progress"] = job.progress;
     value["progress"]["fraction"] = job.fraction->load(std::memory_order_relaxed);
-    if (job.status == "done" || (job.status == "cancelled" && !job.result.isNull()))
-        value["result"] = job.result;
+    if (job.status == "done" || !job.result.isNull()) value["result"] = job.result;
     if (job.status == "failed") value["error"] = errorJson(job.error);
     return value;
 }
@@ -116,7 +115,7 @@ Status JobManager::completeWith(std::string_view id, json::Value result,
     if (wake_) wake_();
     return {};
 }
-Status JobManager::fail(std::string_view id, Error error) {
+Status JobManager::fail(std::string_view id, Error error, std::optional<json::Value> result) {
     std::unique_lock lock(mutex_);
     auto it = jobs_.find(std::string(id));
     if (it == jobs_.end()) return Error("job.unknown", "unknown job", "/job", "use job.list");
@@ -124,6 +123,7 @@ Status JobManager::fail(std::string_view id, Error error) {
         return Error("job.finished", "job is no longer running", "/job");
     it->second.status = it->second.cancelRequested ? "cancelled" : "failed";
     it->second.error = std::move(error);
+    if (result) it->second.result = std::move(*result);
     events_.emplace_back("job.done", snapshot(it->second));
     cv_.notify_all();
     prune();

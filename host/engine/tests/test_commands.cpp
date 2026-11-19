@@ -184,6 +184,54 @@ TEST_CASE("project.set timecode: rate and start, alone or together, undoable (AD
     CHECK(reopened->project->timecode == app->head().project->timecode);
 }
 
+TEST_CASE("track.add colours a new channel or buss; the choice is the session's alone") {
+    Workdir dir;
+    auto app = makeApp(dir.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    auto colorOf = [&](std::string_view id) {
+        return app->head().tracks.find(*model::Id::parse(id))->color;
+    };
+    // The palette in its order, grey left out, then round again.
+    const char* hues[] = {"red", "orange", "yellow", "green", "teal", "blue", "violet"};
+    for (int i = 0; i < 9; ++i) {
+        const std::string id =
+            run(bus, "track.add", i % 2 ? R"({"type":"buss"})" : "{}")["track"].asString();
+        CHECK(colorOf(id) == hues[i % 7]);
+    }
+    // A master gets none; a named colour, a hex colour and "" are kept as given.
+    CHECK(colorOf(run(bus, "track.add", R"({"type":"master"})")["track"].asString()).empty());
+    CHECK(colorOf(run(bus, "track.add", R"({"color":"grey"})")["track"].asString()) == "grey");
+    CHECK(colorOf(run(bus, "track.add", R"({"color":"#102030"})")["track"].asString()) ==
+          "#102030");
+    CHECK(colorOf(run(bus, "track.add", R"({"color":""})")["track"].asString()).empty());
+    // Red and orange are on two tracks each, the other hues on one: the next
+    // is the first of the least used, whatever was added last.
+    CHECK(colorOf(run(bus, "track.add", "{}")["track"].asString()) == "yellow");
+    // Freeing a colour makes it the next: the count is of the tracks there are.
+    run(bus, "track.set", R"({"track":"tr_1","color":""})");
+    run(bus, "track.set", R"({"track":"tr_8","color":""})");
+    CHECK(colorOf(run(bus, "track.add", "{}")["track"].asString()) == "red");
+    // Undo and redo arrive at the same colour.
+    run(bus, "history.undo", "{}");
+    CHECK(colorOf(run(bus, "track.add", "{}")["track"].asString()) == "red");
+    // A colour the palette does not hold is refused, with the choices.
+    auto bad = bus.execute({"track.add", j(R"({"color":"pink"})"), kOrigin});
+    REQUIRE_FALSE(bad);
+    CHECK(bad.error().code == "track.color");
+    CHECK(bad.error().path == "/args/color");
+    CHECK(bad.error().hint.find("violet") != std::string::npos);
+    CHECK(model::nextTrackColor(model::Session::create(model::Project{})) == "red");
+    // rack.add without a track makes its own channel, coloured as track.add
+    // colours one: the next hue, which a track.add at the same point takes.
+    const std::string next = model::nextTrackColor(app->head());
+    REQUIRE_FALSE(next.empty());
+    const std::string home = run(bus, "rack.add", "{}")["track"].asString();
+    CHECK(colorOf(home) == next);
+    CHECK(model::nextTrackColor(app->head()) != next);  // it counts as used
+}
+
 TEST_CASE("auxiliary channels over the bus: channels, routes to 3/4, key pins (ADR-0020)") {
     Workdir dir;
     auto app = makeApp(dir.path);

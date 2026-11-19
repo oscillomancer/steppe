@@ -31,7 +31,8 @@ Status checkRenderRange(const model::Session& session, const OfflineSettings& se
                         std::optional<std::int64_t> sampleRate = {});
 Result<OfflineResult> renderSnapshot(const model::Session& session, OfflineSettings settings,
                                      const std::vector<host::PluginInfo>& catalogue,
-                                     const host::HostIdentity& identity);
+                                     const host::HostIdentity& identity,
+                                     const LoadOverrides& overrides);
 // The render commands (engine.md §3): render.mix, .stems, .regions,
 // .dry-run, .settings, .preset.*, .queue.* and branch.render-ab, one
 // implementation over the resolved render settings (ADR-0055).

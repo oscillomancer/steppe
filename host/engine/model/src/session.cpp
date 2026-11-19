@@ -6,6 +6,7 @@
 #include "supple/model/numeric.h"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <functional>
@@ -1130,6 +1131,20 @@ std::string nextTrackName(const Session& s, StripType type) {
         std::string name = std::string(labelPrefix(type)) + std::to_string(n);
         if (!taken.contains(name)) return name;
     }
+}
+
+std::string nextTrackColor(const Session& s) {
+    // The search below starts at the first colour, so that one must be a hue.
+    static_assert(kTrackColors.front() != "grey", "the palette starts with a hue");
+    std::array<std::size_t, kTrackColors.size()> used{};
+    for (const auto& e : s.tracks)
+        if (const auto at = std::find(kTrackColors.begin(), kTrackColors.end(), e.value->color);
+            at != kTrackColors.end())
+            ++used[static_cast<std::size_t>(at - kTrackColors.begin())];
+    std::size_t best = 0;
+    for (std::size_t i = 1; i < kTrackColors.size(); ++i)
+        if (kTrackColors[i] != "grey" && used[i] < used[best]) best = i;
+    return std::string(kTrackColors[best]);
 }
 
 std::optional<Id> mediaSourceWithHash(const Session& s, std::string_view hash) {

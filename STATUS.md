@@ -248,7 +248,18 @@ instructions are in `docs/guides/installing.md`.
   their time and why a cycle overran. Where a third-party plug-in left on `inherit` runs is an app
   preference (Edit > Preferences, `plugin_isolation`), still in process by
   default until the bridging measurements decide; stock plug-ins stay in
-  process. A
+  process. `plugin.override` (normal, bridge or disable) loads a named
+  plug-in on a bridge or not at all for the run, in every pool and probe and
+  in racks; it is in no project and no save, a live bridge can drop blocks
+  under load, and a changed override plays a fresh instance. Known gap: a
+  rack module (not a plug-in) that a crash report points at has no disable.
+  `project.plugins` (a file, a template, or what `project.recover` would open) and the
+  `project.suspect_plugin` warning of `project.open` and `project.recover` tell an agent which
+  plug-ins of a project a recent crash report points at (the installed build id compared with the
+  report's, within 250 ms), `crash.settle` ends a suspicion and a service settles what it ran
+  normally on a clean exit; the app's own choice dialog is the next step. The check has run only
+  on Linux so far; macOS reads a bundle's executable through CFBundle (not run there).
+  A
   DAG worker pool with graph-bounded participation and idle parking
   (ADR-0023), a separate live callback fork-join pool (ADR-0024) with FIFO
   JACK helpers, a claim-based lifetime join that does not wait for unclaimed
@@ -278,10 +289,16 @@ instructions are in `docs/guides/installing.md`.
   running while the transport is stopped; renderer deadline/event waits
   (ADR-0028); headless main-thread service driven by notifications and
   deadlines (ADR-0030), including MIDI controls, plug-in subscriptions,
-  render-ahead output consumption, jobs, restart and autosave; smooth plan swaps (10 ms ramps);
+  render-ahead output consumption, jobs, restart and autosave; smooth plan swaps (10 ms ramps,
+  a rack's plug-in stages carried as a chain's, nodes and edges matched by
+  lookup by id rather than by scanning every pair; a swap that changes nothing
+  is tested inaudible, and a compiled plan has a canonical dump that tests
+  compare with a second compile);
   strip, send and VCA level and pan edits applied to the running plan without
-  compiling, also once playrate scheduling has started (ADR-0060), and control
-  drags sent once per frame rather than per pointer motion;
+  compiling, also once playrate scheduling has started (ADR-0060), FX wet and
+  bypass, mute and solo edits applied the same way (ADR-0093), patch-only FX
+  edits applied to the running instances without a plan (ADR-0092), and
+  control drags sent once per frame rather than per pointer motion;
   every node, plug-ins and bridged plug-ins included, runs with FTZ/DAZ in
   every executor, and owned audio threads prefault their stacks (ADR-0025).
   A seeded plan-swap soak drives real command edits during dummy-backend
@@ -291,11 +308,21 @@ instructions are in `docs/guides/installing.md`.
   validation of this harness is pending. Intermediate 1024-frame locate windows
   compare the running engine's paced output with private offline renders after
   every settled edit, cycling through beats 0–3; journals retain exact windows
-  for replay. The comparison covers intermediate project states after a locate,
-  not the uninterrupted pre-locate swap crossfade. Readiness and sample counts
+  for replay. Those windows follow a locate; the uninterrupted swaps are
+  covered by a second pass (route E stage 5): each sequence's project states
+  play again on a manual device, once as they are and once with two plan
+  swaps that change nothing after each edit (one inside the edit's 10 ms
+  ramps), and the two must match sample for sample in both executors. The
+  soak's rack has a latent plug-in module at half wet, so a swap that failed
+  to carry a rack's plug-in stage is heard there. Every compile in the soak
+  is checked against a second compile of the same session (the plan dump,
+  `EngineOptions::verifyPlans`). Readiness and sample counts
   decide correctness; a watchdog abort is separately labelled and exits 124.
-  Rack modules restart at locates, so the retained-pool VCA-level reproducers
-  in `tests/fuzz/plan-soak-corpus/` now pass.
+  Each file in `tests/fuzz/plan-soak-corpus/` replays as its own ctest entry
+  (`engine-plan-soak.replay.<name>`) in every preset. Rack modules restart at
+  locates, so the retained-pool VCA-level reproducers there pass; a rack's
+  plug-in stages empty
+  their dry delays and oversampling filters there too, as a chain's.
   `track.move` accepts reorders under a non-root buss and moves between
   sibling folders, and refuses destinations in the moved track's own subtree.
   Its portable command regression covers undo and cycle rollback; the
@@ -327,7 +354,14 @@ instructions are in `docs/guides/installing.md`.
   engine opens every output of the device (up to 64).
 - **Recording**: armed inputs to crash-readable WAV, input monitoring (needs
   the arm), MIDI monitoring and recording with overdub, loop recording into
-  takes, punch, count-in, metronome. Armed masters print their output in real
+  takes, punch, count-in, metronome. **File audition** (`audition.play`,
+  `audition.stop`, `audition.get`, ADR-0094): a WAV, FLAC or MP3 plays once on
+  outputs 1/2, stopped or playing, outside the project (no track, master or
+  meter, never in renders or recordings), fading out over 5 ms when stopped
+  or replaced. Its first 28,800,000 frames (counted at the higher of the
+  file's and the device's rates: ten minutes at 48 kHz, 2.5 at 192 kHz) are
+  read and resampled before it sounds, so a long file starts late; it plays from its start only; nothing plays it
+  on selection; the Browser's Play button is how the GUI reaches it. Armed masters print their output in real
   time onto a lane of their own (ADR-0057): the take is bit-identical to
   `render.mix` of that master in every executor; a master's items play after
   its fader, beside the live mix, with a lane mute, and are silent in the
@@ -572,10 +606,68 @@ instructions are in `docs/guides/installing.md`.
   the plugin browser, routing matrix, MIDI editor, render dialog (the
   project's render settings with dropdowns, foldable sections, presets, a
   user default, up to four outputs, delivery checks in its results, and
-  File → Mix as a job), history dock with
+  File → Mix as a job), history (a tab of the side panel) with
   branches, actions list with key bindings and macros, editable
   menus, toolbar and mouse modifiers, screensets, two palettes in dark and
-  light, preferences, and tap tempo in the tempo form. Help exports the bundled
+  light, preferences, and tap tempo in the tempo form. Items in the arrange
+  view take their track's colour and carry their name on a bar across the
+  top; an unnamed audio item shows its file's name. A new channel or buss
+  gets the palette colour the fewest tracks carry (`track.add`, for agents
+  and the GUI alike). Track rows and mixer
+  strips are quiet at rest (mute, solo, polarity and mono show their colour
+  only when on) and each row has a meter 8 units wide. Rows and strips carry
+  the same buttons in one order (arm, monitor, mute, solo; then polarity and
+  mono), a buss's missing ones leaving their places empty; a buss or a
+  master is told by a mark before its name, and colour on a row or strip is
+  the track's own. A new project's rows are as low as their three lines
+  allow. A mixer strip's meter has a dB scale (0, 12, 24, 36, 48) with
+  lines across its bars, and every meter's bar goes from green through
+  yellow and orange to red just under 0 dB. The pointer's shape says what
+  a press would do: resize arrows at an item's ends and fade corners, a
+  note's ends, the loop range's ends, a row's lower edge and the panels'
+  edges, an I-beam over text, the move cursor on a thing being moved, in
+  the rack too; a thing carried to a drop (a plug-in, a strip, a track
+  row, a rack module) shows the move cursor where it would land and "not
+  allowed" over a place that refuses it, as does a routing matrix
+  cell that cannot be connected. The status line names the control the
+  pointer rests on and the keys bound to its action (a track's controls in
+  the track list and the mixer, the transport bar, the toolbar; the side
+  panel, the MIDI editor's header and the floating windows have no names
+  yet). A drag held at the edge of the arrangement scrolls the view
+  and takes the thing in hand with it; so do a note held at the piano
+  roll's edge, a strip, plug-in or output held at the edge of the mixer's
+  strips, a plug-in held at an end of its strip's plug-in list, and
+  modules, a cable or a marquee held at the edge of the rack
+  window's space. The resize,
+  text and move cursors and the edge scroll in the arrangement and the
+  piano roll have been watched on a Linux desktop (Hyprland, the app
+  under XWayland), where the system draws the cursor and the frame clock
+  paces the scroll; the cursors of carried things, the edge scroll in the
+  mixer and the rack, and all of it on macOS and Windows are verified by
+  tests only. The transport bar's
+  engine readout is in words ("48 kHz · 256 samples") and warns in colour
+  only of a stopped engine, dropouts, render gaps or plug-in errors; the
+  toolbar's buttons are quiet at rest. A side panel at the right edge,
+  closed until asked, holds the Inspector (what is selected; for one item
+  its name, start, length, timebase, gain, fades, mute, loop and lock as
+  fields, each one `item.set`, an audio take's speed, pitch and keep-pitch
+  through `take.set`, and the choice of the take heard; for several items
+  the fields they share, edited as one undo step; for tracks their name,
+  colour, volume, pan and notes through `track.set`), the Browser (the plugin
+  browser as a tab: a chosen plugin goes on every selected track as one
+  undo step, and the browser stays; saved FX chains as a second kind,
+  loaded with `fx.chain.load`; a row of either drags onto a track's row or
+  mixer strip; a folder's audio and MIDI files as a third kind, added as
+  File > Import does or dragged into a lane; the audio the project already
+  holds as a fourth kind, Media, added or dragged the same way without a
+  second copy; Play on the Files and Media pages hears the chosen audio
+  file before it is added (`audition.play`, ADR-0094: on outputs 1/2, from
+  its start, its first 28,800,000 frames (ten minutes at 48 kHz, 2.5 at
+  192 kHz), not on selection alone, no MIDI files,
+  no position shown and no level control); MIDI sources and how often a
+  source is used are not listed, and rack patches are not in the Browser) and the History
+  as tabs; its tab,
+  width and open state are saved per project. Help exports the bundled
   skill as a copy or link, shows this copy's MCP commands and JSON, and registers
   its running-app server with Claude Code, Codex or Hermes on a background
   worker, linking the skill into that agent's user skills folder unless one of
@@ -1157,10 +1249,15 @@ Engine and hosting:
   latency preferences report unsupported on other platforms. Windows MCP is
   intended for piped/file input; cancelling an interactive console read can
   await a keypress during shutdown.
-- Only level and pan edits skip compiling (ADR-0060). Mute, solo, routing and
-  plug-in changes compile the session, and with playrate scheduling started
-  each also prepares a rate plan, which costs several milliseconds per edit in
-  a session of a few dozen tracks.
+- Only level and pan edits (ADR-0060), FX wet, bypass, mute and solo edits
+  (ADR-0093) and patch-only FX edits (ADR-0092) skip compiling. Routing, item
+  mutes, a route mute that changes a send's encoding, an ADR-0093 edit that
+  in the anticipative executor changes both a live and a rendered track's
+  values (or a live track's while an earlier edit to a rendered one is still
+  ahead of the playhead), and other plug-in changes compile the session, as does a patch edit on an FX with automation or one
+  that changes the plug-in's latency, parameters or ports. With playrate
+  scheduling started each compile also prepares a rate plan, which costs
+  several milliseconds per edit in a session of a few dozen tracks.
 - A structural edit that playrate scheduling defers is accepted before it
   compiles. If it then fails to compile (for example over the hardware MIDI
   route budget), it never plays. The engine keeps playing the version before
@@ -1201,14 +1298,16 @@ Engine and hosting:
   whichever is larger) is silent for that block, which counts as an xrun.
   There is no pipelined bridge mode. macOS and Windows timing is unmeasured,
   and the macOS bridge does not join the device's audio workgroup.
-- A bridged call made off the callback, in an offline render, the renderer or
-  on the main thread, fails if the bridge has not answered within 2 s
-  (lifecycle commands 7 s; ADR-0013). The plug-in is then killed and silent,
-  and an offline render still succeeds, with no warning. A healthy plug-in
-  can miss this under memory pressure: two test suites at once did it, and
-  pausing a bridge for 2.3 s reproduces it. The engine tests raise the
-  deadline (`host::setBridgeDeadlineMs`), but the product default and the
-  silent success are open questions.
+- A bridged call made off the callback by the anticipative renderer, a
+  worker or the main thread fails if the bridge has not answered within 2 s
+  (lifecycle commands 7 s; ADR-0013); the plug-in is killed and silent and
+  playback goes on. An offline render waits 60 s (152 s) instead, and fails
+  with `engine.fx_failed`, naming the FX, if a plug-in fails while it runs
+  (ADR-0090). Stopping or cancelling such a render kills its own bridges,
+  so it does not wait for a hung plug-in, and neither does quitting or
+  opening a project; only a render still loading its plug-ins waits, up to
+  20 s per plug-in. A render job that fails or is cancelled at a later
+  task keeps the files of the tasks before it and lists them in its result.
 - Audio backends: Linux JACK, dummy, and native PortAudio (CoreAudio on macOS;
   WASAPI/ASIO on Windows), with selection, latency/xruns and restart notifications.
   Fake-device output equals offline in both executors, with native CI coverage.
@@ -1264,7 +1363,8 @@ Engine and hosting:
   (3+) of a wide master cannot reach the device, and an output has no gain
   of its own. A key route from one output master into another master's path
   leaves the first one early at the device (a plan warning gives the
-  samples). The metronome always plays on outputs 1/2. Native CI has not yet
+  samples). The metronome and the file audition always play on outputs 1/2.
+  Native CI has not yet
   run the multi-output engine on macOS or Windows (CoreAudio and WASAPI
   opening every output of a device).
 - Overlapping gestures on a plugin without semantic parameters share one
@@ -1380,6 +1480,10 @@ Session and editing:
   background preparation is pending on macOS/Windows.
 - Loop recording passes that span a change of the loop range are not
   handled; a MIDI take's journal keeps the loop in effect at its start.
+- A loop shorter than the render-ahead time divided by a render-ahead
+  ring's chunk count (about 3 ms with the defaults) keeps the anticipative
+  renderer short of its render-ahead time, since no rendered chunk crosses a
+  loop wrap; it then has less margin against a stall (engine spec §1.6).
 - Master recording (ADR-0057): a plan change that moves a master's latency
   while it records shifts the rest of the take, as output-latency changes do
   for channel takes. Starting a recording while already playing lets an
@@ -1398,6 +1502,11 @@ Session and editing:
   macOS/Windows CI has not run on it yet.
 
 GUI:
+- ThreadSanitizer does not run the stock plugins' on-screen embedding probes
+  (`plugin.<name>.embedding`, labelled `tsan-skip`): one at a time, on the
+  software renderer the `tsan` preset draws with, they take twelve minutes.
+  They run in every other preset that builds the GUI, and the DAW's own GUI
+  tests run under `tsan`.
 - Automation-item point editing requires an amplitude magnitude above 0.000000001; restore
   the amplitude before editing a flattened item.
 - Plan compilation (including media decoding/resampling), Lua execution and
@@ -1430,8 +1539,6 @@ GUI:
   Script-player headless pictures (`dsp.preview`) use framework 1.24.0's
   EGL, Metal and WGL renderers. Native CI requires pictures and pointer edits;
   missing devices/drivers return `dsp.no_picture` with a corrective hint.
-- No autoscroll during drags; no resize cursor; plugins can be dropped onto
-  mixer strips but not onto track-panel rows.
 
 Plugins:
 - Bracken, Ghyll, Pollia, Umber and Withy discard non-finite inputs before their recursive
@@ -1508,3 +1615,160 @@ detail; core-params formats magnitudes beyond six decimals imprecisely;
 - A disk-backed media cache.
 - Lua ergonomics (a script library path, hot reload).
 - Native audio/MIDI hardware validation and GUI hardening on macOS and Windows.
+
+## Local crash diagnostics — staged delivery (ADR-0083)
+
+Approved contracts exist for an external supervisor per frontend, local non-roaming
+reports (20/50 MB), bounded terminal handoff, no new dependency/upload, one-time
+opt-in-remembered safe loading and diagnostics-only hangs. The development frontend entrypoints now act as launchers for a separately
+supervised worker, with private run markers, expected-return/exit classification,
+metadata-only reports, bounded retention and collector-loss fixtures. Retention
+validates current report enums/scalar bounds and preserves malformed entries,
+including nonempty inventories/traces whose nested schemas are not implemented.
+Concurrent pruners tolerate another pruner removing a report during metadata scan
+or deletion (on Windows including a deletion still pending behind the other pruner's
+open handle, told apart from a real access refusal by its NT status), while
+preserving genuine storage failures. Terminal
+signal/SEH/terminate capsules and cold thread-stack registration now exist, with
+metadata-only sanitizer/fail-fast fallbacks. The ordinary terminate hook publishes
+its distinct cause before chaining the previously installed handler, preserving
+its message/exit behavior; this sole foreign-call exception does not apply to
+signal/SEH handlers, and sanitizer hooks remain untouched. macOS leaves Mach handling untouched
+and uses signal/exit-only capture; signed-native Mach forwarding/liveness is not
+proven. First-party Linux and macOS code, and the stock plug-ins, keep frame pointers in
+every preset. On Linux the supervisor now records thread traces inside the terminal
+hold (600 ms budget under the worker's one-second wait): module build IDs plus
+module-relative offsets for the faulting, main and other threads (at most 128 threads and
+128 frames), with a reason for any thread it could not read (Yama scope 2+, a
+non-dumpable worker or a deadline). Foreign frames are best effort and frames of
+frameless code can be missing. The Windows collector (suspend, `StackWalk64` under
+one DbgHelp lock without symbol paths or servers, PE CodeView GUID and age) passed native CI
+44056590141 (Windows, 413 of 413). On macOS the worker reads its own
+threads and images inside its terminal hold with Mach calls on its own task (no
+`task_for_pid`, no entitlement), and the supervisor validates and reports the capsule; this
+is written and its portable parts (walker, framing, parser) are tested, but the Mach calls are
+unproven until native CI runs them, and system frames in the dyld shared cache carry no
+module identity. The offline symbol resolver (`resolve-crash`, `host/diagnostics/resolver`)
+names functions from local ELF, Mach-O and PE files matched by build id; it reads function
+names only (no DWARF lines, no PDB, so a Windows image resolves exported names only), is
+tested on Linux with damaged and truncated inputs, and is unbuilt on macOS and Windows
+until native CI runs it. It is not packaged: the release-symbol archive and shipping the tool
+wait for topic 9. A macOS report whose capsule never arrives lists its fault thread as
+unavailable (`not_collected`).
+Owned threads register in an execution table (`libs/diagnostics-context`, 256 slots, each with
+its role and stack bounds) and reports label each thread with its role; a thread beyond the
+256, the audio driver's callback thread, the dummy backend's thread and the sandbox render
+thread are unregistered and show as `other`, and a report says when the table turned threads
+away. This is tested on Linux, and the Windows table read passed native CI 44056590141; the
+macOS in-process labels are unproven until native CI runs them. Each in-process plug-in instance and loaded
+plug-in library marks the entry a thread is inside in its table cell (scopes in `host::Instance`,
+`Library::open` and the VST3 module load: two release stores on the audio path), and a report
+names the entry each thread was in (`entry`, a kind such as `process`), tying it to the thread
+by stack address. Tested on Linux, including the real-time and offline equivalence under the
+scopes; the Windows stack lookup passed native CI 44056590141, and the macOS in-process
+attribution is unproven until native CI runs it. Limits: an isolated (bridged) instance records
+`bridge_call` only and the bridge child has no table of its own yet; an entry says which kind
+but the report's `plugins` array says which plug-in (below); two scopes in one function cannot
+be told apart; the audio driver's callback thread is found by its stack mapping, which a thread with
+no readable map defeats (the report then says an entry could not be tied to a thread).
+Each plug-in instance and plug-in library announces itself from the host (created, state
+changes, destroyed), and a report's `plugins` array lists the live and the last 64 destroyed
+ones with their kind, origin, mode, state, readable name, vendor, version and id (at most 64
+bytes each, validated again by the supervisor) and, for CLAP, which module the plug-in's code
+is (`build`); the strings are the plug-in's own descriptor (for a plug-in the user exported,
+text they chose), and no path, project name, parameter or preset is recorded. The sink is closed for good if the
+supervisor stalls with a packet half sent, and events lost are counted. Tested on Linux; the
+Windows ring passed native CI 44056590141, and the macOS part-sent path and the capsule's
+module list for announced instances (which gives every plug-in its `build`) are unproven until
+native CI on the commits that fixed them (the first run, 44056590141, failed three macOS
+tests) passes. Known limits:
+rack modules are not announced and have no cell, so a crash inside a rack module is reported
+without a module entry (it is planned as a later change at the engine's call sites); VST3 and
+bridged instances carry no `build`. The model thread's last 64 registered commands reach the
+report's `commands` (name, origin category such as `mcp` or `script`, and `begun` or `ended`;
+never arguments, results or labels): the process's command dispatcher writes them into the
+execution table and the supervisor names them from a table of command names sent once at
+startup. Only the first dispatcher built in a process records, and only the thread registered as the
+model thread (the first thread to dispatch stands in until it registers); on
+macOS the capsule (now version 4) copies the ring after the other threads were read, so the
+newest command can be missing or still `begun`. A report concludes which plug-in its evidence
+points to (`attribution`, with a confidence from `fault_in_image` down to `unknown`; the rules
+are in `docs/specs/diagnostics.md`) and counts what it left out (`dropped`, by kind). It never
+claims a crash was not a plug-in's: a plug-in's own thread has no cell. The command ring, the
+capsule copy and the attribution are tested on Linux, and the Windows ring and table read
+passed native CI 44056590141; the macOS capsule is unproven until native CI passes on the
+fixes after it. Bridge processes (topic 6a): a report says which bridge each plug-in instance ran
+in (`plugins[].bridge`, a `bridges` section with each bridge's state and how it ended: `exit`,
+`signal`, `exception` or `host` for the host's own kill) and a bridge that dies by a signal or an
+exception while the app lives gets a report of its own, kind `bridge_exit`, at most 3 per run and
+none for a repeat (the plug-in's id and version and the status stand in for a build). Without
+a capsule it is the host's account only. A bridge now writes
+its own capsule at a fault (6c.2; Linux exercised with real faults, the Windows and macOS handlers compile and
+wait for native CI) into the slot the host hands it (`AttachCaptureSlot`, bridge protocol 27, Windows 28), and the
+worker tells the supervisor with a `Slot` event (channel protocol 3), which keeps the slot with the bridge's entry and can copy the capsule out (6c.3; Linux exercised from a real plug-in fault in a real bridge to the
+capsule the supervisor read; macOS and Windows wait for native CI), and the supervisor reads the capsule at the
+bridge's end and writes it into the report (6c.4, `docs/specs/diagnostics.md` "Bridge self-capture"): `capture: "bridge"`
+(the bridge's own account, written while a plug-in's code ran in it), `modules`, the fault thread walked, and the attribution
+its evidence supports, `fault_in_image` or `active_token` by the bridge's own addresses and cells; a missing, half-written or
+malformed capsule leaves the host's account. Only the fault thread is walked on Linux and Windows (the others appear by
+role and entry as not collected); macOS walks all threads. A bridged plug-in's crash while the app runs is not a suspect,
+even when its report names it (decided 2026-11-18). Exercised on Linux from a real plug-in fault in a real bridge to the
+report the supervisor wrote; macOS and Windows wait for native CI. Not done: a Windows bridge whose plug-in calls `raise(SIGSEGV)` still ends with an exit code. A Windows bridge
+that faults while another thread holds the loader's function-table lock can hang in the handler's
+unwinder (`RtlLookupFunctionEntry`) until the host's deadline kills it, which reads as a host end with no
+report (the handler's 200 ms is checked between frames, not inside the call; unproven, no mitigation yet).
+A kill that lands inside the handler is likewise a host end. Without
+a capsule the attribution is the only live member or none; an exit's code is not read on POSIX, a bridge killed
+by the out-of-memory killer reads as a signal, and the 65536th bridge of a run has no ordinal.
+It is never a restart notice and takes no place in the suspect window, and retention keeps the newest
+5 of them apart from the 20 crash reports, so they cannot evict the report behind a suspicion. The app can name the
+report a bridge's death may have caused: the worker mints the id and sends it with the end, and the failed fx's
+`engine.status.failed_errors[]` entry and `fx.failed` carry it as `incident` once the end was observed (it may name
+no report: a repeat, the run's limit); the GUI's viewer lists such a report like any other, and a failed effect's row in the FX window has a "Show report" button beside Restart that opens the viewer on it (the mixer's slot shows a failed plug-in too: the slot's solid outline, a red bar down its left edge and " (failed)"). The supervisor writes bridge reports on a thread of its own
+(drained before its own report and exit), so the disk work of a bridge report no longer holds up its receive loop;
+the writer's contract is tested, the loop's non-blocking is not (no test slows a write down). Tested on Linux only
+(unit tests, `clap-host.diagnostics-inventory` with the real bridge); the Windows exception
+classification and the macOS signal path are unproven until native CI runs. On Windows the
+`test_bridge_diagnostics` cases that end a bridge from outside (a signal, a bridge that died
+and was never reaped) are not compiled: the classification of an exception and an exit status is
+tested as a pure function, the host-kill and orderly-end cases run, and a bridge that really dies
+by an exception is exercised only by `clap-host.diagnostics-inventory` there, which has not run
+on Windows yet. The case that a bridge faulting as the host lets go is its own end (the crash fixture's
+teardown mode) is compiled on every platform and unproven on Windows and macOS until native CI runs. A known gap on Windows: a bridge that a plug-in ends with `raise(SIGSEGV)` exits with the C runtime's code 3 and no exception,
+so it is read as an exit and gets no report of its own (on POSIX the same plug-in dies by a signal and does); a real access violation or `__fastfail`
+is an exception and does. `abort()` and an uncaught `std::terminate` were read as the host's end on the first native run (CI 44242073297: the bridge
+did not end until the host's deadline killed it, probably on the debug runtime's abort dialog); the bridge now sets its runtime at start so that
+`abort()` ends it at once with `0xC0000409` (a `SIGABRT` handler, no dialog, no report to wait on) and the case `a bridge ended by abort()` expects the exception and
+that status; that is unproven until the next native Windows run, and does not reach a plug-in with a static runtime.
+The bridge's `Create` reply now carries the instance's cell and generation in the bridge's own execution table and
+an address in the plug-in's binary there (bridge protocol 26, Windows 27; topic 6b), which the host announces and
+the supervisor keeps as private matching data (`Inventory::findInBridge`); nothing reads it yet (6c matches the
+bridge's own capsule with it, and the bridge's threads are not registered until then). Tested on Linux with the
+real bridge (`clap-host.tests`: the announcement, the reply's tail) and by unit tests; the protocol number and the
+reply validator are checked on every platform's build, and a Windows/macOS bridge is unproven until native CI runs.
+Restart UI/hangs and release package verification remain later topics.
+Supervisor end (ADR-0091): a supervisor that crashes tells the worker first and the worker keeps
+running without crash capture; a supervisor ended with no notice (`SIGKILL`, `TerminateProcess`,
+a launcher's hard kill) stops the worker as `SIGTERM` does and ends it hard after ten seconds,
+so the endpoint lock and control socket are released and a restart succeeds. Known behaviour:
+a GUI stopped this way is not asked about unsaved changes (as `SIGTERM` does today). Known
+limits: on Windows a fast-fail or a stack overflow too deep for the filter reads as the
+launcher's stop, as does a supervisor ended by the kernel on any platform; before the Ready
+packet no watcher exists; the watcher thread shows in a report as an `other` thread. After a
+launcher's stop the worker removes its run marker from an exit handler, after the teardown of
+what was built later than the frontend's setup: a crash in the teardown that follows it is not
+recorded at all, and one before it leaves the marker with no report. The watcher and the supervisor's handlers are unproven on macOS and Windows until native CI runs
+them. An application can list and read earlier runs' reports, acknowledge them and delete them
+(`supple/diagnostics/reports.h`, tolerant of kinds and fields of a newer build; a report counts
+only once its run's marker and its supervisor's hold are released; a run that ended with no report is listed as unreported).
+Agents reach it through the `crash.*` commands (list, read, acknowledge, delete, clear). The GUI shows a restart
+notice (a banner under the transport, Dismiss acknowledges; wording provisional) for GUI runs only, and a headless
+service says the same on stderr at start for engine runs only, naming itself; each dismisses only its own
+incidents. Help > Crash reports… is the viewer (all roles: list, one report in plain words with the detail folded, copy a text
+summary, mark as seen, delete one or all, open the folder; the sample reports of the tests have little in them, so the thread, command and
+bridge sections are checked on written-out JSON, and a real report's look is checked only on Linux). The app's own safe-load question (File > Open, recovery and template loads; separate process, not loaded or normal; remembered per exact build in preferences `plugin_overrides`, 1.10) is delivered on Linux; a failed effect links to its report, and a disabled plug-in is marked in the mixer (its slot: a bar inside the outline, " (disabled)"; "fx" in the warning colour, in the mixer and the track list, while the chain holds a disabled or failed one), the FX window and racks, with Enable. Edit > Preferences lists the remembered choices, with Forget and Forget all. The question reads the head of each branch only (a plug-in that only an older history step uses is not asked about) and a template is loaded by name without a hash after it was checked by path (gui.md). The notice
+lists every report-named and marker file in the folder once at start, synchronously, and reads the newest eight
+unacknowledged reports (each at most 4 MiB) to learn their role; retention keeps the folder to about 20 reports,
+but is applied only when a report is published, so the cost is bounded by the folder's contents, not by 20.
+Markers of runs that left no report are capped at the newest 20 (applied when a run starts). Native macOS/Windows CI and
+signed Mach capability/collector-loss tests are due before merge/release.

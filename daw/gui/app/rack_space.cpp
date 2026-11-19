@@ -596,7 +596,8 @@ void RackSpace::paintItem(ui::Canvas& c, const RackScene::Module& m, const Panel
     if (isJack(item.kind)) {
         const bool output = item.kind == Kind::Output;
         const auto& port = output ? m.type->output(item.index) : m.type->input(item.index);
-        const ui::Color sig = t.color(signalToken(port.signal));
+        // A disabled plug-in's jacks carry nothing: their rings go faint.
+        const ui::Color sig = t.color(m.silent ? "ink-faint" : signalToken(port.signal));
         const double level = jackLevel(m, item);
         if (level > 0.02)
             c.fillCircle(centre, kJackR + 3.5f, sig.withAlpha(static_cast<float>(0.32 * level)));
@@ -815,7 +816,9 @@ void RackSpace::paintModule(ui::Canvas& c, const RackScene::Module& m, bool sele
     c.fillRound(r, kRadius, plate);
     c.restore();
     c.fillRect({r.x, r.y + head - 0.5f, r.w, 1}, t.color("rule").withAlpha(0.7f));
-    const ui::Color ink = m.bypass ? t.color("ink-faint") : t.color("ink");
+    // A disabled plug-in: a 2-unit warning bar down the module's left edge.
+    if (m.silent) c.fillRect({r.x, r.y + kRadius, 2.0f, r.h - 2 * kRadius}, t.color("meter-hot"));
+    const ui::Color ink = m.bypass || m.silent ? t.color("ink-faint") : t.color("ink");
     if (m.plugin) {
         // A plug-in shows its name, and opens on a click.
         if (words())
@@ -1272,6 +1275,61 @@ void RackSpace::sendPointer(model::Id id, script::PointerAction action, ui::Poin
     if (!edits.empty() && hooks_.displayEdit) hooks_.displayEdit(id, edits, gesture);
 }
 
+bool RackSpace::edgeDrag() const {
+    switch (drag_.kind) {
+        case Drag::Kind::Move:
+        case Drag::Kind::Marquee:
+            return drag_.moved;
+        case Drag::Kind::Cable:
+            return true;
+        default:
+            return false;
+    }
+}
+
+void RackSpace::noteDragEdge(const ui::PointerEvent& e) {
+    if (!edgeDrag()) {
+        edgeVx_ = edgeVy_ = 0;
+        return;
+    }
+    const ui::Rect b = bounds();
+    edgeVx_ = ui::edgeScrollSpeed(e.pos.x, b.x, b.right());
+    edgeVy_ = ui::edgeScrollSpeed(e.pos.y, b.y, b.bottom());
+    edgeLast_ = e;
+    if (autoScrolling() && root()) root()->requestAnimationFrame();  // the window's tick steps it
+}
+
+bool RackSpace::autoScrolling() const { return (edgeVx_ != 0 || edgeVy_ != 0) && edgeDrag(); }
+
+bool RackSpace::autoScroll(double seconds) {
+    if (!autoScrolling()) {
+        edgeVx_ = edgeVy_ = 0;
+        return false;
+    }
+    const View before = view_;
+    View v = view_;
+    v.x += D(edgeVx_) * seconds / v.zoom;
+    v.y += D(edgeVy_) * seconds / v.zoom;
+    setView(v);
+    const auto dx = static_cast<float>((view_.x - before.x) * view_.zoom);
+    const auto dy = static_cast<float>((view_.y - before.y) * view_.zoom);
+    if (dx == 0 && dy == 0) return false;  // at the space's limit
+    // The press point goes with the content, so modules in hand keep their
+    // place under the pointer and a marquee keeps its first corner; a cable
+    // hangs from its socket and needs none.
+    if (drag_.kind != Drag::Kind::Cable) {
+        drag_.start.x -= dx;
+        drag_.start.y -= dy;
+    }
+    onPointer(edgeLast_);
+    return true;
+}
+
+ui::Cursor RackSpace::cursorAt(ui::Point) const {
+    const bool inHand = drag_.kind == Drag::Kind::Move || drag_.kind == Drag::Kind::Pan;
+    return inHand && drag_.moved ? ui::Cursor::Move : ui::Cursor::Arrow;
+}
+
 bool RackSpace::onPointer(const ui::PointerEvent& e) {
     using T = ui::PointerEvent::Type;
     const ui::Point sp = toSpace(e.pos);
@@ -1429,6 +1487,7 @@ bool RackSpace::onPointer(const ui::PointerEvent& e) {
             default:
                 break;
         }
+        noteDragEdge(e);
         invalidate();
         return true;
     }

@@ -6,8 +6,8 @@
 //   com.suppleaudio.test.gain  — stereo effect; params "gain" (dB, ADR-0010
 //     normalized CLAP value, modulatable by param_mod) and "latency" (0/64 samples, stepped;
 //     changing it while active requests a restart); versioned state; the semantic-params extension
-//     implemented with core-params + core-patch. With SUPPLE_TEST_START_GATE set when it is
-//     made (POSIX), start_processing waits on a gate shared with the test (see factoryCreate).
+//     implemented with core-params + core-patch. With SUPPLE_TEST_LIFECYCLE_GATE set when it
+//     is made, one of its calls waits on a gate shared with the test (lifecycle_gate.h).
 //   com.suppleaudio.test.sine  — instrument; 0 inputs, stereo output, CLAP and
 //     MIDI note dialects; one sine voice per key at velocity * 0.25, stops at
 //     note off and reports NOTE_END.
@@ -50,16 +50,28 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
+#include "lifecycle_gate.h"
 #include "supple/clap/semantic_params.h"
 #include "supple/json/json.h"
 #include "supple/params/params.h"
 #include "supple/patch/patch.h"
 
 namespace {
+// A test can ask to be told, from inside the plug-in, which callback is running
+// (supple_fixture_set_observer): the host tests use it to look at the execution table from
+// where a plug-in's own code runs. The observer must be real-time safe; it is called from
+// process() too. Null by default, and then one relaxed load.
+std::atomic<void (*)(const char*)> gObserver{nullptr};
+void observe(const char* phase) {
+    if (const auto call = gObserver.load(std::memory_order_relaxed)) call(phase);
+}
+
 void fixtureWrite(int fd, const void* bytes, unsigned count) {
 #if defined(_WIN32)
     (void)::_write(fd, bytes, count);
@@ -233,6 +245,9 @@ struct Gain {
     bool enforceThread = false;
     bool rejectPatch = false;
     bool slowPatch = false;
+    std::uint32_t patchRescan = 0;  // GainControl::patchRescan
+    std::uint32_t patchEffect = 0;  // GainControl::patchEffect, once
+    bool failActivate = false;      // the next activate() fails
     bool mismatchedId = false, missingValue = false;
     bool malformedSchema = false;
     bool badCurve = false;
@@ -286,6 +301,7 @@ bool CLAP_ABI gainParamInfo(const clap_plugin_t*, uint32_t index, clap_param_inf
     return true;
 }
 bool CLAP_ABI gainParamValue(const clap_plugin_t* pl, clap_id id, double* out) {
+    observe("param_value");
     auto* g = G(pl);
     if (g->missingValue && id == 0) return false;
     if (id == 0)
@@ -329,8 +345,16 @@ void gainEditorOutput(const clap_plugin_t* pl, const clap_output_events_t* out) 
         out->try_push(out, &gesture.header);
     }
 }
+// The lifecycle gate (lifecycle_gate.h): mapped when a gain is made with
+// SUPPLE_TEST_LIFECYCLE_GATE set (main thread), never freed.
+std::atomic<std::atomic<unsigned>*> gLifecycleGate{nullptr};
+void gainGate(supple::test::GatedCall call) {
+    supple::test::passGate(gLifecycleGate.load(std::memory_order_acquire), call);
+}
+
 void CLAP_ABI gainFlush(const clap_plugin_t* pl, const clap_input_events_t* in,
                         const clap_output_events_t* out) {
+    gainGate(supple::test::GatedCall::Flush);
     for (uint32_t i = 0; i < in->size(in); ++i) {
         const auto* h = in->get(in, i);
         if (h->type == CLAP_EVENT_PARAM_VALUE)
@@ -348,12 +372,14 @@ uint32_t CLAP_ABI gainLatency(const clap_plugin_t* pl) {
 const clap_plugin_latency_t kGainLatency = {gainLatency};
 
 bool CLAP_ABI gainStateSave(const clap_plugin_t* pl, const clap_ostream_t* os) {
+    observe("state_save");
     const std::string doc = gainPatchType().serialize(G(pl)->current());
     auto bytes = patch::encodeState(doc, 0x54474e31);  // "TGN1"
     if (!bytes) return false;
     return os->write(os, bytes->data(), bytes->size()) == static_cast<int64_t>(bytes->size());
 }
 bool CLAP_ABI gainStateLoad(const clap_plugin_t* pl, const clap_istream_t* is) {
+    observe("state_load");
     std::vector<std::uint8_t> buf;
     std::uint8_t tmp[512];
     for (;;) {
@@ -467,6 +493,31 @@ bool CLAP_ABI semSetPatch(const clap_plugin_t* pl, uint32_t mode, const char* te
     const int latency = static_cast<int>(result->body.values[1]);
     if (latency != G(pl)->latencyChoice.exchange(latency) && G(pl)->host->request_restart)
         G(pl)->host->request_restart(G(pl)->host);
+    if (G(pl)->patchRescan) {
+        const auto* hp = static_cast<const clap_host_params_t*>(
+            G(pl)->host->get_extension(G(pl)->host, CLAP_EXT_PARAMS));
+        if (hp) hp->rescan(G(pl)->host, G(pl)->patchRescan);
+    }
+    // GainControl::patchEffect: what this patch does besides its values.
+    switch (std::exchange(G(pl)->patchEffect, 0u)) {
+        case 1:  // a latency change, without the restart CLAP asks for
+            G(pl)->activeLatency = 16;
+            break;
+        case 2:  // asks the host to clear the gain's automation
+            if (const auto* hp = static_cast<const clap_host_params_t*>(
+                    G(pl)->host->get_extension(G(pl)->host, CLAP_EXT_PARAMS)))
+                hp->clear(G(pl)->host, 0, CLAP_PARAM_CLEAR_AUTOMATIONS);
+            break;
+        case 3:  // asks to process (an inactive instance is then activated)
+            G(pl)->host->request_process(G(pl)->host);
+            break;
+        case 4:  // likewise, and that activation fails
+            G(pl)->failActivate = true;
+            G(pl)->host->request_process(G(pl)->host);
+            break;
+        default:
+            break;
+    }
     return true;
 }
 bool CLAP_ABI semDescribe(const clap_plugin_t* pl, uint32_t detail, const clap_ostream_t* out) {
@@ -489,6 +540,13 @@ struct GainControl {
     std::uint32_t (*deliveries)(const clap_plugin_t*);
     void (*latency)(const clap_plugin_t*, bool);
     std::uint32_t (*creates)();
+    // The rescan flags a later applied patch reports (0: none).
+    void (*patchRescan)(const clap_plugin_t*, std::uint32_t);
+    // What the next applied patch does besides its values, once: 1 reports
+    // another latency without a restart, 2 asks the host to clear the gain's
+    // automation, 3 asks to process, 4 asks to process and fails the
+    // activation that follows.
+    void (*patchEffect)(const clap_plugin_t*, std::uint32_t);
 };
 void gainEditorEdit(const clap_plugin_t* pl, double value, std::uint32_t flags) {
     G(pl)->gainDb = value;
@@ -504,7 +562,10 @@ void gainRequestLatency(const clap_plugin_t* pl, bool delayed) {
     G(pl)->host->request_restart(G(pl)->host);
 }
 std::uint32_t gainCreates() { return gGainCreates.load(); }
-const GainControl kGainControl{gainEditorEdit, gainHostDeliveries, gainRequestLatency, gainCreates};
+void gainPatchRescan(const clap_plugin_t* pl, std::uint32_t flags) { G(pl)->patchRescan = flags; }
+void gainPatchEffect(const clap_plugin_t* pl, std::uint32_t effect) { G(pl)->patchEffect = effect; }
+const GainControl kGainControl{gainEditorEdit, gainHostDeliveries, gainRequestLatency,
+                               gainCreates,    gainPatchRescan,    gainPatchEffect};
 const void* CLAP_ABI gainExt(const clap_plugin_t* pl, const char* id) {
     if (!std::strcmp(id, "supple.test.gain-control")) return &kGainControl;
     if (!std::strcmp(id, CLAP_EXT_PARAMS)) return &kGainParams;
@@ -518,7 +579,19 @@ const void* CLAP_ABI gainExt(const clap_plugin_t* pl, const char* id) {
 }
 
 bool CLAP_ABI gainActivate(const clap_plugin_t* pl, double, uint32_t, uint32_t) {
+    observe("activate");
     if (!checkGainMain(pl)) return false;
+    if (std::exchange(G(pl)->failActivate, false)) return false;
+    gainGate(supple::test::GatedCall::Activate);
+    // A gated params flush must happen: ask for one, as a plug-in whose
+    // values changed would. While active, the host serves it on the audio
+    // thread's next flush or block.
+    if (auto* gate = gLifecycleGate.load(std::memory_order_acquire);
+        gate && gate[3].load(std::memory_order_acquire) ==
+                    static_cast<unsigned>(supple::test::GatedCall::Flush))
+        if (const auto* hp = static_cast<const clap_host_params_t*>(
+                G(pl)->host->get_extension(G(pl)->host, CLAP_EXT_PARAMS)))
+            hp->request_flush(G(pl)->host);
     auto* g = G(pl);
     g->activeLatency = g->latencyChoice ? 64 : 0;
     std::memset(g->delay, 0, sizeof(g->delay));
@@ -529,6 +602,8 @@ bool CLAP_ABI gainActivate(const clap_plugin_t* pl, double, uint32_t, uint32_t) 
 }
 
 clap_process_status CLAP_ABI gainProcess(const clap_plugin_t* pl, const clap_process_t* p) {
+    observe("process");
+    gainGate(supple::test::GatedCall::Process);
     auto* g = G(pl);
     gainEditorOutput(pl, p->out_events);
     const uint32_t n = p->frames_count;
@@ -1039,6 +1114,8 @@ struct EdgeControl {
     // State beyond the parameters (a sampler's file): its last byte, then
     // clap.state mark_dirty, as an editor would.
     void (*markDirty)(const clap_plugin_t*, std::uint8_t);
+    // clap.params rescan with these flags, the parameter list unchanged.
+    void (*rescanFlags)(const clap_plugin_t*, std::uint32_t);
 };
 void edgeRequestProcess(const clap_plugin_t* pl) { E(pl)->host->request_process(E(pl)->host); }
 void edgeRescan(const clap_plugin_t* pl, bool removed) {
@@ -1059,8 +1136,13 @@ void edgeMarkDirty(const clap_plugin_t* pl, std::uint8_t value) {
         E(pl)->host->get_extension(E(pl)->host, CLAP_EXT_STATE));
     hs->mark_dirty(E(pl)->host);
 }
-const EdgeControl kEdgeControl = {edgeRequestProcess, edgeRescan, edgeClear, edgeRestart,
-                                  edgeMarkDirty};
+void edgeRescanFlags(const clap_plugin_t* pl, std::uint32_t flags) {
+    const auto* hp = static_cast<const clap_host_params_t*>(
+        E(pl)->host->get_extension(E(pl)->host, CLAP_EXT_PARAMS));
+    hp->rescan(E(pl)->host, flags);
+}
+const EdgeControl kEdgeControl = {edgeRequestProcess, edgeRescan,    edgeClear,
+                                  edgeRestart,        edgeMarkDirty, edgeRescanFlags};
 void CLAP_ABI edgeMain(const clap_plugin_t* pl) {
     ++E(pl)->mainCalls;
     if (E(pl)->config[0] == 44) {
@@ -1363,8 +1445,12 @@ clap_process_status CLAP_ABI multiOutProcess(const clap_plugin_t* pl, const clap
 
 // --- crash (the isolation fixture) -------------------------------------------------------
 // An effect that passes audio through until its Mode parameter says otherwise:
-// 1 crashes the process in process() (SIGSEGV), 2 hangs it there, 3 takes
-// 20 ms over each block (a plug-in that misses a live deadline, ADR-0081).
+// 1 crashes the process in process() (raise(SIGSEGV): a signal on POSIX, but on Windows the C
+// runtime ends the process with exit code 3 and no exception), 2 hangs it there, 3 takes
+// 20 ms over each block (a plug-in that misses a live deadline, ADR-0081), 4 writes through a bad
+// pointer: a signal on POSIX and an access violation on Windows, the crash a host classifies as
+// one on every platform. 5 faults when the instance is destroyed, 6 calls abort(), 7 runs the stack
+// out, 8 faults on a thread the plug-in made itself, 9 calls std::terminate().
 
 const clap_plugin_descriptor_t* crashDescriptor() {
     static const char* features[] = {CLAP_PLUGIN_FEATURE_AUDIO_EFFECT, nullptr};
@@ -1382,11 +1468,34 @@ const clap_plugin_descriptor_t* crashDescriptor() {
     return &d;
 }
 
+[[gnu::noinline]] void badWrite() { *reinterpret_cast<volatile int*>(8) = 1; }
+
+// Runs the stack out: each frame touches its own page-sized buffer, and the result is used so
+// that nothing folds the recursion into a loop.
+volatile bool gStackHasEnd = false;  // never set: the recursion has no end the compiler can see
+[[gnu::noinline]] int runOutOfStack(int depth) {
+    volatile char page[4096];
+    if (gStackHasEnd) return depth;
+    page[0] = static_cast<char>(depth);
+    page[sizeof(page) - 1] = static_cast<char>(depth >> 8);
+    return runOutOfStack(depth + 1) + page[0] + page[sizeof(page) - 1];
+}
+
 struct Crash {
     clap_plugin_t plugin{};
     const clap_host_t* host = nullptr;
     std::atomic<int> mode{0};
+    // Mode 5: processes like mode 0 and faults when it is destroyed, which is a crash that
+    // happens only once the host lets go of a bridge that still holds the instance.
+    ~Crash() {
+        if (mode.load() == 5) badWrite();
+    }
 };
+// Tests (supple_fixture_hold_process): while held, an in-process crash
+// instance's process() waits there, spinning, after counting its entry: a
+// renderer held in the middle of a block until the test lets it go.
+std::atomic<bool> gHoldProcess{false};
+std::atomic<int> gHeldProcess{0};
 Crash* C(const clap_plugin_t* p) { return static_cast<Crash*>(p->plugin_data); }
 
 uint32_t CLAP_ABI crashParamCount(const clap_plugin_t*) { return 1; }
@@ -1396,7 +1505,7 @@ bool CLAP_ABI crashParamInfo(const clap_plugin_t*, uint32_t index, clap_param_in
     info->id = 1;
     info->flags = CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_AUTOMATABLE;
     std::snprintf(info->name, sizeof(info->name), "Mode");
-    info->max_value = 3;
+    info->max_value = 9;
     return true;
 }
 bool CLAP_ABI crashParamValue(const clap_plugin_t* pl, clap_id id, double* out) {
@@ -1405,8 +1514,9 @@ bool CLAP_ABI crashParamValue(const clap_plugin_t* pl, clap_id id, double* out) 
     return true;
 }
 bool CLAP_ABI crashValueToText(const clap_plugin_t*, clap_id, double v, char* out, uint32_t size) {
-    static const char* kNames[] = {"pass", "crash", "hang", "slow"};
-    std::snprintf(out, size, "%s", kNames[std::clamp(static_cast<int>(v), 0, 3)]);
+    static const char* kNames[] = {"pass",     "crash", "hang",     "slow",   "fault",
+                                   "teardown", "abort", "overflow", "thread", "terminate"};
+    std::snprintf(out, size, "%s", kNames[std::clamp(static_cast<int>(v), 0, 9)]);
     return true;
 }
 bool CLAP_ABI crashTextToValue(const clap_plugin_t*, clap_id, const char*, double*) {
@@ -1435,7 +1545,17 @@ const void* CLAP_ABI crashExt(const clap_plugin_t*, const char* id) {
 bool CLAP_ABI crashActivate(const clap_plugin_t*, double, uint32_t, uint32_t) { return true; }
 clap_process_status CLAP_ABI crashProcess(const clap_plugin_t* pl, const clap_process_t* p) {
     crashEvents(pl, p->in_events);
+    if (gHoldProcess.load(std::memory_order_acquire)) {
+        gHeldProcess.fetch_add(1, std::memory_order_acq_rel);
+        while (gHoldProcess.load(std::memory_order_acquire)) {  // spin, as mode 2
+        }
+    }
     if (C(pl)->mode.load() == 1) std::raise(SIGSEGV);
+    if (C(pl)->mode.load() == 4) badWrite();
+    if (C(pl)->mode.load() == 6) std::abort();  // what the host makes of abort() differs
+    if (C(pl)->mode.load() == 7) (void)runOutOfStack(0);
+    if (C(pl)->mode.load() == 8) std::thread([] { badWrite(); }).join();  // a thread of its own
+    if (C(pl)->mode.load() == 9) std::terminate();
     while (C(pl)->mode.load() == 2) {  // spin (no system call: sanitizers see a hang, not a call)
     }
     if (C(pl)->mode.load() == 3) {  // spin on the clock: no system call either
@@ -1458,15 +1578,22 @@ void CLAP_ABI checkedGainDestroy(const clap_plugin_t* p) {
     delete G(p);
 }
 
-bool CLAP_ABI initOk(const clap_plugin_t*) { return true; }
-void CLAP_ABI deactivateNop(const clap_plugin_t*) {}
-bool CLAP_ABI startOk(const clap_plugin_t*) { return true; }
-void CLAP_ABI stopNop(const clap_plugin_t*) {}
-void CLAP_ABI resetNop(const clap_plugin_t*) {}
-void CLAP_ABI mainNop(const clap_plugin_t*) {}
+bool CLAP_ABI initOk(const clap_plugin_t*) {
+    observe("init");
+    return true;
+}
+void CLAP_ABI deactivateNop(const clap_plugin_t*) { observe("deactivate"); }
+bool CLAP_ABI startOk(const clap_plugin_t*) {
+    observe("start");
+    return true;
+}
+void CLAP_ABI stopNop(const clap_plugin_t*) { observe("stop"); }
+void CLAP_ABI resetNop(const clap_plugin_t*) { observe("reset"); }
+void CLAP_ABI mainNop(const clap_plugin_t*) { observe("main_thread"); }
 
 template <class T>
 void CLAP_ABI destroyT(const clap_plugin_t* p) {
+    observe("destroy");
     delete static_cast<T*>(p->plugin_data);
 }
 
@@ -1755,34 +1882,27 @@ const clap_plugin_t* CLAP_ABI factoryCreate(const clap_plugin_factory_t*, const 
     if (!std::strcmp(id, gainDescriptor()->id)) {
         auto* plugin = const_cast<clap_plugin_t*>(
             make<Gain>(host, gainDescriptor(), gainActivate, gainProcess, gainExt));
+        // The lifecycle gate for host tests (lifecycle_gate.h): the gated
+        // call spins, with no system call, until the test lets it go on.
+        if (const char* file = std::getenv(supple::test::kLifecycleGateVariable); file && *file)
+            if (auto* words = supple::test::mapGateFile(file))
+                gLifecycleGate.store(words, std::memory_order_release);
         plugin->reset = [](const clap_plugin_t* pl) {
+            observe("reset");
+            gainGate(supple::test::GatedCall::Reset);
             // A seek must clear latency history just as activation does.
             std::memset(G(pl)->delay, 0, sizeof(G(pl)->delay));
             G(pl)->delayPos = 0;
         };
-#if !defined(_WIN32)
-        // A gated start for host tests: SUPPLE_TEST_START_GATE names a file of
-        // at least three atomic words, mapped here, on the main thread. Then
-        // start_processing sets word 0, spins until the test sets word 1, sets
-        // word 2 and succeeds: no system call on the audio thread.
-        if (const char* file = std::getenv("SUPPLE_TEST_START_GATE")) {
-            static std::atomic<unsigned>* gate = nullptr;
-            const int fd = ::open(file, O_RDWR);
-            void* words = fd >= 0 ? ::mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)
-                                  : MAP_FAILED;
-            if (fd >= 0) ::close(fd);
-            if (words != MAP_FAILED) {
-                gate = static_cast<std::atomic<unsigned>*>(words);
-                plugin->start_processing = [](const clap_plugin_t*) {
-                    gate[0].store(1, std::memory_order_release);
-                    while (!gate[1].load(std::memory_order_acquire)) {
-                    }
-                    gate[2].store(1, std::memory_order_release);
-                    return true;
-                };
-            }
-        }
-#endif
+        plugin->start_processing = [](const clap_plugin_t*) {
+            observe("start");  // what the default start does (startNop), as the observer expects
+            gainGate(supple::test::GatedCall::StartProcessing);
+            return true;
+        };
+        plugin->stop_processing = [](const clap_plugin_t*) {
+            observe("stop");
+            gainGate(supple::test::GatedCall::StopProcessing);
+        };
         return plugin;
     }
     if (!std::strcmp(id, checkedGainDescriptor(false)->id) ||
@@ -1868,14 +1988,20 @@ const clap_plugin_t* CLAP_ABI factoryCreate(const clap_plugin_factory_t*, const 
 }
 const clap_plugin_factory_t kFactory = {factoryCount, factoryDesc, factoryCreate};
 
-bool CLAP_ABI entryInit(const char*) { return true; }
-void CLAP_ABI entryDeinit() {}
+bool CLAP_ABI entryInit(const char*) {
+    observe("library_init");
+    return true;
+}
+void CLAP_ABI entryDeinit() { observe("library_deinit"); }
 const void* CLAP_ABI entryFactory(const char* id) {
     return !std::strcmp(id, CLAP_PLUGIN_FACTORY_ID) ? &kFactory : nullptr;
 }
 
 }  // namespace
 
+extern "C" CLAP_EXPORT void supple_fixture_set_observer(void (*observer)(const char*)) {
+    gObserver.store(observer, std::memory_order_release);
+}
 extern "C" CLAP_EXPORT int supple_fixture_thread_failures() {
     return gThreadFailures.load(std::memory_order_relaxed);
 }
@@ -1885,6 +2011,15 @@ extern "C" CLAP_EXPORT int supple_fixture_patch_starts() {
 
 extern "C" CLAP_EXPORT const clap_plugin_entry_t clap_entry = {CLAP_VERSION_INIT, entryInit,
                                                                entryDeinit, entryFactory};
+
+// Holds (1) or lets go (0) every in-process crash instance's process(), and
+// how many process() calls have entered a hold so far.
+extern "C" CLAP_EXPORT void supple_fixture_hold_process(int hold) {
+    gHoldProcess.store(hold != 0, std::memory_order_release);
+}
+extern "C" CLAP_EXPORT int supple_fixture_held_process() {
+    return gHeldProcess.load(std::memory_order_acquire);
+}
 
 extern "C" CLAP_EXPORT void supple_fixture_wait_patch_start(int previous) {
     while (gPatchStarts.load(std::memory_order_acquire) == previous) gPatchStarts.wait(previous);

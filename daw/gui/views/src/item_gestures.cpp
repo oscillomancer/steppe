@@ -173,10 +173,20 @@ class Ghost : public ui::Node {
                         x1 = v.xAt(s.timeMap->secondsAt(end));
             return ui::Rect{x0, r.y + 1, std::max(2.0f, x1 - x0), r.h - 2};
         };
-        // The selection.
+        // The selection: each selected item is lit (a wash of its own colour
+        // over its body) and outlined in the focus colour, with a hairline of
+        // the ground inside the outline: on an orange or red item the outline
+        // and the body are close in hue, and the hairline keeps them apart.
         for (model::Id id : g.selection())
             if (const model::Item* it = itemOf(s, id))
-                if (auto r = rectFor(*it, 0, 0, 0, 0)) c.strokeRect(*r, t.color("focus"), 2);
+                if (auto r = rectFor(*it, 0, 0, 0, 0)) {
+                    const model::Track* track = s.tracks.find(it->track);
+                    const ui::Color own = Lanes::itemColor(
+                        t, *it, track, track ? track->type : model::StripType::Channel);
+                    c.fillRect(*r, own.withAlpha(0.22f));
+                    c.strokeRect(*r, t.color("focus"), 2);
+                    if (r->w > 8 && r->h > 8) c.strokeRect(r->inset(2), t.color("ground"), 1);
+                }
         // Selected automation points (filled), unless a drag draws them moved.
         if (st.drag != ItemGestures::Drag::EnvPoint)
             for (model::Id pe : g.pointEnvelopes())
@@ -269,10 +279,12 @@ class Ghost : public ui::Node {
                     if (auto r = rectFor(*anchor, 0, 0, 0, 0)) {
                         const float w =
                             static_cast<float>(st.fadeSeconds * v.viewport().pixelsPerSecond);
+                        const ui::Rect body = Lanes::fadeArea(*r);  // where the fade draws
                         if (st.drag == ItemGestures::Drag::FadeIn)
-                            c.line({r->x, r->bottom()}, {r->x + w, r->y}, t.color("focus"), 2);
+                            c.line({body.x, body.bottom()}, {body.x + w, body.y}, t.color("focus"),
+                                   2);
                         else
-                            c.line({r->right() - w, r->y}, {r->right(), r->bottom()},
+                            c.line({body.right() - w, body.y}, {body.right(), body.bottom()},
                                    t.color("focus"), 2);
                     }
                 break;
@@ -544,8 +556,8 @@ Status ItemGestures::pasteClip(const Clip& c, double atBeat, std::optional<model
     args["version"] = static_cast<std::int64_t>(c.version);
     if (placements.asArray().empty())
         return Error("gui.clipboard.targets",
-                     "paste dropped " + std::to_string(dropped) + " items: no target channel", {},
-                     "select a target channel with enough following channels");
+                     "paste dropped " + std::to_string(dropped) + " items: no target track", {},
+                     "select a target track with enough tracks below it");
     args["items"] = std::move(placements);
     auto r = run(label, {{"item.paste", std::move(args)}});
     if (!r) return std::move(r).error();
@@ -556,7 +568,7 @@ Status ItemGestures::pasteClip(const Clip& c, double atBeat, std::optional<model
     changed();
     if (dropped && onError)
         onError(Error("gui.clipboard.targets", "paste dropped " + std::to_string(dropped) +
-                                                   " items without a target channel"));
+                                                   " items without a target track"));
     return {};
 }
 
@@ -641,6 +653,50 @@ std::optional<ItemGestures::Hit> ItemGestures::hit(ui::Point p) const {
         best = h;
     }
     return best;
+}
+
+ui::Cursor ItemGestures::cursorAt(ui::Point p) const {
+    auto of = [](Drag drag) {
+        switch (drag) {
+            case Drag::TrimLeft:
+            case Drag::TrimRight:
+            case Drag::FadeIn:
+            case Drag::FadeOut:
+            case Drag::Slip:
+            case Drag::Warp:
+            case Drag::AutoItemLength:
+                return ui::Cursor::ResizeHorizontal;
+            case Drag::Move:
+            case Drag::AutoItemMove:
+            case Drag::TakeOut:
+                return ui::Cursor::Move;
+            case Drag::None:
+            case Drag::Marquee:
+            case Drag::EnvPoint:
+            case Drag::Comp:
+                break;
+        }
+        return ui::Cursor::Arrow;
+    };
+    // A press that has not moved yet is still a click: the item keeps the
+    // arrow until it goes somewhere.
+    if (state_.drag != Drag::None) {
+        const ui::Cursor cursor = of(state_.drag);
+        return cursor == ui::Cursor::Move && !moved_ ? ui::Cursor::Arrow : cursor;
+    }
+    // At rest only the places whose press is not a plain move or selection
+    // say so: an item's body keeps the arrow.
+    if (const auto lane = rowAt(p.y); lane && view_.trackLayout().rows()[*lane].env) {
+        const auto ai = autoItemAt(*view_.trackLayout().rows()[*lane].env, p);
+        return ai && ai->zone == Drag::AutoItemLength ? ui::Cursor::ResizeHorizontal
+                                                      : ui::Cursor::Arrow;
+    }
+    const auto h = hit(p);
+    if (!h || h->zone == Drag::Move || h->zone == Drag::Comp || h->takeBadge)
+        return ui::Cursor::Arrow;
+    // A locked item is not trimmed or faded.
+    const model::Item* it = itemOf(view_.session(), h->item);
+    return it && !it->locked ? of(h->zone) : ui::Cursor::Arrow;
 }
 
 bool ItemGestures::pointer(const ui::PointerEvent& e) {

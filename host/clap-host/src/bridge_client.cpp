@@ -4,9 +4,12 @@
 // bridge process; main-thread calls are control-plane requests, audio-thread
 // calls are commands in shared memory with a futex wake-up and a deadline.
 #include "bridge_client.h"
+#include "bridge_diagnostics.h"
 #include "bridge_notifications.h"
 #include "editor_platform.h"
 #include "platform.h"
+#include "supple/diagcap/selfcapture.h"
+#include "supple/diagctx/inventory.h"
 
 #include <algorithm>
 #include <atomic>
@@ -27,6 +30,7 @@ std::atomic<std::uint64_t> gRequests{0};  // bridgeRequests()
 
 std::mutex gBridgeMutex;
 std::filesystem::path gBridgeExecutable;
+std::atomic<bool> gAttachCaptureSlot{true};  // tests only
 
 constexpr int kCreateTimeoutMs = 20000;
 
@@ -58,7 +62,13 @@ ThreadPolicy bridgeAudioPolicy() SUPPLE_RT {
 
 namespace {
 std::atomic<int> gBridgeDeadlineMs{2000};
+// A lifecycle command's failure deadline for a `process` deadline of
+// `deadlineMs` (ADR-0013 §5): 5/2 of it plus 2 s.
+int lifecycleDeadlineMs(int deadlineMs) SUPPLE_RT {
+    return static_cast<int>(
+        std::min<std::int64_t>(5 * std::int64_t(deadlineMs) / 2 + 2000, INT32_MAX));
 }
+}  // namespace
 void setBridgeDeadlineMs(int ms) {
     gBridgeDeadlineMs.store(std::max(ms, 1), std::memory_order_relaxed);
 }
@@ -81,6 +91,36 @@ ThreadPolicy liveBridgeAudioPolicy() SUPPLE_RT {
 std::uint32_t liveBridgePeriodNs() SUPPLE_RT {
     return gLiveBridgePeriodNs.load(std::memory_order_relaxed);
 }
+
+void setBridgeCaptureSlotForTests(bool attach) {
+    gAttachCaptureSlot.store(attach, std::memory_order_relaxed);
+}
+
+namespace {
+std::atomic<std::int64_t> gKillGraceNs{-1};
+std::int64_t killGraceNs() {
+    const std::int64_t set = gKillGraceNs.load(std::memory_order_relaxed);
+    return set >= 0 ? set : static_cast<std::int64_t>(diagnostics::selfcapture::kHandlerBudget);
+}
+}  // namespace
+void setBridgeKillGraceForTests(std::int64_t nanoseconds) {
+    gKillGraceNs.store(nanoseconds, std::memory_order_relaxed);
+}
+namespace {
+std::atomic<int> gForcedAlive{0};
+// One of the forced "alive" answers, if any is left (setBridgeLivenessForTests).
+bool forcedAlive() noexcept {
+    int left = gForcedAlive.load(std::memory_order_relaxed);
+    while (left > 0 &&
+           !gForcedAlive.compare_exchange_weak(left, left - 1, std::memory_order_relaxed)) {
+    }
+    return left > 0;
+}
+}  // namespace
+void setBridgeLivenessForTests(int checks) {
+    gForcedAlive.store(checks, std::memory_order_relaxed);
+}
+int bridgeLivenessLeftForTests() { return gForcedAlive.load(std::memory_order_relaxed); }
 
 void setBridgeExecutable(std::filesystem::path path) {
     std::lock_guard lock(gBridgeMutex);
@@ -144,13 +184,43 @@ Result<std::shared_ptr<BridgeProcess>> BridgeProcess::spawn() {
     }
     self->child_ = std::move(*child);
     self->pid_ = self->child_->pid();
+    self->ordinal_ = bridgeOrdinals().take();
+    diagctx::announceBridge(self->ordinal_);  // topic 6a: started (0 is ignored)
 #if defined(_WIN32)
     self->sock_ = new NativeControl(reinterpret_cast<HANDLE>(sv[0]));
 #else
     self->sock_ = sv[0];
 #endif
     if (auto status = self->initializeNotifications(); !status) return status.error();
+    self->attachCaptureSlot();
     return self;
+}
+
+void BridgeProcess::attachCaptureSlot() {
+    namespace capture = diagnostics::selfcapture;
+    if (ordinal_ == 0 || failed() || !gAttachCaptureSlot.load(std::memory_order_relaxed)) return;
+    const Resource memory = createMemory(capture::kSlotBytes);
+    if (memory == noResource) return;
+    void* map = mapMemory(memory, capture::kSlotBytes);
+    const bool ready = map && capture::initializeSlot(map, capture::kSlotBytes, ordinal_);
+    unmapMemory(map, capture::kSlotBytes);
+    Writer w;
+    w.u32(capture::kSlotVersion);
+    // On Windows call() duplicates the handle into the bridge; `memory` stays this process's.
+    const bool attached = ready && static_cast<bool>(call(Op::AttachCaptureSlot, 0, w, memory));
+    // The supervisor is told once the bridge holds the slot, so a Slot event always names one a
+    // bridge can write. The announcement sends a copy; this process's own goes below.
+    if (attached) diagctx::announceSlot(ordinal_, memory);
+#if defined(_WIN32)
+    // The supervisor duplicates the handle from this process when it reads the announcement, so
+    // it stays open until the process object goes (~BridgeProcess).
+    if (attached)
+        slot_ = memory;
+    else
+        closeResource(memory);
+#else
+    closeResource(memory);  // a descriptor in flight keeps the object
+#endif
 }
 
 Status BridgeProcess::initializeNotifications() {
@@ -213,7 +283,7 @@ void BridgeProcess::unsubscribe(RemoteInstance& instance) {
 
 void BridgeProcess::watch() {
     nameThread("bridge-parent");
-    bool watchingDeath = true, failureAnnounced = false;
+    bool watchingDeath = true, failureAnnounced = false, graceAnnounced = false;
     for (;;) {
         Waitable death;
         if (child_) death = child_->waitable();
@@ -226,7 +296,23 @@ void BridgeProcess::watch() {
 #else
             {watchingDeath ? Waitable(sock_) : Waitable{}, 0, 0}};
 #endif
-        const int ready = waitFor(descriptors, -1);
+        // A bridge failed as hung is killed by the main thread's next reap() once its grace is
+        // over, but the failure was announced at the start of the grace and the main thread
+        // looks again only when told: this thread tells it when the grace ends, so a hung
+        // bridge dies in a bounded time with nobody asking (an engine that is only ticking).
+        int timeoutMs = -1;
+        if (!graceAnnounced && failed() && failSignal_.load(std::memory_order_acquire) == kHung) {
+            const std::int64_t left =
+                killGraceNs() - (steadyNanoseconds() - hungAt_.load(std::memory_order_acquire));
+            timeoutMs = left <= 0 ? 0 : static_cast<int>((left + 999'999) / 1'000'000);
+        }
+        const int ready = waitFor(descriptors, timeoutMs);
+        if (ready == 0 && timeoutMs >= 0) {
+            graceAnnounced = true;
+            delivery_.fetch_add(1, std::memory_order_release);
+            notifySubscribers();
+            continue;
+        }
         if (ready < 0 && errno == EINTR) continue;
         if (ready < 0) {
             fail(-1);
@@ -340,6 +426,9 @@ Result<std::unique_ptr<RemoteInstance>> RemoteInstance::spawn(
         port.channels = r.u32();
         ports.auxOutputs.push_back(std::move(port));
     }
+    ports.childCell = r.u32();
+    ports.childGeneration = r.u16();
+    ports.childImage = r.u64();
     if (!r.ok() || !self->instanceId_ || auxPorts > kMaxAuxPorts)
         return Error("host.bridge", "malformed reply from the plugin bridge");
     if (ports.inChannels > kMaxChannels || ports.outChannels > kMaxChannels ||
@@ -357,11 +446,18 @@ RemoteInstance::~RemoteInstance() {
         std::erase(process_->members_, this);
         std::erase(process_->refreshOnly_, this);
     }
-    if (process_ && instanceId_ && !failed()) (void)call(Op::Destroy, Writer{}, -1, 2000);
+    // The control plane's own timeout, as for every main-thread request: a
+    // shorter one killed the bridge, and every plug-in sharing it, when a
+    // stalled machine was slow to answer (ADR-0090, review round 30).
+    if (process_ && instanceId_ && !failed()) (void)call(Op::Destroy, Writer{});
     unmap();
 }
 
 BridgeProcess::~BridgeProcess() {
+    // A bridge that ended before this and was never reaped ended by itself; one that is still
+    // there is ended by the host closing its socket, below.
+    const bool diedFirst = child_ && !forcedAlive() && !child_->alive();
+    const int diedWith = diedFirst ? child_->exitStatus() : 0;
     watcherQuit_.store(true, std::memory_order_release);
     watcherWake_.notify();
     if (watcher_.joinable()) watcher_.join();
@@ -376,7 +472,25 @@ BridgeProcess::~BridgeProcess() {
                 (void)waitFor({}, 10);
         }
     }
+    // A bridge that was still there when the host let go may be dying of its own fault at that
+    // moment (a crash whose core or dump is still being written is alive until it is done): if it
+    // ended by a signal or an exception, that is its own death, not the host's end. Also when the
+    // host had killed it already (a request that found its socket closed and the process not yet
+    // gone does that): a kill cannot change the status of a process that is dying of a fault, and
+    // classifyBridgeEnd tells the host's own kill, whose status is the kill's, from that.
+    int endedWith = diedWith;
+    bool hostEnded = !diedFirst;
+    if (!diedFirst && child_ && !child_->alive()) {
+        const int after = child_->exitStatus();
+        const auto how = classifyBridgeEnd(after, false).how;
+        if (how == diagctx::BridgeHow::Signal || how == diagctx::BridgeHow::Exception) {
+            endedWith = after;
+            hostEnded = false;
+        }
+    }
+    announceEnd(endedWith, hostEnded);
     child_.reset();
+    if (slot_ != noResource) closeResource(slot_);
 }
 
 void RemoteInstance::unmap() {
@@ -395,18 +509,50 @@ void RemoteInstance::unmap() {
 }
 
 void BridgeProcess::killBridge() {
+    // Before the kill, so that whoever sees the end also sees that the host caused it (topic 6a).
+    hostKilled_.store(true, std::memory_order_release);
     // The helper retains the leader's identity until final tree cleanup.
     if (child_) child_->kill();
+}
+
+void BridgeProcess::announceEnd(int why, bool hostEnded) noexcept {
+    if (ordinal_ == 0 || endAnnounced_.exchange(true)) return;
+    const BridgeEnd end =
+        classifyBridgeEnd(why, hostEnded || hostKilled_.load(std::memory_order_acquire));
+    const std::string incident = diagctx::announceBridge(ordinal_, end.how, end.status);
+    if (incident.size() == incident_.size()) {
+        std::copy(incident.begin(), incident.end(), incident_.begin());
+        incidentReady_.store(true, std::memory_order_release);
+    }
+}
+
+std::string BridgeProcess::incident() const {
+    if (!incidentReady_.load(std::memory_order_acquire)) return {};
+    return std::string(incident_.data(), incident_.size());
+}
+
+void BridgeProcess::abandon() {
+    // Failed first, so a wait that wakes sees why before it sees the death.
+    fail(kAbandoned);
+    killBridge();
 }
 
 // Main thread: observes exit without reaping the helper-owned leader.
 void BridgeProcess::reap() {
     if (pid_ <= 0) return;
-    // A live block may fail a hung bridge but never kills it (ADR-0081).
-    if (failed_.load() && failSignal_.load() == kHung && child_ && child_->alive()) killBridge();
+    // A live block may fail a hung bridge but never kills it (ADR-0081). The kill waits out the
+    // bridge's own handler budget after the failure, so that a bridge that faulted as it was
+    // failed (50 ms of late blocks is far shorter than any other deadline) finishes its capsule
+    // first; a hung one is not kept for it longer than that. Not a wait: a later reap() kills.
+    if (failed_.load() && failSignal_.load() == kHung && child_ && child_->alive()) {
+        const std::int64_t failedAt = hungAt_.load(std::memory_order_acquire);
+        if (failedAt != 0 && steadyNanoseconds() - failedAt < killGraceNs()) return;
+        killBridge();
+    }
     if (!child_ || child_->alive()) return;
     const int why = child_->exitStatus();
     pid_ = -1;
+    announceEnd(why, false);  // the only place a bridge's end is observed (topic 6a)
     fail(why);
     if (failSignal_.load() == -1) failSignal_.store(why);
 }
@@ -418,6 +564,7 @@ bool BridgeProcess::alive() const {
 
 void BridgeProcess::fail(int why) SUPPLE_RT {
     if (!failed_.exchange(true)) {
+        if (why == kHung) hungAt_.store(steadyNanoseconds(), std::memory_order_release);
         failSignal_.store(why, std::memory_order_release);
         watcherWake_.notify();
     }
@@ -428,6 +575,7 @@ std::string BridgeProcess::failure() const {
     const int s = failSignal_.load();
     if (s == kProtocolViolation) return "the plugin bridge violated the output-event protocol";
     if (s == kHung) return "the plugin stopped responding and its bridge was killed";
+    if (s == kAbandoned) return "the host abandoned the plugin's bridge and killed it";
 #if defined(_WIN32)
     if (s != 0 && s != -1)
         return "the plugin bridge exited (Windows status " +
@@ -473,8 +621,12 @@ Result<std::vector<std::uint8_t>> BridgeProcess::call(Op op, std::uint32_t insta
                          "use matching host and bridge builds");
         }
 #endif
-        // Gone, or not answering: either way the instance is lost.
-        if (alive()) {
+        // Gone, or not answering: either way the instance is lost. The test seam is asked here and
+        // in ~BridgeProcess only, and always (not only when the process is really gone), so the
+        // number of answers left does not depend on how often other waits looked: a command's
+        // wait asks alive() on every 10 ms timeout, and a slow machine makes that count vary.
+        const bool forcedStill = forcedAlive();
+        if (forcedStill || alive()) {
             fail(kHung);
             killBridge();
         } else {
@@ -524,6 +676,10 @@ Result<std::vector<std::uint8_t>> RemoteInstance::call(Op op, const Writer& w, R
         default:
             break;
     }
+    // An instance with a deadline of its own (an offline render's, ADR-0090)
+    // gives its control requests at least what its lifecycle commands get.
+    if (const int own = callDeadlineMs_.load(std::memory_order_relaxed); own > 0)
+        timeoutMs = std::max(timeoutMs, lifecycleDeadlineMs(own));
     return process_->call(op, instanceId_, w, fd, timeoutMs);
 }
 
@@ -776,7 +932,7 @@ std::optional<Instance::EditorFrame> RemoteInstance::closeEditor() {
     editorOpen_ = false;
     pendingEditor_ = {};
     if (failed()) return {};
-    auto reply = call(Op::EditorClose, Writer{}, -1, 2000);
+    auto reply = call(Op::EditorClose, Writer{});  // as Destroy: the control plane's timeout
     if (!reply) return {};
     Reader r(reply->data(), reply->size());
     auto frame = readFrame(r);
@@ -1007,11 +1163,9 @@ bool RemoteInstance::answered(std::uint32_t req, Cmd cmd) SUPPLE_RT {
     // Lifecycle commands may page in a plugin's code; a block must not stall
     // the renderer long, but a loaded machine must not get a healthy plugin
     // killed either.
-    const int deadlineMs = bridgeDeadlineMs();
-    const int limitMs = cmd == Cmd::Process
-                            ? deadlineMs
-                            : static_cast<int>(std::min<std::int64_t>(
-                                  5 * std::int64_t(deadlineMs) / 2 + 2000, INT32_MAX));
+    const int own = callDeadlineMs_.load(std::memory_order_relaxed);
+    const int deadlineMs = own > 0 ? own : bridgeDeadlineMs();
+    const int limitMs = cmd == Cmd::Process ? deadlineMs : lifecycleDeadlineMs(deadlineMs);
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(limitMs);
     for (;;) {
         const std::uint32_t seen = hdr_->done.load(std::memory_order_acquire);
@@ -1022,6 +1176,8 @@ bool RemoteInstance::answered(std::uint32_t req, Cmd cmd) SUPPLE_RT {
         signals_.wait(hdr_->done, seen, 10, true);
 #endif
         if (hdr_->done.load(std::memory_order_acquire) == req) return true;
+        // Abandoned (or failed by any other thread): nothing waits for it.
+        if (process_->failed()) return false;
         if (!process_->alive()) {
             process_->fail(-1);  // the signal is read when the main thread reaps it
             return false;

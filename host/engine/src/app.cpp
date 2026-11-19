@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include "supple/engine/app.h"
+#include "audition_loader.h"
 #include "file_platform.h"
 #include "media_files.h"
 #include "module_library.h"
@@ -10,6 +11,7 @@
 #include "source_preparation.h"
 #include "supple/model/freeze.h"
 #include "supple/model/numeric.h"
+#include "suspects.h"
 
 #if !defined(_WIN32)
 #include <poll.h>
@@ -34,6 +36,7 @@
 #include "supple/base/files.h"
 #include "supple/base/sha256.h"
 #include "supple/clap/semantic_params.h"
+#include "supple/diagnostics/reports.h"
 #include "supple/dsp/oversampler.h"
 #include "supple/engine/jack.h"
 #include "supple/model/env_shape.h"
@@ -136,6 +139,7 @@ Result<std::unique_ptr<EngineApp>> EngineApp::create(AppOptions options, model::
         app->options_.identity);
     app->pool_->setMainThreadWake(app->mainWake_);
     app->pool_->setDefaultIsolation(app->pluginIsolation_);
+    app->pool_->setOverrides(app->overrides_);
     app->modules_ = detail::loadModuleLibrary(detail::builtinModuleCatalog(), app->moduleDir());
     app->pool_->racks().setCatalog(app->modules_);
     SUPPLE_TRY(app->newProject(std::move(project)));
@@ -172,10 +176,70 @@ void EngineApp::installPlugins(std::vector<host::PluginInfo> list, host::ScanRep
     scanReport_ = std::move(report);
 }
 
-Result<host::PluginInfo> EngineApp::findPlugin(std::string_view idOrName) {
+Result<host::PluginInfo> EngineApp::lookupPlugin(std::string_view idOrName) {
     auto all = plugins();
     if (!all) return std::move(all).error();
     return findPlugin(*all, idOrName);
+}
+
+Result<host::PluginInfo> EngineApp::findPlugin(std::string_view idOrName) {
+    auto info = lookupPlugin(idOrName);
+    if (info && overrides_.mode(*info) == LoadMode::Disable) return LoadOverrides::disabled(*info);
+    return info;
+}
+
+LoadMode EngineApp::loadModeOf(const model::PluginRef& ref) const {
+    if (overrides_.empty()) return LoadMode::Normal;
+    if (const auto direct = overrides_.mode(ref.format, ref.id); direct != LoadMode::Normal)
+        return direct;
+    if (catalogue_)
+        if (auto info = findPlugin(std::span<const host::PluginInfo>(*catalogue_), ref.id))
+            return overrides_.mode(*info);
+    return LoadMode::Normal;
+}
+
+Result<std::unique_ptr<host::Instance>> EngineApp::makeInstance(const host::PluginInfo& info) {
+    const LoadMode mode = overrides_.mode(info);
+    if (mode == LoadMode::Disable) return LoadOverrides::disabled(info);
+    auto made = host::Instance::create(info, options_.identity, mode == LoadMode::Bridge);
+    if (made) ++instancesMade_;
+    return made;
+}
+
+Result<bool> EngineApp::setLoadOverride(const host::PluginInfo& info, LoadMode mode) {
+    if (mode == LoadMode::Bridge) {
+        if (host::bridgeExecutable().empty())
+            return Error("plugin.override_unavailable",
+                         "no plug-in bridge executable was found, so \"" + info.name +
+                             "\" cannot be bridged",
+                         "/mode",
+                         "reinstall so that the bridge sits beside the app, or use mode "
+                         "\"disable\" or \"normal\"");
+        if (pool_->isStock(info))
+            return Error("plugin.override_unavailable",
+                         "\"" + info.name + "\" is a stock plug-in; stock plug-ins are not bridged",
+                         "/mode", "use mode \"disable\" or \"normal\"");
+    }
+    if (!overrides_.set(info.format, info.id, mode)) return false;
+    ++overridesVersion_;
+    pool_->setOverrides(overrides_);
+    // A probe made before is of the wrong kind now (in process, or bridged).
+    std::erase_if(scratch_, [&](const auto& entry) {
+        return entry.second && entry.second->info().format == info.format &&
+               entry.second->info().id == info.id;
+    });
+    pool_->restartPlugin(info.format, info.id);
+    for (const auto& entry : head().fx) {
+        const auto& ref = entry.value->plugin;
+        const bool same =
+            ref.id == info.id || (catalogue_ && [&] {
+                auto found = findPlugin(std::span<const host::PluginInfo>(*catalogue_), ref.id);
+                return found && found->id == info.id && found->format == info.format;
+            }());
+        if (same) reportedFailures_.erase(entry.id);
+    }
+    headChanged();  // a running engine plays fresh instances from its next plan
+    return true;
 }
 
 Result<host::PluginInfo> EngineApp::findPlugin(std::span<const host::PluginInfo> catalogue,
@@ -205,15 +269,40 @@ Result<host::Instance*> EngineApp::scratch(const model::FxInstance& fx) {
             scratch_.erase(fx.plugin.id);
             return std::move(info).error();
         }
-        auto made = host::Instance::create(*info, options_.identity);
+        return scratch(*info, fx.plugin.id);
+    }
+    return slot.get();
+}
+
+Result<host::Instance*> EngineApp::scratch(const host::PluginInfo& info, std::string key) {
+    auto& slot = scratch_[key];
+    if (!slot) {
+        auto made = makeInstance(info);
         if (!made) {
-            scratch_.erase(fx.plugin.id);
+            scratch_.erase(key);
             return std::move(made).error();
         }
         slot = std::move(*made);
         slot->setMainThreadWake(mainWake_);
     }
     return slot.get();
+}
+
+Result<EngineApp::Probe> EngineApp::probeFor(const host::PluginInfo& info,
+                                             const model::FxInstance& fx) {
+    Probe probe;
+    if (overrides_.mode(info) == LoadMode::Bridge && (fx.patch || fx.state)) {
+        auto borrowed = scratch(info, fx.plugin.id);
+        if (!borrowed) return std::move(borrowed).error();
+        probe.use = *borrowed;
+        return probe;
+    }
+    auto made = makeInstance(info);
+    if (!made) return std::move(made).error();
+    probe.own = std::move(*made);
+    probe.use = probe.own.get();
+    probe.use->setMainThreadWake(mainWake_);
+    return probe;
 }
 
 Result<json::Value> EngineApp::fxSchema(const model::FxInstance& fx) {
@@ -294,10 +383,9 @@ Result<json::Value> EngineApp::setPlainParams(model::Id id, const json::Value& v
                      "use an fx id returned by fx.add, fx.copy or fx.chain.load");
     auto info = findPlugin(fx->plugin.id);
     if (!info) return info.error();
-    auto made = host::Instance::create(*info, options_.identity);
-    if (!made) return made.error();
-    auto& instance = **made;
-    instance.setMainThreadWake(mainWake_);
+    auto probe = probeFor(*info, *fx);
+    if (!probe) return probe.error();
+    auto& instance = *probe->use;
     SUPPLE_TRY(restoreFx(instance, *fx, s));
     const auto params = instance.params();
     std::map<std::uint32_t, double> pending;
@@ -396,21 +484,68 @@ Status EngineApp::validatePluginMod(model::Id id, const model::FxInstance& fx,
     };
     if (!validation)
         if (auto* live = instanceOf(id)) return check(*live);
+    // The fx's own state and parameters, put on `probe` (which must then be checked at once).
+    auto prepare = [&](host::Instance& probe) -> Status {
+        auto state = validation ? validation->session : view();
+        if (blob && fx.state) state.blobs[*fx.state] = blob;
+        SUPPLE_TRY(restoreFx(probe, fx, state));
+        if (!fx.params.empty()) {
+            if (probe.active()) probe.deactivate();  // a borrowed probe may have been used
+            SUPPLE_TRY(probe.activate(state.project->sampleRate, 1, 1));
+            probe.flushParams();
+        }
+        return {};
+    };
     auto makeProbe = [&]() -> Result<std::unique_ptr<host::Instance>> {
         auto info = findPlugin(fx.plugin.id);
         if (!info) return std::move(info).error();
-        auto probe = host::Instance::create(*info, options_.identity);
+        auto probe = makeInstance(*info);
         if (!probe) return std::move(probe).error();
-        auto state = validation ? validation->session : view();
-        if (blob && fx.state) state.blobs[*fx.state] = blob;
-        SUPPLE_TRY(restoreFx(**probe, fx, state));
-        if (!fx.params.empty()) {
-            SUPPLE_TRY((*probe)->activate(state.project->sampleRate, 1, 1));
-            (*probe)->flushParams();
-        }
+        SUPPLE_TRY(prepare(**probe));
         return std::move(*probe);
     };
     if (validation) {
+        // Under a bridge override a probe is a process: a load with many cables to the same
+        // plug-in must not start one per fx. A fx with state borrows the plug-in's one cached
+        // scratch probe and restores its own state onto it for each check; one with none (and
+        // no parameters) shares a pristine probe of the load.
+        if (auto info = findPlugin(fx.plugin.id);
+            info && overrides_.mode(*info) == LoadMode::Bridge) {
+            const std::string pluginKey = fx.plugin.id;
+            if (const auto failed = validation->failures.find(&fx);
+                failed != validation->failures.end())
+                return Error(failed->second).at(path);
+            const bool stateful = fx.patch || fx.state;
+            if (stateful || fx.params.empty()) {
+                host::Instance* use = nullptr;
+                if (stateful) {
+                    auto borrowed = scratch(*info, pluginKey);
+                    if (!borrowed) return std::move(borrowed).error().at(path);
+                    use = *borrowed;
+                    if (validation->restoredFor[pluginKey] != &fx) {
+                        validation->restoredFor[pluginKey] =
+                            nullptr;  // unknown while it is half done
+                        if (Status st = prepare(*use); !st) {
+                            validation->failures.emplace(&fx, st.error());
+                            return std::move(st).error().at(path);
+                        }
+                        validation->restoredFor[pluginKey] = &fx;
+                    }
+                } else {
+                    auto& slot = validation->pristine[pluginKey];
+                    if (!slot) {
+                        auto made = makeInstance(*info);
+                        if (!made) {
+                            validation->failures.emplace(&fx, made.error());
+                            return std::move(made).error().at(path);
+                        }
+                        slot = std::move(*made);
+                    }
+                    use = slot.get();
+                }
+                return check(*use);
+            }
+        }
         auto found = validation->probes.find(&fx);
         if (found == validation->probes.end())
             found = validation->probes.emplace(&fx, makeProbe()).first;
@@ -446,10 +581,9 @@ Result<std::uint32_t> EngineApp::fxLatencySamples(model::Id id, const model::FxI
     if (host::Instance* live = instanceOf(id); live && live->active()) return measured(*live);
     auto info = findPlugin(fx.plugin.id);
     if (!info) return std::move(info).error();
-    auto made = host::Instance::create(*info, options_.identity);
-    if (!made) return std::move(made).error();
-    host::Instance& probe = **made;
-    probe.setMainThreadWake(mainWake_);
+    auto lease = probeFor(*info, fx);
+    if (!lease) return std::move(lease).error();
+    host::Instance& probe = *lease->use;
     SUPPLE_TRY(restoreFx(probe, fx, view()));
     constexpr std::uint32_t kProbeBlock = 512;  // OfflineSettings' default block
     const auto rate =
@@ -613,6 +747,7 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
         if (!stopped) return stopped.error();
     }
     projectGeneration_.fetch_add(1, std::memory_order_acq_rel);
+    stopAudition();  // a file audition belongs to the old project's media folder (ADR-0094)
     // A control still moving belongs to the old project's effects.
     learnCommits_.clear();
     learnState_.clear();
@@ -674,10 +809,12 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
         }
         warnings->push_back({"project.modules", std::move(message), moduleFolder.string()});
     }
+    harvestRan();  // what this project ran in process counts for the run
     pool_ = std::make_unique<InstancePool>(
         [this](const model::PluginRef& ref) { return findPlugin(ref.id); }, options_.identity);
     pool_->setMainThreadWake(mainWake_);
     pool_->setDefaultIsolation(pluginIsolation_);
+    pool_->setOverrides(overrides_);
     pool_->racks().setCatalog(modules_);
     pendingDirtyStates_.clear();
     if (scripts_) {
@@ -906,12 +1043,184 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
     return okStatus();
 }
 
-Status EngineApp::open(const fs::path& where, std::vector<schema::Warning>* warnings) {
+// --- crash safe-load (topic 7d) ---------------------------------------------------------
+
+std::vector<EngineApp::ProjectPlugin> EngineApp::gatherPlugins(const std::vector<NamedHead>& heads,
+                                                               const std::string& current) const {
+    using Key = std::pair<std::string, std::string>;
+    std::map<Key, ProjectPlugin> byKey;
+    for (const auto& [branch, session] : heads)
+        for (const auto& entry : session->fx) {
+            const model::PluginRef& ref = entry.value->plugin;
+            std::optional<host::PluginInfo> resolved;
+            if (catalogue_)
+                if (auto found = findPlugin(std::span<const host::PluginInfo>(*catalogue_), ref.id))
+                    resolved = std::move(*found);
+            const Key key =
+                resolved ? Key(resolved->format, resolved->id) : Key(ref.format, ref.id);
+            auto [it, added] = byKey.try_emplace(key);
+            ProjectPlugin& p = it->second;
+            if (added) {
+                p.format = key.first;
+                p.id = key.second;
+                p.name = ref.name.empty() && resolved ? resolved->name : ref.name;
+                p.vendor = ref.vendor.empty() && resolved ? resolved->vendor : ref.vendor;
+                p.version = ref.version.empty() && resolved ? resolved->version : ref.version;
+                p.resolved = std::move(resolved);
+                p.mode = overrides_.mode(key.first, key.second);
+                p.stock = p.resolved && pool_ && pool_->isStock(*p.resolved);
+                p.bridgeable = p.resolved && !p.stock && !host::bridgeExecutable().empty();
+            }
+            if (branch == current) ++p.uses;
+            if (std::ranges::find(p.branches, branch) == p.branches.end())
+                p.branches.push_back(branch);
+        }
+    std::vector<ProjectPlugin> out;
+    for (auto& [key, p] : byKey) out.push_back(std::move(p));
+    return out;
+}
+
+void EngineApp::annotateSuspects(std::vector<ProjectPlugin>& plugins) {
+    auto found = diagnostics::suspects(diagnosticsDir());
+    if (!found || found->empty()) return;
+    detail::SuspectCheck check(std::move(*found));
+    for (auto& p : plugins) {
+        if (!p.resolved) continue;  // not installed: nothing to load, nothing to protect
+        const auto verdict = check.check(*p.resolved);
+        if (!verdict.applies()) continue;
+        p.suspectBuild = std::string(detail::buildName(verdict.build));
+        p.attribution = verdict.attribution;
+        p.incidents = verdict.incidents;
+    }
+}
+
+void EngineApp::warnSuspects(const std::vector<ProjectPlugin>& plugins,
+                             std::vector<schema::Warning>* warnings) {
+    for (const auto& p : plugins) {
+        // A bridge or a disable already protects this run; a settled one is not a suspect.
+        if (p.suspectBuild.empty() || p.mode != LoadMode::Normal) continue;
+        const std::string who = (p.name.empty() ? p.id : p.name) + " (" + p.id + ")";
+        const std::string how = p.suspectBuild == "unreadable"
+                                    ? ", and the installed file could not be checked against it"
+                                : p.suspectBuild == "version" ? ", for the version installed"
+                                                              : ", for the build installed";
+        const std::string remedy =
+            p.stock ? "it looks like a product fault, so only disabling it is offered: "
+                      "plugin.override {plugin, mode: \"disable\"}"
+                    : (p.bridgeable ? "plugin.override {plugin, mode: \"bridge\" or \"disable\"}"
+                                    : "plugin.override {plugin, mode: \"disable\"}") +
+                          std::string(" before opening protects this run");
+        std::string message = who + " may crash: crash report " + p.incidents.front() +
+                              " points at it (" + p.attribution + how +
+                              "); it loads normally here. " + remedy +
+                              "; crash.settle the report once the plug-in is trusted.";
+        if (options_.warnSuspectsOnStderr && suspectsWarned_.insert(p.format + "/" + p.id).second)
+            std::fprintf(stderr, "%s\n", message.c_str());
+        if (warnings)
+            warnings->push_back({"project.suspect_plugin", std::move(message), "/plugins/" + p.id});
+    }
+}
+
+void EngineApp::warnStoreSuspects(const model::VersionStore& store,
+                                  std::vector<schema::Warning>* out) {
+    auto suspected = diagnostics::suspects(diagnosticsDir());
+    if (!suspected || suspected->empty()) return;
+    std::vector<NamedHead> heads;
+    bool holdsPlugins = false;
+    for (const auto& name : store.branches())
+        if (auto head = store.head(name)) {
+            holdsPlugins = holdsPlugins || !head->fx.empty();
+            heads.emplace_back(name, std::move(head));
+        }
+    if (!holdsPlugins) return;
+    // The load scans the catalogue for these plug-ins anyway; the check needs it first.
+    if (!catalogue_) (void)plugins();
+    auto list = gatherPlugins(heads, store.branch());
+    annotateSuspects(list);
+    warnSuspects(list, out);
+}
+
+Result<EngineApp::ProjectPlugins> EngineApp::projectPlugins(
+    const fs::path& where, bool asTemplate, std::vector<schema::Warning>* warnings) {
+    const fs::path path = resolve(where);
+    std::error_code ec;
+    const fs::path file = asTemplate && fs::is_directory(path, ec) ? path / "project.json" : path;
+    auto text = readTextFile(file, std::size_t(1) << 30);
+    if (!text) return std::move(text).error();
+    ProjectPlugins out;
+    out.path = file.string();
+    out.hash = "sha256:" + sha256Hex(*text);
+    out.source = asTemplate ? "template" : "file";
+    std::vector<NamedHead> heads;
+    std::string current = "main";
+    if (asTemplate) {
+        auto session = model::parseProject(*text, warnings);
+        if (!session) return std::move(session).error();
+        heads.emplace_back(current, std::make_shared<const model::Session>(std::move(*session)));
+    } else {
+        auto opened = model::parseProjectFile(*text, warnings, replayableStep);
+        if (!opened) return std::move(opened).error();
+        current = opened->store.branch();
+        for (const auto& name : opened->store.branches())
+            if (auto head = opened->store.head(name)) heads.emplace_back(name, std::move(head));
+    }
+    out.catalogueEmpty = !catalogue_ || catalogue_->empty();
+    out.plugins = gatherPlugins(heads, current);
+    annotateSuspects(out.plugins);
+    return out;
+}
+
+void EngineApp::harvestRan() {
+    if (!pool_) return;
+    for (auto& ran : pool_->ranInProcess()) {
+        // An earlier project of the run may have run it already: the first sighting stands.
+        auto known = std::ranges::find_if(ranBefore_, [&](const InstancePool::Ran& seen) {
+            return seen.info.format == ran.info.format && seen.info.id == ran.info.id;
+        });
+        if (known == ranBefore_.end())
+            ranBefore_.push_back(std::move(ran));
+        else if (ran.since < known->since)
+            known->since = ran.since;
+    }
+}
+
+void EngineApp::settleCleanSuspects() {
+    harvestRan();
+    if (ranBefore_.empty()) return;
+    auto found = diagnostics::suspects(diagnosticsDir());
+    if (!found || found->empty()) return;
+    detail::SuspectCheck check(std::move(*found));
+    for (const auto& ran : ranBefore_) {
+        // Only the build the report named, or the version when it named none: a plug-in whose
+        // file could not be checked ran fine, but is not known to be the one that crashed.
+        const auto verdict = check.check(ran.info);
+        if (verdict.build != detail::SuspicionVerdict::Build::Same &&
+            verdict.build != detail::SuspicionVerdict::Build::Version)
+            continue;
+        // Only a report older than this run's first sight of the plug-in active: another process
+        // sharing the folder may have crashed in it since, and a clean run here cannot clear that.
+        for (std::size_t i = 0; i < verdict.incidents.size(); ++i)
+            if (verdict.incidentTimes[i] < ran.since)
+                (void)diagnostics::settle(verdict.incidents[i], diagnosticsDir());
+    }
+    ranBefore_.clear();
+}
+
+Status EngineApp::open(const fs::path& where, std::vector<schema::Warning>* warnings,
+                       std::string_view expectHash) {
     const fs::path path = resolve(where);
     auto text = readTextFile(path, std::size_t(1) << 30);
     if (!text) return std::move(text).error();
+    if (!expectHash.empty() && "sha256:" + sha256Hex(*text) != expectHash)
+        return Error("project.changed",
+                     path.filename().string() + " changed since its plug-ins were checked", "/path",
+                     "run project.plugins again and decide again, or open without expect_hash");
     auto opened = model::parseProjectFile(*text, warnings, replayableStep);
     if (!opened) return std::move(opened).error();
+    // A plug-in an earlier crash report points at is warned of, never refused or changed here:
+    // the engine does not prompt and does not override itself (the frontend or the agent asked
+    // first with project.plugins, and plugin.override).
+    warnStoreSuspects(opened->store, warnings);
     if (opened->branchesDropped && warnings) {
         const Error& why = *opened->branchesDropped;
         warnings->push_back({"project.history",
@@ -1205,6 +1514,7 @@ Result<OfflineResult> EngineApp::renderSession(const model::Session& session,
     // is never disturbed and state is deterministic.
     InstancePool offlinePool([this](const model::PluginRef& ref) { return findPlugin(ref.id); },
                              options_.identity);
+    offlinePool.setOverrides(overrides_);
     if (!s.modules) s.modules = modules_;
     return renderOffline(session, offlinePool, s);
 }
@@ -1463,6 +1773,7 @@ void EngineApp::haltEngine() {
     // must not come back as holds or a latch tail when a successor plays or
     // records (recording, unlike play, starts no new pass).
     autoWrite_.clear();
+    stopAudition();  // the engine stopping drops it (ADR-0094)
     sourcePreparation_.reset();
     pendingSourceKey_.clear();
     preparationError_.clear();
@@ -1494,7 +1805,7 @@ void EngineApp::haltEngine() {
     ownedBackend_.reset();
     outputGestures_.clear();
     pendingOutputs_.clear();
-    outputGeneration_ = outputEpoch_ = 0;
+    outputGeneration_ = outputPatches_ = outputEpoch_ = 0;
     outputDrops_ = voiceDrops_ = consumerDrops_ = 0;
     outputOverflow_ = false;
 }
@@ -1534,6 +1845,7 @@ void EngineApp::emitRecordingError(const RecordingError& failure) {
 
 void EngineApp::tick() {
     mainWake_.drain();  // re-arm before inspecting producer queues
+    serviceAudition();  // a decoded file audition to the engine (ADR-0094)
     std::erase_if(jobs_,
                   [](const auto& job) { return job.finished->load(std::memory_order_acquire); });
     if (sourcePreparation_)
@@ -2076,6 +2388,9 @@ EngineStatus EngineApp::engineStatus() {
                               st.cpuIdleLatency.error->hint);
     if (st.memoryLock.error)
         st.warnings.push_back(st.memoryLock.error->message + "; " + st.memoryLock.error->hint);
+    for (const auto& entry : head().fx)
+        if (loadModeOf(entry.value->plugin) == LoadMode::Disable)
+            st.disabledFx.push_back(entry.id.str());
     for (model::Id id : pool_->isolationFallbacks()) {
         const model::FxInstance* fx = head().fx.find(id);
         st.warnings.push_back((fx ? fx->plugin.name : id.str()) + " (" + id.str() +
@@ -2092,6 +2407,8 @@ EngineStatus EngineApp::engineStatus() {
         failure["fx"] = id.str();
         failure["reason"] = error.message;
         failure["error"] = pluginErrorJson(error);
+        if (auto incident = pool_->failureIncident(id); !incident.empty())
+            failure["incident"] = std::move(incident);
         st.failedErrors.asArray().push_back(std::move(failure));
     }
     st.sync = syncReport();
@@ -2543,6 +2860,91 @@ void EngineApp::startPlaying(int countInBars) {
 void EngineApp::setMetronome(const MetronomeSettings& m) {
     metronome_ = m;
     if (engine_) engine_->setMetronome(m.enabled, m.volumeDb);
+}
+
+// --- file audition (ADR-0094) ---------------------------------------------------------------
+
+Result<AuditionInfo> EngineApp::playAudition(const fs::path& given) {
+    if (!engine_)
+        return Error("engine.stopped", "the engine is not running", {}, "engine.start first");
+    const fs::path path = given.is_relative() ? mediaDir() / given : given;
+    auto inspected = audio::inspect(path);
+    if (!inspected)
+        return Error("audition.file", path.string() + ": " + inspected.error().message, "/path",
+                     "give a WAV, FLAC or MP3 file: an absolute path, or a name in the "
+                     "project's media folder");
+    stopAudition();
+    // The cap bounds the decoded file and the resampled voice alike, so it
+    // counts at the higher of the file's and the device's rates (the
+    // resampler's round(n * device / file) frames stay within it).
+    const double deviceRate = engine_->config().sampleRate;
+    const auto cap = static_cast<std::int64_t>(
+        std::floor(static_cast<double>(std::max<std::int64_t>(0, options_.auditionMaxFrames)) *
+                   std::min(1.0, inspected->sampleRate / deviceRate)));
+    AuditionInfo info;
+    info.path = path.string();
+    info.sampleRate = inspected->sampleRate;
+    info.channels = inspected->channels;
+    info.truncated = inspected->frames > cap;
+    info.seconds = static_cast<double>(std::min(inspected->frames, cap)) / inspected->sampleRate;
+    if (!auditionLoader_)
+        auditionLoader_ = std::make_unique<AuditionLoader>([this] { mainWake_.notify(); });
+    auditionRate_ = deviceRate;
+    auditionRequest_ = auditionLoader_->request({path, cap, auditionRate_});
+    auditionDecoding_ = true;
+    auditionInfo_ = info;
+    return info;
+}
+
+void EngineApp::stopAudition() {
+    if (auditionLoader_) auditionLoader_->cancel();
+    auditionRequest_ = 0;
+    auditionDecoding_ = false;
+    auditionInfo_ = {};
+    if (engine_ && auditionVoice_ != 0) engine_->audition(nullptr);
+    auditionVoice_ = 0;
+}
+
+void EngineApp::serviceAudition() {
+    if (!auditionLoader_) return;
+    auto done = auditionLoader_->take();
+    if (!done || !auditionDecoding_ || done->generation != auditionRequest_) return;
+    auditionDecoding_ = false;
+    if (!done->voice) {
+        auto event = json::Value::object();
+        event["path"] = auditionInfo_.path;
+        event["code"] = done->voice.error().code;
+        event["message"] = done->voice.error().message;
+        emit("audition.error", std::move(event));
+        auditionInfo_ = {};
+        return;
+    }
+    // The device it was resampled for (a restart in between drops it).
+    if (!engine_ || engine_->config().sampleRate != auditionRate_) {
+        auditionInfo_ = {};
+        return;
+    }
+    auditionVoice_ = engine_->audition(std::move(*done->voice));
+    if (auditionVoice_ == 0) auditionInfo_ = {};  // an empty file: nothing plays
+}
+
+AuditionStatus EngineApp::auditionStatus() const {
+    AuditionStatus s;
+    s.decoding = auditionDecoding_;
+    bool playing = false;
+    std::int64_t position = 0;
+    if (engine_ && auditionVoice_ != 0) {
+        const AuditionState state = engine_->auditionState();
+        // Published and not yet taken by the callback, or playing.
+        playing = state.taken < auditionVoice_ || state.serial == auditionVoice_;
+        if (state.serial == auditionVoice_) position = state.position;
+    }
+    s.playing = s.decoding || playing;
+    if (!s.playing) return s;
+    s.path = auditionInfo_.path;
+    s.seconds = auditionInfo_.seconds;
+    if (playing && auditionRate_ > 0) s.position = static_cast<double>(position) / auditionRate_;
+    return s;
 }
 
 void EngineApp::setLoop(const TransportRange& loop) {
@@ -3680,7 +4082,7 @@ Status EngineApp::publishRecoveryKeeps(const fs::path& file,
     return okStatus();
 }
 
-Result<SessionRecovery> EngineApp::recoverAutosave(const std::string& name) {
+Result<std::vector<fs::path>> EngineApp::autosaveCandidates(const std::string& name) const {
     auto none = [] {
         return Error("recover.no_autosave", "there is no autosave newer than the saved file",
                      "/autosave", "open the project as saved; nothing was lost");
@@ -3701,7 +4103,6 @@ Result<SessionRecovery> EngineApp::recoverAutosave(const std::string& name) {
         const auto t = fs::last_write_time(file, timeError);
         return !timeError && t > time;
     };
-    SessionRecovery out;
     const fs::path folder = autosaveDir();
     // A named one is the one that was offered: it must be newer than the
     // file as this project was opened, so a save since (the question before
@@ -3727,13 +4128,26 @@ Result<SessionRecovery> EngineApp::recoverAutosave(const std::string& name) {
                          "autosave newer than the file");
         candidates.push_back(file);
     } else {
-        candidates = autosavesIn(folder);  // newest first
+        for (const fs::path& file : autosavesIn(folder))  // newest first
+            if (newer(file, autosavedThrough_, written)) candidates.push_back(file);
     }
+    return candidates;
+}
+
+Result<SessionRecovery> EngineApp::recoverAutosave(const std::string& name) {
+    auto none = [] {
+        return Error("recover.no_autosave", "there is no autosave newer than the saved file",
+                     "/autosave", "open the project as saved; nothing was lost");
+    };
+    auto listed = autosaveCandidates(name);
+    if (!listed) return std::move(listed).error();
+    const std::vector<fs::path> candidates = std::move(*listed);
+    const fs::path folder = autosaveDir();
+    SessionRecovery out;
     // The same rule as a session's (ADR-0078): what this recovery cannot
     // fully restore is kept for the first save to publish beside the file.
     std::vector<RawAutosave> keep;
     for (const fs::path& file : candidates) {
-        if (name.empty() && !newer(file, autosavedThrough_, written)) continue;
         std::vector<schema::Warning> parsed;
         auto text = detail::readRecoveryText(folder, file, std::size_t(1) << 30);
         auto opened = text ? model::parseProjectFile(*text, &parsed, replayableStep)
@@ -3762,6 +4176,13 @@ Result<SessionRecovery> EngineApp::recoverAutosave(const std::string& name) {
                                     "/branches", "", "", file.filename().string()});
         if (opened->branchesDropped)
             keep.emplace_back(file.filename().string(), *text, ".pre-branches");
+        {  // a plug-in a crash report points at, before anything of it loads
+            std::vector<schema::Warning> suspect;
+            warnStoreSuspects(opened->store, &suspect);
+            for (auto& w : suspect)
+                out.warnings.push_back(
+                    {w.code, w.message, w.path, "", "", file.filename().string()});
+        }
         // Kept before anything is replaced: without the copies, the first
         // save would delete the only source of what this cannot restore.
         auto kept = keepForFirstSave(folder, keep, "/autosave");
@@ -3825,6 +4246,13 @@ Result<SessionRecovery> EngineApp::recoverSession(const std::string& session) {
                                     "/branches", "", "", file.filename().string()});
         if (opened->branchesDropped)
             keep.emplace_back(file.filename().string(), *text, ".pre-branches");
+        {
+            std::vector<schema::Warning> suspect;
+            warnStoreSuspects(opened->store, &suspect);
+            for (auto& w : suspect)
+                out.warnings.push_back(
+                    {w.code, w.message, w.path, "", "", file.filename().string()});
+        }
         store = std::move(opened->store);
         out.autosave = file.filename().string();
         break;
@@ -3900,6 +4328,64 @@ Result<SessionRecovery> EngineApp::recoverSession(const std::string& session) {
             out.warnings.push_back(
                 {r.error().code, r.error().message + "; the recordings stay recoverable",
                  r.error().path, "use project.recover with files and track to place them", "", ""});
+    }
+    return out;
+}
+
+Result<EngineApp::ProjectPlugins> EngineApp::recoverPlugins(
+    const std::string& session, const std::string& autosaveFile,
+    std::vector<schema::Warning>* warnings) {
+    fs::path folder;
+    std::vector<fs::path> candidates;
+    ProjectPlugins out;
+    if (!session.empty()) {
+        // What recoverSession reads: the folder's autosaves, newest first, the first that opens.
+        auto found = sessionFolder(session);
+        if (!found) return std::move(found).error();
+        folder = *found;
+        if (!sessionContent(folder))
+            return Error("recover.unknown_session",
+                         "there is nothing in " + session + " to recover", "/session",
+                         "use a session project.recoverable lists");
+        candidates = autosavesIn(folder);
+        out.source = "session";
+    } else {
+        auto listed = autosaveCandidates(autosaveFile);
+        if (!listed) return std::move(listed).error();
+        folder = autosaveDir();
+        candidates = std::move(*listed);
+        if (candidates.empty())
+            return Error("recover.no_autosave", "there is no autosave newer than the saved file",
+                         "/autosave", "open the project as saved; nothing was lost");
+        out.source = "autosave";
+    }
+    out.catalogueEmpty = !catalogue_ || catalogue_->empty();
+    for (const fs::path& file : candidates) {
+        auto text = detail::readRecoveryText(folder, file, std::size_t(1) << 30);
+        if (!text) continue;
+        std::vector<schema::Warning> parsed;
+        auto opened = model::parseProjectFile(*text, &parsed, replayableStep);
+        if (!opened) continue;  // recover tries the next older one, so does this
+        if (warnings)
+            for (auto& w : parsed) warnings->push_back(std::move(w));
+        out.path = file.string();
+        out.autosave = file.filename().string();
+        out.hash = "sha256:" + sha256Hex(*text);
+        std::vector<NamedHead> heads;
+        for (const auto& name : opened->store.branches())
+            if (auto head = opened->store.head(name)) heads.emplace_back(name, std::move(head));
+        out.plugins = gatherPlugins(heads, opened->store.branch());
+        annotateSuspects(out.plugins);
+        return out;
+    }
+    // As project.recover answers: an autosave nothing could read is "no autosave"; a session
+    // with nothing readable puts back recordings only, which name no plug-in.
+    if (out.source == "autosave") {
+        if (!autosaveFile.empty())
+            return Error("recover.no_autosave", autosaveFile + " cannot be read", "/autosave_file",
+                         "open the project as saved, or omit autosave_file to try the others");
+        return Error("recover.no_autosave", "there is no autosave newer than the saved file",
+                     "/autosave", "open the project as saved; nothing was lost");
     }
     return out;
 }
@@ -4347,6 +4833,9 @@ void EngineApp::headChanged() {
                     before && (before->patch || before->state))
                     pool_->restart(e.id);
     (void)engine_->setWriteHolds(writeHolds(), false);  // the load takes them
+    // An edit that a reload since the last tick found would never play (a
+    // seek's, say) is reported first: a failure of this load would take it.
+    noteUnplayedEdit();
     auto st = engine_->load(head(), projectDir());
     if (st) loadedHead_ = versions_->head();
     if (!st) {
@@ -4517,6 +5006,24 @@ void EngineApp::setupFixture(cmd::Dispatcher& d, std::string_view fixture) {
         auto st = startEngine("dummy", 256);
         assert(st && "fixture engine failed");
         (void)st;
+        return;
+    }
+    if (fixture == "audition_file") {  // + media/tone.wav: two seconds of stereo at 48 kHz
+        auto st = startEngine("dummy", 256);
+        assert(st && "fixture engine failed");
+        (void)st;
+        audio::AudioData tone;
+        tone.sampleRate = 48000;
+        tone.channels.assign(2, std::vector<float>(96000));
+        for (std::size_t i = 0; i < tone.frames(); ++i)
+            tone.channels[0][i] = tone.channels[1][i] =
+                static_cast<float>(0.25 * std::sin(2 * std::numbers::pi * 440.0 *
+                                                   static_cast<double>(i) / tone.sampleRate));
+        std::error_code ec;
+        fs::create_directories(mediaDir(), ec);
+        const Status written = audio::writeWav(mediaDir() / "tone.wav", tone);
+        assert(written && "fixture audio failed");
+        (void)written;
         return;
     }
     if (fixture == "job_running") {
@@ -4740,6 +5247,13 @@ struct Gain : Effect {
     }
     if (fixture == "song_with_marker") {
         run("marker.add", R"({"pos":4,"name":"Verse"})");
+        return;
+    }
+    if (fixture == "song_with_crash_report") {  // + one earlier run's report, 0123…cdef
+        const auto st =
+            diagnostics::writeSampleReport("0123456789abcdef0123456789abcdef", diagnosticsDir());
+        assert(st && "fixture crash report failed");
+        (void)st;
         return;
     }
     if (fixture == "branch_ahead") {  // an agent branch one edit ahead of main, main current

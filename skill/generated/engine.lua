@@ -53,6 +53,33 @@ q = nil
 ---@class Steppe.audio_warp_reset_args
 ---@field items string[]
 
+---@class Steppe.audition_get_result
+---@field playing boolean
+---@field decoding boolean
+---@field path string
+---@field seconds number
+---@field position number
+---@field warnings? table[]
+
+---@class Steppe.audition_play_args
+---@field path string
+
+---@class Steppe.audition_play_result
+---@field path string
+---@field seconds number
+---@field sample_rate number
+---@field channels integer
+---@field truncated boolean
+---@field warnings? table[]
+
+---@class Steppe.audition_stop_result
+---@field playing boolean
+---@field decoding boolean
+---@field path string
+---@field seconds number
+---@field position number
+---@field warnings? table[]
+
 ---@class Steppe.autoitem_add_args
 ---@field env string Envelope id, e.g. "en_1".
 ---@field position? number
@@ -163,6 +190,21 @@ q = nil
 ---@field cable string
 ---@field amount? number
 ---@field color? string
+
+---@class Steppe.crash_acknowledge_args
+---@field incident string A report's incident id, from crash.list.
+
+---@class Steppe.crash_delete_args
+---@field incident string A report's incident id, from crash.list.
+
+---@class Steppe.crash_list_args
+---@field limit? integer
+
+---@class Steppe.crash_read_args
+---@field incident string A report's incident id, from crash.list.
+
+---@class Steppe.crash_settle_args
+---@field incident string A report's incident id, from crash.list.
 
 ---@class Steppe.dsp_check_args
 ---@field name? string
@@ -337,6 +379,7 @@ q = nil
 ---@field audio_page_faults table
 ---@field meter_drops table
 ---@field failed_fx string[]
+---@field disabled_fx string[] fx whose plug-in this run has disabled (plugin.override): the strip passes audio through
 ---@field bridge_threads_refused string[]
 ---@field dropped integer
 ---@field voice_dropped integer
@@ -383,6 +426,7 @@ q = nil
 ---@field audio_page_faults table
 ---@field meter_drops table
 ---@field failed_fx string[]
+---@field disabled_fx string[] fx whose plug-in this run has disabled (plugin.override): the strip passes audio through
 ---@field bridge_threads_refused string[]
 ---@field dropped integer
 ---@field voice_dropped integer
@@ -523,6 +567,7 @@ q = nil
 ---@field sidechain_channels? integer The plug-in's key input: route.add {fx} feeds it
 ---@field latency_samples? integer The instance's reported latency, in samples
 ---@field isolation_effective? string Where the instance runs: in_process, shared_bridge or dedicated; inherit resolves to the plug-in isolation preference (stock plug-ins in process), as the instance is made
+---@field override? string This run's plugin.override for the plug-in, when it is not normal: bridge (it runs on a dedicated bridge) or disable (it is not loaded: the strip passes audio through, a rack module is silent, and there is no isolation_effective or parameter section)
 ---@field outputs_notes? boolean The loaded plug-in sends notes or MIDI: fx.set midi_output chooses replace or merge
 ---@field params_total? integer Plain parameters matching; at most 512 are listed.
 ---@field warnings? table[]
@@ -1085,6 +1130,24 @@ q = nil
 ---@field scan table
 ---@field warnings? table[]
 
+---@class Steppe.plugin_override_args
+---@field plugin string id or name, as plugin.list shows it
+---@field mode "normal"|"bridge"|"disable"
+
+---@class Steppe.plugin_override_result
+---@field plugin string
+---@field name string
+---@field format string
+---@field mode "normal"|"bridge"|"disable"
+---@field changed boolean false: it was set that way already
+---@field fx string[] the fx of this plug-in in the project now
+---@field warnings? table[]
+
+---@class Steppe.plugin_overrides_result
+---@field overrides table[]
+---@field bridge_available boolean
+---@field warnings? table[]
+
 ---@class Steppe.plugin_scan_args
 ---@field wait? boolean false: scan in the background (default true)
 
@@ -1132,6 +1195,7 @@ q = nil
 
 ---@class Steppe.project_open_args
 ---@field path? string
+---@field expect_hash? string The hash project.plugins returned: the file is opened only if its bytes are those it checked (project.changed otherwise)
 
 ---@class Steppe.project_open_result
 ---@field name string
@@ -1148,6 +1212,13 @@ q = nil
 ---@field autosave_available boolean
 ---@field recoverable_sessions integer Unsaved projects earlier runs left behind (project.recoverable lists them)
 ---@field warnings? table[]
+
+---@class Steppe.project_plugins_args
+---@field path? string
+---@field template? boolean
+---@field session? string A session project.recoverable lists
+---@field autosave? boolean The open project's newer autosave
+---@field autosave_file? string With autosave: which one, as offered
 
 ---@class Steppe.project_recover_args
 ---@field files? string[]
@@ -1187,7 +1258,7 @@ q = nil
 ---@field author? string
 ---@field notes? string
 ---@field console9? boolean
----@field pan_law? table Channels' and busses' pan law unless a strip sets its own: db is the centre's cut (0, -2.5, -3, -4.5 or -6; default 0); boost keeps the centre at 0 dB and raises the sides instead
+---@field pan_law? table Channels' and busses' pan law unless a track sets its own: db is the centre's cut (0, -2.5, -3, -4.5 or -6; default 0); boost keeps the centre at 0 dB and raises the sides instead
 ---@field history_budget_bytes? integer Estimated retained history byte budget; default 1 GiB. Leases and branch boundaries may exceed it.
 ---@field render? table Render settings (session-model §1.10); every member optional
 ---@field timebase? "time"|"beats"|"beats_position"
@@ -1804,6 +1875,7 @@ q = nil
 ---@class Steppe.track_add_args
 ---@field type? "channel"|"buss"|"master" (default: "channel")
 ---@field name? string
+---@field color? string
 ---@field parent? string Parent track id, e.g. "tr_1".
 ---@field index? integer
 ---@field channels? integer
@@ -1920,9 +1992,9 @@ q = nil
 ---@field midi_channel? integer
 ---@field record_mode? "input"|"midi_overdub"|"midi_replace"
 ---@field monitor? "off"|"on"|"auto"
----@field parent_send? boolean The implicit send to the parent buss/master (off: only explicit sends leave the strip)
+---@field parent_send? boolean The implicit send to the parent buss/master (off: only explicit sends leave the track)
 ---@field timebase? "project"|"time"|"beats"|"beats_position" What this channel's items follow when the tempo changes (those that inherit it): project, beats, time or beats_position; they keep their place now
----@field channels? integer 1-2: the strip's main pair; up to 128 adds auxiliary channels 3-128 for routes and plug-in pins (a detector on 3/4, a multi-out instrument's outputs), outside the fader, pan and parent send
+---@field channels? integer 1-2: the track's main pair; up to 128 adds auxiliary channels 3-128 for routes and plug-in pins (a detector on 3/4, a multi-out instrument's outputs), outside the fader, pan and parent send
 ---@field hw_output? integer[] Masters: the device outputs the main pair plays to: [l, r], [mono] or [] for none (engine.inputs lists them). Default: tr_0 [1, 2], other masters []
 ---@field lane_mute? boolean Masters: silence the master's own items (its prints) and nothing else
 ---@field chain_midi? "bus"|"instrument" What the FX chain does with MIDI: bus (default; plug-ins hear and feed it in order) or instrument (only the first plug-in with a note input hears the track's MIDI; plug-ins' note output goes nowhere)
@@ -2180,6 +2252,11 @@ q = nil
 ---@field detach fun(args: Steppe.audio_warp_detach_args): table Detach selected items from jointly processed warp bundles.
 ---@field reset fun(args: Steppe.audio_warp_reset_args): table Remove selected items' warping while keeping detected hits.
 
+---@class Steppe.audition
+---@field get fun(): Steppe.audition_get_result Whether a file audition plays: its path, length and position (seconds).
+---@field play fun(args: Steppe.audition_play_args): Steppe.audition_play_result Play an audio file once on outputs 1/2, outside the project.
+---@field stop fun(): Steppe.audition_stop_result Stop the file audition (fading out over 5 ms); returns its state.
+
 ---@class Steppe.autoitem
 ---@field add fun(args: Steppe.autoitem_add_args): table Put an automation item on an envelope: a block that replaces it there.
 ---@field duplicate fun(args: Steppe.autoitem_duplicate_args): table Copy an automation item (pooled by default: edits to either reach both).
@@ -2201,6 +2278,14 @@ q = nil
 ---@field add fun(args: Steppe.cable_add_args): table Connect an output to an input or a knob.
 ---@field remove fun(args?: Steppe.cable_remove_args): table Remove a cable, by id or by its two ends.
 ---@field set fun(args: Steppe.cable_set_args): table Set a modulation cable's amount or a cable's colour.
+
+---@class Steppe.crash
+---@field acknowledge fun(args: Steppe.crash_acknowledge_args): table Mark a crash report, or a run that left none, as seen.
+---@field clear fun(): table Delete every finished crash report and record of an ended run.
+---@field delete fun(args: Steppe.crash_delete_args): table Delete one crash report, or the record of a run that left none.
+---@field list fun(args?: Steppe.crash_list_args): table The crash reports earlier runs left, newest first.
+---@field read fun(args: Steppe.crash_read_args): table One crash report in full.
+---@field settle fun(args: Steppe.crash_settle_args): table Mark the suspicion a crash report raised as resolved.
 
 ---@class Steppe.dsp
 ---@field check fun(args?: Steppe.dsp_check_args): Steppe.dsp_check_result Compile a DSP script without saving it; return its diagnostics.
@@ -2295,7 +2380,7 @@ q = nil
 ---@field ["explode-takes"] fun(args: Steppe.item_explode_takes_args): Steppe.item_explode_takes_result Spread an item's takes onto new tracks, or one after another on its track.
 ---@field export fun(args: Steppe.item_export_args): Steppe.item_export_result Write an item's raw audio (WAV) or its MIDI (SMF) to a file.
 ---@field heal fun(args: Steppe.item_heal_args): table Heal compatible consecutive audio pieces without rendering.
----@field ["mix-to-track"] fun(args: Steppe.item_mix_to_track_args): table Mix the selected items through their strips onto a new muted channel.
+---@field ["mix-to-track"] fun(args: Steppe.item_mix_to_track_args): table Mix the selected items through their tracks onto a new muted channel.
 ---@field move fun(args: Steppe.item_move_args): Steppe.item_move_result Move an item in time (position in beats or bar) and/or to another track.
 ---@field paste fun(args: Steppe.item_paste_args): Steppe.item_paste_result Copy items as they were in a version (a clipboard) to tracks and beats.
 ---@field remove fun(args: Steppe.item_remove_args): Steppe.item_remove_result Remove an item with its takes (unpooled sources go too).
@@ -2360,12 +2445,15 @@ q = nil
 
 ---@class Steppe.plugin
 ---@field list fun(args?: Steppe.plugin_list_args): Steppe.plugin_list_result List scanned plugins; filter matches id, name, or vendor.
+---@field override fun(args: Steppe.plugin_override_args): Steppe.plugin_override_result Load a plug-in normally, on a bridge, or not at all for this run.
+---@field overrides fun(): Steppe.plugin_overrides_result List the plug-ins this run bridges or has disabled.
 ---@field scan fun(args?: Steppe.plugin_scan_args): Steppe.plugin_scan_result Rescan configured plugin paths and return the available plugins.
 
 ---@class Steppe.project
 ---@field get fun(): Steppe.project_get_result Show the project: name, rate, tempo, meter, file, version and branch.
 ---@field new fun(args?: Steppe.project_new_args): Steppe.project_new_result Start a new, empty project (replaces the current one and its history).
 ---@field open fun(args?: Steppe.project_open_args): Steppe.project_open_result Open a project file and its branches (replaces the current project).
+---@field plugins fun(args?: Steppe.project_plugins_args): table The plug-ins a project, or a recovery, names, and any a crash report suspects.
 ---@field recover fun(args?: Steppe.project_recover_args): Steppe.project_recover_result Put back what a crash left behind: recordings, or an unsaved project.
 ---@field recoverable fun(): Steppe.project_recoverable_result List recordings and unsaved projects a crash left behind.
 ---@field save fun(args?: Steppe.project_save_args): Steppe.project_save_result Save the project (canonical JSON) to its file or a new path.
@@ -2435,7 +2523,7 @@ q = nil
 ---@field run fun(args?: Steppe.render_queue_run_args): table Run every queued render in order; each one leaves the queue when it is done.
 
 ---@class Steppe.route
----@field add fun(args: Steppe.route_add_args): Steppe.route_add_result Send audio between strips, or MIDI between channels and rack modules.
+---@field add fun(args: Steppe.route_add_args): Steppe.route_add_result Send audio between tracks, or MIDI between channels and rack modules.
 ---@field list fun(): Steppe.route_list_result List sends with endpoints and mixer settings.
 ---@field matrix fun(args?: Steppe.route_matrix_args): table Read audio or MIDI endpoints, existing sends and blocked pairs.
 ---@field remove fun(args: Steppe.route_remove_args): Steppe.route_remove_result Remove a send.
@@ -2484,7 +2572,7 @@ q = nil
 ---@field set fun(args: Steppe.timesig_set_args): Steppe.timesig_set_result Set the meter from a bar on, e.g. {"bar": 9, "meter": "3/4"}.
 
 ---@class Steppe.track
----@field add fun(args?: Steppe.track_add_args): Steppe.track_add_result Add a channel, buss or master strip and return its id.
+---@field add fun(args?: Steppe.track_add_args): Steppe.track_add_result Add a track (a channel, buss or master) and return its id.
 ---@field describe fun(args: Steppe.track_describe_args): Steppe.track_describe_result Describe track groups and requested/applied effective gain at a time.
 ---@field duplicate fun(args: Steppe.track_duplicate_args): Steppe.track_duplicate_result Duplicate channels or busses with their FX, items, sends and automation.
 ---@field freeze fun(args: Steppe.track_freeze_args): table Freeze a channel's items and FX to pre-fader audio and release its plugins.
@@ -2505,8 +2593,8 @@ q = nil
 ---@class Steppe.track.template
 ---@field delete fun(args: Steppe.track_template_delete_args): Steppe.track_template_delete_result Delete a saved track template by name.
 ---@field list fun(): Steppe.track_template_list_result List saved track templates by name, path and effect count.
----@field load fun(args?: Steppe.track_template_load_args): Steppe.track_template_load_result Add a strip from a track template (settings and FX) in one undo step.
----@field save fun(args: Steppe.track_template_save_args): Steppe.track_template_save_result Save a strip (settings and FX chains) as a named track template.
+---@field load fun(args?: Steppe.track_template_load_args): Steppe.track_template_load_result Add a track from a track template (settings and FX) in one undo step.
+---@field save fun(args: Steppe.track_template_save_args): Steppe.track_template_save_result Save a track (settings and FX chains) as a named track template.
 
 ---@class Steppe.transport
 ---@field get fun(): Steppe.transport_get_result The play position and whether it is playing.
@@ -2540,9 +2628,11 @@ q = nil
 ---@class Steppe
 ---@field analyze Steppe.analyze Commands named analyze.*
 ---@field audio Steppe.audio Commands named audio.*
+---@field audition Steppe.audition Commands named audition.*
 ---@field autoitem Steppe.autoitem Commands named autoitem.*
 ---@field branch Steppe.branch Commands named branch.*
 ---@field cable Steppe.cable Commands named cable.*
+---@field crash Steppe.crash Commands named crash.*
 ---@field dsp Steppe.dsp Commands named dsp.*
 ---@field engine Steppe.engine Commands named engine.*
 ---@field env Steppe.env Commands named env.*

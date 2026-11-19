@@ -264,7 +264,7 @@ wildcards allowed); every Example of every non-Internal command must pass.
 Each application registers its fixtures. `available(fixture)`, when given,
 says whether this build can provide a fixture, and examples whose fixture it
 cannot are skipped: `dsp_player_editor`, a script player with its editor,
-in builds without a GUI (the sanitizer presets). Editor-enabled builds run
+in builds without a GUI (the `rtsan` preset). Editor-enabled builds run
 its PNG and pointer examples on Linux, macOS and Windows; CI requires the
 native offscreen renderer to succeed. The binary `dsp_player_export` fixture runs on Linux, macOS and Windows.
 
@@ -534,7 +534,12 @@ an informational Linux-reference diff; DSP values are deterministic per platform
   transaction closes. `job.get` reads status and progress (`job.status` remains an
   alias). `job.cancel` marks a job cancelled immediately and sets its
   cancellation flag for the worker. The most recent progress is retained even
-  when progress events are throttled to 2 Hz.
+  when progress events are throttled to 2 Hz. A job's snapshot (`job.get`,
+  `job.wait`, `job.done`) carries `result` when it is done, and also when
+  it failed or was cancelled after doing something its caller must know
+  about: `JobManager::fail` and `cancel` take that partial result (a render
+  job's files written before it stopped, `docs/specs/engine.md` §5). A
+  failed job's snapshot then has both `error` and `result`.
 - `runExamples` calls `Host::setupFixture(dispatcher, fixture)` after creating
   the host. This lets fixtures seed jobs and host services as well as ordinary
   session state. The test library commits deterministic registry, MCP tool and

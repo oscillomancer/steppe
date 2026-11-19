@@ -6,15 +6,42 @@
 
 #include <sched.h>
 
+#include <algorithm>
 #include <atomic>
 #include <latch>
 #include <random>
 #include <semaphore>
+#include <thread>
 #include <vector>
 
+#include "supple/diagctx/table.h"
 #include "workers.h"
 
 using namespace supple::engine::detail;
+
+namespace {
+// Registered threads of `role` in this process's execution table, by worker number.
+std::vector<unsigned> registered(supple::diagctx::ThreadRole role) {
+    std::vector<unsigned> numbers;
+    for (const auto& slot : supple::diagctx::table().threads) {
+        const auto id = slot.id.load(std::memory_order_acquire);
+        if (id == 0 || id == supple::diagctx::kClaiming) continue;
+        const auto info = supple::diagctx::slotInfo(slot.info.load(std::memory_order_relaxed));
+        if (info.role == role) numbers.push_back(info.ordinal);
+    }
+    std::sort(numbers.begin(), numbers.end());
+    return numbers;
+}
+// Threads register as they start, a moment after the constructor returns: wait on that
+// state (no clock) until `count` have.
+bool awaitRegistered(supple::diagctx::ThreadRole role, std::size_t count) {
+    for (long spin = 0; spin < 200'000'000L; ++spin) {
+        if (registered(role).size() == count) return true;
+        std::this_thread::yield();
+    }
+    return false;
+}
+}  // namespace
 
 namespace {
 
@@ -254,4 +281,17 @@ TEST_CASE("the default helper count follows the calling thread's allowed CPUs") 
     if (cpus.size() >= 3) CHECK(helpersOn(3) == 0);
     if (cpus.size() >= 5) CHECK(helpersOn(5) == 2);
     CHECK(helpersOn(cpus.size()) == (cpus.size() > 3 ? cpus.size() - 3 : 0));
+}
+
+TEST_CASE(
+    "background pool: each helper registers as a numbered audio thread and releases its slot") {
+    using supple::diagctx::ThreadRole;
+    constexpr auto role = ThreadRole::AudioBackground;
+    CHECK(registered(role).empty());
+    {
+        Workers workers(3);
+        REQUIRE(awaitRegistered(role, 3));
+        CHECK(registered(role) == std::vector<unsigned>{1, 2, 3});
+    }
+    CHECK(registered(role).empty());  // the pool joined its threads, so their slots are free
 }

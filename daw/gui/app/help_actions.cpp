@@ -119,13 +119,14 @@ std::string skillOutcome(const std::optional<std::filesystem::path>& source,
 }  // namespace
 HelpActions::HelpActions(ui::Root& root, AppActions& actions, SDL_Window* window,
                          DialogLifetime::Post post, std::filesystem::path executable,
-                         FolderPicker picker)
+                         FolderPicker picker, std::filesystem::path diagnostics)
     : root_(root),
       window_(window),
       post_(std::move(post)),
       executables_(help::executables(executable, help::nativePlatform())),
       picker_(std::move(picker)),
-      translocated_(help::isTranslocated(pathText(executable))) {
+      translocated_(help::isTranslocated(pathText(executable))),
+      crash_(root, actions, std::move(diagnostics), window, post_) {
     actions.addUi("ui.help.skill", "Help: download skill…", [this] { download(false); });
     actions.addUi("ui.help.skill_link", "Help: download skill link…", [this] { download(true); });
     actions.addUi("ui.help.mcp", "Help: MCP server…", [this] { mcp(); });

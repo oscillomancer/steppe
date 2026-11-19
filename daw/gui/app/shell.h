@@ -12,7 +12,9 @@
 #include <string>
 
 #include "app_actions.h"
+#include "fx_attention.h"
 #include "meter_feed.h"
+#include "plugin_drag.h"
 #include "selection_edit.h"
 #include "supple/engine/app.h"
 #include "supple/json/value.h"
@@ -52,8 +54,17 @@ class Shell {
     void installOverlay(ui::Root& root);
     // Brings the view up to the model's head version; invalidates what changed.
     void sync(bool event = true);
+    FxAttention& attention() { return attention_; }  // the marks' source (tests set its status)
     std::optional<std::chrono::steady_clock::time_point> nextDeadline() const;
     views::ArrangeView* arrange() const { return arrange_; }
+    // The track row under `p`, its control panel and its lane together, as
+    // a place to drop something on the track (a plugin from the side
+    // panel's browser). An automation lane is not one.
+    std::optional<TrackTarget> trackTargetAt(ui::Point p) const;
+    // Where a file dragged from the side panel's browser would land: the
+    // lane of the row under `p` that can hold items, or the empty space
+    // under the last row (a new track). Nothing elsewhere.
+    std::optional<ui::Rect> fileTargetAt(ui::Point p) const;
     json::Value saveTransportLayout() const;
     void loadTransportLayout(const json::Value& value);
     // The meters the TCP shows; the app sets the source (EngineApp::meters())
@@ -65,6 +76,8 @@ class Shell {
     const json::Value& inputs(bool force = false);
     // Shown by the app's status line when a command fails.
     std::function<void(const std::string&)> onError;
+    // The restart notice's "Show report": the app opens the crash report viewer on the incident.
+    std::function<void(const std::string& incident)> showCrashReport;
     // Model-thread recording diagnostic, shown without stopping healthy targets.
     void recordingError(const json::Value& payload);
     // The TCP's output click hands the matrix its strip and popup anchor.
@@ -76,7 +89,7 @@ class Shell {
     // The channel count menu (the ui.track.channels action; the track menu's Channels…).
     Status openChannelsMenu(const model::Id& track, const ui::Rect& anchor);
     // Adds a strip of a type ("channel", "buss", "master") and selects it: the
-    // TCP's "+ strip", and a double-click on the TCP's or the mixer's empty space.
+    // TCP's "+ track", and a double-click on the TCP's or the mixer's empty space.
     void addStrip(std::string_view type);
     // The record input picker at `anchor` and what a strip's input button says
     // (the TCP's and the mixer's): the port names, "midi *", or "in —".
@@ -101,11 +114,18 @@ class Shell {
     std::vector<std::string> shownSelection_;  // the track selection the TCP shows
     engine::EngineApp& app_;
     cmd::Dispatcher& dispatcher_;
+    FxAttention attention_{app_};           // the "fx" mark's rule (disabled or failed plug-ins)
     AppActions* actions_ = nullptr;         // from build()
     SelectionEdit selectionEdit_;           // a strip control on a selected track: all of them
     std::unique_ptr<TrackMenu> trackMenu_;  // made in build() (needs the root)
     UiState& ui_;
     std::string status_, editStatus_;
+    // The name and keys of the control the pointer rests on, which the
+    // status line says in the note's place; a note set since the pointer
+    // came to rest there shows instead (a press's error is not hidden).
+    std::string hoverName() const;
+    ui::Hint hovered_;
+    std::uint64_t noteSerial_ = 0, hoveredAtNote_ = 0;
     std::uint64_t shownVersion_ = ~std::uint64_t{0};
     std::uint64_t projectGeneration_ = ~std::uint64_t{0};
     ui::Label* counts_ = nullptr;

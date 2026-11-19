@@ -145,3 +145,6 @@ it.
 metadata applies to MIDI as well as audio. Version 1.0 remains readable with
 punch disabled; changed punch settings are published with a complete progress
 record, using the existing writer rather than any audio-thread file operation.
+
+*Amended 2026-11-15:* [ADR-0083](0083-local-crash-reports.md) adds external local crash diagnostics.
+Existing bridge deadlines, notification framing and recovery ownership remain authoritative.

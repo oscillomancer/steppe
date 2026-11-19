@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# ThreadSanitizer suppressions for the GUI tests (daw/gui/CMakeLists.txt puts
+# this file in their TSAN_OPTIONS).
+#
+# SDL opens the session bus through libdbus, which takes its own locks in
+# both orders. The library is not ours and is not built with the sanitizer;
+# the report says nothing about the app's threads.
+deadlock:libdbus-1.so

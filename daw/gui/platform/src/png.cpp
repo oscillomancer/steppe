@@ -77,6 +77,11 @@ std::vector<std::uint8_t> encodePng(const Image& image) {
     return out;
 }
 
+Image opaque(Image image) {
+    for (std::size_t i = 3; i < image.rgba.size(); i += 4) image.rgba[i] = 255;
+    return image;
+}
+
 Status writePng(const std::filesystem::path& path, const Image& image) {
     const auto bytes = encodePng(image);
     if (bytes.empty())

@@ -16,6 +16,7 @@
 #include <thread>
 
 #include "live_workers.h"
+#include "plan.h"
 #include "rack_runtime.h"
 #include "supple/base/files.h"
 #include "supple/engine/app.h"
@@ -24,6 +25,15 @@
 
 using namespace supple;
 using namespace supple::engine;
+
+namespace supple::engine {
+struct RateTestAccess {
+    // The playrate the newest plan was last asked to play (its scalar).
+    static double requestedScalar(const Engine& e) {
+        return e.latestPlan_.load(std::memory_order_acquire)->requestedScalar;
+    }
+};
+}  // namespace supple::engine
 
 namespace {
 
@@ -2019,6 +2029,171 @@ TEST_CASE("a deferred playrate edit whose reload fails never frees what the play
         CHECK(engine.processErrors() == errors);
         f.app->stopEngine();
     }
+}
+
+TEST_CASE("a deferred structural edit compiles even while a playrate move waits in a full queue") {
+    // Review 37b F1. Knob moves faster than the audio consumes them fill the
+    // scalar queue, and a refused last move stays pending (scalarPending_).
+    // A structural edit deferred meanwhile reached service()'s reload, where
+    // the scalar shortcut took it without compiling: the edit never played,
+    // nothing said so, and the prune against the latest session freed what
+    // the playing plan ran. In-callback, so nothing drains the queue between
+    // the moves. The control's last move repeats the queued value, so
+    // nothing stays pending.
+    for (bool refused : {true, false}) {
+        CAPTURE(refused);
+        Fixture f;
+        f.run("transport.playrate.set", R"({"rate":0.8})");
+        const auto track = f.run("track.add", R"({"name":"Src"})")["track"].asString();
+        const auto fxText =
+            f.run("fx.add",
+                  "{\"track\":\"" + track + "\",\"plugin\":\"com.suppleaudio.test.gain\"}")["fx"]
+                .asString();
+        const auto fx = *model::Id::parse(fxText);
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        REQUIRE(f.app->startEngine(backend, {.sampleRate = 8000, .blockSize = 128},
+                                   {.anticipative = false, .workers = 0}));
+        auto& engine = *f.app->engine();
+        const auto cycle = [&] {
+            backend.run(1);
+            f.app->tick();
+        };
+        engine.play();
+        for (int i = 0; i < 32; ++i) cycle();
+        // A future non-unity plan: structural edits inside its span are deferred.
+        f.run("env.add", R"({"track":"tr_0","param":"playrate",
+                             "points":[{"seconds":0,"value":1.25}]})");
+        const auto generation = engine.planGeneration();
+        // 1100 moves with no cycle between them: the 1024-entry queue fills.
+        for (int i = 0; i < 1100; ++i)
+            f.run("transport.playrate.set", i % 2 ? R"({"rate":0.81})" : R"({"rate":0.82})");
+        f.run("transport.playrate.set", refused ? R"({"rate":0.83})" : R"({"rate":0.81})");
+        REQUIRE(engine.planGeneration() == generation);
+        f.run("fx.remove", "{\"fx\":\"" + fxText + "\"}");  // deferred: the gain leaves
+        REQUIRE(engine.planGeneration() == generation);
+        const auto removed = f.app->head().version;
+        (void)f.app->takeEvents();
+        const auto errors = engine.processErrors();
+        // The pool keeps the gain until a plan without it was published, and
+        // the removal compiles once its span has passed.
+        for (int i = 0; i < 400 && f.app->instances().find(fx) != nullptr; ++i) {
+            cycle();
+            REQUIRE(engine.processErrors() == errors);
+            if (f.app->instances().find(fx) == nullptr)
+                REQUIRE(engine.planGeneration() > generation);
+        }
+        CHECK(engine.planGeneration() > generation);
+        CHECK(f.app->instances().find(fx) == nullptr);
+        CHECK(f.app->engineStatus().preparedVersion == removed);
+        for (const auto& [topic, value] : f.app->takeEvents()) CHECK(topic != "engine.error");
+        f.app->stopEngine();
+    }
+}
+
+TEST_CASE("a playrate move a full queue refused still plays after a deferred edit fails") {
+    // Review 37c F1. A refused move (full scalar queue) stays pending. A
+    // structural edit deferred meanwhile clears that when its reload starts
+    // compiling, since the compile would carry the move; when the compile
+    // failed, the restore put the session back but not the pending move,
+    // and nothing retried it. In-callback, so nothing drains the queue
+    // between the moves.
+    Fixture f;
+    f.run("transport.playrate.set", R"({"rate":0.8})");
+    const auto track = f.run("track.add", R"({"name":"Src"})")["track"].asString();
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(f.app->startEngine(backend, {.sampleRate = 8000, .blockSize = 128},
+                               {.anticipative = false, .workers = 0}));
+    auto& engine = *f.app->engine();
+    const auto cycle = [&] {
+        backend.run(1);
+        f.app->tick();
+    };
+    engine.play();
+    for (int i = 0; i < 32; ++i) cycle();
+    f.run("env.add", R"({"track":"tr_0","param":"playrate",
+                         "points":[{"seconds":0,"value":1.25}]})");
+    const auto generation = engine.planGeneration();
+    for (int i = 0; i < 1100; ++i)
+        f.run("transport.playrate.set", i % 2 ? R"({"rate":0.81})" : R"({"rate":0.82})");
+    f.run("transport.playrate.set", R"({"rate":0.83})");  // refused: the queue is full
+    REQUIRE(engine.planGeneration() == generation);
+    REQUIRE(RateTestAccess::requestedScalar(engine) == doctest::Approx(0.81));
+    // A deferred edit that cannot compile: 257 hardware MIDI sends, over the
+    // engine's budget of 256 (engine.midi_budget).
+    auto tx = f.app->beginTransaction(origin, "Too many hardware MIDI sends");
+    REQUIRE(tx);
+    for (int i = 0; i < 257; ++i) {
+        model::Route send;
+        send.from.track = *model::Id::parse(track);
+        send.to.midiDevice = "nowhere";
+        send.midi = model::MidiRouting{};
+        f.app->txn().create(send);
+    }
+    REQUIRE(f.app->commitTransaction(*tx));
+    REQUIRE(engine.planGeneration() == generation);
+    bool failed = false;
+    for (int i = 0; i < 400; ++i) {
+        cycle();
+        for (const auto& warning : engine.warnings())
+            failed |= warning.find("never played") != std::string::npos;
+    }
+    REQUIRE(failed);
+    CHECK(engine.planGeneration() == generation);
+    // The engine plays the session from before the edit, and the move in it.
+    CHECK(RateTestAccess::requestedScalar(engine) == doctest::Approx(0.83));
+    f.app->stopEngine();
+}
+
+TEST_CASE("a deferred edit that never played is reported even when a later load fails first") {
+    // Review 37b suggestion 1. A seek's reload ends a deferral in failure,
+    // which queues the "never played" error for the app's next tick. An
+    // unrelated edit whose own load fails before that tick took the queued
+    // error and emitted only its own.
+    Fixture f;
+    f.run("transport.playrate.set", R"({"rate":0.8})");
+    const auto track = f.run("track.add", R"({"name":"Src"})")["track"].asString();
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(f.app->startEngine(backend, {.sampleRate = 8000, .blockSize = 128},
+                               {.anticipative = false, .workers = 0}));
+    auto& engine = *f.app->engine();
+    engine.play();
+    for (int i = 0; i < 32; ++i) {
+        backend.run(1);
+        f.app->tick();
+    }
+    f.run("env.add", R"({"track":"tr_0","param":"playrate",
+                         "points":[{"seconds":0,"value":1.25}]})");
+    const auto generation = engine.planGeneration();
+    // A deferred edit that cannot compile: 257 hardware MIDI sends, over the
+    // engine's budget of 256 (engine.midi_budget).
+    auto tx = f.app->beginTransaction(origin, "Too many hardware MIDI sends");
+    REQUIRE(tx);
+    for (int i = 0; i < 257; ++i) {
+        model::Route send;
+        send.from.track = *model::Id::parse(track);
+        send.to.midiDevice = "nowhere";
+        send.midi = model::MidiRouting{};
+        f.app->txn().create(send);
+    }
+    REQUIRE(f.app->commitTransaction(*tx));
+    REQUIRE(engine.planGeneration() == generation);
+    (void)f.app->takeEvents();
+    engine.seek(0.5);                           // compiles the deferred edit, which fails
+    engine.pause();                             // nothing defers now
+    f.run("track.add", R"({"name":"Other"})");  // the sends fail its compile too
+    REQUIRE(engine.planGeneration() == generation);
+    int unplayed = 0, own = 0;
+    for (const auto& [topic, value] : f.app->takeEvents()) {
+        if (topic != "engine.error" || !value.isString()) continue;
+        const auto& text = value.asString();
+        CHECK(text.find("engine.midi_budget") != std::string::npos);
+        ++(text.find("never played") != std::string::npos ? unplayed : own);
+    }
+    CHECK(unplayed == 1);
+    CHECK(own == 1);
+    f.app->tick();  // nothing is reported twice
+    for (const auto& [topic, value] : f.app->takeEvents()) CHECK(topic != "engine.error");
+    f.app->stopEngine();
 }
 
 TEST_CASE(

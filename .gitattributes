@@ -7,3 +7,5 @@
 # rack guide's recipes are parsed out of the Markdown.
 /modules/patches/** text eol=lf
 /skill/guides/** text eol=lf
+# Replayed line by line by the plan-swap soak's ctest entries.
+/tests/fuzz/plan-soak-corpus/** text eol=lf

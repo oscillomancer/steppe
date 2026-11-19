@@ -82,7 +82,9 @@ void TextField::paint(Canvas& c) {
     const Theme& t = c.theme();
     const Rect b = bounds();
     const float size = t.type("body");
-    c.fillRound(b, t.radius("s"), t.color("raised"));
+    // Disabled, it lies flat on the panel and its text is faint (as a
+    // disabled dropdown's is).
+    c.fillRound(b, t.radius("s"), enabled ? t.color("raised") : t.color("panel"));
     c.strokeRound(b, t.radius("s"), focused() ? t.color("focus") : t.color("rule"));
     const Rect inner{b.x + kPad, b.y, std::max(0.0f, b.w - 2 * kPad), b.h};
 
@@ -116,7 +118,8 @@ void TextField::paint(Canvas& c) {
     if (shown.empty() && !placeholder_.empty())
         c.text({inner.x, b.y, inner.w, b.h}, placeholder_, Font::Ui, size, t.color("ink-faint"));
     else
-        c.text({x0, b.y, carets_.back().second + 2, b.h}, shown, Font::Ui, size, t.color("ink"));
+        c.text({x0, b.y, carets_.back().second + 2, b.h}, shown, Font::Ui, size,
+               t.color(enabled ? "ink" : "ink-faint"));
     if (!composing_.empty())  // underline the composition
         c.fillRect(
             {x0 + xOf(caret_), b.bottom() - 7, xOf(caret_ + composing_.size()) - xOf(caret_), 1},

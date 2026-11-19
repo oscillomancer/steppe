@@ -832,6 +832,7 @@ void registerRackCommands(cmd::Registry& registry) {
                 model::Track tr;
                 tr.record.monitor = e.defaultMonitor();
                 tr.name = a.name.value_or(model::nextTrackName(s, model::StripType::Channel));
+                tr.color = model::nextTrackColor(s);  // as track.add colours a new channel
                 tr.parent = model::kMaster;
                 track = t.create(tr);
                 t.modify<model::Track>(model::kMaster,

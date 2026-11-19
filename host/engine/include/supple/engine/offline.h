@@ -30,6 +30,7 @@
 
 #include "supple/audio/audio_file.h"
 #include "supple/base/result.h"
+#include "supple/engine/load_overrides.h"
 #include "supple/host/clap_host.h"
 #include "supple/model/session.h"
 
@@ -61,6 +62,16 @@ class InstancePool {
     // turn into a pass-through placeholder.
     Result<host::Instance*> get(model::Id id, const model::FxInstance& fx,
                                 const model::Session& session);
+    // Route E stage 3 (ADR-0092): whether a changed patch of `fx` can reach
+    // its instance without a compile. The instance exists, has not failed
+    // and waits on no restart, was made for the same plug-in and isolation,
+    // and was configured from a patch, as `fx` is.
+    bool patchable(model::Id id, const model::FxInstance& fx) const;
+    // Applies `fx`'s patch to that instance as get() would, then services
+    // it, and returns what service() reported: the caller compiles when any
+    // of it reaches a plan.
+    Result<host::Instance::Notifications> applyPatch(model::Id id, const model::FxInstance& fx,
+                                                     const model::Session& session);
     // Destroys instances whose fx no longer exists in `session` (call it once
     // no plan uses them), and replaced instances retired at a generation up
     // to `liveGeneration` (the newest plan the audio side has adopted).
@@ -84,6 +95,30 @@ class InstancePool {
     model::Isolation defaultIsolation() const { return defaultIsolation_; }
     // The stock plug-ins' directory; host::stockPluginDir() unless set.
     void setStockDir(std::filesystem::path dir);
+    // Whether `info` is one of the stock plug-ins (in the stock directory).
+    bool isStock(const host::PluginInfo& info) const;
+    // How this run loads named plug-ins (topic 7d). A pool takes its own copy
+    // on the main thread, when it is made; a disabled plug-in is refused by
+    // get() with plugin.disabled, a bridged one is made on a dedicated bridge
+    // whatever its fx asked, and neither the pool's default nor a stock
+    // directory changes that. A changed override reaches instances already made
+    // only through restartPlugin().
+    void setOverrides(LoadOverrides overrides) { overrides_ = std::move(overrides); }
+    const LoadOverrides& overrides() const { return overrides_; }
+    // Retires the instances of one plug-in (every fx of it): the next get()
+    // makes new ones, and the old stay until prune() like a restart().
+    void restartPlugin(std::string_view format, std::string_view id);
+    // The plug-ins, one entry each, with an instance in this process that was
+    // active at some point and has not failed: a run that ended cleanly with
+    // them loaded normally (topic 7d, E12). `since` is when the first of their
+    // instances was seen active (the file system's clock, so that it compares
+    // with a crash report's file time): the run says nothing about a report
+    // written after it.
+    struct Ran {
+        host::PluginInfo info;
+        std::filesystem::file_time_type since;
+    };
+    std::vector<Ran> ranInProcess() const;
     // Where `id`'s instance runs, or would if it were made now.
     model::Isolation effectiveIsolation(model::Id id, const model::FxInstance& fx) const;
     // Instances on inherit made in process because no bridge was set.
@@ -100,14 +135,25 @@ class InstancePool {
     // compensated) until service() has restarted it.
     bool restarting(model::Id id) const;
     bool restarting(const host::Instance* instance) const;
+    // Counts the changes service() makes to what a compile reads of an
+    // instance (restarting, active, failed, latency) and the restarts asked
+    // of the pool: two compiles of one session differ only if it moved.
+    std::uint64_t availabilityChanges() const { return availabilityChanges_; }
     std::vector<std::pair<model::Id, Error>> failedErrors() const;
+    // The id of the local crash report the death of this instance's bridge may have caused
+    // (ADR-0083, topic 6a), or empty: not isolated, not failed, the bridge did not die of a signal
+    // or an exception, or its end has not been observed yet (the next service of the failed
+    // instance does). The report may not exist.
+    std::string failureIncident(model::Id id) const;
     // Isolated instances whose bridge audio thread was refused its class.
     std::vector<model::Id> bridgeThreadsRefused() const;
     const Error* failure(model::Id id) const;
     std::uint32_t rememberedLatency(model::Id id) const;
     void rememberLatency(model::Id id, std::uint32_t latency);  // what a plan compensated
     bool automationCleared(model::Id id, std::uint32_t param) const;
-    void resetAutomation(model::Id id);  // explicit model reload
+    bool automationCleared(model::Id id) const;  // for any of its parameters
+    bool anyAutomationCleared() const;           // for any instance
+    void resetAutomation(model::Id id);          // explicit model reload
     // Main thread, only after applying plug-in-originated values to its model
     // patch: acknowledge that patch without sending it back on the next get().
     void acknowledgeOutputPatch(model::Id id, const json::Value& patch);
@@ -115,10 +161,14 @@ class InstancePool {
     void acknowledgeOutputState(model::Id id, const std::string& hash);
 
     std::size_t retired() const { return retired_.size(); }
+    // FX patches get() has serialized to compare or apply them (route E
+    // stage 2 counts them).
+    std::size_t patchSerializations() const { return patchSerializations_; }
     std::size_t size() const { return instances_.size(); }
 
   private:
     std::unique_ptr<detail::RackPool> racks_;
+    std::size_t patchSerializations_ = 0;
     struct Entry {
         std::unique_ptr<host::Instance> instance;
         std::string pluginId;
@@ -128,14 +178,20 @@ class InstancePool {
         std::uint32_t latency = 0;     // prepared stage frames
         std::uint32_t rawLatency = 0;  // plug-in frames at its activation rate
         bool restarting = false;       // a restart the plug-in asked for waits on processing
+        bool activated = false;        // it was active when last serviced, at some point
+        std::filesystem::file_time_type activatedAt;  // when that was first seen
         std::optional<Error> failure;
         std::vector<std::uint32_t> clearedAutomation;
         std::string appliedState;  // canonical patch text or blob hash last applied
+        // The model's object it was applied from, while that is the
+        // session's own (kept, so its address cannot be reused).
+        std::shared_ptr<const model::FxInstance> appliedFx;
     };
     void retire(std::unique_ptr<host::Instance> instance);
     model::Isolation resolveIsolation(const model::FxInstance& fx, const host::PluginInfo& info,
                                       bool* fallback) const;
     model::Isolation defaultIsolation_ = model::Isolation::InProcess;
+    LoadOverrides overrides_;
     mutable std::optional<std::optional<std::filesystem::path>> stockDir_;  // found when needed
     MainThreadWake* mainWake_ = nullptr;
     Resolver resolve_;
@@ -144,6 +200,7 @@ class InstancePool {
     std::map<model::Id, Entry> instances_;
     std::vector<std::pair<std::uint64_t, std::unique_ptr<host::Instance>>> retired_;
     std::uint64_t generation_ = 0;
+    std::uint64_t availabilityChanges_ = 0;
 };
 
 // How a take's audio is played back (session-model §1.5). `rate` is the rate
@@ -216,6 +273,11 @@ class MediaCache {
     std::shared_ptr<const PreparedSources> prepared_;
 };
 
+// The deadline of a bridged call in an offline render (ADR-0090): a minute,
+// thirty times the live path's 2 s, since an offline render loses only time
+// by waiting; a hung plug-in still fails the render within it.
+inline constexpr int kOfflineBridgeDeadlineMs = 60'000;
+
 struct OfflineSettings {
     // Playback/stems apply master rate; analysis and item-FX renders opt out.
     bool applyMasterPlayrate = true;
@@ -250,6 +312,10 @@ struct OfflineSettings {
     std::function<void(double)> progress;
     double progressBase = 0.0, progressScale = 1.0;
     supple::StopToken stopToken;
+    // How long a bridged call may go unanswered before the render fails its
+    // plug-in (ADR-0090); lifecycle commands get 5/2 of it plus 2 s. Tests
+    // shorten it; the product keeps the default.
+    int bridgeDeadlineMs = kOfflineBridgeDeadlineMs;
 };
 
 struct OfflineResult {

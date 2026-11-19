@@ -63,6 +63,11 @@ if(WIN32)
   supple_windows_utf8_manifests("${PROJECT_SOURCE_DIR}")
 endif()
 
+# The permissive part of the tree must not reach a GPL-only library; checked here, at the
+# end of configuration, over the finished link graph.
+include(cmake/LicenseIsolation.cmake)
+supple_check_license_isolation()
+
 # License gate: fails the build when a dependency is not declared. Python is
 # required (building.md lists it on every platform), so the gate is never skipped.
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
