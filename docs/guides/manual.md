@@ -1174,7 +1174,10 @@ what they drive ("Filter cutoff"), with **Open** to go to the rack. Turn
 them there, right-click one to automate it or to learn a MIDI controller,
 and watch them move with their automation as the song plays.
 In the mixer, that channel shows the rack as a line above its plugins,
-marked **rack**: click it to open the rack. In the FX chain window the
+marked **rack**: click it to open the rack. A rack that holds a Mod Out
+module is a modulator for the track it lives on. That track's strip shows
+it as a line marked **mod** in violet, the colour of modulation, which
+opens the rack the same way. In the FX chain window the
 rack shows those knobs; double-click it anywhere (or click **Open**) to
 open the rack.
 **Tidy up** in the space's right-click menu lays the rack out by signal

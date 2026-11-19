@@ -1017,9 +1017,17 @@ on the meter clears it, with the held peaks and the clip lights; so does
 reopening the mixer. The strip's plug-in chain lists every plug-in,
 after a channel's rack slots: one line per rack whose Out feeds the channel
 (`racks::racksFeeding`), in route order, with the rack's name on a rack
-module's face and a faint "rack". A click on one opens the rack window on
-the rack (a double-click's second press does nothing more); a right-click
-is the strip's. A bypassed plug-in's name is dimmed and struck through; an
+module's face and a faint "rack". Then come any strip's mod slots
+(ADR-0096): one line per rack homed on the strip's track (`Rack::track`)
+that holds a Mod Out module (`racks::modRacks`, in rack order). A rack is a
+modulator by holding a Mod Out, whatever its name. A mod slot has the same
+face with "mod" in `signal-cv`, always drawn, with the name cut short to make
+room. A rack slot drops its "rack" tag when the name needs the room. A modulator that also feeds the channel shows
+once, where it feeds, as a mod slot, and a rack that loses its last Mod Out
+loses its slot. Only a channel homes a rack (a model invariant), so only
+channels show them. A click on a
+rack or mod slot opens the rack window on the rack (a double-click's second
+press does nothing more); a right-click is the strip's. A bypassed plug-in's name is dimmed and struck through; an
 offline one's is dimmed inside a dashed outline (their `valueText` ends in
 " (bypassed)" or " (offline)"). An empty chain is bare: no text is drawn in
 it.

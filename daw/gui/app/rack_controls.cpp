@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <set>
 
 #include "rack_scene.h"
 #include "supple/engine/midi_control.h"
@@ -84,6 +85,16 @@ std::vector<model::Id> racksFeeding(const model::Session& s, model::Id track) {
         const model::RackModule* m = s.modules.find(*r.value->from.module);
         if (m && std::find(out.begin(), out.end(), m->rack) == out.end()) out.push_back(m->rack);
     }
+    return out;
+}
+
+std::vector<model::Id> modRacks(const model::Session& s, model::Id track) {
+    std::set<model::Id> holding;
+    for (const auto& m : s.modules)
+        if (m.value->type == model::kModOutModule) holding.insert(m.value->rack);
+    std::vector<model::Id> out;
+    for (const auto& r : s.racks)
+        if (r.value->track == track && holding.contains(r.id)) out.push_back(r.id);
     return out;
 }
 

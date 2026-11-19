@@ -48,6 +48,12 @@ std::vector<MacroGroup> macroGroups(
 // The racks whose Outs feed `track` (its record input), in route order.
 std::vector<model::Id> racksFeeding(const model::Session& s, model::Id track);
 
+// The racks a strip's mod slots list (ADR-0096, M3): those homed on `track`
+// (Rack::track) that hold a Mod Out module, in rack order. A rack is a
+// modulator by holding a Mod Out, whatever its name ("Modulators" is only
+// the default `modulate` gives a new one).
+std::vector<model::Id> modRacks(const model::Session& s, model::Id track);
+
 // Whether a Mod Out input carries 0..1 (ADR-0096, "Range"): it has a cable
 // and every cable into it comes from a unipolar, gate or phase output. An
 // unpatched input, or one fed by any other output, carries -1..1.
