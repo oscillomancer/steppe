@@ -1154,8 +1154,8 @@ fx holds another plug-in or version. A Macro with no cabled knob is left out. Wi
 device is only the name and Open: the GUI does not guess at other
 "performance" knobs. A knob's drag runs `module.set` as one undo step (its
 gesture); a double click resets it; its right-click offers a rack knob's
-menu (Default, Automate or Show/Hide automation lane, MIDI learn… and
-Remove MIDI learn, `racks::knobMenu`, shared with the rack window). The
+menu (MIDI learn… and Remove MIDI learn, Show or Hide lane, Reset to its
+default, `racks::knobMenu`, shared with the rack window). The
 knobs follow their Macro's telemetry, so automation moves them as it
 plays: the window reads the shown Macros' telemetry every 33 ms
 (`FxWindow::nextDeadline`) and watches only those modules. Telemetry
@@ -1894,15 +1894,17 @@ a new channel). It follows rack.md §8.
   a choice drawn as a box steps on a click. Modulated knobs carry a ring
   outside the travel: faint for the range the cables' amounts span, bright
   to the value they make now (telemetry); dragging that ring sets the last
-  cable's amount (`cable.set`). A right-click offers the default value, a
-  choice's options, and Automate: an envelope on the knob holding its value
+  cable's amount (`cable.set`). A right-click opens the knob's menu in the
+  order and wording of the strips' parameter menu (§4.2): MIDI learn…, Show
+  lane, Reset to the default ("Reset to 0.0 dB"), then a choice's options.
+  Show lane makes an envelope on the knob holding its value
   (`env.add {module, param, points}`), shown as a lane under the rack's home
   channel ("Rack » Module · knob", on the knob's own scale); once there, the
   item shows or hides that lane. MIDI learn… opens the learn dialog (§6)
   for the knob: it listens, and OK binds what it heard (`module.learn.set`;
   a toggle's CC defaults to toggle mode, others offer soft takeover). A
   bound knob carries a small accent dot in its gap (a control, at its
-  corner), and its menu names the controller ("MIDI: CC 21 · ch 1…") and
+  corner), and its menu names the controller ("MIDI learn… (CC 21 · ch 1)") and
   offers Remove MIDI learn (`module.learn.remove`). The controller moves
   the knob through `module.set`, so the window's knob follows it along the
   same travel (tested end to end with a dummy device's CCs). A plugin

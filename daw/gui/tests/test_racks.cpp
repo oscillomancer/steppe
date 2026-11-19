@@ -747,7 +747,7 @@ TEST_CASE("rack window: a cable that closes a loop is drawn as feedback") {
     f.snapshot("rack-feedback.png");
 }
 
-TEST_CASE("rack window: Automate on a knob makes an envelope, a lane on the home channel") {
+TEST_CASE("rack window: Show lane on a knob makes an envelope, a lane on the home channel") {
     Fixture f;
     if (!f.ok) return;
     Patch p(f);
@@ -759,7 +759,16 @@ TEST_CASE("rack window: Automate on a knob makes an envelope, a lane on the home
     f.pointer(ui::PointerEvent::Type::Down, level, 3);
     f.pointer(ui::PointerEvent::Type::Up, level, 3);
     REQUIRE(f.r().find("rack.param.menu"));
-    REQUIRE(f.pick("rack.param.menu", "Automate"));
+    // The strips' wording (gui.md §4.2): Reset to the default, Show lane.
+    {
+        const auto items = ui::menuItems(*f.r().find("rack.param.menu"));
+        REQUIRE(items.size() == 3);
+        CHECK(items[0].label == "MIDI learn…");
+        CHECK(items[1].label == "Show lane");
+        CHECK(items[2].label == "Reset to 0.0 dB");
+    }
+    f.snapshot("rack-knob-menu.png");
+    REQUIRE(f.pick("rack.param.menu", "Show lane"));
     const model::Envelope* env = nullptr;
     model::Id envId;
     for (const auto& e : f.app->head().envelopes)
@@ -786,7 +795,7 @@ TEST_CASE("rack window: Automate on a knob makes an envelope, a lane on the home
     // The menu now hides (and shows) the lane instead.
     f.pointer(ui::PointerEvent::Type::Down, level, 3);
     f.pointer(ui::PointerEvent::Type::Up, level, 3);
-    REQUIRE(f.pick("rack.param.menu", "Hide automation lane"));
+    REQUIRE(f.pick("rack.param.menu", "Hide lane"));
     CHECK_FALSE(f.app->head().envelopes.find(envId)->visible);
 }
 
@@ -1027,8 +1036,9 @@ TEST_CASE("rack window: a knob learns a MIDI controller from its menu, shows it 
     // The menu names the controller, and removes it.
     menu();
     const auto items = ui::menuItems(*f.r().find("rack.param.menu"));
-    CHECK(std::any_of(items.begin(), items.end(),
-                      [](const ui::MenuItem& m) { return m.label.rfind("MIDI: CC 9", 0) == 0; }));
+    CHECK(std::any_of(items.begin(), items.end(), [](const ui::MenuItem& m) {
+        return m.label.rfind("MIDI learn… (CC 9", 0) == 0;
+    }));
     REQUIRE(f.pick("rack.param.menu", "Remove MIDI learn"));
     CHECK(f.app->head().modules.find(vca)->learn.empty());
     CHECK_FALSE(f.racks->space()->scene().module(vca)->learned.contains("level"));

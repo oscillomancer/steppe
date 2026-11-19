@@ -1197,7 +1197,7 @@ change what they show (each drag or scroll is one undo step), and move the
 module by its title instead.
 
 Drag a knob up or down to turn it (Shift for fine), double-click to reset
-it, and right-click it for **Automate**, which adds an automation lane for
+it, and right-click it for **Show lane**, which adds an automation lane for
 it under the rack's channel, or **MIDI learn…**: move a control on your
 MIDI controller and click OK, and that control turns the knob (a small
 dot marks it), which moves on screen as you turn it; right-click it again
