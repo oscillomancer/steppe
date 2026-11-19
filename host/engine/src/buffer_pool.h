@@ -50,6 +50,8 @@ class BufferPool {
     // of the size (both counted only inside a Scope).
     std::uint64_t reused() const { return reused_; }
     std::uint64_t made() const { return made_; }
+    // Bytes of buffer capacity the pool holds now (tests: trim()'s bound).
+    std::size_t heldBytes() const;
     // Tests: every harvested buffer is filled with loud garbage first, so a
     // reuse that fails to clear one is heard.
     bool poisonForTests = false;

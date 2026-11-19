@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <functional>
 #include <map>
+#include <optional>
+#include <vector>
 
 #include <supple/engine/realtime.h>
 
@@ -390,6 +392,73 @@ TEST_CASE("plan: each stage's note sources are those of the reference build") {
     CHECK(repeats > 0);
 }
 
+TEST_CASE(
+    "plan: every restarting instance stays off the executors, whatever its address (step 1)") {
+    // prepare() binary-searches the pool's restarting instances, so the pool
+    // must hand them over sorted by address. It walks its entries in id
+    // order: two restarting instances whose addresses run the other way make
+    // a list that, unsorted, hides the first of them, which would stay on
+    // the executors and never restart. (An entry holds one instance, so the
+    // list has no duplicates to get wrong.)
+    model::EditTxn t(model::Session::create(), 1);
+    std::vector<Id> ids;
+    for (int i = 0; i < 8; ++i) ids.push_back(addFx(t, addChannel(t), fxOf(kGain)));
+    const auto s = commit(t);
+    std::sort(ids.begin(), ids.end());  // the pool's order
+    auto pool = makePool();
+    MediaCache media;
+    // Made half in id order and half against it, so that addresses and ids
+    // disagree somewhere whichever way the allocator hands out memory.
+    std::vector<Id> making(ids.begin(), ids.begin() + 4);
+    making.insert(making.end(), ids.rbegin(), ids.rbegin() + 4);
+    for (const Id id : making) REQUIRE(pool.get(id, *s.fx.entry(id)->value, s));
+    std::vector<host::Instance*> instances;
+    for (const Id id : ids) instances.push_back(pool.find(id));
+    std::size_t first = ids.size(), second = ids.size();
+    for (std::size_t i = 0; i < ids.size() && first == ids.size(); ++i)
+        for (std::size_t j = i + 1; j < ids.size(); ++j)
+            if (std::less<>{}(instances[j], instances[i])) {
+                first = i;
+                second = j;
+                break;
+            }
+    REQUIRE_MESSAGE(first < ids.size(), "no two instances whose addresses run against their ids");
+    // Those two ask for a restart while processing (the fixture's latency
+    // parameter): it waits until they stop, so the pool reports them.
+    std::vector<float> l(128), r(128), ol(128), orr(128);
+    const float* in[2] = {l.data(), r.data()};
+    float* out[2] = {ol.data(), orr.data()};
+    host::Event latency;
+    latency.kind = host::Event::Kind::Param;
+    latency.paramId = 1;  // "short"
+    latency.value = 1.0;
+    host::ProcessBlock block;
+    block.inputs = in;
+    block.inputChannels = 2;
+    block.outputs = out;
+    block.outputChannels = 2;
+    block.frames = 128;
+    block.events = std::span<const host::Event>(&latency, 1);
+    for (const std::size_t k : {first, second}) {
+        host::Instance& gain = *instances[k];
+        REQUIRE(gain.activate(48000, 1, 128));
+        REQUIRE(gain.startProcessing());
+        REQUIRE(gain.process(block));
+        pool.service(ids[k]);
+        REQUIRE(pool.restarting(ids[k]));
+    }
+    {
+        const d::Plan p = prepared(s, pool, media);
+        for (std::size_t k = 0; k < ids.size(); ++k) {
+            INFO("instance " << k << ", restarting: " << (k == first || k == second));
+            const bool runs = std::find(p.instances.begin(), p.instances.end(), instances[k]) !=
+                              p.instances.end();
+            CHECK(runs == (k != first && k != second));
+        }
+    }
+    for (const std::size_t k : {first, second}) instances[k]->stopProcessing();
+}
+
 TEST_CASE("plan: a compile hands out retired plans' buffers cleared, the plan unchanged (step 3)") {
     // A retired plan's buffers, filled with garbage as they enter the pool,
     // serve the next compile of the same session: each it hands out holds
@@ -450,4 +519,51 @@ TEST_CASE("plan: a compile hands out retired plans' buffers cleared, the plan un
     CHECK(after.voices_ == before.voices_);
     CHECK(after.outputs_ == before.outputs_);
     CHECK(d::firstDifference(fresh, d::dumpPlan(second)).empty());
+}
+
+TEST_CASE("plan: the buffer pool keeps no more than the last compile took (step 3)") {
+    // trim() keeps of each size as many buffers as the last prepare() took
+    // and frees the rest, so the pool holds at most one plan's worth however
+    // the plans change. Each round compiles at a new block size while the
+    // previous plan is live, then retires that one, as collectPlans does; a
+    // trim that kept more would hold a 1024-sample plan's buffers after a
+    // 64-sample compile. Each pooled plan also dumps as a fresh one.
+    const auto s = richSession();
+    auto pool = makePool();
+    MediaCache media;
+    d::BufferPool buffers;
+    buffers.poisonForTests = true;
+    struct Bytes final : d::BufferVisitor {
+        std::size_t total = 0;
+        void floats(std::vector<float>& v) override { total += v.capacity() * sizeof(float); }
+        void voices(std::vector<d::HeldVoice>& v) override {
+            total += v.capacity() * sizeof(d::HeldVoice);
+        }
+        void outputs(std::vector<host::OutputEvent>& v) override {
+            total += v.capacity() * sizeof(host::OutputEvent);
+        }
+    };
+    const auto compileAt = [&](std::uint32_t block, d::BufferPool* with) {
+        auto compiled = d::compile(s, pool, 0, block, 48000);
+        REQUIRE(compiled);
+        d::Plan p = std::move(*compiled);
+        p.media = &media;
+        p.buffers = with;
+        REQUIRE(d::prepare(p, s));
+        return p;
+    };
+    std::optional<d::Plan> live;
+    for (const std::uint32_t block : {128u, 1024u, 64u, 512u, 32u, 256u}) {
+        INFO("block " << block);
+        const auto fresh = d::dumpPlan(compileAt(block, nullptr));
+        d::Plan next = compileAt(block, &buffers);
+        CHECK(d::firstDifference(fresh, d::dumpPlan(next)).empty());
+        Bytes size;
+        d::visitPooledBuffers(next, size);
+        if (live) buffers.harvest(*live);
+        buffers.trim();
+        CHECK((buffers.heldBytes() > 0) == live.has_value());  // not vacuous
+        CHECK(buffers.heldBytes() <= size.total);
+        live = std::move(next);
+    }
 }

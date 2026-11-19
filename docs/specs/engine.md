@@ -370,7 +370,9 @@ specified here as it lands); so far:
   from the pool once (`InstancePool::restartingInstances`, one pass, sorted)
   and looks each plan instance and stage up in that list; it asked the pool
   for each, which scanned every entry. A test counts the entries visited
-  per compile (`restartLookups`).
+  per compile (`restartLookups`); another makes two instances restart whose
+  addresses run against their ids, the case an unsorted list gets wrong,
+  and checks that both leave the plan.
 - **Note sources are built by sorting, once per node** (step 2). A note's
   ordinal counts the earlier note-ons with the same origin, port, channel
   and key: `prepare` sorts a stage's note-ons by that address and arrival
@@ -395,7 +397,15 @@ specified here as it lands); so far:
   with and without reuse (`recycleBuffers`) sample for sample in both
   executors, across plan swaps that carry a rack's plug-in stage, a newly
   inserted latent stage, seeks, and plans with fewer and more channels and
-  strips; a steady compile allocates none.
+  strips; a steady compile allocates none. The cost is memory: between
+  compiles the pool holds about one plan's worth of buffers, which were
+  freed once a plan retired. In engine-bench's generated sessions that is
+  70 MB at 96 tracks and 139 MB at 192, most of it (114 MB at 192) the
+  voice lists, two per stage that takes notes with room for 4,096 voices
+  each, whether or not a plug-in holds one. It does not grow: a test
+  compiles at block sizes from 32 to 1024 in turn, retiring each plan as
+  the next goes live, and checks that the pool never holds more than the
+  last compile's buffers.
 Returning to a version with neither patch nor state after applying saved FX
 settings recreates the factory-default instance. The old instance remains alive
 until both executors release its plan, as with a changed opaque state.

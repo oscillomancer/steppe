@@ -182,6 +182,16 @@ void BufferPool::trim() {
     if (voices_.size() > lastVoiceTakes_) voices_.resize(lastVoiceTakes_);
 }
 
+std::size_t BufferPool::heldBytes() const {
+    std::size_t bytes = 0;
+    for (const auto& [size, list] : floats_)
+        for (const auto& v : list) bytes += v.capacity() * sizeof(float);
+    for (const auto& v : voices_) bytes += v.capacity() * sizeof(HeldVoice);
+    for (const auto& [size, list] : outputs_)
+        for (const auto& v : list) bytes += v.capacity() * sizeof(host::OutputEvent);
+    return bytes;
+}
+
 void zeroed(std::vector<float>& v, std::size_t n) {
     BufferPool* pool = BufferPool::current();
     if (n > 0 && pool && pool->takeFloats(n, v)) {
