@@ -292,6 +292,28 @@ namespace {
 struct Checker {
     const Session& s;
     std::vector<Error> errors;
+    // Each FX in a track's chain or input chain, to its track: built once per
+    // check, on the first modulation route that asks (trackOfChainFx scans
+    // every track's chains).
+    std::optional<std::map<Id, Id>> chainFx;
+
+    std::optional<Id> trackOfChainFx(Id fx) {
+        if (!chainFx) {
+            chainFx.emplace();
+            for (const auto& e : s.tracks) {
+                for (Id id : e.value->chain) chainFx->emplace(id, e.id);
+                for (Id id : e.value->inputChain) chainFx->emplace(id, e.id);
+            }
+        }
+        const auto found = chainFx->find(fx);
+        if (found == chainFx->end()) return std::nullopt;
+        return found->second;
+    }
+    // modulationTargetNode, through the map.
+    std::optional<Id> targetNode(const EnvTarget& target) {
+        if (target.object.kind == Kind::Fx) return trackOfChainFx(target.object);
+        return modulationTargetNode(s, target);
+    }
 
     void fail(std::string path, std::string message) {
         if (errors.size() < 50)
@@ -553,7 +575,7 @@ struct Checker {
         std::map<std::pair<Id, Id>, Id> modEdges;
         for (const auto& e : s.modulations) {
             const RackModule* m = s.modules.find(e.value->source.module);
-            const auto target = modulationTargetNode(s, e.value->target);
+            const auto target = targetNode(e.value->target);
             if (!m || !target) continue;  // reported by modulations()
             edges[m->rack].push_back(*target);
             modEdges.emplace(std::pair{m->rack, *target}, e.id);
@@ -726,7 +748,7 @@ struct Checker {
             const Id o = m.target.object;
             const std::string& param = m.target.param;
             double range = 0;  // the depth's bound; 0: not a target
-            if (o.kind == Kind::Fx && trackOfChainFx(s, o)) {
+            if (o.kind == Kind::Fx && trackOfChainFx(o)) {
                 range = 1;
             } else if (const Track* t = o.kind == Kind::Track ? s.tracks.find(o) : nullptr) {
                 if (param == "volume") range = 48;
@@ -1049,7 +1071,7 @@ Status validateNumeric(const Session& s) {
 Status checkInvariants(const Session& s) {
     SUPPLE_TRY(validateAudioWarp(s));
     SUPPLE_TRY(validateNumeric(s));
-    Checker c{s, {}};
+    Checker c{s, {}, {}};
     if (!(s.project->sampleRate >= 8000 && s.project->sampleRate <= 384000))
         c.fail("/project/sample_rate", "sample rate out of range");
     if (auto strips = validateStripRules(s); !strips) {
@@ -1149,7 +1171,7 @@ std::vector<std::pair<Id, std::string>> dropUnplayableModulations(Session& s) {
     std::vector<std::pair<Id, std::string>> dropped;
     const std::string prefix = "/modulations/mr_";
     while (!s.modulations.empty()) {
-        Checker c{s, {}};
+        Checker c{s, {}, {}};
         c.modulations();  // gone or unfit referents first, then cycles
         if (c.errors.empty()) c.routes();
         std::optional<Id> id;
