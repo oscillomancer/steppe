@@ -911,11 +911,12 @@ signal stands for: `0xC0000005` (access violation), `0xC000001D` (illegal instru
 divide by zero; `SIGFPE` carries no finer code). The host therefore reads an `exception` with that status, as it
 reads a fault that reached the last-chance filter. The same handler is also called by the runtime's own
 filter around `main` and around a thread the runtime started, for an unhandled hardware fault of that
-thread, with the runtime's exception pointers set (`_pxcptinfoptrs`), and the runtime would then resume
+thread, with the runtime's exception pointers set (`__pxcptinfoptrs()`, which the SDK's headers do not
+declare: the bridge finds it by name in the runtime DLL the process loaded), and the runtime would then resume
 the faulting code. The handler never returns: it captures from the fault's own context and ends the
 process with the exception's own code, so a hardware fault reads as it did before the handler existed
 (a handler that took the context of its own frame would have lost the fault's address). Where
-`_pxcptinfoptrs` is not defined the handlers are not installed. The attribution of a raised signal is
+the runtime does not export `__pxcptinfoptrs` the handlers are not installed. The attribution of a raised signal is
 `active_token` (the fault frame is the bridge's handler, in the bridge's own image, so no plug-in image holds
 it; the plug-in's entry is still open), as an `abort()`'s is, and the plug-in's own frame is further down the
 walk. The settings are unproven until the `abort()` case of
