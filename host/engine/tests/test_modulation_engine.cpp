@@ -480,3 +480,27 @@ TEST_CASE("modulation: binding gives each stage its slots and their events") {
         CHECK(me.values.size() == p.plan.block);
     }
 }
+
+TEST_CASE("modulation: an input-chain plug-in has room for its automation and modulation" *
+          doctest::description("rt")) {
+    // B's input is the rack's Out, armed, so its input chain runs every
+    // block. Its gain is automated to -20 dB; then modulated as well.
+    Emit emit("playing", std::nullopt);
+    model::EditTxn t(emit.s, 2);
+    t.modify<model::Track>(emit.b, [&](model::Track& tr) {
+        tr.chain.clear();
+        tr.inputChain.push_back(emit.gain);
+        tr.record.armed = true;
+    });
+    model::Envelope env;
+    env.target = {emit.gain, "gain"};
+    env.points = {{0.0, -20.0}};
+    t.create(env);
+    const auto automated = commit(t);
+    const auto a = render(automated, 0.5);
+    CHECK(double(a.left[12000]) == doctest::Approx(std::pow(10.0, -20.0 / 20.0)).epsilon(1e-4));
+    model::EditTxn more(automated, 3);
+    modulate(more, emit.modOut, emit.gain, "gain", 0.1);
+    const auto m = render(commit(more), 0.5);
+    CHECK(double(m.left[12000]) > double(a.left[12000]) * 1.5);
+}

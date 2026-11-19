@@ -1732,8 +1732,8 @@ Status prepare(Plan& p, const Session& s) {
             }
             return lanes;
         };
-        // Input FX: their modulation events (ADR-0096).
-        for (Stage& st : n.inputChain) st.blockEvents.reserve(st.modEvents);
+        // Input FX take automation and modulation only (they hear no notes).
+        for (Stage& st : n.inputChain) st.blockEvents.reserve(laneEvents(st) + st.modEvents);
         for (Stage& st : n.chain) {
             const std::size_t lanes = laneEvents(st) + st.modEvents;
             const bool noteTarget =

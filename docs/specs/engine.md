@@ -330,7 +330,8 @@ only.
     (ADR-0092).
   - Each stage reserves `block / 32 + 2` events per modulated parameter and
     one for each other slot. An event that finds the block full is tried
-    again at the next grid point.
+    again at the next grid point. Input-chain stages reserve their
+    automation and modulation events as chain stages do.
   - Bridged plug-ins receive the same events through the bridge; a late
     block's coalescing keeps the latest value per target (§5).
 - **Inert routes.** A route is inert, with a plan warning, when binding finds
