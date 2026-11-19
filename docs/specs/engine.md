@@ -347,8 +347,9 @@ specified here as it lands); so far:
   the edit's ramps and removed later, and wants the output unchanged sample
   for sample in both executors: whatever a swap fails to carry is heard.
 - **Carries look nodes and edges up by id** (stage 6). The compile indexes
-  each plan last (`indexForCarry`, main thread): its nodes sorted by id,
-  each edge's source id, each node's in-edges sorted by source id (ties in
+  each plan last (`indexForCarry`, main thread): its nodes sorted by id
+  (a plan has one node per id, asserted there in debug builds), each edge's
+  source id, each node's in-edges sorted by source id (ties in
   `in` order). At adoption the executor finds a node's counterpart by
   binary search (`findNode`, `carriedNode`), and an in-edge's or a MIDI
   send's predecessor among the old node's in-edges from the same source, the

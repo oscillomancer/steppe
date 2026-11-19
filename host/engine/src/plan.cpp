@@ -3517,6 +3517,11 @@ void indexForCarry(Plan& p) {
         p.nodeIndex.push_back({p.nodes[i].id, static_cast<std::uint32_t>(i)});
     std::sort(p.nodeIndex.begin(), p.nodeIndex.end(),
               [](const Plan::NodeKey& a, const Plan::NodeKey& b) { return a.id < b.id; });
+    // The lookups binary-search these ids: a plan has one node per id.
+    assert(std::adjacent_find(p.nodeIndex.begin(), p.nodeIndex.end(),
+                              [](const Plan::NodeKey& a, const Plan::NodeKey& b) {
+                                  return a.id == b.id;
+                              }) == p.nodeIndex.end());
     for (Edge& e : p.edges) e.fromId = p.nodes[e.from].id;
     for (Node& n : p.nodes) {
         n.inBySource.clear();

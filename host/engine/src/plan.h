@@ -956,6 +956,7 @@ struct Plan {
     std::vector<Edge> edges;
     // Every node by id, sorted (indexForCarry): an adoption finds a node's
     // counterpart in log n steps, whichever earlier plan it carries from.
+    // Node ids are unique within a plan (asserted in debug builds).
     struct NodeKey {
         Id id;
         std::uint32_t node = 0;
