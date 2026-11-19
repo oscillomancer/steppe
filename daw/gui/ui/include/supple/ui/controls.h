@@ -26,11 +26,11 @@ enum class Gesture { Begin, Move, End, Set };  // Set: one-shot (double-click re
 // in signal-cv as the rack knob's ring is: the span faint, the live value
 // bright with a dot; a fader, slider or pan bar shows it as a bar beside its
 // track (over the cap, so the live value shows under the hand), a knob as an
-// arc on its travel. An Alt-drag anywhere on the control, or a drag that
-// starts on the bar (the knob's arc, as a rack knob's ring sets its cable's
-// amount), changes `depth` and reports it through the control's onDepth; the
-// value is left alone. On a modulated fader or pan with onDepth set, Alt
-// therefore no longer reaches the caller as "this member alone".
+// arc on its travel. A drag that starts on the bar, within 8 units across it
+// (a knob's ring, face edge + 1 to + 7), changes `depth` and reports it
+// through the control's onDepth, as a rack knob's ring sets its cable's
+// amount; the value is left alone. No modifier is involved: Alt keeps its
+// meaning (a fader's or pan's "this member alone").
 struct ModulationView {
     double low = 0, high = 0;    // the smallest and largest offset the routes can add
     std::optional<double> live;  // the offset now (telemetry); unset: not playing
@@ -69,7 +69,9 @@ class Fader : public Node {
     void setModulation(std::optional<ModulationView> m);
     const std::optional<ModulationView>& modulation() const { return mod_; }
     std::function<void(double depth, Gesture)> onDepth;
-    Rect modulationBar() const;  // where the bar is drawn (empty without modulation)
+    Rect modulationBar() const;       // where the bar is drawn (empty without modulation)
+    Rect depthZone() const;           // where a press drags depth (empty without onDepth)
+    Node* hitTest(Point p) override;  // the zone may reach past the bounds
 
     Size measure(const Canvas& canvas, Size available) override;
     void paint(Canvas& canvas) override;
@@ -110,6 +112,7 @@ class Slider : public Node {
     void setModulation(std::optional<ModulationView> m);
     const std::optional<ModulationView>& modulation() const { return mod_; }
     std::function<void(double depth, Gesture)> onDepth;
+    Node* hitTest(Point p) override;  // the depth zone may reach past the bounds
 
     Size measure(const Canvas& canvas, Size available) override;
     void paint(Canvas& canvas) override;
@@ -120,7 +123,8 @@ class Slider : public Node {
 
   protected:
     virtual double dragDelta(Point from, Point to) const;
-    // Whether a press at `p` starts a depth drag: on the bar (the knob's arc).
+    // Whether a press at `p` starts a depth drag: in the bar's zone (the
+    // knob's ring), with onDepth set.
     virtual bool onModulation(Point p) const;
     void paintModulationBar(Canvas& c) const;
     std::optional<ModulationView> mod_;
@@ -175,6 +179,8 @@ class PanControl : public Node {
     const std::optional<ModulationView>& modulation(int part) const { return mod_[part]; }
     std::function<void(int part, double depth, Gesture)> onDepth;
     Rect modulationBar(int part) const;
+    Rect depthZone(int part) const;   // where a press drags that bar's depth
+    Node* hitTest(Point p) override;  // the zones may reach past the bounds
     Size measure(const Canvas& canvas, Size available) override;
     void paint(Canvas& canvas) override;
     bool onPointer(const PointerEvent& e) override;

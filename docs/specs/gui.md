@@ -262,15 +262,19 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   value bright from the value to a dot. Faders, sliders and pan bars draw it as
   a 3-unit bar beside the track (right of a vertical fader, under the others),
   over the cap so the live value shows under the hand. Knobs draw it as an arc
-  on the travel. An Alt-drag anywhere on a modulated control, or a drag that
-  starts on its bar (a knob's arc, outside the face), changes the depth of the
-  route the view names and reports Begin/Move/End through `onDepth`, leaving
-  the value alone. The drag spans the same travel as a value drag: 72 dB per
-  fader length, the full 0..1 on a slider or 150 units on a knob, and 200% per
-  pan bar. Shift is fine, and the depth clamps to ADR-0096's ranges (±48 dB,
-  ±1, ±200%). On a modulated control Alt is therefore not "this member alone"
-  (§ Track groups); an unmodulated control passes Alt on as before. No view
-  sets modulation yet.
+  on the travel. A drag that starts on a modulated control's bar changes the
+  depth of the route the view names and reports Begin/Move/End through
+  `onDepth`, leaving the value alone. No modifier is needed, as with the rack
+  knob's ring. The bar's grab zone is 8 units across, centred on the 3-unit
+  bar, so it can be grabbed (`depthZone()`). A knob's zone is its ring, from
+  1 to 7 units outside its face, as the rack ring's. A zone may reach a little
+  past the control's bounds (its `hitTest` claims it). On a fader or slider the
+  cap keeps its own presses. On a pan bar the zone takes the lower 2.5 units
+  of the bar's track. The drag spans the same travel as a value drag: 72 dB
+  per fader length, the full 0..1 on a slider or 150 units on a knob, and 200%
+  per pan bar. Shift is fine, and the depth clamps to ADR-0096's ranges
+  (±48 dB, ±1, ±200%). Alt keeps its meaning on a modulated fader or pan:
+  "this member alone" (§ Track groups). No view sets modulation yet.
 - **Damage.** Each window keeps a dirty-rect list; nodes invalidate
   themselves; a frame redraws only damaged regions (scissored). Removed nodes
   survive the current input dispatch; focus, hover and capture are resolved

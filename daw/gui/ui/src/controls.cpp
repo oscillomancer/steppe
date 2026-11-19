@@ -28,7 +28,11 @@ float toDb(float amplitude) { return amplitude > 1e-8f ? 20.0f * std::log10(ampl
 
 // Modulation (ModulationView): the bar's thickness, how far beside it a press
 // still grabs it, and the depth ranges of ADR-0096 per unit.
-constexpr float kModBar = 3, kModGrab = 3;
+constexpr float kModBar = 3;
+// A depth drag grabs the bar within kModZone units across it (centred on
+// it), and a knob's ring between its face's edge + 1 and + 7, as the rack
+// knob's ring does.
+constexpr float kModZone = 8, kRingIn = 1, kRingOut = 7;
 constexpr double kFaderDepthDb = 48, kPanDepth = 200;
 constexpr double kFaderTravelDb = 72;  // a depth drag's dB per fader travel (-60..+12)
 
@@ -131,6 +135,18 @@ void Fader::setModulation(std::optional<ModulationView> m) {
     invalidate();
 }
 
+Rect Fader::depthZone() const {
+    if (!mod_ || !onDepth) return {};
+    const Rect bar = modulationBar();
+    const float grow = (kModZone - kModBar) / 2;
+    return orientation_ == Orientation::Vertical ? grown(bar, grow, 0) : grown(bar, 0, grow);
+}
+
+Node* Fader::hitTest(Point p) {
+    if (visible && enabled && depthZone().contains(p)) return this;
+    return Node::hitTest(p);
+}
+
 Rect Fader::modulationBar() const {
     if (!mod_) return {};
     const Rect tr = track();
@@ -214,12 +230,8 @@ bool Fader::onPointer(const PointerEvent& e) {
                 orientation_ == Orientation::Vertical
                     ? Rect{bounds().x + 2, tr.bottom() - at * tr.h - 7, bounds().w - 4, 14}
                     : Rect{tr.x + at * tr.w - 5, bounds().y + 2, 10, bounds().h - 4};
-            const Rect grab = orientation_ == Orientation::Vertical
-                                  ? grown(modulationBar(), kModGrab, 0)
-                                  : grown(modulationBar(), 0, kModGrab);
-            // Alt-drag anywhere, or a press on the bar clear of the cap: depth.
-            if (mod_ && onDepth &&
-                ((e.mods & kAlt) || (grab.contains(e.pos) && !cap.contains(e.pos)))) {
+            // A press in the bar's zone, clear of the cap: depth.
+            if (depthZone().contains(e.pos) && !cap.contains(e.pos)) {
                 depthDrag_ = true;
                 press_ = e.pos;
                 pressDepth_ = mod_->depth;
@@ -371,6 +383,17 @@ void PanControl::setModulation(int part, std::optional<ModulationView> m) {
     invalidate();
 }
 
+Rect PanControl::depthZone(int part) const {
+    if (part < 0 || part > 1 || !mod_[part] || !onDepth) return {};
+    const Rect bar = modulationBar(part);
+    return grown(bar, 0, (kModZone - bar.h) / 2);
+}
+
+Node* PanControl::hitTest(Point p) {
+    if (visible && enabled && (depthZone(0).contains(p) || depthZone(1).contains(p))) return this;
+    return Node::hitTest(p);
+}
+
 Rect PanControl::modulationBar(int part) const {
     if (part < 0 || part > 1 || !mod_[part]) return {};
     const Rect tr = track(part);
@@ -436,19 +459,14 @@ bool PanControl::onPointer(const PointerEvent& e) {
             if (e.button != 1) return false;
             if (Root* r = root()) r->focus(this);
             part_ = under;
-            // Alt-drag on a bar, or a press under its track on its modulation
-            // bar: a depth drag.
-            if (mod_[under] && onDepth) {
-                const Rect tr = track(under);
-                const Rect grab{tr.x, tr.bottom(), tr.w, bounds().bottom() - tr.bottom()};
-                if ((e.mods & kAlt) || grab.contains(e.pos)) {
-                    depthDrag_ = true;
-                    press_ = e.pos;
-                    pressDepth_ = mod_[under]->depth;
-                    if (Root* r = root()) r->capture(this);
-                    onDepth(under, pressDepth_, Gesture::Begin);
-                    return true;
-                }
+            // A press in a bar's modulation zone: a depth drag.
+            if (depthZone(under).contains(e.pos)) {
+                depthDrag_ = true;
+                press_ = e.pos;
+                pressDepth_ = mod_[under]->depth;
+                if (Root* r = root()) r->capture(this);
+                onDepth(under, pressDepth_, Gesture::Begin);
+                return true;
             }
             if (e.clicks >= 2) {
                 change(under, home(under), Gesture::Set);
@@ -569,11 +587,16 @@ Rect sliderBar(const Rect& b) {
 }  // namespace
 
 bool Slider::onModulation(Point p) const {
-    if (!mod_) return false;
+    if (!mod_ || !onDepth) return false;
     const Rect b = bounds();
     const float hx = b.x + kInset + static_cast<float>(value_) * (b.w - 2 * kInset);
     const Rect cap{hx - 4, b.y + 2, 8, b.h - 4};
-    return grown(sliderBar(b), 0, kModGrab).contains(p) && !cap.contains(p);
+    return grown(sliderBar(b), 0, (kModZone - kModBar) / 2).contains(p) && !cap.contains(p);
+}
+
+Node* Slider::hitTest(Point p) {
+    if (visible && enabled && onModulation(p)) return this;
+    return Node::hitTest(p);
 }
 
 void Slider::paintModulationBar(Canvas& c) const {
@@ -623,8 +646,8 @@ bool Slider::onPointer(const PointerEvent& e) {
         case T::Down:
             if (e.button != 1) return false;
             if (Root* r = root()) r->focus(this);
-            // Alt-drag, or a press on the bar (the knob's arc): depth.
-            if (mod_ && onDepth && ((e.mods & kAlt) || onModulation(e.pos))) {
+            // A press on the bar (the knob's ring): depth.
+            if (onModulation(e.pos)) {
                 depthDrag_ = true;
                 press_ = e.pos;
                 pressDepth_ = mod_->depth;
@@ -739,11 +762,12 @@ bool Knob::onPointer(const PointerEvent& e) {
 }
 
 bool Knob::onModulation(Point p) const {
-    if (!mod_ || !bounds().contains(p)) return false;
+    if (!mod_ || !onDepth) return false;
     const Rect b = bounds();
     const float radius = std::max(1.0f, std::min(b.w, b.h) / 2 - 3);
     const float dx = p.x - (b.x + b.w / 2), dy = p.y - (b.y + b.h / 2);
-    return std::sqrt(dx * dx + dy * dy) > radius + 0.5f;  // outside the face: the arc
+    const float d = std::sqrt(dx * dx + dy * dy);
+    return d > radius + kRingIn && d <= radius + kRingOut;  // the ring around the face
 }
 
 void Knob::paint(Canvas& c) {

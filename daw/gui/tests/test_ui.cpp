@@ -521,7 +521,7 @@ TEST_CASE(
     CHECK(std::get<0>(panDepths[1]) == 1);
     CHECK(std::get<1>(panDepths[1]) == doctest::Approx(-60 + 50));  // a quarter bar: +50%
     CHECK(pan.second() == 100);
-    // A knob's arc, outside its face, takes the depth drag too.
+    // A knob's ring, outside its face, takes the depth drag too.
     double knobDepth = 0;
     knob.onDepth = [&](double d, Gesture) { knobDepth = d; };
     const ui::Rect kb = knob.bounds();
@@ -530,38 +530,44 @@ TEST_CASE(
     root.pointer({PointerEvent::Type::Up, {kb.x + 1, kb.y + kb.h / 2 - 15}, 1});
     CHECK(knobDepth == doctest::Approx(0.3 + 0.1));  // 15 of the knob's 150 units
     CHECK(knob.value() == doctest::Approx(0.5));
-    // Alt-drag anywhere, the cap and the knob's face included, is a depth
-    // drag too; without Alt the same press moves the value.
+    // The zone is 8 units across the bar: 2.5 beside it still grabs depth,
+    // 3.5 beside it is the fader's own.
     depths.clear();
+    root.pointer({PointerEvent::Type::Down, {bar.right() + 2.4f, lowY}, 1});
+    root.pointer({PointerEvent::Type::Up, {bar.right() + 2.4f, lowY}, 1});
+    CHECK(depths.size() == 2);
+    depths.clear();
+    root.pointer({PointerEvent::Type::Down, {bar.right() + 3.6f, lowY}, 1});
+    root.pointer({PointerEvent::Type::Up, {bar.right() + 3.6f, lowY}, 1});
+    CHECK(depths.empty());
+    // Alt keeps its meaning on a modulated fader: an Alt-drag on the cap
+    // moves the value, and the caller reads Alt ("this member alone").
     const ui::Rect fb = fader.bounds();
     const float capY = bar.bottom() - static_cast<float>(faderPosition(-6)) * bar.h;
     const ui::Point onCap{fb.x + fb.w / 2 - 4, capY};
     root.pointer({PointerEvent::Type::Down, onCap, 1, 1, kAlt});
     root.pointer({PointerEvent::Type::Move, {onCap.x, onCap.y + bar.h * 0.1f}, 1, 1, kAlt});
     root.pointer({PointerEvent::Type::Up, {onCap.x, onCap.y + bar.h * 0.1f}, 1, 1, kAlt});
-    REQUIRE(depths.size() == 3);
-    CHECK(depths[1].first == doctest::Approx(13.2 - 7.2));
-    CHECK(changes == 3);
-    CHECK(fader.value() == -6);
-    root.pointer({PointerEvent::Type::Down, onCap, 1});
-    root.pointer({PointerEvent::Type::Move, {onCap.x, onCap.y + bar.h * 0.1f}, 1});
-    root.pointer({PointerEvent::Type::Up, {onCap.x, onCap.y + bar.h * 0.1f}, 1});
-    CHECK(depths.size() == 3);
+    CHECK(depths.empty());
     CHECK(fader.value() < -6);
-    const ui::Point face{kb.x + kb.w / 2, kb.y + kb.h / 2};
-    root.pointer({PointerEvent::Type::Down, face, 1, 1, kAlt});
-    root.pointer({PointerEvent::Type::Move, {face.x, face.y + 30}, 1, 1, kAlt});
-    root.pointer({PointerEvent::Type::Up, {face.x, face.y + 30}, 1, 1, kAlt});
-    CHECK(knobDepth == doctest::Approx(0.4 - 0.2));
+    CHECK(fader.gestureModifiers() == kAlt);
+    // A knob's ring reaches past its bounds, as the rack knob's does (face
+    // edge + 1 to + 7): 3 units above the knob still grabs it.
+    knobDepth = 0;
+    const ui::Point above{kb.x + kb.w / 2, kb.y - 3};
+    root.pointer({PointerEvent::Type::Down, above, 1});
+    root.pointer({PointerEvent::Type::Move, {above.x, above.y - 15}, 1});
+    root.pointer({PointerEvent::Type::Up, {above.x, above.y - 15}, 1});
+    CHECK(knobDepth == doctest::Approx(0.4 + 0.1));
     CHECK(knob.value() == doctest::Approx(0.5));
-    // Without modulation nothing is drawn and Alt is the caller's again.
+    // Without modulation nothing is drawn and the zone is gone.
     fader.setModulation(std::nullopt);
     CHECK(fader.modulationBar().h == 0);
+    CHECK(fader.depthZone().w == 0);
     depths.clear();
-    root.pointer({PointerEvent::Type::Down, onCap, 1, 1, kAlt});
-    root.pointer({PointerEvent::Type::Up, onCap, 1, 1, kAlt});
+    root.pointer({PointerEvent::Type::Down, {bar.x + 1, lowY}, 1});
+    root.pointer({PointerEvent::Type::Up, {bar.x + 1, lowY}, 1});
     CHECK(depths.empty());
-    CHECK(fader.gestureModifiers() == kAlt);
 }
 
 TEST_CASE("golden image: a small panel in the dark theme") {
