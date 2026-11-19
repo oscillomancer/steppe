@@ -44,30 +44,37 @@ take `section`.
   written, the quality as the first name in the table below. An empty symbol
   means "no chord from here". A chord holds until the next chord point.
 - Invariants: at most one point of a type at a beat; beats finite and ≥ 0;
-  the symbol parses; the number of points is at most 4096 per type.
+  the number of points is at most 4096 per type. That a symbol parses is not
+  an invariant: a later build may write a quality this one lacks (`Cm11`), so
+  an unparsable symbol is data. The commands refuse what does not parse and
+  readers (`context.at`, describe, the index) treat it as an unknown chord:
+  named as written, voiced as nothing.
   `at` and `to` are rounded to 1/960 beat (the MIDI sequence's ppq), so a
   point always lies on the grid the lead sheet and notation use.
 - **Project level only.** There is no per-track key in this work.
 
 **Stored per entry**, so branches merge: each point is its own object in the
 `cx` collection of the session, with `rev`, diff and merge like a marker. The
-file has a top-level `context` section (`points`, in id order, each
-`{id, beat, type, …}` with defaults omitted) and writes the `cx` counter in
+file has a top-level `context` section, `{"points": {"cx_1": {"beat": …,
+"type": …, …}, …}}`, keyed by id in id order like every other collection,
+defaults omitted, and writes the `cx` counter in
 `next_ids` once used. The schema is **2.17**: modulation (ADR-0096)
 lands first and takes 2.16 (design amendment G-d; numbers follow the order of
 landing on integration). A build that does not know the
 section keeps it verbatim as an unknown top-level section, so a file that
 passes through it returns with the points intact and the `cx` counter
-missing.
+missing. The one thing such a build cannot keep is `section: false` on a
+region: it decodes regions without that member and writes them back without
+it, so the region returns as a section. That loss is accepted.
 
 **A file that went through an older build never fails to open for this.** On
 load a missing or low `cx` counter is raised to the highest `cx` id plus one,
 with a `project.counter_derived` warning. A point with a duplicate beat of
 its type keeps the lowest id and drops the rest with a warning naming them; a
-point whose symbol or scale name the loader does not know is kept (an unknown
-scale name is data; only the commands refuse it). Points hold no references
+point whose symbol or scale name the loader does not know is kept (both are
+data; only the commands refuse them, and `Cm11` does not fail the open). Points hold no references
 to other objects, so nothing else can dangle. A hand-edited file tests each
-rule.
+rule, with an unparsable symbol and an unknown scale name among them.
 
 **The index.** A derived, immutable sorted index over the points answers
 `holdsAt(beat)` (key, chord) in O(log n). It is rebuilt only when the
@@ -76,7 +83,12 @@ collection's storage changes and reused when storage is shared, like the
 of the regions through the current `TimeMap`: the count is small and a tempo
 edit moves time-based regions.
 
-**`libs/harmony` is MIT** and has no model dependency. It holds the key,
+**`libs/harmony` is MIT** and has no model dependency. Its chord parser is
+first-party code that moves out of the GPL `libs/notation` into the MIT
+library: the holder relicenses it, which the rules allow, and it is stated
+here so the move is a decision and not an accident. `tools/license-check` and
+`cmake/LicenseIsolation.cmake` list `harmony` with the MIT libraries, beside
+`core-base`, its one dependency. It holds the key,
 scale and chord types, the scale table, chord parse, print and pitches
 (lifted out of the notation compiler, which then calls it),
 `spell(pitch, key)`, `transposeDegrees(pitch, key, degrees)` and the index
@@ -101,7 +113,10 @@ accepting both spellings.
    letter, with the accidental that makes its pitch class (so C-sharp minor
    has `C# D# E F# G# A B`). If a degree would need a double accidental, the
    key is refused by `key.set` with `key.unsupported` and a hint naming the
-   enharmonic key (G-sharp major asks for A-flat major). Pitch classes the
+   enharmonic key (G-sharp major asks for A-flat major). The scale's own
+   degrees decide, not its parent's: G-sharp major pentatonic leaves out the
+   seventh that needs `F##` and is supported; D-sharp major pentatonic keeps
+   the third, `F##`, and is not. Pitch classes the
    scale does not contain take the *direction* of the key: flats
    (`C Db D Eb E F Gb G Ab A Bb B`) when the spelled scale has more flats
    than sharps, sharps (`C C# D D# E F F# G G# A A# B`) when it has more
@@ -198,8 +213,18 @@ not read the context, so a context edit must not compile one. The three
 equivalence checks (`scalarOnly`, `mixOnly`, `patchOnly`) qualify fast paths
 only when something they handle changed, so a context-only edit falls through
 them to a full compile. `Engine::loadNow` therefore gains a fourth shortcut,
-`contextOnly`: when only the context collection differs between the running
-and the new session, nothing is compiled and `latest_` takes the new session.
+`contextOnly`, under three rules. The `cx` storage really differs: a session
+identical to the running one is not a context edit. It runs after the
+`compile` check, like the others, and carries `loadScalarRate`'s deferral
+guards (no deferred edit, no reload that ends a deferral, no seek or loop
+target, no notification reload, the same project directory), because in the
+reload that ends a deferral `latest_` is the deferred session itself and
+"nothing but the context differs" would be true of it, so a deferred playrate
+move would never play (review 37b F1). And it has the same `Session`-member
+binding as the other three lists, since it is a fourth per-member list. When
+only the context differs, nothing is compiled and `latest_` takes the new
+session. Tests: no compile over a `chord.set`; a deferred playrate edit still
+compiles with a chord edit pending.
 When a note source or a rack module reads the context, an edit compiles only
 if something in the project reads it.
 

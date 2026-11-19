@@ -540,8 +540,8 @@ envelope targets exist (a module's knob among them); points sorted; every fx
 belongs to exactly one chain or one plugin module; racks obey rack.md §2.5
 (homes are channels, cables within one rack, Out modules feed channels as
 their record inputs, no cycle through a rack, the limits); context points
-have finite beats ≥ 0, a symbol the chord grammar parses, at most one point of
-a type at a beat and at most 4096 of a type; counters exceed every used ID; tempo map has a point at
+have finite beats ≥ 0, at most one point of a type at a beat and at most 4096
+of a type (that a symbol parses is not an invariant: it is data, ADR-0095); counters exceed every used ID; tempo map has a point at
 beat 0 and meters at bar starts. A violation is a bug (`model.invariant`),
 never a user error — user errors are caught by command validation first.
 
@@ -1443,13 +1443,17 @@ still a render-matrix row.
 "major"}, …}}`, keyed by id in id order, defaults omitted, written only when
 there are points. `next_ids.cx` is written once used. A build that does not
 know the section keeps it as an unknown top-level section; a file that
-passed through one comes back with the points and without the counter.
+passed through one comes back with the points and without the counter, and a
+region marked `section: false` comes back as a section (an older build drops
+the member).
 
 **Load.** A missing or low `cx` counter is raised to the highest `cx` id plus
 one (`project.counter_derived` warning). Of two points of one type at one
 beat the lowest id is kept and the rest dropped with a warning naming them.
-An unknown scale name is kept as data; only the commands refuse it. The open
-never fails for any of this.
+An unknown scale name and a chord symbol the parser does not take (`Cm11`
+from a later build) are kept as data; only the commands refuse them, and
+readers treat the symbol as an unknown chord. The open never fails for any of
+this.
 
 **Commands** (§7). Errors: `key.unsupported` (the tonic and scale need a
 double accidental; hint: the enharmonic key), `chord.unknown_quality` (the

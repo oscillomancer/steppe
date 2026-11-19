@@ -146,6 +146,24 @@ TEST_CASE("spelling by hand") {
     CHECK(degrees(key("G#", Scale::MinorPentatonic)) == "G# B C# D# F#");
 }
 
+TEST_CASE("support is decided by the scale's own degrees, not its parent's") {
+    // G# major needs F## for its seventh; the pentatonic scale leaves the seventh out.
+    CHECK_FALSE(keySupported(key("G#", Scale::Major)));
+    CHECK(keySupported(key("G#", Scale::MajorPentatonic)));
+    CHECK(degrees(key("G#", Scale::MajorPentatonic)) == "G# A# B# D# E#");
+    // D# major pentatonic keeps the third, F##.
+    CHECK_FALSE(keySupported(key("D#", Scale::MajorPentatonic)));
+    // Chromatic has no letters: every tonic is supported, even where the major is not.
+    for (char letter : std::string("ABCDEFG"))
+        for (const char* accidental : {"", "#", "b"})
+            CHECK(keySupported(key(std::string(1, letter) + accidental, Scale::Chromatic)));
+    // Blues (minor pentatonic plus the lowered fifth): refused when one of its own
+    // degrees needs a double accidental, not when only the parent's would.
+    CHECK(keySupported(key("G#", Scale::Blues)));
+    CHECK_FALSE(keySupported(key("Cb", Scale::Blues)));            // Cb Ebb ...
+    CHECK_FALSE(keySupported(key("Gb", Scale::MinorPentatonic)));  // Gb Bbb ...
+}
+
 TEST_CASE("pitch classes outside the scale take the key's direction") {
     CHECK(spellPitchClass(1, key("C", Scale::Major)) == "C#");  // equal: the default table
     CHECK(spellPitchClass(3, key("C", Scale::Major)) == "Eb");

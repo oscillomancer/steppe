@@ -536,10 +536,15 @@ gated.
 
 **Context edits (ADR-0095).** The plan does not read the context track (the
 `cx` collection), so a session that differs from the last one `Engine::load`
-took only in that collection is not compiled: every other collection, the
-project, the blobs and the unknown sections have the same storage, and
-`latest_` takes the new session. It is a shortcut of its own, tried before
-the scalar, mix and patch ones; the three equivalence checks do not list the
+took only in that collection is not compiled: the `cx` storage differs, every
+other collection, the project, the blobs and the unknown sections have the
+same storage, and `latest_` takes the new session. It is a shortcut of its
+own and, like the others, runs only when nothing forces a compile, and never
+while an edit is deferred or for the reload that ends a deferral (the guards
+of `loadScalarRate`; there `latest_` is the deferred session, and a session
+identical to it is not a context edit). It is tried before the scalar, mix and
+patch ones, and its list of `Session` members is bound in the code as theirs
+are; the three equivalence checks do not list the
 context, because each of them qualifies a fast path only when something it
 handles changed, so an edit that changes nothing they handle falls through
 them to a compile. A context edit that comes with any other change compiles

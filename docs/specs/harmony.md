@@ -70,7 +70,9 @@ Melodic minor is the ascending form in both directions.
   nearest scale pitch below, then moves. A chromatic scale has twelve
   degrees. The result is clamped to 0..127 by returning nothing when it falls
   outside.
-- `keySupported(key)`: false when spelling needs a double accidental.
+- `keySupported(key)`: false when spelling one of the scale's own degrees needs a
+  double accidental (the scale's degrees decide, not its parent's; chromatic is
+  always supported).
 - `ContextIndex(keyPoints, chordPoints)` from plain `KeyPoint{beat, key}` and
   `ChordPoint{beat, optional chord}` vectors (any order; an empty chord is "no
   chord from here"); `keyAt(beat)`, `chordAt(beat)`
@@ -92,7 +94,9 @@ Melodic minor is the ascending form in both directions.
    sharps, the sharp table `C C# D D# E F F# G G# A A# B` when it has more
    sharps, otherwise the default table below (a scale with no accidentals, such as C major, A
    minor or D dorian, or with equally many).
-2. **Pentatonic** takes the letters of its parent (major pentatonic: major;
+2. **Pentatonic** (support is decided by its own five degrees: G-sharp major
+   pentatonic `G# A# B# D# E#` is supported though G-sharp major is not,
+   D-sharp major pentatonic needs `F##` and is not) takes the letters of its parent (major pentatonic: major;
    minor pentatonic: natural minor). **Blues** is minor pentatonic plus the
    lowered fifth, spelled as the fifth's letter with a flat. **Chromatic**
    takes the direction of the major scale on the same tonic and the tables
@@ -108,7 +112,9 @@ is supported; G-sharp major needs `F##` and is not.
 
 Every scale's spelling for all 21 tonic spellings (seven letters, each plain,
 `#` and `b`), supported or refused, with the 15 major and 15 minor key
-signatures checked by hand; out-of-scale direction; the default table equal to
+signatures checked by hand; support by the scale's own degrees (G-sharp major
+pentatonic supported, D-sharp major pentatonic refused, chromatic always
+supported); out-of-scale direction; the default table equal to
 the notation printer's output for 0..127; chord parse and print round trips
 for every alias; `chordPitches` equal to the compiler's output for every
 quality and a slash bass; `transposeDegrees` over each scale across octave
