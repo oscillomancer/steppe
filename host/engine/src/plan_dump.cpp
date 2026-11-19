@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <charconv>
 #include <map>
+#include <ranges>
 #include <type_traits>
 
 #include "hardware_midi.h"
@@ -87,10 +88,17 @@ class Dump {
         } else if constexpr (IsVector<V>::value || IsArray<V>::value || std::is_array_v<V>) {
             text += '[';
             bool first = true;
+            using E = std::ranges::range_value_t<V>;
             for (const auto& e : value) {
                 if (!first) text += ' ';
                 first = false;
-                write(e);
+                // An element seen through a proxy (a vector<bool>'s, which
+                // libc++ gives as __bit_const_reference) is written as its
+                // value type.
+                if constexpr (std::is_same_v<std::remove_cvref_t<decltype(e)>, E>)
+                    write(e);
+                else
+                    write(static_cast<E>(e));
             }
             text += ']';
         } else {
