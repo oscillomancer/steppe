@@ -283,11 +283,16 @@ only.
   into the target stage:
   - its tap latency is the Mod Out's latency inside the rack (computed as
     an Out's, rack.md §6);
-  - its `before` is the chain latency ahead of the target stage (the whole
-    chain for a mixer target, plus one grid interval, 32 frames);
+  - its `before` is the chain latency ahead of the target stage: 0 for an
+    input-chain stage, which is outside compensation; for a mixer target
+    the whole chain less one grid interval (32 frames), since it reads one
+    interval ahead;
   - it carries a delay line of held values sized by that compensation, so
     the value the rack computed for timeline sample t reaches the target as
-    the target plays t.
+    the target plays t;
+  - under a master playrate the delay, the rack grid Mod Out samples on and
+    the target's 32-frame grid are in device frames, the graph's domain
+    (ADR-0045), as a sidechain's delay and the `Param` grid are.
   A late source path delays the target as a sidechain does. Cycles are
   refused at edit time (`modulation.cycle`); self-modulation is not
   supported.
@@ -331,8 +336,8 @@ only.
   (step M2); until then they compile.*
 - **Mixer targets** (track volume, pan, width; a send's level). *Not yet
   built (step M2).* The offset at a frame is linear between the values at
-  the target grid points either side of it. The grid interval of
-  compensation added above makes the later value available in time. The
+  the target grid points either side of it. The one-interval lookahead
+  above makes the later value available in time. The
   base plus the offset is clamped to the target's range per sample, before
   the gain ramps. Volume and send level offsets are in dB, pan and width in
   percent.

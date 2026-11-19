@@ -251,6 +251,18 @@ struct RackNode {
     std::vector<std::int64_t> outLatencies;
     std::vector<rack::host::In*> ins;  // Node::rackIns
     std::vector<Id> inIds;
+    // Mod Out modules (ADR-0096), in module id order, and their latencies.
+    // `modValues[k * kModOutInputs + i]`: input i of Mod Out k at each frame
+    // of the block, sized only where a modulation route reads it; `modHeld`,
+    // each one's value at the end of the last block this plan ran.
+    std::vector<rack::host::ModOut*> modOuts;
+    std::vector<Id> modOutIds;
+    std::vector<std::int64_t> modOutLatencies;
+    std::vector<std::vector<double>> modValues;
+    std::vector<double> modHeld;
+    // This block the modules were the other executor's: Mod Outs held their
+    // last values and emitters send nothing (ADR-0096, M-f).
+    bool modStale = false;
     std::vector<NotesFeed> notes;
     std::vector<NotesOutBinding> notesOut;
     std::vector<PluginBinding> plugins;

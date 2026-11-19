@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 
 namespace supple::rack::host {
 
@@ -248,6 +249,35 @@ std::shared_ptr<const ModuleType> transportType() {
     return t;
 }
 
+std::shared_ptr<const ModuleType> modOutType() {
+    static const auto t = [] {
+        static const std::array<std::string, kModOutInputs> keys = [] {
+            std::array<std::string, kModOutInputs> k;
+            for (int i = 0; i < kModOutInputs; ++i)
+                k[static_cast<std::size_t>(i)] = "in_" + std::to_string(i + 1);
+            return k;
+        }();
+        static const std::array<std::string, kModOutInputs> names = [] {
+            std::array<std::string, kModOutInputs> n;
+            for (int i = 0; i < kModOutInputs; ++i)
+                n[static_cast<std::size_t>(i)] = "In " + std::to_string(i + 1);
+            return n;
+        }();
+        std::vector<sd::PortModel> ports;
+        for (std::size_t i = 0; i < keys.size(); ++i)
+            ports.push_back(port(keys[i].c_str(), names[i].c_str(), Signal::Cv, false,
+                                 "A control signal, -1 to 1, that modulation routes take to "
+                                 "parameters outside the rack."));
+        return ModuleType::host(
+            info(kModOut, "Mod Out",
+                 "The rack's control signals to the DAW: modulation routes move parameters of "
+                 "plug-ins and the mixer by them.",
+                 {"io", "modulation"}),
+            {}, std::move(ports));
+    }();
+    return t;
+}
+
 std::unique_ptr<Instance> make(std::shared_ptr<const ModuleType> type,
                                const Instance::Setup& setup) {
     if (!type) return nullptr;
@@ -262,6 +292,8 @@ std::unique_ptr<Instance> make(std::shared_ptr<const ModuleType> type,
         host = std::make_unique<NotesOut>();
     else if (type->id() == kTransport)
         host = std::make_unique<Transport>();
+    else if (type->id() == kModOut)
+        host = std::make_unique<ModOut>();
     else
         return nullptr;
     return Instance::make(std::move(type), std::move(host), setup);
@@ -286,6 +318,26 @@ void Out::process(const HostContext& ctx) SUPPLE_RT {
         const double g = gainOf(lv.at(i));
         left_[ctx.offset + i] += static_cast<float>(a * g);
         right_[ctx.offset + i] += static_cast<float>(b * g);
+    }
+}
+
+// --- Mod Out -------------------------------------------------------------------------
+
+void ModOut::restart(Instance&) SUPPLE_RT { held_.fill(0.0); }
+
+void ModOut::process(const HostContext& ctx) SUPPLE_RT {
+    Instance& in = *ctx.instance;
+    // A call starts on a grid point whatever the host's block size; one
+    // that does not continues the interval, holding its value.
+    const bool onGrid = ((ctx.position % kGrid) + kGrid) % kGrid == 0;
+    for (int k = 0; k < kModOutInputs; ++k) {
+        double& held = held_[static_cast<std::size_t>(k)];
+        if (onGrid) {
+            const double v = in.inputMember(k)[0][0];
+            held = std::isfinite(v) ? std::clamp(v, -1.0, 1.0) : 0.0;
+        }
+        if (double* out = values_[static_cast<std::size_t>(k)])
+            std::fill_n(out + ctx.offset, ctx.frames, held);
     }
 }
 

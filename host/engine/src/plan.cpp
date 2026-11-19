@@ -193,6 +193,12 @@ Result<std::vector<Id>> topoOrder(const Session& s) {
             for (Id module : model::midiFollowers(s, *r.to.track, from))
                 link(*from, s.modules.find(module)->rack);
     }
+    // Modulation routes (ADR-0096): the source rack before the target's node.
+    for (const auto& e : s.modulations) {
+        const model::RackModule* m = s.modules.find(e.value->source.module);
+        const auto to = model::modulationTargetNode(s, e.value->target);
+        if (m && to) link(m->rack, *to);
+    }
     std::set<Id> ready;
     for (const auto& [id, d] : indeg)
         if (d == 0) ready.insert(id);
@@ -666,6 +672,52 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         pe.e.to = pe.to;
         p.edges.push_back(std::move(pe.e));
     }
+    // Modulation routes (ADR-0096), in route id order. Every route is an
+    // edge, enabled or not (amendment M-l).
+    for (const auto& e : s.modulations) {
+        const model::Modulation& m = *e.value;
+        const model::RackModule* module = s.modules.find(m.source.module);
+        const auto target = model::modulationTargetNode(s, m.target);
+        if (!module || !target || !index.count(module->rack) || !index.count(*target)) continue;
+        ModEdge me;
+        me.route = e.id;
+        me.from = index.at(module->rack);
+        me.to = index.at(*target);
+        me.fromId = module->rack;
+        me.toId = *target;
+        me.target = m.target;
+        me.depth = m.depth;
+        me.enabled = m.enabled;
+        for (int i = 0; i < rack::host::kModOutInputs; ++i)
+            if (m.source.input == "in_" + std::to_string(i + 1)) me.input = i;
+        if (const RackNode* rack = p.nodes[me.from].rack.get()) {
+            const auto at =
+                std::find(rack->modOutIds.begin(), rack->modOutIds.end(), m.source.module);
+            if (at != rack->modOutIds.end())
+                me.modOut = static_cast<int>(at - rack->modOutIds.begin());
+        }
+        if (me.modOut < 0) {
+            me.inert = true;
+            p.warnings.push_back(e.id.str() + ": its Mod Out " + m.source.module.str() +
+                                 " is not available; the modulation is inert");
+        }
+        if (m.target.object.kind == Kind::Fx) {
+            const model::Track& owner = *s.tracks.find(*target);
+            const auto in = std::find(owner.chain.begin(), owner.chain.end(), m.target.object);
+            if (in != owner.chain.end())
+                me.stage = static_cast<int>(in - owner.chain.begin());
+            else
+                me.inputStage = static_cast<int>(
+                    std::find(owner.inputChain.begin(), owner.inputChain.end(), m.target.object) -
+                    owner.inputChain.begin());
+        } else if (!me.inert) {
+            me.inert = true;  // ADR-0096: mixer targets arrive in step M2
+            p.warnings.push_back(e.id.str() + ": modulating " + m.target.object.str() + " " +
+                                 m.target.param + " is not built yet (step M2); it is inert");
+        }
+        p.nodes[me.to].modIn.push_back(p.modEdges.size());
+        p.modEdges.push_back(std::move(me));
+    }
     // Solo (model::soloSilencedTracks, which the readouts share). A rack is
     // heard through its channels.
     {
@@ -772,6 +824,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
                     return f.device.has_value() || f.sourceDevice.has_value();
                 });
             for (std::size_t e : n.in) n.live = n.live || p.nodes[p.edges[e].from].live;
+            for (std::size_t me : n.modIn) n.live = n.live || p.nodes[p.modEdges[me].from].live;
             if (!n.live && keepLive && std::binary_search(keepLive->begin(), keepLive->end(), n.id))
                 n.live = p.heldLive = true;
             p.anyLive = p.anyLive || n.live;
@@ -803,6 +856,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
                                t.record.mode == model::RecordMode::MidiReplace))
             for (std::size_t edge : n.in) n.live = n.live || p.edges[edge].midi;
         for (std::size_t e : n.in) n.live = n.live || p.nodes[p.edges[e].from].live;
+        for (std::size_t me : n.modIn) n.live = n.live || p.nodes[p.modEdges[me].from].live;
         if (!n.live && keepLive && std::binary_search(keepLive->begin(), keepLive->end(), n.id))
             n.live = p.heldLive = true;
         p.anyLive = p.anyLive || n.live;
@@ -824,6 +878,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         // Auxiliary links do not cross the frontier (its rings carry the main
         // pair): a strip that feeds a live strip's aux channels, or is fed
         // from aux into a live one, plays live too, and what it feeds.
+        std::vector<std::size_t> pulledLive;  // racks a modulation target made live
         for (bool changed = true; changed;) {
             changed = false;
             for (const Edge& e : p.edges)
@@ -847,6 +902,23 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
                         n.live = true;
                         changed = true;
                     }
+            // A modulation edge carries no audio, so it cannot cross the
+            // frontier: source and target run in one executor (ADR-0096).
+            for (const ModEdge& me : p.modEdges) {
+                Node& source = p.nodes[me.from];
+                Node& target = p.nodes[me.to];
+                if (target.live && !source.live) {
+                    source.live = changed = true;
+                    if (std::find(pulledLive.begin(), pulledLive.end(), me.from) ==
+                        pulledLive.end()) {
+                        pulledLive.push_back(me.from);
+                        p.warnings.push_back(me.route.str() + ": " + me.fromId.str() +
+                                             " plays live because its target " + me.toId.str() +
+                                             " does (modulation.live)");
+                    }
+                }
+                if (source.live && !target.live) target.live = changed = true;
+            }
         }
     }
     // Compile each control once, then copy its curves to independent consumers.
@@ -1221,6 +1293,9 @@ Status prepare(Plan& p, const Session& s) {
             continue;
         edge.rackPadding = std::max<std::int64_t>(0, source.latChain - edge.rackLatency);
     }
+    for (ModEdge& me : p.modEdges)
+        if (me.modOut >= 0)
+            me.tap = p.nodes[me.from].rack->modOutLatencies[static_cast<std::size_t>(me.modOut)];
     auto inputs = [&](std::size_t target, auto&& visit) {
         Node& n = p.nodes[target];
         for (std::size_t ei : n.in) {
@@ -1232,6 +1307,19 @@ Status prepare(Plan& p, const Session& s) {
                 for (auto& link : e.auxLinks)
                     visit(e.from, tapOffset(source, link.from >= 2 ? model::Tap::PostFader : e.tap),
                           0, link.delay);
+        }
+        // A modulation edge, as a sidechain into its target stage (ADR-0096):
+        // a chain stage's latency ahead of it; the input chain is outside
+        // compensation; a mixer target follows the whole chain and reads one
+        // grid interval ahead for its interpolation, so its value arrives
+        // that much earlier.
+        for (std::size_t mi : n.modIn) {
+            ModEdge& me = p.modEdges[mi];
+            const std::int64_t before =
+                me.stage >= 0        ? n.chain[static_cast<std::size_t>(me.stage)].before
+                : me.inputStage >= 0 ? 0
+                                     : n.latChain - std::int64_t{kAutomationStep};
+            visit(me.from, me.tap, before, me.delay);
         }
     };
     // Retain the forward arrivals as diagnostics and the main output's startup
@@ -1616,6 +1704,11 @@ Status prepare(Plan& p, const Session& s) {
     for (std::size_t i = 0; i < p.nodes.size(); ++i)
         for (std::size_t e : p.nodes[i].in)
             deps[i].push_back(static_cast<std::uint32_t>(p.edges[e].from));
+    for (std::size_t i = 0; i < p.nodes.size(); ++i)
+        for (std::size_t me : p.nodes[i].modIn) {
+            assert(p.nodes[p.modEdges[me].from].live == p.nodes[i].live);
+            deps[i].push_back(static_cast<std::uint32_t>(p.modEdges[me].from));
+        }
     p.graph = std::make_unique<TaskGraph>();
     p.graph->build(deps);
     // The executors' shares (ADR-0014). Live propagates downstream, so a

@@ -106,6 +106,37 @@ struct MonoDelay {
     }
 };
 
+// A compensation delay of held control values (ADR-0096): the modulation
+// edge's, in doubles so a value arrives as the rack computed it.
+struct ModDelay {
+    std::vector<double> buf;
+    std::size_t pos = 0;
+    std::int64_t length = 0;
+    void init(std::int64_t n) {
+        length = n;
+        buf.assign(static_cast<std::size_t>(std::max<std::int64_t>(n, 1)), 0.0);
+        pos = 0;
+    }
+    void clear() SUPPLE_RT {
+        std::fill(buf.begin(), buf.end(), 0.0);
+        pos = 0;
+    }
+    // `out[i]` is `in[i]` from `length` frames earlier.
+    void process(const double* in, double* out, std::uint32_t frames) SUPPLE_RT {
+        if (length == 0) {
+            std::copy_n(in, frames, out);
+            return;
+        }
+        const auto n = static_cast<std::size_t>(length);
+        for (std::uint32_t i = 0; i < frames; ++i) {
+            const double d = buf[pos];
+            buf[pos] = in[i];
+            out[i] = d;
+            pos = pos + 1 == n ? 0 : pos + 1;
+        }
+    }
+};
+
 struct Stereo {
     std::vector<float> l, r;
     void init(std::size_t n) {
@@ -446,6 +477,30 @@ struct Edge {
     bool frontier = false;
     std::size_t ring = 0;  // index into Plan::frontierRings
     Stereo frontierBuf;
+};
+
+// A modulation route (ADR-0096): from a rack's Mod Out input to the node
+// that applies its target. Every route is an edge, enabled or not
+// (amendment M-l): it orders its source first, runs both in one executor
+// (liveness goes both ways) and is compensated as a sidechain into its
+// target stage. It carries no audio.
+struct ModEdge {
+    Id route;                      // mr_*
+    std::size_t from = 0, to = 0;  // node indices: the source rack, the target's node
+    Id fromId{}, toId{};
+    int modOut = -1;  // the source rack's Mod Out (RackNode::modOuts); -1: not installed
+    int input = 0;    // 0 .. kModOutInputs - 1
+    model::EnvTarget target;
+    // Where the target is: a stage of the node's chain, of its input chain,
+    // or neither (a mixer target).
+    int stage = -1, inputStage = -1;
+    double depth = 0.0;
+    bool enabled = true;
+    // Compiled but not applied, with a plan warning: a mixer target before
+    // step M2, a Mod Out whose type is not installed.
+    bool inert = false;
+    std::int64_t tap = 0;  // the Mod Out's latency in its rack
+    ModDelay delay;        // sized by the latency solve
 };
 
 // An automated plugin parameter (engine.md §1.4, ADR-0010): semantic
@@ -791,8 +846,9 @@ struct Node {
                : c == 1 ? sum.r.data()
                         : aux[static_cast<std::size_t>(c - 2)].data();
     }
-    std::vector<std::size_t> in;   // incoming edges, in summation order
-    std::vector<std::size_t> out;  // source-owned send encoders
+    std::vector<std::size_t> in;     // incoming edges, in summation order
+    std::vector<std::size_t> out;    // source-owned send encoders
+    std::vector<std::size_t> modIn;  // incoming modulation edges (Plan::modEdges)
     std::vector<Stage> chain;
     // Input FX (a channel's input_chain): they process its record input, which
     // is then monitored and recorded, whenever the track is armed with an
@@ -956,6 +1012,7 @@ struct Plan {
     // is live whenever anything is, and all of them share outputLatency.
     std::vector<OutputTap> outputs;
     std::vector<Edge> edges;
+    std::vector<ModEdge> modEdges;  // modulation routes (ADR-0096), in route id order
     // Every node by id, sorted (indexForCarry): an adoption finds a node's
     // counterpart in log n steps, whichever earlier plan it carries from.
     // Node ids are unique within a plan (asserted in debug builds).
