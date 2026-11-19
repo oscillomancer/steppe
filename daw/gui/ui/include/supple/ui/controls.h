@@ -9,6 +9,8 @@
 
 #include <chrono>
 #include <functional>
+#include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -17,6 +19,34 @@
 namespace supple::ui {
 
 enum class Gesture { Begin, Move, End, Set };  // Set: one-shot (double-click reset, wheel, keys)
+
+// A modulated control (ADR-0096, gui.md §4.4): what its modulation routes
+// can add to it and add now, in the control's own unit (dB on a fader, the
+// normalized 0..1 travel on a slider or knob, percent on a pan bar). Drawn
+// in signal-cv as the rack knob's ring is: the span faint, the live value
+// bright with a dot; a fader, slider or pan bar shows it as a bar beside its
+// track (over the cap, so the live value shows under the hand), a knob as an
+// arc on its travel. An Alt-drag anywhere on the control, or a drag that
+// starts on the bar (the knob's arc, as a rack knob's ring sets its cable's
+// amount), changes `depth` and reports it through the control's onDepth; the
+// value is left alone. On a modulated fader or pan with onDepth set, Alt
+// therefore no longer reaches the caller as "this member alone".
+struct ModulationView {
+    double low = 0, high = 0;    // the smallest and largest offset the routes can add
+    std::optional<double> live;  // the offset now (telemetry); unset: not playing
+    double depth = 0;            // the depth a drag on the bar edits (one route's)
+    bool operator==(const ModulationView&) const = default;
+};
+
+// One route as the span needs it: its depth in the control's unit, and
+// whether its signal is 0..1 (unipolar, gate, phase) or -1..1 (ADR-0096,
+// "Range"). The span is the sum over routes: depth × [-1, 1], or depth ×
+// [0, 1] for a unipolar route (a negative depth spans downwards).
+struct ModulationRoute {
+    double depth = 0;
+    bool unipolar = false;
+};
+ModulationView modulationSpan(std::span<const ModulationRoute> routes);
 
 // dB <-> 0..1 position: a square-root taper over -60..+12 dB, -inf below.
 // Unity sits near 70 % of the travel; the bottom 2 % is silence.
@@ -33,8 +63,13 @@ class Fader : public Node {
     void setValue(double db);  // from the model; no callback during a drag
     double value() const { return db_; }
     bool dragging() const { return dragging_; }
-    void cancelGesture() { dragging_ = false; }
+    void cancelGesture() { dragging_ = depthDrag_ = false; }
     unsigned gestureModifiers() const { return gestureMods_; }
+    // Modulation in dB (depth -48..48); unset: none drawn, no depth drag.
+    void setModulation(std::optional<ModulationView> m);
+    const std::optional<ModulationView>& modulation() const { return mod_; }
+    std::function<void(double depth, Gesture)> onDepth;
+    Rect modulationBar() const;  // where the bar is drawn (empty without modulation)
 
     Size measure(const Canvas& canvas, Size available) override;
     void paint(Canvas& canvas) override;
@@ -47,10 +82,11 @@ class Fader : public Node {
     Rect track() const;
     void change(double db, Gesture g);
     Orientation orientation_;
-    double db_ = 0, pressDb_ = 0;
+    double db_ = 0, pressDb_ = 0, pressDepth_ = 0;
     Point press_{};
-    bool dragging_ = false;
+    bool dragging_ = false, depthDrag_ = false;
     unsigned gestureMods_ = 0;
+    std::optional<ModulationView> mod_;
 };
 
 // A normalized slider: [0, 1] along its width, for values whose curve the
@@ -70,6 +106,10 @@ class Slider : public Node {
     double defaultValue() const { return defaultValue_; }
     bool dragging() const { return dragging_; }
     static constexpr float kInset = 10;  // knob travel inset per side
+    // Modulation on the 0..1 travel (depth -1..1); unset: none drawn.
+    void setModulation(std::optional<ModulationView> m);
+    const std::optional<ModulationView>& modulation() const { return mod_; }
+    std::function<void(double depth, Gesture)> onDepth;
 
     Size measure(const Canvas& canvas, Size available) override;
     void paint(Canvas& canvas) override;
@@ -80,13 +120,17 @@ class Slider : public Node {
 
   protected:
     virtual double dragDelta(Point from, Point to) const;
+    // Whether a press at `p` starts a depth drag: on the bar (the knob's arc).
+    virtual bool onModulation(Point p) const;
+    void paintModulationBar(Canvas& c) const;
+    std::optional<ModulationView> mod_;
 
   private:
     Rect track() const;
     void change(double value, Gesture g);
-    double value_ = 0, pressValue_ = 0, defaultValue_ = 0;
+    double value_ = 0, pressValue_ = 0, defaultValue_ = 0, pressDepth_ = 0;
     Point press_{};
-    bool dragging_ = false;
+    bool dragging_ = false, depthDrag_ = false;
 };
 
 // A normalized round knob, with the slider's gestures/default/keys and a
@@ -101,6 +145,7 @@ class Knob : public Slider {
 
   protected:
     double dragDelta(Point from, Point to) const override;
+    bool onModulation(Point p) const override;
 };
 
 // Pan -100 (left) .. +100 (right) as a horizontal bar from the centre. Split
@@ -122,8 +167,14 @@ class PanControl : public Node {
     double second() const { return second_; }
     Split split() const { return split_; }
     int part() const { return part_; }  // the bar the last gesture moved: 0 or 1
-    void cancelGesture() { dragging_ = false; }
+    void cancelGesture() { dragging_ = depthDrag_ = false; }
     unsigned gestureModifiers() const { return gestureMods_; }
+    // Modulation of a bar (0: the pan or dual's left, 1: the second) in
+    // percent (depth -200..200); unset: none drawn.
+    void setModulation(int part, std::optional<ModulationView> m);
+    const std::optional<ModulationView>& modulation(int part) const { return mod_[part]; }
+    std::function<void(int part, double depth, Gesture)> onDepth;
+    Rect modulationBar(int part) const;
     Size measure(const Canvas& canvas, Size available) override;
     void paint(Canvas& canvas) override;
     bool onPointer(const PointerEvent& e) override;
@@ -135,12 +186,13 @@ class PanControl : public Node {
     void change(int part, double value, Gesture g);
     double home(int part) const;  // a double-click's value
     Rect track(int part) const;
-    double pan_ = 0, second_ = 100, pressValue_ = 0;
+    double pan_ = 0, second_ = 100, pressValue_ = 0, pressDepth_ = 0;
     Split split_ = Split::None;
     int part_ = 0;
     Point press_{};
-    bool dragging_ = false;
+    bool dragging_ = false, depthDrag_ = false;
     unsigned gestureMods_ = 0;
+    std::optional<ModulationView> mod_[2];
 };
 
 // Stereo peak/RMS meter, -60..+6 dBFS. Readings come from EngineApp::meters

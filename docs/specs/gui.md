@@ -252,6 +252,25 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   frame, then services the model. `Root::pointer` (tests, scripts) delivers
   every motion at once, as does a capture that does not coalesce (item and
   envelope drags, drawing tools).
+  A fader, slider, knob or pan bar can show modulation (ADR-0096,
+  `ui::ModulationView`): the offsets its routes can add (the span) and add now
+  (the live value), in the control's unit: dB on a fader, the 0..1 travel on a
+  slider or knob, percent on a pan bar. `ui::modulationSpan` sums the routes,
+  each over its signal's range: depth × −1..1, or depth × 0..1 for a unipolar,
+  gate or phase source, so a span need not be centred on the value. It is drawn
+  in `signal-cv` as the rack knob's ring is (§4.12): the span faint, the live
+  value bright from the value to a dot. Faders, sliders and pan bars draw it as
+  a 3-unit bar beside the track (right of a vertical fader, under the others),
+  over the cap so the live value shows under the hand. Knobs draw it as an arc
+  on the travel. An Alt-drag anywhere on a modulated control, or a drag that
+  starts on its bar (a knob's arc, outside the face), changes the depth of the
+  route the view names and reports Begin/Move/End through `onDepth`, leaving
+  the value alone. The drag spans the same travel as a value drag: 72 dB per
+  fader length, the full 0..1 on a slider or 150 units on a knob, and 200% per
+  pan bar. Shift is fine, and the depth clamps to ADR-0096's ranges (±48 dB,
+  ±1, ±200%). On a modulated control Alt is therefore not "this member alone"
+  (§ Track groups); an unmodulated control passes Alt on as before. No view
+  sets modulation yet.
 - **Damage.** Each window keeps a dirty-rect list; nodes invalidate
   themselves; a frame redraws only damaged regions (scissored). Removed nodes
   survive the current input dispatch; focus, hover and capture are resolved
