@@ -6,6 +6,7 @@
 #include "supple/base/sha256.h"
 #include "supple/model/audio_warp.h"
 #include "supple/model/schemas.h"
+#include "supple/model/take_owner.h"
 #include "transients.h"
 
 namespace supple::engine {
@@ -44,10 +45,8 @@ Result<Id> takeId(const model::Session& s, const std::string& text) {
     return *id;
 }
 const model::Item* owner(const model::Session& s, Id id) {
-    for (const auto& e : s.items)
-        if (std::find(e.value->takes.begin(), e.value->takes.end(), id) != e.value->takes.end())
-            return e.value.get();
-    return nullptr;
+    const auto held = model::takeOwner(s, id);
+    return held ? s.items.find(*held) : nullptr;
 }
 Status warpAllowed(const model::Session& s, Id id) {
     const auto* t = s.takes.find(id);

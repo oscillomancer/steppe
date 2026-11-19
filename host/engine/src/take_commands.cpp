@@ -21,6 +21,7 @@
 #include "supple/base/sha256.h"
 #include "supple/engine/app.h"
 #include "supple/model/schemas.h"
+#include "supple/model/take_owner.h"
 
 namespace supple::engine {
 namespace {
@@ -29,11 +30,9 @@ Result<json::Value> invoke(const char* name, json::Value args, Context& ctx) {
     return ctx.service<const cmd::Registry>().find(name)->invoke(args, ctx);
 }
 
-// The item holding `take`.
+// The item holding `take` (its owner, model::takeOwner).
 Result<Id> itemOfTake(const model::Session& s, Id take, const std::string& path) {
-    for (const auto& e : s.items)
-        if (std::find(e.value->takes.begin(), e.value->takes.end(), take) != e.value->takes.end())
-            return e.id;
+    if (const auto owner = model::takeOwner(s, take)) return *owner;
     return Error("take.orphan", take.str() + " belongs to no item", path,
                  "use a take from take.list");
 }

@@ -9,6 +9,7 @@
 #include "supple/model/freeze.h"
 #include "supple/model/groups.h"
 #include "supple/model/numeric.h"
+#include "supple/model/take_owner.h"
 
 namespace supple::engine {
 // Omission leaves a field unchanged; explicit null clears it. Preserve null
@@ -49,9 +50,8 @@ inline Status checkUnlocked(const model::Session& s, model::Id item, std::string
     return {};
 }
 inline Status checkUnlockedTake(const model::Session& s, model::Id take, std::string path) {
-    for (const auto& e : s.items)
-        if (std::find(e.value->takes.begin(), e.value->takes.end(), take) != e.value->takes.end())
-            return checkUnlocked(s, e.id, std::move(path));
+    if (const auto owner = model::takeOwner(s, take))
+        return checkUnlocked(s, *owner, std::move(path));
     return {};
 }
 

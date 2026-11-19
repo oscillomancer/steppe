@@ -4,6 +4,7 @@
 #include "supple/model/audio_warp.h"
 #include "supple/model/groups.h"
 #include "supple/model/numeric.h"
+#include "supple/model/take_owner.h"
 
 #include <algorithm>
 #include <array>
@@ -378,7 +379,10 @@ struct Checker {
     }
 
     void itemsAndTakes() {
-        std::map<Id, Id> takeOwner;
+        // Each take has one owner (ADR-0097): a later claim is a fault, and a
+        // take nothing holds is an orphan.
+        const TakeOwners owners(s);
+        std::set<Id> claimed;
         for (const auto& e : s.items) {
             const Item& it = *e.value;
             if (!s.tracks.contains(it.track))
@@ -386,10 +390,9 @@ struct Checker {
             for (Id t : it.takes) {
                 if (!s.takes.contains(t))
                     fail(at("items", e.id, "takes"), "take " + t.str() + " does not exist");
-                auto [pos, fresh] = takeOwner.emplace(t, e.id);
-                if (!fresh)
+                if (!claimed.insert(t).second)
                     fail(at("items", e.id, "takes"),
-                         t.str() + " also belongs to " + pos->second.str());
+                         t.str() + " also belongs to " + owners.of(t)->str());
             }
             if (it.activeTake &&
                 std::find(it.takes.begin(), it.takes.end(), *it.activeTake) == it.takes.end())
@@ -400,7 +403,7 @@ struct Checker {
             if (!(it.length >= 0)) fail(at("items", e.id, "length"), "negative length");
         }
         for (const auto& e : s.takes) {
-            if (!takeOwner.count(e.id)) fail(at("takes", e.id), e.id.str() + " belongs to no item");
+            if (!owners.of(e.id)) fail(at("takes", e.id), e.id.str() + " belongs to no item");
             const Take& t = *e.value;
             if (t.source) {
                 const bool ok = (t.source->kind == Kind::Media && s.media.contains(*t.source)) ||
