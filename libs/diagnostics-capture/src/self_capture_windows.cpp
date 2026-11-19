@@ -24,11 +24,11 @@
 #if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
 #define SUPPLE_SELF_CAPTURE_SANITIZER 1
 #endif
-// The bridge's fault handlers on Windows (topic 6c): the last-chance exception filter, SIGABRT
-// and std::terminate. A handler here runs in ordinary thread context, not a signal, but it keeps
-// the same rule: static storage, system calls and arithmetic only, so a heap or a lock the
-// failing thread was holding cannot stop it. The walk reads the stack through the OS unwinder
-// after checking that the stack pointer lies on the thread's own stack.
+// The bridge's fault handlers on Windows (topic 6c): the last-chance exception filter, SIGABRT,
+// SIGSEGV, SIGILL, SIGFPE and std::terminate. A handler here runs in ordinary thread context, not a
+// signal, but it keeps the same rule: static storage, system calls and arithmetic only, so a heap
+// or a lock the failing thread was holding cannot stop it. The walk reads the stack through the OS
+// unwinder after checking that the stack pointer lies on the thread's own stack.
 namespace supple::diagnostics::selfcapture {
 namespace {
 LPTOP_LEVEL_EXCEPTION_FILTER priorFilter = nullptr;
@@ -49,12 +49,16 @@ bool readOwn(std::uint64_t address, void* out, std::size_t bytes) {
 }
 
 [[noreturn]] void terminateHook() noexcept;
+void installFaultSignals() noexcept;
 void threadHook() noexcept {
     // Room on the stack for the handler after an overflow, and our terminate hook on this thread
     // (the runtime keeps the handler per thread).
     ULONG bytes = 64 * 1024;
     (void)SetThreadStackGuarantee(&bytes);
     if (terminateHooked.load(std::memory_order_acquire)) (void)std::set_terminate(terminateHook);
+    // The runtime keeps the SIGSEGV, SIGILL and SIGFPE actions per thread too (SIGABRT's is the
+    // process's): a thread starts with the defaults, whatever the thread that installed ours has.
+    installFaultSignals();
 }
 
 Fault faultFrom(const CONTEXT* context) noexcept {
@@ -106,6 +110,71 @@ void abortSignal(int) {
     }
     // Ends at once, as the bridge's abort handler did before capture (CI 44242073297).
     TerminateProcess(GetCurrentProcess(), kFailFast);
+}
+
+// SIGSEGV, SIGILL and SIGFPE as the C runtime delivers them, from two places. `raise()` calls the
+// handler on the raising thread, with the thread's exception pointers cleared (and with no
+// handler, `raise()` ends the process with exit code 3: no exception, nothing for the host to
+// read as a crash). The runtime's filter around `main` and around a thread it started
+// (`_seh_filter_exe`) calls it for an unhandled hardware fault of that thread, with the pointers
+// set, and then resumes the faulting code: so the handler must never return on that path, and the
+// capture must be of the fault's context, not of this frame. Either way the process ends with the
+// status the fault itself has (an access violation, an illegal instruction, a divide by zero), so
+// the host reads an exception, as it does for a fault that reached the last-chance filter.
+// The runtime's `__pxcptinfoptrs()`: the address of the calling thread's exception pointers. It is
+// the function behind the `_pxcptinfoptrs` macro of the C runtime's headers, which the Windows
+// SDK's do not declare, so it is found by name in the runtime the process loaded (the debug one
+// first) when the handlers are installed, never inside a handler.
+using ExceptionPointersFn = void** (*)();
+ExceptionPointersFn exceptionPointersOfThread = nullptr;
+
+ExceptionPointersFn findExceptionPointers() noexcept {
+    for (const wchar_t* name : {L"ucrtbased.dll", L"ucrtbase.dll"})
+        if (const HMODULE runtime = GetModuleHandleW(name))
+            if (void* found = reinterpret_cast<void*>(GetProcAddress(runtime, "__pxcptinfoptrs")))
+                return reinterpret_cast<ExceptionPointersFn>(found);
+    return nullptr;
+}
+
+UINT faultStatus(int signalNumber) noexcept {
+    return signalNumber == SIGILL   ? 0xC000001Du   // STATUS_ILLEGAL_INSTRUCTION
+           : signalNumber == SIGFPE ? 0xC0000094u   // STATUS_INTEGER_DIVIDE_BY_ZERO
+                                    : 0xC0000005u;  // STATUS_ACCESS_VIOLATION
+}
+
+void faultSignal(int signalNumber) {
+    const std::uint64_t start = monotonic();
+    const std::uint64_t tid = GetCurrentThreadId();
+    const auto* exception = static_cast<const EXCEPTION_POINTERS*>(*exceptionPointersOfThread());
+    CONTEXT here{};
+    const CONTEXT* context = &here;
+    UINT status = faultStatus(signalNumber);
+    if (exception && exception->ContextRecord && exception->ExceptionRecord) {
+        context = exception->ContextRecord;
+        status = exception->ExceptionRecord->ExceptionCode;
+    } else {
+        RtlCaptureContext(&here);
+    }
+    if (beginCapture(tid)) {
+        (void)captureAndPublish(faultFrom(context), start);
+        endCapture();
+    } else {
+        awaitCapture(tid, start);
+    }
+    TerminateProcess(GetCurrentProcess(), status);
+}
+
+// Per thread: the runtime keeps the actions for these three signals in the thread's own table
+// (a thread starts on the default one, and `signal` changes only the calling thread's), so every
+// thread that can run a plug-in installs them as it registers (`threadHook`), the main thread as
+// the handlers go in. A thread nobody registered (one a plug-in makes itself) keeps the runtime's
+// default: its `raise(SIGSEGV)` still ends the process with exit code 3. The runtime resets a
+// handler to the default before it calls it, which is fine: the handler ends the process.
+void installFaultSignals() noexcept {
+    if (!exceptionPointersOfThread) return;
+    (void)std::signal(SIGSEGV, faultSignal);
+    (void)std::signal(SIGILL, faultSignal);
+    (void)std::signal(SIGFPE, faultSignal);
 }
 
 [[noreturn]] void terminateHook() noexcept {
@@ -219,6 +288,10 @@ bool installHandlers() noexcept {
     // Replaces the bridge's earlier SIGABRT handler (which only ended the process with the same
     // status): this one captures first and then ends it the same way.
     (void)std::signal(SIGABRT, abortSignal);
+    // Where the runtime's exception pointers cannot be found, nothing is installed: a handler
+    // would then turn a main-thread fault's context into this frame's.
+    exceptionPointersOfThread = findExceptionPointers();
+    installFaultSignals();  // this thread's; each registered thread's follows from threadHook
     priorTerminate = std::set_terminate(terminateHook);
     terminateHooked.store(true, std::memory_order_release);
     ULONG bytes = 64 * 1024;

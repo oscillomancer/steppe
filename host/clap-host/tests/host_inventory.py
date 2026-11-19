@@ -177,25 +177,35 @@ if not sanitized:
     scenarios=[(4,"fault_in_image","bridge_audio","process",faults),
                (8,"fault_in_image",None,None,faults),
                (5,"fault_in_image","bridge_control","destroy",faults)]
+    # What each end must say, by mode: the fixture plug-in's mode, the attribution level, the role
+    # of the thread it faulted on, the entry it was in, and the native status. A POSIX status is a
+    # signal. A Windows status is an NT status, as the signed 32-bit value the report carries:
+    # 0xC0000409 (a fast-fail) ends abort() and std::terminate (the bridge's SIGABRT handler),
+    # 0xC0000005 ends raise(SIGSEGV) (the bridge's SIGSEGV handler: the C runtime's default would
+    # be exit code 3, which the host reads as an orderly exit), 0xC00000FD is a stack overflow.
     if posix:
-        # raise(SIGSEGV) and abort() end a Windows bridge with exit code 3, which is no crash to
-        # the host there; a stack overflow and std::terminate are not yet shown on Windows.
         scenarios+=[(1,"active_token","bridge_audio","process",(11,)),
                     (6,"active_token","bridge_audio","process",(6,)),
                     (7,"fault_in_image","bridge_audio",None,faults),
                     (9,"active_token","bridge_audio","process",(6,))]
+    else:
+        scenarios+=[(1,"active_token","bridge_audio","process",(-1073741819,)),
+                    (6,"active_token","bridge_audio","process",(-1073740791,)),
+                    (7,"fault_in_image","bridge_audio",None,(-1073741571,)),
+                    (9,"active_token","bridge_audio","process",(-1073740791,))]
     reports_by_mode={}
     for mode,level,registered,entry,codes in scenarios:
         e,ended=bridge_report("bridged-one",str(mode))
         reports_by_mode[mode]=e
         member=named(e)
         label=(mode,e["attribution"],e["threads"][0],ended)
-        if mode==7 and sys.platform=="darwin":
+        if mode==7 and sys.platform in ("darwin","win32"):
             # Each frame of the overflowing recursion holds a 4096-byte buffer, which macOS's
-            # compiler probes with ___chkstk_darwin, a system library's function: the guard page
-            # is hit there, so the fault is in a system library called from the plug-in
-            # (`active_token`, the spec's label for that), not in the plug-in's own code. Either is
-            # right; what is said must be consistent with where the fault frame is.
+            # compiler probes with ___chkstk_darwin, a system library's function (and Windows's
+            # with __chkstk, which each image carries its own copy of or takes from the runtime):
+            # the guard page may be hit there, so the fault is in a library called from the
+            # plug-in (`active_token`, the spec's label for that), not in the plug-in's own code.
+            # Either is right; what is said must be consistent with where the fault frame is.
             assert e["attribution"]["confidence"] in ("fault_in_image","active_token"),label
             level=e["attribution"]["confidence"]
             ids=[m["id"] for m in e["modules"]]
@@ -208,6 +218,13 @@ if not sanitized:
         assert e["threads"][0].get("registered")==registered,label
         if entry: assert e["threads"][0].get("entry")==entry,label
         if level=="fault_in_image": in_build(e,member)
+        if not posix and mode in (1,6,9):
+            # The fault frame of these three is the bridge's own handler (it captures from inside
+            # the signal or terminate hook it was called by); the plug-in's `process` is further
+            # down the walk, which the OS unwinder reads through the runtime's frames.
+            ids=[m["id"] for m in e["modules"]]
+            assert member["build"]["id"] in ids and any(
+                f.get("module")==ids.index(member["build"]["id"]) for f in e["threads"][0]["frames"]),label
         if mode!=7: assert member["executing"] and member["executing"][0]["entry"]==(entry or "process"),label
         counted(e,member)
         if mode==8:

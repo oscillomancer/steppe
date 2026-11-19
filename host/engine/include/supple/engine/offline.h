@@ -134,11 +134,16 @@ class InstancePool {
     // plans leave it off their executors (its stage passes through,
     // compensated) until service() has restarted it.
     bool restarting(model::Id id) const;
-    bool restarting(const host::Instance* instance) const;
+    // Those instances, sorted, in one pass over the pool: a compile takes
+    // them once, not once per stage.
+    std::vector<const host::Instance*> restartingInstances() const;
     // Counts the changes service() makes to what a compile reads of an
     // instance (restarting, active, failed, latency) and the restarts asked
     // of the pool: two compiles of one session differ only if it moved.
     std::uint64_t availabilityChanges() const { return availabilityChanges_; }
+    // Pool entries visited to find which instances are restarting (a
+    // compile's cost by count, route E).
+    std::uint64_t restartLookups() const { return restartLookups_; }
     std::vector<std::pair<model::Id, Error>> failedErrors() const;
     // The id of the local crash report the death of this instance's bridge may have caused
     // (ADR-0083, topic 6a), or empty: not isolated, not failed, the bridge did not die of a signal
@@ -201,6 +206,7 @@ class InstancePool {
     std::vector<std::pair<std::uint64_t, std::unique_ptr<host::Instance>>> retired_;
     std::uint64_t generation_ = 0;
     std::uint64_t availabilityChanges_ = 0;
+    mutable std::uint64_t restartLookups_ = 0;
 };
 
 // How a take's audio is played back (session-model §1.5). `rate` is the rate

@@ -6,7 +6,7 @@ add_subdirectory(model)
 find_package(ZLIB REQUIRED)
 
 supple_add_library(engine
-  SOURCES src/transients.cpp src/audio_commands.cpp src/prepared_sources.cpp src/offline.cpp src/plan.cpp src/plan_dump.cpp src/workers.cpp src/live_workers.cpp src/realtime.cpp src/audition.cpp src/recording.cpp
+  SOURCES src/transients.cpp src/audio_commands.cpp src/prepared_sources.cpp src/offline.cpp src/plan.cpp src/plan_dump.cpp src/buffer_pool.cpp src/workers.cpp src/live_workers.cpp src/realtime.cpp src/audition.cpp src/recording.cpp
           src/stretch.cpp src/playrate_dsp.cpp src/playrate_timeline.cpp src/rate_sources.cpp src/rate_runtime.cpp src/mix_runtime.cpp src/meters.cpp src/runtime_protection.cpp src/media_files.cpp
           src/rack_runtime.cpp src/rack_midi.cpp src/midi_bus.cpp src/rack_clip_commands.cpp src/rack_level_commands.cpp src/rack_commands.cpp src/module_library.cpp src/module_commands.cpp src/rack_probe.cpp src/app.cpp src/session_lock.cpp src/plugin_outputs.cpp src/commands.cpp src/project_commands.cpp src/tempo_commands.cpp src/track_commands.cpp src/item_commands.cpp src/fx_commands.cpp src/history_commands.cpp
           src/envelope_commands.cpp src/device_commands.cpp src/transport_commands.cpp src/audition_commands.cpp src/route_commands.cpp src/log_commands.cpp src/crash_report_commands.cpp src/suspects.cpp src/ruler_commands.cpp

@@ -21,6 +21,7 @@
 #include <tuple>
 #include <vector>
 
+#include "buffer_pool.h"
 #include "midi_order.h"
 #include "playrate_timeline.h"
 #include "recording.h"
@@ -57,7 +58,7 @@ struct Delay {
     std::size_t pos = 0;
     void init(std::int64_t n) {
         length = n;
-        for (auto& b : buf) b.assign(static_cast<std::size_t>(std::max<std::int64_t>(n, 1)), 0.0f);
+        for (auto& b : buf) zeroed(b, static_cast<std::size_t>(std::max<std::int64_t>(n, 1)));
         pos = 0;
     }
     void clear() SUPPLE_RT {
@@ -86,7 +87,7 @@ struct MonoDelay {
     std::int64_t length = 0;
     void init(std::int64_t n) {
         length = n;
-        buf.assign(static_cast<std::size_t>(std::max<std::int64_t>(n, 1)), 0.0f);
+        zeroed(buf, static_cast<std::size_t>(std::max<std::int64_t>(n, 1)));
         pos = 0;
     }
     void clear() SUPPLE_RT {
@@ -108,8 +109,8 @@ struct MonoDelay {
 struct Stereo {
     std::vector<float> l, r;
     void init(std::size_t n) {
-        l.assign(n, 0.0f);
-        r.assign(n, 0.0f);
+        zeroed(l, n);
+        zeroed(r, n);
     }
     void clear(std::uint32_t n) SUPPLE_RT {
         std::fill_n(l.begin(), n, 0.0f);
@@ -946,6 +947,7 @@ struct MixSlots {
 
 struct Plan {
     InstancePool* pool = nullptr;      // main-thread prepare/notifications only
+    BufferPool* buffers = nullptr;     // prepare() reuses retired plans' buffers (null: allocates)
     std::uint64_t sessionVersion = 0;  // source session at compile time
     std::uint64_t generation = 0;      // set by the real-time engine when it publishes the plan
     std::vector<Node> nodes;           // topological order

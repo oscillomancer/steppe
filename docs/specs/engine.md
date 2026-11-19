@@ -361,9 +361,52 @@ specified here as it lands); so far:
   the pairs the earlier scans of every node and edge pair found, whichever
   earlier plan the executor carries from (the callback can skip plans, the
   live region lags); the soak and a MIDI-send test compare them with those
-  scans, the latter also with a key route retargeted to another FX. Nothing is allocated on the audio thread. At 192 tracks the
-  callback's carry compares about 7,400 entries per adoption instead of
-  75,000; its time is the carry's own work, linear in the plan.
+  scans, the latter also with a key route retargeted to another FX.
+  Nothing is allocated on the audio thread. At 192 tracks the callback's
+  carry compares about 7,400 entries per adoption instead of 75,000; its
+  time is the carry's own work, linear in the plan.
+- **A compile's cost is linear in its plug-ins** (the compile profile's
+  step 1, in place of stage 7). `prepare` takes the restarting instances
+  from the pool once (`InstancePool::restartingInstances`, one pass, sorted)
+  and looks each plan instance and stage up in that list; it asked the pool
+  for each, which scanned every entry. A test counts the entries visited
+  per compile (`restartLookups`); another makes two instances restart whose
+  addresses run against their ids, the case an unsorted list gets wrong,
+  and checks that both leave the plan.
+- **Note sources are built by sorting, once per node** (step 2). A note's
+  ordinal counts the earlier note-ons with the same origin, port, channel
+  and key: `prepare` sorts a stage's note-ons by that address and arrival
+  and numbers each run, where it kept a map of counts per stage, and the
+  chain's note target copies the MIDI stage's sources (the same events). A
+  test compares every stage's sources and index with the map-based build.
+- **A compile reuses retired plans' buffers** (step 3; `buffer_pool.h`).
+  When `collectPlans` retires a plan (no executor can reach it, the rule
+  its rings follow) the engine's `BufferPool` takes its stage, node, edge,
+  rack-binding and record-tap buffers, its voice lists and its output event
+  storage; the next `prepare` takes buffers of the size it needs from there
+  and clears each as a new one would be (zeros, empty, default events), and
+  allocates only what the pool lacks. After each collection the pool keeps
+  as many of each size as the last `prepare` took. Offline renders allocate
+  as before. A reused buffer never sounds: its contents are cleared on the
+  main thread, and the executors also clear an uncarried stage's delays when
+  they adopt a plan, so the first guard alone is checked at the plan: a
+  retired plan's buffers, filled with garbage as they enter the pool, serve
+  a compile of the same session that must hand each out fresh, take all of
+  them from the pool and dump as a compile without it. Engine tests fill the
+  pool the same way (`EngineOptions::poisonRecycledBuffers`) and compare runs
+  with and without reuse (`recycleBuffers`) sample for sample in both
+  executors, across plan swaps that carry a rack's plug-in stage, a newly
+  inserted latent stage, seeks, and plans with fewer and more channels and
+  strips; a steady compile allocates none. The cost is memory: between
+  compiles the pool holds about one plan's worth of buffers, which were
+  freed once a plan retired. In engine-bench's generated sessions that is
+  70 MB at 96 tracks and 139 MB at 192, most of it (114 MB at 192) the
+  voice lists, two per stage that takes notes with room for 4,096 voices
+  each, whether or not a plug-in holds one. It does not grow: a test
+  compiles at block sizes from 32 to 1024 in turn, and a one-channel
+  session between compiles of the rich one, retiring each plan as the next
+  goes live, and checks that the pool never holds more audio buffers, voice
+  lists or output event buffers than the last compile took.
 Returning to a version with neither patch nor state after applying saved FX
 settings recreates the factory-default instance. The old instance remains alive
 until both executors release its plan, as with a changed opaque state.

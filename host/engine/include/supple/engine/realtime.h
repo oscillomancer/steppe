@@ -43,6 +43,7 @@ namespace supple::engine {
 
 namespace detail {
 struct Plan;
+class BufferPool;
 struct ChunkRing;
 class SyncRuntime;
 class Workers;
@@ -535,6 +536,12 @@ struct EngineOptions {
     // the two (engine.md "Edits are being made cheaper"); a difference fails
     // the load with engine.plan_differs. It doubles each compile's time.
     bool verifyPlans = false;
+    // A compile reuses the buffers of plans no executor can reach any more
+    // (engine.md, the compile profile's step 3). Off: each allocates anew.
+    bool recycleBuffers = true;
+    // Tests: the pool fills every buffer it takes back with loud garbage, so
+    // a reuse that fails to clear one is heard.
+    bool poisonRecycledBuffers = false;
 };
 
 // Output values remain in the host event domain (VST3 normalized). Main-thread
@@ -605,6 +612,10 @@ class Engine {
     std::uint64_t mixEdits() const { return mixEdits_; }  // main thread
     // Main thread: the plans verifyPlans compiled twice and found equal.
     std::uint64_t verifiedPlans() const { return verifiedPlans_; }
+    // Buffers compiles took from retired plans, and allocated anew (with
+    // recycleBuffers; main thread).
+    std::uint64_t buffersReused() const;
+    std::uint64_t buffersMade() const;
     // Patch-only FX edits load() applied to the instances without compiling
     // (ADR-0092).
     std::uint64_t patchEdits() const { return patchEdits_; }  // main thread
@@ -1018,6 +1029,7 @@ class Engine {
     // them (both acknowledged a newer generation).
     std::vector<std::unique_ptr<detail::Plan>> plans_;
     std::vector<std::unique_ptr<detail::ChunkRing>> ringPool_;  // main thread (recycleRings)
+    std::unique_ptr<detail::BufferPool> bufferPool_;  // main thread (collectPlans, prepare)
     std::atomic<detail::Plan*> latestPlan_{nullptr};
     std::atomic<detail::Plan*> handPlan_{nullptr};  // renderer -> callback (ADR-0014)
     std::atomic<std::uint64_t> callbackGen_{0};     // the callback's plan generation
