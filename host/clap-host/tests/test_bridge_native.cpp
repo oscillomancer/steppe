@@ -703,17 +703,18 @@ TEST_CASE("a bridge takes the capture slot once, and every damaged attach is ref
     // own (a Windows CI run read 103 at start and 104 to 106 while it sat idle), and a count read
     // at one moment says nothing about a leak. The first request is the warm-up (it may start
     // things the bridge keeps); a leak adds one per repeat after it. POSIX counts are exact and
-    // must not move at all; Windows's may drift by a few, far less than the repeats.
-    constexpr int kRepeats = 16;
+    // must not move at all; Windows's may drift by a few (+3 was the most seen), so it is allowed
+    // 15 over 128 repeats: a refusal that leaks one request in eight or more shows.
+    constexpr int kRepeats = 128;
 #if defined(_WIN32)
-    constexpr long kAllowedGrowth = kRepeats / 2 - 1;
+    constexpr long kAllowedGrowth = 15;
 #else
     constexpr long kAllowedGrowth = 0;
 #endif
     const auto refused =
         [&](const char* label, bridge::Op op, std::uint32_t instance, const bridge::Writer& w,
             const std::function<bridge::Resource()>& makeResource, std::string_view code) {
-            CAPTURE(label);
+            INFO("refusal: " << std::string(label));  // CAPTURE(label) printed "1" on Windows CI
             long baseline = -1;
             for (int i = 0; i < kRepeats; ++i) {
                 const bridge::Resource resource = makeResource();
