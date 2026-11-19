@@ -887,10 +887,10 @@ is `host` and no report is written, which is how the host classified every kill 
 
 *A report when the worker lives.* A bridge that ends by a signal or an exception (not by the
 host's kill, not by an exit: the exit code is not read on POSIX) while the worker goes on gets a
-report of its own, `kind` `bridge_exit`. (On Windows an `exit` includes a bridge ended by `raise(SIGSEGV)`,
-and may include one ended by `abort()` or an uncaught `std::terminate`: the C runtime ends such a
-process with exit code 3 and no exception, so the host cannot tell it from an orderly exit and
-writes no report. Left to the runtime, `abort()` does not end a bridge at once on Windows: the first native run
+report of its own, `kind` `bridge_exit`. (On Windows the C runtime's own end for a raised `SIGSEGV`, `SIGILL` or `SIGFPE` that nobody
+handles is `_exit(3)`: an exit code with no exception, which the host cannot tell from an orderly exit,
+so the bridge installs handlers for those three (below) and a bridge a plug-in ends by `raise(SIGSEGV)`
+is an exception with an access violation's status, and a report. Left to the runtime, `abort()` does not end a bridge at once on Windows: the first native run
 (CI 44242073297, the Debug runtime) read an `abort()` as `host`, status 1, which is the host's own kill:
 the bridge had not ended when the host's deadline killed it, and the likeliest cause (the log has no
 more than the status; the build flags and the other test programs' own settings point the same way) is the
@@ -900,9 +900,25 @@ assertions to standard error, `SetErrorMode` for the system's own boxes, and a `
 at once with `0xC0000409`, a fast-fail's status, which is fatal by its severity bits and so is read as the
 bridge's own fault (exception, with a report). A plug-in's `abort()` and an uncaught `std::terminate`
 (which calls `abort()`) therefore read as an exception. This reaches the runtime the bridge shares with its
-plug-ins (the DLL one); a plug-in with a static runtime has an `abort()` of its own that the bridge's
-settings do not reach, and `raise(SIGSEGV)` is not an abort (the runtime ends the process with code 3, an exit,
-no report: a known gap, STATUS.md). The settings are unproven until the `abort()` case of
+plug-ins (the DLL one); a plug-in with a static runtime has an `abort()` and a `raise()` of its own that the
+bridge's settings and handlers do not reach (its `raise(SIGSEGV)` ends the process with code 3, an exit, no
+report: a known limit, STATUS.md). *`raise` of a fault signal.* The runtime's `raise()` calls a handler
+installed with `signal()` on the raising thread (the runtime's documented behaviour; with no handler it is
+`_exit(3)`), and the bridge installs one for `SIGSEGV`, `SIGILL` and `SIGFPE` (`self_capture_windows.cpp`,
+`faultSignal`). It captures from the raising thread's own context (`RtlCaptureContext`: the handler's frame,
+then the runtime's, then the plug-in's) and ends the process with `TerminateProcess` and the status the
+signal stands for: `0xC0000005` (access violation), `0xC000001D` (illegal instruction), `0xC0000094` (integer
+divide by zero; `SIGFPE` carries no finer code). The host therefore reads an `exception` with that status, as it
+reads a fault that reached the last-chance filter. The same handler is also called by the runtime's own
+filter around `main` and around a thread the runtime started, for an unhandled hardware fault of that
+thread, with the runtime's exception pointers set (`_pxcptinfoptrs`), and the runtime would then resume
+the faulting code. The handler never returns: it captures from the fault's own context and ends the
+process with the exception's own code, so a hardware fault reads as it did before the handler existed
+(a handler that took the context of its own frame would have lost the fault's address). Where
+`_pxcptinfoptrs` is not defined the handlers are not installed. The attribution of a raised signal is
+`active_token` (the fault frame is the bridge's handler, in the bridge's own image, so no plug-in image holds
+it; the plug-in's entry is still open), as an `abort()`'s is, and the plug-in's own frame is further down the
+walk. The settings are unproven until the `abort()` case of
 `test_bridge_diagnostics.cpp` (the crash fixture's mode 6) has run on Windows CI: it expects the exception and
 the status `0xC0000409` there, and names what it got otherwise. A bridge ended by an access
 violation, a stack overflow or `__fastfail` ends with an exception status and is reported.) The supervisor writes it from its inventory when it
@@ -1208,11 +1224,10 @@ process with the same status after capturing); and the terminate hook on both. T
 is recorded when the handlers go in, and each plug-in's image when it is created. A handler writes the capsule into the slot and then **chains to the previous
 action so the exit status stays the fatal one**: the host's classification of the end
 (`signal`, `exception`, `host`) and its kill rules are unchanged by capture, and a
-`bridge_exit` report without a capsule stays exactly as today's. *Not done in 6c.2:* closing the Windows gap in which
-`raise(SIGSEGV)` ends a process with an exit code (a `bridge_exit` that reads as an `exit`, so no
-report). It needs a `SIGSEGV` handler, and a C runtime handler on Windows also receives the
-hardware faults of the main thread that the last-chance filter now sees with their real context;
-keeping that context needs the runtime's exception pointers, which have not been tried here. *One capture a process, and a second failing thread waits (round 6c-a).* The first thread to fail
+`bridge_exit` report without a capsule stays exactly as today's. *The Windows gap in which `raise(SIGSEGV)` ended a process with an exit code* (a `bridge_exit` that read as an
+`exit`, so no report) *is closed for the bridge* by `SIGSEGV`, `SIGILL` and `SIGFPE` handlers that read the
+runtime's exception pointers, which keep the context of a hardware fault the runtime's own filter passes to
+them (*A report when the worker lives*, above). The worker's own Windows handlers are not changed by it. *One capture a process, and a second failing thread waits (round 6c-a).* The first thread to fail
 claims the capture (one atomic compare-and-swap, with its thread id); a thread that fails while it
 is being made does not end the process under it, which would leave the slot `writing`: it waits,
 sleeping a millisecond at a time (`nanosleep`, `Sleep`), until the capture has ended or until

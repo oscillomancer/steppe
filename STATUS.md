@@ -1713,7 +1713,7 @@ its evidence supports, `fault_in_image` or `active_token` by the bridge's own ad
 malformed capsule leaves the host's account. Only the fault thread is walked on Linux and Windows (the others appear by
 role and entry as not collected); macOS walks all threads. A bridged plug-in's crash while the app runs is not a suspect,
 even when its report names it (decided 2026-11-18). Exercised on Linux from a real plug-in fault in a real bridge to the
-report the supervisor wrote; macOS and Windows wait for native CI. Not done: a Windows bridge whose plug-in calls `raise(SIGSEGV)` still ends with an exit code. A Windows bridge
+report the supervisor wrote; macOS and Windows wait for native CI. A Windows bridge whose plug-in calls `raise(SIGSEGV)`, `SIGILL` or `SIGFPE` now ends with the fault's own status (handlers read the runtime's exception pointers; unproven until native CI). A Windows bridge
 that faults while another thread holds the loader's function-table lock can hang in the handler's
 unwinder (`RtlLookupFunctionEntry`) until the host's deadline kills it, which reads as a host end with no
 report (the handler's 200 ms is checked between frames, not inside the call; unproven, no mitigation yet).
@@ -1734,12 +1734,10 @@ and was never reaped) are not compiled: the classification of an exception and a
 tested as a pure function, the host-kill and orderly-end cases run, and a bridge that really dies
 by an exception is exercised only by `clap-host.diagnostics-inventory` there, which has not run
 on Windows yet. The case that a bridge faulting as the host lets go is its own end (the crash fixture's
-teardown mode) is compiled on every platform and unproven on Windows and macOS until native CI runs. A known gap on Windows: a bridge that a plug-in ends with `raise(SIGSEGV)` exits with the C runtime's code 3 and no exception,
-so it is read as an exit and gets no report of its own (on POSIX the same plug-in dies by a signal and does); a real access violation or `__fastfail`
-is an exception and does. `abort()` and an uncaught `std::terminate` were read as the host's end on the first native run (CI 44242073297: the bridge
+teardown mode) is compiled on every platform and unproven on Windows and macOS until native CI runs. A known limit on Windows: a plug-in with a static C runtime has its own `raise()` and `abort()`, which the bridge's handlers do not reach, so its `raise(SIGSEGV)` exits with code 3 and no exception and is read as an exit with no report (a real access violation or `__fastfail` is an exception and does); the worker's own Windows handlers do not cover `raise(SIGSEGV)` either (not examined in this change). `abort()` and an uncaught `std::terminate` were read as the host's end on the first native run (CI 44242073297: the bridge
 did not end until the host's deadline killed it, probably on the debug runtime's abort dialog); the bridge now sets its runtime at start so that
 `abort()` ends it at once with `0xC0000409` (a `SIGABRT` handler, no dialog, no report to wait on) and the case `a bridge ended by abort()` expects the exception and
-that status; that is unproven until the next native Windows run, and does not reach a plug-in with a static runtime.
+that status; that is unproven until the next native Windows run, and does not reach a plug-in with a static runtime. `clap-host.diagnostics-inventory` asserts on Windows the four ends a plug-in's code can give besides an access violation (`raise(SIGSEGV)`, `abort()`, a stack overflow, `std::terminate`: the exception and its status, the attribution level, and the plug-in's frame in the walk), and `test_bridge_diagnostics` has a case for each of the first, second and last; none has run on Windows until native CI.
 The bridge's `Create` reply now carries the instance's cell and generation in the bridge's own execution table and
 an address in the plug-in's binary there (bridge protocol 26, Windows 27; topic 6b), which the host announces and
 the supervisor keeps as private matching data (`Inventory::findInBridge`); nothing reads it yet (6c matches the

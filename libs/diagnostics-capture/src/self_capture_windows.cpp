@@ -24,11 +24,11 @@
 #if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
 #define SUPPLE_SELF_CAPTURE_SANITIZER 1
 #endif
-// The bridge's fault handlers on Windows (topic 6c): the last-chance exception filter, SIGABRT
-// and std::terminate. A handler here runs in ordinary thread context, not a signal, but it keeps
-// the same rule: static storage, system calls and arithmetic only, so a heap or a lock the
-// failing thread was holding cannot stop it. The walk reads the stack through the OS unwinder
-// after checking that the stack pointer lies on the thread's own stack.
+// The bridge's fault handlers on Windows (topic 6c): the last-chance exception filter, SIGABRT,
+// SIGSEGV, SIGILL, SIGFPE and std::terminate. A handler here runs in ordinary thread context, not a
+// signal, but it keeps the same rule: static storage, system calls and arithmetic only, so a heap
+// or a lock the failing thread was holding cannot stop it. The walk reads the stack through the OS
+// unwinder after checking that the stack pointer lies on the thread's own stack.
 namespace supple::diagnostics::selfcapture {
 namespace {
 LPTOP_LEVEL_EXCEPTION_FILTER priorFilter = nullptr;
@@ -107,6 +107,45 @@ void abortSignal(int) {
     // Ends at once, as the bridge's abort handler did before capture (CI 44242073297).
     TerminateProcess(GetCurrentProcess(), kFailFast);
 }
+
+#if defined(_pxcptinfoptrs)
+// SIGSEGV, SIGILL and SIGFPE as the C runtime delivers them, from two places. `raise()` calls the
+// handler on the raising thread, with the thread's exception pointers cleared (and with no
+// handler, `raise()` ends the process with exit code 3: no exception, nothing for the host to
+// read as a crash). The runtime's filter around `main` and around a thread it started
+// (`_seh_filter_exe`) calls it for an unhandled hardware fault of that thread, with the pointers
+// set, and then resumes the faulting code: so the handler must never return on that path, and the
+// capture must be of the fault's context, not of this frame. Either way the process ends with the
+// status the fault itself has (an access violation, an illegal instruction, a divide by zero), so
+// the host reads an exception, as it does for a fault that reached the last-chance filter.
+UINT faultStatus(int signalNumber) noexcept {
+    return signalNumber == SIGILL   ? 0xC000001Du   // STATUS_ILLEGAL_INSTRUCTION
+           : signalNumber == SIGFPE ? 0xC0000094u   // STATUS_INTEGER_DIVIDE_BY_ZERO
+                                    : 0xC0000005u;  // STATUS_ACCESS_VIOLATION
+}
+
+void faultSignal(int signalNumber) {
+    const std::uint64_t start = monotonic();
+    const std::uint64_t tid = GetCurrentThreadId();
+    const auto* exception = static_cast<const EXCEPTION_POINTERS*>(_pxcptinfoptrs);
+    CONTEXT here{};
+    const CONTEXT* context = &here;
+    UINT status = faultStatus(signalNumber);
+    if (exception && exception->ContextRecord && exception->ExceptionRecord) {
+        context = exception->ContextRecord;
+        status = exception->ExceptionRecord->ExceptionCode;
+    } else {
+        RtlCaptureContext(&here);
+    }
+    if (beginCapture(tid)) {
+        (void)captureAndPublish(faultFrom(context), start);
+        endCapture();
+    } else {
+        awaitCapture(tid, start);
+    }
+    TerminateProcess(GetCurrentProcess(), status);
+}
+#endif
 
 [[noreturn]] void terminateHook() noexcept {
     const std::uint64_t start = monotonic();
@@ -219,6 +258,14 @@ bool installHandlers() noexcept {
     // Replaces the bridge's earlier SIGABRT handler (which only ended the process with the same
     // status): this one captures first and then ends it the same way.
     (void)std::signal(SIGABRT, abortSignal);
+#if defined(_pxcptinfoptrs)
+    // The runtime resets a handler to the default before it calls it, which is fine: the handler
+    // ends the process. Where the runtime's exception pointers cannot be named, nothing is
+    // installed: a handler would then turn a main-thread fault's context into this frame's.
+    (void)std::signal(SIGSEGV, faultSignal);
+    (void)std::signal(SIGILL, faultSignal);
+    (void)std::signal(SIGFPE, faultSignal);
+#endif
     priorTerminate = std::set_terminate(terminateHook);
     terminateHooked.store(true, std::memory_order_release);
     ULONG bytes = 64 * 1024;
