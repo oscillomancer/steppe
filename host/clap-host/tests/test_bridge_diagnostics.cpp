@@ -364,8 +364,14 @@ TEST_CASE("a bridge killed by the host while it died of its own fault is still i
         block.frames = 64;
         REQUIRE(instance.process(block));
         // The Destroy request's failed reply is read as "the process is still there" (the first
-        // answer), and the host letting go finds it there too (the second).
+        // answer), and the host letting go finds it there too (the second). The stop and the
+        // deactivation the instance's destruction sends first wait on the command channel, which
+        // looks at the process itself and never takes an answer.
         setBridgeLivenessForTests(2);
+        // A plain look at the process (what the command channel's waits do on every timeout)
+        // takes no answer, however often it is made.
+        for (int i = 0; i < 3; ++i) CHECK(!bridgeProcessFailed(*process));
+        CHECK(bridgeLivenessLeftForTests() == 2);
         made->reset();  // sends Destroy; the bridge faults inside it
     }
     // The failed request asked whether the bridge was alive (and the host killed it, the branch

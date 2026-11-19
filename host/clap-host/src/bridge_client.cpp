@@ -559,7 +559,6 @@ void BridgeProcess::reap() {
 
 bool BridgeProcess::alive() const {
     if (pid_ <= 0) return false;
-    if (forcedAlive()) return true;
     return child_ && child_->alive();
 }
 
@@ -622,8 +621,12 @@ Result<std::vector<std::uint8_t>> BridgeProcess::call(Op op, std::uint32_t insta
                          "use matching host and bridge builds");
         }
 #endif
-        // Gone, or not answering: either way the instance is lost.
-        if (alive()) {
+        // Gone, or not answering: either way the instance is lost. The test seam is asked here and
+        // in ~BridgeProcess only, and always (not only when the process is really gone), so the
+        // number of answers left does not depend on how often other waits looked: a command's
+        // wait asks alive() on every 10 ms timeout, and a slow machine makes that count vary.
+        const bool forcedStill = forcedAlive();
+        if (forcedStill || alive()) {
             fail(kHung);
             killBridge();
         } else {
