@@ -94,8 +94,8 @@ bool scalarOnly(const model::Session& a, const model::Session& b) {
            a.autoItems.sameStorage(b.autoItems) && a.markers.sameStorage(b.markers) &&
            a.regions.sameStorage(b.regions) && a.racks.sameStorage(b.racks) &&
            a.modules.sameStorage(b.modules) && a.cables.sameStorage(b.cables) &&
-           a.modulations.sameStorage(b.modulations) &&
-           a.blobs == b.blobs && a.extraSections == b.extraSections;
+           a.modulations.sameStorage(b.modulations) && a.blobs == b.blobs &&
+           a.extraSections == b.extraSections;
 }
 }  // namespace
 
