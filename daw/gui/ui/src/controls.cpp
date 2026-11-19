@@ -40,7 +40,8 @@ Color blend(Color a, Color b, float t) {
 }
 
 Color levelColor(const Theme& t, float db) {
-    const Color green = t.color("meter"), yellow = t.color("meter-hot"), red = t.color("clip");
+    const Color green = t.color("meter"), yellow = t.color("meter-hot"),
+                red = t.color("meter-clip");
     const Color orange = blend(yellow, red, 0.5f);
     if (db <= kMeterGreenDb) return green;
     if (db <= kMeterYellowDb)
@@ -688,13 +689,13 @@ void Meter::paint(Canvas& c) {
             const float p = meterPos(holdDb_[ch]);
             if (vertical_)
                 c.fillRect({lane.x, lane.bottom() - p * lane.h, lane.w, 1.5f},
-                           t.color(holdDb_[ch] > 0 ? "clip" : "ink"));
+                           t.color(holdDb_[ch] > 0 ? "meter-clip" : "ink"));
             else
                 c.fillRect({lane.x + p * lane.w, lane.y, 1.5f, lane.h},
-                           t.color(holdDb_[ch] > 0 ? "clip" : "ink"));
+                           t.color(holdDb_[ch] > 0 ? "meter-clip" : "ink"));
         }
         // Clip indicator at the top (or end).
-        const Color clipCol = clip_[ch] ? t.color("clip") : t.color("rule");
+        const Color clipCol = clip_[ch] ? t.color("meter-clip") : t.color("rule");
         if (vertical_)
             c.fillRect({lane.x, b.y, lane.w, 3}, clipCol);
         else

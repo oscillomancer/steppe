@@ -906,7 +906,7 @@ TEST_CASE(
         f.refresh();
         CHECK(f.node("mixer.fx." + p1)->valueText().ends_with(" (failed)"));
         CHECK(f.node("mixer.fx." + p2)->valueText().ends_with(" (failed)"));
-        CHECK(is(barPixel(f, "mixer.fx." + p1), theme.color("clip")));
+        CHECK(is(barPixel(f, "mixer.fx." + p1), theme.color("meter-clip")));
         CHECK_FALSE(f.node("mixer.fx." + p3)->valueText().ends_with(" (failed)"));
         CHECK(static_cast<double>(f.node("mixer.fx." + p3)->bounds().h) ==
               doctest::Approx(beforeH));

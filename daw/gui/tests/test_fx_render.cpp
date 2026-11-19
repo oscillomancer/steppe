@@ -2446,7 +2446,7 @@ TEST_CASE("a failed effect links to the report its bridge's death left") {
     REQUIRE(badge);
     REQUIRE(badge->runs().size() == 2);
     CHECK(badge->runs()[0].colorToken == "ink-quiet");
-    CHECK(badge->runs()[1].colorToken == "clip");
+    CHECK(badge->runs()[1].colorToken == "meter-clip");
     f.snapshot("fx-failed-report.png");
     CHECK(f.fx->incidentOf(id) == "0123456789abcdef0123456789abcdef");
     REQUIRE(f.click("fx.report." + id));

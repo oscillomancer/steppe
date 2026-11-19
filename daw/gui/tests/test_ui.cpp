@@ -377,6 +377,27 @@ TEST_CASE("theme JSON overrides tokens and reports bad values with their path") 
     CHECK(rejected.error().path == "/colors/accent");
 }
 
+TEST_CASE("theme: the meter's overload red is meter-clip, a file's old clip key still sets it") {
+    for (const Theme& t : {Theme::dark(), Theme::light()}) {
+        CHECK(t.color("meter-clip") == Color::hex(0xe0503c));
+        CHECK(t.color("playing") == t.color("meter"));   // what plays is the meter's green
+        CHECK(t.color("clip") == Color::hex(0xff00ff));  // no longer a token
+    }
+    auto old = json::parse(R"({"schema": "supple.theme/1.0", "colors": {"clip": "#aa0000"}})");
+    REQUIRE(old);
+    auto theme = Theme::fromJson(*old, Theme::dark());
+    REQUIRE(theme);
+    CHECK(theme->color("meter-clip") == Color::hex(0xaa0000));
+    CHECK(theme->color("clip") == Color::hex(0xff00ff));
+    // Both given: the new name wins.
+    auto both = json::parse(
+        R"({"schema": "supple.theme/1.0", "colors": {"clip": "#aa0000", "meter-clip": "#00aa00"}})");
+    REQUIRE(both);
+    auto chosen = Theme::fromJson(*both, Theme::dark());
+    REQUIRE(chosen);
+    CHECK(chosen->color("meter-clip") == Color::hex(0x00aa00));
+}
+
 TEST_CASE("golden image: a small panel in the dark theme") {
     REQUIRE_GL();
     Root root(*fixture().window, fixture().fonts, Theme::dark());
@@ -957,7 +978,7 @@ TEST_CASE("mixer controls: fader taper and gestures, pan, meter hold and clip, t
                    0.01f;
         };
         const Color green = theme.color("meter"), yellow = theme.color("meter-hot"),
-                    red = theme.color("clip");
+                    red = theme.color("meter-clip");
         CHECK(same(Meter::colorAt(theme, -60), green));
         CHECK(same(Meter::colorAt(theme, -18), green));
         CHECK(same(Meter::colorAt(theme, -9), yellow));

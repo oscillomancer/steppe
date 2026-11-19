@@ -697,7 +697,7 @@ class CcLane : public ui::Node {
         }
         if (s_.ccErasing)
             c.fillRect({g.xOf(s_.ccFrom), a.y, g.xOf(s_.ccTo) - g.xOf(s_.ccFrom), a.h},
-                       t.color("clip").withAlpha(0.2f));
+                       t.color("meter-clip").withAlpha(0.2f));
         c.restore();
     }
     bool onPointer(const ui::PointerEvent& e) override {

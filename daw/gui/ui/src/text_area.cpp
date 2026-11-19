@@ -175,7 +175,7 @@ void TextArea::paint(Canvas& c) {
         for (const Mark& m : marks_)
             if (m.line == line + 1 && (!mark || (m.error && !mark->error))) mark = &m;
         if (mark) {
-            const Color tint = mark->error ? t.color("clip") : t.color("meter-hot");
+            const Color tint = mark->error ? t.color("meter-clip") : t.color("meter-hot");
             c.fillRect({b.x + g, y, b.w - g, lineH_}, tint.withAlpha(0.12f));
             if (lineNumbers) c.fillRound({b.x + 4, y + lineH_ / 2 - 3, 6, 6}, 3, tint);
         }
@@ -208,7 +208,7 @@ void TextArea::paint(Canvas& c) {
             while (z < le && text_[z] != ' ' && text_[z] != '\t') ++z;
             if (z == a) z = std::min(le, nextBoundary(text_, a));
             const float ux = xOf(a), uw = std::max(charW_, xOf(z) - ux);
-            const Color col = m.error ? t.color("clip") : t.color("meter-hot");
+            const Color col = m.error ? t.color("meter-clip") : t.color("meter-hot");
             for (float x = ux; x < ux + uw; x += 4)
                 c.line({x, y + lineH_ - 2}, {std::min(x + 2, ux + uw), y + lineH_ - 3}, col, 1.2f);
         }

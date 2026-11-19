@@ -206,7 +206,7 @@ class FxSlot : public DragButton {
         if (needsYou) {
             const float inset = std::max(2.0f, t.radius("s"));
             c.fillRect({b.x + 1, b.y + inset, 2.0f, b.h - 2 * inset},
-                       t.color(state == State::Failed ? "clip" : "meter-hot"));
+                       t.color(state == State::Failed ? "meter-clip" : "meter-hot"));
         }
         const std::string name = Button::valueText();
         const float size = t.type("small");
@@ -383,7 +383,8 @@ class PeakReadout : public ui::Node {
     void paint(ui::Canvas& c) override {
         const ui::Theme& t = c.theme();
         c.text(bounds(), valueText(), ui::Font::Mono, t.type("caption"),
-               t.color(meter_->maxPeakDb() > 0 ? "clip" : "ink-quiet"), ui::kCenter | ui::kMiddle);
+               t.color(meter_->maxPeakDb() > 0 ? "meter-clip" : "ink-quiet"),
+               ui::kCenter | ui::kMiddle);
     }
     bool onPointer(const ui::PointerEvent& e) override {
         if (e.type != ui::PointerEvent::Type::Down || e.button != 1) return false;

@@ -52,7 +52,7 @@ ui::Color colourOf(int c, const ui::Theme& t) {
         case S::Theme::modulation:
             return t.color("signal-cv");
         case S::Theme::alert:
-            return t.color("clip");
+            return t.color("meter-clip");
         default:
             return t.color("ink");
     }
@@ -230,7 +230,7 @@ class NvgPainter final : public sd::Painter {
             nvgRect(vg_, F(x), F(y), F(w * t), F(h));
         else
             nvgRect(vg_, F(x), F(y + h * (1 - t)), F(w), F(h * t));
-        nvgFillColor(vg_, nvg(db > 0 ? t_.color("clip") : t_.color("meter"), alpha_));
+        nvgFillColor(vg_, nvg(db > 0 ? t_.color("meter-clip") : t_.color("meter"), alpha_));
         nvgFill(vg_);
         restoreFill();
     }

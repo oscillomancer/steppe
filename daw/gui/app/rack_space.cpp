@@ -858,12 +858,12 @@ void RackSpace::paintModule(ui::Canvas& c, const RackScene::Module& m, bool sele
             nvgRestore(vg);
             if (drawn->stopped())
                 c.text({r.x + 6, r.bottom() - 16, r.w - 12, 12}, "draw() ran too long",
-                       ui::Font::Ui, 8.5f, t.color("clip"), ui::kCenter | ui::kMiddle);
+                       ui::Font::Ui, 8.5f, t.color("meter-clip"), ui::kCenter | ui::kMiddle);
         }
     }
     if (!m.type) {  // an unknown type: kept, silent, said
         c.text({r.x + 8, r.y + head + 8, r.w - 16, 14}, m.subtitle, ui::Font::UiBold, 9.5f,
-               t.color("clip"), ui::kCenter | ui::kMiddle);
+               t.color("meter-clip"), ui::kCenter | ui::kMiddle);
         c.text({r.x + 8, r.y + head + 24, r.w - 16, 24}, m.typeId, ui::Font::Mono, 7.5f,
                t.color("ink-quiet"), ui::kCenter | ui::kMiddle);
     } else {
@@ -894,7 +894,7 @@ void RackSpace::paintModule(ui::Canvas& c, const RackScene::Module& m, bool sele
                t.color("ink-quiet"), ui::kCenter | ui::kMiddle);
     }
     c.strokeRound({r.x + 0.5f, r.y + 0.5f, r.w - 1, r.h - 1}, kRadius,
-                  !m.type ? t.color("clip").withAlpha(0.7f) : t.color("rule"), 1);
+                  !m.type ? t.color("meter-clip").withAlpha(0.7f) : t.color("rule"), 1);
     if (selected) {
         const float w = static_cast<float>(2.0 / view_.zoom);
         c.strokeRound({r.x - w, r.y - w, r.w + 2 * w, r.h + 2 * w}, kRadius + w, t.color("focus"),

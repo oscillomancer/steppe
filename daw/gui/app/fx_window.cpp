@@ -1371,7 +1371,7 @@ void FxWindow::buildRow(ui::Node& body, model::Id fx, std::size_t index, bool in
                 prefix + "badge." + id,
                 std::vector<ui::TextRun>{{badgeText(*inst, app_.effectiveIsolation(fx), false),
                                           ui::Font::Mono, "ink-quiet"},
-                                         {" \u00b7 failed", ui::Font::Mono, "clip"}},
+                                         {" \u00b7 failed", ui::Font::Mono, "meter-clip"}},
                 "caption");
         } else {
             badge = &l2.emplace<ui::Label>(prefix + "badge." + id,
@@ -1570,7 +1570,7 @@ void FxWindow::buildParams(ui::Node& body) {
     }
     if (auto built = params_->build(body, selected_); !built)
         body.emplace<ui::Label>("fx.params.error", built.error().message, ui::Font::Ui, "small",
-                                "clip");
+                                "meter-clip");
 }
 
 // A chain row dragged among the others: the insertion bar follows the pointer

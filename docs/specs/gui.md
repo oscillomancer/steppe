@@ -1120,7 +1120,7 @@ Each row's second line starts with a badge saying where the plug-in runs:
 instance was made, with `(default)` (`fx.describe isolation_effective`,
 ADR-0081). `· offline` and `· failed` follow when they apply.
 A failed effect (`engine.status failed_fx`) shows its mode in `ink-quiet` followed by "failed" in the
-`clip` colour (no more red than that) on the second line, and on the first line Restart and, when the
+`meter-clip` colour (no more red than that) on the second line, and on the first line Restart and, when the
 death of its bridge left a crash report (`failed_errors[].incident`, the `incident` of the
 `fx.failed` event; topic 7d), a quiet "Show report" button beside it, so the two answers to a failure
 sit together; it raises the main window and opens the
@@ -2654,7 +2654,11 @@ Steppe's own character, not a REAPER clone or a generic dark theme
   *ink* (blue). The palette sets the accent, focus and selection; everything
   else is shared. View > switch light / dark and View > switch warm / ink
   palette apply at once and are saved in `<config>/<slug>/appearance.json`;
-  `--theme` and `--palette` override them for one run.
+  `--theme` and `--palette` override them for one run. `--theme` also takes
+  a `supple.theme/1.0` file whose `colors` override tokens by name; the
+  meter's overload red is `meter-clip` (a file's older `clip` key still sets
+  it), and `playing`, the meter's green, marks what is sounding now (a
+  launched clip).
 - **Type-led hierarchy:** Inter for UI, IBM Plex Mono for every number and
   for notation; few font sizes; labels quiet, values prominent.
 - **Strip types as marks:** on a track's row and its mixer strip the type
@@ -3053,13 +3057,13 @@ Preferences says "Disabled", and **Enable** is its opposite. A plug-in this run 
 (`plugin.override` mode `disable`: the question, an agent, or a remembered choice;
 `engine.status.disabled_fx`) is marked wherever its fx shows, in the one colour the feature has
 (`meter-hot`, the banner's bar). A plug-in that failed (`engine.status.failed_fx`: its separate
-process closed or stopped answering) is marked the same way in `clip`.
+process closed or stopped answering) is marked the same way in `meter-clip`.
 
 *The mixer's slot has four states of the one 18-unit slot,* each in the slot's place and size.
 Bypassed: the name dimmed and struck through, a solid outline. Offline: the name dimmed inside a
 dashed outline, no strike. **Disabled: the solid outline, no strike, the name in `ink-quiet` and a
 2-unit bar in `meter-hot` down the slot's left edge, inside the outline** (it does not shift the
-slot). **Failed: the same slot with the bar in `clip`.** The words follow the others'
+slot). **Failed: the same slot with the bar in `meter-clip`.** The words follow the others'
 (`valueText` ends " (bypassed)", " (offline)", " (disabled)" or " (failed)"), and disabled and
 failed win over offline and bypassed since they are the ones that need the person; disabled wins over
 failed (a disabled plug-in is not loaded). A click on a disabled slot puts "<name> is disabled for
