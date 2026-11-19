@@ -83,8 +83,10 @@ json::Value timing(const Session& s) {
 }
 }  // namespace
 
-std::string freezeDependencyHash(const Session& s, Id track) {
+namespace {
+std::string dependencyHash(const Session& s, Id track, const std::set<Id>& leaveOut) {
     auto ids = dependencies(s, track);
+    for (Id id : leaveOut) ids.erase(id);
     // The racks homed here are locked too, though not owned (ADR-0075).
     const auto rack = rackDependencies(s, track);
     ids.insert(rack.begin(), rack.end());
@@ -152,6 +154,11 @@ std::string freezeDependencyHash(const Session& s, Id track) {
         }
     value["objects"] = std::move(objects);
     return "sha256:" + sha256Hex(json::writeCompact(value));
+}
+}  // namespace
+
+std::string freezeDependencyHash(const Session& s, Id track) {
+    return dependencyHash(s, track, {});
 }
 
 std::vector<Id> freezeFxIds(const Session& s, Id track) {
@@ -233,7 +240,14 @@ Status validateFrozenTransition(const Session& before, const Session& after) {
     for (const auto& e : before.tracks) {
         const auto* next = after.tracks.find(e.id);
         if (!e.value->freeze || !next || !next->freeze) continue;
-        if (freezeDependencyHash(before, e.id) != freezeDependencyHash(after, e.id))
+        // A modulation route goes with its source module, wherever that is:
+        // the source lies outside the print, as a sidechain's does
+        // (ADR-0096). Editing or removing the route itself stays locked.
+        std::set<Id> sourceGone;
+        for (const auto& m : before.modulations)
+            if (!after.modulations.find(m.id) && !after.modules.find(m.value->source.module))
+                sourceGone.insert(m.id);
+        if (dependencyHash(before, e.id, sourceGone) != freezeDependencyHash(after, e.id))
             return frozenError(before, e.id, "/tracks/" + e.id.str());
         if (auto allowed = validateFreezeInput(after, e.id); !allowed)
             return frozenError(before, e.id, "/tracks/" + e.id.str());

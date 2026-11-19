@@ -297,9 +297,12 @@ The same rule holds for every new kind (amendment G-c).
 ### Freeze
 
 The routes whose target is in a frozen track are part of that track's freeze
-dependency hash, as its envelopes are. Editing them fails with `track.frozen`.
-Their source racks are not part of the hash, just as a sidechain's source
-track is not. While frozen, the print plays and the routes are inert.
+dependency hash, as its envelopes are. Editing or removing them fails with
+`track.frozen`. Their source racks are not part of the hash, just as a
+sidechain's source track is not: removing a route's source module, or its
+rack or home track, removes the route even while the target is frozen, and
+the print keeps playing. While frozen, the print plays and the routes are
+inert.
 
 ### Commands
 

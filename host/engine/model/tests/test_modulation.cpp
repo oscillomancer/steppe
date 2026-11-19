@@ -511,3 +511,60 @@ TEST_CASE("modulation: a rack modulating its own rack send's level is told why")
     CHECK(self.error().code == "modulation.cycle");
     CHECK(self.error().hint.find("rack send") != std::string::npos);
 }
+
+TEST_CASE("modulation: a frozen target keeps its routes locked, but their source can go") {
+    // Review round 52, F4: the source lies outside the print, as a
+    // sidechain's does (ADR-0096 "Freeze").
+    Fixture f = fixture();
+    Id id;
+    auto modulated = with(f.s, route(f.modOut, f.fx, "cutoff", 0.5), &id);
+    REQUIRE(modulated);
+    EditTxn freeze(*modulated, modulated->version + 1);
+    const Id media = freeze.create(MediaSource{"freeze.wav", "sha256:" + std::string(64, '1'),
+                                               "wav", modulated->project->sampleRate, 2, 96000});
+    const TrackFreeze cache{media, 48000, 48000, 0, freezeDependencyHash(*modulated, f.b)};
+    freeze.modify<Track>(f.b, [&](Track& t) { t.freeze = cache; });
+    auto frozen = freeze.commit();
+    REQUIRE_MESSAGE(frozen, (frozen ? "" : frozen.error().toString()));
+    // Editing or removing the route itself changes the frozen track's sound.
+    {
+        EditTxn t(*frozen, frozen->version + 1);
+        t.modify<Modulation>(id, [](Modulation& m) { m.depth = 0.75; });
+        auto s = t.commit();
+        REQUIRE_FALSE(s);
+        CHECK(s.error().code == "track.frozen");
+    }
+    {
+        EditTxn t(*frozen, frozen->version + 1);
+        t.remove<Modulation>(id);
+        auto s = t.commit();
+        REQUIRE_FALSE(s);
+        CHECK(s.error().code == "track.frozen");
+    }
+    // Removing the source module elsewhere takes the route with it.
+    {
+        EditTxn t(*frozen, frozen->version + 1);
+        for (const auto& c : frozen->cables)
+            if (c.value->to.object == f.modOut) t.remove<Cable>(c.id);
+        t.remove<RackModule>(f.modOut);
+        auto s = t.commit();
+        REQUIRE_MESSAGE(s, (s ? "" : s.error().toString()));
+        CHECK(s->modulations.empty());
+        CHECK(s->tracks.find(f.b)->freeze);
+    }
+    // So does removing the source's home track, with its rack and send, as
+    // track.remove does.
+    {
+        EditTxn t(*frozen, frozen->version + 1);
+        for (const auto& c : frozen->cables) t.remove<Cable>(c.id);
+        t.remove<RackModule>(f.lfo);
+        t.remove<RackModule>(f.modOut);
+        t.remove<Rack>(f.rack);
+        t.remove<Route>(f.send);
+        t.remove<Track>(f.a);
+        t.modify<Track>(kMaster, [&](Track& m) { std::erase(m.children, f.a); });
+        auto s = t.commit();
+        REQUIRE_MESSAGE(s, (s ? "" : s.error().toString()));
+        CHECK(s->modulations.empty());
+    }
+}
