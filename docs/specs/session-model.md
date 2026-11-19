@@ -564,7 +564,7 @@ routes: sd_1 tr_2 → tr_6 ch 1/2→3/4 pre-fader −6 dB (sidechain)
 markers: mk_1 "Verse" bar 1 · regions: rg_1 "Chorus" bars 9–17
 ```
 
-## 5. Project file (`supple.project/2.17`)
+## 5. Project file (`supple.project/2.16`)
 
 ### 5.1 Shape
 
@@ -581,7 +581,7 @@ and audio items on masters (ADR-0057). Before 2.4, a route from a master to `hw_
 played) becomes that master's `hw_output` (its first such route) and the
 route is dropped, with a `project.hw_output_route` warning.
 
-The loader accepts 1.x and 2.x documents and saves the current schema (2.17,
+The loader accepts 1.x and 2.x documents and saves the current schema (2.16,
 §5). Migration allocates child channel IDs in track-ID order, inserts each
 child first, and moves the source items and record/input FX there while
 keeping user inserts on the buss. Hardware/MIDI record routes follow the new
@@ -1496,14 +1496,20 @@ The 2.7 change added the `racks`, `modules` and
 A 2.6 file loads unchanged; an older application opening a 2.7 file keeps the
 collections as unknown sections and refuses routes with a module end.
 
-### Modulation (schema 2.17, ADR-0096)
+### Modulation (schema 2.16, ADR-0096)
 
-Schema 2.17 is the expected number. Numbers follow the order in which
-branches land on integration, so this one moves if another schema change
-lands first. The change adds the top-level `modulations` collection, written
-only when present. Earlier files load unchanged and nothing migrates. An
-older build keeps the collection as an unknown section, so its routes do
-nothing there.
+Schema numbers follow the order in which branches land on integration
+(amendment G-d). The change adds the top-level `modulations` collection,
+written only when present. Earlier files load unchanged and nothing
+migrates.
+
+An older build keeps the collection as an unknown section, so its routes do
+nothing there, but it drops the `mr` counter and may delete what a route
+points at (amendment G-c). A file that comes back from one opens anyway: a
+missing or low `mr` counter is derived from the highest `mr` id, and a
+route whose source or target is gone or no longer fits the invariants
+below, or that closes a cycle, is dropped with a `project.modulation_dropped`
+warning at its path that names it and says why.
 
 | Field | Meaning |
 |---|---|
@@ -1511,7 +1517,7 @@ nothing there.
 | `target` | `{object, param}` as an envelope's target is stored (required): an `fx_*` with `param` a key, name or decimal CLAP id; a `tr_*` with `volume`, `pan` or `width` (`width`: not on a master); an `sd_*` with `volume`, for an audio send between strips or a rack send. |
 | `depth` | The offset at a signal of 1 (required). Plug-in parameter: a fraction of its CLAP range, −1..1. Volume and send level: dB, −48..48. Pan and width: percent, −200..200. |
 | `enabled` | Default true. |
-| `lane` | The target's lane is shown, default true. Undoable like an envelope's `visible`. It never changes the sound; until step M2 gives routes their mix slots, changing it compiles like any route edit. |
+| `lane` | The target's lane is shown, default true. Undoable like an envelope's `visible`. It never changes the sound, but changing it compiles, as an envelope's `visible` does. |
 
 The offset (signal × depth, where signal is −1..1 or 0..1) adds to the base,
 whatever plays without modulation. Routes on one target sum. Modulation
@@ -1551,7 +1557,8 @@ Editing them fails with `track.frozen`.
   must be flagged modulatable and not read-only or bypass. VST3 parameters
   never are.
 - Mixer targets are refused until step M2 (`modulation.target`, with a hint
-  naming the step).
+  naming the step). A file's mixer-target route loads and is inert until
+  then (engine.md §1.4.1).
 - Errors: `modulation.source`, `modulation.target`, `modulation.duplicate`,
   `modulation.cycle` (naming the route that closes it), `modulation.depth`,
   `modulation.limit`. Each carries `code`, `message`, `path` and a `hint`.

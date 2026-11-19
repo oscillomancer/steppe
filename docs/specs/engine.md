@@ -273,8 +273,9 @@ the base: the static value, the envelope or a write hold's hand. It never
 writes the base, the model or an envelope, and write modes record the base
 only.
 
-- **Edges.** Each enabled route is an edge from its source rack's node to
-  the node that applies its target. That is the track for an FX in a chain
+- **Edges.** Every route, enabled or not, is an edge from its source rack's
+  node to the node that applies its target; `enabled` only zeroes its
+  contribution (ADR-0096, amendment M-l). That is the track for an FX in a chain
   and for a track's mixer targets; for a send's level it is the node that
   applies the level (the source strip, or the rack for a rack send). The
   edge orders the source first in `topoOrder`, is a dependency in both
@@ -298,16 +299,17 @@ only.
 - **Plug-in targets** (CLAP parameters flagged modulatable). At each point
   of the target stage's absolute 32-sample automation grid, the stage sends
   one `PARAM_MOD` event per modulated parameter, after any `Param` event at
-  the same frame: the sum of its enabled routes' signal × depth × the
-  parameter's CLAP range. An event is sent only when the value differs from
-  the memo of the last one sent.
+  the same frame: the sum of its routes' signal × depth × the parameter's
+  CLAP range, a disabled route adding 0. An event is sent only when the
+  value differs from the memo of the last one sent.
   - The memo is carried across compiles by (fx, param), like `carryMix`
     (§1.6). A parameter that the new plan no longer modulates is sent one 0
-    at its first grid point.
-  - It is reset on the instance's activation, a reset (`host::Instance::
-    resets()`: a seek, a play start), a changed instance, and a patch or
-    state applied to the instance. The next grid point then sends every
-    modulated parameter.
+    at its first grid point and leaves the memo.
+  - It goes stale (it is never emptied) on the instance's activation, a
+    reset (`host::Instance::resets()`: a seek, a play start), a changed
+    instance, and a patch or state applied to the instance. The next grid
+    point then sends the current sum of every modulated parameter and 0 to
+    every other parameter the memo lists, and drops those.
   - A patch edit to a modulated FX compiles instead of taking the patch path
     (ADR-0092).
   - Each stage reserves `block / 32 + 2` events per modulated parameter.
@@ -316,7 +318,8 @@ only.
 - **Inert routes.** A route is inert, with a plan warning, when binding finds
   that its target cannot take it: the parameter is gone, not flagged
   modulatable, read-only or bypass, or the plug-in is missing or VST3
-  (`modulation.target`). It is also inert after its target reported a
+  (`modulation.target`). Until step M2 a route to a mixer target is inert
+  the same way, reported as `target`. It is also inert after its target reported a
   latency change while modulated (`modulation.latency`): the engine then
   keeps every route into that FX's modulated parameters disabled until one
   of them is edited, the FX is replaced, or the project is reopened.

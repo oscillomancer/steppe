@@ -4,7 +4,12 @@
 ADR-0093 (values on a running plan). Built in steps M1 to M4 (below).
 
 Contracts: `specs/engine.md` §1.4.1, `specs/rack.md` §5–6,
-`specs/session-model.md` "Modulation (schema 2.17, ADR-0096)".
+`specs/session-model.md` "Modulation (schema 2.16, ADR-0096)".
+
+*Amended 2026-11-19 after review round 51 (amendments G-c, G-d and M-l):*
+files that went through an older build open (§"Older builds"); every route
+is an edge whatever `enabled` says; a reset marks the send memo stale
+rather than emptying it; the schema is 2.16.
 
 ## Context
 
@@ -50,9 +55,9 @@ any rack beside Out and Note Out.
 - **Bypass.** A bypassed Mod Out holds 0 on every input.
 - **Limit.** A rack holds at most 32 Mod Outs, as it holds 32 Outs.
 
-A rack whose only way out is an enabled modulation route counts as having an
-output: its Mod Outs set the node's latency as routed Outs do (rack.md §6,
-"Timing").
+A rack whose only way out is a modulation route, enabled or not, counts as
+having an output: its Mod Outs set the node's latency as routed Outs do
+(rack.md §6, "Timing").
 
 ### Route: the modulation object
 
@@ -83,6 +88,20 @@ prefix `mo` already names rack modules, and `Id::parse` would map both to
   route in a `modulation.removed` warning.
 - **Persistence.** Routes are ordinary model objects: undo, history, diff,
   merge by replay and branches treat them as they treat envelopes.
+
+### Older builds
+
+A build that predates schema 2.16 keeps `modulations` as an unknown section
+but drops the `mr` counter from `next_ids`, and it may delete a route's
+source module or target, or add a send that closes a cycle through a route.
+Such a file never fails to open:
+
+- a missing or low `mr` counter is derived from the highest `mr` id;
+- a route whose source or target is gone or no longer fits, or that closes
+  a cycle, is dropped with a `project.modulation_dropped` warning naming
+  it and why.
+
+The same rule holds for every new kind (amendment G-c).
 
 ### Depth and the base
 
@@ -129,6 +148,8 @@ prefix `mo` already names rack modules, and `Id::parse` would map both to
     compile checks the flags again when it binds the instance. Such a route
     is inert and the plan warns (`modulation.target`). An FX whose plug-in
     is missing makes its routes inert the same way.
+  - Until step M2, a route to a mixer target (from a later build's file, or
+    written by hand) is inert in the same way, reported as `target`.
 - **Latency.** No CLAP flag says a parameter changes latency: a plug-in
   reports latency only after it has changed. When a target reports a
   latency change while it is modulated:
@@ -147,8 +168,10 @@ prefix `mo` already names rack modules, and `Id::parse` would map both to
 
 ### Order, cycles and liveness
 
-- **Order.** A modulation route is an edge from the source rack's node to
-  the target's node:
+- **Order.** Every modulation route, enabled or not, is an edge from the
+  source rack's node to the target's node (amendment M-l): `enabled` only
+  zeroes its contribution, so turning it on without a compile finds the
+  order, the compensation, the executor and the source's values in place:
   - the target's node is the track for an FX in a chain and for a track's
     mixer targets;
   - for a send's level it is the node that applies that level (the source
@@ -157,7 +180,10 @@ prefix `mo` already names rack modules, and `Id::parse` would map both to
     latency solve.
 - **Cycles.** The model's cycle check counts the edge too, so `modulation.
   add` refuses a cycle at edit time (`modulation.cycle`, naming the route
-  that closes it). The compile never meets one.
+  that closes it). The compile never meets one. A rack modulating its own
+  rack send's level is a cycle of one node (the level is applied at the
+  rack) and is refused with a hint that says so; modulate the destination's
+  volume instead.
 - **Self-modulation stays refused.** A follower on a track's own signal
   driving that track's insert is a cycle. A later ADR may allow it only with
   a mechanism shown identical at every block size in both executors; a
@@ -193,7 +219,7 @@ prefix `mo` already names rack modules, and `Id::parse` would map both to
     automation grid (`kAutomationStep`), the same points its `Param`
     events use.
   - **What.** The stage sends one `PARAM_MOD` per modulated parameter: the
-    sum of its enabled routes' signal × depth × range.
+    sum of its routes' signal × depth × range, a disabled route adding 0.
   - **Order.** At a frame that also carries an automation event, the
     `Param` event comes first.
   - **Block size.** These positions are functions of the timeline position
@@ -203,14 +229,22 @@ prefix `mo` already names rack modules, and `Id::parse` would map both to
   last one sent to that parameter.
   - **It survives compiles.** It is carried across compiles by (fx, param),
     with the other carried state (§1.6 of the engine spec). A parameter that
-    a new plan no longer modulates (a route removed, disabled or made inert,
-    a source rack deleted) is sent one 0 at the new plan's first grid point.
-  - **It resets** on the instance's activation, on a reset
-    (`host::Instance::resets()`, a seek or a play start), on a changed
-    instance, and on a patch or state applied to it. After a reset the
-    first grid point sends every modulated parameter, so a real-time play
-    from a position and an offline render from there both start from an
-    empty memo.
+    a new plan no longer modulates (a route removed or made inert, a source
+    rack deleted) is sent one 0 at the new plan's first grid point, and its
+    entry is dropped. A disabled route adds 0, so its parameter's sum
+    changes and is sent like any other change.
+  - **It goes stale, never empty** (amendment M-l), on the instance's
+    activation, on a reset (`host::Instance::resets()`, a seek or a play
+    start), on a changed instance, and on a patch or state applied to it.
+    The next grid point sends the current sum of every modulated parameter
+    whatever the memo holds, and 0 to every other parameter the memo still
+    lists, then drops those entries. A plug-in may keep its modulation
+    across a reset (the stock template clears it only on activation), so
+    emptying the memo would lose the 0 of a route removed in the same
+    adoption as a seek. A real-time play from a position and an offline
+    render from there therefore send every modulated parameter at the first
+    grid point, and the real-time run also clears what a fresh instance
+    never had.
   - **Patch edits compile.** For that reason a patch edit to a modulated FX
     compiles instead of taking ADR-0092's patch path, as an FX with an
     active envelope does.
@@ -247,9 +281,11 @@ prefix `mo` already names rack modules, and `Id::parse` would map both to
   slot has one reader. ADR-0093's rule for edits made one after the other
   in different executors still applies.
 - **What compiles.** Adding, removing, retargeting or changing a route's
-  source compiles. `lane` belongs to the GUI and never changes the sound;
-  until M2 gives routes their slots, a `lane` change compiles like any
-  route edit, and from M2 it rides the slots' path without compiling.
+  source compiles. `lane` belongs to the GUI and never changes the sound,
+  but a `lane` change compiles like any route edit, as an envelope's
+  `visible` does today. A shortcut that skips the compile (as amendment
+  C-f's `contextOnly` does for the context) is possible later and is not
+  part of this ADR.
 
 ### Freeze
 
@@ -285,10 +321,10 @@ track is not. While frozen, the print plays and the routes are inert.
 
 | Step | Who | What |
 |---|---|---|
-| M1 | lead | Mod Out; the `mr` kind (schema 2.17 in the expected order, renumbered by order of landing); edges, cycles, liveness and alignment; the `PARAM_MOD` emitter with memo carry, resets and capacity; flag checks; `modulation.*`; `fx.describe` `modulatable` |
+| M1 | lead | Mod Out; the `mr` kind (schema 2.16, by order of landing, G-d); older builds' files (G-c); edges, cycles, liveness and alignment; the `PARAM_MOD` emitter with memo carry, resets and capacity; flag checks; `modulation.*`; `fx.describe` `modulatable` |
 | M2 | lead | Mixer targets; depth and enabled as mix values; `modulate`; telemetry; the drop and bridge counters |
 | M2b | builder | The other stock plug-ins mark their continuous parameters modulatable (never ones that restart the plug-in or change latency) |
-| M3 | gui-lead | The parameter menu, the `mod` slot, rings and bars, lanes keyed by target, the FX parameter list |
+| M3 | gui-lead | One parameter menu, the same in the mixer and the track panel: MIDI learn…, Modulate ▸ (greyed where `fx.describe` reports the parameter not `modulatable`, M-b), Show lane. MIDI learn moves off the bare right-click into that menu, with a dated note on ADR-0058 and the manual's change (M-k). The `mod` slot lists the racks of the strip's track that hold a Mod Out. Rings and bars, lanes keyed by target, the FX parameter list. gui.md and the ADR-0058 note come with M3 |
 | M4 | lead | Modulation through an envelope (above) |
 
 ## Consequences
@@ -310,6 +346,6 @@ track is not. While frozen, the print plays and the routes are inert.
 - **Determinism.** Renders stay deterministic, and real time stays equal to
   offline in both executors, at any block size and through the bridge.
   Every position involved is a function of the timeline position, the memo
-  resets with the plug-in, and source and target share an executor.
+  goes stale with the plug-in, and source and target share an executor.
 - **Platforms.** No platform-specific code is added. Native CI must pass on
   Linux, macOS and Windows before each step merges.

@@ -568,7 +568,7 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   frontier ring carries the send's output.
 - **Timing.** Read-ahead PDC treats the node as a strip whose latency is the
   maximum of its routed audio Outs and Note Outs (ADR-0064), and of its Mod
-  Outs that feed an enabled modulation route (ADR-0096). Each Out's
+  Outs that feed a modulation route, enabled or not (ADR-0096). Each Out's
   latency is the maximum sum of prepared plug-in stage latencies, including
   oversampling, along
   paths in the DAG left after removing the scheduler's feedback cables.
@@ -663,8 +663,8 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
 - **Modulation.** A Mod Out's inputs leave the rack through modulation
   routes (engine.md §1.4.1): the route's edge is compensated as a sidechain
   into its target stage, and the target's stage sends CLAP `param_mod` on
-  its own automation grid. A rack whose only way out is an enabled
-  modulation route counts as having an output.
+  its own automation grid. A rack whose only way out is a modulation route,
+  enabled or not, counts as having an output.
 - **Freeze.** Freezing a rack's home channel prints what the channel hears.
   Rack sends are not in the print: the rack keeps running for them
   (ADR-0075), so freezing does not reduce the rack's CPU. While the home is
