@@ -510,6 +510,10 @@ Canonical output, in order:
    to the lowest-numbered voice of that channel whose cursor is ≤ its start. A note that crosses a bar
    line is split and tied (`~`). Voices are named `c<ch>v<n>`
    (`c1v1`, `c1v2`), with `vel` set to the voice's most common velocity.
+   Pitches are named by `harmony::spell` (`specs/harmony.md` §3): with no key
+   (`DecompileOptions::key` unset) the table `C C# D Eb E F F# G Ab A Bb B`,
+   which is the output's spelling today, else by the key; every spelling
+   compiles back to the same pitch.
    Gaps become rests. Durations are written as the shortest correct token:
    single symbolic (`q`, `e.`, `e3`, ...), else a `+` sum of at most two
    symbolic values, else `Nt`. Velocities different from the voice's `vel`

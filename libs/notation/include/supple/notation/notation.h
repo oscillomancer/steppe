@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <supple/base/result.h>
+#include <supple/harmony/harmony.h>
 #include <supple/midi/midi.h>
 
 namespace supple::notation {
@@ -46,6 +47,9 @@ struct DecompileOptions {
     std::function<midi::Meter(int bar)> meterAt;
     bool drumGrids = true;
     std::optional<DrumMap> drums;
+    // Spells pitch names by this key (harmony::spell). Unset: the default table,
+    // which is what the output has always used.
+    std::optional<harmony::Key> key;
 };
 
 Result<std::string> decompile(const midi::Sequence& sequence, const DecompileOptions& options = {});

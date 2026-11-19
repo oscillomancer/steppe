@@ -758,48 +758,34 @@ class Compiler {
 
     std::optional<std::vector<int>> chord(std::string_view text, int octave, const Token& at) {
         const auto slash = text.find('/');
-        auto symbol = text.substr(0, slash);
+        const auto symbol = text.substr(0, slash);
         if (symbol.empty()) return std::nullopt;
-        std::size_t i = 1;
-        if (i < symbol.size() && (symbol[i] == '#' || symbol[i] == 'b')) ++i;
-        const std::string rootName = std::string(symbol.substr(0, i));
-        auto root = internal::pitch(rootName + std::to_string(octave));
-        if (!root) {
+        // The grammar, the quality table and the voicing are harmony's; the
+        // warnings below keep the compiler's codes and wording.
+        auto parsed = harmony::parseChord(text);
+        auto pitches = parsed ? harmony::chordPitches(*parsed, octave)
+                              : Result<std::vector<int>>(parsed.error());
+        if (pitches) return *pitches;
+        const std::string& code = pitches.error().code;
+        if (code == "chord.bad_root") {
             add("bad_pitch", "Invalid chord root.", at, "Use a root such as C or Bb.");
-            return std::nullopt;
-        }
-        const std::string quality(symbol.substr(i));
-        const auto& qualities = internal::chordQualities();
-        auto it = qualities.find(quality);
-        if (it == qualities.end()) {
+        } else if (code == "chord.unknown_quality") {
+            std::size_t i = 1;
+            if (i < symbol.size() && (symbol[i] == '#' || symbol[i] == 'b')) ++i;
+            const std::string quality(symbol.substr(i));
             std::vector<std::string> names;
-            for (const auto& [name, ignored] : qualities) {
+            for (const auto& [name, ignored] : harmony::chordQualities()) {
                 (void)ignored;
                 names.push_back(name);
             }
             add("unknown_chord", "Unknown chord quality '" + quality + "'.", at,
                 "Did you mean '" + closest(quality, names) + "'?");
-            return std::nullopt;
+        } else if (code == "chord.bad_bass") {
+            add("bad_pitch", "Invalid slash bass.", at, "Use a bass letter such as C/E.");
+        } else {
+            add("pitch_range", "Chord pitch exceeds MIDI range.", at, "Use a lower chord octave.");
         }
-        std::vector<int> pitches;
-        if (slash != std::string_view::npos) {
-            auto bass =
-                internal::pitch(std::string(text.substr(slash + 1)) + std::to_string(octave - 1));
-            if (!bass) {
-                add("bad_pitch", "Invalid slash bass.", at, "Use a bass letter such as C/E.");
-                return std::nullopt;
-            }
-            pitches.push_back(*bass);
-        }
-        for (int interval : it->second) {
-            if (*root + interval > 127) {
-                add("pitch_range", "Chord pitch exceeds MIDI range.", at,
-                    "Use a lower chord octave.");
-                return std::nullopt;
-            }
-            pitches.push_back(*root + interval);
-        }
-        return pitches;
+        return std::nullopt;
     }
 
     void compileVoice(Voice& voice) {

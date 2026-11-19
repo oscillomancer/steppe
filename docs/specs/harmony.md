@@ -42,9 +42,11 @@ Melodic minor is the ascending form in both directions.
 
 ## 2. Functions
 
-- `parsePitchClass(text)`, `printPitchClass(pc)`: a letter and at most one `#`
-  or `b`. `Eb` and `D#` are different values with the same sounding pitch;
-  `pitchClassNumber(pc)` is 0 to 11.
+- `parsePitchClass(text)`, `printPitchClass(pc)`: a letter (either case on
+  input, upper case on output) and at most one `#` or `b`. `Eb` and `D#` are
+  different values with the same sounding pitch; `pitchClassNumber(pc)` is 0
+  to 11 and `pitchClassSemitone(pc)` is the unreduced value (`Cb` is -1, `B#`
+  is 12).
 - `parseChord(text)` / `printChord(chord)`: the notation's chord grammar
   (notation spec, "Chord symbols"): root, quality, optional `/bass`.
   `parseChord` fails with the quality list. `printChord` writes the
@@ -52,13 +54,16 @@ Melodic minor is the ascending form in both directions.
   `min`, `aug` for `+`, `sus4` for `sus`, `maj7` for `M7`, `m7` for `min7`,
   `m7b5` for `ø`) and the root and bass as written. `chordPitches(chord,
   octave)` voices it as the notation does: close position, the root in
-  `octave`, each further tone the table's interval above the root, pitches
-  ascending, a slash bass in the octave below the root. `chordQualities()` is
-  the one table (31 names) the notation compiler and the commands share.
-- `spell(pitch, key)` and `spell(pitch)` (no key): the name of a MIDI pitch
-  or pitch class, as in the rule below. `spellPitch` adds the octave
-  (`Bb3`; the octave number is scientific, C4 = 60, written as the notation
-  prints it).
+  `octave`, each further tone the table's interval above the root, a slash
+  bass first, in `octave - 1` (so the pitches are ascending). It fails with
+  `chord.bad_root`, `chord.bad_bass` (not a MIDI pitch) or `chord.pitch_range`;
+  `parseChord` fails with `chord.bad_root`, `chord.unknown_quality` (the hint
+  lists the qualities) or `chord.bad_bass`. `chordQualities()` is the one table
+  (31 names) the notation compiler and the commands share.
+- `spellPitchClass(pc, key?)` and `spell(pitch, key?)`: the name of a pitch
+  class, or of a MIDI pitch with its octave (`Bb3`; scientific, C4 = 60; the
+  octave follows the letter, so `B#3` is the pitch of C4), as in the rule
+  below. With no key, the default table.
 - `transposeDegrees(pitch, key, degrees)`: a MIDI pitch moved by scale
   degrees. An in-scale pitch moves to the degree `degrees` away (octaves
   carry, negative degrees go down); an out-of-scale pitch first goes to the
@@ -66,8 +71,9 @@ Melodic minor is the ascending form in both directions.
   degrees. The result is clamped to 0..127 by returning nothing when it falls
   outside.
 - `keySupported(key)`: false when spelling needs a double accidental.
-- `ContextIndex`: `build(points)` from plain `KeyPoint{beat, key}` and
-  `ChordPoint{beat, chord}` vectors (any order); `keyAt(beat)`, `chordAt(beat)`
+- `ContextIndex(keyPoints, chordPoints)` from plain `KeyPoint{beat, key}` and
+  `ChordPoint{beat, optional chord}` vectors (any order; an empty chord is "no
+  chord from here"); `keyAt(beat)`, `chordAt(beat)`
   (the last point at or before `beat`, none before the first), `keyPoints()`,
   `chordPoints()`. Two points of one type at one beat are a caller error; the
   index keeps the later in input order. Immutable once built.
