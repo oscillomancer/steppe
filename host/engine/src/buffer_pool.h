@@ -20,6 +20,12 @@ namespace supple::engine::detail {
 struct Plan;
 struct HeldVoice;
 
+// Bytes of buffer capacity, by kind (BufferPool::heldBytes() and tests).
+struct HeldBytes {
+    std::size_t floats = 0, voices = 0, outputs = 0;
+    std::size_t total() const { return floats + voices + outputs; }
+};
+
 class BufferPool {
   public:
     // While a Scope lives, this thread's zeroed(), reservedVoices() and
@@ -50,8 +56,8 @@ class BufferPool {
     // of the size (both counted only inside a Scope).
     std::uint64_t reused() const { return reused_; }
     std::uint64_t made() const { return made_; }
-    // Bytes of buffer capacity the pool holds now (tests: trim()'s bound).
-    std::size_t heldBytes() const;
+    // Buffer capacity the pool holds now (tests: trim()'s bound).
+    HeldBytes heldBytes() const;
     // Tests: every harvested buffer is filled with loud garbage first, so a
     // reuse that fails to clear one is heard.
     bool poisonForTests = false;

@@ -403,9 +403,10 @@ specified here as it lands); so far:
   70 MB at 96 tracks and 139 MB at 192, most of it (114 MB at 192) the
   voice lists, two per stage that takes notes with room for 4,096 voices
   each, whether or not a plug-in holds one. It does not grow: a test
-  compiles at block sizes from 32 to 1024 in turn, retiring each plan as
-  the next goes live, and checks that the pool never holds more than the
-  last compile's buffers.
+  compiles at block sizes from 32 to 1024 in turn, and a one-channel
+  session between compiles of the rich one, retiring each plan as the next
+  goes live, and checks that the pool never holds more audio buffers, voice
+  lists or output event buffers than the last compile took.
 Returning to a version with neither patch nor state after applying saved FX
 settings recreates the factory-default instance. The old instance remains alive
 until both executors release its plan, as with a changed opaque state.

@@ -8,6 +8,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include <supple/engine/realtime.h>
@@ -524,46 +525,77 @@ TEST_CASE("plan: a compile hands out retired plans' buffers cleared, the plan un
 TEST_CASE("plan: the buffer pool keeps no more than the last compile took (step 3)") {
     // trim() keeps of each size as many buffers as the last prepare() took
     // and frees the rest, so the pool holds at most one plan's worth however
-    // the plans change. Each round compiles at a new block size while the
-    // previous plan is live, then retires that one, as collectPlans does; a
-    // trim that kept more would hold a 1024-sample plan's buffers after a
-    // 64-sample compile. Each pooled plan also dumps as a fresh one.
-    const auto s = richSession();
-    auto pool = makePool();
+    // the plans change. Each round compiles a new plan while the previous
+    // one is live, then retires that one, as collectPlans does. The block
+    // size changes the audio buffers; a smaller session (one instrument
+    // channel) after the rich one changes the voice lists and output event
+    // buffers, which do not depend on the block. A trim that kept more of
+    // any kind would hold a 1024-sample plan's buffers after a 64-sample
+    // compile, or the rich session's voice lists after the small one's.
+    // Each pooled plan also dumps as a fresh one.
+    const auto rich = richSession();
+    const auto small = [] {
+        model::EditTxn t(model::Session::create({.console9 = true, .seed = 4243}), 1);
+        const Id a = addChannel(t);
+        addFx(t, a, fxOf(kSine));
+        addNotes(t, a);
+        return commit(t);
+    }();
+    // Each session its own instance pool: their ids may coincide.
+    auto richPool = makePool(), smallPool = makePool();
     MediaCache media;
     d::BufferPool buffers;
     buffers.poisonForTests = true;
     struct Bytes final : d::BufferVisitor {
-        std::size_t total = 0;
-        void floats(std::vector<float>& v) override { total += v.capacity() * sizeof(float); }
+        d::HeldBytes held;
+        void floats(std::vector<float>& v) override { held.floats += v.capacity() * sizeof(float); }
         void voices(std::vector<d::HeldVoice>& v) override {
-            total += v.capacity() * sizeof(d::HeldVoice);
+            held.voices += v.capacity() * sizeof(d::HeldVoice);
         }
         void outputs(std::vector<host::OutputEvent>& v) override {
-            total += v.capacity() * sizeof(host::OutputEvent);
+            held.outputs += v.capacity() * sizeof(host::OutputEvent);
         }
     };
-    const auto compileAt = [&](std::uint32_t block, d::BufferPool* with) {
-        auto compiled = d::compile(s, pool, 0, block, 48000);
+    struct Round {
+        const model::Session* session;
+        InstancePool* instances;
+        std::uint32_t block;
+        const char* name;
+    };
+    const auto compile = [&](const Round& r, d::BufferPool* with) {
+        auto compiled = d::compile(*r.session, *r.instances, 0, r.block, 48000);
         REQUIRE(compiled);
         d::Plan p = std::move(*compiled);
         p.media = &media;
         p.buffers = with;
-        REQUIRE(d::prepare(p, s));
+        REQUIRE(d::prepare(p, *r.session));
         return p;
     };
+    const Round rounds[] = {
+        {&rich, &richPool, 128, "rich"}, {&rich, &richPool, 1024, "rich"},
+        {&rich, &richPool, 64, "rich"},  {&small, &smallPool, 64, "small"},
+        {&rich, &richPool, 512, "rich"}, {&small, &smallPool, 32, "small"},
+        {&rich, &richPool, 256, "rich"},
+    };
     std::optional<d::Plan> live;
-    for (const std::uint32_t block : {128u, 1024u, 64u, 512u, 32u, 256u}) {
-        INFO("block " << block);
-        const auto fresh = d::dumpPlan(compileAt(block, nullptr));
-        d::Plan next = compileAt(block, &buffers);
+    for (const Round& r : rounds) {
+        INFO(std::string(r.name) << " session, block " << r.block);
+        const auto fresh = d::dumpPlan(compile(r, nullptr));
+        d::Plan next = compile(r, &buffers);
         CHECK(d::firstDifference(fresh, d::dumpPlan(next)).empty());
         Bytes size;
         d::visitPooledBuffers(next, size);
         if (live) buffers.harvest(*live);
         buffers.trim();
-        CHECK((buffers.heldBytes() > 0) == live.has_value());  // not vacuous
-        CHECK(buffers.heldBytes() <= size.total);
+        const d::HeldBytes held = buffers.heldBytes();
+        // Not vacuous: both sessions have each kind, so after a harvest the
+        // pool keeps some of each.
+        CHECK((held.floats > 0) == live.has_value());
+        CHECK((held.voices > 0) == live.has_value());
+        CHECK((held.outputs > 0) == live.has_value());
+        CHECK(held.floats <= size.held.floats);
+        CHECK(held.voices <= size.held.voices);
+        CHECK(held.outputs <= size.held.outputs);
         live = std::move(next);
     }
 }
