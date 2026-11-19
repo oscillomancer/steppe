@@ -1416,9 +1416,10 @@ routes (§1.8) and VCAs. A 2.5 file loads unchanged; an older application openin
 file ignores `learn` with a warning, and its controllers move nothing on strips, sends or
 VCAs.
 
-### Context track (schema 2.16, ADR-0095)
+### Context track (schema 2.17, ADR-0095)
 
-Writers emit `supple.project/2.16` once the model lands. The session gains
+Writers emit `supple.project/2.17` once the model lands (2.16 is modulation,
+ADR-0096). The session gains
 the `cx` collection and `Region` gains `section`.
 
 **Context point** `cx_*`: `{beat, type, …}`, beats only, positions rounded

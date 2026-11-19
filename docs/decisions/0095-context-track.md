@@ -2,7 +2,7 @@
 
 **Status:** Proposed, 2026-11-19.
 
-Contracts: `specs/session-model.md` "Context track (schema 2.16)" (the model, the
+Contracts: `specs/session-model.md` "Context track (schema 2.17)" (the model, the
 file, errors, describe), §1.10, §3, §7 (commands); `specs/harmony.md` (the library); `specs/notation.md`
 ("Chord symbols"). Part of the headline design in `designs/headline-core.md`
 §0, §1 and §6; the survey that grounds it is `reports/survey-context.md`.
@@ -53,8 +53,9 @@ take `section`.
 `cx` collection of the session, with `rev`, diff and merge like a marker. The
 file has a top-level `context` section (`points`, in id order, each
 `{id, beat, type, …}` with defaults omitted) and writes the `cx` counter in
-`next_ids` once used. The schema is **2.16** if this lands first (numbers
-follow the order of landing on integration). A build that does not know the
+`next_ids` once used. The schema is **2.17**: modulation (ADR-0096)
+lands first and takes 2.16 (design amendment G-d; numbers follow the order of
+landing on integration). A build that does not know the
 section keeps it verbatim as an unknown top-level section, so a file that
 passes through it returns with the points intact and the `cx` counter
 missing.
