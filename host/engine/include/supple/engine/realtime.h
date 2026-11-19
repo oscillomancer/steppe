@@ -1045,6 +1045,10 @@ class Engine {
     // Tests only (EngineTestAccess): changes the verifier's second compile
     // (EngineOptions::verifyPlans) before the two are compared.
     void (*secondCompileForTests_)(detail::Plan&) = nullptr;
+    // Tests only (EngineTestAccess): runs between the verifier's two
+    // compiles, where a plug-in may ask for a restart.
+    void (*betweenCompilesForTests_)(void*) = nullptr;
+    void* betweenCompilesContext_ = nullptr;
     bool bridgedLive_ = false;  // main thread (bridgedLive())
     std::atomic<std::uint64_t> stoppedGen_{0};
     // The session the engine plays: the newest published plan's, or a mix or

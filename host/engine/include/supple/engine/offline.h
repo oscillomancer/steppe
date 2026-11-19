@@ -110,6 +110,10 @@ class InstancePool {
     // compensated) until service() has restarted it.
     bool restarting(model::Id id) const;
     bool restarting(const host::Instance* instance) const;
+    // Counts the changes service() makes to what a compile reads of an
+    // instance (restarting, active, failed, latency) and the restarts asked
+    // of the pool: two compiles of one session differ only if it moved.
+    std::uint64_t availabilityChanges() const { return availabilityChanges_; }
     std::vector<std::pair<model::Id, Error>> failedErrors() const;
     // Isolated instances whose bridge audio thread was refused its class.
     std::vector<model::Id> bridgeThreadsRefused() const;
@@ -163,6 +167,7 @@ class InstancePool {
     std::map<model::Id, Entry> instances_;
     std::vector<std::pair<std::uint64_t, std::unique_ptr<host::Instance>>> retired_;
     std::uint64_t generation_ = 0;
+    std::uint64_t availabilityChanges_ = 0;
 };
 
 // How a take's audio is played back (session-model §1.5). `rate` is the rate
