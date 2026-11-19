@@ -630,6 +630,14 @@ move and resize drags also compare the press-time amplitude, baseline, position,
 length, source length, loop state, envelope and pool. A change cancels the drag
 with `env.changed`; it does not rebase the draft onto the changed item.
 
+**Ruler rows.** Top to bottom: bars and beats (22 units, the loop range),
+time (15, the punch range), tempo and meter (20), regions (15) and markers
+(16), 88 units in all (`views::RulerRows`). The height is a run-time value,
+the rows' sum: the header row beside the track list, the ruler's painting and
+hit tests and the tracks' visible height all read it, so a row added or
+hidden later (the context track's chords) changes it in one place
+(`ArrangeView::setRulerRows`).
+
 **Empty project.** The lanes of a project without a track are bare: no text
 is drawn there. Both ways to begin work from the start: a file dropped on
 the empty lanes makes a track, and "+ track" is in the track panel's foot,
