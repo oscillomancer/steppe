@@ -47,6 +47,13 @@ bool entriesMatch(const model::IdMap<T>& a, const model::IdMap<T>& b, F&& same) 
 bool mixOnly(const model::Session& a, const model::Session& b,
              const std::vector<model::EnvTarget>& holds, bool& changed,
              std::vector<model::EnvTarget>& stale) {
+    {  // This list names every Session member: one added to Session is a build
+       // error here until mixOnly says how it is compared.
+        [[maybe_unused]] const auto& [project, next, tempo, meters, timeMap, tracks, groups, items,
+                                      takes, media, midi, fx, routes, envelopes, autoItems, markers,
+                                      regions, racks, modules, cables, blobs, extraSections,
+                                      version] = a;
+    }
     if (!(a.project == b.project || *a.project == *b.project)) return false;
     if (!a.tempo.sameStorage(b.tempo) || !a.meters.sameStorage(b.meters) ||
         !a.items.sameStorage(b.items) || !a.takes.sameStorage(b.takes) ||
@@ -161,23 +168,19 @@ bool mixOnly(const model::Session& a, const model::Session& b,
     });
 }
 
-// mixOnly and patchOnly list every member of model::Session. This binds
-// them all, so a member added to Session is a build error here until both
-// lists say how it is compared. Neither compares `next` (it moves only with
-// a collection), `timeMap` (derived from tempo and meters) or `version`.
-[[maybe_unused]] void listsEverySessionMember(const model::Session& s) {
-    [[maybe_unused]] const auto& [project, next, tempo, meters, timeMap, tracks, groups, items,
-                                  takes, media, midi, fx, routes, envelopes, autoItems, markers,
-                                  regions, racks, modules, cables, blobs, extraSections, version] =
-        s;
-}
-
 // Whether `b` differs from `a` only in FX patches, each FX keeping a patch:
 // every other collection has the same storage, and each changed FX is
 // compared whole with its patch taken from `b`, so a field added later can
 // never pass as a patch edit. `changed` gains the FX whose patch differs.
 // Keep the collections in step with model::Session.
 bool patchOnly(const model::Session& a, const model::Session& b, std::vector<model::Id>& changed) {
+    {  // This list names every Session member: one added to Session is a build
+       // error here until patchOnly says how it is compared.
+        [[maybe_unused]] const auto& [project, next, tempo, meters, timeMap, tracks, groups, items,
+                                      takes, media, midi, fx, routes, envelopes, autoItems, markers,
+                                      regions, racks, modules, cables, blobs, extraSections,
+                                      version] = a;
+    }
     if (!(a.project == b.project || *a.project == *b.project)) return false;
     if (!a.tempo.sameStorage(b.tempo) || !a.meters.sameStorage(b.meters) ||
         !a.tracks.sameStorage(b.tracks) || !a.groups.sameStorage(b.groups) ||

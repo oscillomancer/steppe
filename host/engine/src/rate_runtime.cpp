@@ -77,6 +77,13 @@ namespace {
 // to model::Project can never pass as a scalar edit. Keep the collections in
 // step with model::Session.
 bool scalarOnly(const model::Session& a, const model::Session& b) {
+    {  // This list names every Session member: one added to Session is a build
+       // error here until scalarOnly says how it is compared.
+        [[maybe_unused]] const auto& [project, next, tempo, meters, timeMap, tracks, groups, items,
+                                      takes, media, midi, fx, routes, envelopes, autoItems, markers,
+                                      regions, racks, modules, cables, blobs, extraSections,
+                                      version] = a;
+    }
     model::Project x = *a.project;
     x.playrate.rate = b.project->playrate.rate;
     return x == *b.project && a.tempo.sameStorage(b.tempo) && a.meters.sameStorage(b.meters) &&

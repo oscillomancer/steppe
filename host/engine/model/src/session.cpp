@@ -55,7 +55,20 @@ namespace {
 constexpr std::string_view kPrefixes[kKindCount] = {"tr", "it", "tk", "md", "mi", "fx", "sd",
                                                     "en", "ai", "mk", "rg", "tp", "ts", "gr",
                                                     "ln", "rj", "rk", "mo", "cb"};
+
+// Ids parse by prefix, so every kind needs one and no two may share it. A
+// kind added without a prefix leaves an empty one at the end of the array
+// (the initializer is shorter than kKindCount) and fails here.
+constexpr bool prefixesAreUnique() {
+    for (std::size_t i = 0; i < kKindCount; ++i) {
+        if (kPrefixes[i].empty()) return false;
+        for (std::size_t j = 0; j < i; ++j)
+            if (kPrefixes[i] == kPrefixes[j]) return false;
+    }
+    return true;
 }
+static_assert(prefixesAreUnique(), "every Kind needs a distinct, non-empty id prefix");
+}  // namespace
 
 std::string_view prefix(Kind kind) {
     return kind == Kind::Project ? "project" : kPrefixes[static_cast<std::size_t>(kind)];
