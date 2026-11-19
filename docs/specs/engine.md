@@ -361,9 +361,16 @@ specified here as it lands); so far:
   the pairs the earlier scans of every node and edge pair found, whichever
   earlier plan the executor carries from (the callback can skip plans, the
   live region lags); the soak and a MIDI-send test compare them with those
-  scans, the latter also with a key route retargeted to another FX. Nothing is allocated on the audio thread. At 192 tracks the
-  callback's carry compares about 7,400 entries per adoption instead of
-  75,000; its time is the carry's own work, linear in the plan.
+  scans, the latter also with a key route retargeted to another FX.
+  Nothing is allocated on the audio thread. At 192 tracks the callback's
+  carry compares about 7,400 entries per adoption instead of 75,000; its
+  time is the carry's own work, linear in the plan.
+- **A compile's cost is linear in its plug-ins** (the compile profile's
+  step 1, in place of stage 7). `prepare` takes the restarting instances
+  from the pool once (`InstancePool::restartingInstances`, one pass, sorted)
+  and looks each plan instance and stage up in that list; it asked the pool
+  for each, which scanned every entry. A test counts the entries visited
+  per compile (`restartLookups`).
 Returning to a version with neither patch nor state after applying saved FX
 settings recreates the factory-default instance. The old instance remains alive
 until both executors release its plan, as with a changed opaque state.

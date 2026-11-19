@@ -434,10 +434,14 @@ bool InstancePool::restarting(Id id) const {
     return it != instances_.end() && it->second.restarting;
 }
 
-bool InstancePool::restarting(const host::Instance* instance) const {
-    for (const auto& [id, e] : instances_)
-        if (e.instance.get() == instance) return e.restarting;
-    return false;
+std::vector<const host::Instance*> InstancePool::restartingInstances() const {
+    std::vector<const host::Instance*> out;
+    for (const auto& [id, e] : instances_) {
+        ++restartLookups_;
+        if (e.restarting && e.instance) out.push_back(e.instance.get());
+    }
+    std::sort(out.begin(), out.end());
+    return out;
 }
 
 std::uint32_t InstancePool::rememberedLatency(Id id) const {

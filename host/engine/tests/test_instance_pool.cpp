@@ -116,6 +116,36 @@ TEST_CASE("an unchanged FX costs the pool no patch serialization") {
     CHECK(pool.find(ids[3])->paramValue(0).value() != before);
 }
 
+TEST_CASE("a compile finds the restarting instances in one pass over the pool") {
+    // Route E's compile profile: prepare() asked the pool, for every plan
+    // instance and again for every stage, whether it was restarting, and
+    // each answer scanned every entry: quadratic in the plug-in count (1.5
+    // ms of a 10 ms compile at 192 tracks). One pass per compile now.
+    const std::filesystem::path fixture = FIXTURE_CLAP_PATH;
+    const auto plugins = host::scan(std::span(&fixture, 1));
+    REQUIRE(plugins);
+    InstancePool pool([&](const model::PluginRef& ref) -> Result<host::PluginInfo> {
+        for (const auto& plugin : *plugins)
+            if (plugin.id == ref.id) return plugin;
+        return Error("engine.plugin_missing", ref.id);
+    });
+    model::EditTxn t(model::Session::create(), 1);
+    for (int i = 0; i < 16; ++i) {
+        model::FxInstance fx;
+        fx.plugin.id = "com.suppleaudio.test.gain";
+        const auto id = t.create(fx);
+        t.modify<model::Track>(model::kMaster, [&](auto& m) { m.chain.push_back(id); });
+    }
+    auto committed = t.commit();
+    REQUIRE_MESSAGE(committed, (committed ? "" : committed.error().toString()));
+    const OfflineSettings settings{.endSeconds = 0.01};
+    REQUIRE(renderOffline(*committed, pool, settings));  // the instances exist
+    REQUIRE(pool.size() == 16);
+    const auto before = pool.restartLookups();
+    REQUIRE(renderOffline(*committed, pool, settings));  // one compile
+    CHECK(pool.restartLookups() - before <= pool.size());
+}
+
 TEST_CASE("an FX the pool remembers is compared by text once it may not describe the instance") {
     // Route E stage 2 skips the comparison only when the instance was last
     // configured from this very session object, and nothing changed it since.

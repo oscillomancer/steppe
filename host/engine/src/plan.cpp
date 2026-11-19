@@ -1196,7 +1196,12 @@ Status prepare(Plan& p, const Session& s) {
         });
     // Inactive, or waiting for a restart it asked for: no executor runs it (the
     // executors stop it on adopting this plan), so the restart can happen.
-    std::erase_if(p.instances, [&](auto* in) { return !in->active() || p.pool->restarting(in); });
+    const std::vector<const host::Instance*> restartingNow =
+        p.pool ? p.pool->restartingInstances() : std::vector<const host::Instance*>{};
+    const auto awaitsRestart = [&](const host::Instance* in) {
+        return std::binary_search(restartingNow.begin(), restartingNow.end(), in);
+    };
+    std::erase_if(p.instances, [&](auto* in) { return !in->active() || awaitsRestart(in); });
     // Each input constraint joins a source tap to a destination stage. Aux
     // channels leave after the chain even when the main pair uses a pre-FX tap.
     for (auto& edge : p.edges) {
@@ -1591,9 +1596,7 @@ Status prepare(Plan& p, const Session& s) {
     // renderer node never depends on a live one.
     std::vector<std::uint32_t> task(p.nodes.size(), 0);
     // As p.instances: an instance waiting for its restart runs on neither.
-    auto runs = [&](const host::Instance* in) {
-        return in && in->active() && !(p.pool && p.pool->restarting(in));
-    };
+    auto runs = [&](const host::Instance* in) { return in && in->active() && !awaitsRestart(in); };
     for (std::size_t i = 0; i < p.nodes.size(); ++i) {
         (p.nodes[i].live ? p.liveNodes : p.rendererNodes).push_back(i);
         task[i] = static_cast<std::uint32_t>(
