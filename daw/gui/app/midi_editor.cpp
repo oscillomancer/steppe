@@ -479,6 +479,68 @@ class Keys : public ui::Node {
     RollState& s_;
 };
 
+// ----------------------------------------------------------------- bar strip
+
+// The project's bar numbers over the roll, at its bar lines, so a part can be
+// placed in the song without the arrangement in view. Which bars are numbered
+// depends on the zoom alone, as in the arrange ruler: every bar, or every
+// 2nd, 4th, 8th... counted from bar 1, the first stride whose spacing fits the
+// widest number (three digits at least); no two numbers ever touch.
+class BarStrip : public ui::Node {
+  public:
+    static constexpr float kHeight = 16, kGap = 12;
+    BarStrip(const RollState& s, std::vector<int>& labelled)
+        : Node("midi.bars"), s_(s), labelled_(labelled) {
+        layout.height = ui::SizeRule::fixed(kHeight);
+    }
+    void paint(ui::Canvas& c) override {
+        const ui::Theme& t = c.theme();
+        const ui::Rect b = bounds();
+        const ui::Rect area{b.x + kKeysWidth, b.y, std::max(0.0f, b.w - kKeysWidth), b.h};
+        const Geometry g{s_, area};
+        labelled_.clear();
+        c.fillRect(b, t.color("raised"));
+        c.fillRect({b.x, b.bottom() - 1, b.w, 1}, t.color("rule"));
+        c.fillRect({area.x - 1, b.y, 1, b.h}, t.color("rule"));
+        if (s_.barLines.empty()) return;
+        const float size = t.type("caption");
+        const int last = s_.firstBar + static_cast<int>(s_.barLines.size()) - 1;
+        const std::string digits(std::to_string(std::max(last, 100)).size(), '8');
+        const float widest = c.textWidth(digits, ui::Font::Mono, size);
+        float narrowest = 1e9f;
+        for (std::size_t i = 1; i < s_.barLines.size(); ++i)
+            narrowest = std::min(
+                narrowest,
+                static_cast<float>((s_.barLines[i] - s_.barLines[i - 1]) * s_.pixelsPerBeat));
+        int stride = 1;
+        while (stride < (1 << 20) && static_cast<float>(stride) * narrowest < widest + kGap)
+            stride *= 2;
+        c.save();
+        c.clip(area);
+        float lastX = -1e9f, lastW = 0;
+        for (std::size_t i = 0; i < s_.barLines.size(); ++i) {
+            const int bar = s_.firstBar + static_cast<int>(i);
+            const float x = g.xOf(s_.barLines[i] - s_.itemPosition);
+            if (x > area.right()) break;
+            if (x < area.x - widest - kGap || (bar - 1) % stride != 0) continue;
+            const std::string text = std::to_string(bar);
+            const float w = c.textWidth(text, ui::Font::Mono, size);
+            if (x - lastX < lastW + kGap) continue;
+            c.fillRect({x, b.bottom() - 6, 1, 5}, t.color("ink-quiet"));
+            c.text({x + 3, b.y, w + 4, b.h - 1}, text, ui::Font::Mono, size, t.color("ink"),
+                   ui::kLeft | ui::kMiddle);
+            if (x + 3 + w > area.x) labelled_.push_back(bar);
+            lastX = x;
+            lastW = w;
+        }
+        c.restore();
+    }
+
+  private:
+    const RollState& s_;
+    std::vector<int>& labelled_;
+};
+
 // ----------------------------------------------------------------- velocity lane
 
 class VelocityLane : public ui::Node {
@@ -917,6 +979,7 @@ std::unique_ptr<ui::Node> MidiEditor::build() {
     rollPane_ = &left;
     left.layout.dir = ui::Layout::Dir::Column;
     left.layout.width = ui::SizeRule::fraction();
+    bars_ = &left.emplace<BarStrip>(state_, barLabels_);
     auto& rollRow = left.emplace<ui::Node>("midi.rollrow");
     rollRow.layout.dir = ui::Layout::Dir::Row;
     rollRow.layout.height = ui::SizeRule::fraction();
@@ -929,6 +992,7 @@ std::unique_ptr<ui::Node> MidiEditor::build() {
     ccLane_ = &left.emplace<CcLane>(state_, *this, roll_);
     auto repaint = [this] {
         if (roll_) roll_->invalidate();
+        if (bars_) bars_->invalidate();
         if (keys_) keys_->invalidate();
         if (velocity_) velocity_->invalidate();
         if (ccLane_) ccLane_->invalidate();
@@ -1118,6 +1182,7 @@ Status MidiEditor::reload() {
     state_.barLines.clear();
     const auto& map = *app_.head().timeMap;
     const int firstBar = std::max(1, map.barBeat(std::max(0.0, state_.itemPosition - 64)).bar);
+    state_.firstBar = firstBar;
     for (int bar = firstBar; bar < firstBar + 512; ++bar) {
         const double at = map.beatOfBar(bar);
         if (at > state_.itemPosition + state_.itemLength + 64) break;
@@ -1140,6 +1205,7 @@ Status MidiEditor::reload() {
         refreshTitle();
     }
     if (roll_) roll_->invalidate();
+    if (bars_) bars_->invalidate();
     if (keys_) keys_->invalidate();
     if (velocity_) velocity_->invalidate();
     if (ccLane_) ccLane_->invalidate();

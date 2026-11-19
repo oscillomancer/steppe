@@ -1425,7 +1425,12 @@ in the focus colour with an ink outline. Velocity shows as fullness: a
 note keeps 45% of its colour at velocity 0 and all of it at 127, the rest
 drawn towards the ground. The rows of the white keys are on the panel
 colour and those of the black keys on the darker ground, as on the
-keyboard at the left; the line under each C is stronger. The title names
+keyboard at the left; the line under each C is stronger. A strip 16 units
+high above the roll numbers the project's bars (not the item's) at the roll's
+bar lines, in the ruler's mono caption: every bar, or every 2nd, 4th, 8th…
+counted from bar 1, the first stride whose spacing fits the widest number
+(three digits at least), so which bars are numbered depends on the zoom
+alone and no two numbers touch. The title names
 the track and the item as the arrangement labels it ("MIDI · Rhodes —
 Chords · 4 notes · grid 1/16"), with the item's id only while it has no
 name.

@@ -508,7 +508,9 @@ panel's top edge to set its height; a double-click there puts it back.
 
 The panel's main part is the **piano roll**: time runs left to right, the
 keys are at the left, and each note is a bar drawn in its item's colour,
-fuller the higher its velocity.
+fuller the higher its velocity. The strip along its top numbers the song's
+bars, as the arrangement's ruler does, so you can see where in the song the
+part plays.
 
 ### Notes
 
