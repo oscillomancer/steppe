@@ -325,7 +325,16 @@ TEST_CASE("a bridge ended by raise(SIGSEGV) is told as a crash, not as an exit")
 }
 
 // An uncaught std::terminate reaches abort() through the plug-in's runtime, so it ends the bridge
-// as abort() does.
+// as abort() does. Not under RealtimeSanitizer: libstdc++'s terminate handler writes its message
+// with fwrite on the bridge's audio thread, which rtsan flags, and halt_on_error ends the bridge
+// with exit 0 before it reaches abort(). That is the sanitizer's verdict on the plug-in's call, not
+// the host's classification this case is about.
+#if defined(__has_feature)
+#if __has_feature(realtime_sanitizer)
+#define SUPPLE_TEST_RTSAN 1
+#endif
+#endif
+#if !defined(SUPPLE_TEST_RTSAN)
 TEST_CASE("a bridge ended by std::terminate is told as the system ended it") {
     const auto end = endBridgeWith(9.0);  // std::terminate() in the next process()
 #if defined(_WIN32)
@@ -336,6 +345,7 @@ TEST_CASE("a bridge ended by std::terminate is told as the system ended it") {
     CHECK(end.status == SIGABRT);
 #endif
 }
+#endif
 
 // A bridge whose plug-in faults only once the host lets go of it is the bridge's own end, not the
 // host's (the destructor reads the status after it waits; round 6a, F3). The host fails the bridge
