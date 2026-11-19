@@ -13,6 +13,7 @@
 #include "pan_menu.h"
 #include "panel_grip.h"
 #include "panel_height.h"
+#include "param_menu.h"
 #include "rack_controls.h"
 #include "strip_learn.h"
 #include "supple/model/groups.h"
@@ -1134,13 +1135,10 @@ void Mixer::rebuild(bool keepLists) {
         st.type = type;
         auto frame = std::make_unique<StripFrame>("mixer.strip." + tid, [this, id](ui::Point p) {
             // Strip coordinates are the window's (the row lays them out in place).
-            // On a fader, pan or button: its MIDI learn (ADR-0058).
+            // On a fader, pan or button: the parameter menu (MIDI learn, lane,
+            // reset; a pan's mode and law), as in the track panel.
             if (const char* param = learnableAt(id.str(), p)) {
-                // The pan's menu adds its mode and law (ADR-0066).
-                if (std::string_view(param) == "pan")
-                    openPanMenu(root_, actions_, id, {p.x, p.y, 1, 1});
-                else
-                    openStripLearnMenu(root_, actions_, {{id}, param}, {p.x, p.y, 1, 1});
+                openParamMenu(root_, actions_, id, param, {p.x, p.y, 1, 1});
                 return;
             }
             trackMenu_.open(id, {p.x, p.y, 1, 1}, {});
@@ -1510,9 +1508,9 @@ void Mixer::rebuild(bool keepLists) {
         st.track = tid;
         st.type = "vca";
         auto frame = std::make_unique<StripFrame>("mixer.vca." + tid, [this, gid](ui::Point p) {
-            // On the fader, mute or solo: its MIDI learn (ADR-0058).
+            // On the fader, mute or solo: the parameter menu.
             if (const char* param = learnableAt(gid.str(), p)) {
-                openStripLearnMenu(root_, actions_, {{gid}, param}, {p.x, p.y, 1, 1});
+                openParamMenu(root_, actions_, gid, param, {p.x, p.y, 1, 1});
                 return;
             }
             trackMenu_.openGroup(gid, {}, {p.x, p.y, 1, 1});

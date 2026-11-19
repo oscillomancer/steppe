@@ -665,7 +665,7 @@ bool TcpPanel::Row::onPointer(const ui::PointerEvent& e) {
         if (ui::Root* r = root()) r->capture(this);
         return true;
     }
-    // A right-click on a fader, pan or button: MIDI learn for it.
+    // A right-click on a fader, pan or button: its parameter menu.
     if (e.button == 3 && panel_.cb_.learn)
         if (const char* param = learnableAt(e.pos)) {
             panel_.cb_.learn(*track_, param, {e.pos.x, e.pos.y, 1, 1});

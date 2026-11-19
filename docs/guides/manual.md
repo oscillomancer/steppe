@@ -306,6 +306,13 @@ what it is called, and the keys that do the same when it has any: "Mute",
 "Transport: play/stop (Space)". This works for a track's buttons, fader and
 pan in the track list and the mixer, the transport bar and the toolbar.
 
+Right-click a track's fader, pan or button, in the track list or the mixer,
+for its menu. It is the same in both places: **MIDI learn** binds the control
+to a controller (see MIDI controllers), **Show lane** opens its automation
+lane under the track (a new lane starts at the control's value; **Hide
+lane** puts it away), and on a fader or pan **Reset** sends it home, as a
+double-click does: 0 dB, or the centre.
+
 In the track list the first four are at the right of the track's name, at
 any row height. Under them is a line with **Ø**, **mono**, the fader and
 the pan, and then a line with the input, **fx**, **+**, **env** and **out**.
@@ -652,8 +659,8 @@ the speakers, tracks that move together, and channels frozen to audio.
 
 ### Panning
 
-Right-click a channel's or buss's pan, in the track list or the mixer, to
-choose how it pans:
+Right-click a channel's or buss's pan, in the track list or the mixer. Under
+its MIDI learn, lane and reset entries, the menu chooses how it pans:
 
 - **Pan mode: pan** (the default) balances a stereo track and pans a mono
   one.
@@ -1315,8 +1322,8 @@ them to MIDI controllers (`exec {"command": "module.learn.set"}`).
 ## MIDI controllers
 
 Right-click a track's fader, pan, mute, solo, polarity, mono, arm or
-monitoring button, in the track list or the mixer, and choose **MIDI learn**.
-The pan menu offers **Pan** in pan mode, **Pan left** and **Pan right** in
+monitoring button, in the track list or the mixer, and choose **MIDI learn**,
+the first entry of its menu. The pan menu offers **Pan** in pan mode, **Pan left** and **Pan right** in
 dual mode, **Pan** and **Width** in width mode, and **Gain compensation** in
 every mode on channels and busses. The positions follow knobs with soft
 takeover; compensation learns as a toggle.

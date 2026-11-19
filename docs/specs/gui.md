@@ -571,19 +571,32 @@ template and saves one (loading an older `menus.json` drops the track edits
 it used to list: Color…, Channels…, add plugin, Duplicate and Delete
 selected). A right-click on a row's fader,
 pan, mute, lane mute, solo, polarity, mono, arm or monitoring button opens
-that control's menu instead, "MIDI learn: Volume…" (naming the bound control,
-"(CC 7 · ch 1)"): the learn dialog of §4.5 for that track alone, binding
-through `track.learn.set` (ADR-0058); the mixer's strips do the same. A
-channel's or buss's pan opens its pan menu instead (ADR-0066, `pan_menu.cpp`):
-"Pan mode: pan / dual pan / pan and width", a rule, "Pan law: project (0 dB)"
-and "Pan law: 0 dB … −6 dB" (the strip's own law), "Gain compensation (boost
-pans)" (ticked by the effective law; on a strip that follows the project it
-gives the strip its own law), a rule, then MIDI learn entries for each shown
-control: Pan in pan mode, Pan left and Pan right in dual mode, Pan and Width
-in width mode, always followed by Gain compensation. Each entry names its
-binding; the three positions allow soft takeover and compensation defaults
-to toggle mode. Each
-choice is one `track.set`. A master's pan opens MIDI learn alone. In `dual` and
+that control's **parameter menu** instead (`param_menu.cpp`), the same menu
+the mixer's strips open:
+- **MIDI learn: Volume…**, naming the bound control ("(CC 7 · ch 1)"): the
+  learn dialog of §4.5 for that track alone, binding through
+  `track.learn.set` (ADR-0058);
+- **Show lane: Volume** or **Hide lane: Volume** for a parameter that can be
+  automated (volume, mute; a pan's bars): `env.set {visible}`, or for a
+  parameter without an envelope `env.add` with one point at the control's
+  value, so the lane starts flat;
+- **Reset to 0 dB** on a fader and **Reset to centre** on a pan (in width
+  mode "Reset to centre, full width", in dual mode "Reset to full left and
+  right"), shown with the double-click that does the same: one `track.set`
+  through the selection, as the double-click (every bar of a pan at once).
+
+Modulate joins the menu after MIDI learn when modulation lands. A
+channel's or buss's pan menu has the pan's rows first, one MIDI learn entry
+per shown control (Pan in pan mode, Pan left and Pan right in dual mode, Pan
+and Width in width mode, always followed by Gain compensation) and a lane per
+shown bar, then its modes and law (ADR-0066): a rule, "Pan mode: pan / dual
+pan / pan and width", a rule, "Pan law: project (0 dB)" and "Pan law: 0 dB …
+−6 dB" (the strip's own law), "Gain compensation (boost pans)" (ticked by the
+effective law; on a strip that follows the project it gives the strip its own
+law). Each learn entry names its binding; the three positions allow soft
+takeover and compensation defaults to toggle mode. Each choice is one
+`track.set`. A master's pan is a balance: MIDI learn, its lane and Reset to
+centre, no modes or law. In `dual` and
 `width` modes the pan control splits into two half-width bars: dual's left and
 right inputs, or the position and the width (drawn in a quieter ink, from the
 centre). A press picks the bar under the pointer; a double-click sends it
@@ -985,7 +998,7 @@ Alt+click on a plug-in removes it
 the plugin browser for that strip. A double-click on the strips' empty space
 (not on a strip) adds a channel; a right-click there offers Channel, Buss or
 Master, as the TCP's "+ track". A right-click on a strip's fader, pan, mute,
-solo, arm, polarity, mono or monitoring button offers its MIDI learn, as in
+solo, arm, polarity, mono or monitoring button opens its parameter menu, as in
 the TCP (§4.2); elsewhere on the strip, the track menu. A send dragged from "out" draws a wire from the
 button and outlines the strip it would feed, as in the TCP. The
 panel's top edge (shared with the MIDI editor: it lights up under the pointer)
@@ -2839,8 +2852,10 @@ including selection and matched-span item edits, but leaves VCA sound active.
 A group's optional VCA appears after audio strips and before pinned masters in
 the existing mixer. It has a name/color, member count/menu, envelope button,
 fader, mute and solo; it has no audio meter, pan, inserts, inputs or routing.
-A right-click on its fader, mute or solo offers that control's MIDI learn
-(§4.5, `vca.learn.set`, ADR-0058); elsewhere on the strip, the group's menu.
+A right-click on its fader, mute or solo opens that control's parameter menu
+(§4.2): MIDI learn (§4.5, `vca.learn.set`, ADR-0058), the volume or mute lane,
+and on the fader Reset to 0 dB (`vca.set`); elsewhere on the strip, the
+group's menu.
 Members' fader handles continue to show their own levels. VCA volume/mute
 lanes use the normal arrange automation editor and appear before the audio
 track lanes. Nested VCA membership is available through typed commands.

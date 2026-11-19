@@ -5,6 +5,7 @@
 
 #include "crash_banner.h"
 #include "pan_menu.h"
+#include "param_menu.h"
 #include "plugin_scales.h"
 #include "strip_learn.h"
 #include "track_menu.h"
@@ -189,14 +190,11 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
     tcp.envelopes = [this](const model::Id& track, const ui::Rect& anchor) {
         openEnvelopeMenu(track, anchor);
     };
-    // A right-click on a strip's fader, pan or button: MIDI learn (ADR-0058);
-    // the pan's menu adds its mode and law (ADR-0066).
+    // A right-click on a strip's fader, pan or button: the parameter menu
+    // (MIDI learn, lane, reset; a pan's mode and law), as in the mixer.
     tcp.learn = [&root, &actions](const model::Id& track, const std::string& param,
                                   const ui::Rect& anchor) {
-        if (param == "pan")
-            openPanMenu(root, actions, track, anchor);
-        else
-            openStripLearnMenu(root, actions, {{track}, param}, anchor);
+        openParamMenu(root, actions, track, param, anchor);
     };
     trackMenu_ = std::make_unique<TrackMenu>(TrackMenu{
         root, dispatcher_, app_,
@@ -487,18 +485,7 @@ void Shell::openEnvelopeMenu(const model::Id& track, const ui::Rect& anchor) {
             removals.push_back(std::move(remove));
         } else {
             // A new envelope starts flat at the strip's current value.
-            const double value =
-                group ? (param == std::string_view("volume") ? group->vca->volumeDb
-                                                             : (group->vca->mute ? 1.0 : 0.0))
-                : param == std::string_view("playrate")  ? s.project->playrate.rate
-                : param == std::string_view("volume")    ? tr->volumeDb
-                : param == std::string_view("pan")       ? tr->pan
-                : param == std::string_view("width")     ? tr->width
-                : param == std::string_view("pan_left")  ? tr->panLeft
-                : param == std::string_view("pan_right") ? tr->panRight
-                : param == std::string_view("pan_boost")
-                    ? (model::panLawOf(*s.project, *tr).boost ? 1.0 : 0.0)
-                    : (tr->mute ? 1.0 : 0.0);
+            const double value = envelopeStartValue(s, track, param);
             m.run = [this, track, param = std::string(param), value] {
                 json::Value args = json::Value::object(), points = json::Value::array(),
                             first = json::Value::object();
