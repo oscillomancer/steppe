@@ -13,6 +13,10 @@
 
 namespace supple::model {
 
+// Adding a kind: put it before Project, raise kKindCount, add its prefix to
+// kPrefixes (session.cpp) and handle it in the Kind switches of versions.cpp.
+// The prefix table is checked at compile time and those switches have no
+// `default`, so a step left out fails the build.
 enum class Kind : std::uint8_t {
     Track,          // tr
     Item,           // it

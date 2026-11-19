@@ -353,6 +353,38 @@ TEST_CASE("a playrate edit together with a VCA edit compiles (not scalar-only)")
     engine.stop();
 }
 
+// scalarOnly lists every Session collection; one that is left out lets an edit
+// ride along with a playrate move without ever compiling.
+TEST_CASE("a playrate edit together with a rack edit compiles (not scalar-only)") {
+    Mix m = mixSession();
+    model::Id rack;
+    {
+        model::EditTxn t(m.session, 2);
+        rack = t.create(model::Rack{m.a, "Before"});
+        auto project = t.project();
+        project.playrate.rate = 1.25;
+        t.setProject(project);
+        m.session = t.commit().value();
+    }
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    Engine engine(pool, media, kInCallback);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+    REQUIRE(engine.load(m.session));
+    engine.play();
+    backend.run(8);
+    model::EditTxn both(m.session, 3);
+    auto project = both.project();
+    project.playrate.rate = 1.5;
+    both.setProject(project);
+    both.modify<model::Rack>(rack, [](auto& r) { r.name = "After"; });
+    const auto generation = engine.planGeneration();
+    REQUIRE(engine.load(both.commit().value()));
+    CHECK(engine.planGeneration() > generation);  // the rack edit reaches the engine
+    engine.stop();
+}
+
 TEST_CASE("a write hold plays the static level over the curve until it is released" *
           doctest::description("rt")) {
     Mix m = mixSession();
