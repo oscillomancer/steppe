@@ -85,6 +85,8 @@ EntryInfo entryInfo(const Session& s, Id id) {
             return info(s.modules, id);
         case Kind::Cable:
             return info(s.cables, id);
+        case Kind::Modulation:
+            return info(s.modulations, id);
         default:
             return {};
     }
@@ -133,6 +135,8 @@ json::Value objectJson(const Session& s, Id id) {
             return enc(s.modules);
         case Kind::Cable:
             return enc(s.cables);
+        case Kind::Modulation:
+            return enc(s.modulations);
         default:
             return {};
     }
@@ -184,6 +188,8 @@ const json::Value* objectSchema(const Session& s, Id id) {
             return &schemaFor(s.modules);
         case Kind::Cable:
             return &schemaFor(s.cables);
+        case Kind::Modulation:
+            return &schemaFor(s.modulations);
         default:
             return nullptr;
     }
@@ -604,6 +610,7 @@ struct VersionStore::RetainedSize {
         map(v.id, s.racks);
         map(v.id, s.modules);
         map(v.id, s.cables);
+        map(v.id, s.modulations);
         for (const auto& [hash, blob] : s.blobs)
             add(v.id, blob.get(), sizeof(Blob) + blob->data.size());
     }

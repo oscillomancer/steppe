@@ -53,7 +53,8 @@ bool mixOnly(const model::Session& a, const model::Session& b,
         !a.media.sameStorage(b.media) || !a.midi.sameStorage(b.midi) ||
         !a.autoItems.sameStorage(b.autoItems) || !a.markers.sameStorage(b.markers) ||
         !a.regions.sameStorage(b.regions) || !a.racks.sameStorage(b.racks) ||
-        !a.cables.sameStorage(b.cables) || a.blobs != b.blobs || a.extraSections != b.extraSections)
+        !a.cables.sameStorage(b.cables) || !a.modulations.sameStorage(b.modulations) ||
+        a.blobs != b.blobs || a.extraSections != b.extraSections)
         return false;
     // A module's knobs reach its instance without a compile (RackPool::
     // applyParams); where it sits and what it is called are the window's.
@@ -168,8 +169,8 @@ bool mixOnly(const model::Session& a, const model::Session& b,
 [[maybe_unused]] void listsEverySessionMember(const model::Session& s) {
     [[maybe_unused]] const auto& [project, next, tempo, meters, timeMap, tracks, groups, items,
                                   takes, media, midi, fx, routes, envelopes, autoItems, markers,
-                                  regions, racks, modules, cables, blobs, extraSections, version] =
-        s;
+                                  regions, racks, modules, cables, modulations, blobs,
+                                  extraSections, version] = s;
 }
 
 // Whether `b` differs from `a` only in FX patches, each FX keeping a patch:
@@ -187,7 +188,8 @@ bool patchOnly(const model::Session& a, const model::Session& b, std::vector<mod
         !a.autoItems.sameStorage(b.autoItems) || !a.markers.sameStorage(b.markers) ||
         !a.regions.sameStorage(b.regions) || !a.racks.sameStorage(b.racks) ||
         !a.modules.sameStorage(b.modules) || !a.cables.sameStorage(b.cables) ||
-        a.blobs != b.blobs || a.extraSections != b.extraSections)
+        !a.modulations.sameStorage(b.modulations) || a.blobs != b.blobs ||
+        a.extraSections != b.extraSections)
         return false;
     if (a.fx.sameStorage(b.fx) || a.fx.size() != b.fx.size()) return false;
     for (auto x = a.fx.begin(), y = b.fx.begin(); x != a.fx.end(); ++x, ++y) {

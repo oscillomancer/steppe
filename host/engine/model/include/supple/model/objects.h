@@ -472,6 +472,10 @@ inline constexpr std::string_view kInModule = "com.suppleaudio.rack.in";
 inline constexpr std::string_view kPluginModule = "com.suppleaudio.rack.plugin";
 inline constexpr std::string_view kNotesOutModule = "com.suppleaudio.rack.notes-out";
 inline constexpr std::string_view kNotesModule = "com.suppleaudio.rack.notes";
+// A rack's way out for control signals (ADR-0096): inputs in_1 .. in_16.
+inline constexpr std::string_view kModOutModule = "com.suppleaudio.rack.mod-out";
+inline constexpr int kModOutInputs = 16;
+inline constexpr std::size_t kMaxRackModOuts = 32;
 
 // A patching space, homed on a channel.
 struct Rack {
@@ -520,6 +524,25 @@ struct Cable {
     std::string color;             // a track colour or "#rrggbb"; "": by signal kind
     bool operator==(const Cable&) const = default;
 };
+
+// A modulation route (ADR-0096, session-model "Modulation"): a Mod Out
+// input moves a parameter by signal x depth, on top of its base. `target`
+// uses the envelope addressing; `depth` is in the target's unit (a
+// fraction of a plug-in parameter's range, dB, or percent).
+struct ModSource {
+    Id module{Kind::Module, 0};  // a Mod Out module
+    std::string input;           // in_1 .. in_16
+    bool operator==(const ModSource&) const = default;
+};
+struct Modulation {
+    ModSource source;
+    EnvTarget target;
+    double depth = 0.0;
+    bool enabled = true;
+    bool lane = true;  // the GUI shows the target's lane
+    bool operator==(const Modulation&) const = default;
+};
+inline constexpr std::size_t kMaxModulations = 4096;
 
 struct Marker {
     double pos = 0.0;

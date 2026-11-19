@@ -21,8 +21,8 @@ constexpr std::string_view kSection = "branches";
 // blobs by hash), of these one level further down; anything else is one value.
 int objectDepth(std::string_view section) {
     static const std::set<std::string_view> keyed{
-        "tracks",           "items",  "takes", "fx",    "routes",  "envelopes",
-        "automation_items", "groups", "racks", "blobs", "modules", "cables"};
+        "tracks", "items", "takes", "fx",      "routes", "envelopes",  "automation_items",
+        "groups", "racks", "blobs", "modules", "cables", "modulations"};
     static const std::set<std::string_view> nested{"tempo", "rulers", "sources"};
     if (keyed.contains(section)) return 1;
     if (nested.contains(section)) return 2;
@@ -242,6 +242,9 @@ Result<Counters> countersAt(const json::Value* v, const std::string& path) {
                          "the branches section is damaged; main still opens without it");
         c[*kind] = static_cast<std::uint32_t>(*n);
     }
+    // Written before modulation routes existed (2.17): they start where a
+    // new session's do.
+    if (c[Kind::Modulation] == 0) c[Kind::Modulation] = 1;
     return c;
 }
 
@@ -287,6 +290,7 @@ void shareRevisions(Session& s, const Session* p) {
     each(&Session::racks);
     each(&Session::modules);
     each(&Session::cables);
+    each(&Session::modulations);
     if (!p) return;
     if (toJson(*s.project) == toJson(*p->project)) s.project = p->project;
     if (s.tempo.sameStorage(p->tempo) && s.meters.sameStorage(p->meters)) s.timeMap = p->timeMap;

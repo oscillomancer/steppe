@@ -564,7 +564,7 @@ routes: sd_1 tr_2 → tr_6 ch 1/2→3/4 pre-fader −6 dB (sidechain)
 markers: mk_1 "Verse" bar 1 · regions: rg_1 "Chorus" bars 9–17
 ```
 
-## 5. Project file (`supple.project/2.15`)
+## 5. Project file (`supple.project/2.17`)
 
 ### 5.1 Shape
 
@@ -581,7 +581,7 @@ and audio items on masters (ADR-0057). Before 2.4, a route from a master to `hw_
 played) becomes that master's `hw_output` (its first such route) and the
 route is dropped, with a `project.hw_output_route` warning.
 
-The loader accepts 1.x and 2.x documents and saves the current schema (2.15,
+The loader accepts 1.x and 2.x documents and saves the current schema (2.17,
 §5). Migration allocates child channel IDs in track-ID order, inserts each
 child first, and moves the source items and record/input FX there while
 keeping user inserts on the buss. Hardware/MIDI record routes follow the new
@@ -1508,17 +1508,25 @@ nothing there.
 | Field | Meaning |
 |---|---|
 | `source` | `{module, input}` (required): a Mod Out module (`com.suppleaudio.rack.mod-out`, rack.md §5) and one of its inputs, `in_1` .. `in_16`. |
-| `target` | An envelope target (§1.9) (required): `{fx, param}` with `param` a key, name or decimal CLAP id; `{track, param}` with `volume`, `pan` or `width`; `{route, param: volume}` for a send between strips or a rack send. |
+| `target` | `{object, param}` as an envelope's target is stored (required): an `fx_*` with `param` a key, name or decimal CLAP id; a `tr_*` with `volume`, `pan` or `width` (`width`: not on a master); an `sd_*` with `volume`, for an audio send between strips or a rack send. |
 | `depth` | The offset at a signal of 1 (required). Plug-in parameter: a fraction of its CLAP range, −1..1. Volume and send level: dB, −48..48. Pan and width: percent, −200..200. |
 | `enabled` | Default true. |
-| `lane` | The target's lane is shown, default true. Undoable like an envelope's `visible`; the engine ignores it. |
+| `lane` | The target's lane is shown, default true. Undoable like an envelope's `visible`. It never changes the sound; until step M2 gives routes their mix slots, changing it compiles like any route edit. |
 
 The offset (signal × depth, where signal is −1..1 or 0..1) adds to the base,
 whatever plays without modulation. Routes on one target sum. Modulation
 never writes the base, an envelope or the model, and touch, latch and write
 record the base only.
 
-**Invariants.**
+```json
+"modulations": {
+  "mr_1": {"source": {"module": "mo_7", "input": "in_1"},
+           "target": {"object": "fx_3", "param": "cutoff"}, "depth": 0.25}
+}
+```
+
+**Invariants.** Violations are `model.invariant`, except a cycle, which is
+`modulation.cycle` at the route's path with a hint.
 - The source module exists, is a Mod Out, and `input` is one of its inputs.
 - The target object exists.
 - An FX target is in a track's chain or input chain (not a take's chain or

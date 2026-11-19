@@ -32,6 +32,9 @@ std::set<Id> dependencies(const Session& s, Id track) {
             ids.insert(env.id);
     for (const auto& item : s.autoItems)
         if (ids.count(item.value->envelope)) ids.insert(item.id);
+    // Modulation of its plug-ins (ADR-0096); its fader acts after the print.
+    for (const auto& m : s.modulations)
+        if (ids.count(m.value->target.object) && m.value->target.object != track) ids.insert(m.id);
     return ids;
 }
 // What a channel's racks sound like (ADR-0075): their modules, cables,
@@ -138,6 +141,14 @@ std::string freezeDependencyHash(const Session& s, Id track) {
             auto cable = toJson(*e.value);
             cable.asObject().erase("color");
             objects.push_back(remapIds(cable, schemaOf<Cable>().jsonSchema(), remap));
+        }
+    // A route's lane is the GUI's, not its sound. Its source is not remapped:
+    // like a sidechain's source, it lies outside the print.
+    for (const auto& e : s.modulations)
+        if (ids.count(e.id)) {
+            auto modulation = toJson(*e.value);
+            modulation.asObject().erase("lane");
+            objects.push_back(remapIds(modulation, schemaOf<Modulation>().jsonSchema(), remap));
         }
     value["objects"] = std::move(objects);
     return "sha256:" + sha256Hex(json::writeCompact(value));

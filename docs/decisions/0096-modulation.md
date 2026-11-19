@@ -63,14 +63,14 @@ prefix `mo` already names rack modules, and `Id::parse` would map both to
 ```json
 "modulations": {
   "mr_1": {"source": {"module": "mo_7", "input": "in_1"},
-           "target": {"fx": "fx_3", "param": "cutoff"}, "depth": 0.25}
+           "target": {"object": "fx_3", "param": "cutoff"}, "depth": 0.25}
 }
 ```
 
 | Field | Meaning |
 |---|---|
 | `source` | `{module, input}`: a Mod Out module and one of its inputs. |
-| `target` | The envelope addressing (`EnvTarget`, session-model §1.9): `{fx, param}`, `{track, param}` or `{route, param}`. |
+| `target` | The envelope addressing (`EnvTarget`, session-model §1.9), stored as an envelope's is: `{object, param}`, the object an `fx_*`, `tr_*` or `sd_*`. |
 | `depth` | The offset at a signal of 1, in the target's unit (below). |
 | `enabled` | Default true. |
 | `lane` | Whether the target's lane is shown. Default true; undoable like an envelope's `visible`. |
@@ -247,7 +247,9 @@ prefix `mo` already names rack modules, and `Id::parse` would map both to
   slot has one reader. ADR-0093's rule for edits made one after the other
   in different executors still applies.
 - **What compiles.** Adding, removing, retargeting or changing a route's
-  source compiles. `lane` belongs to the GUI and never compiles.
+  source compiles. `lane` belongs to the GUI and never changes the sound;
+  until M2 gives routes their slots, a `lane` change compiles like any
+  route edit, and from M2 it rides the slots' path without compiling.
 
 ### Freeze
 

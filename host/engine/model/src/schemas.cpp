@@ -1221,6 +1221,31 @@ const Schema<Cable>& schemaOf<Cable>() {
 }
 
 template <>
+const Schema<Modulation>& schemaOf<Modulation>() {
+    static const Schema<Modulation> s = [] {
+        const Modulation d;
+        auto source = schema::object<ModSource>("mod_source")
+                          .field("module", &ModSource::module, idSchema())
+                          .field("input", &ModSource::input, str().minLength(1))
+                          .build();
+        auto target = schema::object<EnvTarget>("env_target")
+                          .field("object", &EnvTarget::object, idSchema())
+                          .field("param", &EnvTarget::param, str().minLength(1))
+                          .build();
+        ObjectBuilder<Modulation> b = schema::object<Modulation>("modulation");
+        b.field("source", &Modulation::source, source);
+        b.field("target", &Modulation::target, target);
+        b.field("depth", &Modulation::depth, num());
+        b.field("enabled", &Modulation::enabled, boolean());
+        dflt(b, d.enabled);
+        b.field("lane", &Modulation::lane, boolean());
+        dflt(b, d.lane);
+        return b.build();
+    }();
+    return s;
+}
+
+template <>
 const Schema<Marker>& schemaOf<Marker>() {
     static const Schema<Marker> s = [] {
         const Marker d;
@@ -1313,10 +1338,11 @@ json::Value projectToJson(const Session& s) {
     json::Value next = json::Value::object();
     for (std::size_t k = 0; k < kKindCount; ++k) {
         const auto kind = static_cast<Kind>(k);
-        // The rack kinds (2.7) are written once used: older projects stay
-        // byte-identical but for the schema.
-        const bool rack = kind == Kind::Rack || kind == Kind::Module || kind == Kind::Cable;
-        if (rack && s.next.next[k] <= 1) continue;
+        // The rack kinds (2.7) and modulation routes (2.17) are written once
+        // used: older projects stay byte-identical but for the schema.
+        const bool late = kind == Kind::Rack || kind == Kind::Module || kind == Kind::Cable ||
+                          kind == Kind::Modulation;
+        if (late && s.next.next[k] <= 1) continue;
         next[std::string(prefix(kind))] = s.next.next[k];
     }
     project["next_ids"] = std::move(next);
@@ -1345,6 +1371,7 @@ json::Value projectToJson(const Session& s) {
     if (!s.racks.empty()) doc["racks"] = mapToJson(s.racks);
     if (!s.modules.empty()) doc["modules"] = mapToJson(s.modules);
     if (!s.cables.empty()) doc["cables"] = mapToJson(s.cables);
+    if (!s.modulations.empty()) doc["modulations"] = mapToJson(s.modulations);
     json::Value blobs = json::Value::object();
     for (const auto& [hash, blob] : s.blobs) {
         json::Value b = json::Value::object();
@@ -1437,7 +1464,7 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
         auto migrated = migrateProject1(std::move(doc), warnings);
         if (!migrated) return std::move(migrated).error();
         doc = std::move(*migrated);
-    } else if (version->minor > 15 && warnings)  // 2.14: branches; 2.15: autosaved_through
+    } else if (version->minor > 17 && warnings)  // 2.15: autosaved_through; 2.17: modulations
         warnings->push_back(
             {"project.newer_minor", "loading a newer project minor version", "/schema"});
     // Before 2.10 a Notes module heard only its source track's own MIDI, never
@@ -1516,9 +1543,9 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
         if (warnings) warnings->push_back({std::move(code), std::move(message), std::move(path)});
     };
     const std::set<std::string_view> known{
-        "schema", "project", "tempo",   "rulers",  "tracks",    "items",
-        "takes",  "fx",      "sources", "routes",  "envelopes", "automation_items",
-        "blobs",  "groups",  "racks",   "modules", "cables",    "branches"};
+        "schema", "project", "tempo",  "rulers",      "tracks",           "items", "takes",
+        "fx",     "sources", "routes", "envelopes",   "automation_items", "blobs", "groups",
+        "racks",  "modules", "cables", "modulations", "branches"};
     for (const auto& section : doc.asObject()) {
         const auto path = json::pointerJoin("", section.key);
         if (section.key == "ui") {
@@ -1593,9 +1620,9 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
                 }
         }
     }
-    // The rack kinds' counters are written once used (2.7); before, they
-    // start where a new session's do.
-    for (Kind k : {Kind::Rack, Kind::Module, Kind::Cable})
+    // The rack kinds' (2.7) and modulation routes' (2.17) counters are
+    // written once used; before, they start where a new session's do.
+    for (Kind k : {Kind::Rack, Kind::Module, Kind::Cable, Kind::Modulation})
         if (s.next[k] == 0) s.next[k] = 1;
     auto sub = [&](const char* a, const char* b) -> const json::Value* {
         const json::Value* x = doc.find(a);
@@ -1617,6 +1644,7 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
     IdMap<Rack>::Builder racks(s.racks);
     IdMap<RackModule>::Builder modules(s.modules);
     IdMap<Cable>::Builder cables(s.cables);
+    IdMap<Modulation>::Builder modulations(s.modulations);
     mapFromJson<TempoPointObj>(sub("tempo", "points"), "/tempo/points", Kind::TempoPoint, tempo,
                                errors, options, warnings);
     mapFromJson<MeterObj>(sub("tempo", "meters"), "/tempo/meters", Kind::Meter, meters, errors,
@@ -1649,6 +1677,8 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
                             options, warnings);
     mapFromJson<Cable>(sub("cables", nullptr), "/cables", Kind::Cable, cables, errors, options,
                        warnings);
+    mapFromJson<Modulation>(sub("modulations", nullptr), "/modulations", Kind::Modulation,
+                            modulations, errors, options, warnings);
     // fx live under "fx" (a top-level collection keyed by fx id).
     IdMap<FxInstance>::Builder fx(s.fx);
     mapFromJson<FxInstance>(sub("fx", nullptr), "/fx", Kind::Fx, fx, errors, options, warnings);
@@ -1713,6 +1743,7 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
     s.racks = racks.build();
     s.modules = modules.build();
     s.cables = cables.build();
+    s.modulations = modulations.build();
     if (warnings)
         for (const auto& [envelope, given] : derivedItems) {
             auto expected = json::Value::array();
