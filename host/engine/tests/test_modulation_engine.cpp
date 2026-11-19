@@ -15,6 +15,7 @@
 #include "plan.h"
 #include "plan_dump.h"
 #include "rack_runtime.h"
+#include "supple/model/freeze.h"
 #include "supple/model/schemas.h"
 #include "supple/params/params.h"
 
@@ -139,9 +140,10 @@ struct Prepared {
 // timeline shifts, its tap and the target stage's position.
 std::int64_t before(const d::Plan& p, const d::ModEdge& me) {
     const d::Node& n = p.nodes[me.to];
-    return me.stage >= 0        ? n.chain[static_cast<std::size_t>(me.stage)].before
-           : me.inputStage >= 0 ? 0
-                                : n.latChain - std::int64_t{d::kAutomationStep};
+    return me.stage >= 0 ? n.chain[static_cast<std::size_t>(me.stage)].before
+           : me.inputStage >= 0 || me.target.object.kind == model::Kind::Fx
+               ? 0
+               : n.latChain - std::int64_t{d::kAutomationStep};
 }
 
 }  // namespace
@@ -503,4 +505,36 @@ TEST_CASE("modulation: an input-chain plug-in has room for its automation and mo
     modulate(more, emit.modOut, emit.gain, "gain", 0.1);
     const auto m = render(commit(more), 0.5);
     CHECK(double(m.left[12000]) > double(a.left[12000]) * 1.5);
+}
+
+TEST_CASE(
+    "modulation: a route into a frozen track's FX is inert, and the plan has no chain to read") {
+    // Review round 54's probe: the frozen node's plan chain is empty, so the
+    // route must not index it (the latency solve, the binding).
+    Patch patch;
+    model::EditTxn t(patch.s, 2);
+    const Id route = modulate(t, patch.modOut, patch.plain, "gain");
+    const Id media = t.create(
+        model::MediaSource{"frozen.wav", "sha256:" + std::string(64, '2'), "wav", 48000, 2, 48000});
+    auto modulated = t.preview();
+    const model::TrackFreeze cache{media, 48000, 0, 0,
+                                   model::freezeDependencyHash(modulated, patch.b)};
+    t.modify<model::Track>(patch.b, [&](model::Track& tr) { tr.freeze = cache; });
+    const auto frozen = commit(t);
+    InstancePool pool = makePool();
+    MediaCache media2;
+    auto compiled = d::compile(frozen, pool, 0, 128);
+    REQUIRE_MESSAGE(compiled, (compiled ? "" : compiled.error().toString()));
+    REQUIRE(compiled->modEdges.size() == 1);
+    const d::ModEdge& me = compiled->modEdges[0];
+    CHECK(me.route == route);
+    CHECK(me.inert);
+    CHECK(me.stage == -1);
+    CHECK(compiled->nodes[me.to].chain.empty());
+    compiled->media = &media2;
+    // The media file is not there, so prepare stops reading it, after the
+    // latency solve has visited the route.
+    auto prepared = d::prepare(*compiled, frozen);
+    REQUIRE_FALSE(prepared);
+    CHECK(prepared.error().code == "audio.open");
 }

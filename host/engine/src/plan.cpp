@@ -802,7 +802,9 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
             p.warnings.push_back(e.id.str() + ": its Mod Out " + m.source.module.str() +
                                  " is not available; the modulation is inert");
         }
-        if (m.target.object.kind == Kind::Fx) {
+        if (m.target.object.kind == Kind::Fx && s.tracks.find(*target)->freeze) {
+            me.inert = true;  // the print plays, and the plan holds no chain
+        } else if (m.target.object.kind == Kind::Fx) {
             const model::Track& owner = *s.tracks.find(*target);
             const auto in = std::find(owner.chain.begin(), owner.chain.end(), m.target.object);
             if (in != owner.chain.end())
@@ -1414,13 +1416,15 @@ Status prepare(Plan& p, const Session& s) {
         // a chain stage's latency ahead of it; the input chain is outside
         // compensation; a mixer target follows the whole chain and reads one
         // grid interval ahead for its interpolation, so its value arrives
-        // that much earlier.
+        // that much earlier. A frozen track's FX (no stage: the print plays)
+        // is outside compensation too.
         for (std::size_t mi : n.modIn) {
             ModEdge& me = p.modEdges[mi];
-            const std::int64_t before =
-                me.stage >= 0        ? n.chain[static_cast<std::size_t>(me.stage)].before
-                : me.inputStage >= 0 ? 0
-                                     : n.latChain - std::int64_t{kAutomationStep};
+            const std::int64_t before = me.stage >= 0
+                                            ? n.chain[static_cast<std::size_t>(me.stage)].before
+                                        : me.inputStage >= 0 || me.target.object.kind == Kind::Fx
+                                            ? 0
+                                            : n.latChain - std::int64_t{kAutomationStep};
             visit(me.from, me.tap, before, me.delay);
         }
     };
