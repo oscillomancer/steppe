@@ -3,6 +3,7 @@
 #include "shell.h"
 #include <supple/model/groups.h>
 
+#include "crash_banner.h"
 #include "pan_menu.h"
 #include "plugin_scales.h"
 #include "strip_learn.h"
@@ -114,6 +115,12 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
     transport_->setFollow(
         [this] { return arrange_ ? arrange_->follow() : views::Follow::Page; });  // ui.follow.*
     shell->add(transport_->build());
+    // Under the transport: the restart notice, when the last run ended unexpectedly.
+    auto banner = std::make_unique<CrashBanner>(app_.diagnosticsDir());
+    banner->setOnShowReport([this](const std::string& incident) {
+        if (showCrashReport) showCrashReport(incident);
+    });
+    shell->add(std::move(banner));
     // The playrate's menu leads here: open in its place.
     actions.addUi("ui.master.envelopes", "Master: envelopes",
                   [this] { openEnvelopeMenu(model::kMaster, transport_->rateAnchor()); });
@@ -220,6 +227,10 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
     };
     tcp.fx = [runFor](const model::Id& track) { runFor("ui.fx.chain", track); };
     tcp.addFx = [runFor](const model::Id& track) { runFor("ui.fx.add", track); };
+    tcp.fxNeedsAttention = [this](const model::Id& track) {
+        const model::Track* t = app_.head().tracks.find(track);
+        return t && attention_.chainNeeds(app_.head(), *t);
+    };
     tcp.addSend = [this](const model::Id& from, const model::Id& to) {
         json::Value args = json::Value::object();
         args["from"] = from.str();
@@ -314,6 +325,8 @@ void Shell::sync(bool event) {
     const model::Session& s = app_.head();
     const bool replaced = app_.projectGeneration() != projectGeneration_;
     const bool moved = replaced || s.version != shownVersion_;
+    // A load override or a failed plug-in changes "fx" without a new project version.
+    if (attention_.poll() && arrange_) arrange_->tcpPanel().refresh();
     if (ui_.selectedTracks != shownSelection_) {  // the mixer selects too
         shownSelection_ = ui_.selectedTracks;
         if (arrange_) arrange_->tcpPanel().invalidate();

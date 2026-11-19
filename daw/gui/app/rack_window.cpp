@@ -1114,6 +1114,7 @@ Status RackWindow::reload() {
     catalog_ = racks::catalog(app_);
     projectGeneration_ = app_.projectGeneration();
     version_ = s.version;
+    overridesVersion_ = app_.loadOverridesVersion();
     if (rack_ && !s.racks.find(*rack_)) rack_.reset();
     if (!rack_ && !s.racks.empty()) rack_ = s.racks.begin()->id;
     refreshTabs();
@@ -1136,8 +1137,13 @@ Status RackWindow::reload() {
     if (rack_)
         for (const auto& e : s.modules)
             plugins = plugins || (e.value->rack == *rack_ && e.value->fx);
+    const std::function<bool(const model::PluginRef&)> disabled =
+        [this](const model::PluginRef& ref) {
+            return app_.loadModeOf(ref) == engine::LoadMode::Disable;
+        };
     RackScene scene = rack_ ? RackScene::build(s, *rack_, *catalog_,
-                                               plugins ? std::function(instrument) : nullptr)
+                                               plugins ? std::function(instrument) : nullptr,
+                                               plugins ? disabled : nullptr)
                             : RackScene{};
     // Cables that close a loop carry the previous frame; they are drawn so.
     if (rack_ && !scene.cables.empty()) {
@@ -1201,7 +1207,8 @@ void RackWindow::show(std::optional<model::Id> rack) {
 
 void RackWindow::sync() {
     if (!isOpen()) return;
-    if (app_.projectGeneration() != projectGeneration_ || app_.head().version != version_) {
+    if (app_.projectGeneration() != projectGeneration_ || app_.head().version != version_ ||
+        app_.loadOverridesVersion() != overridesVersion_) {
         error_.clear();
         (void)reload();
     }
@@ -2091,6 +2098,11 @@ void RackWindow::moduleMenu(model::Id module, ui::Point at) {
         args[field] = std::move(v);
         (void)exec("module.set", std::move(args));
     };
+    // First, for a plug-in this run has disabled: its module is silent until it loads again.
+    if (m->fx && enableFx)
+        if (const model::FxInstance* inst = app_.head().fx.find(*m->fx);
+            inst && app_.loadModeOf(inst->plugin) == engine::LoadMode::Disable)
+            items.push_back({"Enable", "", [this, fx = *m->fx] { enableFx(fx); }});
     if (m->fx && openEditor)
         items.push_back({"Open editor", "", [this, fx = *m->fx] {
                              if (auto r = openEditor(fx); !r) report(r.error());

@@ -162,14 +162,21 @@ class FxSlot : public DragButton {
     std::function<void()> remove;         // Alt+click
     std::function<void(ui::Point)> menu;  // a right-click (not the track's menu)
     // What the plug-in is doing: a bypassed one's name is dimmed and struck
-    // through; an offline (unloaded) one's is dimmed inside a dashed outline.
-    enum class State { On, Bypassed, Offline };
+    // through; an offline (unloaded) one's is dimmed inside a dashed outline. A disabled one (this
+    // run does not load it) or a failed one (its process closed or stopped answering) keeps the
+    // solid outline and its place and size, dims its name and carries a bar down the left edge,
+    // inside the outline: amber for disabled, `clip` red for failed (docs/specs/gui.md, "Disabled
+    // plug-ins are marked"). Disabled and failed win over offline and bypassed: they are the ones
+    // that need the person.
+    enum class State { On, Bypassed, Offline, Disabled, Failed };
     State state = State::On;
     std::string valueText() const override {
         const std::string name = Button::valueText();
-        return state == State::Bypassed  ? name + " (bypassed)"
-               : state == State::Offline ? name + " (offline)"
-                                         : name;
+        return state == State::Disabled   ? name + " (disabled)"
+               : state == State::Failed   ? name + " (failed)"
+               : state == State::Bypassed ? name + " (bypassed)"
+               : state == State::Offline  ? name + " (offline)"
+                                          : name;
     }
     void paint(ui::Canvas& c) override {
         const ui::Theme& t = c.theme();
@@ -195,10 +202,18 @@ class FxSlot : public DragButton {
         } else {
             c.strokeRound(b, t.radius("s"), focused() ? t.color("focus") : t.color("rule"));
         }
+        const bool needsYou = state == State::Disabled || state == State::Failed;
+        if (needsYou) {
+            const float inset = std::max(2.0f, t.radius("s"));
+            c.fillRect({b.x + 1, b.y + inset, 2.0f, b.h - 2 * inset},
+                       t.color(state == State::Failed ? "clip" : "meter-hot"));
+        }
         const std::string name = Button::valueText();
         const float size = t.type("small");
         c.text(b, name, ui::Font::UiBold, size,
-               t.color(enabled && state == State::On ? "ink" : "ink-faint"),
+               t.color(needsYou                        ? "ink-quiet"
+                       : enabled && state == State::On ? "ink"
+                                                       : "ink-faint"),
                ui::kCenter | ui::kMiddle);
         if (state == State::Bypassed) {
             const float w = std::min(b.w - 4, c.textWidth(name, ui::Font::UiBold, size));
@@ -1050,8 +1065,11 @@ std::string Mixer::structure() const {
             const model::FxInstance* f = s.fx.find(fx);
             out += fx.str() + ",";
             if (f)
-                out += std::to_string(f->bypass) + std::to_string(f->offline) + ":" +
-                       std::to_string(f->label.size()) + ":" + f->label + ":" +
+                out += std::to_string(f->bypass) + std::to_string(f->offline) +
+                       (attention_.markOf(fx, *f) == FxAttention::Mark::Disabled ? "D"
+                        : attention_.markOf(fx, *f) == FxAttention::Mark::Failed ? "F"
+                                                                                 : "") +
+                       ":" + std::to_string(f->label.size()) + ":" + f->label + ":" +
                        std::to_string(f->plugin.name.size()) + ":" + f->plugin.name;
         }
         for (model::Id rack : racks::racksFeeding(s, id))
@@ -1200,7 +1218,25 @@ void Mixer::rebuild(bool keepLists) {
                                     : f->label;
             auto slot = std::make_unique<FxSlot>(
                 "mixer.fx." + fx.str(), label,
-                [this, fx] {
+                [this, fx, label] {
+                    // A plug-in that is not loaded, or whose process failed, has no editor to
+                    // open: say so instead.
+                    const model::FxInstance* now = app_.head().fx.find(fx);
+                    const auto mark = now ? attention_.markOf(fx, *now) : FxAttention::Mark::None;
+                    if (mark == FxAttention::Mark::Disabled) {
+                        if (actions_.onError)
+                            actions_.onError(label +
+                                             " is disabled for this run and not loaded. "
+                                             "Right-click it to enable it.");
+                        return;
+                    }
+                    if (mark == FxAttention::Mark::Failed) {
+                        if (actions_.onError)
+                            actions_.onError(label +
+                                             " failed: its separate process closed or stopped "
+                                             "answering. Restart it in the FX window.");
+                        return;
+                    }
                     json::Value args = json::Value::object();
                     args["fx"] = fx.str();
                     run("ui.fx.editor", std::move(args));
@@ -1214,11 +1250,24 @@ void Mixer::rebuild(bool keepLists) {
             };
             slot->remove = [this, fx] { removeFx(fx); };
             slot->enabled = !t.freeze;
-            slot->state = f->offline  ? FxSlot::State::Offline
-                          : f->bypass ? FxSlot::State::Bypassed
-                                      : FxSlot::State::On;
+            switch (attention_.markOf(fx, *f)) {
+                case FxAttention::Mark::Disabled:
+                    slot->state = FxSlot::State::Disabled;
+                    break;
+                case FxAttention::Mark::Failed:
+                    slot->state = FxSlot::State::Failed;
+                    break;
+                case FxAttention::Mark::None:
+                    slot->state = f->offline  ? FxSlot::State::Offline
+                                  : f->bypass ? FxSlot::State::Bypassed
+                                              : FxSlot::State::On;
+                    break;
+            }
             chain.addSlot(std::move(slot));
         }
+        // One rule for the warning colour of "fx", here and in the track list: the chain holds a
+        // plug-in that is disabled or failed.
+        st.fx->setTextColor(attention_.chainNeeds(s, t) ? "meter-hot" : "");
         frame->select = [this, tid](unsigned mods) {
             std::vector<std::string> shown;
             for (const Strip& x : strips_) shown.push_back(x.track);
@@ -1776,14 +1825,30 @@ void Mixer::resolveFxDrop() {
 
 // A plug-in's own menu (a right-click on it in the chain).
 void Mixer::openFxMenu(model::Id fx, const ui::Rect& slot, ui::Point at) {
-    if (!app_.head().fx.find(fx)) return;
-    std::vector<ui::MenuItem> items(3);
-    items[0].label = "Rename…";
-    items[0].run = [this, fx, slot] { openFxRename(fx, slot); };
-    items[1].label = "Duplicate";
-    items[1].run = [this, fx] { duplicateFx(fx); };
-    items[2].label = "Delete";
-    items[2].run = [this, fx] { removeFx(fx); };
+    const model::FxInstance* inst = app_.head().fx.find(fx);
+    if (!inst) return;
+    std::vector<ui::MenuItem> items;
+    // First, for a plug-in this run has disabled: loading it again is the likeliest thing wanted.
+    if (app_.loadModeOf(inst->plugin) == engine::LoadMode::Disable) {
+        ui::MenuItem enable;
+        enable.label = "Enable";
+        enable.run = [this, fx] {
+            json::Value args = json::Value::object();
+            args["fx"] = fx.str();
+            run("ui.fx.enable", std::move(args));
+        };
+        items.push_back(std::move(enable));
+    }
+    ui::MenuItem rename, duplicate, remove;
+    rename.label = "Rename…";
+    rename.run = [this, fx, slot] { openFxRename(fx, slot); };
+    duplicate.label = "Duplicate";
+    duplicate.run = [this, fx] { duplicateFx(fx); };
+    remove.label = "Delete";
+    remove.run = [this, fx] { removeFx(fx); };
+    items.push_back(std::move(rename));
+    items.push_back(std::move(duplicate));
+    items.push_back(std::move(remove));
     root_.openPopup(
         ui::makeMenu("mixer.fxmenu." + fx.str(), std::move(items), [this] { root_.closePopup(); }),
         ui::Rect{at.x, at.y, 0, 0}, ui::Placement::Below);
@@ -2076,7 +2141,9 @@ void Mixer::follow() {
     applyHeight();  // the window may have been resized
     if (actions_.ui().selectedTracks != shownSelection_) showSelection();  // the TCP changed it
     const bool replaced = app_.projectGeneration() != projectGeneration_;
-    if (!replaced && app_.head().version == version_) return;
+    // A load override or a failed plug-in changes the strips without a new project version.
+    const bool attention = attention_.poll();
+    if (!replaced && !attention && app_.head().version == version_) return;
     projectGeneration_ = app_.projectGeneration();
     version_ = app_.head().version;
     const std::string structureNow = structure();

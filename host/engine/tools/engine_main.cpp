@@ -18,6 +18,8 @@
 //   <slug>-engine play FILE [--bar N] [--seconds S] [--block N] [--backend jack|portaudio|dummy]
 //       Play a project through the audio device (to its end, or for S
 //       seconds; Ctrl-C stops), then print engine.status.
+#include "supple/diagnostics/frontend.h"
+#include "supple/diagnostics/reports.h"
 #if defined(_WIN32)
 #include <fcntl.h>
 #include <io.h>
@@ -238,7 +240,7 @@ int play(cmd::Registry& registry, const std::vector<std::string>& args) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int frontendMain(int argc, char** argv) {
 #if defined(_WIN32)
     _setmode(_fileno(stdin), _O_BINARY);
     _setmode(_fileno(stdout), _O_BINARY);
@@ -283,9 +285,11 @@ int main(int argc, char** argv) {
         if (options.workdir.empty()) {
             options.workdir = project.empty() ? defaultWorkdir() : project.parent_path();
             options.renderPresetDir = userRenderPresetDir();
+            options.diagnosticsDir = supple::diagnostics::defaultDirectory();
         }
         if (auto stock = host::stockPluginDir()) options.pluginPath.push_back(*stock);
         for (auto& path : host::defaultSearchPath()) options.pluginPath.push_back(path);
+        options.warnSuspectsOnStderr = true;  // a service says it once; exec never does
         auto app = engine::EngineApp::create(options);
         if (!app) {
             std::fprintf(stderr, "%s\n", app.error().toString().c_str());
@@ -298,6 +302,18 @@ int main(int argc, char** argv) {
                 return 1;
             }
         }
+        // A service that outlives one call says once, on stderr, that the last run ended
+        // unexpectedly (never on a protocol stream; never a prompt). The agent reads it with
+        // crash.list and dismisses it with crash.acknowledge.
+        // Engine runs only, and it says so: the app's own crash is the app's banner to show,
+        // and an agent must not dismiss it from here.
+        if (auto notice = supple::diagnostics::lastRunNotice((*app)->diagnosticsDir(),
+                                                             supple::diagnostics::Role::Engine);
+            notice && *notice)
+            std::fprintf(stderr,
+                         "%s Use crash.list to read it, and crash.acknowledge with an incident id "
+                         "to dismiss it.\n",
+                         supple::diagnostics::noticeText(**notice).c_str());
         cmd::Dispatcher dispatcher(registry, **app);
         rpc::Server* activeServer = nullptr;
         auto publishEvents = [&] {
@@ -353,6 +369,7 @@ int main(int argc, char** argv) {
             (*app)->stopEngine();  // commit captured takes while the session/bus still exist
             publishEvents();
             server.stop();
+            (*app)->settleCleanSuspects();  // a run that ended well clears what it loaded normally
             return 0;
         }
         mcp::Server server(registry, dispatcher, tools);
@@ -380,6 +397,7 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "%s\n", status.error().toString().c_str());
             return 1;
         }
+        (*app)->settleCleanSuspects();  // a run that ended well clears what it loaded normally
         return 0;
     }
     if (args[0] == "registry") {
@@ -479,4 +497,9 @@ int main(int argc, char** argv) {
     }
     print(*result);
     return 0;
+}
+
+int main(int argc, char** argv) {
+    return supple::diagnostics::runFrontend(argc, argv, supple::diagnostics::Role::Engine,
+                                            frontendMain);
 }

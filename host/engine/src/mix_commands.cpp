@@ -151,8 +151,8 @@ struct Work {
 };
 
 Status render(Work& work, const std::vector<host::PluginInfo>& catalogue,
-              const host::HostIdentity& identity, cmd::JobManager& jobs, const std::string& job,
-              StopToken stop) {
+              const host::HostIdentity& identity, const LoadOverrides& overrides,
+              cmd::JobManager& jobs, const std::string& job, StopToken stop) {
     OfflineSettings settings;
     settings.applyMasterPlayrate = false;  // the result plays under the master rate itself
     settings.projectDir = work.projectDir;
@@ -166,7 +166,7 @@ Status render(Work& work, const std::vector<host::PluginInfo>& catalogue,
     settings.progress = [&jobs, &job](double progress) {
         (void)jobs.progress(job, progress, "Mixing items");
     };
-    auto audio = renderSnapshot(work.snapshot, settings, catalogue, identity);
+    auto audio = renderSnapshot(work.snapshot, settings, catalogue, identity, overrides);
     if (!audio) return audio.error();
     if (!audio->warnings.empty())
         return Error("item.mix_render", audio->warnings.front(), "/items",
@@ -365,8 +365,9 @@ void registerMixCommands(cmd::Registry& registry) {
         std::vector<host::PluginInfo> catalogue(plugins->begin(), plugins->end());
         app.startJob([&app, &dispatcher, &jobs, job, work = std::move(work),
                       catalogue = std::move(catalogue), identity = app.options().identity,
+                      overrides = app.loadOverrides(),
                       origin = ctx.origin()](StopToken stop) mutable {
-            auto rendered = render(work, catalogue, identity, jobs, job, stop);
+            auto rendered = render(work, catalogue, identity, overrides, jobs, job, stop);
             if (!rendered) {
                 if (!jobs.cancelled(job)) (void)jobs.fail(job, rendered.error());
                 return;

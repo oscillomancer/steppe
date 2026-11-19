@@ -4,6 +4,8 @@
 
 #include <supple/base/environment.h>
 #include <supple/cmd/bus.h>
+#include <supple/diagctx/commands.h>
+#include <supple/diagctx/inventory.h>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -720,6 +722,149 @@ TEST_CASE("warning result schemas extend typed command warning arrays") {
     CHECK((*result)["warnings"].at(0).find("count")->asInt() == 3);
     CHECK(*registry.find("toy.objects")->resultSchema.find("properties")->find("warnings") ==
           obj(R"({"type":"array","items":{"type":"object"}})"));
+}
+
+namespace {
+namespace dc = supple::diagctx;
+std::vector<std::pair<std::uint32_t, std::string>> gAnnounced;
+void collectNames(const dc::Event& event) noexcept {
+    if (event.event != dc::EventKind::Names) return;
+    std::uint32_t id = event.cell;
+    for (const auto field :
+         {event.identity.name, event.identity.vendor, event.identity.version, event.identity.id}) {
+        if (!field.empty()) gAnnounced.emplace_back(id, std::string(field));
+        ++id;
+    }
+}
+std::string nameOf(const std::vector<std::string_view>& names, const dc::CommandCrumb& crumb) {
+    return crumb.nameId < names.size() ? std::string(names[crumb.nameId]) : std::string("?");
+}
+}  // namespace
+
+TEST_CASE("the first dispatcher announces its command names once") {
+    dc::detail::resetCommandsForTests();
+    auto registry = makeRegistry();
+    FakeHost host;
+    gAnnounced.clear();
+    dc::setInventorySink(&collectNames);
+    Dispatcher first(registry, host);
+    Dispatcher second(registry, host);  // not the process's recorder: announces nothing
+    dc::setInventorySink(nullptr);
+    const auto names = registry.namesById();
+    REQUIRE(names.size() == registry.all().size());  // the registry's own commands included
+    CHECK(names.size() > 8);
+    CHECK(gAnnounced.size() == names.size());
+    for (const auto& [id, name] : gAnnounced) {
+        REQUIRE(id < names.size());
+        CHECK(names[id] == name);
+    }
+    // The second dispatcher writes nothing into the ring.
+    (void)call(second, "toy.get");
+    CHECK(dc::readCommands().count == 0);
+    (void)call(first, "toy.get");
+    CHECK(dc::readCommands().count == 1);
+    dc::detail::resetCommandsForTests();
+}
+
+TEST_CASE("registered commands leave breadcrumbs: an id, an origin category, a state") {
+    dc::detail::resetCommandsForTests();
+    auto registry = makeRegistry();
+    FakeHost host;
+    Dispatcher dispatcher(registry, host);
+    const auto names = registry.namesById();
+    const auto crumbs = [] { return dc::readCommands(); };
+
+    SUBCASE("a command, its origin and its end") {
+        REQUIRE(call(dispatcher, "toy.add", obj("{\"value\":2}")));
+        const auto read = crumbs();
+        REQUIRE(read.count == 1);
+        CHECK(nameOf(names, read.crumbs[0]) == "toy.add");
+        CHECK(read.crumbs[0].origin == dc::CommandOrigin::Test);
+        CHECK(read.crumbs[0].state == dc::CommandState::Ended);
+    }
+    SUBCASE("an unknown name or version never enters; a known one with bad arguments does") {
+        CHECK_FALSE(call(dispatcher, "toy.ad"));
+        CHECK_FALSE(call(dispatcher, "toy.add@3"));
+        CHECK_FALSE(call(dispatcher, "not a command at all"));
+        CHECK(crumbs().count == 0);
+        CHECK_FALSE(call(dispatcher, "toy.add", obj("{\"valeu\":2}")));
+        const auto read = crumbs();
+        REQUIRE(read.count == 1);
+        CHECK(nameOf(names, read.crumbs[0]) == "toy.add");
+        CHECK(read.crumbs[0].state == dc::CommandState::Ended);  // a failure is an end too
+    }
+    SUBCASE("the steps of a batch are entries of their own, in order, inside the batch's") {
+        auto input = obj(
+            R"({"label":"two","steps":[{"command":"toy.add","args":{"value":1}},{"command":"toy.get","args":{}}]})");
+        REQUIRE(call(dispatcher, "batch", input));
+        const auto read = crumbs();
+        REQUIRE(read.count == 3);
+        CHECK(nameOf(names, read.crumbs[0]) == "batch");
+        CHECK(nameOf(names, read.crumbs[1]) == "toy.add");
+        CHECK(nameOf(names, read.crumbs[2]) == "toy.get");
+        for (std::uint32_t i = 0; i < read.count; ++i)
+            CHECK(read.crumbs[i].state == dc::CommandState::Ended);
+    }
+    SUBCASE("a command that is running reads as begun") {
+        // A command can look at the ring from inside: its own entry is open.
+        Command<NoArgs, Count> peek;
+        peek.name = "toy.peek";
+        peek.exposure = Exposure::Internal;
+        peek.summary = "Read the breadcrumbs from inside a command.";
+        peek.args = schema::object<NoArgs>("no_args").build();
+        peek.result = schema::object<Count>("count")
+                          .field("count", &Count::count, schema::integerOf<int>())
+                          .build();
+        static dc::CommandsRead inside;
+        peek.run = [](const NoArgs&, Context&) -> Result<Count> {
+            inside = dc::readCommands();
+            return Count{0};
+        };
+        Registry local;
+        local.add(std::move(peek));
+        FakeHost localHost;
+        dc::detail::resetCommandsForTests();
+        Dispatcher mine(local, localHost);
+        REQUIRE(mine.execute({"toy.peek", json::Value::object(), testOrigin}));
+        REQUIRE(inside.count == 1);
+        CHECK(inside.crumbs[0].state == dc::CommandState::Begun);
+        CHECK(dc::readCommands().crumbs[0].state == dc::CommandState::Ended);
+    }
+    SUBCASE("the origin is a category and every kind of origin maps to one") {
+        const std::pair<Origin::Type, dc::CommandOrigin> map[]{
+            {Origin::Type::Ui, dc::CommandOrigin::Ui},
+            {Origin::Type::Lua, dc::CommandOrigin::Script},
+            {Origin::Type::Mcp, dc::CommandOrigin::Mcp},
+            {Origin::Type::Rpc, dc::CommandOrigin::Rpc},
+            {Origin::Type::Test, dc::CommandOrigin::Test},
+            {Origin::Type::Internal, dc::CommandOrigin::Internal},
+            {Origin::Type::Agent, dc::CommandOrigin::Agent}};
+        for (const auto& [type, category] : map)
+            REQUIRE(dispatcher.execute(
+                {"toy.get", json::Value::object(), Origin{type, "client-canary", "agent-canary"}}));
+        const auto read = crumbs();
+        REQUIRE(read.count == 7);
+        for (std::size_t i = 0; i < 7; ++i) CHECK(read.crumbs[i].origin == map[i].second);
+    }
+    SUBCASE("nothing of the call but its id and category reaches the table") {
+        REQUIRE(call(dispatcher, "toy.add", obj("{\"value\":5}")));
+        REQUIRE(
+            dispatcher.execute({"toy.get", json::Value::object(),
+                                Origin{Origin::Type::Mcp, "canary-client-name", "canary-agent"}}));
+        CHECK_FALSE(call(dispatcher, "canary.command.name"));
+        const std::string_view bytes(reinterpret_cast<const char*>(&dc::table()),
+                                     sizeof(dc::Table));
+        for (const std::string_view canary : {"canary", "toy.add", "toy.get"})
+            CHECK(bytes.find(canary) == std::string_view::npos);
+    }
+    SUBCASE("the ring keeps the last 64 of many") {
+        for (int i = 0; i < 200; ++i) REQUIRE(call(dispatcher, "toy.get"));
+        const auto read = crumbs();
+        REQUIRE(read.count == 64);
+        CHECK(read.crumbs[63].seq == 200);
+        CHECK(read.crumbs[0].seq == 137);
+    }
+    dc::detail::resetCommandsForTests();
 }
 
 TEST_CASE("a failed job reports what it did before failing, when given") {

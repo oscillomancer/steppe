@@ -50,6 +50,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <string>
 #include <thread>
 #include <utility>
@@ -62,6 +63,15 @@
 #include "supple/patch/patch.h"
 
 namespace {
+// A test can ask to be told, from inside the plug-in, which callback is running
+// (supple_fixture_set_observer): the host tests use it to look at the execution table from
+// where a plug-in's own code runs. The observer must be real-time safe; it is called from
+// process() too. Null by default, and then one relaxed load.
+std::atomic<void (*)(const char*)> gObserver{nullptr};
+void observe(const char* phase) {
+    if (const auto call = gObserver.load(std::memory_order_relaxed)) call(phase);
+}
+
 void fixtureWrite(int fd, const void* bytes, unsigned count) {
 #if defined(_WIN32)
     (void)::_write(fd, bytes, count);
@@ -291,6 +301,7 @@ bool CLAP_ABI gainParamInfo(const clap_plugin_t*, uint32_t index, clap_param_inf
     return true;
 }
 bool CLAP_ABI gainParamValue(const clap_plugin_t* pl, clap_id id, double* out) {
+    observe("param_value");
     auto* g = G(pl);
     if (g->missingValue && id == 0) return false;
     if (id == 0)
@@ -361,12 +372,14 @@ uint32_t CLAP_ABI gainLatency(const clap_plugin_t* pl) {
 const clap_plugin_latency_t kGainLatency = {gainLatency};
 
 bool CLAP_ABI gainStateSave(const clap_plugin_t* pl, const clap_ostream_t* os) {
+    observe("state_save");
     const std::string doc = gainPatchType().serialize(G(pl)->current());
     auto bytes = patch::encodeState(doc, 0x54474e31);  // "TGN1"
     if (!bytes) return false;
     return os->write(os, bytes->data(), bytes->size()) == static_cast<int64_t>(bytes->size());
 }
 bool CLAP_ABI gainStateLoad(const clap_plugin_t* pl, const clap_istream_t* is) {
+    observe("state_load");
     std::vector<std::uint8_t> buf;
     std::uint8_t tmp[512];
     for (;;) {
@@ -566,6 +579,7 @@ const void* CLAP_ABI gainExt(const clap_plugin_t* pl, const char* id) {
 }
 
 bool CLAP_ABI gainActivate(const clap_plugin_t* pl, double, uint32_t, uint32_t) {
+    observe("activate");
     if (!checkGainMain(pl)) return false;
     if (std::exchange(G(pl)->failActivate, false)) return false;
     gainGate(supple::test::GatedCall::Activate);
@@ -588,6 +602,7 @@ bool CLAP_ABI gainActivate(const clap_plugin_t* pl, double, uint32_t, uint32_t) 
 }
 
 clap_process_status CLAP_ABI gainProcess(const clap_plugin_t* pl, const clap_process_t* p) {
+    observe("process");
     gainGate(supple::test::GatedCall::Process);
     auto* g = G(pl);
     gainEditorOutput(pl, p->out_events);
@@ -1430,8 +1445,12 @@ clap_process_status CLAP_ABI multiOutProcess(const clap_plugin_t* pl, const clap
 
 // --- crash (the isolation fixture) -------------------------------------------------------
 // An effect that passes audio through until its Mode parameter says otherwise:
-// 1 crashes the process in process() (SIGSEGV), 2 hangs it there, 3 takes
-// 20 ms over each block (a plug-in that misses a live deadline, ADR-0081).
+// 1 crashes the process in process() (raise(SIGSEGV): a signal on POSIX, but on Windows the C
+// runtime ends the process with exit code 3 and no exception), 2 hangs it there, 3 takes
+// 20 ms over each block (a plug-in that misses a live deadline, ADR-0081), 4 writes through a bad
+// pointer: a signal on POSIX and an access violation on Windows, the crash a host classifies as
+// one on every platform. 5 faults when the instance is destroyed, 6 calls abort(), 7 runs the stack
+// out, 8 faults on a thread the plug-in made itself, 9 calls std::terminate().
 
 const clap_plugin_descriptor_t* crashDescriptor() {
     static const char* features[] = {CLAP_PLUGIN_FEATURE_AUDIO_EFFECT, nullptr};
@@ -1449,10 +1468,28 @@ const clap_plugin_descriptor_t* crashDescriptor() {
     return &d;
 }
 
+[[gnu::noinline]] void badWrite() { *reinterpret_cast<volatile int*>(8) = 1; }
+
+// Runs the stack out: each frame touches its own page-sized buffer, and the result is used so
+// that nothing folds the recursion into a loop.
+volatile bool gStackHasEnd = false;  // never set: the recursion has no end the compiler can see
+[[gnu::noinline]] int runOutOfStack(int depth) {
+    volatile char page[4096];
+    if (gStackHasEnd) return depth;
+    page[0] = static_cast<char>(depth);
+    page[sizeof(page) - 1] = static_cast<char>(depth >> 8);
+    return runOutOfStack(depth + 1) + page[0] + page[sizeof(page) - 1];
+}
+
 struct Crash {
     clap_plugin_t plugin{};
     const clap_host_t* host = nullptr;
     std::atomic<int> mode{0};
+    // Mode 5: processes like mode 0 and faults when it is destroyed, which is a crash that
+    // happens only once the host lets go of a bridge that still holds the instance.
+    ~Crash() {
+        if (mode.load() == 5) badWrite();
+    }
 };
 // Tests (supple_fixture_hold_process): while held, an in-process crash
 // instance's process() waits there, spinning, after counting its entry: a
@@ -1468,7 +1505,7 @@ bool CLAP_ABI crashParamInfo(const clap_plugin_t*, uint32_t index, clap_param_in
     info->id = 1;
     info->flags = CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_AUTOMATABLE;
     std::snprintf(info->name, sizeof(info->name), "Mode");
-    info->max_value = 3;
+    info->max_value = 9;
     return true;
 }
 bool CLAP_ABI crashParamValue(const clap_plugin_t* pl, clap_id id, double* out) {
@@ -1477,8 +1514,9 @@ bool CLAP_ABI crashParamValue(const clap_plugin_t* pl, clap_id id, double* out) 
     return true;
 }
 bool CLAP_ABI crashValueToText(const clap_plugin_t*, clap_id, double v, char* out, uint32_t size) {
-    static const char* kNames[] = {"pass", "crash", "hang", "slow"};
-    std::snprintf(out, size, "%s", kNames[std::clamp(static_cast<int>(v), 0, 3)]);
+    static const char* kNames[] = {"pass",     "crash", "hang",     "slow",   "fault",
+                                   "teardown", "abort", "overflow", "thread", "terminate"};
+    std::snprintf(out, size, "%s", kNames[std::clamp(static_cast<int>(v), 0, 9)]);
     return true;
 }
 bool CLAP_ABI crashTextToValue(const clap_plugin_t*, clap_id, const char*, double*) {
@@ -1513,6 +1551,11 @@ clap_process_status CLAP_ABI crashProcess(const clap_plugin_t* pl, const clap_pr
         }
     }
     if (C(pl)->mode.load() == 1) std::raise(SIGSEGV);
+    if (C(pl)->mode.load() == 4) badWrite();
+    if (C(pl)->mode.load() == 6) std::abort();  // what the host makes of abort() differs
+    if (C(pl)->mode.load() == 7) (void)runOutOfStack(0);
+    if (C(pl)->mode.load() == 8) std::thread([] { badWrite(); }).join();  // a thread of its own
+    if (C(pl)->mode.load() == 9) std::terminate();
     while (C(pl)->mode.load() == 2) {  // spin (no system call: sanitizers see a hang, not a call)
     }
     if (C(pl)->mode.load() == 3) {  // spin on the clock: no system call either
@@ -1535,15 +1578,22 @@ void CLAP_ABI checkedGainDestroy(const clap_plugin_t* p) {
     delete G(p);
 }
 
-bool CLAP_ABI initOk(const clap_plugin_t*) { return true; }
-void CLAP_ABI deactivateNop(const clap_plugin_t*) {}
-bool CLAP_ABI startOk(const clap_plugin_t*) { return true; }
-void CLAP_ABI stopNop(const clap_plugin_t*) {}
-void CLAP_ABI resetNop(const clap_plugin_t*) {}
-void CLAP_ABI mainNop(const clap_plugin_t*) {}
+bool CLAP_ABI initOk(const clap_plugin_t*) {
+    observe("init");
+    return true;
+}
+void CLAP_ABI deactivateNop(const clap_plugin_t*) { observe("deactivate"); }
+bool CLAP_ABI startOk(const clap_plugin_t*) {
+    observe("start");
+    return true;
+}
+void CLAP_ABI stopNop(const clap_plugin_t*) { observe("stop"); }
+void CLAP_ABI resetNop(const clap_plugin_t*) { observe("reset"); }
+void CLAP_ABI mainNop(const clap_plugin_t*) { observe("main_thread"); }
 
 template <class T>
 void CLAP_ABI destroyT(const clap_plugin_t* p) {
+    observe("destroy");
     delete static_cast<T*>(p->plugin_data);
 }
 
@@ -1838,16 +1888,19 @@ const clap_plugin_t* CLAP_ABI factoryCreate(const clap_plugin_factory_t*, const 
             if (auto* words = supple::test::mapGateFile(file))
                 gLifecycleGate.store(words, std::memory_order_release);
         plugin->reset = [](const clap_plugin_t* pl) {
+            observe("reset");
             gainGate(supple::test::GatedCall::Reset);
             // A seek must clear latency history just as activation does.
             std::memset(G(pl)->delay, 0, sizeof(G(pl)->delay));
             G(pl)->delayPos = 0;
         };
         plugin->start_processing = [](const clap_plugin_t*) {
+            observe("start");  // what the default start does (startNop), as the observer expects
             gainGate(supple::test::GatedCall::StartProcessing);
             return true;
         };
         plugin->stop_processing = [](const clap_plugin_t*) {
+            observe("stop");
             gainGate(supple::test::GatedCall::StopProcessing);
         };
         return plugin;
@@ -1935,14 +1988,20 @@ const clap_plugin_t* CLAP_ABI factoryCreate(const clap_plugin_factory_t*, const 
 }
 const clap_plugin_factory_t kFactory = {factoryCount, factoryDesc, factoryCreate};
 
-bool CLAP_ABI entryInit(const char*) { return true; }
-void CLAP_ABI entryDeinit() {}
+bool CLAP_ABI entryInit(const char*) {
+    observe("library_init");
+    return true;
+}
+void CLAP_ABI entryDeinit() { observe("library_deinit"); }
 const void* CLAP_ABI entryFactory(const char* id) {
     return !std::strcmp(id, CLAP_PLUGIN_FACTORY_ID) ? &kFactory : nullptr;
 }
 
 }  // namespace
 
+extern "C" CLAP_EXPORT void supple_fixture_set_observer(void (*observer)(const char*)) {
+    gObserver.store(observer, std::memory_order_release);
+}
 extern "C" CLAP_EXPORT int supple_fixture_thread_failures() {
     return gThreadFailures.load(std::memory_order_relaxed);
 }

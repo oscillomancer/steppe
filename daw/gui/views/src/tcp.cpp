@@ -398,6 +398,8 @@ void TcpPanel::Row::refresh(const model::Session& session) {
                       : tr->record.monitor == model::Monitor::On ? ui::MonitorButton::Mode::On
                                                                  : ui::MonitorButton::Mode::Auto);
     fx_->setEmphasis(!tr->chain.empty() || !tr->inputChain.empty());
+    fx_->setTextColor(
+        panel_.cb_.fxNeedsAttention && panel_.cb_.fxNeedsAttention(*track_) ? "meter-hot" : "");
     fader_->setValue(tr->volumeDb);
     // A master's pan is a balance; a channel's or buss's follows its mode.
     const bool master = tr->type == model::StripType::Master;

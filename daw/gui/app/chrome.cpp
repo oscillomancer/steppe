@@ -122,7 +122,9 @@ ChromeLayout ChromeLayout::defaults() {
          {"project.timebase:beats", "project.timebase:time", "project.timebase:beats_position", "-",
           "project.pan_law:0", "project.pan_law:-2.5", "project.pan_law:-3", "project.pan_law:-4.5",
           "project.pan_law:-6", "project.pan_law.boost", "-", "ui.project.timecode"}},
-        {"Help", {"ui.help.skill", "ui.help.skill_link", "ui.help.mcp", "ui.help.agent"}},
+        {"Help",
+         {"ui.help.crash_reports", "ui.help.skill", "ui.help.skill_link", "ui.help.mcp",
+          "ui.help.agent"}},
     };
     // Transport actions live in the transport bar's own row; not duplicated here.
     l.toolbar = {"history.undo", "history.redo", "track.add:channel", "ui.rack", "ui.actions"};

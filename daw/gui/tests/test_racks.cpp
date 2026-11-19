@@ -861,6 +861,51 @@ TEST_CASE("rack window: a plugin module shows the plug-in's name and a click ope
     f.snapshot("rack-plugin.png");
 }
 
+TEST_CASE(
+    "rack window: a plugin module of a disabled plug-in says it is disabled, and can be enabled") {
+    Fixture f(ui::Theme::dark(), {FIXTURE_CLAP_PATH});
+    if (!f.ok) return;
+    Patch p(f);
+    const std::string sine =
+        f.exec("module.add",
+               R"({"rack":")" + p.rack +
+                   R"(","plugin":"com.suppleaudio.test.sine","x":260,"y":560})")["module"]
+            .asString();
+    std::vector<model::Id> enabled;
+    f.racks->enableFx = [&](model::Id fx) { enabled.push_back(fx); };
+    f.racks->open();
+    f.frame();
+    const model::Id id = *model::Id::parse(sine);
+    CHECK(f.racks->space()->scene().module(id)->subtitle != "disabled");
+    const model::Id fx = *f.app->head().modules.find(id)->fx;
+    {
+        const auto version = f.app->head().version;
+        f.exec("plugin.override", R"({"plugin":"com.suppleaudio.test.sine","mode":"disable"})");
+        CHECK(f.app->head().version == version);  // nothing in the project changed
+    }
+    f.racks->sync();  // the window follows the override
+    f.frame();
+    CHECK(f.racks->space()->scene().module(id)->subtitle == "disabled");
+    CHECK(f.racks->space()->scene().module(id)->silent);
+    f.snapshot("rack-plugin-disabled.png");
+    // Its menu starts with Enable.
+    const ui::Point body = *f.racks->space()->bodyAt(id);
+    f.pointer(ui::PointerEvent::Type::Move, body, 0);
+    f.pointer(ui::PointerEvent::Type::Down, body, 3);
+    f.pointer(ui::PointerEvent::Type::Up, body, 3);
+    f.frame();
+    const auto items = ui::menuItems(*f.r().find("rack.module.menu"));
+    REQUIRE_FALSE(items.empty());
+    CHECK(items.front().label == "Enable");
+    items.front().run();
+    CHECK(enabled == std::vector<model::Id>{fx});
+    f.exec("plugin.override", R"({"plugin":"com.suppleaudio.test.sine","mode":"normal"})");
+    f.racks->sync();
+    f.frame();
+    CHECK(f.racks->space()->scene().module(id)->subtitle != "disabled");
+    CHECK_FALSE(f.racks->space()->scene().module(id)->silent);
+}
+
 TEST_CASE("rack window: a display hears the pointer; its edits are one undo step a press") {
     Fixture f;
     if (!f.ok) return;

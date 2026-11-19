@@ -191,6 +191,21 @@ q = nil
 ---@field amount? number
 ---@field color? string
 
+---@class Steppe.crash_acknowledge_args
+---@field incident string A report's incident id, from crash.list.
+
+---@class Steppe.crash_delete_args
+---@field incident string A report's incident id, from crash.list.
+
+---@class Steppe.crash_list_args
+---@field limit? integer
+
+---@class Steppe.crash_read_args
+---@field incident string A report's incident id, from crash.list.
+
+---@class Steppe.crash_settle_args
+---@field incident string A report's incident id, from crash.list.
+
 ---@class Steppe.dsp_check_args
 ---@field name? string
 ---@field source? string
@@ -364,6 +379,7 @@ q = nil
 ---@field audio_page_faults table
 ---@field meter_drops table
 ---@field failed_fx string[]
+---@field disabled_fx string[] fx whose plug-in this run has disabled (plugin.override): the strip passes audio through
 ---@field bridge_threads_refused string[]
 ---@field dropped integer
 ---@field voice_dropped integer
@@ -410,6 +426,7 @@ q = nil
 ---@field audio_page_faults table
 ---@field meter_drops table
 ---@field failed_fx string[]
+---@field disabled_fx string[] fx whose plug-in this run has disabled (plugin.override): the strip passes audio through
 ---@field bridge_threads_refused string[]
 ---@field dropped integer
 ---@field voice_dropped integer
@@ -550,6 +567,7 @@ q = nil
 ---@field sidechain_channels? integer The plug-in's key input: route.add {fx} feeds it
 ---@field latency_samples? integer The instance's reported latency, in samples
 ---@field isolation_effective? string Where the instance runs: in_process, shared_bridge or dedicated; inherit resolves to the plug-in isolation preference (stock plug-ins in process), as the instance is made
+---@field override? string This run's plugin.override for the plug-in, when it is not normal: bridge (it runs on a dedicated bridge) or disable (it is not loaded: the strip passes audio through, a rack module is silent, and there is no isolation_effective or parameter section)
 ---@field outputs_notes? boolean The loaded plug-in sends notes or MIDI: fx.set midi_output chooses replace or merge
 ---@field params_total? integer Plain parameters matching; at most 512 are listed.
 ---@field warnings? table[]
@@ -1112,6 +1130,24 @@ q = nil
 ---@field scan table
 ---@field warnings? table[]
 
+---@class Steppe.plugin_override_args
+---@field plugin string id or name, as plugin.list shows it
+---@field mode "normal"|"bridge"|"disable"
+
+---@class Steppe.plugin_override_result
+---@field plugin string
+---@field name string
+---@field format string
+---@field mode "normal"|"bridge"|"disable"
+---@field changed boolean false: it was set that way already
+---@field fx string[] the fx of this plug-in in the project now
+---@field warnings? table[]
+
+---@class Steppe.plugin_overrides_result
+---@field overrides table[]
+---@field bridge_available boolean
+---@field warnings? table[]
+
 ---@class Steppe.plugin_scan_args
 ---@field wait? boolean false: scan in the background (default true)
 
@@ -1159,6 +1195,7 @@ q = nil
 
 ---@class Steppe.project_open_args
 ---@field path? string
+---@field expect_hash? string The hash project.plugins returned: the file is opened only if its bytes are those it checked (project.changed otherwise)
 
 ---@class Steppe.project_open_result
 ---@field name string
@@ -1175,6 +1212,13 @@ q = nil
 ---@field autosave_available boolean
 ---@field recoverable_sessions integer Unsaved projects earlier runs left behind (project.recoverable lists them)
 ---@field warnings? table[]
+
+---@class Steppe.project_plugins_args
+---@field path? string
+---@field template? boolean
+---@field session? string A session project.recoverable lists
+---@field autosave? boolean The open project's newer autosave
+---@field autosave_file? string With autosave: which one, as offered
 
 ---@class Steppe.project_recover_args
 ---@field files? string[]
@@ -2235,6 +2279,14 @@ q = nil
 ---@field remove fun(args?: Steppe.cable_remove_args): table Remove a cable, by id or by its two ends.
 ---@field set fun(args: Steppe.cable_set_args): table Set a modulation cable's amount or a cable's colour.
 
+---@class Steppe.crash
+---@field acknowledge fun(args: Steppe.crash_acknowledge_args): table Mark a crash report, or a run that left none, as seen.
+---@field clear fun(): table Delete every finished crash report and record of an ended run.
+---@field delete fun(args: Steppe.crash_delete_args): table Delete one crash report, or the record of a run that left none.
+---@field list fun(args?: Steppe.crash_list_args): table The crash reports earlier runs left, newest first.
+---@field read fun(args: Steppe.crash_read_args): table One crash report in full.
+---@field settle fun(args: Steppe.crash_settle_args): table Mark the suspicion a crash report raised as resolved.
+
 ---@class Steppe.dsp
 ---@field check fun(args?: Steppe.dsp_check_args): Steppe.dsp_check_result Compile a DSP script without saving it; return its diagnostics.
 ---@field edit fun(args: Steppe.dsp_edit_args): Steppe.dsp_edit_result Change part of a library script by replacing text; compile it, as dsp.write.
@@ -2393,12 +2445,15 @@ q = nil
 
 ---@class Steppe.plugin
 ---@field list fun(args?: Steppe.plugin_list_args): Steppe.plugin_list_result List scanned plugins; filter matches id, name, or vendor.
+---@field override fun(args: Steppe.plugin_override_args): Steppe.plugin_override_result Load a plug-in normally, on a bridge, or not at all for this run.
+---@field overrides fun(): Steppe.plugin_overrides_result List the plug-ins this run bridges or has disabled.
 ---@field scan fun(args?: Steppe.plugin_scan_args): Steppe.plugin_scan_result Rescan configured plugin paths and return the available plugins.
 
 ---@class Steppe.project
 ---@field get fun(): Steppe.project_get_result Show the project: name, rate, tempo, meter, file, version and branch.
 ---@field new fun(args?: Steppe.project_new_args): Steppe.project_new_result Start a new, empty project (replaces the current one and its history).
 ---@field open fun(args?: Steppe.project_open_args): Steppe.project_open_result Open a project file and its branches (replaces the current project).
+---@field plugins fun(args?: Steppe.project_plugins_args): table The plug-ins a project, or a recovery, names, and any a crash report suspects.
 ---@field recover fun(args?: Steppe.project_recover_args): Steppe.project_recover_result Put back what a crash left behind: recordings, or an unsaved project.
 ---@field recoverable fun(): Steppe.project_recoverable_result List recordings and unsaved projects a crash left behind.
 ---@field save fun(args?: Steppe.project_save_args): Steppe.project_save_result Save the project (canonical JSON) to its file or a new path.
@@ -2577,6 +2632,7 @@ q = nil
 ---@field autoitem Steppe.autoitem Commands named autoitem.*
 ---@field branch Steppe.branch Commands named branch.*
 ---@field cable Steppe.cable Commands named cable.*
+---@field crash Steppe.crash Commands named crash.*
 ---@field dsp Steppe.dsp Commands named dsp.*
 ---@field engine Steppe.engine Commands named engine.*
 ---@field env Steppe.env Commands named env.*

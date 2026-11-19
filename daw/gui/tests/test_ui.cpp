@@ -19,6 +19,7 @@
 #include "supple/ui/list.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/root.h"
+#include "supple/ui/scroll_view.h"
 #include "supple/ui/shortcut.h"
 #include "supple/ui/text_area.h"
 #include "supple/ui/text_field.h"
@@ -1836,6 +1837,38 @@ TEST_CASE("a control's drag reaches its callback once per frame, the latest posi
     root.frame(false);
     REQUIRE(calls.size() == before + 1);
     CHECK(calls.back().second == Gesture::End);
+}
+
+TEST_CASE("rich text wraps across runs, keeps the spaces between them and grows with its lines") {
+    REQUIRE_GL();
+    Root root(*fixture().window, fixture().fonts, Theme::dark());
+    auto content = std::make_unique<Node>("root");
+    content->layout.dir = Layout::Dir::Row;
+    content->layout.align = Layout::Align::Start;
+    auto& column = content->emplace<Node>("column");
+    column.layout.dir = Layout::Dir::Column;
+    column.layout.width = SizeRule::fixed(300);
+    auto& text = column.emplace<RichText>(
+        "rich", std::vector<TextRun>{{"The ", Font::Ui, "ink"},
+                                     {"Canary Verb", Font::UiBold, "ink"},
+                                     {" was running when it closed, and what follows is quiet.",
+                                      Font::Ui, "ink-quiet"}});
+    root.setContent(std::move(content));
+    root.frame(false);
+    CHECK(text.valueText() ==
+          "The Canary Verb was running when it closed, and what follows is quiet.");
+    const float wide = text.bounds().h;
+    CHECK(wide > 0);
+    // A narrower paragraph is taller.
+    column.layout.width = SizeRule::fixed(120);
+    root.relayout();
+    root.frame(false);
+    CHECK(text.bounds().h > wide);
+    // A single word is a single line, of the height of one line of text.
+    text.setRuns({{"Short", Font::UiBold, "ink"}});
+    root.frame(false);
+    CHECK(text.bounds().h < wide);
+    CHECK(text.valueText() == "Short");
 }
 
 TEST_CASE("edge scroll: the speed by depth, and a clock that caps a stalled frame") {

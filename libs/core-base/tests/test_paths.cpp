@@ -50,6 +50,10 @@ TEST_CASE("platform paths select native user directories without creating them")
     CHECK(config() == "C:/roaming");
     CHECK(data() == config());
     CHECK(cache() == "C:/local");
+    CHECK(localData() == "C:/local");
+    local.set(nullptr);
+    CHECK(localData().empty());
+    local.set("C:/local");
     CHECK(runtime() == "C:/local/Temp");
 #else
     Environment user("HOME", "/tmp/test-user");
@@ -60,6 +64,7 @@ TEST_CASE("platform paths select native user directories without creating them")
 #if defined(__APPLE__)
     CHECK(config() == "/tmp/test-user/Library/Application Support");
     CHECK(data() == config());
+    CHECK(localData() == data());
     CHECK(cache() == "/tmp/test-user/Library/Caches");
     // Without TMPDIR: the per-user temporary directory TMPDIR normally names.
     Environment temporary("TMPDIR", nullptr);
@@ -70,6 +75,7 @@ TEST_CASE("platform paths select native user directories without creating them")
 #else
     CHECK(config() == "/tmp/config");
     CHECK(data() == "/tmp/data");
+    CHECK(localData() == data());
     CHECK(cache() == "/tmp/cache");
     CHECK(runtime() == "/tmp/runtime");
     configEnv.set(nullptr);
@@ -88,6 +94,7 @@ TEST_CASE("platform paths select native user directories without creating them")
     user.set("");
     CHECK(cache().empty());
     CHECK(data().empty());
+    CHECK(localData().empty());
     CHECK(cache(true) == ".cache");
     CHECK(data(true) == ".local/share");
     user.set(nullptr);

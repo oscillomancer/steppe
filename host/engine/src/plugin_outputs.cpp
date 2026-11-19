@@ -414,6 +414,8 @@ void EngineApp::checkFailures() {
         payload["fx"] = id.str();
         payload["reason"] = error.message;
         payload["error"] = pluginErrorJson(error);
+        if (auto incident = pool_->failureIncident(id); !incident.empty())
+            payload["incident"] = std::move(incident);
         emit("fx.failed", std::move(payload));
     }
 }

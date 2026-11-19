@@ -105,6 +105,36 @@ void* mapMemory(Resource resource, std::size_t size) {
     return result == MAP_FAILED ? nullptr : result;
 #endif
 }
+void* mapCaptureSlot(Resource resource, std::size_t size) {
+#if defined(_WIN32)
+    const auto section = reinterpret_cast<HANDLE>(resource);
+    // Size 0 maps the whole section: an event, a pipe or a file is no section and does not map.
+    void* view = MapViewOfFile(section, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, 0);
+    if (!view) return nullptr;
+    MEMORY_BASIC_INFORMATION info{};
+    if (VirtualQuery(view, &info, sizeof(info)) != sizeof(info) || info.Type != MEM_MAPPED ||
+        info.AllocationBase != view || info.RegionSize != size) {
+        UnmapViewOfFile(view);
+        return nullptr;
+    }
+    return view;
+#else
+    struct stat info{};
+    if (::fstat(resource, &info) != 0 || info.st_size != static_cast<off_t>(size)) return nullptr;
+#if defined(__linux__)
+    if (!S_ISREG(info.st_mode)) return nullptr;
+    const int seals = ::fcntl(resource, F_GET_SEALS);  // -1 for anything that is not a memfd
+    constexpr int kNeeded = F_SEAL_SHRINK | F_SEAL_GROW;
+    if (seals < 0 || (seals & kNeeded) != kNeeded) return nullptr;
+#else
+    // A POSIX shared-memory object reports no file type on some systems; a socket, a pipe, a
+    // directory or a device is never one.
+    if ((info.st_mode & S_IFMT) != 0 && !S_ISREG(info.st_mode)) return nullptr;
+#endif
+    void* result = ::mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, resource, 0);
+    return result == MAP_FAILED ? nullptr : result;
+#endif
+}
 void unmapMemory(void* map, std::size_t size) {
     if (!map) return;
 #if defined(_WIN32)

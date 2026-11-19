@@ -3,6 +3,8 @@
 #include <supple/base/paths.h>
 #include <supple/model/groups.h>
 #include "audio_edit.h"
+#include "supple/diagnostics/frontend.h"
+#include "supple/diagnostics/reports.h"
 // <slug>: the DAW with a window (docs/specs/gui.md). The UI thread is the
 // model thread: it pumps the command bus's loop (socket requests, the service
 // tick) between SDL events, and draws only when something changed.
@@ -58,6 +60,7 @@
 #include "rack_window.h"
 #include "render_dialog.h"
 #include "routing_matrix.h"
+#include "safe_load.h"
 #include "screensets.h"
 #include "shell.h"
 #include "side_browser.h"
@@ -256,18 +259,7 @@ double percentile(std::vector<double> v, double p) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
-#if defined(_WIN32)
-    // Preserve redirected handles from CTest/pipes. Only reopen streams with
-    // no inherited handle when launched from a terminal without redirection.
-    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
-        FILE* stream = nullptr;
-        if (_fileno(stdout) < 0 && GetFileType(GetStdHandle(STD_OUTPUT_HANDLE)) == FILE_TYPE_CHAR)
-            (void)freopen_s(&stream, "CONOUT$", "w", stdout);
-        if (_fileno(stderr) < 0 && GetFileType(GetStdHandle(STD_ERROR_HANDLE)) == FILE_TYPE_CHAR)
-            (void)freopen_s(&stream, "CONOUT$", "w", stderr);
-    }
-#endif
+int frontendMain(int argc, char** argv) {
     Options o;
     if (!parse(argc, argv, o)) return usage();
 
@@ -327,6 +319,8 @@ int main(int argc, char** argv) {
     if (o.workdir.empty()) options.rackPresetDir = dataFolder() / "rack-presets";
     // Render presets and the render default likewise (ADR-0055).
     if (o.workdir.empty()) options.renderPresetDir = dataFolder() / "render-presets";
+    // Earlier runs' crash reports, where the diagnostics frontend wrote them.
+    if (o.workdir.empty()) options.diagnosticsDir = supple::diagnostics::defaultDirectory();
     auto app = engine::EngineApp::create(options);
     if (!app) {
         std::fprintf(stderr, "%s\n", app.error().toString().c_str());
@@ -513,7 +507,12 @@ int main(int argc, char** argv) {
         o.actions.insert(o.actions.begin(), "ui.file.recover");
     gui::HelpActions helpActions(
         root, appActions, (*window)->sdl(),
-        [&](std::function<void()> f) { loop.post(std::move(f)); }, gui::help::ownExecutable());
+        [&](std::function<void()> f) { loop.post(std::move(f)); }, gui::help::ownExecutable(), {},
+        (*app)->diagnosticsDir());
+    // The restart notice's "Show report" opens the viewer on the incident it names.
+    shell.showCrashReport = [&](const std::string& incident) {
+        helpActions.crashReports().open(incident);
+    };
     appActions.addUi(
         "ui.fx.editor", "FX: open or close editor", "fx", [&](const json::Value& v) -> Status {
             const auto id = v.isString() ? model::Id::parse(v.asString()) : std::nullopt;
@@ -528,7 +527,20 @@ int main(int argc, char** argv) {
             [&](gui::LearnRequest request) {
                 gui::openLearnDialog(fxPanel.root(), appActions, **app, std::move(request));
             },
-            [&](model::Id rack) { racks.open(rack); }},
+            [&](model::Id rack) { racks.open(rack); },
+            // Enable, on a disabled plug-in's row: the action below.
+            [&](model::Id fx) {
+                json::Value args = json::Value::object();
+                args["fx"] = fx.str();
+                if (const actions::Action* a = appActions.registry().find("ui.fx.enable"))
+                    if (auto r = appActions.run(*a, args); !r && shell.onError)
+                        shell.onError(r.error().message);
+            },
+            // The viewer is a popup of the main window: bring that window up first.
+            [&](const std::string& incident) {
+                SDL_RaiseWindow((*window)->sdl());
+                helpActions.crashReports().open(incident);
+            }},
         gui::Favourites::defaultFile(product::kSlug));
     // A plugin dragged out of the browser lands on the strip or the track
     // row under the pointer (gui.md §4.14).
@@ -667,6 +679,30 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "%s\n", message.c_str());
     };
     appActions.addUi("ui.preferences", "Edit: preferences…", [&] { preferences.open(); });
+    // Before File > Open, a recovery or a template loads, a plug-in a crash report points at is
+    // asked about (safe-load, topic 7d); a choice kept for its exact build is the preferences'.
+    gui::SafeLoad safeLoad(root, dispatcher, (*app)->diagnosticsDir());
+    safeLoad.remembered = [&] { return preferences.preferences().rememberedLoads; };
+    safeLoad.setRemembered = [&](std::vector<gui::RememberedLoad> loads) {
+        return preferences.setRememberedLoads(std::move(loads));
+    };
+    safeLoad.onStatus = [&](const std::string& message) { shell.setStatus(message); };
+    fileActions.setSafeLoad(&safeLoad);
+    // Enable, on a plug-in this run has disabled (the strip's menu, the FX window's row).
+    appActions.addUi(
+        "ui.fx.enable", "FX: enable a disabled plug-in", "fx", [&](const json::Value& v) -> Status {
+            const auto id = v.isString() ? model::Id::parse(v.asString()) : std::nullopt;
+            const model::FxInstance* fx = id ? (*app)->head().fx.find(*id) : nullptr;
+            if (!fx) return Error("gui.fx_enable", "an effect id like fx_3", "/fx");
+            return safeLoad.enable(fx->plugin.id);
+        });
+    racks.enableFx = [&](model::Id fx) {
+        json::Value args = json::Value::object();
+        args["fx"] = fx.str();
+        if (const actions::Action* a = appActions.registry().find("ui.fx.enable"))
+            if (auto r = appActions.run(*a, args); !r && shell.onError)
+                shell.onError(r.error().message);
+    };
     // The audio device: saved with the preferences, applied to the engine at once.
     gui::AudioDeviceDialog audioDevice(
         root, dispatcher, **app, prefs.audio,
@@ -1449,4 +1485,20 @@ int main(int argc, char** argv) {
             peaks.stats().built, peaks.stats().loaded, (*window)->renderer().c_str());
     }
     return serviceFailed ? 1 : 0;
+}
+
+int main(int argc, char** argv) {
+#if defined(_WIN32)
+    // Preserve redirected handles from CTest/pipes. Only reopen streams with
+    // no inherited handle when launched from a terminal without redirection.
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        FILE* stream = nullptr;
+        if (_fileno(stdout) < 0 && GetFileType(GetStdHandle(STD_OUTPUT_HANDLE)) == FILE_TYPE_CHAR)
+            (void)freopen_s(&stream, "CONOUT$", "w", stdout);
+        if (_fileno(stderr) < 0 && GetFileType(GetStdHandle(STD_ERROR_HANDLE)) == FILE_TYPE_CHAR)
+            (void)freopen_s(&stream, "CONOUT$", "w", stderr);
+    }
+#endif
+    return supple::diagnostics::runFrontend(argc, argv, supple::diagnostics::Role::Gui,
+                                            frontendMain);
 }

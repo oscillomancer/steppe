@@ -214,6 +214,65 @@ projects (see *Rendering*).
 
 Uninstalling Steppe leaves these folders and your projects in place.
 
+### Local crash reports (staged, ADR-0083)
+
+Crash diagnostics are being added separately from autosave and recording recovery.
+Reports remain on this machine under the app’s local data folder/diagnostics,
+limited to 20 reports or 50 MB, oldest removed. They exclude your project, audio,
+MIDI and command arguments. Steppe never uploads them; your OS crash reporting
+continues under your own OS settings. After an unexpected close, the next start shows a
+banner under the transport that says so (naming the plug-in the report points at, when it
+points at one, or saying no report was written); Dismiss hides it for good. It is about the
+app's own earlier closes only: a headless engine service that an agent started has its own line
+on standard error (naming itself, "Steppe engine"), and dismissing one never dismisses the other.
+It is a note, not a question, and project recovery is offered separately. An agent connected over MCP can list, read,
+acknowledge, settle and delete these reports (`crash.list`, `crash.read`, `crash.acknowledge`,
+`crash.settle`, `crash.delete`, `crash.clear`); a report names plug-ins and commands, never project
+content. Before opening a project, or recovering one (`project.plugins` with `session` or `autosave`),
+`project.plugins` says which of its plug-ins a recent
+report points at, and `plugin.override` loads a plug-in on a bridge or not at all for the
+run (`bridge`, `disable`), so the project can be opened safely; `project.open` and `project.recover` warn of such a plug-in
+and load it normally unless one of those was set first. **Help > Crash reports…** lists
+what earlier runs left, newest first (a bar marks a report you have not marked as seen), and shows one in plain
+words: what stopped Steppe, which plug-in the report points at and how far to trust that, and, folded away, the
+plug-ins that were loaded, the threads, the last commands and what the report could not record. You can copy a text
+summary, save a copy of the report file wherever you choose (it is never sent anywhere), mark a report as seen, delete one report or all of them (each asks for a second click), or open the folder.
+The banner's "Show report" button opens the same window on that report. 
+**When a plug-in may have closed Steppe.** If a recent report points at a plug-in your project uses, Steppe
+asks before it opens the project (File > Open, Recover, or starting from a template) how to load that plug-in
+this time: in a separate process, so that a new fault stays there (the suggested choice); disabled this time, so that
+its tracks pass audio through and the project keeps the plug-in; or normally, which also marks the reports as dealt
+with. Choose one and press Continue; nothing is saved in your project by this choice. A plug-in that comes with
+Steppe offers the last two only, since a fault in one is Steppe's own. Cancel, or Escape, cancels the open. Tick
+"Remember my choice" to have Steppe apply the same answer the next time without asking; it is kept for that exact
+version of the plug-in, so an updated plug-in is asked about again, and a remembered "normally" is dropped if that
+plug-in closes Steppe again. Remembered choices are saved in the preferences file.
+
+Two limits of that question. It looks at the project as saved, at the latest step of each branch: a plug-in
+that only an older step of the history uses is not asked about, and loads normally if you undo back to that
+step. And a project template is checked and then loaded by its name, so a template file that is changed
+between the question and the load is loaded without the question.
+
+A plug-in you disabled is marked in the mixer (its slot keeps its outline, its name goes dim and
+an amber bar runs down the slot's left edge; a plug-in that failed, because its separate process closed or
+stopped answering, has the same slot with a red bar; and a track's "fx" turns amber while its chain holds a
+disabled or a failed plug-in, in the mixer and in the track list), in the FX window ("disabled after an unexpected close · audio passes through") and in
+a rack (its module says "disabled"). Right-click it in the mixer or a rack, or press Enable in the FX window, to
+load it again. The choice lasts until you quit Steppe. If a failed plug-in left a report, its row in the FX window has
+a Show report button beside Restart.
+
+#### Stopping Steppe from a script or a service
+
+Steppe runs as two processes, a supervisor that you start and a worker that does the
+work. Stop it the ordinary way: close the window, or send the program `SIGTERM` or Ctrl-C
+(on Windows, Ctrl-C in its console, or close the window). Ending only the process you
+started, with `kill -9`, Task Manager or `TerminateProcess`, stops the program too: the
+worker notices that its supervisor vanished and shuts down as if it had been sent
+`SIGTERM`, ending hard if that has not finished within ten seconds. It then frees its
+control socket, so starting Steppe again works. A window closed this way does not ask
+about unsaved changes, as with `SIGTERM`. If Steppe's supervisor itself crashes, the worker
+keeps running without crash capture.
+
 ## Tracks and items
 
 ### Colours and names

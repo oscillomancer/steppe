@@ -11,7 +11,9 @@ Fails (exit 1) when:
   * a CMake FetchContent_Declare / ExternalProject_Add names a dependency that
     is not in the manifest;
   * GPL dependencies are not declared DAW-only, or plugin code carries GPL;
-  * first-party source carries an incompatible SPDX identifier.
+  * first-party source carries an incompatible SPDX identifier;
+  * MIT-licensed code (plugins/, modules/, the MIT libraries) names or includes a GPL-only
+    library (GPL_ONLY_LIBRARIES).
 
 Run: tools/license-check/check.py --root <repo>
 """
@@ -33,6 +35,15 @@ GPL_LICENSES = {"GPL-3.0-only", "GPL-3.0-or-later"}
 APPROVED_LGPL = {"lame": "LGPL-2.0-or-later", "libltc": "LGPL-3.0-or-later"}
 MIT_LIBRARIES = {"core-base", "core-json", "core-schema", "core-params",
                  "core-patch", "core-dsp", "core-analysis"}
+# GPL-only first-party libraries (ADR-0083): nothing in the permissive part of the tree
+# (mit_component) may include their headers or name them. cmake/LicenseIsolation.cmake
+# checks the link graph of the targets it can see; this checks the files, which also covers
+# a plug-in built in isolation. Keep the target names there equal to these.
+GPL_ONLY_LIBRARIES = {
+    "diagnostics-context": re.compile(r"supple/diagctx/|diagctx::|\bdiagnostics-context\b"),
+    "diagnostics-capture": re.compile(r"supple/diagcap/|\bdiagnostics-capture\b"),
+    "image-identity": re.compile(r"supple/imageid/|\bimage-identity\b"),
+}
 SPDX_RE = re.compile("SPDX-License-" + r"Identifier:[ \t]*([^\n]+)")
 
 
@@ -209,6 +220,12 @@ def main() -> int:
                     if (mit_component(rel) and re.search(r"\b(?:A?GPL|LGPL)-", identifier)
                             or not license_ok(identifier, permitted)):
                         errors.append(f"{rel}: incompatible SPDX identifier '{identifier}'")
+            if mit_component(rel):
+                for library, pattern in GPL_ONLY_LIBRARIES.items():
+                    match = pattern.search(text)
+                    if match:
+                        errors.append(f"{rel}: uses the GPL-only library {library} ('{match.group(0)}'); "
+                                      f"plug-ins, modules and the MIT libraries stay MIT")
             if p.name == "CMakeLists.txt" or p.suffix == ".cmake":
                 for m in FETCH_RE.finditer(text):
                     dep = m.group(1).lower()

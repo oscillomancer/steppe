@@ -36,6 +36,7 @@
 #include <supple/host/clap_host.h>
 
 #include "../../clap-host/tests/lifecycle_gate.h"
+#include "../../clap-host/tests/scope_probe.h"
 #include "bridge_patience.h"
 #include "fake_jack.h"
 #include "live_workers.h"
@@ -1461,6 +1462,73 @@ TEST_CASE("plugin automation: real-time output equals the offline render" *
         const std::uint32_t L = engine.outputLatency();
         const auto& cap = backend.capture();
         CHECK(maxDiff(cap.channels[0], L, offline.audio.channels[0], 96000) == 0.0);
+    }
+}
+
+// Execution scopes (ADR-0083, topic 5b) are compiled into every plug-in entry. They must not
+// change a sample, must be open whenever plug-in code runs (so a crash inside it is
+// attributable), and must leave nothing behind, in both executors and the offline render.
+TEST_CASE(
+    "execution scopes are open while a plug-in processes and change nothing, in both "
+    "executors and offline" *
+    doctest::description("rt")) {
+    namespace probe = supple::scopeprobe;
+    using diagctx::Entry;
+    model::Session s = synthSession(0.0, "com.suppleaudio.test.gain");
+    probe::Observer observer(FIXTURE_CLAP_PATH);
+    const auto untracked = diagctx::table().header.untracked.load();
+
+    // Which cells are in a Process scope, how often, and whether anything else was open.
+    const auto check = [&](const std::vector<probe::Sighting>& seen, const char* what) {
+        CAPTURE(what);
+        const auto calls = probe::phase(seen, "process");
+        CHECK(calls.size() > 100);
+        // Exactly one word is open inside the plug-in's process: this instance's audio word.
+        CHECK(probe::onlyOpen(seen, "process", Entry::Process, true));
+        // The other callbacks the engine makes (activate, start, stop, reset, ...) are also
+        // scoped; none of them ever sees a second word open.
+        for (const auto& call : seen) {
+            CHECK(call.count >= 1);
+            CHECK(call.more == 0);
+            for (std::size_t i = 0; i < call.count; ++i)
+                CHECK(call.open[i].word.stack > call.observerFrame);
+        }
+        // Nothing is left open when the run is over.
+        for (std::uint32_t cell = 0; cell < diagctx::kMaxInstances; ++cell) {
+            CHECK(diagctx::unpackWord(diagctx::table().instances[cell].audio.load()).kind ==
+                  Entry::None);
+            CHECK(diagctx::unpackWord(diagctx::table().instances[cell].main.load()).kind ==
+                  Entry::None);
+        }
+        CHECK(diagctx::table().header.untracked.load() == untracked);
+    };
+
+    auto pool = makePool();
+    const auto offline = renderOffline(s, pool, {.startSeconds = 0, .endSeconds = 2.0}).value();
+    check(observer.take(), "offline");
+
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 3}}) {
+        CAPTURE(options.workers);
+        auto rtPool = makePool();
+        MediaCache media;
+        DummyBackend backend(
+            {.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 2 + 4096});
+        Engine engine(rtPool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        REQUIRE(engine.load(s));
+        (void)observer.take();  // the load's own scoped calls are not what is checked here
+        engine.play();
+        if (options.anticipative)
+            runAhead(engine, backend, (48000 * 2 + 4096) / 128, 128);
+        else
+            backend.run((48000 * 2 + 4096) / 128);
+        engine.stop();
+        const auto seen = observer.take();
+        const std::uint32_t L = engine.outputLatency();
+        const auto& cap = backend.capture();
+        // Real-time output is still the offline render, sample for sample.
+        CHECK(maxDiff(cap.channels[0], L, offline.audio.channels[0], 96000) == 0.0);
+        check(seen, options.anticipative ? "anticipative executor" : "in-callback executor");
     }
 }
 

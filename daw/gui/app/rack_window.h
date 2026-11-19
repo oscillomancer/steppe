@@ -57,6 +57,8 @@ class RackWindow {
     std::optional<model::Id> rack() const { return rack_; }
     // Opens a plug-in's editor window (the app's PluginWindows).
     std::function<Status(model::Id fx)> openEditor;
+    // Enable a plug-in this run has disabled (plugin.override normal), given one of its fx.
+    std::function<void(model::Id fx)> enableFx;
     // Space pressed and released in the space: the transport, as elsewhere.
     std::function<void()> spaceTap;
     // The plug-in browser's favourites (empty: none saved; tests).
@@ -188,6 +190,7 @@ class RackWindow {
     UiState& ui_;
     std::shared_ptr<const rack::Catalog> catalog_;
     std::uint64_t version_ = ~std::uint64_t{0};
+    std::uint64_t overridesVersion_ = ~std::uint64_t{0};  // the engine's load overrides, as drawn
     std::uint64_t projectGeneration_ = ~std::uint64_t{0};
     std::optional<model::Id> rack_;
     std::map<model::Id, RackSpace::View> views_;

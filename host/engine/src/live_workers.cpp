@@ -9,6 +9,7 @@
 #include <string>
 
 #include "supple/base/thread.h"
+#include "supple/diagctx/table.h"
 
 #include "supple/engine/realtime.h"
 
@@ -25,6 +26,8 @@ LiveWorkers::LiveWorkers(unsigned helpers, Hooks hooks, Backend* backend)
         for (unsigned i = 0; i < helpers; ++i)
             threads_.emplace_back([this, i] {
                 nameThread("audio-live-" + std::to_string(i + 1));
+                (void)diagctx::registerThread(diagctx::ThreadRole::AudioLive,
+                                              static_cast<std::uint16_t>(i + 1));
                 rt::prefaultStack();  // ADR-0025
                 const bool elevated = startup_.enter(i);
                 ThreadStartup::Cleanup cleanup{elevated ? nativeBackend_ : nullptr};

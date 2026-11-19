@@ -46,6 +46,10 @@ class Button : public Node {
     // opens is not empty (a track's "fx" with plug-ins in its chain).
     void setEmphasis(bool on);
     bool emphasis() const { return emphasis_; }
+    // The text in one theme colour whatever the state, while enabled ("" = the usual): for the
+    // one feature that has a colour (a chain holding a disabled plug-in, `meter-hot`).
+    void setTextColor(std::string token);
+    const std::string& textColor() const { return textColor_; }
 
   protected:
     bool pressed() const { return pressed_; }
@@ -53,6 +57,7 @@ class Button : public Node {
   private:
     std::string text_;
     bool pressed_ = false, emphasis_ = false;
+    std::string textColor_;
 };
 
 }  // namespace supple::ui

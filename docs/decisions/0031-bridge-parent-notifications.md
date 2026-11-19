@@ -68,3 +68,6 @@ failure and idle death, malformed/version/descriptor boundaries, subscriber
 lifetime and stop-before/during-park interleavings. No pass/fail threshold is
 based on elapsed time. Run relevant host tests under dev, RTSan and TSan;
 retain exact-output coverage in the existing bridge/hosting tests.
+
+*Amended 2026-11-15:* [ADR-0083](0083-local-crash-reports.md) adds external local crash diagnostics.
+Existing bridge deadlines, notification framing and recovery ownership remain authoritative.

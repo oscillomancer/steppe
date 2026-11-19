@@ -60,6 +60,9 @@ struct TcpCallbacks {
     // adding to the end of the chain.
     std::function<void(const model::Id& track)> fx;
     std::function<void(const model::Id& track)> addFx;
+    // Whether the track's chain holds a plug-in that is disabled or failed: "fx" takes the
+    // warning colour. The app owns the rule (it knows the engine); unset means no mark.
+    std::function<bool(const model::Id& track)> fxNeedsAttention;
     // A right-click on the row: the track's menu (rename, colour, delete) at
     // the pointer, in window coordinates; `rename` starts the in-place rename.
     std::function<void(const model::Id& track, const ui::Rect& anchor,

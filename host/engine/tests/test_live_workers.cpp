@@ -3,15 +3,42 @@
 // The live pool (ADR-0024): exact-once dependencies and claim/close lifetime.
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <random>
 #include <semaphore>
+#include <thread>
 #include <vector>
 
 #include "live_workers.h"
+#include "supple/diagctx/table.h"
 #include "supple/host/clap_host.h"
 
 using namespace supple::engine::detail;
+
+namespace {
+// Registered threads of `role` in this process's execution table, by worker number.
+std::vector<unsigned> registered(supple::diagctx::ThreadRole role) {
+    std::vector<unsigned> numbers;
+    for (const auto& slot : supple::diagctx::table().threads) {
+        const auto id = slot.id.load(std::memory_order_acquire);
+        if (id == 0 || id == supple::diagctx::kClaiming) continue;
+        const auto info = supple::diagctx::slotInfo(slot.info.load(std::memory_order_relaxed));
+        if (info.role == role) numbers.push_back(info.ordinal);
+    }
+    std::sort(numbers.begin(), numbers.end());
+    return numbers;
+}
+// Threads register as they start, a moment after the constructor returns: wait on that
+// state (no clock) until `count` have.
+bool awaitRegistered(supple::diagctx::ThreadRole role, std::size_t count) {
+    for (long spin = 0; spin < 200'000'000L; ++spin) {
+        if (registered(role).size() == count) return true;
+        std::this_thread::yield();
+    }
+    return false;
+}
+}  // namespace
 
 namespace {
 
@@ -387,4 +414,16 @@ TEST_CASE("live pool: a delayed node publishes state once before its dependent")
     submit.join();
     CHECK(state.roots == 2);
     CHECK(state.dependentState == 125);
+}
+
+TEST_CASE("live pool: each helper registers as a numbered audio thread and releases its slot") {
+    using supple::diagctx::ThreadRole;
+    constexpr auto role = ThreadRole::AudioLive;
+    CHECK(registered(role).empty());
+    {
+        LiveWorkers workers(3);
+        REQUIRE(awaitRegistered(role, 3));
+        CHECK(registered(role) == std::vector<unsigned>{1, 2, 3});
+    }
+    CHECK(registered(role).empty());  // the pool joined its threads, so their slots are free
 }

@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "app_actions.h"
+#include "fx_attention.h"
 #include "meter_feed.h"
 #include "plugin_drag.h"
 #include "selection_edit.h"
@@ -62,6 +63,7 @@ class Mixer {
     // or the list moved (sync calls it with the pass's time step).
     bool autoScrolling() const;
     bool autoScroll(double seconds);
+    FxAttention& attention() { return attention_; }  // the marks' source (tests set its status)
 
     // The panel's height (UI state, persisted with the panels): clamped to what
     // the window can give it; the default fits about five plug-ins.
@@ -191,6 +193,7 @@ class Mixer {
     ui::Root::OverlayHandle ghost_;
     std::string structure_;
     std::uint64_t version_ = ~0ull;
+    FxAttention attention_{app_};  // disabled and failed plug-ins: the marks' one rule
     std::uint64_t projectGeneration_ = ~std::uint64_t{0};
     std::uint64_t gesture_ = 0;  // a serial per drag: separate drags are separate undo steps
 };

@@ -13,6 +13,8 @@ namespace supple::paths {
 std::filesystem::path home();
 std::filesystem::path config();
 std::filesystem::path data(bool allowTemporary = false);
+// Non-roaming data, no temporary fallback (ADR-0083).
+std::filesystem::path localData();
 std::filesystem::path cache(bool allowTemporary = false);
 std::filesystem::path runtime();
 

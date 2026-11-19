@@ -169,13 +169,13 @@ Result<Work> prepare(EngineApp& app, Id track) {
 }
 
 Status render(Work& work, const std::vector<host::PluginInfo>& catalogue,
-              const host::HostIdentity& identity) {
-    auto rendered = renderSnapshot(work.snapshot, work.settings, catalogue, identity);
+              const host::HostIdentity& identity, const LoadOverrides& overrides) {
+    auto rendered = renderSnapshot(work.snapshot, work.settings, catalogue, identity, overrides);
     while (!rendered && rendered.error().code == "freeze.tail_pending" &&
            work.settings.freezeTailLimitSeconds < 600.) {
         work.settings.freezeTailLimitSeconds =
             std::min(600., work.settings.freezeTailLimitSeconds * 2.);
-        rendered = renderSnapshot(work.snapshot, work.settings, catalogue, identity);
+        rendered = renderSnapshot(work.snapshot, work.settings, catalogue, identity, overrides);
     }
     if (!rendered) return rendered.error();
     if (!rendered->warnings.empty())
@@ -391,9 +391,10 @@ void registerFreezeCommands(cmd::Registry& registry) {
             if (!plugins) return plugins.error();
             std::vector<host::PluginInfo> catalogue(plugins->begin(), plugins->end());
             const auto identity = app.options().identity;
+            const auto overrides = app.loadOverrides();
             auto& dispatcher = ctx.service<cmd::Dispatcher>();
             if (!a.job) {
-                SUPPLE_TRY(render(*work, catalogue, identity));
+                SUPPLE_TRY(render(*work, catalogue, identity, overrides));
                 return publish(app, dispatcher, *work, ctx.origin());
             }
             auto& jobs = ctx.service<cmd::JobManager>();
@@ -404,10 +405,10 @@ void registerFreezeCommands(cmd::Registry& registry) {
                 (void)jobs.progress(job, p, "Freezing track");
             };
             app.startJob([&app, &dispatcher, &jobs, job, work = std::move(*work),
-                          catalogue = std::move(catalogue), identity,
+                          catalogue = std::move(catalogue), identity, overrides,
                           origin = ctx.origin()](supple::StopToken stop) mutable {
                 work.settings.stopToken = stop;
-                auto rendered = render(work, catalogue, identity);
+                auto rendered = render(work, catalogue, identity, overrides);
                 if (!rendered) {
                     if (!jobs.cancelled(job)) (void)jobs.fail(job, rendered.error());
                     return;

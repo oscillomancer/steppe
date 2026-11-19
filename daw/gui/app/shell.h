@@ -12,6 +12,7 @@
 #include <string>
 
 #include "app_actions.h"
+#include "fx_attention.h"
 #include "meter_feed.h"
 #include "plugin_drag.h"
 #include "selection_edit.h"
@@ -53,6 +54,7 @@ class Shell {
     void installOverlay(ui::Root& root);
     // Brings the view up to the model's head version; invalidates what changed.
     void sync(bool event = true);
+    FxAttention& attention() { return attention_; }  // the marks' source (tests set its status)
     std::optional<std::chrono::steady_clock::time_point> nextDeadline() const;
     views::ArrangeView* arrange() const { return arrange_; }
     // The track row under `p`, its control panel and its lane together, as
@@ -74,6 +76,8 @@ class Shell {
     const json::Value& inputs(bool force = false);
     // Shown by the app's status line when a command fails.
     std::function<void(const std::string&)> onError;
+    // The restart notice's "Show report": the app opens the crash report viewer on the incident.
+    std::function<void(const std::string& incident)> showCrashReport;
     // Model-thread recording diagnostic, shown without stopping healthy targets.
     void recordingError(const json::Value& payload);
     // The TCP's output click hands the matrix its strip and popup anchor.
@@ -110,6 +114,7 @@ class Shell {
     std::vector<std::string> shownSelection_;  // the track selection the TCP shows
     engine::EngineApp& app_;
     cmd::Dispatcher& dispatcher_;
+    FxAttention attention_{app_};           // the "fx" mark's rule (disabled or failed plug-ins)
     AppActions* actions_ = nullptr;         // from build()
     SelectionEdit selectionEdit_;           // a strip control on a selected track: all of them
     std::unique_ptr<TrackMenu> trackMenu_;  // made in build() (needs the root)

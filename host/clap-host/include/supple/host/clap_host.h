@@ -99,6 +99,11 @@ std::vector<std::filesystem::path> defaultSearchPath();
 // two folders above daw/gui/ and host/engine/. The apps search it before
 // defaultSearchPath(), so an older stock copy in ~/.clap never wins.
 std::optional<std::filesystem::path> stockPluginDir();
+// The executable image file of a scanned CLAP: its path, or for a macOS bundle the
+// executable inside it. Empty for a VST3 (a folder bundle whose reports carry no build
+// id) and when a bundle names none. Read-only; for comparing a build id with a crash
+// report's (topic 7d).
+std::filesystem::path pluginImageFile(const PluginInfo& info);
 // The agent skill (the folder holding SKILL.md) that ships with the running
 // binary, found as stockPluginDir() is: skill beside it (Windows),
 // ../Resources/skill (macOS bundle), ../share/<slug>/skill (Linux), or
@@ -538,6 +543,24 @@ class Instance {
     bool startUnanswered() const SUPPLE_RT;
     void stopProcessing() SUPPLE_RT;
     bool processing() const { return processing_; }
+    // Where this instance is in this process's execution table (ADR-0083, topic 6b): its cell,
+    // that cell's generation and an address in the plug-in's binary, 0 when unknown (a VST3, an
+    // instance the table had no room for). A bridge says it in its Create reply, so that the
+    // host can match what the bridge's table says to the instance it announced.
+    struct DiagnosticsPlace {
+        std::uint32_t cell = 0xffffffffu;
+        std::uint16_t generation = 0;
+        std::uint64_t image = 0;
+    };
+    DiagnosticsPlace diagnosticsPlace() const noexcept;
+    // Main thread. For a bridged instance whose bridge died of a signal or an exception: the id of
+    // the local crash report that death may have caused (ADR-0083, topic 6a). Asking observes the
+    // end of a failed bridge (and kills one that failed by a missed deadline and is still there),
+    // so it may be empty for a moment after the failure: a bridge that is still writing its core
+    // has not ended. Empty for anything else, and while no supervisor writes reports. The report
+    // may not exist (a repeat in the run, the run's limit): whoever reads it by this id handles a
+    // missing one.
+    std::string bridgeIncident() const;
     // The host's executor that currently processes this instance (an opaque
     // token, null for none): a host with several audio threads uses it so
     // that exactly one of them calls the audio-thread API at a time. An
@@ -668,6 +691,23 @@ class Instance {
     struct HostState;  // opaque host-side state (callbacks, queues, event arena)
 
   private:
+    // The instance's cell in the execution table (diagnostics-context, ADR-0083): claimed
+    // in create(), given back when the instance's own members are gone. The first member,
+    // so the last destroyed.
+    class Cell {
+      public:
+        Cell() = default;
+        Cell(const Cell&) = delete;
+        Cell& operator=(const Cell&) = delete;
+        ~Cell();
+        void acquire() noexcept;
+        std::uint32_t id() const noexcept SUPPLE_RT { return id_; }
+
+      private:
+        std::uint32_t id_ = 0xffffffffu;  // diagctx::kNoCell
+    };
+    Cell cell_;
+
     Instance() = default;
     friend struct HostCallbacks;
     bool processBackend(const ProcessBlock& block, OutputEvents* out) SUPPLE_RT;

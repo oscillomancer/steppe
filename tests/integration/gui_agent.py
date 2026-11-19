@@ -18,6 +18,45 @@ from pathlib import Path
 from processes import stop
 
 
+def child_pids(parent):
+    """Process ids of `parent`'s direct children (Windows). The app runs as a worker
+    under the crash supervisor (ADR-0083), so the process the test starts owns no
+    window: its child does."""
+    import ctypes
+    from ctypes import wintypes
+
+    class ProcessEntry(ctypes.Structure):  # PROCESSENTRY32W
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
+                    ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", wintypes.LONG),
+                    ("dwFlags", wintypes.DWORD), ("szExeFile", wintypes.WCHAR * 260)]
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry)]
+    kernel.Process32FirstW.restype = wintypes.BOOL
+    kernel.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry)]
+    kernel.Process32NextW.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    snapshot = kernel.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
+    if snapshot in (None, wintypes.HANDLE(-1).value):
+        return set()
+    children = set()
+    try:
+        entry = ProcessEntry()
+        entry.dwSize = ctypes.sizeof(ProcessEntry)
+        found = kernel.Process32FirstW(snapshot, ctypes.byref(entry))
+        while found:
+            if entry.th32ParentProcessID == parent:
+                children.add(entry.th32ProcessID)
+            found = kernel.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        kernel.CloseHandle(snapshot)
+    return children
+
+
 def close_gui(process):
     """Use the native close event on Windows, where terminate skips cleanup."""
     if os.name != "nt":
@@ -25,6 +64,7 @@ def close_gui(process):
         return
     import ctypes
     from ctypes import wintypes
+    owners = {process.pid} | child_pids(process.pid)
     user = ctypes.WinDLL("user32", use_last_error=True)
     callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     user.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
@@ -36,7 +76,7 @@ def close_gui(process):
     def close(window, _):
         owner = wintypes.DWORD()
         user.GetWindowThreadProcessId(window, ctypes.byref(owner))
-        if owner.value == process.pid:
+        if owner.value in owners:
             posted.append(bool(user.PostMessageW(window, 0x0010, 0, 0)))  # WM_CLOSE
         return True
 

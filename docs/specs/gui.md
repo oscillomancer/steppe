@@ -1098,6 +1098,14 @@ Each row's second line starts with a badge saying where the plug-in runs:
 `inherit`, where the plug-in isolation preference placed it when its
 instance was made, with `(default)` (`fx.describe isolation_effective`,
 ADR-0081). `· offline` and `· failed` follow when they apply.
+A failed effect (`engine.status failed_fx`) shows its mode in `ink-quiet` followed by "failed" in the
+`clip` colour (no more red than that) on the second line, and on the first line Restart and, when the
+death of its bridge left a crash report (`failed_errors[].incident`, the `incident` of the
+`fx.failed` event; topic 7d), a quiet "Show report" button beside it, so the two answers to a failure
+sit together; it raises the main window and opens the
+crash viewer (Help > Crash reports…) on that incident. A failure with no report has no such button. If the
+report was deleted since, or is past what is kept, the viewer says "That report is no longer on this
+computer. These are the ones left." in its status line and selects nothing in particular.
 Below come the knobs of its Macro modules
 (`com.suppleaudio.rack.macro`), grouped under each Macro's label (else
 "Macro"). Only a knob whose output (`macro_N` out of `out_N`) is cabled
@@ -2374,8 +2382,9 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   **Mix to new track** (`ui.item.mix-to-track`, `item.mix-to-track` on the
   selected items, engine.md) is greyed without selected items; progress and the result show in the status line as for
   Consolidate items, and only one such background item job runs at a time.
-- **Help** provides four app-local actions (not engine command-registry entries):
-  `ui.help.skill`, `ui.help.skill_link`, `ui.help.mcp`, `ui.help.agent`.
+- **Help** provides five app-local actions (not engine command-registry entries):
+  `ui.help.crash_reports` (first, the crash report viewer below), `ui.help.skill`,
+  `ui.help.skill_link`, `ui.help.mcp`, `ui.help.agent`.
   **Download skill…** and **Download skill link…** open the native folder
   picker directly, with no preset destination or intermediate panel. The chosen
   folder receives `<slug>/SKILL.md` and the rest of the bundled `host::skillDir()`.
@@ -2556,6 +2565,16 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   `inherit` as its instance is made (adding it, opening a project,
   `fx.restart`): one already running stays where it is. Stock plug-ins stay
   in the app, and a plug-in's own isolation wins. A note says so.
+  **Remembered load choices** (1.10, topic 7d): `plugin_overrides`, written by the safe-load question
+  (below, "Safe-load question") and read back by it. The last section of the dialog is its list, "Plug-in choices": a heading
+  in bold `small` over a rule with the count in quiet `caption` after it and a quiet **Forget all** at
+  its right (only with rows), then one row of 24 to a choice on the form's grid: the plug-in in bold
+  `ink` with its maker and version after it in `ink-quiet` on one line ("Unknown plug-in" when no
+  name was recorded), what was chosen in `ink` where the other rows' controls start ("In a
+  separate process", "Disabled", "Normally"), and a quiet **Forget** at the right edge. With none,
+  one quiet sentence says nothing is remembered. More than six rows scroll. Forgetting is
+  saved at once (`PreferencesDialog::setRememberedLoads`) and takes effect the next time a project
+  opens: the plug-in is asked about again if a report still points at it.
   **Audio device** (1.5): the row shows the audio system, output device,
   rate and buffer, and opens the audio device dialog (also Edit > Audio
   device…, action `ui.audio.device`). Saved as the `audio` object:
@@ -2846,3 +2865,202 @@ commits; this workflow has two undo steps. Explicit detection is still available
 for inspecting candidates first. Changing the target items/takes while analysis
 runs cancels the follow-up edit. There is no new panel or editing mode. The existing
 status line displays detection, preparation and command errors.
+
+## Crash reports and safe startup (ADR-0083; staged)
+
+**Restart notice (topic 7b; delivered).** When an earlier run ended unexpectedly and the user has
+not yet seen it, a banner (`crash.notice`) sits under the transport, above the arrangement: two
+sentences of text (`crash.notice.text`) and the buttons (`crash.notice.show`, when there is a
+report and a viewer to open it, and `crash.notice.dismiss`). It is not modal, takes
+no focus and blocks nothing; recovery (ADR-0078) is its own offer and may show at the same time.
+The text is the diagnostics library's `lastRunNotice` (diagnostics.md, "Restart notice"): that the
+last run closed unexpectedly, naming the plug-in a report points at when it points at one
+(`fault_in_image` or `active_token` only), or saying that no report was written. The first sentence is in full ink, with the plug-in's name in bold;
+what follows is quiet ink and short: for a report only "A report was saved on this computer." (what the report says
+and that nothing is sent is the viewer's), for a run with no report why that can be. How many earlier closes the same Dismiss covers is the viewer's to tell: the banner
+shows it only as the count on the viewer's button, "Show reports (3)" (one incident: "Show
+report"). The band is a `raised` strip with a 3-unit `meter-hot` bar at its left edge, a `rule`
+under it and 12 by 8 padding; the text takes the width the buttons leave, and the band is as tall
+as its lines (one at 1280 units for a report). "Show report" is the boxed button and Dismiss goes quiet; with no
+report to show (an unreported run), or with no viewer, Dismiss is alone and boxed. The banner is for GUI runs
+only (`lastRunNotice` with `Role::Gui`): an incident of the headless engine is that service's to
+announce, and Dismiss acknowledges only the incidents the banner covered and hides it; no report or
+marker is deleted. The banner reads the folder once, at start, reading the newest few reports to
+learn their role (`kNoticeRoleReads`, 8). It is hidden, not built, when there is nothing to say, and under `--workdir`
+it reads `<workdir>/diagnostics`. Wording is provisional (P12).
+
+The paragraph is `ui::RichText`: runs of words that differ in weight or ink, broken at spaces
+across runs.
+
+**Crash report viewer (topic 7c; delivered).** Help > Crash reports… (`ui.help.crash_reports`; the
+banner's "Show report" opens it on the incident it names) is a popup, `crash.viewer`, 12 units of
+padding and 16 between groups, at most 980 units wide and as tall as its content up to the window (the
+list and the report each scroll in a `ui::ScrollView` past that). Its header is the title and Close. Under
+it is one quiet line saying that reports stay on this computer and nothing in them is ever sent (it is
+also where the message about an action shows) with Open folder and Delete all… at its right; then a
+list at the left (240 units), a 1-unit `rule` with 16 on each side, and the shown report. The list is every
+report whose run is over and every run that left none (`listReports`), newest first, each a row 40
+high of two lines: when it was written (local time) in `small`, then what it was in `caption`, `ink-quiet` (Crash,
+Unexpected exit, Plug-in process stopped, Other report, or "No report was written"), with the plug-in's name
+when the report's attribution names one (`fault_in_image`, `active_token`, `bridge_exit`). Unread is the date in bold `ink`
+with a 6-unit `accent` dot at the row's left (the amber of the banner is the warning, not this); seen is the
+date regular and `ink-quiet`. The shown row is filled with `selection` (the focus outline when it has the focus),
+and Up and Down move through the rows. A kind this version does not know is listed as "Other report" and shown
+as far as it can be read, never hidden.
+
+The shown report starts with one plain sentence (the headline, a plug-in's name in bold), then when it
+was saved, by which build, on what, and in which app; then Copy summary (the boxed button), Save a copy… and Mark as
+seen (quiet), and Delete (quiet, at the far end); then the sentences: what stopped it (a signal or Windows exception in
+words, `std::terminate`, `abort()`, or an exit status), what the report points at and how far to
+trust it ("a clue, not proof"), and that nothing was sent: the first sentence in `small` `ink`, the rest under
+it in `caption`, `ink-quiet`. For a separate process that stopped and wrote down where it stopped itself (the
+report's `capture` is `bridge`; topic 6c) the page says that, after "kept running": "The process wrote down where it
+stopped itself: inside *the plug-in's* code. A plug-in runs in that process and could have written that account too, so
+it points at the plug-in but does not prove it" (`fault_in_image`; for `active_token`, "a clue, not proof"; with no plug-in
+named, "It names no plug-in"), and the threads' note adds that the process wrote them itself and could read only the thread
+that stopped; the headline names the plug-in as for any report of that kind. The technical detail is below, every
+section folded: a heading with the title in bold over a `rule`, its count quiet after it and Show or Hide at
+the right (the whole row takes the click), and a body that starts at the heading's left edge, with the data (plug-ins,
+frames, commands) in the mono face and full `ink` on an inset in the `well` colour, and the explanations as `caption` lines: the plug-ins the program had loaded (by their own names;
+a frame in a plug-in's file is named by the plug-in), the separate processes (`bridges`), the
+threads by role with module-relative frames (no function names), the recent commands (names and
+origin only, "running" for one that had not finished) and what is missing: every line of the
+report's `unavailable` and every `dropped` counter that is not zero. A report that lacks a section
+shows no such section; one with little in it reads as one that holds little. The text is
+`crash_report_text.{h,cpp}` (`describeReport`), which reads the report's JSON tolerantly (an unknown
+key is ignored, an unknown thread role or reason is shown as written). Copy summary puts the whole
+page as plain text on the clipboard, every line of every section (the viewer shows at most 40 lines of
+a section and says so). Save a copy… (P3; reports only, not a run that left none) writes the report file as it is to a place the
+user picks in the system's save dialog, suggesting `<slug>-crash-<first 8 of the incident>.json`; it is the only
+way a report leaves the folder and nothing is uploaded. The copy is written with `writeFileAtomic`, so a file the user
+chose to replace stays whole when the write fails (a full disk) and the status line says it could not save. Mark as seen is `acknowledge` (the viewer never acknowledges by being
+opened). Delete and Delete all… ask twice: the first click changes the button's text to "Click
+again…" and says what it will do (the report, or every report and every record of a run without
+one), the second does it; choosing another row cancels the first. Open folder reveals the
+diagnostics folder in the file manager. Wording is provisional (P12).
+
+**Safe-load question (topic 7d; delivered, `safe_load.{h,cpp}`).** Before the app's own File > Open
+(a project file), the recovery actions (a session, an autosave) and a project template load, it asks
+the engine `project.plugins {path | session | autosave | template}` (never scanning, loading
+nothing) and, for each plug-in the check names as a suspect and that still loads normally this run,
+asks how to load it this time; then it loads with `project.open {expect_hash}` (or the recover
+command), so the bytes asked about are the bytes loaded. The engine itself never prompts: an agent
+or a script opening a project gets the `project.suspect_plugin` warning and its own choice
+(`plugin.override`). A check that cannot be made (a bad file, no engine answer) never stops the
+load: it goes on and reports its own error.
+
+The question is a popup on `raised`, 520 wide, 16 padding, opened over the window's centre. A bold
+`body` title, "<plug-in> was running when <product> closed unexpectedly" (one line at that width; a
+long name wraps to a second); one `small` `ink` question ("This project uses it. How should it load
+this time?"). Then a radio list: a 12-unit ring at the left of each option, filled for the chosen
+one, a bold `small` label with one `caption` `ink-quiet` line under it, no box, 8 units between
+them: **Run it in a separate process**, **Disable it this time** (its line says that audio passes
+through and the project keeps the plug-in) and **Load it normally**. The recommended option is
+chosen at open and holds the focus: the separate process where there can be one, else disabling. A
+stock plug-in (it comes with the app, so the fault is the app's: the question says "looks like a
+fault in <product>") has the last two; a plug-in with no bridge executable behind it has no
+separate-process option. A click or Space chooses an option and acts on nothing; Up and Down move
+the choice and the focus; Enter goes on with it. Under the options one `caption` `ink-quiet` caveat
+("A report cannot prove the plug-in was the cause", longer when the check matched the version only or
+could not read the file, and saying so when a separate process is not possible here). The last line
+holds a `ui::Checkbox` "Remember my choice for <name> <version>" at the left, its box outlined in
+`ink-faint` (`Checkbox::outline`) so that it reads on the panel in both themes, and at the right a
+quiet **Cancel** and the one boxed **Continue**. The checkbox is not shown when the choice cannot be
+kept for an exact build (the report recorded no build id, as for every VST3 and every
+`active_token` attribution, or the check matched the version only). Continue acts on the chosen
+option. Closing the dialog any other way, Cancel or Escape, cancels the open: nothing loads and no
+choice applies. Several suspects are asked one after another before anything is applied, on every
+path that asks (open, the two recoveries, a template).
+
+A choice is applied through `plugin.override` (separate process: `bridge`; "Disable it this time": `disable`);
+nothing is written to the project (a project saved while it holds is byte-for-byte the one saved
+without). Choosing **Load it normally** settles the reports the suspicion rests on (`crash.settle`,
+engine.md "Load overrides"; the reports stay in the viewer), so the next open does not ask again
+unless a newer run ends badly. A choice that cannot be applied (`plugin.override_unavailable`) is
+said in the status line and the open does not happen halfway.
+
+*Nothing reaches the engine until the open is about to happen* (round 6b). The check only reads and
+asks; every remembered choice and every answer is collected, and only when the last question is
+answered do they act, in this order: (1) the overrides, remembered ones first, as a whole: one that
+fails sets back to the normal load the ones this open changed (the suspects asked about were on
+it; `plugin.override` says `changed`, and one it did not change, because an earlier open's
+remembered choice already holds, stays as it is: an override holds until the app quits, and
+setting it back would restart that plug-in in the project that stays open) and ends there, with nothing settled, nothing saved and no open; (2) the settling of what was
+answered **Load it normally**, before the open so that the open does not warn of a plug-in the
+person has just cleared; (3) the open itself (File > Open passes the check's `hash` as
+`expect_hash`; a file that changed since the check is refused and the project is unchanged). An open
+that then fails sets back the overrides it changed (and only those) and keeps no choice: no remembered rule is written or
+dropped. What stays after a failed open, and why: the reports settled by a **Load it normally**
+answer (the person's word that it loads stands, and nothing can unsettle them), and, when the
+override was set back, the restart that setting it made of that plug-in's instances in the project
+that stayed open (the engine restarts them for any change of mode). Cancel at any question changes
+nothing, in the engine or on disk.
+
+*Two limits of the check* (round 6b; known, not closed). (1) It reads the head of every branch, not the
+history steps behind them (`project.plugins`' description says so): a plug-in that only an older step
+names loads without the question when the person undoes or restores to that step. (2) A project
+template is checked at its path but loaded by name, and `project.template.load` takes no hash: a
+template file that changes between the check and the load is loaded as it then is, unchecked. File >
+Open and the two recoveries are bound to the checked bytes (`expect_hash`, `autosave_file`); templates
+are not. Closing (2) means `project.template.load` taking the path or a hash; closing (1) means
+checking the steps too.
+
+*Remembering* is a preference, opt-in per question: `plugin_overrides` in `preferences.json`
+(`supple.preferences/1.10`; absent and older files mean none) is an array of `{format, id, build_id,
+mode, remembered_ms}` with the plug-in's `name`, `vendor` and `version` for the list in Settings;
+`mode` is `normal`, `bridge` or `disable`, and an entry missing a key or with another mode is
+`preferences.plugin_overrides` at `/plugin_overrides/<n>`. The key is the exact build: an entry
+applies only while `project.plugins` says the installed build is the report's (`suspect.build` is
+`same`), so a rebuilt plug-in is asked about again. A remembered `bridge` or `disable` is applied
+through `plugin.override` without a question (with the answers, see above) and said once in the
+status line, once the open has happened ("<plug-in>: loaded in a separate process, as you chose
+before. Edit > Preferences lists it."); one that cannot hold here
+(a separate process where none is possible) is asked about instead. A remembered `normal` is
+evidence the plug-in was fine, so a new report for that build makes the question be asked again,
+and the entry is removed once it is answered (a cancelled question changes nothing on disk). Remembering is rewritten by `Preferences::save`; the GUI
+is its only writer.
+
+**Disabled and failed plug-ins are marked (topic 7d; delivered).** One word for
+the state everywhere: the question says "Disable it this time", the marks say "disabled",
+Preferences says "Disabled", and **Enable** is its opposite. A plug-in this run has disabled
+(`plugin.override` mode `disable`: the question, an agent, or a remembered choice;
+`engine.status.disabled_fx`) is marked wherever its fx shows, in the one colour the feature has
+(`meter-hot`, the banner's bar). A plug-in that failed (`engine.status.failed_fx`: its separate
+process closed or stopped answering) is marked the same way in `clip`.
+
+*The mixer's slot has four states of the one 18-unit slot,* each in the slot's place and size.
+Bypassed: the name dimmed and struck through, a solid outline. Offline: the name dimmed inside a
+dashed outline, no strike. **Disabled: the solid outline, no strike, the name in `ink-quiet` and a
+2-unit bar in `meter-hot` down the slot's left edge, inside the outline** (it does not shift the
+slot). **Failed: the same slot with the bar in `clip`.** The words follow the others'
+(`valueText` ends " (bypassed)", " (offline)", " (disabled)" or " (failed)"), and disabled and
+failed win over offline and bypassed since they are the ones that need the person; disabled wins over
+failed (a disabled plug-in is not loaded). A click on a disabled slot puts "<name> is disabled for
+this run and not loaded. Right-click it to enable it." in the status line, on a failed one "<name>
+failed: its separate process closed or stopped answering. Restart it in the FX window."; the slot's
+right-click menu of a disabled plug-in starts with **Enable**. One rule gives "fx" its warning
+colour, in the mixer's strip and in the track list's row alike: **the track's chain (or input chain)
+holds a plug-in that is disabled or failed** (`FxAttention::chainNeeds`, `ui::Button::setTextColor`,
+beside `setEmphasis`; the track list takes it through `TcpCallbacks::fxNeedsAttention`). In the
+mixer "fx" sits at the left of the plug-in list's own line (`mixer.fxrow.<track>`, the button `mixer.fxadd.<track>`),
+so it is the one sign the strip keeps when the slot is scrolled out of the list. The marks follow
+the engine, not the project: `FxAttention` reads `engine.status` at most twice a second and the
+overrides' version, and a change rebuilds the strips and refreshes the rows.
+The FX window's row has its name in `ink-quiet`, a 2-unit bar at
+its left edge, and **Enable** as its one boxed button in that state: bypass, offline, UI, params and
+presets are off (faint) since they act on a plug-in that is not loaded, and Remove goes quiet. Its
+second line reads "disabled after an unexpected close · audio passes through" in `ink-quiet` (a
+sentence, not a value) in place of the isolation badge. Nothing opens an editor for it: a double-click
+on the row (or a click on the mixer slot) puts "<name> is disabled for this run and not loaded" and
+how to enable it in the window's status line (the toolkit has no hover tooltips; the reason is on
+screen in the row's second line and the status line). A rack's plug-in module has a 2-unit bar down its left
+edge, its title in `ink-faint`, "disabled" in `ink-quiet` where the vendor line is, and its jacks'
+rings in `ink-faint` (they carry nothing); its menu starts with **Enable**. A disabled plug-in in a
+rack is otherwise silent and says nothing more (a project that opens with one is not asked about
+again). Enable is the action `ui.fx.enable` (an `fx` id): `plugin.override` mode `normal` for the
+plug-in, and the reports its suspicion rests on are settled as in "Load it normally". An override is
+not in the project, so the windows follow `EngineApp::loadOverridesVersion()` as well as the
+project's version.
+
+Recovery (ADR-0078) stays its own offer. No upload or global OS-reporting changes. See
+diagnostics.md and STATUS for delivery scope.

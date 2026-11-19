@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -25,6 +26,8 @@
 #include "app_actions.h"
 #include "appearance.h"
 #include "chrome.h"
+#include "crash_banner.h"
+#include "crash_report_text.h"
 #include "file_actions.h"
 #include "floating_panel.h"
 #include "help_actions.h"
@@ -34,12 +37,14 @@
 #include "mouse_dialog.h"
 #include "plugin_browser.h"
 #include "preferences.h"
+#include "safe_load.h"
 #include "screensets.h"
 #include "shell.h"
 #include "supple/audio/audio_file.h"
 #include "supple/base/environment.h"
 #include "supple/base/files.h"
 #include "supple/base/paths.h"
+#include "supple/diagnostics/reports.h"
 #include "supple/engine/app.h"
 #include "supple/gui/png.h"
 #include "supple/gui/process.h"
@@ -708,6 +713,17 @@ TEST_CASE("native dialog completions respect shutdown before posting and running
         REQUIRE(queued.size() == 1);
         queued.front()();
         CHECK(completions == 1);
+    }
+    SUBCASE("a post that runs the work at once does not wait on the lifetime's lock") {
+        // Round 6b suggestion 1: the guard no longer holds its lock across the post, so a post
+        // that is inline (a test's, or a later one) cannot deadlock on the posted check.
+        int inlineRuns = 0;
+        auto direct = lifetime->guard([](auto task) { task(); }, [&](auto) { ++inlineRuns; });
+        direct({"example.json"});
+        CHECK(inlineRuns == 1);
+        lifetime.reset();
+        direct({"example.json"});  // after shutdown: nothing runs
+        CHECK(inlineRuns == 1);
     }
 }
 
@@ -3777,6 +3793,171 @@ TEST_CASE("file actions: Save before Open autosave works after a first save") {
     CHECK(model::parseProjectFile(*readTextFile(file))->store.head()->project->name == "Current");
 }
 
+namespace {
+const char* kNoticeOne = "00000000000000000000000000000001";
+const char* kNoticeTwo = "00000000000000000000000000000002";
+const char* kNoticeThree = "00000000000000000000000000000003";
+// The app's shell with its transport and the restart notice under it, as the GUI builds it.
+struct NoticeShell {
+    peaks::PeakService peaks;
+    gui::MeterFeed meters;
+    gui::Shell shell;
+    // `withMenus`: the window as the app builds it, the menu row above the shell.
+    explicit NoticeShell(App& a, bool withMenus = false)
+        : peaks(a.dir / "cache", [](std::function<void()> f) { f(); }),
+          shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters) {
+        if (!withMenus) {
+            a.root->setContent(shell.build(*a.root, *a.actions));
+        } else {
+            auto frame = std::make_unique<ui::Node>("window");
+            frame->layout.dir = ui::Layout::Dir::Column;
+            frame->add(gui::makeChrome(*a.root, *a.actions, gui::ChromeLayout::defaults()));
+            frame->add(shell.build(*a.root, *a.actions));
+            a.root->setContent(std::move(frame));
+        }
+        a.root->frame(false);
+    }
+};
+std::string noticeText(App& a) {
+    auto* text = a.root->find("crash.notice.text");
+    return text ? text->valueText() : std::string();
+}
+void ageFile(const std::filesystem::path& path, int hours) {
+    std::filesystem::last_write_time(
+        path, std::filesystem::file_time_type::clock::now() - std::chrono::hours(hours));
+}
+}  // namespace
+
+TEST_CASE("the restart notice sits under the transport and Dismiss acknowledges what it covered") {
+    App a;
+    REQUIRE(a.ok);
+    const auto dir = a.app->diagnosticsDir();
+    SUBCASE("with nothing left behind there is no banner") {
+        NoticeShell s(a);
+        const auto* banner = a.root->find("crash.notice");
+        REQUIRE(banner);
+        CHECK_FALSE(banner->visibleInTree());
+        CHECK(noticeText(a).empty());
+    }
+    SUBCASE("a report says so, plainly, and Dismiss hides it for good") {
+        REQUIRE(diagnostics::writeSampleReport(kNoticeOne, dir, diagnostics::Role::Gui));
+        NoticeShell s(a);
+        const auto* banner = a.root->find("crash.notice");
+        REQUIRE(banner);
+        REQUIRE(banner->visibleInTree());
+        CHECK(noticeText(a).find("closed unexpectedly last time") != std::string::npos);
+        CHECK(noticeText(a).find("A report was saved on this computer.") != std::string::npos);
+        // Under the transport, above the arrangement: not modal, nothing else moves out of reach.
+        const auto* transport = a.root->find("transport");
+        if (transport)
+            CHECK(banner->bounds().y >= transport->bounds().y + transport->bounds().h - 1);
+        CHECK(banner->bounds().h > 0);
+        a.snapshot("crash-notice-report.png");
+        REQUIRE(a.root->click("crash.notice.dismiss"));
+        a.root->frame(false);
+        CHECK_FALSE(a.root->find("crash.notice")->visibleInTree());
+        auto listing = diagnostics::listReports(dir);
+        REQUIRE(listing);
+        REQUIRE(listing->reports.size() == 1);
+        CHECK(listing->reports[0].acknowledged);
+        CHECK(std::filesystem::exists(dir / (std::string(kNoticeOne) + ".json")));  // kept
+        // The next start has nothing to say.
+        NoticeShell next(a);
+        CHECK_FALSE(a.root->find("crash.notice")->visibleInTree());
+    }
+    SUBCASE("a crash inside a plug-in names it") {
+        REQUIRE(diagnostics::writeSampleCrash(kNoticeOne, "Canary Verb", "Acme", dir, {},
+                                              diagnostics::Role::Gui));
+        NoticeShell s(a);
+        CHECK(noticeText(a).find("Canary Verb by Acme was running when") == 0);
+        CHECK(noticeText(a).find("A report was saved on this computer.") != std::string::npos);
+        // The rest of what the report says is the viewer's: the banner keeps to one short line.
+        CHECK(noticeText(a).find("cannot prove") == std::string::npos);
+        a.snapshot("crash-notice-plugin.png");
+        // "Show report" is the boxed button and Dismiss goes quiet.
+        const auto* show = dynamic_cast<ui::Button*>(a.root->find("crash.notice.show"));
+        const auto* dismiss = dynamic_cast<ui::Button*>(a.root->find("crash.notice.dismiss"));
+        REQUIRE(show);
+        REQUIRE(dismiss);
+        CHECK(show->valueText() == "Show report");
+        CHECK_FALSE(show->quiet);
+        CHECK(dismiss->quiet);
+    }
+    SUBCASE("a run that left no report says that, and why that can be") {
+        REQUIRE(diagnostics::writeSampleUnreportedRun(kNoticeOne, dir, diagnostics::Role::Gui));
+        NoticeShell s(a);
+        CHECK(noticeText(a).find("no crash report was written") != std::string::npos);
+        // No report to show: Dismiss alone, and boxed.
+        CHECK(a.root->find("crash.notice.show") == nullptr);
+        CHECK_FALSE(dynamic_cast<ui::Button*>(a.root->find("crash.notice.dismiss"))->quiet);
+        a.snapshot("crash-notice-no-report.png");
+        REQUIRE(a.root->click("crash.notice.dismiss"));
+        a.root->frame(false);
+        CHECK_FALSE(a.root->find("crash.notice")->visibleInTree());
+        // The marker is not deleted by dismissing: the record of that run stays.
+        CHECK(std::filesystem::exists(dir / (std::string(kNoticeOne) + ".run")));
+        // And that run is not announced again at the next start.
+        NoticeShell next(a);
+        CHECK_FALSE(a.root->find("crash.notice")->visibleInTree());
+    }
+    SUBCASE("earlier closes are counted, and one Dismiss covers them all") {
+        REQUIRE(diagnostics::writeSampleReport(kNoticeOne, dir, diagnostics::Role::Gui));
+        REQUIRE(diagnostics::writeSampleUnreportedRun(kNoticeTwo, dir, diagnostics::Role::Gui));
+        REQUIRE(diagnostics::writeSampleCrash(kNoticeThree, "Canary Verb", "Acme", dir, {},
+                                              diagnostics::Role::Gui));
+        ageFile(dir / (std::string(kNoticeOne) + ".json"), 9);
+        ageFile(dir / (std::string(kNoticeTwo) + ".run"), 5);
+        NoticeShell s(a);
+        CHECK(noticeText(a).find("Canary Verb by Acme") == 0);
+        // The count of earlier closes is the viewer's to tell: the banner keeps to two
+        // sentences, and the button that opens the viewer carries the count.
+        CHECK(noticeText(a).find("also closed unexpectedly") == std::string::npos);
+        std::string opened;
+        s.shell.showCrashReport = [&](const std::string& incident) { opened = incident; };
+        const auto* show = a.root->find("crash.notice.show");
+        REQUIRE(show);
+        CHECK(show->valueText() == "Show reports (3)");
+        a.snapshot("crash-notice-earlier.png");
+        REQUIRE(a.root->click("crash.notice.show"));
+        CHECK(opened == kNoticeThree);  // the newest report, not the newest run
+        REQUIRE(a.root->click("crash.notice.dismiss"));
+        a.root->frame(false);
+        auto notice = diagnostics::lastRunNotice(dir, diagnostics::Role::Gui);
+        REQUIRE(notice);
+        CHECK_FALSE(*notice);
+    }
+    SUBCASE("a headless engine's incident is not the banner's, and Dismiss leaves it alone") {
+        REQUIRE(diagnostics::writeSampleReport(kNoticeOne, dir, diagnostics::Role::Engine));
+        REQUIRE(diagnostics::writeSampleUnreportedRun(kNoticeTwo, dir, diagnostics::Role::Engine));
+        {
+            NoticeShell s(a);
+            CHECK_FALSE(a.root->find("crash.notice")->visibleInTree());
+        }
+        // With a GUI incident beside them, only that one is announced and dismissed.
+        REQUIRE(diagnostics::writeSampleReport(kNoticeThree, dir, diagnostics::Role::Gui));
+        NoticeShell s(a);
+        REQUIRE(a.root->find("crash.notice")->visibleInTree());
+        CHECK(noticeText(a).find("also closed unexpectedly") == std::string::npos);
+        REQUIRE(a.root->click("crash.notice.dismiss"));
+        a.root->frame(false);
+        auto listing = diagnostics::listReports(dir);
+        REQUIRE(listing);
+        for (const auto& report : listing->reports)
+            CHECK(report.acknowledged == (report.incident == kNoticeThree));
+        REQUIRE(listing->unreported.size() == 1);
+        CHECK_FALSE(listing->unreported[0].acknowledged);
+    }
+    SUBCASE("a report still being written is not announced") {
+        // The worker of that run still holds its marker: its report is not yet one.
+        const std::string held = "00000000000000000000000000000009";
+        REQUIRE(diagnostics::writeSampleReport(held, dir, diagnostics::Role::Gui));
+        auto marker = std::ofstream(dir / (held + ".run"));  // an empty marker: being created
+        marker.close();
+        NoticeShell s(a);
+        CHECK_FALSE(a.root->find("crash.notice")->visibleInTree());
+    }
+}
+
 TEST_CASE("an empty project takes a dropped file and has + track; both track counts agree") {
     App a(1200, 800);
     REQUIRE(a.ok);
@@ -3829,6 +4010,93 @@ TEST_CASE("an empty project takes a dropped file and has + track; both track cou
     CHECK(shell.arrange()->trackLayout().rowCount() > 3);  // the lane is a row
     CHECK(a.root->find("tcp-header")->valueText() == "Tracks  3");
     CHECK(a.root->find("status")->valueText().rfind("3 tracks  ", 0) == 0);
+}
+
+TEST_CASE("the track list's \"fx\" takes the warning colour by the mixer's rule") {
+    App a(1200, 800);
+    REQUIRE(a.ok);
+    peaks::PeakService peaks(a.dir / "cache", [](std::function<void()> f) { f(); });
+    gui::MeterFeed meters;
+    gui::Shell shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters);
+    struct Detach {
+        ui::Root& root;
+        ~Detach() { root.setContent(std::make_unique<ui::Node>("detached")); }
+    } detach{*a.root};
+    a.root->setContent(shell.build(*a.root, *a.actions));
+    shell.attention().now = [] { return std::chrono::steady_clock::time_point{}; };
+    auto exec = [&](const char* command, const std::string& args) {
+        auto done = a.dispatcher->execute(
+            {command, json::parse(args).value(), {cmd::Origin::Type::Test, "t", {}}});
+        REQUIRE_MESSAGE(done, (done ? "" : done.error().toString()));
+        return *done;
+    };
+    // Any installed plug-in will do: both tracks hold one of it (a partial build has none).
+    auto listed = exec("plugin.list", "{}");
+    if (listed["plugins"].asArray().empty()) {
+        MESSAGE("skipped: no plugins (a partial build)");
+        return;
+    }
+    const std::string plugin = listed["plugins"].asArray().front()["id"].asString();
+    const std::string track = exec("track.add", R"({"name":"Bass"})")["track"].asString();
+    const std::string quiet = exec("track.add", R"({"name":"Keys"})")["track"].asString();
+    const std::string fx =
+        exec("fx.add", R"({"track":")" + track + R"(","plugin":")" + plugin + R"("})")["fx"]
+            .asString();
+    (void)exec("fx.add", R"({"track":")" + quiet + R"(","plugin":")" + plugin + R"("})");
+    shell.sync();
+    a.root->frame(false);
+    auto colour = [&](const std::string& id) {
+        auto* button = dynamic_cast<ui::Button*>(
+            shell.arrange()->tcpPanel().controlNode(*model::Id::parse(id), "fx"));
+        REQUIRE(button);
+        return button->textColor();
+    };
+    CHECK(colour(track).empty());
+    // Disabled: both tracks hold Hickory, so both marks; the rule is the chain's, as in the mixer.
+    exec("plugin.override", R"({"plugin":")" + plugin + R"(","mode":"disable"})");
+    shell.sync();
+    a.root->frame(false);
+    CHECK(colour(track) == "meter-hot");
+    CHECK(colour(quiet) == "meter-hot");
+    exec("plugin.override", R"({"plugin":")" + plugin + R"(","mode":"normal"})");
+    shell.sync();
+    CHECK(colour(track).empty());
+    // Failed counts the same, and only for the track that holds the failed plug-in.
+    engine::EngineStatus status;
+    status.failedFx = {fx};
+    shell.attention().apply(status);
+    shell.sync();
+    a.root->frame(false);
+    CHECK(colour(track) == "meter-hot");
+    CHECK(colour(quiet).empty());
+    shell.attention().apply(engine::EngineStatus{});
+    shell.sync();
+    CHECK(colour(track).empty());
+    // The rule is for both chains: a plug-in only in a track's input chain marks "fx" as well
+    // (round 6c-a E8: the input chain was left out of the rule and no test noticed).
+    const std::string voice = exec("track.add", R"({"name":"Voice"})")["track"].asString();
+    const std::string tap = exec("fx.add", R"({"track":")" + voice + R"(","plugin":")" + plugin +
+                                               R"(","chain":"input"})")["fx"]
+                                .asString();
+    shell.sync();
+    a.root->frame(false);
+    CHECK(colour(voice).empty());
+    exec("plugin.override", R"({"plugin":")" + plugin + R"(","mode":"disable"})");
+    shell.sync();
+    a.root->frame(false);
+    CHECK(colour(voice) == "meter-hot");
+    exec("plugin.override", R"({"plugin":")" + plugin + R"(","mode":"normal"})");
+    shell.sync();
+    CHECK(colour(voice).empty());
+    status.failedFx = {tap};
+    shell.attention().apply(status);
+    shell.sync();
+    a.root->frame(false);
+    CHECK(colour(voice) == "meter-hot");
+    CHECK(colour(track).empty());
+    shell.attention().apply(engine::EngineStatus{});
+    shell.sync();
+    CHECK(colour(voice).empty());
 }
 
 TEST_CASE("a plugin dragged from the browser lands on the track row or strip under the pointer") {
@@ -4069,4 +4337,1263 @@ TEST_CASE("a plugin dragged from the browser lands on the track row or strip und
     drag.drag(plugin, "", ui::DragPhase::End, centre(tcp));
     CHECK(chain(bass) == 1);
     CHECK(steps() == before + 2);
+}
+
+// ---------------------------------------------------------------- the crash report viewer
+
+namespace {
+// What a Help action posts to the UI thread runs at once in these tests.
+// What a dialog's answer posts to the UI thread: held until the test pumps it (running it inside
+// the dialog's own guard would take its lock twice).
+std::vector<std::function<void()>>& posted() {
+    static std::vector<std::function<void()>> queue;
+    return queue;
+}
+void runNow(std::function<void()> f) { posted().push_back(std::move(f)); }
+void pumpPosted() {
+    auto queue = std::move(posted());
+    posted().clear();
+    for (auto& f : queue) f();
+}
+std::string rowText(App& a, std::size_t i) {
+    auto* row = a.root->find("crash.viewer.row." + std::to_string(i));
+    return row ? row->valueText() : std::string();
+}
+}  // namespace
+
+TEST_CASE("crash report text: causes in words, and a report read as far as it can be") {
+    CHECK(
+        gui::causeSentence("linux", "crash", 1, 11, true).find("segmentation fault (signal 11)") !=
+        std::string::npos);
+    CHECK(gui::causeSentence("macos", "crash", 1, 10, true).find("bus error") != std::string::npos);
+    CHECK(gui::causeSentence("linux", "crash", 1, 10, true).find("bus error") == std::string::npos);
+    CHECK(gui::causeSentence("windows", "crash", 2, 0xC0000005LL, true).find("access violation") !=
+          std::string::npos);
+    CHECK(gui::causeSentence("windows", "crash", 2, 0xC0000005LL, true).find("0xC0000005") !=
+          std::string::npos);
+    CHECK(gui::causeSentence("linux", "crash", 3, 0, true).find("std::terminate") !=
+          std::string::npos);
+    CHECK(gui::causeSentence("linux", "unexpected_exit", 0, 7, false)
+              .find("exit with the status 7") == std::string::npos);  // "It exited with ..."
+    CHECK(gui::causeSentence("linux", "unexpected_exit", 0, 7, false).find("status 7") !=
+          std::string::npos);
+    // A report with nothing but a kind reads as a report that holds little, never as an error.
+    const auto bare = json::parse(R"({"kind":"crash"})");
+    REQUIRE(bare);
+    const auto page = gui::describeReport(*bare, "");
+    CHECK(page.headline.find("closed unexpectedly") != std::string::npos);
+    CHECK(page.plugin.empty());
+    CHECK(page.text().find("Nothing is noted as missing.") != std::string::npos);
+    // A bridge's death says the app kept running, and names the plug-in that was in it.
+    const auto bridge = json::parse(
+        R"({"kind":"bridge_exit","platform":"linux","role":"gui","code":11,"cause":0,)"
+        R"("bridge":1,"plugins":[{"id":0,"name":"Canary Verb","vendor":"Acme","bridge":1}],)"
+        R"("bridges":[{"id":1,"state":"ended","ended":{"how":"signal","code":11},"instances":[0]}],)"
+        R"("attribution":{"confidence":"bridge_exit","plugin":0}})");
+    REQUIRE(bridge);
+    const auto died = gui::describeReport(*bridge, "1 Jan 2030, 09:00");
+    CHECK(died.headline.find("Canary Verb by Acme was running in a separate process") == 0);
+    CHECK(died.text().find("kept running") != std::string::npos);
+    CHECK(died.text().find("Process 1 · ended by a signal (status 11) · Canary Verb") !=
+          std::string::npos);
+    // A bridge that wrote its own account says so, and does not claim more than that.
+    const auto own = [](const char* level, const char* plugin) {
+        return json::parse(
+            std::string(R"({"kind":"bridge_exit","platform":"linux","role":"gui","code":11,)"
+                        R"("cause":0,"bridge":1,"capture":"bridge",)"
+                        R"("modules":[{"format":"elf","id":"aabb"}],)"
+                        R"("threads":[{"ordinal":0,"role":"fault","state":"walked","stop":"end",)"
+                        R"("frames":[{"module":0,"offset":"0x10","return":false}]},)"
+                        R"({"ordinal":1,"role":"bridge_control","state":"unavailable",)"
+                        R"("reason":"not_collected","frames":[]}],)"
+                        R"("plugins":[{"id":0,"name":"Canary Verb","vendor":"Acme","bridge":1,)"
+                        R"("build":{"format":"elf","id":"aabb"}}],)"
+                        R"("bridges":[{"id":1,"state":"ended","ended":{"how":"signal","code":11},)"
+                        R"("instances":[0]}],"attribution":{"confidence":")") +
+            level + R"(","plugin":)" + plugin + "}}");
+    };
+    const auto image = own("fault_in_image", "0");
+    REQUIRE(image);
+    const auto inImage = gui::describeReport(*image, "1 Jan 2030, 09:00");
+    CHECK(inImage.headline.find("Canary Verb by Acme was running in a separate process") == 0);
+    CHECK(inImage.text().find("The process wrote down where it stopped itself: inside Canary Verb "
+                              "by Acme's code.") != std::string::npos);
+    CHECK(inImage.text().find("could have written that account too") != std::string::npos);
+    CHECK(inImage.text().find("does not prove it") != std::string::npos);
+    CHECK(inImage.text().find("wrote these itself") != std::string::npos);  // the threads' note
+    CHECK(inImage.text().find("#0  Canary Verb +0x10  (where it stopped)") != std::string::npos);
+    CHECK(inImage.text().find("Plug-in process: control thread · not read: it was not collected") !=
+          std::string::npos);
+    const auto token = own("active_token", "0");
+    REQUIRE(token);
+    CHECK(gui::describeReport(*token, "").text().find("a clue, not proof") != std::string::npos);
+    const auto nobody = own("bridge_exit", "null");
+    REQUIRE(nobody);
+    const auto none = gui::describeReport(*nobody, "");
+    CHECK(none.text().find("It names no plug-in.") != std::string::npos);
+    CHECK(none.headline.find("A separate process that runs plug-ins stopped.") == 0);
+    // A bridge report without the capsule says none of this.
+    CHECK(died.text().find("wrote down where it stopped itself") == std::string::npos);
+    // A kind this version does not know is said to be unknown, and what it holds is still shown.
+    const auto future = json::parse(
+        R"({"kind":"from_the_future","plugins":[{"id":0,"name":"Canary Verb","vendor":"Acme"}]})");
+    REQUIRE(future);
+    const auto other = gui::describeReport(*future, "1 Jan 2030, 09:00");
+    CHECK(other.headline.find("cannot fully read") != std::string::npos);
+    CHECK(other.text().find("Canary Verb by Acme") != std::string::npos);
+}
+
+TEST_CASE("crash report text: threads, commands, limits and counters are all in the page") {
+    const auto report = json::parse(R"({
+      "kind":"crash","platform":"linux","architecture":"x86_64","role":"gui","code":11,"cause":1,
+      "native_fatal_status":true,"terminal_context":true,
+      "build":{"version":"0.6.0","commit":"abc","dirty":false},
+      "unavailable":["frames are best effort","a limit of this report"],
+      "modules":[{"format":"elf","id":"0123456789abcdef0123"},{"format":"elf","id":"aaaa"}],
+      "threads":[
+        {"ordinal":0,"role":"fault","state":"walked","stop":"end",
+         "frames":[{"module":0,"offset":"0x10","return":false},
+                   {"module":1,"offset":"0x20","return":true},
+                   {"module":null,"return":true}]},
+        {"ordinal":1,"role":"model","state":"unavailable","reason":"ptrace_denied"},
+        {"ordinal":2,"role":"a_role_from_the_future","state":"walked","stop":"depth","frames":[]},
+        {"ordinal":3,"role":"bridge_control","state":"walked","stop":"end","frames":[]},
+        {"ordinal":4,"role":"bridge_audio","worker":2,"state":"walked","stop":"end","frames":[]}],
+      "plugins":[{"id":0,"kind":"vst3","origin":"foreign","mode":"in_process","state":"active",
+                  "build":{"format":"elf","id":"0123456789abcdef0123"},"name":"Canary Verb"}],
+      "commands":[{"seq":1,"name":"transport.play","origin":"ui","state":"ended"},
+                  {"seq":2,"name":"fx.add","origin":"mcp","state":"begun"}],
+      "attribution":{"confidence":"fault_in_image","plugin":0},
+      "dropped":{"threads":3,"plugins":0,"commands":2},
+      "a_field_from_the_future":[1,2,3]})");
+    REQUIRE(report);
+    const auto page = gui::describeReport(*report, "17 Nov 2026, 14:32");
+    const auto text = page.text();
+    CHECK(page.headline == "Canary Verb was running when Steppe closed unexpectedly.");
+    CHECK(page.subtitle.find("Saved 17 Nov 2026, 14:32") == 0);
+    CHECK(page.subtitle.find("0.6.0") != std::string::npos);
+    CHECK(text.find("segmentation fault (signal 11)") != std::string::npos);
+    // A frame in a plug-in's own file is named by the plug-in; others by their file's identity.
+    CHECK(text.find("#0  Canary Verb +0x10  (where it stopped)") != std::string::npos);
+    CHECK(text.find("#1  elf aaaa +0x20") != std::string::npos);
+    CHECK(text.find("#2  (code with no file)") != std::string::npos);
+    CHECK(text.find("Faulting thread · reached the end of its stack") != std::string::npos);
+    CHECK(text.find("Model thread · not read: the system did not allow reading it") !=
+          std::string::npos);
+    CHECK(text.find("a_role_from_the_future · stopped at the depth limit") != std::string::npos);
+    CHECK(text.find("Plug-in process: control thread · reached the end of its stack") !=
+          std::string::npos);
+    CHECK(text.find("Plug-in process: audio thread") != std::string::npos);
+    CHECK(text.find("running  fx.add  (agent (MCP))") != std::string::npos);
+    CHECK(text.find("done     transport.play  (app)") != std::string::npos);
+    // Every limit the report states and every counter that is not zero.
+    CHECK(text.find("a limit of this report") != std::string::npos);
+    CHECK(text.find("3 threads left out") != std::string::npos);
+    CHECK(text.find("2 commands left out") != std::string::npos);
+    CHECK(text.find("plug-ins left out") == std::string::npos);  // a zero counter says nothing
+    CHECK(text.find("What is missing (4)") != std::string::npos);
+}
+
+TEST_CASE("Help > Crash reports lists what earlier runs left and shows one in plain words") {
+    App a(1280, 800);
+    REQUIRE(a.ok);
+    const auto dir = a.app->diagnosticsDir();
+    gui::HelpActions help(*a.root, *a.actions, a.window->sdl(), runNow, gui::help::ownExecutable(),
+                          {}, dir);
+    std::string copied;
+    std::filesystem::path revealed;
+    help.crashReports().copyText = [&](const std::string& text) { copied = text; };
+    help.crashReports().openFolder = [&](const std::filesystem::path& p) { revealed = p; };
+    const auto layout = gui::ChromeLayout::defaults();
+    CHECK(std::find(layout.menus.back().items.begin(), layout.menus.back().items.end(),
+                    "ui.help.crash_reports") != layout.menus.back().items.end());
+    SUBCASE("with no reports it says so and offers nothing to delete") {
+        REQUIRE(a.actions->run("ui.help.crash_reports"));
+        a.root->frame(false);
+        REQUIRE(a.root->find("crash.viewer"));
+        CHECK(a.root->find("crash.viewer.empty")->valueText().find("no crash reports") !=
+              std::string::npos);
+        CHECK_FALSE(a.root->find("crash.viewer.delete_all")->visible);
+        REQUIRE(a.root->click("crash.viewer.folder"));
+        CHECK(revealed == dir);
+        a.snapshot("crash-viewer-empty.png");
+        REQUIRE(a.root->click("crash.viewer.close"));
+        CHECK_FALSE(a.root->find("crash.viewer"));
+    }
+    SUBCASE("reports newest first, the newest shown, detail folded, summary copied") {
+        REQUIRE(diagnostics::writeSampleUnreportedRun(kNoticeOne, dir, diagnostics::Role::Gui));
+        REQUIRE(diagnostics::writeSampleReport(kNoticeTwo, dir, diagnostics::Role::Gui));
+        REQUIRE(diagnostics::writeSampleCrash(kNoticeThree, "Canary Verb", "Acme", dir, {},
+                                              diagnostics::Role::Gui));
+        ageFile(dir / (std::string(kNoticeOne) + ".run"), 9);
+        ageFile(dir / (std::string(kNoticeTwo) + ".json"), 5);
+        REQUIRE(a.actions->run("ui.help.crash_reports"));
+        a.root->frame(false);
+        REQUIRE(a.root->find("crash.viewer.row.2"));
+        CHECK_FALSE(a.root->find("crash.viewer.row.3"));
+        CHECK(rowText(a, 0).find("Crash · Canary Verb") != std::string::npos);
+        CHECK(rowText(a, 1).find("Unexpected exit") != std::string::npos);
+        CHECK(rowText(a, 2).find("No report was written") != std::string::npos);
+        // The newest is shown: a plain sentence first, its plug-in named.
+        const auto headline = a.root->find("crash.viewer.headline")->valueText();
+        CHECK(headline.find("Canary Verb by Acme was running when") == 0);
+        CHECK(a.root->find("crash.viewer.sentences")->valueText().find("cannot prove") !=
+              std::string::npos);
+        // The technical detail is folded, and opens.
+        for (const auto* id : {"plugins", "threads", "limits"}) {
+            const auto* fold = a.root->find(std::string("crash.viewer.section.") + id);
+            REQUIRE(fold);
+            CHECK(fold->valueText() == "folded");
+        }
+        REQUIRE(a.root->click("crash.viewer.section.plugins.toggle"));
+        a.root->frame(false);
+        CHECK(a.root->find("crash.viewer.section.plugins")->valueText() == "open");
+        CHECK(a.root->find("crash.viewer.section.plugins.lines.0")
+                  ->valueText()
+                  .find("Canary Verb by Acme") != std::string::npos);
+        a.snapshot("crash-viewer-report.png");
+        // The summary holds the plain words and every section, folded or not.
+        REQUIRE(a.root->click("crash.viewer.copy"));
+        CHECK(copied.find("Canary Verb by Acme was running when") == 0);
+        CHECK(copied.find("Plug-ins (1)") != std::string::npos);
+        CHECK(copied.find("Threads (1)") != std::string::npos);
+        CHECK(copied.find("What is missing") != std::string::npos);
+        // Another row shows its own page.
+        REQUIRE(a.root->click("crash.viewer.row.2"));
+        a.root->frame(false);
+        CHECK(a.root->find("crash.viewer.headline")->valueText().find("no crash report") !=
+              std::string::npos);
+        CHECK_FALSE(a.root->find("crash.viewer.section.plugins"));
+        a.snapshot("crash-viewer-unreported.png");
+    }
+    SUBCASE(
+        "Save a copy writes the report as it is where the user picks; an unreported run has none") {
+        REQUIRE(diagnostics::writeSampleCrash(kNoticeOne, "Canary Verb", "Acme", dir, {},
+                                              diagnostics::Role::Gui));
+        REQUIRE(diagnostics::writeSampleUnreportedRun(kNoticeTwo, dir, diagnostics::Role::Gui));
+        ageFile(dir / (std::string(kNoticeTwo) + ".run"), 4);
+        const auto target = a.dir / "copy" / "report.json";
+        std::filesystem::create_directories(target.parent_path());
+        std::string suggested;
+        help.crashReports().saveDialog = [&](const std::string& start, auto done) {
+            suggested = start;
+            done({target});
+        };
+        REQUIRE(a.actions->run("ui.help.crash_reports"));
+        a.root->frame(false);
+        REQUIRE(a.root->find("crash.viewer.save")->visible);
+        REQUIRE(a.root->click("crash.viewer.save"));
+        pumpPosted();
+        a.root->frame(false);
+        // The dialog was offered a name that says what it is, and the copy is the file itself.
+        CHECK(suggested.find(std::string(product::kSlug) + "-crash-00000000.json") !=
+              std::string::npos);
+        const auto original = diagnostics::readReport(kNoticeOne, dir);
+        REQUIRE(original);
+        std::ifstream in(target, std::ios::binary);
+        const std::string copy((std::istreambuf_iterator<char>(in)),
+                               std::istreambuf_iterator<char>());
+        CHECK(copy == *original);
+        CHECK(
+            a.root->find("crash.viewer.status")->valueText().find("Saved a copy as report.json") !=
+            std::string::npos);
+        // Nothing else in the folder changed: saving a copy is not acknowledging.
+        auto listing = diagnostics::listReports(dir);
+        REQUIRE(listing);
+        CHECK_FALSE(listing->reports[0].acknowledged);
+        // The run that left no report has nothing to copy.
+        REQUIRE(a.root->click("crash.viewer.row.1"));
+        a.root->frame(false);
+        CHECK_FALSE(a.root->find("crash.viewer.save")->visible);
+    }
+    SUBCASE(
+        "Save a copy over a file the user chose to replace leaves it whole when the write fails") {
+        REQUIRE(diagnostics::writeSampleCrash(kNoticeOne, "Canary Verb", "Acme", dir, {},
+                                              diagnostics::Role::Gui));
+        const auto target = a.dir / "copy" / "report.json";
+        std::filesystem::create_directories(target.parent_path());
+        const std::string previous = "what the user already had there\n";
+        {
+            std::ofstream out(target, std::ios::binary);
+            out << previous;
+        }
+        help.crashReports().saveDialog = [&](const std::string&, auto done) { done({target}); };
+        // The write is refused when it syncs, as a full disk refuses it part-way.
+        int refused = 0;
+        setFileSyncHookForTesting([&](const std::filesystem::path& f) {
+            if (f.parent_path() != target.parent_path()) return true;
+            ++refused;
+            return false;
+        });
+        REQUIRE(a.actions->run("ui.help.crash_reports"));
+        a.root->frame(false);
+        REQUIRE(a.root->click("crash.viewer.save"));
+        pumpPosted();
+        a.root->frame(false);
+        setFileSyncHookForTesting({});
+        CHECK(refused >= 1);
+        const auto readTarget = [&] {
+            std::ifstream in(target, std::ios::binary);
+            return std::string((std::istreambuf_iterator<char>(in)),
+                               std::istreambuf_iterator<char>());
+        };
+        CHECK(readTarget() == previous);
+        CHECK(a.root->find("crash.viewer.status")->valueText().find("Could not save a copy") !=
+              std::string::npos);
+        // The failed attempt left nothing beside it.
+        std::size_t files = 0;
+        for (const auto& entry : std::filesystem::directory_iterator(target.parent_path())) {
+            (void)entry;
+            ++files;
+        }
+        CHECK(files == 1);
+        // And once the disk takes it, the same choice replaces the file with the report.
+        REQUIRE(a.root->click("crash.viewer.save"));
+        pumpPosted();
+        a.root->frame(false);
+        const auto original = diagnostics::readReport(kNoticeOne, dir);
+        REQUIRE(original);
+        CHECK(readTarget() == *original);
+    }
+    SUBCASE("Mark as seen acknowledges; deleting asks twice") {
+        REQUIRE(diagnostics::writeSampleReport(kNoticeOne, dir, diagnostics::Role::Gui));
+        REQUIRE(diagnostics::writeSampleReport(kNoticeTwo, dir, diagnostics::Role::Gui));
+        ageFile(dir / (std::string(kNoticeOne) + ".json"), 3);
+        REQUIRE(a.actions->run("ui.help.crash_reports"));
+        a.root->frame(false);
+        REQUIRE(a.root->find("crash.viewer.seen")->visible);
+        REQUIRE(a.root->click("crash.viewer.seen"));
+        a.root->frame(false);
+        {
+            auto listing = diagnostics::listReports(dir);
+            REQUIRE(listing);
+            for (const auto& r : listing->reports)
+                CHECK(r.acknowledged == (r.incident == kNoticeTwo));
+        }
+        CHECK_FALSE(a.root->find("crash.viewer.seen")->visible);  // the shown one is seen now
+        // One click only arms it.
+        REQUIRE(a.root->click("crash.viewer.delete"));
+        CHECK(a.root->find("crash.viewer.delete")->valueText() == "Click again to delete");
+        CHECK(std::filesystem::exists(dir / (std::string(kNoticeTwo) + ".json")));
+        REQUIRE(a.root->click("crash.viewer.delete"));
+        a.root->frame(false);
+        CHECK_FALSE(std::filesystem::exists(dir / (std::string(kNoticeTwo) + ".json")));
+        CHECK(std::filesystem::exists(dir / (std::string(kNoticeOne) + ".json")));
+        CHECK(a.root->find("crash.viewer.row.0"));
+        CHECK_FALSE(a.root->find("crash.viewer.row.1"));
+        // Delete all asks twice too, and says what it will do.
+        REQUIRE(a.root->click("crash.viewer.delete_all"));
+        CHECK(a.root->find("crash.viewer.delete_all")->valueText().find("Click again") !=
+              std::string::npos);
+        CHECK(std::filesystem::exists(dir / (std::string(kNoticeOne) + ".json")));
+        REQUIRE(a.root->click("crash.viewer.delete_all"));
+        a.root->frame(false);
+        CHECK_FALSE(std::filesystem::exists(dir / (std::string(kNoticeOne) + ".json")));
+        CHECK(a.root->find("crash.viewer.empty"));
+    }
+    SUBCASE("a kind this version does not know is listed as other, never hidden") {
+        REQUIRE(diagnostics::writeSampleReport(kNoticeOne, dir, diagnostics::Role::Gui));
+        const auto path = dir / (std::string(kNoticeOne) + ".json");
+        std::string text;
+        {
+            std::ifstream in(path, std::ios::binary);
+            text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        }
+        const std::string from = "\"unexpected_exit\"";
+        const auto at = text.find(from);
+        REQUIRE(at != std::string::npos);
+        text.replace(at, from.size(), "\"from_the_future\"");
+        {
+            std::ofstream out(path, std::ios::binary | std::ios::trunc);
+            out << text;
+        }
+        REQUIRE(a.actions->run("ui.help.crash_reports"));
+        a.root->frame(false);
+        REQUIRE(a.root->find("crash.viewer.row.0"));
+        CHECK(rowText(a, 0).find("Other report") != std::string::npos);
+        CHECK(a.root->find("crash.viewer.headline")->valueText().find("cannot fully read") !=
+              std::string::npos);
+    }
+}
+
+TEST_CASE("the banner's Show report opens the viewer on the incident the banner covers") {
+    App a(1280, 800);
+    REQUIRE(a.ok);
+    const auto dir = a.app->diagnosticsDir();
+    REQUIRE(diagnostics::writeSampleReport(kNoticeOne, dir, diagnostics::Role::Gui));
+    REQUIRE(diagnostics::writeSampleCrash(kNoticeTwo, "Canary Verb", "Acme", dir, {},
+                                          diagnostics::Role::Gui));
+    ageFile(dir / (std::string(kNoticeOne) + ".json"), 6);
+    NoticeShell s(a);
+    gui::HelpActions help(*a.root, *a.actions, a.window->sdl(), runNow, gui::help::ownExecutable(),
+                          {}, dir);
+    s.shell.showCrashReport = [&](const std::string& incident) {
+        help.crashReports().open(incident);
+    };
+    REQUIRE(a.root->click("crash.notice.show"));
+    a.root->frame(false);
+    REQUIRE(a.root->find("crash.viewer"));
+    CHECK(a.root->find("crash.viewer.headline")->valueText().find("Canary Verb by Acme") == 0);
+    // Opening the viewer acknowledges nothing: the banner is still the user's to dismiss.
+    auto notice = diagnostics::lastRunNotice(dir, diagnostics::Role::Gui);
+    REQUIRE(notice);
+    CHECK(*notice);
+    // Asked for the older one by name, it shows that one.
+    help.crashReports().open(kNoticeOne);
+    a.root->frame(false);
+    CHECK(a.root->find("crash.viewer.headline")->valueText().find("closed unexpectedly") !=
+          std::string::npos);
+    CHECK(a.root->find("crash.viewer.headline")->valueText().find("Canary") == std::string::npos);
+}
+
+TEST_CASE("the crash viewer over the app, in both themes (for review: SUPPLE_TEST_SNAPSHOTS)") {
+    struct Look {
+        int width, height;
+        bool light;
+        const char* name;
+    };
+    for (const Look look : {Look{1600, 1000, false, "crash-viewer-dark-1600x1000.png"},
+                            Look{1280, 800, true, "crash-viewer-light-1280x800.png"}}) {
+        App a(look.width, look.height);
+        REQUIRE(a.ok);
+        if (look.light) a.root->setTheme(ui::Theme::light());
+        const auto dir = a.app->diagnosticsDir();
+        REQUIRE(diagnostics::writeSampleUnreportedRun(kNoticeOne, dir, diagnostics::Role::Gui));
+        REQUIRE(diagnostics::writeSampleReport(kNoticeTwo, dir, diagnostics::Role::Gui));
+        REQUIRE(diagnostics::writeSampleCrash(kNoticeThree, "Canary Verb", "Acme", dir, {},
+                                              diagnostics::Role::Gui));
+        ageFile(dir / (std::string(kNoticeOne) + ".run"), 30);
+        ageFile(dir / (std::string(kNoticeTwo) + ".json"), 6);
+        REQUIRE(diagnostics::acknowledge(kNoticeOne, dir));
+        NoticeShell s(a, true);
+        gui::HelpActions help(*a.root, *a.actions, a.window->sdl(), runNow,
+                              gui::help::ownExecutable(), {}, dir);
+        s.shell.showCrashReport = [&](const std::string& incident) {
+            help.crashReports().open(incident);
+        };
+        // The window as the app builds it: the menu row first, then the transport, the banner
+        // under it.
+        const auto* chrome = a.root->find("chrome");
+        const auto* transport = a.root->find("transport");
+        const auto* banner = a.root->find("crash.notice");
+        REQUIRE(chrome);
+        REQUIRE(transport);
+        REQUIRE(banner);
+        CHECK(chrome->bounds().h > 0);
+        CHECK(chrome->bounds().y < transport->bounds().y);
+        CHECK(banner->bounds().y >= transport->bounds().bottom() - 1);
+        a.snapshot(look.light ? "crash-banner-light-1280x800.png"
+                              : "crash-banner-dark-1600x1000.png");
+        REQUIRE(a.root->click("crash.notice.show"));
+        a.root->frame(false);
+        REQUIRE(a.root->click("crash.viewer.section.threads.toggle"));
+        REQUIRE(a.root->click("crash.viewer.section.limits.toggle"));
+        a.root->frame(false);
+        a.snapshot(look.name);
+    }
+}
+
+namespace {
+// File > Open with safe-load, the engine's answers replaced: a listing naming one suspect
+// plug-in (the real `project.plugins` supplies the file's hash), a recorder for the choices.
+struct SafeLoadRig {
+    App a;
+    std::filesystem::path file;
+    gui::SafeLoad load;
+    std::unique_ptr<gui::FileActions> files;
+    std::vector<std::pair<std::string, std::string>> overrides;
+    std::vector<std::string> settled, statuses;
+    std::vector<gui::RememberedLoad> rules;
+    std::string build = "same", buildId = "0123abcd";
+    bool stock = false, bridgeable = true, listed = true;
+    bool second = false;  // a second suspect plug-in in the same listing
+    int checks = 0;
+    json::Value lastArgs;                      // what the last check asked about
+    std::function<void()> afterCheck;          // runs once the check has read the file
+    std::string failFor;                       // a plug-in id whose override the engine refuses
+    std::map<std::string, std::string> modes;  // the mode each plug-in was last set to
+    std::string canaryId = "com.acme.canary";  // the suspect plug-in's id (a real one for F4)
+
+    explicit SafeLoadRig(int width = 1000, int height = 640,
+                         const std::filesystem::path& scratch = {})
+        : a(width, height, gui::Platform::Driver::Offscreen, scratch),
+          load(*a.root, *a.dispatcher, a.dir / "diagnostics") {
+        REQUIRE(a.ok);
+        file = a.dir / "song" / "song.json";
+        REQUIRE(
+            a.dispatcher->execute({"project.set", json::parse(R"({"name":"Saved"})").value(), {}}));
+        REQUIRE(a.app->save(file));
+        REQUIRE(a.dispatcher->execute(
+            {"project.set", json::parse(R"({"name":"Open now"})").value(), {}}));
+        load.plugins = [this](const json::Value& args) -> Result<json::Value> {
+            ++checks;
+            lastArgs = args;
+            auto real = a.dispatcher->execute({"project.plugins", args, {}});
+            if (!real) return real;
+            if (afterCheck) afterCheck();
+            json::Value out = *real;
+            auto plugins = json::Value::array();
+            if (listed) {
+                auto p = json::Value::object();
+                p["format"] = "clap";
+                p["id"] = canaryId;
+                p["name"] = "Canary";
+                p["mode"] = "normal";
+                p["stock"] = stock;
+                p["bridgeable"] = bridgeable;
+                auto resolved = json::Value::object();
+                resolved["name"] = "Canary Verb";
+                resolved["vendor"] = "Acme";
+                resolved["version"] = "1.2.0";
+                p["resolved"] = std::move(resolved);
+                auto suspect = json::Value::object();
+                suspect["build"] = build;
+                suspect["attribution"] = "fault_in_image";
+                auto incidents = json::Value::array();
+                incidents.push_back(json::Value("aa11"));
+                suspect["incidents"] = std::move(incidents);
+                p["suspect"] = std::move(suspect);
+                plugins.push_back(std::move(p));
+                if (second) {
+                    auto q = json::Value::object();
+                    q["format"] = "clap";
+                    q["id"] = "com.acme.second";
+                    q["name"] = "Second";
+                    q["mode"] = "normal";
+                    q["stock"] = false;
+                    q["bridgeable"] = true;
+                    auto resolved2 = json::Value::object();
+                    resolved2["name"] = "Second Verb";
+                    resolved2["version"] = "2.0";
+                    q["resolved"] = std::move(resolved2);
+                    auto suspect2 = json::Value::object();
+                    suspect2["build"] = "same";
+                    suspect2["attribution"] = "fault_in_image";
+                    auto incidents2 = json::Value::array();
+                    incidents2.push_back(json::Value("bb22"));
+                    suspect2["incidents"] = std::move(incidents2);
+                    q["suspect"] = std::move(suspect2);
+                    plugins.push_back(std::move(q));
+                }
+            }
+            out["plugins"] = std::move(plugins);
+            return out;
+        };
+        load.reported = [this] {
+            diagnostics::Suspect s;
+            s.format = "clap";
+            s.pluginId = canaryId;
+            s.buildId = buildId;
+            s.incidents = {"aa11"};
+            std::vector<diagnostics::Suspect> all{s};
+            if (second) {
+                diagnostics::Suspect t = s;
+                t.pluginId = "com.acme.second";
+                t.buildId = "second-build";
+                t.incidents = {"bb22"};
+                all.push_back(t);
+            }
+            return all;
+        };
+        load.override_ = [this](const std::string& id, const std::string& mode) -> Result<bool> {
+            if (!failFor.empty() && id == failFor && mode != "normal")
+                return Error("plugin.override", "the engine refused it");
+            overrides.emplace_back(id, mode);
+            // As the engine answers: whether the plug-in's mode changed.
+            auto [at, fresh] = modes.emplace(id, "normal");
+            const bool changed = at->second != mode;
+            at->second = mode;
+            return changed;
+        };
+        load.settle = [this](const std::string& incident) -> Status {
+            settled.push_back(incident);
+            return {};
+        };
+        load.remembered = [this] { return rules; };
+        load.setRemembered = [this](std::vector<gui::RememberedLoad> next) -> Status {
+            rules = std::move(next);
+            return {};
+        };
+        load.onStatus = [this](const std::string& text) { statuses.push_back(text); };
+        load.now = [] { return std::int64_t{1763400000000}; };
+        files = std::make_unique<gui::FileActions>(*a.root, *a.actions, *a.dispatcher, *a.app, a.ui,
+                                                   a.window->sdl(), [](auto task) { task(); });
+        files->setSafeLoad(&load);
+    }
+    // Choose a row of the question and go on with it (a click chooses; Continue acts).
+    void pick(const char* row) {
+        REQUIRE(a.root->click(row));
+        REQUIRE(a.root->click("safeload.continue"));
+    }
+    // Starts File > Open of the saved file and gets past the unsaved changes' question.
+    void ask() {
+        files->openPath(file);
+        a.root->frame(false);
+        if (!a.root->find("safeload") && a.root->find("file.confirm.discard")) {
+            REQUIRE(a.root->click("file.confirm.discard"));
+            a.root->frame(false);
+        }
+    }
+    void open() {
+        files->openPath(file);
+        a.root->frame(false);
+        // The unsaved changes ask first.
+        if (a.root->find("file.confirm.discard")) {
+            REQUIRE(a.root->click("file.confirm.discard"));
+            a.root->frame(false);
+        }
+    }
+    std::string name() const { return a.app->head().project->name; }
+};
+}  // namespace
+
+TEST_CASE("safe-load: a suspect plug-in is asked about before File > Open loads, three ways") {
+    SafeLoadRig r;
+    r.files->openPath(r.file);
+    r.a.root->frame(false);
+    // The project had unsaved changes only if the open asked; the dialog comes first either way.
+    if (!r.a.root->find("safeload") && r.a.root->find("file.confirm.discard")) {
+        REQUIRE(r.a.root->click("file.confirm.discard"));
+        r.a.root->frame(false);
+    }
+    REQUIRE(r.a.root->find("safeload"));
+    CHECK(r.a.root->find("safeload.title")->valueText().find("Canary Verb") != std::string::npos);
+    REQUIRE(r.a.root->find("safeload.bridge"));
+    REQUIRE(r.a.root->find("safeload.disable"));
+    REQUIRE(r.a.root->find("safeload.normal"));
+    REQUIRE(r.a.root->find("safeload.remember"));
+    const auto* remember = dynamic_cast<ui::Checkbox*>(r.a.root->find("safeload.remember"));
+    REQUIRE(remember);
+    CHECK(remember->text().find("Canary Verb 1.2.0") != std::string::npos);
+    CHECK(r.a.root->focused() == r.a.root->find("safeload.bridge"));  // the default is first
+    CHECK(r.name() == "Open now");  // nothing loaded while it asks
+    r.a.snapshot("safe-load-dialog.png");
+    // The popup is as tall as what it holds, a two-line title included.
+    CHECK(r.a.root->find("safeload")->bounds().bottom() >=
+          r.a.root->find("safeload.cancel")->bounds().bottom());
+
+    // A radio list: the recommended one chosen at open, one boxed Continue, the box on its line.
+    CHECK(r.a.root->find("safeload.bridge")->valueText().rfind("(x) ", 0) == 0);
+    CHECK(r.a.root->find("safeload.disable")->valueText().rfind("( ) ", 0) == 0);
+    CHECK(r.a.root->find("safeload.normal")->valueText().rfind("( ) ", 0) == 0);
+    CHECK(r.a.root->find("safeload.disable")->valueText().find("Disable it this time") !=
+          std::string::npos);
+    CHECK(r.a.root->find("safeload.continue"));
+    CHECK(std::abs(r.a.root->find("safeload.remember")->bounds().y -
+                   r.a.root->find("safeload.continue")->bounds().y) < 6.0f);
+    CHECK(r.a.root->find("safeload.caveat")->bounds().y >
+          r.a.root->find("safeload.normal")->bounds().y);  // under the options
+    CHECK(r.a.root->find("safeload")->bounds().w == doctest::Approx(520.0));
+
+    SUBCASE("a click only chooses; Continue acts") {
+        REQUIRE(r.a.root->click("safeload.normal"));
+        CHECK(r.a.root->find("safeload.normal")->valueText().rfind("(x) ", 0) == 0);
+        CHECK(r.a.root->find("safeload.bridge")->valueText().rfind("( ) ", 0) == 0);
+        CHECK(r.overrides.empty());
+        CHECK(r.settled.empty());
+        CHECK(r.a.root->find("safeload"));  // still asking
+        REQUIRE(r.a.root->click("safeload.continue"));
+        r.a.root->frame(false);
+        CHECK(r.overrides.empty());
+        CHECK(r.settled.size() == 1);  // Normal, as chosen
+    }
+    SUBCASE("Enter takes the default: a separate process, once") {
+        r.a.root->key(SDLK_RETURN, 0);
+        r.a.root->frame(false);
+        REQUIRE(r.overrides.size() == 1);
+        CHECK(r.overrides[0] == std::pair<std::string, std::string>{"com.acme.canary", "bridge"});
+        CHECK(r.settled.empty());
+        CHECK(r.rules.empty());      // not remembered
+        CHECK(r.name() == "Saved");  // and the file opened
+    }
+    SUBCASE("Down then Enter disables") {
+        r.a.root->key(SDLK_DOWN, 0);
+        CHECK(r.a.root->focused() == r.a.root->find("safeload.disable"));
+        CHECK(r.a.root->find("safeload.disable")->valueText().rfind("(x) ", 0) == 0);
+        r.a.root->key(SDLK_RETURN, 0);
+        r.a.root->frame(false);
+        REQUIRE(r.overrides.size() == 1);
+        CHECK(r.overrides[0].second == "disable");
+        CHECK(r.name() == "Saved");
+    }
+    SUBCASE("Up at the top stays") {
+        r.a.root->key(SDLK_UP, 0);
+        CHECK(r.a.root->focused() == r.a.root->find("safeload.bridge"));
+    }
+    SUBCASE("Normal settles the reports and overrides nothing") {
+        r.pick("safeload.normal");
+        r.a.root->frame(false);
+        CHECK(r.overrides.empty());
+        REQUIRE(r.settled.size() == 1);
+        CHECK(r.settled[0] == "aa11");
+        CHECK(r.name() == "Saved");
+    }
+    SUBCASE("Cancel cancels the open") {
+        REQUIRE(r.a.root->click("safeload.cancel"));
+        r.a.root->frame(false);
+        CHECK_FALSE(r.a.root->find("safeload"));
+        CHECK(r.overrides.empty());
+        CHECK(r.settled.empty());
+        CHECK(r.name() == "Open now");
+        CHECK_FALSE(r.load.asking());
+    }
+    SUBCASE("Escape is Cancel") {
+        r.a.key("Escape");
+        CHECK_FALSE(r.a.root->find("safeload"));
+        CHECK(r.name() == "Open now");
+        CHECK(r.overrides.empty());
+    }
+}
+
+TEST_CASE("safe-load: nothing reaches the engine until the open happens (round 6b F1, F2, F4)") {
+    SafeLoadRig r;
+    r.second = true;
+    const gui::RememberedLoad canary{"clap", "com.acme.canary", "0123abcd", "bridge", "Canary Verb",
+                                     "Acme", "1.2.0",           1};
+    SUBCASE("a remembered choice waits for the answers: Cancel leaves the engine as it was") {
+        r.rules = {canary};
+        r.ask();
+        REQUIRE(r.a.root->find("safeload"));
+        CHECK(r.a.root->find("safeload.title")->valueText().find("Second Verb") == 0);
+        CHECK(r.overrides.empty());  // nothing applied while the question is open
+        REQUIRE(r.a.root->click("safeload.cancel"));
+        r.a.root->frame(false);
+        CHECK(r.overrides.empty());
+        CHECK(r.settled.empty());
+        CHECK(r.statuses.empty());  // no "as you chose before" for an open that did not happen
+        CHECK(r.name() == "Open now");
+        CHECK(r.rules.size() == 1);
+    }
+    SUBCASE("answered, the remembered choice and the answer act together, then the project opens") {
+        r.rules = {canary};
+        r.ask();
+        r.pick("safeload.disable");
+        r.a.root->frame(false);
+        REQUIRE(r.overrides.size() == 2);
+        CHECK(r.overrides[0] == std::pair<std::string, std::string>{"com.acme.canary", "bridge"});
+        CHECK(r.overrides[1] == std::pair<std::string, std::string>{"com.acme.second", "disable"});
+        CHECK(r.name() == "Saved");
+        bool said = false;
+        for (const auto& s : r.statuses)
+            said |= s.find("Canary Verb") != std::string::npos &&
+                    s.find("as you chose before") != std::string::npos;
+        CHECK(said);
+    }
+    SUBCASE("an override that fails sets the others back and settles and saves nothing") {
+        r.failFor = "com.acme.second";
+        r.ask();
+        REQUIRE(r.a.root->find("safeload"));  // the first suspect: Canary
+        r.pick("safeload.disable");
+        r.a.root->frame(false);
+        REQUIRE(r.a.root->find("safeload"));  // the second
+        REQUIRE(r.a.root->click("safeload.remember"));
+        r.pick("safeload.bridge");
+        r.a.root->frame(false);
+        // Canary was disabled, then set back to normal when the second could not be made.
+        REQUIRE(r.overrides.size() == 2);
+        CHECK(r.overrides[0] == std::pair<std::string, std::string>{"com.acme.canary", "disable"});
+        CHECK(r.overrides[1] == std::pair<std::string, std::string>{"com.acme.canary", "normal"});
+        CHECK(r.settled.empty());
+        CHECK(r.rules.empty());
+        CHECK(r.name() == "Open now");  // no open
+        REQUIRE_FALSE(r.statuses.empty());
+        CHECK(r.statuses.back().find("Second Verb") != std::string::npos);
+    }
+    SUBCASE("a failing override after a Normal answer leaves that plug-in's reports unsettled") {
+        r.failFor = "com.acme.second";
+        r.ask();
+        r.pick("safeload.normal");
+        r.a.root->frame(false);
+        r.pick("safeload.disable");
+        r.a.root->frame(false);
+        CHECK(r.settled.empty());
+        CHECK(r.name() == "Open now");
+    }
+    SUBCASE("an open that fails sets the overrides back and keeps no choice (F4: the hash)") {
+        r.second = false;
+        // The file changes after the check read it: the open must be refused, not load the
+        // other bytes. (Dropping `expect_hash` from File > Open makes it load them.)
+        r.afterCheck = [&] {
+            std::ofstream out(r.file, std::ios::binary | std::ios::app);
+            out << "\n";
+        };
+        r.ask();
+        REQUIRE(r.a.root->find("safeload"));
+        REQUIRE(r.a.root->click("safeload.remember"));
+        r.pick("safeload.disable");
+        r.a.root->frame(false);
+        CHECK(r.name() == "Open now");  // the open was refused; the project is unchanged
+        REQUIRE(r.overrides.size() == 2);
+        CHECK(r.overrides[0].second == "disable");
+        CHECK(r.overrides[1].second == "normal");  // set back: the load did not happen
+        CHECK(r.rules.empty());                    // nothing is remembered for it
+    }
+    SUBCASE("the file the check read is the file opened: unchanged, the open succeeds") {
+        r.second = false;
+        r.ask();
+        r.pick("safeload.disable");
+        r.a.root->frame(false);
+        CHECK(r.name() == "Saved");
+        CHECK(r.overrides.size() == 1);
+    }
+}
+
+TEST_CASE("safe-load: the app reads plugin.override's changed from the real dispatcher (F4)") {
+    // F1's undo rests on the field `changed` of the engine's answer; a rename on either side
+    // would make every override read as a change (the safe default) and the fix return silently.
+    // The default override, wired to the real command, must say false for a mode already held.
+    App a(1000, 640, gui::Platform::Driver::Offscreen);
+    REQUIRE(a.ok);
+    gui::SafeLoad load(*a.root, *a.dispatcher, a.dir / "diagnostics");
+    auto listed = a.dispatcher->execute({"plugin.list", json::Value::object(), {}});
+    REQUIRE(listed);
+    std::string id;
+    for (const json::Value& p : (*listed)["plugins"].asArray())
+        if (const json::Value* found = p.find("id"); found && found->isString()) {
+            id = found->asString();
+            break;
+        }
+    if (id.empty()) return;  // a partial build has no stock plug-ins: nothing to override
+    const auto say = [&](const char* mode) {
+        auto changed = load.override_(id, mode);
+        REQUIRE(changed);
+        return *changed;
+    };
+    CHECK_FALSE(say("normal"));  // it is loaded normally already
+    CHECK(say("disable"));
+    CHECK_FALSE(say("disable"));  // held already: the second says so
+    CHECK(say("normal"));
+    CHECK_FALSE(say("normal"));
+}
+
+TEST_CASE("safe-load: a refused second open leaves the override in the real engine (F4)") {
+    // The reviewer's sequence through the real dispatcher: a remembered choice is applied by the
+    // first open, the second open is refused, and `plugin.overrides` still lists the plug-in.
+    // A reader of plugin.override that stopped finding `changed` would read the second open's
+    // override as a change and set the plug-in back to normal.
+    SafeLoadRig r;
+    auto listed = r.a.dispatcher->execute({"plugin.list", json::Value::object(), {}});
+    REQUIRE(listed);
+    std::string id;
+    for (const json::Value& p : (*listed)["plugins"].asArray())
+        if (const json::Value* found = p.find("id"); found && found->isString()) {
+            id = found->asString();
+            break;
+        }
+    if (id.empty()) return;  // a partial build has no stock plug-ins to override
+    gui::SafeLoad real(*r.a.root, *r.a.dispatcher, r.a.dir / "diagnostics");
+    r.load.override_ = real.override_;  // the default: the real plugin.override
+    r.canaryId = id;
+    r.stock = true;
+    r.bridgeable = false;
+    r.rules = {
+        gui::RememberedLoad{"clap", id, "0123abcd", "disable", "Canary Verb", "Acme", "1.2.0", 1}};
+    const auto held = [&] {
+        auto all = r.a.dispatcher->execute({"plugin.overrides", json::Value::object(), {}});
+        REQUIRE(all);
+        std::vector<std::string> plugins;
+        for (const json::Value& o : (*all)["overrides"].asArray())
+            if (const json::Value* who = o.find("plugin"); who && who->isString())
+                plugins.push_back(who->asString());
+        return plugins;
+    };
+    r.open();  // the first open applies the remembered disable and opens
+    REQUIRE(r.name() == "Saved");
+    REQUIRE(held().size() == 1);
+    r.afterCheck = [&] {  // the file changes after the check: the second open is refused
+        std::ofstream out(r.file, std::ios::binary | std::ios::app);
+        out << "\n";
+    };
+    REQUIRE(r.a.dispatcher->execute(
+        {"project.set", json::parse(R"({"name":"Open now"})").value(), {}}));
+    r.open();
+    CHECK(r.name() == "Open now");  // refused
+    CHECK(held().size() == 1);      // and the plug-in is still disabled
+}
+
+TEST_CASE("safe-load: an undo sets back only what this open changed (round 6c-a F1)") {
+    // A plug-in override holds until the app quits. A later open that finds the plug-in already
+    // set the way a remembered choice says changes nothing, so a refusal of that open must not
+    // put the plug-in back on the normal load: that restarts it in process under the project that
+    // is still open and loses its unsaved state.
+    SafeLoadRig r;
+    const gui::RememberedLoad canary{"clap", "com.acme.canary", "0123abcd", "bridge", "Canary Verb",
+                                     "Acme", "1.2.0",           1};
+    r.rules = {canary};
+    r.open();  // the first open applies the remembered bridge to Canary and opens
+    REQUIRE(r.name() == "Saved");
+    REQUIRE(r.overrides.size() == 1);
+    CHECK(r.overrides[0] == std::pair<std::string, std::string>{"com.acme.canary", "bridge"});
+    SUBCASE("a second open that is refused leaves Canary on its bridge") {
+        r.afterCheck = [&] {  // the file changes after the check: the open is refused
+            std::ofstream out(r.file, std::ios::binary | std::ios::app);
+            out << "\n";
+        };
+        REQUIRE(r.a.dispatcher->execute(
+            {"project.set", json::parse(R"({"name":"Open now"})").value(), {}}));
+        r.open();
+        CHECK(r.name() == "Open now");  // refused
+        for (std::size_t i = 1; i < r.overrides.size(); ++i)
+            CHECK(r.overrides[i] ==
+                  std::pair<std::string, std::string>{"com.acme.canary", "bridge"});
+        CHECK(r.overrides.size() == 2);  // the remembered choice was applied again, never undone
+    }
+    SUBCASE("a later override that fails leaves it there too") {
+        r.second = true;
+        r.failFor = "com.acme.second";
+        REQUIRE(r.a.dispatcher->execute(
+            {"project.set", json::parse(R"({"name":"Open now"})").value(), {}}));
+        r.ask();
+        REQUIRE(r.a.root->find("safeload"));
+        r.pick("safeload.disable");
+        r.a.root->frame(false);
+        CHECK(r.name() == "Open now");  // the second suspect's override was refused: no open
+        for (std::size_t i = 1; i < r.overrides.size(); ++i)
+            CHECK(r.overrides[i] ==
+                  std::pair<std::string, std::string>{"com.acme.canary", "bridge"});
+    }
+}
+
+TEST_CASE("safe-load: nothing suspect, nothing asked; a stock plug-in has two choices") {
+    SafeLoadRig r;
+    SUBCASE("no suspect") {
+        r.listed = false;
+        r.open();
+        CHECK_FALSE(r.a.root->find("safeload"));
+        CHECK(r.name() == "Saved");
+        CHECK(r.checks == 1);
+    }
+    SUBCASE("stock") {
+        r.stock = true;
+        r.bridgeable = false;
+        r.files->openPath(r.file);
+        r.a.root->frame(false);
+        if (!r.a.root->find("safeload") && r.a.root->find("file.confirm.discard")) {
+            REQUIRE(r.a.root->click("file.confirm.discard"));
+            r.a.root->frame(false);
+        }
+        REQUIRE(r.a.root->find("safeload"));
+        CHECK_FALSE(r.a.root->find("safeload.bridge"));
+        CHECK(r.a.root->find("safeload.sentence")->valueText().find("fault in") !=
+              std::string::npos);
+        CHECK(r.a.root->focused() == r.a.root->find("safeload.disable"));
+        r.a.snapshot("safe-load-dialog-stock.png");
+        r.pick("safeload.disable");
+        r.a.root->frame(false);
+        REQUIRE(r.overrides.size() == 1);
+        CHECK(r.overrides[0].second == "disable");
+    }
+}
+
+TEST_CASE(
+    "safe-load: remembering is for an exact build, and a new crash undoes a remembered Normal") {
+    SafeLoadRig r;
+    auto ask = [&] {
+        r.files->openPath(r.file);
+        r.a.root->frame(false);
+        if (!r.a.root->find("safeload") && r.a.root->find("file.confirm.discard")) {
+            REQUIRE(r.a.root->click("file.confirm.discard"));
+            r.a.root->frame(false);
+        }
+    };
+    SUBCASE("a choice is kept and applied the next time without a question") {
+        ask();
+        REQUIRE(r.a.root->click("safeload.remember"));
+        r.pick("safeload.disable");
+        r.a.root->frame(false);
+        REQUIRE(r.rules.size() == 1);
+        CHECK(r.rules[0].mode == "disable");
+        CHECK(r.rules[0].buildId == "0123abcd");
+        CHECK(r.rules[0].name == "Canary Verb");
+        CHECK(r.rules[0].version == "1.2.0");
+        CHECK(r.rules[0].rememberedMs == 1763400000000);
+        CHECK(r.name() == "Saved");
+        r.overrides.clear();
+        r.statuses.clear();
+        r.open();  // again: the project asks nothing
+        CHECK_FALSE(r.a.root->find("safeload"));
+        REQUIRE(r.overrides.size() == 1);
+        CHECK(r.overrides[0].second == "disable");
+        REQUIRE_FALSE(r.statuses.empty());
+        CHECK(r.statuses.back().find("Canary Verb") != std::string::npos);
+    }
+    SUBCASE("a rebuilt plug-in is asked about again") {
+        r.rules = {
+            {"clap", "com.acme.canary", "OLDBUILD", "disable", "Canary Verb", "Acme", "1.1.0", 1}};
+        ask();
+        CHECK(r.a.root->find("safeload"));
+        CHECK(r.overrides.empty());
+    }
+    SUBCASE("a remembered Normal is dropped when the build is a suspect again, and asks") {
+        r.rules = {
+            {"clap", "com.acme.canary", "0123abcd", "normal", "Canary Verb", "Acme", "1.2.0", 1}};
+        ask();
+        CHECK(r.a.root->find("safeload"));
+        CHECK(r.rules.size() == 1);  // nothing changes until the question is answered
+        SUBCASE("answered") {
+            r.pick("safeload.disable");
+            r.a.root->frame(false);
+            CHECK(r.rules.empty());
+        }
+        SUBCASE("cancelled") {
+            REQUIRE(r.a.root->click("safeload.cancel"));
+            r.a.root->frame(false);
+            CHECK(r.rules.size() == 1);
+            CHECK(r.rules[0].mode == "normal");
+        }
+    }
+    SUBCASE("a remembered separate process is not applied where none is possible") {
+        r.bridgeable = false;
+        r.rules = {
+            {"clap", "com.acme.canary", "0123abcd", "bridge", "Canary Verb", "Acme", "1.2.0", 1}};
+        ask();
+        CHECK(r.a.root->find("safeload"));
+        CHECK(r.overrides.empty());
+    }
+    SUBCASE("no build id: no checkbox, nothing kept") {
+        r.buildId.clear();
+        ask();
+        REQUIRE(r.a.root->find("safeload"));
+        CHECK_FALSE(r.a.root->find("safeload.remember"));
+        r.pick("safeload.disable");
+        r.a.root->frame(false);
+        CHECK(r.rules.empty());
+    }
+    SUBCASE("a build the check could not confirm cannot be kept either") {
+        r.build = "version";
+        ask();
+        REQUIRE(r.a.root->find("safeload"));
+        CHECK_FALSE(r.a.root->find("safeload.remember"));
+    }
+}
+
+TEST_CASE(
+    "the safe-load question over the app, in both themes (for review: SUPPLE_TEST_SNAPSHOTS)") {
+    struct Look {
+        int width, height;
+        bool light;
+        const char* suffix;
+    };
+    for (const Look look : {Look{1600, 1000, false, "dark-1600x1000.png"},
+                            Look{1280, 800, true, "light-1280x800.png"}}) {
+        for (const bool stock : {false, true}) {
+            SafeLoadRig r(look.width, look.height);
+            if (look.light) r.a.root->setTheme(ui::Theme::light());
+            r.stock = stock;
+            r.bridgeable = !stock;
+            NoticeShell s(r.a, true);
+            r.files->openPath(r.file);
+            r.a.root->frame(false);
+            if (!r.a.root->find("safeload") && r.a.root->find("file.confirm.discard")) {
+                REQUIRE(r.a.root->click("file.confirm.discard"));
+                r.a.root->frame(false);
+            }
+            REQUIRE(r.a.root->find("safeload"));
+            r.a.snapshot(
+                (std::string(stock ? "safe-load-stock-" : "safe-load-") + look.suffix).c_str());
+        }
+    }
+}
+
+TEST_CASE(
+    "safe-load: a project template is checked where it is saved, and cancelling loads nothing") {
+    SafeLoadRig r;
+    REQUIRE(r.a.dispatcher->execute(
+        {"project.template.save", json::parse(R"({"name":"Band"})").value(), {}}));
+    REQUIRE(
+        r.a.dispatcher->execute({"project.set", json::parse(R"({"name":"Later"})").value(), {}}));
+    r.files->loadTemplate("Band");
+    r.a.root->frame(false);
+    REQUIRE(r.a.root->find("safeload"));
+    REQUIRE(r.checks == 1);
+    SUBCASE("cancel") {
+        REQUIRE(r.a.root->click("safeload.cancel"));
+        r.a.root->frame(false);
+        CHECK(r.name() == "Later");
+    }
+    SUBCASE("a choice loads it") {
+        r.pick("safeload.disable");
+        r.a.root->frame(false);
+        CHECK(r.name() == "Open now");  // the template holds the project as it was saved
+        REQUIRE(r.overrides.size() == 1);
+        CHECK(r.overrides[0].second == "disable");
+    }
+}
+
+TEST_CASE(
+    "safe-load: recovering the open project's autosave asks first, and loads the file the check "
+    "read") {
+    SafeLoadRig r;
+    r.listed = false;  // opening the file as saved asks nothing
+    auto exec = [&](const char* name, const char* args) {
+        auto done = r.a.dispatcher->execute({name, json::parse(args).value(), {}});
+        REQUIRE_MESSAGE(done, (done ? std::string() : done.error().toString()));
+    };
+    r.a.app->setFixedClock(1'000'000);
+    exec("project.set", R"({"name":"Saved"})");
+    REQUIRE(r.a.app->save(r.file));
+    exec("project.set", R"({"name":"After the save"})");
+    r.a.app->setFixedClock(1'061'000);
+    r.a.app->tick();
+    REQUIRE_FALSE(r.a.app->newerAutosave(r.file).empty());
+    r.files->openPath(r.file);
+    r.a.root->frame(false);
+    REQUIRE(r.a.root->find("file.recover.autosave.open"));
+    CHECK(r.a.app->head().project->name == "Saved");
+    r.listed = true;  // the autosave names the suspect plug-in
+    r.checks = 0;
+    REQUIRE(r.a.root->click("file.recover.autosave.open"));
+    r.a.root->frame(false);
+    if (r.a.root->find("file.confirm.discard")) {
+        REQUIRE(r.a.root->click("file.confirm.discard"));
+        r.a.root->frame(false);
+    }
+    REQUIRE(r.a.root->find("safeload"));
+    CHECK(r.checks == 1);
+    REQUIRE(r.lastArgs.find("autosave"));
+    CHECK(r.lastArgs.find("autosave")->asBool());
+    CHECK(r.a.app->head().project->name == "Saved");  // nothing loaded while it asks
+
+    SUBCASE("a choice recovers it") {
+        r.pick("safeload.disable");
+        r.a.root->frame(false);
+        REQUIRE(r.overrides.size() == 1);
+        CHECK(r.overrides[0].second == "disable");
+        CHECK(r.a.app->head().project->name == "After the save");
+        CHECK(r.a.root->find("file.recovered"));
+    }
+    SUBCASE("the autosave recovered is the one the question was asked about") {
+        // An autosave newer than the offered one lands while the question is open (the project
+        // changed and a minute passed): choosing recovers the file the check read, not that one.
+        REQUIRE(r.lastArgs.find("autosave_file"));
+        const std::string asked = r.lastArgs.find("autosave_file")->asString();
+        CHECK(std::filesystem::path(asked).filename() == r.a.app->newerAutosave(r.file).filename());
+        exec("project.set", R"({"name":"Even later"})");
+        r.a.app->setFixedClock(1'125'000);
+        r.a.app->tick();
+        r.pick("safeload.disable");
+        r.a.root->frame(false);
+        CHECK(r.a.app->head().project->name == "After the save");
+    }
+    SUBCASE("Cancel recovers nothing and leaves the file's project open") {
+        REQUIRE(r.a.root->click("safeload.cancel"));
+        r.a.root->frame(false);
+        CHECK(r.a.app->head().project->name == "Saved");
+        CHECK(r.overrides.empty());
+        CHECK_FALSE(r.a.root->find("file.recovered"));
+    }
+}
+
+TEST_CASE("safe-load: two suspects on a recovery path are asked one after the other") {
+    SafeLoadRig r;
+    r.listed = false;
+    auto exec = [&](const char* name, const char* args) {
+        auto done = r.a.dispatcher->execute({name, json::parse(args).value(), {}});
+        REQUIRE_MESSAGE(done, (done ? std::string() : done.error().toString()));
+    };
+    r.a.app->setFixedClock(1'000'000);
+    exec("project.set", R"({"name":"Saved"})");
+    REQUIRE(r.a.app->save(r.file));
+    exec("project.set", R"({"name":"After the save"})");
+    r.a.app->setFixedClock(1'061'000);
+    r.a.app->tick();
+    r.files->openPath(r.file);
+    r.a.root->frame(false);
+    REQUIRE(r.a.root->find("file.recover.autosave.open"));
+    r.listed = true;
+    r.second = true;
+    REQUIRE(r.a.root->click("file.recover.autosave.open"));
+    r.a.root->frame(false);
+    if (r.a.root->find("file.confirm.discard")) {
+        REQUIRE(r.a.root->click("file.confirm.discard"));
+        r.a.root->frame(false);
+    }
+    // The first plug-in's question; nothing applies or loads yet.
+    REQUIRE(r.a.root->find("safeload"));
+    CHECK(r.a.root->find("safeload.title")->valueText().find("Canary Verb") == 0);
+    r.pick("safeload.bridge");
+    r.a.root->frame(false);
+    // The second's takes its place; still nothing loaded.
+    REQUIRE(r.a.root->find("safeload"));
+    CHECK(r.a.root->find("safeload.title")->valueText().find("Second Verb") == 0);
+    CHECK(r.a.app->head().project->name == "Saved");
+    CHECK(r.overrides.empty());
+    r.pick("safeload.disable");
+    r.a.root->frame(false);
+    REQUIRE(r.overrides.size() == 2);
+    CHECK(r.overrides[0] == std::pair<std::string, std::string>{"com.acme.canary", "bridge"});
+    CHECK(r.overrides[1] == std::pair<std::string, std::string>{"com.acme.second", "disable"});
+    CHECK(r.a.app->head().project->name == "After the save");
+}
+
+TEST_CASE("safe-load: recovering an earlier run's session asks first") {
+    auto stamp = [](std::time_t when) {
+        const std::tm local = gui::localTime(when);
+        char text[32] = {};
+        std::strftime(text, sizeof text, "%Y%m%d-%H%M%S", &local);
+        return std::string(text);
+    };
+    const std::time_t now = std::time(nullptr);
+    SafeLoadRig r(1000, 640, "unsaved/" + stamp(now) + "-1");
+    const std::string left = stamp(now - 300) + "-4242";
+    {
+        engine::AppOptions o;
+        o.workdir = r.a.dir / "earlier";
+        o.scratchDir = r.a.dir / "unsaved" / left;
+        auto earlier = engine::EngineApp::create(o);
+        REQUIRE(earlier);
+        (*earlier)->setFixedClock(1'000'000);
+        REQUIRE((*earlier)->newProject({}));
+        cmd::Dispatcher d(r.a.registry, **earlier);
+        REQUIRE(d.execute({"project.set", json::parse(R"({"name":"Sketch"})").value(), {}}));
+        (*earlier)->setFixedClock(1'060'000);
+        (*earlier)->tick();
+    }
+    REQUIRE(r.a.app->recoverableSessionCount() == 1);
+    REQUIRE(r.a.actions->run("ui.file.recover"));
+    r.a.root->frame(false);
+    REQUIRE(r.a.root->click("file.recover.open.0"));
+    r.a.root->frame(false);
+    if (r.a.root->find("file.confirm.discard")) {
+        REQUIRE(r.a.root->click("file.confirm.discard"));
+        r.a.root->frame(false);
+    }
+    REQUIRE(r.a.root->find("safeload"));
+    REQUIRE(r.lastArgs.find("session"));
+    CHECK(r.lastArgs.find("session")->asString().find(left) != std::string::npos);
+    CHECK(r.name() == "Open now");
+
+    SUBCASE("a choice recovers it") {
+        r.pick("safeload.bridge");
+        r.a.root->frame(false);
+        REQUIRE(r.overrides.size() == 1);
+        CHECK(r.overrides[0].second == "bridge");
+        CHECK(r.name() == "Sketch");
+        CHECK(r.a.root->find("file.recovered"));
+    }
+    SUBCASE("Cancel leaves the session to recover later") {
+        REQUIRE(r.a.root->click("safeload.cancel"));
+        r.a.root->frame(false);
+        CHECK(r.name() == "Open now");
+        CHECK(r.a.app->recoverableSessionCount() == 1);
+    }
+}
+
+TEST_CASE("the crash viewer opened on a report that is gone says so and keeps the list") {
+    App a;
+    REQUIRE(a.ok);
+    const auto dir = a.app->diagnosticsDir();
+    REQUIRE(diagnostics::writeSampleReport(kNoticeTwo, dir, diagnostics::Role::Gui));
+    gui::HelpActions help(*a.root, *a.actions, a.window->sdl(), runNow, gui::help::ownExecutable(),
+                          {}, dir);
+    help.crashReports().open(kNoticeOne);  // not there
+    a.root->frame(false);
+    REQUIRE(a.root->find("crash.viewer"));
+    CHECK(a.root->find("crash.viewer.status")->valueText().find("no longer on this computer") !=
+          std::string::npos);
+    CHECK(a.root->find("crash.viewer.row.0"));
+    a.root->closePopups();
+    help.crashReports().open(kNoticeTwo);  // there: the intro line
+    a.root->frame(false);
+    CHECK(a.root->find("crash.viewer.status")->valueText().find("no longer") == std::string::npos);
 }

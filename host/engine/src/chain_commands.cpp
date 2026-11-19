@@ -205,7 +205,7 @@ Result<std::vector<json::Value>> encodeEffects(EngineApp& app, const model::Sess
                                  "capture the plugin state again");
                 bytes = blob->second->data;
             } else {
-                auto probe = host::Instance::create(*info, app.options().identity);
+                auto probe = app.makeInstance(*info);
                 if (!probe) return std::move(probe).error();
                 for (const auto& [param, v] : fx.params) SUPPLE_TRY((*probe)->setParam(param, v));
                 auto state = (*probe)->saveState();
@@ -253,7 +253,7 @@ Result<std::vector<PreparedFx>> prepareEffects(EngineApp& app,
                     "provide base64 state from a saved instance of this plugin and omit patch");
             auto bytes = base64Decode(*fx->state);
             if (!bytes) return std::move(bytes).error().at(at + "/state");
-            auto probe = host::Instance::create(*info, app.options().identity);
+            auto probe = app.makeInstance(*info);
             if (!probe) return std::move(probe).error().at(at + "/plugin");
             SUPPLE_TRY((*probe)->loadState(*bytes));
             p.fx.state = stateHash(*bytes);
@@ -1173,7 +1173,7 @@ void registerPresetCommands(cmd::Registry& registry) {
                 return Error("fx.preset_invalid", mine->path.string() + ": the state is not base64",
                              "/name", "save the preset again");
             // The plugin checks the state on a probe before the model changes.
-            auto probe = host::Instance::create(*info, app.options().identity);
+            auto probe = app.makeInstance(*info);
             if (!probe) return std::move(probe).error();
             if (auto loaded = (*probe)->loadState(*bytes); !loaded)
                 return Error("fx.preset_invalid",

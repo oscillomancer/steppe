@@ -105,6 +105,22 @@ ui::Node& row(ui::Node& form, const std::string& id, const std::string& label) {
     return r;
 }
 
+const char* rememberedChoice(const std::string& mode) {
+    return mode == "bridge" ? "In a separate process" : mode == "disable" ? "Disabled" : "Normally";
+}
+
+// The list of remembered choices is as tall as its rows, up to six; more scroll.
+class RememberedScroll : public ui::ScrollView {
+  public:
+    using ScrollView::ScrollView;
+    float maxHeight = 6 * 24 + 5 * 4, contentWidth = 600;
+    ui::Size measure(const ui::Canvas& c, ui::Size available) override {
+        const auto size =
+            content().measure(c, {contentWidth - ui::ScrollBar::kThickness, available.h});
+        return {available.w, std::min(size.h, maxHeight)};
+    }
+};
+
 class RuleLine : public ui::Node {
   public:
     explicit RuleLine(std::string id) : Node(std::move(id)) {
@@ -154,7 +170,8 @@ Result<Preferences> Preferences::load(const std::filesystem::path& file) {
          schema->asString() != "supple.preferences/1.5" &&
          schema->asString() != "supple.preferences/1.6" &&
          schema->asString() != "supple.preferences/1.7" &&
-         schema->asString() != "supple.preferences/1.8"))
+         schema->asString() != "supple.preferences/1.8" &&
+         schema->asString() != "supple.preferences/1.9"))
         return Error("preferences.schema", file.string() + " is not a " + kSchema + " document",
                      "/schema");
     if (const json::Value* m = doc->find("default_monitor")) {
@@ -203,6 +220,37 @@ Result<Preferences> Preferences::load(const std::filesystem::path& file) {
             return Error("preferences.plugin_isolation",
                          "plugin_isolation must be in_process, shared_bridge or dedicated",
                          "/plugin_isolation", "use one of in_process, shared_bridge, dedicated");
+    }
+    if (const auto* v = doc->find("plugin_overrides")) {  // 1.10, topic 7d
+        if (!v->isArray())
+            return Error("preferences.plugin_overrides", "plugin_overrides must be an array",
+                         "/plugin_overrides", "remove the field to forget every remembered choice");
+        std::size_t index = 0;
+        for (const auto& item : v->asArray()) {
+            const std::string at = "/plugin_overrides/" + std::to_string(index++);
+            auto text = [&](const char* key) {
+                const auto* x = item.isObject() ? item.find(key) : nullptr;
+                return x && x->isString() ? x->asString() : std::string();
+            };
+            RememberedLoad load;
+            load.format = text("format");
+            load.id = text("id");
+            load.buildId = text("build_id");
+            load.mode = text("mode");
+            load.name = text("name");
+            load.vendor = text("vendor");
+            load.version = text("version");
+            if (const auto* ms = item.isObject() ? item.find("remembered_ms") : nullptr;
+                ms && ms->isInt())
+                load.rememberedMs = ms->asInt();
+            if (load.format.empty() || load.id.empty() || load.buildId.empty() ||
+                (load.mode != "normal" && load.mode != "bridge" && load.mode != "disable"))
+                return Error("preferences.plugin_overrides",
+                             "a remembered choice needs a format, an id, a build_id and a mode "
+                             "of normal, bridge or disable",
+                             at, "remove the entry, or forget it in Preferences");
+            out.rememberedLoads.push_back(std::move(load));
+        }
     }
     if (const auto* v = doc->find("render_open_folder")) {
         if (!v->isBool())
@@ -256,6 +304,22 @@ Status Preferences::save(const std::filesystem::path& file) const {
     doc["copy_imported_media"] = copyImports;
     doc["plugin_isolation"] = isolationName(pluginIsolation);
     doc["render_open_folder"] = renderOpenFolder;
+    if (!rememberedLoads.empty()) {
+        json::Value loads = json::Value::array();
+        for (const auto& load : rememberedLoads) {
+            json::Value item = json::Value::object();
+            item["format"] = load.format;
+            item["id"] = load.id;
+            item["build_id"] = load.buildId;
+            item["mode"] = load.mode;
+            if (!load.name.empty()) item["name"] = load.name;
+            if (!load.vendor.empty()) item["vendor"] = load.vendor;
+            if (!load.version.empty()) item["version"] = load.version;
+            item["remembered_ms"] = load.rememberedMs;
+            loads.push_back(std::move(item));
+        }
+        doc["plugin_overrides"] = std::move(loads);
+    }
     doc["audio"] = audioDeviceJson(audio);
     doc["sync"] = engine::syncSettingsJson(sync);
     // These records belong to the engine; preserve the current disk value.
@@ -288,6 +352,15 @@ PreferencesDialog::PreferencesDialog(ui::Root& root, engine::EngineApp& app, Mou
     app_.setCopyImportedMedia(prefs_.copyImports);
     if (!app_.setPluginIsolation(prefs_.pluginIsolation))
         prefs_.pluginIsolation = app_.pluginIsolation();
+}
+
+Status PreferencesDialog::setRememberedLoads(std::vector<RememberedLoad> loads) {
+    auto next = prefs_;
+    next.rememberedLoads = std::move(loads);
+    if (!file_.empty()) SUPPLE_TRY(save(next));
+    prefs_ = std::move(next);
+    refresh();
+    return {};
 }
 
 Status PreferencesDialog::save(Preferences& prefs) {
@@ -411,6 +484,11 @@ void PreferencesDialog::open() {
     mouse
         .emplace<ui::Button>("prefs.mouse.open", "Edit mouse modifiers…", [this] { mouse_.open(); })
         .layout.height = ui::SizeRule::fixed(26);
+    remembered_ = &body->emplace<ui::Node>("prefs.remembered");
+    remembered_->layout.dir = ui::Layout::Dir::Column;
+    remembered_->layout.height = ui::SizeRule::content();
+    remembered_->layout.gap = 6;
+    rememberedShown_ = "\x01";  // not built yet: an empty list still gets its sentence
 
     // Low-level tuning sits under Advanced, closed until asked for, or open
     // from the start when one of its settings is not at its default: a
@@ -505,6 +583,7 @@ void PreferencesDialog::open() {
         }
     }
     root_.openPopup(std::move(form), {}, ui::Placement::Center, [this] {
+        remembered_ = nullptr;
         monitor_ = nullptr;
         threads_ = nullptr;
         memory_ = nullptr;
@@ -547,7 +626,96 @@ void protectionNote(const std::array<ui::Label*, 4>& labels,
 }
 }  // namespace
 
+// A section at the end of the form: its heading in bold over a rule, the count quiet after it and
+// Forget all at the right; under it one row to a choice on the form's grid: the plug-in (bold) with
+// its maker and version in quiet ink, what was chosen, and a quiet Forget at the right edge.
+void PreferencesDialog::rebuildRemembered() {
+    if (!remembered_) return;
+    std::string signature;
+    for (const auto& r : prefs_.rememberedLoads)
+        signature += r.format + "|" + r.id + "|" + r.buildId + "|" + r.mode + "|" + r.name + "|" +
+                     r.vendor + "|" + r.version + "\n";
+    if (signature == rememberedShown_) return;
+    rememberedShown_ = signature;
+    const auto& loads = prefs_.rememberedLoads;
+    root_.releaseWithin(remembered_);
+    remembered_->clear();
+    // A section like the others: its name over a rule, the count and Forget all at the right.
+    auto& head = section(*remembered_, "prefs.remembered.head", "Plug-in choices");
+    head.layout.gap = 8;
+    head.emplace<ui::Label>("prefs.remembered.count",
+                            loads.empty() ? "none"
+                                          : std::to_string(loads.size()) +
+                                                (loads.size() == 1 ? " choice" : " choices"),
+                            ui::Font::Ui, "caption", "ink-quiet")
+        .layout.height = ui::SizeRule::fixed(20);
+    if (!loads.empty()) {
+        auto& all = head.emplace<ui::Button>("prefs.remembered.forget_all", "Forget all", [this] {
+            if (auto saved = setRememberedLoads({}); !saved && onError)
+                onError("preferences: " + saved.error().toString());
+        });
+        all.quiet = true;
+        all.layout.width = ui::SizeRule::fixed(90);
+        all.layout.height = ui::SizeRule::fixed(22);
+    }
+    if (loads.empty()) {
+        remembered_->emplace<ui::Label>("prefs.remembered.empty",
+                                        "Nothing is remembered. A choice made when a project opens "
+                                        "is kept here if you ask for it.",
+                                        ui::Font::Ui, "caption", "ink-quiet");
+        remembered_->relayout();
+        return;
+    }
+    // Up to six rows stand as they are; more scroll (and the bar takes its own strip).
+    ui::Node* rows = nullptr;
+    if (loads.size() > 6) {
+        auto& scroll = remembered_->emplace<RememberedScroll>("prefs.remembered.scroll");
+        scroll.layout.width = ui::SizeRule::fraction();
+        scroll.layout.height = ui::SizeRule::content();
+        scroll.content().layout.dir = ui::Layout::Dir::Column;
+        scroll.content().layout.gap = 4;
+        rows = &scroll.content();
+    } else {
+        rows = &remembered_->emplace<ui::Node>("prefs.remembered.rows");
+        rows->layout.dir = ui::Layout::Dir::Column;
+        rows->layout.height = ui::SizeRule::content();
+        rows->layout.gap = 4;
+    }
+    for (std::size_t i = 0; i < loads.size(); ++i) {
+        const RememberedLoad& load = loads[i];
+        const std::string at = "prefs.remembered.row." + std::to_string(i);
+        auto& line = rows->emplace<ui::Node>(at);
+        line.layout.dir = ui::Layout::Dir::Row;
+        line.layout.height = ui::SizeRule::fixed(24);
+        line.layout.gap = 8;
+        line.layout.align = ui::Layout::Align::Center;
+        std::string who = load.vendor;
+        if (!load.version.empty()) who += (who.empty() ? "" : " \u00b7 ") + load.version;
+        // The label column of the form: the plug-in and, quietly, who made it, on one line.
+        std::vector<ui::TextRun> runs{
+            {load.name.empty() ? "Unknown plug-in" : load.name, ui::Font::UiBold, "ink"}};
+        if (!who.empty()) runs.push_back({"  " + who, ui::Font::Ui, "ink-quiet"});
+        auto& name = line.emplace<ui::RichText>(at + ".name", std::move(runs), "small");
+        name.layout.width = ui::SizeRule::fixed(200);
+        line.emplace<ui::Label>(at + ".choice", rememberedChoice(load.mode), ui::Font::Ui, "small",
+                                "ink")
+            .layout.width = ui::SizeRule::fraction();
+        auto& forget = line.emplace<ui::Button>(at + ".forget", "Forget", [this, i] {
+            auto next = prefs_.rememberedLoads;
+            if (i >= next.size()) return;
+            next.erase(next.begin() + static_cast<std::ptrdiff_t>(i));
+            if (auto saved = setRememberedLoads(std::move(next)); !saved && onError)
+                onError("preferences: " + saved.error().toString());
+        });
+        forget.quiet = true;
+        forget.layout.width = ui::SizeRule::fixed(60);
+        forget.layout.height = ui::SizeRule::fixed(22);
+    }
+    remembered_->relayout();
+}
+
 void PreferencesDialog::refresh() {
+    rebuildRemembered();
     if (advanced_ && advanced_->visible != advancedOpen_) {
         advanced_->visible = advancedOpen_;
         root_.relayout();

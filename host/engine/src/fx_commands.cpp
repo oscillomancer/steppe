@@ -69,6 +69,7 @@ struct FxDescription {
     std::optional<std::int64_t> latencySamples;     // the instance's reported latency
     std::optional<bool> outputsNotes;               // note output ports (ADR-0068)
     std::optional<std::string> isolationEffective;  // where it runs (ADR-0081)
+    std::optional<std::string> loadOverride;        // this run's override: bridge or disable
 };
 
 constexpr std::size_t kMaxListedParams = 512;
@@ -664,6 +665,12 @@ void registerFxCommands(cmd::Registry& registry) {
                            "Where the instance runs: in_process, shared_bridge or dedicated; "
                            "inherit resolves to the plug-in isolation preference (stock plug-ins "
                            "in process), as the instance is made"))
+                .field("override", &FxDescription::loadOverride,
+                       schema::string().doc(
+                           "This run's plugin.override for the plug-in, when it is not normal: "
+                           "bridge (it runs on a dedicated bridge) or disable (it is not loaded: "
+                           "the strip passes audio through, a rack module is silent, and there is "
+                           "no isolation_effective or parameter section)"))
                 .field("outputs_notes", &FxDescription::outputsNotes,
                        schema::boolean().doc("The loaded plug-in sends notes or MIDI: fx.set "
                                              "midi_output chooses replace or merge"))
@@ -689,6 +696,18 @@ void registerFxCommands(cmd::Registry& registry) {
                                 "; stored state retained. Use track.unfreeze to edit.";
                 if (fx.patch) r.patch = *fx.patch;
                 r.params = model::toJson(fx);
+                return r;
+            }
+            // A disabled plug-in is not loaded to be described: the session and
+            // the override are all there is (plugin.override, topic 7d).
+            const LoadMode mode = app.loadModeOf(fx.plugin);
+            if (mode != LoadMode::Normal) r.loadOverride = std::string(loadModeName(mode));
+            if (mode == LoadMode::Disable) {
+                r.description =
+                    "Disabled for this run (plugin.override): the plug-in is not loaded, this "
+                    "strip passes audio through and a rack module of it is silent; the project "
+                    "file keeps it as it is. plugin.override {mode: normal} loads it again.";
+                if (fx.patch) r.patch = *fx.patch;
                 return r;
             }
             // A scratch instance cannot know what went wrong in the one playing.

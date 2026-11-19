@@ -49,6 +49,7 @@ struct RackScene {
         std::vector<double> values;     // each parameter's knob, physical
         std::set<std::string> learned;  // the knobs a MIDI controller turns (keys)
         bool bypass = false, plugin = false, out = false;
+        bool silent = false;          // a plugin module whose plug-in this run has disabled
         bool instrument = false;      // a plugin module's plug-in plays notes
         std::optional<model::Id> fx;  // a plugin module's
         // A plugin module's plug-in parameters that cables reach (their keys,
@@ -89,8 +90,11 @@ struct RackScene {
     // Rack `rack` of `s` (an empty scene when it is not there).
     // `instrument` says whether a plugin module's plug-in plays notes (its
     // face then shows the note inputs).
+    // `disabled` says whether a plug-in module's plug-in is one this run has disabled (it is silent
+    // then, and says so).
     static RackScene build(const model::Session& s, model::Id rack, const rack::Catalog& catalog,
-                           const std::function<bool(const model::PluginRef&)>& instrument = {});
+                           const std::function<bool(const model::PluginRef&)>& instrument = {},
+                           const std::function<bool(const model::PluginRef&)>& disabled = {});
 
     const Module* module(model::Id id) const;
     Module* module(model::Id id);

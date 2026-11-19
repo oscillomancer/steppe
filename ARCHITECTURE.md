@@ -62,6 +62,7 @@ such as opening dialogs are not all engine commands.
 | tuning | `libs/optimize` | CMA-ES for the patch optimizer | `docs/specs/optimizer.md` |
 | control | `libs/command-bus`, `libs/control-protocol`, `mcp/` | registry and dispatch; JSON-RPC over Unix socket; MCP adapter | ADR-0007, `docs/specs/command-bus.md` |
 | scripting | `libs/lua-bus` (vendored PUC Lua 5.4) | sandboxed Lua scripts on the bus: generated bindings, `q.batch` transactions, `q.on` subscriptions; `script.run` | ADR-0006 |
+| diagnostics | `libs/diagnostics-context`, `libs/diagnostics-capture`, `libs/image-identity` (both GPL, DAW only), `host/diagnostics` | the execution table (which owned thread has which role, later which plug-in entry each instance is in) and the crash-report supervisor that reads it from outside the failing process; local reports only | ADR-0083, `docs/specs/diagnostics.md` |
 | hosting | `host/clap-host` | CLAP and VST3 hosting, the semantic-params extension, the bridge process (`host/clap-host/bridge/`) | ADR-0013, ADR-0017, `docs/specs/semantic-params-extension.md` |
 | sandbox | `host/sandbox`, `host/analysis-commands` | headless plugin sandbox (library, CLI, MCP); analysis commands shared with the engine | `docs/specs/sandbox.md` |
 | engine | `host/engine` | session model (`host/engine/model/`), commands, render plans, real-time engine, JACK and native PortAudio backends, renders | `docs/specs/session-model.md`, `docs/specs/engine.md` |
@@ -380,3 +381,7 @@ The UI's primary modifier maps to Command on macOS.
 Native editor embedding uses typed X11/NSView/HWND parents (ADR-0040); Cocoa
 bridges own floating windows, while local and Windows bridge editors embed.
 The shared GUI watcher services native app/model and plugin waitables.
+
+Local crash diagnostics follow ADR-0083 and `docs/specs/diagnostics.md`: an external
+supervisor precedes frontend startup, terminal work is bounded and separate from
+recovery. Delivery is staged; STATUS states the implemented boundary.

@@ -1264,6 +1264,66 @@ renders, render snapshots and rack probes make their own instances: one on
 `inherit` runs in process there, one set to `shared_bridge` or `dedicated`
 runs bridged; isolation does not change the output.
 
+**Load overrides (topic 7d, ADR-0081 note, ADR-0083).** How this run loads a
+named plug-in, whatever the project says: `plugin.override {plugin, mode}`
+with `mode` `normal`, `bridge` or `disable`, and `plugin.overrides` to list
+them with the fx of each plug-in in the project. They exist so that a plug-in
+a crash report points at can be loaded safely, by the person at the keyboard
+or by an agent; nothing sets one on its own. The map is keyed `(format,
+plug-in id)`, is owned by the app and changed on the main thread, lives as long
+as the app (it survives `project.open` and `project.new`), and is in no project
+file, no history step and no save: a project saved while one holds is the
+project saved without it, byte for byte.
+- **A value type, copied into every pool.** `LoadOverrides` is copied into the
+  app's `InstancePool`, a render's pool, a render snapshot's, a rack probe's
+  and a capture's when the pool is made, on the main thread, so no job thread
+  reads the app's map. Every probe the app makes itself
+  (`EngineApp::makeInstance`: `fx.describe`, `fx.param.set`, latency, plug-in
+  modules' validation at open, MIDI learn, chain and preset loading) goes
+  through the same override.
+- **`disable`** is enforced where a plug-in is found (`findPlugin`, and
+  `InstancePool::get` for pools that resolve from a catalogue copy): both
+  answer `plugin.disabled`, so the existing missing-plug-in paths apply. A
+  strip plays the pass-through placeholder with its stage (wet, bypass ramps,
+  sidechain routing, latency 0) and the plan warns; a rack module of it is
+  silent; an offline render equals the render with that plug-in missing. The
+  project keeps the fx. `fx.describe` answers from the session and the override:
+  `override: "disable"`, a description saying so, no `isolation_effective`, no
+  parameter section. `engine.status.disabled_fx` lists the fx. `fx.add` of the
+  plug-in and anything that would load it answers `plugin.disabled`.
+- **`bridge`** makes every instance of the plug-in on a dedicated bridge,
+  ahead of the fx's own isolation and the preference
+  (`InstancePool::resolveIsolation`). It is refused with
+  `plugin.override_unavailable` when no bridge executable was found (rather
+  than the quiet in-process fallback of `inherit`, which is wrong for a safety
+  choice) and for a stock plug-in (a stock plug-in is a Steppe fault: disable
+  only). Rack plug-in modules go through the same pool and are bridged too;
+  tests compare the render with the live run in both executors. Offline
+  output is bit-identical to in process; live, a bridged plug-in runs under
+  the ADR-0081 deadline, so on a loaded machine a late block is silent live
+  and present offline. A per-call probe (`fx.param.set`, latency) of a
+  plug-in whose fx has a saved patch or state borrows the cached bridged
+  probe (one process per plug-in id, not one per call); with neither, a
+  fresh bridged probe is made.
+- **A changed override plays a fresh instance.** `plugin.override` drops the
+  cached probe of that plug-in, retires its instances in the app's pool
+  (`InstancePool::restartPlugin`, as `fx.restart` does: the old ones live until
+  both executors have adopted a newer plan) and recompiles. Whatever state
+  was never saved is lost and held notes end. Setting the mode a plug-in
+  already has changes nothing.
+- **Probes at load.** Opening a project validates each cable into a plug-in module with a probe
+  restored from that fx's state. Under a bridge override a probe is a process, so a plug-in's fx
+  with a state share its one cached scratch probe (each fx's state is restored onto it before its
+  check) and those with none share one pristine probe of the load, instead of one process per fx.
+  A fresh fx under a bridge override, one with neither a state nor a patch, has nothing to restore
+  onto a shared probe, so a `setPlainParams` call (`fx.set` of plain parameters) on it, and a
+  latency measurement made while it has no state, each make a bridge process of their own. The
+  first `setPlainParams` saves the fx's state, and from then on it shares the cached probe, so
+  this lasts for one or a few calls per fx.
+- **Which plug-ins to protect.** `project.plugins`, `project.open`'s
+  `project.suspect_plugin` warning, `crash.settle` and the clean-run settlement that
+  decide it are in `docs/specs/diagnostics.md` "Safe-load in the engine".
+
 The bridge is native on Linux, macOS and Windows (ADR-0037). Linux retains
 memfd, SCM_RIGHTS, shared futexes and pidfd behavior. macOS uses unlinked
 shm_open descriptors transferred over socketpair, shared address waits/wakes,
@@ -1492,7 +1552,10 @@ instance).
   process-wide, the cycle counters per engine.
 - Crash handling: a control thread watches the process (pidfd); on crash the
   instance becomes a **failed node** (silence; `fx.failed` event with the
-  signal and last known state kept in the model), the rest of the session
+  signal and last known state kept in the model; when the bridge died of a signal or an exception
+  and a local crash-report supervisor was there, `incident` names the report that death may have
+  caused (ADR-0083), also in `engine.status.failed_errors[]` once the bridge's end was observed;
+  the report may not exist, and `crash.read` says so), the rest of the session
   keeps playing, and `fx.restart` re-creates it from the last known state.
   In an offline render, a node that fails this way fails the render instead
   (§3, ADR-0090).
@@ -3764,3 +3827,9 @@ stages reserves what it did before. A stage with note ports and no audio
 ports (`midiOnly`) runs with no audio buffers; the audio passes it through
 its compensation delay, and it is never oversampled. Bus notes keep the
 chain's input time; post-FX taps add `latChain`.
+
+## Local crash diagnostics (ADR-0083)
+
+The frontend supervisor and terminal handoff contract is in `diagnostics.md`.
+A terminal audio fault never returns to DSP, saves or destroys engine state.
+Normal RT rules stay absolute; diagnostics-only hangs never kill the engine.

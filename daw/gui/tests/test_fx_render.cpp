@@ -2330,6 +2330,121 @@ TEST_CASE("the FX chain badges each effect's state, and a failed one offers a re
     CHECK(f.uiRoot().find("fx.restart." + fx.str()) == nullptr);
 }
 
+TEST_CASE("a disabled plug-in is marked in the FX chain, with Enable on its row") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<model::Id> enabled;
+    gui::FxWindow::Hooks hooks;
+    hooks.enableFx = [&](model::Id fx) { enabled.push_back(fx); };
+    f.fx =
+        std::make_unique<gui::FxWindow>(*f.app, *f.dispatcher, *f.root, *f.panel, std::move(hooks),
+                                        gui::Favourites::defaultFile(gui::test::slug()));
+    const model::Id track = f.addTrack("Guitar");
+    REQUIRE(f.fx->open(track));
+    f.click("fx.add");
+    f.type("Hickory");
+    f.key("Return");
+    REQUIRE(f.fx->chain().size() == 1);
+    const std::string id = f.fx->chain()[0].str();
+    CHECK(f.uiRoot().find("fx.enable." + id) == nullptr);
+    CHECK(f.uiRoot().find("fx.badge." + id)->valueText() == "in-process (default)");
+    REQUIRE(
+        f.run("plugin.override", f.args({{"plugin", f.pluginId("Hickory")}, {"mode", "disable"}})));
+    f.fx->tick();  // the window follows the override with no change to the project
+    f.frame();
+    REQUIRE(f.uiRoot().find("fx.enable." + id));
+    CHECK(
+        f.uiRoot().find("fx.badge." + id)->valueText().find("disabled after an unexpected close") ==
+        0);
+    CHECK(f.uiRoot().find("fx.badge." + id)->valueText().find("audio passes through") !=
+          std::string::npos);
+    f.snapshot("fx-disabled.png");
+    // It is not loaded, so there is no editor to open: the button is off, and a double click on
+    // the row says why in the status line.
+    CHECK_FALSE(f.uiRoot().find("fx.editor." + id)->enabled);
+    // Everything that acts on a plug-in that is not loaded is off; Enable and Remove are not.
+    for (const char* button : {"bypass", "offline", "params", "presets"})
+        CHECK_FALSE(f.uiRoot().find(std::string("fx.") + button + "." + id)->enabled);
+    CHECK(f.uiRoot().find("fx.enable." + id)->enabled);
+    CHECK(f.uiRoot().find("fx.remove." + id)->enabled);
+    CHECK(f.uiRoot().find("fx.badge." + id)->valueText().find("disabled") == 0);
+    {
+        const ui::Rect r = f.uiRoot().find("fx.row." + id)->bounds();
+        const ui::Point at{r.x + 6, r.y + 8};
+        f.uiRoot().pointer({ui::PointerEvent::Type::Down, at, 1, 2, 0});
+        f.uiRoot().pointer({ui::PointerEvent::Type::Up, at, 1, 2, 0});
+        f.frame();
+        CHECK(f.uiRoot().find("fx.status")->valueText().find("not loaded") != std::string::npos);
+    }
+    REQUIRE(f.click("fx.enable." + id));
+    REQUIRE(enabled.size() == 1);
+    CHECK(enabled[0].str() == id);
+    // Loaded again: the marker goes with no other change.
+    REQUIRE(
+        f.run("plugin.override", f.args({{"plugin", f.pluginId("Hickory")}, {"mode", "normal"}})));
+    f.fx->tick();
+    f.frame();
+    CHECK(f.uiRoot().find("fx.enable." + id) == nullptr);
+    CHECK(f.uiRoot().find("fx.badge." + id)->valueText() == "in-process (default)");
+}
+
+TEST_CASE("a failed effect links to the report its bridge's death left") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::string> shown;
+    gui::FxWindow::Hooks hooks;
+    hooks.showCrashReport = [&](const std::string& incident) { shown.push_back(incident); };
+    f.fx =
+        std::make_unique<gui::FxWindow>(*f.app, *f.dispatcher, *f.root, *f.panel, std::move(hooks),
+                                        gui::Favourites::defaultFile(gui::test::slug()));
+    const model::Id track = f.addTrack("Guitar");
+    REQUIRE(f.fx->open(track));
+    f.click("fx.add");
+    f.type("Hickory");
+    f.key("Return");
+    REQUIRE(f.fx->chain().size() == 1);
+    const std::string id = f.fx->chain()[0].str();
+    auto statusWith = [&](const char* incident) {
+        engine::EngineStatus status;
+        status.failedFx = {id};
+        auto failure = json::Value::object();
+        failure["fx"] = id;
+        failure["reason"] = "the bridge ended";
+        if (*incident) failure["incident"] = incident;
+        status.failedErrors.asArray().push_back(std::move(failure));
+        return status;
+    };
+    // A failure that left no report offers a restart and no link.
+    f.fx->applyFailures(statusWith(""));
+    f.frame();
+    CHECK(f.uiRoot().find("fx.restart." + id));
+    CHECK(f.uiRoot().find("fx.report." + id) == nullptr);
+    CHECK(f.fx->incidentOf(id).empty());
+    // One that did gets "Report", which opens the viewer on that incident.
+    f.fx->applyFailures(statusWith("0123456789abcdef0123456789abcdef"));
+    f.frame();
+    REQUIRE(f.uiRoot().find("fx.report." + id));
+    CHECK(f.uiRoot().find("fx.report." + id)->valueText() == "Show report");
+    // Next to Restart on the first line; the mode stays quiet and only "failed" is red.
+    CHECK(f.uiRoot().find("fx.report." + id)->parent() ==
+          f.uiRoot().find("fx.restart." + id)->parent());
+    CHECK(f.uiRoot().find("fx.badge." + id)->valueText() == "in-process (default) \u00b7 failed");
+    const auto* badge = dynamic_cast<ui::RichText*>(f.uiRoot().find("fx.badge." + id));
+    REQUIRE(badge);
+    REQUIRE(badge->runs().size() == 2);
+    CHECK(badge->runs()[0].colorToken == "ink-quiet");
+    CHECK(badge->runs()[1].colorToken == "clip");
+    f.snapshot("fx-failed-report.png");
+    CHECK(f.fx->incidentOf(id) == "0123456789abcdef0123456789abcdef");
+    REQUIRE(f.click("fx.report." + id));
+    REQUIRE(shown.size() == 1);
+    CHECK(shown[0] == "0123456789abcdef0123456789abcdef");
+    f.fx->applyFailures(engine::EngineStatus{});  // restarted: both go
+    f.frame();
+    CHECK(f.uiRoot().find("fx.restart." + id) == nullptr);
+    CHECK(f.uiRoot().find("fx.report." + id) == nullptr);
+}
+
 TEST_CASE(
     "the FX chain's pins choose a plugin's channels on a strip with aux channels (ADR-0020)") {
     Fixture f;

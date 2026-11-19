@@ -3,8 +3,8 @@
 supple_add_library(clap-host
   SOURCES src/clap_host.cpp src/vst3_host.cpp src/platform.cpp src/scan.cpp
   DEPS supple::core-base supple::core-json supple::clap supple::semantic-params-abi supple::vst3-host
-  PRIVATE_DEPS ${CMAKE_DL_LIBS} supple::product-info)
-target_sources(clap-host PRIVATE src/bridge_client.cpp src/bridge_protocol.cpp src/bridge_platform.cpp src/bridge_child.cpp)
+  PRIVATE_DEPS ${CMAKE_DL_LIBS} supple::product-info supple::diagnostics-context supple::diagnostics-capture)
+target_sources(clap-host PRIVATE src/bridge_client.cpp src/bridge_protocol.cpp src/bridge_platform.cpp src/bridge_child.cpp src/bridge_diagnostics.cpp)
 if(WIN32)
   target_sources(clap-host PRIVATE src/child_process_windows.cpp src/editor_platform_windows.cpp)
   target_link_libraries(clap-host PRIVATE User32)
@@ -38,7 +38,8 @@ if(APPLE)
   set_source_files_properties(bridge/bridge_main.cpp PROPERTIES LANGUAGE OBJCXX
                              COMPILE_OPTIONS "${_bridge_objcxx_options}")
 endif()
-target_link_libraries(${PRODUCT_SLUG}-bridge PRIVATE supple::clap-host supple::core-dsp)
+target_link_libraries(${PRODUCT_SLUG}-bridge PRIVATE supple::clap-host supple::core-dsp
+                      supple::diagnostics-context supple::diagnostics-capture)
 if(WIN32)
   target_link_libraries(${PRODUCT_SLUG}-bridge PRIVATE avrt)  # MMCSS for live audio (ADR-0081)
 endif()
@@ -64,12 +65,14 @@ if(SUPPLE_BUILD_TESTS)
   else()
     set(_host_tests tests/test_native_host.cpp tests/test_main_thread_wake.cpp)
   endif()
-  supple_add_tests(clap-host SOURCES ${_host_tests} tests/test_child_process.cpp tests/test_local_host.cpp tests/test_note_output.cpp tests/test_bridge_native.cpp tests/test_editors.cpp tests/test_editor_display.cpp LABELS rt)
+  supple_add_tests(clap-host SOURCES ${_host_tests} tests/test_child_process.cpp tests/test_local_host.cpp tests/test_note_output.cpp tests/test_bridge_native.cpp tests/test_bridge_diagnostics.cpp tests/test_editors.cpp tests/test_editor_display.cpp LABELS rt)
   if(APPLE)
     set_source_files_properties(tests/test_editor_display.cpp PROPERTIES LANGUAGE OBJCXX
                                COMPILE_OPTIONS "${_bridge_objcxx_options};-fobjc-arc")
     target_link_libraries(clap-host.tests PRIVATE "-framework CoreGraphics")
   endif()
+  # The tests read the execution table from inside the fixture plug-in (tests/scope_probe.h).
+  target_link_libraries(clap-host.tests PRIVATE supple::diagnostics-context supple::diagnostics-capture)
   add_dependencies(clap-host.tests ${PRODUCT_SLUG}-scanner host-child-fixture)
   # The agent skill beside the binary (test_scan.cpp) and, with the stock
   # plugins, the script player in their folder (review round 33).
@@ -80,6 +83,23 @@ if(SUPPLE_BUILD_TESTS)
   target_compile_definitions(clap-host.tests PRIVATE CHILD_FIXTURE_PATH="$<TARGET_FILE:host-child-fixture>")
   target_compile_definitions(clap-host.tests PRIVATE SCANNER_PATH="$<TARGET_FILE:${PRODUCT_SLUG}-scanner>")
   target_compile_definitions(clap-host.tests PRIVATE SUPPLE_TEST_STOCK_EDITORS=$<BOOL:${SUPPLE_BUILD_GUI}>)
+  # The real host under the diagnostics frontend: the report must list what it announced.
+  add_executable(clap-host-diagnostics-fixture tests/diagnostics_host_fixture.cpp)
+  target_link_libraries(clap-host-diagnostics-fixture PRIVATE supple::clap-host supple::diagnostics)
+  target_include_directories(clap-host-diagnostics-fixture PRIVATE ${PROJECT_SOURCE_DIR}/host/diagnostics/src)
+  add_dependencies(clap-host-diagnostics-fixture clap-host-fixtures ${PRODUCT_SLUG}-bridge)
+  target_compile_definitions(clap-host-diagnostics-fixture PRIVATE FIXTURE_CLAP_PATH="$<TARGET_FILE:clap-host-fixtures>"
+                             BRIDGE_PATH="$<TARGET_FILE:${PRODUCT_SLUG}-bridge>")
+  supple_target_defaults(clap-host-diagnostics-fixture)
+  # What the execution scopes cost (informational: prints numbers, decides nothing).
+  add_executable(clap-host-scope-overhead tests/scope_overhead.cpp)
+  target_link_libraries(clap-host-scope-overhead PRIVATE supple::clap-host supple::diagnostics-context)
+  add_dependencies(clap-host-scope-overhead clap-host-fixtures)
+  target_compile_definitions(clap-host-scope-overhead PRIVATE FIXTURE_CLAP_PATH="$<TARGET_FILE:clap-host-fixtures>")
+  supple_target_defaults(clap-host-scope-overhead)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME clap-host.diagnostics-inventory COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/host_inventory.py" "$<TARGET_FILE:clap-host-diagnostics-fixture>" "${SUPPLE_SANITIZE}")
+  set_tests_properties(clap-host.diagnostics-inventory PROPERTIES LABELS rt)
   add_dependencies(clap-host.tests clap-host-fixtures ${PRODUCT_SLUG}-bridge)
   target_include_directories(clap-host.tests PRIVATE ${PROJECT_SOURCE_DIR}/plugins/suite/compiler/include)
   target_compile_definitions(clap-host.tests PRIVATE FIXTURE_CLAP_PATH="$<TARGET_FILE:clap-host-fixtures>"

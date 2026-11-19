@@ -77,6 +77,13 @@ std::filesystem::path data(bool allowTemporary) {
 #endif
     return root.empty() && allowTemporary ? runtime() / ".local/share" : root;
 }
+std::filesystem::path localData() {
+#if defined(_WIN32)
+    return env("LOCALAPPDATA");
+#else
+    return data();
+#endif
+}
 std::filesystem::path cache(bool allowTemporary) {
 #if defined(_WIN32)
     auto root = env("LOCALAPPDATA");

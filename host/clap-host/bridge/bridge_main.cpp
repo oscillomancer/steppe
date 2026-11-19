@@ -6,6 +6,7 @@
 // commands arrive in per-instance shared memory sent with Activate and run on
 // that instance's audio thread. Exits when the host closes the control socket.
 #if defined(_WIN32)
+#include <crtdbg.h>
 #include <fcntl.h>
 #include <io.h>
 #include <windows.h>
@@ -32,6 +33,7 @@
 #include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
@@ -50,6 +52,8 @@
 #include "../src/scan.h"
 #include "supple/base/rt.h"
 #include "supple/base/thread.h"
+#include "supple/diagcap/selfcapture.h"
+#include "supple/diagctx/table.h"
 #include "supple/dsp/dsp.h"
 #include "supple/host/clap_host.h"
 #include "supple/json/json.h"
@@ -443,6 +447,7 @@ struct Bridge {
 #endif
     MainThreadWake wake;  // outlives every instance and its callback threads
     Resource outward = noResource;
+    bool captureAttached = false;  // the crash-capsule slot (topic 6c), taken once
     NotificationLatch notifications;
     ~Bridge() {
         if (outward != noResource) closeResource(outward);
@@ -487,6 +492,46 @@ struct Bridge {
         w.u8(size.resizable ? 1 : 0);
     }
 
+    // AttachCaptureSlot (topic 6c): the shared slot this process writes its own crash capsule
+    // into. Every refusal is a structured error that closes the resource it was sent with and
+    // changes nothing; the slot is taken once.
+    bool attachCaptureSlot(std::uint32_t instanceId, std::uint32_t version, Resource fd) {
+        namespace capture = diagnostics::selfcapture;
+        const auto refuse = [&](std::string message, const char* path, const char* hint) {
+            if (fd >= 0) closeResource(fd);
+            return fail(Error("bridge.capture_slot", std::move(message), path, hint));
+        };
+        if (instanceId != 0)
+            return refuse("AttachCaptureSlot requires instance id 0", "/instance",
+                          "send it with instance 0");
+        if (version != capture::kSlotVersion)
+            return refuse("capture slot version " + std::to_string(capture::kSlotVersion) +
+                              ", host " + std::to_string(version),
+                          "/version", "use matching host and bridge builds");
+        if (fd < 0)
+            return refuse("AttachCaptureSlot needs one shared-memory resource", "/fd",
+                          "send the slot's memory object with the request");
+        void* map = mapCaptureSlot(fd, capture::kSlotBytes);
+        closeResource(fd);  // the mapping keeps the memory
+        fd = noResource;
+        if (!map)
+            return refuse("not a capture slot of the expected size", "/fd",
+                          "send a sealed shared-memory object of exactly the slot's size");
+        if (captureAttached) {
+            unmapMemory(map, capture::kSlotBytes);
+            return refuse("a capture slot is already attached", "/fd", "attach one slot only");
+        }
+        if (!capture::attachSlot(map, capture::kSlotBytes)) {
+            unmapMemory(map, capture::kSlotBytes);
+            return refuse("the capture slot is not an empty slot of this version", "/fd",
+                          "send a slot the host initialized and nobody has written");
+        }
+        captureAttached = true;  // the mapping stays for the life of the process
+        Writer w;
+        w.u32(capture::kSlotVersion);
+        return reply(w);
+    }
+
     // Returns false to exit.
     bool handle(Op op, std::uint32_t instanceId, Reader& r, Resource fd, int descriptorCount = -1) {
         replyId = instanceId;
@@ -529,10 +574,11 @@ struct Bridge {
             w.u32(kVersion);
             return reply(w);
         }
-        if (fd >= 0 && op != Op::Activate) {
+        if (fd >= 0 && op != Op::Activate && op != Op::AttachCaptureSlot) {
             closeResource(fd);
             return fail(Error("bridge.fd", "unexpected descriptor for this operation", "/fd",
-                              "send descriptors only with Activate or SubscribeNotifications"));
+                              "send descriptors only with Activate, SubscribeNotifications or "
+                              "AttachCaptureSlot"));
         }
         if (op == Op::AckNotifications) {
             if (instanceId || outward < 0)
@@ -556,6 +602,7 @@ struct Bridge {
                 Error("bridge.subscription", "notification subscription is required", "/version",
                       "subscribe with the matching bridge protocol before creating instances"));
         }
+        if (op == Op::AttachCaptureSlot) return attachCaptureSlot(instanceId, r.u32(), fd);
         if (op == Op::Create) {
             if (instanceId != 0)
                 return fail(Error("bridge.instance", "Create requires instance id 0"));
@@ -593,6 +640,15 @@ struct Bridge {
                 w.str(aux[i].name);
                 w.u32(aux[i].channels);
             }
+            // Where the instance is in this process's own table, for the host to match (6b).
+            const auto place = slot->instance->diagnosticsPlace();
+            w.u32(place.cell);
+            w.u16(place.generation);
+            w.u64(place.image);
+            // The plug-in's build for the capsule's module list, read now while nothing is
+            // failing; a fault inside it is then labelled with that build (topic 6c).
+            (void)diagnostics::selfcapture::recordImage(
+                reinterpret_cast<const void*>(static_cast<std::uintptr_t>(place.image)));
             instances.emplace(newId, std::move(slot));
             return reply(w);
         }
@@ -615,6 +671,7 @@ struct Bridge {
             case Op::Create:
             case Op::SubscribeNotifications:
             case Op::AckNotifications:
+            case Op::AttachCaptureSlot:
                 break;
             case Op::Activate: {
                 const double rate = r.f64();
@@ -667,8 +724,16 @@ struct Bridge {
                 }
                 slot.rate = rate;
                 const std::uint32_t first = hdr->request.load(std::memory_order_acquire);
-                audio = std::thread([&slot, first] {
+                // Numbered in creation order, from 1 (the report's `worker`), and wrapping
+                // past 65535 to 1 so the number stays one the report accepts.
+                static std::atomic<std::uint32_t> audioThreads{0};
+                const auto number = static_cast<std::uint16_t>(
+                    1 + audioThreads.fetch_add(1, std::memory_order_relaxed) % 65535);
+                audio = std::thread([&slot, first, number] {
                     nameThread("audio-bridge");
+                    // Cold, before the first block: the report names this thread (ADR-0083,
+                    // topic 6c); the slot is released when the thread ends.
+                    (void)diagctx::registerThread(diagctx::ThreadRole::BridgeAudio, number);
                     rt::prefaultStack();  // ADR-0025
                     slot.audioLoop(first);
                 });
@@ -1024,6 +1089,13 @@ int main(int argc, char** argv) {
         return result ? 0 : 1;
     }
 #endif
+    // The bridge describes its own death (ADR-0083, topic 6c): fault handlers that write a capsule
+    // into the capture slot and let the process end as it would have. Before any plug-in is loaded
+    // and before the first command is read; nothing is installed where a sanitizer owns the
+    // signals, and the bridge then works as before, with no capsule.
+    (void)diagnostics::selfcapture::install();
+    // The process's command loop is this thread: the report names it (ADR-0083, topic 6c).
+    (void)diagctx::registerThread(diagctx::ThreadRole::BridgeControl);
     Bridge b;
     for (int i = 1; i + 1 < argc; ++i)
 #if defined(_WIN32)
@@ -1119,8 +1191,30 @@ int main(int argc, char** argv) {
 }
 
 #if defined(_WIN32)
+namespace {
+// What a plug-in's abort() ends the bridge with (topic 6b): a fast-fail's status, at once. The
+// debug runtime otherwise shows a dialog nobody answers on a runner, and any runtime may wait on
+// error reporting, until the host's deadline kills the bridge and the end is read as the host's
+// (CI 44242073297). 0xC0000409 is STATUS_FAIL_FAST_EXCEPTION, which is fatal by its severity bits,
+// so the host reads the end as the bridge's own fault.
+void endOnAbort(int) { TerminateProcess(GetCurrentProcess(), 0xC0000409u); }
+// Nothing the bridge's runtime would ask or report may stop it ending: no dialog from an error,
+// an assertion or abort(), no report to wait on. Reaches the runtime the bridge shares with its
+// plug-ins (the DLL one); a plug-in with a static runtime has its own abort() and its own state.
+void endWithoutAsking() {
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+    _set_abort_behavior(
+        0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);  // if the handler is replaced: _exit(3)
+    _set_error_mode(_OUT_TO_STDERR);
+    for (const int kind : {_CRT_WARN, _CRT_ERROR, _CRT_ASSERT}) {
+        _CrtSetReportMode(kind, _CRTDBG_MODE_FILE);
+        _CrtSetReportFile(kind, _CRTDBG_FILE_STDERR);
+    }
+    std::signal(SIGABRT, endOnAbort);
+}
+}  // namespace
 int wmain(int argc, wchar_t** argv) {
-    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+    endWithoutAsking();
     std::vector<std::string> text;
     text.reserve(static_cast<std::size_t>(argc));
     for (int i = 0; i < argc; ++i)

@@ -41,6 +41,25 @@ if(SUPPLE_SANITIZE)
   endforeach()
 endif()
 
+# Frame pointers (ADR-0083). The crash collector walks frame-pointer chains, which
+# only exist where the compiler keeps rbp/x29 as a frame register: always on arm64
+# macOS, but optimised x86-64 and Linux arm64 code drops it. First-party targets keep
+# frame pointers on Linux and macOS in every preset, leaf functions included where the
+# compiler can (GCC and Clang on both architectures). Third-party code stays as built.
+# SUPPLE_FRAME_POINTER_FLAGS is the same list as a string for the template products,
+# which take it through the parent's CMAKE_<LANG>_FLAGS without any template file
+# changing. Windows walks stacks with the OS unwinder and needs none.
+set(_supple_frame_pointer_flags "")
+if(NOT WIN32)
+  include(CheckCXXCompilerFlag)
+  list(APPEND _supple_frame_pointer_flags -fno-omit-frame-pointer)
+  check_cxx_compiler_flag(-mno-omit-leaf-frame-pointer SUPPLE_HAS_LEAF_FRAME_POINTER)
+  if(SUPPLE_HAS_LEAF_FRAME_POINTER)
+    list(APPEND _supple_frame_pointer_flags -mno-omit-leaf-frame-pointer)
+  endif()
+endif()
+string(REPLACE ";" " " SUPPLE_FRAME_POINTER_FLAGS "${_supple_frame_pointer_flags}")
+
 # clang-cl accepts warning switches directly, but ignores some GNU driver
 # flags (notably -ffp-contract). Forward every such option explicitly.
 function(supple_compile_options target scope)
@@ -82,6 +101,9 @@ function(supple_target_defaults target)
     # noexcept. Keep their types and RT annotations; suppress only this
     # signature advisory, not function-effect checks or other warnings.
     target_compile_options(${target} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wno-perf-constraint-implies-noexcept>)
+  endif()
+  if(_supple_frame_pointer_flags)
+    target_compile_options(${target} PRIVATE ${_supple_frame_pointer_flags})
   endif()
   if(_supple_sanitize_flags)
     target_compile_options(${target} PRIVATE ${_supple_sanitize_flags})

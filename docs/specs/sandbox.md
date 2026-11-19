@@ -272,7 +272,7 @@ for eventfd type, read/write access and O_NONBLOCK; received copies are CLOEXEC.
 Missing, wrong-type, extra or duplicate descriptors, duplicate subscriptions,
 wrong versions/instance ids and trailing payloads are rejected with structured
 errors; rejected descriptors are closed. A wrong version's error names both
-protocols ("bridge protocol 25, host 24"); a refusal from a bridge older than
+protocols ("bridge protocol 26, host 25"); a refusal from a bridge older than
 protocol 25, which names neither, is reported with the host's. A host/bridge mismatch is detected
 even when no instance is activated. Existing operation numbers are preserved;
 SubscribeNotifications and AckNotifications are appended after TakeIdleOutputs.
@@ -280,6 +280,36 @@ SubscribeNotifications and AckNotifications are appended after TakeIdleOutputs.
 Windows) its reply names the instances with captures since the last ACK
 (`u32 count`, then `count` instance ids), each once. A destroyed instance
 leaves the list. A count above the parent's members plus 16 is unreadable.
+Protocol 26 (27 on Windows) appends three fields to the end of the `Create` reply, after the
+auxiliary ports: `u32 cell`, `u16 generation`, `u64 image`, the instance's place in the bridge's
+own execution table (ADR-0083, topic 6b): its cell (`0xffffffff` when the table had no room), that
+cell's generation and an address in the plug-in's binary in the bridge's address space (0 when
+unknown). They are private to the channel: the host passes them to its crash-report supervisor to
+match what the bridge's table says to the instance it announced, and never records them. The
+reply validator refuses a `Create` reply without them or with anything after them. Nothing else
+in the protocol, and nothing on the data plane, changes.
+Protocol 27 (28 on Windows) appends one process-level operation, `AttachCaptureSlot` (ADR-0083
+topic 6c, `docs/specs/diagnostics.md` "Bridge self-capture"), so that a bridge can write its own
+crash capsule where the host's supervisor can read it. Instance 0, payload `u32 version` (the
+slot's, `selfcapture::kSlotVersion`, 1), exactly one shared-memory resource beside the frame
+(POSIX: a descriptor with SCM_RIGHTS; Windows: the mapping handle the host duplicated into the
+bridge, which the frame carries as its recipient-owned handle, as for `Activate`); the reply repeats
+the version. The host creates the slot (`bridge::createMemory`: a memfd sealed against shrinking and
+growing on Linux, an unlinked `shm_open` object on macOS, a pagefile-backed section on Windows) of
+`kSlotBytes` (256 KiB), writes an empty slot's header into it and sends it right after the
+subscription and before any `Create`; it then closes its descriptor (POSIX) or keeps its handle
+until the process object is gone (Windows). The bridge refuses with a structured error
+(`bridge.capture_slot`, or `bridge.malformed` for a payload that is not exactly `u32`, or
+`bridge.fd` for more than one descriptor) and closes whatever it was sent, changing nothing:
+a wrong version (the error names both), a request with an instance id, no resource, a resource
+that is not shared memory of exactly the slot's size (a pipe, an event, a file or an object of
+another size; on Linux an unsealed memfd), memory that is not an empty slot of this version
+(no magic, a wrong version or capacity, a state that is not empty) and a second slot after one was
+taken (checked last, so each of the others reports its own cause on an attached bridge). It
+requires an established subscription, like every operation but the subscription. A bridge that was
+not attached works exactly as before and writes its capsule nowhere anyone reads. A host that
+could not attach (an allocation failure, a refusal) goes on without a capsule: attaching is never
+a reason to fail a bridge's start. The data plane and every earlier operation are unchanged.
 Protocol 12 appends the main-thread `PluginStatus` query after it (no payload,
 one JSON string reply); the data plane and earlier operation numbers are
 unchanged. See [plugin-status](plugin-status-extension.md).

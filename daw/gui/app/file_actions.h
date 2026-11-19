@@ -20,6 +20,8 @@ struct SDL_Window;
 
 namespace supple::gui {
 
+class SafeLoad;
+
 // Native callbacks may race shutdown; posted completions run on the UI thread.
 class DialogLifetime {
   public:
@@ -71,6 +73,9 @@ class FileActions {
     std::function<void(DialogLifetime::Paths)> guardDialog(
         std::function<void(DialogLifetime::Paths)> done, bool opening = false);
     // For tests: what a dialog would have returned.
+    // Before a project, a recovery or a template loads, ask about the plug-ins a crash report
+    // points at (safe-load, topic 7d). Without one nothing is asked.
+    void setSafeLoad(SafeLoad* safeLoad) { safeLoad_ = safeLoad; }
     void openPath(const std::filesystem::path& path);
     void saveAs(const std::filesystem::path& path);  // in projectFolderPath()
     // One file: onto the selected track (or a new one) at the playhead.
@@ -129,6 +134,10 @@ class FileActions {
     void confirmDeleteSession(const std::string& session, const std::string& title,
                               const std::string& size);
     void showNotice(const std::string& id, const std::string& title, const std::string& text);
+    // Runs `project.plugins {args}` through safe-load, then `then` with its result; nothing when
+    // the question is cancelled. Without safe-load, `then` at once with an empty object.
+    void checked(json::Value args, std::function<bool(const json::Value&)> then);
+    SafeLoad* safeLoad_ = nullptr;
     ui::Root& root_;
     AppActions& actions_;
     cmd::Dispatcher& dispatcher_;

@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <string>
@@ -62,6 +63,7 @@ struct Fixture {
     std::unique_ptr<gui::MeterFeed> feed;
     std::unique_ptr<gui::Mixer> mixer;
     std::vector<std::string> editors, errors;  // ui.fx.editor calls; reported errors
+    std::vector<std::string> enables;          // ui.fx.enable calls
     bool ok = false;
 
     Fixture(std::shared_ptr<engine::RuntimeProtectionOps> operations = {}) {
@@ -103,6 +105,11 @@ struct Fixture {
         actions->addUi("ui.fx.editor", "FX: open or close editor", "fx",
                        [this](const json::Value& v) -> Status {
                            editors.push_back(v.asString());
+                           return {};
+                       });
+        actions->addUi("ui.fx.enable", "FX: enable a disabled plug-in", "fx",
+                       [this](const json::Value& v) -> Status {
+                           enables.push_back(v.asString());
                            return {};
                        });
         actions->onError = [this](const std::string& e) { errors.push_back(e); };
@@ -774,6 +781,187 @@ TEST_CASE("mixer: a plug-in's right-click menu renames that instance") {
     CHECK(f.app->head().fx.find(*model::Id::parse(p1))->label == "Lead trim");
     CHECK(f.node("mixer.fx." + p1)->valueText() == "Lead trim");
     CHECK(f.errors.empty());
+}
+
+TEST_CASE("mixer: a disabled plug-in is marked on its strip, with Enable first in its menu") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    const auto p1 = f.addFx(a, "Hickory");
+    f.refresh();
+    auto* slot = dynamic_cast<ui::Button*>(f.node("mixer.fx." + p1));
+    auto* fxButton = dynamic_cast<ui::Button*>(f.node("mixer.fxadd." + a));
+    REQUIRE(slot);
+    REQUIRE(fxButton);
+    CHECK(slot->valueText().find("(disabled)") == std::string::npos);
+    CHECK(fxButton->textColor().empty());
+    {
+        // Nothing in the project changes, and the strip follows (an override is not in the model).
+        const auto version = f.app->head().version;
+        f.exec("plugin.override", R"({"plugin":"Hickory","mode":"disable"})");
+        CHECK(f.app->head().version == version);
+    }
+    f.refresh();
+    slot = dynamic_cast<ui::Button*>(f.node("mixer.fx." + p1));
+    fxButton = dynamic_cast<ui::Button*>(f.node("mixer.fxadd." + a));
+    REQUIRE(slot);
+    CHECK(slot->valueText().ends_with(" (disabled)"));
+    CHECK(fxButton->textColor() == "meter-hot");
+    f.snapshot("mixer-disabled.png");
+    // A click on it opens no editor: it says why instead.
+    {
+        const std::size_t shown = f.editors.size();
+        const ui::Point click = f.centre(f.node("mixer.fx." + p1));
+        f.pointer(ui::PointerEvent::Type::Down, click);
+        f.pointer(ui::PointerEvent::Type::Up, click);
+        CHECK(f.editors.size() == shown);
+        REQUIRE_FALSE(f.errors.empty());
+        CHECK(f.errors.back().find("not loaded") != std::string::npos);
+        f.errors.clear();
+    }
+    // Enable comes first in the slot's menu.
+    const ui::Point at = f.centre(f.node("mixer.fx." + p1));
+    f.pointer(ui::PointerEvent::Type::Down, at, 1, 0, 3);
+    f.pointer(ui::PointerEvent::Type::Up, at, 1, 0, 3);
+    ui::Node* menu = f.node("mixer.fxmenu." + p1);
+    const ui::Point first{menu->bounds().x + 40, menu->bounds().y + 13};
+    f.pointer(ui::PointerEvent::Type::Move, first);
+    f.pointer(ui::PointerEvent::Type::Down, first);
+    f.pointer(ui::PointerEvent::Type::Up, first);
+    REQUIRE(f.enables.size() == 1);
+    CHECK(f.enables[0] == p1);
+    // Loaded again: the marks go, and the menu has its three rows.
+    f.exec("plugin.override", R"({"plugin":"Hickory","mode":"normal"})");
+    f.refresh();
+    CHECK(dynamic_cast<ui::Button*>(f.node("mixer.fx." + p1))->valueText().find("(disabled)") ==
+          std::string::npos);
+    CHECK(dynamic_cast<ui::Button*>(f.node("mixer.fxadd." + a))->textColor().empty());
+}
+
+namespace {
+// The pixel at the middle of a slot's left edge, inside its outline: the bar's place.
+std::array<int, 3> barPixel(Fixture& f, const std::string& slot) {
+    f.root->damageAll();
+    f.root->frame(false);
+    const gui::Image image = f.root->readBack();
+    const ui::Rect b = f.node(slot)->bounds();
+    const int x = static_cast<int>(b.x) + 2, y = static_cast<int>(b.y + b.h / 2);
+    const std::size_t at = (static_cast<std::size_t>(y) * static_cast<std::size_t>(image.width) +
+                            static_cast<std::size_t>(x)) *
+                           4;
+    return {image.rgba[at], image.rgba[at + 1], image.rgba[at + 2]};
+}
+bool is(const std::array<int, 3>& pixel, const ui::Color& c) {
+    return std::abs(pixel[0] - static_cast<int>(std::lround(c.r * 255))) <= 2 &&
+           std::abs(pixel[1] - static_cast<int>(std::lround(c.g * 255))) <= 2 &&
+           std::abs(pixel[2] - static_cast<int>(std::lround(c.b * 255))) <= 2;
+}
+}  // namespace
+
+TEST_CASE(
+    "mixer: a slot is disabled or failed in the same place and size, a bar inside its outline") {
+    Fixture f;
+    if (!f.ok) return;
+    // A frozen clock: the marks follow what the test applies, not the real engine status.
+    f.mixer->attention().now = [] { return std::chrono::steady_clock::time_point{}; };
+    const auto a = f.addTrack("channel", "A");
+    const auto p1 = f.addFx(a, "Hickory");
+    const auto p2 = f.addFx(a, "Hickory");
+    const auto p3 = f.addFx(a, "Hickory");
+    f.exec("fx.set", R"({"fx":")" + p1 + R"(","bypass":true})");
+    f.exec("fx.set", R"({"fx":")" + p2 + R"(","offline":true})");
+    f.refresh();
+    const ui::Theme& theme = f.root->theme();
+    const ui::Rect before = f.node("mixer.fx." + p3)->bounds();
+    const auto beforeX = static_cast<double>(before.x), beforeW = static_cast<double>(before.w),
+               beforeH = static_cast<double>(before.h);
+    CHECK(f.node("mixer.fx." + p1)->valueText().ends_with(" (bypassed)"));
+    CHECK(f.node("mixer.fx." + p2)->valueText().ends_with(" (offline)"));
+    CHECK_FALSE(is(barPixel(f, "mixer.fx." + p1), theme.color("meter-hot")));
+    CHECK(f.node("mixer.fxadd." + a)->valueText() == "fx");
+    CHECK(dynamic_cast<ui::Button*>(f.node("mixer.fxadd." + a))->textColor().empty());
+
+    SUBCASE("disabled wins over bypassed and over offline; the bar is amber") {
+        f.exec("plugin.override", R"({"plugin":"Hickory","mode":"disable"})");
+        f.refresh();
+        for (const auto& id : {p1, p2, p3}) {
+            CHECK(f.node("mixer.fx." + id)->valueText().ends_with(" (disabled)"));
+            CHECK(is(barPixel(f, "mixer.fx." + id), theme.color("meter-hot")));
+        }
+        // The slot keeps its place and its 18-unit height.
+        CHECK(static_cast<double>(f.node("mixer.fx." + p3)->bounds().h) ==
+              doctest::Approx(beforeH));
+        CHECK(static_cast<double>(f.node("mixer.fx." + p3)->bounds().x) ==
+              doctest::Approx(beforeX));
+        CHECK(static_cast<double>(f.node("mixer.fx." + p3)->bounds().w) ==
+              doctest::Approx(beforeW));
+        CHECK(beforeH == doctest::Approx(18.0));
+        f.snapshot("mixer-slot-states-disabled.png");
+    }
+    SUBCASE(
+        "failed: the same slot, a red bar, \" (failed)\", and it wins over offline and bypassed") {
+        engine::EngineStatus status;
+        status.failedFx = {p1, p2};
+        f.mixer->attention().apply(status);
+        f.refresh();
+        CHECK(f.node("mixer.fx." + p1)->valueText().ends_with(" (failed)"));
+        CHECK(f.node("mixer.fx." + p2)->valueText().ends_with(" (failed)"));
+        CHECK(is(barPixel(f, "mixer.fx." + p1), theme.color("clip")));
+        CHECK_FALSE(f.node("mixer.fx." + p3)->valueText().ends_with(" (failed)"));
+        CHECK(static_cast<double>(f.node("mixer.fx." + p3)->bounds().h) ==
+              doctest::Approx(beforeH));
+        // "fx" is in the warning colour while the chain holds one: failed counts as disabled does.
+        CHECK(dynamic_cast<ui::Button*>(f.node("mixer.fxadd." + a))->textColor() == "meter-hot");
+        // A click opens no editor, and says why.
+        const std::size_t shown = f.editors.size();
+        const ui::Point click = f.centre(f.node("mixer.fx." + p1));
+        f.pointer(ui::PointerEvent::Type::Down, click);
+        f.pointer(ui::PointerEvent::Type::Up, click);
+        CHECK(f.editors.size() == shown);
+        REQUIRE_FALSE(f.errors.empty());
+        CHECK(f.errors.back().find("failed") != std::string::npos);
+        f.errors.clear();
+        f.snapshot("mixer-slot-states-failed.png");
+        // Restarted (no longer failed): the marks go.
+        f.mixer->attention().apply(engine::EngineStatus{});
+        f.refresh();
+        CHECK(f.node("mixer.fx." + p1)->valueText().ends_with(" (bypassed)"));
+        CHECK(dynamic_cast<ui::Button*>(f.node("mixer.fxadd." + a))->textColor().empty());
+    }
+    SUBCASE("all the states in one strip, for the picture") {
+        // Another plug-in for the ones that are not disabled: an override is per plug-in.
+        std::string other;
+        const auto listed = f.exec("plugin.list", "{}");
+        for (const auto& p : listed.find("plugins")->asArray())
+            if (other.empty() && p.find("name")->asString() != "Hickory")
+                other = p.find("id")->asString();
+        if (other.empty()) return;  // a partial build has one plug-in only
+        const auto q1 =
+            f.exec("fx.add", R"({"track":")" + a + R"(","plugin":")" + other + R"("})")["fx"]
+                .asString();
+        const auto q2 =
+            f.exec("fx.add", R"({"track":")" + a + R"(","plugin":")" + other + R"("})")["fx"]
+                .asString();
+        f.exec("fx.set", R"({"fx":")" + q1 + R"(","bypass":true})");
+        engine::EngineStatus status;
+        status.failedFx = {q2};
+        f.mixer->attention().apply(status);
+        f.exec("plugin.override", R"({"plugin":"Hickory","mode":"disable"})");
+        f.refresh();
+        CHECK(f.node("mixer.fx." + q1)->valueText().ends_with(" (bypassed)"));
+        CHECK(f.node("mixer.fx." + q2)->valueText().ends_with(" (failed)"));
+        CHECK(f.node("mixer.fx." + p1)->valueText().ends_with(" (disabled)"));
+        f.snapshot("mixer-slot-states.png");
+    }
+    SUBCASE("a disabled plug-in that is also listed failed reads as disabled") {
+        f.exec("plugin.override", R"({"plugin":"Hickory","mode":"disable"})");
+        engine::EngineStatus status;
+        status.failedFx = {p1};
+        f.mixer->attention().apply(status);
+        f.refresh();
+        CHECK(f.node("mixer.fx." + p1)->valueText().ends_with(" (disabled)"));
+        CHECK(is(barPixel(f, "mixer.fx." + p1), theme.color("meter-hot")));
+    }
 }
 
 TEST_CASE("mixer: a plug-in's right-click menu duplicates it after itself or deletes it") {
@@ -1655,6 +1843,72 @@ TEST_CASE("mixer: the chain's empty part takes a double-click (plugin browser); 
     CHECK(outputs[0] == model::kMaster);
 }
 
+TEST_CASE("preferences: remembered plug-in choices are listed, forgotten one by one or all") {
+    Fixture f;
+    if (!f.ok) return;
+    views::MouseMap map;
+    gui::MouseDialog mouse(*f.root, map, {});
+    const auto file = f.dir / "config" / "preferences.json";
+    gui::Preferences start;
+    start.rememberedLoads = {
+        {"clap", "com.acme.canary", "0123abcd", "bridge", "Canary Verb", "Acme", "1.2.0", 10},
+        {"vst3", "com.acme.other", "ff00", "disable", "", "", "", 20},
+        {"clap", "com.acme.fine", "aa", "normal", "Fine EQ", "Acme", "3.0", 30}};
+    gui::PreferencesDialog prefs(*f.root, *f.app, mouse, start, file);
+    std::vector<std::string> problems;
+    prefs.onError = [&](const std::string& message) { problems.push_back(message); };
+    prefs.open();
+    f.root->frame(false);
+    // A section of its own: the heading, the count, Forget all and a rule, then a row to a choice.
+    REQUIRE(f.root->find("prefs.remembered"));
+    CHECK(f.node("prefs.remembered.head.title")->valueText() == "Plug-in choices");
+    CHECK(f.node("prefs.remembered.count")->valueText() == "3 choices");
+    CHECK(f.root->find("prefs.remembered.head.rule"));
+    CHECK(f.node("prefs.remembered.row.0.name")->valueText() == "Canary Verb  Acme \u00b7 1.2.0");
+    CHECK(f.node("prefs.remembered.row.0.choice")->valueText() == "In a separate process");
+    CHECK(f.node("prefs.remembered.row.1.name")->valueText() == "Unknown plug-in");
+    CHECK(f.node("prefs.remembered.row.1.choice")->valueText() == "Disabled");
+    CHECK(f.node("prefs.remembered.row.2.choice")->valueText() == "Normally");
+    // The columns sit on the form's grid: the choice where the other rows' controls start, Forget
+    // at the right edge, Forget all at the right of the heading.
+    CHECK(f.node("prefs.remembered.row.0.choice")->bounds().x ==
+          f.node("prefs.monitor.set")->bounds().x);
+    const float edge = f.node("prefs.monitor.set")->bounds().right();
+    CHECK(std::abs(f.node("prefs.remembered.row.0.forget")->bounds().right() - edge) < 2.0f);
+    CHECK(std::abs(f.node("prefs.remembered.forget_all")->bounds().right() - edge) < 2.0f);
+    if (const char* out = std::getenv("SUPPLE_TEST_SNAPSHOTS")) {
+        f.root->damageAll();
+        f.root->frame(false);
+        (void)gui::writePng(std::filesystem::path(out) / "prefs-remembered.png",
+                            f.root->readBack());
+    }
+    // Forget the middle one: saved, the rest keep their order.
+    REQUIRE(f.root->click("prefs.remembered.row.1.forget"));
+    f.root->frame(false);
+    CHECK(problems.empty());
+    REQUIRE(prefs.preferences().rememberedLoads.size() == 2);
+    CHECK(prefs.preferences().rememberedLoads[1].id == "com.acme.fine");
+    CHECK(f.node("prefs.remembered.row.1.name")->valueText().rfind("Fine EQ", 0) == 0);
+    CHECK_FALSE(f.root->find("prefs.remembered.row.2"));
+    auto saved = gui::Preferences::load(file);
+    REQUIRE(saved);
+    CHECK(saved->rememberedLoads.size() == 2);
+    // Forget all: the sentence stands where the rows were, and no button to clear nothing.
+    REQUIRE(f.root->click("prefs.remembered.forget_all"));
+    f.root->frame(false);
+    CHECK(prefs.preferences().rememberedLoads.empty());
+    CHECK(f.root->find("prefs.remembered.empty"));
+    CHECK_FALSE(f.root->find("prefs.remembered.forget_all"));
+    CHECK(f.node("prefs.remembered.count")->valueText() == "none");
+    saved = gui::Preferences::load(file);
+    REQUIRE(saved);
+    CHECK(saved->rememberedLoads.empty());
+    // A new dialog on no choices says so too.
+    prefs.open();
+    f.root->frame(false);
+    CHECK(f.root->find("prefs.remembered.empty"));
+}
+
 TEST_CASE("mixer: the strips match their golden picture") {
     Fixture f;
     if (!f.ok) return;
@@ -1806,7 +2060,9 @@ TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
     CHECK(f.node("prefs.advanced.toggle")->valueText() == "Show");
     CHECK_FALSE(f.node("prefs.threads.set")->visibleInTree());
     const float folded = f.node("prefs")->bounds().h;
-    CHECK(folded < 480);  // the everyday settings alone
+    // The everyday settings alone, the section of remembered plug-in choices (topic 7d) with its
+    // sentence among them.
+    CHECK(folded < 540);
     REQUIRE(f.root->click("prefs.advanced.toggle"));
     f.root->frame(false);
     CHECK(f.node("prefs.advanced")->visible);
@@ -1966,6 +2222,9 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
     values.sync.onLoss = "freewheel";
     values.sync.ltcOutput = true;
     values.sync.ltcOutputChannel = 4;
+    values.rememberedLoads = {{"clap", "com.acme.canary", "0123abcd", "bridge", "Canary Verb",
+                               "Acme", "1.2.0", 1763400000000},
+                              {"vst3", "com.acme.other", "ff00", "disable", "", "", "", 5}};
     REQUIRE(values.save(file));
     auto loaded = gui::Preferences::load(file);
     REQUIRE(loaded);
@@ -1979,15 +2238,16 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
     CHECK(loaded->renderOpenFolder);
     CHECK(loaded->audio == values.audio);
     CHECK(loaded->sync == values.sync);
+    CHECK(loaded->rememberedLoads == values.rememberedLoads);  // 1.10, topic 7d
     CHECK(loaded->midiOutputs.empty());  // the engine writes these records, not the GUI
     const auto bytes = readFile(file).value();
-    CHECK(std::string(bytes.begin(), bytes.end()).find("supple.preferences/1.9") !=
+    CHECK(std::string(bytes.begin(), bytes.end()).find("supple.preferences/1.10") !=
           std::string::npos);
     REQUIRE(loaded->save(file));
     CHECK(readFile(file).value() == bytes);
     // Older schemas load, with defaults for what they lack.
     for (const char* version :
-         {"1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9"}) {
+         {"1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10"}) {
         REQUIRE(writeFileAtomic(
             file, std::string("{\"schema\":\"supple.preferences/") + version + "\"}"));
         auto old = gui::Preferences::load(file);
@@ -2001,6 +2261,7 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
         CHECK_FALSE(old->renderOpenFolder);
         CHECK(old->audio == gui::AudioDeviceSettings{});
         CHECK(old->sync == engine::SyncSettings{});
+        CHECK(old->rememberedLoads.empty());
         CHECK(old->midiOutputs.empty());
     }
     // A 1.8 clock record on disk (the engine's midi.outputs.set) loads, and a
@@ -2035,6 +2296,17 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
         auto rejected = gui::Preferences::load(file);
         REQUIRE_FALSE(rejected);
         CHECK(rejected.error().path == std::string("/") + field);
+        CHECK_FALSE(rejected.error().hint.empty());
+    }
+    // A remembered choice that cannot be read names its entry.
+    for (const char* bad : {R"([{"format":"clap","id":"a","build_id":"b","mode":"maybe"}])",
+                            R"([{"format":"clap","id":"a","mode":"bridge"}])", R"({"a":1})"}) {
+        REQUIRE(writeFileAtomic(
+            file,
+            std::string(R"({"schema":"supple.preferences/1.10","plugin_overrides":)") + bad + "}"));
+        auto rejected = gui::Preferences::load(file);
+        REQUIRE_FALSE(rejected);
+        CHECK(rejected.error().path.rfind("/plugin_overrides", 0) == 0);
         CHECK_FALSE(rejected.error().hint.empty());
     }
     // So does a wrong audio device value, under /audio.

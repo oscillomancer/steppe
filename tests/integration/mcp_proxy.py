@@ -4,6 +4,7 @@
 import json
 import os
 from pipe_ready import wait_pipe
+import processes
 import subprocess
 import sys
 import tempfile
@@ -15,7 +16,8 @@ def main():
     server_binary, proxy_binary, target = sys.argv[1:4]
     engine_mode = target == "--engine"
     started = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix="supple-proxy-test-") as temporary:
+    temporary = tempfile.mkdtemp(prefix="supple-proxy-test-")
+    try:
         socket = Path(temporary) / "control.sock"
         command = [server_binary, "serve", "--socket", str(socket), "--workdir", temporary]
         if not engine_mode:
@@ -106,18 +108,15 @@ def main():
             if proxy and proxy.poll() is None:
                 proxy.kill()
                 proxy.wait(timeout=5)
-            if server.poll() is None:
-                server.terminate()
-                try:
-                    server.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    server.kill()
-                    server.wait(timeout=5)
-            # POSIX terminate delivers the installed SIGTERM handler. Windows
-            # TerminateProcess cannot run destructors; this private directory
-            # is reclaimed by the harness. Native endpoint tests cover close.
+            # Ends the server and, on Windows, the program its supervisor started.
+            processes.stop(server, timeout=5)
+            # POSIX terminate reaches the supervisor's handler, which passes it on to the
+            # program, so the socket is gone. On Windows the program's lock file can stay
+            # open for a moment after taskkill returns; remove_tree below waits for that.
             if os.name != "nt":
                 assert not socket.exists(), "server left its socket after shutdown"
+    finally:
+        processes.remove_tree(temporary)
     print(f"MCP proxy socket integration passed in {time.monotonic() - started:.2f}s")
 
 

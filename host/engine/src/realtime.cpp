@@ -16,6 +16,7 @@
 #include <type_traits>
 
 #include "supple/base/thread.h"
+#include "supple/diagctx/table.h"
 #include "supple/host/clap_host.h"
 
 #include <cstring>
@@ -406,6 +407,7 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
         rendererWakeAt_.store(INT64_MAX);
         renderer_ = std::thread([this, first, rendererStartup, native] {
             nameThread("audio-render");
+            (void)diagctx::registerThread(diagctx::ThreadRole::AudioRender);
             rt::prefaultStack();  // ADR-0025
             const bool elevated = rendererStartup && rendererStartup->enter(0);
             detail::ThreadStartup::Cleanup cleanup{elevated ? native : nullptr};

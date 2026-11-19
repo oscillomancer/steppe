@@ -52,12 +52,14 @@ class Row : public ui::Node {
     bool selected = false;
     bool dragged = false;                          // being dragged: dimmed
     bool markerTop = false, markerBottom = false;  // where a dragged row would land
+    bool disabledMark = false;  // a plug-in this run has disabled: a 3-unit amber bar at the left
     std::function<void(Phase, ui::Point)> onDrag;  // unset: the row stays put
     void paint(ui::Canvas& c) override {
         const ui::Theme& t = c.theme();
         if (selected) c.fillRound(bounds(), t.radius("s"), t.color("selection").withAlpha(0.55f));
         if (dragged) c.fillRound(bounds(), t.radius("s"), t.color("ground").withAlpha(0.5f));
         const ui::Rect b = bounds();
+        if (disabledMark) c.fillRect({b.x, b.y + 1, 2.0f, b.h - 2}, t.color("meter-hot"));
         if (markerTop) c.fillRect({b.x, b.y - 3, b.w, 3}, t.color("focus"));
         if (markerBottom) c.fillRect({b.x, b.bottom(), b.w, 3}, t.color("focus"));
     }
@@ -886,13 +888,29 @@ std::string FxWindow::badgeText(const model::FxInstance& fx, model::Isolation ef
 }
 
 // engine.status lists the isolated instances whose process crashed or hung.
-void FxWindow::checkFailures() {
-    const auto status = app_.engineStatus();
+void FxWindow::checkFailures() { applyFailures(app_.engineStatus()); }
+
+void FxWindow::applyFailures(const engine::EngineStatus& status) {
     std::set<std::string> failed;
     for (const auto& id : status.failedFx) failed.insert(id);
-    if (failed == failed_) return;
+    std::map<std::string, std::string> incidents;
+    if (status.failedErrors.isArray())
+        for (const auto& entry : status.failedErrors.asArray()) {
+            const json::Value* fx = entry.find("fx");
+            const json::Value* incident = entry.find("incident");
+            if (fx && fx->isString() && incident && incident->isString() &&
+                !incident->asString().empty())
+                incidents[fx->asString()] = incident->asString();
+        }
+    if (failed == failed_ && incidents == incidents_) return;
     failed_ = std::move(failed);
+    incidents_ = std::move(incidents);
     refresh();
+}
+
+std::string FxWindow::incidentOf(const std::string& fx) const {
+    const auto at = incidents_.find(fx);
+    return at == incidents_.end() ? std::string() : at->second;
 }
 
 void FxWindow::tick(bool event) {
@@ -900,6 +918,7 @@ void FxWindow::tick(bool event) {
     if (replaced) {
         latency_.clear();
         failed_.clear();
+        incidents_.clear();
         selected_ = anchor_ = {};
         picked_.clear();
         take_.reset();
@@ -935,7 +954,9 @@ void FxWindow::tick(bool event) {
             root().damageAll();
         }
     }
-    if (page_ && (replaced || app_.head().version != shownVersion_)) refresh();
+    const bool overridden = app_.loadOverridesVersion() != overridesVersion_;
+    overridesVersion_ = app_.loadOverridesVersion();
+    if (page_ && (replaced || overridden || app_.head().version != shownVersion_)) refresh();
     // The Rack devices' knobs follow their Macros (automation as it plays).
     std::vector<model::Id> macros;
     if (page_)
@@ -1026,11 +1047,22 @@ Status FxWindow::setEach(model::Id fx, const char* field, bool value) {
 // A press on a row: alone it selects the effect (a double click also opens
 // its editor, only that one); Ctrl adds or takes it out of the selection;
 // Shift selects every row from the last one clicked.
+bool FxWindow::disabledFx(model::Id fx) const {
+    const model::FxInstance* inst = app_.head().fx.find(fx);
+    return inst && app_.loadModeOf(inst->plugin) == engine::LoadMode::Disable;
+}
+
 void FxWindow::press(model::Id fx, unsigned mods, int clicks) {
     const bool ctrl = (mods & ui::kCtrl) != 0, shift = (mods & ui::kShift) != 0;
     if (!ctrl && !shift) {
         if (clicks >= 2) {
             if (selected_ != fx || !picked_.empty()) select(fx);
+            if (disabledFx(fx)) {
+                setStatus(nameOf(fx) +
+                          " is disabled for this run and not loaded. Enable it to "
+                          "open its editor.");
+                return;
+            }
             if (hooks_.openEditor)
                 if (auto opened = hooks_.openEditor(fx); !opened)
                     setStatus("editor: " + opened.error().message);
@@ -1235,6 +1267,8 @@ void FxWindow::buildRow(ui::Node& body, model::Id fx, std::size_t index, bool in
             dragRow(fx, static_cast<int>(phase), p);
         };
     const bool isFailed = failed_.count(id) != 0;
+    const bool isDisabled = app_.loadModeOf(inst->plugin) == engine::LoadMode::Disable;
+    row.disabledMark = isDisabled;
 
     {
         auto& l1 = line(row, prefix + "line1." + id);
@@ -1242,12 +1276,16 @@ void FxWindow::buildRow(ui::Node& body, model::Id fx, std::size_t index, bool in
         std::snprintf(number, sizeof number, "%zu.", index + 1);
         l1.emplace<ui::Label>(prefix + "number." + id, number, ui::Font::Mono, "caption",
                               "ink-quiet");
-        auto& name =
-            l1.emplace<ui::Label>(prefix + "name." + id, nameOf(fx), ui::Font::Ui, "small");
-        name.layout.width = ui::SizeRule::fixed(160);
+        auto& name = l1.emplace<ui::Label>(prefix + "name." + id, nameOf(fx), ui::Font::Ui, "small",
+                                           isDisabled ? "ink-quiet" : "ink");
+        name.layout.width = ui::SizeRule::fixed(110);
         auto& latency = l1.emplace<ui::Label>(prefix + "latency." + id, latencyOf(fx),
                                               ui::Font::Mono, "caption", "ink-quiet");
-        latency.layout.width = ui::SizeRule::fixed(80);
+        latency.layout.width = ui::SizeRule::fixed(64);
+        // A disabled plug-in has nothing to restart: what is wanted is to load it again.
+        if (isDisabled && hooks_.enableFx)
+            l1.emplace<ui::Button>(prefix + "enable." + id, "Enable",
+                                   [this, fx] { hooks_.enableFx(fx); });
         if (isFailed)
             l1.emplace<ui::Button>(prefix + "restart." + id, "Restart", [this, fx] {
                 json::Value args = json::Value::object();
@@ -1255,31 +1293,46 @@ void FxWindow::buildRow(ui::Node& body, model::Id fx, std::size_t index, bool in
                 if (dispatch("fx.restart", std::move(args))) {
                     latency_.erase(fx.str());
                     failed_.erase(fx.str());
+                    incidents_.erase(fx.str());
                     refresh();
                 }
             });
+        // The two answers to a failure side by side: restart it, or read what it left.
+        if (isFailed && hooks_.showCrashReport && !incidentOf(id).empty())
+            l1.emplace<ui::Button>(
+                  prefix + "report." + id, "Show report",
+                  [this, report = incidentOf(id)] { hooks_.showCrashReport(report); })
+                .quiet = true;
+
         // Bypass, offline and remove act on every selected effect when the
         // row is one of several selected (gui.md §4.5).
+        // Acting on a plug-in that is not loaded means nothing: those buttons are off, and Enable
+        // is the one boxed button the row has.
         l1.emplace<ui::Button>(prefix + "bypass." + id, inst->bypass ? "bypassed" : "bypass",
                                [this, fx, bypass = inst->bypass] {
                                    if (setEach(fx, "bypass", !bypass)) refresh();
-                               });
+                               })
+            .enabled = !isDisabled;
         l1.emplace<ui::Button>(prefix + "offline." + id, inst->offline ? "offlined" : "offline",
                                [this, fx, offline = inst->offline] {
                                    if (setEach(fx, "offline", !offline)) refresh();
-                               });
+                               })
+            .enabled = !isDisabled;
+        // A plug-in that is not loaded has no editor to open (the row's second line says why).
         l1.emplace<ui::Button>(prefix + "editor." + id, "UI", [this, fx] {
-            if (hooks_.openEditor) {
-                if (auto opened = hooks_.openEditor(fx); !opened)
-                    setStatus("editor: " + opened.error().message);
-            }
-        });
+              if (hooks_.openEditor) {
+                  if (auto opened = hooks_.openEditor(fx); !opened)
+                      setStatus("editor: " + opened.error().message);
+              }
+          }).enabled = !isDisabled;
         l1.emplace<ui::Button>(prefix + "params." + id, "params", [this, fx] {
-            selected_ = fx;
-            showParamsTab();
-        });
-        l1.emplace<ui::Button>(prefix + "presets." + id, "presets", [this, fx] { presetMenu(fx); });
-        l1.emplace<ui::Button>(prefix + "remove." + id, "Remove", [this, fx] {
+              selected_ = fx;
+              showParamsTab();
+          }).enabled = !isDisabled;
+        l1.emplace<ui::Button>(prefix + "presets." + id, "presets", [this, fx] {
+              presetMenu(fx);
+          }).enabled = !isDisabled;
+        auto& remove = l1.emplace<ui::Button>(prefix + "remove." + id, "Remove", [this, fx] {
             const std::vector<model::Id> each = targets(fx);
             auto removed = dispatcher_.transact(
                 each.size() > 1 ? "Remove effects" : "Remove effect", kUiOrigin,
@@ -1301,14 +1354,32 @@ void FxWindow::buildRow(ui::Node& body, model::Id fx, std::size_t index, bool in
             }
             refresh();
         });
+        remove.quiet = isDisabled;  // Enable is the one boxed button of a disabled row
     }
     {
         auto& l2 = line(row, prefix + "line2." + id);
-        auto& badge = l2.emplace<ui::Label>(
-            prefix + "badge." + id, badgeText(*inst, app_.effectiveIsolation(fx), isFailed),
-            ui::Font::Mono, "caption", isFailed ? "clip" : "ink-faint");
+        // A disabled plug-in does not run anywhere: what the badge would say is replaced by why.
+        // A failed one says "failed" in red after the mode in quiet ink, and no more red than that.
+        ui::Node* badge = nullptr;
+        if (isDisabled) {
+            badge = &l2.emplace<ui::Label>(prefix + "badge." + id,
+                                           "disabled after an unexpected close \u00b7 audio passes "
+                                           "through",
+                                           ui::Font::Ui, "caption", "ink-quiet");
+        } else if (isFailed) {
+            badge = &l2.emplace<ui::RichText>(
+                prefix + "badge." + id,
+                std::vector<ui::TextRun>{{badgeText(*inst, app_.effectiveIsolation(fx), false),
+                                          ui::Font::Mono, "ink-quiet"},
+                                         {" \u00b7 failed", ui::Font::Mono, "clip"}},
+                "caption");
+        } else {
+            badge = &l2.emplace<ui::Label>(prefix + "badge." + id,
+                                           badgeText(*inst, app_.effectiveIsolation(fx), false),
+                                           ui::Font::Mono, "caption", "ink-faint");
+        }
         // Room for the longest: "shared bridge (default) · offline · failed".
-        badge.layout.width = ui::SizeRule::fixed(296);
+        badge->layout.width = ui::SizeRule::fixed(isDisabled ? 340 : 296);
         auto* wetLabel = &l2.emplace<ui::Label>(prefix + "wetlabel." + id, "", ui::Font::Mono,
                                                 "caption", "ink-quiet");
         wetLabel->layout.width = ui::SizeRule::fixed(76);

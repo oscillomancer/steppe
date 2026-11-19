@@ -999,6 +999,9 @@ ArrangeView::ArrangeView(peaks::PeakService& peaks, Resolve resolve, TransportSo
     forward.addFx = [this](const model::Id& id) {
         if (tcpCallbacks_.addFx) tcpCallbacks_.addFx(id);
     };
+    forward.fxNeedsAttention = [this](const model::Id& id) {
+        return tcpCallbacks_.fxNeedsAttention && tcpCallbacks_.fxNeedsAttention(id);
+    };
     forward.mixer = [this] {
         if (tcpCallbacks_.mixer) tcpCallbacks_.mixer();
     };

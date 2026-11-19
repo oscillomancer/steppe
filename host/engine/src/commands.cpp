@@ -33,6 +33,7 @@ namespace supple::engine {
 
 void registerRouteCommands(cmd::Registry& registry);
 void registerLogCommands(cmd::Registry& registry);
+void registerCrashReportCommands(cmd::Registry& registry);
 void registerRulerCommands(cmd::Registry& registry);
 void registerPluginCommands(cmd::Registry& registry);
 void registerGroupCommands(cmd::Registry& registry);
@@ -79,6 +80,7 @@ void registerEngineCommands(cmd::Registry& registry) {
     registerFreezeCommands(registry);
     registerRouteCommands(registry);
     registerLogCommands(registry);
+    registerCrashReportCommands(registry);
     registerRulerCommands(registry);
     registerPluginCommands(registry);
     registerGroupCommands(registry);

@@ -11,6 +11,9 @@ namespace supple::host::platform {
 std::filesystem::path pathFromText(std::string_view text);
 std::string pathText(const std::filesystem::path& path);
 std::filesystem::path executablePath();
+// The executable image a plug-in path holds: the path itself, except a macOS bundle's
+// Contents/MacOS executable (empty when it has none).
+std::filesystem::path bundleExecutable(const std::filesystem::path& path);
 Result<void*> openLibrary(const std::filesystem::path& path);
 void* symbol(void* library, const char* name);
 void closeLibrary(void* library);
