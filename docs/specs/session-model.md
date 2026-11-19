@@ -36,6 +36,8 @@ Session
 │                        cables cb_* (ADR-0062, rack.md §2)
 ├── modulations    mr_*  modulation routes: a rack's Mod Out input → a
 │                        parameter, with a depth (ADR-0096, "Modulation")
+├── scenes         sc_*  launcher columns (ADR-0097, "Scenes and clips")
+├── clips          cl_*  a channel's material for one scene, with takes tk_*
 └── blobs          content-addressed opaque data (plugin states, large arrays)
 ```
 
@@ -51,9 +53,11 @@ reused within a lineage: `tr` track, `it` item, `tk` take, `md` media
 source, `mi` MIDI source, `fx` plugin instance, `sd` route, `en` envelope,
 `ai` automation item, `mk` marker, `rg` region, `tp` tempo point, `ts` meter
 change, `gr` group, `ln` lane, `rj` render job, `rk` rack, `mo` module, `cb`
-cable, `mr` modulation route. `tr_0` is the main master. The rack kinds' and
+cable, `mr` modulation route, `sc` scene, `cl` clip. `tr_0` is the main
+master. The rack kinds' and
 `mr` counters are written once they pass 1 (a project without racks keeps
-its 2.6 `next_ids`; one without modulation routes its earlier ones).
+its 2.6 `next_ids`; one without modulation routes its earlier ones; the
+`sc` and `cl` counters likewise).
 Events inside containers (MIDI notes, envelope points, stretch markers) are
 not objects (ADR-0008).
 
@@ -596,7 +600,8 @@ Canonical JSON (ADR-0009) with members in this order: `schema`, `project`,
 `tempo` (`points`, `meters`), `rulers` (`markers`, `regions`), `tracks`,
 `items`, `takes`, `fx`, `sources` (`media`, `midi`), `routes`, `envelopes`,
 `automation_items`, `groups`, `racks`, `modules` and `cables` (when present),
-`modulations` (when present), `blobs`, then preserved unknown top-level
+`modulations` (when present), `scenes` and `clips` (when present), `blobs`,
+then preserved unknown top-level
 sections and `extensions`, and last `branches` (§5.4) when the project has
 more than main to keep. The document is always main's head. `groups` / `gr_*` are typed track groups since 2.2 (ADR-0052);
 older opaque groups are preserved in extensions with a warning. `ui` belongs to the sidecar. *(Amended 2026-09-26: `fx` — plugin instances are
@@ -1083,6 +1088,15 @@ and naming. All `edit` unless marked (q) query or (a) action.
 - **modulation** (ADR-0096): `modulation.add {source, target, depth,
   enabled?, lane?}`, `modulation.set {modulation, …}`, `modulation.remove
   {modulation}`, `modulation.list {track?, fx?, rack?}` (q).
+- **scenes and clips** (ADR-0097, "Scenes and clips"): `scene.add {name?,
+  color?, at?}`, `scene.set`, `scene.remove`, `scene.move {scene, to}`,
+  `scene.list` (q); `clip.add {track, scene, notation? | audio_file? |
+  midi_file? | item?, pooled?}`, `clip.set`, `clip.remove`, `clip.move`,
+  `clip.duplicate`; `item.add {clip, …}` lays a copy on the timeline; launches
+  (transport state, never history): `launch.clip`, `launch.scene`,
+  `launch.stop {track?}`, `launch.arrangement {track?}` (a), `launch.state`
+  (q), `launch.capture {on}` (a), `launch.commit`; `scene.insert`,
+  `scene.capture {region}`, `arrangement.build {sequence}`.
 - **automation**: `env.add {target}`, `env.remove`, `env.set {mode, active,
   …}`, `env.points.set {env, points, range?}`, `env.points.add`,
   `env.points.remove {range}`, `env.add {take, param}` (take envelopes),
@@ -1568,3 +1582,113 @@ Editing them fails with `track.frozen`.
 - `session.describe` lists the routes under their target's track.
 - A file whose target lost its modulatable flag loads. The engine treats
   that route as inert (engine.md §1.4.1).
+
+### Scenes and clips (schema 2.18, ADR-0097)
+
+Schema numbers follow the order of landing (amendment G-d). The change adds
+two top-level collections, `scenes` and `clips`, each written only when
+present, and the project field `launch_quantize`, written only when not
+`bar`. Earlier files load unchanged and nothing migrates.
+
+| Scene field | Meaning |
+|---|---|
+| `name`, `color` | As a region's. |
+| `order` | The column, an integer (required). Distinct across scenes; `scene.add` and `scene.move` keep them 0 .. n−1. |
+
+| Clip field | Meaning |
+|---|---|
+| `track` | A channel (required). |
+| `scene` | Its scene (required). |
+| `takes`, `active_take` | Ordinary takes, as an item's. A clip with takes has an active take. |
+| `length` | The period, > 0, in the clip's unit (required). |
+| `loop` | `{on, start, length}`: the content window that repeats inside the clip, from the take's start offset; default off. |
+| `mode` | `loop` (default) or `once`. |
+| `quantize` | Overrides `launch_quantize` for this clip: `bar`, `beat`, `1/2` … `1/32`, `none`. |
+| `name`, `color`, `mute`, `gain_db` | As an item's. |
+
+**The clip's unit.** `length`, `loop` and the clip's take envelopes are in
+beats for a MIDI clip and in seconds of take time for an audio clip. An
+audio clip plays at its take's own rate; it does not follow the tempo. A clip
+with no source is in beats.
+
+```json
+"scenes": {"sc_1": {"name": "Verse", "order": 0}},
+"clips": {
+  "cl_1": {"track": "tr_2", "scene": "sc_1", "takes": ["tk_9"],
+           "active_take": "tk_9", "length": 8.0,
+           "loop": {"on": true, "start": 0.0, "length": 4.0}, "name": "Bass line"}
+}
+```
+
+**The take owner.** A take belongs to exactly one item or clip
+(`model::takeOwner`); the orphan-take invariant counts both. Moving material
+between an item and a clip copies its takes. An unpooled MIDI source is
+copied with its take unless `pooled` is asked. Audio media are shared.
+
+**Invariants.** Violations are `model.invariant` at the object's path.
+- A clip's track exists and is a channel.
+- A clip's scene exists.
+- At most one clip per (track, scene).
+- `length` is finite and > 0. `loop.start` ≥ 0, and `loop.length` > 0 when
+  `loop.on`.
+- A clip's takes exist and belong to no other item or clip, and the active
+  take is one of them.
+- A clip's sources are all MIDI or all audio (`clip.mixed` at the command).
+- Scene orders are distinct integers.
+- At most 1024 scenes and 16384 clips.
+
+Removing a track or a scene removes its clips. Removing a clip removes its
+takes, and their unpooled sources, as `item.remove` does. The command warns
+`clip.removed` naming the clips. Clips are outside a frozen track's freeze
+hash (the print is the arrangement). They can be edited on a frozen track
+but not launched.
+
+**Older builds (amendment G-c).**
+- A pre-2.18 build keeps `scenes` and `clips` as unknown sections. Clip
+  takes then belong to no item there, so it refuses to open a file whose
+  clips hold takes, at the take's path, as a 2.6 build refuses a 2.7 file's
+  module routes.
+- A file that comes back through one anyway opens:
+  - a missing or low `sc` or `cl` counter is derived from the highest id;
+  - a clip whose track or scene is gone, whose track is not a channel, or
+    whose takes are gone or owned by an item is dropped with a
+    `project.clip_dropped` warning at its path naming it and why;
+  - of two clips on one (track, scene), the lower id is kept.
+
+**Commands.**
+- The content commands accept a clip wherever they take an item. The
+  `item` field's ID pattern becomes `^(it|cl)_[0-9]+$`, so merges remap it:
+  - `midi.get/write/edit/notes`, `item.export`;
+  - `take.list/add/activate/set/remove/extract` and `take.hits.*`;
+  - `fx.add {take}` and `env.add {take}` on a clip's take.
+- Refused on a clip's take with `clip.unsupported`:
+  `take.stretch.add/move/remove`.
+- Timeline commands refuse a clip with `item.kind`, whose hint names the
+  clip command:
+  - `item.move/set/split/duplicate/remove/paste`;
+  - `item.consolidate` and `.commit`, `item.heal`;
+  - `audio.quantize` and `audio.warp.*`;
+  - `group.targets` and `record.commit`.
+- Clips never count toward the project length, render bounds, analysis ends
+  or freeze length.
+- `clip.add`, `clip.duplicate`, `take.add` and `take.activate` on a clip, and
+  `take.set` on a clip's source window refuse what would put the resident
+  audio over the in-memory budget (`clip.memory`).
+- Errors: `clip.track`, `clip.scene`, `clip.occupied`, `clip.mixed`,
+  `clip.length`, `clip.memory`, `clip.unsupported`, `clip.limit`,
+  `scene.limit` and `item.kind`. Each carries `code`, `message`, `path` and a
+  `hint`.
+- Launches (`launch.*`) change transport state only. They are logged for
+  `launch.commit` while capture is on, and they are never in history.
+
+**What `session.describe` prints.** After the tracks, one line per scene in
+order with its clips under it. Each clip line has its track, length in its
+unit, mode, content and flags; no clip moves the project length:
+
+```
+Scenes (2):
+  sc_1 Verse
+    tr_2 Bass: cl_1 "Bass line" 8 beats · loop 0–4 · MIDI mi_3, 12 notes
+    tr_5 Pad: cl_4 "Pad swell" 6.0 s once · audio md_2 pad.wav · quantize beat · muted
+  sc_2 Chorus (no clips)
+```

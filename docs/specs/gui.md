@@ -2359,6 +2359,92 @@ Inputs, outputs, sends and record settings stay where they are (the track
 row, the mixer strip and the routing matrix).
 
 
+### 4.15 Clip launcher (ADR-0097; step L3)
+
+*Specified before it is built, from gui-lead's mock 13 (19 Nov). "Clip
+launcher" is always said in full: "the launcher" elsewhere is the process
+that starts the app (ADR-0091).*
+
+**Where it is.** The clip launcher is a pane between the track panel and the
+lanes, on the one row model: its rows are `TrackLayout`'s rows, with the
+same heights, scroll and colours.
+- **Shown.** It is shown by View > Clip launcher (`ui.clips`) and saved in
+  the UI sidecar (`clips: {shown, width}`). A project with scenes opens with it
+  shown, and a new project hides it.
+- **Width.** Dragging the rule between the pane and the lanes sets its width.
+  Dragged all the way, the clip launcher fills the view and the lanes hide; a
+  drag back brings them.
+- **The header cell (amendment L-h).** Above the scene headers, the pane
+  takes a cell in the arrange header row, beside the ruler. It holds
+  **stop** (`launch.stop`, every track) and **arrangement**
+  (`launch.arrangement`, every track back to the timeline).
+
+**Columns.**
+- **Scenes.** There is one column per scene in `order`, 64 units wide. Its
+  header, in the ruler band's lowest row (the marker row's height), shows a
+  ▶ and the scene's name.
+  - A click on the ▶ launches the scene (`launch.scene`). The scene playing
+    now has its header outlined in `playing`.
+  - A double-click on the name renames it in place (`scene.set`).
+  - A drag on the header moves the column (`scene.move`).
+  - A right-click offers Rename, Colour, Insert into arrangement at the
+    playhead (`scene.insert`, L4) and Delete (`scene.remove`, with its
+    clips).
+  - A last header cell, **+**, adds a scene (`scene.add`).
+- **Arr.** A narrow last column, 22 units, holds per track a dot that is lit
+  in `playing` while the track follows the arrangement. A click on an unlit
+  dot returns the track (`launch.arrangement {track}`).
+
+**Cells.**
+- **Where.** Only a channel's row has cells. Busses, masters and automation
+  lanes show ground across the scene columns. Clips are on channels only.
+- **An empty cell** shows a small square in quiet ink. A click stops the
+  track (`launch.stop {track}`); a double-click makes an empty one-bar MIDI
+  clip there (`clip.add`). No text is drawn in it.
+- **A clip** is a small item: a name bar in its colour (the track's when it
+  has none) and its content drawn by the shared item-body functions
+  (`views::drawAudioBody` / `drawMidiBody`, §4.3) over one period. A
+  muted clip is dimmed, as a muted item is.
+  - **Playing:** a ▶ before the name, an outline, and a progress line along
+    the bottom edge, all in `playing` (telemetry, `launch.state`).
+  - **Queued:** a dashed outline in `playing` until the boundary.
+  - **Held silent** (a `once` clip that ended): the outline without the ▶.
+- **While a clip holds a track,** the track's lanes and items dim (ink at
+  0.45) and its Arr dot is unlit.
+
+**Gestures.**
+- **Click** a clip: launch it (`launch.clip`). A click selects it too; a
+  click on the lanes clears that selection.
+- **Double-click** a clip: open it in the piano roll (MIDI) or the
+  inspector (audio). The editors and content commands take the clip as
+  they take an item (ADR-0097, "The take owner").
+- **Drag** a clip to another cell to move it (`clip.move`), or with Ctrl to
+  copy it (`clip.duplicate`). An occupied cell refuses the drop (the
+  pointer says so).
+- **Drag a clip onto the timeline** to lay a copy there (`item.add {clip}`),
+  snapped as an item drag. **Drag an item into a cell** to make a clip from
+  a copy of its takes (`clip.add {item}`). A refused drop shows the error's
+  message in the status line (a warped take, `clip.unsupported`).
+- **Right-click** a clip: Rename, Colour, Mode (Loop / Once), Quantize ▸
+  (Project, Bar, Beat, 1/2 … 1/32, None), Duplicate, Lay on timeline at
+  playhead, Delete.
+- **Delete** removes the selected clips (`clip.remove`), one undo step,
+  while a cell was clicked last, as Delete takes points after a lane click
+  (§4.3). Copy and paste of clips is later.
+
+**Elsewhere.**
+- **Render dialog.** While any track is held by a clip, it says in one line
+  that renders play the arrangement only.
+- **Inspector.** It shows a selected clip's fields (`clip.set`).
+- **Status line.** It counts scenes beside tracks only when there are some.
+
+**Tests (L3).**
+- Snapshots of the pane with playing, queued, held and empty cells, in both
+  themes.
+- Every gesture above, through the dispatcher, with fixtures built from
+  files until `launch.*` lands.
+- `arrange-items.png` stays byte-identical with the pane hidden.
+
 ## 5. Agent panel (removed)
 
 The app has no built-in agent (ADR-0043). Agents drive it from an external
