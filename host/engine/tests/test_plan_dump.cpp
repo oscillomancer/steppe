@@ -4,7 +4,12 @@
 // compiled plan against a second compile (EngineOptions::verifyPlans).
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <functional>
+#include <map>
+#include <optional>
+#include <string>
+#include <vector>
 
 #include <supple/engine/realtime.h>
 
@@ -294,5 +299,303 @@ TEST_CASE("plan dump: the engine compiles each plan twice and finds them equal (
         engine.stop();
         CHECK(engine.processErrors() == 0);
         CHECK(engine.verifiedPlans() == 2);
+    }
+}
+
+namespace {
+// prepare()'s note-source build as it was before the compile profile's step
+// 2 (a std::map of per-address counts per stage), kept as the reference.
+void referenceSources(d::Stage& st, const std::vector<d::TimedEvent>& events) {
+    std::map<decltype(d::NoteSource{}.addressWithoutOrdinal()), std::uint32_t> counts;
+    for (const auto& timed : events)
+        if (timed.event.noteId >= 0 &&
+            st.noteSources.size() <= static_cast<std::size_t>(timed.event.noteId))
+            st.noteSources.resize(static_cast<std::size_t>(timed.event.noteId) + 1);
+    for (const auto& timed : events) {
+        const auto& event = timed.event;
+        if (event.kind != host::Event::Kind::NoteOn || event.noteId < 0) continue;
+        const auto id = static_cast<std::size_t>(event.noteId);
+        if (st.noteSources.size() <= id) st.noteSources.resize(id + 1);
+        d::NoteSource source;
+        source.origin = timed.origin;
+        source.start = timed.sample;
+        source.port = event.port;
+        source.channel = event.channel;
+        source.key = event.key;
+        source.ordinal = counts[source.addressWithoutOrdinal()]++;
+        source.id = event.noteId;
+        st.noteSources[id] = source;
+    }
+    for (const auto& timed : events)
+        if (timed.event.kind == host::Event::Kind::NoteOff && timed.event.noteId >= 0 &&
+            static_cast<std::size_t>(timed.event.noteId) < st.noteSources.size())
+            st.noteSources[static_cast<std::size_t>(timed.event.noteId)].end = timed.sample;
+    for (const auto& source : st.noteSources)
+        if (source.id >= 0) st.noteSourceIndex.push_back(source);
+    std::sort(st.noteSourceIndex.begin(), st.noteSourceIndex.end(),
+              [](const auto& a, const auto& b) { return a.address() < b.address(); });
+}
+
+bool sameSources(const std::vector<d::NoteSource>& a, const std::vector<d::NoteSource>& b) {
+    return std::equal(a.begin(), a.end(), b.begin(), b.end(), [](const auto& x, const auto& y) {
+        return x.address() == y.address() && x.start == y.start && x.end == y.end && x.id == y.id;
+    });
+}
+}  // namespace
+
+TEST_CASE("plan: each stage's note sources are those of the reference build") {
+    // The compile profile's step 2 replaced the per-stage std::map of note
+    // counts (2.2 ms of a 10 ms compile at 192 tracks, with rack MIDI). The
+    // ordinals (repeats of one origin, port, channel and key) and the index
+    // must stay what the old build made: adoption rebinds voices by them.
+    model::EditTxn t(richSession(), 2);
+    const Id doubled = addChannel(t);
+    addFx(t, doubled, fxOf(kSine));
+    model::MidiSource src;
+    src.sequence.ppq = 960;
+    src.sequence.length = 2 * 960;
+    for (int i = 0; i < 2; ++i)  // the same key at the same tick, twice
+        src.sequence.notes.push_back({0, 480, 0, 64, 100, 0});
+    src.sequence.notes.push_back({960, 480, 0, 67, 100, 0});
+    model::Take take;
+    take.source = t.create(src);
+    take.chain = {t.create(fxOf(kSine))};
+    const Id tk = t.create(take);
+    model::Item item;
+    item.track = doubled;
+    item.length = 6.0;  // three passes of the source
+    item.loop = true;
+    item.takes = {tk};
+    item.activeTake = tk;
+    t.create(item);
+    const auto s = commit(t);
+    auto pool = makePool();
+    MediaCache media;
+    d::Plan p = prepared(s, pool, media);
+    std::size_t stages = 0, repeats = 0;
+    auto check = [&](const d::Stage& st, const std::vector<d::TimedEvent>& events) {
+        d::Stage reference;
+        referenceSources(reference, events);
+        CHECK(sameSources(st.noteSources, reference.noteSources));
+        CHECK(sameSources(st.noteSourceIndex, reference.noteSourceIndex));
+        ++stages;
+        for (const auto& source : st.noteSourceIndex) repeats += source.ordinal > 0;
+    };
+    for (const d::Node& n : p.nodes) {
+        INFO("node " << n.id.str());
+        check(n.midiStage, n.events);
+        if (n.noteTarget >= 0) check(n.chain[static_cast<std::size_t>(n.noteTarget)], n.events);
+        for (const d::TakeChain& tc : n.takeChains)
+            if (tc.noteTarget >= 0)
+                check(tc.chain[static_cast<std::size_t>(tc.noteTarget)], tc.events);
+    }
+    CHECK(stages > 0);
+    CHECK(repeats > 0);
+}
+
+TEST_CASE(
+    "plan: every restarting instance stays off the executors, whatever its address (step 1)") {
+    // prepare() binary-searches the pool's restarting instances, so the pool
+    // must hand them over sorted by address. It walks its entries in id
+    // order: two restarting instances whose addresses run the other way make
+    // a list that, unsorted, hides the first of them, which would stay on
+    // the executors and never restart. (An entry holds one instance, so the
+    // list has no duplicates to get wrong.)
+    model::EditTxn t(model::Session::create(), 1);
+    std::vector<Id> ids;
+    for (int i = 0; i < 8; ++i) ids.push_back(addFx(t, addChannel(t), fxOf(kGain)));
+    const auto s = commit(t);
+    std::sort(ids.begin(), ids.end());  // the pool's order
+    auto pool = makePool();
+    MediaCache media;
+    // Made half in id order and half against it, so that addresses and ids
+    // disagree somewhere whichever way the allocator hands out memory.
+    std::vector<Id> making(ids.begin(), ids.begin() + 4);
+    making.insert(making.end(), ids.rbegin(), ids.rbegin() + 4);
+    for (const Id id : making) REQUIRE(pool.get(id, *s.fx.entry(id)->value, s));
+    std::vector<host::Instance*> instances;
+    for (const Id id : ids) instances.push_back(pool.find(id));
+    std::size_t first = ids.size(), second = ids.size();
+    for (std::size_t i = 0; i < ids.size() && first == ids.size(); ++i)
+        for (std::size_t j = i + 1; j < ids.size(); ++j)
+            if (std::less<>{}(instances[j], instances[i])) {
+                first = i;
+                second = j;
+                break;
+            }
+    REQUIRE_MESSAGE(first < ids.size(), "no two instances whose addresses run against their ids");
+    // Those two ask for a restart while processing (the fixture's latency
+    // parameter): it waits until they stop, so the pool reports them.
+    std::vector<float> l(128), r(128), ol(128), orr(128);
+    const float* in[2] = {l.data(), r.data()};
+    float* out[2] = {ol.data(), orr.data()};
+    host::Event latency;
+    latency.kind = host::Event::Kind::Param;
+    latency.paramId = 1;  // "short"
+    latency.value = 1.0;
+    host::ProcessBlock block;
+    block.inputs = in;
+    block.inputChannels = 2;
+    block.outputs = out;
+    block.outputChannels = 2;
+    block.frames = 128;
+    block.events = std::span<const host::Event>(&latency, 1);
+    for (const std::size_t k : {first, second}) {
+        host::Instance& gain = *instances[k];
+        REQUIRE(gain.activate(48000, 1, 128));
+        REQUIRE(gain.startProcessing());
+        REQUIRE(gain.process(block));
+        pool.service(ids[k]);
+        REQUIRE(pool.restarting(ids[k]));
+    }
+    {
+        const d::Plan p = prepared(s, pool, media);
+        for (std::size_t k = 0; k < ids.size(); ++k) {
+            INFO("instance " << k << ", restarting: " << (k == first || k == second));
+            const bool runs = std::find(p.instances.begin(), p.instances.end(), instances[k]) !=
+                              p.instances.end();
+            CHECK(runs == (k != first && k != second));
+        }
+    }
+    for (const std::size_t k : {first, second}) instances[k]->stopProcessing();
+}
+
+TEST_CASE("plan: a compile hands out retired plans' buffers cleared, the plan unchanged (step 3)") {
+    // A retired plan's buffers, filled with garbage as they enter the pool,
+    // serve the next compile of the same session: each it hands out holds
+    // what a new one would (zeros, no voices, default events), every one
+    // comes from the pool, and the plan dumps as one compiled without it.
+    // (The executors also clear a stage's delays when they adopt a plan, so
+    // a reuse that skipped this would not always be heard.)
+    const auto s = richSession();
+    auto pool = makePool();
+    MediaCache media;
+    const auto fresh = d::dumpPlan(prepared(s, pool, media));
+    d::BufferPool buffers;
+    buffers.poisonForTests = true;
+    const auto pooled = [&] {
+        auto compiled = d::compile(s, pool, 0, 128, 48000);
+        REQUIRE(compiled);
+        d::Plan p = std::move(*compiled);
+        p.media = &media;
+        p.buffers = &buffers;
+        REQUIRE(d::prepare(p, s));
+        return p;
+    };
+    struct Count final : d::BufferVisitor {
+        std::size_t floats_ = 0, voices_ = 0, outputs_ = 0, dirty = 0;
+        void floats(std::vector<float>& v) override {
+            floats_ += v.empty() ? 0 : 1;
+            dirty += std::any_of(v.begin(), v.end(), [](float x) { return x != 0.0f; });
+        }
+        void voices(std::vector<d::HeldVoice>& v) override {
+            voices_ += v.capacity() ? 1 : 0;
+            dirty += !v.empty();
+        }
+        void outputs(std::vector<host::OutputEvent>& v) override {
+            outputs_ += v.empty() ? 0 : 1;
+            dirty += std::any_of(v.begin(), v.end(), [](const host::OutputEvent& e) {
+                return e.kind != host::OutputEvent{}.kind;
+            });
+        }
+    };
+    d::Plan first = pooled();
+    const auto made = buffers.made();
+    CHECK(made > 0);
+    CHECK(buffers.reused() == 0);
+    Count before;
+    d::visitPooledBuffers(first, before);
+    CHECK(before.floats_ > 0);
+    CHECK(before.voices_ > 0);
+    CHECK(before.outputs_ > 0);
+    buffers.harvest(first);
+    buffers.trim();
+    d::Plan second = pooled();
+    CHECK(buffers.made() == made);  // every buffer from the pool
+    CHECK(buffers.reused() == made);
+    Count after;
+    d::visitPooledBuffers(second, after);
+    CHECK(after.dirty == 0);
+    CHECK(after.floats_ == before.floats_);
+    CHECK(after.voices_ == before.voices_);
+    CHECK(after.outputs_ == before.outputs_);
+    CHECK(d::firstDifference(fresh, d::dumpPlan(second)).empty());
+}
+
+TEST_CASE("plan: the buffer pool keeps no more than the last compile took (step 3)") {
+    // trim() keeps of each size as many buffers as the last prepare() took
+    // and frees the rest, so the pool holds at most one plan's worth however
+    // the plans change. Each round compiles a new plan while the previous
+    // one is live, then retires that one, as collectPlans does. The block
+    // size changes the audio buffers; a smaller session (one instrument
+    // channel) after the rich one changes the voice lists and output event
+    // buffers, which do not depend on the block. A trim that kept more of
+    // any kind would hold a 1024-sample plan's buffers after a 64-sample
+    // compile, or the rich session's voice lists after the small one's.
+    // Each pooled plan also dumps as a fresh one.
+    const auto rich = richSession();
+    const auto small = [] {
+        model::EditTxn t(model::Session::create({.console9 = true, .seed = 4243}), 1);
+        const Id a = addChannel(t);
+        addFx(t, a, fxOf(kSine));
+        addNotes(t, a);
+        return commit(t);
+    }();
+    // Each session its own instance pool: their ids may coincide.
+    auto richPool = makePool(), smallPool = makePool();
+    MediaCache media;
+    d::BufferPool buffers;
+    buffers.poisonForTests = true;
+    struct Bytes final : d::BufferVisitor {
+        d::HeldBytes held;
+        void floats(std::vector<float>& v) override { held.floats += v.capacity() * sizeof(float); }
+        void voices(std::vector<d::HeldVoice>& v) override {
+            held.voices += v.capacity() * sizeof(d::HeldVoice);
+        }
+        void outputs(std::vector<host::OutputEvent>& v) override {
+            held.outputs += v.capacity() * sizeof(host::OutputEvent);
+        }
+    };
+    struct Round {
+        const model::Session* session;
+        InstancePool* instances;
+        std::uint32_t block;
+        const char* name;
+    };
+    const auto compile = [&](const Round& r, d::BufferPool* with) {
+        auto compiled = d::compile(*r.session, *r.instances, 0, r.block, 48000);
+        REQUIRE(compiled);
+        d::Plan p = std::move(*compiled);
+        p.media = &media;
+        p.buffers = with;
+        REQUIRE(d::prepare(p, *r.session));
+        return p;
+    };
+    const Round rounds[] = {
+        {&rich, &richPool, 128, "rich"}, {&rich, &richPool, 1024, "rich"},
+        {&rich, &richPool, 64, "rich"},  {&small, &smallPool, 64, "small"},
+        {&rich, &richPool, 512, "rich"}, {&small, &smallPool, 32, "small"},
+        {&rich, &richPool, 256, "rich"},
+    };
+    std::optional<d::Plan> live;
+    for (const Round& r : rounds) {
+        INFO(std::string(r.name) << " session, block " << r.block);
+        const auto fresh = d::dumpPlan(compile(r, nullptr));
+        d::Plan next = compile(r, &buffers);
+        CHECK(d::firstDifference(fresh, d::dumpPlan(next)).empty());
+        Bytes size;
+        d::visitPooledBuffers(next, size);
+        if (live) buffers.harvest(*live);
+        buffers.trim();
+        const d::HeldBytes held = buffers.heldBytes();
+        // Not vacuous: both sessions have each kind, so after a harvest the
+        // pool keeps some of each.
+        CHECK((held.floats > 0) == live.has_value());
+        CHECK((held.voices > 0) == live.has_value());
+        CHECK((held.outputs > 0) == live.has_value());
+        CHECK(held.floats <= size.held.floats);
+        CHECK(held.voices <= size.held.voices);
+        CHECK(held.outputs <= size.held.outputs);
+        live = std::move(next);
     }
 }
