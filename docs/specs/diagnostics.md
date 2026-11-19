@@ -923,7 +923,18 @@ declare: the bridge finds it by name in the runtime DLL the process loaded), and
 the faulting code. The handler never returns: it captures from the fault's own context and ends the
 process with the exception's own code, so a hardware fault reads as it did before the handler existed
 (a handler that took the context of its own frame would have lost the fault's address). Where
-the runtime does not export `__pxcptinfoptrs` the handlers are not installed. The attribution of a raised signal is
+the runtime does not export `__pxcptinfoptrs` the handlers are not installed (the bridge is then as it was
+before them: a plug-in's `raise(SIGSEGV)` ends it with exit code 3). *What is proven about the export.*
+The debug runtime (`ucrtbased.dll`) exports it: Windows CI builds the Debug preset, and the
+`raise(SIGSEGV)` cases pass there only if the lookup found it. For the release runtime (`ucrtbase.dll`) the
+evidence is documentary and none of it says that the shipping DLL exports it: Microsoft lists
+`__pxcptinfoptrs` among the CRT's internal functions
+(<https://learn.microsoft.com/en-us/cpp/c-runtime-library/internal-crt-globals-and-functions>, "not intended
+for use by your code", no DLL named) and among the internal functions `ucrtbase_enclave.dll` exports
+(<https://learn.microsoft.com/en-us/windows/win32/trusted-execution/enclaves-available-in-ucrt>), and
+mingw-w64's list of the first public `ucrtbase.dll`'s exports (10.0.10137.0) has it
+(`mingw-w64-crt/lib-common/ucrtbase-common.def.in`). Nobody has read a release DLL's export table; a release
+build's CI would show a miss as exit code 3 again. The attribution of a raised signal is
 `active_token` (the fault frame is the bridge's handler, in the bridge's own image, so no plug-in image holds
 it; the plug-in's entry is still open), as an `abort()`'s is, and the plug-in's own frame is further down the
 walk. The settings are unproven until the `abort()` case of
