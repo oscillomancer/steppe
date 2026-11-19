@@ -20,6 +20,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <tuple>
 #include <vector>
 #include "supple/base/files.h"
 #include "test_support.h"
@@ -2674,6 +2675,48 @@ TEST_CASE("a master's lane: armed or holding items, above its automation lanes (
     const auto goneChanges = gone.changes();
     REQUIRE(layout.show(plain, &goneChanges));
     CHECK_FALSE(layout.indexOf(model::kMaster));
+}
+
+TEST_CASE(
+    "automation rows carry their target; a lane, with or without an envelope, holds no item") {
+    model::EditTxn txn(model::Session::create(), 1);
+    model::Track track;
+    track.parent = model::kMaster;
+    const auto channel = txn.create(track);
+    txn.modify<model::Track>(model::kMaster,
+                             [&](auto& master) { master.children.push_back(channel); });
+    model::Envelope env;
+    env.target = {channel, "pan"};
+    env.points = {{0, 0}};
+    const auto pan = txn.create(env);
+    env.target = {channel, "volume"};
+    const auto volume = txn.create(env);
+    auto s = txn.commit().value();
+    views::TrackLayout layout;
+    REQUIRE(layout.show(s));
+    // The channel, then its lanes in envelope order: volume before pan.
+    REQUIRE(layout.rowCount() == 3);
+    const views::TrackRow& row = layout.rows()[0];
+    CHECK_FALSE(row.lane());
+    CHECK_FALSE(row.target);
+    CHECK(views::holdsItem(s, row, nullptr));
+    for (auto [index, id, param] :
+         {std::tuple{std::size_t{1}, volume, "volume"}, std::tuple{std::size_t{2}, pan, "pan"}}) {
+        const views::TrackRow& lane = layout.rows()[index];
+        CHECK(layout.indexOfEnv(id) == index);
+        REQUIRE(lane.lane());
+        CHECK(*lane.target == model::EnvTarget{channel, param});
+        CHECK(lane.env == id);
+        CHECK(lane.track == channel);
+        CHECK_FALSE(views::holdsItem(s, lane, nullptr));
+        CHECK(layout.heightOf(index) == doctest::Approx(static_cast<double>(layout.envHeight())));
+    }
+    // A lane keyed by its target alone (a modulated parameter without
+    // automation) is a lane all the same: no item lands on it.
+    views::TrackRow modulated{channel, model::StripType::Channel, 0,
+                              model::EnvTarget{channel, "volume"}, std::nullopt};
+    CHECK(modulated.lane());
+    CHECK_FALSE(views::holdsItem(s, modulated, nullptr));
 }
 
 TEST_CASE("master automation lanes are visible while hidden track lanes remain hidden") {

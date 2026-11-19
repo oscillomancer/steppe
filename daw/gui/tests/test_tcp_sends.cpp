@@ -747,7 +747,7 @@ namespace {
 std::vector<model::Id> trackRows(SendsFixture& f) {
     std::vector<model::Id> out;
     for (const views::TrackRow& r : f.view().trackLayout().rows())
-        if (!r.env) out.push_back(r.track);
+        if (!r.lane()) out.push_back(r.track);
     return out;
 }
 std::vector<model::Id> masterChildren(SendsFixture& f) {

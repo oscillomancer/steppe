@@ -848,7 +848,14 @@ what is selected. After a marquee that took items and points, Delete
 removes both (one undo step) and Ctrl+C, Ctrl+X and Ctrl+V take the items;
 after one that took points only, the keys take the points.
 
-**Automation lanes.** A click on a point selects it (Ctrl+click adds or
+**Automation lanes.** A lane is a row of the track layout keyed by the
+parameter it shows (`views::TrackRow::target`, the envelope's addressing),
+with that parameter's envelope when it has one; code asks whether a row is a
+lane with `TrackRow::lane()`, so a lane without an envelope (a modulated
+parameter, once modulation exists) never passes for a track row and never takes an item.
+Lanes are made only from visible envelopes until modulation lands; a lane
+without an envelope is drawn empty, has no header controls and takes no
+press. A click on a point selects it (Ctrl+click adds or
 removes one) and a click on empty space adds a point there, selected.
 Dragging a selected point moves every selected point, in every lane, by the
 same time and the same share of its lane's height (one `env.points.set` per

@@ -307,7 +307,7 @@ void Lanes::paint(ui::Canvas& c) {
         const ui::Rect r = rowRect(i);
         if (r.bottom() < bounds().y) continue;
         if (r.y > bounds().bottom()) break;
-        if (layout_.rows()[i].env) {
+        if (layout_.rows()[i].lane()) {
             c.save();
             c.clip(r);  // curve glyphs and text must stay inside their own lane
             drawEnvelope(c, i, r);
@@ -327,9 +327,13 @@ void Lanes::drawEnvelope(ui::Canvas& c, std::size_t row, const ui::Rect& r) {
     const model::Session& s = layout_.session();
     c.fillRect(r, t.color("ground").withAlpha(0.6f));
     c.fillRect({r.x, r.bottom() - 1, r.w, 1}, t.color("rule").withAlpha(0.4f));
-    const model::Envelope* env = s.envelopes.find(*layout_.rows()[row].env);
+    // A lane without an envelope (a modulated parameter) is empty
+    // until it has one.
+    const auto& rowEnv = layout_.rows()[row].env;
+    const model::Envelope* env = rowEnv ? s.envelopes.find(*rowEnv) : nullptr;
     const auto scale = env ? layout_.scaleOf(*env) : std::nullopt;
     if (!env || !scale) return;
+    const model::Id envId = *rowEnv;
     double fallback = scale->reference();
     if (const model::Track* tr = s.tracks.find(env->target.object))
         fallback = env->target.param == "playrate" ? s.project->playrate.rate
@@ -346,7 +350,6 @@ void Lanes::drawEnvelope(ui::Canvas& c, std::size_t row, const ui::Rect& r) {
         t.color(typeToken(layout_.rows()[row].type)).withAlpha(env->active ? 1.0f : 0.35f);
     // The unity / centre line for orientation.
     c.fillRect({a.x, yOf(scale->reference()), a.w, 1}, t.color("rule").withAlpha(0.35f));
-    const model::Id envId = *layout_.rows()[row].env;
     // Automation items replace the envelope where they sit: their boxes under
     // the curve, a header band (name or pool), a tick at each loop pass.
     const double visibleFrom = s.timeMap->beatAt(std::max(0.0, timeAt(bounds().x)));

@@ -293,7 +293,7 @@ std::optional<TrackTarget> Shell::trackTargetAt(ui::Point p) const {
     for (std::size_t i = 0; i < rows.size(); ++i) {
         const ui::Rect row = arrange_->tcpRowRect(i);
         if (p.y < row.y || p.y >= row.bottom()) continue;
-        if (rows[i].env || !app_.head().tracks.find(rows[i].track)) return std::nullopt;
+        if (rows[i].lane() || !app_.head().tracks.find(rows[i].track)) return std::nullopt;
         return TrackTarget{rows[i].track, ui::Rect{area.x, row.y, area.w, row.h}.intersect(area)};
     }
     return std::nullopt;
@@ -888,7 +888,7 @@ bool Shell::isSelected(const model::Id& track) const { return trackSelected(ui_,
 void Shell::selectTrack(const model::Id& track, unsigned mods) {
     std::vector<std::string> order;
     for (const auto& row : arrange_->trackLayout().rows())
-        if (!row.env) order.push_back(row.track.str());
+        if (!row.lane()) order.push_back(row.track.str());
     gui::selectTrack(ui_, track.str(), mods, order);
     const bool selected = trackSelected(ui_, track.str());
     for (auto peer : model::linkedTracks(app_.head(), track, "selection")) {

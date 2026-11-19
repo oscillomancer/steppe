@@ -613,7 +613,8 @@ std::optional<std::size_t> ItemGestures::rowAt(float y) const {
 std::optional<ItemGestures::Hit> ItemGestures::hit(ui::Point p) const {
     if (!view_.lanesRect().contains(p)) return std::nullopt;
     const auto row = rowAt(p.y);
-    if (!row || view_.trackLayout().rows()[*row].env) return std::nullopt;  // a lane has no items
+    if (!row || view_.trackLayout().rows()[*row].lane())
+        return std::nullopt;  // a lane has no items
     const model::Session& s = view_.session();
     const model::Id track = view_.trackLayout().rows()[*row].track;
     std::optional<Hit> best;
@@ -686,8 +687,9 @@ ui::Cursor ItemGestures::cursorAt(ui::Point p) const {
     }
     // At rest only the places whose press is not a plain move or selection
     // say so: an item's body keeps the arrow.
-    if (const auto lane = rowAt(p.y); lane && view_.trackLayout().rows()[*lane].env) {
-        const auto ai = autoItemAt(*view_.trackLayout().rows()[*lane].env, p);
+    if (const auto lane = rowAt(p.y); lane && view_.trackLayout().rows()[*lane].lane()) {
+        const auto& env = view_.trackLayout().rows()[*lane].env;
+        const auto ai = env ? autoItemAt(*env, p) : std::nullopt;
         return ai && ai->zone == Drag::AutoItemLength ? ui::Cursor::ResizeHorizontal
                                                       : ui::Cursor::Arrow;
     }
@@ -729,7 +731,10 @@ bool ItemGestures::pointer(const ui::PointerEvent& e) {
                 state_.pointBase = pointSel_;
             }
         };
-        if (const auto lane = rowAt(e.pos.y); lane && view_.trackLayout().rows()[*lane].env) {
+        if (const auto lane = rowAt(e.pos.y); lane && view_.trackLayout().rows()[*lane].lane()) {
+            // A lane without an envelope (a modulated parameter)
+            // has no points to edit yet: the press stops there.
+            if (!view_.trackLayout().rows()[*lane].env) return true;
             const model::Id env = *view_.trackLayout().rows()[*lane].env;
             const auto ai = autoItemAt(env, e.pos);
             if (onEnvelopeFocus) onEnvelopeFocus(true);
@@ -774,7 +779,7 @@ bool ItemGestures::pointer(const ui::PointerEvent& e) {
         if (e.button == 1 && e.clicks >= 2 && !h) {  // empty space on a channel: a new MIDI item
             if (const auto row = rowAt(e.pos.y)) {
                 const TrackRow& spec = view_.trackLayout().rows()[*row];
-                if (!spec.env && spec.type == model::StripType::Channel) {
+                if (!spec.lane() && spec.type == model::StripType::Channel) {
                     if (auto made = newMidiItem(spec.track, beatAtX(e.pos.x)); !made && onError)
                         onError(made.error());
                     state_ = State{};
@@ -984,7 +989,7 @@ bool ItemGestures::pointer(const ui::PointerEvent& e) {
                 marqueePoints();
                 selection_ = state_.marqueeBase;
                 for (std::size_t r = 0; r < view_.trackLayout().rowCount(); ++r) {
-                    if (view_.trackLayout().rows()[r].env) continue;
+                    if (view_.trackLayout().rows()[r].lane()) continue;
                     const model::Id track = view_.trackLayout().rows()[r].track;
                     for (const auto& item : s.items) {
                         if (item.value->track != track) continue;

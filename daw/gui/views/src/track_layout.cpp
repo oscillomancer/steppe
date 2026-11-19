@@ -6,6 +6,7 @@
 #include <cmath>
 #include <functional>
 #include <iterator>
+#include <tuple>
 #include <utility>
 
 #include "supple/views/envelope_lane.h"
@@ -252,7 +253,15 @@ bool TrackLayout::show(const model::Session& session, const std::vector<model::C
     // A rack module's knobs automate on its rack's home channel (ADR-0062).
     for (const auto& m : session_.modules)
         if (const model::Rack* rk = session_.racks.find(m.value->rack)) owners[m.id] = rk->track;
-    std::map<model::Id, std::vector<std::pair<int, model::Id>>> lanes;
+    struct Lane {
+        int order;
+        model::Id env;
+        const model::EnvTarget* target;
+        bool operator<(const Lane& o) const {
+            return std::tie(order, env) < std::tie(o.order, o.env);
+        }
+    };
+    std::map<model::Id, std::vector<Lane>> lanes;
     for (const auto& envelope : session_.envelopes) {
         if (!envelope.value->visible || !scaleOf(*envelope.value)) continue;
         if (envelope.value->target.object.kind == model::Kind::Track ||
@@ -269,7 +278,8 @@ bool TrackLayout::show(const model::Session& session, const std::vector<model::C
             owner = found->second;
         }
         if (owner.kind == model::Kind::Track || owner.kind == model::Kind::Group)
-            lanes[owner].emplace_back(envOrder(*envelope.value), envelope.id);
+            lanes[owner].push_back(
+                {envOrder(*envelope.value), envelope.id, &envelope.value->target});
     }
     for (auto& [track, entries] : lanes) std::sort(entries.begin(), entries.end());
     masterLanes_ = masterLanes(session_);
@@ -281,15 +291,15 @@ bool TrackLayout::show(const model::Session& session, const std::vector<model::C
         const bool row = (!master || masterLanes_.contains(id)) && !t->hiddenTcp;
         if (row) {
             trackRows_[id] = rows_.size();
-            rows_.push_back({id, t->type, depth, std::nullopt});
+            rows_.push_back({id, t->type, depth, std::nullopt, std::nullopt});
         }
         // Master strip rows are otherwise hidden, but their visible automation
         // lanes precede the master's children, including the global playrate lane.
         if (row || master)
             if (const auto found = lanes.find(id); found != lanes.end())
                 for (const auto& lane : found->second) {
-                    envRows_[lane.second] = rows_.size();
-                    rows_.push_back({id, t->type, depth, lane.second});
+                    envRows_[lane.env] = rows_.size();
+                    rows_.push_back({id, t->type, depth, *lane.target, lane.env});
                 }
         if (t->folderCompact == 2) return;  // a collapsed folder hides its children
         // A master's children stay at its depth, lane or not.
@@ -299,8 +309,8 @@ bool TrackLayout::show(const model::Session& session, const std::vector<model::C
     for (const auto& g : session_.groups)
         if (g.value->vca)
             for (const auto& lane : lanes[g.id]) {
-                envRows_[lane.second] = rows_.size();
-                rows_.push_back({g.id, model::StripType::Buss, 0, lane.second});
+                envRows_[lane.env] = rows_.size();
+                rows_.push_back({g.id, model::StripType::Buss, 0, *lane.target, lane.env});
             }
     for (model::Id master : session_.project->masters) visit(master, 0);
     // Drop overrides for tracks that are gone (they would never be read again).
@@ -421,8 +431,8 @@ void TrackLayout::rebuildGeometry() {
     const auto spread = expandedTakeCounts();
     float y = 0;
     for (const TrackRow& r : rows_) {
-        float h = r.env ? envHeight() : baseHeight(r.track);
-        if (!r.env)
+        float h = r.lane() ? envHeight() : baseHeight(r.track);
+        if (!r.lane())
             if (const auto found = spread.find(r.track); found != spread.end())
                 h = std::max(h, kTakeBar + static_cast<float>(found->second) * h);
         yOffsets_.push_back(y);

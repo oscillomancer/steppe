@@ -22,12 +22,17 @@ namespace supple::views {
 
 // A visible row: a track and its indentation under the first root (the
 // masters' children are at depth 0). An automation lane is a row too: it
-// carries its track (and type/depth) plus the envelope it shows (P5.14).
+// carries its track (and type/depth) plus the parameter it shows, and that
+// parameter's envelope when it has one (P5.14). A lane is keyed by its target,
+// not by an envelope, so a parameter can have a lane without automation (a
+// modulated one); whether a row is a lane is lane(), never `env`.
 struct TrackRow {
     model::Id track;
     model::StripType type = model::StripType::Channel;
     int depth = 0;
-    std::optional<model::Id> env;  // set on an automation lane
+    std::optional<model::EnvTarget> target;  // set on an automation lane
+    std::optional<model::Id> env;            // the target's envelope, when it has one
+    bool lane() const { return target.has_value(); }
 };
 
 // A parent's children in display order: channels first, then busses (masters
@@ -52,7 +57,7 @@ inline bool audioItem(const model::Session& session, const model::Item& item) {
 // Whether a row can hold `item` (any item when null; ADR-0057): a channel any
 // item, a master's lane audio items only, busses and automation lanes none.
 inline bool holdsItem(const model::Session& session, const TrackRow& row, const model::Item* item) {
-    if (row.env || row.type == model::StripType::Buss) return false;
+    if (row.lane() || row.type == model::StripType::Buss) return false;
     return row.type == model::StripType::Channel || !item || audioItem(session, *item);
 }
 
