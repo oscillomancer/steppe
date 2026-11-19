@@ -898,22 +898,36 @@ Played playHeads(const std::vector<model::Session>& heads, bool ahead, bool noOp
             return EngineTestAccess::rendered(engine, std::numeric_limits<std::int64_t>::max());
         });
     };
+    // Both runs hear the engine's notifications at the same cycles, so a
+    // no-op compile never takes one early, and act on them as far as they
+    // go before the next callback. A plug-in restart (a latency change) is
+    // two steps: service() takes the plug-in off the executors, and a later
+    // one restarts it once it has stopped processing. The renderer stops it
+    // on its own thread as soon as it adopts the plan without it, so this
+    // waits for that adoption (and for the renderer to render all it may)
+    // before each service(), and services until nothing more is published:
+    // where a restart completes is then decided by the callback alone.
+    const auto settle = [&] {
+        for (int pass = 0;; ++pass) {
+            REQUIRE(pass < 8);
+            planReady(engine);
+            full();
+            const auto generation = engine.planGeneration();
+            engine.service();
+            if (engine.planGeneration() == generation) return;
+        }
+    };
     const auto runTo = [&](std::int64_t until) {
         runReady(engine, backend, until - cycle);
         cycle = until;
-        // Both runs hear the engine's notifications at the same cycles, so
-        // a no-op compile never takes one early. A plug-in asks for a
-        // restart (a latency change) where its executor applies a patch: the
-        // renderer, ahead, so it first renders all it may.
-        full();
-        engine.service();
+        settle();
     };
     const auto load = [&](const model::Session& s, bool compiles) {
         full();  // it adopts at the same position in every run
         const auto generation = engine.planGeneration();
         REQUIRE(engine.load(s));
         if (compiles) REQUIRE(engine.planGeneration() == generation + 1);
-        engine.service();
+        settle();
     };
     REQUIRE(engine.load(heads[0]));
     engine.setLoop(0, 0.25, true);

@@ -158,8 +158,13 @@ It plays them twice: once as they are, and once with two plan swaps that
 change nothing after each edit, a marker added two callbacks after the edit
 (inside its 10 ms ramps) and removed at callback 13. Both runs must match
 sample for sample. At each load and each service point the anticipative
-renderer has first rendered all it may (decided by its state), so both runs
-take every plan, and every plug-in restart request, at the same position.
+renderer has first adopted the latest plan and rendered all it may (decided
+by its state), and the harness services until nothing more is published, so
+both runs take every plan, and every step of a plug-in restart, at the same
+position. (A restart's second step waits for the plug-in to stop, which the
+renderer does on its own thread when it adopts the plan without it; servicing
+before that adoption let the restart land two callbacks apart in the two
+runs, seen once under ASan with other tests running.)
 A failure prints `plan-soak NO-CHANGE SWAP AUDIBLE`, the first differing
 frame, the project state's index, the callback within its step and the
 journal row of the edit that made that state. Removing the carry of a rack's
