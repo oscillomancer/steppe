@@ -1506,7 +1506,9 @@ migrates.
 An older build keeps the collection as an unknown section, so its routes do
 nothing there, but it drops the `mr` counter and may delete what a route
 points at (amendment G-c). A file that comes back from one opens anyway: a
-missing or low `mr` counter is derived from the highest `mr` id, and a
+missing or low `mr` counter is derived from the highest `mr` id with a
+`project.counter_derived` warning at `/project/next_ids/mr` (the code
+ADR-0095 uses for `cx`), and a
 route whose source or target is gone or no longer fits the invariants
 below, or that closes a cycle, is dropped with a `project.modulation_dropped`
 warning at its path that names it and says why.

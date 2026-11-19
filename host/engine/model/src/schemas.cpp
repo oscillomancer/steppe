@@ -1747,8 +1747,16 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
     // A file that went through an older build (amendment G-c): it kept the
     // routes as an unknown section but not their counter, and may have
     // deleted what they point at. Never fail the open for that.
-    for (const auto& e : s.modulations)
-        s.next[Kind::Modulation] = std::max(s.next[Kind::Modulation], e.id.n + 1);
+    {
+        const auto saved = s.next[Kind::Modulation];
+        for (const auto& e : s.modulations)
+            s.next[Kind::Modulation] = std::max(s.next[Kind::Modulation], e.id.n + 1);
+        if (s.next[Kind::Modulation] != saved)
+            warn("project.counter_derived",
+                 "next_ids.mr was " + std::to_string(saved) + "; raised to " +
+                     std::to_string(s.next[Kind::Modulation]) + ", past the highest mr id",
+                 "/project/next_ids/mr");
+    }
     for (const auto& [id, why] : dropUnplayableModulations(s))
         warn("project.modulation_dropped", "dropped modulation " + id.str() + ": " + why,
              "/modulations/" + id.str());

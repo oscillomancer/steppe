@@ -7,6 +7,7 @@
 #include <supple/model/schemas.h>
 #include <supple/model/versions.h>
 
+#include <algorithm>
 #include <string>
 
 using namespace supple;
@@ -465,6 +466,9 @@ TEST_CASE("modulation: a file that went through an older build still opens") {
     CHECK(opened->modulations.size() == 1);
     CHECK(opened->modulations.contains({Kind::Modulation, 2}));
     CHECK(opened->next[Kind::Modulation] == 5);  // past the highest id the file held
+    CHECK(std::any_of(warnings.begin(), warnings.end(), [](const auto& w) {
+        return w.code == "project.counter_derived" && w.path == "/project/next_ids/mr";
+    }));
     std::vector<std::string> dropped;
     for (const auto& w : warnings)
         if (w.code == "project.modulation_dropped") dropped.push_back(w.path);
@@ -488,10 +492,20 @@ TEST_CASE("modulation: a low mr counter is raised to the highest id") {
     REQUIRE(s);
     auto doc = json::parse(serializeProject(*s)).value();
     doc["project"]["next_ids"]["mr"] = 1;
-    auto opened = parseProject(json::writeCompact(doc));
+    std::vector<schema::Warning> warnings;
+    auto opened = parseProject(json::writeCompact(doc), &warnings);
     REQUIRE_MESSAGE(opened, (opened ? "" : opened.error().toString()));
     CHECK(opened->next[Kind::Modulation] == 3);
     CHECK(opened->modulations.size() == 2);
+    // The same code as ADR-0095's cx repair, so agents read one warning.
+    const auto derived = std::count_if(warnings.begin(), warnings.end(), [](const auto& w) {
+        return w.code == "project.counter_derived" && w.path == "/project/next_ids/mr";
+    });
+    CHECK(derived == 1);
+    // A counter that is right says nothing.
+    warnings.clear();
+    REQUIRE(parseProject(serializeProject(*s), &warnings));
+    for (const auto& w : warnings) CHECK(w.code != "project.counter_derived");
 }
 
 TEST_CASE("modulation: a rack modulating its own rack send's level is told why") {

@@ -96,7 +96,8 @@ but drops the `mr` counter from `next_ids`, and it may delete a route's
 source module or target, or add a send that closes a cycle through a route.
 Such a file never fails to open:
 
-- a missing or low `mr` counter is derived from the highest `mr` id;
+- a missing or low `mr` counter is derived from the highest `mr` id, with
+  a `project.counter_derived` warning (the code ADR-0095 gives `cx`);
 - a route whose source or target is gone or no longer fits, or that closes
   a cycle, is dropped with a `project.modulation_dropped` warning naming
   it and why.
