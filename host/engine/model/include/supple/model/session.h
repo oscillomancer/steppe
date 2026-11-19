@@ -248,6 +248,11 @@ std::optional<Id> trackOfChainFx(const Session& s, Id fx);
 // for a send's level the node that applies it (its source strip, or the
 // rack of a rack send). nullopt for a target no route may have.
 std::optional<Id> modulationTargetNode(const Session& s, const EnvTarget& target);
+// Removes the modulation routes whose source or target is gone or no longer
+// fits the invariants, or that close a cycle: a file that went through an
+// older build (ADR-0096, amendment G-c). Returns each with the reason, in
+// the order removed.
+std::vector<std::pair<Id, std::string>> dropUnplayableModulations(Session& s);
 // The plugin module that holds `fx` (ADR-0062), if any.
 std::optional<Id> moduleOfFx(const Session& s, Id fx);
 // The rack a cable end is in: its module's, or for a plug-in's parameter its

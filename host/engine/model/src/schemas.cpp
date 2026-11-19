@@ -1338,7 +1338,7 @@ json::Value projectToJson(const Session& s) {
     json::Value next = json::Value::object();
     for (std::size_t k = 0; k < kKindCount; ++k) {
         const auto kind = static_cast<Kind>(k);
-        // The rack kinds (2.7) and modulation routes (2.17) are written once
+        // The rack kinds (2.7) and modulation routes (2.16) are written once
         // used: older projects stay byte-identical but for the schema.
         const bool late = kind == Kind::Rack || kind == Kind::Module || kind == Kind::Cable ||
                           kind == Kind::Modulation;
@@ -1464,7 +1464,7 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
         auto migrated = migrateProject1(std::move(doc), warnings);
         if (!migrated) return std::move(migrated).error();
         doc = std::move(*migrated);
-    } else if (version->minor > 17 && warnings)  // 2.15: autosaved_through; 2.17: modulations
+    } else if (version->minor > 16 && warnings)  // 2.15: autosaved_through; 2.16: modulations
         warnings->push_back(
             {"project.newer_minor", "loading a newer project minor version", "/schema"});
     // Before 2.10 a Notes module heard only its source track's own MIDI, never
@@ -1620,7 +1620,7 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
                 }
         }
     }
-    // The rack kinds' (2.7) and modulation routes' (2.17) counters are
+    // The rack kinds' (2.7) and modulation routes' (2.16) counters are
     // written once used; before, they start where a new session's do.
     for (Kind k : {Kind::Rack, Kind::Module, Kind::Cable, Kind::Modulation})
         if (s.next[k] == 0) s.next[k] = 1;
@@ -1744,6 +1744,14 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
     s.modules = modules.build();
     s.cables = cables.build();
     s.modulations = modulations.build();
+    // A file that went through an older build (amendment G-c): it kept the
+    // routes as an unknown section but not their counter, and may have
+    // deleted what they point at. Never fail the open for that.
+    for (const auto& e : s.modulations)
+        s.next[Kind::Modulation] = std::max(s.next[Kind::Modulation], e.id.n + 1);
+    for (const auto& [id, why] : dropUnplayableModulations(s))
+        warn("project.modulation_dropped", "dropped modulation " + id.str() + ": " + why,
+             "/modulations/" + id.str());
     if (warnings)
         for (const auto& [envelope, given] : derivedItems) {
             auto expected = json::Value::array();

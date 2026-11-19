@@ -102,7 +102,7 @@ TEST_CASE("modulation: a route saves, reopens and serializes the same") {
     CHECK(Id::parse("mo_1")->kind == Kind::Module);
 
     const std::string bytes = serializeProject(*s);
-    CHECK(bytes.find("\"supple.project/2.17\"") != std::string::npos);
+    CHECK(bytes.find("\"supple.project/2.16\"") != std::string::npos);
     auto doc = json::parse(bytes).value();
     REQUIRE(doc.find("modulations"));
     json::Value& m = doc["modulations"]["mr_1"];
@@ -421,4 +421,93 @@ TEST_CASE("modulation: diffs list route changes by field") {
     REQUIRE(updated.size() == 1);
     CHECK(updated[0].op == Change::Op::Update);
     CHECK(updated[0].fields == std::vector<std::string>{"depth"});
+}
+
+TEST_CASE("modulation: a file that went through an older build still opens") {
+    Fixture f = fixture();
+    // mr_1 targets the plug-in an older build deleted; mr_2 stays valid;
+    // mr_3 lost its Mod Out input's module; mr_4 closes a cycle the older
+    // build made with a send from B into the rack's In.
+    EditTxn t(f.s, f.s.version + 1);
+    t.create(route(f.modOut, f.fx, "cutoff", 0.5));
+    t.create(route(f.modOut, f.a, "volume", 3.0));
+    RackModule spare;
+    spare.rack = f.rack;
+    spare.type = std::string(kModOutModule);
+    const Id spareId = t.create(spare);
+    t.create(route(spareId, f.inputFx, "cutoff", 0.5));
+    t.create(route(f.modOut, f.inputFx, "drive", 0.5));
+    auto s = t.commit();
+    REQUIRE_MESSAGE(s, (s ? "" : s.error().toString()));
+    auto doc = json::parse(serializeProject(*s)).value();
+
+    // What the older build wrote: no mr counter, mr_1's plug-in and the
+    // spare Mod Out gone, a send from B into a new In module.
+    doc["project"]["next_ids"].asObject().erase("mr");
+    doc["fx"].asObject().erase(f.fx.str());
+    doc["tracks"][f.b.str()].asObject().erase("chain");
+    doc["modules"].asObject().erase(spareId.str());
+    const Id inModule{Kind::Module, s->next[Kind::Module]};
+    doc["modules"][inModule.str()] =
+        json::parse(R"({"rack": ")" + f.rack.str() + R"(", "type": ")" + std::string(kInModule) +
+                    R"("})")
+            .value();
+    doc["project"]["next_ids"]["mo"] = static_cast<int>(inModule.n + 1);
+    const Id send{Kind::Route, s->next[Kind::Route]};
+    doc["routes"][send.str()] = json::parse(R"({"from": {"track": ")" + f.b.str() +
+                                            R"("}, "to": {"module": ")" + inModule.str() + R"("}})")
+                                    .value();
+    doc["project"]["next_ids"]["sd"] = static_cast<int>(send.n + 1);
+
+    std::vector<schema::Warning> warnings;
+    auto opened = parseProject(json::writeCompact(doc), &warnings);
+    REQUIRE_MESSAGE(opened, (opened ? "" : opened.error().toString()));
+    CHECK(opened->modulations.size() == 1);
+    CHECK(opened->modulations.contains({Kind::Modulation, 2}));
+    CHECK(opened->next[Kind::Modulation] == 5);  // past the highest id the file held
+    std::vector<std::string> dropped;
+    for (const auto& w : warnings)
+        if (w.code == "project.modulation_dropped") dropped.push_back(w.path);
+    CHECK(dropped ==
+          std::vector<std::string>{"/modulations/mr_1", "/modulations/mr_3", "/modulations/mr_4"});
+    for (const auto& w : warnings)
+        if (w.code == "project.modulation_dropped")
+            CHECK(w.message.find(w.path.substr(std::string("/modulations/").size())) !=
+                  std::string::npos);
+    // A new route takes a fresh id.
+    auto more = with(*opened, route(f.modOut, f.a, "pan", 10.0));
+    REQUIRE(more);
+    CHECK(more->modulations.contains({Kind::Modulation, 5}));
+}
+
+TEST_CASE("modulation: a low mr counter is raised to the highest id") {
+    Fixture f = fixture();
+    auto s = with(f.s, route(f.modOut, f.fx, "cutoff", 0.5));
+    REQUIRE(s);
+    s = with(*s, route(f.modOut, f.b, "volume", 1.0));
+    REQUIRE(s);
+    auto doc = json::parse(serializeProject(*s)).value();
+    doc["project"]["next_ids"]["mr"] = 1;
+    auto opened = parseProject(json::writeCompact(doc));
+    REQUIRE_MESSAGE(opened, (opened ? "" : opened.error().toString()));
+    CHECK(opened->next[Kind::Modulation] == 3);
+    CHECK(opened->modulations.size() == 2);
+}
+
+TEST_CASE("modulation: a rack modulating its own rack send's level is told why") {
+    Fixture f = fixture();
+    EditTxn t(f.s, f.s.version + 1);
+    RackModule out;
+    out.rack = f.rack;
+    out.type = std::string(kOutModule);
+    const Id outModule = t.create(out);
+    Route rackSend;
+    rackSend.from.module = outModule;
+    rackSend.to.track = f.buss;
+    const Id rackSendId = t.create(rackSend);
+    t.create(route(f.modOut, rackSendId, "volume", 3.0));
+    const auto self = t.commit();
+    REQUIRE_FALSE(self);
+    CHECK(self.error().code == "modulation.cycle");
+    CHECK(self.error().hint.find("rack send") != std::string::npos);
 }

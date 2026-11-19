@@ -577,13 +577,18 @@ struct Checker {
                         path += (path.empty() ? "" : " -> ") + at->first.str();
                     }
                     if (modulation) {
+                        // A rack's own rack send has its level applied at
+                        // the rack: a cycle of one node.
+                        const bool self = first + 1 == stack.end() && first->first == next;
                         errors.emplace_back(
                             "modulation.cycle",
                             "modulation " + modulation->str() + " closes a cycle: " + path +
                                 " -> " + next.str(),
                             "/modulations/" + modulation->str(),
-                            "a rack cannot modulate what it hears: modulate another track, or "
-                            "remove the send into the rack's In module");
+                            self ? "a rack cannot modulate its own rack send's level, which "
+                                   "it applies itself: modulate the destination's volume instead"
+                                 : "a rack cannot modulate what it hears: modulate another "
+                                   "track, or remove the send into the rack's In module");
                         return;
                     }
                     if (midi) {
@@ -1125,6 +1130,34 @@ std::vector<ObjectDiff> diff(const Session& a, const Session& b) {
     diffMap(a.cables, b.cables, out);
     diffMap(a.modulations, b.modulations, out);
     return out;
+}
+
+std::vector<std::pair<Id, std::string>> dropUnplayableModulations(Session& s) {
+    std::vector<std::pair<Id, std::string>> dropped;
+    const std::string prefix = "/modulations/mr_";
+    while (!s.modulations.empty()) {
+        Checker c{s, {}};
+        c.modulations();  // gone or unfit referents first, then cycles
+        if (c.errors.empty()) c.routes();
+        std::optional<Id> id;
+        std::string why;
+        for (const Error& e : c.errors) {
+            if (e.path.compare(0, prefix.size(), prefix) != 0) continue;
+            const auto end = e.path.find('/', prefix.size());
+            id = Id::parse(e.path.substr(1 + std::string("modulations/").size(),
+                                         end == std::string::npos
+                                             ? std::string::npos
+                                             : end - 1 - std::string("modulations/").size()));
+            why = e.message;
+            break;
+        }
+        if (!id) break;
+        IdMap<Modulation>::Builder b(s.modulations);
+        b.erase(*id);
+        s.modulations = b.build();
+        dropped.emplace_back(*id, why);
+    }
+    return dropped;
 }
 
 std::optional<Id> trackOfChainFx(const Session& s, Id fx) {
