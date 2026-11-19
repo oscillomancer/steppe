@@ -482,10 +482,11 @@ class Keys : public ui::Node {
 // ----------------------------------------------------------------- bar strip
 
 // The project's bar numbers over the roll, at its bar lines, so a part can be
-// placed in the song without the arrangement in view. Which bars are numbered
-// depends on the zoom alone, as in the arrange ruler: every bar, or every
-// 2nd, 4th, 8th... counted from bar 1, the first stride whose spacing fits the
-// widest number (three digits at least); no two numbers ever touch.
+// placed in the song without the arrangement in view. As in the arrange
+// ruler, every bar is numbered, or every 2nd, 4th, 8th... counted from bar 1:
+// the first stride whose spacing fits the widest number (three digits at
+// least), set by the zoom and the narrowest bar around the item (barLines),
+// never by the scroll; no two numbers ever touch.
 class BarStrip : public ui::Node {
   public:
     static constexpr float kHeight = 16, kGap = 12;

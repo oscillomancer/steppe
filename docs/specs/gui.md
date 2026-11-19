@@ -1442,8 +1442,9 @@ keyboard at the left; the line under each C is stronger. A strip 16 units
 high above the roll numbers the project's bars (not the item's) at the roll's
 bar lines, in the ruler's mono caption: every bar, or every 2nd, 4th, 8th…
 counted from bar 1, the first stride whose spacing fits the widest number
-(three digits at least), so which bars are numbered depends on the zoom
-alone and no two numbers touch. The title names
+(three digits at least), the stride set by the zoom and the narrowest bar
+around the item (the bars 64 beats either side of it), never by where the
+roll is scrolled; no two numbers touch. The title names
 the track and the item as the arrangement labels it ("MIDI · Rhodes —
 Chords · 4 notes · grid 1/16"), with the item's id only while it has no
 name.

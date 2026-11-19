@@ -235,6 +235,7 @@ TEST_CASE("MIDI editor: the strip over the roll numbers the project's bars, spar
     f.exec("timesig.set", R"({"bar":3,"meter":"3/4"})");
     REQUIRE(f.editor->open(f.item));  // the item starts at beat 4: bar 2
     f.frame();
+    REQUIRE(f.root->find("midi.bars"));
     const ui::Rect strip = f.root->find("midi.bars")->bounds();
     const ui::Rect roll = f.editor->roll()->bounds();
     CHECK(strip.bottom() <= roll.y);  // above the roll, as wide as the keys and the roll
