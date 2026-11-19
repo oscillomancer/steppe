@@ -230,17 +230,11 @@ TEST_CASE("only a death that may be reported names a report") {
     instance->reset();
 }
 
-// A bridge whose plug-in faults only once the host lets go of it is the bridge's own end, not the
-// host's (the destructor reads the status after it waits; round 6a, F3). The host fails the bridge
-// without killing it, so the instance is never destroyed by a request: the bridge destroys it when
-// the socket closes, and the fixture faults in its destructor. No timing decides this: the bridge
-// is alive when the host lets go, and what it did next is what the end reads as.
-// What a bridge ended by abort() reads as. POSIX ends it with SIGABRT, a signal. On Windows the
-// bridge sets its runtime at start (no dialog, no report to wait on, a SIGABRT handler) so that
-// abort() ends it at once with a fast-fail's status, an exception. The first native run
-// (CI 44242073297) had the debug runtime's abort wait until the host's deadline killed the bridge,
-// which reads as the host's end with status 1; this case fails naming that if it happens again.
-TEST_CASE("a bridge ended by abort() is told as the system ended it, and the result is recorded") {
+// Runs the crash fixture in a bridge of its own with `mode` (the fixture's parameter 1) until the
+// plug-in's next process() ends the bridge, and returns the end the host announced. The checks that
+// hold for every way a plug-in can end its bridge are made here: the end is not the host's, and a
+// signal or an exception names a report while an exit does not.
+static diagctx::Event endBridgeWith(double mode) {
     setBridgeExecutable(BRIDGE_PATH);
     Sink sink;
     auto process = createBridgeProcess();
@@ -251,7 +245,7 @@ TEST_CASE("a bridge ended by abort() is told as the system ended it, and the res
     Instance& instance = **made;
     REQUIRE(instance.activate(48000.0, 1, 64));
     REQUIRE(instance.startProcessing());
-    REQUIRE(instance.setParam(1, 6.0));  // abort() in the next process()
+    REQUIRE(instance.setParam(1, mode));
     std::array<float, 64> in{}, out{};
     const float* inputs[1]{in.data()};
     float* outputs[1]{out.data()};
@@ -266,9 +260,26 @@ TEST_CASE("a bridge ended by abort() is told as the system ended it, and the res
     diagctx::Event end;
     for (const auto& event : Sink::of(diagctx::EventKind::Bridge))
         if (event.bridge == ordinal && event.how != diagctx::BridgeHow::None) end = event;
-    std::fprintf(stderr, "abort() ended a bridge as how=%s status=%d (0x%x)\n",
+    std::fprintf(stderr, "mode %g ended a bridge as how=%s status=%d (0x%x)\n", mode,
                  diagctx::bridgeHowName(end.how) ? diagctx::bridgeHowName(end.how) : "none",
                  end.status, static_cast<unsigned>(end.status));
+    CHECK(end.how != diagctx::BridgeHow::Host);
+    // Whatever the system called it, a signal or an exception names a report; an exit does not.
+    const bool reported =
+        end.how == diagctx::BridgeHow::Signal || end.how == diagctx::BridgeHow::Exception;
+    CHECK(Sink::incidentOf(ordinal).size() == (reported ? 32u : 0u));
+    CHECK(instance.bridgeIncident() == Sink::incidentOf(ordinal));
+    made->reset();
+    return end;
+}
+
+// What a bridge ended by abort() reads as. POSIX ends it with SIGABRT, a signal. On Windows the
+// bridge sets its runtime at start (no dialog, no report to wait on, a SIGABRT handler) so that
+// abort() ends it at once with a fast-fail's status, an exception. The first native run
+// (CI 44242073297) had the debug runtime's abort wait until the host's deadline killed the bridge,
+// which reads as the host's end with status 1; this case fails naming that if it happens again.
+TEST_CASE("a bridge ended by abort() is told as the system ended it, and the result is recorded") {
+    const auto end = endBridgeWith(6.0);  // abort() in the next process()
 #if defined(_WIN32)
     CHECK_MESSAGE(
         end.how == diagctx::BridgeHow::Exception,
@@ -280,13 +291,6 @@ TEST_CASE("a bridge ended by abort() is told as the system ended it, and the res
     CHECK(end.how == diagctx::BridgeHow::Signal);
     CHECK(end.status == SIGABRT);
 #endif
-    CHECK(end.how != diagctx::BridgeHow::Host);
-    // Whatever the system called it, a signal or an exception names a report; an exit does not.
-    const bool reported =
-        end.how == diagctx::BridgeHow::Signal || end.how == diagctx::BridgeHow::Exception;
-    CHECK(Sink::incidentOf(ordinal).size() == (reported ? 32u : 0u));
-    CHECK(instance.bridgeIncident() == Sink::incidentOf(ordinal));
-    made->reset();
 }
 
 // AddressSanitizer and ThreadSanitizer end a faulting bridge with their own exit (after their
@@ -301,6 +305,53 @@ TEST_CASE("a bridge ended by abort() is told as the system ended it, and the res
 #define SUPPLE_TEST_SANITIZER_EXITS 1
 #endif
 #if !defined(SUPPLE_TEST_SANITIZER_EXITS)
+// raise(SIGSEGV) from a plug-in. POSIX: the signal. Windows: the C runtime's default for a raised
+// SIGSEGV is _exit(3), which is no crash to the host (an exit, no report); the bridge installs a
+// SIGSEGV handler that captures and ends the process with an access violation's status, so it
+// reads as the exception it stands for (diagnostics.md, "A report when the worker lives").
+TEST_CASE("a bridge ended by raise(SIGSEGV) is told as a crash, not as an exit") {
+    const auto end = endBridgeWith(1.0);  // raise(SIGSEGV) in the next process()
+#if defined(_WIN32)
+    CHECK_MESSAGE(
+        end.how == diagctx::BridgeHow::Exception,
+        "raise(SIGSEGV) ended the bridge as "
+            << (diagctx::bridgeHowName(end.how) ? diagctx::bridgeHowName(end.how) : "none")
+            << ", status " << end.status << " (exit, status 3: the runtime's default)");
+    CHECK(static_cast<std::uint32_t>(end.status) == 0xC0000005u);
+#else
+    CHECK(end.how == diagctx::BridgeHow::Signal);
+    CHECK(end.status == SIGSEGV);
+#endif
+}
+
+// An uncaught std::terminate reaches abort() through the plug-in's runtime, so it ends the bridge
+// as abort() does. Not under RealtimeSanitizer: libstdc++'s terminate handler writes its message
+// with fwrite on the bridge's audio thread, which rtsan flags, and halt_on_error ends the bridge
+// with exit 0 before it reaches abort(). That is the sanitizer's verdict on the plug-in's call, not
+// the host's classification this case is about.
+#if defined(__has_feature)
+#if __has_feature(realtime_sanitizer)
+#define SUPPLE_TEST_RTSAN 1
+#endif
+#endif
+#if !defined(SUPPLE_TEST_RTSAN)
+TEST_CASE("a bridge ended by std::terminate is told as the system ended it") {
+    const auto end = endBridgeWith(9.0);  // std::terminate() in the next process()
+#if defined(_WIN32)
+    CHECK(end.how == diagctx::BridgeHow::Exception);
+    CHECK(static_cast<std::uint32_t>(end.status) == 0xC0000409u);
+#else
+    CHECK(end.how == diagctx::BridgeHow::Signal);
+    CHECK(end.status == SIGABRT);
+#endif
+}
+#endif
+
+// A bridge whose plug-in faults only once the host lets go of it is the bridge's own end, not the
+// host's (the destructor reads the status after it waits; round 6a, F3). The host fails the bridge
+// without killing it, so the instance is never destroyed by a request: the bridge destroys it when
+// the socket closes, and the fixture faults in its destructor. No timing decides this: the bridge
+// is alive when the host lets go, and what it did next is what the end reads as.
 TEST_CASE("a bridge that faults as the host lets go is its own end, not the host's") {
     setBridgeExecutable(BRIDGE_PATH);
     Sink sink;

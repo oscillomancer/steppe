@@ -26,6 +26,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <ostream>
@@ -110,6 +111,47 @@ bridge::Writer slotRequest(std::uint32_t version = diagnostics::selfcapture::kSl
 struct NoAutoAttach {  // a bridge started in this scope is not given a slot
     NoAutoAttach() { setBridgeCaptureSlotForTests(false); }
     ~NoAutoAttach() { setBridgeCaptureSlotForTests(true); }
+};
+// Whether a child process is gone, observed without reaping it and without waiting. POSIX asks
+// waitid(WNOWAIT), where a zombie counts as gone. Windows has no zombies: a process handle opened
+// while the process lives stays signalled once it ends, and keeps the pid from being reused, so
+// the answer cannot be about another process. Open it while the bridge is known to be there.
+class ExitWatch {
+  public:
+    explicit ExitWatch(int pid) : pid_(pid) {
+#if defined(_WIN32)
+        handle_ = OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(pid));
+#endif
+    }
+    ExitWatch(const ExitWatch&) = delete;
+    ExitWatch& operator=(const ExitWatch&) = delete;
+    ~ExitWatch() {
+#if defined(_WIN32)
+        if (handle_) CloseHandle(handle_);
+#endif
+    }
+    bool valid() const {
+#if defined(_WIN32)
+        return handle_ != nullptr;
+#else
+        return pid_ > 0;
+#endif
+    }
+    bool exited() const {
+#if defined(_WIN32)
+        return handle_ && WaitForSingleObject(handle_, 0) == WAIT_OBJECT_0;
+#else
+        siginfo_t info{};
+        return ::waitid(P_PID, static_cast<id_t>(pid_), &info, WEXITED | WNOHANG | WNOWAIT) == 0 &&
+               info.si_pid == pid_;
+#endif
+    }
+
+  private:
+    [[maybe_unused]] int pid_;  // Windows watches the handle, not the number
+#if defined(_WIN32)
+    HANDLE handle_ = nullptr;
+#endif
 };
 void awaitWake(MainThreadWake& wake) {
     WaitItem item{wake.waitable()};
@@ -406,24 +448,17 @@ TEST_CASE("a hung bridged plug-in fails after 50 ms of late blocks; main kills i
     CHECK(bridgeLateCalls() - before == static_cast<std::uint64_t>(blocks));
     REQUIRE(c.failed());
     CHECK(c.failure().find("stopped responding") != std::string::npos);
-#if !defined(_WIN32)
     const int pid = c.bridgePid();
     REQUIRE(pid > 0);
-    // Exited (a zombie until reaped counts), observed without reaping it.
-    auto exited = [pid] {
-        siginfo_t info{};
-        return ::waitid(P_PID, static_cast<id_t>(pid), &info, WEXITED | WNOHANG | WNOWAIT) == 0 &&
-               info.si_pid == pid;
-    };
-    CHECK_FALSE(exited());  // the audio thread killed nothing
-    while (!exited() && std::chrono::steady_clock::now() < guard) {
+    ExitWatch watch(pid);  // opened while the bridge is hung and not yet killed
+    REQUIRE(watch.valid());
+    CHECK_FALSE(watch.exited());  // the audio thread killed nothing
+    while (!watch.exited() && std::chrono::steady_clock::now() < guard) {
         c.serviceMainThread();  // main reaps the failure, killing the bridge
         std::this_thread::yield();
     }
-    CHECK(exited());
-#endif
+    CHECK(watch.exited());
 }
-#if !defined(_WIN32)
 TEST_CASE("a bridge failed by late blocks is left to finish a capsule for the handler's budget") {
     // Late blocks fail a bridge after 50 ms, the shortest deadline the host has on one; the main
     // thread's kill follows at its next reap. A bridge that faulted as it was failed would be cut
@@ -451,11 +486,8 @@ TEST_CASE("a bridge failed by late blocks is left to finish a capsule for the ha
     REQUIRE(c.failed());
     const int pid = c.bridgePid();
     REQUIRE(pid > 0);
-    auto exited = [pid] {
-        siginfo_t info{};
-        return ::waitid(P_PID, static_cast<id_t>(pid), &info, WEXITED | WNOHANG | WNOWAIT) == 0 &&
-               info.si_pid == pid;
-    };
+    ExitWatch watch(pid);
+    REQUIRE(watch.valid());
     // Main looks for long enough that a kill, which takes a moment to show as an exit, would have
     // shown (the time only makes the check stricter: it cannot make it fail).
     for (const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
@@ -463,13 +495,13 @@ TEST_CASE("a bridge failed by late blocks is left to finish a capsule for the ha
         c.serviceMainThread();
         std::this_thread::yield();
     }
-    CHECK_FALSE(exited());  // main looked for 300 ms and killed nothing
+    CHECK_FALSE(watch.exited());  // main looked for 300 ms and killed nothing
     setBridgeKillGraceForTests(0);
-    while (!exited() && std::chrono::steady_clock::now() < guard) {
+    while (!watch.exited() && std::chrono::steady_clock::now() < guard) {
         c.serviceMainThread();
         std::this_thread::yield();
     }
-    CHECK(exited());
+    CHECK(watch.exited());
 }
 
 TEST_CASE("a hung bridge in an engine nobody queries is killed once the grace is over") {
@@ -500,21 +532,18 @@ TEST_CASE("a hung bridge in an engine nobody queries is killed once the grace is
     REQUIRE(c.failed());
     const int pid = c.bridgePid();
     REQUIRE(pid > 0);
-    auto exited = [pid] {
-        siginfo_t info{};
-        return ::waitid(P_PID, static_cast<id_t>(pid), &info, WEXITED | WNOHANG | WNOWAIT) == 0 &&
-               info.si_pid == pid;
-    };
+    ExitWatch watch(pid);
+    REQUIRE(watch.valid());
     // Ticks, as the engine makes them, and nothing else. The limit only ends a test that fails.
     const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(20);
-    while (!exited() && std::chrono::steady_clock::now() < limit) {
+    while (!watch.exited() && std::chrono::steady_clock::now() < limit) {
         c.serviceMainThread();
         (void)c.takeNotifications();
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
-    CHECK(exited());
+    CHECK(watch.exited());
 }
-#endif
+
 TEST_CASE("native bridge notifications ACK and rearm without periodic parent polling") {
     setBridgeExecutable(BRIDGE_PATH);
     MainThreadWake wake;
@@ -668,69 +697,103 @@ TEST_CASE("a bridge takes the capture slot once, and every damaged attach is ref
     auto made = createBridgeProcess();
     REQUIRE(made);
     auto& process = *made;
-    const long before = openResourcesOf(process->pid());
-    const auto refused = [&](const char* label, bridge::Op op, std::uint32_t instance,
-                             const bridge::Writer& w, bridge::Resource resource,
-                             std::string_view code) {
-        CAPTURE(label);
-        auto reply = process->call(op, instance, w, resource);
-        if (resource != bridge::noResource) bridge::closeResource(resource);  // the sender's copy
-        REQUIRE_FALSE(reply);
-        CHECK(reply.error().code == code);
-        CHECK_FALSE(process->failed());
-        // The bridge closed what it was sent: its own open-resource count is where it was.
-        if (before >= 0) CHECK(openResourcesOf(process->pid()) == before);
-    };
-    refused("wrong version", bridge::Op::AttachCaptureSlot, 0,
-            slotRequest(capture::kSlotVersion + 1), makeSlot(), "bridge.capture_slot");
-    refused("no resource", bridge::Op::AttachCaptureSlot, 0, slotRequest(), bridge::noResource,
-            "bridge.capture_slot");
-    refused("a request for an instance", bridge::Op::AttachCaptureSlot, 1, slotRequest(),
-            makeSlot(), "bridge.capture_slot");
+    // A refusal that leaks what it was sent leaks it once per request, so each request is repeated
+    // and the bridge's open-resource count may not grow with the repeats. It is not compared with
+    // a count taken before the first request: a bridge's count moves by a few for reasons of its
+    // own (a Windows CI run read 103 at start and 104 to 106 while it sat idle), and a count read
+    // at one moment says nothing about a leak. The first request is the warm-up (it may start
+    // things the bridge keeps); a leak adds one per repeat after it. POSIX counts are exact and
+    // must not move at all; Windows's may drift by a few (+3 was the most seen), so it is allowed
+    // 15 over 128 repeats: a refusal that leaks one request in eight or more shows.
+    constexpr int kRepeats = 128;
+#if defined(_WIN32)
+    constexpr long kAllowedGrowth = 15;
+#else
+    constexpr long kAllowedGrowth = 0;
+#endif
+    const auto refused =
+        [&](const char* label, bridge::Op op, std::uint32_t instance, const bridge::Writer& w,
+            const std::function<bridge::Resource()>& makeResource, std::string_view code) {
+            INFO("refusal: " << std::string(label));  // CAPTURE(label) printed "1" on Windows CI
+            long baseline = -1;
+            for (int i = 0; i < kRepeats; ++i) {
+                const bridge::Resource resource = makeResource();
+                auto reply = process->call(op, instance, w, resource);
+                if (resource != bridge::noResource)
+                    bridge::closeResource(resource);  // the sender's copy
+                REQUIRE_FALSE(reply);
+                CHECK(reply.error().code == code);
+                CHECK_FALSE(process->failed());
+                if (i == 0) baseline = openResourcesOf(process->pid());
+            }
+            // The bridge closed what it was sent: its own open-resource count is where it was.
+            if (baseline >= 0) CHECK(openResourcesOf(process->pid()) - baseline <= kAllowedGrowth);
+        };
+    refused(
+        "wrong version", bridge::Op::AttachCaptureSlot, 0, slotRequest(capture::kSlotVersion + 1),
+        [] { return makeSlot(); }, "bridge.capture_slot");
+    refused(
+        "no resource", bridge::Op::AttachCaptureSlot, 0, slotRequest(),
+        [] { return bridge::noResource; }, "bridge.capture_slot");
+    refused(
+        "a request for an instance", bridge::Op::AttachCaptureSlot, 1, slotRequest(),
+        [] { return makeSlot(); }, "bridge.capture_slot");
     {
         bridge::Writer trailing = slotRequest();
         trailing.u8(0);
-        refused("trailing payload", bridge::Op::AttachCaptureSlot, 0, trailing, makeSlot(),
-                "bridge.malformed");
-        refused("short payload", bridge::Op::AttachCaptureSlot, 0, bridge::Writer{}, makeSlot(),
-                "bridge.malformed");
+        refused(
+            "trailing payload", bridge::Op::AttachCaptureSlot, 0, trailing,
+            [] { return makeSlot(); }, "bridge.malformed");
+        refused(
+            "short payload", bridge::Op::AttachCaptureSlot, 0, bridge::Writer{},
+            [] { return makeSlot(); }, "bridge.malformed");
     }
-    refused("memory too small", bridge::Op::AttachCaptureSlot, 0, slotRequest(),
-            bridge::createMemory(capture::kSlotBytes / 2), "bridge.capture_slot");
-    refused("memory too large", bridge::Op::AttachCaptureSlot, 0, slotRequest(),
-            bridge::createMemory(capture::kSlotBytes * 2), "bridge.capture_slot");
+    refused(
+        "memory too small", bridge::Op::AttachCaptureSlot, 0, slotRequest(),
+        [] { return bridge::createMemory(capture::kSlotBytes / 2); }, "bridge.capture_slot");
+    refused(
+        "memory too large", bridge::Op::AttachCaptureSlot, 0, slotRequest(),
+        [] { return bridge::createMemory(capture::kSlotBytes * 2); }, "bridge.capture_slot");
     // Right size, never initialized as a slot: no magic.
-    refused("not a slot", bridge::Op::AttachCaptureSlot, 0, slotRequest(),
-            bridge::createMemory(capture::kSlotBytes), "bridge.capture_slot");
+    refused(
+        "not a slot", bridge::Op::AttachCaptureSlot, 0, slotRequest(),
+        [] { return bridge::createMemory(capture::kSlotBytes); }, "bridge.capture_slot");
 #if defined(_WIN32)
-    {
-        const HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-        REQUIRE(event);
-        refused("an event is no memory", bridge::Op::AttachCaptureSlot, 0, slotRequest(),
-                reinterpret_cast<bridge::Resource>(event), "bridge.capture_slot");
-    }
+    refused(
+        "an event is no memory", bridge::Op::AttachCaptureSlot, 0, slotRequest(),
+        [] {
+            const HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            REQUIRE(event);
+            return reinterpret_cast<bridge::Resource>(event);
+        },
+        "bridge.capture_slot");
 #else
-    {
-        int ends[2];
-        REQUIRE(::pipe(ends) == 0);
-        ::close(ends[1]);
-        refused("a pipe is no memory", bridge::Op::AttachCaptureSlot, 0, slotRequest(), ends[0],
-                "bridge.capture_slot");
-    }
+    refused(
+        "a pipe is no memory", bridge::Op::AttachCaptureSlot, 0, slotRequest(),
+        [] {
+            int ends[2];
+            REQUIRE(::pipe(ends) == 0);
+            ::close(ends[1]);
+            return ends[0];
+        },
+        "bridge.capture_slot");
 #endif
 #if defined(__linux__)
-    {
-        // Right size, a slot's header, but unsealed: the mapping could be shrunk to a fault.
-        const int fd = ::memfd_create("unsealed", MFD_CLOEXEC);
-        REQUIRE(fd >= 0);
-        REQUIRE(::ftruncate(fd, static_cast<off_t>(capture::kSlotBytes)) == 0);
-        refused("an unsealed memfd", bridge::Op::AttachCaptureSlot, 0, slotRequest(), fd,
-                "bridge.capture_slot");
-    }
+    // Right size, a slot's header, but unsealed: the mapping could be shrunk to a fault.
+    refused(
+        "an unsealed memfd", bridge::Op::AttachCaptureSlot, 0, slotRequest(),
+        [] {
+            const int fd = ::memfd_create("unsealed", MFD_CLOEXEC);
+            REQUIRE(fd >= 0);
+            REQUIRE(::ftruncate(fd, static_cast<off_t>(capture::kSlotBytes)) == 0);
+            return fd;
+        },
+        "bridge.capture_slot");
 #endif
     // A request that may carry no resource still refuses one (an existing rule, kept for it).
-    refused("a resource on another operation", bridge::Op::AckNotifications, 0, bridge::Writer{},
-            makeSlot(), "bridge.fd");
+    refused(
+        "a resource on another operation", bridge::Op::AckNotifications, 0, bridge::Writer{},
+        [] { return makeSlot(); }, "bridge.fd");
     // None of that used the one attach: a good slot is taken now, and a second is refused.
     {
         const auto slot = makeSlot();
@@ -740,8 +803,9 @@ TEST_CASE("a bridge takes the capture slot once, and every damaged attach is ref
         bridge::Reader r(taken->data(), taken->size());
         CHECK(r.u32() == capture::kSlotVersion);
     }
-    refused("a second slot", bridge::Op::AttachCaptureSlot, 0, slotRequest(), makeSlot(),
-            "bridge.capture_slot");
+    refused(
+        "a second slot", bridge::Op::AttachCaptureSlot, 0, slotRequest(), [] { return makeSlot(); },
+        "bridge.capture_slot");
     CHECK_FALSE(process->failed());
 }
 
