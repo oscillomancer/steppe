@@ -308,16 +308,29 @@ only.
   CLAP range, a disabled route adding 0. An event is sent only when the
   value differs from the memo of the last one sent.
   - The memo is carried across compiles by (fx, param), like `carryMix`
-    (§1.6). A parameter that the new plan no longer modulates is sent one 0
-    at its first grid point and leaves the memo.
+    (§1.6): a stage's slots are matched by instance and CLAP id. A
+    parameter that the new plan no longer modulates is sent one 0 at its
+    first grid point and leaves the memo. So that a carried memo always
+    fits, each stage keeps a slot for every parameter any plan has
+    modulated on its FX (`InstancePool::modulatedParams`, main thread), and
+    a stage with no route left keeps its slots until their 0s are sent.
   - It goes stale (it is never emptied) on the instance's activation, a
-    reset (`host::Instance::resets()`: a seek, a play start), a changed
-    instance, and a patch or state applied to the instance. The next grid
-    point then sends the current sum of every modulated parameter and 0 to
-    every other parameter the memo lists, and drops those.
+    reset (a seek, a play start), a changed instance, and a patch or state
+    applied to the instance: `host::Instance::modulationEpoch()` counts
+    `activate()`, `reset()`, `setPatch()` and `loadState()` (`resets()`
+    keeps counting `reset()` alone). The next grid point then sends the
+    current sum of every modulated parameter and 0 to every other parameter
+    the memo lists, and drops those. A stage that does not process this
+    block (a compensated bypass, not owned, not processing) is sent nothing
+    and its memo goes stale.
+  - The route's delay runs every block at the target node, and a locate
+    clears it unless a swap just carried it (by route id, at the same
+    length), as an edge's delay.
   - A patch edit to a modulated FX compiles instead of taking the patch path
     (ADR-0092).
-  - Each stage reserves `block / 32 + 2` events per modulated parameter.
+  - Each stage reserves `block / 32 + 2` events per modulated parameter and
+    one for each other slot. An event that finds the block full is tried
+    again at the next grid point.
   - Bridged plug-ins receive the same events through the bridge; a late
     block's coalescing keeps the latest value per target (§5).
 - **Inert routes.** A route is inert, with a plan warning, when binding finds

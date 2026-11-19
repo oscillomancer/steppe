@@ -213,7 +213,8 @@ void dumpEvents(Dump& d, std::string_view a, const std::vector<TimedEvent>& even
 
 void dumpStage(Dump& d, std::string_view a, const Stage& st) {
     [[maybe_unused]] const auto& [rackMidiBase, busPart, busMerge, busLive, midiOnly, busBase,
-                                  busHeld, busControllers, instance, fx, lanes, bypass, instrument,
+                                  busHeld, busControllers, instance, fx, lanes, mods, modRoutes,
+                                  modEvents, modHeard, modEpoch, bypass, instrument,
                                   autoBypassOnSilence, sleeping, processed, inputLatency, rateLive,
                                   callbackBypass, wet, appliedWet, rampFromWet, rampToWet,
                                   wetRampLeft, preserveDryOnLocate, latency, dry, out, dryBuf,
@@ -239,6 +240,17 @@ void dumpStage(Dump& d, std::string_view a, const Stage& st) {
         d.put(la, "described", lane.spec != nullptr);
         dumpAutomation(d, at(la, "curve"), lane.curve);
     }
+    // Modulation slots; the memo in them is runtime state.
+    d.put(a, "mods", static_cast<std::uint64_t>(st.mods.size()));
+    for (std::size_t i = 0; i < st.mods.size(); ++i) {
+        const ModParam& m = st.mods[i];
+        const auto ma = at(a, "mod", i);
+        d.put(ma, "clap", m.clapId);
+        d.put(ma, "range", m.range);
+        d.put(ma, "routes", std::array{m.first, m.count});
+    }
+    d.put(a, "modRoutes", st.modRoutes);
+    d.put(a, "modEvents", static_cast<std::uint64_t>(st.modEvents));
     d.put(a, "bypass", st.bypass);
     d.put(a, "instrument", st.instrument);
     d.put(a, "autoBypassOnSilence", st.autoBypassOnSilence);
@@ -537,7 +549,8 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
 // A modulation edge (ADR-0096); its delay's contents are runtime state.
 void dumpModEdge(Dump& d, std::string_view a, const ModEdge& e) {
     [[maybe_unused]] const auto& [route, from, to, fromId, toId, modOut, input, target, stage,
-                                  inputStage, depth, enabled, inert, tap, delay] = e;
+                                  inputStage, clapId, depth, enabled, inert, tap, delay,
+                                  preserveDelayOnLocate, values] = e;
     d.put(a, "route", e.route);
     d.put(a, "from", static_cast<std::uint64_t>(e.from));
     d.put(a, "to", static_cast<std::uint64_t>(e.to));
@@ -550,6 +563,8 @@ void dumpModEdge(Dump& d, std::string_view a, const ModEdge& e) {
     d.put(a, "inert", e.inert);
     d.put(a, "tap", e.tap);
     d.put(a, "delay", e.delay.length);
+    d.put(a, "clap", e.clapId);
+    d.size(a, "values", e.values);
 }
 
 void dumpEdge(Dump& d, std::string_view a, const Edge& e) {

@@ -228,7 +228,7 @@ bool Engine::loadPatches(const model::Session& session, const std::filesystem::p
         // A frozen track's FX is in no plan; its instance waits to be pruned.
         if (model::frozenOwner(session, id) || !plugins_.patchable(id, *session.fx.find(id)))
             return false;
-        if (detail::automated(session, id)) return false;
+        if (detail::automated(session, id) || detail::modulated(session, id)) return false;
     }
     // From here the patches are applied. Whatever a plug-in reports that a
     // plan holds (latency, parameters, ports, activation, a restart) makes

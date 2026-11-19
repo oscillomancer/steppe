@@ -494,13 +494,18 @@ struct ModEdge {
     // Where the target is: a stage of the node's chain, of its input chain,
     // or neither (a mixer target).
     int stage = -1, inputStage = -1;
+    std::uint32_t clapId = 0;  // a plug-in target's parameter, bound by prepare
     double depth = 0.0;
     bool enabled = true;
     // Compiled but not applied, with a plan warning: a mixer target before
     // step M2, a Mod Out whose type is not installed.
     bool inert = false;
-    std::int64_t tap = 0;  // the Mod Out's latency in its rack
-    ModDelay delay;        // sized by the latency solve
+    std::int64_t tap = 0;                // the Mod Out's latency in its rack
+    ModDelay delay;                      // sized by the latency solve
+    bool preserveDelayOnLocate = false;  // a swap just carried it (as Edge's)
+    // This block's source values, delayed: what the target reads at each
+    // frame. Sized to the block for a route that is not inert.
+    std::vector<double> values;
 };
 
 // An automated plugin parameter (engine.md §1.4, ADR-0010): semantic
@@ -618,6 +623,19 @@ struct MidiRoutedInput {
     std::int32_t address = -1;
 };
 
+// One parameter of a stage's plug-in that modulation reaches, or reached
+// (ADR-0096), and the memo of what was last sent to it.
+struct ModParam {
+    std::uint32_t clapId = 0;
+    double range = 0.0;  // its CLAP max - min: a route's depth is a fraction of it
+    // Its routes in Stage::modRoutes from `first`; none: no route in this
+    // plan, so it is sent a 0 if the memo still lists it.
+    std::uint32_t first = 0, count = 0;
+    double sent = 0.0;    // the memo: the last amount the plug-in was sent
+    bool listed = false;  // the memo lists it: the plug-in may hold `sent`
+    bool stale = true;    // send at the next grid point whatever `sent` is
+};
+
 struct Stage {
     int rackMidiBase = -1;  // kRoutedNoteBase on a track's note target
     // The MIDI bus (ADR-0068): a note-output stage's ordinal among them
@@ -635,6 +653,16 @@ struct Stage {
     host::Instance* instance = nullptr;  // null: placeholder (pass-through)
     Id fx;
     std::vector<ParamLane> lanes;
+    // Modulation (ADR-0096): a slot per parameter any plan has modulated on
+    // this FX (InstancePool::modulatedParams), sorted by id, and each slot's
+    // routes (Plan::modEdges indices). `modEvents` are reserved per block.
+    // `modHeard` and `modEpoch`: the instance and its modulationEpoch() the
+    // memo was last checked against; a change marks it stale.
+    std::vector<ModParam> mods;
+    std::vector<std::uint32_t> modRoutes;
+    std::size_t modEvents = 0;
+    const host::Instance* modHeard = nullptr;
+    std::uint32_t modEpoch = 0;
     bool bypass = false, instrument = false;
     bool autoBypassOnSilence = false, sleeping = false, processed = false;
     std::int64_t inputLatency = 0;  // stage input's timeline shift, also corrects output events
@@ -1334,6 +1362,13 @@ inline bool rescansParamList(const host::Instance::Notifications& n) {
 inline bool automated(const model::Session& s, model::Id fx) {
     for (const auto& envelope : s.envelopes)
         if (envelope.value->target.object == fx && envelope.value->active) return true;
+    return false;
+}
+// Whether a modulation route targets the FX: a patch edit to it compiles, as
+// one to an automated FX does (ADR-0096).
+inline bool modulated(const model::Session& s, model::Id fx) {
+    for (const auto& route : s.modulations)
+        if (route.value->target.object == fx) return true;
     return false;
 }
 

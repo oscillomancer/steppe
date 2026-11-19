@@ -551,6 +551,18 @@ bool InstancePool::automationCleared(Id id) const {
     return it != instances_.end() && !it->second.clearedAutomation.empty();
 }
 
+std::vector<std::uint32_t> InstancePool::modulatedParams(Id id,
+                                                         std::span<const std::uint32_t> now) {
+    auto it = instances_.find(id);
+    if (it == instances_.end()) return {now.begin(), now.end()};
+    auto& set = it->second.modulated;
+    for (std::uint32_t param : now)
+        if (const auto at = std::lower_bound(set.begin(), set.end(), param);
+            at == set.end() || *at != param)
+            set.insert(at, param);
+    return set;
+}
+
 bool InstancePool::anyAutomationCleared() const {
     return std::any_of(instances_.begin(), instances_.end(),
                        [](const auto& entry) { return !entry.second.clearedAutomation.empty(); });
