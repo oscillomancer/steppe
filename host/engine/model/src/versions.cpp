@@ -85,9 +85,15 @@ EntryInfo entryInfo(const Session& s, Id id) {
             return info(s.modules, id);
         case Kind::Cable:
             return info(s.cables, id);
-        default:
+        case Kind::Modulation:
+            return info(s.modulations, id);
+        // Kinds with no Session collection. No `default`: a new kind must be
+        // placed here or above, or the build fails (-Wswitch).
+        case Kind::Lane:
+        case Kind::RenderJob:
             return {};
     }
+    return {};
 }
 
 // The object's JSON form (null when absent), for field-level comparisons.
@@ -133,9 +139,13 @@ json::Value objectJson(const Session& s, Id id) {
             return enc(s.modules);
         case Kind::Cable:
             return enc(s.cables);
-        default:
+        case Kind::Modulation:
+            return enc(s.modulations);
+        case Kind::Lane:
+        case Kind::RenderJob:
             return {};
     }
+    return {};
 }
 
 // The JSON Schema of an object's encoding: it marks the ID fields.
@@ -184,9 +194,13 @@ const json::Value* objectSchema(const Session& s, Id id) {
             return &schemaFor(s.modules);
         case Kind::Cable:
             return &schemaFor(s.cables);
-        default:
+        case Kind::Modulation:
+            return &schemaFor(s.modulations);
+        case Kind::Lane:
+        case Kind::RenderJob:
             return nullptr;
     }
+    return nullptr;
 }
 
 // Structural lists that a replayed command recomputes on the target (a track
@@ -604,6 +618,7 @@ struct VersionStore::RetainedSize {
         map(v.id, s.racks);
         map(v.id, s.modules);
         map(v.id, s.cables);
+        map(v.id, s.modulations);
         for (const auto& [hash, blob] : s.blobs)
             add(v.id, blob.get(), sizeof(Blob) + blob->data.size());
     }

@@ -13,6 +13,10 @@
 
 namespace supple::model {
 
+// Adding a kind: put it before Project, raise kKindCount, add its prefix to
+// kPrefixes (session.cpp) and handle it in the Kind switches of versions.cpp.
+// The prefix table is checked at compile time and those switches have no
+// `default`, so a step left out fails the build.
 enum class Kind : std::uint8_t {
     Track,          // tr
     Item,           // it
@@ -33,9 +37,10 @@ enum class Kind : std::uint8_t {
     Rack,           // rk  a modular rack (ADR-0062)
     Module,         // mo  a module in a rack
     Cable,          // cb  a cable between modules
+    Modulation,     // mr  a modulation route (ADR-0096)
     Project = 255,  // non-allocated singleton, used in changes/diffs
 };
-inline constexpr std::size_t kKindCount = 19;
+inline constexpr std::size_t kKindCount = 20;
 
 std::string_view prefix(Kind kind);  // "tr"
 std::optional<Kind> kindFromPrefix(std::string_view prefix);
