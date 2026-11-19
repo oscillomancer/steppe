@@ -111,6 +111,47 @@ struct NoAutoAttach {  // a bridge started in this scope is not given a slot
     NoAutoAttach() { setBridgeCaptureSlotForTests(false); }
     ~NoAutoAttach() { setBridgeCaptureSlotForTests(true); }
 };
+// Whether a child process is gone, observed without reaping it and without waiting. POSIX asks
+// waitid(WNOWAIT), where a zombie counts as gone. Windows has no zombies: a process handle opened
+// while the process lives stays signalled once it ends, and keeps the pid from being reused, so
+// the answer cannot be about another process. Open it while the bridge is known to be there.
+class ExitWatch {
+  public:
+    explicit ExitWatch(int pid) : pid_(pid) {
+#if defined(_WIN32)
+        handle_ = OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(pid));
+#endif
+    }
+    ExitWatch(const ExitWatch&) = delete;
+    ExitWatch& operator=(const ExitWatch&) = delete;
+    ~ExitWatch() {
+#if defined(_WIN32)
+        if (handle_) CloseHandle(handle_);
+#endif
+    }
+    bool valid() const {
+#if defined(_WIN32)
+        return handle_ != nullptr;
+#else
+        return pid_ > 0;
+#endif
+    }
+    bool exited() const {
+#if defined(_WIN32)
+        return handle_ && WaitForSingleObject(handle_, 0) == WAIT_OBJECT_0;
+#else
+        siginfo_t info{};
+        return ::waitid(P_PID, static_cast<id_t>(pid_), &info, WEXITED | WNOHANG | WNOWAIT) == 0 &&
+               info.si_pid == pid_;
+#endif
+    }
+
+  private:
+    [[maybe_unused]] int pid_;  // Windows watches the handle, not the number
+#if defined(_WIN32)
+    HANDLE handle_ = nullptr;
+#endif
+};
 void awaitWake(MainThreadWake& wake) {
     WaitItem item{wake.waitable()};
     REQUIRE(waitFor(std::span(&item, 1), 60000) ==
@@ -406,24 +447,17 @@ TEST_CASE("a hung bridged plug-in fails after 50 ms of late blocks; main kills i
     CHECK(bridgeLateCalls() - before == static_cast<std::uint64_t>(blocks));
     REQUIRE(c.failed());
     CHECK(c.failure().find("stopped responding") != std::string::npos);
-#if !defined(_WIN32)
     const int pid = c.bridgePid();
     REQUIRE(pid > 0);
-    // Exited (a zombie until reaped counts), observed without reaping it.
-    auto exited = [pid] {
-        siginfo_t info{};
-        return ::waitid(P_PID, static_cast<id_t>(pid), &info, WEXITED | WNOHANG | WNOWAIT) == 0 &&
-               info.si_pid == pid;
-    };
-    CHECK_FALSE(exited());  // the audio thread killed nothing
-    while (!exited() && std::chrono::steady_clock::now() < guard) {
+    ExitWatch watch(pid);  // opened while the bridge is hung and not yet killed
+    REQUIRE(watch.valid());
+    CHECK_FALSE(watch.exited());  // the audio thread killed nothing
+    while (!watch.exited() && std::chrono::steady_clock::now() < guard) {
         c.serviceMainThread();  // main reaps the failure, killing the bridge
         std::this_thread::yield();
     }
-    CHECK(exited());
-#endif
+    CHECK(watch.exited());
 }
-#if !defined(_WIN32)
 TEST_CASE("a bridge failed by late blocks is left to finish a capsule for the handler's budget") {
     // Late blocks fail a bridge after 50 ms, the shortest deadline the host has on one; the main
     // thread's kill follows at its next reap. A bridge that faulted as it was failed would be cut
@@ -451,11 +485,8 @@ TEST_CASE("a bridge failed by late blocks is left to finish a capsule for the ha
     REQUIRE(c.failed());
     const int pid = c.bridgePid();
     REQUIRE(pid > 0);
-    auto exited = [pid] {
-        siginfo_t info{};
-        return ::waitid(P_PID, static_cast<id_t>(pid), &info, WEXITED | WNOHANG | WNOWAIT) == 0 &&
-               info.si_pid == pid;
-    };
+    ExitWatch watch(pid);
+    REQUIRE(watch.valid());
     // Main looks for long enough that a kill, which takes a moment to show as an exit, would have
     // shown (the time only makes the check stricter: it cannot make it fail).
     for (const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
@@ -463,13 +494,13 @@ TEST_CASE("a bridge failed by late blocks is left to finish a capsule for the ha
         c.serviceMainThread();
         std::this_thread::yield();
     }
-    CHECK_FALSE(exited());  // main looked for 300 ms and killed nothing
+    CHECK_FALSE(watch.exited());  // main looked for 300 ms and killed nothing
     setBridgeKillGraceForTests(0);
-    while (!exited() && std::chrono::steady_clock::now() < guard) {
+    while (!watch.exited() && std::chrono::steady_clock::now() < guard) {
         c.serviceMainThread();
         std::this_thread::yield();
     }
-    CHECK(exited());
+    CHECK(watch.exited());
 }
 
 TEST_CASE("a hung bridge in an engine nobody queries is killed once the grace is over") {
@@ -500,21 +531,18 @@ TEST_CASE("a hung bridge in an engine nobody queries is killed once the grace is
     REQUIRE(c.failed());
     const int pid = c.bridgePid();
     REQUIRE(pid > 0);
-    auto exited = [pid] {
-        siginfo_t info{};
-        return ::waitid(P_PID, static_cast<id_t>(pid), &info, WEXITED | WNOHANG | WNOWAIT) == 0 &&
-               info.si_pid == pid;
-    };
+    ExitWatch watch(pid);
+    REQUIRE(watch.valid());
     // Ticks, as the engine makes them, and nothing else. The limit only ends a test that fails.
     const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(20);
-    while (!exited() && std::chrono::steady_clock::now() < limit) {
+    while (!watch.exited() && std::chrono::steady_clock::now() < limit) {
         c.serviceMainThread();
         (void)c.takeNotifications();
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
-    CHECK(exited());
+    CHECK(watch.exited());
 }
-#endif
+
 TEST_CASE("native bridge notifications ACK and rearm without periodic parent polling") {
     setBridgeExecutable(BRIDGE_PATH);
     MainThreadWake wake;
