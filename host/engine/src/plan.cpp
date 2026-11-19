@@ -1544,26 +1544,43 @@ Status prepare(Plan& p, const Session& s) {
     }
     // Immutable musical origins let adoption rebind compiled ids after a
     // MIDI edit or time-map change. Build the lookup here, never scan a model on audio.
-    auto sources = [](Stage& st, const std::vector<TimedEvent>& events) {
-        std::map<decltype(NoteSource{}.addressWithoutOrdinal()), std::uint32_t> counts;
-        for (const auto& timed : events)
-            if (timed.event.noteId >= 0 &&
-                st.noteSources.size() <= static_cast<std::size_t>(timed.event.noteId))
-                st.noteSources.resize(static_cast<std::size_t>(timed.event.noteId) + 1);
-        for (const auto& timed : events) {
+    // A note's ordinal counts the earlier note-ons with its origin, port,
+    // channel and key: the note-ons, sorted by that address and then by
+    // arrival, are numbered along each run. The work lists are reused.
+    using Address = decltype(NoteSource{}.addressWithoutOrdinal());
+    std::vector<std::pair<Address, std::uint32_t>> arrivals;  // address, index in `ons`
+    std::vector<std::uint32_t> ons, ordinals;                 // note-on events, their ordinals
+    auto sources = [&](Stage& st, const std::vector<TimedEvent>& events) {
+        ons.clear();
+        arrivals.clear();
+        for (std::size_t i = 0; i < events.size(); ++i) {
+            const auto& event = events[i].event;
+            if (event.noteId < 0) continue;
+            if (st.noteSources.size() <= static_cast<std::size_t>(event.noteId))
+                st.noteSources.resize(static_cast<std::size_t>(event.noteId) + 1);
+            if (event.kind != host::Event::Kind::NoteOn) continue;
+            arrivals.push_back({std::tuple_cat(events[i].origin.address(),
+                                               std::tuple{event.port, event.channel, event.key}),
+                                static_cast<std::uint32_t>(ons.size())});
+            ons.push_back(static_cast<std::uint32_t>(i));
+        }
+        std::sort(arrivals.begin(), arrivals.end());
+        ordinals.assign(ons.size(), 0);
+        for (std::size_t k = 1; k < arrivals.size(); ++k)
+            if (arrivals[k].first == arrivals[k - 1].first)
+                ordinals[arrivals[k].second] = ordinals[arrivals[k - 1].second] + 1;
+        for (std::size_t k = 0; k < ons.size(); ++k) {
+            const auto& timed = events[ons[k]];
             const auto& event = timed.event;
-            if (event.kind != host::Event::Kind::NoteOn || event.noteId < 0) continue;
-            const auto id = static_cast<std::size_t>(event.noteId);
-            if (st.noteSources.size() <= id) st.noteSources.resize(id + 1);
             NoteSource source;
             source.origin = timed.origin;
             source.start = timed.sample;
             source.port = event.port;
             source.channel = event.channel;
             source.key = event.key;
-            source.ordinal = counts[source.addressWithoutOrdinal()]++;
+            source.ordinal = ordinals[k];
             source.id = event.noteId;
-            st.noteSources[id] = source;
+            st.noteSources[static_cast<std::size_t>(event.noteId)] = source;
         }
         for (const auto& timed : events)
             if (timed.event.kind == host::Event::Kind::NoteOff && timed.event.noteId >= 0 &&
@@ -1576,8 +1593,11 @@ Status prepare(Plan& p, const Session& s) {
     };
     for (Node& node : p.nodes) {
         sources(node.midiStage, node.events);
-        if (node.noteTarget >= 0)
-            sources(node.chain[static_cast<std::size_t>(node.noteTarget)], node.events);
+        if (node.noteTarget >= 0) {  // the same events: the same sources
+            Stage& target = node.chain[static_cast<std::size_t>(node.noteTarget)];
+            target.noteSources = node.midiStage.noteSources;
+            target.noteSourceIndex = node.midiStage.noteSourceIndex;
+        }
         for (TakeChain& tc : node.takeChains)
             if (tc.noteTarget >= 0)
                 sources(tc.chain[static_cast<std::size_t>(tc.noteTarget)], tc.events);

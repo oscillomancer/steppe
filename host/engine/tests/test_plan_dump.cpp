@@ -4,7 +4,9 @@
 // compiled plan against a second compile (EngineOptions::verifyPlans).
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <functional>
+#include <map>
 
 #include <supple/engine/realtime.h>
 
@@ -295,4 +297,95 @@ TEST_CASE("plan dump: the engine compiles each plan twice and finds them equal (
         CHECK(engine.processErrors() == 0);
         CHECK(engine.verifiedPlans() == 2);
     }
+}
+
+namespace {
+// prepare()'s note-source build as it was before the compile profile's step
+// 2 (a std::map of per-address counts per stage), kept as the reference.
+void referenceSources(d::Stage& st, const std::vector<d::TimedEvent>& events) {
+    std::map<decltype(d::NoteSource{}.addressWithoutOrdinal()), std::uint32_t> counts;
+    for (const auto& timed : events)
+        if (timed.event.noteId >= 0 &&
+            st.noteSources.size() <= static_cast<std::size_t>(timed.event.noteId))
+            st.noteSources.resize(static_cast<std::size_t>(timed.event.noteId) + 1);
+    for (const auto& timed : events) {
+        const auto& event = timed.event;
+        if (event.kind != host::Event::Kind::NoteOn || event.noteId < 0) continue;
+        const auto id = static_cast<std::size_t>(event.noteId);
+        if (st.noteSources.size() <= id) st.noteSources.resize(id + 1);
+        d::NoteSource source;
+        source.origin = timed.origin;
+        source.start = timed.sample;
+        source.port = event.port;
+        source.channel = event.channel;
+        source.key = event.key;
+        source.ordinal = counts[source.addressWithoutOrdinal()]++;
+        source.id = event.noteId;
+        st.noteSources[id] = source;
+    }
+    for (const auto& timed : events)
+        if (timed.event.kind == host::Event::Kind::NoteOff && timed.event.noteId >= 0 &&
+            static_cast<std::size_t>(timed.event.noteId) < st.noteSources.size())
+            st.noteSources[static_cast<std::size_t>(timed.event.noteId)].end = timed.sample;
+    for (const auto& source : st.noteSources)
+        if (source.id >= 0) st.noteSourceIndex.push_back(source);
+    std::sort(st.noteSourceIndex.begin(), st.noteSourceIndex.end(),
+              [](const auto& a, const auto& b) { return a.address() < b.address(); });
+}
+
+bool sameSources(const std::vector<d::NoteSource>& a, const std::vector<d::NoteSource>& b) {
+    return std::equal(a.begin(), a.end(), b.begin(), b.end(), [](const auto& x, const auto& y) {
+        return x.address() == y.address() && x.start == y.start && x.end == y.end && x.id == y.id;
+    });
+}
+}  // namespace
+
+TEST_CASE("plan: each stage's note sources are those of the reference build") {
+    // The compile profile's step 2 replaced the per-stage std::map of note
+    // counts (2.2 ms of a 10 ms compile at 192 tracks, with rack MIDI). The
+    // ordinals (repeats of one origin, port, channel and key) and the index
+    // must stay what the old build made: adoption rebinds voices by them.
+    model::EditTxn t(richSession(), 2);
+    const Id doubled = addChannel(t);
+    addFx(t, doubled, fxOf(kSine));
+    model::MidiSource src;
+    src.sequence.ppq = 960;
+    src.sequence.length = 2 * 960;
+    for (int i = 0; i < 2; ++i)  // the same key at the same tick, twice
+        src.sequence.notes.push_back({0, 480, 0, 64, 100, 0});
+    src.sequence.notes.push_back({960, 480, 0, 67, 100, 0});
+    model::Take take;
+    take.source = t.create(src);
+    take.chain = {t.create(fxOf(kSine))};
+    const Id tk = t.create(take);
+    model::Item item;
+    item.track = doubled;
+    item.length = 6.0;  // three passes of the source
+    item.loop = true;
+    item.takes = {tk};
+    item.activeTake = tk;
+    t.create(item);
+    const auto s = commit(t);
+    auto pool = makePool();
+    MediaCache media;
+    d::Plan p = prepared(s, pool, media);
+    std::size_t stages = 0, repeats = 0;
+    auto check = [&](const d::Stage& st, const std::vector<d::TimedEvent>& events) {
+        d::Stage reference;
+        referenceSources(reference, events);
+        CHECK(sameSources(st.noteSources, reference.noteSources));
+        CHECK(sameSources(st.noteSourceIndex, reference.noteSourceIndex));
+        ++stages;
+        for (const auto& source : st.noteSourceIndex) repeats += source.ordinal > 0;
+    };
+    for (const d::Node& n : p.nodes) {
+        INFO("node " << n.id.str());
+        check(n.midiStage, n.events);
+        if (n.noteTarget >= 0) check(n.chain[static_cast<std::size_t>(n.noteTarget)], n.events);
+        for (const d::TakeChain& tc : n.takeChains)
+            if (tc.noteTarget >= 0)
+                check(tc.chain[static_cast<std::size_t>(tc.noteTarget)], tc.events);
+    }
+    CHECK(stages > 0);
+    CHECK(repeats > 0);
 }

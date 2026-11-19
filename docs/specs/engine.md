@@ -371,6 +371,12 @@ specified here as it lands); so far:
   and looks each plan instance and stage up in that list; it asked the pool
   for each, which scanned every entry. A test counts the entries visited
   per compile (`restartLookups`).
+- **Note sources are built by sorting, once per node** (step 2). A note's
+  ordinal counts the earlier note-ons with the same origin, port, channel
+  and key: `prepare` sorts a stage's note-ons by that address and arrival
+  and numbers each run, where it kept a map of counts per stage, and the
+  chain's note target copies the MIDI stage's sources (the same events). A
+  test compares every stage's sources and index with the map-based build.
 Returning to a version with neither patch nor state after applying saved FX
 settings recreates the factory-default instance. The old instance remains alive
 until both executors release its plan, as with a changed opaque state.
