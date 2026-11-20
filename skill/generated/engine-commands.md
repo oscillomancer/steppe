@@ -11719,9 +11719,9 @@ Result:
 
 ## `module.get@1`
 
-A module type's source: stock or library.
+A module type's source, not a placed module's knobs (rack.get reads those).
 
-type (an id or short name: every stock module's source is readable, a good start for your own) or name (a library module's file, also when it does not compile).
+Reads a module type's source, for writing your own; the knobs of a module placed in a rack are in rack.get (detail full lists every knob key; module.describe lists a type's knobs and ranges). type (an id or short name: every stock module's source is readable, a good start for your own) or name (a library module's file, also when it does not compile).
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -14218,9 +14218,9 @@ Kind: `edit`. Exposure: `internal`.
 
 ## `rack.get@1`
 
-A rack's modules, cables, Out modules and problems.
+A rack's modules with their changed knobs, cables, Outs and problems.
 
-Modules with their type, label, place and size and the knobs that differ from their defaults (detail full: also their input, output and knob keys); cables with feedback (true: it closes a loop and carries the previous frame); Out modules and the channels they feed (sends: their rack sends to busses and masters, ADR-0075, {route, to}); latency_samples for each Out and the rack node, and note_outs with their latencies (ADR-0064); problems (missing types, cables that do not fit). Brief/default latency reads prepared values without creating plug-ins; unprepared latency is null. detail full may probe unprepared plug-ins.
+Reads the modules placed in a rack, including each one's knobs (module.get reads a module type's source instead). Modules with their type, label, place and size and the knobs that differ from their defaults (detail full: also their input, output and knob keys); cables with feedback (true: it closes a loop and carries the previous frame); Out modules and the channels they feed (sends: their rack sends to busses and masters, ADR-0075, {route, to}); latency_samples for each Out and the rack node, and note_outs with their latencies (ADR-0064); problems (missing types, cables that do not fit). Brief/default latency reads prepared values without creating plug-ins; unprepared latency is null. detail full may probe unprepared plug-ins.
 
 Kind: `query`. Exposure: `mcp-exec`.
 

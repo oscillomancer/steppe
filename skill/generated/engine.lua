@@ -2584,7 +2584,7 @@ q = nil
 ---@field duplicate fun(args: Steppe.module_duplicate_args): table Duplicate modules, with the cables between them.
 ---@field edit fun(args: Steppe.module_edit_args): table Edit a library module in place: replace text, then save and compile it.
 ---@field fork fun(args: Steppe.module_fork_args): table Copy a module type's source into the library under a new id.
----@field get fun(args?: Steppe.module_get_args): table A module type's source: stock or library.
+---@field get fun(args?: Steppe.module_get_args): table A module type's source, not a placed module's knobs (rack.get reads those).
 ---@field list fun(args?: Steppe.module_list_args): table List module types: id, name, tags, what they do.
 ---@field randomize fun(args: Steppe.module_randomize_args): table Move a module's knobs at random, by an amount.
 ---@field remove fun(args: Steppe.module_remove_args): table Remove a module with its cables.
@@ -2625,7 +2625,7 @@ q = nil
 ---@field add fun(args?: Steppe.rack_add_args): table Add a modular rack on a channel, its Out the input.
 ---@field arrange fun(args: Steppe.rack_arrange_args): table Lay out a rack's modules by signal flow.
 ---@field capture fun(args: Steppe.rack_capture_args): table Record a rack's pitch and gate as notes in a MIDI item on a track.
----@field get fun(args: Steppe.rack_get_args): table A rack's modules, cables, Out modules and problems.
+---@field get fun(args: Steppe.rack_get_args): table A rack's modules with their changed knobs, cables, Outs and problems.
 ---@field levels fun(args: Steppe.rack_levels_args): table Read every module output's linear peak, without subscribing to telemetry.
 ---@field list fun(): table List racks: home channels, module counts, Outs.
 ---@field paste fun(args: Steppe.rack_paste_args): table Paste the module clipboard with its plug-in settings as one undo step.
