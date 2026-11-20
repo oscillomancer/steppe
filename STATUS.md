@@ -167,11 +167,41 @@ instructions are in `docs/guides/installing.md`.
   `launch_quantize`; `scene.*`, `clip.*`, `item.add {clip}`, the cascades
   (track and scene removal take their clips), the item ↔ clip conversion
   at the item's tempo, `clip.memory`, and the scene section of
-  `session.describe`. Nothing plays a clip yet: launching (`launch.*`, L2)
-  and the pane (L3) are to come. The content commands (`midi.*`,
+  `session.describe`. Playing them is the next entry; the pane (L3) is to
+  come. The content commands (`midi.*`,
   `take.*`, `item.export`, take envelopes and take FX) take a clip as they
   take an item; timeline commands refuse one with `item.kind`; take FX
   parameter envelopes on a clip's take still follow the timeline.
+- **Clip launcher, playing** (ADR-0097, step L2; engine.md §1.4.2):
+  - Every channel's clips compile into its node as players, and
+    `launch.clip`, `launch.scene`, `launch.stop` and `launch.arrangement`
+    switch what a track plays at the next quantize boundary.
+  - This happens in both executors and through the bridge, with the
+    switch where each track's own song position reaches it (compensation
+    included). Notes sounding at the switch end, and audio crossfades
+    over 5 ms.
+  - A clip's phase is a function of the song position and its anchor.
+    `once` and the loop window play as specified.
+  - `launch.state` (and `Engine::launchState()` for the GUI) reports what
+    each track plays as heard, the clip's position, and what is queued.
+  - The engine logs every applied launch. The tests replay that log
+    offline and match live output bit for bit, in both executors, at two
+    block sizes and through the bridge.
+  - Renders play the arrangement only. The render dialog says so while a
+    clip holds a track.
+  - Limits, until done:
+    - a master playrate refuses launches (`launch.playrate`);
+    - a clip take's FX and envelopes do not play (`launch.take_chain`
+      warning);
+    - clip MIDI reaches the track's own instrument only, not a rack's
+      Notes module or the track's MIDI sends;
+    - freezing, or removing the playing clip, returns the track to the
+      arrangement without the switch fade;
+    - a quantize of `none` waits for the floor, about a device block for
+      a live track and about 0.2 s for a rendered one;
+    - the offline replay does not yet take seeks or transport wraps (L4,
+      with capture);
+    - the pane is L3.
 - **Track freeze** (ADR-0054): whole-channel pre-fader float32 capture, including
   take FX and auxiliary channels, with virtual latency and plugin retirement.
   Typed freeze/unfreeze, cancellable jobs, dependency-checked completion, retained

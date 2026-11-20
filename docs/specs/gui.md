@@ -1573,6 +1573,10 @@ project is drawn in the quiet ink, with "from your default" on hover.
   loaded into the dialog only, written to the project only on Render),
   **Save preset…** (asks for a name), **Delete preset**, Close.
 - **Source:** a segmented control: Master mix | Stems | Regions.
+  - While a clip holds any track (`launch.state` says a track plays
+    something other than the arrangement), a quiet caption under it says
+    "Renders play the arrangement: the clips playing now are not in them."
+    (ADR-0097; `render.clips.note`, read when the dialog builds).
   - Master mix, when the project has more than one master, shows a checklist
     of the masters (All / None; the main master alone by default) that edits
     `masters`: each checked master renders its own file (ADR-0056). Unchecking
@@ -2451,7 +2455,7 @@ same heights, scroll and colours.
 
 **Elsewhere.**
 - **Render dialog.** While any track is held by a clip, it says in one line
-  that renders play the arrangement only.
+  that renders play the arrangement only (§4.8; built with L2).
 - **Inspector.** It shows a selected clip's fields (`clip.set`).
 - **Status line.** It counts scenes beside tracks only when there are some.
 

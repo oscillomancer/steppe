@@ -328,6 +328,37 @@ TEST_CASE("FX and render hidden subpanels release focus; popup close releases it
     CHECK(f.uiRoot().focused() == nullptr);
 }
 
+TEST_CASE("the render dialog says renders leave out the clips playing now") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto run = [&](const char* name, std::string_view args) {
+        auto r = f.dispatcher->execute({name, json::parse(args).value(), kTestOrigin});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+    };
+    run("track.add", R"({"name": "Bass"})");
+    run("scene.add", R"({"name": "A"})");
+    run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C3:q r:*"})");
+    engine::DummyBackend backend({.mode = engine::DummyBackend::Mode::Manual});
+    struct StopEngine {
+        engine::EngineApp& app;
+        ~StopEngine() { app.stopEngine(); }
+    } stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 256},
+                               {.anticipative = false}));
+    f.render->open();
+    f.frame();
+    CHECK_FALSE(f.uiRoot().find("render.clips.note"));  // every track on the arrangement
+    f.render->close();
+    run("launch.clip", R"({"clip": "cl_1"})");
+    backend.run(4);
+    f.app->tick();
+    f.render->open();
+    f.frame();
+    CHECK(f.uiRoot().find("render.clips.note"));
+    f.snapshot("render-clips-note.png");
+    f.render->close();
+}
+
 TEST_CASE("FX drags survive model refresh and separate drags have separate undo steps") {
     Fixture f;
     if (!f.ok || !f.stockPlugins()) return;
