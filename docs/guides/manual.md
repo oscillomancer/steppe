@@ -16,6 +16,7 @@ the public commands and GUI actions (`Shift+/` or `Ctrl+Shift+P`,
 - [Projects](#projects)
 - [Tracks and items](#tracks-and-items)
 - [Editing items](#editing-items)
+- [The song's key and chords](#the-songs-key-and-chords)
 - [The MIDI editor](#the-midi-editor)
 - [Plugins](#plugins)
 - [Mixing](#mixing)
@@ -507,6 +508,17 @@ the name bar pulls a take out into an item of its own.
 **Edit > Mouse modifiers…** lists these gestures (dragging an item, dragging
 its end, clicking it, pressing a fade, dragging in empty space, the wheel)
 and lets you choose what each does with Shift, Ctrl and Alt held.
+
+## The song's key and chords
+
+A song can say what key it is in, and where the key changes. Key changes
+show in the ruler's tempo row, under the tempo, beside the time signatures,
+as "F major" or "D dorian". To set one, right-click in that half of the row
+and choose **Key change here…**, then type a note name and a scale and press
+Enter: "Eb major", "C# minor", "F dorian". The scales are major, minor,
+harmonic minor, melodic minor, the modes (dorian, phrygian, lydian,
+mixolydian, locrian), major and minor pentatonic, blues and chromatic.
+Double-click a key change to edit it, or right-click it to delete it.
 
 ## The MIDI editor
 

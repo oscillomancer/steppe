@@ -18,6 +18,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "supple/model/context.h"
 #include "supple/time/timeline.h"
 #include "supple/ui/canvas.h"
 #include "supple/ui/popup.h"
@@ -60,6 +61,35 @@ std::string formatBpm(double bpm) {
     char buf[16];
     std::snprintf(buf, sizeof buf, "%.4g", bpm);
     return buf;
+}
+
+std::string meterText(const time::MeterChange& m) {
+    return std::to_string(m.numerator) + "/" + std::to_string(m.denominator);
+}
+
+// "Eb major", "C# harmonic minor": the ruler's key field as key.set's tonic
+// and scale (the scale's spaces become underscores). None without both.
+std::optional<std::pair<std::string, std::string>> splitKeyText(std::string_view text) {
+    auto trim = [](std::string_view v) {
+        while (!v.empty() && std::isspace(static_cast<unsigned char>(v.front())))
+            v.remove_prefix(1);
+        while (!v.empty() && std::isspace(static_cast<unsigned char>(v.back()))) v.remove_suffix(1);
+        return v;
+    };
+    text = trim(text);
+    const auto space = text.find_first_of(" \t");
+    if (space == std::string_view::npos) return std::nullopt;
+    const std::string_view rest = trim(text.substr(space + 1));
+    if (rest.empty()) return std::nullopt;
+    std::string scale;
+    for (char ch : rest) {
+        if (std::isspace(static_cast<unsigned char>(ch))) {
+            if (!scale.empty() && scale.back() != '_') scale += '_';
+        } else {
+            scale += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        }
+    }
+    return std::pair{std::string(text.substr(0, space)), scale};
 }
 
 ui::Color parseColor(const std::string& text, ui::Color fallback) {
@@ -328,10 +358,10 @@ class Ruler : public ui::Node {
             if (x < x0 - 1 || x > x1) continue;
             const float y = tempoRow.y + tempoRow.h / 2.0f;
             c.fillRect({x, y, 1, tempoRow.h / 2.0f - 1}, t.color("master"));
-            c.text({x + 3, y, 54, tempoRow.h / 2.0f},
-                   std::to_string(m.numerator) + "/" + std::to_string(m.denominator),
-                   ui::Font::Mono, t.type("caption"), t.color("master"), ui::kLeft | ui::kMiddle);
+            c.text({x + 3, y, 54, tempoRow.h / 2.0f}, meterText(m), ui::Font::Mono,
+                   t.type("caption"), t.color("master"), ui::kLeft | ui::kMiddle);
         }
+        paintKeys(c, tempoRow);
 
         // Regions on their own row, markers below it.
         for (const auto& e : s.regions) {
@@ -362,6 +392,103 @@ class Ruler : public ui::Node {
                    quiet, ui::kLeft | ui::kMiddle);
         }
         c.restore();
+    }
+
+    // Key changes (ADR-0095) in the meter half of the tempo row, in quiet
+    // ink: a key that starts on a meter change's beat follows its label;
+    // any other has its own tick. Each label stops short of the next flag.
+    struct KeyFlag {
+        double beat = 0;
+        std::string text;  // "Eb major", as written ("?") when this build cannot read it
+        ui::Rect rect;     // what a press on it hits
+    };
+    std::vector<KeyFlag> keyFlags;  // the last paint's, left to right
+    void paintKeys(ui::Canvas& c, const ui::Rect& tempoRow) {
+        keyFlags.clear();
+        const ui::Theme& t = c.theme();
+        const model::Session& s = view_.session();
+        const time::TimeMap& tm = *s.timeMap;
+        const auto& keys = s.contextView->keys;
+        const float y = tempoRow.y + tempoRow.h / 2.0f, h = tempoRow.h / 2.0f - 1;
+        const float size = t.type("caption");
+        const ui::Color quiet = t.color("ink-quiet");
+        const float x1 = bounds().right();
+        for (std::size_t i = 0; i < keys.size(); ++i) {
+            const model::ContextPoint* p = s.context.find(keys[i].id);
+            if (!p) continue;
+            const float x = view_.xAt(tm.secondsAt(keys[i].beat));
+            if (x > x1) break;
+            float textX = x + 3, limit = x1;
+            bool shared = false;
+            for (const time::MeterChange& m : tm.meter()) {
+                const float mx = view_.xAt(tm.secondsAt(tm.beatOfBar(m.bar)));
+                if (std::abs(mx - x) < 1) {
+                    textX += c.textWidth(meterText(m), ui::Font::Mono, size) + 6;
+                    shared = true;
+                } else if (mx > x) {
+                    limit = std::min(limit, mx - 3);
+                }
+            }
+            if (i + 1 < keys.size())
+                limit = std::min(limit, view_.xAt(tm.secondsAt(keys[i + 1].beat)) - 3);
+            std::string text = model::keyWords(*p);
+            const float w = c.textWidth(text, ui::Font::Ui, size);
+            const float shown = std::max(0.0f, std::min(w, limit - textX));
+            if (!shared) c.fillRect({x, y, 1, h}, quiet);
+            if (shown > 0) {
+                c.save();
+                // Only the width is cut: capitals rise above the half row.
+                c.clip({textX - 2, tempoRow.y, shown + 2, tempoRow.h});
+                c.text({textX, y, w + 4, h}, text, ui::Font::Ui, size, quiet,
+                       ui::kLeft | ui::kMiddle);
+                c.restore();
+            }
+            stats.keyLabels.push_back(text);
+            const float left = shared ? textX - 2 : x - 5;
+            keyFlags.push_back({keys[i].beat,
+                                std::move(text),
+                                {left, y, textX + std::max(shown, 8.0f) - left, h}});
+        }
+    }
+    const KeyFlag* keyFlagAt(ui::Point p) const {
+        for (const KeyFlag& k : keyFlags)
+            if (k.rect.contains(p)) return &k;
+        return nullptr;
+    }
+    // The beat under `x`, on the grid.
+    double gridBeat(float x) const {
+        const auto& tm = *view_.session().timeMap;
+        const double grid = view_.gestures().gridBeats();
+        return std::round(tm.beatAt(std::max(0.0, view_.timeAt(x))) / grid) * grid;
+    }
+    // The key field: "Eb major" into key.set at `beat`.
+    void keyField(double beat, const std::string& text, ui::Point at) {
+        if (!root()) return;
+        auto field = std::make_unique<ui::TextField>("ruler-key", text);
+        field->layout.width = ui::SizeRule::fixed(200);
+        field->selectAll();
+        field->onSubmit = [this, beat](const std::string& typed) {
+            const auto parts = splitKeyText(typed);
+            if (!parts) {
+                if (callbacks.onError)
+                    callbacks.onError(Error("key.text", "'" + typed + "' is not a key", "",
+                                            "a tonic and a scale: Eb major, F# dorian"));
+                return;
+            }
+            json::Value args = json::Value::object();
+            args["at"] = beat;
+            args["tonic"] = parts->first;
+            args["scale"] = parts->second;
+            if (execute("key.set", std::move(args))) root()->closePopup();
+        };
+        root()->openPopup(std::move(field), {at.x, at.y, 1, 1});
+    }
+    // What a new key at `beat` starts from: the key holding there, else C major.
+    std::string keyTextAt(double beat) const {
+        const model::Session& s = view_.session();
+        if (const auto id = model::keyPointAt(s, beat))
+            if (const model::ContextPoint* p = s.context.find(*id)) return model::keyWords(*p);
+        return "C major";
     }
 
   private:
@@ -471,9 +598,21 @@ class Ruler : public ui::Node {
                     "Delete tempo change", [this, beat = hit->beat] { removeTempo(beat); },
                     hit->beat > 0);
         } else if (y >= tempoTop && y < tempoTop + rows.tempo) {
+            // The meter half: a key change's flag, else a meter change's; and a
+            // key change can start at the beat under the pointer.
+            const KeyFlag* key = keyFlagAt(at);
+            if (key) {
+                add("Change key\u2026",
+                    [this, beat = key->beat, text = key->text, at] { keyField(beat, text, at); });
+                add("Delete key change", [this, beat = key->beat] {
+                    json::Value args = json::Value::object();
+                    args["at"] = beat;
+                    execute("key.remove", std::move(args));
+                });
+            }
             for (const time::MeterChange& m : tm.meter()) {
                 const float x = view_.xAt(tm.secondsAt(tm.beatOfBar(m.bar)));
-                if (at.x < x - 5 || at.x > x + 40) continue;
+                if (key || at.x < x - 5 || at.x > x + 40) continue;
                 add(
                     "Delete meter change",
                     [this, bar = m.bar] {
@@ -484,6 +623,9 @@ class Ruler : public ui::Node {
                     m.bar > 1);
                 break;
             }
+            if (!key)
+                add("Key change here\u2026",
+                    [this, beat = gridBeat(at.x), at] { keyField(beat, keyTextAt(beat), at); });
         } else if (y >= rows.regionTop() && y < rows.markerTop()) {
             for (const auto& entry : s.regions) {
                 const auto& rg = *entry.value;
@@ -676,9 +818,14 @@ bool Ruler::handle(const ui::PointerEvent& e) {
             }
             if (drag_ == Drag::LoopNew) originalStart_ = originalEnd_ = position(e.pos.x, free);
         } else if (y < rows.regionTop() && y >= rows.tempoTop() + rows.tempo / 2.0f) {
-            // The meter half: a double-click edits the meter change under the
-            // pointer, or starts one at the bar under it (timesig.set).
+            // The meter half: a double-click edits the key change or the meter
+            // change under the pointer, or starts a meter change at the bar
+            // under it (timesig.set).
             if (e.clicks != 2 || !root()) return true;
+            if (const KeyFlag* key = keyFlagAt(e.pos)) {
+                keyField(key->beat, key->text, e.pos);
+                return true;
+            }
             int bar = tm.barBeat(std::max(0.0, tm.beatAt(view_.timeAt(e.pos.x)))).bar;
             for (const time::MeterChange& m : tm.meter()) {
                 const float x = view_.xAt(tm.secondsAt(tm.beatOfBar(m.bar)));
@@ -1173,7 +1320,8 @@ void ArrangeView::show(const model::Session& session, const std::vector<model::C
     }
     if (before.project->mediaDir != session.project->mediaDir) lanes_->invalidate();
     const bool markers = !before.markers.sameStorage(session.markers) ||
-                         !before.regions.sameStorage(session.regions);
+                         !before.regions.sameStorage(session.regions) ||
+                         !before.context.sameStorage(session.context);
     if (markers) ruler_->invalidate();
     bool extent = timing || markers || !timebaseTracks.empty();
     for (auto id : changedItems) {

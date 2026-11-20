@@ -501,6 +501,96 @@ TEST_CASE("ruler: double-click in the meter half adds or edits a meter change") 
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("ruler: key changes show in the meter half; a double-click or the menu edits them") {
+    RulerFixture f;
+    auto rightClick = [&](ui::Point p) {
+        ui::PointerEvent e;
+        e.type = Pointer::Down;
+        e.pos = p;
+        e.button = 3;
+        f.root->pointer(e);
+        e.type = Pointer::Up;
+        f.root->pointer(e);
+        f.root->frame(false);
+    };
+    auto menuRows = [&] {
+        std::vector<std::string> rows;
+        ui::Node* menu = f.root->find("ruler.menu");
+        REQUIRE(menu);
+        for (const ui::MenuItem& m : ui::menuItems(*menu)) rows.push_back(m.label);
+        return rows;
+    };
+    auto pick = [&](int row) {  // menu rows are 26 px
+        ui::Node* menu = f.root->find("ruler.menu");
+        REQUIRE(menu);
+        const ui::Point p{menu->bounds().x + 30,
+                          menu->bounds().y + static_cast<float>(row) * 26 + 13};
+        f.pointer(Pointer::Move, p);
+        f.pointer(Pointer::Down, p);
+        f.pointer(Pointer::Up, p);
+        f.sync();
+    };
+    auto keyAt = [&](double beat) {
+        for (const auto& e : f.app->head().context)
+            if (e.value->type == model::ContextType::Key && e.value->beat == beat)
+                return e.value->tonic + " " + e.value->scale;
+        return std::string("none");
+    };
+    f.exec("timesig.set", json::parse(R"({"bar": 3, "meter": "3/4"})").value());  // beat 8
+    f.exec("key.set", json::parse(R"({"at": 0, "tonic": "F", "scale": "major"})").value());
+    f.exec("key.set", json::parse(R"({"at": 4, "tonic": "A", "scale": "minor"})").value());
+    f.exec("key.set", json::parse(R"({"at": 8, "tonic": "D", "scale": "dorian"})").value());
+    CHECK(f.view->rulerStats().keyLabels ==
+          std::vector<std::string>{"F major", "A minor", "D dorian"});
+    auto n = f.history();
+    // A key change on its own tick: a double-click edits it.
+    f.click(f.at(4.4, 55), 0, 2);
+    REQUIRE(f.root->find("ruler-key"));
+    CHECK(f.root->find("ruler-key")->valueText() == "A minor");
+    f.submit("Eb harmonic minor");
+    CHECK(keyAt(4) == "Eb harmonic_minor");
+    CHECK(f.history() == ++n);
+    // One that shares the meter change's beat follows its label: the label is
+    // the key's, the meter's own flag still the meter's.
+    f.click(f.at(8.85, 55), 0, 2);
+    REQUIRE(f.root->find("ruler-key"));
+    f.submit("E phrygian");
+    CHECK(keyAt(8) == "E phrygian");
+    CHECK(f.history() == ++n);
+    f.click(f.at(8.05, 55), 0, 2);
+    REQUIRE(f.root->find("ruler-meter"));
+    f.root->closePopups();
+    // Text that is not a key: an error, and the field stays for a fix.
+    f.click(f.at(4.4, 55), 0, 2);
+    REQUIRE(f.root->find("ruler-key"));
+    f.root->frame(false);
+    f.root->text("Gmajor");
+    f.root->key(SDLK_RETURN);
+    CHECK(f.root->popupOpen());
+    REQUIRE(f.errors.size() == 1);
+    CHECK(f.errors[0].code == "key.text");
+    f.errors.clear();
+    f.root->closePopups();
+    CHECK(f.history() == n);
+    // The menu: Change key…, Delete key change on a flag; Key change here… elsewhere.
+    rightClick(f.at(4.4, 55));
+    CHECK(menuRows() == std::vector<std::string>{"Change key\u2026", "Delete key change"});
+    pick(1);
+    CHECK(keyAt(4) == "none");
+    CHECK(f.history() == ++n);
+    rightClick(f.at(14.1, 55));
+    CHECK(menuRows() == std::vector<std::string>{"Key change here\u2026"});
+    pick(0);
+    REQUIRE(f.root->find("ruler-key"));
+    CHECK(f.root->find("ruler-key")->valueText() == "E phrygian");  // the key holding there
+    f.submit("G major");
+    CHECK(keyAt(14) == "G major");  // on the grid
+    CHECK(f.history() == ++n);
+    CHECK(f.view->rulerStats().keyLabels ==
+          std::vector<std::string>{"F major", "E phrygian", "G major"});
+    CHECK(f.errors.empty());
+}
+
 TEST_CASE("ruler: a right-click deletes a tempo change, a meter change, a region or a marker") {
     RulerFixture f;
     auto rightClick = [&](ui::Point p) {
