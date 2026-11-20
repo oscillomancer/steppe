@@ -566,6 +566,7 @@ TEST_CASE("launcher: the pane's look, playing, queued, held, empty and selected,
                    views::LaunchView::Queued::None, std::nullopt};
     f.view->setLaunchState(state);
     f.view->selectCell(views::ArrangeView::Cell{bass, *model::Id::parse("sc_3")});
+    f.view->setCaptureArmed(true);  // Capture lit
     f.sync();
     f.golden("launcher-dark.png");
     f.root->setTheme(ui::Theme::light());
