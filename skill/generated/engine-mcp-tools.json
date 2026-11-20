@@ -836,6 +836,88 @@
     }
   },
   {
+    "name": "modulate",
+    "title": "Modulate a parameter or mixer level with an LFO, follower, random or macro.",
+    "description": "The whole gesture in one undo step. It takes the first rack homed on the target's track that holds a Mod Out, else the first rack named Modulators, else adds one on a new channel named Modulators (rack: choose one instead). It adds the source module (lfo: an LFO; random: an LFO's Random Steps preset; macro: a Macro, its first knob; follower: a Follower fed by an In module and a send from the track from), cables it into the first free Mod Out input (adding a Mod Out when none is free) and routes that input to the target. {module, input} routes a Mod Out input already patched. depth as modulation.add; default a quarter of a plug-in parameter's range, 6 dB, or 50 percent. A follower cannot listen to the track it modulates (modulation.cycle). See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "modulate_args",
+      "properties": {
+        "target": {
+          "type": "object",
+          "title": "modulation_target",
+          "properties": {
+            "fx": {
+              "type": "string",
+              "pattern": "^fx_[0-9]+$",
+              "description": "Plugin instance id, e.g. \"fx_1\"."
+            },
+            "track": {
+              "type": "string",
+              "pattern": "^tr_[0-9]+$",
+              "description": "A track's volume, pan or width."
+            },
+            "route": {
+              "type": "string",
+              "pattern": "^sd_[0-9]+$",
+              "description": "A send's volume."
+            },
+            "param": {
+              "type": "string",
+              "minLength": 1,
+              "description": "A plug-in parameter's key, name or decimal CLAP id (fx.describe marks the modulatable ones); volume, pan or width for a track; volume for a route."
+            }
+          },
+          "required": ["param"],
+          "additionalProperties": false
+        },
+        "source": {
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": ["lfo", "follower", "random", "macro"]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "module": {
+                  "type": "string",
+                  "pattern": "^mo_[0-9]+$"
+                },
+                "input": {
+                  "type": "string",
+                  "pattern": "^in_([1-9]|1[0-6])$"
+                }
+              },
+              "required": ["module", "input"],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "depth": {
+          "type": "number"
+        },
+        "from": {
+          "type": "string",
+          "pattern": "^tr_[0-9]+$",
+          "description": "The track a follower listens to."
+        },
+        "rack": {
+          "type": "string",
+          "pattern": "^rk_[0-9]+$",
+          "description": "Rack id, e.g. \"rk_1\"."
+        }
+      },
+      "required": ["target", "source"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
     "name": "plugin_list",
     "title": "List scanned plugins; filter matches id, name, or vendor.",
     "description": "List scanned plugins; filter matches id, name, or vendor. See describe for errors and examples.",
