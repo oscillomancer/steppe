@@ -1076,6 +1076,13 @@ q = nil
 ---@class Steppe.modulation_set_result
 ---@field warnings? table[]
 
+---@class Steppe.modulation_telemetry_args
+---@field track? string Target track id, e.g. "tr_1".
+
+---@class Steppe.modulation_telemetry_result
+---@field modulations table[]
+---@field warnings? table[]
+
 ---@class Steppe.module_add_args
 ---@field rack string
 ---@field type? string
@@ -2467,6 +2474,7 @@ q = nil
 ---@field list fun(args?: Steppe.modulation_list_args): Steppe.modulation_list_result List modulation routes, by target track, FX or source rack.
 ---@field remove fun(args: Steppe.modulation_remove_args): Steppe.modulation_remove_result Remove a modulation route.
 ---@field set fun(args: Steppe.modulation_set_args): Steppe.modulation_set_result Change a modulation route's source, target, depth, enabled or lane.
+---@field telemetry fun(args?: Steppe.modulation_telemetry_args): Steppe.modulation_telemetry_result Read each modulation route's live target offset and its span.
 
 ---@class Steppe.module
 ---@field add fun(args: Steppe.module_add_args): table Add a module to a rack: a type with knob values.

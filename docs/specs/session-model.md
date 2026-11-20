@@ -1082,7 +1082,9 @@ and naming. All `edit` unless marked (q) query or (a) action.
   are `vca.learn.*` (Track groups and VCA controls, below).
 - **modulation** (ADR-0096): `modulation.add {source, target, depth,
   enabled?, lane?}`, `modulation.set {modulation, …}`, `modulation.remove
-  {modulation}`, `modulation.list {track?, fx?, rack?}` (q).
+  {modulation}`, `modulation.list {track?, fx?, rack?}` (q),
+  `modulation.telemetry {track?}` (q: each route's live target offset and
+  its span, M2).
 - **automation**: `env.add {target}`, `env.remove`, `env.set {mode, active,
   …}`, `env.points.set {env, points, range?}`, `env.points.add`,
   `env.points.remove {range}`, `env.add {take, param}` (take envelopes),

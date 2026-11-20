@@ -600,8 +600,10 @@ instructions are in `docs/guides/installing.md`.
   executors, bridged, at seeks and over loop wraps. Removing a route's
   source or target removes it with a `modulation.removed` warning. A
   plug-in whose latency moves while modulated turns its routes off until
-  one of them is edited (`modulation.latency`). Telemetry of live offsets
-  comes with step M2. An FX moved to another track keeps the last offset of a
+  one of them is edited (`modulation.latency`). `modulation.telemetry`
+  (and `EngineApp::modulationOffsets()`) reads each route's live target
+  offset and its span; events that wait for room in a block are counted
+  (`engine.status` `modulation_deferred`). An FX moved to another track keeps the last offset of a
   parameter the new plan no longer modulates until the plug-in next
   resets. Native macOS and Windows CI has not run on it.
   Agents patch with `rack.patch` (named

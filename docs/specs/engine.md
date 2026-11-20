@@ -355,6 +355,14 @@ only.
   latency change while modulated (`modulation.latency`): the engine then
   keeps every route into that FX's modulated parameters disabled until one
   of them is edited, the FX is replaced, or the project is reopened.
+- **Telemetry (M2).** Prepare gives each bound target a slot in
+  `Plan::modOffsets` and each route its target's (`modOffsetOf`). The
+  executor that runs a target stores its offset with a relaxed store: a
+  plug-in's sum at every grid point, sent or not, as a fraction of its CLAP
+  range; a mixer target's last frame of each block, in dB or percent.
+  `Engine::modulationOffsets()` (main thread) reads the newest plan's, by
+  route; `modulation.telemetry` adds each route's span (depth × its signal
+  range).
 - **Rack handover.** While a rack's modules are still owned by the other
   executor (rack.md §6, "State"), its Mod Outs hold their last values and
   the emitters they feed send nothing for that block.

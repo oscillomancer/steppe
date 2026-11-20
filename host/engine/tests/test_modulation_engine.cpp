@@ -1136,3 +1136,33 @@ TEST_CASE("modulation: an event that finds no room waits for the next grid point
     CHECK(stage->modDeferred == 4);
     stage->instance->stopProcessing();
 }
+
+TEST_CASE("modulation: telemetry gives each bound route its target's live offset" *
+          doctest::description("rt")) {
+    // ADR-0096, M2: a plug-in's offset as a fraction of its range, a mixer
+    // target's in its unit; routes on one target read the same sum.
+    const Emit emit("playing", 0.1);
+    const auto s = mixed(emit, [&](model::EditTxn& t) {
+        modulate(t, emit.modOut, emit.b, "volume", -6.0);
+        model::Modulation second;
+        second.source = {emit.modOut, "in_2"};
+        second.target = {emit.gain, "gain"};
+        second.depth = 0.05;
+        t.create(second);  // in_2 has no cable: it adds 0
+    });
+    InstancePool pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+    Engine engine(pool, media, kInCallback);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 96}));
+    REQUIRE(engine.load(s));
+    CHECK(engine.modulationOffsets().size() == 3);
+    engine.play();
+    backend.run(100);
+    const auto offsets = engine.modulationOffsets();
+    engine.stop();
+    REQUIRE(offsets.size() == 3);
+    CHECK(offsets.at(emit.route) == doctest::Approx(0.1));  // playing: 1 x 0.1
+    CHECK(offsets.at(Id{model::Kind::Modulation, emit.route.n + 2}) == doctest::Approx(0.1));
+    CHECK(offsets.at(Id{model::Kind::Modulation, emit.route.n + 1}) == doctest::Approx(-6.0));
+}

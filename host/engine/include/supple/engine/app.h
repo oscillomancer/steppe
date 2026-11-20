@@ -487,6 +487,11 @@ class EngineApp : public cmd::Host {
     // process where it once made one per fx.
     std::size_t instancesMade() const { return instancesMade_; }
     InstancePool& instances() { return *pool_; }
+    // Each bound modulation route's target's live offset (ADR-0096, M2;
+    // Engine::modulationOffsets): empty without a running engine.
+    std::map<model::Id, double> modulationOffsets() const {
+        return engine_ ? engine_->modulationOffsets() : std::map<model::Id, double>{};
+    }
     MediaCache& media() { return media_; }
     // The plugin's semantic schema (null for plugins without the extension).
     Result<json::Value> fxSchema(const model::FxInstance& fx);

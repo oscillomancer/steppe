@@ -63,6 +63,20 @@ struct ModList {
     std::vector<ModEntry> modulations;
 };
 
+struct ModTelemetryArgs {
+    std::optional<std::string> track;
+};
+
+struct ModReading {
+    std::string modulation;
+    std::optional<double> offset;
+    double low = 0, high = 0;
+};
+
+struct ModTelemetry {
+    std::vector<ModReading> modulations;
+};
+
 schema::Schema<SourceArg> sourceSchema() {
     return schema::object<SourceArg>("modulation_source")
         .field("module", &SourceArg::module, idArg("mo", "Mod Out module"))
@@ -462,6 +476,61 @@ void registerModulationCommands(cmd::Registry& registry) {
                 } else if (!playable(m.target)) {
                     row.inert = "target";
                 }
+                out.modulations.push_back(std::move(row));
+            }
+            return out;
+        };
+        addChecked(registry, std::move(c));
+    }();
+    [&] {
+        Command<ModTelemetryArgs, ModTelemetry> c;
+        c.name = "modulation.telemetry";
+        c.kind = Kind::Query;
+        c.exposure = cmd::Exposure::McpExec;
+        c.summary = "Read each modulation route's live target offset and its span.";
+        c.description =
+            "offset: the route's target's current offset, the sum of every route on it, as the "
+            "engine last applied it (a plug-in parameter's as a fraction of its range, a "
+            "volume's in dB, a pan's or width's in percent); absent while no running plan "
+            "applies the route. low and high: what this route alone can add, depth times its "
+            "signal range (bipolar -1..1, unipolar 0..1), in the same unit.";
+        c.tags = {"modulation", "rack"};
+        c.args = schema::object<ModTelemetryArgs>("modulation_telemetry_args")
+                     .field("track", &ModTelemetryArgs::track, idArg("tr", "Target track"))
+                     .build();
+        auto entry = schema::object<ModReading>("modulation_reading")
+                         .field("modulation", &ModReading::modulation, schema::string())
+                         .field("offset", &ModReading::offset, schema::number())
+                         .field("low", &ModReading::low, schema::number())
+                         .field("high", &ModReading::high, schema::number())
+                         .build();
+        c.result = schema::object<ModTelemetry>("modulation_telemetry")
+                       .field("modulations", &ModTelemetry::modulations, schema::arrayOf(entry))
+                       .build();
+        c.examples = {{"Stopped", j("{}"),
+                       j(R"({"modulations": [{"modulation": "mr_1", "low": -0.25,
+                             "high": 0.25}]})"),
+                       "song_with_modulation"}};
+        c.run = [](const ModTelemetryArgs& a, Context& ctx) -> Result<ModTelemetry> {
+            EngineApp& app = engine::app(ctx);
+            const model::Session s = app.view();
+            std::optional<Id> track;
+            if (a.track) {
+                auto id = existing<model::Track>(s, *a.track, "/track");
+                if (!id) return std::move(id).error();
+                track = *id;
+            }
+            const auto live = app.modulationOffsets();
+            ModTelemetry out;
+            for (const auto& e : s.modulations) {
+                const model::Modulation& m = *e.value;
+                if (track && model::modulationTargetNode(s, m.target) != track) continue;
+                ModReading row;
+                row.modulation = e.id.str();
+                if (const auto it = live.find(e.id); it != live.end()) row.offset = it->second;
+                const bool unipolar = rangeOf(app, s, m.source) == "unipolar";
+                row.low = unipolar ? std::min(0.0, m.depth) : -std::abs(m.depth);
+                row.high = unipolar ? std::max(0.0, m.depth) : std::abs(m.depth);
                 out.modulations.push_back(std::move(row));
             }
             return out;

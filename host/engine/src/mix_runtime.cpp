@@ -324,6 +324,17 @@ bool Engine::loadMixValues(const model::Session& session, const std::filesystem:
     return true;
 }
 
+std::map<model::Id, double> Engine::modulationOffsets() const {
+    std::map<model::Id, double> out;
+    const auto* p = latestPlan_.load(std::memory_order_acquire);
+    if (!p || !p->modOffsets) return out;
+    for (std::size_t i = 0; i < p->modEdges.size() && i < p->modOffsetOf.size(); ++i)
+        if (const int slot = p->modOffsetOf[i]; slot >= 0)
+            out.emplace(p->modEdges[i].route, p->modOffsets[static_cast<std::size_t>(slot)].load(
+                                                  std::memory_order_relaxed));
+    return out;
+}
+
 bool Engine::releasesStaleCurve() const {
     return std::any_of(staleCurves_.begin(), staleCurves_.end(),
                        [&](const auto& t) { return !contains(writeHolds_, t); });

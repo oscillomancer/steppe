@@ -678,16 +678,16 @@ void dumpSlot(Dump& d, std::string_view a, const MixSlots::Value& v) {
 
 std::string dumpPlan(const Plan& p) {
     [[maybe_unused]] const auto& [pool, buffers, sessionVersion, generation, nodes, mainMaster,
-                                  outputs, edges, modEdges, nodeIndex, linearConsole,
-                                  masterPlayrate, rateEnvelope, rateEnabled, syncPlan, syncRate,
-                                  timelines, previousTimelines, rateControl, preparedRateBoundary,
-                                  rateHandDevice, rateSeekSequence, rateEpochSeekSequence,
-                                  rateFromGeneration, rateFromUnity, ratePrepared, rateOrigin,
-                                  rateDeviceMargin, rateBackendLatency, rateSourceAhead,
-                                  rateSourceBehind, rateSwitchDevice, rateSafeDevice,
-                                  rateControlsChanged, scalarPublication, scalarHistory,
-                                  requestedScalar, rate, smoothFrames, mix, startSeconds,
-                                  outputLatency, block, timeMap, warnings, projectDir,
+                                  outputs, edges, modEdges, modOffsets, modOffsetOf, nodeIndex,
+                                  linearConsole, masterPlayrate, rateEnvelope, rateEnabled,
+                                  syncPlan, syncRate, timelines, previousTimelines, rateControl,
+                                  preparedRateBoundary, rateHandDevice, rateSeekSequence,
+                                  rateEpochSeekSequence, rateFromGeneration, rateFromUnity,
+                                  ratePrepared, rateOrigin, rateDeviceMargin, rateBackendLatency,
+                                  rateSourceAhead, rateSourceBehind, rateSwitchDevice,
+                                  rateSafeDevice, rateControlsChanged, scalarPublication,
+                                  scalarHistory, requestedScalar, rate, smoothFrames, mix,
+                                  startSeconds, outputLatency, block, timeMap, warnings, projectDir,
                                   preparedSources, media, instances, graph, anyLive, heldLive,
                                   rendererNodes, liveNodes, rendererGraph, liveGraph,
                                   rendererInstances, liveInstances, modules, rendererModules,
@@ -743,6 +743,7 @@ std::string dumpPlan(const Plan& p) {
     d.put(a, "modEdges", static_cast<std::uint64_t>(p.modEdges.size()));
     for (std::size_t i = 0; i < p.modEdges.size(); ++i)
         dumpModEdge(d, "m" + std::to_string(i), p.modEdges[i]);
+    d.put(a, "modOffsetOf", p.modOffsetOf);  // the values are telemetry, not the plan
     std::vector<std::string> index;
     for (const Plan::NodeKey& k : p.nodeIndex)
         index.push_back(k.id.str() + "=" + std::to_string(k.node));

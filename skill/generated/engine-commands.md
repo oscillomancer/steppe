@@ -10463,6 +10463,87 @@ Result:
 
 ```
 
+## `modulation.telemetry@1`
+
+Read each modulation route's live target offset and its span.
+
+offset: the route's target's current offset, the sum of every route on it, as the engine last applied it (a plug-in parameter's as a fraction of its range, a volume's in dB, a pan's or width's in percent); absent while no running plan applies the route. low and high: what this route alone can add, depth times its signal range (bipolar -1..1, unipolar 0..1), in the same unit.
+
+Kind: `query`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `track` | string |  |  |  | Target track id, e.g. "tr_1". |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "modulation_telemetry",
+  "properties": {
+    "modulations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "modulation_reading",
+        "properties": {
+          "modulation": {
+            "type": "string"
+          },
+          "offset": {
+            "type": "number"
+          },
+          "low": {
+            "type": "number"
+          },
+          "high": {
+            "type": "number"
+          }
+        },
+        "required": ["modulation", "low", "high"],
+        "additionalProperties": false
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["modulations"],
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**Stopped** (`song_with_modulation`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "modulations": [
+    {
+      "modulation": "mr_1",
+      "low": -0.25,
+      "high": 0.25
+    }
+  ]
+}
+
+```
+
 ## `module.add@1`
 
 Add a module to a rack: a type with knob values.

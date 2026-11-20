@@ -640,6 +640,7 @@ struct ModParam {
     double sent = 0.0;    // the memo: the last amount the plug-in was sent
     bool listed = false;  // the memo lists it: the plug-in may hold `sent`
     bool stale = true;    // send at the next grid point whatever `sent` is
+    int telemetry = -1;   // its Plan::modOffsets slot; -1: no route this plan
 };
 
 struct Stage {
@@ -899,6 +900,7 @@ struct Node {
         double prev = 0, next = 0;
         bool preserveOnLocate = false;  // a swap just carried it
         std::vector<double> offsets;    // this block's, per frame
+        int telemetry = -1;             // its Plan::modOffsets slot
     };
     std::vector<MixMod> mixMods;
     int modVolume = -1, modPan = -1, modWidth = -1;
@@ -1076,6 +1078,13 @@ struct Plan {
     std::vector<OutputTap> outputs;
     std::vector<Edge> edges;
     std::vector<ModEdge> modEdges;  // modulation routes (ADR-0096), in route id order
+    // Telemetry (ADR-0096, M2): each bound target's last offset, written by
+    // the executor that runs it (relaxed), read by the main thread. A
+    // plug-in's is a fraction of its CLAP range, a mixer target's in dB or
+    // percent. modOffsetOf maps each modEdges entry to its target's slot
+    // (-1: inert).
+    std::unique_ptr<std::atomic<double>[]> modOffsets;
+    std::vector<int> modOffsetOf;
     // Every node by id, sorted (indexForCarry): an adoption finds a node's
     // counterpart in log n steps, whichever earlier plan it carries from.
     // Node ids are unique within a plan (asserted in debug builds).

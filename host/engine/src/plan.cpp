@@ -416,6 +416,22 @@ void bindModulation(Plan& p, std::map<host::Instance*, json::Value>& schemas) {
         // A routed parameter's grid, and one 0 for each of the others.
         st->modEvents = perParam * now.size() + (all.size() - now.size());
     }
+    // Telemetry (M2): one slot per bound target, and each route's slot.
+    int slots = 0;
+    p.modOffsetOf.assign(p.modEdges.size(), -1);
+    for (Stage* st : stages)
+        for (ModParam& m : st->mods) {
+            m.telemetry = m.count ? slots++ : -1;
+            for (std::uint32_t k = 0; k < m.count; ++k)
+                p.modOffsetOf[st->modRoutes[m.first + k]] = m.telemetry;
+        }
+    for (Node& n : p.nodes)
+        for (Node::MixMod& mm : n.mixMods) {
+            mm.telemetry = slots++;
+            for (const std::uint32_t mi : mm.routes) p.modOffsetOf[mi] = mm.telemetry;
+        }
+    p.modOffsets =
+        std::make_unique<std::atomic<double>[]>(static_cast<std::size_t>(std::max(slots, 1)));
 }
 
 Result<ResolvedLane> paramLane(host::Instance& in, const std::string& param,
@@ -2400,6 +2416,11 @@ void modulateStage(Plan& p, Stage& st, std::int64_t pos, std::uint32_t n, std::i
                 held = held || p.nodes[me.from].rack->modStale;
                 if (me.enabled) sum += me.values[g] * me.depth * m.range;
             }
+            // Telemetry: the sum at every grid point, sent or not (a carried
+            // memo may not need to send it again).
+            if (!held && m.telemetry >= 0 && m.range > 0)
+                p.modOffsets[static_cast<std::size_t>(m.telemetry)].store(
+                    sum / m.range, std::memory_order_relaxed);
             if (held || (!m.stale && m.listed && sum == m.sent)) continue;
             if (st.blockEvents.size() >= room) {  // tried again at the next grid point
                 ++st.modDeferred;
@@ -3190,6 +3211,10 @@ void fillMixMods(Plan& p, Node& node, std::int64_t pos, std::uint32_t n,
             }
             mm.offsets[i] = mm.prev + (mm.next - mm.prev) * double(k) / double(kAutomationStep);
         }
+    for (const Node::MixMod& mm : node.mixMods)
+        if (mm.telemetry >= 0 && n > 0)
+            p.modOffsets[static_cast<std::size_t>(mm.telemetry)].store(mm.offsets[n - 1],
+                                                                       std::memory_order_relaxed);
 }
 
 // One block of every node, in order. Returns false on a plugin error.

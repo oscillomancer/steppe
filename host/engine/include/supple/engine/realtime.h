@@ -784,6 +784,11 @@ class Engine {
     // Modulation events that waited past their grid point for room (a full
     // block or a bridged block's cut, ADR-0096): cumulative, any thread.
     std::uint64_t modulationDeferred() const { return modDeferred_.load(); }
+    // Telemetry (ADR-0096, M2), main thread: each bound modulation route's
+    // target's last offset in the newest plan (a plug-in's as a fraction of
+    // its CLAP range, a mixer target's in dB or percent). An inert route,
+    // or one no plan binds yet, is absent.
+    std::map<model::Id, double> modulationOffsets() const;
 
     std::uint32_t outputLatency() const;
     void setMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences outputs);
