@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <charconv>
 #include <cstdio>
 #include <map>
 #include <set>
@@ -262,6 +263,20 @@ void bindModulation(Plan& p, std::map<host::Instance*, json::Value>& schemas) {
     };
     std::vector<Bound> bound;
     std::vector<Stage*> stages;  // every stage a route reaches, and only once
+    // The routes into an FX, as text: what amendment M-d's disabling keeps.
+    const auto routesInto = [&](Id fx) {
+        std::string text;
+        for (const ModEdge& other : p.modEdges)
+            if (other.target.object == fx) {
+                char depth[32];
+                const auto [end, ec] = std::to_chars(depth, depth + sizeof depth, other.depth);
+                text += other.route.str() + " " + other.fromId.str() + " " +
+                        std::to_string(other.modOut) + "." + std::to_string(other.input) + " " +
+                        other.target.param + " " + std::string(depth, end) +
+                        (other.enabled ? " on;" : " off;");
+            }
+        return text;
+    };
     for (std::size_t mi = 0; mi < p.modEdges.size(); ++mi) {
         ModEdge& me = p.modEdges[mi];
         me.values.clear();
@@ -305,6 +320,15 @@ void bindModulation(Plan& p, std::map<host::Instance*, json::Value>& schemas) {
                                        [&](const auto& pi) { return pi.id == target->param; });
         if (info->flags & (CLAP_PARAM_IS_READONLY | CLAP_PARAM_IS_BYPASS)) {
             inert(info->name + " is read-only or a bypass");
+            continue;
+        }
+        if (p.pool && p.pool->modulationDisabled(st->fx, routesInto(st->fx))) {
+            me.inert = true;
+            p.warnings.push_back(me.route.str() + ": " + me.target.object.str() + " " +
+                                 me.target.param +
+                                 ": its plug-in changed its latency while modulated; the "
+                                 "modulation is off until a route into it is edited "
+                                 "(modulation.latency)");
             continue;
         }
         me.clapId = target->param;

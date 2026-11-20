@@ -507,6 +507,61 @@ TEST_CASE("modulation: an input-chain plug-in has room for its automation and mo
     CHECK(double(m.left[12000]) > double(a.left[12000]) * 1.5);
 }
 
+TEST_CASE("modulation: a target whose latency moves while modulated turns its routes off") {
+    // ADR-0096, amendment M-d: the plug-in reports latency only after it has
+    // changed, so the engine turns the routes into that FX off until one of
+    // them is edited. Here a patch edit moves the gain's latency.
+    const Emit on("playing", 0.1);
+    model::EditTxn t(on.s, 2);
+    t.modify<model::FxInstance>(on.gain, [](model::FxInstance& fx) {
+        fx.patch =
+            json::parse(
+                R"({"schema":"supple.test-gain-patch/1.0","params":{"gain":-6,"latency":"short"}})")
+                .value();
+    });
+    const auto latent = commit(t);
+    model::EditTxn u(latent, 3);  // an unrelated edit that compiles
+    addChannel(u);
+    const auto unrelated = commit(u);
+    model::EditTxn e(unrelated, 4);
+    e.modify<model::Modulation>(on.route, [](model::Modulation& m) { m.depth = 0.05; });
+    const auto edited = commit(e);
+
+    InstancePool pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+    Engine engine(pool, media, {.anticipative = false, .workers = 0});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 96}));
+    const auto settle = [&](int blocks) {
+        for (int i = 0; i < blocks; i += 10) {
+            engine.service();
+            backend.run(10);
+        }
+    };
+    REQUIRE(engine.load(on.s));
+    engine.play();
+    settle(100);  // to 9600
+    CHECK_FALSE(pool.modulationDisabled(on.gain));
+    REQUIRE(engine.load(latent));
+    settle(100);  // to 19200: the restart, the latency, the reload
+    CHECK(pool.modulationDisabled(on.gain));
+    CHECK(warns(engine.warnings(), "modulation.latency"));  // the latest plan's
+    REQUIRE(engine.load(unrelated));
+    settle(20);
+    CHECK(pool.modulationDisabled(on.gain));  // only a route edit ends it
+    REQUIRE(engine.load(edited));
+    settle(100);
+    engine.stop();
+    CHECK(engine.processErrors() == 0);
+    CHECK_FALSE(pool.modulationDisabled(on.gain));
+    const auto& cap = backend.capture();
+    CHECK(double(cap.channels[0][9000]) == doctest::Approx(gainAt(0.1)).epsilon(1e-4));
+    CHECK(double(cap.channels[0][19000]) == doctest::Approx(gainAt(0)).epsilon(1e-4));
+    CHECK(double(cap.channels[0][21000]) == doctest::Approx(gainAt(0)).epsilon(1e-4));
+    CHECK(double(cap.channels[0][30500]) == doctest::Approx(gainAt(0.05)).epsilon(1e-4));
+    CHECK_FALSE(warns(engine.warnings(), "modulation.latency"));
+}
+
 TEST_CASE(
     "modulation: a route into a frozen track's FX is inert, and the plan has no chain to read") {
     // Review round 54's probe: the frozen node's plan chain is empty, so the
