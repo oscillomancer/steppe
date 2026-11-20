@@ -672,6 +672,106 @@ TEST_CASE("launcher: Capture arms while lit; a stop commits the performance, one
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("launcher: a refused capture commit keeps the performance; a click commits it") {
+    LauncherFixture f;
+    f.song();
+    // A locked arrangement item on Drums, under the whole capture: the commit
+    // that clears it is refused (item.locked).
+    f.exec(
+        "item.add",
+        R"({"track":"tr_1","bar":1,"notation":"voice d; 1: C2:w | C2:w | C2:w | C2:w | )"
+        R"(C2:w | C2:w | C2:w | C2:w | C2:w | C2:w | C2:w | C2:w | C2:w | C2:w | C2:w | C2:w"})");
+    REQUIRE(f.app->head().items.size() == 1);
+    const std::string item = f.app->head().items.begin()->id.str();
+    auto lock = [&](bool on) {
+        f.exec("item.set",
+               R"({"item":")" + item + R"(","locked":)" + (on ? "true" : "false") + "}");
+    };
+    lock(true);
+    gui::CaptureControl capture(*f.app, *f.dispatcher);
+    std::vector<Error> refused;
+    capture.onError = [&](const Error& e) { refused.push_back(e); };
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    const model::Id drums = *model::Id::parse("tr_1");
+    // Kit A launched and heard, then a stop. The bounds only keep a broken
+    // build from hanging.
+    auto perform = [&] {
+        f.exec("launch.clip", R"({"clip":"cl_1"})");
+        auto playing = [&] {
+            for (const auto& t : f.app->launchState())
+                if (t.track == drums && t.plays == engine::Engine::TrackLaunch::Plays::Clip)
+                    return true;
+            return false;
+        };
+        for (int k = 0; k < 3000 && !playing(); ++k) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            capture.service();
+        }
+        REQUIRE(playing());
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        capture.service();
+        const std::size_t seen = refused.size();
+        f.exec("transport.stop", "{}");
+        for (int k = 0; k < 3000 && refused.size() == seen && capture.armed(); ++k) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            capture.service();
+        }
+    };
+    auto heldFrames = [&] {
+        const auto held = f.app->engine()->launchCapture();
+        return held && !held->launches.empty() ? held->frames : 0;
+    };
+    REQUIRE(capture.set(true));
+    const std::uint64_t armedAt = f.app->head().version;
+    perform();
+    // Refused: nothing written, the toggle dark, the performance kept.
+    REQUIRE(refused.size() == 1);
+    CHECK(refused[0].code == "item.locked");
+    CHECK(refused[0].message.find("the performance is kept") != std::string::npos);
+    CHECK(f.app->head().version == armedAt);
+    CHECK_FALSE(capture.armed());
+    CHECK(capture.kept());
+    CHECK_FALSE(f.app->launchCapturing());
+    CHECK(heldFrames() > 0);
+    // A click while it is still locked: refused again, still kept, dark.
+    const Status again = capture.set(true);
+    REQUIRE_FALSE(again);
+    CHECK(again.error().code == "item.locked");
+    CHECK(again.error().message.find("click Capture again to drop it") != std::string::npos);
+    CHECK_FALSE(capture.armed());
+    CHECK(capture.kept());
+    CHECK(heldFrames() > 0);
+    // Unlocked, a click commits it in one undo step, then arms the next.
+    lock(false);
+    const std::uint64_t unlocked = f.app->head().version;
+    REQUIRE(capture.set(true));
+    CHECK(f.app->head().version == unlocked + 1);
+    CHECK_FALSE(capture.kept());
+    CHECK(capture.armed());
+    CHECK(f.app->launchCapturing());
+    bool laid = false;
+    for (const auto& e : f.app->head().items)
+        laid = laid || (e.value->track == drums && e.id.str() != item);
+    CHECK(laid);
+    // Refused at stop and at the click after it, a third click drops it and
+    // arms: nothing is written.
+    for (const auto& e : f.app->head().items)
+        if (e.value->track == drums)
+            f.exec("item.set", R"({"item":")" + e.id.str() + R"(","locked":true})");
+    perform();
+    REQUIRE(refused.size() == 2);
+    CHECK_FALSE(capture.armed());
+    const std::uint64_t locked = f.app->head().version;
+    REQUIRE_FALSE(capture.set(true));
+    REQUIRE(capture.set(true));
+    CHECK_FALSE(capture.kept());
+    CHECK(capture.armed());
+    CHECK(f.app->head().version == locked);
+    REQUIRE(capture.set(false));
+    f.exec("engine.stop", "{}");
+    CHECK(f.errors.empty());
+}
+
 TEST_CASE("launcher: a scene dragged onto the timeline lies there; its menu inserts it") {
     LauncherFixture f;
     f.song();

@@ -17,9 +17,34 @@ Result<json::Value> CaptureControl::run(const std::string& command, json::Value 
     return dispatcher_.execute({command, std::move(args), kOrigin});
 }
 
+Error CaptureControl::keep(Error refusal) {
+    armed_ = capturing_ = false;
+    kept_ = Kept::Refused;
+    keptGeneration_ = app_.projectGeneration();
+    refusal.message += "; the performance is kept: fix that, then click Capture to commit it";
+    return refusal;
+}
+
 Status CaptureControl::set(bool on) {
     if (on == armed_) return {};
     if (on) {
+        // A kept performance belongs to its project and its engine.
+        if (kept_ != Kept::None && (!app_.engine() || app_.projectGeneration() != keptGeneration_))
+            kept_ = Kept::None;
+        if (kept_ != Kept::None) {
+            if (auto st = commit(); st) {
+                kept_ = Kept::None;
+            } else if (kept_ == Kept::Refused) {
+                kept_ = Kept::Warned;
+                Error refusal = std::move(st).error();
+                refusal.message +=
+                    "; the performance is still kept: click Capture again to drop "
+                    "it and arm";
+                return refusal;
+            } else {
+                kept_ = Kept::None;  // warned: dropped, and the arming replaces it
+            }
+        }
         json::Value args = json::Value::object();
         args["on"] = true;
         auto r = run("launch.capture", std::move(args));
@@ -30,7 +55,8 @@ Status CaptureControl::set(bool on) {
     }
     armed_ = false;
     capturing_ = false;
-    return commit();
+    if (auto st = commit(); !st) return keep(std::move(st).error());
+    return {};
 }
 
 Status CaptureControl::commit() {
@@ -60,7 +86,12 @@ void CaptureControl::service() {
     const bool now = app_.launchCapturing();
     if (capturing_ && !now) {
         // The engine ended a capture that ran: commit it, and arm the next.
-        if (auto st = commit(); !st && onError) onError(st.error());
+        // A refusal keeps it and arms nothing, since arming would replace it.
+        if (auto st = commit(); !st) {
+            Error refusal = keep(std::move(st).error());
+            if (onError) onError(refusal);
+            return;
+        }
         json::Value args = json::Value::object();
         args["on"] = true;
         if (auto r = run("launch.capture", std::move(args)); !r) {
