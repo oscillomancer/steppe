@@ -1799,6 +1799,7 @@ Status prepare(Plan& p, const Session& s) {
                 timed.event.noteId = -2;  // local take controller; sends still carry it
         }
         for (auto& ev : n.events) ev.sample += n.timelineShift;
+        compileClipPlayers(p, n, s);  // the clip launcher (ADR-0097)
         // Reserve the most events any block-long window holds (events are
         // sorted; after a seek, blocks start anywhere), so processBlock never
         // allocates.
@@ -1837,7 +1838,7 @@ Status prepare(Plan& p, const Session& s) {
             const std::size_t notes =
                 noteTarget ? st.voices.capacity() : 0;  // releases at a wrap or route edit
             const std::size_t live = noteTarget && n.midiIn ? kMaxMidiInputEvents : 0;
-            st.blockEvents.reserve(windowMax + 1 + lanes + notes + live);
+            st.blockEvents.reserve(windowMax + n.clipWindow + 1 + lanes + notes + live);
         }
     }
     // Immutable musical origins let adoption rebind compiled ids after a
@@ -1889,8 +1890,29 @@ Status prepare(Plan& p, const Session& s) {
         std::sort(st.noteSourceIndex.begin(), st.noteSourceIndex.end(),
                   [](const auto& a, const auto& b) { return a.address() < b.address(); });
     };
+    // Clips past the memory budget (ADR-0097 "Memory"): named once.
+    if (p.preparedSources && !p.preparedSources->clipsSkipped.empty()) {
+        std::string names;
+        for (const Id id : p.preparedSources->clipsSkipped)
+            names += (names.empty() ? "" : ", ") + id.str();
+        p.warnings.push_back("launch.memory: " + names +
+                             " do not fit in the audio memory budget beside the arrangement and "
+                             "cannot be launched; use shorter audio or fewer distinct files");
+    }
+    std::vector<TimedEvent> withClips;
     for (Node& node : p.nodes) {
-        sources(node.midiStage, node.events);
+        // A clip's notes continue the timeline's ids (compileClipPlayers).
+        // They have no place in the song, so their sources span all of it:
+        // releaseVoices never ends one as outside its span.
+        withClips = node.events;
+        for (const ClipPlayer& pl : node.players)
+            for (const ClipEvent& e : pl.events)
+                if (e.event.noteId >= 0)
+                    withClips.push_back({e.event.kind == host::Event::Kind::NoteOn
+                                             ? std::numeric_limits<std::int64_t>::min()
+                                             : std::numeric_limits<std::int64_t>::max(),
+                                         e.event, e.origin});
+        sources(node.midiStage, withClips);
         if (node.noteTarget >= 0) {  // the same events: the same sources
             Stage& target = node.chain[static_cast<std::size_t>(node.noteTarget)];
             target.noteSources = node.midiStage.noteSources;
@@ -3149,6 +3171,7 @@ bool processTake(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std::uint
                            static_cast<double>(length - k) / static_cast<double>(tc.fadeOut));
         if (tc.volume.active()) g *= dbToGain(tc.volume.at(t));
         if (tc.mute.active() && tc.mute.at(t) >= .5) g = 0.0;
+        if (node.arrangementGain) g *= double(node.arrangementGain[i]);  // the clip launcher's
         double l = tc.gainL * g, r = tc.gainR * g;
         if (tc.pan.active()) {
             const auto [pl, pr] = balanceSides(tc.pan.at(t) / 100.0);
@@ -3336,8 +3359,29 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
     const bool postItems = node.postItems && node.hasItems();
     if (postItems) node.items.clear(n);
     Stereo& itemsInto = postItems ? node.items : node.sum;
-    for (Clip& c : node.clips)
-        if (transport.playing && c.takeChain < 0) playClip(p, c, itemsInto, pos, n, 0, node.live);
+    // The clip launcher (ADR-0097): its audio, and how much of the
+    // arrangement plays (null: all of it).
+    if (transport.playing)
+        launchAudio(p, node, itemsInto, pos, n);
+    else
+        node.arrangementGain = nullptr;
+    if (const float* g = node.arrangementGain) {
+        node.launchBuf.clear(n);
+        bool any = false;
+        for (std::uint32_t i = 0; i < n && !any; ++i) any = g[i] != 0.0f;
+        for (Clip& c : node.clips)
+            if (any && transport.playing && c.takeChain < 0)
+                playClip(p, c, node.launchBuf, pos, n, 0, node.live);
+        if (any)
+            for (std::uint32_t i = 0; i < n; ++i) {
+                itemsInto.l[i] += node.launchBuf.l[i] * g[i];
+                itemsInto.r[i] += node.launchBuf.r[i] * g[i];
+            }
+    } else {
+        for (Clip& c : node.clips)
+            if (transport.playing && c.takeChain < 0)
+                playClip(p, c, itemsInto, pos, n, 0, node.live);
+    }
     // Takes with chains or envelopes: through their chains, into the sum.
     for (TakeChain& tc : node.takeChains)
         if (!processTake(p, node, tc, pos, n, transport, self, loop)) return false;
@@ -3376,15 +3420,19 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
     if (p.rateEnabled && transport.playing)
         rateEvents(p, node.live, node.events, node.midiStage, pos, n, node.timelineShift,
                    node.rateEventFresh);
+    // While a clip holds the track, its timeline notes pass unplayed.
+    const bool arrangementMidi = node.launch.kind == LaunchState::Kind::Arrangement;
     while (!p.rateEnabled && transport.playing && node.nextEvent < node.events.size() &&
            double(node.events[node.nextEvent].sample) <
                mappedAt(p, node.live, pos + n, node.timelineShift)) {
         const TimedEvent& te = node.events[node.nextEvent++];
+        if (!arrangementMidi) continue;
         host::Event e = te.event;
         e.time = eventOffset(p, node.live, pos, n, node.timelineShift, te.sample);
         auto& target = node.midiStage.blockEvents;
         if (target.size() < target.capacity()) target.push_back(e);  // never allocate here
     }
+    if (transport.playing) launchMidi(p, node, pos, n);
     // Live MIDI from the device (ADR-0016), playing or not, after timeline MIDI
     // at the same frame; not counted as held (a loop wrap does not cut what
     // the performer holds).
@@ -3954,6 +4002,7 @@ void wrapTo(Plan& p, std::int64_t pos, int liveClass) SUPPLE_RT {
             std::lower_bound(n.events.begin(), n.events.end(), pos,
                              [](const TimedEvent& e, std::int64_t x) { return e.sample < x; });
         n.nextEvent = static_cast<std::size_t>(it - n.events.begin());
+        launchWrapped(n);  // a once clip is silent until launched again
         n.encoder.reset();
         n.keyEncoder.reset();
         n.decoder.reset();

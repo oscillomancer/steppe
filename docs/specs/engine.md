@@ -505,6 +505,31 @@ the same.*
   own launch log, at two block sizes, through the bridge, and under
   rtsan.
 
+**Implementation (clip_player.cpp).**
+- `compileClipPlayers` builds a channel's `Node::players` after its
+  timeline events. A MIDI player's events are laid out over the period,
+  one entry per pass of the loop window. Notes are cut at the window's and
+  the period's end, and sorted by beat with offs before controls before
+  ons. Their note ids continue the timeline's. Their note sources span the
+  whole song, so `releaseVoices` never ends one as out of its span, and
+  carried voices rebind by address as item notes do. An audio player holds
+  the take's prepared buffer, gain, pan and channel mode, as an item does.
+  `prepareRackMidi` sizes the track's MIDI pool and block window for the
+  players (`clipVoices`, `clipWindow`).
+- `Node::launch` is what the channel plays. `applyLaunch` changes it at a
+  block boundary and sets `releaseHeld`, so the notes left sounding end at
+  that block's start, as at a loop wrap. The executor splits its block
+  there. That boundary is the channel's song position at the anchor: the
+  launch's frame plus the node's `timelineShift`.
+- Each block, `launchAudio` computes the arrangement's gain per frame,
+  null when the arrangement plays throughout (the path is then exactly
+  the old one). It adds the clip's audio, crossfading by song position
+  over `kLaunchFadeSeconds`. Plain items and take chains are scaled by
+  that gain. Timeline MIDI passes unplayed while a clip holds the track,
+  and `launchMidi` emits the clip's notes instead.
+- `OfflineSettings::launches` replays a log from the render's start (no
+  seeks or wraps yet; L4 adds them with capture).
+
 ### 1.5 Transport and time
 
 The plan holds a sample-domain time map (tempo segments → samples) so the RT

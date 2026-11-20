@@ -325,6 +325,22 @@ class MediaCache {
 // by waiting; a hung plug-in still fails the render within it.
 inline constexpr int kOfflineBridgeDeadlineMs = 60'000;
 
+// One applied launch of the clip launcher (ADR-0097, engine.md §1.4.2), as
+// the engine logs it: at `runningFrame` (stream frames since the play start)
+// `track` starts `clip`, returns to the arrangement or stops; `anchorSample`
+// (song samples from the plan's start) and `anchorBeat` are the song position
+// of that frame, from which the clip's phase runs.
+struct LaunchLogEntry {
+    enum class Action : std::uint8_t { Clip, Arrangement, Stop };
+    std::int64_t runningFrame = 0;
+    model::Id track;
+    Action action = Action::Clip;
+    model::Id clip;
+    std::int64_t anchorSample = 0;
+    double anchorBeat = 0;
+    bool operator==(const LaunchLogEntry&) const = default;
+};
+
 struct OfflineSettings {
     // Playback/stems apply master rate; analysis and item-FX renders opt out.
     bool applyMasterPlayrate = true;
@@ -363,6 +379,10 @@ struct OfflineSettings {
     // plug-in (ADR-0090); lifecycle commands get 5/2 of it plus 2 s. Tests
     // shorten it; the product keeps the default.
     int bridgeDeadlineMs = kOfflineBridgeDeadlineMs;
+    // Internal (tests, L4 capture): replay these launches, in runningFrame
+    // order, from the render's start, which must be the log's play start.
+    // The render dialog never sets it: renders play the arrangement only.
+    std::vector<LaunchLogEntry> launches;
 };
 
 struct OfflineResult {

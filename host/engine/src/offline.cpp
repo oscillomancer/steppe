@@ -1036,14 +1036,49 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
             in->flushParams();
             if (!in->startProcessing()) startFailed = true;
         }
+        // The launch log's replay (internal; engine.md §1.4.2): each channel
+        // switches at the block boundary where its song position reaches the
+        // anchor, its log frame plus its timeline shift.
+        struct Switch {
+            std::int64_t at;
+            std::size_t node;
+            detail::LaunchAction action;
+        };
+        std::vector<Switch> switches;
+        for (const LaunchLogEntry& e : opt.launches)
+            for (std::size_t k = 0; k < p.nodes.size(); ++k) {
+                detail::Node& node = p.nodes[k];
+                if (node.id != e.track || node.players.empty()) continue;
+                detail::LaunchAction a;
+                a.anchorSample = e.anchorSample;
+                a.anchorBeat = e.anchorBeat;
+                a.kind = e.action == LaunchLogEntry::Action::Clip ? detail::LaunchState::Kind::Clip
+                         : e.action == LaunchLogEntry::Action::Stop
+                             ? detail::LaunchState::Kind::Stopped
+                             : detail::LaunchState::Kind::Arrangement;
+                if (a.kind == detail::LaunchState::Kind::Clip) {
+                    a.player = detail::playerOf(node, e.clip);
+                    if (a.player < 0) continue;
+                }
+                switches.push_back({e.runningFrame + node.timelineShift, k, a});
+            }
+        std::stable_sort(switches.begin(), switches.end(),
+                         [](const Switch& a, const Switch& b) { return a.at < b.at; });
+        std::size_t nextSwitch = 0;
         if (!startFailed) {
             for (std::int64_t pos = 0; pos < total;) {
                 if (RenderWatch::requested(opt)) {
                     cancelled = true;
                     break;
                 }
+                for (; nextSwitch < switches.size() && switches[nextSwitch].at <= pos; ++nextSwitch)
+                    detail::applyLaunch(p, p.nodes[switches[nextSwitch].node],
+                                        switches[nextSwitch].action);
                 auto n = static_cast<std::uint32_t>(std::min<std::int64_t>(p.block, total - pos));
                 if (p.rateEnabled) n = std::min(n, static_cast<std::uint32_t>(64 - (pos & 63)));
+                if (nextSwitch < switches.size())
+                    n = static_cast<std::uint32_t>(
+                        std::min<std::int64_t>(n, switches[nextSwitch].at - pos));
                 if (!(workers.helpers() ? processBlockOn(workers, p, pos, n)
                                         : processBlock(p, pos, n))) {
                     failed = true;
