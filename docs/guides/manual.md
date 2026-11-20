@@ -1623,6 +1623,13 @@ written onto the timeline as items, in one undo step, and Capture stays lit
 for the next take; click it again to finish and turn it off. If every track
 stayed on the arrangement, nothing is written.
 
+If the performance can't be written (a locked item is in the way, say),
+Capture goes dark and the status line says why. The performance is kept: fix
+what it names, then click Capture, and it is written before Capture lights
+again. If it is refused again, the status line says so, and one more click tries
+once more and, if it still can't, discards the performance and starts a new
+capture.
+
 To put a scene into the song, drag its header onto the timeline: it lies
 from the bar you drop it on, for as many whole bars as its longest clip
 needs, with a marker showing where while you drag. **Insert at playhead**
@@ -1655,7 +1662,8 @@ Right-click a clip for Rename, Colour, Mode (loop or once), Quantize,
 Duplicate, Lay on timeline at playhead and Delete; Delete on the keyboard
 removes the selected clips. Ctrl+C copies the selected clips; click an empty
 cell and press Ctrl+V to paste them there, laid out as they were. Ctrl+X
-marks clips to move, and the next paste moves them. The inspector shows a selected clip's name,
+marks clips to move, and the next paste moves them. Copied clips stay in
+their own project: after you open another one, there is nothing to paste. The inspector shows a selected clip's name,
 colour, length, gain, mode, launch quantize and mute.
 
 In the piano roll a clip starts at its own bar 1. It has no place in the

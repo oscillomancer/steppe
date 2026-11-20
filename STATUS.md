@@ -239,10 +239,11 @@ instructions are in `docs/guides/installing.md`.
   gesture in §4.15 is in: launch, select, stop, create, open, move and
   copy, drags to and from the timeline, the clip and scene menus, rename,
   scene reordering, Delete, copy and paste (a cut moves the clips at the
-  paste), the inspector's clip fields and the scene count in the status
+  paste; the clipboard empties when another project opens), the inspector's clip fields and the scene count in the status
   line. The piano roll opens MIDI clips. L4 adds the header's Capture
   toggle (armed while lit; a stop, seek or loop change commits the
-  performance with `launch.commit` and arms the next), a scene dragged onto
+  performance with `launch.commit` and arms the next; a refused commit
+  keeps the performance, dark, for the next click), a scene dragged onto
   the timeline or inserted at the playhead or the end (`scene.insert`, for
   its longest clip's whole bars, with a drop marker while dragged), and a
   section's Capture as scene (`scene.capture`); their refusals show in the
