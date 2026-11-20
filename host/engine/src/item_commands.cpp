@@ -281,46 +281,15 @@ Result<ItemAddResult> addItemFromClip(EngineApp& app, const model::Session& s, m
     if (!active)
         return Error("item.take", clip.activeTake->str() + " is missing", "/clip",
                      "use a current take id from take.list");
-    model::Item item;
-    item.track = track;
-    item.gainDb = clip.gainDb;
-    item.mute = clip.mute;
-    item.color = clip.color;
-    if (clip.loop.on) {
-        const double content = contentLength(s, *active);
-        const double tolerance = 1e-9 * std::max(1.0, content);
-        if (std::abs(clip.loop.start) > tolerance ||
-            std::abs(clip.loop.length - content) > tolerance)
-            return Error("clip.unsupported",
-                         text +
-                             "'s loop window has no item equivalent: an item loops its whole "
-                             "content",
-                         "/clip",
-                         "set the clip's loop off, or to start 0 and length " +
-                             json::formatDouble(content) + " (clip.set), first");
-        item.loop = true;
-    }
-    const auto map = s.timeMap;
-    const double startSec = map->secondsAt(pos);
-    double length = clip.length;
-    std::function<double(double)> envelopePos;
-    if (clip.kind == model::ClipKind::Audio) {
-        length = map->beatAt(startSec + clip.length) - pos;
-        envelopePos = [map, startSec, pos](double secs) {
-            return map->beatAt(startSec + secs) - pos;
-        };
-    }
-    SUPPLE_TRY(model::checkedBeat(s, pos + length, "/clip"));
-    auto copied = copyTakesFor(t, s, clip.takes, false, envelopePos, "/clip");
+    auto shaped = itemFromClip(s, clip, *active, track, pos, "/clip");
+    if (!shaped) return std::move(shaped).error();
+    model::Item item = std::move(shaped->item);
+    auto copied = copyTakesFor(t, s, clip.takes, false, shaped->envelopePos, "/clip");
     if (!copied) return std::move(copied).error();
     item.takes = *copied;
     for (std::size_t k = 0; k < clip.takes.size(); ++k)
         if (clip.activeTake == clip.takes[k]) item.activeTake = item.takes[k];
-    // An audio clip's seconds land exactly; a MIDI clip's beats likewise.
-    if (clip.kind == model::ClipKind::Audio)
-        model::placeItemSeconds(s, item, startSec, startSec + clip.length);
-    else
-        model::placeItem(s, item, pos, length);  // in the track's timebase
+    const double length = model::itemLengthBeats(s, item);
     const Id it = t.create(std::move(item));
     ItemAddResult r;
     r.item = it.str();
@@ -553,11 +522,12 @@ void registerItemCommands(cmd::Registry& registry) {
         c.args = schema::object<ItemRef>("item_ref")
                      .field("bypass_groups", &ItemRef::bypassGroups, schema::boolean())
                      .defaultValue(false)
-                     .field("item", &ItemRef::item, idArg("it", "Item"))
+                     .field("item", &ItemRef::item, timelineItemArg())
                      .build();
         c.result = emptySchema();
         c.examples = {{"Remove", j(R"({"item": "it_1"})"), j("{}"), "song_with_item"}};
         c.run = [](const ItemRef& a, Context& ctx) -> Result<Empty> {
+            SUPPLE_TRY(refuseClip(a.item, "/item", "remove a clip with clip.remove"));
             EngineApp& app = engine::app(ctx);
             const model::Session s = app.view();
             auto id = existing<model::Item>(s, a.item, "/item");
@@ -580,7 +550,7 @@ void registerItemCommands(cmd::Registry& registry) {
         c.args = schema::object<ItemMoveArgs>("item_move_args")
                      .field("bypass_groups", &ItemMoveArgs::bypassGroups, schema::boolean())
                      .defaultValue(false)
-                     .field("item", &ItemMoveArgs::item, idArg("it", "Item"))
+                     .field("item", &ItemMoveArgs::item, timelineItemArg())
                      .field("position", &ItemMoveArgs::position, schema::number().min(0))
                      .field("bar", &ItemMoveArgs::bar,
                             schema::integer().range(1, std::numeric_limits<int>::max()))
@@ -590,6 +560,7 @@ void registerItemCommands(cmd::Registry& registry) {
         c.examples = {
             {"Two bars later", j(R"({"item": "it_1", "bar": 3})"), j("{}"), "song_with_item"}};
         c.run = [](const ItemMoveArgs& a, Context& ctx) -> Result<Empty> {
+            SUPPLE_TRY(refuseClip(a.item, "/item", "move a clip to another cell with clip.move"));
             EngineApp& app = engine::app(ctx);
             const model::Session s = app.view();
             auto id = existing<model::Item>(s, a.item, "/item");
@@ -622,10 +593,10 @@ void registerItemCommands(cmd::Registry& registry) {
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpTool;
         c.summary =
-            "Replace an item's MIDI with notation (the item keeps its position and length).";
+            "Replace an item's or clip's MIDI with notation (keeping its place and length).";
         c.tags = {"midi"};
         c.args = schema::object<MidiWriteArgs>("midi_write_args")
-                     .field("item", &MidiWriteArgs::item, idArg("it", "Item"))
+                     .field("item", &MidiWriteArgs::item, ownerIdArg())
                      .field("notation", &MidiWriteArgs::notation, schema::string())
                      .build();
         c.result = emptySchema();
@@ -635,23 +606,22 @@ void registerItemCommands(cmd::Registry& registry) {
         c.run = [](const MidiWriteArgs& a, Context& ctx) -> Result<Empty> {
             EngineApp& app = engine::app(ctx);
             const model::Session s = app.view();
-            auto id = existing<model::Item>(s, a.item, "/item");
+            auto id = existingOwner(s, a.item, "/item");
             if (!id) return std::move(id).error();
             SUPPLE_TRY(checkUnlocked(s, *id));
-            const model::Item& it = *s.items.find(*id);
-            const model::Take* take = it.activeTake ? s.takes.find(*it.activeTake) : nullptr;
+            const auto active = ownerActiveTake(s, *id);
+            const model::Take* take = active ? s.takes.find(*active) : nullptr;
             if (!take || !take->source || take->source->kind != model::Kind::Midi)
                 return Error("midi.not_midi", a.item + " has no MIDI take", "/item",
-                             "use item.add with notation");
-            auto compiled = compileNotation(s, a.notation, model::itemSpan(s, it).startBeat);
+                             "use item.add or clip.add with notation");
+            auto compiled = compileNotation(s, a.notation, ownerStartBeat(s, *id));
             if (!compiled) return std::move(compiled).error();
             const model::MidiSource* old = s.midi.find(*take->source);
             compiled->first.pooled = old && old->pooled;
             model::EditTxn& txn = app.txn();
             txn.put<model::MidiSource>(*take->source, std::move(compiled->first));
             if (!old || !old->pooled)
-                txn.modify<model::Take>(*it.activeTake,
-                                        [](model::Take& tk) { tk.startOffset = 0; });
+                txn.modify<model::Take>(*active, [](model::Take& tk) { tk.startOffset = 0; });
             return Empty{};
         };
         addChecked(registry, std::move(c));
@@ -661,10 +631,10 @@ void registerItemCommands(cmd::Registry& registry) {
         c.name = "midi.get";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary = "Read an item's MIDI as notation.";
+        c.summary = "Read an item's or clip's MIDI as notation.";
         c.tags = {"midi"};
         c.args = schema::object<MidiGetArgs>("midi_get_args")
-                     .field("item", &MidiGetArgs::item, idArg("it", "Item"))
+                     .field("item", &MidiGetArgs::item, ownerIdArg())
                      .build();
         c.result = schema::object<TextResult>("text")
                        .field("text", &TextResult::text, schema::string())
@@ -673,16 +643,16 @@ void registerItemCommands(cmd::Registry& registry) {
                        "song_with_item"}};
         c.run = [](const MidiGetArgs& a, Context& ctx) -> Result<TextResult> {
             const model::Session s = app(ctx).view();
-            auto id = existing<model::Item>(s, a.item, "/item");
+            auto id = existingOwner(s, a.item, "/item");
             if (!id) return std::move(id).error();
-            const model::Item& it = *s.items.find(*id);
-            const model::Take* take = it.activeTake ? s.takes.find(*it.activeTake) : nullptr;
+            const auto active = ownerActiveTake(s, *id);
+            const model::Take* take = active ? s.takes.find(*active) : nullptr;
             if (!take || !take->source || take->source->kind != model::Kind::Midi)
                 return Error("midi.not_midi", a.item + " has no MIDI take", "/item",
                              "choose an item with a MIDI take from track.list or create one with "
                              "item.add notation");
             notation::DecompileOptions options;
-            options.meterAt = meterContext(s, model::itemSpan(s, it).startBeat);
+            options.meterAt = meterContext(s, ownerStartBeat(s, *id));
             auto text = notation::decompile(s.midi.find(*take->source)->sequence, options);
             if (!text) return std::move(text).error();
             return TextResult{std::move(*text)};
@@ -705,7 +675,7 @@ void registerItemCommands(cmd::Registry& registry) {
         c.args = schema::object<ItemSetArgs>("item_set_args")
                      .field("bypass_groups", &ItemSetArgs::bypassGroups, schema::boolean())
                      .defaultValue(false)
-                     .field("item", &ItemSetArgs::item, idArg("it", "Item"))
+                     .field("item", &ItemSetArgs::item, timelineItemArg())
                      .field("position", &ItemSetArgs::position, schema::number().min(0))
                      .field("bar", &ItemSetArgs::bar,
                             schema::integer().range(1, std::numeric_limits<int>::max()))
@@ -730,6 +700,7 @@ void registerItemCommands(cmd::Registry& registry) {
             {"Keep an item at its time when the tempo changes",
              j(R"({"item":"it_1","timebase":"time"})"), j("{}"), "song_with_item"}};
         c.run = [](const ItemSetArgs& a, Context& ctx) -> Result<Empty> {
+            SUPPLE_TRY(refuseClip(a.item, "/item", "set a clip's fields with clip.set"));
             const auto s = app(ctx).view();
             auto id = existing<model::Item>(s, a.item, "/item");
             if (!id) return std::move(id).error();
@@ -790,7 +761,7 @@ void registerItemCommands(cmd::Registry& registry) {
         c.args = schema::object<ItemDuplicateArgs>("item_duplicate_args")
                      .field("bypass_groups", &ItemDuplicateArgs::bypassGroups, schema::boolean())
                      .defaultValue(false)
-                     .field("item", &ItemDuplicateArgs::item, idArg("it", "Item"))
+                     .field("item", &ItemDuplicateArgs::item, timelineItemArg())
                      .field("to", &ItemDuplicateArgs::to, schema::number().min(0))
                      .build();
         c.result =
@@ -802,6 +773,9 @@ void registerItemCommands(cmd::Registry& registry) {
                 .build();
         c.examples = {{"Repeat", j(R"({"item":"it_1"})"), j(R"({"id":"it_2"})"), "song_with_item"}};
         c.run = [](const ItemDuplicateArgs& a, Context& ctx) -> Result<ItemDuplicateResult> {
+            SUPPLE_TRY(refuseClip(
+                a.item, "/item",
+                "copy a clip with clip.duplicate, or lay it on the timeline with item.add {clip}"));
             const auto s = app(ctx).view();
             auto id = existing<model::Item>(s, a.item, "/item");
             if (!id) return std::move(id).error();
@@ -838,7 +812,7 @@ void registerItemCommands(cmd::Registry& registry) {
             "take FX and MIDI are copied; an audio source the project no longer has is restored.";
         c.tags = {"item"};
         auto placement = schema::object<PastePlacement>("paste_placement")
-                             .field("item", &PastePlacement::item, idArg("it", "Item"))
+                             .field("item", &PastePlacement::item, timelineItemArg())
                              .field("track", &PastePlacement::track, idArg("tr", "Track"))
                              .field("position", &PastePlacement::position, schema::number().min(0))
                              .build();
@@ -853,6 +827,10 @@ void registerItemCommands(cmd::Registry& registry) {
                        j(R"({"items":[{"item":"it_1","track":"tr_1","position":16}]})"),
                        j(R"({"items":["it_2"]})"), "song_with_item"}};
         c.run = [](const ItemPasteArgs& a, Context& ctx) -> Result<ItemPasteResult> {
+            for (std::size_t k = 0; k < a.items.size(); ++k)
+                SUPPLE_TRY(refuseClip(a.items[k].item, "/items/" + std::to_string(k) + "/item",
+                                      "copy clips with clip.duplicate, or lay one on the "
+                                      "timeline with item.add {clip}"));
             EngineApp& eng = app(ctx);
             const auto now = eng.view();
             std::shared_ptr<const model::Session> from;
@@ -972,7 +950,7 @@ void registerItemCommands(cmd::Registry& registry) {
         c.args = schema::object<ItemSplitArgs>("item_split_args")
                      .field("bypass_groups", &ItemSplitArgs::bypassGroups, schema::boolean())
                      .defaultValue(false)
-                     .field("item", &ItemSplitArgs::item, idArg("it", "Item"))
+                     .field("item", &ItemSplitArgs::item, timelineItemArg())
                      .field("at", &ItemSplitArgs::at, schema::number().min(0))
                      .field("snap", &ItemSplitArgs::snap,
                             schema::enumeration<std::string>(
@@ -1017,6 +995,9 @@ void registerItemCommands(cmd::Registry& registry) {
             return {};
         };
         c.run = [](const ItemSplitArgs& a, Context& ctx) -> Result<SplitResult> {
+            SUPPLE_TRY(refuseClip(
+                a.item, "/item",
+                "a clip does not split; lay it on the timeline first (item.add {clip})"));
             const auto s = app(ctx).view();
             auto id = existing<model::Item>(s, a.item, "/item");
             if (!id) return std::move(id).error();

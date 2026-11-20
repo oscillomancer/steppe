@@ -168,8 +168,10 @@ instructions are in `docs/guides/installing.md`.
   (track and scene removal take their clips), the item ↔ clip conversion
   at the item's tempo, `clip.memory`, and the scene section of
   `session.describe`. Nothing plays a clip yet: launching (`launch.*`, L2)
-  and the pane (L3) are to come, and the content commands do not take a
-  clip until the next step.
+  and the pane (L3) are to come. The content commands (`midi.*`,
+  `take.*`, `item.export`, take envelopes and take FX) take a clip as they
+  take an item; timeline commands refuse one with `item.kind`; take FX
+  parameter envelopes on a clip's take still follow the timeline.
 - **Track freeze** (ADR-0054): whole-channel pre-fader float32 capture, including
   take FX and auxiliary channels, with virtual latency and plugin retirement.
   Typed freeze/unfreeze, cancellable jobs, dependency-checked completion, retained

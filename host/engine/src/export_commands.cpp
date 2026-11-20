@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cmath>
 
+#include "clip_launcher.h"
 #include "heard_midi.h"
 #include "supple/audio/audio_file.h"
 #include "supple/base/files.h"
@@ -221,13 +222,13 @@ void registerExportCommands(cmd::Registry& registry) {
         "float. MIDI: what the item plays (loops unrolled, notes ending by its end) from 0, at "
         "the source PPQ, with the tempo and meter at the item's start. Relative paths resolve "
         "against the work directory; a missing extension is added; existing files are replaced, "
-        "the project's media never.";
+        "the project's media never. A clip exports as the item it would make at the start: one "
+        "period, looped as an item loops.";
     c.tags = {"item", "export"};
-    c.args =
-        schema::object<ExportArgs>("item_export_args")
-            .field("item", &ExportArgs::item, schema::string().pattern("^it_[0-9]+$", "item id"))
-            .field("path", &ExportArgs::path, schema::string())
-            .build();
+    c.args = schema::object<ExportArgs>("item_export_args")
+                 .field("item", &ExportArgs::item, ownerIdArg())
+                 .field("path", &ExportArgs::path, schema::string())
+                 .build();
     c.result = schema::object<ExportResult>("item_export_result")
                    .field("path", &ExportResult::path, schema::string())
                    .field("format", &ExportResult::format, schema::string())
@@ -259,6 +260,20 @@ void registerExportCommands(cmd::Registry& registry) {
         auto& app = ctx.service<EngineApp>();
         const model::Session s = app.view();
         const auto id = Id::parse(a.item);
+        // A clip exports as the item it would make at the project's start:
+        // one period, its loop as an item loops (ADR-0097).
+        if (const model::Clip* clip =
+                id && id->kind == model::Kind::Clip ? s.clips.find(*id) : nullptr) {
+            const model::Take* take = clip->activeTake ? s.takes.find(*clip->activeTake) : nullptr;
+            if (!take || !take->source)
+                return Error("item.export_empty", a.item + " has no material to export", "/item",
+                             "pick a take with material (take.activate) or write into the clip");
+            auto shaped = itemFromClip(s, *clip, *take, clip->track, 0, "/item");
+            if (!shaped) return std::move(shaped).error();
+            if (take->source->kind == model::Kind::Midi)
+                return exportMidi(app, s, shaped->item, *take, a.path);
+            return exportAudio(app, s, shaped->item, *take, a.path);
+        }
         const model::Item* it = id && id->kind == model::Kind::Item ? s.items.find(*id) : nullptr;
         if (!it)
             return Error("item.unknown", "no " + a.item, "/item",

@@ -12,6 +12,7 @@
 #include <cstring>
 #include <set>
 
+#include "clip_launcher.h"
 #include "command_helpers.h"
 #include "command_validation.h"
 #include "file_platform.h"
@@ -30,15 +31,17 @@ Result<json::Value> invoke(const char* name, json::Value args, Context& ctx) {
     return ctx.service<const cmd::Registry>().find(name)->invoke(args, ctx);
 }
 
-// The item holding `take` (its owner, model::takeOwner).
-Result<Id> itemOfTake(const model::Session& s, Id take, const std::string& path) {
-    if (const auto owner = model::takeOwner(s, take)) {
-        if (owner->kind == model::Kind::Item) return *owner;
-        return Error("item.kind", take.str() + " belongs to clip " + owner->str(), path,
-                     "this command takes an item's take; a clip's takes are edited from the clip");
-    }
-    return Error("take.orphan", take.str() + " belongs to no item", path,
+// The item or clip holding `take` (model::takeOwner).
+Result<Id> ownerOfTake(const model::Session& s, Id take, const std::string& path) {
+    if (const auto owner = model::takeOwner(s, take)) return *owner;
+    return Error("take.orphan", take.str() + " belongs to no item or clip", path,
                  "use a take from take.list");
+}
+
+// A clip whose audio changed must still fit beside the arrangement.
+Status checkOwnerMemory(EngineApp& app, Id owner, const std::string& path) {
+    if (owner.kind != model::Kind::Clip) return {};
+    return checkClipMemory(app, app.view(), path);
 }
 
 // A track that may hold an item with `takes` (ADR-0057: channels, or masters for audio).
@@ -90,7 +93,8 @@ struct TakeRemoveResult {
     bool itemRemoved = false;
 };
 struct TakeExtractArgs {
-    std::string take, track;
+    std::string take;
+    std::optional<std::string> track;
     std::optional<double> position;
 };
 struct ItemResult {
@@ -234,6 +238,39 @@ schema::Schema<RecordCommitArgs> recordCommitSchema() {
         .build();
 }
 
+// take.extract from a clip: the take moves onto the timeline as an item at
+// `position` (required), shaped by the conversion rule, its own envelopes
+// converted in place; the clip goes with its last take.
+Result<ItemResult> extractFromClip(EngineApp& app, const model::Session& s,
+                                   const TakeExtractArgs& a, Id take, Id clipId) {
+    if (!a.position)
+        return Error("take.position", "a clip's take needs a position on the timeline", "/position",
+                     "give position in beats, e.g. {\"position\": 16}");
+    const model::Clip& clip = *s.clips.find(clipId);
+    auto track = itemTrack(s, a.track.value_or(clip.track.str()), "/track", {take});
+    if (!track) return std::move(track).error();
+    SUPPLE_TRY(model::checkedBeat(s, *a.position, "/position"));
+    auto shaped = itemFromClip(s, clip, *s.takes.find(take), *track, *a.position, "/take");
+    if (!shaped) return std::move(shaped).error();
+    model::EditTxn& t = app.txn();
+    if (shaped->envelopePos) convertTakeEnvelopes(t, s, take, shaped->envelopePos);
+    shaped->item.takes = {take};
+    shaped->item.activeTake = take;
+    if (clip.takes.size() == 1) {
+        t.remove<model::Clip>(clipId);
+    } else {
+        model::Item scratch;  // dropTake's rule for the heard take
+        scratch.takes = clip.takes;
+        scratch.activeTake = clip.activeTake;
+        dropTake(scratch, take);
+        t.modify<model::Clip>(clipId, [&](model::Clip& c) {
+            c.takes = scratch.takes;
+            c.activeTake = scratch.activeTake;
+        });
+    }
+    return ItemResult{t.create(std::move(shaped->item)).str()};
+}
+
 }  // namespace
 
 Status removeTakeObjects(model::EditTxn& t, const model::Session& s, Id take) {
@@ -277,10 +314,10 @@ void registerTakeCommands(cmd::Registry& registry) {
         c.name = "take.add";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Add a take to an item, optionally copied from another take of that item.";
+        c.summary = "Add a take to an item or clip, optionally copied from one of its takes.";
         c.tags = {"take"};
         c.args = schema::object<TakeAddArgs>("take_add_args")
-                     .field("item", &TakeAddArgs::item, idArg("it", "Item"))
+                     .field("item", &TakeAddArgs::item, ownerIdArg())
                      .field("from", &TakeAddArgs::from, idArg("tk", "Take"))
                      .build();
         c.result = idResultSchema();
@@ -288,14 +325,14 @@ void registerTakeCommands(cmd::Registry& registry) {
                        "song_with_item"}};
         c.run = [](const TakeAddArgs& a, Context& ctx) -> Result<IdResult> {
             const auto s = app(ctx).view();
-            auto item = existing<model::Item>(s, a.item, "/item");
+            auto item = existingOwner(s, a.item, "/item");
             if (!item) return std::move(item).error();
             SUPPLE_TRY(checkUnlocked(s, *item));
             model::Take copy;
             if (a.from) {
                 auto source = existing<model::Take>(s, *a.from, "/from");
                 if (!source) return std::move(source).error();
-                const auto& takes = s.items.find(*item)->takes;
+                const auto& takes = *model::ownerTakes(s, *item);
                 if (std::find(takes.begin(), takes.end(), *source) == takes.end())
                     return Error(
                         "take.not_in_item", *a.from + " does not belong to " + a.item, "/from",
@@ -313,10 +350,11 @@ void registerTakeCommands(cmd::Registry& registry) {
             }
             auto& txn = app(ctx).txn();
             Id fresh = txn.create(std::move(copy));
-            txn.modify<model::Item>(*item, [&](model::Item& it) {
-                it.takes.push_back(fresh);
-                if (!it.activeTake) it.activeTake = fresh;
+            modifyOwnerTakes(txn, *item, [&](std::vector<Id>& takes, std::optional<Id>& active) {
+                takes.push_back(fresh);
+                if (!active) active = fresh;
             });
+            SUPPLE_TRY(checkOwnerMemory(app(ctx), *item, "/from"));
             return IdResult{fresh.str()};
         };
         addChecked(registry, std::move(c));
@@ -326,14 +364,14 @@ void registerTakeCommands(cmd::Registry& registry) {
         c.name = "take.activate";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Choose the take heard from an item.";
+        c.summary = "Choose the take heard from an item or clip.";
         c.description =
             "take (its id) or index (0-based in the item's take order — the same position "
             "after item.split, which copies the takes in order: comping splits an item and "
             "picks a take by index on the piece).";
         c.tags = {"take"};
         c.args = schema::object<TakeActivateArgs>("take_activate_args")
-                     .field("item", &TakeActivateArgs::item, idArg("it", "Item"))
+                     .field("item", &TakeActivateArgs::item, ownerIdArg())
                      .field("take", &TakeActivateArgs::take, idArg("tk", "Take"))
                      .field("index", &TakeActivateArgs::index, schema::integer().min(0))
                      .build();
@@ -342,10 +380,10 @@ void registerTakeCommands(cmd::Registry& registry) {
             {"Activate", j(R"({"item":"it_1","take":"tk_1"})"), j("{}"), "song_with_item"}};
         c.run = [](const TakeActivateArgs& a, Context& ctx) -> Result<Empty> {
             const auto s = app(ctx).view();
-            auto item = existing<model::Item>(s, a.item, "/item");
+            auto item = existingOwner(s, a.item, "/item");
             if (!item) return std::move(item).error();
             SUPPLE_TRY(checkUnlocked(s, *item));
-            const auto& takes = s.items.find(*item)->takes;
+            const auto& takes = *model::ownerTakes(s, *item);
             if (a.take.has_value() == a.index.has_value())
                 return Error("take.choice", "give take or index", "", "take: \"tk_2\" or index: 1");
             std::optional<Id> take;
@@ -363,8 +401,9 @@ void registerTakeCommands(cmd::Registry& registry) {
                     return Error("take.not_in_item", *a.take + " does not belong to " + a.item,
                                  "/take", "use take.list for this item");
             }
-            app(ctx).txn().modify<model::Item>(*item,
-                                               [&](model::Item& it) { it.activeTake = *take; });
+            modifyOwnerTakes(app(ctx).txn(), *item,
+                             [&](std::vector<Id>&, std::optional<Id>& active) { active = *take; });
+            SUPPLE_TRY(checkOwnerMemory(app(ctx), *item, a.take ? "/take" : "/index"));
             return Empty{};
         };
         addChecked(registry, std::move(c));
@@ -453,6 +492,8 @@ void registerTakeCommands(cmd::Registry& registry) {
             });
             if (validWarp)
                 SUPPLE_TRY(model::validateWarpMap(*app(ctx).view().takes.find(*id), "/take"));
+            if (const auto owner = model::takeOwner(app(ctx).view(), *id))
+                SUPPLE_TRY(checkOwnerMemory(app(ctx), *owner, "/take"));
             return Empty{};
         };
         addChecked(registry, std::move(c));
@@ -462,10 +503,10 @@ void registerTakeCommands(cmd::Registry& registry) {
         c.name = "take.list";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "List the takes of an item and identify its active take.";
+        c.summary = "List the takes of an item or clip and identify its active take.";
         c.tags = {"take"};
         c.args = schema::object<ItemQuery>("take_list_args")
-                     .field("item", &ItemQuery::item, idArg("it", "Item"))
+                     .field("item", &ItemQuery::item, ownerIdArg())
                      .build();
         auto entry =
             schema::object<TakeEntry>("take_entry")
@@ -492,16 +533,16 @@ void registerTakeCommands(cmd::Registry& registry) {
             {"List", j(R"({"item":"it_1"})"), j(R"({"takes":"<any>"})"), "song_with_item"}};
         c.run = [](const ItemQuery& a, Context& ctx) -> Result<TakeList> {
             const auto s = app(ctx).view();
-            auto id = existing<model::Item>(s, a.item, "/item");
+            auto id = existingOwner(s, a.item, "/item");
             if (!id) return std::move(id).error();
             TakeList out;
-            const auto& it = *s.items.find(*id);
-            for (Id takeId : it.takes) {
+            const auto heard = ownerActiveTake(s, *id);
+            for (Id takeId : *model::ownerTakes(s, *id)) {
                 auto found = dangling<model::Take>(s, takeId, "/item");
                 if (!found) return std::move(found).error();
                 const auto& tk = **found;
                 out.takes.push_back({takeId.str(), tk.name, tk.source ? tk.source->str() : "",
-                                     it.activeTake == takeId, tk.gainDb, tk.pan, tk.startOffset,
+                                     heard == takeId, tk.gainDb, tk.pan, tk.startOffset,
                                      tk.playrate, tk.pitch, tk.preservePitch, tk.pitchMode});
                 auto encoded = model::toJson(tk);
                 auto& listedTake = out.takes.back();
@@ -521,11 +562,11 @@ void registerTakeCommands(cmd::Registry& registry) {
         c.name = "take.remove";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Delete a take from its item (the item goes with its last take).";
+        c.summary = "Delete a take from its item or clip (which goes with its last take).";
         c.description =
             "The take's FX, envelopes and unshared MIDI go with it. When it was the heard take, "
-            "the next take is heard (else the previous one). item_removed: it was the item's only "
-            "take, so the item was removed too.";
+            "the next take is heard (else the previous one). item: the item or clip that held "
+            "it; item_removed: it was the only take, so that item or clip was removed too.";
         c.tags = {"take"};
         c.args = schema::object<TakeRef>("take_remove_args")
                      .field("take", &TakeRef::take, idArg("tk", "Take"))
@@ -540,10 +581,14 @@ void registerTakeCommands(cmd::Registry& registry) {
             const model::Session s = app(ctx).view();
             auto take = existing<model::Take>(s, a.take, "/take");
             if (!take) return std::move(take).error();
-            auto item = itemOfTake(s, *take, "/take");
+            auto item = ownerOfTake(s, *take, "/take");
             if (!item) return std::move(item).error();
             SUPPLE_TRY(checkUnlocked(s, *item, "/take"));
-            if (s.items.find(*item)->takes.size() == 1) {
+            if (model::ownerTakes(s, *item)->size() == 1) {
+                if (item->kind == model::Kind::Clip) {
+                    SUPPLE_TRY(removeClipObjects(app(ctx).txn(), s, *item));
+                    return TakeRemoveResult{item->str(), true};
+                }
                 json::Value args = json::Value::object();
                 args["item"] = item->str();
                 SUPPLE_TRY(invoke("item.remove", std::move(args), ctx));
@@ -551,7 +596,14 @@ void registerTakeCommands(cmd::Registry& registry) {
             }
             model::EditTxn& t = app(ctx).txn();
             SUPPLE_TRY(removeTakeObjects(t, s, *take));
-            t.modify<model::Item>(*item, [&](model::Item& it) { dropTake(it, *take); });
+            modifyOwnerTakes(t, *item, [&](std::vector<Id>& takes, std::optional<Id>& active) {
+                model::Item scratch;  // dropTake's rule for the heard take
+                scratch.takes = takes;
+                scratch.activeTake = active;
+                dropTake(scratch, *take);
+                takes = scratch.takes;
+                active = scratch.activeTake;
+            });
             return TakeRemoveResult{item->str(), false};
         };
         addChecked(registry, std::move(c));
@@ -561,15 +613,19 @@ void registerTakeCommands(cmd::Registry& registry) {
         c.name = "take.extract";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Take a take out of its item into an item of its own on any channel.";
+        c.summary = "Take a take out of its item or clip into an item of its own on any channel.";
         c.description =
             "The new item copies the old one's length, fades, gain and timebase and starts at "
             "position (beats; default: where the item starts). The take keeps its FX and "
-            "envelopes. The only take of an item moves the item itself.";
+            "envelopes. The only take of an item moves the item itself. From a clip, position "
+            "is required (a clip has no place in time), track defaults to the clip's, the item "
+            "is as long as the clip, and its loop and take envelopes convert at the tempo where "
+            "it lands (ADR-0097); the clip goes with its last take.";
         c.tags = {"take", "item"};
         c.args = schema::object<TakeExtractArgs>("take_extract_args")
                      .field("take", &TakeExtractArgs::take, idArg("tk", "Take"))
-                     .field("track", &TakeExtractArgs::track, idArg("tr", "Track"))
+                     .field("track", &TakeExtractArgs::track,
+                            idArg("tr", "Track").doc("Default: the item's or clip's track."))
                      .field("position", &TakeExtractArgs::position,
                             schema::number().min(0).doc("Beats."))
                      .build();
@@ -582,10 +638,13 @@ void registerTakeCommands(cmd::Registry& registry) {
             const model::Session s = app(ctx).view();
             auto take = existing<model::Take>(s, a.take, "/take");
             if (!take) return std::move(take).error();
-            auto item = itemOfTake(s, *take, "/take");
+            auto item = ownerOfTake(s, *take, "/take");
             if (!item) return std::move(item).error();
             SUPPLE_TRY(checkUnlocked(s, *item, "/take"));
-            auto track = itemTrack(s, a.track, "/track", {*take});
+            if (item->kind == model::Kind::Clip)
+                return extractFromClip(app(ctx), s, a, *take, *item);
+            auto track =
+                itemTrack(s, a.track.value_or(s.items.find(*item)->track.str()), "/track", {*take});
             if (!track) return std::move(track).error();
             const model::Item& from = *s.items.find(*item);
             const double at = a.position.value_or(model::itemSpan(s, from).startBeat);
@@ -617,7 +676,7 @@ void registerTakeCommands(cmd::Registry& registry) {
             "long as the item. Every take becomes a one-take item with its FX and envelopes.";
         c.tags = {"take", "item"};
         c.args = schema::object<ExplodeArgs>("item_explode_takes_args")
-                     .field("item", &ExplodeArgs::item, idArg("it", "Item"))
+                     .field("item", &ExplodeArgs::item, timelineItemArg())
                      .field("mode", &ExplodeArgs::mode,
                             schema::string().pattern("^(tracks|serial)$", "tracks or serial"))
                      .defaultValue(std::string("tracks"))
@@ -632,6 +691,9 @@ void registerTakeCommands(cmd::Registry& registry) {
                       {"Takes one after another", j(R"({"item":"it_1","mode":"serial"})"),
                        j(R"({"items":["it_1","<any>","<any>"],"tracks":[]})"), "song_with_takes"}};
         c.run = [](const ExplodeArgs& a, Context& ctx) -> Result<ExplodeResult> {
+            SUPPLE_TRY(refuseClip(a.item, "/item",
+                                  "a clip's takes stay in the clip; take.extract "
+                                  "lays one on the timeline"));
             const model::Session s = app(ctx).view();
             auto item = existing<model::Item>(s, a.item, "/item");
             if (!item) return std::move(item).error();
@@ -697,7 +759,7 @@ void registerTakeCommands(cmd::Registry& registry) {
             "if they should not apply twice.";
         c.tags = {"take", "item", "render"};
         c.args = schema::object<ApplyFxArgs>("item_apply_fx_args")
-                     .field("item", &ApplyFxArgs::item, idArg("it", "Item"))
+                     .field("item", &ApplyFxArgs::item, timelineItemArg())
                      .field("mode", &ApplyFxArgs::mode,
                             schema::string().pattern("^(take|replace)$", "take or replace"))
                      .defaultValue(std::string("take"))
@@ -710,6 +772,9 @@ void registerTakeCommands(cmd::Registry& registry) {
         c.examples = {{"MIDI through the instrument, as a new take", j(R"({"item":"it_1"})"),
                        j(R"({"take":"<any>","source":"<any>","path":"<any>"})"), "song_with_fx"}};
         c.run = [](const ApplyFxArgs& a, Context& ctx) -> Result<ApplyFxResult> {
+            SUPPLE_TRY(refuseClip(a.item, "/item",
+                                  "lay the clip on the timeline first "
+                                  "(item.add {clip})"));
             EngineApp& engine = app(ctx);
             const model::Session s = engine.view();
             auto item = existing<model::Item>(s, a.item, "/item");

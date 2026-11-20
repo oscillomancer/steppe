@@ -302,7 +302,7 @@
   {
     "name": "env_add",
     "title": "Automate a parameter: a track's or route's mixer control, or a plugin's.",
-    "description": "Target one of track (param volume|pan|mute; width|pan_left|pan_right|pan_boost on channels/busses; playrate only on tr_0), route (volume|pan|mute), group (VCA volume|mute), or fx (a semantic key such as \"gain\" or \"filter1.cutoff\", or for other plugins a CLAP id or parameter name), or module (a rack module's knob by key, values in its unit, a choice by its key; module.describe). points: [{beat|bar|seconds, value, shape?, tension?}]; values in the parameter's unit (dB, %, Hz… — text like \"800 Hz\" works for plugins); shapes linear, square, slow, fast_start, fast_end, bezier. Plugin values move along the parameter's curve (a log cutoff sweeps evenly in pitch). take (param volume|pan|mute): a take envelope, its points in beats from the item's start (it moves with the item); it shapes the take after its take FX (a MIDI take needs an instrument in its take FX). Master playrate points are finite numeric ratios 0.25..4.0; an active nonempty master curve replaces the saved scalar during playback and rendering. Audio sources convert before take FX/live mixing; MIDI and automation follow the same timeline clock. Width and dual pans use -100..100 percent; pan_boost uses 0..1 (on at 0.5), overriding the effective law's boost while the envelope is active and nonempty. See describe for errors and examples.",
+    "description": "Target one of track (param volume|pan|mute; width|pan_left|pan_right|pan_boost on channels/busses; playrate only on tr_0), route (volume|pan|mute), group (VCA volume|mute), or fx (a semantic key such as \"gain\" or \"filter1.cutoff\", or for other plugins a CLAP id or parameter name), or module (a rack module's knob by key, values in its unit, a choice by its key; module.describe). points: [{beat|bar|seconds, value, shape?, tension?}]; values in the parameter's unit (dB, %, Hz… — text like \"800 Hz\" works for plugins); shapes linear, square, slow, fast_start, fast_end, bezier. Plugin values move along the parameter's curve (a log cutoff sweeps evenly in pitch). take (param volume|pan|mute): a take envelope, its points in beats from the item's start (it moves with the item), or on a clip's take from the clip's start in beats (MIDI) or seconds (audio); it shapes the take after its take FX (a MIDI take needs an instrument in its take FX). Master playrate points are finite numeric ratios 0.25..4.0; an active nonempty master curve replaces the saved scalar during playback and rendering. Audio sources convert before take FX/live mixing; MIDI and automation follow the same timeline clock. Width and dual pans use -100..100 percent; pan_boost uses 0..1 (on at 0.5), overriding the effective law's boost while the envelope is active and nonempty. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "env_add_args",
@@ -681,8 +681,8 @@
         },
         "item": {
           "type": "string",
-          "pattern": "^it_[0-9]+$",
-          "description": "Item id, e.g. \"it_1\"."
+          "pattern": "^(it|cl)_[0-9]+$",
+          "description": "Item id, e.g. \"it_1\" (a clip's id is refused with item.kind)."
         }
       },
       "required": ["item"],
@@ -708,8 +708,8 @@
         },
         "item": {
           "type": "string",
-          "pattern": "^it_[0-9]+$",
-          "description": "Item id, e.g. \"it_1\"."
+          "pattern": "^(it|cl)_[0-9]+$",
+          "description": "Item id, e.g. \"it_1\" (a clip's id is refused with item.kind)."
         },
         "position": {
           "type": "number",
@@ -788,16 +788,16 @@
   },
   {
     "name": "midi_get",
-    "title": "Read an item's MIDI as notation.",
-    "description": "Read an item's MIDI as notation. See describe for errors and examples.",
+    "title": "Read an item's or clip's MIDI as notation.",
+    "description": "Read an item's or clip's MIDI as notation. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "midi_get_args",
       "properties": {
         "item": {
           "type": "string",
-          "pattern": "^it_[0-9]+$",
-          "description": "Item id, e.g. \"it_1\"."
+          "pattern": "^(it|cl)_[0-9]+$",
+          "description": "Item or clip id, e.g. \"it_1\" or \"cl_1\"."
         }
       },
       "required": ["item"],
@@ -811,16 +811,16 @@
   },
   {
     "name": "midi_write",
-    "title": "Replace an item's MIDI with notation (the item keeps its position and length).",
-    "description": "Replace an item's MIDI with notation (the item keeps its position and length). See describe for errors and examples.",
+    "title": "Replace an item's or clip's MIDI with notation (keeping its place and length).",
+    "description": "Replace an item's or clip's MIDI with notation (keeping its place and length). See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "midi_write_args",
       "properties": {
         "item": {
           "type": "string",
-          "pattern": "^it_[0-9]+$",
-          "description": "Item id, e.g. \"it_1\"."
+          "pattern": "^(it|cl)_[0-9]+$",
+          "description": "Item or clip id, e.g. \"it_1\" or \"cl_1\"."
         },
         "notation": {
           "type": "string"

@@ -7,6 +7,7 @@
 #include <supple/base/files.h>
 #include <supple/engine/app.h>
 #include <supple/engine/offline.h>
+#include <supple/json/write.h>
 #include <supple/midi/midi.h>
 #include <supple/model/launcher.h>
 #include <supple/model/schemas.h>
@@ -538,4 +539,189 @@ TEST_CASE("a clip added on a branch merges with remapped scene, clip and take id
     for (const auto& c : s.clips) names.insert(s.scenes.find(c.value->scene)->name);
     CHECK(names == std::set<std::string>{"Outro", "Bridge"});
     CHECK(model::checkInvariants(s));
+}
+
+// --- the content commands on clips ------------------------------------------------------
+
+TEST_CASE("midi.write, midi.get, midi.notes and midi.edit take a clip") {
+    Launcher l;
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C2:w"})");
+    l.run("clip.set", R"({"clip": "cl_1", "length": 8})");
+    l.run("midi.write", R"({"item": "cl_1", "notation": "voice bass; 1: C2:q D2:q E2:q F2:q"})");
+    CHECK(l.head().clips.find(id("cl_1"))->length == 8);  // the clip keeps its length
+    CHECK(model::lastItemBeat(l.head()) == 4.0);
+    auto notes = l.run("midi.notes", R"({"item": "cl_1"})");
+    REQUIRE(notes["notes"].size() == 4);
+    CHECK(notes["notes"].at(1).find("start")->asDouble() == 1.0);  // from the clip's start
+    CHECK(notes["length"].asDouble() == 8.0);
+    CHECK_FALSE(notes.find("position"));
+    l.run("midi.edit", R"({"item": "cl_1", "ops": [{"op": "remove", "notes": [0]}]})");
+    CHECK(l.run("midi.notes", R"({"item": "cl_1"})")["notes"].size() == 3);
+    CHECK(l.run("midi.get", R"({"item": "cl_1"})")["text"].asString().find("D2") !=
+          std::string::npos);
+    CHECK(l.fails("midi.get", R"({"item": "cl_9"})").code == "cl.unknown");
+}
+
+TEST_CASE("take.list, take.add, take.activate and take.remove take a clip") {
+    Launcher l;
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C2:w"})");
+    const model::Id first = l.head().clips.find(id("cl_1"))->takes[0];
+    auto added = l.runArgs(
+        "take.add", json::parse(R"({"item": "cl_1", "from": ")" + first.str() + "\"}").value());
+    const model::Id second = id(added["id"].asString().c_str());
+    auto listed = l.run("take.list", R"({"item": "cl_1"})");
+    REQUIRE(listed["takes"].size() == 2);
+    CHECK(listed["takes"].at(0).find("active")->asBool());
+    l.runArgs("take.activate",
+              json::parse(R"({"item": "cl_1", "take": ")" + second.str() + "\"}").value());
+    CHECK(l.head().clips.find(id("cl_1"))->activeTake == second);
+    l.run("take.activate", R"({"item": "cl_1", "index": 0})");
+    CHECK(l.head().clips.find(id("cl_1"))->activeTake == first);
+    auto removed =
+        l.runArgs("take.remove", json::parse(R"({"take": ")" + first.str() + "\"}").value());
+    CHECK(removed["item"].asString() == "cl_1");
+    CHECK_FALSE(removed["item_removed"].asBool());
+    CHECK(l.head().clips.find(id("cl_1"))->activeTake == second);
+    removed = l.runArgs("take.remove", json::parse(R"({"take": ")" + second.str() + "\"}").value());
+    CHECK(removed["item_removed"].asBool());
+    CHECK(l.head().clips.empty());
+}
+
+TEST_CASE("take.extract moves a clip's take onto the timeline at a position") {
+    Launcher l;
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C2:w"})");
+    l.run("take.add", R"({"item": "cl_1"})");
+    const model::Clip clip = *l.head().clips.find(id("cl_1"));
+    const model::Id heard = *clip.activeTake;
+    const Error where =
+        l.fails("take.extract",
+                json::writeCompact(json::parse(R"({"take": ")" + heard.str() + "\"}").value()));
+    CHECK(where.code == "take.position");
+    auto r =
+        l.runArgs("take.extract",
+                  json::parse(R"({"take": ")" + heard.str() + R"(", "position": 16})").value());
+    const model::Item& item = *l.head().items.find(id(r["item"].asString().c_str()));
+    CHECK(item.track == id("tr_1"));  // the clip's track
+    CHECK(item.takes == std::vector<model::Id>{heard});
+    CHECK(model::itemSpan(l.head(), item).startBeat == 16.0);
+    CHECK(model::itemLengthBeats(l.head(), item) == 4.0);
+    CHECK(l.head().clips.find(id("cl_1"))->takes.size() == 1);
+    CHECK(model::takeOwner(l.head(), heard) == id(r["item"].asString().c_str()));
+    const model::Id last = l.head().clips.find(id("cl_1"))->takes[0];
+    l.runArgs("take.extract",
+              json::parse(R"({"take": ")" + last.str() + R"(", "position": 32})").value());
+    CHECK(l.head().clips.empty());  // the clip goes with its last take
+}
+
+TEST_CASE("env.add on a clip's take measures in the clip's unit; fx.add works") {
+    Launcher l;
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C2:w"})");
+    const model::Id midiTake = l.head().clips.find(id("cl_1"))->takes[0];
+    l.runArgs("fx.add", json::parse(R"({"take": ")" + midiTake.str() +
+                                    R"(", "plugin": "com.suppleaudio.test.sine"})")
+                            .value());
+    l.runArgs("env.add",
+              json::parse(R"({"take": ")" + midiTake.str() +
+                          R"(", "param": "volume", "points": [{"beat": 2, "value": -6}]})")
+                  .value());
+    const Error bar = l.fails(
+        "env.add",
+        json::writeCompact(json::parse(R"({"take": ")" + midiTake.str() +
+                                       R"(", "param": "pan", "points": [{"bar": 1, "value": 0}]})")
+                               .value()));
+    CHECK(bar.code == "clip.unsupported");
+    auto args = j(R"({"track": "tr_1", "scene": "sc_2"})");
+    args["audio_file"] = l.wav("pad.wav").string();
+    l.runArgs("clip.add", args);
+    const model::Id audioTake = l.head().clips.find(id("cl_2"))->takes[0];
+    l.runArgs("env.add",
+              json::parse(R"({"take": ")" + audioTake.str() +
+                          R"(", "param": "volume", "points": [{"seconds": 0.5, "value": -6}]})")
+                  .value());
+    double pos = -1;
+    for (const auto& e : l.head().envelopes)
+        if (e.value->target.object == audioTake) pos = e.value->points.at(0).pos;
+    CHECK(pos == 0.5);
+    CHECK(l.fails("env.add",
+                  json::writeCompact(
+                      json::parse(R"({"take": ")" + audioTake.str() +
+                                  R"(", "param": "pan", "points": [{"beat": 1, "value": 0}]})")
+                          .value()))
+              .code == "clip.unsupported");
+    // take.hits work on any take; stretch markers are refused on a clip's.
+    l.runArgs(
+        "take.hits.set",
+        json::parse(R"({"take": ")" + audioTake.str() + R"(", "positions": [0.25]})").value());
+    l.runArgs("take.set", json::parse(R"({"take": ")" + audioTake.str() +
+                                      R"(", "preserve_pitch": true, "pitch_mode": "signalsmith"})")
+                              .value());
+    CHECK(
+        l.fails(
+             "take.stretch.add",
+             json::writeCompact(
+                 json::parse(R"({"take": ")" + audioTake.str() + R"(", "item_pos": 0.5})").value()))
+            .code == "clip.unsupported");
+}
+
+TEST_CASE("item.export writes a clip's MIDI") {
+    Launcher l;
+    l.run("clip.add",
+          R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C2:q D2:q E2:q r:q"})");
+    auto args = j(R"({"item": "cl_1"})");
+    args["path"] = (l.root / "riff.mid").string();
+    auto r = l.runArgs("item.export", args);
+    CHECK(r["format"].asString() == "mid");
+    CHECK(r["notes"].asInt() == 3);
+}
+
+TEST_CASE("timeline commands refuse a clip with item.kind") {
+    Launcher l;
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1"})");
+    const std::pair<const char*, const char*> calls[] = {
+        {"item.move", R"({"item": "cl_1", "position": 4})"},
+        {"item.set", R"({"item": "cl_1", "mute": true})"},
+        {"item.split", R"({"item": "cl_1", "at": 2})"},
+        {"item.duplicate", R"({"item": "cl_1"})"},
+        {"item.remove", R"({"item": "cl_1"})"},
+        {"item.paste", R"({"items": [{"item": "cl_1", "track": "tr_1", "position": 8}]})"},
+        {"item.consolidate", R"({"items": ["cl_1"]})"},
+        {"item.heal", R"({"items": ["cl_1", "it_1"]})"},
+        {"item.mix-to-track", R"({"items": ["cl_1"]})"},
+        {"audio.quantize", R"({"items": ["cl_1"], "grid": 1})"},
+        {"audio.warp.reset", R"({"items": ["cl_1"]})"},
+        {"audio.warp.detach", R"({"items": ["cl_1"]})"},
+        {"group.targets", R"({"item": "cl_1", "attribute": "edit"})"},
+        {"item.explode-takes", R"({"item": "cl_1"})"},
+        {"item.apply-fx", R"({"item": "cl_1"})"},
+    };
+    for (const auto& [name, args] : calls) {
+        CAPTURE(name);
+        auto result = l.bus->execute({name, j(args), kOrigin});
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == "item.kind");
+        CHECK(result.error().path.find("/args/item") == 0);
+        CHECK_FALSE(result.error().hint.empty());
+    }
+    CHECK(l.head().clips.size() == 1);
+    CHECK(l.head().items.size() == 1);
+}
+
+TEST_CASE("a content edit on a branch's clip merges with the clip's id remapped") {
+    Launcher l;
+    l.run("branch.create", R"({"name": "agent/test/riff"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1"})");  // cl_1 on the branch
+    l.run("midi.write", R"({"item": "cl_1", "notation": "voice bass; 1: C2:q D2:q E2:q F2:q"})");
+    l.run("branch.switch", R"({"name": "main"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_2"})");  // cl_1 on main
+    l.run("branch.merge", R"({"from": "agent/test/riff"})");
+    const model::Session& s = l.head();
+    REQUIRE(s.clips.size() == 2);
+    const auto verse = model::clipAt(s, id("tr_1"), id("sc_1"));
+    REQUIRE(verse);
+    CHECK(*verse != id("cl_1"));  // remapped past main's
+    const model::MidiSource* m = s.midi.find(*s.takes.find(s.clips.find(*verse)->takes[0])->source);
+    CHECK(m->sequence.notes.size() == 4);
+    const model::MidiSource* other =
+        s.midi.find(*s.takes.find(s.clips.find(id("cl_1"))->takes[0])->source);
+    CHECK(other->sequence.notes.empty());
 }

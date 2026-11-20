@@ -108,7 +108,8 @@ pattern becomes `^(it|cl)_[0-9]+$` so that merges remap it), or a clip's
 take:
 - `midi.get`, `midi.write`, `midi.edit` and `midi.notes`. A clip keeps its
   length under `midi.write`, as an item keeps its position and length.
-- `item.export`: the clip's raw audio or its MIDI.
+- `item.export`: the clip's raw audio or its MIDI, as the item it would
+  make at the project's start (one period, looped as an item loops).
 - `take.list`, `take.add`, `take.activate`, `take.set` and `take.remove`.
   A clip goes with its last take, as an item does.
 - `take.extract {take, position, track?}`: the take leaves the clip for a
@@ -175,10 +176,12 @@ new item lands (`itemSpan`, so the item's timebase is resolved first).
 clip command). They place material in time:
 - `item.move`, `item.set`, `item.split`, `item.duplicate`, `item.remove`,
   `item.paste`;
-- `item.consolidate` and `.commit`, `item.heal`;
+- `item.consolidate`, `item.heal`, `item.mix-to-track`,
+  `item.explode-takes`, `item.apply-fx`;
 - `audio.quantize`, `audio.warp.detach/reset`, `group.targets`;
-- `record.commit`;
 - render bounds, analysis ends, freeze length and the project length.
+Their `item` fields accept a clip's id only to refuse it. (`record.commit`
+takes no item, so a clip never reaches it.)
 
 ### Invariants
 
@@ -291,8 +294,9 @@ Clips replace that with an **ordered budget**:
     (a take whose source does not match the clip's kind), `clip.length`,
     `clip.memory`,
     `clip.unsupported`, `clip.limit`, `clip.source` (more than one source),
-    `scene.limit`, `scene.index` (a column past the last) and `item.kind`,
-    and `track.strip_type` from `track.set`. Each has `code`, `message`, `path`
+    `scene.limit`, `scene.index` (a column past the last), `take.position`
+    (`take.extract` from a clip without a position) and `item.kind`, and
+    `track.strip_type` from `track.set`. Each has `code`, `message`, `path`
     and a `hint`.
 - **L2, lead.** `launch.clip {clip}`, `launch.scene {scene}`,
   `launch.stop {track?}`, `launch.arrangement {track?}`, and

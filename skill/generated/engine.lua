@@ -841,7 +841,7 @@ q = nil
 
 ---@class Steppe.group_targets_args
 ---@field track? string
----@field item? string
+---@field item? string Item id, e.g. "it_1" (a clip's id is refused with item.kind).
 ---@field attribute string
 
 ---@class Steppe.group_targets_result
@@ -888,7 +888,7 @@ q = nil
 ---@field warnings? (string|table)[]
 
 ---@class Steppe.item_apply_fx_args
----@field item string Item id, e.g. "it_1".
+---@field item string Item id, e.g. "it_1" (a clip's id is refused with item.kind).
 ---@field mode? string (default: "take")
 
 ---@class Steppe.item_apply_fx_result
@@ -907,7 +907,7 @@ q = nil
 
 ---@class Steppe.item_duplicate_args
 ---@field bypass_groups? boolean (default: false)
----@field item string Item id, e.g. "it_1".
+---@field item string Item id, e.g. "it_1" (a clip's id is refused with item.kind).
 ---@field to? number
 
 ---@class Steppe.item_duplicate_result
@@ -916,7 +916,7 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.item_explode_takes_args
----@field item string Item id, e.g. "it_1".
+---@field item string Item id, e.g. "it_1" (a clip's id is refused with item.kind).
 ---@field mode? string (default: "tracks")
 
 ---@class Steppe.item_explode_takes_result
@@ -925,7 +925,7 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.item_export_args
----@field item string
+---@field item string Item or clip id, e.g. "it_1" or "cl_1".
 ---@field path string
 
 ---@class Steppe.item_export_result
@@ -953,7 +953,7 @@ q = nil
 
 ---@class Steppe.item_move_args
 ---@field bypass_groups? boolean (default: false)
----@field item string Item id, e.g. "it_1".
+---@field item string Item id, e.g. "it_1" (a clip's id is refused with item.kind).
 ---@field position? number
 ---@field bar? integer
 ---@field track? string Track id, e.g. "tr_1".
@@ -971,14 +971,14 @@ q = nil
 
 ---@class Steppe.item_remove_args
 ---@field bypass_groups? boolean (default: false)
----@field item string Item id, e.g. "it_1".
+---@field item string Item id, e.g. "it_1" (a clip's id is refused with item.kind).
 
 ---@class Steppe.item_remove_result
 ---@field warnings? table[]
 
 ---@class Steppe.item_set_args
 ---@field bypass_groups? boolean (default: false)
----@field item string Item id, e.g. "it_1".
+---@field item string Item id, e.g. "it_1" (a clip's id is refused with item.kind).
 ---@field position? number
 ---@field bar? integer
 ---@field length? number
@@ -999,7 +999,7 @@ q = nil
 
 ---@class Steppe.item_split_args
 ---@field bypass_groups? boolean (default: false)
----@field item string Item id, e.g. "it_1".
+---@field item string Item id, e.g. "it_1" (a clip's id is refused with item.kind).
 ---@field at number
 ---@field snap? "none"|"zero_crossing" (default: "none")
 
@@ -1058,11 +1058,11 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.midi_edit_args
----@field item string
+---@field item string Item or clip id, e.g. "it_1" or "cl_1".
 ---@field ops table[]
 
 ---@class Steppe.midi_get_args
----@field item string Item id, e.g. "it_1".
+---@field item string Item or clip id, e.g. "it_1" or "cl_1".
 
 ---@class Steppe.midi_get_result
 ---@field text string
@@ -1074,7 +1074,7 @@ q = nil
 ---@field offset_ms? number
 
 ---@class Steppe.midi_notes_args
----@field item string
+---@field item string Item or clip id, e.g. "it_1" or "cl_1".
 
 ---@class Steppe.midi_outputs_set_args
 ---@field port string
@@ -1088,7 +1088,7 @@ q = nil
 ---@field clock_while_stopped? boolean
 
 ---@class Steppe.midi_write_args
----@field item string Item id, e.g. "it_1".
+---@field item string Item or clip id, e.g. "it_1" or "cl_1".
 ---@field notation string
 
 ---@class Steppe.midi_write_result
@@ -1846,7 +1846,7 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.take_activate_args
----@field item string Item id, e.g. "it_1".
+---@field item string Item or clip id, e.g. "it_1" or "cl_1".
 ---@field take? string Take id, e.g. "tk_1".
 ---@field index? integer
 
@@ -1854,7 +1854,7 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.take_add_args
----@field item string Item id, e.g. "it_1".
+---@field item string Item or clip id, e.g. "it_1" or "cl_1".
 ---@field from? string Take id, e.g. "tk_1".
 
 ---@class Steppe.take_add_result
@@ -1863,7 +1863,7 @@ q = nil
 
 ---@class Steppe.take_extract_args
 ---@field take string Take id, e.g. "tk_1".
----@field track string Track id, e.g. "tr_1".
+---@field track? string Default: the item's or clip's track.
 ---@field position? number Beats.
 
 ---@class Steppe.take_extract_result
@@ -1886,7 +1886,7 @@ q = nil
 ---@field sensitivity? number (default: 0.5)
 
 ---@class Steppe.take_list_args
----@field item string Item id, e.g. "it_1".
+---@field item string Item or clip id, e.g. "it_1" or "cl_1".
 
 ---@class Steppe.take_list_result
 ---@field takes table[]
@@ -2509,9 +2509,9 @@ q = nil
 
 ---@class Steppe.midi
 ---@field edit fun(args: Steppe.midi_edit_args): table Edit a MIDI item's notes and CCs: add, remove, move, resize, velocity, quantize.
----@field get fun(args: Steppe.midi_get_args): Steppe.midi_get_result Read an item's MIDI as notation.
----@field notes fun(args: Steppe.midi_notes_args): table List a MIDI item's notes and CC points (beats from the item's start).
----@field write fun(args: Steppe.midi_write_args): Steppe.midi_write_result Replace an item's MIDI with notation (the item keeps its position and length).
+---@field get fun(args: Steppe.midi_get_args): Steppe.midi_get_result Read an item's or clip's MIDI as notation.
+---@field notes fun(args: Steppe.midi_notes_args): table List a MIDI item's or clip's notes and CC points (beats from its start).
+---@field write fun(args: Steppe.midi_write_args): Steppe.midi_write_result Replace an item's or clip's MIDI with notation (keeping its place and length).
 
 ---@class Steppe.midi.inputs
 ---@field get fun(): table Hardware MIDI inputs, timing, settings, loss and startup warnings.
@@ -2650,11 +2650,11 @@ q = nil
 ---@field set fun(args?: Steppe.sync_set_args): Steppe.sync_set_result Set external sync (MIDI clock, MTC, LTC) and LTC output; returns them.
 
 ---@class Steppe.take
----@field activate fun(args: Steppe.take_activate_args): Steppe.take_activate_result Choose the take heard from an item.
----@field add fun(args: Steppe.take_add_args): Steppe.take_add_result Add a take to an item, optionally copied from another take of that item.
----@field extract fun(args: Steppe.take_extract_args): Steppe.take_extract_result Take a take out of its item into an item of its own on any channel.
----@field list fun(args: Steppe.take_list_args): Steppe.take_list_result List the takes of an item and identify its active take.
----@field remove fun(args: Steppe.take_remove_args): Steppe.take_remove_result Delete a take from its item (the item goes with its last take).
+---@field activate fun(args: Steppe.take_activate_args): Steppe.take_activate_result Choose the take heard from an item or clip.
+---@field add fun(args: Steppe.take_add_args): Steppe.take_add_result Add a take to an item or clip, optionally copied from one of its takes.
+---@field extract fun(args: Steppe.take_extract_args): Steppe.take_extract_result Take a take out of its item or clip into an item of its own on any channel.
+---@field list fun(args: Steppe.take_list_args): Steppe.take_list_result List the takes of an item or clip and identify its active take.
+---@field remove fun(args: Steppe.take_remove_args): Steppe.take_remove_result Delete a take from its item or clip (which goes with its last take).
 ---@field set fun(args: Steppe.take_set_args): Steppe.take_set_result Set take gain, pan, channel mode, name, source offset, or playrate and pitch.
 
 ---@class Steppe.take.hits

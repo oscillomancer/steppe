@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "clip_launcher.h"
 #include "supple/engine/app.h"
 #include "supple/model/session.h"
 
@@ -37,6 +38,34 @@ struct MidiFileImport {
 };
 Result<MidiFileImport> readMidiFile(EngineApp& app, const model::Session& s,
                                     const std::string& path, double atBeat);
+
+// --- take owners: an item or a clip (clip_launcher_commands.cpp) -----------------
+
+// The `item` argument of a content command, which takes an item or a clip
+// (ADR-0097 "The take owner"); merges remap both kinds.
+schema::Schema<std::string> ownerIdArg(const char* what = "Item or clip");
+// The `item` argument of a timeline command: a clip's id is accepted only so
+// that refuseClip can say what to use instead.
+schema::Schema<std::string> timelineItemArg();
+// An item or a clip by id, else it.unknown or cl.unknown with candidates.
+Result<model::Id> existingOwner(const model::Session& s, const std::string& text,
+                                const std::string& path);
+// item.kind when `text` names a clip: timeline commands place material in
+// time, and a clip has no place in time. `instead` is the hint.
+Status refuseClip(const std::string& text, const std::string& path, const std::string& instead);
+// item.kind for the first clip among `ids` (at path/k).
+Status refuseClipIds(const std::vector<model::Id>& ids, const std::string& path,
+                     const std::string& instead);
+// An owner's active take, if any.
+std::optional<model::Id> ownerActiveTake(const model::Session& s, model::Id owner);
+// Edits an owner's takes and active take.
+void modifyOwnerTakes(
+    model::EditTxn& t, model::Id owner,
+    const std::function<void(std::vector<model::Id>&, std::optional<model::Id>&)>& f);
+// Where an owner's content starts, in beats: an item's start, 0 for a clip.
+double ownerStartBeat(const model::Session& s, model::Id owner);
+// The kind of the clip holding `take`, or nullopt when an item holds it.
+std::optional<model::ClipKind> clipKindOfTake(const model::Session& s, model::Id take);
 
 // --- clips (clip_launcher_commands.cpp) -------------------------------------------
 
@@ -68,6 +97,22 @@ Result<std::vector<model::Id>> copyTakesFor(model::EditTxn& t, const model::Sess
                                             const std::vector<model::Id>& takes, bool pooled,
                                             const std::function<double(double)>& envelopePos,
                                             const std::string& path);
+
+// The item a clip's `take` makes at `pos` on `track` (ADR-0097 "Converting
+// between an item and a clip"): its length, loop, gain, mute and colour,
+// with no takes yet. `envelopePos` is set to the take envelope conversion
+// (null for a MIDI clip, whose beats stay). A loop window an item cannot
+// express is clip.unsupported.
+struct ClipItem {
+    model::Item item;
+    std::function<double(double)> envelopePos;
+};
+Result<ClipItem> itemFromClip(const model::Session& s, const model::Clip& clip,
+                              const model::Take& take, model::Id track, double pos,
+                              const std::string& path);
+// Rewrites the points of the envelopes on `take` itself through `pos`.
+void convertTakeEnvelopes(model::EditTxn& t, const model::Session& s, model::Id take,
+                          const std::function<double(double)>& pos);
 
 // The length of one pass of a take's content in played time: beats for
 // MIDI, seconds for audio (the source's length over the take's playrate);

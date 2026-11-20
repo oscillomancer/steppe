@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
+#include "clip_launcher.h"
 #include "command_validation.h"
 #include "heard_midi.h"
 #include "midi_ticks.h"
@@ -88,13 +89,19 @@ struct Target {
     Frame frame;
 };
 
+// An item's or a clip's active MIDI take (ADR-0097 "The take owner"). A
+// clip's beats count from its own start.
 Result<Target> midiTarget(const model::Session& s, const std::string& text) {
     auto id = Id::parse(text);
+    const bool clip = id && id->kind == model::Kind::Clip && s.clips.contains(*id);
     const model::Item* it = id && id->kind == model::Kind::Item ? s.items.find(*id) : nullptr;
-    if (!it)
-        return Error("it.unknown", "no " + text, "/item",
-                     "use an item id from track.list or item.add");
-    const model::Take* take = it->activeTake ? s.takes.find(*it->activeTake) : nullptr;
+    if (!it && !clip)
+        return Error(id && id->kind == model::Kind::Clip ? "cl.unknown" : "it.unknown",
+                     "no " + text, "/item",
+                     "use an item id from track.list or item.add, or a clip id from "
+                     "session.describe");
+    const auto active = ownerActiveTake(s, *id);
+    const model::Take* take = active ? s.takes.find(*active) : nullptr;
     if (!take || !take->source || take->source->kind != model::Kind::Midi)
         return Error("midi.not_midi", text + " has no MIDI take", "/item",
                      "use item.add with notation to create a MIDI item");
@@ -103,11 +110,11 @@ Result<Target> midiTarget(const model::Session& s, const std::string& text) {
         return Error("mi.unknown", take->source->str() + " is missing from the model", "/item",
                      "load a project containing the item's MIDI source, or recreate the item with "
                      "item.add notation");
-    Target t{*id, *it->activeTake, *take->source, midi, {}};
+    Target t{*id, *active, *take->source, midi, {}};
     t.frame.ppq = midi->sequence.ppq;
     t.frame.offset = take->startOffset;
     t.frame.rate = take->playrate > 0 ? take->playrate : 1.0;
-    t.frame.itemPosition = model::itemSpan(s, *it).startBeat;
+    t.frame.itemPosition = ownerStartBeat(s, *id);
     return t;
 }
 
@@ -132,8 +139,12 @@ Result<json::Value> describe(const model::Session& s, const Target& t) {
     json::Value out = json::Value::object();
     out["item"] = t.item.str();
     out["ppq"] = static_cast<std::int64_t>(seq.ppq);
-    out["length"] = roundBeats(model::itemLengthBeats(s, *s.items.find(t.item)));
-    out["position"] = roundBeats(t.frame.itemPosition);
+    if (const model::Clip* clip = s.clips.find(t.item)) {
+        out["length"] = roundBeats(clip->length);  // a clip has no position
+    } else {
+        out["length"] = roundBeats(model::itemLengthBeats(s, *s.items.find(t.item)));
+        out["position"] = roundBeats(t.frame.itemPosition);
+    }
     if (t.midi->pooled) out["pooled"] = true;
     json::Value notes = json::Value::array();
     for (const midi::Note& n : seq.notes) notes.push_back(noteJson(n, t.frame));
@@ -562,17 +573,16 @@ void registerMidiCommands(cmd::Registry& registry) {
         c.name = "midi.notes";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "List a MIDI item's notes and CC points (beats from the item's start).";
+        c.summary = "List a MIDI item's or clip's notes and CC points (beats from its start).";
         c.description =
             "Notes are in a fixed order (by start, then pitch); midi.edit refers to them by their "
             "position in this list. start/length/beat are in beats from the item's start; channel "
             "is 1-16 (omitted for 1). pooled: other items share this MIDI, and edits change them "
             "too. For writing whole phrases, midi.write with notation is usually better.";
         c.tags = {"midi"};
-        c.args =
-            schema::object<ItemArgs>("midi_notes_args")
-                .field("item", &ItemArgs::item, schema::string().pattern("^it_[0-9]+$", "item id"))
-                .build();
+        c.args = schema::object<ItemArgs>("midi_notes_args")
+                     .field("item", &ItemArgs::item, ownerIdArg())
+                     .build();
         c.result = schema::any();
         c.examples = {
             {"Notes of a MIDI item", j(R"({"item": "it_1"})"),
@@ -638,11 +648,10 @@ void registerMidiCommands(cmd::Registry& registry) {
                 .field("from", &MidiOp::from, schema::number())
                 .field("to", &MidiOp::to, schema::number())
                 .build();
-        c.args =
-            schema::object<EditArgs>("midi_edit_args")
-                .field("item", &EditArgs::item, schema::string().pattern("^it_[0-9]+$", "item id"))
-                .field("ops", &EditArgs::ops, schema::arrayOf(opSchema))
-                .build();
+        c.args = schema::object<EditArgs>("midi_edit_args")
+                     .field("item", &EditArgs::item, ownerIdArg())
+                     .field("ops", &EditArgs::ops, schema::arrayOf(opSchema))
+                     .build();
         c.result = schema::any();
         c.examples = {
             {"Add a note and move the first one up an octave",

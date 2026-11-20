@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include <cmath>
 #include <set>
+#include "clip_launcher.h"
 #include "command_validation.h"
 #include "supple/base/sha256.h"
 #include "supple/model/audio_warp.h"
@@ -49,6 +50,11 @@ const model::Item* owner(const model::Session& s, Id id) {
     return held ? s.items.find(*held) : nullptr;
 }
 Status warpAllowed(const model::Session& s, Id id) {
+    if (clipKindOfTake(s, id))
+        return Error("clip.unsupported", id.str() + " belongs to a clip, and clips do not warp",
+                     "/take",
+                     "lay the clip on the timeline first (item.add {clip}), then warp "
+                     "the item's take");
     const auto* t = s.takes.find(id);
     const auto* it = owner(s, id);
     if (!t || !it || it->loop || !t->preservePitch || t->pitchMode != "signalsmith")
@@ -89,6 +95,10 @@ struct Job {
 };
 Result<std::vector<Id>> itemIds(const model::Session& s, const std::vector<std::string>& names) {
     std::vector<Id> ids;
+    for (std::size_t k = 0; k < names.size(); ++k)
+        SUPPLE_TRY(refuseClip(names[k], "/items/" + std::to_string(k),
+                              "lay the clip on the timeline first (item.add {clip}); clips do "
+                              "not warp"));
     for (const auto& name : names) {
         auto id = Id::parse(name);
         if (!id || !s.items.contains(*id))
@@ -396,7 +406,7 @@ void registerAudioCommands(cmd::Registry& registry) {
                           : "Detach selected items from jointly processed warp bundles.";
         c.args = schema::object<Items>("audio_items")
                      .field("items", &Items::items,
-                            schema::arrayOf(idSchema("it")).minItems(1).maxItems(128))
+                            schema::arrayOf(timelineItemArg()).minItems(1).maxItems(128))
                      .build();
         c.result = schema::any();
         c.examples = {{"Clear warp", j(R"({"items":["it_1"]})"), j("{}"), "song_with_audio"}};
@@ -429,7 +439,7 @@ void registerAudioCommands(cmd::Registry& registry) {
         c.args =
             schema::object<Quantize>("audio_quantize")
                 .field("items", &Quantize::items,
-                       schema::arrayOf(idSchema("it")).minItems(1).maxItems(128))
+                       schema::arrayOf(timelineItemArg()).minItems(1).maxItems(128))
                 .field("grid", &Quantize::grid, schema::number().range(1. / 1024, 1024))
                 .field("strength", &Quantize::strength, schema::number().range(0, 1))
                 .defaultValue(1.)

@@ -1710,9 +1710,12 @@ but not launched; freezing returns the track to the arrangement first.
 - Timeline commands refuse a clip with `item.kind`, whose hint names the
   clip command:
   - `item.move/set/split/duplicate/remove/paste`;
-  - `item.consolidate` and `.commit`, `item.heal`;
+  - `item.consolidate`, `item.heal`, `item.mix-to-track`,
+    `item.explode-takes`, `item.apply-fx`;
   - `audio.quantize` and `audio.warp.*`;
-  - `group.targets` and `record.commit`.
+  - `group.targets`.
+- `item.export` writes a clip as the item it would make at the start: one
+  period, looped as an item loops.
 - Clips never count toward the project length, render bounds, analysis ends
   or freeze length.
 - The in-memory budget is ordered: arrangement items first, then clips in
@@ -1727,8 +1730,8 @@ but not launched; freezing returns the track to the arrangement first.
   of the first meter).
 - Errors: `clip.track`, `clip.scene`, `clip.occupied`, `clip.mixed`,
   `clip.length`, `clip.memory`, `clip.unsupported`, `clip.limit`,
-  `clip.source`, `scene.limit`, `scene.index` and `item.kind`, and
-  `track.strip_type`. Each carries
+  `clip.source`, `scene.limit`, `scene.index`, `take.position` and
+  `item.kind`, and `track.strip_type`. Each carries
   `code`, `message`, `path` and a `hint`.
 - Launches (`launch.*`) change transport state only. They are logged for
   `launch.commit` while capture is on, and they are never in history.

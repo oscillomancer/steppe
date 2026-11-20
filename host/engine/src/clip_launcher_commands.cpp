@@ -90,10 +90,10 @@ Result<std::vector<Id>> copyTakesFor(model::EditTxn& t, const model::Session& s,
             return Error("item.take", old.str() + " is missing", path,
                          "use a current take id from take.list");
         if (envelopePos) {
-            std::set<Id> targets{old};
-            targets.insert(tk->chain.begin(), tk->chain.end());
+            // Only the take's own envelopes are measured from its owner's
+            // start; take FX parameters follow the timeline.
             for (const auto& e : s.envelopes)
-                if (targets.contains(e.value->target.object))
+                if (e.value->target.object == old)
                     for (const auto& ai : s.autoItems)
                         if (ai.value->envelope == e.id)
                             return Error("clip.unsupported",
@@ -113,20 +113,127 @@ Result<std::vector<Id>> copyTakesFor(model::EditTxn& t, const model::Session& s,
         }
         auto fresh = copyTake(s, t, old, std::move(copy));
         if (!fresh) return std::move(fresh).error();
-        if (envelopePos) {
-            const model::Session now = t.preview();
-            std::set<Id> targets{*fresh};
-            if (const model::Take* nt = now.takes.find(*fresh))
-                targets.insert(nt->chain.begin(), nt->chain.end());
-            for (const auto& e : now.envelopes)
-                if (targets.contains(e.value->target.object))
-                    t.modify<model::Envelope>(e.id, [&](model::Envelope& env) {
-                        for (auto& p : env.points) p.pos = envelopePos(p.pos);
-                    });
-        }
+        if (envelopePos) convertTakeEnvelopes(t, t.preview(), *fresh, envelopePos);
         out.push_back(*fresh);
     }
     return out;
+}
+
+schema::Schema<std::string> ownerIdArg(const char* what) {
+    return schema::string()
+        .pattern("^(it|cl)_[0-9]+$", "item or clip id")
+        .doc(std::string(what) + " id, e.g. \"it_1\" or \"cl_1\".");
+}
+
+schema::Schema<std::string> timelineItemArg() {
+    return schema::string()
+        .pattern("^(it|cl)_[0-9]+$", "item id")
+        .doc("Item id, e.g. \"it_1\" (a clip's id is refused with item.kind).");
+}
+
+Result<Id> existingOwner(const model::Session& s, const std::string& text,
+                         const std::string& path) {
+    const auto id = Id::parse(text);
+    if (id && id->kind == model::Kind::Clip) {
+        auto clip = existing<model::Clip>(s, text, path);
+        if (!clip) return std::move(clip).error();
+        return *clip;
+    }
+    auto item = existing<model::Item>(s, text, path);
+    if (!item) {
+        Error e = std::move(item).error();
+        e.code = "it.unknown";
+        return e;
+    }
+    return *item;
+}
+
+Status refuseClip(const std::string& text, const std::string& path, const std::string& instead) {
+    const auto id = Id::parse(text);
+    if (id && id->kind == model::Kind::Clip)
+        return Error("item.kind", text + " is a clip, and this command places items in time", path,
+                     instead);
+    return {};
+}
+
+Status refuseClipIds(const std::vector<Id>& ids, const std::string& path,
+                     const std::string& instead) {
+    for (std::size_t k = 0; k < ids.size(); ++k)
+        SUPPLE_TRY(refuseClip(ids[k].str(), path + "/" + std::to_string(k), instead));
+    return {};
+}
+
+std::optional<Id> ownerActiveTake(const model::Session& s, Id owner) {
+    if (const model::Item* it = s.items.find(owner)) return it->activeTake;
+    if (const model::Clip* c = s.clips.find(owner)) return c->activeTake;
+    return std::nullopt;
+}
+
+void modifyOwnerTakes(model::EditTxn& t, Id owner,
+                      const std::function<void(std::vector<Id>&, std::optional<Id>&)>& f) {
+    if (owner.kind == model::Kind::Clip)
+        t.modify<model::Clip>(owner, [&](model::Clip& c) { f(c.takes, c.activeTake); });
+    else
+        t.modify<model::Item>(owner, [&](model::Item& it) { f(it.takes, it.activeTake); });
+}
+
+double ownerStartBeat(const model::Session& s, Id owner) {
+    if (const model::Item* it = s.items.find(owner)) return model::itemSpan(s, *it).startBeat;
+    return 0;
+}
+
+std::optional<model::ClipKind> clipKindOfTake(const model::Session& s, Id take) {
+    const auto owner = model::takeOwner(s, take);
+    if (!owner || owner->kind != model::Kind::Clip) return std::nullopt;
+    return s.clips.find(*owner)->kind;
+}
+
+Result<ClipItem> itemFromClip(const model::Session& s, const model::Clip& clip,
+                              const model::Take& take, Id track, double pos,
+                              const std::string& path) {
+    ClipItem out;
+    model::Item& item = out.item;
+    item.track = track;
+    item.gainDb = clip.gainDb;
+    item.mute = clip.mute;
+    item.color = clip.color;
+    if (clip.loop.on) {
+        const double content = contentLength(s, take);
+        const double tolerance = 1e-9 * std::max(1.0, content);
+        if (std::abs(clip.loop.start) > tolerance ||
+            std::abs(clip.loop.length - content) > tolerance)
+            return Error("clip.unsupported",
+                         "the clip's loop window has no item equivalent: an item loops its whole "
+                         "content",
+                         path,
+                         "set the clip's loop off, or to start 0 and length " +
+                             json::formatDouble(content) + " (clip.set), first");
+        item.loop = true;
+    }
+    const auto map = s.timeMap;
+    const double startSec = map->secondsAt(pos);
+    if (clip.kind == model::ClipKind::Audio) {
+        SUPPLE_TRY(model::checkedBeat(s, map->beatAt(startSec + clip.length), path));
+        // The seconds land exactly; the envelope points convert at the tempo
+        // where the item lands.
+        model::placeItemSeconds(s, item, startSec, startSec + clip.length);
+        out.envelopePos = [map, startSec, pos](double secs) {
+            return map->beatAt(startSec + secs) - pos;
+        };
+    } else {
+        SUPPLE_TRY(model::checkedBeat(s, pos + clip.length, path));
+        model::placeItem(s, item, pos, clip.length);  // in the track's timebase
+    }
+    return out;
+}
+
+void convertTakeEnvelopes(model::EditTxn& t, const model::Session& s, Id take,
+                          const std::function<double(double)>& pos) {
+    for (const auto& e : s.envelopes)
+        if (e.value->target.object == take)
+            t.modify<model::Envelope>(e.id, [&](model::Envelope& env) {
+                for (auto& p : env.points) p.pos = pos(p.pos);
+            });
 }
 
 Status checkClipMemory(EngineApp& app, const model::Session& after, const std::string& path) {

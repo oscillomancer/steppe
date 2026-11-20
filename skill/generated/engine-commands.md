@@ -5349,7 +5349,7 @@ Result:
 
 Automate a parameter: a track's or route's mixer control, or a plugin's.
 
-Target one of track (param volume|pan|mute; width|pan_left|pan_right|pan_boost on channels/busses; playrate only on tr_0), route (volume|pan|mute), group (VCA volume|mute), or fx (a semantic key such as "gain" or "filter1.cutoff", or for other plugins a CLAP id or parameter name), or module (a rack module's knob by key, values in its unit, a choice by its key; module.describe). points: [{beat|bar|seconds, value, shape?, tension?}]; values in the parameter's unit (dB, %, Hz… — text like "800 Hz" works for plugins); shapes linear, square, slow, fast_start, fast_end, bezier. Plugin values move along the parameter's curve (a log cutoff sweeps evenly in pitch). take (param volume|pan|mute): a take envelope, its points in beats from the item's start (it moves with the item); it shapes the take after its take FX (a MIDI take needs an instrument in its take FX). Master playrate points are finite numeric ratios 0.25..4.0; an active nonempty master curve replaces the saved scalar during playback and rendering. Audio sources convert before take FX/live mixing; MIDI and automation follow the same timeline clock. Width and dual pans use -100..100 percent; pan_boost uses 0..1 (on at 0.5), overriding the effective law's boost while the envelope is active and nonempty.
+Target one of track (param volume|pan|mute; width|pan_left|pan_right|pan_boost on channels/busses; playrate only on tr_0), route (volume|pan|mute), group (VCA volume|mute), or fx (a semantic key such as "gain" or "filter1.cutoff", or for other plugins a CLAP id or parameter name), or module (a rack module's knob by key, values in its unit, a choice by its key; module.describe). points: [{beat|bar|seconds, value, shape?, tension?}]; values in the parameter's unit (dB, %, Hz… — text like "800 Hz" works for plugins); shapes linear, square, slow, fast_start, fast_end, bezier. Plugin values move along the parameter's curve (a log cutoff sweeps evenly in pitch). take (param volume|pan|mute): a take envelope, its points in beats from the item's start (it moves with the item), or on a clip's take from the clip's start in beats (MIDI) or seconds (audio); it shapes the take after its take FX (a MIDI take needs an instrument in its take FX). Master playrate points are finite numeric ratios 0.25..4.0; an active nonempty master curve replaces the saved scalar during playback and rendering. Audio sources convert before take FX/live mixing; MIDI and automation follow the same timeline clock. Width and dual pans use -100..100 percent; pan_boost uses 0..1 (on at 0.5), overriding the effective law's boost while the envelope is active and nonempty.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -8260,7 +8260,7 @@ Kind: `query`. Exposure: `mcp-exec`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `track` | string |  |  |  |  |
-| `item` | string |  |  |  |  |
+| `item` | string |  |  |  | Item id, e.g. "it_1" (a clip's id is refused with item.kind). |
 | `attribute` | string |  |  |  |  |
 
 ### Result
@@ -8643,7 +8643,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `item` | string |  |  |  | Item id, e.g. "it_1". |
+| `item` | string |  |  |  | Item id, e.g. "it_1" (a clip's id is refused with item.kind). |
 | `mode` | string |  |  | "take" |  |
 
 ### Result
@@ -8782,7 +8782,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `bypass_groups` | boolean |  |  | false |  |
-| `item` | string |  |  |  | Item id, e.g. "it_1". |
+| `item` | string |  |  |  | Item id, e.g. "it_1" (a clip's id is refused with item.kind). |
 | `to` | number |  | 0.0.. |  |  |
 
 ### Result
@@ -8847,7 +8847,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `item` | string |  |  |  | Item id, e.g. "it_1". |
+| `item` | string |  |  |  | Item id, e.g. "it_1" (a clip's id is refused with item.kind). |
 | `mode` | string |  |  | "tracks" |  |
 
 ### Result
@@ -8927,7 +8927,7 @@ Result:
 
 Write an item's raw audio (WAV) or its MIDI (SMF) to a file.
 
-Exports the active take over the part the item covers (trims and splits respected). Audio: the source's own samples, rate and channels, from the source position at the item's start to the one at its end (playrate, unpreserved pitch and stretch markers decide that span but are not applied; a looping item ignores markers and repeats its source as heard; outside the source is silence). No gain, fades, pan, channel mode, FX or track processing. 16/24-bit PCM WAV sources keep their format; others are 32-bit float. MIDI: what the item plays (loops unrolled, notes ending by its end) from 0, at the source PPQ, with the tempo and meter at the item's start. Relative paths resolve against the work directory; a missing extension is added; existing files are replaced, the project's media never.
+Exports the active take over the part the item covers (trims and splits respected). Audio: the source's own samples, rate and channels, from the source position at the item's start to the one at its end (playrate, unpreserved pitch and stretch markers decide that span but are not applied; a looping item ignores markers and repeats its source as heard; outside the source is silence). No gain, fades, pan, channel mode, FX or track processing. 16/24-bit PCM WAV sources keep their format; others are 32-bit float. MIDI: what the item plays (loops unrolled, notes ending by its end) from 0, at the source PPQ, with the tempo and meter at the item's start. Relative paths resolve against the work directory; a missing extension is added; existing files are replaced, the project's media never. A clip exports as the item it would make at the start: one period, looped as an item loops.
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -8935,7 +8935,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `item` | string |  |  |  |  |
+| `item` | string |  |  |  | Item or clip id, e.g. "it_1" or "cl_1". |
 | `path` | string |  |  |  |  |
 
 ### Result
@@ -9169,7 +9169,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `bypass_groups` | boolean |  |  | false |  |
-| `item` | string |  |  |  | Item id, e.g. "it_1". |
+| `item` | string |  |  |  | Item id, e.g. "it_1" (a clip's id is refused with item.kind). |
 | `position` | number |  | 0.0.. |  |  |
 | `bar` | integer |  | 1.0..2147483647.0 |  |  |
 | `track` | string |  |  |  | Track id, e.g. "tr_1". |
@@ -9292,7 +9292,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `bypass_groups` | boolean |  |  | false |  |
-| `item` | string |  |  |  | Item id, e.g. "it_1". |
+| `item` | string |  |  |  | Item id, e.g. "it_1" (a clip's id is refused with item.kind). |
 
 ### Result
 
@@ -9344,7 +9344,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `bypass_groups` | boolean |  |  | false |  |
-| `item` | string |  |  |  | Item id, e.g. "it_1". |
+| `item` | string |  |  |  | Item id, e.g. "it_1" (a clip's id is refused with item.kind). |
 | `position` | number |  | 0.0.. |  |  |
 | `bar` | integer |  | 1.0..2147483647.0 |  |  |
 | `length` | number |  | 0.0.. |  |  |
@@ -9428,7 +9428,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `bypass_groups` | boolean |  |  | false |  |
-| `item` | string |  |  |  | Item id, e.g. "it_1". |
+| `item` | string |  |  |  | Item id, e.g. "it_1" (a clip's id is refused with item.kind). |
 | `at` | number |  | 0.0.. |  |  |
 | `snap` | string |  |  | "none" |  |
 
@@ -10103,7 +10103,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `item` | string |  |  |  |  |
+| `item` | string |  |  |  | Item or clip id, e.g. "it_1" or "cl_1". |
 | `ops` | array |  |  |  |  |
 
 ### Result
@@ -10148,7 +10148,7 @@ Result:
 
 ## `midi.get@1`
 
-Read an item's MIDI as notation.
+Read an item's or clip's MIDI as notation.
 
 
 
@@ -10158,7 +10158,7 @@ Kind: `query`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `item` | string |  |  |  | Item id, e.g. "it_1". |
+| `item` | string |  |  |  | Item or clip id, e.g. "it_1" or "cl_1". |
 
 ### Result
 
@@ -10287,7 +10287,7 @@ Result:
 
 ## `midi.notes@1`
 
-List a MIDI item's notes and CC points (beats from the item's start).
+List a MIDI item's or clip's notes and CC points (beats from its start).
 
 Notes are in a fixed order (by start, then pitch); midi.edit refers to them by their position in this list. start/length/beat are in beats from the item's start; channel is 1-16 (omitted for 1). pooled: other items share this MIDI, and edits change them too. For writing whole phrases, midi.write with notation is usually better.
 
@@ -10297,7 +10297,7 @@ Kind: `query`. Exposure: `mcp-exec`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `item` | string |  |  |  |  |
+| `item` | string |  |  |  | Item or clip id, e.g. "it_1" or "cl_1". |
 
 ### Result
 
@@ -10421,7 +10421,7 @@ Result:
 
 ## `midi.write@1`
 
-Replace an item's MIDI with notation (the item keeps its position and length).
+Replace an item's or clip's MIDI with notation (keeping its place and length).
 
 
 
@@ -10431,7 +10431,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `item` | string |  |  |  | Item id, e.g. "it_1". |
+| `item` | string |  |  |  | Item or clip id, e.g. "it_1" or "cl_1". |
 | `notation` | string |  |  |  |  |
 
 ### Result
@@ -16718,7 +16718,7 @@ Result:
 
 ## `take.activate@1`
 
-Choose the take heard from an item.
+Choose the take heard from an item or clip.
 
 take (its id) or index (0-based in the item's take order — the same position after item.split, which copies the takes in order: comping splits an item and picks a take by index on the piece).
 
@@ -16728,7 +16728,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `item` | string |  |  |  | Item id, e.g. "it_1". |
+| `item` | string |  |  |  | Item or clip id, e.g. "it_1" or "cl_1". |
 | `take` | string |  |  |  | Take id, e.g. "tk_1". |
 | `index` | integer |  | 0.0.. |  |  |
 
@@ -16772,7 +16772,7 @@ Result:
 
 ## `take.add@1`
 
-Add a take to an item, optionally copied from another take of that item.
+Add a take to an item or clip, optionally copied from one of its takes.
 
 
 
@@ -16782,7 +16782,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `item` | string |  |  |  | Item id, e.g. "it_1". |
+| `item` | string |  |  |  | Item or clip id, e.g. "it_1" or "cl_1". |
 | `from` | string |  |  |  | Take id, e.g. "tk_1". |
 
 ### Result
@@ -16831,9 +16831,9 @@ Result:
 
 ## `take.extract@1`
 
-Take a take out of its item into an item of its own on any channel.
+Take a take out of its item or clip into an item of its own on any channel.
 
-The new item copies the old one's length, fades, gain and timebase and starts at position (beats; default: where the item starts). The take keeps its FX and envelopes. The only take of an item moves the item itself.
+The new item copies the old one's length, fades, gain and timebase and starts at position (beats; default: where the item starts). The take keeps its FX and envelopes. The only take of an item moves the item itself. From a clip, position is required (a clip has no place in time), track defaults to the clip's, the item is as long as the clip, and its loop and take envelopes convert at the tempo where it lands (ADR-0097); the clip goes with its last take.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -16842,7 +16842,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `take` | string |  |  |  | Take id, e.g. "tk_1". |
-| `track` | string |  |  |  | Track id, e.g. "tr_1". |
+| `track` | string |  |  |  | Default: the item's or clip's track. |
 | `position` | number |  | 0.0.. |  | Beats. |
 
 ### Result
@@ -17008,7 +17008,7 @@ Result:
 
 ## `take.list@1`
 
-List the takes of an item and identify its active take.
+List the takes of an item or clip and identify its active take.
 
 
 
@@ -17018,7 +17018,7 @@ Kind: `query`. Exposure: `mcp-exec`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `item` | string |  |  |  | Item id, e.g. "it_1". |
+| `item` | string |  |  |  | Item or clip id, e.g. "it_1" or "cl_1". |
 
 ### Result
 
@@ -17150,9 +17150,9 @@ Result:
 
 ## `take.remove@1`
 
-Delete a take from its item (the item goes with its last take).
+Delete a take from its item or clip (which goes with its last take).
 
-The take's FX, envelopes and unshared MIDI go with it. When it was the heard take, the next take is heard (else the previous one). item_removed: it was the item's only take, so the item was removed too.
+The take's FX, envelopes and unshared MIDI go with it. When it was the heard take, the next take is heard (else the previous one). item: the item or clip that held it; item_removed: it was the only take, so that item or clip was removed too.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
