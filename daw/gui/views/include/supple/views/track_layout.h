@@ -22,12 +22,17 @@ namespace supple::views {
 
 // A visible row: a track and its indentation under the first root (the
 // masters' children are at depth 0). An automation lane is a row too: it
-// carries its track (and type/depth) plus the envelope it shows (P5.14).
+// carries its track (and type/depth) plus the parameter it shows, and that
+// parameter's envelope when it has one (P5.14). A lane is keyed by its target,
+// not by an envelope, so a parameter can have a lane without automation (a
+// modulated one); whether a row is a lane is lane(), never `env`.
 struct TrackRow {
     model::Id track;
     model::StripType type = model::StripType::Channel;
     int depth = 0;
-    std::optional<model::Id> env;  // set on an automation lane
+    std::optional<model::EnvTarget> target;  // set on an automation lane
+    std::optional<model::Id> env;            // the target's envelope, when it has one
+    bool lane() const { return target.has_value(); }
 };
 
 // A parent's children in display order: channels first, then busses (masters
@@ -52,7 +57,7 @@ inline bool audioItem(const model::Session& session, const model::Item& item) {
 // Whether a row can hold `item` (any item when null; ADR-0057): a channel any
 // item, a master's lane audio items only, busses and automation lanes none.
 inline bool holdsItem(const model::Session& session, const TrackRow& row, const model::Item* item) {
-    if (row.env || row.type == model::StripType::Buss) return false;
+    if (row.lane() || row.type == model::StripType::Buss) return false;
     return row.type == model::StripType::Channel || !item || audioItem(session, *item);
 }
 
@@ -151,6 +156,16 @@ class TrackLayout {
     std::function<std::optional<EnvScale>(const model::Envelope&)> pluginScales;
     // A lane's scale: a mixer parameter's, else the plugin's.
     std::optional<EnvScale> scaleOf(const model::Envelope& env) const;
+    std::optional<EnvScale> scaleOf(const model::EnvTarget& target) const;
+    // A modulation route's signal range (the app reads the rack catalog);
+    // empty: every source -1..1. The lanes' bands read it.
+    UnipolarSource unipolarSource;
+    // Modulation telemetry (ADR-0096, M2): each bound route's target's live
+    // offset (EngineApp::modulationOffsets), given each pass through
+    // ArrangeView::setModulationOffsets; empty while nothing plays.
+    std::map<model::Id, double> liveOffsets;
+    // The lane row of a target (with or without an envelope).
+    std::optional<std::size_t> indexOfTarget(const model::EnvTarget& target) const;
     // Called when the rows or a height changed (the view re-clamps its scroll,
     // refreshes its scroll bars and repaints).
     std::function<void()> onChanged;
@@ -167,6 +182,8 @@ class TrackLayout {
     std::vector<TrackRow> rows_;
     std::map<model::Id, std::size_t> trackRows_, envRows_;
     std::set<model::Id> scaledEnvs_;
+    // The targets a modulation route asks a lane for (compared on a change).
+    std::set<std::pair<model::Id, std::string>> modLanes_;
     std::map<model::Id, float> heights_;
     std::set<model::Id> expanded_;
     std::set<model::Id> masterLanes_;  // the masters with a row (ADR-0057)

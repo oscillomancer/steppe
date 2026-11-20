@@ -106,6 +106,37 @@ struct MonoDelay {
     }
 };
 
+// A compensation delay of held control values (ADR-0096): the modulation
+// edge's, in doubles so a value arrives as the rack computed it.
+struct ModDelay {
+    std::vector<double> buf;
+    std::size_t pos = 0;
+    std::int64_t length = 0;
+    void init(std::int64_t n) {
+        length = n;
+        buf.assign(static_cast<std::size_t>(std::max<std::int64_t>(n, 1)), 0.0);
+        pos = 0;
+    }
+    void clear() SUPPLE_RT {
+        std::fill(buf.begin(), buf.end(), 0.0);
+        pos = 0;
+    }
+    // `out[i]` is `in[i]` from `length` frames earlier.
+    void process(const double* in, double* out, std::uint32_t frames) SUPPLE_RT {
+        if (length == 0) {
+            std::copy_n(in, frames, out);
+            return;
+        }
+        const auto n = static_cast<std::size_t>(length);
+        for (std::uint32_t i = 0; i < frames; ++i) {
+            const double d = buf[pos];
+            buf[pos] = in[i];
+            out[i] = d;
+            pos = pos + 1 == n ? 0 : pos + 1;
+        }
+    }
+};
+
 struct Stereo {
     std::vector<float> l, r;
     void init(std::size_t n) {
@@ -415,6 +446,9 @@ struct Edge {
     // its mix slot, `stripMute` its mute curve, `vcas` its VCAs' mutes.
     bool rackSend = false, homeMute = false, homeSilenced = false;
     int rackHome = -1;
+    // Its level's modulation (ADR-0096, M-i): an index into its source
+    // node's `mixMods`, the node that applies the level; -1: none.
+    int modVolume = -1;
     // A MIDI send (ADR-0067): from a channel's MIDI stream or a Note Out
     // (`rackNotes`), to a channel or a Notes module (`midiNotes`). Queues and
     // voices belong to the destination, and stay on its executor; delay
@@ -448,16 +482,59 @@ struct Edge {
     Stereo frontierBuf;
 };
 
+// A modulation route (ADR-0096): from a rack's Mod Out input to the node
+// that applies its target. Every route is an edge, enabled or not
+// (amendment M-l): it orders its source first, runs both in one executor
+// (liveness goes both ways) and is compensated as a sidechain into its
+// target stage. It carries no audio.
+struct ModEdge {
+    Id route;                      // mr_*
+    std::size_t from = 0, to = 0;  // node indices: the source rack, the target's node
+    Id fromId{}, toId{};
+    int modOut = -1;  // the source rack's Mod Out (RackNode::modOuts); -1: not installed
+    int input = 0;    // 0 .. kModOutInputs - 1
+    model::EnvTarget target;
+    // Where the target is: a stage of the node's chain, of its input chain,
+    // or neither (a mixer target).
+    int stage = -1, inputStage = -1;
+    std::uint32_t clapId = 0;  // a plug-in target's parameter, bound by prepare
+    // Applied by the parameter's envelope lane, which sends the summed value
+    // (ADR-0096 step M4), rather than as PARAM_MOD.
+    bool viaLane = false;
+    double depth = 0.0;
+    bool enabled = true;
+    // Compiled but not applied, with a plan warning: a mixer target before
+    // step M2, a Mod Out whose type is not installed.
+    bool inert = false;
+    std::int64_t tap = 0;                // the Mod Out's latency in its rack
+    ModDelay delay;                      // sized by the latency solve
+    bool preserveDelayOnLocate = false;  // a swap just carried it (as Edge's)
+    // This block's source values, delayed: what the target reads at each
+    // frame. Sized to the block for a route that is not inert.
+    std::vector<double> values;
+};
+
 // An automated plugin parameter (engine.md §1.4, ADR-0010): semantic
 // parameters interpolate in the normalized (curve) domain from physical
 // points; plain CLAP parameters in their CLAP value. Values reach the plugin
 // as param events at every point and every kAutomationStep samples.
 inline constexpr std::uint32_t kAutomationStep = 32;
+// The top of a strip's or send's volume_db (the model's range): a modulated
+// level is clamped to it (ADR-0096, M-i).
+inline constexpr double kMixMaxDb = 12.0;
 struct ParamLane {
     std::uint32_t clapId = 0;
     Automation curve;
     std::shared_ptr<const params::DescribedParam> spec;  // null: plain CLAP values
     double lastSent = std::numeric_limits<double>::quiet_NaN();
+    // Modulation through the envelope (ADR-0096 step M4): its routes are
+    // Stage::laneModRoutes[modFirst .. modFirst + modCount); their sum,
+    // depth x signal x modRange, is added to the curve's value and the
+    // result clamped to [lo, hi], the parameter's range in the lane's domain.
+    std::uint32_t modFirst = 0, modCount = 0;
+    double modRange = 0, lo = 0, hi = 0;
+    double modSum = 0;   // the last sum, held while a source rack's modules are elsewhere
+    int telemetry = -1;  // its Plan::modOffsets slot
     double clapAt(std::int64_t sample) SUPPLE_RT {
         const double v = curve.at(sample);
         return spec ? params::toClap(spec->spec, params::fromNormalized(spec->spec, v)) : v;
@@ -563,6 +640,20 @@ struct MidiRoutedInput {
     std::int32_t address = -1;
 };
 
+// One parameter of a stage's plug-in that modulation reaches, or reached
+// (ADR-0096), and the memo of what was last sent to it.
+struct ModParam {
+    std::uint32_t clapId = 0;
+    double range = 0.0;  // its CLAP max - min: a route's depth is a fraction of it
+    // Its routes in Stage::modRoutes from `first`; none: no route in this
+    // plan, so it is sent a 0 if the memo still lists it.
+    std::uint32_t first = 0, count = 0;
+    double sent = 0.0;    // the memo: the last amount the plug-in was sent
+    bool listed = false;  // the memo lists it: the plug-in may hold `sent`
+    bool stale = true;    // send at the next grid point whatever `sent` is
+    int telemetry = -1;   // its Plan::modOffsets slot; -1: no route this plan
+};
+
 struct Stage {
     int rackMidiBase = -1;  // kRoutedNoteBase on a track's note target
     // The MIDI bus (ADR-0068): a note-output stage's ordinal among them
@@ -580,6 +671,17 @@ struct Stage {
     host::Instance* instance = nullptr;  // null: placeholder (pass-through)
     Id fx;
     std::vector<ParamLane> lanes;
+    std::vector<std::uint32_t> laneModRoutes;  // Plan::modEdges indices, by lane (M4)
+    // Modulation (ADR-0096): a slot per parameter any plan has modulated on
+    // this FX (InstancePool::modulatedParams), sorted by id, and each slot's
+    // routes (Plan::modEdges indices). `modEvents` are reserved per block.
+    // `modHeard` and `modEpoch`: the instance and its modulationEpoch() the
+    // memo was last checked against; a change marks it stale.
+    std::vector<ModParam> mods;
+    std::vector<std::uint32_t> modRoutes;
+    std::size_t modEvents = 0;
+    const host::Instance* modHeard = nullptr;
+    std::uint32_t modEpoch = 0;
     bool bypass = false, instrument = false;
     bool autoBypassOnSilence = false, sleeping = false, processed = false;
     std::int64_t inputLatency = 0;  // stage input's timeline shift, also corrects output events
@@ -622,6 +724,9 @@ struct Stage {
     std::uint32_t nextNoteId = 0;
     std::size_t releases = 0;  // leading addressed releases already use running ids
     std::uint64_t voiceDropped = 0;
+    // Modulation events that waited past their grid point for room: a full
+    // block, or a bridged block's cut (ADR-0096); the engine reports them.
+    std::uint64_t modDeferred = 0;
     std::vector<host::OutputEvent> outStorage;
     host::OutputEvents outEvents;
     // PDC policy (fx.pdc): an ignored stage keeps its own dry delay but adds
@@ -692,6 +797,52 @@ struct TimedEvent {
     host::Event event;
     NoteOrigin origin{};
 };
+
+// A clip of the clip launcher (ADR-0097, engine.md §1.4.2), compiled into
+// its channel's node. Its phase is a pure function of the song position
+// and the anchor its launch set: `(song − anchor) mod period`, in beats for
+// a MIDI clip and timeline samples for an audio clip.
+struct ClipEvent {
+    double beat = 0;  // within the period, [0, period]; note-offs may sit at the period
+    host::Event event;
+    NoteOrigin origin{};
+};
+struct ClipPlayer {
+    Id clip;
+    bool midi = true, once = false, muted = false;
+    // Audio: its prepared take (`audio.start`/`length` unused), the period
+    // and the loop window, in timeline samples.
+    Clip audio;
+    std::int64_t periodFrames = 0, loopStartFrames = 0, loopFrames = 0;
+    bool loopOn = false;
+    // MIDI: the period in beats and its events, sorted by beat (offs first at
+    // a beat), every pass of the loop window already laid out.
+    double periodBeats = 0;
+    std::vector<ClipEvent> events;
+};
+// What a channel plays (engine.md §1.4.2): transport state, carried across
+// plan swaps by node and clip id, never in the model.
+struct LaunchState {
+    enum class Kind : std::uint8_t { Arrangement, Clip, Held, Stopped };
+    Kind kind = Kind::Arrangement;
+    int player = -1;                // Kind::Clip: its Node::players entry
+    std::int64_t anchorSample = 0;  // song samples (plan origin 0)
+    double anchorBeat = 0;          // the same position in beats
+    // The switch's crossfade: what was left (-1 the arrangement, a player,
+    // -2 nothing) and the song sample where the switch began.
+    int fadeFrom = -2;
+    std::int64_t fadeStart = 0, fadeAnchorSample = 0;  // the left player's anchor
+};
+// What a launch does to one channel, at the block boundary where the
+// channel's song position reaches `anchorSample` (engine.md §1.4.2).
+struct LaunchAction {
+    LaunchState::Kind kind = LaunchState::Kind::Arrangement;
+    int player = -1;
+    std::int64_t anchorSample = 0;
+    double anchorBeat = 0;
+};
+// A crossfade's length at a switch: 5 ms of timeline samples.
+inline constexpr double kLaunchFadeSeconds = 0.005;
 
 // A take with its own FX chain or envelopes (gap log #22): the item plays
 // through it before it reaches the track's input. Its input runs `latency`
@@ -791,8 +942,29 @@ struct Node {
                : c == 1 ? sum.r.data()
                         : aux[static_cast<std::size_t>(c - 2)].data();
     }
-    std::vector<std::size_t> in;   // incoming edges, in summation order
-    std::vector<std::size_t> out;  // source-owned send encoders
+    std::vector<std::size_t> in;     // incoming edges, in summation order
+    std::vector<std::size_t> out;    // source-owned send encoders
+    std::vector<std::size_t> modIn;  // incoming modulation edges (Plan::modEdges)
+    // Mixer targets of modulation routes (ADR-0096, M-i), bound by prepare:
+    // the node's volume, pan and width (indices into `mixMods`, -1: none),
+    // and its sends' levels (Edge::modVolume).
+    struct MixMod {
+        std::vector<std::uint32_t> routes;  // Plan::modEdges indices, summed
+        Id object{};                        // the track or route
+        std::string param;                  // volume, pan, width
+        // The sum at the current grid interval's start and end: a route
+        // delivers each value one interval early (`before` less 32), so the
+        // end is known when the interval plays.
+        double prev = 0, next = 0;
+        bool preserveOnLocate = false;  // a swap just carried it
+        std::vector<double> offsets;    // this block's, per frame
+        int telemetry = -1;             // its Plan::modOffsets slot
+    };
+    std::vector<MixMod> mixMods;
+    int modVolume = -1, modPan = -1, modWidth = -1;
+    double modOffset(int mod, std::uint32_t i) const SUPPLE_RT {
+        return mod < 0 ? 0.0 : mixMods[static_cast<std::size_t>(mod)].offsets[i];
+    }
     std::vector<Stage> chain;
     // Input FX (a channel's input_chain): they process its record input, which
     // is then monitored and recorded, whenever the track is armed with an
@@ -818,6 +990,17 @@ struct Node {
     bool releaseLive = false;  // the device's notes end (its input is no longer heard)
     std::vector<Clip> clips;
     std::vector<TakeChain> takeChains;
+    // The clip launcher (ADR-0097): the channel's clips, what it plays, and
+    // this block's arrangement gain (null: 1 throughout) with its buffers.
+    std::vector<ClipPlayer> players;
+    LaunchState launch;
+    std::int64_t launchFadeFrames = 0;
+    const float* arrangementGain = nullptr;
+    std::vector<float> arrangementGains;
+    Stereo launchBuf;
+    // MIDI sizing (prepareRackMidi): the most clip notes sounding at once and
+    // the most clip events in a block-long window, over the players.
+    std::size_t clipVoices = 0, clipWindow = 0;
     // Masters (ADR-0057): their own items play after the plain gain/pan stage,
     // into `items`, and join `post` there (ramped by the master's mute only);
     // `mix` keeps the output before them, what a master's recording takes.
@@ -941,6 +1124,13 @@ struct MixSlots {
     };
     std::unique_ptr<StageValue[]> stages;
     std::vector<Id> stageFx;
+    // A modulation route's depth and enabled (ADR-0096, M-h), per
+    // Plan::modEdges entry, read by the executor of the route's target.
+    struct ModValue {
+        std::atomic<double> depth{0};
+        std::atomic<bool> enabled{true};
+    };
+    std::unique_ptr<ModValue[]> modulations;
     std::atomic<std::uint64_t> sequence{0};
     std::array<std::uint64_t, 2> seen{};  // per executor class (0: renderer or all, 1: live)
 };
@@ -956,6 +1146,15 @@ struct Plan {
     // is live whenever anything is, and all of them share outputLatency.
     std::vector<OutputTap> outputs;
     std::vector<Edge> edges;
+    std::vector<ModEdge> modEdges;  // modulation routes (ADR-0096), in route id order
+    // Telemetry (ADR-0096, M2): each bound target's last offset, written by
+    // the executor that runs it (relaxed), read by the main thread. A
+    // plug-in's is a fraction of its CLAP range, a mixer target's in dB or
+    // percent. modOffsetOf maps each modEdges entry to its target's slot
+    // (-1: inert).
+    std::unique_ptr<std::atomic<double>[]> modOffsets;
+    static_assert(std::atomic<double>::is_always_lock_free, "the executors store offsets");
+    std::vector<int> modOffsetOf;
     // Every node by id, sorted (indexForCarry): an adoption finds a node's
     // counterpart in log n steps, whichever earlier plan it carries from.
     // Node ids are unique within a plan (asserted in debug builds).
@@ -1020,6 +1219,9 @@ struct Plan {
     // depend on that session staying alive (the real-time engine outlives it).
     std::shared_ptr<const time::TimeMap> timeMap;
     std::vector<std::string> warnings;
+    // Channels compile their clips' players (ADR-0097). Off for an offline
+    // render with no launch log: renders play the arrangement only.
+    bool clipPlayers = true;
     std::filesystem::path projectDir;
     std::shared_ptr<const PreparedSources> preparedSources;
     MediaCache* media = nullptr;
@@ -1249,6 +1451,30 @@ ExecutorChanges changedExecutors(const Plan& p, const model::Session& s);
 // An executor's copy of the published values into the nodes and edges its
 // class reads (`liveClass` as for wrapTo), at the start of a block.
 void syncMix(Plan& p, int liveClass) SUPPLE_RT;
+// --- The clip launcher (ADR-0097; clip_player.cpp) ---
+// A channel's clips as players, after its timeline events (whose ids its
+// clip notes continue from). Main thread, at compile.
+void compileClipPlayers(Plan& p, Node& n, const Session& s);
+// Applies a launch at the start of the block where the channel's song
+// position is `a.anchorSample`: notes sounding end there, audio crossfades.
+void applyLaunch(Plan& p, Node& n, const LaunchAction& a) SUPPLE_RT;
+// The node's player for `clip`, or -1.
+int playerOf(const Node& n, Id clip) SUPPLE_RT;
+// This block's arrangement gain (Node::arrangementGain; null when the
+// arrangement plays throughout) and the clips' audio, added into `into`.
+void launchAudio(Plan& p, Node& n, Stereo& into, std::int64_t pos, std::uint32_t frames) SUPPLE_RT;
+// The playing MIDI clip's events in this block, into the track's MIDI stage.
+void launchMidi(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames) SUPPLE_RT;
+// A transport wrap: a `once` clip falls silent until launched again.
+void launchWrapped(Node& n) SUPPLE_RT;
+// A plan swap: what the channel plays carries by clip id; a clip the new
+// plan lacks (or a node with no players) returns it to the arrangement.
+void carryLaunch(const Node& old, Node& n) SUPPLE_RT;
+// One stage's modulation events for a block (ADR-0096, plan.cpp): after its
+// automation, at each point of the absolute grid; `origin` is the plan's
+// first sample. Exposed for tests.
+void modulateStage(Plan& p, Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t origin,
+                   const void* self) SUPPLE_RT;
 // The device output for `k` frames (ADR-0056): every output master's main
 // pair at its channels (taps beyond `width` are skipped), the rest silent.
 // `out[c] + offset` receives channel c. A channel's first tap is copied, so a
@@ -1277,6 +1503,13 @@ inline bool rescansParamList(const host::Instance::Notifications& n) {
 inline bool automated(const model::Session& s, model::Id fx) {
     for (const auto& envelope : s.envelopes)
         if (envelope.value->target.object == fx && envelope.value->active) return true;
+    return false;
+}
+// Whether a modulation route targets the FX: a patch edit to it compiles, as
+// one to an automated FX does (ADR-0096).
+inline bool modulated(const model::Session& s, model::Id fx) {
+    for (const auto& route : s.modulations)
+        if (route.value->target.object == fx) return true;
     return false;
 }
 

@@ -271,7 +271,11 @@ position, root position: the root in the voice's `octave` (default 3), each
 further chord tone the interval above the root from the table (so 9ths etc.
 sit above the octave), pitches sorted ascending. Slash chords `{C/E}` add
 the bass note in the octave below the root. `octave` applies to chord
-symbols only. Qualities (intervals in semitones from
+symbols only. The parser, the voicing and the quality table belong to
+`libs/harmony` (`specs/harmony.md` §2), which the compiler calls; the context
+track stores the same symbols (ADR-0095), with each quality in its canonical
+spelling (`maj` is the empty quality, `min` is `m`, `+` is `aug`, `sus` is
+`sus4`, `M7` is `maj7`, `min7` is `m7`, `ø` is `m7b5`). Qualities (intervals in semitones from
 the root):
 
 | symbol | intervals | symbol | intervals |
@@ -457,6 +461,12 @@ struct DecompileOptions {
     std::optional<DrumMap> drums;
 };
 Result<std::string> decompile(const midi::Sequence&, const DecompileOptions& = {});
+
+// A duration token in ticks at `ppq` (`q.`, `h+e`, `e3`, `700t`), and the shortest
+// token for a tick count (a sum of two, else `Nt`). Errors `notation.bad_duration`
+// and `notation.tick_fraction`; zero is refused. The context lead sheet shares them.
+Result<std::int64_t> parseDuration(std::string_view token, int ppq);
+std::string durationText(std::int64_t ticks, int ppq);
 }
 ```
 
@@ -506,6 +516,10 @@ Canonical output, in order:
    to the lowest-numbered voice of that channel whose cursor is ≤ its start. A note that crosses a bar
    line is split and tied (`~`). Voices are named `c<ch>v<n>`
    (`c1v1`, `c1v2`), with `vel` set to the voice's most common velocity.
+   Pitches are named by `harmony::spell` (`specs/harmony.md` §3): with no key
+   (`DecompileOptions::key` unset) the table `C C# D Eb E F F# G Ab A Bb B`,
+   which is the output's spelling today, else by the key; every spelling
+   compiles back to the same pitch.
    Gaps become rests. Durations are written as the shortest correct token:
    single symbolic (`q`, `e.`, `e3`, ...), else a `+` sum of at most two
    symbolic values, else `Nt`. Velocities different from the voice's `vel`

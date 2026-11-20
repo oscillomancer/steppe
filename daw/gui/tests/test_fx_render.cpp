@@ -328,6 +328,37 @@ TEST_CASE("FX and render hidden subpanels release focus; popup close releases it
     CHECK(f.uiRoot().focused() == nullptr);
 }
 
+TEST_CASE("the render dialog says renders leave out the clips playing now") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto run = [&](const char* name, std::string_view args) {
+        auto r = f.dispatcher->execute({name, json::parse(args).value(), kTestOrigin});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+    };
+    run("track.add", R"({"name": "Bass"})");
+    run("scene.add", R"({"name": "A"})");
+    run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C3:q r:*"})");
+    engine::DummyBackend backend({.mode = engine::DummyBackend::Mode::Manual});
+    struct StopEngine {
+        engine::EngineApp& app;
+        ~StopEngine() { app.stopEngine(); }
+    } stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 256},
+                               {.anticipative = false}));
+    f.render->open();
+    f.frame();
+    CHECK_FALSE(f.uiRoot().find("render.clips.note"));  // every track on the arrangement
+    f.render->close();
+    run("launch.clip", R"({"clip": "cl_1"})");
+    backend.run(4);
+    f.app->tick();
+    f.render->open();
+    f.frame();
+    CHECK(f.uiRoot().find("render.clips.note"));
+    f.snapshot("render-clips-note.png");
+    f.render->close();
+}
+
 TEST_CASE("FX drags survive model refresh and separate drags have separate undo steps") {
     Fixture f;
     if (!f.ok || !f.stockPlugins()) return;
@@ -791,6 +822,332 @@ TEST_CASE("the FX window's MIDI button learns a controller for a parameter (fx.l
     REQUIRE(f.click("fx.param.learn." + key));
     REQUIRE(f.click("learn.remove"));
     CHECK(f.app->head().fx.find(fx)->learn.empty());
+}
+
+TEST_CASE(
+    "the FX window's parameter menu: MIDI learn, Modulate (greyed unless modulatable), lane") {
+    Fixture f;
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    if (!f.stockPlugins()) {
+        MESSAGE("skipped: no stock plugins (a partial build)");
+        return;
+    }
+    const model::Id track = f.addTrack("Keys");
+    // A stock plug-in that marks a parameter modulatable (fx.describe), and
+    // one writable parameter of it that is not.
+    model::Id fx;
+    std::string modulatable, fixed, modulatableName;
+    auto listed = f.run("plugin.list", json::Value::object());
+    REQUIRE(listed);
+    for (const char* name : {"Marram", "Coppice"}) {
+        std::string plugin;  // a partial build may not have it
+        for (const json::Value& p : (*listed)["plugins"].asArray())
+            if (const json::Value* n = p.find("name"); n && n->isString() && n->asString() == name)
+                plugin = p.find("id")->asString();
+        if (plugin.empty()) continue;
+        auto made = f.run("fx.add", f.args({{"track", track.str()}, {"plugin", plugin}}));
+        REQUIRE(made);
+        const model::Id id = *model::Id::parse((*made)["fx"].asString());
+        auto described = f.run("fx.describe", f.args({{"fx", id.str()}, {"full", true}}));
+        REQUIRE(described);
+        modulatable.clear();
+        fixed.clear();
+        for (const auto& m : (*described)["params"].asObject()) {
+            const json::Value* flags = m.value.find("flags");
+            const std::string text = flags ? json::writeCompact(*flags) : "";
+            if (text.find("readonly") != std::string::npos ||
+                text.find("hidden") != std::string::npos)
+                continue;
+            const json::Value* mod = m.value.find("modulatable");
+            const json::Value* viaEnvelope = m.value.find("modulatable_by_envelope");
+            if (viaEnvelope && viaEnvelope->isBool() && viaEnvelope->asBool()) continue;
+            if (mod && mod->isBool() && mod->asBool()) {
+                if (modulatable.empty()) {
+                    modulatable = m.key;
+                    const json::Value* n = m.value.find("name");
+                    modulatableName = n && n->isString() ? n->asString() : m.key;
+                }
+            } else if (fixed.empty()) {
+                fixed = m.key;
+            }
+        }
+        if (!modulatable.empty() && !fixed.empty()) {
+            fx = id;
+            break;
+        }
+    }
+    if (fx == model::Id{}) {
+        MESSAGE("skipped: neither Marram nor Coppice is built (a partial build)");
+        return;
+    }
+    REQUIRE(!modulatable.empty());
+    REQUIRE(f.fx->open(track));
+    f.fx->select(fx);
+    f.fx->showParamsTab();
+    f.frame();
+    const auto menuFor = [&](const std::string& key) -> ui::Node* {
+        ui::Node* name = f.uiRoot().find("fx.param.name." + key);
+        REQUIRE(name);
+        // A long list: scroll the row into view first.
+        for (ui::Node* n = name->parent(); n; n = n->parent())
+            if (auto* view = dynamic_cast<ui::ScrollView*>(n)) {
+                view->scrollTo(view->scroll() + name->bounds().y - view->bounds().y - 20);
+                f.frame();
+                break;
+            }
+        const ui::Point p{name->bounds().x + 4, name->bounds().y + name->bounds().h / 2};
+        f.uiRoot().pointer({ui::PointerEvent::Type::Down, p, 3});
+        f.uiRoot().pointer({ui::PointerEvent::Type::Up, p, 3});
+        f.frame();
+        return f.uiRoot().find("fx.param.menu");
+    };
+    const auto row = [](ui::Node* menu, const std::string& prefix) {
+        const auto items = ui::menuItems(*menu);
+        const auto it = std::find_if(items.begin(), items.end(),
+                                     [&](const auto& i) { return i.label.rfind(prefix, 0) == 0; });
+        REQUIRE_MESSAGE(it != items.end(), prefix);
+        return *it;
+    };
+    ui::Node* menu = menuFor(fixed);
+    REQUIRE(menu);
+    CHECK_FALSE(row(menu, "Modulate: ").enabled);
+    CHECK(row(menu, "Show lane: ").enabled);
+    f.uiRoot().closePopup();
+    menu = menuFor(modulatable);
+    REQUIRE(menu);
+    auto modulate = row(menu, "Modulate: ");
+    CHECK(modulate.label == "Modulate: " + modulatableName + "…");
+    CHECK(modulate.enabled);
+    f.uiRoot().closePopup();
+    modulate.run();
+    ui::Node* sources = f.uiRoot().find("param.modulate.menu");
+    REQUIRE(sources);
+    auto lfo = row(sources, "LFO");
+    f.uiRoot().closePopup();
+    const std::size_t before = f.historyCount();
+    lfo.run();
+    CHECK(f.historyCount() == before + 1);
+    const model::Session s = f.app->head();
+    REQUIRE(s.modulations.size() == 1);
+    CHECK(s.modulations.begin()->value->target == model::EnvTarget{fx, modulatable});
+    // The route holds the lane: the menu offers to hide it, not to add one.
+    f.fx->tick();
+    f.frame();
+    menu = menuFor(modulatable);
+    REQUIRE(menu);
+    CHECK(row(menu, "Hide lane: ").enabled);
+    f.uiRoot().closePopup();
+    // Its slider shows the route on its travel (an LFO at a quarter of the
+    // range: ±0.25), and a drag on the bar under the track sets the depth in
+    // one undo step while the panel holds still.
+    auto* slider = dynamic_cast<ui::Slider*>(f.uiRoot().find("fx.param." + modulatable));
+    REQUIRE(slider);
+    REQUIRE(slider->modulation());
+    CHECK(slider->modulation()->low == doctest::Approx(-0.25));
+    CHECK(slider->modulation()->high == doctest::Approx(0.25));
+    const model::Id route = s.modulations.begin()->id;
+    const ui::Rect b = slider->bounds();
+    const bool left = slider->value() > 0.5;  // away from the cap
+    const ui::Point p{left ? b.x + ui::Slider::kInset + 6 : b.right() - ui::Slider::kInset - 6,
+                      b.y + b.h / 2 + 4.5f};
+    const std::size_t steps = f.historyCount();
+    f.uiRoot().pointer({ui::PointerEvent::Type::Down, p, 1});
+    for (int i = 1; i <= 10; ++i) {
+        f.uiRoot().pointer(
+            {ui::PointerEvent::Type::Move, {p.x + (left ? 1 : -1) * i * 4.0f, p.y}, 0});
+        f.fx->tick();
+        f.frame();
+    }
+    CHECK(f.uiRoot().find("fx.param." + modulatable) == slider);  // not rebuilt mid-drag
+    f.uiRoot().pointer({ui::PointerEvent::Type::Up, {p.x + (left ? 40.0f : -40.0f), p.y}, 1});
+    f.fx->tick();
+    f.frame();
+    CHECK(f.historyCount() == steps + 1);
+    CHECK(f.app->head().modulations.find(route)->depth != doctest::Approx(0.25));
+}
+
+TEST_CASE("a plain CLAP plug-in's modulatable parameter is editable in the FX window") {
+    // ADR-0096 M3: a plug-in without semantic keys lists its CLAP parameters;
+    // a modulatable one gets a slider over its declared range (fx.param.set by
+    // id, a drag one undo step) and the menu's Modulate.
+    Fixture f(true);
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    const model::Id track = f.addTrack("Raw");
+    auto made = f.run(
+        "fx.add", f.args({{"track", track.str()}, {"plugin", "com.suppleaudio.test.raw-gain"}}));
+    REQUIRE(made);
+    const model::Id fx = *model::Id::parse((*made)["fx"].asString());
+    auto described = f.run("fx.describe", f.args({{"fx", fx.str()}, {"full", true}}));
+    REQUIRE(described);
+    REQUIRE((*described)["params"].isArray());
+    std::string key;
+    for (const json::Value& p : (*described)["params"].asArray())
+        if (const json::Value* m = p.find("modulatable"); m && m->isBool() && m->asBool())
+            key = std::to_string(static_cast<std::uint32_t>(p.find("id")->asDouble()));
+    REQUIRE_MESSAGE(!key.empty(), "the raw gain marks its gain modulatable");
+    REQUIRE(f.fx->open(track));
+    f.fx->select(fx);
+    f.fx->showParamsTab();
+    f.frame();
+    auto* slider = dynamic_cast<ui::Slider*>(f.uiRoot().find("fx.param." + key));
+    REQUIRE(slider);
+    // A drag sets the value by id, one undo step.
+    const std::size_t before = f.historyCount();
+    const ui::Rect b = slider->bounds();
+    const float y = b.y + b.h / 2 - 3;  // the track, above the modulation bar's place
+    const float x0 = b.x + ui::Slider::kInset +
+                     static_cast<float>(slider->value()) * (b.w - 2 * ui::Slider::kInset);
+    f.uiRoot().pointer({ui::PointerEvent::Type::Down, {x0, y}, 1});
+    for (int i = 1; i <= 10; ++i)
+        f.uiRoot().pointer({ui::PointerEvent::Type::Move, {x0 - i * 5.0f, y}, 0});
+    f.uiRoot().pointer({ui::PointerEvent::Type::Up, {x0 - 50.0f, y}, 1});
+    f.fx->tick();
+    f.frame();
+    CHECK(f.historyCount() == before + 1);
+    const auto& params = f.app->head().fx.find(fx)->params;
+    const auto saved = params.find(static_cast<std::uint32_t>(std::stoul(key)));
+    REQUIRE(saved != params.end());
+    // Its menu has Modulate (no lane: a plain parameter has none), which
+    // routes the parameter by its CLAP id.
+    ui::Node* name = f.uiRoot().find("fx.plain.name.0");
+    REQUIRE(name);
+    const ui::Point p{name->bounds().x + 4, name->bounds().y + name->bounds().h / 2};
+    f.uiRoot().pointer({ui::PointerEvent::Type::Down, p, 3});
+    f.uiRoot().pointer({ui::PointerEvent::Type::Up, p, 3});
+    f.frame();
+    ui::Node* menu = f.uiRoot().find("fx.param.menu");
+    REQUIRE(menu);
+    std::vector<std::string> labels;
+    std::function<void()> modulate;
+    for (const auto& item : ui::menuItems(*menu)) {
+        labels.push_back(item.label);
+        if (item.label.rfind("Modulate: ", 0) == 0) {
+            CHECK(item.enabled);
+            modulate = item.run;
+        }
+    }
+    CHECK(std::none_of(labels.begin(), labels.end(),
+                       [](const std::string& l) { return l.find("lane") != std::string::npos; }));
+    REQUIRE(modulate);
+    f.uiRoot().closePopup();
+    modulate();
+    ui::Node* sources = f.uiRoot().find("param.modulate.menu");
+    REQUIRE(sources);
+    std::function<void()> lfo;
+    for (const auto& item : ui::menuItems(*sources))
+        if (item.label == "LFO") lfo = item.run;
+    REQUIRE(lfo);
+    f.uiRoot().closePopup();
+    lfo();
+    REQUIRE(f.app->head().modulations.size() == 1);
+    CHECK(f.app->head().modulations.begin()->value->target == model::EnvTarget{fx, key});
+    f.fx->tick();
+    f.frame();
+    slider = dynamic_cast<ui::Slider*>(f.uiRoot().find("fx.param." + key));
+    REQUIRE(slider);
+    REQUIRE(slider->modulation());
+    CHECK(slider->modulation()->high == doctest::Approx(0.25));
+}
+
+TEST_CASE("a parameter reached through its envelope takes Modulate; an idle route says why") {
+    // ADR-0096 M4: a plug-in parameter that is automatable but not
+    // modulatable (the fixed gain's, as any VST3 one) is marked
+    // modulatable_by_envelope. Its row is editable and its Modulate enabled;
+    // modulate adds the one-point envelope that carries the route, and with
+    // that envelope off the route is idle and the menu names the reason.
+    Fixture f(true);
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    const model::Id track = f.addTrack("Fixed");
+    auto made = f.run(
+        "fx.add", f.args({{"track", track.str()}, {"plugin", "com.suppleaudio.test.fixed-gain"}}));
+    REQUIRE(made);
+    const model::Id fx = *model::Id::parse((*made)["fx"].asString());
+    auto described = f.run("fx.describe", f.args({{"fx", fx.str()}, {"full", true}}));
+    REQUIRE(described);
+    REQUIRE((*described)["params"].isArray());
+    std::string key;
+    for (const json::Value& p : (*described)["params"].asArray())
+        if (const json::Value* m = p.find("modulatable_by_envelope");
+            m && m->isBool() && m->asBool())
+            key = std::to_string(static_cast<std::uint32_t>(p.find("id")->asDouble()));
+    REQUIRE_MESSAGE(!key.empty(), "the fixed gain's gain is reached through its envelope");
+    REQUIRE(f.fx->open(track));
+    f.fx->select(fx);
+    f.fx->showParamsTab();
+    f.frame();
+    REQUIRE(dynamic_cast<ui::Slider*>(f.uiRoot().find("fx.param." + key)));
+    auto openMenu = [&]() -> ui::Node* {
+        ui::Node* name = f.uiRoot().find("fx.plain.name.0");
+        REQUIRE(name);
+        const ui::Point p{name->bounds().x + 4, name->bounds().y + name->bounds().h / 2};
+        f.uiRoot().pointer({ui::PointerEvent::Type::Down, p, 3});
+        f.uiRoot().pointer({ui::PointerEvent::Type::Up, p, 3});
+        f.frame();
+        return f.uiRoot().find("fx.param.menu");
+    };
+    auto labels = [](ui::Node* menu) {
+        std::vector<std::string> out;
+        for (const auto& item : ui::menuItems(*menu)) out.push_back(item.label);
+        return out;
+    };
+    ui::Node* menu = openMenu();
+    REQUIRE(menu);
+    std::function<void()> modulate;
+    for (const auto& item : ui::menuItems(*menu))
+        if (item.label.rfind("Modulate: ", 0) == 0) {
+            CHECK(item.enabled);
+            modulate = item.run;
+        }
+    REQUIRE(modulate);
+    f.uiRoot().closePopup();
+    modulate();
+    ui::Node* sources = f.uiRoot().find("param.modulate.menu");
+    REQUIRE(sources);
+    std::function<void()> lfo;
+    for (const auto& item : ui::menuItems(*sources))
+        if (item.label == "LFO") lfo = item.run;
+    REQUIRE(lfo);
+    f.uiRoot().closePopup();
+    lfo();
+    const model::Session s = f.app->head();
+    REQUIRE(s.modulations.size() == 1);
+    CHECK(s.modulations.begin()->value->target == model::EnvTarget{fx, key});
+    std::optional<model::Id> env;
+    for (const auto& e : s.envelopes)
+        if (e.value->target == model::EnvTarget{fx, key}) env = e.id;
+    REQUIRE_MESSAGE(env, "modulate added the envelope that carries the route");
+    f.fx->tick();
+    f.frame();
+    // It plays: no idle row.
+    menu = openMenu();
+    REQUIRE(menu);
+    for (const std::string& l : labels(menu)) CHECK(l.find("idle") == std::string::npos);
+    f.uiRoot().closePopup();
+    // With its envelope off the route is idle, and the menu says why.
+    REQUIRE(f.run("env.set", f.args({{"env", env->str()}, {"active", false}})));
+    f.fx->tick();
+    f.frame();
+    menu = openMenu();
+    REQUIRE(menu);
+    bool said = false;
+    for (const auto& item : ui::menuItems(*menu))
+        if (item.label == "Modulation idle: the envelope that carries it is off") {
+            CHECK_FALSE(item.enabled);
+            said = true;
+        }
+    std::string rows;
+    for (const std::string& l : labels(menu)) rows += l + " | ";
+    CHECK_MESSAGE(said, "menu rows: " << rows);
+    f.uiRoot().closePopup();
 }
 
 TEST_CASE("a knob bound to the last touched parameter follows the panel's last edit") {
@@ -2446,7 +2803,7 @@ TEST_CASE("a failed effect links to the report its bridge's death left") {
     REQUIRE(badge);
     REQUIRE(badge->runs().size() == 2);
     CHECK(badge->runs()[0].colorToken == "ink-quiet");
-    CHECK(badge->runs()[1].colorToken == "clip");
+    CHECK(badge->runs()[1].colorToken == "meter-clip");
     f.snapshot("fx-failed-report.png");
     CHECK(f.fx->incidentOf(id) == "0123456789abcdef0123456789abcdef");
     REQUIRE(f.click("fx.report." + id));
@@ -3531,10 +3888,10 @@ TEST_CASE(
     REQUIRE(menu);
     std::vector<std::string> labels;
     for (const auto& item : ui::menuItems(*menu)) labels.push_back(item.label);
-    CHECK(std::find(labels.begin(), labels.end(), "Automate") != labels.end());
+    CHECK(std::find(labels.begin(), labels.end(), "Show lane") != labels.end());
     CHECK(std::find(labels.begin(), labels.end(), "MIDI learn…") != labels.end());
     for (const auto& item : ui::menuItems(*menu))
-        if (item.label == "Automate") {
+        if (item.label == "Show lane") {
             auto run = item.run;
             f.panel->root().closePopups();
             run();

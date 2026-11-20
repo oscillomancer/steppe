@@ -6,11 +6,13 @@
 #include "test_support.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include "supple/engine/realtime.h"
 
 #include "routing_matrix.h"
 #include "shell.h"
+#include "supple/gui/png.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/root.h"
 #include "supple/ui/text_field.h"
@@ -747,7 +749,7 @@ namespace {
 std::vector<model::Id> trackRows(SendsFixture& f) {
     std::vector<model::Id> out;
     for (const views::TrackRow& r : f.view().trackLayout().rows())
-        if (!r.env) out.push_back(r.track);
+        if (!r.lane()) out.push_back(r.track);
     return out;
 }
 std::vector<model::Id> masterChildren(SendsFixture& f) {
@@ -988,7 +990,83 @@ TEST_CASE("a strip's envelope menu automates its sends; their lanes sit under th
     CHECK(*lane == *strip + 1);
 }
 
-TEST_CASE("TCP: a right-click on a strip's fader or button learns a MIDI control for it") {
+TEST_CASE("TCP: a modulated fader shows its route, and a drag on its bar sets the depth") {
+    SendsFixture f;
+    auto* fader = dynamic_cast<ui::Fader*>(f.view().tcpPanel().controlNode(f.a, "fader"));
+    REQUIRE(fader);
+    CHECK_FALSE(fader->modulation());
+    json::Value target = json::Value::object(), args = json::Value::object();
+    target["track"] = f.a.str();
+    target["param"] = "volume";
+    args["target"] = target;
+    args["source"] = "lfo";
+    const auto route = *model::Id::parse(f.exec("modulate", args)["modulation"].asString());
+    f.sync();
+    fader = dynamic_cast<ui::Fader*>(f.view().tcpPanel().controlNode(f.a, "fader"));
+    REQUIRE(fader);
+    REQUIRE(fader->modulation());
+    CHECK(fader->modulation()->low == -6);
+    CHECK(fader->modulation()->high == 6);
+    // The horizontal fader's bar is under it: a drag there is the depth.
+    const ui::Rect zone = fader->depthZone();
+    REQUIRE(zone.w > 0);
+    const ui::Point p{zone.x + zone.w / 2, zone.y + zone.h / 2};
+    const auto before = f.history();
+    f.pointer(Pointer::Down, p);
+    for (int i = 1; i <= 10; ++i) {
+        f.pointer(Pointer::Move, {p.x + i * 4.0f, p.y});
+        f.sync();
+    }
+    f.pointer(Pointer::Up, {p.x + 40.0f, p.y});
+    f.sync();
+    CHECK(f.history() == before + 1);
+    const model::Session s = f.app->head();
+    CHECK(s.modulations.find(route)->depth > 6);
+    CHECK(s.tracks.find(f.a)->volumeDb == 0);
+    // The engine's telemetry gives the live value; without it there is none.
+    CHECK_FALSE(fader->modulation()->live);
+    f.view().setModulationOffsets({{route, -2.5}});
+    REQUIRE(fader->modulation());
+    REQUIRE(fader->modulation()->live);
+    CHECK(*fader->modulation()->live == -2.5);
+    // The lane draws the live value at the playhead: a bright stroke and
+    // dot in signal-cv, where away from the playhead only the faint band is.
+    const auto laneRow = f.view().trackLayout().indexOfTarget({f.a, "volume"});
+    REQUIRE(laneRow);
+    f.view().setPlayhead(2.0);
+    f.view().setModulationOffsets({{route, 6.0}});
+    f.root->damageAll();
+    f.root->frame(false);
+    const ui::Rect lane = f.view().rowRect(*laneRow);
+    const float px = f.view().xAt(2.0);
+    REQUIRE(px > lane.x + 10);
+    REQUIRE(px + 40 < lane.right());
+    const gui::Image image = f.root->readBack();
+    const float ratio = static_cast<float>(image.width) / f.window->width();
+    const ui::Color cv = ui::Theme::dark().color("signal-cv");
+    auto brightIn = [&](float x) {
+        for (float y = lane.y + 1; y < lane.bottom() - 1; y += 0.5f) {
+            const std::size_t i =
+                (static_cast<std::size_t>(y * ratio) * static_cast<std::size_t>(image.width) +
+                 static_cast<std::size_t>(x * ratio)) *
+                4;
+            if (std::abs(image.rgba[i] - static_cast<int>(cv.r * 255)) < 20 &&
+                std::abs(image.rgba[i + 1] - static_cast<int>(cv.g * 255)) < 20 &&
+                std::abs(image.rgba[i + 2] - static_cast<int>(cv.b * 255)) < 20)
+                return true;
+        }
+        return false;
+    };
+    // Beside the playhead's own line, within the 5-unit dot.
+    CHECK(brightIn(px + 1.75f));
+    CHECK_FALSE(brightIn(px + 40));
+    if (const char* out = std::getenv("SUPPLE_TEST_SNAPSHOTS"))
+        (void)gui::writePng(std::filesystem::path(out) / "lane-live.png", image);
+    f.view().setModulationOffsets({});
+    CHECK_FALSE(fader->modulation()->live);
+}
+
+TEST_CASE("TCP: a right-click on a strip's fader or button opens its parameter menu") {
     SendsFixture f;
     auto rightClick = [&](const char* what) {
         ui::Node* node = f.view().tcpPanel().controlNode(f.a, what);
@@ -1003,10 +1081,39 @@ TEST_CASE("TCP: a right-click on a strip's fader or button learns a MIDI control
         f.root->pointer(e);
         f.root->frame(false);
     };
-    // The menu's one row opens the learn dialog; a moved control and OK bind it.
+    auto labels = [&] {
+        std::vector<std::string> out;
+        ui::Node* menu = f.root->find("strip.param.menu");
+        REQUIRE(menu);
+        for (const auto& item : ui::menuItems(*menu)) out.push_back(item.label);
+        return out;
+    };
+    // A row of the menu, run as a click on it would.
+    auto pick = [&](const std::string& label) {
+        ui::Node* menu = f.root->find("strip.param.menu");
+        REQUIRE(menu);
+        const auto items = ui::menuItems(*menu);
+        const auto it = std::find_if(items.begin(), items.end(),
+                                     [&](const auto& i) { return i.label == label; });
+        REQUIRE(it != items.end());
+        auto run = it->run;
+        f.root->closePopup();
+        run();
+        f.sync();
+    };
+    // The same rows as the mixer's: learn, lane, reset.
+    rightClick("fader");
+    CHECK(labels() == std::vector<std::string>{"MIDI learn: Volume…", "Modulate: Volume…",
+                                               "Show lane: Volume", "Reset to 0 dB"});
+    f.root->closePopup();
+    rightClick("mute");
+    CHECK(labels() ==
+          std::vector<std::string>{"MIDI learn: Mute…", "Modulate: Mute…", "Show lane: Mute"});
+    f.root->closePopup();
+    // The first row opens the learn dialog; a moved control and OK bind it.
     auto learn = [&](const char* what, const std::string& entry, std::uint8_t cc) {
         rightClick(what);
-        ui::Node* menu = f.root->find("strip.learn.menu");
+        ui::Node* menu = f.root->find("strip.param.menu");
         REQUIRE(menu);
         CHECK(ui::menuItems(*menu)[0].label == entry);
         const ui::Point p{menu->bounds().x + 40, menu->bounds().y + 13};
@@ -1037,10 +1144,43 @@ TEST_CASE("TCP: a right-click on a strip's fader or button learns a MIDI control
     CHECK(a.learn[1].control.number == 7);
     // The menu names what is bound.
     rightClick("fader");
-    REQUIRE(f.root->find("strip.learn.menu"));
-    CHECK(ui::menuItems(*f.root->find("strip.learn.menu"))[0].label ==
-          "MIDI learn: Volume… (CC 7 · ch 1)");
+    if (const char* out = std::getenv("SUPPLE_TEST_SNAPSHOTS")) {
+        f.root->damageAll();
+        f.root->frame(false);
+        (void)gui::writePng(std::filesystem::path(out) / "param-menu-tcp-fader.png",
+                            f.root->readBack());
+    }
+    CHECK(labels().front() == "MIDI learn: Volume… (CC 7 · ch 1)");
     f.root->closePopup();
+    // Show lane: a volume envelope flat at the fader's value, its lane under
+    // the track; the next menu hides it.
+    auto set = json::Value::object();
+    set["track"] = f.a.str();
+    set["volume_db"] = -6.0;
+    f.exec("track.set", set);
+    rightClick("fader");
+    pick("Show lane: Volume");
+    const model::Envelope* volume = nullptr;
+    model::Id volumeId;
+    for (const auto& e : f.app->head().envelopes)
+        if (e.value->target == model::EnvTarget{f.a, "volume"}) {
+            volume = e.value.get();
+            volumeId = e.id;
+        }
+    REQUIRE(volume);
+    REQUIRE(volume->points.size() == 1);
+    CHECK(volume->points.front().value == doctest::Approx(-6));
+    CHECK(f.view().trackLayout().indexOfEnv(volumeId));
+    rightClick("fader");
+    pick("Hide lane: Volume");
+    CHECK_FALSE(f.app->head().envelopes.find(volumeId)->visible);
+    CHECK_FALSE(f.view().trackLayout().indexOfEnv(volumeId));
+    // Reset: 0 dB, as a double-click on the fader sets it, one undo step.
+    const auto before = f.history();
+    rightClick("fader");
+    pick("Reset to 0 dB");
+    CHECK(f.app->head().tracks.find(f.a)->volumeDb == 0);
+    CHECK(f.history() == before + 1);
     // Elsewhere on the row, the track's menu as before.
     const auto row = f.view().trackLayout().indexOf(f.a);
     REQUIRE(row);
@@ -1052,7 +1192,8 @@ TEST_CASE("TCP: a right-click on a strip's fader or button learns a MIDI control
     f.root->pointer(e);
     f.root->frame(false);
     CHECK(f.root->find("track.menu." + f.a.str()));
-    CHECK_FALSE(f.root->find("strip.learn.menu"));
+    CHECK_FALSE(f.root->find("strip.param.menu"));
+    CHECK(f.errors.empty());
 }
 
 TEST_CASE("pan controls: channel and buss envelope menus create and hide pan lanes") {

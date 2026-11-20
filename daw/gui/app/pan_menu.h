@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
-// A channel's or buss's pan menu (gui.md §4.5, ADR-0066): a right-click on its
-// pan in the TCP or the mixer chooses the pan mode (pan, dual pan, pan and
-// width), the pan law (the project's, or 0 to -6 dB) and gain compensation,
-// above the pan's MIDI learn. A master's pan is a balance: MIDI learn only.
+// A strip's pan control by its pan mode (gui.md §4.5, ADR-0066). The pan's
+// right-click menu, with its mode, law and gain compensation, is the
+// parameter menu's (param_menu.h).
 #pragma once
 
 #include "app_actions.h"
@@ -12,9 +11,6 @@
 #include "supple/ui/root.h"
 
 namespace supple::gui {
-
-void openPanMenu(ui::Root& root, AppActions& actions, const model::Id& track,
-                 const ui::Rect& anchor);
 
 // How a strip's pan control splits for its mode, and the values it shows.
 ui::PanControl::Split panSplit(const model::Track& track);

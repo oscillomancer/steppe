@@ -114,7 +114,10 @@ same change, and say what you found.
   --size 1400x900 --frames 5 --snapshot out.png` (add `--action ui.mixer`
   and similar to open panels). Golden images regenerate with a full run of
   the suite (`SUPPLE_UPDATE_GOLDEN=1`, no `-tc` filter); look at every
-  changed PNG before committing it. UI behaviour is specified in
+  changed PNG before committing it. Run `gui-ui.tests`, `gui-views.tests`
+  and `gui-app.tests` directly from `build/dev/daw/gui/`, not through
+  ctest: ctest renders in software GL and rewrites every golden by a level
+  or two, and the committed goldens are the direct run's. UI behaviour is specified in
   `docs/specs/gui.md`; update it with the change.
 - **Docs.** Update the spec, and `STATUS.md` when a feature lands, a known
   limit appears or one is lifted. Keep `STATUS.md` a picture of the present,
@@ -169,7 +172,11 @@ unless their variable is exactly `1`: `SUPPLE_AUDIO_DEVICE_TEST` opens the
 real audio device (two seconds of silence); `SUPPLE_GUI_DISPLAY_TEST` opens
 plugin editor windows on the native display; `SUPPLE_MIDI_DEVICE_TEST` opens
 native MIDI inputs on macOS/Windows (with a fake audio driver, so no audio
-device is opened).
+device is opened); `SUPPLE_EDITOR_PROBE_TEST` runs the stock plugins' X11 and
+Win32 editor probes (`plugin.<name>.embedding`), which take over a window at
+a fixed spot on the screen: without it they are reported as skipped. Native
+CI sets it on every platform (Linux under Xvfb). Do not set it on a desktop
+you are using.
 
 Other checks, run on demand: `tools/validator/build.sh` and
 `tools/validator/run.sh <plugin.clap>` (clap-validator 0.4.1, built in the

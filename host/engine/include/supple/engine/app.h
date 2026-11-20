@@ -252,6 +252,7 @@ struct EngineStatus {
     // class (ADR-0026, ADR-0081).
     std::vector<std::string> bridgeThreadsRefused;
     std::int64_t dropped = 0, voiceDropped = 0;  // plug-in output/voice transport
+    std::int64_t modulationDeferred = 0;         // ADR-0096: events that waited for room
     json::Value failedErrors = json::Value::array();
     SyncReport sync;  // external sync (ADR-0071)
 };
@@ -364,6 +365,10 @@ class EngineApp : public cmd::Host {
     model::Session view() const;  // the open transaction's preview, else the head
     model::EditTxn& txn();        // the open transaction (edit commands only)
     bool inTransaction() const { return txn_ != nullptr; }
+    // Adds a step to the open transaction's history record. context.write uses it to
+    // record the key.set, chord.set and remove steps it resolved to instead of its text
+    // (a merge replays those, so branches that write different bars merge).
+    void recordInvocation(std::string command, json::Value args);
     model::VersionStore& versions() { return *versions_; }
     const model::VersionStore& versions() const { return *versions_; }
     const AppOptions& options() const { return options_; }
@@ -486,6 +491,11 @@ class EngineApp : public cmd::Host {
     // process where it once made one per fx.
     std::size_t instancesMade() const { return instancesMade_; }
     InstancePool& instances() { return *pool_; }
+    // Each bound modulation route's target's live offset (ADR-0096, M2;
+    // Engine::modulationOffsets): empty without a running engine.
+    std::map<model::Id, double> modulationOffsets() const {
+        return engine_ ? engine_->modulationOffsets() : std::map<model::Id, double>{};
+    }
     MediaCache& media() { return media_; }
     // The plugin's semantic schema (null for plugins without the extension).
     Result<json::Value> fxSchema(const model::FxInstance& fx);

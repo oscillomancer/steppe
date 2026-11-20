@@ -13,7 +13,7 @@ history; queries and rendering alone do not.
 
 ## Tools: core set + describe/exec/query
 
-The engine lists 37 common command tools plus `describe`, `exec` and `query` by
+The engine lists 38 common command tools plus `describe`, `exec` and `query` by
 default. A proxy to the GUI also lists its existing `gui_selection` tool. `describe {}` lists every command as compact rows grouped by namespace;
 `describe {"command": "fx.patch.list"}` gives arguments, result schema, errors
 and examples. Call the rest with
@@ -74,6 +74,7 @@ tool (or as `args` through `exec`).
 | Task | Read |
 |---|---|
 | Writing melodies, chords, drums, bass lines, controller moves | `guides/notation.md` |
+| The project's key, chords and sections: reading and setting them, how notes are spelled | `guides/harmony.md` |
 | The sandbox loop: load a plugin, program it, render, analyze, iterate | `guides/sandbox-loop.md` |
 | EQ: rumble, masking, harshness, de-essing, dynamic and mid/side bands (Yarrow) | `guides/eq.md` |
 | A real room or hall: its size, materials, where the sound and the listener stand, decay, clarity, held ambience (Ghyll) | `guides/reverb.md` |

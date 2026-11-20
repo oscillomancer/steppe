@@ -8,6 +8,7 @@
 #include "supple/engine/offline.h"
 #include "supple/model/audio_warp.h"
 #include "supple/model/schemas.h"
+#include "supple/model/take_owner.h"
 
 namespace supple::engine {
 namespace {
@@ -21,16 +22,11 @@ std::filesystem::path sourcePath(const model::Session& s, const model::MediaSour
     }
     return path;
 }
-// Each take's item, found once rather than by a search per take.
-std::map<model::Id, const model::Item*> takeOwners(const model::Session& s) {
-    std::map<model::Id, const model::Item*> owners;
-    for (const auto& e : s.items)
-        for (model::Id take : e.value->takes) owners.emplace(take, e.value.get());
-    return owners;
-}
-const model::Item* ownerOf(const std::map<model::Id, const model::Item*>& owners, model::Id id) {
-    const auto found = owners.find(id);
-    return found == owners.end() ? nullptr : found->second;
+// The item holding a take, through each take's owner found once
+// (model::TakeOwners) rather than by a search per take.
+const model::Item* ownerOf(const model::Session& s, const model::TakeOwners& owners, model::Id id) {
+    const auto owner = owners.of(id);
+    return owner ? s.items.find(*owner) : nullptr;
 }
 }  // namespace
 Result<std::string> sourcePreparationKey(const model::Session& s, const std::filesystem::path& dir,
@@ -38,11 +34,11 @@ Result<std::string> sourcePreparationKey(const model::Session& s, const std::fil
     json::Value key = json::Value::array();
     key.push_back(dir.generic_string());
     key.push_back(rate);
-    const auto owners = takeOwners(s);
+    const model::TakeOwners owners(s);
     for (const auto& e : s.takes) {
         const auto& t = *e.value;
         const auto* md = t.source ? s.media.find(*t.source) : nullptr;
-        const auto* it = ownerOf(owners, e.id);
+        const auto* it = ownerOf(s, owners, e.id);
         if (!md || !it) continue;
         // Only source-affecting fields: gain/FX/mute and hit overlays do not
         // re-run preparation. File metadata catches unhashed external changes.
@@ -72,8 +68,136 @@ Result<std::string> sourcePreparationKey(const model::Session& s, const std::fil
                    : std::to_string(static_cast<long long>(stamp.time_since_epoch().count())));
         }
     }
+    // Clips' active takes, in launch order: the order decides which fit.
+    for (const model::Id id : clipsInLaunchOrder(s)) {
+        const model::Clip& clip = *s.clips.find(id);
+        const auto* t = clip.activeTake ? s.takes.find(*clip.activeTake) : nullptr;
+        const auto* md = t && t->source ? s.media.find(*t->source) : nullptr;
+        if (!md) continue;
+        json::Value entry = json::Value::array();
+        entry.push_back(id.str());
+        entry.push_back(clip.activeTake->str());
+        auto take = *t;
+        take.transients.reset();
+        take.chain.clear();
+        take.takeMarkers.clear();
+        take.name.clear();
+        take.gainDb = take.pan = 0;
+        take.phaseInvert = false;
+        take.channelMode = model::ChannelMode::Normal;
+        entry.push_back(model::toJson(take));
+        entry.push_back(model::toJson(*md));
+        if (md->hash.empty()) {
+            std::error_code ec;
+            const auto path = sourcePath(s, *md, dir);
+            const auto size = std::filesystem::file_size(path, ec);
+            entry.push_back(ec ? "missing" : std::to_string(size));
+            const auto stamp = std::filesystem::last_write_time(path, ec);
+            entry.push_back(
+                ec ? "missing"
+                   : std::to_string(static_cast<long long>(stamp.time_since_epoch().count())));
+        }
+        key.push_back(std::move(entry));
+    }
     return json::writeCanonical(key);
 }
+std::vector<model::Id> clipsInLaunchOrder(const model::Session& s) {
+    std::map<model::Id, std::size_t> trackAt;
+    std::vector<model::Id> stack(s.project->masters.rbegin(), s.project->masters.rend());
+    while (!stack.empty()) {
+        const model::Id id = stack.back();
+        stack.pop_back();
+        if (!trackAt.emplace(id, trackAt.size()).second) continue;
+        if (const auto* tr = s.tracks.find(id))
+            for (auto it = tr->children.rbegin(); it != tr->children.rend(); ++it)
+                stack.push_back(*it);
+    }
+    struct Key {
+        int scene;
+        std::size_t track;
+        model::Id id;
+    };
+    std::vector<Key> keys;
+    for (const auto& e : s.clips) {
+        const auto* scene = s.scenes.find(e.value->scene);
+        const auto at = trackAt.find(e.value->track);
+        keys.push_back(
+            {scene ? scene->order : INT32_MAX, at == trackAt.end() ? SIZE_MAX : at->second, e.id});
+    }
+    std::sort(keys.begin(), keys.end(), [](const Key& a, const Key& b) {
+        return std::tie(a.scene, a.track, a.id) < std::tie(b.scene, b.track, b.id);
+    });
+    std::vector<model::Id> out;
+    for (const Key& k : keys) out.push_back(k.id);
+    return out;
+}
+
+ResidentSamples residentSamples(const model::Session& s, const std::filesystem::path& dir,
+                                double rate) {
+    const model::TakeOwners owners(s);
+    std::set<model::Id> needed;
+    for (const auto& e : s.items)
+        if (e.value->activeTake) needed.insert(*e.value->activeTake);
+    for (auto id : std::vector<model::Id>(needed.begin(), needed.end()))
+        if (const auto* t = s.takes.find(id))
+            needed.insert(t->warpPeers.begin(), t->warpPeers.end());
+    ResidentSamples out;
+    std::set<std::string> decoded, variants;
+    // One take's share. A warped, unlooped item's audio is rendered for its
+    // span; anything else is a variant of the whole source.
+    // One take's share; `commit` false only prices it (a clip that may not fit).
+    auto add = [&](const model::Take& take, const model::MediaSource& md, const model::Item* item,
+                   double& total, bool commit = true) {
+        double share = 0;
+        const MediaVariant variant{take.playrate, take.pitch, take.preservePitch, take.pitchMode};
+        const auto identity = md.hash.empty() ? sourcePath(s, md, dir).generic_string() : md.hash;
+        const bool newSource = !decoded.contains(identity);
+        if (newSource) share += static_cast<double>(md.frames) * md.channels;
+        std::string variantKey;
+        if (item && model::activeWarp(take) && !item->loop) {
+            const auto span = model::itemSpan(s, *item);
+            share += std::ceil((span.endSec - span.startSec) * rate) * md.channels;
+        } else {
+            const bool stretch = variant.stretch();
+            variantKey = identity + (stretch ? "|s" : "|r") + json::formatDouble(variant.playrate) +
+                         "|" +
+                         json::formatDouble(stretch || !variant.preservePitch ? variant.pitch : 0.);
+            if (!variants.contains(variantKey))
+                share += static_cast<double>(md.frames) * rate / md.sampleRate / variant.speed() *
+                         md.channels;
+        }
+        if (commit) {
+            if (newSource) decoded.insert(identity);
+            if (!variantKey.empty()) variants.insert(variantKey);
+            total += share;
+        }
+        return share;
+    };
+    for (auto id : needed) {
+        const auto* take = s.takes.find(id);
+        const auto* md = take && take->source ? s.media.find(*take->source) : nullptr;
+        const auto* item = ownerOf(s, owners, id);
+        if (!md || !item || md->sampleRate <= 0) continue;
+        add(*take, *md, item, out.arrangement);
+    }
+    // Clips in launch order: each that fits is counted (and shares what it
+    // holds with the later ones); each that does not is skipped.
+    double fitted = 0;
+    for (const model::Id id : clipsInLaunchOrder(s)) {
+        const model::Clip& clip = *s.clips.find(id);
+        const auto* take = clip.activeTake ? s.takes.find(*clip.activeTake) : nullptr;
+        const auto* md = take && take->source ? s.media.find(*take->source) : nullptr;
+        if (!md || md->sampleRate <= 0) continue;
+        const double share = add(*take, *md, nullptr, fitted, false);
+        out.clips += share;
+        if (out.arrangement + fitted + share > kPreparedSampleBudget)
+            out.clipsSkipped.push_back(id);
+        else
+            add(*take, *md, nullptr, fitted);
+    }
+    return out;
+}
+
 Result<std::shared_ptr<const PreparedSources>> MediaCache::prepareSources(
     const model::Session& s, const std::filesystem::path& dir, double rate,
     const std::function<bool()>& cancelled) {
@@ -85,49 +209,24 @@ Result<std::shared_ptr<const PreparedSources>> MediaCache::prepareSources(
     out->key = *key;
     out->sampleRate = rate;
     out->session = s;
-    const auto owners = takeOwners(s);
+    const model::TakeOwners owners(s);
     std::set<model::Id> needed;
     for (const auto& e : s.items)
         if (e.value->activeTake) needed.insert(*e.value->activeTake);
     for (auto id : std::vector<model::Id>(needed.begin(), needed.end()))
         if (const auto* t = s.takes.find(id))
             needed.insert(t->warpPeers.begin(), t->warpPeers.end());
-    double estimate = 0;
-    std::set<std::string> decoded, variants;
-    for (auto id : needed) {
-        const auto* take = s.takes.find(id);
-        const auto* md = take && take->source ? s.media.find(*take->source) : nullptr;
-        const auto* item = ownerOf(owners, id);
-        if (!md || !item || md->sampleRate <= 0) continue;
-        const MediaVariant variant{take->playrate, take->pitch, take->preservePitch,
-                                   take->pitchMode};
-        const auto span = model::itemSpan(s, *item);
-        const auto identity =
-            md->hash.empty() ? sourcePath(s, *md, dir).generic_string() : md->hash;
-        if (decoded.insert(identity).second)
-            estimate += static_cast<double>(md->frames) * md->channels;
-        if (model::activeWarp(*take) && !item->loop)
-            estimate += std::ceil((span.endSec - span.startSec) * rate) * md->channels;
-        else {
-            const bool stretch = variant.stretch();
-            const auto variantKey =
-                identity + (stretch ? "|s" : "|r") + json::formatDouble(variant.playrate) + "|" +
-                json::formatDouble(stretch || !variant.preservePitch ? variant.pitch : 0.);
-            if (variants.insert(variantKey).second)
-                estimate += static_cast<double>(md->frames) * rate / md->sampleRate /
-                            variant.speed() * md->channels;
-        }
-        if (!(estimate >= 0 && estimate <= (std::int64_t{1} << 28)))
-            return Error("media.budget", "prepared sources exceed the in-memory sample budget", {},
-                         "use shorter source files, fewer channels or a faster playback rate");
-    }
+    const double estimate = residentSamples(s, dir, rate).arrangement;
+    if (!(estimate >= 0 && estimate <= kPreparedSampleBudget))
+        return Error("media.budget", "prepared sources exceed the in-memory sample budget", {},
+                     "use shorter source files, fewer channels or a faster playback rate");
     for (auto id : needed) {
         if (out->takes.contains(id)) continue;
         if (cancelled && cancelled())
             return Error("job.cancelled", "source preparation cancelled", {},
                          "retry for the current version");
         const auto* t = s.takes.find(id);
-        const auto* it = ownerOf(owners, id);
+        const auto* it = ownerOf(s, owners, id);
         const auto* md = t && t->source ? s.media.find(*t->source) : nullptr;
         if (!t || !md || !it) continue;
         if (!model::activeWarp(*t) || it->loop) {
@@ -195,6 +294,29 @@ Result<std::shared_ptr<const PreparedSources>> MediaCache::prepareSources(
                 data->channels.push_back(std::move(warped->channels[channel++]));
             out->takes[peers[p]] = {std::move(data), true, {}};
         }
+    }
+    // Clips after the arrangement, in launch order, as far as the budget goes
+    // (ADR-0097 "Memory"). A clip's take is never warped (clip.add refuses
+    // one), so it is a variant of the whole source.
+    const ResidentSamples resident = residentSamples(s, dir, rate);
+    out->clipsSkipped = resident.clipsSkipped;
+    for (const model::Id id : clipsInLaunchOrder(s)) {
+        if (std::find(out->clipsSkipped.begin(), out->clipsSkipped.end(), id) !=
+            out->clipsSkipped.end())
+            continue;
+        if (cancelled && cancelled())
+            return Error("job.cancelled", "source preparation cancelled", {},
+                         "retry for the current version");
+        const model::Clip& clip = *s.clips.find(id);
+        const auto* t = clip.activeTake ? s.takes.find(*clip.activeTake) : nullptr;
+        const auto* md = t && t->source ? s.media.find(*t->source) : nullptr;
+        if (!md || out->takes.contains(*clip.activeTake)) continue;
+        MediaVariant variant{t->playrate, t->pitch, t->preservePitch, t->pitchMode};
+        auto data = get(sourcePath(s, *md, dir), rate, variant, md->hash);
+        if (data)
+            out->takes[*clip.activeTake].data = *data;
+        else
+            out->takes[*clip.activeTake].error = data.error();
     }
     prepared_ = out;
     return prepared_;

@@ -6,6 +6,8 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <vector>
 
 #include "supple/model/env_shape.h"
 #include "supple/ui/controls.h"
@@ -54,6 +56,26 @@ double EnvScale::fromNorm(double norm) const {
                        : 0.0;
     }
     return 0.0;
+}
+
+double EnvScale::toModulation(double value) const {
+    return kind == Kind::Plugin && param ? params::toClap(param->spec, value) : value;
+}
+
+double EnvScale::fromModulation(double m) const {
+    if (kind != Kind::Plugin || !param) return m;
+    const params::ClapRange range = params::clapRange(param->spec);
+    return params::fromClap(param->spec, std::clamp(m, range.min, range.max));
+}
+
+double EnvScale::modulationUnit() const {
+    if (kind != Kind::Plugin || !param) return 1.0;
+    const params::ClapRange range = params::clapRange(param->spec);
+    return range.max - range.min;
+}
+
+double modulatedValue(const EnvScale& scale, double base, double offset) {
+    return scale.fromModulation(scale.toModulation(base) + offset);
 }
 
 std::string EnvScale::text(double value) const {
@@ -239,6 +261,106 @@ int envOrder(const model::Envelope& env) {
     const std::string& p = env.target.param;
     const int order = p == "volume" ? 0 : p == "pan" ? 1 : p == "mute" ? 2 : 3;
     return env.target.object.kind == model::Kind::Route ? 4 + order : order;
+}
+
+bool modulationLane(const model::Session& session, const model::EnvTarget& target) {
+    for (const auto& m : session.modulations)
+        if (m.value->lane && m.value->target == target) return true;
+    return false;
+}
+
+std::optional<ui::ModulationView> modulationBand(const model::Session& session,
+                                                 const model::EnvTarget& target,
+                                                 const EnvScale& scale,
+                                                 const UnipolarSource& unipolar) {
+    switch (scale.kind) {
+        case EnvScale::Kind::Volume:
+        case EnvScale::Kind::Pan:
+        case EnvScale::Kind::Percent:
+            break;
+        case EnvScale::Kind::Plugin:
+            if (!scale.param) return std::nullopt;
+            break;
+        default:
+            return std::nullopt;
+    }
+    const double unit = scale.modulationUnit();  // the domain's offset per unit of depth
+    std::vector<ui::ModulationRoute> routes;
+    for (const auto& m : session.modulations)
+        if (m.value->enabled && m.value->target == target)
+            routes.push_back(
+                {m.value->depth * unit, unipolar && unipolar(session, m.value->source)});
+    if (routes.empty()) return std::nullopt;
+    return ui::modulationSpan(routes);
+}
+
+bool stripModulatable(const model::Session& s, const model::Id& object, std::string_view param) {
+    const model::Track* t = s.tracks.find(object);
+    if (!t || t->freeze) return false;
+    const bool master = t->type == model::StripType::Master;
+    if (param == "volume") return true;
+    if (param == "pan") return master || t->panMode != model::PanMode::Dual;
+    if (param == "width") return !master && t->panMode == model::PanMode::Width;
+    return false;
+}
+
+std::optional<double> liveOffset(const model::Session& session, const model::EnvTarget& target,
+                                 const std::map<model::Id, double>& live) {
+    if (live.empty()) return std::nullopt;
+    for (const auto& m : session.modulations)
+        if (m.value->target == target)
+            if (auto it = live.find(m.id); it != live.end()) return it->second;
+    return std::nullopt;
+}
+
+std::optional<ControlModulation> controlModulation(const model::Session& session,
+                                                   const model::EnvTarget& target,
+                                                   const UnipolarSource& unipolar,
+                                                   const std::map<model::Id, double>* live) {
+    std::vector<ui::ModulationRoute> routes;
+    std::optional<model::Id> first;
+    double depth = 0;
+    for (const auto& m : session.modulations) {
+        if (!m.value->enabled || !(m.value->target == target)) continue;
+        routes.push_back({m.value->depth, unipolar && unipolar(session, m.value->source)});
+        if (!first) {
+            first = m.id;
+            depth = m.value->depth;
+        }
+    }
+    if (!first) return std::nullopt;
+    ControlModulation out{ui::modulationSpan(routes), *first};
+    out.view.depth = depth;
+    if (live) out.view.live = liveOffset(session, target, *live);
+    return out;
+}
+
+double targetValue(const model::Session& session, const model::EnvTarget& target,
+                   const EnvScale& scale) {
+    const std::string& p = target.param;
+    if (const model::Track* tr = session.tracks.find(target.object)) {
+        if (p == "volume") return tr->volumeDb;
+        if (p == "pan") return tr->pan;
+        if (p == "width") return tr->width;
+        if (p == "pan_left") return tr->panLeft;
+        if (p == "pan_right") return tr->panRight;
+    }
+    if (const model::Route* r = session.routes.find(target.object); r && p == "volume")
+        return r->volumeDb;
+    // A plug-in parameter: the semantic patch's value, else the last CLAP
+    // value of a plain one (keyed by its decimal id).
+    if (const model::FxInstance* fx = session.fx.find(target.object)) {
+        if (fx->patch && scale.param)
+            if (const json::Value* values = fx->patch->find("params"); values && values->isObject())
+                if (const json::Value* v = values->find(p))
+                    if (auto parsed = params::fromJson(scale.param->spec, *v)) return *parsed;
+        char* end = nullptr;
+        const unsigned long id = std::strtoul(p.c_str(), &end, 10);
+        if (!p.empty() && end && *end == '\0')
+            if (auto it = fx->params.find(static_cast<std::uint32_t>(id)); it != fx->params.end())
+                return it->second;
+    }
+    return scale.reference();
 }
 
 std::string envTitle(const model::Envelope& env, const model::Session& session) {

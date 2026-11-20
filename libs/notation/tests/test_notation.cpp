@@ -4,6 +4,7 @@
 
 #include <doctest/doctest.h>
 #include <supple/base/environment.h>
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -395,4 +396,67 @@ TEST_CASE("notation indexes long bar timelines without repeated meter walks") {
     auto roundtrip = compile(*written, context);
     REQUIRE(roundtrip);
     CHECK(roundtrip->sequence == sequence);
+}
+
+TEST_CASE("chord symbols compile to the pitches harmony voices") {
+    for (const auto& [quality, intervals] : supple::harmony::chordQualities())
+        for (const std::string bass : {"", "/E", "/Bb"}) {
+            const std::string symbol = "C" + quality + bass;
+            const auto compiled = compile("voice a; 1: {" + symbol + "}:w");
+            REQUIRE_MESSAGE(compiled, symbol);
+            std::vector<int> got;
+            for (const auto& n : compiled->sequence.notes) got.push_back(n.pitch);
+            std::sort(got.begin(), got.end());
+            const auto chord = supple::harmony::parseChord(symbol);
+            REQUIRE(chord);
+            auto want = supple::harmony::chordPitches(*chord, 3);
+            REQUIRE(want);
+            std::sort(want->begin(), want->end());
+            CHECK_MESSAGE(got == *want, symbol);
+        }
+}
+
+TEST_CASE("chord symbol errors keep the compiler's codes") {
+    auto codes = [](const std::string& text) {
+        std::vector<std::string> out;
+        const auto result = compile(text);
+        if (result) return out;
+        if (result.error().details.empty()) out.push_back(result.error().code);
+        for (const auto& e : result.error().details) out.push_back(e.code);
+        return out;
+    };
+    CHECK(codes("voice a; 1: {H7}:w") == std::vector<std::string>{"notation.bad_pitch"});
+    CHECK(codes("voice a; 1: {Cmajj7}:w") == std::vector<std::string>{"notation.unknown_chord"});
+    CHECK(codes("voice a; 1: {C/H}:w") == std::vector<std::string>{"notation.bad_pitch"});
+    CHECK(codes("voice a octave 8; 1: {C13}:w") ==
+          std::vector<std::string>{"notation.pitch_range"});
+}
+
+TEST_CASE("decompile spells pitches by the key it is given") {
+    supple::midi::Sequence sequence;
+    sequence.ppq = 960;
+    sequence.length = 3840;
+    sequence.notes = {{0, 960, 0, 70, 100, 0}, {960, 960, 0, 61, 100, 0}};  // A#4/Bb4, C#4
+    const auto plain = decompile(sequence);
+    REQUIRE(plain);
+    CHECK(plain->find("Bb4") != std::string::npos);  // no key: the default table, as always
+    CHECK(plain->find("C#4") != std::string::npos);
+    supple::notation::DecompileOptions options;
+    options.key =
+        supple::harmony::Key{*supple::harmony::parsePitchClass("F"), supple::harmony::Scale::Major};
+    const auto inF = decompile(sequence, options);
+    REQUIRE(inF);
+    CHECK(inF->find("Bb4") != std::string::npos);
+    CHECK(inF->find("Db4") != std::string::npos);  // one flat: out-of-scale notes take flats
+    options.key =
+        supple::harmony::Key{*supple::harmony::parsePitchClass("A"), supple::harmony::Scale::Major};
+    const auto inA = decompile(sequence, options);
+    REQUIRE(inA);
+    CHECK(inA->find("A#4") != std::string::npos);
+    CHECK(inA->find("C#4") != std::string::npos);
+    // What it prints compiles back to the same notes in every spelling.
+    const auto back = compile(*inF);
+    REQUIRE(back);
+    CHECK(back->sequence.notes.size() == 2);
+    CHECK(back->sequence.notes[0].pitch == 70);
 }

@@ -882,7 +882,7 @@ int frontendMain(int argc, char** argv) {
                 break;
             }
         for (const auto& row : a.trackLayout().rows())
-            if (!track && !row.env && row.type == model::StripType::Channel) track = row.track;
+            if (!track && !row.lane() && row.type == model::StripType::Channel) track = row.track;
         if (!track) return;
         const bool looping = a.loopEnabled() && a.loopEnd() > a.loopStart();
         const double from = s.timeMap->beatAt(looping ? a.loopStart() : a.playhead());

@@ -638,6 +638,18 @@ void RenderDialog::buildSource(ui::Node& body) {
         versionChoice_ = v;
         markDirty();
     };
+    // Renders play the arrangement only (ADR-0097): said while a clip holds
+    // a track (launch.state fails, and nothing is said, with no engine).
+    if (auto state = dispatcher_.execute({"launch.state", json::Value::object(), kUiOrigin})) {
+        bool held = false;
+        if (const auto* tracks = state->find("tracks"); tracks && tracks->isArray())
+            for (const auto& t : tracks->asArray()) held |= text(t.find("plays")) != "arrangement";
+        if (held)
+            body.emplace<ui::Label>("render.clips.note",
+                                    "Renders play the arrangement: the clips playing now are "
+                                    "not in them.",
+                                    ui::Font::Ui, "caption", "ink-quiet");
+    }
     const model::Session& s = app_.head();
     // Several masters (ADR-0056): which of them the mix renders, a file each.
     if (current == Source::Master && s.project->masters.size() > 1) {
@@ -1250,7 +1262,7 @@ void RenderDialog::buildAfter(ui::Node& body) {
 
 void RenderDialog::buildFooter(ui::Node& page) {
     diagnostic_ =
-        &page.emplace<ui::Label>("render.diagnostic", "", ui::Font::Ui, "caption", "clip");
+        &page.emplace<ui::Label>("render.diagnostic", "", ui::Font::Ui, "caption", "meter-clip");
     // The file lists scroll inside fixed heights: stems and regions can list
     // many files, which must not spill over the buttons below.
     auto& previewScroll = page.emplace<ui::ScrollView>("render.preview.scroll");

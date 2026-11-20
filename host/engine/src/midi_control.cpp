@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include "supple/engine/midi_control.h"
+#include "supple/harmony/harmony.h"
 
 #include <algorithm>
 #include <cctype>
@@ -15,12 +16,8 @@ std::string lower(std::string_view s) {
     return out;
 }
 
-std::string noteName(int key) {
-    static constexpr const char* names[] = {"C",  "C#", "D",  "D#", "E",  "F",
-                                            "F#", "G",  "G#", "A",  "A#", "B"};
-    // Middle C (60) is C4.
-    return std::string(names[key % 12]) + std::to_string(key / 12 - 1);
-}
+// Middle C (60) is C4.
+std::string noteName(int key) { return harmony::spell(key); }
 
 }  // namespace
 

@@ -191,6 +191,113 @@ q = nil
 ---@field amount? number
 ---@field color? string
 
+---@class Steppe.chord_remove_args
+---@field at number
+
+---@class Steppe.chord_remove_result
+---@field warnings? table[]
+
+---@class Steppe.chord_set_args
+---@field at number
+---@field symbol? string
+---@field to? number
+
+---@class Steppe.chord_set_result
+---@field id string
+---@field warnings? table[]
+
+---@class Steppe.clip_add_args
+---@field track string Track id, e.g. "tr_1".
+---@field scene string Scene id, e.g. "sc_1".
+---@field notation? string
+---@field audio_file? string
+---@field midi_file? string
+---@field item? string Item id, e.g. "it_1".
+---@field pooled? boolean (default: false)
+---@field name? string
+
+---@class Steppe.clip_add_result
+---@field clip string
+---@field takes string[]
+---@field source? string
+---@field kind string
+---@field length number
+---@field warnings? (string|table)[]
+
+---@class Steppe.clip_duplicate_args
+---@field clip string Clip id, e.g. "cl_1".
+---@field track? string Track id, e.g. "tr_1".
+---@field scene? string Scene id, e.g. "sc_1".
+---@field pooled? boolean (default: false)
+
+---@class Steppe.clip_duplicate_result
+---@field id string
+---@field warnings? table[]
+
+---@class Steppe.clip_move_args
+---@field clip string Clip id, e.g. "cl_1".
+---@field track? string Track id, e.g. "tr_1".
+---@field scene? string Scene id, e.g. "sc_1".
+
+---@class Steppe.clip_move_result
+---@field warnings? table[]
+
+---@class Steppe.clip_remove_args
+---@field clip string Clip id, e.g. "cl_1".
+
+---@class Steppe.clip_remove_result
+---@field warnings? table[]
+
+---@class Steppe.clip_set_args
+---@field clip string Clip id, e.g. "cl_1".
+---@field name? string
+---@field color? string
+---@field mute? boolean
+---@field gain_db? number
+---@field length? number
+---@field loop? table
+---@field mode? "loop"|"once"
+---@field quantize? any
+
+---@class Steppe.clip_set_result
+---@field warnings? table[]
+
+---@class Steppe.context_at_args
+---@field at? number
+---@field bar? integer
+
+---@class Steppe.context_at_result
+---@field beat number
+---@field bar integer
+---@field beat_in_bar number
+---@field key? table
+---@field chord? table
+---@field section? table
+---@field warnings? table[]
+
+---@class Steppe.context_get_args
+---@field from? number
+---@field to? number
+
+---@class Steppe.context_get_result
+---@field text? string
+---@field points table[]
+---@field key? table
+---@field chord? table
+---@field warnings? table[]
+
+---@class Steppe.context_write_args
+---@field text string
+
+---@class Steppe.context_write_result
+---@field first_bar integer
+---@field last_bar integer
+---@field added integer
+---@field replaced integer
+---@field removed integer
+---@field unchanged integer
+---@field warnings? table[]
+
 ---@class Steppe.crash_acknowledge_args
 ---@field incident string A report's incident id, from crash.list.
 
@@ -383,6 +490,7 @@ q = nil
 ---@field bridge_threads_refused string[]
 ---@field dropped integer
 ---@field voice_dropped integer
+---@field modulation_deferred integer Modulation events that waited past their grid point for room in a block (ADR-0096)
 ---@field failed_errors any
 ---@field sync table
 
@@ -430,6 +538,7 @@ q = nil
 ---@field bridge_threads_refused string[]
 ---@field dropped integer
 ---@field voice_dropped integer
+---@field modulation_deferred integer Modulation events that waited past their grid point for room in a block (ADR-0096)
 ---@field failed_errors any
 ---@field sync table
 
@@ -560,7 +669,7 @@ q = nil
 ---@field plugin string
 ---@field name string
 ---@field description string
----@field params? any
+---@field params? any With full: each parameter; modulatable_by_envelope: true when a route reaches it through its envelope (ADR-0096 M4); modulatable: true when a modulation route can take it (modulation.add)
 ---@field patch? any
 ---@field status_available boolean A live instance supplied its current problems
 ---@field problems? any Current plugin problems: code, message, scope, line when known, hint, silent; scope host when unreadable
@@ -785,7 +894,7 @@ q = nil
 
 ---@class Steppe.group_targets_args
 ---@field track? string
----@field item? string
+---@field item? string Item id, e.g. "it_1" (a clip's id is refused with item.kind).
 ---@field attribute string
 
 ---@class Steppe.group_targets_result
@@ -820,6 +929,7 @@ q = nil
 ---@field notation? string
 ---@field audio_file? string
 ---@field midi_file? string
+---@field clip? string Lay a copy of this clip's takes here.
 ---@field name? string
 
 ---@class Steppe.item_add_result
@@ -831,7 +941,7 @@ q = nil
 ---@field warnings? (string|table)[]
 
 ---@class Steppe.item_apply_fx_args
----@field item string Item id, e.g. "it_1".
+---@field item string Item id, e.g. "it_1" (a clip's id is refused with item.kind).
 ---@field mode? string (default: "take")
 
 ---@class Steppe.item_apply_fx_result
@@ -850,7 +960,7 @@ q = nil
 
 ---@class Steppe.item_duplicate_args
 ---@field bypass_groups? boolean (default: false)
----@field item string Item id, e.g. "it_1".
+---@field item string Item id, e.g. "it_1" (a clip's id is refused with item.kind).
 ---@field to? number
 
 ---@class Steppe.item_duplicate_result
@@ -859,7 +969,7 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.item_explode_takes_args
----@field item string Item id, e.g. "it_1".
+---@field item string Item id, e.g. "it_1" (a clip's id is refused with item.kind).
 ---@field mode? string (default: "tracks")
 
 ---@class Steppe.item_explode_takes_result
@@ -868,7 +978,7 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.item_export_args
----@field item string
+---@field item string Item or clip id, e.g. "it_1" or "cl_1".
 ---@field path string
 
 ---@class Steppe.item_export_result
@@ -896,7 +1006,7 @@ q = nil
 
 ---@class Steppe.item_move_args
 ---@field bypass_groups? boolean (default: false)
----@field item string Item id, e.g. "it_1".
+---@field item string Item id, e.g. "it_1" (a clip's id is refused with item.kind).
 ---@field position? number
 ---@field bar? integer
 ---@field track? string Track id, e.g. "tr_1".
@@ -914,14 +1024,14 @@ q = nil
 
 ---@class Steppe.item_remove_args
 ---@field bypass_groups? boolean (default: false)
----@field item string Item id, e.g. "it_1".
+---@field item string Item id, e.g. "it_1" (a clip's id is refused with item.kind).
 
 ---@class Steppe.item_remove_result
 ---@field warnings? table[]
 
 ---@class Steppe.item_set_args
 ---@field bypass_groups? boolean (default: false)
----@field item string Item id, e.g. "it_1".
+---@field item string Item id, e.g. "it_1" (a clip's id is refused with item.kind).
 ---@field position? number
 ---@field bar? integer
 ---@field length? number
@@ -942,7 +1052,7 @@ q = nil
 
 ---@class Steppe.item_split_args
 ---@field bypass_groups? boolean (default: false)
----@field item string Item id, e.g. "it_1".
+---@field item string Item id, e.g. "it_1" (a clip's id is refused with item.kind).
 ---@field at number
 ---@field snap? "none"|"zero_crossing" (default: "none")
 
@@ -965,6 +1075,71 @@ q = nil
 ---@class Steppe.job_wait_args
 ---@field job string
 ---@field timeout_s? number Seconds to block (default 30). A larger value is clamped to 30 and reported as timeout_clamped_s.
+
+---@class Steppe.key_remove_args
+---@field at number
+
+---@class Steppe.key_remove_result
+---@field warnings? table[]
+
+---@class Steppe.key_set_args
+---@field at number
+---@field tonic? string
+---@field scale? string
+---@field to? number
+
+---@class Steppe.key_set_result
+---@field id string
+---@field warnings? table[]
+
+---@class Steppe.launch_arrangement_args
+---@field track? string Track id, e.g. "tr_1".
+
+---@class Steppe.launch_arrangement_result
+---@field action string
+---@field tracks table[]
+---@field beat? number
+---@field seconds? number
+---@field started boolean
+---@field warnings? table[]
+
+---@class Steppe.launch_clip_args
+---@field clip string Clip id, e.g. "cl_1".
+
+---@class Steppe.launch_clip_result
+---@field action string
+---@field tracks table[]
+---@field beat? number
+---@field seconds? number
+---@field started boolean
+---@field warnings? table[]
+
+---@class Steppe.launch_scene_args
+---@field scene string Scene id, e.g. "sc_1".
+
+---@class Steppe.launch_scene_result
+---@field action string
+---@field tracks table[]
+---@field beat? number
+---@field seconds? number
+---@field started boolean
+---@field warnings? table[]
+
+---@class Steppe.launch_state_result
+---@field playing boolean
+---@field tracks table[]
+---@field warnings? table[]
+
+---@class Steppe.launch_stop_args
+---@field track? string Track id, e.g. "tr_1".
+
+---@class Steppe.launch_stop_result
+---@field action string
+---@field tracks table[]
+---@field beat? number
+---@field seconds? number
+---@field started boolean
+---@field warnings? table[]
 
 ---@class Steppe.log_list_args
 ---@field limit? integer
@@ -1001,14 +1176,15 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.midi_edit_args
----@field item string
+---@field item string Item or clip id, e.g. "it_1" or "cl_1".
 ---@field ops table[]
 
 ---@class Steppe.midi_get_args
----@field item string Item id, e.g. "it_1".
+---@field item string Item or clip id, e.g. "it_1" or "cl_1".
 
 ---@class Steppe.midi_get_result
 ---@field text string
+---@field context? table
 ---@field warnings? table[]
 
 ---@class Steppe.midi_inputs_set_args
@@ -1017,7 +1193,7 @@ q = nil
 ---@field offset_ms? number
 
 ---@class Steppe.midi_notes_args
----@field item string
+---@field item string Item or clip id, e.g. "it_1" or "cl_1".
 
 ---@class Steppe.midi_outputs_set_args
 ---@field port string
@@ -1031,10 +1207,72 @@ q = nil
 ---@field clock_while_stopped? boolean
 
 ---@class Steppe.midi_write_args
----@field item string Item id, e.g. "it_1".
+---@field item string Item or clip id, e.g. "it_1" or "cl_1".
 ---@field notation string
 
 ---@class Steppe.midi_write_result
+---@field warnings? table[]
+
+---@class Steppe.modulate_args
+---@field target table
+---@field source string|table
+---@field depth? number
+---@field from? string The track a follower listens to.
+---@field rack? string Rack id, e.g. "rk_1".
+
+---@class Steppe.modulate_result
+---@field modulation string
+---@field rack? string
+---@field module? string
+---@field mod_out? string
+---@field input? string
+---@field send? string
+---@field channel? string The channel made for a new rack.
+---@field knob? string A macro's knob to move, by key.
+---@field warnings? table[]
+
+---@class Steppe.modulation_add_args
+---@field source table
+---@field target table
+---@field depth number
+---@field enabled? boolean
+---@field lane? boolean Show the target's lane (default true).
+
+---@class Steppe.modulation_add_result
+---@field modulation string
+---@field warnings? table[]
+
+---@class Steppe.modulation_list_args
+---@field track? string Target track id, e.g. "tr_1".
+---@field fx? string Target plug-in instance id, e.g. "fx_1".
+---@field rack? string Source rack id, e.g. "rk_1".
+
+---@class Steppe.modulation_list_result
+---@field modulations table[]
+---@field warnings? table[]
+
+---@class Steppe.modulation_remove_args
+---@field modulation string Modulation route id, e.g. "mr_1".
+
+---@class Steppe.modulation_remove_result
+---@field warnings? table[]
+
+---@class Steppe.modulation_set_args
+---@field modulation string Modulation route id, e.g. "mr_1".
+---@field source? table
+---@field target? table
+---@field depth? number
+---@field enabled? boolean
+---@field lane? boolean
+
+---@class Steppe.modulation_set_result
+---@field warnings? table[]
+
+---@class Steppe.modulation_telemetry_args
+---@field track? string Target track id, e.g. "tr_1".
+
+---@class Steppe.modulation_telemetry_result
+---@field modulations table[]
 ---@field warnings? table[]
 
 ---@class Steppe.module_add_args
@@ -1391,6 +1629,7 @@ q = nil
 ---@field end? number
 ---@field name? string
 ---@field color? string
+---@field section? boolean Whether the region is a section of the song, which context.at and session.describe report [true]
 
 ---@class Steppe.region_add_result
 ---@field id string
@@ -1412,6 +1651,7 @@ q = nil
 ---@field end? number
 ---@field name? string
 ---@field color? string
+---@field section? boolean Whether the region is a section of the song, which context.at and session.describe report [true]
 
 ---@class Steppe.region_set_result
 ---@field warnings? table[]
@@ -1714,6 +1954,40 @@ q = nil
 ---@class Steppe.route_set_result
 ---@field warnings? table[]
 
+---@class Steppe.scene_add_args
+---@field name? string
+---@field color? string
+---@field at? integer Column, 0-based.
+
+---@class Steppe.scene_add_result
+---@field id string
+---@field warnings? table[]
+
+---@class Steppe.scene_list_result
+---@field scenes table[]
+---@field warnings? table[]
+
+---@class Steppe.scene_move_args
+---@field scene string Scene id, e.g. "sc_1".
+---@field to integer Column.
+
+---@class Steppe.scene_move_result
+---@field warnings? table[]
+
+---@class Steppe.scene_remove_args
+---@field scene string Scene id, e.g. "sc_1".
+
+---@class Steppe.scene_remove_result
+---@field warnings? table[]
+
+---@class Steppe.scene_set_args
+---@field scene string Scene id, e.g. "sc_1".
+---@field name? string
+---@field color? string
+
+---@class Steppe.scene_set_result
+---@field warnings? table[]
+
 ---@class Steppe.script_run_args
 ---@field code string The Lua source. It may return a value: what it returns is converted to JSON (tables with string keys are objects, sequences are arrays).
 ---@field name? string The script's name: its commands are recorded as `lua:<name>` and its state (globals, subscriptions) is kept between runs of the same name. Defaults to the caller's client name.
@@ -1755,7 +2029,7 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.take_activate_args
----@field item string Item id, e.g. "it_1".
+---@field item string Item or clip id, e.g. "it_1" or "cl_1".
 ---@field take? string Take id, e.g. "tk_1".
 ---@field index? integer
 
@@ -1763,7 +2037,7 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.take_add_args
----@field item string Item id, e.g. "it_1".
+---@field item string Item or clip id, e.g. "it_1" or "cl_1".
 ---@field from? string Take id, e.g. "tk_1".
 
 ---@class Steppe.take_add_result
@@ -1772,7 +2046,7 @@ q = nil
 
 ---@class Steppe.take_extract_args
 ---@field take string Take id, e.g. "tk_1".
----@field track string Track id, e.g. "tr_1".
+---@field track? string Default: the item's or clip's track.
 ---@field position? number Beats.
 
 ---@class Steppe.take_extract_result
@@ -1795,7 +2069,7 @@ q = nil
 ---@field sensitivity? number (default: 0.5)
 
 ---@class Steppe.take_list_args
----@field item string Item id, e.g. "it_1".
+---@field item string Item or clip id, e.g. "it_1" or "cl_1".
 
 ---@class Steppe.take_list_result
 ---@field takes table[]
@@ -2279,6 +2553,22 @@ q = nil
 ---@field remove fun(args?: Steppe.cable_remove_args): table Remove a cable, by id or by its two ends.
 ---@field set fun(args: Steppe.cable_set_args): table Set a modulation cable's amount or a cable's colour.
 
+---@class Steppe.chord
+---@field remove fun(args: Steppe.chord_remove_args): Steppe.chord_remove_result Remove the chord point at a beat: the chord before it continues.
+---@field set fun(args: Steppe.chord_set_args): Steppe.chord_set_result Set the chord from a beat, until the next chord point; "" ends it.
+
+---@class Steppe.clip
+---@field add fun(args: Steppe.clip_add_args): Steppe.clip_add_result Add a clip to a scene's cell: from notation, a file or an item.
+---@field duplicate fun(args: Steppe.clip_duplicate_args): Steppe.clip_duplicate_result Copy a clip and its takes to an empty cell.
+---@field move fun(args: Steppe.clip_move_args): Steppe.clip_move_result Move a clip to an empty cell in another scene, channel or both.
+---@field remove fun(args: Steppe.clip_remove_args): Steppe.clip_remove_result Remove a clip with its takes (unpooled sources go too).
+---@field set fun(args: Steppe.clip_set_args): Steppe.clip_set_result Set a clip's name, colour, mute, gain, length, loop, mode or quantize.
+
+---@class Steppe.context
+---@field at fun(args?: Steppe.context_at_args): Steppe.context_at_result What key, chord and section hold at a beat or bar.
+---@field get fun(args?: Steppe.context_get_args): Steppe.context_get_result List the key and chord points in a range of beats.
+---@field write fun(args: Steppe.context_write_args): Steppe.context_write_result Write key and chord points from a lead sheet over the bars it names.
+
 ---@class Steppe.crash
 ---@field acknowledge fun(args: Steppe.crash_acknowledge_args): table Mark a crash report, or a run that left none, as seen.
 ---@field clear fun(): table Delete every finished crash report and record of an ended run.
@@ -2373,7 +2663,7 @@ q = nil
 ---@field undo fun(): Steppe.history_undo_result Undo the last change on the current branch.
 
 ---@class Steppe.item
----@field add fun(args: Steppe.item_add_args): Steppe.item_add_result Add an item on a track: MIDI in notation, a MIDI file or an audio file.
+---@field add fun(args: Steppe.item_add_args): Steppe.item_add_result Add an item on a track: notation, a MIDI or audio file, or a clip's copy.
 ---@field ["apply-fx"] fun(args: Steppe.item_apply_fx_args): Steppe.item_apply_fx_result Render an item through its take and track FX into a new audio take.
 ---@field consolidate fun(args: Steppe.item_consolidate_args): table Consolidate selected audio and MIDI per track in a background job.
 ---@field duplicate fun(args: Steppe.item_duplicate_args): Steppe.item_duplicate_result Copy an item and its takes to a new beat position (default: immediately after).
@@ -2400,6 +2690,17 @@ q = nil
 ---@field status fun(args: Steppe.job_status_args): table Get a job's status.
 ---@field wait fun(args: Steppe.job_wait_args): table Wait for a job.
 
+---@class Steppe.key
+---@field remove fun(args: Steppe.key_remove_args): Steppe.key_remove_result Remove the key point at a beat: the key before it continues.
+---@field set fun(args: Steppe.key_set_args): Steppe.key_set_result Set the key from a beat: tonic and scale, until the next key point.
+
+---@class Steppe.launch
+---@field arrangement fun(args?: Steppe.launch_arrangement_args): Steppe.launch_arrangement_result Return a track, or every track, to the arrangement at the boundary.
+---@field clip fun(args: Steppe.launch_clip_args): Steppe.launch_clip_result Play a clip on its track from the next quantize boundary.
+---@field scene fun(args: Steppe.launch_scene_args): Steppe.launch_scene_result Play every clip of a scene together, one target for all tracks.
+---@field state fun(): Steppe.launch_state_result What each track with clips plays, and what it has queued.
+---@field stop fun(args?: Steppe.launch_stop_args): Steppe.launch_stop_result Silence a track's clip, or every playing clip, at the next boundary.
+
 ---@class Steppe.log
 ---@field list fun(args?: Steppe.log_list_args): table Recent commands with origin, arguments and outcome (the command log).
 
@@ -2410,10 +2711,10 @@ q = nil
 ---@field set fun(args: Steppe.marker_set_args): Steppe.marker_set_result Edit a ruler's position, name, or color.
 
 ---@class Steppe.midi
----@field edit fun(args: Steppe.midi_edit_args): table Edit a MIDI item's notes and CCs: add, remove, move, resize, velocity, quantize.
----@field get fun(args: Steppe.midi_get_args): Steppe.midi_get_result Read an item's MIDI as notation.
----@field notes fun(args: Steppe.midi_notes_args): table List a MIDI item's notes and CC points (beats from the item's start).
----@field write fun(args: Steppe.midi_write_args): Steppe.midi_write_result Replace an item's MIDI with notation (the item keeps its position and length).
+---@field edit fun(args: Steppe.midi_edit_args): table Edit a MIDI item's notes and CCs: move, resize, quantize, fit to key or chord.
+---@field get fun(args: Steppe.midi_get_args): Steppe.midi_get_result Read an item's or clip's MIDI as notation, with its key and chords.
+---@field notes fun(args: Steppe.midi_notes_args): table List a MIDI item's or clip's notes and CC points (beats from its start).
+---@field write fun(args: Steppe.midi_write_args): Steppe.midi_write_result Replace an item's or clip's MIDI with notation (keeping its place and length).
 
 ---@class Steppe.midi.inputs
 ---@field get fun(): table Hardware MIDI inputs, timing, settings, loss and startup warnings.
@@ -2423,6 +2724,13 @@ q = nil
 ---@field get fun(): table Hardware MIDI outputs: settings, clock/MTC, timing, loss, warnings.
 ---@field set fun(args: Steppe.midi_outputs_set_args): table Change one MIDI output: enabled, offset, reset, clock, SPP, MTC.
 
+---@class Steppe.modulation
+---@field add fun(args: Steppe.modulation_add_args): Steppe.modulation_add_result Route a rack's Mod Out input to a plug-in parameter or a mixer level.
+---@field list fun(args?: Steppe.modulation_list_args): Steppe.modulation_list_result List modulation routes, by target track, FX or source rack.
+---@field remove fun(args: Steppe.modulation_remove_args): Steppe.modulation_remove_result Remove a modulation route.
+---@field set fun(args: Steppe.modulation_set_args): Steppe.modulation_set_result Change a modulation route's source, target, depth, enabled or lane.
+---@field telemetry fun(args?: Steppe.modulation_telemetry_args): Steppe.modulation_telemetry_result Read each modulation route's live target offset and its span.
+
 ---@class Steppe.module
 ---@field add fun(args: Steppe.module_add_args): table Add a module to a rack: a type with knob values.
 ---@field check fun(args?: Steppe.module_check_args): table Compile a module without saving it; return its diagnostics and description.
@@ -2431,7 +2739,7 @@ q = nil
 ---@field duplicate fun(args: Steppe.module_duplicate_args): table Duplicate modules, with the cables between them.
 ---@field edit fun(args: Steppe.module_edit_args): table Edit a library module in place: replace text, then save and compile it.
 ---@field fork fun(args: Steppe.module_fork_args): table Copy a module type's source into the library under a new id.
----@field get fun(args?: Steppe.module_get_args): table A module type's source: stock or library.
+---@field get fun(args?: Steppe.module_get_args): table A module type's source, not a placed module's knobs (rack.get reads those).
 ---@field list fun(args?: Steppe.module_list_args): table List module types: id, name, tags, what they do.
 ---@field randomize fun(args: Steppe.module_randomize_args): table Move a module's knobs at random, by an amount.
 ---@field remove fun(args: Steppe.module_remove_args): table Remove a module with its cables.
@@ -2472,7 +2780,7 @@ q = nil
 ---@field add fun(args?: Steppe.rack_add_args): table Add a modular rack on a channel, its Out the input.
 ---@field arrange fun(args: Steppe.rack_arrange_args): table Lay out a rack's modules by signal flow.
 ---@field capture fun(args: Steppe.rack_capture_args): table Record a rack's pitch and gate as notes in a MIDI item on a track.
----@field get fun(args: Steppe.rack_get_args): table A rack's modules, cables, Out modules and problems.
+---@field get fun(args: Steppe.rack_get_args): table A rack's modules with their changed knobs, cables, Outs and problems.
 ---@field levels fun(args: Steppe.rack_levels_args): table Read every module output's linear peak, without subscribing to telemetry.
 ---@field list fun(): table List racks: home channels, module counts, Outs.
 ---@field paste fun(args: Steppe.rack_paste_args): table Paste the module clipboard with its plug-in settings as one undo step.
@@ -2534,22 +2842,29 @@ q = nil
 ---@field remove fun(args: Steppe.route_learn_remove_args): Steppe.route_learn_remove_result Remove a send control's MIDI controller binding.
 ---@field set fun(args: Steppe.route_learn_set_args): Steppe.route_learn_set_result Let a MIDI controller move a send's level, pan, mute or tap.
 
+---@class Steppe.scene
+---@field add fun(args?: Steppe.scene_add_args): Steppe.scene_add_result Add a scene (a launcher column) at the end or at an index.
+---@field list fun(): Steppe.scene_list_result List the scenes in column order with their clip counts.
+---@field move fun(args: Steppe.scene_move_args): Steppe.scene_move_result Move a scene to another column.
+---@field remove fun(args: Steppe.scene_remove_args): Steppe.scene_remove_result Remove a scene with its clips and their takes.
+---@field set fun(args: Steppe.scene_set_args): Steppe.scene_set_result Rename or recolour a scene.
+
 ---@class Steppe.script
 ---@field run fun(args: Steppe.script_run_args): Steppe.script_run_result Run a Lua script on the command bus.
 
 ---@class Steppe.session
----@field describe fun(): Steppe.session_describe_result Describe the whole session in compact text (tracks, items, fx, routes).
+---@field describe fun(): Steppe.session_describe_result Describe the whole session in compact text (tracks, items, fx, routes, key).
 
 ---@class Steppe.sync
 ---@field get fun(): Steppe.sync_get_result Show external sync settings and what the engine hears from the master.
 ---@field set fun(args?: Steppe.sync_set_args): Steppe.sync_set_result Set external sync (MIDI clock, MTC, LTC) and LTC output; returns them.
 
 ---@class Steppe.take
----@field activate fun(args: Steppe.take_activate_args): Steppe.take_activate_result Choose the take heard from an item.
----@field add fun(args: Steppe.take_add_args): Steppe.take_add_result Add a take to an item, optionally copied from another take of that item.
----@field extract fun(args: Steppe.take_extract_args): Steppe.take_extract_result Take a take out of its item into an item of its own on any channel.
----@field list fun(args: Steppe.take_list_args): Steppe.take_list_result List the takes of an item and identify its active take.
----@field remove fun(args: Steppe.take_remove_args): Steppe.take_remove_result Delete a take from its item (the item goes with its last take).
+---@field activate fun(args: Steppe.take_activate_args): Steppe.take_activate_result Choose the take heard from an item or clip.
+---@field add fun(args: Steppe.take_add_args): Steppe.take_add_result Add a take to an item or clip, optionally copied from one of its takes.
+---@field extract fun(args: Steppe.take_extract_args): Steppe.take_extract_result Take a take out of its item or clip into an item of its own on any channel.
+---@field list fun(args: Steppe.take_list_args): Steppe.take_list_result List the takes of an item or clip and identify its active take.
+---@field remove fun(args: Steppe.take_remove_args): Steppe.take_remove_result Delete a take from its item or clip (which goes with its last take).
 ---@field set fun(args: Steppe.take_set_args): Steppe.take_set_result Set take gain, pan, channel mode, name, source offset, or playrate and pitch.
 
 ---@class Steppe.take.hits
@@ -2578,7 +2893,7 @@ q = nil
 ---@field freeze fun(args: Steppe.track_freeze_args): table Freeze a channel's items and FX to pre-fader audio and release its plugins.
 ---@field list fun(args?: Steppe.track_list_args): Steppe.track_list_result List tracks in tree order with their level, mute/solo, fx and items.
 ---@field move fun(args: Steppe.track_move_args): Steppe.track_move_result Move a track under another track or reorder it among its siblings.
----@field remove fun(args: Steppe.track_remove_args): Steppe.track_remove_result Remove a track with its items, fx, routes and envelopes (not a folder).
+---@field remove fun(args: Steppe.track_remove_args): Steppe.track_remove_result Remove a track with its items, clips, fx, routes and envelopes (not a folder).
 ---@field set fun(args: Steppe.track_set_args): Steppe.track_set_result Set track fields; choosing audio, MIDI or rack input replaces the others.
 ---@field unfreeze fun(args: Steppe.track_unfreeze_args): table Restore a frozen channel's original items and plugin state.
 
@@ -2632,6 +2947,9 @@ q = nil
 ---@field autoitem Steppe.autoitem Commands named autoitem.*
 ---@field branch Steppe.branch Commands named branch.*
 ---@field cable Steppe.cable Commands named cable.*
+---@field chord Steppe.chord Commands named chord.*
+---@field clip Steppe.clip Commands named clip.*
+---@field context Steppe.context Commands named context.*
 ---@field crash Steppe.crash Commands named crash.*
 ---@field dsp Steppe.dsp Commands named dsp.*
 ---@field engine Steppe.engine Commands named engine.*
@@ -2641,9 +2959,12 @@ q = nil
 ---@field history Steppe.history Commands named history.*
 ---@field item Steppe.item Commands named item.*
 ---@field job Steppe.job Commands named job.*
+---@field key Steppe.key Commands named key.*
+---@field launch Steppe.launch Commands named launch.*
 ---@field log Steppe.log Commands named log.*
 ---@field marker Steppe.marker Commands named marker.*
 ---@field midi Steppe.midi Commands named midi.*
+---@field modulation Steppe.modulation Commands named modulation.*
 ---@field module Steppe.module Commands named module.*
 ---@field plugin Steppe.plugin Commands named plugin.*
 ---@field project Steppe.project Commands named project.*
@@ -2653,6 +2974,7 @@ q = nil
 ---@field registry Steppe.registry Commands named registry.*
 ---@field render Steppe.render Commands named render.*
 ---@field route Steppe.route Commands named route.*
+---@field scene Steppe.scene Commands named scene.*
 ---@field script Steppe.script Commands named script.*
 ---@field session Steppe.session Commands named session.*
 ---@field sync Steppe.sync Commands named sync.*
@@ -2663,6 +2985,7 @@ q = nil
 ---@field track Steppe.track Commands named track.*
 ---@field transport Steppe.transport Commands named transport.*
 ---@field vca Steppe.vca Commands named vca.*
+---@field modulate fun(args: Steppe.modulate_args): Steppe.modulate_result Modulate a parameter or mixer level with an LFO, follower, random or macro.
 ---@field run fun(name: string, args?: table): any Run any registered command by name, e.g. the ones whose names are not Lua identifiers.
 ---@field batch fun(label: string, body: fun()) Run the calls inside body as one transaction: one undo step, rolled back when one of them fails.
 ---@field on fun(topic: string, handler: fun(payload: table, topic: string), filter?: table): integer Subscribe to bus events; returns a handle for q.off.

@@ -629,6 +629,7 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
     // Neither shortcut may release a hold whose compiled curve is stale; the
     // scalar one publishes no mix values, so it carries pending holds after.
     const bool compile = midiSettingsDirty_ || releasesStaleCurve();
+    if (!compile && loadContextOnly(session, projectDir)) return {};
     if (!compile && loadScalarRate(session, projectDir)) {
         applyPendingHolds();
         return {};
@@ -1288,6 +1289,14 @@ void Engine::service() {
         const auto dir = rateDeferredDir_;
         loadScalarRate(*session, dir);
     }
+    serviceLaunches();  // the clip launcher's acks and misses (ADR-0097)
+    // ADR-0096: modulation events that had to wait are reported, not lost.
+    if (const auto deferred = modDeferred_.load(); deferred != modDeferredWarned_) {
+        warnings_.push_back("modulation: " + std::to_string(deferred - modDeferredWarned_) +
+                            " events waited past their grid point for room in a block "
+                            "(modulation.events)");
+        modDeferredWarned_ = deferred;
+    }
     const auto reseek = rateReseekGeneration_.load(std::memory_order_acquire);
     if (reseek != 0 && reseek != rateReseekServiced_) {
         rateReseekServiced_ = reseek;
@@ -1472,6 +1481,8 @@ void Engine::publishPluginOutputs(detail::Plan& p, bool renderer, std::uint64_t 
             changed |= st.voiceDropped != 0 || st.outEvents.dropped != 0;
             voiceDrops_.fetch_add(st.voiceDropped, std::memory_order_relaxed);
             st.voiceDropped = 0;
+            modDeferred_.fetch_add(st.modDeferred, std::memory_order_relaxed);
+            st.modDeferred = 0;
             // The FX before its count, so a drain that sees the count can name it.
             if (st.outEvents.dropped != 0) noteDroppedFx(st.fx);
             outputDrops_.fetch_add(st.outEvents.dropped, std::memory_order_release);
@@ -2065,8 +2076,9 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
     // rtEpoch_. It is the only writer here, so a plain local then one store.
     std::int64_t meterStream = rtStream_.load(std::memory_order_relaxed);
     for (std::uint32_t done = 0; ok && done < frames;) {
-        const std::uint32_t k =
+        std::uint32_t k =
             detail::rateUntil(*plan, pos_, frames - done, loopC_, -1);  // split at a loop wrap
+        k = launchesAt(*plan, -1, rtEpoch_, meterStream, k, false);     // and at a launch
         for (std::uint32_t c = 0; c < deviceInputs_ && c < inAt.size(); ++c)
             inAt[c] = in && in[c] ? in[c] + done : nullptr;
         const float* const* ins = in ? inAt.data() : nullptr;
@@ -2817,8 +2829,9 @@ void Engine::rendererLoop(std::uint64_t seen) {
         if (plan != plan_ && plan && plan->rateEnabled && streamLocal_ % 64 != 0)
             renderFrames =
                 std::min(renderFrames, static_cast<std::uint32_t>(64 - streamLocal_ % 64));
-        const std::uint32_t n = detail::rateUntil(*plan_, pos_, renderFrames, loopR_,
-                                                  0);  // no chunk crosses a loop wrap
+        std::uint32_t n = detail::rateUntil(*plan_, pos_, renderFrames, loopR_,
+                                            0);                  // no chunk crosses a loop wrap
+        n = launchesAt(*plan_, 0, seen, streamLocal_, n, true);  // or a launch
         const auto patchSequence = patchSeq_.load(std::memory_order_acquire);
         const bool ok = [&] {
             BenchProbe::Timer timer(options_.benchProbe, false, n);
@@ -3088,7 +3101,8 @@ std::uint32_t Engine::liveRender(const float* const* in, float* const* out, std:
         epochDone_.load(std::memory_order_acquire) == rtEpoch_)
         options_.benchProbe->observeAhead(renderedStream_.load(std::memory_order_acquire) -
                                           liveStream_);
-    if (playing) k = detail::rateUntil(p, livePos_, k, loopC_, 1);  // stop at a loop wrap
+    if (playing) k = detail::rateUntil(p, livePos_, k, loopC_, 1);       // stop at a loop wrap
+    if (playing) k = launchesAt(p, 1, rtEpoch_, liveStream_, k, false);  // or a launch
     std::uint32_t found = k;
     for (std::size_t j = 0; j < p.frontier.size(); ++j) {
         detail::Edge& e = p.edges[p.frontier[j]];

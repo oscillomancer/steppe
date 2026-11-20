@@ -162,8 +162,12 @@ release builds ignore the variable.
 
 Tests that open real hardware are skipped unless you opt in:
 `SUPPLE_AUDIO_DEVICE_TEST=1` (the audio device), `SUPPLE_MIDI_DEVICE_TEST=1`
-(native MIDI inputs on macOS and Windows) and `SUPPLE_GUI_DISPLAY_TEST=1`
-(plugin editor windows on the desktop).
+(native MIDI inputs on macOS and Windows), `SUPPLE_GUI_DISPLAY_TEST=1`
+(plugin editor windows on the desktop) and `SUPPLE_EDITOR_PROBE_TEST=1` (the
+stock plugins' X11 and Win32 editor probes, `plugin.<name>.embedding`, which
+open a window at a fixed spot on the screen and read it back; they show as
+skipped without it, so set it only on a machine, or an Xvfb, you are not
+using).
 
 ## What the build produces
 

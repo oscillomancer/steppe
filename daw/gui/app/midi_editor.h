@@ -17,12 +17,14 @@
 #include <vector>
 
 #include "app_actions.h"
+#include "supple/harmony/harmony.h"
 #include "supple/ui/edge_scroll.h"
 #include "supple/ui/root.h"
 #include "supple/ui/text_area.h"
 
 namespace supple::ui {
 class Button;
+class Toggle;
 class Label;
 class TextBlock;
 }  // namespace supple::ui
@@ -81,11 +83,35 @@ struct RollState {
     ui::Rect marquee{};
     // Project grid for bars/beats (from the time map).
     std::vector<double> barLines;  // project beats of bar starts in view
+    int firstBar = 1;              // the project bar barLines starts with
     double playheadBeat = -1;      // project beats; < 0: hidden
+    // The context track over the roll (ADR-0095), in project beats, in a
+    // window around the item: the key holding at its start and each change
+    // after (none: no key holds; an unknown scale reads as none), and the
+    // chord points the same way ("" for no chord, "?" after a symbol this
+    // build cannot read).
+    struct KeySpan {
+        double beat = 0;
+        std::optional<harmony::Key> key;
+    };
+    std::vector<KeySpan> keys;
+    struct ChordMark {
+        double beat = 0;
+        std::string text;
+        bool known = true;
+    };
+    std::vector<ChordMark> chords;
+    std::optional<harmony::Key> keyAt(double projectBeat) const;
+    // The key button (gui.md §4.7): a pitch drag and the arrow keys move the
+    // selected notes by scale degrees of the key at each note's beat
+    // (harmony::transposeDegrees, as midi.edit's transpose_degrees does).
+    bool degrees = false;
+    int dDegrees = 0;  // a degree drag's preview
     void cancelGesture() {
         drag = Drag::None;
         dBeats = dLength = dStart = 0;
         dPitch = dVelocity = 0;
+        dDegrees = 0;
         velocityNote.reset();
         ccDraft.clear();
         ccErasing = false;
@@ -131,6 +157,10 @@ class MidiEditor {
     // Tests and the actions.
     RollState& state() { return state_; }
     ui::Node* roll() const { return roll_; }
+    // The bars the strip above the roll numbered in its last paint, left to
+    // right, and the chords its chord row named (tests).
+    const std::vector<int>& barLabels() const { return barLabels_; }
+    const std::vector<std::string>& chordLabels() const { return chordLabels_; }
     // Edge scroll in the piano roll (gui.md §4.7): true while a drag is held
     // at an edge of the roll; autoScroll advances it by `seconds` and is
     // true when the view moved (sync calls it with the frame's time).
@@ -145,6 +175,11 @@ class MidiEditor {
     void selectNone();
     void quantize();
     void transpose(int semitones);
+    void transposeDegrees(int degrees);  // midi.edit transpose_degrees on the selection
+    ui::Toggle* keyButton() const { return keyButton_; }
+    // The chord field (views/chord_field.h) for the chord point at the project
+    // beat `beat`, opened at the window point `at` (the strip's double-click).
+    void editChord(double beat, ui::Point at);
     void nudge(int steps);  // the selected notes, by grid steps
     // The selected notes; with the event list shown, its selected rows.
     void removeSelected();
@@ -191,9 +226,15 @@ class MidiEditor {
     ui::Node* roll_ = nullptr;
     ui::EdgeScrollClock edgeClock_;  // the time sync steps the edge scroll by
     ui::Node* keys_ = nullptr;
+    ui::Node* bars_ = nullptr;
+    std::vector<int> barLabels_;
+    std::vector<std::string> chordLabels_;
     ui::Node* velocity_ = nullptr;
     ui::Node* ccLane_ = nullptr;
     ui::Button* ccButton_ = nullptr;
+    ui::Toggle* keyButton_ = nullptr;
+    std::string keyText_ = "No key";  // the key button's words (its width follows them)
+    void refreshKeyButton();
     ui::Node* notationPane_ = nullptr;
     ui::Label* title_ = nullptr;
     ui::TextArea* text_ = nullptr;

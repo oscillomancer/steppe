@@ -3,7 +3,8 @@
 //
 // The host modules the rack runtime implements itself (docs/specs/rack.md
 // §5): Out (audio to the host), In (audio from it), Notes (MIDI to poly
-// pitch and gates) and Transport (the timeline as clocks and phases). The
+// pitch and gates), Transport (the timeline as clocks and phases) and Mod
+// Out (control signals to the host's parameters, ADR-0096). The
 // host binds each to its block's buffers or events before Schedule::process.
 // Plugin modules are the engine's (they need its plugin hosting).
 #pragma once
@@ -25,6 +26,8 @@ inline constexpr std::string_view kNotes = "com.suppleaudio.rack.notes";
 inline constexpr std::string_view kNotesOut = "com.suppleaudio.rack.notes-out";
 inline constexpr std::string_view kTransport = "com.suppleaudio.rack.transport";
 inline constexpr std::string_view kPlugin = "com.suppleaudio.rack.plugin";
+inline constexpr std::string_view kModOut = "com.suppleaudio.rack.mod-out";
+inline constexpr int kModOutInputs = 16;
 
 // The four types, described (each made once).
 std::shared_ptr<const ModuleType> outType();
@@ -32,6 +35,7 @@ std::shared_ptr<const ModuleType> inType();
 std::shared_ptr<const ModuleType> notesType();
 std::shared_ptr<const ModuleType> notesOutType();
 std::shared_ptr<const ModuleType> transportType();
+std::shared_ptr<const ModuleType> modOutType();
 // Their instances (main thread).
 std::unique_ptr<Instance> make(std::shared_ptr<const ModuleType> type,
                                const Instance::Setup& setup);
@@ -188,6 +192,24 @@ class Notes final : public HostModule {
     bool bendLive_ = false, modwheelLive_ = false, pressureLive_ = false, sustainLive_ = false;
     std::uint64_t liveGeneration_ = 0;
     int triggerFrames_ = 48;
+};
+
+// Mod Out (ADR-0096): each input's first channel, clamped to -1..1, taken
+// at each point of the rack's grid and held until the next. The host binds,
+// per block, a buffer per input it routes (null: unrouted) and reads each
+// frame's held value; a host that cannot run the module this block keeps
+// what `held()` last gave.
+class ModOut final : public HostModule {
+  public:
+    using Buffers = std::array<double*, kModOutInputs>;
+    void bind(const Buffers& values) SUPPLE_RT { values_ = values; }
+    double held(int input) const SUPPLE_RT { return held_[static_cast<std::size_t>(input)]; }
+    void restart(Instance& instance) SUPPLE_RT override;
+    void process(const HostContext& ctx) SUPPLE_RT override;
+
+  private:
+    Buffers values_{};
+    std::array<double, kModOutInputs> held_{};
 };
 
 // Transport: the timeline as gates, clocks and phases.

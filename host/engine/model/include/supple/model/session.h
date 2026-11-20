@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "supple/base/result.h"
+#include "supple/model/context.h"
 #include "supple/model/idmap.h"
 #include "supple/model/objects.h"
 #include "supple/time/timeline.h"
@@ -43,6 +44,12 @@ struct Session {
     IdMap<Rack> racks;
     IdMap<RackModule> modules;
     IdMap<Cable> cables;
+    IdMap<Modulation> modulations;  // mr_* (ADR-0096)
+    IdMap<ContextPoint> context;
+    // Derived from `context`: rebuilt when its storage changes (EditTxn).
+    std::shared_ptr<const ContextView> contextView = std::make_shared<const ContextView>();
+    IdMap<Scene> scenes;                                       // sc_* (ADR-0097)
+    IdMap<Clip> clips;                                         // cl_*
     std::map<std::string, std::shared_ptr<const Blob>> blobs;  // "sha256:<hex>"
     // Unknown top-level project sections (including extensions) survive
     // load/save; UI state belongs to the separate .ui.json sidecar.
@@ -53,6 +60,42 @@ struct Session {
     // bar 1 (ts_1), counters past them.
     static Session create(Project project = {});
 };
+
+// Calls f(map) with each of the Session's object collections (IdMap<T>), in member order.
+// Every per-collection loop goes through here (counters check, diff, revision sharing,
+// retained-size accounting), so a collection left out of one cannot happen. The binding
+// names every Session member: one added to Session is a build error here until it is
+// listed, and then a collection is visited by all of those loops at once. The derived
+// view, the blobs and the sections are not collections.
+template <class S, class F>
+void forEachCollection(S& s, F&& f) {
+    auto& [project, next, tempo, meters, timeMap, tracks, groups, items, takes, media, midi, fx,
+           routes, envelopes, autoItems, markers, regions, racks, modules, cables, modulations,
+           context, contextView, scenes, clips, blobs, extraSections, version] = s;
+    (void)project, (void)next, (void)timeMap, (void)contextView, (void)blobs, (void)extraSections,
+        (void)version;
+    f(tempo);
+    f(meters);
+    f(tracks);
+    f(groups);
+    f(items);
+    f(takes);
+    f(media);
+    f(midi);
+    f(fx);
+    f(routes);
+    f(envelopes);
+    f(autoItems);
+    f(markers);
+    f(regions);
+    f(racks);
+    f(modules);
+    f(cables);
+    f(modulations);
+    f(context);
+    f(scenes);
+    f(clips);
+}
 
 // An EditTxn's per-collection builders (created on first touch).
 struct TxnBuilders {
@@ -73,6 +116,10 @@ struct TxnBuilders {
     std::optional<IdMap<Rack>::Builder> racks;
     std::optional<IdMap<RackModule>::Builder> modules;
     std::optional<IdMap<Cable>::Builder> cables;
+    std::optional<IdMap<Modulation>::Builder> modulations;
+    std::optional<IdMap<ContextPoint>::Builder> context;
+    std::optional<IdMap<Scene>::Builder> scenes;
+    std::optional<IdMap<Clip>::Builder> clips;
 };
 
 // Which map of the Session holds objects of type T, and their ID kind.
@@ -103,6 +150,10 @@ SUPPLE_MODEL_TRAITS(Region, Region, regions)
 SUPPLE_MODEL_TRAITS(Rack, Rack, racks)
 SUPPLE_MODEL_TRAITS(RackModule, Module, modules)
 SUPPLE_MODEL_TRAITS(Cable, Cable, cables)
+SUPPLE_MODEL_TRAITS(Modulation, Modulation, modulations)
+SUPPLE_MODEL_TRAITS(ContextPoint, Context, context)
+SUPPLE_MODEL_TRAITS(Scene, Scene, scenes)
+SUPPLE_MODEL_TRAITS(Clip, Clip, clips)
 #undef SUPPLE_MODEL_TRAITS
 
 // One object-level change made by a transaction.
@@ -176,6 +227,10 @@ class EditTxn {
         if (!builder<T>().erase(id)) return false;
         record(Change::Op::Remove, id);
         if constexpr (std::is_same_v<T, Envelope>) removeItemsOn(id);  // its automation items
+        // A modulation route goes with its source module or its target (ADR-0096).
+        if constexpr (std::is_same_v<T, RackModule> || std::is_same_v<T, FxInstance> ||
+                      std::is_same_v<T, Track> || std::is_same_v<T, Route>)
+            removeModulationsOn(id);
         return true;
     }
 
@@ -198,6 +253,7 @@ class EditTxn {
 
   private:
     void removeItemsOn(Id envelope);
+    void removeModulationsOn(Id object);
     template <class T>
     typename IdMap<T>::Builder& builder() const {
         auto& slot = Traits<T>::slot(builders_);
@@ -233,6 +289,22 @@ Status validateStripRules(const Session& s);
 
 // The track whose FX chain holds `fx` (not input chains or take FX), if any.
 std::optional<Id> trackOfFx(const Session& s, Id fx);
+// The track whose FX chain or input chain holds `fx`, if any.
+std::optional<Id> trackOfChainFx(const Session& s, Id fx);
+// The plan node that applies a modulation route's target (ADR-0096): the
+// track of an FX in a chain or input chain, the track of a mixer target, or
+// for a send's level the node that applies it (its source strip, or the
+// rack of a rack send). nullopt for a target no route may have.
+std::optional<Id> modulationTargetNode(const Session& s, const EnvTarget& target);
+// Removes the modulation routes whose source or target is gone or no longer
+// fits the invariants, or that close a cycle: a file that went through an
+// older build (ADR-0096, amendment G-c). Returns each with the reason, in
+// the order removed.
+std::vector<std::pair<Id, std::string>> dropUnplayableModulations(Session& s);
+// The modulation routes whose source or target an edit took away or made
+// unfit (a removed module, FX, track or route; a send turned MIDI), with the
+// reason, in id order. Commands remove them and warn modulation.removed.
+std::vector<std::pair<Id, std::string>> strandedModulations(const Session& s);
 // The plugin module that holds `fx` (ADR-0062), if any.
 std::optional<Id> moduleOfFx(const Session& s, Id fx);
 // The rack a cable end is in: its module's, or for a plug-in's parameter its

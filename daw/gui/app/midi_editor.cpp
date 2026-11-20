@@ -4,17 +4,21 @@
 #include "midi_event_list.h"
 #include "panel_grip.h"
 #include "panel_height.h"
+#include "supple/harmony/harmony.h"
 #include "supple/ui/shortcut.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 
+#include "supple/model/context.h"
 #include "supple/notation/notation.h"
+#include "supple/ui/controls.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/text_area.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/chord_field.h"
 #include "supple/views/lanes.h"
 #include "supple/views/mouse_map.h"
 
@@ -32,12 +36,49 @@ bool blackKey(int pitch) {
     return pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10;
 }
 
-std::string pitchName(int pitch) {
-    static const char* names[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
-    return std::string(names[((pitch % 12) + 12) % 12]) + std::to_string(pitch / 12 - 1);
+std::string pitchName(int pitch) { return harmony::spell(pitch); }
+
+// The pitch classes a key's rows show light, as a mask; where no key holds,
+// the white keys' (so C major looks as the roll always has).
+std::uint16_t scaleMask(const std::optional<harmony::Key>& key) {
+    std::uint16_t mask = 0;
+    if (!key) {
+        for (int pc : {0, 2, 4, 5, 7, 9, 11}) mask = static_cast<std::uint16_t>(mask | 1u << pc);
+        return mask;
+    }
+    for (int pc : harmony::keyPitchClasses(*key))
+        mask = static_cast<std::uint16_t>(mask | 1u << pc);
+    return mask;
+}
+
+constexpr float kChordRowHeight = 18;  // the strip's chord row, under the bar numbers
+
+// The scale degrees that take `pitch` nearest to `pitch + semitones` (the
+// row under the pointer): what a degree drag previews and commits. Ties go to
+// fewer degrees; none nearer than staying put: 0.
+int nearestDegrees(int pitch, const harmony::Key& key, int semitones) {
+    const int target = pitch + semitones;
+    int best = 0, distance = std::abs(semitones);
+    for (int d = 1; d <= 84 && distance > 0; ++d)
+        for (int step : {d, -d})
+            if (const auto moved = harmony::transposeDegrees(pitch, key, step);
+                moved && std::abs(*moved - target) < distance) {
+                best = step;
+                distance = std::abs(*moved - target);
+            }
+    return best;
 }
 
 }  // namespace
+
+std::optional<harmony::Key> RollState::keyAt(double projectBeat) const {
+    std::optional<harmony::Key> key;
+    for (const KeySpan& k : keys) {
+        if (k.beat > projectBeat) break;
+        key = k.key;
+    }
+    return key;
+}
 
 double RollState::snapBeat(double itemBeat) const {
     if (!snap || grid <= 0) return itemBeat;
@@ -72,7 +113,13 @@ struct Geometry {
         switch (s.drag) {
             case RollState::Drag::Move:
                 n.start += s.dBeats;
-                n.pitch = std::clamp(n.pitch + s.dPitch, 0, 127);
+                if (!s.degrees) {
+                    n.pitch = std::clamp(n.pitch + s.dPitch, 0, 127);
+                } else if (s.dDegrees != 0) {  // by the key where the note lands
+                    if (const auto key = s.keyAt(s.itemPosition + n.start))
+                        n.pitch =
+                            harmony::transposeDegrees(n.pitch, *key, s.dDegrees).value_or(n.pitch);
+                }
                 break;
             case RollState::Drag::ResizeEnd:
                 n.length = std::max(1.0 / 64, n.length + s.dLength);
@@ -126,15 +173,32 @@ class Roll : public ui::Node {
         const ui::Rect b = bounds();
         c.save();
         c.clip(b);
-        // Rows: the white keys' on the panel, the black keys' on the darker
-        // ground, as on the keyboard beside them; C lines stronger.
+        // Rows: those in the scale on the panel, the others on the darker
+        // ground, per span of constant key (ADR-0095). Where no key holds,
+        // the black keys' rows are the dark ones, as on the keyboard beside
+        // them, so C major looks the same. C lines stronger.
         c.fillRect(b, t.color("panel"));
         const int top = g.pitchOf(b.y), bottom = g.pitchOf(b.bottom());
-        for (int p = std::min(127, top); p >= std::max(0, bottom); --p) {
-            const float y = g.yOf(p);
-            if (blackKey(p)) c.fillRect({b.x, y, b.w, s_.rowHeight}, t.color("ground"));
-            if (p % 12 == 0) c.fillRect({b.x, y + s_.rowHeight - 1, b.w, 1}, t.color("rule"));
+        {
+            std::vector<std::pair<float, std::uint16_t>> spans{{b.x, scaleMask(std::nullopt)}};
+            for (const RollState::KeySpan& k : s_.keys) {
+                const float x = std::max(b.x, g.xOf(k.beat - s_.itemPosition));
+                if (x > b.right()) break;
+                if (x <= b.x) spans.clear();  // it holds from the left edge
+                spans.push_back({x, scaleMask(k.key)});
+            }
+            for (std::size_t i = 0; i < spans.size(); ++i) {
+                const float xa = spans[i].first;
+                const float xb = i + 1 < spans.size() ? spans[i + 1].first : b.right();
+                if (xb <= xa) continue;
+                for (int p = std::min(127, top); p >= std::max(0, bottom); --p)
+                    if (!(spans[i].second >> (p % 12) & 1u))
+                        c.fillRect({xa, g.yOf(p), xb - xa, s_.rowHeight}, t.color("ground"));
+            }
         }
+        for (int p = std::min(127, top); p >= std::max(0, bottom); --p)
+            if (p % 12 == 0)
+                c.fillRect({b.x, g.yOf(p) + s_.rowHeight - 1, b.w, 1}, t.color("rule"));
         // Outside the item: shaded.
         const float x0 = g.xOf(0), x1 = g.xOf(s_.itemLength);
         if (x0 > b.x) c.fillRect({b.x, b.y, x0 - b.x, b.h}, t.color("ground").withAlpha(0.6f));
@@ -168,7 +232,8 @@ class Roll : public ui::Node {
             c.fillRound(r, 2, velocityColor(t, s_, n.velocity, sel));
             c.strokeRound(r, 2, sel ? t.color("ink") : t.color("ground").withAlpha(0.7f));
             if (r.w > 34 && s_.rowHeight >= 11)
-                c.text({r.x + 3, r.y, r.w - 4, r.h}, pitchName(n.pitch), ui::Font::Ui,
+                c.text({r.x + 3, r.y, r.w - 4, r.h},
+                       harmony::spell(n.pitch, s_.keyAt(s_.itemPosition + n.start)), ui::Font::Ui,
                        t.type("caption") - 1, t.color("ground"), ui::kLeft | ui::kMiddle);
         }
         if (s_.drag == RollState::Drag::Marquee) {
@@ -370,10 +435,19 @@ class Roll : public ui::Node {
                 return s_.snapBeat(anchorBeat + raw) - anchorBeat;
             };
             switch (s_.drag) {
-                case RollState::Drag::Move:
+                case RollState::Drag::Move: {
                     s_.dBeats = snapped(s_.notes[anchor_].start);
                     s_.dPitch = static_cast<int>(std::lround((press_.y - e.pos.y) / s_.rowHeight));
+                    // Degrees: the note in hand goes to the scale pitch nearest the
+                    // pointer's row, in the key where it lands; the others move as
+                    // many degrees.
+                    s_.dDegrees = 0;
+                    const RollNote& anchor = s_.notes[anchor_];
+                    if (s_.degrees && s_.dPitch != 0)
+                        if (const auto key = s_.keyAt(s_.itemPosition + anchor.start + s_.dBeats))
+                            s_.dDegrees = nearestDegrees(anchor.pitch, *key, s_.dPitch);
                     break;
+                }
                 case RollState::Drag::ResizeEnd:
                     s_.dLength = snapped(s_.notes[anchor_].start + s_.notes[anchor_].length);
                     break;
@@ -407,11 +481,21 @@ class Roll : public ui::Node {
             for (std::size_t i : s_.selected) sel.push_back(static_cast<std::int64_t>(i));
             json::Value op = json::Value::object();
             op["notes"] = sel;
-            if (drag == RollState::Drag::Move && moved_ && (s_.dBeats != 0 || s_.dPitch != 0)) {
-                op["op"] = "move";
-                if (s_.dBeats != 0) op["beats"] = s_.dBeats;
-                if (s_.dPitch != 0) op["semitones"] = s_.dPitch;
-                ops.push_back(std::move(op));
+            const int pitchMove = s_.degrees ? s_.dDegrees : s_.dPitch;
+            if (drag == RollState::Drag::Move && moved_ && (s_.dBeats != 0 || pitchMove != 0)) {
+                // In time first: a degree op reads the key where the move left the note.
+                if (s_.dBeats != 0 || !s_.degrees) {
+                    json::Value move = op;
+                    move["op"] = "move";
+                    if (s_.dBeats != 0) move["beats"] = s_.dBeats;
+                    if (!s_.degrees && s_.dPitch != 0) move["semitones"] = s_.dPitch;
+                    ops.push_back(std::move(move));
+                }
+                if (s_.degrees && s_.dDegrees != 0) {
+                    op["op"] = "transpose_degrees";
+                    op["degrees"] = s_.dDegrees;
+                    ops.push_back(std::move(op));
+                }
             } else if (drag == RollState::Drag::ResizeEnd && moved_ && s_.dLength != 0) {
                 op["op"] = "resize";
                 op["length_delta"] = s_.dLength;
@@ -425,7 +509,7 @@ class Roll : public ui::Node {
                 s_.selected = {anchor_};  // a click on a selected note selects just it
             }
             s_.dBeats = s_.dLength = s_.dStart = 0;
-            s_.dPitch = 0;
+            s_.dPitch = s_.dDegrees = 0;
             if (ops.size() > 0) (void)editor_.edit(std::move(ops), s_.gestureVersion);
             repaintAll();
             return true;
@@ -477,6 +561,151 @@ class Keys : public ui::Node {
 
   private:
     RollState& s_;
+};
+
+// ----------------------------------------------------------------- bar strip
+
+// The project's bar numbers over the roll, at its bar lines, so a part can be
+// placed in the song without the arrangement in view. As in the arrange
+// ruler, every bar is numbered, or every 2nd, 4th, 8th... counted from bar 1:
+// the first stride whose spacing fits the widest number (three digits at
+// least), set by the zoom and the narrowest bar around the item (barLines),
+// never by the scroll; no two numbers ever touch.
+class BarStrip : public ui::Node {
+  public:
+    static constexpr float kHeight = 16, kGap = 12;
+    BarStrip(const RollState& s, MidiEditor& editor, std::vector<int>& labelled,
+             std::vector<std::string>& chords)
+        : Node("midi.bars"), s_(s), editor_(editor), labelled_(labelled), chordLabels_(chords) {
+        interactive = true;
+        layout.height = ui::SizeRule::fixed(kHeight);
+    }
+    // The chord row's window x of a project beat.
+    float chordX(double beat) const {
+        const ui::Rect b = bounds();
+        return Geometry{s_, {b.x + kKeysWidth, b.y, b.w - kKeysWidth, b.h}}.xOf(beat -
+                                                                                s_.itemPosition);
+    }
+    // A double-click on the chord row edits the chord whose start or name is
+    // under it, as the ruler's chord row does; elsewhere it starts a chord at
+    // the grid beat there.
+    bool onPointer(const ui::PointerEvent& e) override {
+        const ui::Rect b = bounds();
+        if (e.type != ui::PointerEvent::Type::Down || e.button != 1 || e.clicks != 2 ||
+            e.pos.y < b.y + kHeight || e.pos.x < b.x + kKeysWidth || s_.chords.empty())
+            return false;
+        std::optional<double> beat;
+        for (const ChordHit& hit : chordHits_)
+            if (hit.label.contains(e.pos)) beat = hit.beat;
+        if (!beat) {
+            const Geometry g{s_, {b.x + kKeysWidth, b.y, b.w - kKeysWidth, b.h}};
+            const double at = std::max(0.0, s_.itemPosition + g.beatOf(e.pos.x));
+            beat = s_.grid > 0 ? std::round(at / s_.grid) * s_.grid : at;
+        }
+        editor_.editChord(*beat, e.pos);
+        return true;
+    }
+    // The strip's height: the bar numbers, and the chord row while chords
+    // hold over the roll (ADR-0095).
+    float wanted() const { return kHeight + (s_.chords.empty() ? 0 : kChordRowHeight); }
+    void paint(ui::Canvas& c) override {
+        const ui::Theme& t = c.theme();
+        const ui::Rect whole = bounds();
+        const ui::Rect b{whole.x, whole.y, whole.w, std::min(whole.h, kHeight)};
+        const ui::Rect area{b.x + kKeysWidth, b.y, std::max(0.0f, b.w - kKeysWidth), b.h};
+        const Geometry g{s_, area};
+        labelled_.clear();
+        chordLabels_.clear();
+        chordHits_.clear();
+        c.fillRect(whole, t.color("raised"));
+        c.fillRect({whole.x, whole.bottom() - 1, whole.w, 1}, t.color("rule"));
+        c.fillRect({area.x - 1, whole.y, 1, whole.h}, t.color("rule"));
+        if (whole.h > kHeight) paintChords(c, {area.x, b.bottom(), area.w, whole.h - kHeight});
+        if (s_.barLines.empty()) return;
+        const float size = t.type("caption");
+        const int last = s_.firstBar + static_cast<int>(s_.barLines.size()) - 1;
+        const std::string digits(std::to_string(std::max(last, 100)).size(), '8');
+        const float widest = c.textWidth(digits, ui::Font::Mono, size);
+        float narrowest = 1e9f;
+        for (std::size_t i = 1; i < s_.barLines.size(); ++i)
+            narrowest = std::min(
+                narrowest,
+                static_cast<float>((s_.barLines[i] - s_.barLines[i - 1]) * s_.pixelsPerBeat));
+        int stride = 1;
+        while (stride < (1 << 20) && static_cast<float>(stride) * narrowest < widest + kGap)
+            stride *= 2;
+        c.save();
+        c.clip(area);
+        float lastX = -1e9f, lastW = 0;
+        for (std::size_t i = 0; i < s_.barLines.size(); ++i) {
+            const int bar = s_.firstBar + static_cast<int>(i);
+            const float x = g.xOf(s_.barLines[i] - s_.itemPosition);
+            if (x > area.right()) break;
+            if (x < area.x - widest - kGap || (bar - 1) % stride != 0) continue;
+            const std::string text = std::to_string(bar);
+            const float w = c.textWidth(text, ui::Font::Mono, size);
+            if (x - lastX < lastW + kGap) continue;
+            c.fillRect({x, b.bottom() - 6, 1, 5}, t.color("ink-quiet"));
+            c.text({x + 3, b.y, w + 4, b.h - 1}, text, ui::Font::Mono, size, t.color("ink"),
+                   ui::kLeft | ui::kMiddle);
+            if (x + 3 + w > area.x) labelled_.push_back(bar);
+            lastX = x;
+            lastW = w;
+        }
+        c.restore();
+    }
+
+  private:
+    // Each chord a cell from its beat to the next chord point, in the
+    // ruler's cell and letters; a "no chord" point a short faint tick.
+    void paintChords(ui::Canvas& c, const ui::Rect& row) {
+        const ui::Theme& t = c.theme();
+        const Geometry g{s_, row};
+        const float size = t.type("caption");
+        c.save();
+        c.clip(row);
+        for (std::size_t i = 0; i < s_.chords.size(); ++i) {
+            const RollState::ChordMark& m = s_.chords[i];
+            const float x = g.xOf(m.beat - s_.itemPosition);
+            if (x > row.right()) break;
+            const float end = i + 1 < s_.chords.size()
+                                  ? g.xOf(s_.chords[i + 1].beat - s_.itemPosition)
+                                  : row.right() + 2;
+            if (end < row.x) continue;
+            if (m.text.empty()) {
+                c.fillRect({x, row.y + 4, 1, row.h - 8}, t.color("ink-faint"));
+                chordHits_.push_back({m.beat, {x - 4, row.y, 8, row.h}});
+                continue;
+            }
+            const ui::Rect cell{x + 1, row.y + 2, std::max(0.0f, end - x - 2), row.h - 5};
+            c.fillRound(cell, 2, t.color("panel"));
+            c.strokeRound(cell, 2, t.color("rule"));
+            const float room = std::max(0.0f, cell.w - 8);
+            if (room <= 0) continue;
+            // A cell that starts left of the roll keeps its name at the edge.
+            const float textX = std::max(cell.x + 4, row.x + 4);
+            // A name too long for its cell ends in an ellipsis, or goes.
+            const float shown = std::min(room, cell.right() - 4 - textX);
+            const std::string fit = c.elide(m.text, ui::Font::Ui, size, std::max(0.0f, shown));
+            const float fitW = fit.empty() ? 0.0f : c.textWidth(fit, ui::Font::Ui, size);
+            chordHits_.push_back(
+                {m.beat, {x - 4, row.y, std::max(8.0f, textX + fitW + 8 - (x - 4)), row.h}});
+            if (fit.empty()) continue;
+            c.text({textX, row.y, shown + 4, row.h - 1}, fit, ui::Font::Ui, size,
+                   t.color(m.known ? "ink" : "ink-quiet"), ui::kLeft | ui::kMiddle);
+            chordLabels_.push_back(fit);
+        }
+        c.restore();
+    }
+    struct ChordHit {
+        double beat = 0;  // the chord point's project beat
+        ui::Rect label;   // its start and name, as the last paint drew them
+    };
+    const RollState& s_;
+    MidiEditor& editor_;
+    std::vector<int>& labelled_;
+    std::vector<std::string>& chordLabels_;
+    std::vector<ChordHit> chordHits_;
 };
 
 // ----------------------------------------------------------------- velocity lane
@@ -634,7 +863,7 @@ class CcLane : public ui::Node {
         }
         if (s_.ccErasing)
             c.fillRect({g.xOf(s_.ccFrom), a.y, g.xOf(s_.ccTo) - g.xOf(s_.ccFrom), a.h},
-                       t.color("clip").withAlpha(0.2f));
+                       t.color("meter-clip").withAlpha(0.2f));
         c.restore();
     }
     bool onPointer(const ui::PointerEvent& e) override {
@@ -820,10 +1049,18 @@ MidiEditor::MidiEditor(ui::Root& root, AppActions& actions, cmd::Dispatcher& dis
                    [this] { quantize(); });
     actions_.addUi("ui.midi.notes.delete", "MIDI: delete selected notes (or the event list's)",
                    [this] { removeSelected(); });
-    actions_.addUi("ui.midi.notes.up", "MIDI: transpose selected notes up a semitone",
-                   [this] { transpose(1); });
-    actions_.addUi("ui.midi.notes.down", "MIDI: transpose selected notes down a semitone",
-                   [this] { transpose(-1); });
+    // The arrows: a semitone, or a scale degree while the key button is on.
+    actions_.addUi("ui.midi.notes.up",
+                   "MIDI: transpose selected notes up a semitone (a degree with the key button on)",
+                   [this] { state_.degrees ? transposeDegrees(1) : transpose(1); });
+    actions_.addUi(
+        "ui.midi.notes.down",
+        "MIDI: transpose selected notes down a semitone (a degree with the key button on)",
+        [this] { state_.degrees ? transposeDegrees(-1) : transpose(-1); });
+    actions_.addUi("ui.midi.notes.degree_up", "MIDI: move selected notes up a scale degree",
+                   [this] { transposeDegrees(1); });
+    actions_.addUi("ui.midi.notes.degree_down", "MIDI: move selected notes down a scale degree",
+                   [this] { transposeDegrees(-1); });
     actions_.addUi("ui.midi.notes.octave_up", "MIDI: transpose selected notes up an octave",
                    [this] { transpose(12); });
     actions_.addUi("ui.midi.notes.octave_down", "MIDI: transpose selected notes down an octave",
@@ -880,6 +1117,13 @@ std::unique_ptr<ui::Node> MidiEditor::build() {
         refreshTitle();
     });
     header.emplace<ui::Button>("midi.quantize", "Quantize", [this] { quantize(); });
+    // The key at the item's start; lit, pitch drags and arrows go by degrees.
+    keyButton_ = &header.emplace<ui::Toggle>("midi.key", "No key", "accent",
+                                             [this](bool on) { state_.degrees = on; });
+    keyButton_->layout.width = ui::SizeRule::content();
+    keyButton_->textSize = "small";  // as the header's buttons
+    keyButton_->offInk = "ink";
+    keyButton_->enabled = false;
     ccButton_ = &header.emplace<ui::Button>("midi.cc.number", "CC 1 mod", [this] {
         // The common controllers in turn: mod wheel, volume, pan, expression, sustain.
         static constexpr std::pair<int, const char*> kCcs[] = {
@@ -917,6 +1161,7 @@ std::unique_ptr<ui::Node> MidiEditor::build() {
     rollPane_ = &left;
     left.layout.dir = ui::Layout::Dir::Column;
     left.layout.width = ui::SizeRule::fraction();
+    bars_ = &left.emplace<BarStrip>(state_, *this, barLabels_, chordLabels_);
     auto& rollRow = left.emplace<ui::Node>("midi.rollrow");
     rollRow.layout.dir = ui::Layout::Dir::Row;
     rollRow.layout.height = ui::SizeRule::fraction();
@@ -929,6 +1174,7 @@ std::unique_ptr<ui::Node> MidiEditor::build() {
     ccLane_ = &left.emplace<CcLane>(state_, *this, roll_);
     auto repaint = [this] {
         if (roll_) roll_->invalidate();
+        if (bars_) bars_->invalidate();
         if (keys_) keys_->invalidate();
         if (velocity_) velocity_->invalidate();
         if (ccLane_) ccLane_->invalidate();
@@ -1118,10 +1364,44 @@ Status MidiEditor::reload() {
     state_.barLines.clear();
     const auto& map = *app_.head().timeMap;
     const int firstBar = std::max(1, map.barBeat(std::max(0.0, state_.itemPosition - 64)).bar);
+    state_.firstBar = firstBar;
     for (int bar = firstBar; bar < firstBar + 512; ++bar) {
         const double at = map.beatOfBar(bar);
         if (at > state_.itemPosition + state_.itemLength + 64) break;
         state_.barLines.push_back(at);
+    }
+    // The context in the same window (ADR-0095): what holds at its start and
+    // the changes in it.
+    state_.keys.clear();
+    state_.chords.clear();
+    {
+        const model::Session& head = app_.head();
+        const double lo = state_.itemPosition - 64;
+        const double hi = state_.itemPosition + state_.itemLength + 64;
+        for (const auto& k : head.contextView->keys) {
+            if (k.beat > hi) break;
+            const model::ContextPoint* p = head.context.find(k.id);
+            if (!p) continue;
+            if (k.beat <= lo) state_.keys.clear();
+            state_.keys.push_back({k.beat, model::parseKey(*p)});
+        }
+        for (const auto& k : head.contextView->chords) {
+            if (k.beat > hi) break;
+            const model::ContextPoint* p = head.context.find(k.id);
+            if (!p) continue;
+            if (k.beat <= lo) state_.chords.clear();
+            const bool known = p->symbol.empty() || model::parseChordPoint(*p).has_value();
+            state_.chords.push_back({k.beat, p->symbol + (known ? "" : "?"), known});
+        }
+    }
+    refreshKeyButton();
+    if (bars_) {
+        const float h = static_cast<BarStrip*>(bars_)->wanted();
+        if (bars_->layout.height.value != h) {
+            bars_->layout.height = ui::SizeRule::fixed(h);
+            root_.relayout();
+            root_.damageAll();
+        }
     }
     projectGeneration_ = app_.projectGeneration();
     version_ = app_.head().version;
@@ -1140,6 +1420,7 @@ Status MidiEditor::reload() {
         refreshTitle();
     }
     if (roll_) roll_->invalidate();
+    if (bars_) bars_->invalidate();
     if (keys_) keys_->invalidate();
     if (velocity_) velocity_->invalidate();
     if (ccLane_) ccLane_->invalidate();
@@ -1292,6 +1573,19 @@ Status MidiEditor::edit(json::Value ops, std::optional<std::uint64_t> expectedVe
     return {};
 }
 
+void MidiEditor::editChord(double beat, ui::Point at) {
+    views::openChordField(
+        root_,
+        {[this]() -> const model::Session& { return app_.head(); },
+         [this](const std::string& command, json::Value args) {
+             auto r = dispatcher_.execute({command, std::move(args), kOrigin});
+             if (!r && actions_.onError) actions_.onError("Chord: " + r.error().message);
+             return static_cast<bool>(r);
+         },
+         [this](double b) { return bars_ ? static_cast<BarStrip*>(bars_)->chordX(b) : 0.0f; }},
+        beat, at);
+}
+
 namespace {
 json::Value selectionOf(const RollState& s) {
     json::Value sel = json::Value::array();
@@ -1333,6 +1627,35 @@ void MidiEditor::transpose(int semitones) {
     json::Value ops = json::Value::array();
     ops.push_back(std::move(op));
     (void)edit(std::move(ops));
+}
+
+void MidiEditor::transposeDegrees(int degrees) {
+    if (!isOpen() || state_.selected.empty()) return;
+    json::Value op = json::Value::object();
+    op["op"] = "transpose_degrees";
+    op["notes"] = selectionOf(state_);
+    op["degrees"] = degrees;
+    json::Value ops = json::Value::array();
+    ops.push_back(std::move(op));
+    (void)edit(std::move(ops));
+}
+
+void MidiEditor::refreshKeyButton() {
+    if (!keyButton_) return;
+    const model::Session& head = app_.head();
+    const auto id = model::keyPointAt(head, state_.itemPosition);
+    const model::ContextPoint* point = id ? head.context.find(*id) : nullptr;
+    const bool known = point && model::parseKey(*point);
+    std::string text = point ? model::keyWords(*point) : "No key";
+    keyButton_->enabled = known;
+    if (!known && state_.degrees) {  // nothing to count degrees in
+        state_.degrees = false;
+        keyButton_->setOn(false);
+    }
+    if (text == keyText_) return;
+    keyText_ = text;
+    keyButton_->setText(std::move(text));
+    root_.relayout();
 }
 
 void MidiEditor::nudge(int steps) {

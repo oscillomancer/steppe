@@ -5,7 +5,9 @@
 
 #include "crash_banner.h"
 #include "pan_menu.h"
+#include "param_menu.h"
 #include "plugin_scales.h"
+#include "rack_controls.h"
 #include "strip_learn.h"
 #include "track_menu.h"
 
@@ -164,6 +166,12 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
                             : f == Follow::Off ? Follow::Continuous
                                                : Follow::Page);
     });
+    // The chord row (gui.md §4.3): shown while the project has a chord; this
+    // chooses for the project (the UI file keeps the choice).
+    actions.addUi("ui.view.chords", "View: chord row",
+                  [this] { arrange_->setChordRow(!arrange_->chordRowShown()); });
+    actions.setChecked("ui.view.chords",
+                       [this](const actions::Context&) { return arrange_->chordRowShown(); });
     arrange_->gestures().projectGeneration = [this] { return app_.projectGeneration(); };
     // The TCP talks to the app through these: selection state, commands (with
     // a drag's gesture) and the meters it pools with its rows.
@@ -189,14 +197,11 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
     tcp.envelopes = [this](const model::Id& track, const ui::Rect& anchor) {
         openEnvelopeMenu(track, anchor);
     };
-    // A right-click on a strip's fader, pan or button: MIDI learn (ADR-0058);
-    // the pan's menu adds its mode and law (ADR-0066).
+    // A right-click on a strip's fader, pan or button: the parameter menu
+    // (MIDI learn, lane, reset; a pan's mode and law), as in the mixer.
     tcp.learn = [&root, &actions](const model::Id& track, const std::string& param,
                                   const ui::Rect& anchor) {
-        if (param == "pan")
-            openPanMenu(root, actions, track, anchor);
-        else
-            openStripLearnMenu(root, actions, {{track}, param}, anchor);
+        openParamMenu(root, actions, track, param, anchor);
     };
     trackMenu_ = std::make_unique<TrackMenu>(TrackMenu{
         root, dispatcher_, app_,
@@ -258,6 +263,12 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
         [scales = std::make_shared<PluginScales>(dispatcher_, &app_)](const model::Envelope& env) {
             return (*scales)(env);
         };
+    // A modulated lane's band spans 0..1 sources one way (ADR-0096).
+    arrange_->trackLayout().unipolarSource = [this](const model::Session& s,
+                                                    const model::ModSource& source) {
+        const auto catalog = racks::catalog(app_);
+        return catalog && racks::unipolarSource(s, *catalog, source);
+    };
     counts_ = &shell->emplace<ui::Label>("status", status_, ui::Font::Mono, "small", "ink-quiet");
     counts_->layout.width = ui::SizeRule::fraction();
     counts_->layout.height = ui::SizeRule::fixed(26);
@@ -293,7 +304,7 @@ std::optional<TrackTarget> Shell::trackTargetAt(ui::Point p) const {
     for (std::size_t i = 0; i < rows.size(); ++i) {
         const ui::Rect row = arrange_->tcpRowRect(i);
         if (p.y < row.y || p.y >= row.bottom()) continue;
-        if (rows[i].env || !app_.head().tracks.find(rows[i].track)) return std::nullopt;
+        if (rows[i].lane() || !app_.head().tracks.find(rows[i].track)) return std::nullopt;
         return TrackTarget{rows[i].track, ui::Rect{area.x, row.y, area.w, row.h}.intersect(area)};
     }
     return std::nullopt;
@@ -374,6 +385,9 @@ void Shell::sync(bool event) {
         if (auto id = model::Id::parse(text); id && s.items.find(*id)) selected.push_back(*id);
     if (arrange_->gestures().selection() != selected)
         arrange_->gestures().setSelection(std::move(selected));
+    // Modulation telemetry (ADR-0096, M2): live values on the modulated
+    // controls and lanes (nothing is redrawn while it holds still).
+    arrange_->setModulationOffsets(liveModulation_.read(dispatcher_, app_));
     // The bar changes with the model or while the engine runs; refreshing it on
     // every idle pass would repaint (and cost) for nothing.
     if (transport_) transport_->sync(event || moved);
@@ -487,18 +501,7 @@ void Shell::openEnvelopeMenu(const model::Id& track, const ui::Rect& anchor) {
             removals.push_back(std::move(remove));
         } else {
             // A new envelope starts flat at the strip's current value.
-            const double value =
-                group ? (param == std::string_view("volume") ? group->vca->volumeDb
-                                                             : (group->vca->mute ? 1.0 : 0.0))
-                : param == std::string_view("playrate")  ? s.project->playrate.rate
-                : param == std::string_view("volume")    ? tr->volumeDb
-                : param == std::string_view("pan")       ? tr->pan
-                : param == std::string_view("width")     ? tr->width
-                : param == std::string_view("pan_left")  ? tr->panLeft
-                : param == std::string_view("pan_right") ? tr->panRight
-                : param == std::string_view("pan_boost")
-                    ? (model::panLawOf(*s.project, *tr).boost ? 1.0 : 0.0)
-                    : (tr->mute ? 1.0 : 0.0);
+            const double value = envelopeStartValue(s, track, param);
             m.run = [this, track, param = std::string(param), value] {
                 json::Value args = json::Value::object(), points = json::Value::array(),
                             first = json::Value::object();
@@ -888,7 +891,7 @@ bool Shell::isSelected(const model::Id& track) const { return trackSelected(ui_,
 void Shell::selectTrack(const model::Id& track, unsigned mods) {
     std::vector<std::string> order;
     for (const auto& row : arrange_->trackLayout().rows())
-        if (!row.env) order.push_back(row.track.str());
+        if (!row.lane()) order.push_back(row.track.str());
     gui::selectTrack(ui_, track.str(), mods, order);
     const bool selected = trackSelected(ui_, track.str());
     for (auto peer : model::linkedTracks(app_.head(), track, "selection")) {

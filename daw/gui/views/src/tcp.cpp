@@ -135,6 +135,9 @@ class TcpPanel::Row : public ui::Node {
     void bind(const model::Id& track, int depth, const model::Track& tr,
               const model::Session& session);
     void refresh(const model::Session& session);  // values only
+    // The fader's and pan bars' modulation (ADR-0096), with the layout's
+    // live offsets.
+    void showModulation(const model::Session& session);
     void unbind();
 
     bool bound() const { return track_.has_value(); }
@@ -319,6 +322,28 @@ TcpPanel::Row::Row(TcpPanel& panel, std::size_t slot)
     };
     pan_->onChange = panBar(0);
     pan_->onSecondChange = panBar(1);
+    // A drag on a modulated bar edits its first enabled route's depth
+    // (ADR-0096, modulation.set); a drag is one undo step.
+    auto depth = [this](const char* param, double value, ui::Gesture g) {
+        if (g == ui::Gesture::Begin) ++panel_.gestureSerial_;
+        if (g == ui::Gesture::Begin || g == ui::Gesture::End) return;
+        if (!track_ || !panel_.cb_.commit) return;
+        const auto mod = controlModulation(panel_.layout_.session(), {*track_, param},
+                                           panel_.layout_.unipolarSource);
+        if (!mod) return;
+        json::Value args = json::Value::object();
+        args["modulation"] = mod->route.str();
+        args["depth"] = value;
+        panel_.cb_.commit("modulation.set", std::move(args),
+                          g == ui::Gesture::Move
+                              ? gestureFor("tcp.depth", mod->route, panel_.gestureSerial_)
+                              : std::string{});
+    };
+    fader_->onDepth = [depth](double value, ui::Gesture g) { depth("volume", value, g); };
+    pan_->onDepth = [this, depth](int part, double value, ui::Gesture g) {
+        depth(part == 1 && pan_->split() == ui::PanControl::Split::Width ? "width" : "pan", value,
+              g);
+    };
     // The wheel scrolls the track list, never a strip's level or pan.
     fader_->wheel = false;
     pan_->wheel = false;
@@ -409,6 +434,7 @@ void TcpPanel::Row::refresh(const model::Session& session) {
     pan_->setSplit(split);
     pan_->setValue(split == ui::PanControl::Split::Dual ? tr->panLeft : tr->pan);
     pan_->setSecond(split == ui::PanControl::Split::Dual ? tr->panRight : tr->width);
+    showModulation(session);
     // The record input: the view knows the channels, the app knows the device's
     // port names (engine.inputs), so the app writes the label.
     std::string channels;
@@ -665,7 +691,7 @@ bool TcpPanel::Row::onPointer(const ui::PointerEvent& e) {
         if (ui::Root* r = root()) r->capture(this);
         return true;
     }
-    // A right-click on a fader, pan or button: MIDI learn for it.
+    // A right-click on a fader, pan or button: its parameter menu.
     if (e.button == 3 && panel_.cb_.learn)
         if (const char* param = learnableAt(e.pos)) {
             panel_.cb_.learn(*track_, param, {e.pos.x, e.pos.y, 1, 1});
@@ -935,7 +961,7 @@ void TcpPanel::updateReorder(ui::Point p) {
         }
         std::size_t last = *row;
         while (last + 1 < rows.size() &&
-               (rows[last + 1].env || rows[last + 1].depth > rows[*row].depth))
+               (rows[last + 1].lane() || rows[last + 1].depth > rows[*row].depth))
             ++last;
         end = rowRect(last).bottom();
     }
@@ -1112,6 +1138,29 @@ void TcpPanel::updateSession(const model::Session& session, const std::set<model
         if (row->visible && row->bound() && envelopes.contains(row->env())) row->refresh(session_);
 }
 
+// Modulation (ADR-0096): a bar beside the fader and each pan bar that a
+// route moves, with its live value; a dual pan's bars take none.
+void TcpPanel::Row::showModulation(const model::Session& session) {
+    if (!track_) return;
+    const auto split = pan_->split();
+    auto modulation = [&](const char* param) -> std::optional<ui::ModulationView> {
+        if (!stripModulatable(session, *track_, param)) return std::nullopt;
+        const auto mod = controlModulation(session, {*track_, param}, panel_.layout_.unipolarSource,
+                                           &panel_.layout_.liveOffsets);
+        return mod ? std::optional(mod->view) : std::nullopt;
+    };
+    fader_->setModulation(modulation("volume"));
+    pan_->setModulation(0, split == ui::PanControl::Split::Dual ? std::nullopt : modulation("pan"));
+    pan_->setModulation(1,
+                        split == ui::PanControl::Split::Width ? modulation("width") : std::nullopt);
+}
+
+void TcpPanel::refreshModulation() {
+    if (session_.modulations.empty() && layout_.liveOffsets.empty()) return;
+    for (Row* row : rows_)
+        if (row->bound()) row->showModulation(session_);
+}
+
 void TcpPanel::refresh() {
     for (Row* row : rows_)
         if (row->bound()) row->refresh(session_);
@@ -1126,7 +1175,13 @@ void TcpPanel::bindRows() {
         const ui::Rect r = rowRect(i);
         if (r.bottom() <= bounds().y) continue;
         if (r.y >= bounds().bottom() - kFootHeight) break;  // under the foot
-        (layout_.rows()[i].env ? shownLanes : shownRows).push_back(i);
+        // A lane's header shows its envelope; a lane without one (a
+        // modulated parameter) has none yet.
+        const TrackRow& spec = layout_.rows()[i];
+        if (!spec.lane())
+            shownRows.push_back(i);
+        else if (spec.env)
+            shownLanes.push_back(i);
     }
     while (envRows_.size() < shownLanes.size())
         envRows_.push_back(&rowsHost_->emplace<EnvRow>(*this, envRows_.size()));
@@ -1172,7 +1227,7 @@ void TcpPanel::arrange(const ui::Canvas& canvas, const ui::Rect& r) {
         if (!row->visible || !row->bound()) continue;
         const auto it = std::find_if(
             layout_.rows().begin(), layout_.rows().end(),
-            [&](const TrackRow& spec) { return spec.track == row->track() && !spec.env; });
+            [&](const TrackRow& spec) { return spec.track == row->track() && !spec.lane(); });
         if (it == layout_.rows().end()) continue;
         row->arrange(canvas, rowRect(static_cast<std::size_t>(it - layout_.rows().begin())));
     }

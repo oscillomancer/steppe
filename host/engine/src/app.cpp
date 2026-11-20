@@ -2399,6 +2399,7 @@ EngineStatus EngineApp::engineStatus() {
     }
     st.dropped = static_cast<std::int64_t>(outputDrops_ + consumerDrops_);
     st.voiceDropped = static_cast<std::int64_t>(voiceDrops_);
+    if (engine_) st.modulationDeferred = static_cast<std::int64_t>(engine_->modulationDeferred());
     for (const model::Id& id : pool_->bridgeThreadsRefused())
         st.bridgeThreadsRefused.push_back(id.str());
     for (const auto& [id, error] : pool_->failedErrors()) {
@@ -4991,8 +4992,13 @@ std::uint64_t EngineApp::clockMs() const {
 }
 
 void EngineApp::invoked(std::string_view command, int, const json::Value& args, cmd::Kind kind) {
-    if (txn_ && kind == cmd::Kind::Edit)
+    // context.write records the points it resolved to (recordInvocation), not its text.
+    if (txn_ && kind == cmd::Kind::Edit && command != "context.write")
         record_.invocations.push_back({std::string(command), args});
+}
+
+void EngineApp::recordInvocation(std::string command, json::Value args) {
+    if (txn_) record_.invocations.push_back({std::move(command), std::move(args)});
 }
 
 void EngineApp::setupFixture(cmd::Dispatcher& d, std::string_view fixture) {
@@ -5003,6 +5009,13 @@ void EngineApp::setupFixture(cmd::Dispatcher& d, std::string_view fixture) {
         return;
     }
     if (fixture == "engine_running") {  // the dummy backend: no device
+        auto st = startEngine("dummy", 256);
+        assert(st && "fixture engine failed");
+        (void)st;
+        return;
+    }
+    if (fixture == "song_with_clip_running") {  // song_with_clip, then the engine (dummy)
+        setupFixture(d, "song_with_clip");
         auto st = startEngine("dummy", 256);
         assert(st && "fixture engine failed");
         (void)st;
@@ -5190,6 +5203,17 @@ struct Gain : Effect {
         run("rack.add", R"({"track": "tr_2"})");
         return;
     }
+    if (fixture == "song_with_mod_out" || fixture == "song_with_modulation") {
+        // + rk_1 on tr_1: mo_1 Out, mo_2 a Mod Out; fx_1 a gain in tr_1's chain;
+        // with modulation, mr_1 takes mo_2.in_1 to fx_1's gain at depth 0.25
+        run("rack.add", R"({"track": "tr_1"})");
+        run("module.add", R"({"rack": "rk_1", "type": "mod_out", "x": 300, "y": 40})");
+        run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.gain"})");
+        if (fixture == "song_with_modulation")
+            run("modulation.add",
+                R"({"source": {"module": "mo_2", "input": "in_1"}, "target": {"fx": "fx_1", "param": "gain"}, "depth": 0.25})");
+        return;
+    }
     if (fixture == "song_with_module") {  // + wobble in the module library
         run("rack.add", R"({"track": "tr_1"})");
         json::Value args = json::Value::object();
@@ -5276,8 +5300,23 @@ struct Gain : Effect {
         run("take.activate", R"({"item":"it_1","take":"tk_3"})");
         return;
     }
+    if (fixture == "song_with_clip") {  // + sc_1 Verse, sc_2 Chorus; cl_1 on tr_1 in sc_1
+        run("scene.add", R"({"name": "Verse"})");
+        run("scene.add", R"({"name": "Chorus"})");
+        run("clip.add",
+            R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C2:q E2:q G2:q C3:q", "name": "Bass line"})");
+        return;
+    }
     if (fixture == "song_with_region") {
         run("region.add", R"({"start":0,"end":4,"name":"Verse"})");
+        return;
+    }
+    if (fixture ==
+        "song_with_context") {  // cx_1 Eb major, cx_2 Ebmaj7 and cx_3 Cm7 (bar 2), rg_1 Verse
+        run("key.set", R"({"at":0,"tonic":"Eb","scale":"major"})");
+        run("chord.set", R"({"at":0,"symbol":"Ebmaj7"})");
+        run("chord.set", R"({"at":4,"symbol":"Cm7"})");
+        run("region.add", R"({"start":0,"end":8,"name":"Verse"})");
         return;
     }
     run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.sine"})");

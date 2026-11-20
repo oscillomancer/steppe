@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include <algorithm>
+#include "clip_launcher.h"
 #include "command_validation.h"
 #include "supple/model/groups.h"
 #include "supple/model/schemas.h"
@@ -330,16 +331,15 @@ void registerGroupCommands(cmd::Registry& registry) {
         common(c, "group.targets",
                "Resolve linked tracks or matching items for an edit or selection.");
         c.kind = cmd::Kind::Query;
-        c.args =
-            schema::object<Targets>("group_targets_args")
-                .field("track", &Targets::track,
-                       schema::string().pattern("^tr_[0-9]+$", "track id"))
-                .field("item", &Targets::item, schema::string().pattern("^it_[0-9]+$", "item id"))
-                .field("attribute", &Targets::attribute,
-                       schema::string().pattern(
-                           "^(volume|pan|mute|solo|armed|monitor|selection|edit)$",
-                           "linked attribute"))
-                .build();
+        c.args = schema::object<Targets>("group_targets_args")
+                     .field("track", &Targets::track,
+                            schema::string().pattern("^tr_[0-9]+$", "track id"))
+                     .field("item", &Targets::item, timelineItemArg())
+                     .field("attribute", &Targets::attribute,
+                            schema::string().pattern(
+                                "^(volume|pan|mute|solo|armed|monitor|selection|edit)$",
+                                "linked attribute"))
+                     .build();
         c.result = schema::object<TargetResult>("group_targets")
                        .field("tracks", &TargetResult::tracks, schema::arrayOf(model::idSchema()))
                        .field("items", &TargetResult::items, schema::arrayOf(model::idSchema()))
@@ -350,6 +350,10 @@ void registerGroupCommands(cmd::Registry& registry) {
             const auto s = ctx.service<EngineApp>().view();
             if (a.track.has_value() == a.item.has_value())
                 return Error("group.target", "give one track or item", "", "omit the other target");
+            if (a.item)
+                SUPPLE_TRY(refuseClip(*a.item, "/item",
+                                      "a clip has no group; clips are edited one "
+                                      "at a time"));
             auto id = Id::parse(a.track ? *a.track : *a.item);
             if (!id || (a.track ? !s.tracks.contains(*id) : !s.items.contains(*id)))
                 return Error("group.target", "target does not exist", a.track ? "/track" : "/item",

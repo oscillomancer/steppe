@@ -88,9 +88,38 @@ Status EngineApp::commitOutputGesture(const OutputKey& key, const OutputGesture&
                          "choose an installed plugin version whose semantic schema describes the "
                          "output parameter, or remove that parameter's envelope");
     }
+    std::string paramKey = semantic ? semantic->key : std::to_string(key.second);
+    // A route reaching this parameter through its envelope (ADR-0096 step
+    // M4: a VST3's, or one not modulatable) makes the lane send base plus
+    // the modulation, so the plug-in reports that and a drag from it. Write
+    // modes record the base: the current offset comes off, as the lane last
+    // applied it (a fraction of the range; of the normalized one for a VST3).
+    double offset = 0.0;
+    if (fx->plugin.format == "vst3" || !(param->flags & CLAP_PARAM_IS_MODULATABLE)) {
+        const auto offsets = modulationOffsets();
+        for (const auto& m : head().modulations) {
+            const model::Modulation& route = *m.value;
+            const auto it = offsets.find(m.id);
+            if (route.target.object != key.first || it == offsets.end() ||
+                (route.target.param != paramKey && route.target.param != param->name))
+                continue;
+            offset = it->second;  // the target's sum, the same on each of its routes
+            break;
+        }
+    }
+    auto unmodulated = [&](double reported) -> Result<double> {
+        auto checked = plain(reported);
+        if (!checked || offset == 0.0) return checked;
+        if (instance->paramsNormalized())
+            return instance->plainParam(key.second, std::clamp(reported - offset, 0.0, 1.0));
+        return std::clamp(*checked - offset * (param->max - param->min), param->min, param->max);
+    };
+    if (offset != 0.0) {
+        value = unmodulated(gesture.latest->event.value);
+        if (!value) return value.error();
+    }
     auto next = *fx;
     next.params[key.second] = *value;
-    std::string paramKey = semantic ? semantic->key : std::to_string(key.second);
     if (semantic) {
         if (!next.patch) {
             auto patch = instance->getPatch(false);
@@ -136,7 +165,7 @@ Status EngineApp::commitOutputGesture(const OutputKey& key, const OutputGesture&
                       std::make_shared<const model::Blob>(model::Blob{std::move(*state)}));
     for (const auto& output : gesture.recording) {
         if (!records || !engine_) break;
-        auto recorded = plain(output.event.value);
+        auto recorded = unmodulated(output.event.value);
         if (!recorded) continue;
         const double physical = semantic ? params::fromClap(semantic->spec, *recorded) : *recorded;
         const double seconds =

@@ -34,7 +34,7 @@ GPL_LICENSES = {"GPL-3.0-only", "GPL-3.0-or-later"}
 # the maintainer's approval.
 APPROVED_LGPL = {"lame": "LGPL-2.0-or-later", "libltc": "LGPL-3.0-or-later"}
 MIT_LIBRARIES = {"core-base", "core-json", "core-schema", "core-params",
-                 "core-patch", "core-dsp", "core-analysis"}
+                 "core-patch", "core-dsp", "core-analysis", "harmony"}
 # GPL-only first-party libraries (ADR-0083): nothing in the permissive part of the tree
 # (mit_component) may include their headers or name them. cmake/LicenseIsolation.cmake
 # checks the link graph of the targets it can see; this checks the files, which also covers

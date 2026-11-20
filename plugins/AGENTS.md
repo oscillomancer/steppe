@@ -33,7 +33,10 @@ The monorepo builds each plugin as an isolated ExternalProject
 `supple_add_stock_script`); its own test suite runs as
 `plugin.<name>.ctest`, apart from the X11 and Win32 embedding probes,
 which read an editor's pixels off the shared screen and so run as
-`plugin.<name>.embedding`, one plugin at a time (a `RESOURCE_LOCK`).
+`plugin.<name>.embedding`, one plugin at a time (a `RESOURCE_LOCK`). They
+take over a window on the screen the suite runs on, so `EditorProbes.cmake`
+runs them only when `SUPPLE_EDITOR_PROBE_TEST=1` (native CI sets it) and
+reports them skipped otherwise.
 Built plugins land in `build/<preset>/plugins/clap/`.
 
 `template/` is the plugin template at a released framework version, a

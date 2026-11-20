@@ -422,6 +422,8 @@ class Instance {
     bool failed() const;
     std::string failure() const;
     bool isolated() const { return remote_ != nullptr; }
+    // The input events a bridged block carries; the bridge cuts the rest.
+    static constexpr std::uint32_t kBridgeBlockEvents = 2048;
     int bridgePid() const;  // -1 for in-process
     // Bridged: this instance's failure deadline off the callback, in place
     // of bridgeDeadlineMs() (0, the default, uses that); lifecycle commands
@@ -588,6 +590,13 @@ class Instance {
     // How many times reset() was called: a host that keeps per-instance state
     // (a rack's plugin module: which notes it sent) sees the plug-in forgot it.
     std::uint32_t resets() const { return resets_.load(std::memory_order_relaxed); }
+    // How many times the plug-in may have lost or replaced its parameter
+    // modulation: activate(), reset(), setPatch() and loadState() each count,
+    // whether or not they succeed. A host that sends only changed
+    // modulation amounts resends them all once this moves (ADR-0096).
+    std::uint32_t modulationEpoch() const {
+        return modulationEpoch_.load(std::memory_order_relaxed);
+    }
 
     // --- main-thread servicing (call regularly: after renders, from the app loop) ---
     // Handles request_callback, request_restart (while active), pending flushes
@@ -742,6 +751,7 @@ class Instance {
     std::unique_ptr<Vst3Instance> vst3_;
     std::atomic<const void*> owner_{nullptr};
     std::atomic<std::uint32_t> resets_{0};
+    std::atomic<std::uint32_t> modulationEpoch_{0};
     std::atomic<bool> paramProcessRequested_{false};
     void notifyAudio() SUPPLE_RT;
     std::atomic<std::atomic<std::uint32_t>*> audioWake_{nullptr};

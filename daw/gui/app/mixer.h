@@ -26,10 +26,12 @@
 #include "app_actions.h"
 #include "fx_attention.h"
 #include "meter_feed.h"
+#include "modulation_status.h"
 #include "plugin_drag.h"
 #include "selection_edit.h"
 #include "supple/ui/edge_scroll.h"
 #include "supple/ui/root.h"
+#include "supple/views/envelope_lane.h"
 #include "supple/views/track_layout.h"
 #include "track_menu.h"
 
@@ -196,6 +198,14 @@ class Mixer {
     FxAttention attention_{app_};  // disabled and failed plug-ins: the marks' one rule
     std::uint64_t projectGeneration_ = ~std::uint64_t{0};
     std::uint64_t gesture_ = 0;  // a serial per drag: separate drags are separate undo steps
+    // Modulation (ADR-0096): a strip control's routes, and a depth drag on its
+    // bar (modulation.set on the route it edits; a drag is one undo step).
+    std::optional<views::ControlModulation> modulationOf(const model::Session& s,
+                                                         const model::EnvTarget& target);
+    void setDepth(const model::EnvTarget& target, double depth, ui::Gesture g);
+    void showModulation(Strip& st, const model::Track& t);
+    std::map<model::Id, double> live_;  // telemetry: each route's target's offset now
+    LiveModulation liveModulation_;     // reads live_, inert routes left out
 };
 
 }  // namespace supple::gui

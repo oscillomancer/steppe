@@ -649,7 +649,11 @@ void registerFxCommands(cmd::Registry& registry) {
                 .field("plugin", &FxDescription::plugin, schema::string())
                 .field("name", &FxDescription::name, schema::string())
                 .field("description", &FxDescription::description, schema::string())
-                .field("params", &FxDescription::params, schema::any())
+                .field("params", &FxDescription::params,
+                       schema::any().doc("With full: each parameter; modulatable_by_envelope: "
+                                         "true when a route reaches it through its envelope "
+                                         "(ADR-0096 M4); modulatable: true when a "
+                                         "modulation route can take it (modulation.add)"))
                 .field("patch", &FxDescription::patch, schema::any())
                 .field("status_available", &FxDescription::statusAvailable,
                        schema::boolean().doc("A live instance supplied its current problems"))
@@ -749,9 +753,32 @@ void registerFxCommands(cmd::Registry& registry) {
             if (a.full) {
                 auto schema = app.fxSchema(fx);
                 if (!schema && live) schema = live->semanticSchema();
-                if (schema && schema->isObject() && schema->find("params"))
+                // modulatable: a modulation route can take it (ADR-0096): flagged
+                // modulatable, not read-only or a bypass, and not a VST3's.
+                const bool vst3 = fx.plugin.format == "vst3";
+                if (schema && schema->isObject() && schema->find("params")) {
                     r.params = *schema->find("params");
-                else if (auto list = app.fxParams(fx)) {
+                    if (r.params->isObject() && !vst3)
+                        for (auto& entry : r.params->asObject()) {
+                            const json::Value* flags =
+                                entry.value.isObject() ? entry.value.find("flags") : nullptr;
+                            if (!flags || !flags->isArray()) continue;
+                            bool modulatable = false, automatable = false, excluded = false;
+                            for (const auto& f : flags->asArray()) {
+                                if (!f.isString()) continue;
+                                modulatable |= f.asString() == "modulatable";
+                                automatable |= f.asString() == "automatable";
+                                excluded |= f.asString() == "readonly" || f.asString() == "bypass";
+                            }
+                            const json::Value* type = entry.value.find("type");
+                            const bool continuous =
+                                type && type->isString() && type->asString() == "float";
+                            if (modulatable && !excluded) entry.value["modulatable"] = true;
+                            // Through its envelope (ADR-0096 step M4).
+                            if (!modulatable && automatable && continuous && !excluded)
+                                entry.value["modulatable_by_envelope"] = true;
+                        }
+                } else if (auto list = app.fxParams(fx)) {
                     // Not semantic (a plain CLAP or a VST3): its parameters as the
                     // plugin declares them, for fx.param.set by id or name.
                     auto lower = [](std::string t) {
@@ -778,6 +805,15 @@ void registerFxCommands(cmd::Registry& registry) {
                         if (p.flags & (CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_ENUM))
                             e["stepped"] = true;
                         if (p.flags & CLAP_PARAM_IS_READONLY) e["read_only"] = true;
+                        const bool writable =
+                            !(p.flags & (CLAP_PARAM_IS_READONLY | CLAP_PARAM_IS_BYPASS));
+                        if (!vst3 && (p.flags & CLAP_PARAM_IS_MODULATABLE) && writable)
+                            e["modulatable"] = true;
+                        // Through its envelope (ADR-0096 step M4): automatable and
+                        // continuous, not modulatable (any VST3 parameter).
+                        else if (writable && (p.flags & CLAP_PARAM_IS_AUTOMATABLE) &&
+                                 !(p.flags & (CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_ENUM)))
+                            e["modulatable_by_envelope"] = true;
                         ps.push_back(std::move(e));
                     }
                     r.params = std::move(ps);

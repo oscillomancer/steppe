@@ -27,7 +27,8 @@ namespace {
 const cmd::Origin kUiOrigin{cmd::Origin::Type::Ui, "gui", {}};
 
 bool draggingSlider(const ui::Node& node) {
-    if (const auto* slider = dynamic_cast<const ui::Slider*>(&node); slider && slider->dragging())
+    if (const auto* slider = dynamic_cast<const ui::Slider*>(&node);
+        slider && (slider->dragging() || slider->depthDragging()))
         return true;
     for (const auto& child : node.children())
         if (draggingSlider(*child)) return true;
@@ -568,7 +569,7 @@ Status FxWindow::open(model::Id track) {
     SUPPLE_TRY(panel_.ensure());
     if (!browser_) {
         browser_ = std::make_unique<PluginBrowser>(app_, dispatcher_, root(), favouritesFile_);
-        params_ = std::make_unique<ParamPanel>(dispatcher_, root());
+        params_ = std::make_unique<ParamPanel>(app_, dispatcher_, root());
         params_->onError = [this](const std::string& message) { setStatus(message); };
         params_->openLearn = hooks_.openLearn;
     }
@@ -957,6 +958,8 @@ void FxWindow::tick(bool event) {
     const bool overridden = app_.loadOverridesVersion() != overridesVersion_;
     overridesVersion_ = app_.loadOverridesVersion();
     if (page_ && (replaced || overridden || app_.head().version != shownVersion_)) refresh();
+    // The parameter tab's modulated sliders follow the engine (ADR-0096).
+    if (page_ && tab_ == Tab::Params && params_) params_->tickLive();
     // The Rack devices' knobs follow their Macros (automation as it plays).
     std::vector<model::Id> macros;
     if (page_)
@@ -1371,7 +1374,7 @@ void FxWindow::buildRow(ui::Node& body, model::Id fx, std::size_t index, bool in
                 prefix + "badge." + id,
                 std::vector<ui::TextRun>{{badgeText(*inst, app_.effectiveIsolation(fx), false),
                                           ui::Font::Mono, "ink-quiet"},
-                                         {" \u00b7 failed", ui::Font::Mono, "clip"}},
+                                         {" \u00b7 failed", ui::Font::Mono, "meter-clip"}},
                 "caption");
         } else {
             badge = &l2.emplace<ui::Label>(prefix + "badge." + id,
@@ -1570,7 +1573,7 @@ void FxWindow::buildParams(ui::Node& body) {
     }
     if (auto built = params_->build(body, selected_); !built)
         body.emplace<ui::Label>("fx.params.error", built.error().message, ui::Font::Ui, "small",
-                                "clip");
+                                "meter-clip");
 }
 
 // A chain row dragged among the others: the insertion bar follows the pointer

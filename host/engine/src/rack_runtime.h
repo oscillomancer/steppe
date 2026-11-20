@@ -31,11 +31,17 @@ namespace supple::engine::detail {
 struct PluginModTarget {
     std::uint32_t param = 0;
     double scale = 0;
+    // Reached through its envelope (ADR-0096 step M4): automatable, not
+    // modulatable (or a VST3's), so its lane sends the summed value. A
+    // VST3's lane runs in the normalized domain: scale is then 1.
+    bool envelope = false;
 };
 // Main-thread resolution shared by command validation and plan preparation.
+// `allowEnvelope`: a modulation route may take an automatable parameter
+// through its envelope; a rack cable into a plugin module may not.
 Result<PluginModTarget> resolvePluginMod(std::span<const host::ParamInfo> params,
                                          const json::Value* schema, const std::string& key,
-                                         bool vst3 = false);
+                                         bool vst3 = false, bool allowEnvelope = false);
 
 // The module types every engine knows: the host modules (the rack runtime's
 // and the plugin module) and the stock ones.
@@ -251,6 +257,18 @@ struct RackNode {
     std::vector<std::int64_t> outLatencies;
     std::vector<rack::host::In*> ins;  // Node::rackIns
     std::vector<Id> inIds;
+    // Mod Out modules (ADR-0096), in module id order, and their latencies.
+    // `modValues[k * kModOutInputs + i]`: input i of Mod Out k at each frame
+    // of the block, sized only where a modulation route reads it; `modHeld`,
+    // each one's value at the end of the last block this plan ran.
+    std::vector<rack::host::ModOut*> modOuts;
+    std::vector<Id> modOutIds;
+    std::vector<std::int64_t> modOutLatencies;
+    std::vector<std::vector<double>> modValues;
+    std::vector<double> modHeld;
+    // This block the modules were the other executor's: Mod Outs held their
+    // last values and emitters send nothing (ADR-0096, M-f).
+    bool modStale = false;
     std::vector<NotesFeed> notes;
     std::vector<NotesOutBinding> notesOut;
     std::vector<PluginBinding> plugins;

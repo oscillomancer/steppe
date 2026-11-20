@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
+#include "clip_launcher.h"
 #include "command_validation.h"
 #include "supple/model/item_edits.h"
 #include "supple/model/schemas.h"
@@ -34,6 +35,8 @@ void registerHealCommands(cmd::Registry& registry) {
     c.examples = {{"Heal an audio split", *json::parse(R"({"items":["it_1","it_2"]})"),
                    *json::parse(R"({"items":["it_1"]})"), "song_split_audio"}};
     c.run = [](const Args& a, cmd::Context& ctx) -> Result<json::Value> {
+        SUPPLE_TRY(refuseClipIds(a.items, "/items",
+                                 "lay the clip on the timeline first (item.add {clip})"));
         auto& app = ctx.service<EngineApp>();
         auto groups = model::healingGroups(app.view(), a.items);
         if (!groups) return groups.error();

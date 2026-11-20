@@ -56,6 +56,10 @@ class Canvas {
     void text(const Rect& box, std::string_view s, Font font, float size, Color c,
               int align = kLeft | kMiddle);
     float textWidth(std::string_view s, Font font, float size) const;
+    // `s` as it fits in `width`: whole, or cut after a whole character and
+    // ended with an ellipsis; "" when not even one character and the ellipsis
+    // fit (a label too narrow for its name shows nothing, never a cut glyph).
+    std::string elide(std::string_view s, Font font, float size, float width) const;
     // `s` broken into lines no wider than `width` (at spaces where possible;
     // explicit newlines break).
     std::vector<std::string> wrap(std::string_view s, Font font, float size, float width) const;

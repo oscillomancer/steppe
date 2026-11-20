@@ -13,7 +13,9 @@
 #include "pan_menu.h"
 #include "panel_grip.h"
 #include "panel_height.h"
+#include "param_menu.h"
 #include "rack_controls.h"
+#include "rack_engine.h"
 #include "strip_learn.h"
 #include "supple/model/groups.h"
 #include "supple/ui/controls.h"
@@ -206,7 +208,7 @@ class FxSlot : public DragButton {
         if (needsYou) {
             const float inset = std::max(2.0f, t.radius("s"));
             c.fillRect({b.x + 1, b.y + inset, 2.0f, b.h - 2 * inset},
-                       t.color(state == State::Failed ? "clip" : "meter-hot"));
+                       t.color(state == State::Failed ? "meter-clip" : "meter-hot"));
         }
         const std::string name = Button::valueText();
         const float size = t.type("small");
@@ -298,13 +300,16 @@ class NameEdit : public ui::Node {
 };
 
 // A rack that feeds a channel, above its plug-ins (signal order): its name on
-// a rack module's face, and a faint "rack". A click opens the rack window on
-// it (a double-click's second press does nothing more); a right-click is the
-// strip's.
+// a rack module's face, and a faint "rack". A modulator rack (one homed on the
+// strip's track that holds a Mod Out, ADR-0096) is a mod slot: the same face
+// with "mod" in signal-cv, the colour modulation has everywhere. A click opens
+// the rack window on it (a double-click's second press does nothing more); a
+// right-click is the strip's.
 class RackSlot : public ui::Button {
   public:
-    RackSlot(std::string id, std::string name, std::function<void()> click)
-        : Button(std::move(id), name, std::move(click)), name_(std::move(name)) {}
+    RackSlot(std::string id, std::string name, std::function<void()> click, bool mod = false)
+        : Button(std::move(id), name, std::move(click)), name_(std::move(name)), mod_(mod) {}
+    bool mod() const { return mod_; }
     bool onPointer(const ui::PointerEvent& e) override {
         if (e.button == 1 && e.clicks >= 2 &&
             (e.type == ui::PointerEvent::Type::Down || e.type == ui::PointerEvent::Type::Up))
@@ -320,20 +325,23 @@ class RackSlot : public ui::Button {
                                 : t.color("module"));
         c.strokeRound(b, t.radius("s"), t.color("rule"));
         const float size = t.type("small"), tagSize = t.type("caption");
-        const float tagW = c.textWidth("rack", ui::Font::Ui, tagSize);
+        const char* tagText = mod_ ? "mod" : "rack";
+        const float tagW = c.textWidth(tagText, ui::Font::Ui, tagSize);
         const float nameW = c.textWidth(name_, ui::Font::UiBold, size);
-        // The tag only where the name keeps its room.
-        const bool tag = nameW + tagW + 14 <= b.w;
+        // A rack's tag only where the name keeps its room; a mod slot's always
+        // (the name is cut short instead), since "mod" is what marks it.
+        const bool tag = mod_ || nameW + tagW + 14 <= b.w;
         const ui::Rect text{b.x + 4, b.y, b.w - 8 - (tag ? tagW + 4 : 0), b.h};
         c.text(text, name_, ui::Font::UiBold, size, t.color("ink"),
                (tag ? ui::kLeft : ui::kCenter) | ui::kMiddle);
         if (tag)
-            c.text({b.right() - 4 - tagW, b.y, tagW, b.h}, "rack", ui::Font::Ui, tagSize,
-                   t.color("ink-faint"), ui::kLeft | ui::kMiddle);
+            c.text({b.right() - 4 - tagW, b.y, tagW, b.h}, tagText, ui::Font::Ui, tagSize,
+                   t.color(mod_ ? "signal-cv" : "ink-faint"), ui::kLeft | ui::kMiddle);
     }
 
   private:
     std::string name_;
+    bool mod_ = false;
 };
 
 // The dB marks of a strip's meter, beside it: 0, then how far under it.
@@ -383,7 +391,8 @@ class PeakReadout : public ui::Node {
     void paint(ui::Canvas& c) override {
         const ui::Theme& t = c.theme();
         c.text(bounds(), valueText(), ui::Font::Mono, t.type("caption"),
-               t.color(meter_->maxPeakDb() > 0 ? "clip" : "ink-quiet"), ui::kCenter | ui::kMiddle);
+               t.color(meter_->maxPeakDb() > 0 ? "meter-clip" : "ink-quiet"),
+               ui::kCenter | ui::kMiddle);
     }
     bool onPointer(const ui::PointerEvent& e) override {
         if (e.type != ui::PointerEvent::Type::Down || e.button != 1) return false;
@@ -1074,6 +1083,9 @@ std::string Mixer::structure() const {
         }
         for (model::Id rack : racks::racksFeeding(s, id))
             out += rack.str() + "," + model::rackLabel(s, rack) + ",";
+        out += "m";
+        for (model::Id rack : racks::modRacks(s, id))
+            out += rack.str() + "," + model::rackLabel(s, rack) + ",";
         for (const auto& e : s.routes)
             if (e.value->from.track == id) {
                 out += e.id.str() + "," + std::to_string(e.value->mute);
@@ -1133,13 +1145,10 @@ void Mixer::rebuild(bool keepLists) {
         st.type = type;
         auto frame = std::make_unique<StripFrame>("mixer.strip." + tid, [this, id](ui::Point p) {
             // Strip coordinates are the window's (the row lays them out in place).
-            // On a fader, pan or button: its MIDI learn (ADR-0058).
+            // On a fader, pan or button: the parameter menu (MIDI learn, lane,
+            // reset; a pan's mode and law), as in the track panel.
             if (const char* param = learnableAt(id.str(), p)) {
-                // The pan's menu adds its mode and law (ADR-0066).
-                if (std::string_view(param) == "pan")
-                    openPanMenu(root_, actions_, id, {p.x, p.y, 1, 1});
-                else
-                    openStripLearnMenu(root_, actions_, {{id}, param}, {p.x, p.y, 1, 1});
+                openParamMenu(root_, actions_, id, param, {p.x, p.y, 1, 1});
                 return;
             }
             trackMenu_.open(id, {p.x, p.y, 1, 1}, {});
@@ -1200,15 +1209,30 @@ void Mixer::rebuild(bool keepLists) {
             args["track"] = tid;
             run("ui.fx.add", std::move(args));
         };
-        // The racks that feed it (their Outs route to its input), first.
+        // The racks that feed it (their Outs route to its input), first, then
+        // its modulator racks (mod slots). A modulator that also feeds it
+        // shows once, where it feeds, as a mod slot.
+        const std::vector<model::Id> modulators = racks::modRacks(s, id);
+        auto isMod = [&](model::Id rack) {
+            return std::find(modulators.begin(), modulators.end(), rack) != modulators.end();
+        };
+        std::vector<model::Id> slotted;
+        auto addRackSlot = [&](model::Id rack) {
+            const bool mod = isMod(rack);
+            auto slot = std::make_unique<RackSlot>(
+                std::string(mod ? "mixer.mod." : "mixer.rack.") + tid + "." + rack.str(),
+                model::rackLabel(s, rack),
+                [this, rack] {
+                    if (openRack) openRack(rack);
+                },
+                mod);
+            st.racks.push_back(&chain.addRack(std::move(slot)));
+            slotted.push_back(rack);
+        };
         if (t.type == model::StripType::Channel)
-            for (model::Id rack : racks::racksFeeding(s, id)) {
-                auto slot = std::make_unique<RackSlot>("mixer.rack." + tid + "." + rack.str(),
-                                                       model::rackLabel(s, rack), [this, rack] {
-                                                           if (openRack) openRack(rack);
-                                                       });
-                st.racks.push_back(&chain.addRack(std::move(slot)));
-            }
+            for (model::Id rack : racks::racksFeeding(s, id)) addRackSlot(rack);
+        for (model::Id rack : modulators)
+            if (std::find(slotted.begin(), slotted.end(), rack) == slotted.end()) addRackSlot(rack);
         for (std::size_t at = 0; at < t.chain.size(); ++at) {
             const model::Id fx = t.chain[at];
             const model::FxInstance* f = s.fx.find(fx);
@@ -1402,6 +1426,13 @@ void Mixer::rebuild(bool keepLists) {
         };
         st.pan->onChange = panBar(0);
         st.pan->onSecondChange = panBar(1);
+        // A drag on a modulated bar edits its route's depth (ADR-0096).
+        st.pan->onDepth = [this, id](int part, double depth, ui::Gesture g) {
+            const model::Track* now = app_.head().tracks.find(id);
+            if (!now) return;
+            const char* field = panField(*now, part);
+            setDepth({id, field}, depth, g);
+        };
         showPan(*st.pan, t);
         // The state row, over the fader: arm, monitor, mute, solo, one cell
         // each and always in that place. A buss has no arm or monitor and a
@@ -1473,6 +1504,9 @@ void Mixer::rebuild(bool keepLists) {
                           : "",
                       bool(control->gestureModifiers() & ui::kAlt));
         };
+        st.fader->onDepth = [this, id](double depth, ui::Gesture g) {
+            setDepth({id, "volume"}, depth, g);
+        };
         // Under the fader its value; under the meter the highest peak shown.
         auto& values = frame->emplace<ui::Node>("mixer.values." + tid);
         values.layout.dir = ui::Layout::Dir::Row;
@@ -1509,9 +1543,9 @@ void Mixer::rebuild(bool keepLists) {
         st.track = tid;
         st.type = "vca";
         auto frame = std::make_unique<StripFrame>("mixer.vca." + tid, [this, gid](ui::Point p) {
-            // On the fader, mute or solo: its MIDI learn (ADR-0058).
+            // On the fader, mute or solo: the parameter menu.
             if (const char* param = learnableAt(gid.str(), p)) {
-                openStripLearnMenu(root_, actions_, {{gid}, param}, {p.x, p.y, 1, 1});
+                openParamMenu(root_, actions_, gid, param, {p.x, p.y, 1, 1});
                 return;
             }
             trackMenu_.openGroup(gid, {}, {p.x, p.y, 1, 1});
@@ -2071,6 +2105,50 @@ void Mixer::endDrag(bool commit) {
         actions_.onError(std::string("mixer: ") + r.error().message);
 }
 
+std::optional<views::ControlModulation> Mixer::modulationOf(const model::Session& s,
+                                                            const model::EnvTarget& target) {
+    const auto catalog = racks::catalog(app_);
+    return views::controlModulation(
+        s, target,
+        [&catalog](const model::Session& at, const model::ModSource& source) {
+            return catalog && racks::unipolarSource(at, *catalog, source);
+        },
+        &live_);
+}
+
+void Mixer::setDepth(const model::EnvTarget& target, double depth, ui::Gesture g) {
+    if (g == ui::Gesture::Begin) ++gesture_;
+    if (g == ui::Gesture::Begin || g == ui::Gesture::End) return;
+    const auto mod = modulationOf(app_.head(), target);
+    if (!mod) return;
+    json::Value args = json::Value::object();
+    args["modulation"] = mod->route.str();
+    args["depth"] = depth;
+    cmd::Origin origin = kOrigin;
+    if (g == ui::Gesture::Move)
+        origin.gesture = "mixer.depth:" + mod->route.str() + ":" + std::to_string(gesture_);
+    if (auto r = dispatcher_.execute({"modulation.set", std::move(args), origin});
+        !r && actions_.onError)
+        actions_.onError(std::string("mixer: ") + r.error().message);
+}
+
+// The fader's and each pan bar's modulation: a bar beside it, and a drag on
+// the bar for depth (ui::ModulationView). A dual pan's bars take none.
+void Mixer::showModulation(Strip& st, const model::Track& t) {
+    const model::Session& s = app_.head();
+    const model::Id id = *model::Id::parse(st.track);
+    auto view = [&](const char* param) -> std::optional<ui::ModulationView> {
+        if (!views::stripModulatable(s, id, param)) return std::nullopt;
+        const auto mod = modulationOf(s, {id, param});
+        return mod ? std::optional(mod->view) : std::nullopt;
+    };
+    st.fader->setModulation(view("volume"));
+    const bool dual = t.type != model::StripType::Master && t.panMode == model::PanMode::Dual;
+    st.pan->setModulation(0, dual ? std::nullopt : view("pan"));
+    st.pan->setModulation(
+        1, !dual && t.type != model::StripType::Master ? view("width") : std::nullopt);
+}
+
 void Mixer::update() {
     const model::Session& s = app_.head();
     if (console9_) console9_->setOn(s.project->console9);
@@ -2100,6 +2178,7 @@ void Mixer::update() {
             row->setText(sendText(s, *route.value));
         }
         showPan(*st.pan, *t);
+        showModulation(st, *t);
         st.mute->setOn(t->mute);
         st.solo->setOn(t->solo != model::Solo::Off);
         st.polarity->enabled = st.mono->enabled = !t->freeze;
@@ -2132,6 +2211,15 @@ void Mixer::sync(std::chrono::steady_clock::time_point now) {
         edgeClock_.reset();
     }
     follow();
+    // Modulation telemetry (ADR-0096, M2): the modulated controls' live
+    // values, redrawn only when they move.
+    if (auto live = liveModulation_.read(dispatcher_, app_); live != live_) {
+        live_ = std::move(live);
+        const model::Session& s = app_.head();
+        for (Strip& st : strips_)
+            if (const auto id = model::Id::parse(st.track))
+                if (const model::Track* t = s.tracks.find(*id)) showModulation(st, *t);
+    }
 }
 
 // The pass without its time: what the panel shows follows the window, the

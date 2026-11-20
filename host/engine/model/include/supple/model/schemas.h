@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 // JSON forms of the session objects (core-schema) and the project file
-// `supple.project/2.15` (session-model §5). Fields equal to their defaults are
+// `supple.project/2.18` (session-model §5). Fields equal to their defaults are
 // omitted, so files and diffs stay small; decoding fills them back in.
 #pragma once
 
@@ -40,12 +40,13 @@ schema::ObjectBuilder<T>& controlBindingFields(schema::ObjectBuilder<T>& b) {
     b.field("soft_takeover", softTakeover, schema::boolean()).defaultValue(false).omitIfDefault();
     return b;
 }
-schema::Schema<ParamLearn> paramLearnSchema();        // {param, midi, mode, …} (ADR-0027)
-schema::Schema<ControlLearn> controlLearnSchema();    // {param, midi, mode, …} (ADR-0058)
-schema::Schema<TrackTimebase> trackTimebaseSchema();  // project | time | beats | beats_position
-schema::Schema<ItemTimebase> itemTimebaseSchema();    // track | time | beats | beats_position
-schema::Schema<ChainMidi> chainMidiSchema();          // bus | instrument (ADR-0068)
-schema::Schema<Id> idSchema();                        // "tr_3"
+schema::Schema<ParamLearn> paramLearnSchema();          // {param, midi, mode, …} (ADR-0027)
+schema::Schema<ControlLearn> controlLearnSchema();      // {param, midi, mode, …} (ADR-0058)
+schema::Schema<TrackTimebase> trackTimebaseSchema();    // project | time | beats | beats_position
+schema::Schema<ItemTimebase> itemTimebaseSchema();      // track | time | beats | beats_position
+schema::Schema<ChainMidi> chainMidiSchema();            // bus | instrument (ADR-0068)
+schema::Schema<LaunchQuantize> launchQuantizeSchema();  // bar | beat | 1/2 … 1/32 | none
+schema::Schema<Id> idSchema();                          // "tr_3"
 // A cable end, "mo_3.out" (rack.md §2.3); merges remap the object's id in
 // strings matching kCableEndPattern.
 inline constexpr std::string_view kCableEndPattern =
@@ -59,7 +60,7 @@ json::Value toJson(const T& object) {
     return schemaOf<T>().encode(object);
 }
 
-inline constexpr std::string_view kProjectSchema = "supple.project/2.15";
+inline constexpr std::string_view kProjectSchema = "supple.project/2.18";
 
 // The whole session as the canonical project document (members in the
 // spec's order, objects keyed by ID in ID order). A project file also keeps
@@ -72,5 +73,9 @@ Result<Session> projectFromJson(const json::Value& doc,
                                 std::vector<schema::Warning>* warnings = nullptr);
 Result<Session> parseProject(std::string_view text,
                              std::vector<schema::Warning>* warnings = nullptr);
+
+// Whether the loader reads a top-level section itself; any other is kept as an extra
+// section. The sections projectToJson writes must all be known (a test checks it).
+bool isKnownProjectSection(std::string_view section);
 
 }  // namespace supple::model

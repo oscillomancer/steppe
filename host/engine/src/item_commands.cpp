@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 // Item commands: item.add/remove/move/set/duplicate/paste/split, midi.write and midi.get.
+#include "clip_launcher.h"
 #include "command_helpers.h"
+#include "supple/model/context.h"
 
 namespace supple::engine {
 
@@ -15,6 +17,7 @@ struct ItemAddArgs {
     std::optional<std::int64_t> bar;
     std::optional<double> length;  // beats
     std::optional<std::string> notation, audioFile, midiFile;
+    std::optional<std::string> clip;  // a copy of a clip's takes (ADR-0097)
     std::optional<std::string> name;
 };
 
@@ -46,6 +49,67 @@ struct MidiWriteArgs {
 struct MidiGetArgs {
     std::string item;
 };
+
+// The key and the chords heard over a MIDI item's span, each from the bar of the item
+// where it starts (item bars are the notation's; project bars are the arrange view's).
+struct ContextRun {
+    std::int64_t itemBar = 1, projectBar = 1;
+    std::string what;
+};
+struct MidiContext {
+    std::vector<ContextRun> keys, chords;
+};
+struct MidiGetResult {
+    std::string text;
+    std::optional<MidiContext> context;
+};
+
+// The 1-based bar of the item that holds `itemBeat` (beats from the item's start).
+std::int64_t itemBarOf(const std::function<midi::Meter(int)>& meterAt, double itemBeat) {
+    double beat = 0;
+    for (int bar = 1; bar < 1000000; ++bar) {
+        const auto meter = meterAt(bar);
+        beat += meter.numerator * 4.0 / meter.denominator;
+        if (itemBeat < beat - 1e-9) return bar;
+    }
+    return 1000000;
+}
+
+std::optional<MidiContext> midiContext(const model::Session& s, const model::Item& item) {
+    const double start = model::itemSpan(s, item).startBeat;
+    const double end = start + model::itemLengthBeats(s, item);
+    const auto meterAt = meterContext(s, start);
+    auto run = [&](double from, bool holding, std::string what) {
+        const double at = holding ? start : from;
+        return ContextRun{itemBarOf(meterAt, at - start), s.timeMap->barBeat(at).bar,
+                          std::move(what)};
+    };
+    MidiContext out;
+    // By beat; the one holding at the item's start leads, later ones fall inside.
+    auto collect = [&](model::ContextType type, std::vector<ContextRun>& runs) {
+        std::vector<std::pair<double, Id>> inside;
+        for (const auto& e : s.context)
+            if (e.value->type == type && e.value->beat > start && e.value->beat < end)
+                inside.push_back({e.value->beat, e.id});
+        std::sort(inside.begin(), inside.end());
+        auto words = [&](const model::ContextPoint& p) {
+            if (type == model::ContextType::Key) return model::keyWords(p);
+            if (p.symbol.empty()) return std::string("(no chord)");
+            return p.symbol + (model::parseChordPoint(p) ? "" : "?");
+        };
+        const auto holding = type == model::ContextType::Key ? model::keyPointAt(s, start)
+                                                             : model::chordPointAt(s, start);
+        if (holding)
+            if (const auto* p = s.context.find(*holding))
+                runs.push_back(run(start, true, words(*p)));
+        for (const auto& [beat, id] : inside)
+            runs.push_back(run(beat, false, words(*s.context.find(id))));
+    };
+    collect(model::ContextType::Key, out.keys);
+    collect(model::ContextType::Chord, out.chords);
+    if (out.keys.empty() && out.chords.empty()) return std::nullopt;
+    return out;
+}
 
 // The model's name for a container ("wav"/"flac"/"mp3"): the detected one, not
 // the file's extension.
@@ -262,7 +326,124 @@ schema::Schema<model::FadeShape> fadeShapeSchema() {
                                                   {model::FadeShape::Exp, "exp"}});
 }
 
+// item.add {clip}: a new item from a copy of the clip's takes, converted
+// at the tempo where it lands (ADR-0097 "Converting between an item and a
+// clip").
+Result<ItemAddResult> addItemFromClip(EngineApp& app, const model::Session& s, model::EditTxn& t,
+                                      Id track, double pos, const std::string& text) {
+    (void)app;
+    auto id = existing<model::Clip>(s, text, "/clip");
+    if (!id) return std::move(id).error();
+    const model::Clip& clip = *s.clips.find(*id);
+    if (clip.takes.empty() || !clip.activeTake)
+        return Error("item.source", text + " has no take to lay on the timeline", "/clip",
+                     "give the clip a take first (take.add), or remove it");
+    SUPPLE_TRY(checkItemTrack(s, track, clip.takes, "/track"));
+    const model::Take* active = s.takes.find(*clip.activeTake);
+    if (!active)
+        return Error("item.take", clip.activeTake->str() + " is missing", "/clip",
+                     "use a current take id from take.list");
+    auto shaped = itemFromClip(s, clip, *active, track, pos, "/clip");
+    if (!shaped) return std::move(shaped).error();
+    model::Item item = std::move(shaped->item);
+    auto copied = copyTakesFor(t, s, clip.takes, false, shaped->envelopePos, "/clip");
+    if (!copied) return std::move(copied).error();
+    item.takes = *copied;
+    for (std::size_t k = 0; k < clip.takes.size(); ++k)
+        if (clip.activeTake == clip.takes[k]) item.activeTake = item.takes[k];
+    const double length = model::itemLengthBeats(s, item);
+    const Id it = t.create(std::move(item));
+    ItemAddResult r;
+    r.item = it.str();
+    r.take = t.preview().items.find(it)->activeTake->str();
+    if (const model::Take* tk = t.preview().takes.find(*t.preview().items.find(it)->activeTake);
+        tk && tk->source)
+        r.source = tk->source->str();
+    r.position = pos;
+    r.length = length;
+    return r;
+}
+
 }  // namespace
+
+Result<AudioImport> importAudioFile(EngineApp& app, model::EditTxn& t, const model::Session& s,
+                                    const std::string& path) {
+    // The header, not a decode: the media model needs only the rate, the
+    // channel count and the length, and adding one file to many items must
+    // not decode it many times. The hash is the source's identity, so a
+    // second add of the same bytes reuses the md_*.
+    auto info = audio::inspect(path);
+    if (!info) return std::move(info).error();
+    auto hash = sha256File(path);
+    if (!hash) return std::move(hash).error();
+    AudioImport out;
+    if (info->sampleRate > 0) out.seconds = static_cast<double>(info->frames) / info->sampleRate;
+    // The same bytes are one media source: a second add of the same file
+    // reuses the source it already has. A project saved before hashes
+    // existed has a source with none, so the file's path and header decide,
+    // and the source's hash is filled in with the bytes on disk now — an old
+    // project converges rather than growing a second source for the same
+    // file.
+    std::optional<model::Id> known = model::mediaSourceWithHash(s, *hash);
+    if (!known) {
+        if (const auto legacy = legacyMediaSourceFor(s, path, *info, app.mediaDir()))
+            known = *legacy;
+        if (known)
+            t.modify<model::MediaSource>(*known, [&](model::MediaSource& md) { md.hash = *hash; });
+    }
+    if (known) {
+        out.source = *known;
+        return out;
+    }
+    model::MediaSource md;
+    md.path = fs::absolute(path).string();
+    if (app.copyImportedMedia() && !app.projectDir().empty()) {
+        // The project's own copy, so it never depends on the original staying
+        // where it is (a replay finds the same bytes under the same name and
+        // reuses them).
+        bool created = false;
+        auto name = detail::copyIntoFolder(path, app.mediaDir(), &created);
+        if (!name) return std::move(name).error();
+        if (created) app.noteCreatedFile(app.mediaDir() / *name);
+        md.path = *name;
+    }
+    md.hash = *hash;
+    md.format = formatName(info->container);
+    md.sampleRate = info->sampleRate;
+    md.channels = info->channels;
+    md.frames = info->frames;
+    out.source = t.create(std::move(md));
+    return out;
+}
+
+Result<MidiFileImport> readMidiFile(EngineApp& app, const model::Session& s,
+                                    const std::string& path, double atBeat) {
+    auto bytes = readFile(app.resolve(path), midi::kMaxSmfBytes);
+    if (!bytes) return std::move(bytes).error();
+    midi::SmfInfo info;
+    auto seq = midi::readSmf(*bytes, &info);
+    if (!seq) return std::move(seq).error();
+    MidiFileImport out;
+    // The file's own end, else where its last event ends.
+    std::int64_t end = seq->length;
+    for (const auto& n : seq->notes) end = std::max(end, n.start + n.length);
+    for (const auto& cc : seq->controls) end = std::max(end, cc.tick);
+    seq->length = end;
+    seq->canonicalize();
+    if (end > 0) out.beats = static_cast<double>(end) / seq->ppq;
+    const double bpm = s.timeMap->bpmAt(atBeat);
+    for (const auto& [tick, tempo] : info.tempos)
+        if (std::abs(tempo - bpm) > 1e-6) {
+            out.warnings.push_back("the file's tempo (" + json::formatDouble(tempo) +
+                                   " BPM) is not applied: its notes follow the project's tempo");
+            break;
+        }
+    if (info.skippedEvents > 0)
+        out.warnings.push_back(std::to_string(info.skippedEvents) +
+                               " unsupported events in the file were skipped");
+    out.source.sequence = std::move(*seq);
+    return out;
+}
 
 void registerItemCommands(cmd::Registry& registry) {
     // ---------------------------------------------------------------- item.add
@@ -271,7 +452,7 @@ void registerItemCommands(cmd::Registry& registry) {
         c.name = "item.add";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary = "Add an item on a track: MIDI in notation, a MIDI file or an audio file.";
+        c.summary = "Add an item on a track: notation, a MIDI or audio file, or a clip's copy.";
         c.description =
             "position in beats (quarter notes from the start) or bar (1-based). notation: e.g. "
             "\"voice bass; 1: C2:q r:q C2:q r:q | F2:h G2:h\" — every bar must add up; the item "
@@ -280,7 +461,9 @@ void registerItemCommands(cmd::Registry& registry) {
             "keeps its own copy in its media folder. midi_file: a Standard MIDI File (type 0 or 1, "
             "every track merged, channels kept); its notes keep their beats and follow the "
             "project's tempo (the file's tempo and meter are not applied; a warning says when they "
-            "differ), and the item is as long as the file unless length is given. A master holds "
+            "differ), and the item is as long as the file unless length is given. clip: a copy of "
+            "that clip's takes, as long as the clip, its loop and take envelopes converted at "
+            "the tempo where the item lands (ADR-0097). A master holds "
             "audio items only (prints, played after its fader); busses hold none.";
         c.tags = {"item", "midi"};
         c.args =
@@ -296,6 +479,10 @@ void registerItemCommands(cmd::Registry& registry) {
                 .field("notation", &ItemAddArgs::notation, schema::string())
                 .field("audio_file", &ItemAddArgs::audioFile, schema::string())
                 .field("midi_file", &ItemAddArgs::midiFile, schema::string())
+                .field("clip", &ItemAddArgs::clip,
+                       schema::string()
+                           .pattern("^cl_[0-9]+$", "clip id")
+                           .doc("Lay a copy of this clip's takes here."))
                 .field("name", &ItemAddArgs::name, schema::string())
                 .build();
         c.result =
@@ -327,9 +514,14 @@ void registerItemCommands(cmd::Registry& registry) {
                              a.notation ? "/notation" : "/midi_file",
                              "give audio_file for a master, or put the MIDI on a channel "
                              "with an instrument");
-            if ((a.notation ? 1 : 0) + (a.audioFile ? 1 : 0) + (a.midiFile ? 1 : 0) > 1)
-                return Error("item.source", "give one of notation, audio_file or midi_file", {},
-                             "provide exactly one source for the item");
+            if ((a.notation ? 1 : 0) + (a.audioFile ? 1 : 0) + (a.midiFile ? 1 : 0) +
+                    (a.clip ? 1 : 0) >
+                1)
+                return Error("item.source", "give one of notation, audio_file, midi_file or clip",
+                             {}, "provide exactly one source for the item");
+            if (a.clip && a.length)
+                return Error("item.source", "an item from a clip is as long as the clip", "/length",
+                             "leave length out, or set it after with item.set");
             const double pos = beatsOf(
                 s, a.position, a.bar ? std::optional<int>(static_cast<int>(*a.bar)) : std::nullopt);
             SUPPLE_TRY(model::checkedBeat(s, pos, a.bar ? "/bar" : "/position"));
@@ -339,6 +531,7 @@ void registerItemCommands(cmd::Registry& registry) {
             take.name = a.name.value_or("");
             double length = a.length.value_or(4.0);
             ItemAddResult r;
+            if (a.clip) return addItemFromClip(app, s, t, *track, pos, *a.clip);
             if (a.notation) {
                 auto compiled = compileNotation(s, *a.notation, pos);
                 if (!compiled) return std::move(compiled).error();
@@ -347,91 +540,23 @@ void registerItemCommands(cmd::Registry& registry) {
                 take.source = mi;
                 r.source = mi.str();
             } else if (a.midiFile) {
-                auto bytes = readFile(app.resolve(*a.midiFile), midi::kMaxSmfBytes);
-                if (!bytes) return std::move(bytes).error().at("/midi_file");
-                midi::SmfInfo info;
-                auto seq = midi::readSmf(*bytes, &info);
-                if (!seq) return std::move(seq).error().at("/midi_file");
-                auto warn = [&r](std::string w) {
+                auto file = readMidiFile(app, s, *a.midiFile, pos);
+                if (!file) return std::move(file).error().at("/midi_file");
+                for (auto& w : file->warnings) {
                     if (!r.warnings) r.warnings.emplace();
                     r.warnings->push_back(std::move(w));
-                };
-                // The file's own end, else where its last event ends.
-                std::int64_t end = seq->length;
-                for (const auto& n : seq->notes) end = std::max(end, n.start + n.length);
-                for (const auto& cc : seq->controls) end = std::max(end, cc.tick);
-                seq->length = end;
-                seq->canonicalize();
-                if (!a.length && end > 0) length = static_cast<double>(end) / seq->ppq;
-                const double bpm = s.timeMap->bpmAt(pos);
-                for (const auto& [tick, tempo] : info.tempos)
-                    if (std::abs(tempo - bpm) > 1e-6) {
-                        warn("the file's tempo (" + json::formatDouble(tempo) +
-                             " BPM) is not applied: its notes follow the "
-                             "project's tempo");
-                        break;
-                    }
-                if (info.skippedEvents > 0)
-                    warn(std::to_string(info.skippedEvents) +
-                         " unsupported events in the file were skipped");
-                model::MidiSource src;
-                src.sequence = std::move(*seq);
-                const Id mi = t.create(std::move(src));
+                }
+                if (!a.length && file->beats > 0) length = file->beats;
+                const Id mi = t.create(std::move(file->source));
                 take.source = mi;
                 r.source = mi.str();
             } else if (a.audioFile) {
-                // The header, not a decode: the media model needs only the rate,
-                // the channel count and the length, and adding one file to many
-                // items must not decode it many times. The hash is the source's
-                // identity, so a second add of the same bytes reuses the md_*.
-                auto info = audio::inspect(*a.audioFile);
-                if (!info) return std::move(info).error().at("/audio_file");
-                auto hash = sha256File(*a.audioFile);
-                if (!hash) return std::move(hash).error().at("/audio_file");
-                if (!a.length && info->sampleRate > 0) {
-                    const double secs = static_cast<double>(info->frames) / info->sampleRate;
-                    length = s.timeMap->beatAt(s.timeMap->secondsAt(pos) + secs) - pos;
-                }
-                // The same bytes are one media source: a second add of the same
-                // file reuses the source it already has. A project saved before
-                // hashes existed has a source with none, so the file's path and
-                // header decide, and the source's hash is filled in with the
-                // bytes on disk now — an old project converges rather than
-                // growing a second source for the same file.
-                std::optional<model::Id> known = model::mediaSourceWithHash(s, *hash);
-                if (!known) {
-                    if (const auto legacy =
-                            legacyMediaSourceFor(s, *a.audioFile, *info, app.mediaDir()))
-                        known = *legacy;
-                    if (known)
-                        t.modify<model::MediaSource>(
-                            *known, [&](model::MediaSource& md) { md.hash = *hash; });
-                }
-                if (known) {
-                    take.source = *known;
-                    r.source = known->str();
-                } else {
-                    model::MediaSource md;
-                    md.path = fs::absolute(*a.audioFile).string();
-                    if (app.copyImportedMedia() && !app.projectDir().empty()) {
-                        // The project's own copy, so it never depends on the
-                        // original staying where it is (a replay finds the
-                        // same bytes under the same name and reuses them).
-                        bool created = false;
-                        auto name = detail::copyIntoFolder(*a.audioFile, app.mediaDir(), &created);
-                        if (!name) return std::move(name).error().at("/audio_file");
-                        if (created) app.noteCreatedFile(app.mediaDir() / *name);
-                        md.path = *name;
-                    }
-                    md.hash = *hash;
-                    md.format = formatName(info->container);
-                    md.sampleRate = info->sampleRate;
-                    md.channels = info->channels;
-                    md.frames = info->frames;
-                    const Id md_ = t.create(std::move(md));
-                    take.source = md_;
-                    r.source = md_.str();
-                }
+                auto imported = importAudioFile(app, t, s, *a.audioFile);
+                if (!imported) return std::move(imported).error().at("/audio_file");
+                if (!a.length && imported->seconds > 0)
+                    length = s.timeMap->beatAt(s.timeMap->secondsAt(pos) + imported->seconds) - pos;
+                take.source = imported->source;
+                r.source = imported->source.str();
             }
             const Id tk = t.create(std::move(take));
             model::Item item;
@@ -459,11 +584,12 @@ void registerItemCommands(cmd::Registry& registry) {
         c.args = schema::object<ItemRef>("item_ref")
                      .field("bypass_groups", &ItemRef::bypassGroups, schema::boolean())
                      .defaultValue(false)
-                     .field("item", &ItemRef::item, idArg("it", "Item"))
+                     .field("item", &ItemRef::item, timelineItemArg())
                      .build();
         c.result = emptySchema();
         c.examples = {{"Remove", j(R"({"item": "it_1"})"), j("{}"), "song_with_item"}};
         c.run = [](const ItemRef& a, Context& ctx) -> Result<Empty> {
+            SUPPLE_TRY(refuseClip(a.item, "/item", "remove a clip with clip.remove"));
             EngineApp& app = engine::app(ctx);
             const model::Session s = app.view();
             auto id = existing<model::Item>(s, a.item, "/item");
@@ -486,7 +612,7 @@ void registerItemCommands(cmd::Registry& registry) {
         c.args = schema::object<ItemMoveArgs>("item_move_args")
                      .field("bypass_groups", &ItemMoveArgs::bypassGroups, schema::boolean())
                      .defaultValue(false)
-                     .field("item", &ItemMoveArgs::item, idArg("it", "Item"))
+                     .field("item", &ItemMoveArgs::item, timelineItemArg())
                      .field("position", &ItemMoveArgs::position, schema::number().min(0))
                      .field("bar", &ItemMoveArgs::bar,
                             schema::integer().range(1, std::numeric_limits<int>::max()))
@@ -496,6 +622,7 @@ void registerItemCommands(cmd::Registry& registry) {
         c.examples = {
             {"Two bars later", j(R"({"item": "it_1", "bar": 3})"), j("{}"), "song_with_item"}};
         c.run = [](const ItemMoveArgs& a, Context& ctx) -> Result<Empty> {
+            SUPPLE_TRY(refuseClip(a.item, "/item", "move a clip to another cell with clip.move"));
             EngineApp& app = engine::app(ctx);
             const model::Session s = app.view();
             auto id = existing<model::Item>(s, a.item, "/item");
@@ -528,10 +655,10 @@ void registerItemCommands(cmd::Registry& registry) {
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpTool;
         c.summary =
-            "Replace an item's MIDI with notation (the item keeps its position and length).";
+            "Replace an item's or clip's MIDI with notation (keeping its place and length).";
         c.tags = {"midi"};
         c.args = schema::object<MidiWriteArgs>("midi_write_args")
-                     .field("item", &MidiWriteArgs::item, idArg("it", "Item"))
+                     .field("item", &MidiWriteArgs::item, ownerIdArg())
                      .field("notation", &MidiWriteArgs::notation, schema::string())
                      .build();
         c.result = emptySchema();
@@ -541,57 +668,78 @@ void registerItemCommands(cmd::Registry& registry) {
         c.run = [](const MidiWriteArgs& a, Context& ctx) -> Result<Empty> {
             EngineApp& app = engine::app(ctx);
             const model::Session s = app.view();
-            auto id = existing<model::Item>(s, a.item, "/item");
+            auto id = existingOwner(s, a.item, "/item");
             if (!id) return std::move(id).error();
             SUPPLE_TRY(checkUnlocked(s, *id));
-            const model::Item& it = *s.items.find(*id);
-            const model::Take* take = it.activeTake ? s.takes.find(*it.activeTake) : nullptr;
+            const auto active = ownerActiveTake(s, *id);
+            const model::Take* take = active ? s.takes.find(*active) : nullptr;
             if (!take || !take->source || take->source->kind != model::Kind::Midi)
                 return Error("midi.not_midi", a.item + " has no MIDI take", "/item",
-                             "use item.add with notation");
-            auto compiled = compileNotation(s, a.notation, model::itemSpan(s, it).startBeat);
+                             "use item.add or clip.add with notation");
+            auto compiled = compileNotation(s, a.notation, ownerStartBeat(s, *id));
             if (!compiled) return std::move(compiled).error();
             const model::MidiSource* old = s.midi.find(*take->source);
             compiled->first.pooled = old && old->pooled;
             model::EditTxn& txn = app.txn();
             txn.put<model::MidiSource>(*take->source, std::move(compiled->first));
             if (!old || !old->pooled)
-                txn.modify<model::Take>(*it.activeTake,
-                                        [](model::Take& tk) { tk.startOffset = 0; });
+                txn.modify<model::Take>(*active, [](model::Take& tk) { tk.startOffset = 0; });
             return Empty{};
         };
         addChecked(registry, std::move(c));
     }();
     [&] {
-        Command<MidiGetArgs, TextResult> c;
+        Command<MidiGetArgs, MidiGetResult> c;
         c.name = "midi.get";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary = "Read an item's MIDI as notation.";
+        c.summary = "Read an item's or clip's MIDI as notation, with its key and chords.";
+        c.description =
+            "Pitch names follow the key that holds at the item's start (none: the default "
+            "spelling). context lists the key and the chords over the item's span, each from "
+            "the bar of the item (item_bar, the notation's) and of the project (project_bar) "
+            "where it starts; the first of each is the one already holding at the item's "
+            "start. Omitted when the project has no key or chords there. A clip has no place "
+            "in time: its pitch names follow the key at the project's start, and it has no "
+            "context.";
         c.tags = {"midi"};
         c.args = schema::object<MidiGetArgs>("midi_get_args")
-                     .field("item", &MidiGetArgs::item, idArg("it", "Item"))
+                     .field("item", &MidiGetArgs::item, ownerIdArg())
                      .build();
-        c.result = schema::object<TextResult>("text")
-                       .field("text", &TextResult::text, schema::string())
+        auto runSchema = schema::object<ContextRun>("context_run")
+                             .field("item_bar", &ContextRun::itemBar, schema::integer())
+                             .field("project_bar", &ContextRun::projectBar, schema::integer())
+                             .field("what", &ContextRun::what, schema::string())
+                             .build();
+        c.result = schema::object<MidiGetResult>("midi_get")
+                       .field("text", &MidiGetResult::text, schema::string())
+                       .field("context", &MidiGetResult::context,
+                              schema::object<MidiContext>("midi_context")
+                                  .field("keys", &MidiContext::keys, schema::arrayOf(runSchema))
+                                  .field("chords", &MidiContext::chords, schema::arrayOf(runSchema))
+                                  .build())
                        .build();
         c.examples = {{"Read the bass line", j(R"({"item": "it_1"})"), j(R"({"text": "<any>"})"),
                        "song_with_item"}};
-        c.run = [](const MidiGetArgs& a, Context& ctx) -> Result<TextResult> {
+        c.run = [](const MidiGetArgs& a, Context& ctx) -> Result<MidiGetResult> {
             const model::Session s = app(ctx).view();
-            auto id = existing<model::Item>(s, a.item, "/item");
+            auto id = existingOwner(s, a.item, "/item");
             if (!id) return std::move(id).error();
-            const model::Item& it = *s.items.find(*id);
-            const model::Take* take = it.activeTake ? s.takes.find(*it.activeTake) : nullptr;
+            const auto active = ownerActiveTake(s, *id);
+            const model::Take* take = active ? s.takes.find(*active) : nullptr;
             if (!take || !take->source || take->source->kind != model::Kind::Midi)
                 return Error("midi.not_midi", a.item + " has no MIDI take", "/item",
                              "choose an item with a MIDI take from track.list or create one with "
                              "item.add notation");
             notation::DecompileOptions options;
-            options.meterAt = meterContext(s, model::itemSpan(s, it).startBeat);
+            const double start = ownerStartBeat(s, *id);
+            options.meterAt = meterContext(s, start);
+            options.key = model::keyAt(s, start);
             auto text = notation::decompile(s.midi.find(*take->source)->sequence, options);
             if (!text) return std::move(text).error();
-            return TextResult{std::move(*text)};
+            const model::Item* item = s.items.find(*id);  // null for a clip
+            return MidiGetResult{std::move(*text),
+                                 item ? midiContext(s, *item) : std::optional<MidiContext>{}};
         };
         addChecked(registry, std::move(c));
     }();
@@ -611,7 +759,7 @@ void registerItemCommands(cmd::Registry& registry) {
         c.args = schema::object<ItemSetArgs>("item_set_args")
                      .field("bypass_groups", &ItemSetArgs::bypassGroups, schema::boolean())
                      .defaultValue(false)
-                     .field("item", &ItemSetArgs::item, idArg("it", "Item"))
+                     .field("item", &ItemSetArgs::item, timelineItemArg())
                      .field("position", &ItemSetArgs::position, schema::number().min(0))
                      .field("bar", &ItemSetArgs::bar,
                             schema::integer().range(1, std::numeric_limits<int>::max()))
@@ -636,6 +784,7 @@ void registerItemCommands(cmd::Registry& registry) {
             {"Keep an item at its time when the tempo changes",
              j(R"({"item":"it_1","timebase":"time"})"), j("{}"), "song_with_item"}};
         c.run = [](const ItemSetArgs& a, Context& ctx) -> Result<Empty> {
+            SUPPLE_TRY(refuseClip(a.item, "/item", "set a clip's fields with clip.set"));
             const auto s = app(ctx).view();
             auto id = existing<model::Item>(s, a.item, "/item");
             if (!id) return std::move(id).error();
@@ -696,7 +845,7 @@ void registerItemCommands(cmd::Registry& registry) {
         c.args = schema::object<ItemDuplicateArgs>("item_duplicate_args")
                      .field("bypass_groups", &ItemDuplicateArgs::bypassGroups, schema::boolean())
                      .defaultValue(false)
-                     .field("item", &ItemDuplicateArgs::item, idArg("it", "Item"))
+                     .field("item", &ItemDuplicateArgs::item, timelineItemArg())
                      .field("to", &ItemDuplicateArgs::to, schema::number().min(0))
                      .build();
         c.result =
@@ -708,6 +857,9 @@ void registerItemCommands(cmd::Registry& registry) {
                 .build();
         c.examples = {{"Repeat", j(R"({"item":"it_1"})"), j(R"({"id":"it_2"})"), "song_with_item"}};
         c.run = [](const ItemDuplicateArgs& a, Context& ctx) -> Result<ItemDuplicateResult> {
+            SUPPLE_TRY(refuseClip(
+                a.item, "/item",
+                "copy a clip with clip.duplicate, or lay it on the timeline with item.add {clip}"));
             const auto s = app(ctx).view();
             auto id = existing<model::Item>(s, a.item, "/item");
             if (!id) return std::move(id).error();
@@ -744,7 +896,7 @@ void registerItemCommands(cmd::Registry& registry) {
             "take FX and MIDI are copied; an audio source the project no longer has is restored.";
         c.tags = {"item"};
         auto placement = schema::object<PastePlacement>("paste_placement")
-                             .field("item", &PastePlacement::item, idArg("it", "Item"))
+                             .field("item", &PastePlacement::item, timelineItemArg())
                              .field("track", &PastePlacement::track, idArg("tr", "Track"))
                              .field("position", &PastePlacement::position, schema::number().min(0))
                              .build();
@@ -759,6 +911,10 @@ void registerItemCommands(cmd::Registry& registry) {
                        j(R"({"items":[{"item":"it_1","track":"tr_1","position":16}]})"),
                        j(R"({"items":["it_2"]})"), "song_with_item"}};
         c.run = [](const ItemPasteArgs& a, Context& ctx) -> Result<ItemPasteResult> {
+            for (std::size_t k = 0; k < a.items.size(); ++k)
+                SUPPLE_TRY(refuseClip(a.items[k].item, "/items/" + std::to_string(k) + "/item",
+                                      "copy clips with clip.duplicate, or lay one on the "
+                                      "timeline with item.add {clip}"));
             EngineApp& eng = app(ctx);
             const auto now = eng.view();
             std::shared_ptr<const model::Session> from;
@@ -878,7 +1034,7 @@ void registerItemCommands(cmd::Registry& registry) {
         c.args = schema::object<ItemSplitArgs>("item_split_args")
                      .field("bypass_groups", &ItemSplitArgs::bypassGroups, schema::boolean())
                      .defaultValue(false)
-                     .field("item", &ItemSplitArgs::item, idArg("it", "Item"))
+                     .field("item", &ItemSplitArgs::item, timelineItemArg())
                      .field("at", &ItemSplitArgs::at, schema::number().min(0))
                      .field("snap", &ItemSplitArgs::snap,
                             schema::enumeration<std::string>(
@@ -923,6 +1079,9 @@ void registerItemCommands(cmd::Registry& registry) {
             return {};
         };
         c.run = [](const ItemSplitArgs& a, Context& ctx) -> Result<SplitResult> {
+            SUPPLE_TRY(refuseClip(
+                a.item, "/item",
+                "a clip does not split; lay it on the timeline first (item.add {clip})"));
             const auto s = app(ctx).view();
             auto id = existing<model::Item>(s, a.item, "/item");
             if (!id) return std::move(id).error();
