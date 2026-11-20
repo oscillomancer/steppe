@@ -22,7 +22,7 @@ using namespace supple::engine;
 namespace fs = std::filesystem;
 
 namespace supple::engine {
-// test_realtime.cpp (EngineTestAccess): runs `hook` in launch() between
+// test_launch_access.cpp (EngineTestAccess): runs `hook` in launch() between
 // publishing a launch and deciding it.
 void launchCommitHookForTests(Engine& e, void (*hook)(void*), void* context);
 // The slots the executors still act on (Engine::launchesQueued_).
