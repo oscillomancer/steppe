@@ -313,7 +313,13 @@ only.
     first grid point and leaves the memo. So that a carried memo always
     fits, each stage keeps a slot for every parameter any plan has
     modulated on its FX (`InstancePool::modulatedParams`, main thread), and
-    a stage with no route left keeps its slots until their 0s are sent.
+    a stage with no route left keeps its slots until their 0s are sent. The
+    memo follows its instance between the track's input chain and main
+    chain. It is not carried to another node: an FX moved to another track
+    starts with every slot stale, so the first grid point resends what is
+    modulated there, but a parameter the new plan no longer modulates (a
+    route removed in the same edit as the move) keeps its last offset until
+    the instance's next epoch (activation, reset, patch or state).
   - It goes stale (it is never emptied) on the instance's activation, a
     reset (a seek, a play start), a changed instance, and a patch or state
     applied to the instance: `host::Instance::modulationEpoch()` counts

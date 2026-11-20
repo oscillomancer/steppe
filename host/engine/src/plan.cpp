@@ -264,16 +264,22 @@ void bindModulation(Plan& p, std::map<host::Instance*, json::Value>& schemas) {
     std::vector<Bound> bound;
     std::vector<Stage*> stages;  // every stage a route reaches, and only once
     // The routes into an FX, as text: what amendment M-d's disabling keeps.
+    // The source is its module and input as the model names them, never a
+    // position in the rack, which another module's removal shifts.
     const auto routesInto = [&](Id fx) {
         std::string text;
         for (const ModEdge& other : p.modEdges)
             if (other.target.object == fx) {
                 char depth[32];
                 const auto [end, ec] = std::to_chars(depth, depth + sizeof depth, other.depth);
-                text += other.route.str() + " " + other.fromId.str() + " " +
-                        std::to_string(other.modOut) + "." + std::to_string(other.input) + " " +
-                        other.target.param + " " + std::string(depth, end) +
-                        (other.enabled ? " on;" : " off;");
+                const RackNode* rack = p.nodes[other.from].rack.get();
+                const std::string module =
+                    rack && other.modOut >= 0
+                        ? rack->modOutIds[static_cast<std::size_t>(other.modOut)].str()
+                        : "?";
+                text += other.route.str() + " " + module + ".in_" +
+                        std::to_string(other.input + 1) + " " + other.target.param + " " +
+                        std::string(depth, end) + (other.enabled ? " on;" : " off;");
             }
         return text;
     };
@@ -4158,6 +4164,19 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
             n.releaseHeld = n.releaseHeld || old.releaseHeld;
         }
         n.releaseLive = n.releaseLive || old.releaseLive;
+        // The modulation memo, by instance and CLAP id (ADR-0096).
+        auto carryMemo = [](Stage& st, const Stage& os) {
+            st.modHeard = os.modHeard;
+            st.modEpoch = os.modEpoch;
+            for (ModParam& m : st.mods)
+                for (const ModParam& om : os.mods)
+                    if (om.clapId == m.clapId) {
+                        m.sent = om.sent;
+                        m.listed = om.listed;
+                        m.stale = om.stale;
+                        break;
+                    }
+        };
         auto carryStages = [&](std::vector<Stage>& chain, std::vector<Stage>& oldChain) {
             for (Stage& st : chain)
                 for (Stage& os : oldChain)
@@ -4202,16 +4221,7 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
                         }
                         // The modulation memo, by parameter (the same
                         // instance's slots: an earlier plan's always fit).
-                        st.modHeard = os.modHeard;
-                        st.modEpoch = os.modEpoch;
-                        for (ModParam& m : st.mods)
-                            for (const ModParam& om : os.mods)
-                                if (om.clapId == m.clapId) {
-                                    m.sent = om.sent;
-                                    m.listed = om.listed;
-                                    m.stale = om.stale;
-                                    break;
-                                }
+                        carryMemo(st, os);
                         st.appliedWet = os.appliedWet;
                         st.rampFromWet = os.rampFromWet;
                         st.rampToWet = os.rampToWet;
@@ -4249,6 +4259,19 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
         carryStages(n.rackStages, old.rackStages);
         carryStages(n.inputChain, old.inputChain);
         carryStages(n.chain, old.chain);
+        // An FX moved between the track's input chain and its main chain
+        // keeps its memo, so a route removed with the move still sends its 0
+        // (review round 54, F2). Its other state starts afresh there.
+        const auto carryMoved = [&](std::vector<Stage>& chain, const std::vector<Stage>& oldChain) {
+            for (Stage& st : chain)
+                for (const Stage& os : oldChain)
+                    if (st.instance && os.instance == st.instance) {
+                        carryMemo(st, os);
+                        break;
+                    }
+        };
+        carryMoved(n.inputChain, old.chain);
+        carryMoved(n.chain, old.inputChain);
         // A take chain playing on keeps playing (no reset at the swap).
         for (TakeChain& tc : n.takeChains)
             for (TakeChain& otc : old.takeChains)

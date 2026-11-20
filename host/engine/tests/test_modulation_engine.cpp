@@ -971,3 +971,87 @@ TEST_CASE("modulation: a mixer target is linear between grid points, a plug-in s
                      1.0, block)
                   .left == level);
 }
+
+TEST_CASE("modulation: removing another Mod Out keeps a latency-disabled route off") {
+    // Review round 54, F1: what M-d keeps names the source by module and
+    // input, so a shift in the rack's Mod Outs is no route edit. The route
+    // comes from the rack's second Mod Out; the first, unrouted, goes.
+    const Emit emit("playing", std::nullopt);
+    model::EditTxn t(emit.s, 2);
+    const Id second = addModule(t, emit.rack, model::kModOutModule);
+    Id transport{};
+    for (const auto& c : emit.s.cables)
+        if (c.value->to.object == emit.modOut) transport = c.value->from.object;
+    cable(t, transport, "playing", second, "in_1");
+    const Id route = modulate(t, second, emit.gain, "gain", 0.1);
+    const auto on = commit(t);
+    model::EditTxn l(on, 3);
+    l.modify<model::FxInstance>(emit.gain, [](model::FxInstance& fx) {
+        fx.patch =
+            json::parse(
+                R"({"schema":"supple.test-gain-patch/1.0","params":{"gain":-6,"latency":"short"}})")
+                .value();
+    });
+    const auto latent = commit(l);
+    model::EditTxn r(latent, 4);
+    for (const auto& c : latent.cables)
+        if (c.value->to.object == emit.modOut) r.remove<model::Cable>(c.id);
+    r.remove<model::RackModule>(emit.modOut);
+    const auto removed = commit(r);
+    REQUIRE(removed.modulations.contains(route));
+
+    InstancePool pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+    Engine engine(pool, media, {.anticipative = false, .workers = 0});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 96}));
+    const auto settle = [&](int blocks) {
+        for (int i = 0; i < blocks; i += 10) {
+            engine.service();
+            backend.run(10);
+        }
+    };
+    REQUIRE(engine.load(on));
+    engine.play();
+    settle(100);
+    REQUIRE(engine.load(latent));
+    settle(100);
+    REQUIRE(pool.modulationDisabled(emit.gain));
+    REQUIRE(engine.load(removed));
+    settle(100);
+    engine.stop();
+    CHECK(pool.modulationDisabled(emit.gain));
+    CHECK(double(backend.capture().channels[0][28000]) == doctest::Approx(gainAt(0)).epsilon(1e-4));
+}
+
+TEST_CASE(
+    "modulation: an FX moved into its track's input chain with its route removed gets its 0") {
+    // Review round 54, F2: the memo follows the instance between the input
+    // chain and the main chain, so the removed route's offset is cleared.
+    const Emit on("playing", 0.1);
+    model::EditTxn a(on.s, 2);
+    a.modify<model::Track>(on.b, [](model::Track& tr) { tr.record.armed = true; });
+    const auto armed = commit(a);
+    model::EditTxn m(armed, 3);
+    m.remove<model::Modulation>(on.route);
+    m.modify<model::Track>(on.b, [&](model::Track& tr) {
+        tr.chain.clear();
+        tr.inputChain.push_back(on.gain);
+    });
+    const auto moved = commit(m);
+    InstancePool pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+    Engine engine(pool, media, kInCallback);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 96}));
+    REQUIRE(engine.load(armed));
+    engine.play();
+    backend.run(100);
+    REQUIRE(engine.load(moved));
+    backend.run(100);
+    engine.stop();
+    CHECK(engine.processErrors() == 0);
+    const auto& cap = backend.capture().channels[0];
+    CHECK(double(cap[9000]) == doctest::Approx(gainAt(0.1)).epsilon(1e-4));
+    CHECK(double(cap[19000]) == doctest::Approx(gainAt(0)).epsilon(1e-4));
+}
