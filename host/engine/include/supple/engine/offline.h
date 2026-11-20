@@ -267,6 +267,9 @@ struct PreparedSources {
     double sampleRate = 0;
     model::Session session;  // immutable provenance for source-dependent edits
     std::map<model::Id, PreparedSource> takes;
+    // Clips whose audio did not fit beside the arrangement's in the budget
+    // (ADR-0097 "Memory"), in launch order: not prepared, not launchable.
+    std::vector<model::Id> clipsSkipped;
 };
 Result<std::string> sourcePreparationKey(const model::Session& session,
                                          const std::filesystem::path& directory, double rate);
@@ -275,11 +278,18 @@ inline constexpr double kPreparedSampleBudget = static_cast<double>(std::int64_t
 // What preparation holds resident, in samples: each source decoded once and
 // each variant of it once. `arrangement` counts the items' active takes and
 // their warp peers; `clips` what the clips' active takes add after them
-// (ADR-0097 "Memory": the arrangement first). Clips are not prepared yet;
-// clip.memory checks their share.
+// (ADR-0097 "Memory": the arrangement first, then the clips in launch
+// order). `clips` is what they would all add; `clipsSkipped` are those
+// that do not fit, in order, each skipped clip adding nothing (so a later,
+// smaller one may still fit). clip.memory refuses an edit that skips any.
 struct ResidentSamples {
     double arrangement = 0, clips = 0;
+    std::vector<model::Id> clipsSkipped;
 };
+// The clips in launch order (ADR-0097 "Memory"): scene order, then the track
+// tree's display order (the masters, each followed depth-first by its
+// children), then id.
+std::vector<model::Id> clipsInLaunchOrder(const model::Session& session);
 ResidentSamples residentSamples(const model::Session& session,
                                 const std::filesystem::path& directory, double rate);
 class MediaCache {

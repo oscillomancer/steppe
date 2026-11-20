@@ -240,7 +240,7 @@ Status checkClipMemory(EngineApp& app, const model::Session& after, const std::s
     const double rate =
         app.engine() ? app.engine()->config().sampleRate : after.project->sampleRate;
     const ResidentSamples r = residentSamples(after, app.projectDir(), rate);
-    if (r.arrangement + r.clips <= kPreparedSampleBudget) return {};
+    if (r.clipsSkipped.empty()) return {};
     auto n = [](double x) { return json::formatDouble(std::ceil(x)); };
     return Error("clip.memory",
                  "the clips' audio would not all fit beside the arrangement's in the " +
