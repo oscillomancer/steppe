@@ -166,11 +166,20 @@ TEST_CASE("a patch-only edit while playing sounds exactly like a compiled reload
                     cycles(100);
                     // A full renderer waiting for the callback: every run takes
                     // the edit from the same renderer position.
+                    // Decided by state alone.
                     if (options.anticipative)
-                        REQUIRE(engine.awaitRendered(std::numeric_limits<std::int64_t>::max()));
+                        while (!engine.awaitRendered(std::numeric_limits<std::int64_t>::max())) {
+                        }
                     const auto generation = engine.planGeneration();
                     if (run == 0) REQUIRE(engine.load(next));
                     if (run == 1) REQUIRE(engine.load(withMarker(next, 4)));
+                    // The renderer takes the compiled plan where it stands,
+                    // full: one still finishing the pass that filled it would
+                    // otherwise render one more block from the old plan once
+                    // the callback plays on (round 65 F1).
+                    if (options.anticipative)
+                        while (!engine.awaitPlan()) {
+                        }
                     CHECK(engine.planGeneration() == generation + (run == 1 ? 1 : 0));
                     CHECK(engine.patchEdits() == (run == 0 ? 1u : 0u));
                     cycles(200);
