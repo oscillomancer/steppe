@@ -908,8 +908,9 @@ signal, a fraction of the parameter's range (−1 to 1); routes on one
 parameter add up, and none of them writes the parameter's value or its
 automation. `modulation.set` changes a route (a drag that sends one
 gesture is one undo step), `modulation.remove` removes it, and
-`modulation.list` shows each route's signal range and, when it cannot
-play, why. Removing the Mod Out or the plug-in removes its routes with a
+`modulation.list` shows each route's signal range, the modules cabled
+into its Mod Out input and, when it cannot play, why: `source` when
+nothing is cabled into that input yet. Removing the Mod Out or the plug-in removes its routes with a
 `modulation.removed` warning.
 
 A route can also take a track's volume (`{track, param: "volume"}`, depth
@@ -936,7 +937,8 @@ starts at its module's defaults: set its knobs with `module.set {module,
 params}` on the module the command returns (an LFO's `rate`, `shape` and
 `sync`, a follower's `gain` and `threshold`; a Macro's `macro_1` sits at 0
 until moved, so a macro changes nothing at first), and the depth with
-`modulation.set`.
+`modulation.set`. For a macro, the result's `knob` is the knob that moves
+the target.
 `modulation.telemetry` reads each route's live offset and how far it
 can move its target, and `engine.status` counts modulation steps that
 had to wait for room in a block (`modulation_deferred`).

@@ -10893,7 +10893,7 @@ Result:
 
 Modulate a parameter or mixer level with an LFO, follower, random or macro.
 
-The whole gesture in one undo step. It takes the first rack homed on the target's track that holds a Mod Out, else the first rack named Modulators, else adds one on a new channel named Modulators (rack: choose one instead). It adds the source module (lfo: an LFO; random: an LFO's Random Steps preset; macro: a Macro, its first knob; follower: a Follower fed by an In module and a send from the track from), cables it into the first free Mod Out input (adding a Mod Out when none is free) and routes that input to the target. {module, input} routes a Mod Out input already patched. depth as modulation.add; default a quarter of a plug-in parameter's range, 6 dB, or 50 percent. A rack that would close a loop (it already drives the track a follower hears, or hears the target) is passed over for the next, or a new Modulators rack. Only a real cycle is refused (modulation.cycle): a follower on a track the target feeds, itself included. target: {fx, param} (a plug-in parameter by key, name or CLAP id; fx.describe full marks the modulatable ones), {track, param: volume|pan|width} or {route, param: volume}. The source module is left set to its defaults: change it with module.set {module, params} on the module this returns (an LFO's rate, shape or sync; a follower's gain and threshold; a macro's macro_1, which sits at 0 until moved, so a macro does nothing at first; module.describe {type} lists the knobs) and the route's depth with modulation.set.
+The whole gesture in one undo step. It takes the first rack homed on the target's track that holds a Mod Out, else the first rack named Modulators, else adds one on a new channel named Modulators (rack: choose one instead). It adds the source module (lfo: an LFO; random: an LFO's Random Steps preset; macro: a Macro, its first knob; follower: a Follower fed by an In module and a send from the track from), cables it into the first free Mod Out input (adding a Mod Out when none is free) and routes that input to the target. {module, input} routes a Mod Out input already patched. For a macro, knob names the knob to move. depth as modulation.add; default a quarter of a plug-in parameter's range, 6 dB, or 50 percent. A rack that would close a loop (it already drives the track a follower hears, or hears the target) is passed over for the next, or a new Modulators rack. Only a real cycle is refused (modulation.cycle): a follower on a track the target feeds, itself included. target: {fx, param} (a plug-in parameter by key, name or CLAP id; fx.describe full marks the modulatable ones), {track, param: volume|pan|width} or {route, param: volume}. The source module is left set to its defaults: change it with module.set {module, params} on the module this returns (an LFO's rate, shape or sync; a follower's gain and threshold; a macro's macro_1, which sits at 0 until moved, so a macro does nothing at first; module.describe {type} lists the knobs) and the route's depth with modulation.set.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -10941,6 +10941,10 @@ Kind: `edit`. Exposure: `mcp-tool`.
     "channel": {
       "type": "string",
       "description": "The channel made for a new rack."
+    },
+    "knob": {
+      "type": "string",
+      "description": "A macro's knob to move, by key."
     },
     "warnings": {
       "type": "array",
@@ -11066,7 +11070,7 @@ Result:
 
 List modulation routes, by target track, FX or source rack.
 
-Each route with its source signal's range (bipolar -1..1, or unipolar 0..1 when every cable into the Mod Out input is unipolar, a gate or a phase) and, when the plan cannot apply it, inert: target (the parameter cannot take it, or the target's track is frozen and its level is outside the print) or latency (its plug-in changed latency while modulated; editing a route into it turns them back on).
+Each route with its source signal's range (bipolar -1..1, or unipolar 0..1 when every cable into the Mod Out input is unipolar, a gate or a phase), fed_by (each cable into that input: its module, output and module type) and, when the plan cannot apply it, inert: source (nothing is cabled into the input), target (the parameter cannot take it, or the target's track is frozen and its level is outside the print) or latency (its plug-in changed latency while modulated; editing a route into it turns them back on).
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -11152,11 +11156,40 @@ Kind: `query`. Exposure: `mcp-exec`.
           "range": {
             "type": "string"
           },
+          "fed_by": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "title": "modulation_fed_by",
+              "properties": {
+                "module": {
+                  "type": "string"
+                },
+                "output": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                }
+              },
+              "required": ["module", "output", "type"],
+              "additionalProperties": false
+            }
+          },
           "inert": {
             "type": "string"
           }
         },
-        "required": ["modulation", "source", "target", "depth", "enabled", "lane", "range"],
+        "required": [
+          "modulation",
+          "source",
+          "target",
+          "depth",
+          "enabled",
+          "lane",
+          "range",
+          "fed_by"
+        ],
         "additionalProperties": false
       }
     },
@@ -11200,7 +11233,9 @@ Result:
       "depth": 0.25,
       "enabled": true,
       "lane": true,
-      "range": "bipolar"
+      "range": "bipolar",
+      "fed_by": [],
+      "inert": "source"
     }
   ]
 }
@@ -11325,7 +11360,7 @@ Result:
 
 Read each modulation route's live target offset and its span.
 
-offset: the route's target's current offset, the sum of every route on it, as the engine last applied it (a plug-in parameter's as a fraction of its range, a volume's in dB, a pan's or width's in percent); absent while no running plan applies the route. low and high: what this route alone can add, depth times its signal range (bipolar -1..1, unipolar 0..1), in the same unit.
+offset: the route's target's current offset, the sum of every route on it, as the engine last applied it (a plug-in parameter's as a fraction of its range, a volume's in dB, a pan's or width's in percent); absent while no running plan applies the route. low and high: what this route alone can add, depth times its signal range (bipolar -1..1, unipolar 0..1), in the same unit; absent while nothing is cabled into its Mod Out input.
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -11361,7 +11396,7 @@ Kind: `query`. Exposure: `mcp-exec`.
             "type": "number"
           }
         },
-        "required": ["modulation", "low", "high"],
+        "required": ["modulation"],
         "additionalProperties": false
       }
     },
@@ -11380,7 +11415,7 @@ Kind: `query`. Exposure: `mcp-exec`.
 
 ### Examples
 
-**Stopped** (`song_with_modulation`)
+**Stopped, nothing cabled into the route's input yet** (`song_with_modulation`)
 
 ```json
 {}
@@ -11393,9 +11428,7 @@ Result:
 {
   "modulations": [
     {
-      "modulation": "mr_1",
-      "low": -0.25,
-      "high": 0.25
+      "modulation": "mr_1"
     }
   ]
 }
