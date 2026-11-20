@@ -410,7 +410,8 @@ the same.*
   `once` clip past its length) or `stopped`. Plans carry it across swaps
   by node id and clip id (§1.6 of engine.md). A clip the new plan no
   longer has (removed, or now past the memory budget) ends at that swap
-  with the switch fade, and its track returns to the arrangement.
+  and its track returns to the arrangement, without the switch fade: the
+  new plan holds no player to fade out.
 - **A launch is a timed message (L-a, B1).** Its target is `{epoch,
   stream sample}`, the coordinate plan handoffs use (`handAt`,
   `handEpoch`). A scene launch has one target for all its tracks: the
@@ -554,6 +555,11 @@ the same.*
   leaves a launch to fire later. Applied entries come back
   through a ring per executor, become `LaunchLogEntry`s and are kept in
   `launchLog()` in running-frame order.
+- **Renders.** An offline render without `OfflineSettings::launches`
+  compiles no players (`Plan::clipPlayers`) and prepares no clip audio:
+  renders play the arrangement only, so a clip's warnings never reach a
+  render or block a freeze. A clip past the memory budget gets no player
+  either (a launch of it is refused with `launch.memory`).
 - **Plan swaps.** `carryMix` carries `Node::launch` by clip id
   (`carryLaunch`). A clip the new plan lacks, or a node with no players
   (a frozen track), returns its track to the arrangement at once, and its

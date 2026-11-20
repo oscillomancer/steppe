@@ -1799,7 +1799,7 @@ Status prepare(Plan& p, const Session& s) {
                 timed.event.noteId = -2;  // local take controller; sends still carry it
         }
         for (auto& ev : n.events) ev.sample += n.timelineShift;
-        compileClipPlayers(p, n, s);  // the clip launcher (ADR-0097)
+        if (p.clipPlayers) compileClipPlayers(p, n, s);  // the clip launcher (ADR-0097)
         // Reserve the most events any block-long window holds (events are
         // sorted; after a seek, blocks start anywhere), so processBlock never
         // allocates.

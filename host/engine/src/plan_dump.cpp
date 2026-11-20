@@ -704,13 +704,13 @@ std::string dumpPlan(const Plan& p) {
                                   rateSourceAhead, rateSourceBehind, rateSwitchDevice,
                                   rateSafeDevice, rateControlsChanged, scalarPublication,
                                   scalarHistory, requestedScalar, rate, smoothFrames, mix,
-                                  startSeconds, outputLatency, block, timeMap, warnings, projectDir,
-                                  preparedSources, media, instances, graph, anyLive, heldLive,
-                                  rendererNodes, liveNodes, rendererGraph, liveGraph,
-                                  rendererInstances, liveInstances, modules, rendererModules,
-                                  liveModules, rendererMeterNodes, liveMeterNodes, meterNodes,
-                                  frontier, rateOutput, frontierRings, recordTaps, recordRings,
-                                  handAt, handEpoch, handContinuable, split, deviceIn,
+                                  startSeconds, outputLatency, block, timeMap, warnings,
+                                  clipPlayers, projectDir, preparedSources, media, instances, graph,
+                                  anyLive, heldLive, rendererNodes, liveNodes, rendererGraph,
+                                  liveGraph, rendererInstances, liveInstances, modules,
+                                  rendererModules, liveModules, rendererMeterNodes, liveMeterNodes,
+                                  meterNodes, frontier, rateOutput, frontierRings, recordTaps,
+                                  recordRings, handAt, handEpoch, handContinuable, split, deviceIn,
                                   deviceInChannels, deviceRecording, hardwareMidi,
                                   midiInputsSettings, midiOutputsSettings, hardwareLead,
                                   hardwareLeadBase, deviceMidi, deviceMidiOffset, processedInputs] =
@@ -744,6 +744,7 @@ std::string dumpPlan(const Plan& p) {
                      p.rateSourceBehind});
     d.put(a, "timeMap", p.timeMap != nullptr);
     d.put(a, "warnings", p.warnings);
+    d.put(a, "clipPlayers", p.clipPlayers);
     d.put(a, "projectDir", p.projectDir.generic_string());
     d.put(a, "preparedSources", p.preparedSources != nullptr);
     d.put(a, "mainMaster", static_cast<std::uint64_t>(p.mainMaster));

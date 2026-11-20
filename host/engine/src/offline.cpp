@@ -871,6 +871,11 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
         }
     }
     sourceSession.items = sourceItems.build();
+    // Renders play the arrangement only (ADR-0097): without a launch log,
+    // no clip audio is prepared and no clip player compiled, so a clip's
+    // warnings never reach a render.
+    p.clipPlayers = !opt.launches.empty();
+    if (!p.clipPlayers) sourceSession.clips = {};
     auto sources = p.media->prepareSources(sourceSession, p.projectDir, p.rate);
     if (!sources) return sources.error();
     p.preparedSources = *sources;

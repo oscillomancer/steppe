@@ -602,3 +602,25 @@ TEST_CASE("a queued launch whose clip an edit removes is dropped, not played lat
         engine.stop();
     }
 }
+
+TEST_CASE("a render without a launch log plays the arrangement, with no clip warnings") {
+    // twoTracks' audio clip is 1.5 beats long: a live plan warns
+    // launch.tempo; a render never compiles clips, so it neither warns nor
+    // refuses to freeze for it.
+    Project p;
+    twoTracks(p);
+    InstancePool pool = makePool();
+    OfflineSettings settings;
+    settings.endSeconds = 1.0;
+    settings.projectDir = p.app->projectDir();
+    auto plain = renderOffline(p.app->head(), pool, settings);
+    REQUIRE(plain);
+    for (const std::string& w : plain->warnings) CHECK(w.find("launch.") == std::string::npos);
+    settings.launches = {launch(0, "cl_2")};
+    settings.launches[0].track = id("tr_2");
+    auto replayed = renderOffline(p.app->head(), pool, settings);
+    REQUIRE(replayed);
+    CHECK(std::any_of(
+        replayed->warnings.begin(), replayed->warnings.end(),
+        [](const std::string& w) { return w.find("launch.tempo") != std::string::npos; }));
+}

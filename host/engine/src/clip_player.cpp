@@ -201,6 +201,9 @@ void compileClipPlayers(Plan& p, Node& n, const Session& s) {
             const bool skipped =
                 prepared && std::find(prepared->clipsSkipped.begin(), prepared->clipsSkipped.end(),
                                       id) != prepared->clipsSkipped.end();
+            // Past the memory budget: no player, so it cannot be launched,
+            // and a track playing it returns to the arrangement (carryLaunch).
+            if (skipped) continue;
             const auto found = prepared && clip.activeTake
                                    ? prepared->takes.find(*clip.activeTake)
                                    : std::map<Id, PreparedSource>::const_iterator{};

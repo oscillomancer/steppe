@@ -1207,6 +1207,9 @@ struct Plan {
     // depend on that session staying alive (the real-time engine outlives it).
     std::shared_ptr<const time::TimeMap> timeMap;
     std::vector<std::string> warnings;
+    // Channels compile their clips' players (ADR-0097). Off for an offline
+    // render with no launch log: renders play the arrangement only.
+    bool clipPlayers = true;
     std::filesystem::path projectDir;
     std::shared_ptr<const PreparedSources> preparedSources;
     MediaCache* media = nullptr;
