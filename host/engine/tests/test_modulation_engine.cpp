@@ -1266,6 +1266,94 @@ TEST_CASE("modulation through an envelope: the events fall on the grid whatever 
 }
 
 TEST_CASE(
+    "modulation through an envelope: across a plan swap the lane holds its sum while the "
+    "rack is elsewhere") {
+    // M-f: while another executor still owns the source rack's modules, a
+    // lane holds its last sum, as Mod Outs and the PARAM_MOD memo do. The
+    // sum comes with the plan swap; a fresh one would send its envelope's
+    // base alone (review 63, probe P2).
+    const model::Session s = throughEnvelope("beat_phase", 0.2);
+    InstancePool pool = makePool();
+    MediaCache media;
+    const auto make = [&] {
+        auto compiled = d::compile(s, pool, 0, 128);
+        REQUIRE_MESSAGE(compiled, (compiled ? "" : compiled.error().toString()));
+        compiled->media = &media;
+        auto ok = d::prepare(*compiled, s);
+        REQUIRE_MESSAGE(ok, (ok ? "" : ok.error().toString()));
+        return compiled;
+    };
+    const auto lane = [](d::Plan& p) -> d::ParamLane* {
+        for (d::Node& n : p.nodes)
+            for (d::Stage& st : n.chain)
+                for (d::ParamLane& ln : st.lanes)
+                    if (ln.modCount) return &ln;
+        return nullptr;
+    };
+    auto a = make();
+    const char renderer = 0, other = 0;
+    d::adoptRackModules(nullptr, &a->rendererModules, &renderer);
+    d::Workers workers(0);
+    std::int64_t pos = 0;
+    for (; pos < 30000; pos += 128)
+        REQUIRE(d::processRendererBlock(&workers, *a, pos, 128, &renderer));
+    REQUIRE(lane(*a));
+    const double sent = lane(*a)->lastSent;
+    REQUIRE(lane(*a)->modSum != 0.0);
+    auto b = make();
+    d::carryMix(*a, *b, 0);
+    // The rack's modules pass to the other executor before this one runs
+    // the new plan's first block.
+    d::adoptRackModules(&a->rendererModules, nullptr, &renderer);
+    d::claimRackModules(b->rendererModules, &other);
+    REQUIRE(d::processRendererBlock(&workers, *b, pos, 128, &renderer));
+    REQUIRE(lane(*b));
+    CHECK(lane(*b)->lastSent == sent);
+}
+
+TEST_CASE("modulation through an envelope: a target handed to the live executor keeps its sum" *
+          doctest::description("rt")) {
+    // Arming B moves it, and the rack that modulates it, to the callback
+    // (M-f). While the rack's modules are still the renderer's, the lane
+    // holds its last sum, carried with the plan, as the PARAM_MOD memo
+    // does; it never falls back to its envelope's base (review 63, P2).
+    const model::Session s = throughEnvelope("beat_phase", 0.2);
+    model::EditTxn t(s, 3);
+    const Id b = s.tracks.find(kMaster)->children.at(1);
+    t.modify<model::Track>(b, [](model::Track& tr) { tr.record.armed = true; });
+    const model::Session armed = commit(t);
+    constexpr std::uint32_t kBlock = 128;
+    const auto offline = render(s, 2.0, kBlock);
+    CHECK(render(armed, 2.0, kBlock).left == offline.left);  // arming changes no sound
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        auto rtPool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 96000 + 4096});
+        Engine engine(rtPool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+        const auto run = [&](std::int64_t frames) {
+            if (options.anticipative)
+                runAheadOnState(engine, backend, frames / kBlock, kBlock);
+            else
+                backend.run(frames / kBlock);
+        };
+        REQUIRE(engine.load(s));
+        engine.play();
+        run(32000);
+        REQUIRE(engine.load(armed));
+        run(32000);
+        REQUIRE(engine.load(s));
+        run(32000 + 4096);
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+        CHECK(engine.anticipationMisses() == 0);
+        const std::size_t L = engine.outputLatency();
+        CHECK(maxDiff(backend.capture().channels[0], L, offline.left, 96000) == 0.0);
+    }
+}
+
+TEST_CASE(
     "modulation through an envelope: real-time output equals the offline render, in both "
     "executors and through the bridge" *
     doctest::description("rt")) {
