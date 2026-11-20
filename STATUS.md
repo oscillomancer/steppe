@@ -624,7 +624,9 @@ instructions are in `docs/guides/installing.md`.
   value and a depth drag on the bar (one undo step), lanes keyed by target
   with the band (on a plug-in parameter's CLAP curve) and the live value at
   the playhead, and an editable row for each modulatable parameter of a
-  plain CLAP plug-in. An FX moved to another track keeps the last offset of a
+  plain CLAP plug-in. The FX window's live value on a modulated slider is
+  untested with a running plug-in (the mixer's, which shares its code, is
+  tested with the engine running). An FX moved to another track keeps the last offset of a
   parameter the new plan no longer modulates until the plug-in next
   resets. Native macOS and Windows CI has not run on it.
   Agents patch with `rack.patch` (named
