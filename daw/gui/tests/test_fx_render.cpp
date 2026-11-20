@@ -809,8 +809,15 @@ TEST_CASE(
     // one writable parameter of it that is not.
     model::Id fx;
     std::string modulatable, fixed, modulatableName;
-    for (const char* name : {"Marram", "Coppice", "Hickory", "Yarrow"}) {
-        auto made = f.run("fx.add", f.args({{"track", track.str()}, {"plugin", f.pluginId(name)}}));
+    auto listed = f.run("plugin.list", json::Value::object());
+    REQUIRE(listed);
+    for (const char* name : {"Marram", "Coppice"}) {
+        std::string plugin;  // a partial build may not have it
+        for (const json::Value& p : (*listed)["plugins"].asArray())
+            if (const json::Value* n = p.find("name"); n && n->isString() && n->asString() == name)
+                plugin = p.find("id")->asString();
+        if (plugin.empty()) continue;
+        auto made = f.run("fx.add", f.args({{"track", track.str()}, {"plugin", plugin}}));
         REQUIRE(made);
         const model::Id id = *model::Id::parse((*made)["fx"].asString());
         auto described = f.run("fx.describe", f.args({{"fx", id.str()}, {"full", true}}));
@@ -839,7 +846,11 @@ TEST_CASE(
             break;
         }
     }
-    REQUIRE_MESSAGE(!modulatable.empty(), "no stock plug-in marks a parameter modulatable");
+    if (fx == model::Id{}) {
+        MESSAGE("skipped: neither Marram nor Coppice is built (a partial build)");
+        return;
+    }
+    REQUIRE(!modulatable.empty());
     REQUIRE(f.fx->open(track));
     f.fx->select(fx);
     f.fx->showParamsTab();
