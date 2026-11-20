@@ -1734,6 +1734,12 @@ keeps playing its print.
     envelope and needs an active one: `modulation.envelope` at
     `/target/param` otherwise, with an `env.add` hint.
   - `fx.describe` reports such a parameter `modulatable_by_envelope`.
+  - A stepped or enum parameter is refused as such (`modulation.target`),
+    with a hint to automate it with envelope points: no route moves it,
+    with or without an envelope.
+  - A name the plug-in lacks is refused (`modulation.target`) with a hint
+    that lists only what a route can take: the modulatable parameters,
+    then those reached through an active envelope, named as such.
 - Mixer targets (step M2): the target track or send must exist and fit the
   invariants above (`modulation.target` at `/target/track`,
   `/target/route` or `/target/param` otherwise), and a target in a frozen

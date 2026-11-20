@@ -4273,6 +4273,28 @@ TEST_CASE(
          kTest});
     REQUIRE_FALSE(latency);
     CHECK(latency.error().code == "modulation.target");
+    // A choice is refused as such, its hint not the envelope a route through
+    // it would want (review 63 F1): adding one changes nothing.
+    CHECK(latency.error().message == "Latency is stepped (or a list), so a route cannot move it");
+    CHECK(latency.error().hint ==
+          "automate it with envelope points instead (env.add {fx, param, points}); routes take "
+          "continuous parameters, which fx.describe marks modulatable or modulatable_by_envelope");
+    auto choice = d.execute(
+        {"modulate", j(R"({"target": {"fx": "fx_2", "param": "1"}, "source": "lfo"})"), kTest});
+    REQUIRE_FALSE(choice);
+    CHECK(choice.error().code == "modulation.target");
+    CHECK(choice.error().message == latency.error().message);
+    // A name it lacks: the hint names what an envelope reaches, as such
+    // (review 64 F1), though no parameter takes a route directly.
+    auto unknown = d.execute(
+        {"modulation.add",
+         j(R"({"source": {"module": "mo_2", "input": "in_1"}, "target": {"fx": "fx_2", "param": "nope"}, "depth": 0.1})"),
+         kTest});
+    REQUIRE_FALSE(unknown);
+    CHECK(unknown.error().code == "modulation.target");
+    CHECK(unknown.error().hint ==
+          "through an active envelope (modulate adds one): 0; fx.describe marks them "
+          "(modulatable_by_envelope) and lists their ranges");
     // With an envelope it is taken, and listed as playable until the
     // envelope is turned off.
     const std::string env =
