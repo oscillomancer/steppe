@@ -2613,8 +2613,14 @@ same heights, scroll and colours.
 **Elsewhere.**
 - **Render dialog.** While any track is held by a clip, it says in one line
   that renders play the arrangement only (§4.8; built with L2).
-- **Inspector.** It shows a selected clip's fields (`clip.set`).
-- **Status line.** It counts scenes beside tracks only when there are some.
+- **Inspector.** After a launcher click it shows the selected clip (before
+  tracks and items): its header (name; "MIDI clip on Bass, Verse"; its
+  colour) and its fields, each one `clip.set`: Name, Colour, Length (beats,
+  or seconds for an audio clip), Gain, Plays (Loop / Once), Launch (the
+  project's quantize, Bar … 1/32, At once) and Mute. Several clips show
+  only their count.
+- **Status line.** It counts scenes beside tracks only when there are some
+  ("4 tracks  2 scenes  version 9", `gui::countsText`).
 
 **Tests (L3).**
 - Snapshots of the pane with playing, queued, held and empty cells, in both

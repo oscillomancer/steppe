@@ -367,9 +367,7 @@ void Shell::sync(bool event) {
             changes = &previous->changes;
         shownVersion_ = s.version;
         projectGeneration_ = app_.projectGeneration();
-        const std::size_t tracks = views::countTracks(s);
-        counts_->setText(std::to_string(tracks) + (tracks == 1 ? " track  " : " tracks  ") +
-                         "version " + std::to_string(s.version));
+        counts_->setText(countsText(s));
         arrange_->show(s, changes, projectGeneration_);
     }
     // A named control under the pointer is said in the note's place, until
@@ -383,9 +381,7 @@ void Shell::sync(bool event) {
                       : app_.preparingAudio()            ? std::string("Preparing audio…")
                       : !app_.preparationError().empty() ? app_.preparationError()
                                                          : editStatus_;
-    const std::size_t tracks = views::countTracks(s);
-    counts_->setText(std::to_string(tracks) + (tracks == 1 ? " track  " : " tracks  ") +
-                     "version " + std::to_string(s.version) + (note.empty() ? "" : " · " + note));
+    counts_->setText(countsText(s) + (note.empty() ? "" : " · " + note));
     std::vector<model::Id> selected;
     for (const auto& text : ui_.selectedItems)
         if (auto id = model::Id::parse(text); id && s.items.find(*id)) selected.push_back(*id);
@@ -402,6 +398,15 @@ void Shell::sync(bool event) {
     if (transport_) transport_->sync(event || moved);
     // The input names track the engine (started or stopped), not the model.
     if (moved || app_.engine()) inputs();
+}
+
+std::string countsText(const model::Session& s) {
+    const std::size_t tracks = views::countTracks(s);
+    const std::size_t scenes = s.scenes.size();
+    std::string text = std::to_string(tracks) + (tracks == 1 ? " track  " : " tracks  ");
+    if (scenes > 0)  // the launcher's, only when there are some (gui.md §4.15)
+        text += std::to_string(scenes) + (scenes == 1 ? " scene  " : " scenes  ");
+    return text + "version " + std::to_string(s.version);
 }
 
 views::LaunchViews launchViews(const std::vector<engine::Engine::TrackLaunch>& state) {

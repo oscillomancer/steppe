@@ -35,6 +35,10 @@ class TransportBar;
 
 struct TrackMenu;
 
+// The status line's counts: "4 tracks  2 scenes  version 9" (scenes only
+// when there are some).
+std::string countsText(const model::Session& session);
+
 // The engine's launch state as the arrange view draws it (ADR-0097).
 views::LaunchViews launchViews(const std::vector<engine::Engine::TrackLaunch>& state);
 
