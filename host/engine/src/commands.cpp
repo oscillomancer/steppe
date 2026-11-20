@@ -35,6 +35,7 @@ void registerRouteCommands(cmd::Registry& registry);
 void registerLogCommands(cmd::Registry& registry);
 void registerCrashReportCommands(cmd::Registry& registry);
 void registerRulerCommands(cmd::Registry& registry);
+void registerModulationCommands(cmd::Registry& registry);
 void registerPluginCommands(cmd::Registry& registry);
 void registerGroupCommands(cmd::Registry& registry);
 void registerMidiCommands(cmd::Registry& registry);
@@ -82,6 +83,7 @@ void registerEngineCommands(cmd::Registry& registry) {
     registerLogCommands(registry);
     registerCrashReportCommands(registry);
     registerRulerCommands(registry);
+    registerModulationCommands(registry);
     registerPluginCommands(registry);
     registerGroupCommands(registry);
     registerMidiCommands(registry);
@@ -193,6 +195,19 @@ std::string describeSession(const model::Session& s) {
                 if (it.mute) il += " muted";
                 out += il + "\n";
             }
+            std::string routes;  // modulation into this track's FX or mix (ADR-0096)
+            for (const auto& e : s.modulations) {
+                const model::Modulation& m = *e.value;
+                if (model::modulationTargetNode(s, m.target) != id) continue;
+                char amount[32];
+                std::snprintf(amount, sizeof amount, " %+g", m.depth);
+                routes += " " + e.id.str() + " " + m.source.module.str() + "." + m.source.input +
+                          "→" + m.target.object.str() + " " + m.target.param + amount +
+                          (m.enabled ? "" : " (off)");
+            }
+            if (!routes.empty())
+                out += std::string(static_cast<std::size_t>(2 * depth + 2), ' ') +
+                       "modulation:" + routes + "\n";
         }
         for (Id c : t.children) walk(c, depth + 1);
     };

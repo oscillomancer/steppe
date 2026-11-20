@@ -5190,6 +5190,17 @@ struct Gain : Effect {
         run("rack.add", R"({"track": "tr_2"})");
         return;
     }
+    if (fixture == "song_with_mod_out" || fixture == "song_with_modulation") {
+        // + rk_1 on tr_1: mo_1 Out, mo_2 a Mod Out; fx_1 a gain in tr_1's chain;
+        // with modulation, mr_1 takes mo_2.in_1 to fx_1's gain at depth 0.25
+        run("rack.add", R"({"track": "tr_1"})");
+        run("module.add", R"({"rack": "rk_1", "type": "mod_out", "x": 300, "y": 40})");
+        run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.gain"})");
+        if (fixture == "song_with_modulation")
+            run("modulation.add",
+                R"({"source": {"module": "mo_2", "input": "in_1"}, "target": {"fx": "fx_1", "param": "gain"}, "depth": 0.25})");
+        return;
+    }
     if (fixture == "song_with_module") {  // + wobble in the module library
         run("rack.add", R"({"track": "tr_1"})");
         json::Value args = json::Value::object();

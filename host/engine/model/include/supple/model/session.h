@@ -253,6 +253,10 @@ std::optional<Id> modulationTargetNode(const Session& s, const EnvTarget& target
 // older build (ADR-0096, amendment G-c). Returns each with the reason, in
 // the order removed.
 std::vector<std::pair<Id, std::string>> dropUnplayableModulations(Session& s);
+// The modulation routes whose source or target an edit took away or made
+// unfit (a removed module, FX, track or route; a send turned MIDI), with the
+// reason, in id order. Commands remove them and warn modulation.removed.
+std::vector<std::pair<Id, std::string>> strandedModulations(const Session& s);
 // The plugin module that holds `fx` (ADR-0062), if any.
 std::optional<Id> moduleOfFx(const Session& s, Id fx);
 // The rack a cable end is in: its module's, or for a plug-in's parameter its

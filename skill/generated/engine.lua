@@ -560,7 +560,7 @@ q = nil
 ---@field plugin string
 ---@field name string
 ---@field description string
----@field params? any
+---@field params? any With full: each parameter; modulatable: true when a modulation route can take it (modulation.add)
 ---@field patch? any
 ---@field status_available boolean A live instance supplied its current problems
 ---@field problems? any Current plugin problems: code, message, scope, line when known, hint, silent; scope host when unreadable
@@ -1035,6 +1035,43 @@ q = nil
 ---@field notation string
 
 ---@class Steppe.midi_write_result
+---@field warnings? table[]
+
+---@class Steppe.modulation_add_args
+---@field source table
+---@field target table
+---@field depth number
+---@field enabled? boolean
+---@field lane? boolean Show the target's lane (default true).
+
+---@class Steppe.modulation_add_result
+---@field modulation string
+---@field warnings? table[]
+
+---@class Steppe.modulation_list_args
+---@field track? string Target track id, e.g. "tr_1".
+---@field fx? string Target plug-in instance id, e.g. "fx_1".
+---@field rack? string Source rack id, e.g. "rk_1".
+
+---@class Steppe.modulation_list_result
+---@field modulations table[]
+---@field warnings? table[]
+
+---@class Steppe.modulation_remove_args
+---@field modulation string Modulation route id, e.g. "mr_1".
+
+---@class Steppe.modulation_remove_result
+---@field warnings? table[]
+
+---@class Steppe.modulation_set_args
+---@field modulation string Modulation route id, e.g. "mr_1".
+---@field source? table
+---@field target? table
+---@field depth? number
+---@field enabled? boolean
+---@field lane? boolean
+
+---@class Steppe.modulation_set_result
 ---@field warnings? table[]
 
 ---@class Steppe.module_add_args
@@ -2423,6 +2460,12 @@ q = nil
 ---@field get fun(): table Hardware MIDI outputs: settings, clock/MTC, timing, loss, warnings.
 ---@field set fun(args: Steppe.midi_outputs_set_args): table Change one MIDI output: enabled, offset, reset, clock, SPP, MTC.
 
+---@class Steppe.modulation
+---@field add fun(args: Steppe.modulation_add_args): Steppe.modulation_add_result Route a rack's Mod Out input to a plug-in parameter.
+---@field list fun(args?: Steppe.modulation_list_args): Steppe.modulation_list_result List modulation routes, by target track, FX or source rack.
+---@field remove fun(args: Steppe.modulation_remove_args): Steppe.modulation_remove_result Remove a modulation route.
+---@field set fun(args: Steppe.modulation_set_args): Steppe.modulation_set_result Change a modulation route's source, target, depth, enabled or lane.
+
 ---@class Steppe.module
 ---@field add fun(args: Steppe.module_add_args): table Add a module to a rack: a type with knob values.
 ---@field check fun(args?: Steppe.module_check_args): table Compile a module without saving it; return its diagnostics and description.
@@ -2644,6 +2687,7 @@ q = nil
 ---@field log Steppe.log Commands named log.*
 ---@field marker Steppe.marker Commands named marker.*
 ---@field midi Steppe.midi Commands named midi.*
+---@field modulation Steppe.modulation Commands named modulation.*
 ---@field module Steppe.module Commands named module.*
 ---@field plugin Steppe.plugin Commands named plugin.*
 ---@field project Steppe.project Commands named project.*

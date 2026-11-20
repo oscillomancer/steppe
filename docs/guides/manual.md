@@ -900,6 +900,19 @@ Numeric ids use canonical decimal spelling: `12`, not `012`.
 `fx.describe` lists the ids, including third-party plug-ins without semantic
 keys. The target must support modulation. Numeric semantic keys take precedence.
 
+A Mod Out module takes a rack's signals out of the rack: `modulation.add
+{source: {module, input}, target: {fx, param}, depth}` routes one of its
+inputs to a parameter of a plug-in on a track, where `fx.describe {full:
+true}` marks the parameter `modulatable`. Depth is the offset at a full
+signal, a fraction of the parameter's range (−1 to 1); routes on one
+parameter add up, and none of them writes the parameter's value or its
+automation. `modulation.set` changes a route (a drag that sends one
+gesture is one undo step), `modulation.remove` removes it, and
+`modulation.list` shows each route's signal range and, when it cannot
+play, why. Removing the Mod Out or the plug-in removes its routes with a
+`modulation.removed` warning. Track volume, pan and width and send levels
+come later.
+
 Rack plug-in latency is compensated against the song, including oversampling.
 The rack's longest routed audio or Note Out path sets its clock; shorter
 routes receive padding. Parallel paths summed inside the rack keep their

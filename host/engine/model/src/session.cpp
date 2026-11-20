@@ -1195,6 +1195,23 @@ std::vector<std::pair<Id, std::string>> dropUnplayableModulations(Session& s) {
     return dropped;
 }
 
+std::vector<std::pair<Id, std::string>> strandedModulations(const Session& s) {
+    std::vector<std::pair<Id, std::string>> out;
+    Checker c{s, {}, {}};
+    c.modulations();
+    const std::string prefix = "/modulations/";
+    for (const Error& e : c.errors) {
+        if (e.path.compare(0, prefix.size(), prefix) != 0) continue;
+        const auto slash = e.path.find('/', prefix.size());
+        if (slash == std::string::npos) continue;
+        const std::string field = e.path.substr(slash + 1);
+        if (field != "source" && field != "target") continue;
+        const auto id = Id::parse(e.path.substr(prefix.size(), slash - prefix.size()));
+        if (id && (out.empty() || out.back().first != *id)) out.emplace_back(*id, e.message);
+    }
+    return out;
+}
+
 std::optional<Id> trackOfChainFx(const Session& s, Id fx) {
     for (const auto& e : s.tracks)
         if (std::find(e.value->chain.begin(), e.value->chain.end(), fx) != e.value->chain.end() ||

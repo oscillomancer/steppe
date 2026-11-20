@@ -6022,7 +6022,9 @@ Kind: `query`. Exposure: `mcp-tool`.
     "description": {
       "type": "string"
     },
-    "params": {},
+    "params": {
+      "description": "With full: each parameter; modulatable: true when a modulation route can take it (modulation.add)"
+    },
     "patch": {},
     "status_available": {
       "type": "boolean",
@@ -10116,6 +10118,328 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "item": "it_1",
   "notation": "voice bass; 1: C2:e C2:e r:q G1:h"
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
+## `modulation.add@1`
+
+Route a rack's Mod Out input to a plug-in parameter.
+
+depth is the offset at a signal of 1, a fraction of the parameter's CLAP range (-1..1). The parameter must be marked modulatable in fx.describe. Mixer targets (a track's volume, pan or width; a send's volume) arrive with step M2.
+
+Kind: `edit`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `source` | object |  |  |  |  |
+| `target` | object |  |  |  |  |
+| `depth` | number |  |  |  |  |
+| `enabled` | boolean |  |  |  |  |
+| `lane` | boolean |  |  |  | Show the target's lane (default true). |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "modulation_added",
+  "properties": {
+    "modulation": {
+      "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["modulation"],
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**Add** (`song_with_mod_out`)
+
+```json
+{
+  "source": {
+    "module": "mo_2",
+    "input": "in_1"
+  },
+  "target": {
+    "fx": "fx_1",
+    "param": "gain"
+  },
+  "depth": 0.25
+}
+
+```
+
+Result:
+
+```json
+{
+  "modulation": "mr_1"
+}
+
+```
+
+## `modulation.list@1`
+
+List modulation routes, by target track, FX or source rack.
+
+Each route with its source signal's range (bipolar -1..1, or unipolar 0..1 when every cable into the Mod Out input is unipolar, a gate or a phase) and, when the plan cannot apply it, inert: target (the parameter cannot take it, or a mixer target before step M2) or latency (its plug-in changed latency while modulated; editing a route into it turns them back on).
+
+Kind: `query`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `track` | string |  |  |  | Target track id, e.g. "tr_1". |
+| `fx` | string |  |  |  | Target plug-in instance id, e.g. "fx_1". |
+| `rack` | string |  |  |  | Source rack id, e.g. "rk_1". |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "modulation_list",
+  "properties": {
+    "modulations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "modulation_entry",
+        "properties": {
+          "modulation": {
+            "type": "string"
+          },
+          "source": {
+            "type": "object",
+            "title": "modulation_source",
+            "properties": {
+              "module": {
+                "type": "string",
+                "pattern": "^mo_[0-9]+$",
+                "description": "Mod Out module id, e.g. \"mo_1\"."
+              },
+              "input": {
+                "type": "string",
+                "pattern": "^in_([1-9]|1[0-6])$",
+                "description": "One of the Mod Out's inputs, in_1 .. in_16."
+              }
+            },
+            "required": ["module", "input"],
+            "additionalProperties": false
+          },
+          "target": {
+            "type": "object",
+            "title": "modulation_target",
+            "properties": {
+              "fx": {
+                "type": "string",
+                "pattern": "^fx_[0-9]+$",
+                "description": "Plugin instance id, e.g. \"fx_1\"."
+              },
+              "track": {
+                "type": "string",
+                "pattern": "^tr_[0-9]+$",
+                "description": "A track's volume, pan or width (step M2)."
+              },
+              "route": {
+                "type": "string",
+                "pattern": "^sd_[0-9]+$",
+                "description": "A send's volume (step M2)."
+              },
+              "param": {
+                "type": "string",
+                "minLength": 1,
+                "description": "A plug-in parameter's key, name or decimal CLAP id (fx.describe marks the modulatable ones); volume, pan or width for a track; volume for a route."
+              }
+            },
+            "required": ["param"],
+            "additionalProperties": false
+          },
+          "depth": {
+            "type": "number"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "lane": {
+            "type": "boolean"
+          },
+          "range": {
+            "type": "string"
+          },
+          "inert": {
+            "type": "string"
+          }
+        },
+        "required": ["modulation", "source", "target", "depth", "enabled", "lane", "range"],
+        "additionalProperties": false
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["modulations"],
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**List** (`song_with_modulation`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "modulations": [
+    {
+      "modulation": "mr_1",
+      "source": {
+        "module": "mo_2",
+        "input": "in_1"
+      },
+      "target": {
+        "fx": "fx_1",
+        "param": "gain"
+      },
+      "depth": 0.25,
+      "enabled": true,
+      "lane": true,
+      "range": "bipolar"
+    }
+  ]
+}
+
+```
+
+## `modulation.remove@1`
+
+Remove a modulation route.
+
+
+
+Kind: `edit`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `modulation` | string |  |  |  | Modulation route id, e.g. "mr_1". |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "empty",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**Remove** (`song_with_modulation`)
+
+```json
+{
+  "modulation": "mr_1"
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
+## `modulation.set@1`
+
+Change a modulation route's source, target, depth, enabled or lane.
+
+Omitted fields keep their values. A depth drag sends Origin.gesture, so the drag is one undo step.
+
+Kind: `edit`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `modulation` | string |  |  |  | Modulation route id, e.g. "mr_1". |
+| `source` | object |  |  |  |  |
+| `target` | object |  |  |  |  |
+| `depth` | number |  |  |  |  |
+| `enabled` | boolean |  |  |  |  |
+| `lane` | boolean |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "empty",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**Deepen** (`song_with_modulation`)
+
+```json
+{
+  "modulation": "mr_1",
+  "depth": 0.5
 }
 
 ```

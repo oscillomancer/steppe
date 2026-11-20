@@ -649,7 +649,9 @@ void registerFxCommands(cmd::Registry& registry) {
                 .field("plugin", &FxDescription::plugin, schema::string())
                 .field("name", &FxDescription::name, schema::string())
                 .field("description", &FxDescription::description, schema::string())
-                .field("params", &FxDescription::params, schema::any())
+                .field("params", &FxDescription::params,
+                       schema::any().doc("With full: each parameter; modulatable: true when a "
+                                         "modulation route can take it (modulation.add)"))
                 .field("patch", &FxDescription::patch, schema::any())
                 .field("status_available", &FxDescription::statusAvailable,
                        schema::boolean().doc("A live instance supplied its current problems"))
@@ -749,9 +751,25 @@ void registerFxCommands(cmd::Registry& registry) {
             if (a.full) {
                 auto schema = app.fxSchema(fx);
                 if (!schema && live) schema = live->semanticSchema();
-                if (schema && schema->isObject() && schema->find("params"))
+                // modulatable: a modulation route can take it (ADR-0096): flagged
+                // modulatable, not read-only or a bypass, and not a VST3's.
+                const bool vst3 = fx.plugin.format == "vst3";
+                if (schema && schema->isObject() && schema->find("params")) {
                     r.params = *schema->find("params");
-                else if (auto list = app.fxParams(fx)) {
+                    if (r.params->isObject() && !vst3)
+                        for (auto& entry : r.params->asObject()) {
+                            const json::Value* flags =
+                                entry.value.isObject() ? entry.value.find("flags") : nullptr;
+                            if (!flags || !flags->isArray()) continue;
+                            bool modulatable = false, excluded = false;
+                            for (const auto& f : flags->asArray()) {
+                                if (!f.isString()) continue;
+                                modulatable |= f.asString() == "modulatable";
+                                excluded |= f.asString() == "readonly" || f.asString() == "bypass";
+                            }
+                            if (modulatable && !excluded) entry.value["modulatable"] = true;
+                        }
+                } else if (auto list = app.fxParams(fx)) {
                     // Not semantic (a plain CLAP or a VST3): its parameters as the
                     // plugin declares them, for fx.param.set by id or name.
                     auto lower = [](std::string t) {
@@ -778,6 +796,9 @@ void registerFxCommands(cmd::Registry& registry) {
                         if (p.flags & (CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_ENUM))
                             e["stepped"] = true;
                         if (p.flags & CLAP_PARAM_IS_READONLY) e["read_only"] = true;
+                        if (!vst3 && (p.flags & CLAP_PARAM_IS_MODULATABLE) &&
+                            !(p.flags & (CLAP_PARAM_IS_READONLY | CLAP_PARAM_IS_BYPASS)))
+                            e["modulatable"] = true;
                         ps.push_back(std::move(e));
                     }
                     r.params = std::move(ps);
