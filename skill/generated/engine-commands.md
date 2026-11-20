@@ -284,7 +284,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Examples
 
-**Verse, chorus** (`song_with_clip`)
+**A verse for four bars from bar 5** (`song_with_clip`)
 
 ```json
 {
@@ -293,7 +293,8 @@ Kind: `edit`. Exposure: `mcp-exec`.
       "scene": "sc_1",
       "bars": 4
     }
-  ]
+  ],
+  "bar": 5
 }
 
 ```

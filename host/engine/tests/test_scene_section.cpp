@@ -557,3 +557,31 @@ TEST_CASE("arrangement.build refuses an entry, with its index, and changes nothi
                   .path == "/args/sequence/0/scene");
     }
 }
+
+TEST_CASE(
+    "scene.insert, arrangement.build and scene.capture merge from a branch with remapped ids") {
+    Song l;
+    l.run("branch.create", R"({"name": "agent/test/arrange"})");
+    l.run("scene.add", R"({"name": "Bridge"})");  // sc_3 on the branch
+    l.run("clip.add", R"({"track": "tr_2", "scene": "sc_3", "notation": "voice pad; 1: C3:w"})");
+    l.run("arrangement.build", R"({"bar": 5, "sequence": [{"scene": "sc_3", "bars": 2}]})");
+    l.run("scene.insert", R"({"scene": "sc_3", "bar": 9, "bars": 1})");
+    l.run("scene.capture", R"({"region": "rg_1"})");  // the Bridge section laid by the build
+    l.run("branch.switch", R"({"name": "main"})");
+    l.run("scene.add", R"({"name": "Outro"})");  // sc_3 on main
+    l.run("clip.add", R"({"track": "tr_2", "scene": "sc_3", "notation": "voice pad; 1: C3:w"})");
+    l.run("region.add", R"({"start": 64, "end": 68, "name": "Tail"})");  // rg_1 on main
+    l.run("branch.merge", R"({"from": "agent/test/arrange"})");
+    const model::Session& s = l.head();
+    CHECK(model::checkInvariants(s));
+    CHECK(s.scenes.size() == 5);  // Verse, Chorus, Outro, Bridge, and the captured Bridge
+    CHECK(s.clips.size() == 3);
+    CHECK(s.regions.size() == 3);  // Tail and the two sections
+    std::set<std::string> names;
+    for (const auto& e : s.regions) names.insert(e.value->name);
+    CHECK(names == std::set<std::string>{"Tail", "Bridge"});
+    std::set<double> starts;
+    for (const auto& e : s.items)
+        if (e.value->track == id("tr_2")) starts.insert(model::itemSpan(s, *e.value).startBeat);
+    CHECK(starts == std::set<double>{16.0, 32.0});  // bar 5 and bar 9
+}

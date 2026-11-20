@@ -632,8 +632,11 @@ TEST_CASE("every edit command a saved branch may replay has been audited") {
     // must be checked the same way before it joins this list.
     // Reading files is no new power: a project's media may name any path. Each
     // writes only new files in the media folder (item.add copies, renders,
-    // freezes); rack.preset.load installs nothing while replaying.
-    static const std::set<std::string> audited{"audio.quantize",
+    // freezes); rack.preset.load installs nothing while replaying. The scene
+    // commands take no file: they copy takes as clip.add {item} and
+    // item.add {clip} do (ADR-0097).
+    static const std::set<std::string> audited{"arrangement.build",
+                                               "audio.quantize",
                                                "audio.warp.detach",
                                                "audio.warp.reset",
                                                "autoitem.add",
@@ -724,6 +727,8 @@ TEST_CASE("every edit command a saved branch may replay has been audited") {
                                                "route.remove",
                                                "route.set",
                                                "scene.add",
+                                               "scene.capture",
+                                               "scene.insert",
                                                "scene.move",
                                                "scene.remove",
                                                "scene.set",

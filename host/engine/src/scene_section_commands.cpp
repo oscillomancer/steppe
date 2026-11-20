@@ -447,7 +447,8 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
              "move or remove them, or start at another bar"},
             {"scene.insert.period", "a repeating clip no single looping item reproduces",
              "loop the clip over its whole content, or ask for fewer bars"}};
-        c.examples = {{"Verse, chorus", j(R"({"sequence": [{"scene": "sc_1", "bars": 4}]})"),
+        c.examples = {{"A verse for four bars from bar 5",
+                       j(R"({"sequence": [{"scene": "sc_1", "bars": 4}], "bar": 5})"),
                        j(R"({"segments": "<any>"})"), "song_with_clip"}};
         c.run = [](const BuildArgs& a, Context& ctx) -> Result<BuildResult> {
             EngineApp& app = engine::app(ctx);
