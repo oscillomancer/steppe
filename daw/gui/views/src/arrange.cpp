@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include "supple/views/arrange.h"
 
+#include "supple/views/chord_field.h"
 #include "supple/views/envelope_lane.h"
 #include "supple/views/session_changes.h"
 
@@ -435,17 +436,14 @@ class Ruler : public ui::Node {
             if (i + 1 < keys.size())
                 limit = std::min(limit, view_.xAt(tm.secondsAt(keys[i + 1].beat)) - 3);
             std::string text = model::keyWords(*p);
-            const float w = c.textWidth(text, ui::Font::Ui, size);
-            const float shown = std::max(0.0f, std::min(w, limit - textX));
+            // Words too long for the room end in an ellipsis, or go.
+            const std::string fit =
+                c.elide(text, ui::Font::Ui, size, std::max(0.0f, limit - textX));
+            const float shown = fit.empty() ? 0.0f : c.textWidth(fit, ui::Font::Ui, size);
             if (!shared) c.fillRect({x, y, 1, h}, quiet);
-            if (shown > 0) {
-                c.save();
-                // Only the width is cut: capitals rise above the half row.
-                c.clip({textX - 2, tempoRow.y, shown + 2, tempoRow.h});
-                c.text({textX, y, w + 4, h}, text, ui::Font::Ui, size, quiet,
+            if (!fit.empty())
+                c.text({textX, y, shown + 4, h}, fit, ui::Font::Ui, size, quiet,
                        ui::kLeft | ui::kMiddle);
-                c.restore();
-            }
             stats.keyLabels.push_back(text);
             const float left = shared ? textX - 2 : x - 5;
             keyFlags.push_back({keys[i].beat,
@@ -546,14 +544,13 @@ class Ruler : public ui::Node {
             const std::string text = p.symbol + (known ? "" : "?");
             const float w = c.textWidth(text, ui::Font::Ui, size);
             const float room = std::max(0.0f, cell.w - 8);
-            if (room > 0 && end >= x0) {
-                c.save();
-                c.clip({cell.x + 2, row.y, room + 2, row.h});
-                c.text({cell.x + 4, row.y, w + 4, row.h}, text, ui::Font::Ui, size,
+            // A name too long for its cell ends in an ellipsis, or goes.
+            const std::string fit = end >= x0 ? c.elide(text, ui::Font::Ui, size, room) : "";
+            if (!fit.empty()) {
+                c.text({cell.x + 4, row.y, room + 4, row.h}, fit, ui::Font::Ui, size,
                        t.color(known ? "ink" : "ink-quiet").withAlpha(alpha),
                        ui::kLeft | ui::kMiddle);
-                c.restore();
-                stats.chordLabels.push_back(text);
+                stats.chordLabels.push_back(fit);
             }
             chordCells.push_back(
                 {shown[i].beat,
@@ -566,38 +563,17 @@ class Ruler : public ui::Node {
             if (cell.label.contains(p)) return &cell;
         return nullptr;
     }
-    // The chord field: a symbol ("Am7", "" for no chord) into chord.set at
-    // `beat`. Tab writes it and moves the field to the next bar.
-    void chordField(double beat, const std::string& symbol, ui::Point at) {
+    // The chord field (views/chord_field.h) for the chord point at `beat`.
+    void chordField(double beat, ui::Point at) {
         if (!root()) return;
-        auto field = std::make_unique<ui::TextField>("ruler-chord", symbol);
-        field->layout.width = ui::SizeRule::fixed(140);
-        field->selectAll();
-        auto write = [this, beat](const std::string& text) {
-            json::Value args = json::Value::object();
-            args["at"] = beat;
-            args["symbol"] = text;
-            return execute("chord.set", std::move(args));
-        };
-        field->onSubmit = [this, write](const std::string& text) {
-            if (write(text)) root()->closePopup();
-        };
-        ui::TextField* self = field.get();
-        field->onOtherKey = [this, write, beat, at, self](const ui::KeyEvent& e) {
-            if (e.key != SDLK_TAB || (e.mods & ui::kShift)) return false;
-            const std::string text = self->text();
-            if (!text.empty() && !write(text)) return true;
-            const auto& tm = *view_.session().timeMap;
-            const double next = tm.beatOfBar(tm.barBeat(beat).bar + 1);
-            const float x = view_.xAt(tm.secondsAt(next));
-            std::string there;
-            for (const ChordCell& cell : chordCells)
-                if (cell.beat == next) there = cell.symbol;
-            root()->closePopup();
-            chordField(next, there, {x, at.y});
-            return true;
-        };
-        root()->openPopup(std::move(field), {at.x, at.y, 1, 1});
+        openChordField(
+            *root(),
+            {[this]() -> const model::Session& { return view_.session(); },
+             [this](const std::string& command, json::Value args) {
+                 return execute(command, std::move(args));
+             },
+             [this](double b) { return view_.xAt(view_.session().timeMap->secondsAt(b)); }},
+            beat, at);
     }
 
   private:
@@ -743,9 +719,7 @@ class Ruler : public ui::Node {
             for (const ChordCell& cell : chordCells)
                 if (cell.label.x <= at.x) hit = &cell;
             if (hit && hit->label.contains(at)) {
-                add("Edit chord\u2026", [this, beat = hit->beat, symbol = hit->symbol, at] {
-                    chordField(beat, symbol, at);
-                });
+                add("Edit chord\u2026", [this, beat = hit->beat, at] { chordField(beat, at); });
                 add("Delete chord", [this, beat = hit->beat] {
                     json::Value args = json::Value::object();
                     args["at"] = beat;
@@ -753,7 +727,7 @@ class Ruler : public ui::Node {
                 });
             } else {
                 add("Add chord here\u2026",
-                    [this, beat = gridBeat(at.x), at] { chordField(beat, "", at); });
+                    [this, beat = gridBeat(at.x), at] { chordField(beat, at); });
                 if (hit && !hit->symbol.empty())
                     add("No chord from here", [this, beat = gridBeat(at.x)] {
                         json::Value args = json::Value::object();
@@ -1033,13 +1007,13 @@ bool Ruler::handle(const ui::PointerEvent& e) {
             // a double-click elsewhere starts a chord at the grid beat there.
             if (const ChordCell* cell = chordAt(e.pos)) {
                 if (e.clicks == 2) {
-                    chordField(cell->beat, cell->symbol, e.pos);
+                    chordField(cell->beat, e.pos);
                     return true;
                 }
                 originalStart_ = originalEnd_ = cell->beat;
                 drag_ = Drag::Chord;
             } else if (e.clicks == 2) {
-                chordField(gridBeat(e.pos.x), "", e.pos);
+                chordField(gridBeat(e.pos.x), e.pos);
                 return true;
             }
         } else if (y < rows.chordTop()) {

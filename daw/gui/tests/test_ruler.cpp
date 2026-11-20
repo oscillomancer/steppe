@@ -641,14 +641,14 @@ TEST_CASE("ruler: the chord row shows with the first chord; its cells edit, move
     auto n = f.history();
     // A double-click on a chord's name edits it; elsewhere in the row, adds one.
     f.click(f.at(4.2, kRow), 0, 2);
-    REQUIRE(f.root->find("ruler-chord"));
-    CHECK(f.root->find("ruler-chord")->valueText() == "Am7");
+    REQUIRE(f.root->find("chord-field"));
+    CHECK(f.root->find("chord-field")->valueText() == "Am7");
     f.submit("Dmin7");
     CHECK(chords() == Chords{{4, "Dm7"}});  // stored canonical
     CHECK(f.history() == ++n);
     f.click(f.at(10.1, kRow), 0, 2);
-    REQUIRE(f.root->find("ruler-chord"));
-    CHECK(f.root->find("ruler-chord")->valueText().empty());
+    REQUIRE(f.root->find("chord-field"));
+    CHECK(f.root->find("chord-field")->valueText().empty());
     f.submit("G7");
     CHECK(chords() == Chords{{4, "Dm7"}, {10, "G7"}});  // on the grid
     CHECK(f.history() == ++n);
@@ -659,7 +659,7 @@ TEST_CASE("ruler: the chord row shows with the first chord; its cells edit, move
     f.root->key(SDLK_TAB);
     f.sync();
     CHECK(chords() == Chords{{4, "Dm7"}, {10, "G7"}, {16, "C"}});
-    REQUIRE(f.root->find("ruler-chord"));
+    REQUIRE(f.root->find("chord-field"));
     f.submit("F");
     CHECK(chords() == Chords{{4, "Dm7"}, {10, "G7"}, {16, "C"}, {20, "F"}});  // bar 6
     CHECK(f.history() == (n += 2));
@@ -692,6 +692,21 @@ TEST_CASE("ruler: the chord row shows with the first chord; its cells edit, move
     CHECK(chords() == Chords{{12, "G7"}, {13.5, ""}, {16, "C"}, {20, "F"}});
     CHECK(f.history() == ++n);
     CHECK(f.view->rulerStats().chordLabels == std::vector<std::string>{"G7", "C", "F"});
+    // A name too long for its cell ends in an ellipsis; no glyph is cut.
+    const double pxPerBeat = static_cast<double>(f.at(17).x - f.at(16).x);
+    const double narrow = 16 + 30 / pxPerBeat;  // a cell 30 units wide
+    f.exec("chord.set", json::parse(R"({"at": 16, "symbol": "C#m7b5"})").value());
+    f.exec("chord.set",
+           json::parse(R"({"at": )" + json::formatDouble(narrow) + R"(, "symbol": "G"})").value());
+    f.sync();
+    {
+        const auto& labels = f.view->rulerStats().chordLabels;
+        REQUIRE(labels.size() == 4);
+        CHECK(labels[1] != "C#m7b5");
+        CHECK(labels[1].rfind("C", 0) == 0);
+        CHECK(labels[1].ends_with("\u2026"));
+    }
+    f.exec("chord.remove", json::parse(R"({"at": )" + json::formatDouble(narrow) + "}").value());
     // With no chord left the row hides again.
     for (double at : {12.0, 13.5, 16.0, 20.0})
         f.exec("chord.remove", json::parse(R"({"at": )" + json::formatDouble(at) + "}").value());

@@ -240,7 +240,7 @@ Status checkClipMemory(EngineApp& app, const model::Session& after, const std::s
     const double rate =
         app.engine() ? app.engine()->config().sampleRate : after.project->sampleRate;
     const ResidentSamples r = residentSamples(after, app.projectDir(), rate);
-    if (r.arrangement + r.clips <= kPreparedSampleBudget) return {};
+    if (r.clipsSkipped.empty()) return {};
     auto n = [](double x) { return json::formatDouble(std::ceil(x)); };
     return Error("clip.memory",
                  "the clips' audio would not all fit beside the arrangement's in the " +
@@ -523,7 +523,7 @@ void registerSceneCommands(cmd::Registry& registry) {
         c.name = "scene.add";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Add a scene, a column of the clip launcher, at the end or at an index.";
+        c.summary = "Add a scene (a launcher column) at the end or at an index.";
         c.description =
             "at is the column (0-based, default: after the last); the scenes from there on "
             "move one column right. A project holds at most 1024 scenes.";
@@ -703,7 +703,7 @@ void registerClipCommands(cmd::Registry& registry) {
         c.name = "clip.add";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Add a clip to a channel's cell in a scene, from notation, a file or an item.";
+        c.summary = "Add a clip to a scene's cell: from notation, a file or an item.";
         c.description =
             "One source at most: notation (as item.add's), midi_file, audio_file, or item (a "
             "copy of that item's takes; pooled shares its MIDI instead). Without one, an empty "
@@ -935,7 +935,7 @@ void registerClipCommands(cmd::Registry& registry) {
         c.name = "clip.move";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Move a clip to an empty cell: another scene, another channel, or both.";
+        c.summary = "Move a clip to an empty cell in another scene, channel or both.";
         c.tags = {"clip launcher", "clip"};
         c.args = schema::object<ClipMoveArgs>("clip_move_args")
                      .field("clip", &ClipMoveArgs::clip, clipIdArg())

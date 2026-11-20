@@ -3194,6 +3194,55 @@ TEST_CASE("mixer: a modulated fader shows the engine's live offset while it runs
     CHECK_FALSE(f.strip(a).fader->modulation()->live);
 }
 
+TEST_CASE("mixer: a route nothing feeds draws idle, and the fader's menu says why") {
+    // ADR-0096: a route whose Mod Out input has no cable is inert ("source").
+    // The fader keeps its span but never shows a live value for it, though
+    // the engine reports one, and its menu names the reason in a greyed row.
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    json::Value made = f.exec(
+        "modulate", R"({"target":{"track":")" + a + R"(","param":"volume"},"source":"lfo"})");
+    const auto route = *model::Id::parse(made["modulation"].asString());
+    std::string cable;  // the one into the route's Mod Out input
+    for (const auto& c : f.app->head().cables)
+        if (c.value->to.str() == made["mod_out"].asString() + "." + made["input"].asString())
+            cable = c.id.str();
+    REQUIRE(!cable.empty());
+    f.exec("cable.remove", R"({"cable":")" + cable + R"("})");
+    f.refresh();
+    REQUIRE(f.strip(a).fader->modulation());
+    const ui::Point p = f.centre(f.strip(a).fader);
+    f.pointer(ui::PointerEvent::Type::Down, p, 1, 0, 3);
+    f.pointer(ui::PointerEvent::Type::Up, p, 1, 0, 3);
+    ui::Node* menu = f.root->find("strip.param.menu");
+    REQUIRE(menu);
+    bool said = false;
+    for (const auto& item : ui::menuItems(*menu))
+        if (item.label == "Modulation idle: nothing is cabled into its source") {
+            CHECK_FALSE(item.enabled);
+            said = true;
+        }
+    CHECK(said);
+    f.root->closePopup();
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    // Until the engine reports the route's offset; the bound only keeps a
+    // broken build from hanging.
+    bool reported = false;
+    for (int i = 0; i < 300 && !reported; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        f.now += std::chrono::milliseconds(10);
+        f.refresh();
+        reported = f.app->modulationOffsets().contains(route);
+        CHECK_FALSE(f.strip(a).fader->modulation()->live);
+    }
+    f.refresh();
+    CHECK_MESSAGE(reported, "the engine reports an offset for the idle route");
+    CHECK_FALSE(f.strip(a).fader->modulation()->live);
+    f.exec("engine.stop", "{}");
+    CHECK(f.errors.empty());
+}
+
 TEST_CASE("mixer: a right-click on a VCA's fader learns MIDI for it, elsewhere the group menu") {
     Fixture f;
     if (!f.ok) return;

@@ -306,14 +306,17 @@ struct Sundew : Effect {
                 "go, "
                 "FET fast and biting, Vari-Mu gentle and growing, Bloom lifting quiet detail.");
     Param threshold = decibels("Threshold", -60, 0, -18)
+                          .modulated()
                           .in("Compressor")
                           .help("The level it works above (Bloom: below), in dBFS.");
     Param ratioSet =
         ratio("Ratio", 1, 20, 3)
+            .modulated()
             .withKey("ratio")
             .in("Compressor")
             .help("How hard it works: 4 lets 1 dB through for every 4 dB over the threshold.");
     Param attack = milliseconds("Attack", 0.05, 250, 10)
+                       .modulated()
                        .in("Compressor")
                        .help("How fast it reacts to a louder sound.");
     Param sync = choice("Sync", {"Off", "1/32", "1/16", "1/8", "1/4", "1/2", "1 Bar"}, 0)
@@ -322,15 +325,18 @@ struct Sundew : Effect {
                      .help("Locks the release to the tempo: it recovers within that note value.");
     Param release =
         milliseconds("Release", 5, 3000, 150)
+            .modulated()
             .in("Compressor")
             .activeWhen(sync, {"Off"})
             .help("How fast it lets go once the sound falls (ignored while Sync is on).");
     Param knee =
         decibels("Knee", 0, 24, 6)
+            .modulated()
             .in("Compressor")
             .help("How gradually it starts, in dB around the threshold; 0 is a hard corner.");
     Param range =
         decibels("Range", 1, 40, 24)
+            .modulated()
             .in("Compressor")
             .help("The most it changes the level: the deepest cut, or Bloom's highest lift.");
 
@@ -340,9 +346,11 @@ struct Sundew : Effect {
             .help("What it listens to: its own input, or the sidechain input when connected.");
     Param keyHpf =
         frequency("Key HPF", 20, 800, 20)
+            .modulated()
             .in("Key")
             .help("A high-pass on what it listens to, so bass does not drive it; 20 Hz is off.");
     Param link = percent("Link", 100)
+                     .modulated()
                      .in("Key")
                      .help("How much the channels share one gain: 100% keeps the image still.");
     Param stereo = choice("Stereo", {"Left/Right", "Mid/Side"}, 0)
@@ -365,15 +373,18 @@ struct Sundew : Effect {
 
     Param colour =
         percent("Colour", 0)
+            .modulated()
             .in("Output")
             .activeUnless(character, {"Clean", "Bloom"})
             .help(
                 "The character's harmonics, rising as it works harder (Clean and Bloom add none).");
     Param output = decibels("Output", -24, 24, 0)
+                       .modulated()
                        .smoothed(20)
                        .in("Output")
                        .help("The level out, after the mix and the match.");
     Param mix = percent("Mix", 100)
+                    .modulated()
                     .smoothed(20)
                     .in("Output")
                     .help("Compressed against dry: below 100% is parallel compression.");

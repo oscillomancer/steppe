@@ -974,9 +974,12 @@ void registerRackCommands(cmd::Registry& registry) {
     // ---------------------------------------------------------------- rack.get
     [&] {
         Command<RackGet, json::Value> c;
-        common(c, "rack.get", Kind::Query, "A rack's modules, cables, Out modules and problems.");
+        common(c, "rack.get", Kind::Query,
+               "A rack's modules with their changed knobs, cables, Outs and problems.");
         c.description =
-            "Modules with their type, label, place and size and the knobs that differ from "
+            "Reads the modules placed in a rack, including each one's knobs (module.get reads a "
+            "module type's source instead). Modules with their type, label, place and size and the "
+            "knobs that differ from "
             "their defaults (detail full: also their input, output and knob keys); cables with "
             "feedback (true: it closes a loop and carries the previous frame); Out modules and "
             "the channels they feed (sends: their rack sends to busses and masters, ADR-0075, "

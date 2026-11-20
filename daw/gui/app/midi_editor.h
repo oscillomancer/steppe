@@ -177,6 +177,9 @@ class MidiEditor {
     void transpose(int semitones);
     void transposeDegrees(int degrees);  // midi.edit transpose_degrees on the selection
     ui::Toggle* keyButton() const { return keyButton_; }
+    // The chord field (views/chord_field.h) for the chord point at the project
+    // beat `beat`, opened at the window point `at` (the strip's double-click).
+    void editChord(double beat, ui::Point at);
     void nudge(int steps);  // the selected notes, by grid steps
     // The selected notes; with the event list shown, its selected rows.
     void removeSelected();

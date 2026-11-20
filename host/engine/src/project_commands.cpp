@@ -210,6 +210,11 @@ void registerProjectCommands(cmd::Registry& registry) {
             },
             [](const json::Value& v) { return v; }, std::move(renderSchema)};
         c.args = schema::object<ProjectSetArgs>("project_set_args")
+                     .elsewhere("tempo", "the tempo is set with tempo.set")
+                     .elsewhere("bpm", "the tempo is set with tempo.set")
+                     .elsewhere("meter", "the meter is set with timesig.set")
+                     .elsewhere("time_signature", "the meter is set with timesig.set")
+                     .elsewhere("key", "the key is set with key.set")
                      .field("name", &ProjectSetArgs::name, schema::string())
                      .field("title", &ProjectSetArgs::title, schema::string())
                      .field("author", &ProjectSetArgs::author, schema::string())

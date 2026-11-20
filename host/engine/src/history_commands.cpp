@@ -43,6 +43,12 @@ void registerHistoryCommands(cmd::Registry& registry) {
         c.exposure = undo ? cmd::Exposure::McpTool : cmd::Exposure::McpExec;
         c.summary =
             undo ? "Undo the last change on the current branch." : "Redo the last undone change.";
+        c.description =
+            undo ? "Steps the current branch back one version. The result is the version that is "
+                   "current afterwards and its label: the step before the one undone, not the "
+                   "undone step (history.list shows both)."
+                 : "Steps the current branch forward one version. The result is the version that "
+                   "is current afterwards and its label: the step that was redone.";
         c.tags = {"history"};
         c.args = schema::object<NoArgs>("no_args").build();
         c.result = historyResult();

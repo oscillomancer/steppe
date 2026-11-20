@@ -64,7 +64,7 @@ Result<std::size_t> ParamPanel::build(ui::Node& parent, model::Id fx) {
     fx_ = fx;
     gesture_.clear();
     modulatable_.clear();
-    live_ = app_.modulationOffsets();
+    live_ = liveModulation_.read(dispatcher_, app_);
     auto query = [&](std::string command, json::Value args) {
         return dispatcher_.execute({std::move(command), std::move(args), kUiOrigin});
     };
@@ -122,8 +122,9 @@ Result<std::size_t> ParamPanel::build(ui::Node& parent, model::Id fx) {
                         : std::string();
                 const double lo = number("min", 0), hi = number("max", 1);
                 const double current = number("value", number("default", lo));
-                const bool editable =
-                    !key.empty() && flag("modulatable") && !flag("read_only") && hi > lo;
+                const bool editable = !key.empty() &&
+                                      (flag("modulatable") || flag("modulatable_by_envelope")) &&
+                                      !flag("read_only") && hi > lo;
                 std::string value;
                 if (p.find("value") || editable) {
                     char buf[32];
@@ -213,9 +214,12 @@ Result<std::size_t> ParamPanel::build(ui::Node& parent, model::Id fx) {
         d.name = (*spec)->name.empty() ? member.key : (*spec)->name;
         d.group = (*spec)->group;
         d.spec = std::shared_ptr<params::DescribedParam>(std::move(*spec));
-        const json::Value* modulatable =
-            member.value.isObject() ? member.value.find("modulatable") : nullptr;
-        d.modulatable = modulatable && modulatable->isBool() && modulatable->asBool();
+        // A route can take it directly, or through its envelope (ADR-0096 M4).
+        auto marked = [&](const char* field) {
+            const json::Value* v = member.value.isObject() ? member.value.find(field) : nullptr;
+            return v && v->isBool() && v->asBool();
+        };
+        d.modulatable = marked("modulatable") || marked("modulatable_by_envelope");
         rows.push_back(std::move(d));
     }
     if (rows.empty()) {
@@ -397,7 +401,7 @@ std::optional<ui::ModulationView> ParamPanel::modulationView(const std::string& 
 
 void ParamPanel::tickLive() {
     if (modulatable_.empty()) return;
-    auto live = app_.modulationOffsets();
+    auto live = liveModulation_.read(dispatcher_, app_);
     if (live == live_) return;
     live_ = std::move(live);
     for (const std::string& key : modulatable_)
@@ -461,6 +465,7 @@ void ParamPanel::openMenu(const std::string& key, const std::string& name, bool 
     items.push_back(modulateItem(
         root_, dispatcher_, [this] { return app_.head(); }, name, std::move(modTarget), owner,
         modulatable && !(owner && s.tracks.find(*owner)->freeze), anchor, error));
+    if (auto idle = inertItem(dispatcher_, s, target)) items.push_back(std::move(*idle));
     if (learnable && lane) {
         const bool shown = laneShown(s, target);
         items.push_back({(shown ? "Hide lane: " : "Show lane: ") + name, "",

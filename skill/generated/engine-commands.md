@@ -4,6 +4,8 @@ Generated from the command registry.
 
 Successful replies may include `warnings`: command warnings followed by bus diagnostics `{code: string, message: string, path: string}`. Paths are retained as supplied by the decoder or handler. Batch steps carry their own warnings in `results[i].warnings`. A non-object result with bus warnings is `{result: <value>, warnings: [...]}`. Replies without bus warnings keep their original shape.
 
+In an argument table, a member of an object argument is listed under it as `argument.member` (`argument[].member` for a list of objects).
+
 ## `analyze.compare@1`
 
 Compare two renders or track outputs by perceptual descriptors.
@@ -125,7 +127,7 @@ Kind: `query`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `render` | string |  |  |  |  |
-| `detail` | string |  |  | "summary" | summary: key scalars; standard: + percentiles and spectrum; full: + time series. |
+| `detail` | string |  |  | "summary" | summary: key scalars; standard: + percentiles and spectrum; full: + time series. One of: summary, standard, full. |
 
 ### Result
 
@@ -167,8 +169,8 @@ Kind: `query`. Exposure: `mcp-tool`.
 | `track` | string |  |  |  |  |
 | `start_beat` | number |  | 0.0.. |  |  |
 | `end_beat` | number |  |  |  |  |
-| `tap` | string |  |  | "post_fader" |  |
-| `detail` | string |  |  | "summary" | summary: key scalars; standard: + percentiles and spectrum; full: + time series. |
+| `tap` | string |  |  | "post_fader" | One of: post_fader, pre_fader, pre_fx. |
+| `detail` | string |  |  | "summary" | summary: key scalars; standard: + percentiles and spectrum; full: + time series. One of: summary, standard, full. |
 
 ### Result
 
@@ -208,6 +210,8 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `sequence` | array |  |  |  |  |
+| `sequence[].scene` | string |  |  |  | Scene id, e.g. "sc_1". |
+| `sequence[].bars` | integer |  | 1.0.. |  |  |
 | `at` | number |  | 0.0.. |  | Start in beats, on a bar line. |
 | `bar` | integer |  | 1.0..1e+05 |  | Start bar, 1-based [1]. |
 | `pooled` | boolean |  |  | false |  |
@@ -325,9 +329,9 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `strength` | number |  | 0.0..1.0 | 1.0 |  |
 | `swing` | number |  | 0.0..1.0 | 0.0 |  |
 | `crossfade` | number |  | 0.0..0.05 | 0.005 |  |
-| `mode` | string |  |  | "warp" |  |
+| `mode` | string |  |  | "warp" | One of: warp, slice. |
 | `reference` | string |  |  | "" |  |
-| `hits` | string |  |  | "reference" |  |
+| `hits` | string |  |  | "reference" | One of: reference, merged. |
 
 ### Result
 
@@ -708,6 +712,10 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `bar` | integer |  | 1.0..2147483647.0 |  |  |
 | `length` | number |  |  | 4.0 |  |
 | `points` | array |  |  |  |  |
+| `points[].beat` | number |  | 0.0.. |  |  |
+| `points[].value` | value |  |  |  |  |
+| `points[].shape` | string |  |  |  | One of: linear, square, slow, fast_start, fast_end, bezier. |
+| `points[].tension` | number |  | -1.0..1.0 |  |  |
 | `source_length` | number |  |  |  |  |
 | `loop` | boolean |  |  |  |  |
 | `name` | string |  |  |  |  |
@@ -922,6 +930,10 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `baseline` | number |  |  |  |  |
 | `amplitude` | number |  | -2.0..2.0 |  |  |
 | `points` | array |  |  |  |  |
+| `points[].beat` | number |  | 0.0.. |  |  |
+| `points[].value` | value |  |  |  |  |
+| `points[].shape` | string |  |  |  | One of: linear, square, slow, fast_start, fast_end, bezier. |
+| `points[].tension` | number |  | -1.0..1.0 |  |  |
 | `name` | string |  |  |  |  |
 
 ### Result
@@ -1015,6 +1027,9 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | --- | --- | --- | --- | --- | --- |
 | `label` | string |  |  |  |  |
 | `steps` | array |  |  |  |  |
+| `steps[].command` | string |  |  |  |  |
+| `steps[].args` | object |  |  |  |  |
+| `steps[].as` | string |  |  |  |  |
 
 ### Result
 
@@ -1773,7 +1788,7 @@ Result:
 
 ## `clip.add@1`
 
-Add a clip to a channel's cell in a scene, from notation, a file or an item.
+Add a clip to a scene's cell: from notation, a file or an item.
 
 One source at most: notation (as item.add's), midi_file, audio_file, or item (a copy of that item's takes; pooled shares its MIDI instead). Without one, an empty MIDI clip of one bar. A MIDI clip is measured in beats, as long as its notes rounded up to whole bars; an audio clip in seconds of take time, as long as the file. From an item, the length, loop and take envelopes convert at the tempo where the item sits (ADR-0097). Clips live on channels, one per (track, scene).
 
@@ -1942,7 +1957,7 @@ Result:
 
 ## `clip.move@1`
 
-Move a clip to an empty cell: another scene, another channel, or both.
+Move a clip to an empty cell in another scene, channel or both.
 
 
 
@@ -2069,8 +2084,11 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `gain_db` | number |  | -150.0..24.0 |  |  |
 | `length` | number |  |  |  |  |
 | `loop` | object |  |  |  |  |
-| `mode` | string |  |  |  |  |
-| `quantize` | value |  |  |  |  |
+| `loop.on` | boolean |  |  |  |  |
+| `loop.start` | number |  | 0.0.. |  |  |
+| `loop.length` | number |  |  |  |  |
+| `mode` | string |  |  |  | One of: loop, once. |
+| `quantize` | string or null |  |  |  |  |
 
 ### Result
 
@@ -2957,6 +2975,8 @@ Kind: `action`. Exposure: `mcp-exec`.
 | --- | --- | --- | --- | --- | --- |
 | `name` | string |  |  |  |  |
 | `edits` | array |  |  |  |  |
+| `edits[].old` | string |  |  |  | text the script has in one place |
+| `edits[].new` | string |  |  |  | what replaces it |
 
 ### Result
 
@@ -3164,9 +3184,9 @@ Kind: `action`. Exposure: `mcp-exec`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `script` | string |  |  |  | a name from dsp.list |
-| `format` | string |  |  |  | clap (default): a plugin file; source: a C++ project |
+| `format` | string |  |  |  | clap (default): a plugin file; source: a C++ project One of: clap, source. |
 | `folder` | string |  |  |  | an absolute folder to write to (for clap, ~/.clap installs it for this user); for source, empty or new |
-| `license` | string |  |  |  | source: the license of the project's own files (default MIT) |
+| `license` | string |  |  |  | source: the license of the project's own files (default MIT) One of: MIT, GPL-3.0-or-later. |
 
 ### Result
 
@@ -3446,13 +3466,22 @@ Kind: `action`. Exposure: `mcp-exec`.
 | `plugin` | string |  |  |  |  |
 | `script` | string |  |  |  |  |
 | `patch` | value |  |  |  |  |
-| `signal` | string |  |  |  |  |
+| `signal` | string |  |  |  | One of: sine, sweep, impulse, noise, silence, notes, note, file. |
 | `audio_file` | string |  |  |  | the absolute path of a WAV, FLAC or MP3 (10 minutes at most) the file signal plays through an effect |
-| `level_db` | value | dB | -60.0..0.0 | -12.0 | Quantity strings are range-checked by the server. |
-| `frequency_hz` | value | Hz | 10.0..20000.0 | 1000.0 | Quantity strings are range-checked by the server. |
+| `level_db` | number or string | dB | -60.0..0.0 | -12.0 | Quantity strings are range-checked by the server. |
+| `frequency_hz` | number or string | Hz | 10.0..20000.0 | 1000.0 | Quantity strings are range-checked by the server. |
 | `seconds` | number |  | 0.0..10.0 | 1.0 |  |
 | `scale` | number |  | 0.5..3.0 | 1.0 |  |
 | `pointer` | array |  |  |  |  |
+| `pointer[].action` | string |  |  |  | One of: move, press, release, click, double_click, drag, wheel. |
+| `pointer[].x` | number |  | -1000.0..5000.0 |  | design units: the picture's pixels at scale 1 |
+| `pointer[].y` | number |  | -1000.0..5000.0 |  | design units: the picture's pixels at scale 1 |
+| `pointer[].to_x` | number |  | -1000.0..5000.0 |  | drag: where it ends |
+| `pointer[].to_y` | number |  | -1000.0..5000.0 |  | drag: where it ends |
+| `pointer[].steps` | number |  | -20.0..20.0 | 1.0 | wheel: notches turned, up positive |
+| `pointer[].shift` | boolean |  |  | false |  |
+| `pointer[].ctrl` | boolean |  |  | false |  |
+| `pointer[].alt` | boolean |  |  | false |  |
 
 ### Result
 
@@ -3595,12 +3624,24 @@ Kind: `action`. Exposure: `mcp-exec`.
 | `signals` | array |  |  |  | default: effects five, or file with audio_file; instruments three, or notes and silence with custom notes |
 | `audio_file` | string |  |  |  | the absolute path of a WAV, FLAC or MP3 (10 minutes at most) the file signal plays through an effect |
 | `automation` | array |  |  |  | discrete physical-value changes on every signal |
+| `automation[].param` | string |  |  |  | semantic patch key |
+| `automation[].at_s` | number |  | 0.0.. |  |  |
+| `automation[].value` | value |  |  |  | physical value, enum key or boolean |
 | `sidechain` | object |  |  |  | timed generated key input |
+| `sidechain.signal` | string |  |  | "sine" | One of: sine, sweep, impulse, noise, silence. |
+| `sidechain.level_db` | number or string | dB | -60.0..0.0 | -6.0 | Quantity strings are range-checked by the server. |
+| `sidechain.frequency_hz` | number or string | Hz | 10.0..20000.0 | 100.0 | Quantity strings are range-checked by the server. |
+| `sidechain.start_s` | number |  | 0.0.. |  | default: 0.25 * seconds |
+| `sidechain.length_s` | number |  |  |  | default: 0.5 * seconds |
 | `notes` | array |  |  |  | instrument sequence replacing the notes stimulus |
-| `level_db` | value | dB | -60.0..0.0 | -12.0 | Quantity strings are range-checked by the server. |
-| `frequency_hz` | value | Hz | 10.0..20000.0 | 1000.0 | Quantity strings are range-checked by the server. |
+| `notes[].key` | integer |  | 0.0..127.0 |  |  |
+| `notes[].velocity` | number |  | ..1.0 | 0.8 |  |
+| `notes[].start_s` | number |  | 0.0.. |  |  |
+| `notes[].length_s` | number |  |  |  |  |
+| `level_db` | number or string | dB | -60.0..0.0 | -12.0 | Quantity strings are range-checked by the server. |
+| `frequency_hz` | number or string | Hz | 10.0..20000.0 | 1000.0 | Quantity strings are range-checked by the server. |
 | `seconds` | number |  | 0.1..10.0 | 1.0 |  |
-| `sample_rate` | value | Hz | 8000.0..384000.0 |  | default: the session's or project's rate Quantity strings are range-checked by the server. |
+| `sample_rate` | number or string | Hz | 8000.0..384000.0 |  | default: the session's or project's rate Quantity strings are range-checked by the server. |
 | `save` | boolean |  |  | false |  |
 | `trace_points` | integer |  | 1.0..4096.0 | 100 | intervals the signal's traces are kept in |
 
@@ -4179,7 +4220,7 @@ Kind: `query`. Exposure: `mcp-exec`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `backend` | string |  |  |  |  |
+| `backend` | string |  |  |  | One of: jack, dummy, portaudio. |
 
 ### Result
 
@@ -4319,7 +4360,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `backend` | string |  |  |  |  |
+| `backend` | string |  |  |  | One of: jack, dummy, portaudio. |
 | `host_api` | string |  |  |  |  |
 | `input_device` | string |  |  |  |  |
 | `output_device` | string |  |  |  |  |
@@ -5957,6 +5998,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `route` | string |  |  |  | Route id, e.g. "sd_1". |
 | `param` | string |  |  |  |  |
 | `points` | array |  |  |  |  |
+| `points[].beat` | number |  | 0.0.. |  |  |
+| `points[].bar` | integer |  | 1.0..2147483647.0 |  |  |
+| `points[].seconds` | number |  | 0.0.. |  |  |
+| `points[].value` | value |  |  |  |  |
+| `points[].shape` | string |  |  |  | One of: linear, square, slow, fast_start, fast_end, bezier. |
+| `points[].tension` | number |  | -1.0..1.0 |  |  |
 
 ### Result
 
@@ -6245,6 +6292,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | --- | --- | --- | --- | --- | --- |
 | `env` | string |  |  |  | Envelope id, e.g. "en_1". |
 | `points` | array |  |  |  |  |
+| `points[].beat` | number |  | 0.0.. |  |  |
+| `points[].bar` | integer |  | 1.0..2147483647.0 |  |  |
+| `points[].seconds` | number |  | 0.0.. |  |  |
+| `points[].value` | value |  |  |  |  |
+| `points[].shape` | string |  |  |  | One of: linear, square, slow, fast_start, fast_end, bezier. |
+| `points[].tension` | number |  | -1.0..1.0 |  |  |
 | `from_beat` | number |  | 0.0.. |  |  |
 | `to_beat` | number |  | 0.0.. |  |  |
 
@@ -6372,7 +6425,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `env` | string |  |  |  | Envelope id, e.g. "en_1". |
 | `active` | boolean |  |  |  |  |
 | `visible` | boolean |  |  |  |  |
-| `mode` | string |  |  |  |  |
+| `mode` | string |  |  |  | One of: trim, read, touch, latch, latch_preview, write. |
 
 ### Result
 
@@ -6428,6 +6481,8 @@ Kind: `edit`. Exposure: `internal`.
 | `after` | number |  |  |  |  |
 | `through` | number |  |  |  |  |
 | `points` | array |  |  |  |  |
+| `points[].pos` | number |  |  |  |  |
+| `points[].value` | number |  |  |  |  |
 
 ### Result
 
@@ -6959,7 +7014,7 @@ Kind: `query`. Exposure: `mcp-tool`.
       "type": "string"
     },
     "params": {
-      "description": "With full: each parameter; modulatable: true when a modulation route can take it (modulation.add)"
+      "description": "With full: each parameter; modulatable_by_envelope: true when a route reaches it through its envelope (ADR-0096 M4); modulatable: true when a modulation route can take it (modulation.add)"
     },
     "patch": {},
     "status_available": {
@@ -7163,7 +7218,11 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `fx` | string |  |  |  |  |
 | `param` | string |  |  |  | A semantic key, or a plain parameter's id or name (fx.describe) |
 | `midi` | object |  |  |  |  |
-| `mode` | string |  |  |  |  |
+| `midi.kind` | string |  |  |  | One of: cc, note, pitch_bend, program. |
+| `midi.channel` | integer |  | 1.0..16.0 |  |  |
+| `midi.number` | integer |  | 0.0..127.0 | 0 |  |
+| `midi.device` | string |  |  | "" |  |
+| `mode` | string |  |  |  | One of: absolute, relative1, relative2, relative3, toggle. |
 | `soft_takeover` | boolean |  |  |  |  |
 | `when_selected` | boolean |  |  |  |  |
 | `when_focused` | boolean |  |  |  |  |
@@ -7235,7 +7294,7 @@ Kind: `query`. Exposure: `mcp-exec`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `fx` | string |  |  |  | Plugin instance id, e.g. "fx_1". |
-| `from` | string |  |  | "live" | live: the playing instance; render: the last render.mix |
+| `from` | string |  |  | "live" | live: the playing instance; render: the last render.mix One of: live, render. |
 
 ### Result
 
@@ -8107,11 +8166,14 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `fx` | string |  |  |  | Plugin instance id, e.g. "fx_1". |
 | `bypass` | boolean |  |  |  |  |
 | `offline` | boolean |  |  |  |  |
-| `wet` | value | % | 0.0..100.0 |  | Quantity strings are range-checked by the server. |
+| `wet` | number or string | % | 0.0..100.0 |  | Quantity strings are range-checked by the server. |
 | `label` | string |  |  |  |  |
-| `isolation` | string |  |  |  |  |
+| `isolation` | string |  |  |  | One of: inherit, in_process, shared_bridge, dedicated. |
 | `pins` | object |  |  |  |  |
-| `midi_output` | string |  |  |  |  |
+| `pins.in` | array |  |  | [] |  |
+| `pins.out` | array |  |  | [] |  |
+| `pins.key` | array |  |  | [] |  |
+| `midi_output` | string |  |  |  | One of: replace, merge. |
 
 ### Result
 
@@ -9018,7 +9080,7 @@ Result:
 
 Redo the last undone change.
 
-
+Steps the current branch forward one version. The result is the version that is current afterwards and its label: the step that was redone.
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -9076,7 +9138,7 @@ Result:
 
 Undo the last change on the current branch.
 
-
+Steps the current branch back one version. The result is the version that is current afterwards and its label: the step before the one undone, not the undone step (history.list shows both).
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -9353,6 +9415,8 @@ Kind: `edit`. Exposure: `internal`.
 | `items` | array |  |  |  |  |
 | `expected` | string |  |  |  |  |
 | `media` | array |  |  |  |  |
+| `media[].item` | string |  |  |  |  |
+| `media[].source` | object |  |  |  |  |
 
 ### Result
 
@@ -9740,6 +9804,12 @@ Kind: `edit`. Exposure: `internal`.
 | `start` | number |  |  |  |  |
 | `end` | number |  |  |  |  |
 | `media` | object |  |  |  |  |
+| `media.path` | string |  |  |  |  |
+| `media.hash` | string |  |  |  |  |
+| `media.format` | string |  |  |  |  |
+| `media.sample_rate` | number |  | 0.0.. |  |  |
+| `media.channels` | integer |  | 0.0.. |  |  |
+| `media.frames` | integer |  | 0.0.. |  |  |
 
 ### Result
 
@@ -9820,6 +9890,9 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | --- | --- | --- | --- | --- | --- |
 | `version` | integer |  | 1.0.. |  |  |
 | `items` | array |  |  |  |  |
+| `items[].item` | string |  |  |  | Item id, e.g. "it_1" (a clip's id is refused with item.kind). |
+| `items[].track` | string |  |  |  | Track id, e.g. "tr_1". |
+| `items[].position` | number |  | 0.0.. |  |  |
 
 ### Result
 
@@ -9945,14 +10018,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `mute` | boolean |  |  |  |  |
 | `loop` | boolean |  |  |  |  |
 | `locked` | boolean |  |  |  | The arrange view marks locked items. |
-| `gain_db` | value | dB | -150.0..24.0 |  | Quantity strings are range-checked by the server. |
+| `gain_db` | number or string | dB | -150.0..24.0 |  | Quantity strings are range-checked by the server. |
 | `fade_in` | number |  | 0.0.. |  |  |
-| `fade_in_shape` | string |  |  |  |  |
-| `fade_out_shape` | string |  |  |  |  |
+| `fade_in_shape` | string |  |  |  | One of: linear, slow, fast, slow_fast, fast_slow, cos, exp. |
+| `fade_out_shape` | string |  |  |  | One of: linear, slow, fast, slow_fast, fast_slow, cos, exp. |
 | `fade_out` | number |  | 0.0.. |  |  |
 | `name` | string |  |  |  |  |
 | `color` | string |  |  |  |  |
-| `timebase` | string |  |  |  |  |
+| `timebase` | string |  |  |  | One of: track, time, beats, beats_position. |
 
 ### Result
 
@@ -10024,7 +10097,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `bypass_groups` | boolean |  |  | false |  |
 | `item` | string |  |  |  | Item id, e.g. "it_1" (a clip's id is refused with item.kind). |
 | `at` | number |  | 0.0.. |  |  |
-| `snap` | string |  |  | "none" |  |
+| `snap` | string |  |  | "none" | One of: none, zero_crossing. |
 
 ### Result
 
@@ -10503,6 +10576,507 @@ Result:
 
 ```
 
+## `launch.arrangement@1`
+
+Return a track, or every track, to the arrangement at the boundary.
+
+It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. Returning does not chase notes: an arrangement note already under way stays silent until its next start. Without track: every track not following the arrangement, or queued to leave it. A frozen track already follows the arrangement: nothing changes.
+
+Kind: `action`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `track` | string |  |  |  | Track id, e.g. "tr_1". |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "launch_done",
+  "properties": {
+    "action": {
+      "type": "string"
+    },
+    "tracks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "launch_target",
+        "properties": {
+          "track": {
+            "type": "string"
+          },
+          "clip": {
+            "type": "string"
+          }
+        },
+        "required": ["track"],
+        "additionalProperties": false
+      }
+    },
+    "beat": {
+      "type": "number"
+    },
+    "seconds": {
+      "type": "number"
+    },
+    "started": {
+      "type": "boolean"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["action", "tracks", "started"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `engine.stopped`: the engine is not running Hint: engine.start first
+- `launch.playrate`: a master playrate is active Hint: set the master playrate to 1 and turn off its envelope
+- `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
+- `launch.queue`: too many launches are waiting Hint: wait for them to play
+- `launch.later`: the transport is relocating Hint: launch again in a moment
+
+### Examples
+
+**Nothing left the arrangement** (`song_with_clip_running`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "action": "arrangement",
+  "tracks": [],
+  "started": false
+}
+
+```
+
+## `launch.clip@1`
+
+Play a clip on its track from the next quantize boundary.
+
+It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. Launching while stopped starts the transport. The track leaves the arrangement (or the clip it played) there: its sounding notes end and audio crossfades over 5 ms.
+
+Kind: `action`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `clip` | string |  |  |  | Clip id, e.g. "cl_1". |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "launch_done",
+  "properties": {
+    "action": {
+      "type": "string"
+    },
+    "tracks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "launch_target",
+        "properties": {
+          "track": {
+            "type": "string"
+          },
+          "clip": {
+            "type": "string"
+          }
+        },
+        "required": ["track"],
+        "additionalProperties": false
+      }
+    },
+    "beat": {
+      "type": "number"
+    },
+    "seconds": {
+      "type": "number"
+    },
+    "started": {
+      "type": "boolean"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["action", "tracks", "started"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `engine.stopped`: the engine is not running Hint: engine.start first
+- `launch.playrate`: a master playrate is active Hint: set the master playrate to 1 and turn off its envelope
+- `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
+- `launch.queue`: too many launches are waiting Hint: wait for them to play
+- `launch.later`: the transport is relocating Hint: launch again in a moment
+- `track.frozen`: the clip's track is frozen Hint: track.unfreeze first
+- `launch.memory`: the clip's audio did not fit the budget Hint: use shorter audio or fewer files in clips
+
+### Examples
+
+**While stopped** (`song_with_clip_running`)
+
+```json
+{
+  "clip": "cl_1"
+}
+
+```
+
+Result:
+
+```json
+{
+  "action": "clip",
+  "tracks": [
+    {
+      "track": "tr_1",
+      "clip": "cl_1"
+    }
+  ],
+  "beat": 0,
+  "seconds": 0,
+  "started": true
+}
+
+```
+
+## `launch.scene@1`
+
+Play every clip of a scene together, one target for all tracks.
+
+It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. All the scene's tracks switch at the same boundary, the project's launch_quantize. Tracks with no clip in the scene keep playing what they play. A frozen track is skipped with a track.frozen warning, a clip past the memory budget with a launch.memory warning.
+
+Kind: `action`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `scene` | string |  |  |  | Scene id, e.g. "sc_1". |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "launch_done",
+  "properties": {
+    "action": {
+      "type": "string"
+    },
+    "tracks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "launch_target",
+        "properties": {
+          "track": {
+            "type": "string"
+          },
+          "clip": {
+            "type": "string"
+          }
+        },
+        "required": ["track"],
+        "additionalProperties": false
+      }
+    },
+    "beat": {
+      "type": "number"
+    },
+    "seconds": {
+      "type": "number"
+    },
+    "started": {
+      "type": "boolean"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["action", "tracks", "started"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `engine.stopped`: the engine is not running Hint: engine.start first
+- `launch.playrate`: a master playrate is active Hint: set the master playrate to 1 and turn off its envelope
+- `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
+- `launch.queue`: too many launches are waiting Hint: wait for them to play
+- `launch.later`: the transport is relocating Hint: launch again in a moment
+- `launch.scene`: the scene has no clip that can play Hint: add clips to the scene, or unfreeze their tracks
+
+### Examples
+
+**While stopped** (`song_with_clip_running`)
+
+```json
+{
+  "scene": "sc_1"
+}
+
+```
+
+Result:
+
+```json
+{
+  "action": "clip",
+  "tracks": [
+    {
+      "track": "tr_1",
+      "clip": "cl_1"
+    }
+  ],
+  "beat": 0,
+  "seconds": 0,
+  "started": true
+}
+
+```
+
+## `launch.state@1`
+
+What each track with clips plays, and what it has queued.
+
+plays is arrangement, clip, held (a once clip past its length, silent) or stopped, as heard. position is the playing clip's place in its period, in beats for a MIDI clip and seconds for an audio clip. queued is a launch not heard yet, with the song position it applies at. Tracks without clips always follow the arrangement and are not listed.
+
+Kind: `query`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "launch_state",
+  "properties": {
+    "playing": {
+      "type": "boolean"
+    },
+    "tracks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "launch_track_state",
+        "properties": {
+          "track": {
+            "type": "string"
+          },
+          "plays": {
+            "type": "string"
+          },
+          "clip": {
+            "type": "string"
+          },
+          "position": {
+            "type": "number"
+          },
+          "queued": {
+            "type": "object",
+            "title": "launch_queued",
+            "properties": {
+              "action": {
+                "type": "string"
+              },
+              "clip": {
+                "type": "string"
+              },
+              "beat": {
+                "type": "number"
+              },
+              "seconds": {
+                "type": "number"
+              }
+            },
+            "required": ["action", "beat", "seconds"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["track", "plays"],
+        "additionalProperties": false
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["playing", "tracks"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `engine.stopped`: the engine is not running Hint: engine.start first
+
+### Examples
+
+**Before any launch** (`song_with_clip_running`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "playing": false,
+  "tracks": [
+    {
+      "track": "tr_1",
+      "plays": "arrangement"
+    }
+  ]
+}
+
+```
+
+## `launch.stop@1`
+
+Silence a track's clip, or every playing clip, at the next boundary.
+
+It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. A stopped track is silent until a clip is launched or it returns to the arrangement. Without track: every track a clip holds or is queued to hold. A frozen track already follows the arrangement: nothing changes.
+
+Kind: `action`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `track` | string |  |  |  | Track id, e.g. "tr_1". |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "launch_done",
+  "properties": {
+    "action": {
+      "type": "string"
+    },
+    "tracks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "launch_target",
+        "properties": {
+          "track": {
+            "type": "string"
+          },
+          "clip": {
+            "type": "string"
+          }
+        },
+        "required": ["track"],
+        "additionalProperties": false
+      }
+    },
+    "beat": {
+      "type": "number"
+    },
+    "seconds": {
+      "type": "number"
+    },
+    "started": {
+      "type": "boolean"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["action", "tracks", "started"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `engine.stopped`: the engine is not running Hint: engine.start first
+- `launch.playrate`: a master playrate is active Hint: set the master playrate to 1 and turn off its envelope
+- `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
+- `launch.queue`: too many launches are waiting Hint: wait for them to play
+- `launch.later`: the transport is relocating Hint: launch again in a moment
+- `launch.track`: the track has no clips in the running plan Hint: mute the track to silence it
+
+### Examples
+
+**One track, while stopped** (`song_with_clip_running`)
+
+```json
+{
+  "track": "tr_1"
+}
+
+```
+
+Result:
+
+```json
+{
+  "action": "stop",
+  "tracks": [
+    {
+      "track": "tr_1"
+    }
+  ],
+  "beat": 0,
+  "seconds": 0,
+  "started": false
+}
+
+```
+
 ## `log.list@1`
 
 Recent commands with origin, arguments and outcome (the command log).
@@ -10803,7 +11377,7 @@ Result:
 
 ## `midi.edit@1`
 
-Edit a MIDI item's notes and CCs: add, remove, move, resize, velocity, quantize.
+Edit a MIDI item's notes and CCs: move, resize, quantize, fit to key or chord.
 
 ops run in order and are one undo step. notes: indices into midi.notes' list as it was before this command (every op refers to that list, so later ops are not affected by earlier removals). Beats are from the item's start. add {pitch, start, length, velocity?, channel?}; remove {notes}; move {notes, beats?, semitones?}; resize {notes, length? | length_delta? | start_delta?}; velocity {notes, velocity? and/or velocity_delta?}; quantize {notes? (all), grid (beats, on the project's grid), strength? 0-1, ends?}; cc.set {number, points [{beat, value}], channel?}; cc.clear {number, from?, to?}. Scale ops read the context track (key.set, chord.set) at the project beat each note starts, in the order of the ops: transpose_degrees {notes, degrees, key?} moves notes by scale degrees (a pitch outside the scale first goes down to the scale); snap_to_scale {notes? (all), mode? nearest|down|up, key?} moves notes outside the scale to it (nearest: a tie goes down); fit_to_chord {notes? (all), chord?} moves each note to the nearest tone of the chord (a tie goes down; a slash bass counts). key is "Eb major", chord is "Cm7"; given, they replace the context. A note that is looped or shared by another item in a different key or chord is refused with midi.context_varies; none holding is midi.no_key or midi.no_chord. Returns the new indices of the notes the ops added or changed (to keep a selection).
 
@@ -10815,6 +11389,29 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | --- | --- | --- | --- | --- | --- |
 | `item` | string |  |  |  | Item or clip id, e.g. "it_1" or "cl_1". |
 | `ops` | array |  |  |  |  |
+| `ops[].op` | string |  |  |  | One of: add, remove, move, resize, velocity, quantize, cc.set, cc.clear, transpose_degrees, snap_to_scale, fit_to_chord. |
+| `ops[].notes` | array |  |  |  |  |
+| `ops[].pitch` | integer |  | 0.0..127.0 |  |  |
+| `ops[].start` | number |  |  |  |  |
+| `ops[].length` | number |  |  |  |  |
+| `ops[].velocity` | integer |  | 1.0..127.0 |  |  |
+| `ops[].channel` | integer |  | 1.0..16.0 |  |  |
+| `ops[].beats` | number |  |  |  |  |
+| `ops[].semitones` | integer |  | -127.0..127.0 |  |  |
+| `ops[].length_delta` | number |  |  |  |  |
+| `ops[].start_delta` | number |  |  |  |  |
+| `ops[].velocity_delta` | integer |  | -127.0..127.0 |  |  |
+| `ops[].grid` | number |  |  |  |  |
+| `ops[].strength` | number |  | 0.0..1.0 |  |  |
+| `ops[].ends` | boolean |  |  |  |  |
+| `ops[].number` | integer |  | 0.0..127.0 |  |  |
+| `ops[].points` | array |  |  |  |  |
+| `ops[].from` | number |  |  |  |  |
+| `ops[].to` | number |  |  |  |  |
+| `ops[].degrees` | integer |  | -127.0..127.0 |  |  |
+| `ops[].mode` | string |  |  |  | One of: nearest, down, up. |
+| `ops[].key` | string |  |  |  |  |
+| `ops[].chord` | string |  |  |  |  |
 
 ### Result
 
@@ -11260,7 +11857,7 @@ Result:
 
 Modulate a parameter or mixer level with an LFO, follower, random or macro.
 
-The whole gesture in one undo step. It takes the first rack homed on the target's track that holds a Mod Out, else the first rack named Modulators, else adds one on a new channel named Modulators (rack: choose one instead). It adds the source module (lfo: an LFO; random: an LFO's Random Steps preset; macro: a Macro, its first knob; follower: a Follower fed by an In module and a send from the track from), cables it into the first free Mod Out input (adding a Mod Out when none is free) and routes that input to the target. {module, input} routes a Mod Out input already patched. depth as modulation.add; default a quarter of a plug-in parameter's range, 6 dB, or 50 percent. A follower cannot listen to the track it modulates (modulation.cycle).
+The whole gesture in one undo step. It takes the first rack homed on the target's track that holds a Mod Out, else the first rack named Modulators, else adds one on a new channel named Modulators (rack: choose one instead). It adds the source module (lfo: an LFO; random: an LFO's Random Steps preset; macro: a Macro, its first knob; follower: a Follower fed by an In module and a send from the track from), cables it into the first free Mod Out input (adding a Mod Out when none is free) and routes that input to the target. {module, input} routes a Mod Out input already patched. For a macro, knob names the knob to move. depth as modulation.add; default a quarter of a plug-in parameter's range, 6 dB, or 50 percent. A parameter reached through its envelope (fx.describe: modulatable_by_envelope) gets a one-point envelope at its current value first when it has none. A rack that would close a loop (it already drives the track a follower hears, or hears the target) is passed over for the next, or a new Modulators rack. Only a real cycle is refused (modulation.cycle): a follower on a track the target feeds, itself included. target: {fx, param} (a plug-in parameter by key, name or CLAP id; fx.describe full marks the modulatable ones), {track, param: volume|pan|width} or {route, param: volume}. The source module is left set to its defaults: change it with module.set {module, params} on the module this returns (an LFO's rate, shape or sync; a follower's gain and threshold; a macro's macro_1, which sits at 0 until moved, so a macro does nothing at first; module.describe {type} lists the knobs) and the route's depth with modulation.set.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -11269,7 +11866,13 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `target` | object |  |  |  |  |
-| `source` | value |  |  |  |  |
+| `target.fx` | string |  |  |  | Plugin instance id, e.g. "fx_1". |
+| `target.track` | string |  |  |  | A track's volume, pan or width. |
+| `target.route` | string |  |  |  | A send's volume. |
+| `target.param` | string |  |  |  | A plug-in parameter's key, name or decimal CLAP id (fx.describe marks the modulatable ones); volume, pan or width for a track; volume for a route. |
+| `source` | string or object |  |  |  |  |
+| `source.module` | string |  |  |  |  |
+| `source.input` | string |  |  |  |  |
 | `depth` | number |  |  |  |  |
 | `from` | string |  |  |  | The track a follower listens to. |
 | `rack` | string |  |  |  | Rack id, e.g. "rk_1". |
@@ -11303,6 +11906,10 @@ Kind: `edit`. Exposure: `mcp-tool`.
       "type": "string",
       "description": "The channel made for a new rack."
     },
+    "knob": {
+      "type": "string",
+      "description": "A macro's knob to move, by key."
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -11318,7 +11925,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 ### Errors
 
-- `modulation.cycle`: a follower on the track it modulates Hint: listen to another track, or modulate a buss it feeds
+- `modulation.cycle`: a follower on a track the target feeds Hint: listen to another track, or modulate a buss it feeds
 
 ### Examples
 
@@ -11352,7 +11959,7 @@ Result:
 
 Route a rack's Mod Out input to a plug-in parameter or a mixer level.
 
-depth is the offset at a signal of 1: for a plug-in parameter a fraction of its CLAP range (-1..1), and the parameter must be marked modulatable in fx.describe; for a track's or send's volume in dB (-48..48); for a track's pan or width in percent (-200..200). The offset adds to the value automation or the fader gives, and the sum stays in the target's range.
+depth is the offset at a signal of 1: for a plug-in parameter a fraction of its CLAP range (-1..1). A parameter fx.describe marks modulatable takes the offset directly; one marked modulatable_by_envelope (automatable, continuous, not modulatable, or any VST3's) takes it through its active envelope, which must exist (modulation.envelope; modulate adds one), and for a VST3 depth is a fraction of its normalized range; for a track's or send's volume in dB (-48..48); for a track's pan or width in percent (-200..200). The offset adds to the value automation or the fader gives, and the sum stays in the target's range.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -11361,7 +11968,13 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `source` | object |  |  |  |  |
+| `source.module` | string |  |  |  | Mod Out module id, e.g. "mo_1". |
+| `source.input` | string |  |  |  | One of the Mod Out's inputs, in_1 .. in_16. |
 | `target` | object |  |  |  |  |
+| `target.fx` | string |  |  |  | Plugin instance id, e.g. "fx_1". |
+| `target.track` | string |  |  |  | A track's volume, pan or width. |
+| `target.route` | string |  |  |  | A send's volume. |
+| `target.param` | string |  |  |  | A plug-in parameter's key, name or decimal CLAP id (fx.describe marks the modulatable ones); volume, pan or width for a track; volume for a route. |
 | `depth` | number |  |  |  |  |
 | `enabled` | boolean |  |  |  |  |
 | `lane` | boolean |  |  |  | Show the target's lane (default true). |
@@ -11421,7 +12034,7 @@ Result:
 
 List modulation routes, by target track, FX or source rack.
 
-Each route with its source signal's range (bipolar -1..1, or unipolar 0..1 when every cable into the Mod Out input is unipolar, a gate or a phase) and, when the plan cannot apply it, inert: target (the parameter cannot take it, or the target's track is frozen and its level is outside the print) or latency (its plug-in changed latency while modulated; editing a route into it turns them back on).
+Each route with its source signal's range (bipolar -1..1, or unipolar 0..1 when every cable into the Mod Out input is unipolar, a gate or a phase), fed_by (each cable into that input: its module, output and module type) and, when the plan cannot apply it, inert: source (nothing is cabled into the input), target (the parameter cannot take it, or the target's track is frozen and its level is outside the print), envelope (a parameter reached through its envelope, which is gone or off) or latency (its plug-in changed latency while modulated; editing a route into it turns them back on).
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -11507,11 +12120,40 @@ Kind: `query`. Exposure: `mcp-exec`.
           "range": {
             "type": "string"
           },
+          "fed_by": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "title": "modulation_fed_by",
+              "properties": {
+                "module": {
+                  "type": "string"
+                },
+                "output": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                }
+              },
+              "required": ["module", "output", "type"],
+              "additionalProperties": false
+            }
+          },
           "inert": {
             "type": "string"
           }
         },
-        "required": ["modulation", "source", "target", "depth", "enabled", "lane", "range"],
+        "required": [
+          "modulation",
+          "source",
+          "target",
+          "depth",
+          "enabled",
+          "lane",
+          "range",
+          "fed_by"
+        ],
         "additionalProperties": false
       }
     },
@@ -11555,7 +12197,9 @@ Result:
       "depth": 0.25,
       "enabled": true,
       "lane": true,
-      "range": "bipolar"
+      "range": "bipolar",
+      "fed_by": [],
+      "inert": "source"
     }
   ]
 }
@@ -11627,7 +12271,13 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | --- | --- | --- | --- | --- | --- |
 | `modulation` | string |  |  |  | Modulation route id, e.g. "mr_1". |
 | `source` | object |  |  |  |  |
+| `source.module` | string |  |  |  | Mod Out module id, e.g. "mo_1". |
+| `source.input` | string |  |  |  | One of the Mod Out's inputs, in_1 .. in_16. |
 | `target` | object |  |  |  |  |
+| `target.fx` | string |  |  |  | Plugin instance id, e.g. "fx_1". |
+| `target.track` | string |  |  |  | A track's volume, pan or width. |
+| `target.route` | string |  |  |  | A send's volume. |
+| `target.param` | string |  |  |  | A plug-in parameter's key, name or decimal CLAP id (fx.describe marks the modulatable ones); volume, pan or width for a track; volume for a route. |
 | `depth` | number |  |  |  |  |
 | `enabled` | boolean |  |  |  |  |
 | `lane` | boolean |  |  |  |  |
@@ -11674,7 +12324,7 @@ Result:
 
 Read each modulation route's live target offset and its span.
 
-offset: the route's target's current offset, the sum of every route on it, as the engine last applied it (a plug-in parameter's as a fraction of its range, a volume's in dB, a pan's or width's in percent); absent while no running plan applies the route. low and high: what this route alone can add, depth times its signal range (bipolar -1..1, unipolar 0..1), in the same unit.
+offset: the route's target's current offset, the sum of every route on it, as the engine last applied it (a plug-in parameter's as a fraction of its range, a volume's in dB, a pan's or width's in percent); absent while no running plan applies the route. low and high: what this route alone can add, depth times its signal range (bipolar -1..1, unipolar 0..1), in the same unit; absent while nothing is cabled into its Mod Out input.
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -11710,7 +12360,7 @@ Kind: `query`. Exposure: `mcp-exec`.
             "type": "number"
           }
         },
-        "required": ["modulation", "low", "high"],
+        "required": ["modulation"],
         "additionalProperties": false
       }
     },
@@ -11729,7 +12379,7 @@ Kind: `query`. Exposure: `mcp-exec`.
 
 ### Examples
 
-**Stopped** (`song_with_modulation`)
+**Stopped, nothing cabled into the route's input yet** (`song_with_modulation`)
 
 ```json
 {}
@@ -11742,9 +12392,7 @@ Result:
 {
   "modulations": [
     {
-      "modulation": "mr_1",
-      "low": -0.25,
-      "high": 0.25
+      "modulation": "mr_1"
     }
   ]
 }
@@ -11770,7 +12418,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `x` | number |  | -1e+06..1e+06 |  |  |
 | `y` | number |  | -1e+06..1e+06 |  |  |
 | `params` | value |  |  |  |  |
-| `source` | value |  |  |  |  |
+| `source` | string |  |  |  |  |
 | `device` | string |  |  |  |  |
 | `plugin` | string |  |  |  |  |
 
@@ -12075,6 +12723,8 @@ Kind: `action`. Exposure: `mcp-exec`.
 | `name` | string |  |  |  |  |
 | `type` | string |  |  |  |  |
 | `edits` | array |  |  |  |  |
+| `edits[].old` | string |  |  |  | text the source has in one place |
+| `edits[].new` | string |  |  |  | what replaces it |
 
 ### Result
 
@@ -12177,9 +12827,9 @@ Result:
 
 ## `module.get@1`
 
-A module type's source: stock or library.
+A module type's source, not a placed module's knobs (rack.get reads those).
 
-type (an id or short name: every stock module's source is readable, a good start for your own) or name (a library module's file, also when it does not compile).
+Reads a module type's source, for writing your own; the knobs of a module placed in a rack are in rack.get (detail full lists every knob key; module.describe lists a type's knobs and ranges). type (an id or short name: every stock module's source is readable, a good start for your own) or name (a library module's file, also when it does not compile).
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -12331,7 +12981,11 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `module` | string |  |  |  |  |
 | `param` | string |  |  |  |  |
 | `midi` | object |  |  |  |  |
-| `mode` | string |  |  |  |  |
+| `midi.kind` | string |  |  |  | One of: cc, note, pitch_bend, program. |
+| `midi.channel` | integer |  | 1.0..16.0 |  |  |
+| `midi.number` | integer |  | 0.0..127.0 | 0 |  |
+| `midi.device` | string |  |  | "" |  |
+| `mode` | string |  |  |  | One of: absolute, relative1, relative2, relative3, toggle. |
 | `soft_takeover` | boolean |  |  |  |  |
 
 ### Result
@@ -12520,8 +13174,8 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `x` | number |  | -1e+06..1e+06 |  |  |
 | `y` | number |  | -1e+06..1e+06 |  |  |
 | `bypass` | boolean |  |  |  |  |
-| `source` | value |  |  |  |  |
-| `device` | value |  |  |  |  |
+| `source` | value or null |  |  |  |  |
+| `device` | string or null |  |  |  |  |
 | `source_sends` | boolean |  |  |  |  |
 
 ### Result
@@ -12814,7 +13468,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `plugin` | string |  |  |  | id or name, as plugin.list shows it |
-| `mode` | string |  |  |  |  |
+| `mode` | string |  |  |  | One of: normal, bridge, disable. |
 
 ### Result
 
@@ -14116,10 +14770,35 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `notes` | string |  |  |  |  |
 | `console9` | boolean |  |  |  |  |
 | `pan_law` | object |  |  |  | Channels' and busses' pan law unless a track sets its own: db is the centre's cut (0, -2.5, -3, -4.5 or -6; default 0); boost keeps the centre at 0 dB and raises the sides instead |
+| `pan_law.db` | number or string | dB |  | 0.0 | Quantity strings are range-checked by the server. One of: 0.0, -2.5, -3.0, -4.5, -6.0. |
+| `pan_law.boost` | boolean |  |  | false |  |
 | `history_budget_bytes` | integer |  | 1.0.. |  | Estimated retained history byte budget; default 1 GiB. Leases and branch boundaries may exceed it. |
 | `render` | object |  |  |  | Render settings (session-model §1.10); every member optional |
-| `timebase` | string |  |  |  |  |
+| `render.source` | string |  |  |  | The dialog's source; render.mix always renders the mix One of: mix, stems, regions. |
+| `render.masters` | array |  |  |  | The mix: the masters to render, a file each (default: tr_0) |
+| `render.bounds` | string |  |  |  | project (default), loop or custom (start_beat, end_beat) One of: project, loop, custom. |
+| `render.start_beat` | number |  | 0.0..1e+09 |  |  |
+| `render.end_beat` | number |  | ..1e+09 |  |  |
+| `render.tail_s` | number |  | 0.0..600.0 |  | Seconds rendered past the end |
+| `render.pattern` | string or object |  |  |  | File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions} |
+| `render.sample_rate` | integer |  | 8000.0..384000.0 |  | Default: the project rate |
+| `render.channels` | integer or string |  |  |  | 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks) |
+| `render.outputs` | array |  |  |  | 1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]] |
+| `render.normalize` | object |  |  |  |  |
+| `render.limit_true_peak_db` | number |  | -60.0..0.0 |  | A true-peak ceiling (dBTP) |
+| `render.trim` | object |  |  |  |  |
+| `render.seamless_loop` | boolean |  |  |  | Sum the tail into the start (needs tail_s) |
+| `render.handles_s` | number |  | 0.0..60.0 |  | Regions: seconds added at both ends |
+| `render.stems` | object |  |  |  |  |
+| `render.matrix` | object |  |  |  |  |
+| `render.if_exists` | string |  |  |  | One of: overwrite, number, skip, error. |
+| `render.metadata` | object |  |  |  | Tags written into each file; text members accept the file-name tokens |
+| `render.report` | boolean |  |  |  | Write <file>.loudness.txt beside each file |
+| `render.add_to_project` | boolean |  |  |  |  |
+| `timebase` | string |  |  |  | One of: time, beats, beats_position. |
 | `timecode` | object |  |  |  |  |
+| `timecode.rate` | string |  |  |  | One of: 23.976, 24, 25, 29.97df, 29.97, 30. |
+| `timecode.start` | string |  |  |  | HH:MM:SS:FF, ";" before the frames in drop-frame |
 
 ### Result
 
@@ -14659,6 +15338,8 @@ Kind: `edit`. Exposure: `internal`.
 | --- | --- | --- | --- | --- | --- |
 | `track` | string |  |  |  |  |
 | `source` | object |  |  |  |  |
+| `source.sequence` | object |  |  |  | MIDI item: ppq, length (ticks), notes [[start, length, channel, pitch, velocity, off_velocity]], controls [[tick, kind, channel, number, value]], sysex [[tick, "F0 .. F7"]] |
+| `source.pooled` | boolean |  |  | false |  |
 | `name` | string |  |  |  |  |
 | `at` | number |  | 0.0.. |  |  |
 | `beats` | number |  | 0.25..1024.0 |  |  |
@@ -14676,9 +15357,9 @@ Kind: `edit`. Exposure: `internal`.
 
 ## `rack.get@1`
 
-A rack's modules, cables, Out modules and problems.
+A rack's modules with their changed knobs, cables, Outs and problems.
 
-Modules with their type, label, place and size and the knobs that differ from their defaults (detail full: also their input, output and knob keys); cables with feedback (true: it closes a loop and carries the previous frame); Out modules and the channels they feed (sends: their rack sends to busses and masters, ADR-0075, {route, to}); latency_samples for each Out and the rack node, and note_outs with their latencies (ADR-0064); problems (missing types, cables that do not fit). Brief/default latency reads prepared values without creating plug-ins; unprepared latency is null. detail full may probe unprepared plug-ins.
+Reads the modules placed in a rack, including each one's knobs (module.get reads a module type's source instead). Modules with their type, label, place and size and the knobs that differ from their defaults (detail full: also their input, output and knob keys); cables with feedback (true: it closes a loop and carries the previous frame); Out modules and the channels they feed (sends: their rack sends to busses and masters, ADR-0075, {route, to}); latency_samples for each Out and the rack node, and note_outs with their latencies (ADR-0064); problems (missing types, cables that do not fit). Brief/default latency reads prepared values without creating plug-ins; unprepared latency is null. detail full may probe unprepared plug-ins.
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -15368,7 +16049,22 @@ Kind: `edit`. Exposure: `internal`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `takes` | array |  |  |  |  |
+| `takes[].track` | string |  |  |  | Track id, e.g. "tr_1". |
+| `takes[].file` | string |  |  |  | Relative to the media folder when inside it |
+| `takes[].hash` | string |  |  |  |  |
+| `takes[].start_sample` | integer |  | -281474976710656.0..281474976710656.0 |  |  |
+| `takes[].frames` | integer |  | 0.0..281474976710656.0 |  |  |
+| `takes[].segments` | array |  |  |  |  |
+| `takes[].loop_start` | integer |  | 0.0..281474976710656.0 |  |  |
+| `takes[].loop_end` | integer |  | 0.0..281474976710656.0 |  |  |
+| `takes[].overflow_frames` | integer |  | 0.0..281474976710656.0 |  |  |
+| `takes[].sample_rate` | number |  |  |  |  |
+| `takes[].midi` | boolean |  |  |  |  |
+| `takes[].events` | array |  |  |  |  |
 | `punch` | object |  |  |  |  |
+| `punch.enabled` | boolean |  |  |  |  |
+| `punch.start` | number |  |  |  |  |
+| `punch.end` | number |  |  |  |  |
 
 ### Result
 
@@ -15815,41 +16511,73 @@ Kind: `query`. Exposure: `mcp-exec`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `source` | string |  |  |  | The dialog's source; render.mix always renders the mix |
+| `source` | string |  |  |  | The dialog's source; render.mix always renders the mix One of: mix, stems, regions. |
 | `masters` | array |  |  |  | The mix: the masters to render, a file each (default: tr_0) |
-| `bounds` | string |  |  |  | project (default), loop or custom (start_beat, end_beat) |
+| `bounds` | string |  |  |  | project (default), loop or custom (start_beat, end_beat) One of: project, loop, custom. |
 | `start_beat` | number |  | 0.0..1e+09 |  |  |
 | `end_beat` | number |  | ..1e+09 |  |  |
 | `tail_s` | number |  | 0.0..600.0 |  | Seconds rendered past the end |
-| `pattern` | value |  |  |  | File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions} |
+| `pattern` | string or object |  |  |  | File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions} |
+| `pattern.mix` | string |  |  |  |  |
+| `pattern.stems` | string |  |  |  |  |
+| `pattern.regions` | string |  |  |  |  |
 | `sample_rate` | integer |  | 8000.0..384000.0 |  | Default: the project rate |
-| `channels` | value |  |  |  | 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks) |
+| `channels` | integer or string |  |  |  | 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks) |
 | `outputs` | array |  |  |  | 1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]] |
+| `outputs[].format` | string |  |  |  | One of: wav, aiff, flac, mp3, vorbis. |
+| `outputs[].bit_depth` | integer |  |  |  | WAV 16/24/32 (float) [32]; AIFF and FLAC 16/24 [24]; none for MP3 and Vorbis One of: 16, 24, 32. |
+| `outputs[].dither` | string |  |  |  | 16- and 24-bit output: none, tpdf (default) or shaped One of: none, tpdf, shaped. |
+| `outputs[].sample_rate` | integer |  | 8000.0..384000.0 |  | This output's own rate |
+| `outputs[].mp3` | object |  |  |  |  |
+| `outputs[].vorbis_quality` | number |  | -1.0..10.0 |  | Ogg Vorbis quality, -1 to 10 [6] |
+| `outputs[].suffix` | string |  |  |  | Inserted before the extension of a second or later output, e.g. "-16bit" |
 | `normalize` | object |  |  |  |  |
+| `normalize.mode` | string |  |  |  | One of: none, lufs_i, lufs_s, lufs_m, peak, true_peak, rms. |
+| `normalize.target` | number |  | -100.0..0.0 |  | LUFS or dB [-14] |
+| `normalize.only_reduce` | boolean |  |  |  | Never raise the level |
+| `normalize.scope` | string |  |  |  | file (default), or master: stems share the master mix's gain One of: file, master. |
 | `limit_true_peak_db` | number |  | -60.0..0.0 |  | A true-peak ceiling (dBTP) |
 | `trim` | object |  |  |  |  |
+| `trim.start` | boolean |  |  |  |  |
+| `trim.end` | boolean |  |  |  |  |
+| `trim.threshold_db` | number |  | -144.0..0.0 |  | [-60] |
 | `seamless_loop` | boolean |  |  |  | Sum the tail into the start (needs tail_s) |
 | `handles_s` | number |  | 0.0..60.0 |  | Regions: seconds added at both ends |
 | `stems` | object |  |  |  |  |
+| `stems.mode` | string |  |  |  | isolated (default; no master processing) or through_master One of: isolated, through_master. |
+| `stems.tap` | string |  |  |  | One of: post_fader, pre_fader, pre_fx. |
+| `stems.tracks` | array |  |  |  | Track ids (default: every top-level track) |
+| `stems.skip_silent` | boolean |  |  |  | Leave out stems whose peak is below -90 dBFS |
 | `matrix` | object |  |  |  |  |
-| `if_exists` | string |  |  |  |  |
+| `if_exists` | string |  |  |  | One of: overwrite, number, skip, error. |
 | `metadata` | object |  |  |  | Tags written into each file; text members accept the file-name tokens |
+| `metadata.title` | string |  |  |  |  |
+| `metadata.artist` | string |  |  |  |  |
+| `metadata.album` | string |  |  |  |  |
+| `metadata.track_number` | integer |  | 1.0..9999.0 |  |  |
+| `metadata.date` | string |  |  |  |  |
+| `metadata.genre` | string |  |  |  |  |
+| `metadata.comment` | string |  |  |  |  |
+| `metadata.isrc` | string |  |  |  |  |
+| `metadata.cover` | string |  |  |  | A PNG or JPEG of at most 10 MiB, relative to the project folder |
+| `metadata.bwf` | boolean |  |  |  | WAV: a BWF bext chunk (v2) with time reference and loudness |
+| `metadata.markers` | boolean |  |  |  | WAV cue points / AIFF markers for the markers and regions in the file's range |
 | `report` | boolean |  |  |  | Write <file>.loudness.txt beside each file |
 | `add_to_project` | boolean |  |  |  |  |
 | `master` | string |  |  |  | Mix: one master for this call (default: the settings' masters, else tr_0) |
 | `branch` | string |  |  |  | Render this branch's head (default: the current one) |
 | `version` | integer |  | 0.0.. |  | Render the session as of this version (history.list); the render queue pins its renders |
 | `name` | string |  |  |  | A file name instead of the pattern, for this call |
-| `operation` | string |  |  |  | Dry run and render.settings: mix, stems or regions (default: tracks or regions given, else the settings' source) |
+| `operation` | string |  |  |  | Dry run and render.settings: mix, stems or regions (default: tracks or regions given, else the settings' source) One of: mix, stems, regions. |
 | `regions` | array |  |  |  | Regions: region ids (default: all, with the render matrix) |
 | `tracks` | array |  |  |  | Stems: track ids (sets stems.tracks for this call) |
-| `format` | string |  |  |  | Sets outputs[0].format for this call |
+| `format` | string |  |  |  | Sets outputs[0].format for this call One of: wav, aiff, flac, mp3, vorbis. |
 | `bit_depth` | integer |  | 16.0..32.0 |  | Sets outputs[0].bit_depth for this call |
 | `secondary` | value |  |  |  | Replaces outputs[1] ({format, bit_depth}), or "none" removes it, for this call |
-| `mode` | string |  |  |  | Sets stems.mode for this call |
-| `tap` | string |  |  |  | Sets stems.tap for this call |
+| `mode` | string |  |  |  | Sets stems.mode for this call One of: isolated, through_master. |
+| `tap` | string |  |  |  | Sets stems.tap for this call One of: post_fader, pre_fader, pre_fx. |
 | `target` | number |  |  |  | Sets normalize.target for this call |
-| `analyze` | string |  |  |  | Mix: a supple.analysis-report/1.0 inline |
+| `analyze` | string |  |  |  | Mix: a supple.analysis-report/1.0 inline One of: summary, full. |
 | `job` | boolean |  |  | false |  |
 
 ### Result
@@ -15892,41 +16620,73 @@ Kind: `action`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `source` | string |  |  |  | The dialog's source; render.mix always renders the mix |
+| `source` | string |  |  |  | The dialog's source; render.mix always renders the mix One of: mix, stems, regions. |
 | `masters` | array |  |  |  | The mix: the masters to render, a file each (default: tr_0) |
-| `bounds` | string |  |  |  | project (default), loop or custom (start_beat, end_beat) |
+| `bounds` | string |  |  |  | project (default), loop or custom (start_beat, end_beat) One of: project, loop, custom. |
 | `start_beat` | number |  | 0.0..1e+09 |  |  |
 | `end_beat` | number |  | ..1e+09 |  |  |
 | `tail_s` | number |  | 0.0..600.0 |  | Seconds rendered past the end |
-| `pattern` | value |  |  |  | File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions} |
+| `pattern` | string or object |  |  |  | File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions} |
+| `pattern.mix` | string |  |  |  |  |
+| `pattern.stems` | string |  |  |  |  |
+| `pattern.regions` | string |  |  |  |  |
 | `sample_rate` | integer |  | 8000.0..384000.0 |  | Default: the project rate |
-| `channels` | value |  |  |  | 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks) |
+| `channels` | integer or string |  |  |  | 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks) |
 | `outputs` | array |  |  |  | 1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]] |
+| `outputs[].format` | string |  |  |  | One of: wav, aiff, flac, mp3, vorbis. |
+| `outputs[].bit_depth` | integer |  |  |  | WAV 16/24/32 (float) [32]; AIFF and FLAC 16/24 [24]; none for MP3 and Vorbis One of: 16, 24, 32. |
+| `outputs[].dither` | string |  |  |  | 16- and 24-bit output: none, tpdf (default) or shaped One of: none, tpdf, shaped. |
+| `outputs[].sample_rate` | integer |  | 8000.0..384000.0 |  | This output's own rate |
+| `outputs[].mp3` | object |  |  |  |  |
+| `outputs[].vorbis_quality` | number |  | -1.0..10.0 |  | Ogg Vorbis quality, -1 to 10 [6] |
+| `outputs[].suffix` | string |  |  |  | Inserted before the extension of a second or later output, e.g. "-16bit" |
 | `normalize` | object |  |  |  |  |
+| `normalize.mode` | string |  |  |  | One of: none, lufs_i, lufs_s, lufs_m, peak, true_peak, rms. |
+| `normalize.target` | number |  | -100.0..0.0 |  | LUFS or dB [-14] |
+| `normalize.only_reduce` | boolean |  |  |  | Never raise the level |
+| `normalize.scope` | string |  |  |  | file (default), or master: stems share the master mix's gain One of: file, master. |
 | `limit_true_peak_db` | number |  | -60.0..0.0 |  | A true-peak ceiling (dBTP) |
 | `trim` | object |  |  |  |  |
+| `trim.start` | boolean |  |  |  |  |
+| `trim.end` | boolean |  |  |  |  |
+| `trim.threshold_db` | number |  | -144.0..0.0 |  | [-60] |
 | `seamless_loop` | boolean |  |  |  | Sum the tail into the start (needs tail_s) |
 | `handles_s` | number |  | 0.0..60.0 |  | Regions: seconds added at both ends |
 | `stems` | object |  |  |  |  |
+| `stems.mode` | string |  |  |  | isolated (default; no master processing) or through_master One of: isolated, through_master. |
+| `stems.tap` | string |  |  |  | One of: post_fader, pre_fader, pre_fx. |
+| `stems.tracks` | array |  |  |  | Track ids (default: every top-level track) |
+| `stems.skip_silent` | boolean |  |  |  | Leave out stems whose peak is below -90 dBFS |
 | `matrix` | object |  |  |  |  |
-| `if_exists` | string |  |  |  |  |
+| `if_exists` | string |  |  |  | One of: overwrite, number, skip, error. |
 | `metadata` | object |  |  |  | Tags written into each file; text members accept the file-name tokens |
+| `metadata.title` | string |  |  |  |  |
+| `metadata.artist` | string |  |  |  |  |
+| `metadata.album` | string |  |  |  |  |
+| `metadata.track_number` | integer |  | 1.0..9999.0 |  |  |
+| `metadata.date` | string |  |  |  |  |
+| `metadata.genre` | string |  |  |  |  |
+| `metadata.comment` | string |  |  |  |  |
+| `metadata.isrc` | string |  |  |  |  |
+| `metadata.cover` | string |  |  |  | A PNG or JPEG of at most 10 MiB, relative to the project folder |
+| `metadata.bwf` | boolean |  |  |  | WAV: a BWF bext chunk (v2) with time reference and loudness |
+| `metadata.markers` | boolean |  |  |  | WAV cue points / AIFF markers for the markers and regions in the file's range |
 | `report` | boolean |  |  |  | Write <file>.loudness.txt beside each file |
 | `add_to_project` | boolean |  |  |  |  |
 | `master` | string |  |  |  | Mix: one master for this call (default: the settings' masters, else tr_0) |
 | `branch` | string |  |  |  | Render this branch's head (default: the current one) |
 | `version` | integer |  | 0.0.. |  | Render the session as of this version (history.list); the render queue pins its renders |
 | `name` | string |  |  |  | A file name instead of the pattern, for this call |
-| `operation` | string |  |  |  | Dry run and render.settings: mix, stems or regions (default: tracks or regions given, else the settings' source) |
+| `operation` | string |  |  |  | Dry run and render.settings: mix, stems or regions (default: tracks or regions given, else the settings' source) One of: mix, stems, regions. |
 | `regions` | array |  |  |  | Regions: region ids (default: all, with the render matrix) |
 | `tracks` | array |  |  |  | Stems: track ids (sets stems.tracks for this call) |
-| `format` | string |  |  |  | Sets outputs[0].format for this call |
+| `format` | string |  |  |  | Sets outputs[0].format for this call One of: wav, aiff, flac, mp3, vorbis. |
 | `bit_depth` | integer |  | 16.0..32.0 |  | Sets outputs[0].bit_depth for this call |
 | `secondary` | value |  |  |  | Replaces outputs[1] ({format, bit_depth}), or "none" removes it, for this call |
-| `mode` | string |  |  |  | Sets stems.mode for this call |
-| `tap` | string |  |  |  | Sets stems.tap for this call |
+| `mode` | string |  |  |  | Sets stems.mode for this call One of: isolated, through_master. |
+| `tap` | string |  |  |  | Sets stems.tap for this call One of: post_fader, pre_fader, pre_fx. |
 | `target` | number |  |  |  | Sets normalize.target for this call |
-| `analyze` | string |  |  |  | Mix: a supple.analysis-report/1.0 inline |
+| `analyze` | string |  |  |  | Mix: a supple.analysis-report/1.0 inline One of: summary, full. |
 | `job` | boolean |  |  | false |  |
 
 ### Result
@@ -16110,6 +16870,27 @@ Kind: `action`. Exposure: `mcp-exec`.
 | `name` | string |  |  |  | A preset name (render.preset.list) |
 | `default` | boolean |  |  | false |  |
 | `settings` | object |  |  |  | Render settings (session-model §1.10); every member optional |
+| `settings.source` | string |  |  |  | The dialog's source; render.mix always renders the mix One of: mix, stems, regions. |
+| `settings.masters` | array |  |  |  | The mix: the masters to render, a file each (default: tr_0) |
+| `settings.bounds` | string |  |  |  | project (default), loop or custom (start_beat, end_beat) One of: project, loop, custom. |
+| `settings.start_beat` | number |  | 0.0..1e+09 |  |  |
+| `settings.end_beat` | number |  | ..1e+09 |  |  |
+| `settings.tail_s` | number |  | 0.0..600.0 |  | Seconds rendered past the end |
+| `settings.pattern` | string or object |  |  |  | File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions} |
+| `settings.sample_rate` | integer |  | 8000.0..384000.0 |  | Default: the project rate |
+| `settings.channels` | integer or string |  |  |  | 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks) |
+| `settings.outputs` | array |  |  |  | 1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]] |
+| `settings.normalize` | object |  |  |  |  |
+| `settings.limit_true_peak_db` | number |  | -60.0..0.0 |  | A true-peak ceiling (dBTP) |
+| `settings.trim` | object |  |  |  |  |
+| `settings.seamless_loop` | boolean |  |  |  | Sum the tail into the start (needs tail_s) |
+| `settings.handles_s` | number |  | 0.0..60.0 |  | Regions: seconds added at both ends |
+| `settings.stems` | object |  |  |  |  |
+| `settings.matrix` | object |  |  |  |  |
+| `settings.if_exists` | string |  |  |  | One of: overwrite, number, skip, error. |
+| `settings.metadata` | object |  |  |  | Tags written into each file; text members accept the file-name tokens |
+| `settings.report` | boolean |  |  |  | Write <file>.loudness.txt beside each file |
+| `settings.add_to_project` | boolean |  |  |  |  |
 
 ### Result
 
@@ -16344,41 +17125,73 @@ Kind: `action`. Exposure: `mcp-exec`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `source` | string |  |  |  | The dialog's source; render.mix always renders the mix |
+| `source` | string |  |  |  | The dialog's source; render.mix always renders the mix One of: mix, stems, regions. |
 | `masters` | array |  |  |  | The mix: the masters to render, a file each (default: tr_0) |
-| `bounds` | string |  |  |  | project (default), loop or custom (start_beat, end_beat) |
+| `bounds` | string |  |  |  | project (default), loop or custom (start_beat, end_beat) One of: project, loop, custom. |
 | `start_beat` | number |  | 0.0..1e+09 |  |  |
 | `end_beat` | number |  | ..1e+09 |  |  |
 | `tail_s` | number |  | 0.0..600.0 |  | Seconds rendered past the end |
-| `pattern` | value |  |  |  | File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions} |
+| `pattern` | string or object |  |  |  | File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions} |
+| `pattern.mix` | string |  |  |  |  |
+| `pattern.stems` | string |  |  |  |  |
+| `pattern.regions` | string |  |  |  |  |
 | `sample_rate` | integer |  | 8000.0..384000.0 |  | Default: the project rate |
-| `channels` | value |  |  |  | 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks) |
+| `channels` | integer or string |  |  |  | 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks) |
 | `outputs` | array |  |  |  | 1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]] |
+| `outputs[].format` | string |  |  |  | One of: wav, aiff, flac, mp3, vorbis. |
+| `outputs[].bit_depth` | integer |  |  |  | WAV 16/24/32 (float) [32]; AIFF and FLAC 16/24 [24]; none for MP3 and Vorbis One of: 16, 24, 32. |
+| `outputs[].dither` | string |  |  |  | 16- and 24-bit output: none, tpdf (default) or shaped One of: none, tpdf, shaped. |
+| `outputs[].sample_rate` | integer |  | 8000.0..384000.0 |  | This output's own rate |
+| `outputs[].mp3` | object |  |  |  |  |
+| `outputs[].vorbis_quality` | number |  | -1.0..10.0 |  | Ogg Vorbis quality, -1 to 10 [6] |
+| `outputs[].suffix` | string |  |  |  | Inserted before the extension of a second or later output, e.g. "-16bit" |
 | `normalize` | object |  |  |  |  |
+| `normalize.mode` | string |  |  |  | One of: none, lufs_i, lufs_s, lufs_m, peak, true_peak, rms. |
+| `normalize.target` | number |  | -100.0..0.0 |  | LUFS or dB [-14] |
+| `normalize.only_reduce` | boolean |  |  |  | Never raise the level |
+| `normalize.scope` | string |  |  |  | file (default), or master: stems share the master mix's gain One of: file, master. |
 | `limit_true_peak_db` | number |  | -60.0..0.0 |  | A true-peak ceiling (dBTP) |
 | `trim` | object |  |  |  |  |
+| `trim.start` | boolean |  |  |  |  |
+| `trim.end` | boolean |  |  |  |  |
+| `trim.threshold_db` | number |  | -144.0..0.0 |  | [-60] |
 | `seamless_loop` | boolean |  |  |  | Sum the tail into the start (needs tail_s) |
 | `handles_s` | number |  | 0.0..60.0 |  | Regions: seconds added at both ends |
 | `stems` | object |  |  |  |  |
+| `stems.mode` | string |  |  |  | isolated (default; no master processing) or through_master One of: isolated, through_master. |
+| `stems.tap` | string |  |  |  | One of: post_fader, pre_fader, pre_fx. |
+| `stems.tracks` | array |  |  |  | Track ids (default: every top-level track) |
+| `stems.skip_silent` | boolean |  |  |  | Leave out stems whose peak is below -90 dBFS |
 | `matrix` | object |  |  |  |  |
-| `if_exists` | string |  |  |  |  |
+| `if_exists` | string |  |  |  | One of: overwrite, number, skip, error. |
 | `metadata` | object |  |  |  | Tags written into each file; text members accept the file-name tokens |
+| `metadata.title` | string |  |  |  |  |
+| `metadata.artist` | string |  |  |  |  |
+| `metadata.album` | string |  |  |  |  |
+| `metadata.track_number` | integer |  | 1.0..9999.0 |  |  |
+| `metadata.date` | string |  |  |  |  |
+| `metadata.genre` | string |  |  |  |  |
+| `metadata.comment` | string |  |  |  |  |
+| `metadata.isrc` | string |  |  |  |  |
+| `metadata.cover` | string |  |  |  | A PNG or JPEG of at most 10 MiB, relative to the project folder |
+| `metadata.bwf` | boolean |  |  |  | WAV: a BWF bext chunk (v2) with time reference and loudness |
+| `metadata.markers` | boolean |  |  |  | WAV cue points / AIFF markers for the markers and regions in the file's range |
 | `report` | boolean |  |  |  | Write <file>.loudness.txt beside each file |
 | `add_to_project` | boolean |  |  |  |  |
 | `master` | string |  |  |  | Mix: one master for this call (default: the settings' masters, else tr_0) |
 | `branch` | string |  |  |  | Render this branch's head (default: the current one) |
 | `version` | integer |  | 0.0.. |  | Render the session as of this version (history.list); the render queue pins its renders |
 | `name` | string |  |  |  | A file name instead of the pattern, for this call |
-| `operation` | string |  |  |  | Dry run and render.settings: mix, stems or regions (default: tracks or regions given, else the settings' source) |
+| `operation` | string |  |  |  | Dry run and render.settings: mix, stems or regions (default: tracks or regions given, else the settings' source) One of: mix, stems, regions. |
 | `regions` | array |  |  |  | Regions: region ids (default: all, with the render matrix) |
 | `tracks` | array |  |  |  | Stems: track ids (sets stems.tracks for this call) |
-| `format` | string |  |  |  | Sets outputs[0].format for this call |
+| `format` | string |  |  |  | Sets outputs[0].format for this call One of: wav, aiff, flac, mp3, vorbis. |
 | `bit_depth` | integer |  | 16.0..32.0 |  | Sets outputs[0].bit_depth for this call |
 | `secondary` | value |  |  |  | Replaces outputs[1] ({format, bit_depth}), or "none" removes it, for this call |
-| `mode` | string |  |  |  | Sets stems.mode for this call |
-| `tap` | string |  |  |  | Sets stems.tap for this call |
+| `mode` | string |  |  |  | Sets stems.mode for this call One of: isolated, through_master. |
+| `tap` | string |  |  |  | Sets stems.tap for this call One of: post_fader, pre_fader, pre_fx. |
 | `target` | number |  |  |  | Sets normalize.target for this call |
-| `analyze` | string |  |  |  | Mix: a supple.analysis-report/1.0 inline |
+| `analyze` | string |  |  |  | Mix: a supple.analysis-report/1.0 inline One of: summary, full. |
 | `job` | boolean |  |  | false |  |
 
 ### Result
@@ -16421,41 +17234,73 @@ Kind: `query`. Exposure: `mcp-exec`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `source` | string |  |  |  | The dialog's source; render.mix always renders the mix |
+| `source` | string |  |  |  | The dialog's source; render.mix always renders the mix One of: mix, stems, regions. |
 | `masters` | array |  |  |  | The mix: the masters to render, a file each (default: tr_0) |
-| `bounds` | string |  |  |  | project (default), loop or custom (start_beat, end_beat) |
+| `bounds` | string |  |  |  | project (default), loop or custom (start_beat, end_beat) One of: project, loop, custom. |
 | `start_beat` | number |  | 0.0..1e+09 |  |  |
 | `end_beat` | number |  | ..1e+09 |  |  |
 | `tail_s` | number |  | 0.0..600.0 |  | Seconds rendered past the end |
-| `pattern` | value |  |  |  | File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions} |
+| `pattern` | string or object |  |  |  | File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions} |
+| `pattern.mix` | string |  |  |  |  |
+| `pattern.stems` | string |  |  |  |  |
+| `pattern.regions` | string |  |  |  |  |
 | `sample_rate` | integer |  | 8000.0..384000.0 |  | Default: the project rate |
-| `channels` | value |  |  |  | 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks) |
+| `channels` | integer or string |  |  |  | 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks) |
 | `outputs` | array |  |  |  | 1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]] |
+| `outputs[].format` | string |  |  |  | One of: wav, aiff, flac, mp3, vorbis. |
+| `outputs[].bit_depth` | integer |  |  |  | WAV 16/24/32 (float) [32]; AIFF and FLAC 16/24 [24]; none for MP3 and Vorbis One of: 16, 24, 32. |
+| `outputs[].dither` | string |  |  |  | 16- and 24-bit output: none, tpdf (default) or shaped One of: none, tpdf, shaped. |
+| `outputs[].sample_rate` | integer |  | 8000.0..384000.0 |  | This output's own rate |
+| `outputs[].mp3` | object |  |  |  |  |
+| `outputs[].vorbis_quality` | number |  | -1.0..10.0 |  | Ogg Vorbis quality, -1 to 10 [6] |
+| `outputs[].suffix` | string |  |  |  | Inserted before the extension of a second or later output, e.g. "-16bit" |
 | `normalize` | object |  |  |  |  |
+| `normalize.mode` | string |  |  |  | One of: none, lufs_i, lufs_s, lufs_m, peak, true_peak, rms. |
+| `normalize.target` | number |  | -100.0..0.0 |  | LUFS or dB [-14] |
+| `normalize.only_reduce` | boolean |  |  |  | Never raise the level |
+| `normalize.scope` | string |  |  |  | file (default), or master: stems share the master mix's gain One of: file, master. |
 | `limit_true_peak_db` | number |  | -60.0..0.0 |  | A true-peak ceiling (dBTP) |
 | `trim` | object |  |  |  |  |
+| `trim.start` | boolean |  |  |  |  |
+| `trim.end` | boolean |  |  |  |  |
+| `trim.threshold_db` | number |  | -144.0..0.0 |  | [-60] |
 | `seamless_loop` | boolean |  |  |  | Sum the tail into the start (needs tail_s) |
 | `handles_s` | number |  | 0.0..60.0 |  | Regions: seconds added at both ends |
 | `stems` | object |  |  |  |  |
+| `stems.mode` | string |  |  |  | isolated (default; no master processing) or through_master One of: isolated, through_master. |
+| `stems.tap` | string |  |  |  | One of: post_fader, pre_fader, pre_fx. |
+| `stems.tracks` | array |  |  |  | Track ids (default: every top-level track) |
+| `stems.skip_silent` | boolean |  |  |  | Leave out stems whose peak is below -90 dBFS |
 | `matrix` | object |  |  |  |  |
-| `if_exists` | string |  |  |  |  |
+| `if_exists` | string |  |  |  | One of: overwrite, number, skip, error. |
 | `metadata` | object |  |  |  | Tags written into each file; text members accept the file-name tokens |
+| `metadata.title` | string |  |  |  |  |
+| `metadata.artist` | string |  |  |  |  |
+| `metadata.album` | string |  |  |  |  |
+| `metadata.track_number` | integer |  | 1.0..9999.0 |  |  |
+| `metadata.date` | string |  |  |  |  |
+| `metadata.genre` | string |  |  |  |  |
+| `metadata.comment` | string |  |  |  |  |
+| `metadata.isrc` | string |  |  |  |  |
+| `metadata.cover` | string |  |  |  | A PNG or JPEG of at most 10 MiB, relative to the project folder |
+| `metadata.bwf` | boolean |  |  |  | WAV: a BWF bext chunk (v2) with time reference and loudness |
+| `metadata.markers` | boolean |  |  |  | WAV cue points / AIFF markers for the markers and regions in the file's range |
 | `report` | boolean |  |  |  | Write <file>.loudness.txt beside each file |
 | `add_to_project` | boolean |  |  |  |  |
 | `master` | string |  |  |  | Mix: one master for this call (default: the settings' masters, else tr_0) |
 | `branch` | string |  |  |  | Render this branch's head (default: the current one) |
 | `version` | integer |  | 0.0.. |  | Render the session as of this version (history.list); the render queue pins its renders |
 | `name` | string |  |  |  | A file name instead of the pattern, for this call |
-| `operation` | string |  |  |  | Dry run and render.settings: mix, stems or regions (default: tracks or regions given, else the settings' source) |
+| `operation` | string |  |  |  | Dry run and render.settings: mix, stems or regions (default: tracks or regions given, else the settings' source) One of: mix, stems, regions. |
 | `regions` | array |  |  |  | Regions: region ids (default: all, with the render matrix) |
 | `tracks` | array |  |  |  | Stems: track ids (sets stems.tracks for this call) |
-| `format` | string |  |  |  | Sets outputs[0].format for this call |
+| `format` | string |  |  |  | Sets outputs[0].format for this call One of: wav, aiff, flac, mp3, vorbis. |
 | `bit_depth` | integer |  | 16.0..32.0 |  | Sets outputs[0].bit_depth for this call |
 | `secondary` | value |  |  |  | Replaces outputs[1] ({format, bit_depth}), or "none" removes it, for this call |
-| `mode` | string |  |  |  | Sets stems.mode for this call |
-| `tap` | string |  |  |  | Sets stems.tap for this call |
+| `mode` | string |  |  |  | Sets stems.mode for this call One of: isolated, through_master. |
+| `tap` | string |  |  |  | Sets stems.tap for this call One of: post_fader, pre_fader, pre_fx. |
 | `target` | number |  |  |  | Sets normalize.target for this call |
-| `analyze` | string |  |  |  | Mix: a supple.analysis-report/1.0 inline |
+| `analyze` | string |  |  |  | Mix: a supple.analysis-report/1.0 inline One of: summary, full. |
 | `job` | boolean |  |  | false |  |
 
 ### Result
@@ -16498,41 +17343,73 @@ Kind: `action`. Exposure: `mcp-exec`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `source` | string |  |  |  | The dialog's source; render.mix always renders the mix |
+| `source` | string |  |  |  | The dialog's source; render.mix always renders the mix One of: mix, stems, regions. |
 | `masters` | array |  |  |  | The mix: the masters to render, a file each (default: tr_0) |
-| `bounds` | string |  |  |  | project (default), loop or custom (start_beat, end_beat) |
+| `bounds` | string |  |  |  | project (default), loop or custom (start_beat, end_beat) One of: project, loop, custom. |
 | `start_beat` | number |  | 0.0..1e+09 |  |  |
 | `end_beat` | number |  | ..1e+09 |  |  |
 | `tail_s` | number |  | 0.0..600.0 |  | Seconds rendered past the end |
-| `pattern` | value |  |  |  | File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions} |
+| `pattern` | string or object |  |  |  | File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions} |
+| `pattern.mix` | string |  |  |  |  |
+| `pattern.stems` | string |  |  |  |  |
+| `pattern.regions` | string |  |  |  |  |
 | `sample_rate` | integer |  | 8000.0..384000.0 |  | Default: the project rate |
-| `channels` | value |  |  |  | 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks) |
+| `channels` | integer or string |  |  |  | 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks) |
 | `outputs` | array |  |  |  | 1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]] |
+| `outputs[].format` | string |  |  |  | One of: wav, aiff, flac, mp3, vorbis. |
+| `outputs[].bit_depth` | integer |  |  |  | WAV 16/24/32 (float) [32]; AIFF and FLAC 16/24 [24]; none for MP3 and Vorbis One of: 16, 24, 32. |
+| `outputs[].dither` | string |  |  |  | 16- and 24-bit output: none, tpdf (default) or shaped One of: none, tpdf, shaped. |
+| `outputs[].sample_rate` | integer |  | 8000.0..384000.0 |  | This output's own rate |
+| `outputs[].mp3` | object |  |  |  |  |
+| `outputs[].vorbis_quality` | number |  | -1.0..10.0 |  | Ogg Vorbis quality, -1 to 10 [6] |
+| `outputs[].suffix` | string |  |  |  | Inserted before the extension of a second or later output, e.g. "-16bit" |
 | `normalize` | object |  |  |  |  |
+| `normalize.mode` | string |  |  |  | One of: none, lufs_i, lufs_s, lufs_m, peak, true_peak, rms. |
+| `normalize.target` | number |  | -100.0..0.0 |  | LUFS or dB [-14] |
+| `normalize.only_reduce` | boolean |  |  |  | Never raise the level |
+| `normalize.scope` | string |  |  |  | file (default), or master: stems share the master mix's gain One of: file, master. |
 | `limit_true_peak_db` | number |  | -60.0..0.0 |  | A true-peak ceiling (dBTP) |
 | `trim` | object |  |  |  |  |
+| `trim.start` | boolean |  |  |  |  |
+| `trim.end` | boolean |  |  |  |  |
+| `trim.threshold_db` | number |  | -144.0..0.0 |  | [-60] |
 | `seamless_loop` | boolean |  |  |  | Sum the tail into the start (needs tail_s) |
 | `handles_s` | number |  | 0.0..60.0 |  | Regions: seconds added at both ends |
 | `stems` | object |  |  |  |  |
+| `stems.mode` | string |  |  |  | isolated (default; no master processing) or through_master One of: isolated, through_master. |
+| `stems.tap` | string |  |  |  | One of: post_fader, pre_fader, pre_fx. |
+| `stems.tracks` | array |  |  |  | Track ids (default: every top-level track) |
+| `stems.skip_silent` | boolean |  |  |  | Leave out stems whose peak is below -90 dBFS |
 | `matrix` | object |  |  |  |  |
-| `if_exists` | string |  |  |  |  |
+| `if_exists` | string |  |  |  | One of: overwrite, number, skip, error. |
 | `metadata` | object |  |  |  | Tags written into each file; text members accept the file-name tokens |
+| `metadata.title` | string |  |  |  |  |
+| `metadata.artist` | string |  |  |  |  |
+| `metadata.album` | string |  |  |  |  |
+| `metadata.track_number` | integer |  | 1.0..9999.0 |  |  |
+| `metadata.date` | string |  |  |  |  |
+| `metadata.genre` | string |  |  |  |  |
+| `metadata.comment` | string |  |  |  |  |
+| `metadata.isrc` | string |  |  |  |  |
+| `metadata.cover` | string |  |  |  | A PNG or JPEG of at most 10 MiB, relative to the project folder |
+| `metadata.bwf` | boolean |  |  |  | WAV: a BWF bext chunk (v2) with time reference and loudness |
+| `metadata.markers` | boolean |  |  |  | WAV cue points / AIFF markers for the markers and regions in the file's range |
 | `report` | boolean |  |  |  | Write <file>.loudness.txt beside each file |
 | `add_to_project` | boolean |  |  |  |  |
 | `master` | string |  |  |  | Mix: one master for this call (default: the settings' masters, else tr_0) |
 | `branch` | string |  |  |  | Render this branch's head (default: the current one) |
 | `version` | integer |  | 0.0.. |  | Render the session as of this version (history.list); the render queue pins its renders |
 | `name` | string |  |  |  | A file name instead of the pattern, for this call |
-| `operation` | string |  |  |  | Dry run and render.settings: mix, stems or regions (default: tracks or regions given, else the settings' source) |
+| `operation` | string |  |  |  | Dry run and render.settings: mix, stems or regions (default: tracks or regions given, else the settings' source) One of: mix, stems, regions. |
 | `regions` | array |  |  |  | Regions: region ids (default: all, with the render matrix) |
 | `tracks` | array |  |  |  | Stems: track ids (sets stems.tracks for this call) |
-| `format` | string |  |  |  | Sets outputs[0].format for this call |
+| `format` | string |  |  |  | Sets outputs[0].format for this call One of: wav, aiff, flac, mp3, vorbis. |
 | `bit_depth` | integer |  | 16.0..32.0 |  | Sets outputs[0].bit_depth for this call |
 | `secondary` | value |  |  |  | Replaces outputs[1] ({format, bit_depth}), or "none" removes it, for this call |
-| `mode` | string |  |  |  | Sets stems.mode for this call |
-| `tap` | string |  |  |  | Sets stems.tap for this call |
+| `mode` | string |  |  |  | Sets stems.mode for this call One of: isolated, through_master. |
+| `tap` | string |  |  |  | Sets stems.tap for this call One of: post_fader, pre_fader, pre_fx. |
 | `target` | number |  |  |  | Sets normalize.target for this call |
-| `analyze` | string |  |  |  | Mix: a supple.analysis-report/1.0 inline |
+| `analyze` | string |  |  |  | Mix: a supple.analysis-report/1.0 inline One of: summary, full. |
 | `job` | boolean |  |  | false |  |
 
 ### Result
@@ -16575,18 +17452,26 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `from` | value |  |  |  |  |
-| `to` | value |  |  |  |  |
+| `from` | string or object |  |  |  |  |
+| `from.module` | string |  |  |  |  |
+| `from.track` | string |  |  |  |  |
+| `to` | string or object |  |  |  |  |
+| `to.module` | string |  |  |  |  |
+| `to.track` | string |  |  |  |  |
 | `to_midi` | string |  |  |  | Exact hardware MIDI output name; requires midi: {} and replaces to/fx. |
 | `midi` | object |  |  |  | MIDI send routing; {} means every channel unchanged. Channel values 0..16: from 0 = all, to 0 = original. |
+| `midi.from_channel` | integer |  | 0.0..16.0 | 0 |  |
+| `midi.to_channel` | integer |  | 0.0..16.0 | 0 |  |
 | `fx` | string |  |  |  | Feed this plug-in's sidechain (key) input instead of a track's input; `to` may be left out |
-| `tap` | string |  |  |  |  |
-| `volume_db` | value | dB | -150.0..12.0 |  | Quantity strings are range-checked by the server. |
+| `tap` | string |  |  |  | One of: post_fader, pre_fader, pre_fx. |
+| `volume_db` | number or string | dB | -150.0..12.0 |  | Quantity strings are range-checked by the server. |
 | `pan` | value |  |  |  |  |
 | `mute` | boolean |  |  |  |  |
 | `mono` | boolean |  |  |  | Sum the source to mono before the pan |
 | `phase_invert` | boolean |  |  |  |  |
 | `channels` | object |  |  |  | Which source channel feeds which destination channel, pair by pair: {from: [1, 2], to: [2, 1]} swaps, {from: [1, 1], to: [1, 2]} sends the left channel to both, {from: [], to: []} restores the identity |
+| `channels.from` | array |  |  |  |  |
+| `channels.to` | array |  |  |  |  |
 
 ### Result
 
@@ -16839,7 +17724,11 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `route` | string |  |  |  |  |
 | `param` | string |  |  |  | The control: volume, pan, mute, phase_invert, mono, tap:post_fader, tap:pre_fader, tap:pre_fx |
 | `midi` | object |  |  |  |  |
-| `mode` | string |  |  |  |  |
+| `midi.kind` | string |  |  |  | One of: cc, note, pitch_bend, program. |
+| `midi.channel` | integer |  | 1.0..16.0 |  |  |
+| `midi.number` | integer |  | 0.0..127.0 | 0 |  |
+| `midi.device` | string |  |  | "" |  |
+| `mode` | string |  |  |  | One of: absolute, relative1, relative2, relative3, toggle. |
 | `soft_takeover` | boolean |  |  |  |  |
 
 ### Result
@@ -17179,18 +18068,26 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `route` | string |  |  |  | Route id, e.g. "sd_1". |
-| `from` | value |  |  |  |  |
-| `to` | value |  |  |  |  |
+| `from` | string or object |  |  |  |  |
+| `from.module` | string |  |  |  |  |
+| `from.track` | string |  |  |  |  |
+| `to` | string or object |  |  |  |  |
+| `to.module` | string |  |  |  |  |
+| `to.track` | string |  |  |  |  |
 | `to_midi` | string |  |  |  | Exact hardware MIDI output name; requires midi: {} and replaces to/fx. |
 | `midi` | object |  |  |  | MIDI send routing; {} means every channel unchanged. Channel values 0..16: from 0 = all, to 0 = original. |
+| `midi.from_channel` | integer |  | 0.0..16.0 | 0 |  |
+| `midi.to_channel` | integer |  | 0.0..16.0 | 0 |  |
 | `fx` | string |  |  |  | Feed this plug-in's sidechain (key) input instead of a track's input; `to` may be left out |
-| `tap` | string |  |  |  |  |
-| `volume_db` | value | dB | -150.0..12.0 |  | Quantity strings are range-checked by the server. |
+| `tap` | string |  |  |  | One of: post_fader, pre_fader, pre_fx. |
+| `volume_db` | number or string | dB | -150.0..12.0 |  | Quantity strings are range-checked by the server. |
 | `pan` | value |  |  |  |  |
 | `mute` | boolean |  |  |  |  |
 | `mono` | boolean |  |  |  | Sum the source to mono before the pan |
 | `phase_invert` | boolean |  |  |  |  |
 | `channels` | object |  |  |  | Which source channel feeds which destination channel, pair by pair: {from: [1, 2], to: [2, 1]} swaps, {from: [1, 1], to: [1, 2]} sends the left channel to both, {from: [], to: []} restores the identity |
+| `channels.from` | array |  |  |  |  |
+| `channels.to` | array |  |  |  |  |
 
 ### Result
 
@@ -17260,7 +18157,7 @@ Result:
 
 ## `scene.add@1`
 
-Add a scene, a column of the clip launcher, at the end or at an index.
+Add a scene (a launcher column) at the end or at an index.
 
 at is the column (0-based, default: after the last); the scenes from there on move one column right. A project holds at most 1024 scenes.
 
@@ -18060,12 +18957,12 @@ Kind: `action`. Exposure: `mcp-exec`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `source` | string |  |  |  |  |
+| `source` | string |  |  |  | One of: off, midi_clock, mtc, ltc. |
 | `midi_input` | string |  |  |  |  |
 | `ltc_input` | integer |  | 1..64 |  |  |
 | `follow_tempo` | boolean |  |  |  |  |
 | `offset_ms` | number |  | -10000..10000 |  |  |
-| `on_loss` | string |  |  |  |  |
+| `on_loss` | string |  |  |  | One of: stop, freewheel. |
 | `freewheel_frames` | integer |  | 1..300 |  |  |
 | `ltc_output` | boolean |  |  |  |  |
 | `ltc_output_channel` | integer |  | 1..64 |  |  |
@@ -18699,16 +19596,16 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `take` | string |  |  |  | Take id, e.g. "tk_1". |
-| `gain_db` | value | dB | -150.0..24.0 |  | Quantity strings are range-checked by the server. |
-| `pan` | value | % | -100.0..100.0 |  | Quantity strings are range-checked by the server. |
-| `channel_mode` | string |  |  |  |  |
+| `gain_db` | number or string | dB | -150.0..24.0 |  | Quantity strings are range-checked by the server. |
+| `pan` | number or string | % | -100.0..100.0 |  | Quantity strings are range-checked by the server. |
+| `channel_mode` | string |  |  |  | One of: normal, reverse_stereo, mono_mix, left, right. |
 | `name` | string |  |  |  |  |
 | `rebase_seconds` | number |  |  |  | Rebase an audio take after trimming its item start; preserves the warp map. |
 | `start_offset` | number |  |  |  | Source position at the item start; negative for a late first pass. |
-| `playrate` | value | x | 0.01..100.0 |  | Playback speed: 2 plays the source twice as fast. Its length in seconds is the item's, so the take runs out sooner or loops. Quantity strings are range-checked by the server. |
+| `playrate` | number or string | x | 0.01..100.0 |  | Playback speed: 2 plays the source twice as fast. Its length in seconds is the item's, so the take runs out sooner or loops. Quantity strings are range-checked by the server. |
 | `preserve_pitch` | boolean |  |  |  | Keep the source's pitch when the playrate changes (the default). With pitch_mode "resample" the pitch follows the speed. |
-| `pitch` | value | st | -48.0..48.0 |  | Pitch offset in semitones. Stretched when the pitch is preserved, otherwise a further speed factor of 2^(pitch/12). Quantity strings are range-checked by the server. |
-| `pitch_mode` | string |  |  |  | Time-stretch algorithm: "signalsmith" (pitch-preserving, the default) or "resample" (varispeed). |
+| `pitch` | number or string | st | -48.0..48.0 |  | Pitch offset in semitones. Stretched when the pitch is preserved, otherwise a further speed factor of 2^(pitch/12). Quantity strings are range-checked by the server. |
+| `pitch_mode` | string |  |  |  | Time-stretch algorithm: "signalsmith" (pitch-preserving, the default) or "resample" (varispeed). One of: resample, signalsmith. |
 
 ### Result
 
@@ -18978,6 +19875,9 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `points` | array |  |  |  |  |
+| `points[].beat` | number |  | 0.0.. |  |  |
+| `points[].bpm` | number or string | bpm | 1.0..1000.0 |  | Quantity strings are range-checked by the server. |
+| `points[].ramp` | boolean |  |  | false |  |
 
 ### Result
 
@@ -19223,7 +20123,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `type` | string |  |  | "channel" |  |
+| `type` | string |  |  | "channel" | One of: channel, buss, master. |
 | `name` | string |  |  |  |  |
 | `color` | string |  |  |  |  |
 | `parent` | string |  |  |  | Parent track id, e.g. "tr_1". |
@@ -19553,8 +20453,22 @@ Kind: `edit`. Exposure: `internal`.
 | `track` | string |  |  |  |  |
 | `expected` | string |  |  |  |  |
 | `media` | object |  |  |  |  |
+| `media.path` | string |  |  |  |  |
+| `media.hash` | string |  |  |  |  |
+| `media.format` | string |  |  |  |  |
+| `media.sample_rate` | number |  | 0.0.. |  |  |
+| `media.channels` | integer |  | 0.0.. |  |  |
+| `media.frames` | integer |  | 0.0.. |  |  |
 | `freeze` | object |  |  |  |  |
+| `freeze.source` | string |  |  |  |  |
+| `freeze.content_frames` | integer |  | 1.0..268435456.0 |  |  |
+| `freeze.tail_frames` | integer |  | 0.0..268435456.0 |  |  |
+| `freeze.latency_frames` | integer |  | 0.0..268435456.0 |  |  |
+| `freeze.dependency_hash` | string |  |  |  |  |
 | `states` | array |  |  |  |  |
+| `states[].fx` | string |  |  |  |  |
+| `states[].value` | object |  |  |  |  |
+| `states[].blob` | string |  |  |  |  |
 
 ### Result
 
@@ -19697,7 +20611,11 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `track` | string |  |  |  |  |
 | `param` | string |  |  |  | The control: volume, pan, width, pan_left, pan_right, pan_boost, mute, solo, phase_invert, mono, armed, monitor, lane_mute |
 | `midi` | object |  |  |  |  |
-| `mode` | string |  |  |  |  |
+| `midi.kind` | string |  |  |  | One of: cc, note, pitch_bend, program. |
+| `midi.channel` | integer |  | 1.0..16.0 |  |  |
+| `midi.number` | integer |  | 0.0..127.0 | 0 |  |
+| `midi.device` | string |  |  | "" |  |
+| `mode` | string |  |  |  | One of: absolute, relative1, relative2, relative3, toggle. |
 | `soft_takeover` | boolean |  |  |  |  |
 
 ### Result
@@ -20084,34 +21002,36 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | --- | --- | --- | --- | --- | --- |
 | `bypass_groups` | boolean |  |  | false |  |
 | `track` | string |  |  |  | Track id, e.g. "tr_1". |
-| `type` | string |  |  |  |  |
+| `type` | string |  |  |  | One of: channel, buss, master. |
 | `name` | string |  |  |  |  |
 | `color` | string |  |  |  |  |
 | `notes` | string |  |  |  |  |
-| `volume_db` | value | dB | -150.0..12.0 |  | Quantity strings are range-checked by the server. |
-| `pan` | value | % | -100.0..100.0 |  | Quantity strings are range-checked by the server. |
-| `pan_mode` | string |  |  |  | Channels and busses: pan (balance a stereo image, pan a mono one), dual (pan_left and pan_right place each input on its own) or width (width narrows, widens or swaps the image, pan places it) |
-| `width` | value | % | -100.0..100.0 |  | Width mode: 100 as recorded, 0 mono, -100 sides swapped Quantity strings are range-checked by the server. |
-| `pan_left` | value | % | -100.0..100.0 |  | Dual mode: where the left input goes (default -100) Quantity strings are range-checked by the server. |
-| `pan_right` | value | % | -100.0..100.0 |  | Dual mode: where the right input goes (default 100) Quantity strings are range-checked by the server. |
-| `pan_law` | value |  |  |  |  |
+| `volume_db` | number or string | dB | -150.0..12.0 |  | Quantity strings are range-checked by the server. |
+| `pan` | number or string | % | -100.0..100.0 |  | Quantity strings are range-checked by the server. |
+| `pan_mode` | string |  |  |  | Channels and busses: pan (balance a stereo image, pan a mono one), dual (pan_left and pan_right place each input on its own) or width (width narrows, widens or swaps the image, pan places it) One of: pan, dual, width. |
+| `width` | number or string | % | -100.0..100.0 |  | Width mode: 100 as recorded, 0 mono, -100 sides swapped Quantity strings are range-checked by the server. |
+| `pan_left` | number or string | % | -100.0..100.0 |  | Dual mode: where the left input goes (default -100) Quantity strings are range-checked by the server. |
+| `pan_right` | number or string | % | -100.0..100.0 |  | Dual mode: where the right input goes (default 100) Quantity strings are range-checked by the server. |
+| `pan_law` | object or null |  |  |  |  |
+| `pan_law.db` | number or string | dB |  | 0.0 | Quantity strings are range-checked by the server. One of: 0.0, -2.5, -3.0, -4.5, -6.0. |
+| `pan_law.boost` | boolean |  |  | false |  |
 | `mute` | boolean |  |  |  |  |
 | `phase_invert` | boolean |  |  |  | Flip the polarity of the main pair (after the FX chain, before the fader) |
 | `mono` | boolean |  |  |  | Sum the main pair to mono (after the FX chain, before the fader and pan): a mono check on the master |
 | `solo` | string |  |  |  |  |
 | `armed` | boolean |  |  |  |  |
-| `record_input` | value |  |  |  | Hardware audio input; replaces MIDI or rack input. null clears hardware audio only |
-| `record_midi` | value |  |  |  | MIDI device; replaces hardware audio or rack input. null clears MIDI only |
-| `record_rack` | value |  |  |  |  |
+| `record_input` | array or null |  |  |  | Hardware audio input; replaces MIDI or rack input. null clears hardware audio only |
+| `record_midi` | string or null |  |  |  | MIDI device; replaces hardware audio or rack input. null clears MIDI only |
+| `record_rack` | string or null |  |  |  |  |
 | `midi_channel` | integer |  | 0.0..16.0 |  |  |
-| `record_mode` | string |  |  |  |  |
-| `monitor` | string |  |  |  |  |
+| `record_mode` | string |  |  |  | One of: input, midi_overdub, midi_replace. |
+| `monitor` | string |  |  |  | One of: off, on, auto. |
 | `parent_send` | boolean |  |  |  | The implicit send to the parent buss/master (off: only explicit sends leave the track) |
-| `timebase` | string |  |  |  | What this channel's items follow when the tempo changes (those that inherit it): project, beats, time or beats_position; they keep their place now |
+| `timebase` | string |  |  |  | What this channel's items follow when the tempo changes (those that inherit it): project, beats, time or beats_position; they keep their place now One of: project, time, beats, beats_position. |
 | `channels` | integer |  | 1.0..128.0 |  | 1-2: the track's main pair; up to 128 adds auxiliary channels 3-128 for routes and plug-in pins (a detector on 3/4, a multi-out instrument's outputs), outside the fader, pan and parent send |
 | `hw_output` | array |  |  |  | Masters: the device outputs the main pair plays to: [l, r], [mono] or [] for none (engine.inputs lists them). Default: tr_0 [1, 2], other masters [] |
 | `lane_mute` | boolean |  |  |  | Masters: silence the master's own items (its prints) and nothing else |
-| `chain_midi` | string |  |  |  | What the FX chain does with MIDI: bus (default; plug-ins hear and feed it in order) or instrument (only the first plug-in with a note input hears the track's MIDI; plug-ins' note output goes nowhere) |
+| `chain_midi` | string |  |  |  | What the FX chain does with MIDI: bus (default; plug-ins hear and feed it in order) or instrument (only the first plug-in with a note input hears the track's MIDI; plug-ins' note output goes nowhere) One of: bus, instrument. |
 
 ### Result
 
@@ -20957,7 +21877,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `enabled` | boolean |  |  |  |  |
-| `volume_db` | value | dB | -60.0..6.0 |  | Quantity strings are range-checked by the server. |
+| `volume_db` | number or string | dB | -60.0..6.0 |  | Quantity strings are range-checked by the server. |
 | `count_in_bars` | integer |  | 0.0..8.0 |  |  |
 | `count_in_playback` | boolean |  |  |  |  |
 
@@ -22250,7 +23170,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `group` | string |  |  |  |  |
-| `volume_db` | value | dB | -150.0..12.0 |  | Quantity strings are range-checked by the server. |
+| `volume_db` | number or string | dB | -150.0..12.0 |  | Quantity strings are range-checked by the server. |
 | `mute` | boolean |  |  |  |  |
 | `solo` | boolean |  |  |  |  |
 | `followers` | array |  |  |  |  |
@@ -22432,7 +23352,11 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `group` | string |  |  |  |  |
 | `param` | string |  |  |  | The control: volume, mute, solo |
 | `midi` | object |  |  |  |  |
-| `mode` | string |  |  |  |  |
+| `midi.kind` | string |  |  |  | One of: cc, note, pitch_bend, program. |
+| `midi.channel` | integer |  | 1.0..16.0 |  |  |
+| `midi.number` | integer |  | 0.0..127.0 | 0 |  |
+| `midi.device` | string |  |  | "" |  |
+| `mode` | string |  |  |  | One of: absolute, relative1, relative2, relative3, toggle. |
 | `soft_takeover` | boolean |  |  |  |  |
 
 ### Result
@@ -22626,7 +23550,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `group` | string |  |  |  |  |
-| `volume_db` | value | dB | -150.0..12.0 |  | Quantity strings are range-checked by the server. |
+| `volume_db` | number or string | dB | -150.0..12.0 |  | Quantity strings are range-checked by the server. |
 | `mute` | boolean |  |  |  |  |
 | `solo` | boolean |  |  |  |  |
 | `followers` | array |  |  |  |  |

@@ -181,7 +181,7 @@ TEST_CASE("a VST3 reset ends the notes the host delivered") {
 TEST_CASE("scan finds the fixtures with their capabilities") {
     auto list = scan(std::span<const std::filesystem::path>(&kFixture, 1));
     REQUIRE(list);
-    REQUIRE(list->size() == 20);
+    REQUIRE(list->size() == 21);
     const auto gain = find("com.suppleaudio.test.gain");
     CHECK_FALSE(gain.instrument);
     CHECK(gain.semantic);
@@ -189,6 +189,9 @@ TEST_CASE("scan finds the fixtures with their capabilities") {
     const auto sine = find("com.suppleaudio.test.sine");
     CHECK(sine.instrument);
     CHECK_FALSE(sine.semantic);
+    // ADR-0096 step M4: automatable gain, not modulatable, no semantic keys.
+    const auto fixed = find("com.suppleaudio.test.fixed-gain");
+    CHECK_FALSE(fixed.semantic);
     auto bad = Instance::create(PluginInfo{.id = "nope", .path = kFixture}, {});
     REQUIRE_FALSE(bad);
     CHECK(bad.error().code == "host.create");

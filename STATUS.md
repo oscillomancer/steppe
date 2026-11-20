@@ -136,9 +136,10 @@ instructions are in `docs/guides/installing.md`.
   `midi.get`, read the key at the project's start and no chord. In the app
   (C3): key changes in the ruler's meter half and a chord row (shown with the
   first chord, or by View > Chord row), both edited there; the piano roll's
-  strip names the chords, its rows outside the key's scale are shaded, and its
-  key button moves notes by scale degree (drags and arrows). The roll does not
-  open launcher clips yet, so a clip's opening-key shading waits for that.
+  strip names the chords (a double-click edits them), its rows outside the
+  key's scale are shaded, and its key button moves notes by scale degree
+  (drags and arrows). The roll does not open launcher clips yet, so a clip's
+  opening-key shading waits for that.
   Native macOS and Windows CI has not run on C3.
 - **Project timecode** (ADR-0071, schema 2.11): `project.timecode {rate,
   start}` (30 fps from 00:00:00:00 by default and for older projects),
@@ -188,12 +189,42 @@ instructions are in `docs/guides/installing.md`.
   `launch_quantize`; `scene.*`, `clip.*`, `item.add {clip}`, the cascades
   (track and scene removal take their clips), the item ↔ clip conversion
   at the item's tempo, `clip.memory`, and the scene section of
-  `session.describe`. Nothing plays a clip yet: launching (`launch.*`, L2)
-  and the pane (L3) are to come. The content commands (`midi.*`,
+  `session.describe`. Playing them is the next entry; the pane (L3) is to
+  come. The content commands (`midi.*`,
   `take.*`, `item.export`, take envelopes and take FX) take a clip as they
   take an item; timeline commands refuse one with `item.kind`; `env.add`
-  refuses an FX in a clip take's chain (`clip.unsupported`) until L2 decides
-  how a clip's FX automation plays.
+  refuses an FX in a clip take's chain (`clip.unsupported`) while a clip
+  take's FX do not play (below).
+- **Clip launcher, playing** (ADR-0097, step L2; engine.md §1.4.2):
+  - Every channel's clips compile into its node as players, and
+    `launch.clip`, `launch.scene`, `launch.stop` and `launch.arrangement`
+    switch what a track plays at the next quantize boundary.
+  - This happens in both executors and through the bridge, with the
+    switch where each track's own song position reaches it (compensation
+    included). Notes sounding at the switch end, and audio crossfades
+    over 5 ms.
+  - A clip's phase is a function of the song position and its anchor.
+    `once` and the loop window play as specified.
+  - `launch.state` (and `Engine::launchState()` for the GUI) reports what
+    each track plays as heard, the clip's position, and what is queued.
+  - The engine logs every applied launch. The tests replay that log
+    offline and match live output bit for bit, in both executors, at two
+    block sizes and through the bridge.
+  - Renders play the arrangement only. The render dialog says so while a
+    clip holds a track.
+  - Limits, until done:
+    - a master playrate refuses launches (`launch.playrate`);
+    - a clip take's FX and envelopes do not play (`launch.take_chain`
+      warning);
+    - clip MIDI reaches the track's own instrument only, not a rack's
+      Notes module or the track's MIDI sends;
+    - freezing, or removing the playing clip, returns the track to the
+      arrangement without the switch fade;
+    - a quantize of `none` waits for the floor, about a device block for
+      a live track and about 0.2 s for a rendered one;
+    - the offline replay does not yet take seeks or transport wraps (L4,
+      with capture);
+    - the pane is L3.
 - **Scene ↔ section** (ADR-0097, L4a; session-model "Scene ↔ section"):
   `scene.insert` lays a scene's clips on the timeline as items over whole
   bars and adds a section, `scene.capture` makes a scene from the items of a
@@ -637,7 +668,11 @@ instructions are in `docs/guides/installing.md`.
   × depth × range, held on the absolute 32-frame grid and sent as CLAP
   PARAM_MOD events that never touch the base value or automation; a mixer
   target's is linear between grid points, added after automation and
-  clamped to the fader's range. Depth and enabled are mix values (no
+  clamped to the fader's range. A VST3 or unmarked CLAP parameter that is
+  automatable and continuous is modulated through its envelope (M4): its
+  lane sends the base plus the offset, clamped, on the same grid; it needs
+  an active envelope (`modulate` adds a one-point one), and write modes
+  record the base. Depth and enabled are mix values (no
   compile);
   routes are compensated as sidechains into their target stage, follow
   their target between executors, and play live as offline in both
@@ -649,18 +684,30 @@ instructions are in `docs/guides/installing.md`.
   offset and its span; events that wait for room in a block are counted
   (`engine.status` `modulation_deferred`). `modulate` makes the source
   module, its rack if needed (a channel named Modulators), the cable, a
-  follower's send and the route in one undo step. In the app (M3): the
-  parameter menu's Modulate on strip faders and pans and FX parameter rows
+  follower's send and the route in one undo step. A route whose Mod Out
+  input nothing feeds is listed as `inert: "source"`; the list names the
+  modules that feed each route. Stems and track analysis keep a modulated
+  track's source racks, unheard. In the app (M3): the parameter menu's Modulate on strip faders and pans and FX parameter rows
   (greyed where nothing can take it), mod slots for a channel's modulator
   racks, modulated faders, pan bars and sliders with their span and live
   value and a depth drag on the bar (one undo step), lanes keyed by target
   with the band (on a plug-in parameter's CLAP curve) and the live value at
   the playhead, and an editable row for each modulatable parameter of a
-  plain CLAP plug-in. The FX window's live value on a modulated slider is
+  plain CLAP plug-in. With M4 a parameter reached through its envelope
+  (`modulatable_by_envelope`, any VST3 one) takes Modulate too, and an
+  inert route draws idle, with the reason in the parameter menu. The FX window's live value on a modulated slider is
   untested with a running plug-in (the mixer's, which shares its code, is
   tested with the engine running). An FX moved to another track keeps the last offset of a
   parameter the new plan no longer modulates until the plug-in next
   resets. Native macOS and Windows CI has not run on it.
+  Stock plug-ins (M2b): the 16 effects mark their continuous parameters
+  modulatable in their scripts (185 in all: never a meter, a choice, a toggle,
+  an integer, or one that restarts the plug-in or is not automatable; none
+  of the 185 sets the latency, which only prepare() reports). Drumlin and
+  Pollard (instruments) mark none yet: their own route sources would accept a
+  route into a parameter their script reads with `at(i)`, which ignores it
+  (it needs `routed(i)` or `forVoice(v)`). Coppice and Marram mark theirs per
+  voice.
   Agents patch with `rack.patch` (named
   modules and cables in one step, laid out by signal flow and labelled by
   name; `rack.arrange` tidies a rack) or `module.add`/`cable.add`, hear a patch

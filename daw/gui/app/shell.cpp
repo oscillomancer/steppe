@@ -387,7 +387,7 @@ void Shell::sync(bool event) {
         arrange_->gestures().setSelection(std::move(selected));
     // Modulation telemetry (ADR-0096, M2): live values on the modulated
     // controls and lanes (nothing is redrawn while it holds still).
-    arrange_->setModulationOffsets(app_.modulationOffsets());
+    arrange_->setModulationOffsets(liveModulation_.read(dispatcher_, app_));
     // The bar changes with the model or while the engine runs; refreshing it on
     // every idle pass would repaint (and cost) for nothing.
     if (transport_) transport_->sync(event || moved);

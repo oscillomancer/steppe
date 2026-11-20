@@ -26,6 +26,7 @@ the public commands and GUI actions (`Shift+/` or `Ctrl+Shift+P`,
 - [Racks](#racks)
 - [MIDI controllers](#midi-controllers)
 - [Sync](#sync)
+- [The clip launcher](#the-clip-launcher)
 - [Rendering](#rendering)
 - [Agents (MCP)](#agents-mcp)
 
@@ -311,7 +312,10 @@ Right-click a track's fader, pan or button, in the track list or the mixer,
 for its menu. It is the same in both places: **MIDI learn** binds the control
 to a controller (see MIDI controllers), **Modulate** offers an LFO, a
 random source, a macro or a follower of another track's level and sets it
-up in one step (greyed on a switch or a frozen track), **Show lane** opens
+up in one step (greyed on a switch or a frozen track). When a modulation
+there is idle, say because nothing is cabled into its source or the
+envelope that carries it is off, the control shows no live movement and a
+greyed line under **Modulate** says why. **Show lane** opens
 its automation
 lane under the track (a new lane starts at the control's value; **Hide
 lane** puts it away, even when a modulation is what shows it), and on a fader or pan **Reset** sends it home, as a
@@ -542,7 +546,9 @@ keys are at the left, and each note is a bar drawn in its item's colour,
 fuller the higher its velocity. The strip along its top numbers the song's
 bars, as the arrangement's ruler does, so you can see where in the song the
 part plays, and under the numbers it names the song's chords over the part
-(see [The song's key and chords](#the-songs-key-and-chords)). When the song
+(see [The song's key and chords](#the-songs-key-and-chords)). Double-click a
+chord there to change it, or double-click between chords to add one, as in
+the ruler. When the song
 has a key, the rows of the notes outside its scale are drawn darker, and
 note names are spelled for the key (B-flat, not A-sharp, in F major). With
 no key the rows follow the black keys, as on a piano.
@@ -949,10 +955,22 @@ inputs to a parameter of a plug-in on a track, where `fx.describe {full:
 true}` marks the parameter `modulatable`. Depth is the offset at a full
 signal, a fraction of the parameter's range (−1 to 1); routes on one
 parameter add up, and none of them writes the parameter's value or its
-automation. `modulation.set` changes a route (a drag that sends one
+automation.
+
+A VST3 parameter, or a CLAP one the plug-in does not mark, can still be
+modulated when it can be automated and is continuous: `fx.describe` marks
+it `modulatable_by_envelope`. Its envelope gives the base, and the
+modulation is added to what the envelope sends, so it needs an active
+envelope. `modulate` adds one, with a single point at the current value,
+and `modulation.add` asks for one (`env.add`). Turning the envelope off
+leaves the route idle (`inert: "envelope"`). Recording automation on such
+a parameter writes the base: the modulation's current offset is taken off
+what the plug-in reports. Switches and parameters with a few fixed values
+cannot be modulated. `modulation.set` changes a route (a drag that sends one
 gesture is one undo step), `modulation.remove` removes it, and
-`modulation.list` shows each route's signal range and, when it cannot
-play, why. Removing the Mod Out or the plug-in removes its routes with a
+`modulation.list` shows each route's signal range, the modules cabled
+into its Mod Out input and, when it cannot play, why: `source` when
+nothing is cabled into that input yet. Removing the Mod Out or the plug-in removes its routes with a
 `modulation.removed` warning.
 
 A route can also take a track's volume (`{track, param: "volume"}`, depth
@@ -969,9 +987,18 @@ command uses the first rack on the target's track that has a Mod Out,
 else the first rack named Modulators. If neither exists, it adds a rack
 on a new channel named Modulators. It adds the module, cables it into
 the first free Mod Out input and makes the route. A follower also gets
-an In module and a send from `from`. A follower cannot listen to the
-track it modulates, or to a track that track feeds. Without a depth the
-command uses a quarter of a parameter's range, 6 dB, or 50 %.
+an In module and a send from `from`. When that rack would feed back
+into itself, the command uses another Modulators rack, or adds one. That
+happens when the rack already drives the track the follower listens to,
+or already listens to the target. A follower cannot listen to the track
+it modulates, or to a track that track feeds. Without a depth the
+command uses a quarter of a parameter's range, 6 dB, or 50 %. The source
+starts at its module's defaults: set its knobs with `module.set {module,
+params}` on the module the command returns (an LFO's `rate`, `shape` and
+`sync`, a follower's `gain` and `threshold`; a Macro's `macro_1` sits at 0
+until moved, so a macro changes nothing at first), and the depth with
+`modulation.set`. For a macro, the result's `knob` is the knob that moves
+the target.
 `modulation.telemetry` reads each route's live offset and how far it
 can move its target, and `engine.status` counts modulation steps that
 had to wait for room in a block (`modulation_deferred`).
@@ -1537,6 +1564,55 @@ not put them early; nothing is sent during a count-in, and an output on
 the device Steppe follows (Transport sync) does not get its own clock
 back. `midi.outputs.get` and `engine.status` show what each output sends
 and how many messages went out.
+
+## The clip launcher
+
+Besides its timeline, a channel can hold **clips**: short pieces of MIDI or
+audio, each in a **scene**. A scene is a column of clips you can play
+together, a section of a song before it has a place in the arrangement.
+`scene.add` makes a scene, and `clip.add {track, scene, notation |
+audio_file | midi_file | item}` makes a clip, from notation, a file or a
+copy of an item. A MIDI clip's length is in beats and follows the tempo;
+an audio clip's is in seconds and plays at its take's own rate. A clip
+loops by default (`mode: once` plays it once), and a loop window can
+repeat part of it. `item.add {clip}` lays a copy of a clip on the
+timeline. The clip launcher's pane comes later; meanwhile its commands
+work from agents and the console.
+
+### Playing clips
+
+A track either follows the arrangement or plays one of its clips.
+`launch.clip {clip}` starts a clip on its track. `launch.scene {scene}`
+starts every clip of a scene together, on the same beat. Tracks with no
+clip in that scene keep playing what they play. `launch.stop {track?}`
+silences a track's clip, and `launch.arrangement {track?}` returns a
+track to the timeline. Without `track`, they act on every track a clip
+holds.
+
+A launch takes effect at the next quantize boundary: the clip's own
+`quantize`, else the project's `launch_quantize` (a bar by default).
+With `none` it happens as soon as the engine can still take it: about one
+audio block ahead for a track the audio callback runs, about 0.2 s for
+the others. Launching a clip while stopped starts playback with it from
+the play position. At the switch, notes still sounding end and audio
+crossfades over 5 ms. Returning to the arrangement does not restart a
+note already under way: it sounds from its next start. A clip keeps its
+place against the bars, so relaunching a loop of whole bars stays in
+phase.
+
+`launch.state` tells what each track with clips plays as you hear it:
+`arrangement`, `clip` (with its position in the clip), `held` (a `once`
+clip that has finished, silent until the next launch) or `stopped`. It
+also shows what each track has queued.
+
+Renders play the arrangement only; the render dialog says so while a
+clip is playing. Not yet:
+- launching while a master playrate is active (`launch.playrate`);
+- a clip take's FX and envelopes, which do not play in a clip yet;
+- clip MIDI reaching a rack's Notes module or a MIDI send from the track.
+
+A frozen track plays its print: `launch.clip` refuses it and
+`launch.scene` skips it.
 
 ## Rendering
 

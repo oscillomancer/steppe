@@ -226,7 +226,7 @@ Status prepareRackMidi(Plan& p) {
                              "/tracks/" + node.id.str(), "split the track's MIDI items");
             node.midiLiveBase = static_cast<std::int32_t>(timeline);
             node.midiRoutedBase = node.midiLiveBase + (node.midiIn ? kLiveKeys : 0);
-            pool = timelineVoices(node.events) + (node.midiIn ? kLiveKeys : 0);
+            pool = timelineVoices(node.events) + node.clipVoices + (node.midiIn ? kLiveKeys : 0);
             inputs = static_cast<std::size_t>(node.midiRoutedBase);
         }
         const auto window = [&](std::int64_t frames) {
@@ -243,7 +243,8 @@ Status prepareRackMidi(Plan& p) {
         // Events in a block: the timeline's window, a release per held voice
         // (stop, loop wrap, all-notes-off, adoption), live input and sends.
         std::size_t capacity =
-            window(static_cast<std::int64_t>(p.block) * (p.rateEnabled ? 4 : 1)) + pool + 1;
+            window(static_cast<std::int64_t>(p.block) * (p.rateEnabled ? 4 : 1)) + node.clipWindow +
+            pool + 1;
         std::size_t rate = window(p.rateEnabled ? 4 : 1) + (node.midiIn ? kMaxMidiInputEvents : 0);
         if (node.midiIn) capacity += kMaxMidiInputEvents;
         std::size_t routedVoices = 0;

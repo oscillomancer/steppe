@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "modulation_status.h"
 #include "pan_menu.h"
 #include "selection_edit.h"
 #include "strip_learn.h"
@@ -89,6 +90,8 @@ struct Builder {
             [a](const std::string& message) {
                 if (a->onError) a->onError(message);
             }));
+        if (auto idle = inertItem(actions.dispatcher(), s, {object, param}))
+            items.push_back(std::move(*idle));
     }
     // Show or hide the parameter's lane, as the lanes decide it: through
     // its envelope and its modulation routes (laneShown, setLaneShown).

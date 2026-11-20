@@ -278,12 +278,21 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   - the mixer's and the track panel's fader (a track's volume) and pan bars
     (pan, and width in width mode; a dual pan's bars take none);
   - the FX window's slider for a parameter `fx.describe` marks
-    `modulatable`, whose travel is its CLAP range for a float, so a depth (a
-    fraction of that range) is a share of the travel.
+    `modulatable` or `modulatable_by_envelope` (ADR-0096 M4: reached
+    through its envelope's lane), whose travel is its CLAP range for a
+    float, so a depth (a fraction of that range) is a share of the travel.
   Each shows the enabled routes on its target (`views::controlModulation`),
   with the engine's live offset for it while it plays
   (`EngineApp::modulationOffsets`, read each pass; a control redraws only
-  when it moves), and a drag on its bar edits the depth of the first
+  when it moves). An inert route (`modulation.list`'s `inert`: nothing
+  cabled into its source, the envelope that carries it off or gone, a
+  target that cannot take it, or a latency change) draws idle, its span
+  without a live value, on the rings, bars and lanes alike
+  (`gui::LiveModulation` leaves its offset out; `modulation.list` runs only
+  while something plays, and again when the model, the project or the
+  reported routes change); the parameter menu under Modulate names the
+  reason in a greyed row ("Modulation idle: nothing is cabled into its
+  source"). A drag on its bar edits the depth of the first
   enabled one through
   `modulation.set`, one undo step per drag (Origin gesture). The FX window
   holds its rows still while a bar is dragged (`Slider::depthDragging`) and
@@ -704,8 +713,9 @@ chooses for the project instead, and the UI file keeps that choice
 (`arrange.chords`; absent: the rule). Each chord is a cell from its beat to
 the next chord point, in the uniform cell of the launcher's slots (raised,
 an outline), named in letters as the notation writes it ("Bbmaj7", "F/A"),
-with a trailing "?" in quiet ink when this build cannot read the symbol; the
-name is cut at the cell's end. A "no chord" point ends the cell before it
+with a trailing "?" in quiet ink when this build cannot read the symbol; a
+name too long for its cell ends in an ellipsis after a whole character, and
+a cell too narrow for one character and the ellipsis shows no name. A "no chord" point ends the cell before it
 and draws a short faint tick. A double-click on a chord's start or name opens
 a field with its symbol; a double-click elsewhere in the row opens an empty
 one at the grid beat under the pointer. Enter runs `chord.set` (stored
@@ -722,7 +732,8 @@ symbol) and Key change here… at the grid beat.
 ink: "F major", "Eb harmonic minor", written with a trailing "?" when this
 build cannot read the point. A key that starts on a meter change's beat
 follows the meter's label; any other has its own tick. Each label stops short
-of the next flag in that half (a key or a meter change). A double-click on a
+of the next flag in that half (a key or a meter change), ending in an
+ellipsis when the words do not fit, or showing none. A double-click on a
 key's label opens a field with its words: a tonic and a scale ("Eb major",
 "F# dorian"; the scale's spaces are its underscores), Enter runs `key.set` at
 its beat, and text that is not a key is a `key.text` message with the field
@@ -1336,15 +1347,18 @@ every target in one undo step (`track.learn.set` / `route.learn.set` /
 `vca.learn.set`), Remove frees them.
 A plug-in without semantic parameters lists its plain CLAP parameters
 (`fx.describe`'s array): read-only, except one `fx.describe` marks
-`modulatable`, which gets a slider over its declared range (linear; stepped
+`modulatable` or `modulatable_by_envelope` (any VST3 parameter that is
+automatable and continuous), which gets a slider over its declared range (linear; stepped
 values round) and its value, set by CLAP id through `fx.param.set` (a drag
 is one undo step), carries its modulation as a semantic slider does, and
 opens the parameter menu below without a lane (a plain parameter has no
 lane scale).
 A right-click on a semantic parameter's row opens its parameter menu
 (`fx.param.menu`): **MIDI learn: Gain…** (writable rows), **Modulate:
-Gain…** (greyed unless `fx.describe` marks the parameter `modulatable`, or
-while its track is frozen; ADR-0096) and **Show lane** / **Hide lane** as in
+Gain…** (greyed unless `fx.describe` marks the parameter `modulatable` or
+`modulatable_by_envelope`, or while its track is frozen; ADR-0096; for the
+latter `modulate` first adds the one-point envelope that carries the
+route) and **Show lane** / **Hide lane** as in
 the strips' menu (§4.5).
 MIDI learn is one app-wide session across roots: opening another dialog closes
 the first and its nested menus. Owner tokens prevent deferred destruction of
@@ -1602,8 +1616,12 @@ roll is scrolled; no two numbers touch. While chord points hold over that
 window the strip grows by an 18-unit chord row under the numbers: each chord
 a cell to the next chord point, in the ruler's cell and letters ("?" after a
 symbol this build cannot read), a "no chord" point a short faint tick, and a
-cell that starts left of the roll keeps its name at the roll's edge. The row
-only shows the chords; they are edited in the ruler.
+cell that starts left of the roll keeps its name at the roll's edge; names
+that do not fit end in an ellipsis, or go, as in the ruler. A double-click
+on a chord's start or name opens the ruler's chord field
+(`views::openChordField`) with its symbol, and elsewhere in the row an empty
+one at the grid beat under the pointer; Enter and Tab work as in the ruler.
+Chords are moved and deleted in the ruler.
 
 **The key button** (`midi.key`, in the header after Quantize, with the
 header buttons' size and ink) names the key at the item's start ("C minor";
@@ -1672,6 +1690,10 @@ project is drawn in the quiet ink, with "from your default" on hover.
   loaded into the dialog only, written to the project only on Render),
   **Save preset…** (asks for a name), **Delete preset**, Close.
 - **Source:** a segmented control: Master mix | Stems | Regions.
+  - While a clip holds any track (`launch.state` says a track plays
+    something other than the arrangement), a quiet caption under it says
+    "Renders play the arrangement: the clips playing now are not in them."
+    (ADR-0097; `render.clips.note`, read when the dialog builds).
   - Master mix, when the project has more than one master, shows a checklist
     of the masters (All / None; the main master alone by default) that edits
     `masters`: each checked master renders its own file (ADR-0056). Unchecking
@@ -2550,7 +2572,7 @@ same heights, scroll and colours.
 
 **Elsewhere.**
 - **Render dialog.** While any track is held by a clip, it says in one line
-  that renders play the arrangement only.
+  that renders play the arrangement only (§4.8; built with L2).
 - **Inspector.** It shows a selected clip's fields (`clip.set`).
 - **Status line.** It counts scenes beside tracks only when there are some.
 

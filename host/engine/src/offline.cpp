@@ -52,7 +52,10 @@ std::pair<std::optional<Id>, std::optional<Id>> routeNodes(const Session& s,
 }
 
 // Keep the target and precisely the tracks (and racks) whose enabled sends
-// feed it.
+// feed it, and what modulates any of them: a modulation route into a kept
+// node keeps its source rack and the rack's home channel (ADR-0096), so a
+// stem carries the modulation as the mix does. They are dependencies, not
+// heard: the render taps the target.
 Session upstreamSession(const Session& source, Id target) {
     if (target == model::kMaster) return source;
     Session s = source;
@@ -72,6 +75,15 @@ Session upstreamSession(const Session& source, Id target) {
             if (const auto home = model::rackSendHome(source, *entry.value);
                 home && to && keep.count(*to))
                 changed |= keep.insert(*home).second;
+        }
+        // A modulation's source rack runs before its target (ADR-0096).
+        for (const auto& entry : source.modulations) {
+            const auto node = model::modulationTargetNode(source, entry.value->target);
+            const model::RackModule* module = source.modules.find(entry.value->source.module);
+            if (!node || !module || !keep.count(*node)) continue;
+            changed |= keep.insert(module->rack).second;
+            if (const model::Rack* rack = source.racks.find(module->rack))
+                changed |= keep.insert(rack->track).second;
         }
         // A Notes source includes incoming sends, whose channel node must
         // remain available so its implicit reader edges can be compiled.
@@ -134,6 +146,15 @@ Session upstreamSession(const Session& source, Id target) {
     for (const auto& entry : source.racks)
         if (!keep.count(entry.id)) racks.erase(entry.id);
     s.racks = racks.build();
+    // Modulation routes whose source rack or target went with the rest.
+    model::IdMap<model::Modulation>::Builder modulations(source.modulations);
+    for (const auto& entry : source.modulations) {
+        const auto node = model::modulationTargetNode(source, entry.value->target);
+        const model::RackModule* module = source.modules.find(entry.value->source.module);
+        if (!node || !module || !keep.count(*node) || !keep.count(module->rack))
+            modulations.erase(entry.id);
+    }
+    s.modulations = modulations.build();
     return s;
 }
 }  // namespace
@@ -871,6 +892,11 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
         }
     }
     sourceSession.items = sourceItems.build();
+    // Renders play the arrangement only (ADR-0097): without a launch log,
+    // no clip audio is prepared and no clip player compiled, so a clip's
+    // warnings never reach a render.
+    p.clipPlayers = !opt.launches.empty();
+    if (!p.clipPlayers) sourceSession.clips = {};
     auto sources = p.media->prepareSources(sourceSession, p.projectDir, p.rate);
     if (!sources) return sources.error();
     p.preparedSources = *sources;
@@ -1036,14 +1062,49 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
             in->flushParams();
             if (!in->startProcessing()) startFailed = true;
         }
+        // The launch log's replay (internal; engine.md §1.4.2): each channel
+        // switches at the block boundary where its song position reaches the
+        // anchor, its log frame plus its timeline shift.
+        struct Switch {
+            std::int64_t at;
+            std::size_t node;
+            detail::LaunchAction action;
+        };
+        std::vector<Switch> switches;
+        for (const LaunchLogEntry& e : opt.launches)
+            for (std::size_t k = 0; k < p.nodes.size(); ++k) {
+                detail::Node& node = p.nodes[k];
+                if (node.id != e.track || node.players.empty()) continue;
+                detail::LaunchAction a;
+                a.anchorSample = e.anchorSample;
+                a.anchorBeat = e.anchorBeat;
+                a.kind = e.action == LaunchLogEntry::Action::Clip ? detail::LaunchState::Kind::Clip
+                         : e.action == LaunchLogEntry::Action::Stop
+                             ? detail::LaunchState::Kind::Stopped
+                             : detail::LaunchState::Kind::Arrangement;
+                if (a.kind == detail::LaunchState::Kind::Clip) {
+                    a.player = detail::playerOf(node, e.clip);
+                    if (a.player < 0) continue;
+                }
+                switches.push_back({e.runningFrame + node.timelineShift, k, a});
+            }
+        std::stable_sort(switches.begin(), switches.end(),
+                         [](const Switch& a, const Switch& b) { return a.at < b.at; });
+        std::size_t nextSwitch = 0;
         if (!startFailed) {
             for (std::int64_t pos = 0; pos < total;) {
                 if (RenderWatch::requested(opt)) {
                     cancelled = true;
                     break;
                 }
+                for (; nextSwitch < switches.size() && switches[nextSwitch].at <= pos; ++nextSwitch)
+                    detail::applyLaunch(p, p.nodes[switches[nextSwitch].node],
+                                        switches[nextSwitch].action);
                 auto n = static_cast<std::uint32_t>(std::min<std::int64_t>(p.block, total - pos));
                 if (p.rateEnabled) n = std::min(n, static_cast<std::uint32_t>(64 - (pos & 63)));
+                if (nextSwitch < switches.size())
+                    n = static_cast<std::uint32_t>(
+                        std::min<std::int64_t>(n, switches[nextSwitch].at - pos));
                 if (!(workers.helpers() ? processBlockOn(workers, p, pos, n)
                                         : processBlock(p, pos, n))) {
                     failed = true;

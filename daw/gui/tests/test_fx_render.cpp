@@ -328,6 +328,37 @@ TEST_CASE("FX and render hidden subpanels release focus; popup close releases it
     CHECK(f.uiRoot().focused() == nullptr);
 }
 
+TEST_CASE("the render dialog says renders leave out the clips playing now") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto run = [&](const char* name, std::string_view args) {
+        auto r = f.dispatcher->execute({name, json::parse(args).value(), kTestOrigin});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+    };
+    run("track.add", R"({"name": "Bass"})");
+    run("scene.add", R"({"name": "A"})");
+    run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C3:q r:*"})");
+    engine::DummyBackend backend({.mode = engine::DummyBackend::Mode::Manual});
+    struct StopEngine {
+        engine::EngineApp& app;
+        ~StopEngine() { app.stopEngine(); }
+    } stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 256},
+                               {.anticipative = false}));
+    f.render->open();
+    f.frame();
+    CHECK_FALSE(f.uiRoot().find("render.clips.note"));  // every track on the arrangement
+    f.render->close();
+    run("launch.clip", R"({"clip": "cl_1"})");
+    backend.run(4);
+    f.app->tick();
+    f.render->open();
+    f.frame();
+    CHECK(f.uiRoot().find("render.clips.note"));
+    f.snapshot("render-clips-note.png");
+    f.render->close();
+}
+
 TEST_CASE("FX drags survive model refresh and separate drags have separate undo steps") {
     Fixture f;
     if (!f.ok || !f.stockPlugins()) return;
@@ -831,6 +862,8 @@ TEST_CASE(
                 text.find("hidden") != std::string::npos)
                 continue;
             const json::Value* mod = m.value.find("modulatable");
+            const json::Value* viaEnvelope = m.value.find("modulatable_by_envelope");
+            if (viaEnvelope && viaEnvelope->isBool() && viaEnvelope->asBool()) continue;
             if (mod && mod->isBool() && mod->asBool()) {
                 if (modulatable.empty()) {
                     modulatable = m.key;
@@ -1020,6 +1053,101 @@ TEST_CASE("a plain CLAP plug-in's modulatable parameter is editable in the FX wi
     REQUIRE(slider);
     REQUIRE(slider->modulation());
     CHECK(slider->modulation()->high == doctest::Approx(0.25));
+}
+
+TEST_CASE("a parameter reached through its envelope takes Modulate; an idle route says why") {
+    // ADR-0096 M4: a plug-in parameter that is automatable but not
+    // modulatable (the fixed gain's, as any VST3 one) is marked
+    // modulatable_by_envelope. Its row is editable and its Modulate enabled;
+    // modulate adds the one-point envelope that carries the route, and with
+    // that envelope off the route is idle and the menu names the reason.
+    Fixture f(true);
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    const model::Id track = f.addTrack("Fixed");
+    auto made = f.run(
+        "fx.add", f.args({{"track", track.str()}, {"plugin", "com.suppleaudio.test.fixed-gain"}}));
+    REQUIRE(made);
+    const model::Id fx = *model::Id::parse((*made)["fx"].asString());
+    auto described = f.run("fx.describe", f.args({{"fx", fx.str()}, {"full", true}}));
+    REQUIRE(described);
+    REQUIRE((*described)["params"].isArray());
+    std::string key;
+    for (const json::Value& p : (*described)["params"].asArray())
+        if (const json::Value* m = p.find("modulatable_by_envelope");
+            m && m->isBool() && m->asBool())
+            key = std::to_string(static_cast<std::uint32_t>(p.find("id")->asDouble()));
+    REQUIRE_MESSAGE(!key.empty(), "the fixed gain's gain is reached through its envelope");
+    REQUIRE(f.fx->open(track));
+    f.fx->select(fx);
+    f.fx->showParamsTab();
+    f.frame();
+    REQUIRE(dynamic_cast<ui::Slider*>(f.uiRoot().find("fx.param." + key)));
+    auto openMenu = [&]() -> ui::Node* {
+        ui::Node* name = f.uiRoot().find("fx.plain.name.0");
+        REQUIRE(name);
+        const ui::Point p{name->bounds().x + 4, name->bounds().y + name->bounds().h / 2};
+        f.uiRoot().pointer({ui::PointerEvent::Type::Down, p, 3});
+        f.uiRoot().pointer({ui::PointerEvent::Type::Up, p, 3});
+        f.frame();
+        return f.uiRoot().find("fx.param.menu");
+    };
+    auto labels = [](ui::Node* menu) {
+        std::vector<std::string> out;
+        for (const auto& item : ui::menuItems(*menu)) out.push_back(item.label);
+        return out;
+    };
+    ui::Node* menu = openMenu();
+    REQUIRE(menu);
+    std::function<void()> modulate;
+    for (const auto& item : ui::menuItems(*menu))
+        if (item.label.rfind("Modulate: ", 0) == 0) {
+            CHECK(item.enabled);
+            modulate = item.run;
+        }
+    REQUIRE(modulate);
+    f.uiRoot().closePopup();
+    modulate();
+    ui::Node* sources = f.uiRoot().find("param.modulate.menu");
+    REQUIRE(sources);
+    std::function<void()> lfo;
+    for (const auto& item : ui::menuItems(*sources))
+        if (item.label == "LFO") lfo = item.run;
+    REQUIRE(lfo);
+    f.uiRoot().closePopup();
+    lfo();
+    const model::Session s = f.app->head();
+    REQUIRE(s.modulations.size() == 1);
+    CHECK(s.modulations.begin()->value->target == model::EnvTarget{fx, key});
+    std::optional<model::Id> env;
+    for (const auto& e : s.envelopes)
+        if (e.value->target == model::EnvTarget{fx, key}) env = e.id;
+    REQUIRE_MESSAGE(env, "modulate added the envelope that carries the route");
+    f.fx->tick();
+    f.frame();
+    // It plays: no idle row.
+    menu = openMenu();
+    REQUIRE(menu);
+    for (const std::string& l : labels(menu)) CHECK(l.find("idle") == std::string::npos);
+    f.uiRoot().closePopup();
+    // With its envelope off the route is idle, and the menu says why.
+    REQUIRE(f.run("env.set", f.args({{"env", env->str()}, {"active", false}})));
+    f.fx->tick();
+    f.frame();
+    menu = openMenu();
+    REQUIRE(menu);
+    bool said = false;
+    for (const auto& item : ui::menuItems(*menu))
+        if (item.label == "Modulation idle: the envelope that carries it is off") {
+            CHECK_FALSE(item.enabled);
+            said = true;
+        }
+    std::string rows;
+    for (const std::string& l : labels(menu)) rows += l + " | ";
+    CHECK_MESSAGE(said, "menu rows: " << rows);
+    f.uiRoot().closePopup();
 }
 
 TEST_CASE("a knob bound to the last touched parameter follows the panel's last edit") {

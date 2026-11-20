@@ -473,17 +473,20 @@ struct Yarrow : Effect {
             .withKey("band1.type")
             .help("Its shape: a bell, a shelf, a cut, a notch, or a tilt about its frequency.");
     Param b1Freq = frequency("Band 1 Frequency", 20, 20000, 30)
+                       .modulated()
                        .in("Band 1")
                        .activeWhen(b1On)
                        .withKey("band1.freq")
                        .help("Its centre, corner or pivot.");
     Param b1Gain =
         decibels("Band 1 Gain", -30, 30, 0)
+            .modulated()
             .in("Band 1")
             .activeUnless(b1Type, {"Low Cut", "High Cut", "Notch"})
             .withKey("band1.gain")
             .help("Boost or cut, for bells, shelves and tilts (cuts and notches ignore it).");
     Param b1Q = continuous("Band 1 Q", 0.1, 30, 0.71, Unit::None)
+                    .modulated()
                     .curved(Curve::Log)
                     .in("Band 1")
                     .activeWhen(b1On)
@@ -513,6 +516,7 @@ struct Yarrow : Effect {
                               "louder than the threshold.");
     Param b1Threshold =
         decibels("Band 1 Threshold", -60, 0, -30)
+            .modulated()
             .in("Band 1")
             .activeWhen(b1Dynamic)
             .withKey("band1.threshold")
@@ -529,17 +533,20 @@ struct Yarrow : Effect {
             .withKey("band2.type")
             .help("Its shape: a bell, a shelf, a cut, a notch, or a tilt about its frequency.");
     Param b2Freq = frequency("Band 2 Frequency", 20, 20000, 100)
+                       .modulated()
                        .in("Band 2")
                        .activeWhen(b2On)
                        .withKey("band2.freq")
                        .help("Its centre, corner or pivot.");
     Param b2Gain =
         decibels("Band 2 Gain", -30, 30, 0)
+            .modulated()
             .in("Band 2")
             .activeUnless(b2Type, {"Low Cut", "High Cut", "Notch"})
             .withKey("band2.gain")
             .help("Boost or cut, for bells, shelves and tilts (cuts and notches ignore it).");
     Param b2Q = continuous("Band 2 Q", 0.1, 30, 0.71, Unit::None)
+                    .modulated()
                     .curved(Curve::Log)
                     .in("Band 2")
                     .activeWhen(b2On)
@@ -569,6 +576,7 @@ struct Yarrow : Effect {
                               "louder than the threshold.");
     Param b2Threshold =
         decibels("Band 2 Threshold", -60, 0, -30)
+            .modulated()
             .in("Band 2")
             .activeWhen(b2Dynamic)
             .withKey("band2.threshold")
@@ -585,17 +593,20 @@ struct Yarrow : Effect {
             .withKey("band3.type")
             .help("Its shape: a bell, a shelf, a cut, a notch, or a tilt about its frequency.");
     Param b3Freq = frequency("Band 3 Frequency", 20, 20000, 250)
+                       .modulated()
                        .in("Band 3")
                        .activeWhen(b3On)
                        .withKey("band3.freq")
                        .help("Its centre, corner or pivot.");
     Param b3Gain =
         decibels("Band 3 Gain", -30, 30, 0)
+            .modulated()
             .in("Band 3")
             .activeUnless(b3Type, {"Low Cut", "High Cut", "Notch"})
             .withKey("band3.gain")
             .help("Boost or cut, for bells, shelves and tilts (cuts and notches ignore it).");
     Param b3Q = continuous("Band 3 Q", 0.1, 30, 1.0, Unit::None)
+                    .modulated()
                     .curved(Curve::Log)
                     .in("Band 3")
                     .activeWhen(b3On)
@@ -625,6 +636,7 @@ struct Yarrow : Effect {
                               "louder than the threshold.");
     Param b3Threshold =
         decibels("Band 3 Threshold", -60, 0, -30)
+            .modulated()
             .in("Band 3")
             .activeWhen(b3Dynamic)
             .withKey("band3.threshold")
@@ -641,17 +653,20 @@ struct Yarrow : Effect {
             .withKey("band4.type")
             .help("Its shape: a bell, a shelf, a cut, a notch, or a tilt about its frequency.");
     Param b4Freq = frequency("Band 4 Frequency", 20, 20000, 800)
+                       .modulated()
                        .in("Band 4")
                        .activeWhen(b4On)
                        .withKey("band4.freq")
                        .help("Its centre, corner or pivot.");
     Param b4Gain =
         decibels("Band 4 Gain", -30, 30, 0)
+            .modulated()
             .in("Band 4")
             .activeUnless(b4Type, {"Low Cut", "High Cut", "Notch"})
             .withKey("band4.gain")
             .help("Boost or cut, for bells, shelves and tilts (cuts and notches ignore it).");
     Param b4Q = continuous("Band 4 Q", 0.1, 30, 1.0, Unit::None)
+                    .modulated()
                     .curved(Curve::Log)
                     .in("Band 4")
                     .activeWhen(b4On)
@@ -681,6 +696,7 @@ struct Yarrow : Effect {
                               "louder than the threshold.");
     Param b4Threshold =
         decibels("Band 4 Threshold", -60, 0, -30)
+            .modulated()
             .in("Band 4")
             .activeWhen(b4Dynamic)
             .withKey("band4.threshold")
@@ -697,17 +713,20 @@ struct Yarrow : Effect {
             .withKey("band5.type")
             .help("Its shape: a bell, a shelf, a cut, a notch, or a tilt about its frequency.");
     Param b5Freq = frequency("Band 5 Frequency", 20, 20000, 2500)
+                       .modulated()
                        .in("Band 5")
                        .activeWhen(b5On)
                        .withKey("band5.freq")
                        .help("Its centre, corner or pivot.");
     Param b5Gain =
         decibels("Band 5 Gain", -30, 30, 0)
+            .modulated()
             .in("Band 5")
             .activeUnless(b5Type, {"Low Cut", "High Cut", "Notch"})
             .withKey("band5.gain")
             .help("Boost or cut, for bells, shelves and tilts (cuts and notches ignore it).");
     Param b5Q = continuous("Band 5 Q", 0.1, 30, 1.0, Unit::None)
+                    .modulated()
                     .curved(Curve::Log)
                     .in("Band 5")
                     .activeWhen(b5On)
@@ -737,6 +756,7 @@ struct Yarrow : Effect {
                               "louder than the threshold.");
     Param b5Threshold =
         decibels("Band 5 Threshold", -60, 0, -30)
+            .modulated()
             .in("Band 5")
             .activeWhen(b5Dynamic)
             .withKey("band5.threshold")
@@ -753,17 +773,20 @@ struct Yarrow : Effect {
             .withKey("band6.type")
             .help("Its shape: a bell, a shelf, a cut, a notch, or a tilt about its frequency.");
     Param b6Freq = frequency("Band 6 Frequency", 20, 20000, 6000)
+                       .modulated()
                        .in("Band 6")
                        .activeWhen(b6On)
                        .withKey("band6.freq")
                        .help("Its centre, corner or pivot.");
     Param b6Gain =
         decibels("Band 6 Gain", -30, 30, 0)
+            .modulated()
             .in("Band 6")
             .activeUnless(b6Type, {"Low Cut", "High Cut", "Notch"})
             .withKey("band6.gain")
             .help("Boost or cut, for bells, shelves and tilts (cuts and notches ignore it).");
     Param b6Q = continuous("Band 6 Q", 0.1, 30, 1.0, Unit::None)
+                    .modulated()
                     .curved(Curve::Log)
                     .in("Band 6")
                     .activeWhen(b6On)
@@ -793,6 +816,7 @@ struct Yarrow : Effect {
                               "louder than the threshold.");
     Param b6Threshold =
         decibels("Band 6 Threshold", -60, 0, -30)
+            .modulated()
             .in("Band 6")
             .activeWhen(b6Dynamic)
             .withKey("band6.threshold")
@@ -809,17 +833,20 @@ struct Yarrow : Effect {
             .withKey("band7.type")
             .help("Its shape: a bell, a shelf, a cut, a notch, or a tilt about its frequency.");
     Param b7Freq = frequency("Band 7 Frequency", 20, 20000, 10000)
+                       .modulated()
                        .in("Band 7")
                        .activeWhen(b7On)
                        .withKey("band7.freq")
                        .help("Its centre, corner or pivot.");
     Param b7Gain =
         decibels("Band 7 Gain", -30, 30, 0)
+            .modulated()
             .in("Band 7")
             .activeUnless(b7Type, {"Low Cut", "High Cut", "Notch"})
             .withKey("band7.gain")
             .help("Boost or cut, for bells, shelves and tilts (cuts and notches ignore it).");
     Param b7Q = continuous("Band 7 Q", 0.1, 30, 0.71, Unit::None)
+                    .modulated()
                     .curved(Curve::Log)
                     .in("Band 7")
                     .activeWhen(b7On)
@@ -849,6 +876,7 @@ struct Yarrow : Effect {
                               "louder than the threshold.");
     Param b7Threshold =
         decibels("Band 7 Threshold", -60, 0, -30)
+            .modulated()
             .in("Band 7")
             .activeWhen(b7Dynamic)
             .withKey("band7.threshold")
@@ -865,17 +893,20 @@ struct Yarrow : Effect {
             .withKey("band8.type")
             .help("Its shape: a bell, a shelf, a cut, a notch, or a tilt about its frequency.");
     Param b8Freq = frequency("Band 8 Frequency", 20, 20000, 18000)
+                       .modulated()
                        .in("Band 8")
                        .activeWhen(b8On)
                        .withKey("band8.freq")
                        .help("Its centre, corner or pivot.");
     Param b8Gain =
         decibels("Band 8 Gain", -30, 30, 0)
+            .modulated()
             .in("Band 8")
             .activeUnless(b8Type, {"Low Cut", "High Cut", "Notch"})
             .withKey("band8.gain")
             .help("Boost or cut, for bells, shelves and tilts (cuts and notches ignore it).");
     Param b8Q = continuous("Band 8 Q", 0.1, 30, 0.71, Unit::None)
+                    .modulated()
                     .curved(Curve::Log)
                     .in("Band 8")
                     .activeWhen(b8On)
@@ -905,6 +936,7 @@ struct Yarrow : Effect {
                               "louder than the threshold.");
     Param b8Threshold =
         decibels("Band 8 Threshold", -60, 0, -30)
+            .modulated()
             .in("Band 8")
             .activeWhen(b8Dynamic)
             .withKey("band8.threshold")
@@ -912,13 +944,16 @@ struct Yarrow : Effect {
 
     Param scale =
         percent("Gain Scale", 100, 0, 200)
+            .modulated()
             .help("Scales every bell, shelf and tilt gain: 50% halves the curve, 200% doubles it.");
     Param autoGain = toggle("Auto Gain", false)
                          .help(
                              "Offsets the output by the curve's average effect, so a boost does "
                              "not just sound louder.");
-    Param output =
-        decibels("Output", -24, 24, 0).smoothed(20).help("The level out, after every band.");
+    Param output = decibels("Output", -24, 24, 0)
+                       .modulated()
+                       .smoothed(20)
+                       .help("The level out, after every band.");
     Param listen = integer("Listen", 0, 8, 0)
                        .notAutomatable()
                        .help(

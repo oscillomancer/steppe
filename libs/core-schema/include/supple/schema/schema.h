@@ -712,6 +712,12 @@ class ObjectBuilder {
         policy_ = p;
         return *this;
     }
+    // A member that belongs to another command: the unknown-member error says where it is set
+    // (`elsewhere("tempo", "tempo.set sets the tempo")`).
+    ObjectBuilder& elsewhere(std::string member, std::string hint) {
+        elsewhere_.emplace_back(std::move(member), std::move(hint));
+        return *this;
+    }
     template <class M>
     ObjectBuilder& field(std::string name, M T::* member, Schema<M> schema) {
         Field f;
@@ -814,8 +820,9 @@ class ObjectBuilder {
             std::make_shared<const std::vector<Field>>(fields_);  // shared by both closures
         auto policy = policy_;
         auto title = title_;
-        auto decoder = [fields, policy](const json::Value& v, T& out, DecodeCtx& c,
-                                        const std::string& p) {
+        auto elsewhere = elsewhere_;
+        auto decoder = [fields, policy, elsewhere](const json::Value& v, T& out, DecodeCtx& c,
+                                                   const std::string& p) {
             if (!v.isObject()) {
                 wrongType(c, p, "object");
                 return false;
@@ -861,6 +868,8 @@ class ObjectBuilder {
                     hint = "did you mean \"" + match + "\"? valid members: " + hint;
                 else
                     hint = "valid members: " + hint;
+                for (const auto& [member, where] : elsewhere)
+                    if (member == m.key) hint = where + "; " + hint;
                 c.error("schema.unknown_member", "unknown member \"" + m.key + "\"", path, hint);
             }
             return c.errors.size() == before;
@@ -882,6 +891,7 @@ class ObjectBuilder {
   private:
     std::string title_, doc_;
     std::optional<UnknownMembers> policy_;
+    std::vector<std::pair<std::string, std::string>> elsewhere_;
     std::vector<Field> fields_;
     std::vector<std::function<void(const T&, CheckCtx&)>> checks_;
 };

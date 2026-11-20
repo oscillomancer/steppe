@@ -263,6 +263,14 @@ void bindModulation(Plan& p, std::map<host::Instance*, json::Value>& schemas) {
     };
     std::vector<Bound> bound;
     std::vector<Stage*> stages;  // every stage a route reaches, and only once
+    // Routes applied through an envelope lane (M4): the stage, the lane.
+    struct LaneBound {
+        Stage* stage;
+        std::size_t lane;
+        std::uint32_t route;
+    };
+    std::vector<LaneBound> laneBound;
+    std::vector<Stage*> laneStages;
     // The routes into an FX, as text: what amendment M-d's disabling keeps.
     // The source is its module and input as the model names them, never a
     // position in the rack, which another module's removal shifts.
@@ -291,6 +299,7 @@ void bindModulation(Plan& p, std::map<host::Instance*, json::Value>& schemas) {
     for (std::size_t mi = 0; mi < p.modEdges.size(); ++mi) {
         ModEdge& me = p.modEdges[mi];
         me.values.clear();
+        me.viaLane = false;
         if (me.inert) continue;
         Node& n = p.nodes[me.to];
         if (n.freeze) {  // the print plays (ADR-0096 "Freeze")
@@ -353,9 +362,10 @@ void bindModulation(Plan& p, std::map<host::Instance*, json::Value>& schemas) {
             schema = schemas.emplace(&in, std::move(described)).first;
         }
         const auto params = in.params();
+        const bool vst3 = in.info().format == "vst3";
         auto target =
             resolvePluginMod(params, schema->second.isObject() ? &schema->second : nullptr,
-                             me.target.param, in.info().format == "vst3");
+                             me.target.param, vst3, true);
         if (!target) {
             inert(target.error().message);
             continue;
@@ -376,6 +386,29 @@ void bindModulation(Plan& p, std::map<host::Instance*, json::Value>& schemas) {
             continue;
         }
         me.clapId = target->param;
+        if (target->envelope) {
+            // Through its envelope: the lane that plays the parameter adds
+            // the routes' sum (M4). With no active envelope there is none.
+            std::size_t lane = st->lanes.size();
+            for (std::size_t k = 0; k < st->lanes.size(); ++k)
+                if (st->lanes[k].clapId == target->param) lane = k;
+            if (lane == st->lanes.size()) {
+                inert(info->name +
+                      " is not modulatable and has no active envelope to carry it (env.add, "
+                      "or modulate, which adds one)");
+                continue;
+            }
+            ParamLane& ln = st->lanes[lane];
+            ln.modRange = target->scale;
+            ln.lo = vst3 ? 0.0 : info->min;
+            ln.hi = vst3 ? 1.0 : info->max;
+            me.viaLane = true;
+            me.values.assign(p.block, 0.0);
+            laneBound.push_back({st, lane, static_cast<std::uint32_t>(mi)});
+            if (std::find(laneStages.begin(), laneStages.end(), st) == laneStages.end())
+                laneStages.push_back(st);
+            continue;
+        }
         me.values.assign(p.block, 0.0);
         bound.push_back({st, target->param, target->scale, static_cast<std::uint32_t>(mi)});
         if (std::find(stages.begin(), stages.end(), st) == stages.end()) stages.push_back(st);
@@ -416,9 +449,26 @@ void bindModulation(Plan& p, std::map<host::Instance*, json::Value>& schemas) {
         // A routed parameter's grid, and one 0 for each of the others.
         st->modEvents = perParam * now.size() + (all.size() - now.size());
     }
+    // Each lane's routes, in modEdges order (M4).
+    for (Stage* st : laneStages) {
+        st->laneModRoutes.clear();
+        for (std::size_t k = 0; k < st->lanes.size(); ++k) {
+            ParamLane& ln = st->lanes[k];
+            ln.modFirst = static_cast<std::uint32_t>(st->laneModRoutes.size());
+            for (const LaneBound& b : laneBound)
+                if (b.stage == st && b.lane == k) st->laneModRoutes.push_back(b.route);
+            ln.modCount = static_cast<std::uint32_t>(st->laneModRoutes.size()) - ln.modFirst;
+        }
+    }
     // Telemetry (M2): one slot per bound target, and each route's slot.
     int slots = 0;
     p.modOffsetOf.assign(p.modEdges.size(), -1);
+    for (Stage* st : laneStages)
+        for (ParamLane& ln : st->lanes) {
+            ln.telemetry = ln.modCount ? slots++ : -1;
+            for (std::uint32_t k = 0; k < ln.modCount; ++k)
+                p.modOffsetOf[st->laneModRoutes[ln.modFirst + k]] = ln.telemetry;
+        }
     for (Stage* st : stages)
         for (ModParam& m : st->mods) {
             m.telemetry = m.count ? slots++ : -1;
@@ -1799,6 +1849,7 @@ Status prepare(Plan& p, const Session& s) {
                 timed.event.noteId = -2;  // local take controller; sends still carry it
         }
         for (auto& ev : n.events) ev.sample += n.timelineShift;
+        if (p.clipPlayers) compileClipPlayers(p, n, s);  // the clip launcher (ADR-0097)
         // Reserve the most events any block-long window holds (events are
         // sorted; after a seek, blocks start anywhere), so processBlock never
         // allocates.
@@ -1837,7 +1888,7 @@ Status prepare(Plan& p, const Session& s) {
             const std::size_t notes =
                 noteTarget ? st.voices.capacity() : 0;  // releases at a wrap or route edit
             const std::size_t live = noteTarget && n.midiIn ? kMaxMidiInputEvents : 0;
-            st.blockEvents.reserve(windowMax + 1 + lanes + notes + live);
+            st.blockEvents.reserve(windowMax + n.clipWindow + 1 + lanes + notes + live);
         }
     }
     // Immutable musical origins let adoption rebind compiled ids after a
@@ -1889,8 +1940,29 @@ Status prepare(Plan& p, const Session& s) {
         std::sort(st.noteSourceIndex.begin(), st.noteSourceIndex.end(),
                   [](const auto& a, const auto& b) { return a.address() < b.address(); });
     };
+    // Clips past the memory budget (ADR-0097 "Memory"): named once.
+    if (p.preparedSources && !p.preparedSources->clipsSkipped.empty()) {
+        std::string names;
+        for (const Id id : p.preparedSources->clipsSkipped)
+            names += (names.empty() ? "" : ", ") + id.str();
+        p.warnings.push_back("launch.memory: " + names +
+                             " do not fit in the audio memory budget beside the arrangement and "
+                             "cannot be launched; use shorter audio or fewer distinct files");
+    }
+    std::vector<TimedEvent> withClips;
     for (Node& node : p.nodes) {
-        sources(node.midiStage, node.events);
+        // A clip's notes continue the timeline's ids (compileClipPlayers).
+        // They have no place in the song, so their sources span all of it:
+        // releaseVoices never ends one as outside its span.
+        withClips = node.events;
+        for (const ClipPlayer& pl : node.players)
+            for (const ClipEvent& e : pl.events)
+                if (e.event.noteId >= 0)
+                    withClips.push_back({e.event.kind == host::Event::Kind::NoteOn
+                                             ? std::numeric_limits<std::int64_t>::min()
+                                             : std::numeric_limits<std::int64_t>::max(),
+                                         e.event, e.origin});
+        sources(node.midiStage, withClips);
         if (node.noteTarget >= 0) {  // the same events: the same sources
             Stage& target = node.chain[static_cast<std::size_t>(node.noteTarget)];
             target.noteSources = node.midiStage.noteSources;
@@ -2165,7 +2237,8 @@ const Stereo& edgeSignal(const Plan& p, const Edge& e) SUPPLE_RT {
 namespace {
 bool runStage(Plan& p, Stage& st, Stereo& sum, std::uint32_t n, const host::Transport& transport,
               std::int64_t pos, const void* self) SUPPLE_RT;
-void automateStage(Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t origin) SUPPLE_RT;
+void automateStage(Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t origin,
+                   const Plan* p = nullptr) SUPPLE_RT;
 // Audio edges carry only the encoded signal and PDC; key controls are conventional.
 void addEdge(Plan& p, Edge& e, Stereo& into, std::int64_t pos, std::uint32_t n) SUPPLE_RT {
     if (e.midi) return;
@@ -2292,9 +2365,34 @@ void playSpan(Clip& c, Stereo& into, std::int64_t pos, std::int64_t from, std::i
 // Plugin parameter automation: an initial value, the absolute timeline
 // kAutomationStep grid and each point, in time order (the lane's
 // cursor only moves forward), merged into the block's sorted events.
-void automateStage(Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t origin) SUPPLE_RT {
+void automateStage(Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t origin,
+                   const Plan* p) SUPPLE_RT {
     if (st.lanes.empty()) return;
     const std::size_t before = st.blockEvents.size();
+    // The value a lane sends at `sample`, frame `frame` of the block: its
+    // curve's, plus the sum of the routes it carries (ADR-0096 step M4),
+    // clamped to the parameter's range. While a source rack's modules are
+    // owned elsewhere, the last sum holds (as modulateStage's Mod Outs do).
+    const auto valueAt = [&](ParamLane& ln, std::int64_t sample, std::uint32_t frame) {
+        const double base = ln.clapAt(sample);
+        if (!p || !ln.modCount) return base;
+        double sum = 0.0;
+        bool held = false;
+        for (std::uint32_t k = 0; k < ln.modCount; ++k) {
+            const ModEdge& me = p->modEdges[st.laneModRoutes[ln.modFirst + k]];
+            held = held || p->nodes[me.from].rack->modStale;
+            if (me.enabled) sum += me.values[frame] * me.depth * ln.modRange;
+        }
+        if (held) {
+            sum = ln.modSum;
+        } else {
+            ln.modSum = sum;
+            if (ln.telemetry >= 0 && ln.modRange > 0)
+                p->modOffsets[static_cast<std::size_t>(ln.telemetry)].store(
+                    sum / ln.modRange, std::memory_order_relaxed);
+        }
+        return std::clamp(base + sum, ln.lo, ln.hi);
+    };
     for (ParamLane& ln : st.lanes) {
         if (ln.curve.timeline) {
             const auto& pts = ln.curve.points;
@@ -2314,7 +2412,7 @@ void automateStage(Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t or
                 while (point != pts.end() && double(point->sample) + projectOrigin <= at) ++point;
                 if (std::isnan(ln.lastSent) || crossed ||
                     (pos + i + origin) % kAutomationStep == 0) {
-                    const double value = ln.clapAt(pos + i);
+                    const double value = valueAt(ln, pos + i, i);
                     if (value != ln.lastSent && st.blockEvents.size() < st.blockEvents.capacity()) {
                         host::Event event;
                         event.kind = host::Event::Kind::Param;
@@ -2347,7 +2445,7 @@ void automateStage(Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t or
                                               : n;
             const std::uint32_t at = std::min({initial ? 0u : n, grid, atPoint});
             if (at >= n) break;
-            const double v = ln.clapAt(pos + at);
+            const double v = valueAt(ln, pos + at, at);
             if (v != ln.lastSent && st.blockEvents.size() < st.blockEvents.capacity()) {
                 host::Event e;
                 e.kind = host::Event::Kind::Param;
@@ -3149,6 +3247,7 @@ bool processTake(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std::uint
                            static_cast<double>(length - k) / static_cast<double>(tc.fadeOut));
         if (tc.volume.active()) g *= dbToGain(tc.volume.at(t));
         if (tc.mute.active() && tc.mute.at(t) >= .5) g = 0.0;
+        if (node.arrangementGain) g *= double(node.arrangementGain[i]);  // the clip launcher's
         double l = tc.gainL * g, r = tc.gainR * g;
         if (tc.pan.active()) {
             const auto [pl, pr] = balanceSides(tc.pan.at(t) / 100.0);
@@ -3278,7 +3377,7 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
             }
         for (Stage& st : node.inputChain) {
             st.blockEvents.clear();
-            automateStage(st, pos, n, time::samplesAt(p.startSeconds, p.rate));
+            automateStage(st, pos, n, time::samplesAt(p.startSeconds, p.rate), &p);
             modulateStage(p, st, pos, n, time::samplesAt(p.startSeconds, p.rate), self);
             enterGroup(node.inputChain, st, node.inputBuf, n);
             if (!runStage(p, st, node.inputBuf, n, transport, pos, self)) return false;
@@ -3336,8 +3435,29 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
     const bool postItems = node.postItems && node.hasItems();
     if (postItems) node.items.clear(n);
     Stereo& itemsInto = postItems ? node.items : node.sum;
-    for (Clip& c : node.clips)
-        if (transport.playing && c.takeChain < 0) playClip(p, c, itemsInto, pos, n, 0, node.live);
+    // The clip launcher (ADR-0097): its audio, and how much of the
+    // arrangement plays (null: all of it).
+    if (transport.playing)
+        launchAudio(p, node, itemsInto, pos, n);
+    else
+        node.arrangementGain = nullptr;
+    if (const float* g = node.arrangementGain) {
+        node.launchBuf.clear(n);
+        bool any = false;
+        for (std::uint32_t i = 0; i < n && !any; ++i) any = g[i] != 0.0f;
+        for (Clip& c : node.clips)
+            if (any && transport.playing && c.takeChain < 0)
+                playClip(p, c, node.launchBuf, pos, n, 0, node.live);
+        if (any)
+            for (std::uint32_t i = 0; i < n; ++i) {
+                itemsInto.l[i] += node.launchBuf.l[i] * g[i];
+                itemsInto.r[i] += node.launchBuf.r[i] * g[i];
+            }
+    } else {
+        for (Clip& c : node.clips)
+            if (transport.playing && c.takeChain < 0)
+                playClip(p, c, itemsInto, pos, n, 0, node.live);
+    }
     // Takes with chains or envelopes: through their chains, into the sum.
     for (TakeChain& tc : node.takeChains)
         if (!processTake(p, node, tc, pos, n, transport, self, loop)) return false;
@@ -3376,15 +3496,19 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
     if (p.rateEnabled && transport.playing)
         rateEvents(p, node.live, node.events, node.midiStage, pos, n, node.timelineShift,
                    node.rateEventFresh);
+    // While a clip holds the track, its timeline notes pass unplayed.
+    const bool arrangementMidi = node.launch.kind == LaunchState::Kind::Arrangement;
     while (!p.rateEnabled && transport.playing && node.nextEvent < node.events.size() &&
            double(node.events[node.nextEvent].sample) <
                mappedAt(p, node.live, pos + n, node.timelineShift)) {
         const TimedEvent& te = node.events[node.nextEvent++];
+        if (!arrangementMidi) continue;
         host::Event e = te.event;
         e.time = eventOffset(p, node.live, pos, n, node.timelineShift, te.sample);
         auto& target = node.midiStage.blockEvents;
         if (target.size() < target.capacity()) target.push_back(e);  // never allocate here
     }
+    if (transport.playing) launchMidi(p, node, pos, n);
     // Live MIDI from the device (ADR-0016), playing or not, after timeline MIDI
     // at the same frame; not counted as held (a loop wrap does not cut what
     // the performer holds).
@@ -3441,7 +3565,7 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
     }
     // 2b. Plugin parameter automation (automateStage), then modulation.
     for (Stage& st : node.chain) {
-        automateStage(st, pos, n, time::samplesAt(p.startSeconds, p.rate));
+        automateStage(st, pos, n, time::samplesAt(p.startSeconds, p.rate), &p);
         modulateStage(p, st, pos, n, time::samplesAt(p.startSeconds, p.rate), self);
     }
     // 3. The FX chain, in place on `sum`; the MIDI bus through it.
@@ -3954,6 +4078,7 @@ void wrapTo(Plan& p, std::int64_t pos, int liveClass) SUPPLE_RT {
             std::lower_bound(n.events.begin(), n.events.end(), pos,
                              [](const TimedEvent& e, std::int64_t x) { return e.sample < x; });
         n.nextEvent = static_cast<std::size_t>(it - n.events.begin());
+        launchWrapped(n);  // a once clip is silent until launched again
         n.encoder.reset();
         n.keyEncoder.reset();
         n.decoder.reset();
@@ -4114,6 +4239,7 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
         Node* const counterpart = carriedNode(from, n, fromClass);
         if (!counterpart) continue;
         Node& old = *counterpart;
+        carryLaunch(old, n);  // what the channel plays, by clip (ADR-0097)
         // A locate may still be waiting for pooled module ownership.
         // Keep that reset through another plan adoption by this executor.
         if (n.rack && old.rack) {

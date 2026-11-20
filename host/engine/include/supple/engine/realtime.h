@@ -790,6 +790,53 @@ class Engine {
     // or one no plan binds yet, is absent.
     std::map<model::Id, double> modulationOffsets() const;
 
+    // --- The clip launcher (ADR-0097, engine.md §1.4.2; launch_runtime.cpp) ---
+    // What one track is to do: start a clip, return to the arrangement, stop.
+    struct LaunchRequest {
+        model::Id track;
+        LaunchLogEntry::Action action = LaunchLogEntry::Action::Clip;
+        model::Id clip;
+    };
+    // Where a launch was placed: one target for all its tracks (a scene's),
+    // in the epoch's stream, and the song position there.
+    struct LaunchPlaced {
+        std::uint64_t epoch = 0;
+        std::int64_t stream = 0, anchorSample = 0;
+        double anchorBeat = 0;
+    };
+    // Main thread: queues the requests at the next `quantize` boundary at or
+    // after the latest of their tracks' floors (none: the floor; stopped: the
+    // play position, applied at the play start). A newer request for a track
+    // replaces its pending one. launch.queue when the queue is full,
+    // launch.clip when a track's node has no player for the clip.
+    Result<LaunchPlaced> launch(std::span<const LaunchRequest> requests,
+                                model::LaunchQuantize quantize);
+    // Main thread: the launches applied since the engine started, in order
+    // of epoch and running frame (service() collects them), and the pending
+    // ones.
+    const std::vector<LaunchLogEntry>& launchLog() const { return launchLog_; }
+    struct LaunchPending {
+        LaunchRequest request;
+        LaunchPlaced placed;
+    };
+    std::vector<LaunchPending> launchesPending() const;
+    // Main thread: what each track with clips in the running plan plays as
+    // heard (an applied launch not yet heard is still queued), and its
+    // queued launch. The GUI's telemetry and launch.state read it.
+    struct TrackLaunch {
+        enum class Plays : std::uint8_t { Arrangement, Clip, Held, Stopped };
+        model::Id track;
+        Plays plays = Plays::Arrangement;
+        model::Id clip;                  // Clip and Held
+        std::optional<double> position;  // Clip: in its period, in the clip's unit
+        std::optional<LaunchPending> queued;
+    };
+    std::vector<TrackLaunch> launchState() const;
+    // Main thread: the clips the running plan left out of the memory
+    // budget (they cannot be launched; launch.memory).
+    std::vector<model::Id> clipsSkipped() const;
+    static constexpr std::size_t kLaunchSlots = 256;
+
     std::uint32_t outputLatency() const;
     void setMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences outputs);
     std::uint64_t midiPortDropped(bool output, std::size_t port) const;
@@ -1078,6 +1125,52 @@ class Engine {
     // exists; rateDeferredFrom_ then holds the one it replaced, which load()
     // puts back if the deferred edit fails to compile (review 37 F1).
     std::shared_ptr<const model::Session> latest_;
+    // The clip launcher's queue (launch_runtime.cpp): one slot per track.
+    // `state` is generation << 3 | status, so an executor's compare-and-swap
+    // fails if the main thread rewrote the slot meanwhile (a seqlock); the
+    // fields are relaxed atomics for the same reason.
+    struct LaunchSlot {
+        enum : std::uint64_t { kFree = 0, kPending = 1, kApplied = 2, kMissed = 3 };
+        std::atomic<std::uint64_t> state{0};
+        std::atomic<std::uint64_t> track{0}, clip{0}, epoch{0};
+        std::atomic<std::uint8_t> action{0};
+        std::atomic<std::int64_t> target{0}, anchorSample{0};
+        std::atomic<double> anchorBeat{0};
+        // Main thread only: what to re-place after a miss or a new epoch.
+        LaunchRequest request;
+        model::LaunchQuantize quantize = model::LaunchQuantize::Bar;
+    };
+    struct LaunchAck {
+        std::uint64_t track = 0, clip = 0, epoch = 0;
+        std::uint8_t action = 0;
+        std::int64_t stream = 0, anchorSample = 0;
+        double anchorBeat = 0;
+    };
+    std::unique_ptr<std::array<LaunchSlot, kLaunchSlots>> launchSlots_ =
+        std::make_unique<std::array<LaunchSlot, kLaunchSlots>>();
+    std::atomic<std::uint32_t> launchesQueued_{0};  // pending slots: executors skip at 0
+    std::unique_ptr<SpscRing<LaunchAck, 1024>> rendererLaunchAcks_ =
+        std::make_unique<SpscRing<LaunchAck, 1024>>();
+    std::unique_ptr<SpscRing<LaunchAck, 1024>> callbackLaunchAcks_ =
+        std::make_unique<SpscRing<LaunchAck, 1024>>();
+    std::vector<LaunchLogEntry> launchLog_;
+    // Main thread: by track, the log's length when a plan without its clip
+    // returned it to the arrangement (carryLaunch); older entries no longer
+    // say what it plays.
+    std::map<model::Id, std::size_t> launchReset_;
+    std::uint64_t launchCheckedGen_ = UINT64_MAX;  // the plan generation last checked
+    // Executors: applies the launches due at `stream` to this class's nodes
+    // of `p`, marks those already past as missed, and returns the frames
+    // until the next one (at most `k`).
+    std::uint32_t launchesAt(detail::Plan& p, int liveClass, std::uint64_t epoch,
+                             std::int64_t stream, std::uint32_t k, bool renderer) SUPPLE_RT;
+    // Main thread (service): collects acks, re-places missed launches and
+    // those of an old epoch.
+    void serviceLaunches();
+    struct LaunchClock;
+    bool launchClock(LaunchClock& out) const;
+    Result<LaunchPlaced> placeLaunch(std::span<const LaunchRequest> requests,
+                                     model::LaunchQuantize quantize) const;
     std::optional<std::shared_ptr<const model::Session>> rateDeferredFrom_;
     // Whether a refused playrate move was pending when the deferral began:
     // the restore puts it back with rateDeferredFrom_ (review 37c F1).

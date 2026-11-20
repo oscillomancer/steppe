@@ -213,21 +213,25 @@ struct Gorse : Effect {
 
     Param attack =
         decibels("Attack", -12, 12, 0)
+            .modulated()
             .smoothed(20)
             .in("Shape")
             .help("How much each hit's onset is raised (or softened), in dB, at a clear onset.");
     Param sustain =
         decibels("Sustain", -12, 12, 0)
+            .modulated()
             .smoothed(20)
             .in("Shape")
             .help("How much each hit's tail is raised (or shortened) as it decays, in dB.");
     Param length =
         milliseconds("Length", 1, 100, 10)
+            .modulated()
             .smoothed(20)
             .in("Detector")
             .help("How long an onset lasts before the tail begins; slower decays need more.");
     Param sensitivity =
         percent("Sensitivity", 50)
+            .modulated()
             .smoothed(20)
             .in("Detector")
             .help(
@@ -248,10 +252,12 @@ struct Gorse : Effect {
                 "A soft clip, last of all: nothing under -6 dBFS changes, and nothing passes 0 "
                 "dBFS.");
     Param mix = percent("Mix", 100)
+                    .modulated()
                     .smoothed(20)
                     .in("Output")
                     .help("The shaped signal against the dry one, in time with it.");
     Param output = decibels("Output", -24, 24, 0)
+                       .modulated()
                        .smoothed(20)
                        .in("Output")
                        .help("The level out, before the clip.");

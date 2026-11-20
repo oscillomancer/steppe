@@ -213,8 +213,8 @@ void dumpEvents(Dump& d, std::string_view a, const std::vector<TimedEvent>& even
 
 void dumpStage(Dump& d, std::string_view a, const Stage& st) {
     [[maybe_unused]] const auto& [rackMidiBase, busPart, busMerge, busLive, midiOnly, busBase,
-                                  busHeld, busControllers, instance, fx, lanes, mods, modRoutes,
-                                  modEvents, modHeard, modEpoch, bypass, instrument,
+                                  busHeld, busControllers, instance, fx, lanes, laneModRoutes, mods,
+                                  modRoutes, modEvents, modHeard, modEpoch, bypass, instrument,
                                   autoBypassOnSilence, sleeping, processed, inputLatency, rateLive,
                                   callbackBypass, wet, appliedWet, rampFromWet, rampToWet,
                                   wetRampLeft, preserveDryOnLocate, latency, dry, out, dryBuf,
@@ -240,7 +240,15 @@ void dumpStage(Dump& d, std::string_view a, const Stage& st) {
         d.put(la, "clap", lane.clapId);
         d.put(la, "described", lane.spec != nullptr);
         dumpAutomation(d, at(la, "curve"), lane.curve);
+        // Routes it carries (M4); the held sum is runtime state.
+        if (lane.modCount) {
+            d.put(la, "modRoutes", std::array{lane.modFirst, lane.modCount});
+            d.put(la, "modRange", lane.modRange);
+            d.put(la, "range", std::array{lane.lo, lane.hi});
+            d.put(la, "telemetry", lane.telemetry);
+        }
     }
+    d.size(a, "laneModRoutes", st.laneModRoutes);
     // Modulation slots; the memo in them is runtime state.
     d.put(a, "mods", static_cast<std::uint64_t>(st.mods.size()));
     for (std::size_t i = 0; i < st.mods.size(); ++i) {
@@ -443,16 +451,17 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
                                   recordInputs, recordRack, inputLatency, inputBuf, latIn, latChain,
                                   timelineShift, sum, preFx, preFader, post, postKey, events,
                                   nextEvent, rateEventFresh, held, releaseHeld, releaseLive, clips,
-                                  takeChains, postItems, itemShift, items, mix, silentFrom,
-                                  silentTo, dropItems, noteTarget, volumeDb, pan, staticGain,
-                                  panSettings, panCache, type, mute, master, decodeInput,
-                                  phaseInvert, mono, utility, soloSilenced, postKeyed, stageSlot,
-                                  decoder, encoder, fader, keyEncoder, keyFader, monitorInputs,
-                                  tapeAuto, midiIn, liveHeld, live, autoVolume, autoPan, autoMute,
-                                  autoWidth, autoPanLeft, autoPanRight, autoPanBoost, holdWidth,
-                                  holdPanLeft, holdPanRight, holdPanBoost, holdVolume, holdPan,
-                                  vcas, auxPostGain, meterSlot, meterGeneration, meterPeak,
-                                  meterSumSq] = n;
+                                  takeChains, players, launch, launchFadeFrames, arrangementGain,
+                                  arrangementGains, launchBuf, clipVoices, clipWindow, postItems,
+                                  itemShift, items, mix, silentFrom, silentTo, dropItems,
+                                  noteTarget, volumeDb, pan, staticGain, panSettings, panCache,
+                                  type, mute, master, decodeInput, phaseInvert, mono, utility,
+                                  soloSilenced, postKeyed, stageSlot, decoder, encoder, fader,
+                                  keyEncoder, keyFader, monitorInputs, tapeAuto, midiIn, liveHeld,
+                                  live, autoVolume, autoPan, autoMute, autoWidth, autoPanLeft,
+                                  autoPanRight, autoPanBoost, holdWidth, holdPanLeft, holdPanRight,
+                                  holdPanBoost, holdVolume, holdPan, vcas, auxPostGain, meterSlot,
+                                  meterGeneration, meterPeak, meterSumSq] = n;
     d.put(a, "id", n.id);
     d.put(a, "type", n.type);
     d.put(a, "master", n.master);
@@ -468,6 +477,22 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
     d.size(a, "midiInput", n.midiInput);
     d.size(a, "midiRouted", n.midiRouted);
     d.put(a, "midiBases", std::array{n.midiLiveBase, n.midiRoutedBase});
+    // The clip launcher (ADR-0097): the compiled players; what plays is state.
+    d.put(a, "players", static_cast<std::uint64_t>(n.players.size()));
+    for (std::size_t k = 0; k < n.players.size(); ++k) {
+        const ClipPlayer& pl = n.players[k];
+        const auto pa = at(a, "player" + std::to_string(k));
+        d.put(pa, "clip", pl.clip);
+        d.put(pa, "flags", std::array{pl.midi, pl.once, pl.muted, pl.loopOn});
+        d.put(pa, "frames",
+              std::array{pl.periodFrames, pl.loopStartFrames, pl.loopFrames, pl.audio.offset});
+        d.put(pa, "beats", pl.periodBeats);
+        d.put(pa, "events", static_cast<std::uint64_t>(pl.events.size()));
+        d.put(pa, "audio", pl.audio.data != nullptr);
+    }
+    d.put(a, "clipSizing",
+          std::array<std::uint64_t, 3>{static_cast<std::uint64_t>(n.launchFadeFrames), n.clipVoices,
+                                       n.clipWindow});
     d.put(a, "midiTakeSources", n.midiTakeSources);
     d.put(a, "midiRate", std::array<std::uint64_t, 2>{n.midiEventRate, n.midiWindow});
     d.put(a, "midiSends", n.midiSends);
@@ -561,7 +586,7 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
 // A modulation edge (ADR-0096); its delay's contents are runtime state.
 void dumpModEdge(Dump& d, std::string_view a, const ModEdge& e) {
     [[maybe_unused]] const auto& [route, from, to, fromId, toId, modOut, input, target, stage,
-                                  inputStage, clapId, depth, enabled, inert, tap, delay,
+                                  inputStage, clapId, viaLane, depth, enabled, inert, tap, delay,
                                   preserveDelayOnLocate, values] = e;
     d.put(a, "route", e.route);
     d.put(a, "from", static_cast<std::uint64_t>(e.from));
@@ -576,6 +601,7 @@ void dumpModEdge(Dump& d, std::string_view a, const ModEdge& e) {
     d.put(a, "tap", e.tap);
     d.put(a, "delay", e.delay.length);
     d.put(a, "clap", e.clapId);
+    d.put(a, "viaLane", e.viaLane);
     d.size(a, "values", e.values);
 }
 
@@ -687,13 +713,13 @@ std::string dumpPlan(const Plan& p) {
                                   rateSourceAhead, rateSourceBehind, rateSwitchDevice,
                                   rateSafeDevice, rateControlsChanged, scalarPublication,
                                   scalarHistory, requestedScalar, rate, smoothFrames, mix,
-                                  startSeconds, outputLatency, block, timeMap, warnings, projectDir,
-                                  preparedSources, media, instances, graph, anyLive, heldLive,
-                                  rendererNodes, liveNodes, rendererGraph, liveGraph,
-                                  rendererInstances, liveInstances, modules, rendererModules,
-                                  liveModules, rendererMeterNodes, liveMeterNodes, meterNodes,
-                                  frontier, rateOutput, frontierRings, recordTaps, recordRings,
-                                  handAt, handEpoch, handContinuable, split, deviceIn,
+                                  startSeconds, outputLatency, block, timeMap, warnings,
+                                  clipPlayers, projectDir, preparedSources, media, instances, graph,
+                                  anyLive, heldLive, rendererNodes, liveNodes, rendererGraph,
+                                  liveGraph, rendererInstances, liveInstances, modules,
+                                  rendererModules, liveModules, rendererMeterNodes, liveMeterNodes,
+                                  meterNodes, frontier, rateOutput, frontierRings, recordTaps,
+                                  recordRings, handAt, handEpoch, handContinuable, split, deviceIn,
                                   deviceInChannels, deviceRecording, hardwareMidi,
                                   midiInputsSettings, midiOutputsSettings, hardwareLead,
                                   hardwareLeadBase, deviceMidi, deviceMidiOffset, processedInputs] =
@@ -727,6 +753,7 @@ std::string dumpPlan(const Plan& p) {
                      p.rateSourceBehind});
     d.put(a, "timeMap", p.timeMap != nullptr);
     d.put(a, "warnings", p.warnings);
+    d.put(a, "clipPlayers", p.clipPlayers);
     d.put(a, "projectDir", p.projectDir.generic_string());
     d.put(a, "preparedSources", p.preparedSources != nullptr);
     d.put(a, "mainMaster", static_cast<std::uint64_t>(p.mainMaster));

@@ -137,18 +137,22 @@ struct Sorrel : Effect {
                          "Gate opens and closes; Expand turns quieter sound down by the ratio, "
                          "more the quieter it is.");
     Param threshold = decibels("Threshold", -80, 0, -40)
+                          .modulated()
                           .in("Gate")
                           .help("The level of the key, in dBFS, above which it opens.");
     Param hysteresis =
         decibels("Hysteresis", 0, 24, 6)
+            .modulated()
             .in("Gate")
             .activeWhen(mode, {"Gate"})
             .help("How far under the threshold the level must fall before it closes (Gate).");
     Param range = decibels("Range", -80, 0, -40)
+                      .modulated()
                       .offAtMin()
                       .in("Gate")
                       .help("How far it turns down when closed; -80 dB is silence.");
     Param ratioSet = ratio("Ratio", 1.2, 10, 2)
+                         .modulated()
                          .withKey("ratio")
                          .in("Gate")
                          .activeWhen(mode, {"Expand"})
@@ -156,16 +160,19 @@ struct Sorrel : Effect {
                              "Expand: each dB under the threshold becomes this many; 2 turns a "
                              "level 10 dB under it down 10 dB more.");
     Param attack = milliseconds("Attack", 0.05, 50, 1)
+                       .modulated()
                        .in("Timing")
                        .help(
                            "How long it takes to open; with lookahead the opening ends as the "
                            "sound arrives.");
     Param hold = milliseconds("Hold", 0, 1000, 20)
+                     .modulated()
                      .in("Timing")
                      .help(
                          "Gate stays open this long below the close level; Expand holds a falling "
                          "gain this long.");
     Param release = milliseconds("Release", 10, 3000, 150)
+                        .modulated()
                         .in("Timing")
                         .help("How fast it closes: the time it takes to turn down by 60 dB.");
     Param follow =
@@ -187,11 +194,13 @@ struct Sorrel : Effect {
             .help("What it listens to: its own input, or the sidechain input when connected.");
     Param keyHpf =
         frequency("Key HPF", 20, 2000, 20)
+            .modulated()
             .in("Key")
             .help(
                 "A high-pass on what it listens to, so rumble or a kick's spill does not "
                 "open it; 20 Hz is off.");
     Param keyLpf = frequency("Key LPF", 100, 20000, 20000)
+                       .modulated()
                        .in("Key")
                        .help(
                            "A low-pass on what it listens to, so cymbals or hiss do not open it; "

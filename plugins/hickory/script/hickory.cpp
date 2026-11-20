@@ -92,6 +92,7 @@ struct Hickory : Effect {
         .features = {"utility"}};
 
     Param gain = decibels("Gain", -60, 24, 0)
+                     .modulated()
                      .offAtMin()
                      .smoothed(20)
                      .in("Level")
@@ -99,6 +100,7 @@ struct Hickory : Effect {
     Param mute = toggle("Mute", false).in("Level").help("Silence, faded in and out over 10 ms.");
     Param delay =
         milliseconds("Delay", 0, 50, 0)
+            .modulated()
             .in("Level")
             .help(
                 "Delays the whole signal, to the nearest sample, to line it up with another "
@@ -112,11 +114,13 @@ struct Hickory : Effect {
                 "the mono sum (L+R)/2 on both, or the side (L-R)/2 on both.");
     Param width =
         percent("Width", 100, 0, 200)
+            .modulated()
             .smoothed(20)
             .in("Stereo")
             .help("The side against the mid: 0% is mono, 100% as it is, 200% twice the side.");
     Param balance =
         percent("Balance", 0, -100, 100)
+            .modulated()
             .smoothed(20)
             .in("Stereo")
             .help(
@@ -134,6 +138,7 @@ struct Hickory : Effect {
             .help("Makes the lows mono: the side below Mono Below goes, the mid stays untouched.");
     Param monoBelow =
         frequency("Mono Below", 30, 500, 120)
+            .modulated()
             .in("Low End")
             .activeWhen(bassMono)
             .help("Bass Mono's crossover: a 24 dB/oct Linkwitz-Riley high-pass on the side.");

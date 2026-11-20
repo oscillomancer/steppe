@@ -26,6 +26,7 @@
 #include "app_actions.h"
 #include "fx_attention.h"
 #include "meter_feed.h"
+#include "modulation_status.h"
 #include "plugin_drag.h"
 #include "selection_edit.h"
 #include "supple/ui/edge_scroll.h"
@@ -204,6 +205,7 @@ class Mixer {
     void setDepth(const model::EnvTarget& target, double depth, ui::Gesture g);
     void showModulation(Strip& st, const model::Track& t);
     std::map<model::Id, double> live_;  // telemetry: each route's target's offset now
+    LiveModulation liveModulation_;     // reads live_, inert routes left out
 };
 
 }  // namespace supple::gui
