@@ -2580,9 +2580,14 @@ same heights, scroll and colours.
   cell refuses the drop: the pointer says so and the cell is outlined in
   `meter-clip` (a cell that takes it, in `focus`).
 - **Drag a clip onto the timeline** to lay a copy there (`item.add {clip}`),
-  snapped as an item drag. **Drag an item into a cell** to make a clip from
-  a copy of its takes (`clip.add {item}`). A refused drop shows the error's
-  message in the status line (a warped take, `clip.unsupported`).
+  on a channel's own row, snapped as an item drag (Shift: free); the item
+  ghost layer shows where it lands while it is held
+  (`ItemGestures::showClipGhost`). **Drag an item into a cell** to make a
+  clip from a copy of the pressed item's takes (`clip.add {item}`); the item
+  stays where it was, the new clip is selected, and the cell is outlined
+  while the item is over it (an occupied one in `meter-clip`, refusing it).
+  A refused drop shows the error's message in the status line (a warped
+  take, `clip.unsupported`).
 - **Right-click** a clip: Rename, Colour…, Mode: Loop / Mode: Once,
   Quantize… (Project, Bar, Beat, 1/2 … 1/32, None), Duplicate (into the next
   empty cell to its right; none left is an error in the status line), Lay on

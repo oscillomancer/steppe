@@ -198,6 +198,16 @@ class Ghost : public ui::Node {
                             if (x < lanes.x - 4 || x > lanes.right() + 4) continue;
                             c.fillRect({x - 4, frame->y(pt.value) - 4, 8, 8}, t.color("focus"));
                         }
+        // A launcher clip in hand over the lanes: where its copy lands.
+        if (const auto& cg = g.clipGhost())
+            if (const auto row = v.trackLayout().indexOf(cg->track)) {
+                const ui::Rect r = v.rowRect(*row);
+                const float x0 = v.xAt(s.timeMap->secondsAt(cg->start)),
+                            x1 = v.xAt(s.timeMap->secondsAt(cg->end));
+                const ui::Rect ghost{x0, r.y + 1, std::max(2.0f, x1 - x0), r.h - 2};
+                c.fillRect(ghost, t.color("focus").withAlpha(0.25f));
+                c.strokeRect(ghost, t.color("focus"), 1.5f);
+            }
         // The drag's ghost.
         const model::Item* anchor =
             st.anchor.kind == model::Kind::Item ? itemOf(s, st.anchor) : nullptr;
@@ -395,6 +405,12 @@ ItemGestures::~ItemGestures() { *alive_ = nullptr; }
 void ItemGestures::installOverlay(ui::Root& root) {
     root_ = &root;
     if (!overlay_) overlay_ = root.addOverlay(std::make_unique<Ghost>(alive_));
+}
+
+void ItemGestures::showClipGhost(std::optional<ClipGhost> ghost) {
+    if (ghost == clipGhost_) return;
+    clipGhost_ = std::move(ghost);
+    if (root_) root_->requestAnimationFrame();
 }
 
 void ItemGestures::setSelection(std::vector<model::Id> items) {
@@ -934,6 +950,12 @@ bool ItemGestures::pointer(const ui::PointerEvent& e) {
                                    it);
                 }
                 state_.deltaRows = ok ? dr : 0;
+                // Over the clip launcher: the cell it would become a clip in.
+                if (view_.launcherShown()) {
+                    LauncherPane& pane = view_.launcherPane();
+                    pane.showDrop(pane.bounds().contains(e.pos) ? std::optional(e.pos)
+                                                                : std::nullopt);
+                }
                 break;
             }
             case Drag::TakeOut: {
@@ -1723,6 +1745,26 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
             changed();
             return;
         case Drag::Move: {
+            // Dropped in an empty launcher cell: a clip from a copy of the
+            // pressed item's takes (clip.add {item}); an occupied cell refuses
+            // it and the item stays.
+            if (view_.launcherShown()) {
+                LauncherPane& pane = view_.launcherPane();
+                pane.showDrop(std::nullopt);
+                if (pane.bounds().contains(e.pos)) {
+                    const LauncherPane::Hit over = pane.hitAt(e.pos);
+                    if (over.kind != LauncherPane::Hit::Kind::Cell) return;
+                    json::Value args = json::Value::object();
+                    args["track"] = over.track.str();
+                    args["scene"] = over.scene->str();
+                    args["item"] = state_.anchor.str();
+                    if (auto r = view_.runLauncher("clip.add", std::move(args)))
+                        if (const json::Value* made = r->find("clip"); made && made->isString())
+                            if (auto id = model::Id::parse(made->asString()))
+                                view_.selectClips({*id});
+                    return;
+                }
+            }
             if (state_.deltaBeats == 0 && state_.deltaRows == 0) return;
             // The anchor joins the set even if it was not selected (a press
             // whose modifiers copy, toggle or extend does not select it).

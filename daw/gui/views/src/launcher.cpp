@@ -172,6 +172,33 @@ LauncherPane::Hit LauncherPane::hitAt(ui::Point p) const {
     return hit;
 }
 
+void LauncherPane::showDrop(std::optional<ui::Point> at) {
+    if (!at && !dropAt_) return;
+    dropAt_ = at;
+    invalidate();
+}
+
+std::optional<ItemGestures::ClipGhost> LauncherPane::timelineGhost(model::Id clip, ui::Point p,
+                                                                   bool free) const {
+    const model::Session& s = view_.session();
+    const model::Clip* c = s.clips.find(clip);
+    if (!c || !view_.lanesRect().contains(p)) return std::nullopt;
+    const TrackLayout& layout = view_.trackLayout();
+    for (std::size_t i = 0; i < layout.rowCount(); ++i) {
+        const ui::Rect r = view_.rowRect(i);
+        if (p.y < r.y || p.y >= r.bottom()) continue;
+        const TrackRow& row = layout.rows()[i];
+        if (row.lane() || row.type != model::StripType::Channel) return std::nullopt;
+        const double start = view_.gestures().snappedBeatAt(p.x, free);
+        // A MIDI clip's length is in beats, an audio clip's in seconds.
+        const double end = c->kind == model::ClipKind::Midi
+                               ? start + c->length
+                               : s.timeMap->beatAt(s.timeMap->secondsAt(start) + c->length);
+        return ItemGestures::ClipGhost{row.track, start, end};
+    }
+    return std::nullopt;
+}
+
 bool LauncherPane::dropAllowed(const Hit& over) const {
     return over.scene && !over.clip && over.kind == Hit::Kind::Cell;
 }
@@ -291,13 +318,18 @@ void LauncherPane::paint(ui::Canvas& c) {
             c.strokeCircle(dot, 3.5f, t.color("ink-faint"));
         }
     }
-    // A clip in hand: where it would land, or that the cell refuses it.
-    if (drag_ && drag_->moving && drag_->over.scene) {
-        const auto col = std::find(cols.scenes.begin(), cols.scenes.end(), *drag_->over.scene);
+    // A clip in hand, or an item from the lanes: where it would land, or
+    // that the cell refuses it.
+    std::optional<Hit> over;
+    if (drag_ && drag_->moving && drag_->over.scene) over = drag_->over;
+    if (dropAt_) over = hitAt(*dropAt_);
+    if (over && over->scene) {
+        const auto col = std::find(cols.scenes.begin(), cols.scenes.end(), *over->scene);
         if (col != cols.scenes.end()) {
-            const ui::Rect cell = cellRect(drag_->over.row, col - cols.scenes.begin());
+            const ui::Rect cell = cellRect(over->row, col - cols.scenes.begin());
             c.strokeRect(cell.inset(2),
-                         dropAllowed(drag_->over) ? t.color("focus") : t.color("meter-clip"), 1.5f);
+                         dropAllowed(*over) ? t.color("focus") : t.color("meter-clip"), 1.5f);
+            ++stats.dropShown;
         }
     }
     // The Arr column's rule, and the pane's edge against the lanes.
@@ -402,6 +434,8 @@ bool LauncherPane::onPointer(const ui::PointerEvent& e) {
                 drag_->moving = true;
             if (drag_->moving) {
                 drag_->over = hitAt(e.pos);
+                view_.gestures().showClipGhost(
+                    timelineGhost(drag_->clip, e.pos, (e.mods & ui::kShift) != 0));
                 invalidate();
             }
             return true;
@@ -410,8 +444,19 @@ bool LauncherPane::onPointer(const ui::PointerEvent& e) {
             const Drag d = *drag_;
             drag_.reset();
             if (root()) root()->capture(nullptr);
+            view_.gestures().showClipGhost(std::nullopt);
             invalidate();
             if (!d.moving) return true;
+            // Onto the timeline: a copy of the clip's takes as an item there
+            // (item.add {clip}), snapped as an item drag (Shift: free).
+            if (const auto ghost = timelineGhost(d.clip, e.pos, (e.mods & ui::kShift) != 0)) {
+                json::Value args = json::Value::object();
+                args["track"] = ghost->track.str();
+                args["clip"] = d.clip.str();
+                args["position"] = ghost->start;
+                (void)view_.runLauncher("item.add", std::move(args));
+                return true;
+            }
             const Hit over = hitAt(e.pos);
             if (!dropAllowed(over)) return true;  // an occupied cell refuses it
             json::Value args = json::Value::object();

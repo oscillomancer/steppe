@@ -463,3 +463,58 @@ TEST_CASE("launcher: the header's buttons, scene ▶, rename, move, + and the sc
     f.exec("engine.stop", "{}");
     CHECK(f.errors.empty());
 }
+
+TEST_CASE(
+    "launcher: a clip drags onto the timeline as an item; an item into an empty cell as a clip") {
+    LauncherFixture f;
+    f.song();
+    views::LauncherPane& pane = f.view->launcherPane();
+    const std::size_t drums = f.row("tr_1"), keys = f.row("tr_3");
+    const model::Id keysTrack = *model::Id::parse("tr_3");
+    auto beatX = [&](double beat) { return f.view->xAt(f.app->head().timeMap->secondsAt(beat)); };
+    // Kit A onto the Keys' lane at beat 4: a ghost while held, an item on drop.
+    const ui::Point from = centre(views::LauncherPane::bodyRect(pane.cellRect(drums, 0)));
+    const ui::Rect lane = f.view->rowRect(keys);
+    const ui::Point to{beatX(4.0) + 1, lane.y + lane.h / 2};
+    REQUIRE(f.view->lanesRect().contains(to));
+    f.pointer(Pointer::Down, from);
+    f.pointer(Pointer::Move, {from.x + 12, from.y});
+    f.pointer(Pointer::Move, to);
+    const auto& ghost = f.view->gestures().clipGhost();
+    REQUIRE(ghost);
+    CHECK(ghost->track == keysTrack);
+    CHECK(ghost->start == doctest::Approx(4));
+    const double length = f.app->head().clips.find(*model::Id::parse("cl_1"))->length;
+    CHECK(ghost->end == doctest::Approx(4 + length));
+    f.pointer(Pointer::Up, to);
+    f.sync();
+    CHECK_FALSE(f.view->gestures().clipGhost());
+    CHECK(f.commands == std::vector<std::string>{"item.add"});
+    const model::Item* laid = nullptr;
+    for (const auto& e : f.app->head().items)
+        if (e.value->track == keysTrack) laid = &*e.value;
+    REQUIRE(laid);
+    CHECK(model::itemSpan(f.app->head(), *laid).startBeat == doctest::Approx(4));
+    CHECK(f.app->head().clips.find(*model::Id::parse("cl_1")));  // the clip stays
+
+    // That item into the Keys' empty Intro cell: outlined while held, a clip on drop.
+    f.commands.clear();
+    const std::size_t items = f.app->head().items.size();
+    const ui::Point grab{beatX(4.5), lane.y + 8};
+    const ui::Rect cell = pane.cellRect(keys, 0);
+    const ui::Point into{cell.x + 8, cell.bottom() - 8};
+    f.pointer(Pointer::Down, grab);
+    f.pointer(Pointer::Move, {grab.x - 20, grab.y});
+    f.pointer(Pointer::Move, into);
+    f.sync();
+    CHECK(pane.stats.dropShown == 1);
+    f.pointer(Pointer::Up, into);
+    f.sync();
+    CHECK(pane.stats.dropShown == 0);
+    CHECK(f.commands == std::vector<std::string>{"clip.add"});
+    const auto made = views::clipIn(f.app->head(), keysTrack, *model::Id::parse("sc_1"));
+    REQUIRE(made);
+    CHECK(f.view->selectedClips() == std::vector<model::Id>{*made});
+    CHECK(f.app->head().items.size() == items);  // the item stays where it was
+    CHECK(f.errors.empty());
+}

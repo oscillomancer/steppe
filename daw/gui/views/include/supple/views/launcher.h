@@ -24,6 +24,7 @@
 #include "supple/ui/gl.h"
 #include "supple/ui/node.h"
 #include "supple/ui/theme.h"
+#include "supple/views/item_gestures.h"
 
 namespace supple::views {
 
@@ -124,13 +125,17 @@ class LauncherPane : public ui::Node {
         std::optional<model::Id> scene, clip;
     };
     Hit hitAt(ui::Point p) const;
+    // An item dragged from the lanes over the pane (ItemGestures): the cell
+    // under `at` is outlined as a drop that takes it, or refuses it.
+    void showDrop(std::optional<ui::Point> at);
     ui::Rect arrRect(std::size_t row) const;
     LauncherColumns columns() const;
     // What the last paint drew (tests).
     struct Stats {
         std::size_t cells = 0, clips = 0, empty = 0;
         std::vector<std::string> names;  // the clips' names as drawn
-        std::size_t playing = 0, held = 0, queued = 0, arrLit = 0, selected = 0, squares = 0;
+        std::size_t playing = 0, held = 0, queued = 0, arrLit = 0, selected = 0, squares = 0,
+                    dropShown = 0;
         std::size_t notes = 0, columns = 0, pending = 0;  // the last paintGl's
     } stats;
 
@@ -153,7 +158,11 @@ class LauncherPane : public ui::Node {
         Hit over;
     };
     std::optional<Drag> drag_;
+    std::optional<ui::Point> dropAt_;
     bool dropAllowed(const Hit& over) const;
+    // The clip's copy on the lanes under `p` (a channel's own row), if any.
+    std::optional<ItemGestures::ClipGhost> timelineGhost(model::Id clip, ui::Point p,
+                                                         bool free) const;
     void openClipMenu(model::Id clip, ui::Point at);
     void renameClip(model::Id clip, ui::Point at);
 };
