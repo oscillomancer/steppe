@@ -2399,6 +2399,7 @@ EngineStatus EngineApp::engineStatus() {
     }
     st.dropped = static_cast<std::int64_t>(outputDrops_ + consumerDrops_);
     st.voiceDropped = static_cast<std::int64_t>(voiceDrops_);
+    if (engine_) st.modulationDeferred = static_cast<std::int64_t>(engine_->modulationDeferred());
     for (const model::Id& id : pool_->bridgeThreadsRefused())
         st.bridgeThreadsRefused.push_back(id.str());
     for (const auto& [id, error] : pool_->failedErrors()) {
@@ -5188,6 +5189,17 @@ struct Gain : Effect {
         run("rack.preset.save", R"({"rack": "rk_1", "name": "Gated VCA"})");
         run("track.add", R"({"name": "Lead"})");
         run("rack.add", R"({"track": "tr_2"})");
+        return;
+    }
+    if (fixture == "song_with_mod_out" || fixture == "song_with_modulation") {
+        // + rk_1 on tr_1: mo_1 Out, mo_2 a Mod Out; fx_1 a gain in tr_1's chain;
+        // with modulation, mr_1 takes mo_2.in_1 to fx_1's gain at depth 0.25
+        run("rack.add", R"({"track": "tr_1"})");
+        run("module.add", R"({"rack": "rk_1", "type": "mod_out", "x": 300, "y": 40})");
+        run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.gain"})");
+        if (fixture == "song_with_modulation")
+            run("modulation.add",
+                R"({"source": {"module": "mo_2", "input": "in_1"}, "target": {"fx": "fx_1", "param": "gain"}, "depth": 0.25})");
         return;
     }
     if (fixture == "song_with_module") {  // + wobble in the module library

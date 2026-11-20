@@ -1090,7 +1090,16 @@ and naming. All `edit` unless marked (q) query or (a) action.
   are `vca.learn.*` (Track groups and VCA controls, below).
 - **modulation** (ADR-0096): `modulation.add {source, target, depth,
   enabled?, lane?}`, `modulation.set {modulation, …}`, `modulation.remove
-  {modulation}`, `modulation.list {track?, fx?, rack?}` (q).
+  {modulation}`, `modulation.list {track?, fx?, rack?}` (q),
+  `modulation.telemetry {track?}` (q: each route's live target offset and
+  its span, M2), `modulate {target, source: lfo|follower|random|macro|
+  {module, input}, depth?, from?, rack?}` (M2: one undo step. Rack: `rack`,
+  else the first homed on the target's track with a Mod Out, else the
+  first named Modulators with one, else a new one on a new channel named
+  Modulators. It cables the module's first output into the first Mod Out
+  input with no cable or route, adding a Mod Out when none is free. A
+  follower gets an In module and a send from `from`. `modulation.cycle`
+  at `/from` when the follower would hear its own target.)
 - **scenes and clips** (ADR-0097, "Scenes and clips"): `scene.add {name?,
   color?, at?}`, `scene.set`, `scene.remove`, `scene.move {scene, to}`,
   `scene.list` (q); `clip.add {track, scene, notation? | audio_file? |
@@ -1569,7 +1578,9 @@ record the base only.
 
 Removing the source module, or the target's FX, track or route, removes its
 modulation routes, and the command warns with `modulation.removed` naming
-them. Routes whose target is in a frozen track belong to its freeze hash.
+them, at `/modulations/<id>`. A route whose target stops fitting (a
+modulated send turned MIDI or moved to other ends by `route.set`) is
+removed the same way, with the same warning. Routes whose target is in a frozen track belong to its freeze hash.
 Editing or removing them fails with `track.frozen`. Their source lies
 outside the print, as a sidechain's does: removing the source module (or
 its rack or home track) still removes such a route, and the frozen track
@@ -1580,9 +1591,12 @@ keeps playing its print.
   know, from the instance's parameter list (`fx.describe`): the parameter
   must be flagged modulatable and not read-only or bypass. VST3 parameters
   never are.
-- Mixer targets are refused until step M2 (`modulation.target`, with a hint
-  naming the step). A file's mixer-target route loads and is inert until
-  then (engine.md §1.4.1).
+- Mixer targets (step M2): the target track or send must exist and fit the
+  invariants above (`modulation.target` at `/target/track`,
+  `/target/route` or `/target/param` otherwise), and a target in a frozen
+  track fails with `track.frozen`. The depth bound is the target's
+  (`modulation.depth`): ±1 for a plug-in parameter, ±48 dB for a volume,
+  ±200 % for pan and width.
 - Errors: `modulation.source`, `modulation.target`, `modulation.duplicate`,
   `modulation.cycle` (naming the route that closes it), `modulation.depth`,
   `modulation.limit`. Each carries `code`, `message`, `path` and a `hint`.

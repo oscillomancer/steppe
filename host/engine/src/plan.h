@@ -446,6 +446,9 @@ struct Edge {
     // its mix slot, `stripMute` its mute curve, `vcas` its VCAs' mutes.
     bool rackSend = false, homeMute = false, homeSilenced = false;
     int rackHome = -1;
+    // Its level's modulation (ADR-0096, M-i): an index into its source
+    // node's `mixMods`, the node that applies the level; -1: none.
+    int modVolume = -1;
     // A MIDI send (ADR-0067): from a channel's MIDI stream or a Note Out
     // (`rackNotes`), to a channel or a Notes module (`midiNotes`). Queues and
     // voices belong to the destination, and stay on its executor; delay
@@ -513,6 +516,9 @@ struct ModEdge {
 // points; plain CLAP parameters in their CLAP value. Values reach the plugin
 // as param events at every point and every kAutomationStep samples.
 inline constexpr std::uint32_t kAutomationStep = 32;
+// The top of a strip's or send's volume_db (the model's range): a modulated
+// level is clamped to it (ADR-0096, M-i).
+inline constexpr double kMixMaxDb = 12.0;
 struct ParamLane {
     std::uint32_t clapId = 0;
     Automation curve;
@@ -634,6 +640,7 @@ struct ModParam {
     double sent = 0.0;    // the memo: the last amount the plug-in was sent
     bool listed = false;  // the memo lists it: the plug-in may hold `sent`
     bool stale = true;    // send at the next grid point whatever `sent` is
+    int telemetry = -1;   // its Plan::modOffsets slot; -1: no route this plan
 };
 
 struct Stage {
@@ -705,6 +712,9 @@ struct Stage {
     std::uint32_t nextNoteId = 0;
     std::size_t releases = 0;  // leading addressed releases already use running ids
     std::uint64_t voiceDropped = 0;
+    // Modulation events that waited past their grid point for room: a full
+    // block, or a bridged block's cut (ADR-0096); the engine reports them.
+    std::uint64_t modDeferred = 0;
     std::vector<host::OutputEvent> outStorage;
     host::OutputEvents outEvents;
     // PDC policy (fx.pdc): an ignored stage keeps its own dry delay but adds
@@ -877,6 +887,26 @@ struct Node {
     std::vector<std::size_t> in;     // incoming edges, in summation order
     std::vector<std::size_t> out;    // source-owned send encoders
     std::vector<std::size_t> modIn;  // incoming modulation edges (Plan::modEdges)
+    // Mixer targets of modulation routes (ADR-0096, M-i), bound by prepare:
+    // the node's volume, pan and width (indices into `mixMods`, -1: none),
+    // and its sends' levels (Edge::modVolume).
+    struct MixMod {
+        std::vector<std::uint32_t> routes;  // Plan::modEdges indices, summed
+        Id object{};                        // the track or route
+        std::string param;                  // volume, pan, width
+        // The sum at the current grid interval's start and end: a route
+        // delivers each value one interval early (`before` less 32), so the
+        // end is known when the interval plays.
+        double prev = 0, next = 0;
+        bool preserveOnLocate = false;  // a swap just carried it
+        std::vector<double> offsets;    // this block's, per frame
+        int telemetry = -1;             // its Plan::modOffsets slot
+    };
+    std::vector<MixMod> mixMods;
+    int modVolume = -1, modPan = -1, modWidth = -1;
+    double modOffset(int mod, std::uint32_t i) const SUPPLE_RT {
+        return mod < 0 ? 0.0 : mixMods[static_cast<std::size_t>(mod)].offsets[i];
+    }
     std::vector<Stage> chain;
     // Input FX (a channel's input_chain): they process its record input, which
     // is then monitored and recorded, whenever the track is armed with an
@@ -1025,6 +1055,13 @@ struct MixSlots {
     };
     std::unique_ptr<StageValue[]> stages;
     std::vector<Id> stageFx;
+    // A modulation route's depth and enabled (ADR-0096, M-h), per
+    // Plan::modEdges entry, read by the executor of the route's target.
+    struct ModValue {
+        std::atomic<double> depth{0};
+        std::atomic<bool> enabled{true};
+    };
+    std::unique_ptr<ModValue[]> modulations;
     std::atomic<std::uint64_t> sequence{0};
     std::array<std::uint64_t, 2> seen{};  // per executor class (0: renderer or all, 1: live)
 };
@@ -1041,6 +1078,13 @@ struct Plan {
     std::vector<OutputTap> outputs;
     std::vector<Edge> edges;
     std::vector<ModEdge> modEdges;  // modulation routes (ADR-0096), in route id order
+    // Telemetry (ADR-0096, M2): each bound target's last offset, written by
+    // the executor that runs it (relaxed), read by the main thread. A
+    // plug-in's is a fraction of its CLAP range, a mixer target's in dB or
+    // percent. modOffsetOf maps each modEdges entry to its target's slot
+    // (-1: inert).
+    std::unique_ptr<std::atomic<double>[]> modOffsets;
+    std::vector<int> modOffsetOf;
     // Every node by id, sorted (indexForCarry): an adoption finds a node's
     // counterpart in log n steps, whichever earlier plan it carries from.
     // Node ids are unique within a plan (asserted in debug builds).
@@ -1334,6 +1378,11 @@ ExecutorChanges changedExecutors(const Plan& p, const model::Session& s);
 // An executor's copy of the published values into the nodes and edges its
 // class reads (`liveClass` as for wrapTo), at the start of a block.
 void syncMix(Plan& p, int liveClass) SUPPLE_RT;
+// One stage's modulation events for a block (ADR-0096, plan.cpp): after its
+// automation, at each point of the absolute grid; `origin` is the plan's
+// first sample. Exposed for tests.
+void modulateStage(Plan& p, Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t origin,
+                   const void* self) SUPPLE_RT;
 // The device output for `k` frames (ADR-0056): every output master's main
 // pair at its channels (taps beyond `width` are skipped), the rest silent.
 // `out[c] + offset` receives channel c. A channel's first tap is copied, so a

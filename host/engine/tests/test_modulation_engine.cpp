@@ -7,38 +7,26 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <string>
 
 #include <supple/engine/offline.h>
 #include <supple/engine/realtime.h>
 
+#include "bridge_patience.h"
 #include "plan.h"
 #include "plan_dump.h"
 #include "rack_runtime.h"
+#include "realtime_common.h"
+#include "supple/console9/console9.h"
 #include "supple/model/freeze.h"
 #include "supple/model/schemas.h"
 #include "supple/params/params.h"
 
-using namespace supple;
-using namespace supple::engine;
-using model::Id;
-using model::kMaster;
-
 namespace {
 namespace d = supple::engine::detail;
 
-const std::filesystem::path kFixture = FIXTURE_CLAP_PATH;
 constexpr const char* kGain = "com.suppleaudio.test.gain";
-
-InstancePool makePool() {
-    return InstancePool([](const model::PluginRef& ref) -> Result<host::PluginInfo> {
-        auto list = host::scan(std::span<const std::filesystem::path>(&kFixture, 1));
-        if (!list) return std::move(list).error();
-        for (auto& p : *list)
-            if (p.id == ref.id) return p;
-        return Error("engine.plugin_missing", "plugin " + ref.id + " not found");
-    });
-}
 
 Id addChannel(model::EditTxn& t) {
     model::Track tr;
@@ -178,7 +166,7 @@ TEST_CASE("modulation: the source rack runs before its target") {
     CHECK(rack.modValues[1].empty());                    // nothing reads in_2
 }
 
-TEST_CASE("modulation: a disabled route is still an edge, a mixer target is inert until M2") {
+TEST_CASE("modulation: a disabled route is still an edge, a mixer target binds to its node") {
     Patch patch;
     model::EditTxn t(patch.s, 2);
     const Id off = modulate(t, patch.modOut, patch.plain, "gain");
@@ -190,10 +178,12 @@ TEST_CASE("modulation: a disabled route is still an edge, a mixer target is iner
     CHECK_FALSE(p.plan.modEdges[0].enabled);
     CHECK_FALSE(p.plan.modEdges[0].inert);
     CHECK(p.plan.modEdges[1].route == fader);
-    CHECK(p.plan.modEdges[1].inert);
-    CHECK(std::any_of(p.plan.warnings.begin(), p.plan.warnings.end(), [&](const std::string& w) {
-        return w.find(fader.str()) != std::string::npos && w.find("M2") != std::string::npos;
-    }));
+    CHECK_FALSE(p.plan.modEdges[1].inert);
+    const d::Node& b = p.plan.nodes[p.node(patch.b)];
+    REQUIRE(b.modVolume == 0);
+    CHECK(b.modPan == -1);
+    CHECK(b.mixMods.at(0).routes == std::vector<std::uint32_t>{1});
+    CHECK(b.mixMods.at(0).offsets.size() == 128);
     CHECK(p.node(patch.rack) < p.node(patch.b));
 }
 
@@ -592,4 +582,587 @@ TEST_CASE(
     auto prepared = d::prepare(*compiled, frozen);
     REQUIRE_FALSE(prepared);
     CHECK(prepared.error().code == "audio.open");
+}
+
+namespace {
+
+// Emit with the beat phase, and a latent gain ahead of the modulated one,
+// modulated too from the same input: its route's delay is the latent stage's
+// own compensation, the plain one's is shifted by it. `isolation` for both.
+// B's volume and pan are modulated too, after the whole chain.
+model::Session latentPair(model::Isolation isolation) {
+    const Emit emit("beat_phase", 0.2);
+    model::EditTxn t(emit.s, 2);
+    model::FxInstance fx;
+    fx.plugin.id = kGain;
+    fx.isolation = isolation;
+    fx.patch =
+        json::parse(R"({"schema":"supple.test-gain-patch/1.0","params":{"latency":"short"}})")
+            .value();
+    const Id latent = t.create(fx);
+    t.modify<model::Track>(emit.b,
+                           [&](model::Track& tr) { tr.chain.insert(tr.chain.begin(), latent); });
+    t.modify<model::FxInstance>(emit.gain, [&](model::FxInstance& f) { f.isolation = isolation; });
+    modulate(t, emit.modOut, latent, "gain", -0.1);
+    // And B's volume and pan, interpolated between grid points (M-i).
+    modulate(t, emit.modOut, emit.b, "volume", -9.0);
+    modulate(t, emit.modOut, emit.b, "pan", 40.0);
+    return commit(t);
+}
+
+// Plays `s` live from 0 for `frames`: the left channel and the output latency.
+struct Live {
+    std::vector<float> left;
+    std::uint32_t latency = 0;
+};
+Live playLive(const model::Session& s, const EngineOptions& options, std::uint32_t block,
+              std::int64_t frames) {
+    InstancePool pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = frames});
+    Engine engine(pool, media, options);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = block}));
+    REQUIRE(engine.load(s));
+    engine.play();
+    const std::int64_t cycles = frames / block;
+    if (options.anticipative)
+        runAheadOnState(engine, backend, cycles, block);
+    else
+        backend.run(cycles);
+    CHECK(engine.anticipationMisses() == 0);
+    CHECK(engine.bridgeLateCycles() == 0);  // a late live block is silent by design
+    engine.stop();
+    CHECK(engine.processErrors() == 0);
+    return {backend.capture().channels[0], engine.outputLatency()};
+}
+
+}  // namespace
+
+TEST_CASE(
+    "modulation: real-time output equals the offline render, in both executors, at 128 "
+    "and 512" *
+    doctest::description("rt")) {
+    const model::Session s = latentPair(model::Isolation::InProcess);
+    const std::int64_t seconds = 2, frames = 48000 * seconds + 4096;
+    for (const std::uint32_t block : {128u, 512u}) {
+        const auto offline = render(s, double(seconds), block);
+        // The routes move the level, on the grid, so equality says something.
+        CHECK(offline.left != render(Emit("beat_phase", std::nullopt).s, double(seconds)).left);
+        for (const EngineOptions& options :
+             {kInCallback, EngineOptions{.workers = 0}, EngineOptions{.workers = 2}}) {
+            INFO("block " << block << ", anticipative " << options.anticipative << ", workers "
+                          << options.workers);
+            const Live live = playLive(s, options, block, frames);
+            CHECK(live.latency == 64);
+            CHECK(maxDiff(live.left, live.latency, offline.left, 48000 * seconds) == 0.0);
+        }
+    }
+}
+
+TEST_CASE("modulation: through the bridge, real-time output equals the in-process render" *
+          doctest::description("rt")) {
+    host::setBridgeExecutable(BRIDGE_PATH);
+    const std::int64_t seconds = 1, frames = 48000 * seconds + 4096;
+    const auto reference = render(latentPair(model::Isolation::InProcess), double(seconds), 128);
+    for (const auto isolation : {model::Isolation::SharedBridge, model::Isolation::Dedicated}) {
+        INFO("isolation " << static_cast<int>(isolation));
+        const model::Session s = latentPair(isolation);
+        CHECK(render(s, double(seconds), 128).left == reference.left);
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("anticipative " << options.anticipative);
+            // A deadline no healthy plug-in misses under load (bridge_patience.h).
+            const Live live = playLive(s, test::patient(options), 128, frames);
+            CHECK(maxDiff(live.left, live.latency, reference.left, 48000 * seconds) == 0.0);
+        }
+    }
+}
+
+TEST_CASE("modulation: from a seek and over loop wraps, both executors play it as offline" *
+          doctest::description("rt")) {
+    const model::Session s = latentPair(model::Isolation::InProcess);
+    constexpr std::uint32_t kBlock = 128;
+    constexpr std::size_t kPass = 24000;  // the loop, 0.5 s to 1 s
+    constexpr int kPasses = 4;
+    auto pool = makePool();
+    // From 1 s, after a seek: the offline render from there.
+    const auto fromOne =
+        renderOffline(s, pool, {.startSeconds = 1.0, .endSeconds = 2.0, .blockSize = kBlock})
+            .value();
+    const auto whole = render(s, 1.0, kBlock);  // no loop: up to the first wrap
+    std::vector<std::vector<float>> loops;
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        for (const bool looped : {false, true}) {
+            INFO("looped " << looped);
+            auto rtPool = makePool();
+            MediaCache media;
+            const std::size_t frames = looped ? kPass * (1 + kPasses) : 48000;
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual,
+                                  .captureFrames = static_cast<std::int64_t>(frames) + 4096});
+            Engine engine(rtPool, media, options);
+            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+            REQUIRE(engine.load(s));
+            REQUIRE(engine.awaitPlan());
+            if (looped)
+                engine.setLoop(0.5, 1.0, true);
+            else
+                engine.seek(1.0);
+            engine.play();
+            const auto cycles = static_cast<std::int64_t>((frames + 4096) / kBlock);
+            if (options.anticipative)
+                runAheadOnState(engine, backend, cycles, kBlock);
+            else
+                backend.run(cycles);
+            engine.stop();
+            CHECK(engine.processErrors() == 0);
+            const std::size_t L = engine.outputLatency();
+            const auto& got = backend.capture().channels[0];
+            if (!looped) {
+                CHECK(maxDiff(got, L, fromOne.audio.channels[0], 48000 - 4096) == 0.0);
+                continue;
+            }
+            // Up to the first wrap, the render without a loop; every pass
+            // after a wrap plays as the first such pass.
+            CHECK(maxDiff(got, L, whole.left, 2 * kPass) == 0.0);
+            const std::vector<float> second(
+                got.begin() + static_cast<std::ptrdiff_t>(L + 2 * kPass),
+                got.begin() + static_cast<std::ptrdiff_t>(L + 3 * kPass));
+            for (int k = 3; k <= kPasses; ++k) {
+                INFO("pass " << k);
+                CHECK(maxDiff(got, L + static_cast<std::size_t>(k) * kPass, second, kPass) == 0.0);
+            }
+            loops.emplace_back(got.begin(), got.begin() + static_cast<std::ptrdiff_t>(frames));
+        }
+    }
+    REQUIRE(loops.size() == 2);
+    CHECK(loops[0] == loops[1]);  // the two executors, sample for sample
+}
+
+TEST_CASE("modulation: a target handed to the live executor mid-play keeps its offsets" *
+          doctest::description("rt")) {
+    // Arming B makes it live (ADR-0096, M-f): its plug-ins and the rack that
+    // modulates them move to the callback, carrying the memo and held values.
+    const model::Session s = latentPair(model::Isolation::InProcess);
+    model::EditTxn t(s, 3);
+    const Id b = s.tracks.find(kMaster)->children.at(1);
+    t.modify<model::Track>(b, [](model::Track& tr) { tr.record.armed = true; });
+    const model::Session armed = commit(t);
+    constexpr std::uint32_t kBlock = 128;
+    const auto offline = render(s, 2.0, kBlock);
+    CHECK(render(armed, 2.0, kBlock).left == offline.left);  // arming changes no sound
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        auto rtPool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 96000 + 4096});
+        Engine engine(rtPool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+        const auto run = [&](std::int64_t frames) {
+            if (options.anticipative)
+                runAheadOnState(engine, backend, frames / kBlock, kBlock);
+            else
+                backend.run(frames / kBlock);
+        };
+        REQUIRE(engine.load(s));
+        engine.play();
+        run(32000);
+        REQUIRE(engine.load(armed));
+        run(32000);
+        REQUIRE(engine.load(s));
+        run(32000 + 4096);
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+        CHECK(engine.anticipationMisses() == 0);
+        const std::size_t L = engine.outputLatency();
+        CHECK(maxDiff(backend.capture().channels[0], L, offline.left, 96000) == 0.0);
+    }
+}
+
+TEST_CASE("modulation: depth and enabled reach a running plan without a compile" *
+          doctest::description("rt")) {
+    // ADR-0096, M-h: a depth drag is a mix value, as a fader is; lane compiles.
+    const Emit emit("playing", 0.1);
+    const auto edited = [&](const model::Session& from, auto&& change) {
+        model::EditTxn t(from, from.version + 1);
+        t.modify<model::Modulation>(emit.route, change);
+        return commit(t);
+    };
+    const auto half = edited(emit.s, [](model::Modulation& m) { m.depth = 0.05; });
+    const auto off = edited(half, [](model::Modulation& m) { m.enabled = false; });
+    const auto hidden = edited(off, [](model::Modulation& m) { m.lane = false; });
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 96}));
+        const auto run = [&](std::int64_t blocks) {
+            if (options.anticipative)
+                runAheadOnState(engine, backend, blocks, 96);
+            else
+                backend.run(blocks);
+        };
+        REQUIRE(engine.load(emit.s));
+        engine.play();
+        run(100);  // 9600 frames
+        const auto generation = engine.planGeneration();
+        REQUIRE(engine.load(half));
+        CHECK(engine.planGeneration() == generation);
+        run(100);
+        REQUIRE(engine.load(off));
+        CHECK(engine.planGeneration() == generation);
+        run(100);
+        REQUIRE(engine.load(hidden));
+        CHECK(engine.planGeneration() > generation);  // lane is a route edit
+        run(100);
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+        // The anticipative renderer takes a value up to its render-ahead
+        // (9600 frames here) later: read each step's end.
+        const auto& cap = backend.capture().channels[0];
+        CHECK(double(cap[9000]) == doctest::Approx(gainAt(0.1)).epsilon(1e-4));
+        CHECK(double(cap[19000]) == doctest::Approx(gainAt(0.05)).epsilon(1e-4));
+        CHECK(double(cap[28500]) == doctest::Approx(gainAt(0)).epsilon(1e-4));
+        CHECK(double(cap[38000]) == doctest::Approx(gainAt(0)).epsilon(1e-4));
+    }
+}
+
+namespace {
+
+// Emit without a plug-in route, plus mixer routes added by `edit`; B's
+// level reaches the master (the rack's Out is 1.0 while playing).
+model::Session mixed(const Emit& emit, const std::function<void(model::EditTxn&)>& edit) {
+    model::EditTxn t(emit.s, 2);
+    edit(t);
+    return commit(t);
+}
+
+double ratio(const std::vector<float>& a, const std::vector<float>& b, std::size_t at) {
+    return double(a[at]) / double(b[at]);
+}
+
+}  // namespace
+
+TEST_CASE("modulation: a track's volume moves by signal x depth in dB, clamped to its range" *
+          doctest::description("rt")) {
+    const Emit emit("playing", std::nullopt);
+    const auto plain = render(emit.s, 0.5);
+    const auto down = render(
+        mixed(emit, [&](model::EditTxn& t) { modulate(t, emit.modOut, emit.b, "volume", -6.0); }),
+        0.5);
+    CHECK(ratio(down.left, plain.left, 12000) ==
+          doctest::Approx(console9::faderGain(-6) / console9::faderGain(0)).epsilon(1e-6));
+    // Base +10 dB and +6 dB of modulation: the sum stops at the top, 12 dB.
+    const auto loud = [&](model::EditTxn& t) {
+        t.modify<model::Track>(emit.b, [](model::Track& tr) { tr.volumeDb = 10; });
+    };
+    const auto base = render(mixed(emit, loud), 0.5);
+    const auto top = render(mixed(emit,
+                                  [&](model::EditTxn& t) {
+                                      loud(t);
+                                      modulate(t, emit.modOut, emit.b, "volume", 6.0);
+                                  }),
+                            0.5);
+    CHECK(ratio(top.left, base.left, 12000) ==
+          doctest::Approx(console9::faderGain(12) / console9::faderGain(10)).epsilon(1e-6));
+    // A disabled route adds 0.
+    const auto off = render(mixed(emit,
+                                  [&](model::EditTxn& t) {
+                                      const Id r = modulate(t, emit.modOut, emit.b, "volume", -6.0);
+                                      t.modify<model::Modulation>(
+                                          r, [](model::Modulation& m) { m.enabled = false; });
+                                  }),
+                            0.5);
+    CHECK(off.left == plain.left);
+}
+
+TEST_CASE("modulation: pan and width move by signal x depth in percent" *
+          doctest::description("rt")) {
+    const Emit emit("playing", std::nullopt);
+    InstancePool pool = makePool();
+    const auto stereo = [&](const model::Session& s) {
+        OfflineSettings settings;
+        settings.endSeconds = 0.5;
+        auto r = renderOffline(s, pool, settings);
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return std::array{double(r->audio.channels[0][12000]), double(r->audio.channels[1][12000])};
+    };
+    const auto panned = stereo(
+        mixed(emit, [&](model::EditTxn& t) { modulate(t, emit.modOut, emit.b, "pan", 50.0); }));
+    const auto fixed = stereo(mixed(emit, [&](model::EditTxn& t) {
+        t.modify<model::Track>(emit.b, [](model::Track& tr) { tr.pan = 50; });
+    }));
+    CHECK(panned[0] == doctest::Approx(fixed[0]).epsilon(1e-6));
+    CHECK(panned[1] == doctest::Approx(fixed[1]).epsilon(1e-6));
+    CHECK(panned[1] > panned[0]);
+    // Clamped at 100.
+    const auto hard = stereo(mixed(emit, [&](model::EditTxn& t) {
+        t.modify<model::Track>(emit.b, [](model::Track& tr) { tr.pan = 80; });
+        modulate(t, emit.modOut, emit.b, "pan", 60.0);
+    }));
+    const auto right = stereo(mixed(emit, [&](model::EditTxn& t) {
+        t.modify<model::Track>(emit.b, [](model::Track& tr) { tr.pan = 100; });
+    }));
+    CHECK(hard[0] == doctest::Approx(right[0]).epsilon(1e-6));
+    CHECK(hard[1] == doctest::Approx(right[1]).epsilon(1e-6));
+    const auto narrow = stereo(mixed(emit, [&](model::EditTxn& t) {
+        t.modify<model::Track>(emit.b, [](model::Track& tr) { tr.pan = 50; });
+        modulate(t, emit.modOut, emit.b, "width", -60.0);
+    }));
+    const auto narrowFixed = stereo(mixed(emit, [&](model::EditTxn& t) {
+        t.modify<model::Track>(emit.b, [](model::Track& tr) {
+            tr.pan = 50;
+            tr.width = 40;
+        });
+    }));
+    CHECK(narrow[0] == doctest::Approx(narrowFixed[0]).epsilon(1e-6));
+    CHECK(narrow[1] == doctest::Approx(narrowFixed[1]).epsilon(1e-6));
+}
+
+TEST_CASE("modulation: a send's level moves by signal x depth, and the send is encoded for it" *
+          doctest::description("rt")) {
+    // B is silent at its fader; a pre-fader send carries it to a buss.
+    const Emit emit("playing", std::nullopt);
+    Id send;
+    const auto sending = [&](model::EditTxn& t) {
+        t.modify<model::Track>(emit.b, [](model::Track& tr) { tr.volumeDb = model::kSilenceDb; });
+        model::Track buss;
+        buss.type = model::StripType::Buss;
+        buss.parent = kMaster;
+        const Id verb = t.create(buss);
+        t.modify<model::Track>(kMaster, [&](model::Track& m) { m.children.push_back(verb); });
+        model::Route r;
+        r.from.track = emit.b;
+        r.to.track = verb;
+        r.tap = model::Tap::PreFader;
+        send = t.create(r);
+    };
+    const auto plain = render(mixed(emit, sending), 0.5);
+    const auto down = render(mixed(emit,
+                                   [&](model::EditTxn& t) {
+                                       sending(t);
+                                       modulate(t, emit.modOut, send, "volume", -6.0);
+                                   }),
+                             0.5);
+    REQUIRE(std::abs(plain.left[12000]) > 0.01f);
+    CHECK(ratio(down.left, plain.left, 12000) ==
+          doctest::Approx(console9::faderGain(-6) / console9::faderGain(0)).epsilon(1e-5));
+}
+
+TEST_CASE("modulation: a mixer target is linear between grid points, a plug-in steps on them" *
+          doctest::description("rt")) {
+    const Emit emit("beat_phase", std::nullopt);
+    const auto level =
+        render(mixed(emit,
+                     [&](model::EditTxn& t) { modulate(t, emit.modOut, emit.b, "volume", -12.0); }),
+               1.0)
+            .left;
+    // Over a beat the phase ramps, so the level changes at almost every
+    // frame (not only every 32), and the same at any block size.
+    std::size_t changes = 0;
+    for (std::size_t i = 4800; i < 24000; ++i) changes += level[i] != level[i - 1];
+    CHECK(changes > 19000 * 9 / 10);
+    for (const std::uint32_t block : {37u, 128u})
+        CHECK(render(mixed(emit,
+                           [&](model::EditTxn& t) {
+                               modulate(t, emit.modOut, emit.b, "volume", -12.0);
+                           }),
+                     1.0, block)
+                  .left == level);
+}
+
+TEST_CASE("modulation: removing another Mod Out keeps a latency-disabled route off") {
+    // Review round 54, F1: what M-d keeps names the source by module and
+    // input, so a shift in the rack's Mod Outs is no route edit. The route
+    // comes from the rack's second Mod Out; the first, unrouted, goes.
+    const Emit emit("playing", std::nullopt);
+    model::EditTxn t(emit.s, 2);
+    const Id second = addModule(t, emit.rack, model::kModOutModule);
+    Id transport{};
+    for (const auto& c : emit.s.cables)
+        if (c.value->to.object == emit.modOut) transport = c.value->from.object;
+    cable(t, transport, "playing", second, "in_1");
+    const Id route = modulate(t, second, emit.gain, "gain", 0.1);
+    const auto on = commit(t);
+    model::EditTxn l(on, 3);
+    l.modify<model::FxInstance>(emit.gain, [](model::FxInstance& fx) {
+        fx.patch =
+            json::parse(
+                R"({"schema":"supple.test-gain-patch/1.0","params":{"gain":-6,"latency":"short"}})")
+                .value();
+    });
+    const auto latent = commit(l);
+    model::EditTxn r(latent, 4);
+    for (const auto& c : latent.cables)
+        if (c.value->to.object == emit.modOut) r.remove<model::Cable>(c.id);
+    r.remove<model::RackModule>(emit.modOut);
+    const auto removed = commit(r);
+    REQUIRE(removed.modulations.contains(route));
+
+    InstancePool pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+    Engine engine(pool, media, {.anticipative = false, .workers = 0});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 96}));
+    const auto settle = [&](int blocks) {
+        for (int i = 0; i < blocks; i += 10) {
+            engine.service();
+            backend.run(10);
+        }
+    };
+    REQUIRE(engine.load(on));
+    engine.play();
+    settle(100);
+    REQUIRE(engine.load(latent));
+    settle(100);
+    REQUIRE(pool.modulationDisabled(emit.gain));
+    REQUIRE(engine.load(removed));
+    settle(100);
+    engine.stop();
+    CHECK(pool.modulationDisabled(emit.gain));
+    CHECK(double(backend.capture().channels[0][28000]) == doctest::Approx(gainAt(0)).epsilon(1e-4));
+}
+
+TEST_CASE(
+    "modulation: an FX moved into its track's input chain with its route removed gets its 0") {
+    // Review round 54, F2: the memo follows the instance between the input
+    // chain and the main chain, so the removed route's offset is cleared.
+    const Emit on("playing", 0.1);
+    model::EditTxn a(on.s, 2);
+    a.modify<model::Track>(on.b, [](model::Track& tr) { tr.record.armed = true; });
+    const auto armed = commit(a);
+    model::EditTxn m(armed, 3);
+    m.remove<model::Modulation>(on.route);
+    m.modify<model::Track>(on.b, [&](model::Track& tr) {
+        tr.chain.clear();
+        tr.inputChain.push_back(on.gain);
+    });
+    const auto moved = commit(m);
+    InstancePool pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+    Engine engine(pool, media, kInCallback);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 96}));
+    REQUIRE(engine.load(armed));
+    engine.play();
+    backend.run(100);
+    REQUIRE(engine.load(moved));
+    backend.run(100);
+    engine.stop();
+    CHECK(engine.processErrors() == 0);
+    const auto& cap = backend.capture().channels[0];
+    CHECK(double(cap[9000]) == doctest::Approx(gainAt(0.1)).epsilon(1e-4));
+    CHECK(double(cap[19000]) == doctest::Approx(gainAt(0)).epsilon(1e-4));
+}
+
+TEST_CASE("modulation: a handover that also changes the routes sends the new offsets" *
+          doctest::description("rt")) {
+    // Review round 54's open question: the memo carried when a track goes
+    // live (arming B) must describe what its instance last heard. A constant
+    // source makes a stale memo visible: a matching sum would not be resent.
+    // Arming B and halving the depth at once, then arming off and removing
+    // the route at once: each level is the new one, in both executors.
+    const Emit on("playing", 0.1);
+    model::EditTxn a(on.s, 2);
+    a.modify<model::Track>(on.b, [](model::Track& tr) { tr.record.armed = true; });
+    a.modify<model::Modulation>(on.route, [](model::Modulation& m) { m.depth = 0.05; });
+    const auto live = commit(a);
+    model::EditTxn r(live, 3);
+    r.modify<model::Track>(on.b, [](model::Track& tr) { tr.record.armed = false; });
+    r.remove<model::Modulation>(on.route);
+    const auto gone = commit(r);
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 96}));
+        const auto run = [&](std::int64_t blocks) {
+            if (options.anticipative)
+                runAheadOnState(engine, backend, blocks, 96);
+            else
+                backend.run(blocks);
+        };
+        REQUIRE(engine.load(on.s));
+        engine.play();
+        run(100);
+        REQUIRE(engine.load(live));
+        run(150);
+        REQUIRE(engine.load(gone));
+        run(150);
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+        const auto& cap = backend.capture().channels[0];
+        CHECK(double(cap[9000]) == doctest::Approx(gainAt(0.1)).epsilon(1e-4));
+        // Loads at 9600 and 24000; the anticipative renderer takes each up to
+        // its render-ahead later, so read near each segment's end.
+        CHECK(double(cap[23000]) == doctest::Approx(gainAt(0.05)).epsilon(1e-4));
+        CHECK(double(cap[38000]) == doctest::Approx(gainAt(0)).epsilon(1e-4));
+    }
+}
+
+TEST_CASE("modulation: an event that finds no room waits for the next grid point, counted") {
+    // ADR-0096: events dropped for capacity are counted and reported. The
+    // emitter keeps a value that does not fit and sends the then-current one
+    // at a later grid point; each wait counts.
+    const Emit emit("playing", 0.1);
+    Prepared p(emit.s);
+    d::Stage* stage = nullptr;
+    for (d::Node& n : p.plan.nodes)
+        for (d::Stage& st : n.chain)
+            if (!st.mods.empty()) stage = &st;
+    REQUIRE(stage);
+    REQUIRE(stage->instance);
+    if (!stage->instance->processing()) REQUIRE(stage->instance->startProcessing());
+    const d::ModEdge& me = p.plan.modEdges.at(0);
+    std::fill(p.plan.modEdges[0].values.begin(), p.plan.modEdges[0].values.end(), 1.0);
+    REQUIRE(me.values.size() == 128);
+    host::Event filler;
+    filler.kind = host::Event::Kind::Param;
+    stage->blockEvents.clear();
+    while (stage->blockEvents.size() < stage->blockEvents.capacity())
+        stage->blockEvents.push_back(filler);
+    const auto full = stage->blockEvents.size();
+    d::modulateStage(p.plan, *stage, 0, 128, 0, nullptr);
+    CHECK(stage->blockEvents.size() == full);  // nothing fits
+    CHECK(stage->modDeferred == 4);            // grid points 0, 32, 64 and 96
+    stage->blockEvents.clear();
+    d::modulateStage(p.plan, *stage, 128, 128, 0, nullptr);
+    REQUIRE_FALSE(stage->blockEvents.empty());  // sent at the first point with room
+    CHECK(stage->blockEvents.front().kind == host::Event::Kind::ParamMod);
+    CHECK(stage->blockEvents.front().time == 0);
+    CHECK(stage->modDeferred == 4);
+    stage->instance->stopProcessing();
+}
+
+TEST_CASE("modulation: telemetry gives each bound route its target's live offset" *
+          doctest::description("rt")) {
+    // ADR-0096, M2: a plug-in's offset as a fraction of its range, a mixer
+    // target's in its unit; routes on one target read the same sum.
+    const Emit emit("playing", 0.1);
+    const auto s = mixed(emit, [&](model::EditTxn& t) {
+        modulate(t, emit.modOut, emit.b, "volume", -6.0);
+        model::Modulation second;
+        second.source = {emit.modOut, "in_2"};
+        second.target = {emit.gain, "gain"};
+        second.depth = 0.05;
+        t.create(second);  // in_2 has no cable: it adds 0
+    });
+    InstancePool pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+    Engine engine(pool, media, kInCallback);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 96}));
+    REQUIRE(engine.load(s));
+    CHECK(engine.modulationOffsets().size() == 3);
+    engine.play();
+    backend.run(100);
+    const auto offsets = engine.modulationOffsets();
+    engine.stop();
+    REQUIRE(offsets.size() == 3);
+    CHECK(offsets.at(emit.route) == doctest::Approx(0.1));  // playing: 1 x 0.1
+    CHECK(offsets.at(Id{model::Kind::Modulation, emit.route.n + 2}) == doctest::Approx(0.1));
+    CHECK(offsets.at(Id{model::Kind::Modulation, emit.route.n + 1}) == doctest::Approx(-6.0));
 }

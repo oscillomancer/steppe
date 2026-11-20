@@ -38,12 +38,12 @@ bool entriesMatch(const model::IdMap<T>& a, const model::IdMap<T>& b, F&& same) 
 
 // Whether `b` differs from `a` only in what a running plan takes without
 // compiling: strip levels, pans, widths and dual pans, send levels and pans that keep the send's
-// encoding, VCA levels, FX wet and bypass, track and VCA mute and solo, route mutes that
-// keep the send's encoding, and the points of held volume/pan envelopes in a
-// writing mode. Every other field is compared whole, so a field added to one
-// of these objects can never pass as a mix edit. `changed`: something did
-// change; `stale` gains the held targets whose curves the plan no longer
-// matches. Keep the collections in step with model::Session.
+// encoding, VCA levels, FX wet and bypass, track and VCA mute and solo, modulation depth
+// and enabled, route mutes that keep the send's encoding, and the points of held volume/pan
+// envelopes in a writing mode. Every other field is compared whole, so a field added to one of
+// these objects can never pass as a mix edit. `changed`: something did change; `stale` gains the
+// held targets whose curves the plan no longer matches. Keep the collections in step with
+// model::Session.
 bool mixOnly(const model::Session& a, const model::Session& b,
              const std::vector<model::EnvTarget>& holds, bool& changed,
              std::vector<model::EnvTarget>& stale) {
@@ -60,10 +60,19 @@ bool mixOnly(const model::Session& a, const model::Session& b,
         !a.media.sameStorage(b.media) || !a.midi.sameStorage(b.midi) ||
         !a.autoItems.sameStorage(b.autoItems) || !a.markers.sameStorage(b.markers) ||
         !a.regions.sameStorage(b.regions) || !a.racks.sameStorage(b.racks) ||
-        !a.cables.sameStorage(b.cables) || !a.modulations.sameStorage(b.modulations) ||
-        !a.scenes.sameStorage(b.scenes) || !a.clips.sameStorage(b.clips) || a.blobs != b.blobs ||
-        a.extraSections != b.extraSections)
+        !a.cables.sameStorage(b.cables) || !a.scenes.sameStorage(b.scenes) ||
+        !a.clips.sameStorage(b.clips) || a.blobs != b.blobs || a.extraSections != b.extraSections)
         return false;
+    // A modulation route's depth and enabled are mix values (ADR-0096, M-h);
+    // its source, target and lane compile.
+    const bool modulations = entriesMatch(
+        a.modulations, b.modulations, [&](model::Modulation x, const model::Modulation& y) {
+            changed |= x.depth != y.depth || x.enabled != y.enabled;
+            x.depth = y.depth;
+            x.enabled = y.enabled;
+            return x == y;
+        });
+    if (!modulations) return false;
     // A module's knobs reach its instance without a compile (RackPool::
     // applyParams); where it sits and what it is called are the window's.
     const bool modules =
@@ -281,6 +290,15 @@ bool Engine::loadMixValues(const model::Session& session, const std::filesystem:
     bool changed = false;
     std::vector<model::EnvTarget> stale = staleCurves_;
     if (!mixOnly(*latest_, session, writeHolds_, changed, stale) || !changed) return false;
+    // Editing a route into an FX whose routes a latency change turned off
+    // turns them on again (ADR-0096, M-d): that takes a compile.
+    if (!latest_->modulations.sameStorage(session.modulations))
+        for (const auto& e : session.modulations) {
+            const model::Modulation* was = latest_->modulations.find(e.id);
+            if (was && *was != *e.value && e.value->target.object.kind == model::Kind::Fx &&
+                plugins_.modulationDisabled(e.value->target.object))
+                return false;
+        }
     // ADR-0093: the callback takes values at its next block, the renderer
     // where it is rendering, up to the render-ahead later in the stream. An
     // edit both read compiles, and so does one the callback reads while an
@@ -305,6 +323,17 @@ bool Engine::loadMixValues(const model::Session& session, const std::filesystem:
     latest_ = std::make_shared<const model::Session>(session);
     ++mixEdits_;
     return true;
+}
+
+std::map<model::Id, double> Engine::modulationOffsets() const {
+    std::map<model::Id, double> out;
+    const auto* p = latestPlan_.load(std::memory_order_acquire);
+    if (!p || !p->modOffsets) return out;
+    for (std::size_t i = 0; i < p->modEdges.size() && i < p->modOffsetOf.size(); ++i)
+        if (const int slot = p->modOffsetOf[i]; slot >= 0)
+            out.emplace(p->modEdges[i].route, p->modOffsets[static_cast<std::size_t>(slot)].load(
+                                                  std::memory_order_relaxed));
+    return out;
 }
 
 bool Engine::releasesStaleCurve() const {

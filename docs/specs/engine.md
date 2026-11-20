@@ -313,7 +313,13 @@ only.
     first grid point and leaves the memo. So that a carried memo always
     fits, each stage keeps a slot for every parameter any plan has
     modulated on its FX (`InstancePool::modulatedParams`, main thread), and
-    a stage with no route left keeps its slots until their 0s are sent.
+    a stage with no route left keeps its slots until their 0s are sent. The
+    memo follows its instance between the track's input chain and main
+    chain. It is not carried to another node: an FX moved to another track
+    starts with every slot stale, so the first grid point resends what is
+    modulated there, but a parameter the new plan no longer modulates (a
+    route removed in the same edit as the move) keeps its last offset until
+    the instance's next epoch (activation, reset, patch or state).
   - It goes stale (it is never emptied) on the instance's activation, a
     reset (a seek, a play start), a changed instance, and a patch or state
     applied to the instance: `host::Instance::modulationEpoch()` counts
@@ -329,32 +335,58 @@ only.
   - A patch edit to a modulated FX compiles instead of taking the patch path
     (ADR-0092).
   - Each stage reserves `block / 32 + 2` events per modulated parameter and
-    one for each other slot. An event that finds the block full is tried
-    again at the next grid point. Input-chain stages reserve their
+    one for each other slot. An event that finds the block full, or a
+    bridged block at the bridge's cut (`host::Instance::kBridgeBlockEvents`,
+    2048), waits for the next grid point, which sends the then-current sum.
+    Each wait is counted (`Stage::modDeferred`): an offline render warns per
+    FX, and the real-time engine adds the count to
+    `Engine::modulationDeferred()` (`engine.status` `modulation_deferred`)
+    and warns once per rise (`modulation.events`). Input-chain stages reserve their
     automation and modulation events as chain stages do.
   - Bridged plug-ins receive the same events through the bridge; a late
     block's coalescing keeps the latest value per target (§5).
 - **Inert routes.** A route is inert, with a plan warning, when binding finds
   that its target cannot take it: the parameter is gone, not flagged
   modulatable, read-only or bypass, or the plug-in is missing or VST3
-  (`modulation.target`). Until step M2 a route to a mixer target is inert
-  the same way, reported as `target`. It is also inert after its target reported a
+  (`modulation.target`), or for a mixer target when its node applies no
+  such level (a send that is not an encoded edge of its source). A route
+  into a frozen track is inert silently: the print plays. It is also inert
+  after its target reported a
   latency change while modulated (`modulation.latency`): the engine then
   keeps every route into that FX's modulated parameters disabled until one
   of them is edited, the FX is replaced, or the project is reopened.
+- **Telemetry (M2).** Prepare gives each bound target a slot in
+  `Plan::modOffsets` and each route its target's (`modOffsetOf`). The
+  executor that runs a target stores its offset with a relaxed store: a
+  plug-in's sum at every grid point, sent or not, as a fraction of its CLAP
+  range; a mixer target's last frame of each block, in dB or percent.
+  `Engine::modulationOffsets()` (main thread) reads the newest plan's, by
+  route; `modulation.telemetry` adds each route's span (depth × its signal
+  range).
 - **Rack handover.** While a rack's modules are still owned by the other
   executor (rack.md §6, "State"), its Mod Outs hold their last values and
   the emitters they feed send nothing for that block.
-- **Depth and `enabled`** are values published without compiling: one mix
-  slot per route, read at block start (§1.6, ADR-0093). *Not yet built
-  (step M2); until then they compile.*
-- **Mixer targets** (track volume, pan, width; a send's level). *Not yet
-  built (step M2).* The offset at a frame is linear between the values at
-  the target grid points either side of it. The one-interval lookahead
-  above makes the later value available in time. The
-  base plus the offset is clamped to the target's range per sample, before
-  the gain ramps. Volume and send level offsets are in dB, pan and width in
-  percent.
+- **Depth and `enabled`** are values published without compiling (M-h): one
+  mix slot per route (`MixSlots::modulations`), copied at block start by the
+  executor of the route's target, which runs its source too (§1.6,
+  ADR-0093). A route's source, target and `lane` compile. An edit to a route
+  into an FX whose routes a latency change turned off compiles, since that
+  edit turns them back on.
+- **Mixer targets** (M-i: track volume, pan, width; the level of an audio
+  send between strips or a rack send). Prepare binds each to its node's
+  `mixMods` (`Node::modVolume`, `modPan`, `modWidth`, `Edge::modVolume` on
+  the node that applies the send's level: its source, or the rack for a rack
+  send); routes on one target sum. At each point of the absolute 32-frame
+  grid the interval's end becomes the sum of the route values read there,
+  which the one-interval lookahead above delivers early, and the offset at
+  each frame is linear between the interval's start and end. A rack the
+  other executor still owns holds the end. The interpolation is carried by
+  target across plan swaps and starts at 0 after a locate, with the delays.
+  The base (automation, else the fader's value) plus the offset is clamped
+  per sample to the target's range (volume up to 12 dB, a level at −inf
+  stays −inf; pan and width −100..100), before VCAs and the gain ramps; a
+  modulated level is computed per sample. A modulated send is encoded.
+  Volume and send level offsets are in dB, pan and width in percent.
 
 Renders stay deterministic and real time equals offline at any block size,
 in both executors and through the bridge: every grid point and delay is a
@@ -656,7 +688,8 @@ earlier collection does not imply that collection already freed its old plan.
 `Engine::load` took only in strip `volume_db`/`pan`/`width`/`pan_left`/`pan_right`,
 send `volume_db`/`pan`, VCA `volume_db`, and since ADR-0093 FX `wet`/`bypass`
 (not `offline`, which decides whether an instance exists), track `mute` and
-`solo`, VCA `mute` and `solo`, and route `mute` where the send is encoded
+`solo`, VCA `mute` and `solo`, a modulation route's `depth` and `enabled`
+(ADR-0096), and route `mute` where the send is encoded
 anyway (a tap before the fader, a level other than 0 dB, its own pan, mono
 or polarity; MIDI routes and rack sends are never encoded) (and in the
 points of envelopes a write pass holds, including the new pan targets,

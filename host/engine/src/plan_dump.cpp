@@ -221,9 +221,10 @@ void dumpStage(Dump& d, std::string_view a, const Stage& st) {
                                   keyed, keyChannels, key, inPin, outPin, keyPins, pinned,
                                   chanDelay, pinBuf, auxOutPin, auxOut, auxOutPtr, auxWritten,
                                   blockEvents, voices, pendingVoices, noteSources, noteSourceIndex,
-                                  sourceIds, nextNoteId, releases, voiceDropped, outStorage,
-                                  outEvents, pdcIgnore, parallel, group, groupEnd, before, align,
-                                  groupIn, groupOut, os, osFilters, osIn, osOut, osKey, osPad] = st;
+                                  sourceIds, nextNoteId, releases, voiceDropped, modDeferred,
+                                  outStorage, outEvents, pdcIgnore, parallel, group, groupEnd,
+                                  before, align, groupIn, groupOut, os, osFilters, osIn, osOut,
+                                  osKey, osPad] = st;
     d.put(a, "fx", st.fx);
     d.put(a, "instance", st.instance != nullptr);
     d.put(a, "rackMidiBase", st.rackMidiBase);
@@ -438,19 +439,20 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
                                   midiDropped, midiEventRate, midiWindow, midiReleaseTimeline,
                                   midiSends, hardwareMidiSource, id, inBySource, rack, rackOuts,
                                   rackIns, rackStages, freeze, frozenAudio, auxCount, aux, in, out,
-                                  modIn, chain, inputChain, recordInputs, recordRack, inputLatency,
-                                  inputBuf, latIn, latChain, timelineShift, sum, preFx, preFader,
-                                  post, postKey, events, nextEvent, rateEventFresh, held,
-                                  releaseHeld, releaseLive, clips, takeChains, postItems, itemShift,
-                                  items, mix, silentFrom, silentTo, dropItems, noteTarget, volumeDb,
-                                  pan, staticGain, panSettings, panCache, type, mute, master,
-                                  decodeInput, phaseInvert, mono, utility, soloSilenced, postKeyed,
-                                  stageSlot, decoder, encoder, fader, keyEncoder, keyFader,
-                                  monitorInputs, tapeAuto, midiIn, liveHeld, live, autoVolume,
-                                  autoPan, autoMute, autoWidth, autoPanLeft, autoPanRight,
-                                  autoPanBoost, holdWidth, holdPanLeft, holdPanRight, holdPanBoost,
-                                  holdVolume, holdPan, vcas, auxPostGain, meterSlot,
-                                  meterGeneration, meterPeak, meterSumSq] = n;
+                                  modIn, mixMods, modVolume, modPan, modWidth, chain, inputChain,
+                                  recordInputs, recordRack, inputLatency, inputBuf, latIn, latChain,
+                                  timelineShift, sum, preFx, preFader, post, postKey, events,
+                                  nextEvent, rateEventFresh, held, releaseHeld, releaseLive, clips,
+                                  takeChains, postItems, itemShift, items, mix, silentFrom,
+                                  silentTo, dropItems, noteTarget, volumeDb, pan, staticGain,
+                                  panSettings, panCache, type, mute, master, decodeInput,
+                                  phaseInvert, mono, utility, soloSilenced, postKeyed, stageSlot,
+                                  decoder, encoder, fader, keyEncoder, keyFader, monitorInputs,
+                                  tapeAuto, midiIn, liveHeld, live, autoVolume, autoPan, autoMute,
+                                  autoWidth, autoPanLeft, autoPanRight, autoPanBoost, holdWidth,
+                                  holdPanLeft, holdPanRight, holdPanBoost, holdVolume, holdPan,
+                                  vcas, auxPostGain, meterSlot, meterGeneration, meterPeak,
+                                  meterSumSq] = n;
     d.put(a, "id", n.id);
     d.put(a, "type", n.type);
     d.put(a, "master", n.master);
@@ -487,6 +489,16 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
     d.put(a, "in", n.in);
     d.put(a, "out", n.out);
     d.put(a, "modIn", n.modIn);
+    // Mixer targets (ADR-0096, M-i): what each sums; its state is the block's.
+    d.put(a, "modTargets", std::array{n.modVolume, n.modPan, n.modWidth});
+    for (std::size_t i = 0; i < n.mixMods.size(); ++i) {
+        const auto& mm = n.mixMods[i];
+        const std::string m = at(a, "mixMod", i);
+        d.put(m, "object", mm.object);
+        d.put(m, "param", mm.param);
+        d.put(m, "routes", mm.routes);
+        d.size(m, "offsets", mm.offsets);
+    }
     dumpStages(d, a, "chain", n.chain);
     dumpStages(d, a, "input", n.inputChain);
     d.put(a, "recordInputs", n.recordInputs);
@@ -577,8 +589,8 @@ void dumpEdge(Dump& d, std::string_view a, const Edge& e) {
                                   holdStripPanBoost, encoder, fader, encoded, delay,
                                   preserveDelayOnLocate, tmp, auxLinks, auxOnly, auxTmp, rackIn,
                                   rackOut, rackLatency, rackPadding, rackSend, homeMute,
-                                  homeSilenced, rackHome, midi, rackNotes, midiNotes, midiFrom,
-                                  midiTo, midiSourceBase, midiQueue, midiHead, midiCount,
+                                  homeSilenced, rackHome, modVolume, midi, rackNotes, midiNotes,
+                                  midiFrom, midiTo, midiSourceBase, midiQueue, midiHead, midiCount,
                                   midiVoices, midiAddresses, midiReconcile, midiNextVoice,
                                   midiEpoch, midiStarted, midiRelease, midiMuted, frontier, ring,
                                   frontierBuf] = e;
@@ -630,6 +642,7 @@ void dumpEdge(Dump& d, std::string_view a, const Edge& e) {
     d.put(a, "rackSend", e.rackSend);
     d.put(a, "home", std::array{e.homeMute, e.homeSilenced});
     d.put(a, "rackHome", e.rackHome);
+    d.put(a, "modVolume", e.modVolume);
     d.put(a, "midi", e.midi);
     d.put(a, "midiRoute",
           std::array{e.rackNotes, e.midiNotes, e.midiFrom, e.midiTo, e.midiSourceBase});
@@ -665,16 +678,16 @@ void dumpSlot(Dump& d, std::string_view a, const MixSlots::Value& v) {
 
 std::string dumpPlan(const Plan& p) {
     [[maybe_unused]] const auto& [pool, buffers, sessionVersion, generation, nodes, mainMaster,
-                                  outputs, edges, modEdges, nodeIndex, linearConsole,
-                                  masterPlayrate, rateEnvelope, rateEnabled, syncPlan, syncRate,
-                                  timelines, previousTimelines, rateControl, preparedRateBoundary,
-                                  rateHandDevice, rateSeekSequence, rateEpochSeekSequence,
-                                  rateFromGeneration, rateFromUnity, ratePrepared, rateOrigin,
-                                  rateDeviceMargin, rateBackendLatency, rateSourceAhead,
-                                  rateSourceBehind, rateSwitchDevice, rateSafeDevice,
-                                  rateControlsChanged, scalarPublication, scalarHistory,
-                                  requestedScalar, rate, smoothFrames, mix, startSeconds,
-                                  outputLatency, block, timeMap, warnings, projectDir,
+                                  outputs, edges, modEdges, modOffsets, modOffsetOf, nodeIndex,
+                                  linearConsole, masterPlayrate, rateEnvelope, rateEnabled,
+                                  syncPlan, syncRate, timelines, previousTimelines, rateControl,
+                                  preparedRateBoundary, rateHandDevice, rateSeekSequence,
+                                  rateEpochSeekSequence, rateFromGeneration, rateFromUnity,
+                                  ratePrepared, rateOrigin, rateDeviceMargin, rateBackendLatency,
+                                  rateSourceAhead, rateSourceBehind, rateSwitchDevice,
+                                  rateSafeDevice, rateControlsChanged, scalarPublication,
+                                  scalarHistory, requestedScalar, rate, smoothFrames, mix,
+                                  startSeconds, outputLatency, block, timeMap, warnings, projectDir,
                                   preparedSources, media, instances, graph, anyLive, heldLive,
                                   rendererNodes, liveNodes, rendererGraph, liveGraph,
                                   rendererInstances, liveInstances, modules, rendererModules,
@@ -730,6 +743,7 @@ std::string dumpPlan(const Plan& p) {
     d.put(a, "modEdges", static_cast<std::uint64_t>(p.modEdges.size()));
     for (std::size_t i = 0; i < p.modEdges.size(); ++i)
         dumpModEdge(d, "m" + std::to_string(i), p.modEdges[i]);
+    d.put(a, "modOffsetOf", p.modOffsetOf);  // the values are telemetry, not the plan
     std::vector<std::string> index;
     for (const Plan::NodeKey& k : p.nodeIndex)
         index.push_back(k.id.str() + "=" + std::to_string(k.node));
