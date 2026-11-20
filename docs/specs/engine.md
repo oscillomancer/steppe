@@ -345,9 +345,12 @@ only.
 - **Rack handover.** While a rack's modules are still owned by the other
   executor (rack.md §6, "State"), its Mod Outs hold their last values and
   the emitters they feed send nothing for that block.
-- **Depth and `enabled`** are values published without compiling: one mix
-  slot per route, read at block start (§1.6, ADR-0093). *Not yet built
-  (step M2); until then they compile.*
+- **Depth and `enabled`** are values published without compiling (M-h): one
+  mix slot per route (`MixSlots::modulations`), copied at block start by the
+  executor of the route's target, which runs its source too (§1.6,
+  ADR-0093). A route's source, target and `lane` compile. An edit to a route
+  into an FX whose routes a latency change turned off compiles, since that
+  edit turns them back on.
 - **Mixer targets** (track volume, pan, width; a send's level). *Not yet
   built (step M2).* The offset at a frame is linear between the values at
   the target grid points either side of it. The one-interval lookahead
@@ -574,7 +577,8 @@ earlier collection does not imply that collection already freed its old plan.
 `Engine::load` took only in strip `volume_db`/`pan`/`width`/`pan_left`/`pan_right`,
 send `volume_db`/`pan`, VCA `volume_db`, and since ADR-0093 FX `wet`/`bypass`
 (not `offline`, which decides whether an instance exists), track `mute` and
-`solo`, VCA `mute` and `solo`, and route `mute` where the send is encoded
+`solo`, VCA `mute` and `solo`, a modulation route's `depth` and `enabled`
+(ADR-0096), and route `mute` where the send is encoded
 anyway (a tap before the fader, a level other than 0 dB, its own pan, mono
 or polarity; MIDI routes and rack sends are never encoded) (and in the
 points of envelopes a write pass holds, including the new pan targets,

@@ -1164,6 +1164,11 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
     mix.routes = std::make_unique<MixSlots::Value[]>(p.edges.size());
     mix.hardware = std::make_unique<MixSlots::Value[]>(p.hardwareMidi.size());
     mix.vcas = std::make_unique<MixSlots::Value[]>(mix.vcaIds.size());
+    mix.modulations = std::make_unique<MixSlots::ModValue[]>(p.modEdges.size());
+    for (std::size_t i = 0; i < p.modEdges.size(); ++i) {
+        mix.modulations[i].depth.store(p.modEdges[i].depth, std::memory_order_relaxed);
+        mix.modulations[i].enabled.store(p.modEdges[i].enabled, std::memory_order_relaxed);
+    }
     for (std::size_t i = 0; i < p.nodes.size(); ++i) {
         mix.strips[i].mute.store(p.nodes[i].mute, std::memory_order_relaxed);
         mix.strips[i].soloSilenced.store(p.nodes[i].soloSilenced, std::memory_order_relaxed);
@@ -4242,6 +4247,11 @@ void publishMix(Plan& p, const model::Session& s, std::span<const model::EnvTarg
         mix.vcas[i].mute.store(g->vca->mute, relaxed);
         store(mix.vcas[i], g->vca->volumeDb, 0, held(holds, mix.vcaIds[i], "volume"), false);
     }
+    for (std::size_t i = 0; i < p.modEdges.size(); ++i)
+        if (const model::Modulation* m = s.modulations.find(p.modEdges[i].route)) {
+            mix.modulations[i].depth.store(m->depth, relaxed);
+            mix.modulations[i].enabled.store(m->enabled, relaxed);
+        }
     mix.sequence.store(sequence + 2, std::memory_order_release);
 }
 
@@ -4296,6 +4306,12 @@ ExecutorChanges changedExecutors(const Plan& p, const model::Session& s) {
             touch(owner);
         touchVcas(e.vcas, owner);
     }
+    // A modulation route is read where its target is (its source runs there too).
+    for (std::size_t i = 0; i < p.modEdges.size(); ++i)
+        if (const model::Modulation* m = s.modulations.find(p.modEdges[i].route);
+            m && (m->depth != mix.modulations[i].depth.load(relaxed) ||
+                  m->enabled != mix.modulations[i].enabled.load(relaxed)))
+            touch(p.nodes[p.modEdges[i].to]);
     // A hardware route's VCAs are its source's (prepareHardwareMidi), read by
     // the same executor: the node's own check covers them.
     for (std::size_t i = 0; i < p.hardwareMidi.size(); ++i) {
@@ -4389,6 +4405,12 @@ void syncMix(Plan& p, int liveClass) SUPPLE_RT {
         if (!ours(p.nodes[route.source])) continue;
         route.mute = mix.hardware[i].mute.load(relaxed);
         syncVcas(route.vcas);
+    }
+    for (std::size_t i = 0; i < p.modEdges.size(); ++i) {
+        ModEdge& me = p.modEdges[i];
+        if (!ours(p.nodes[me.to])) continue;
+        me.depth = mix.modulations[i].depth.load(relaxed);
+        me.enabled = mix.modulations[i].enabled.load(relaxed);
     }
     std::atomic_thread_fence(std::memory_order_acquire);
     if (mix.sequence.load(relaxed) == sequence) seen = sequence;

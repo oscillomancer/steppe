@@ -766,3 +766,53 @@ TEST_CASE("modulation: a target handed to the live executor mid-play keeps its o
         CHECK(maxDiff(backend.capture().channels[0], L, offline.left, 96000) == 0.0);
     }
 }
+
+TEST_CASE("modulation: depth and enabled reach a running plan without a compile" *
+          doctest::description("rt")) {
+    // ADR-0096, M-h: a depth drag is a mix value, as a fader is; lane compiles.
+    const Emit emit("playing", 0.1);
+    const auto edited = [&](const model::Session& from, auto&& change) {
+        model::EditTxn t(from, from.version + 1);
+        t.modify<model::Modulation>(emit.route, change);
+        return commit(t);
+    };
+    const auto half = edited(emit.s, [](model::Modulation& m) { m.depth = 0.05; });
+    const auto off = edited(half, [](model::Modulation& m) { m.enabled = false; });
+    const auto hidden = edited(off, [](model::Modulation& m) { m.lane = false; });
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 96}));
+        const auto run = [&](std::int64_t blocks) {
+            if (options.anticipative)
+                runAheadOnState(engine, backend, blocks, 96);
+            else
+                backend.run(blocks);
+        };
+        REQUIRE(engine.load(emit.s));
+        engine.play();
+        run(100);  // 9600 frames
+        const auto generation = engine.planGeneration();
+        REQUIRE(engine.load(half));
+        CHECK(engine.planGeneration() == generation);
+        run(100);
+        REQUIRE(engine.load(off));
+        CHECK(engine.planGeneration() == generation);
+        run(100);
+        REQUIRE(engine.load(hidden));
+        CHECK(engine.planGeneration() > generation);  // lane is a route edit
+        run(100);
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+        // The anticipative renderer takes a value up to its render-ahead
+        // (9600 frames here) later: read each step's end.
+        const auto& cap = backend.capture().channels[0];
+        CHECK(double(cap[9000]) == doctest::Approx(gainAt(0.1)).epsilon(1e-4));
+        CHECK(double(cap[19000]) == doctest::Approx(gainAt(0.05)).epsilon(1e-4));
+        CHECK(double(cap[28500]) == doctest::Approx(gainAt(0)).epsilon(1e-4));
+        CHECK(double(cap[38000]) == doctest::Approx(gainAt(0)).epsilon(1e-4));
+    }
+}

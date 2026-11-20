@@ -1025,6 +1025,13 @@ struct MixSlots {
     };
     std::unique_ptr<StageValue[]> stages;
     std::vector<Id> stageFx;
+    // A modulation route's depth and enabled (ADR-0096, M-h), per
+    // Plan::modEdges entry, read by the executor of the route's target.
+    struct ModValue {
+        std::atomic<double> depth{0};
+        std::atomic<bool> enabled{true};
+    };
+    std::unique_ptr<ModValue[]> modulations;
     std::atomic<std::uint64_t> sequence{0};
     std::array<std::uint64_t, 2> seen{};  // per executor class (0: renderer or all, 1: live)
 };
