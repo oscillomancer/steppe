@@ -786,6 +786,52 @@ struct TimedEvent {
     NoteOrigin origin{};
 };
 
+// A clip of the clip launcher (ADR-0097, engine.md §1.4.2), compiled into
+// its channel's node. Its phase is a pure function of the song position
+// and the anchor its launch set: `(song − anchor) mod period`, in beats for
+// a MIDI clip and timeline samples for an audio clip.
+struct ClipEvent {
+    double beat = 0;  // within the period, [0, period]; note-offs may sit at the period
+    host::Event event;
+    NoteOrigin origin{};
+};
+struct ClipPlayer {
+    Id clip;
+    bool midi = true, once = false, muted = false;
+    // Audio: its prepared take (`audio.start`/`length` unused), the period
+    // and the loop window, in timeline samples.
+    Clip audio;
+    std::int64_t periodFrames = 0, loopStartFrames = 0, loopFrames = 0;
+    bool loopOn = false;
+    // MIDI: the period in beats and its events, sorted by beat (offs first at
+    // a beat), every pass of the loop window already laid out.
+    double periodBeats = 0;
+    std::vector<ClipEvent> events;
+};
+// What a channel plays (engine.md §1.4.2): transport state, carried across
+// plan swaps by node and clip id, never in the model.
+struct LaunchState {
+    enum class Kind : std::uint8_t { Arrangement, Clip, Held, Stopped };
+    Kind kind = Kind::Arrangement;
+    int player = -1;                // Kind::Clip: its Node::players entry
+    std::int64_t anchorSample = 0;  // song samples (plan origin 0)
+    double anchorBeat = 0;          // the same position in beats
+    // The switch's crossfade: what was left (-1 the arrangement, a player,
+    // -2 nothing) and the song sample where the switch began.
+    int fadeFrom = -2;
+    std::int64_t fadeStart = 0, fadeAnchorSample = 0;  // the left player's anchor
+};
+// What a launch does to one channel, at the block boundary where the
+// channel's song position reaches `anchorSample` (engine.md §1.4.2).
+struct LaunchAction {
+    LaunchState::Kind kind = LaunchState::Kind::Arrangement;
+    int player = -1;
+    std::int64_t anchorSample = 0;
+    double anchorBeat = 0;
+};
+// A crossfade's length at a switch: 5 ms of timeline samples.
+inline constexpr double kLaunchFadeSeconds = 0.005;
+
 // A take with its own FX chain or envelopes (gap log #22): the item plays
 // through it before it reaches the track's input. Its input runs `latency`
 // samples ahead (the chain's PDC), its output is cut to the item's span and
@@ -932,6 +978,17 @@ struct Node {
     bool releaseLive = false;  // the device's notes end (its input is no longer heard)
     std::vector<Clip> clips;
     std::vector<TakeChain> takeChains;
+    // The clip launcher (ADR-0097): the channel's clips, what it plays, and
+    // this block's arrangement gain (null: 1 throughout) with its buffers.
+    std::vector<ClipPlayer> players;
+    LaunchState launch;
+    std::int64_t launchFadeFrames = 0;
+    const float* arrangementGain = nullptr;
+    std::vector<float> arrangementGains;
+    Stereo launchBuf;
+    // MIDI sizing (prepareRackMidi): the most clip notes sounding at once and
+    // the most clip events in a block-long window, over the players.
+    std::size_t clipVoices = 0, clipWindow = 0;
     // Masters (ADR-0057): their own items play after the plain gain/pan stage,
     // into `items`, and join `post` there (ramped by the master's mute only);
     // `mix` keeps the output before them, what a master's recording takes.
@@ -1150,6 +1207,9 @@ struct Plan {
     // depend on that session staying alive (the real-time engine outlives it).
     std::shared_ptr<const time::TimeMap> timeMap;
     std::vector<std::string> warnings;
+    // Channels compile their clips' players (ADR-0097). Off for an offline
+    // render with no launch log: renders play the arrangement only.
+    bool clipPlayers = true;
     std::filesystem::path projectDir;
     std::shared_ptr<const PreparedSources> preparedSources;
     MediaCache* media = nullptr;
@@ -1379,6 +1439,25 @@ ExecutorChanges changedExecutors(const Plan& p, const model::Session& s);
 // An executor's copy of the published values into the nodes and edges its
 // class reads (`liveClass` as for wrapTo), at the start of a block.
 void syncMix(Plan& p, int liveClass) SUPPLE_RT;
+// --- The clip launcher (ADR-0097; clip_player.cpp) ---
+// A channel's clips as players, after its timeline events (whose ids its
+// clip notes continue from). Main thread, at compile.
+void compileClipPlayers(Plan& p, Node& n, const Session& s);
+// Applies a launch at the start of the block where the channel's song
+// position is `a.anchorSample`: notes sounding end there, audio crossfades.
+void applyLaunch(Plan& p, Node& n, const LaunchAction& a) SUPPLE_RT;
+// The node's player for `clip`, or -1.
+int playerOf(const Node& n, Id clip) SUPPLE_RT;
+// This block's arrangement gain (Node::arrangementGain; null when the
+// arrangement plays throughout) and the clips' audio, added into `into`.
+void launchAudio(Plan& p, Node& n, Stereo& into, std::int64_t pos, std::uint32_t frames) SUPPLE_RT;
+// The playing MIDI clip's events in this block, into the track's MIDI stage.
+void launchMidi(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames) SUPPLE_RT;
+// A transport wrap: a `once` clip falls silent until launched again.
+void launchWrapped(Node& n) SUPPLE_RT;
+// A plan swap: what the channel plays carries by clip id; a clip the new
+// plan lacks (or a node with no players) returns it to the arrangement.
+void carryLaunch(const Node& old, Node& n) SUPPLE_RT;
 // One stage's modulation events for a block (ADR-0096, plan.cpp): after its
 // automation, at each point of the absolute grid; `origin` is the plan's
 // first sample. Exposed for tests.

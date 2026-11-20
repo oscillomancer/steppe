@@ -7,6 +7,7 @@
 #include <supple/base/files.h>
 #include <supple/engine/app.h>
 #include <supple/engine/offline.h>
+#include <supple/engine/realtime.h>
 #include <supple/json/write.h>
 #include <supple/midi/midi.h>
 #include <supple/model/launcher.h>
@@ -779,4 +780,66 @@ TEST_CASE("a content edit on a branch's clip merges with the clip's id remapped"
     const model::MidiSource* other =
         s.midi.find(*s.takes.find(s.clips.find(id("cl_1"))->takes[0])->source);
     CHECK(other->sequence.notes.empty());
+}
+
+TEST_CASE("clip audio is prepared after the arrangement, in launch order, as far as it fits") {
+    // ADR-0097 "Memory". Three mono sources of 2^26 frames (hand-edited, as
+    // above): each costs 2^27 decoded and resampled, so two fill the budget.
+    // Launch order is scene, then track display order: cl_3, cl_1, cl_2,
+    // cl_4. cl_2's source does not fit and is skipped; cl_4 shares cl_1's
+    // source and costs nothing, so it still fits after the skip.
+    Launcher l;
+    l.run("item.remove", R"({"item": "it_1"})");
+    l.run("track.add", R"({"name": "Pad"})");  // tr_2
+    auto args = j(R"({"track": "tr_2", "scene": "sc_1"})");
+    args["audio_file"] = l.wav("a.wav").string();
+    l.runArgs("clip.add", args);  // cl_1
+    args = j(R"({"track": "tr_1", "scene": "sc_2"})");
+    args["audio_file"] = l.wav("b.wav", 1.0, .5f).string();
+    l.runArgs("clip.add", args);  // cl_2
+    args = j(R"({"track": "tr_1", "scene": "sc_1"})");
+    args["audio_file"] = l.wav("c.wav", 1.0, .125f).string();
+    l.runArgs("clip.add", args);                                      // cl_3
+    l.run("clip.duplicate", R"({"clip": "cl_1", "scene": "sc_2"})");  // cl_4
+    const auto path = l.root / "order.steppe";
+    auto save = json::Value::object();
+    save["path"] = path.string();
+    l.runArgs("project.save", save);
+    auto doc = json::parse(*readTextFile(path)).value();
+    for (auto& m : doc["sources"]["media"].asObject()) m.value["frames"] = 1 << 26;
+    REQUIRE(writeFileAtomic(path, std::string_view(json::writeCanonical(doc))));
+    l.runArgs("project.open", save);
+    const auto order = clipsInLaunchOrder(l.head());
+    CHECK(order == std::vector<model::Id>{id("cl_3"), id("cl_1"), id("cl_2"), id("cl_4")});
+    const auto resident = residentSamples(l.head(), l.app->projectDir(), 48000);
+    CHECK(resident.arrangement == 0.0);
+    CHECK(resident.clipsSkipped == std::vector<model::Id>{id("cl_2")});
+    MediaCache cache;
+    auto prepared = cache.prepareSources(l.head(), l.app->projectDir(), 48000);
+    REQUIRE(prepared);
+    CHECK((*prepared)->clipsSkipped == std::vector<model::Id>{id("cl_2")});
+    const auto takeOf = [&](const char* clip) {
+        return *l.head().clips.find(id(clip))->activeTake;
+    };
+    CHECK((*prepared)->takes.contains(takeOf("cl_1")));
+    CHECK((*prepared)->takes.contains(takeOf("cl_3")));
+    CHECK((*prepared)->takes.contains(takeOf("cl_4")));
+    CHECK_FALSE((*prepared)->takes.contains(takeOf("cl_2")));
+    {
+        // The running plan skips it too: it cannot be launched, and a scene
+        // launch leaves it out with a warning.
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        REQUIRE(l.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128},
+                                   EngineOptions{.anticipative = false, .workers = 0}));
+        CHECK(l.fails("launch.clip", R"({"clip": "cl_2"})").code == "launch.memory");
+        auto scene = l.run("launch.scene", R"({"scene": "sc_2"})");
+        REQUIRE(scene["tracks"].size() == 1);
+        CHECK(scene["tracks"].at(0).find("clip")->asString() == "cl_4");
+        CHECK(scene["warnings"].at(0).find("code")->asString() == "launch.memory");
+        l.app->stopEngine();
+    }
+    // Moving cl_2 to the first column puts it before cl_1: now cl_1 is skipped.
+    l.run("scene.move", R"({"scene": "sc_2", "to": 0})");
+    CHECK(residentSamples(l.head(), l.app->projectDir(), 48000).clipsSkipped ==
+          std::vector<model::Id>{id("cl_3")});
 }

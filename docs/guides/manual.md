@@ -26,6 +26,7 @@ the public commands and GUI actions (`Shift+/` or `Ctrl+Shift+P`,
 - [Racks](#racks)
 - [MIDI controllers](#midi-controllers)
 - [Sync](#sync)
+- [The clip launcher](#the-clip-launcher)
 - [Rendering](#rendering)
 - [Agents (MCP)](#agents-mcp)
 
@@ -1549,6 +1550,55 @@ not put them early; nothing is sent during a count-in, and an output on
 the device Steppe follows (Transport sync) does not get its own clock
 back. `midi.outputs.get` and `engine.status` show what each output sends
 and how many messages went out.
+
+## The clip launcher
+
+Besides its timeline, a channel can hold **clips**: short pieces of MIDI or
+audio, each in a **scene**. A scene is a column of clips you can play
+together, a section of a song before it has a place in the arrangement.
+`scene.add` makes a scene, and `clip.add {track, scene, notation |
+audio_file | midi_file | item}` makes a clip, from notation, a file or a
+copy of an item. A MIDI clip's length is in beats and follows the tempo;
+an audio clip's is in seconds and plays at its take's own rate. A clip
+loops by default (`mode: once` plays it once), and a loop window can
+repeat part of it. `item.add {clip}` lays a copy of a clip on the
+timeline. The clip launcher's pane comes later; meanwhile its commands
+work from agents and the console.
+
+### Playing clips
+
+A track either follows the arrangement or plays one of its clips.
+`launch.clip {clip}` starts a clip on its track. `launch.scene {scene}`
+starts every clip of a scene together, on the same beat. Tracks with no
+clip in that scene keep playing what they play. `launch.stop {track?}`
+silences a track's clip, and `launch.arrangement {track?}` returns a
+track to the timeline. Without `track`, they act on every track a clip
+holds.
+
+A launch takes effect at the next quantize boundary: the clip's own
+`quantize`, else the project's `launch_quantize` (a bar by default).
+With `none` it happens as soon as the engine can still take it: about one
+audio block ahead for a track the audio callback runs, about 0.2 s for
+the others. Launching a clip while stopped starts playback with it from
+the play position. At the switch, notes still sounding end and audio
+crossfades over 5 ms. Returning to the arrangement does not restart a
+note already under way: it sounds from its next start. A clip keeps its
+place against the bars, so relaunching a loop of whole bars stays in
+phase.
+
+`launch.state` tells what each track with clips plays as you hear it:
+`arrangement`, `clip` (with its position in the clip), `held` (a `once`
+clip that has finished, silent until the next launch) or `stopped`. It
+also shows what each track has queued.
+
+Renders play the arrangement only; the render dialog says so while a
+clip is playing. Not yet:
+- launching while a master playrate is active (`launch.playrate`);
+- a clip take's FX and envelopes, which do not play in a clip yet;
+- clip MIDI reaching a rack's Notes module or a MIDI send from the track.
+
+A frozen track plays its print: `launch.clip` refuses it and
+`launch.scene` skips it.
 
 ## Rendering
 
