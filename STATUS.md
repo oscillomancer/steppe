@@ -234,7 +234,9 @@ instructions are in `docs/guides/installing.md`.
   items of a track, an item across or after the section's start, a warped
   take. MIDI is copied unless `pooled`. Limits: capture reads whole items
   only (it never splits or trims), a master's items are skipped with a
-  warning, and fades are not kept (as in the item and clip conversion).
+  warning, and fades are not kept (as in the item and clip conversion). A clip
+  whose loop period is not its content (a gap after it, a length shorter than
+  it) is refused with `scene.insert.period`: it is not laid out yet.
 - **Track freeze** (ADR-0054): whole-channel pre-fader float32 capture, including
   take FX and auxiliary channels, with virtual latency and plugin retirement.
   Typed freeze/unfreeze, cancellable jobs, dependency-checked completion, retained

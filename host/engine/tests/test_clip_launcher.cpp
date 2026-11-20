@@ -469,7 +469,7 @@ TEST_CASE("session.describe lists the scenes with their clips") {
     l.runArgs("clip.add", args);
     l.run(
         "clip.set",
-        R"({"clip": "cl_2", "name": "Pad swell", "mode": "once", "quantize": "beat", "mute": true})");
+        R"({"clip": "cl_2", "name": "Pad swell", "mode": "once", "quantize": "beat", "mute": true, "gain_db": -6})");
     const std::string text = l.run("session.describe", "{}")["text"].asString();
     const auto at = text.find("Scenes (2):");
     REQUIRE(at != std::string::npos);
@@ -483,7 +483,7 @@ TEST_CASE("session.describe lists the scenes with their clips") {
               ", 4 notes\n"
               "    tr_2 Pad: cl_2 \"Pad swell\" 6.0 s once · audio " +
               md.str() +
-              " pad.wav · quantize beat · muted\n"
+              " pad.wav · quantize beat · -6 dB · muted\n"
               "  sc_2 Chorus (no clips)\n");
     // The project's length is the arrangement's.
     CHECK(text.find("· 2.0 s\n") != std::string::npos);
@@ -561,6 +561,27 @@ TEST_CASE("midi.write, midi.get, midi.notes and midi.edit take a clip") {
     CHECK(l.run("midi.get", R"({"item": "cl_1"})")["text"].asString().find("D2") !=
           std::string::npos);
     CHECK(l.fails("midi.get", R"({"item": "cl_9"})").code == "cl.unknown");
+}
+
+TEST_CASE("midi.write warns when the notation runs past the clip's or item's length") {
+    Launcher l;
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C2:w"})");
+    const auto fits = l.run("midi.write", R"({"item": "cl_1", "notation": "voice bass; 1: D2:w"})");
+    CHECK(warningCodes(fits).empty());
+    const auto over =
+        l.run("midi.write", R"({"item": "cl_1", "notation": "voice bass; 1: C2:w; 2: D2:w"})");
+    CHECK(warningCodes(over) == "midi.beyond_length ");
+    CHECK(over.find("warnings")->at(0).find("path")->asString() == "/notation");
+    CHECK(l.head().clips.find(id("cl_1"))->length == 4);  // it keeps its length
+    // After lengthening it, the same notation fits.
+    l.run("clip.set", R"({"clip": "cl_1", "length": 8})");
+    CHECK(warningCodes(l.run("midi.write", R"({"item": "cl_1", "notation":
+        "voice bass; 1: C2:w; 2: D2:w"})"))
+              .empty());
+    // An item says the same.
+    l.run("item.add", R"({"track": "tr_1", "bar": 1, "notation": "voice bass; 1: C2:w"})");
+    CHECK(warningCodes(l.run("midi.write", R"({"item": "it_1", "notation":
+        "voice bass; 1: C2:w; 2: D2:w"})")) == "midi.beyond_length ");
 }
 
 TEST_CASE("midi.edit's scale ops on a clip read the key at the project's start, no chord") {

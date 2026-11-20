@@ -812,7 +812,7 @@
   {
     "name": "midi_write",
     "title": "Replace an item's or clip's MIDI with notation (keeping its place and length).",
-    "description": "Replace an item's or clip's MIDI with notation (keeping its place and length). See describe for errors and examples.",
+    "description": "The item or clip keeps its length: notation longer than it is stored but does not play past its end, and midi.beyond_length warns. Lengthen it first (item.set length, clip.set length), or write the notation to fit. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "midi_write_args",

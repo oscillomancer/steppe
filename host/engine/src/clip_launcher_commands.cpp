@@ -1085,6 +1085,7 @@ std::string describeScenes(const model::Session& s) {
             if (clip.takes.size() > 1) line += " · " + std::to_string(clip.takes.size()) + " takes";
             if (clip.quantize)
                 line += " · quantize " + std::string(model::launchQuantizeName(*clip.quantize));
+            if (clip.gainDb != 0.0) line += " · " + number(clip.gainDb) + " dB";
             if (clip.mute) line += " · muted";
             lines += line + "\n";
         }

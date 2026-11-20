@@ -11804,7 +11804,7 @@ Result:
 
 Replace an item's or clip's MIDI with notation (keeping its place and length).
 
-
+The item or clip keeps its length: notation longer than it is stored but does not play past its end, and midi.beyond_length warns. Lengthen it first (item.set length, clip.set length), or write the notation to fit.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 

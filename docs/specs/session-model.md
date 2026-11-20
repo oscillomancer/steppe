@@ -1062,7 +1062,9 @@ and naming. All `edit` unless marked (q) query or (a) action.
   `item.mix-to-track {items}` (background action, one undo step: the items
   through their channels' strips, decoded as a fresh buss hears them, onto a
   new muted channel; engine.md).
-- **MIDI**: `midi.write {item | {track, at}, notation, replace: bool}`,
+- **MIDI**: `midi.write {item | {track, at}, notation, replace: bool}` (the item or
+  clip keeps its length; notation that runs past it is kept but does not play, and
+  the warning `midi.beyond_length` says so),
   `midi.get {item, format: notation|events}` (q), `midi.edit {item, ops:
   [{select: {pitch, range, channel}, set|shift|transpose|quantize|velocity}]}`
   (with the scale ops `transpose_degrees`, `snap_to_scale` and `fit_to_chord`: see
@@ -1964,12 +1966,12 @@ nothing.
 
 **What `session.describe` prints.** After the tracks, one line per scene in
 order with its clips under it. Each clip line has its track, length in its
-unit, mode, content and flags; no clip moves the project length:
+unit, mode, content and flags (loop window, quantize, gain when not 0 dB, muted); no clip moves the project length:
 
 ```
 Scenes (2):
   sc_1 Verse
     tr_2 Bass: cl_1 "Bass line" 8 beats · loop 0–4 · MIDI mi_3, 12 notes
-    tr_5 Pad: cl_4 "Pad swell" 6.0 s once · audio md_2 pad.wav · quantize beat · muted
+    tr_5 Pad: cl_4 "Pad swell" 6.0 s once · audio md_2 pad.wav · quantize beat · -6 dB · muted
   sc_2 Chorus (no clips)
 ```

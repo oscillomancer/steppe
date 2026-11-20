@@ -107,7 +107,9 @@ a `cl_*` where they take an item today (the same `item` field, whose ID
 pattern becomes `^(it|cl)_[0-9]+$` so that merges remap it), or a clip's
 take:
 - `midi.get`, `midi.write`, `midi.edit` and `midi.notes`. A clip keeps its
-  length under `midi.write`, as an item keeps its position and length.
+  length under `midi.write`, as an item keeps its position and length; notation
+  longer than it is kept but does not play, and `midi.write` warns
+  (`midi.beyond_length`).
 - `item.export`: the clip's raw audio or its MIDI, as the item it would
   make at the project's start (one period, looped as an item loops).
 - `take.list`, `take.add`, `take.activate`, `take.set` and `take.remove`.
