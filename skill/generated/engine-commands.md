@@ -10147,7 +10147,7 @@ Modulate a parameter or mixer level with an LFO, follower, random or macro.
 
 The whole gesture in one undo step. It takes the first rack homed on the target's track that holds a Mod Out, else the first rack named Modulators, else adds one on a new channel named Modulators (rack: choose one instead). It adds the source module (lfo: an LFO; random: an LFO's Random Steps preset; macro: a Macro, its first knob; follower: a Follower fed by an In module and a send from the track from), cables it into the first free Mod Out input (adding a Mod Out when none is free) and routes that input to the target. {module, input} routes a Mod Out input already patched. depth as modulation.add; default a quarter of a plug-in parameter's range, 6 dB, or 50 percent. A follower cannot listen to the track it modulates (modulation.cycle).
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `edit`. Exposure: `mcp-exec`.
 
 ### Arguments
 
