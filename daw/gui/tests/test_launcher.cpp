@@ -895,6 +895,23 @@ TEST_CASE("launcher: copied clips paste from the selected cell, in their layout,
     CHECK(f.app->head().clips.find(*model::Id::parse("cl_1"))->track == model::Id::parse("tr_3"));
 }
 
+TEST_CASE("launcher: a cut pasted over its own cells moves front first") {
+    LauncherFixture f;
+    f.song();
+    // Kit A (Drums, Intro) and Root (Bass, Verse), cut and pasted from Bass'
+    // Verse: Kit A lands where Root is, so Root has to move first.
+    const std::uint64_t before = f.app->head().version;
+    auto moved = gui::pasteClips(*f.dispatcher, f.app->head(), {"cl_1", "cl_3"}, "tr_2", "sc_2",
+                                 {"tr_1", "tr_2", "tr_3"}, true);
+    REQUIRE(moved);
+    CHECK(*moved == std::vector<std::string>{"cl_1", "cl_3"});  // the clipboard's order
+    const model::Session& s = f.app->head();
+    CHECK(s.version == before + 1);
+    CHECK(views::clipIn(s, *model::Id::parse("tr_2"), *model::Id::parse("sc_2"))->str() == "cl_1");
+    CHECK(views::clipIn(s, *model::Id::parse("tr_3"), *model::Id::parse("sc_3"))->str() == "cl_3");
+    CHECK_FALSE(views::clipIn(s, *model::Id::parse("tr_1"), *model::Id::parse("sc_1")));
+}
+
 TEST_CASE("launcher: the clip clipboard holds only for the project it was filled in") {
     LauncherFixture f;
     f.song();

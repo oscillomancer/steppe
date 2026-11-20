@@ -61,8 +61,9 @@ Status removeClips(cmd::Dispatcher& dispatcher, const std::vector<std::string>& 
 // in `channels` order (the view's) and the scenes' order, as copies
 // (clip.duplicate) in one undo step. A clip that is gone, a cell past the
 // last channel or scene, or an occupied one refuses the whole paste. With
-// `move` (after a cut) the clips themselves move there (clip.move). The
-// pasted clips' ids, in the clipboard's order.
+// `move` (after a cut) the clips themselves move there (clip.move), front
+// first, so new cells that overlap the old ones are free in time. The pasted
+// clips' ids, in the clipboard's order.
 Result<std::vector<std::string>> pasteClips(cmd::Dispatcher& dispatcher,
                                             const model::Session& session,
                                             const std::vector<std::string>& clips,
