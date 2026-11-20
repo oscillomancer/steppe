@@ -1350,27 +1350,34 @@ struct Hornbeam : Effect {
                           "chime (class A, no feedback), crunch, lead (four tight stages), "
                           "bass.");
     Param gain = percent("Gain", 45)
+                     .modulated()
                      .smoothed(30)
                      .in("Amp")
                      .help("The preamp's gain pot: clean, through edge of breakup, to saturated.");
     Param bass =
         percent("Bass", 50)
+            .modulated()
             .smoothed(30)
             .in("Amp")
             .help(
                 "The tone stack's bass pot; it leans on the mid and treble as a real stack does.");
-    Param mid = percent("Mid", 55).smoothed(30).in("Amp").help(
+    Param mid = percent("Mid", 55).modulated().smoothed(30).in("Amp").help(
         "The tone stack's mid pot: at 0 the stack's deepest scoop.");
-    Param treble =
-        percent("Treble", 60).smoothed(30).in("Amp").help("The tone stack's treble pot.");
+    Param treble = percent("Treble", 60)
+                       .modulated()
+                       .smoothed(30)
+                       .in("Amp")
+                       .help("The tone stack's treble pot.");
     Param presence = percent("Presence", 40)
+                         .modulated()
                          .smoothed(30)
                          .in("Amp")
                          .help("The power amp's top end: less negative feedback above 3 kHz.");
-    Param sag = percent("Sag", 40).smoothed(30).in("Amp").help(
+    Param sag = percent("Sag", 40).modulated().smoothed(30).in("Amp").help(
         "How far the supply droops under the power amp's draw: a stiff supply at 0, a "
         "compressing, blooming valve rectifier at 100.");
     Param master = percent("Master", 55)
+                       .modulated()
                        .smoothed(30)
                        .in("Amp")
                        .help(
@@ -1398,18 +1405,21 @@ struct Hornbeam : Effect {
             .in("Cabinet")
             .help("The microphone: dynamic and condenser are cardioid, ribbon a figure eight.");
     Param position = percent("Position", 30)
+                         .modulated()
                          .smoothed(50)
                          .in("Cabinet")
                          .help(
                              "Where the mic points on the cone: the cap's centre (bright) at 0, "
                              "the edge of the cone (dark) at 100.");
     Param distance = continuous("Distance", 0.01, 1.0, 0.04, Unit::Meters)
+                         .modulated()
                          .curved(Curve::Log)
                          .smoothed(50)
                          .in("Cabinet")
                          .help("The mic's distance from the cone's front, 1 cm to 1 m.");
     Param room =
         percent("Room", 20)
+            .modulated()
             .smoothed(50)
             .in("Cabinet")
             .help(
@@ -1433,10 +1443,12 @@ struct Hornbeam : Effect {
                 "twice the cost.");
     Param mix =
         percent("Mix", 100)
+            .modulated()
             .smoothed(20)
             .in("Output")
             .help("The dry signal and the amp blended (latency aligned): a DI under a bass amp.");
-    Param output = decibels("Output", -24, 24, 0).smoothed(20).in("Output").help("The level out.");
+    Param output =
+        decibels("Output", -24, 24, 0).modulated().smoothed(20).in("Output").help("The level out.");
     Param quality = choice("Quality", {"1x", "2x", "4x", "8x", "16x"}, 2)
                         .keys({"x1", "x2", "x4", "x8", "x16"})
                         .restarts()

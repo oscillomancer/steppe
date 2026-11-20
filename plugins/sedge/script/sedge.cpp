@@ -75,6 +75,7 @@ struct Sedge : Effect {
         .features = {"analyzer"}};
 
     Param reference = frequency("Reference", 415, 466, 440)
+                          .modulated()
                           .in("Tuning")
                           .help("The pitch of A4, in Hz: 440 is concert pitch, 415 baroque.");
     Param temperament =
@@ -93,14 +94,17 @@ struct Sedge : Effect {
                     .help("The note the temperament is built on.");
     Param window =
         milliseconds("Window", 10, 200, 40)
+            .modulated()
             .in("Listening")
             .help(
                 "How much sound each reading listens to: longer is steadier and surer on low "
                 "notes (80 ms or more for a bass), shorter answers sooner.");
     Param tolerance = cents("Tolerance", 1, 10, 3)
+                          .modulated()
                           .in("Listening")
                           .help("How close to the note counts as in tune, in cents either way.");
     Param threshold = decibels("Threshold", -90, -20, -60)
+                          .modulated()
                           .in("Listening")
                           .help(
                               "The input's peak level, in dBFS, below which nothing is read: "
