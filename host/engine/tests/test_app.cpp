@@ -20,6 +20,7 @@
 #include <supple/host/clap_host.h>
 #include <supple/model/project_file.h>
 #include <supple/model/schemas.h>
+#include <supple/params/params.h>
 
 #include <supple/analysis/analysis.h>
 #include <atomic>
@@ -3696,11 +3697,14 @@ TEST_CASE("automation timebases preserve plugin output positions through branch 
     CHECK(app->head().envelopes.find(env)->points.back().pos == doctest::Approx(128.0 / 48000));
 }
 
-TEST_CASE("a write mode records the base of a parameter modulated through its envelope") {
-    // ADR-0096 step M4: the lane sends base + offset, so the plug-in's
-    // editor drags from there; what is recorded has the offset taken off.
-    // The edge fixture's parameter 7 (mode 35) is automatable, not
-    // modulatable, 0..1e9; its editor emits 5, then 10.
+TEST_CASE("a touch over a parameter modulated through its envelope records the hand's values") {
+    // ADR-0096 step M4 sends base + offset down the lane; a write pass holds
+    // the lane from the plug-in's gesture (ADR-0061, amended 2026-11-20), so
+    // the plug-in plays the hand's values and they are recorded as they
+    // are, with no offset taken off (review 63's open question: one offset,
+    // read at the end, came off every point). The edge fixture's parameter 7
+    // (mode 35) is automatable, not modulatable, 0..1e9; its editor emits 5,
+    // then 10.
     Root root;
     auto app = makeApp(root.path);
     cmd::Registry registry;
@@ -3771,11 +3775,131 @@ TEST_CASE("a write mode records the base of a parameter modulated through its en
     }
     const auto& points = app->head().envelopes.find(env)->points;
     REQUIRE(points.size() >= 2);
-    CHECK(points.back().value == doctest::Approx(9.0));  // 10 - 1
-    for (const auto& point : points) CHECK(point.value != doctest::Approx(10.0));
-    CHECK(app->head().fx.find(fx)->params.at(7) == doctest::Approx(9.0));
+    CHECK(points.back().value == doctest::Approx(10.0));
+    for (const auto& point : points) {
+        CHECK(point.value != doctest::Approx(9.0));  // nothing has the offset taken off
+        CHECK(point.value != doctest::Approx(4.0));
+    }
+    CHECK(app->head().fx.find(fx)->params.at(7) == doctest::Approx(10.0));
     instance->closeEditor();
     app->stopEngine();
+}
+
+TEST_CASE("a touch over a moving plug-in lane records the hand's values, modulated or not") {
+    // ADR-0061, amended 2026-11-20. The fixed gain's gain (automatable, not
+    // modulatable) has a moving envelope; with `modulated`, a macro at 100 %
+    // reaches it through that envelope with depth 0.1 of its range. A hand
+    // on the editor's knob over three blocks is recorded as it set it. A
+    // latch pass's hold then reaches the engine until the pass ends.
+    struct Control {
+        void (*edit)(const clap_plugin_t*, double, std::uint32_t);
+        std::uint32_t (*deliveries)(const clap_plugin_t*);
+        void (*latency)(const clap_plugin_t*, bool);
+        std::uint32_t (*creates)();
+        void (*patchRescan)(const clap_plugin_t*, std::uint32_t);
+        void (*patchEffect)(const clap_plugin_t*, std::uint32_t);
+        void (*hand)(const clap_plugin_t*, double, std::uint32_t);
+    };
+    params::ParamSpec spec;  // the fixture's gain, its CLAP value normalized
+    spec.type = params::Type::Float;
+    spec.unit = units::Unit::dB;
+    spec.min = -60;
+    spec.max = 12;
+    for (const bool modulated : {false, true})
+        for (const char* mode : {"touch", "latch"}) {
+            CAPTURE(modulated);
+            CAPTURE(mode);
+            Root root;
+            auto app = makeApp(root.path);
+            cmd::Registry registry;
+            registerEngineCommands(registry);
+            cmd::Dispatcher bus(registry, *app);
+            auto call = [&](const char* command, std::string_view args) {
+                auto result = bus.execute({command, j(args), kTest});
+                REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+                return *result;
+            };
+            call("track.add", "{}");
+            call("fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.fixed-gain"})");
+            call(
+                "env.add",
+                R"({"fx":"fx_1","param":"0","points":[{"beat":0,"value":0.2},{"beat":16,"value":0.9}]})");
+            call("env.set", std::string(R"({"env":"en_1","mode":")") + mode + "\"}");
+            const model::Id fx{model::Kind::Fx, 1}, env{model::Kind::Envelope, 1};
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+            REQUIRE(app->startEngine(backend, {.sampleRate = 48000, .blockSize = 64},
+                                     {.anticipative = false}));
+            REQUIRE(app->transport("play"));
+            backend.run(1);
+            app->tick();
+            if (modulated) {
+                const json::Value made = call(
+                    "modulate", R"({"target":{"track":"tr_1","param":"pan"},"source":"macro"})");
+                json::Value knob = json::Value::object();
+                knob["module"] = made.find("module")->asString();
+                knob["params"] = json::Value::object();
+                knob["params"][made.find("knob")->asString()] = 100.0;
+                knob["params"]["smooth"] = 0.0;
+                REQUIRE(bus.execute({"module.set", knob, kTest}));
+                const model::Modulation& pan = *app->head().modulations.find(
+                    *model::Id::parse(made.find("modulation")->asString()));
+                auto routing = app->beginTransaction(kTest, "Route into the envelope");
+                REQUIRE(routing);
+                model::Modulation into;
+                into.source = pan.source;
+                into.target = {fx, "0"};
+                into.depth = 0.1;
+                const model::Id route = app->txn().create(into);
+                REQUIRE(app->commitTransaction(*routing));
+                const auto offsetNow = [&] {
+                    const auto offsets = app->modulationOffsets();
+                    const auto it = offsets.find(route);
+                    return it == offsets.end() ? 0.0 : it->second;
+                };
+                for (int i = 0; i < 200 && offsetNow() == 0.0; ++i) {
+                    backend.run(1);
+                    app->tick();
+                }
+                REQUIRE(app->modulationOffsets().count(route));
+                CHECK(app->modulationOffsets().at(route) == doctest::Approx(0.1));
+            }
+            auto* instance = app->instanceOf(fx);
+            REQUIRE(instance);
+            const auto* plugin = instance->raw();
+            const auto* control = static_cast<const Control*>(
+                plugin->get_extension(plugin, "supple.test.gain-control"));
+            REQUIRE(control);
+            const std::vector<std::pair<double, std::uint32_t>> moves{{-20, 1}, {-15, 0}, {-10, 2}};
+            for (const auto& [db, what] : moves) {
+                control->hand(plugin, db, what);
+                backend.run(1);
+                app->tick();
+            }
+            app->tick();
+            for (const auto& [topic, payload] : app->takeEvents())
+                if (topic == "engine.error") MESSAGE(json::writeCompact(payload));
+            const auto& points = app->head().envelopes.find(env)->points;
+            for (const auto& [db, what] : moves) {
+                const double hand = params::toClap(spec, db);
+                CAPTURE(db);
+                CHECK(std::any_of(points.begin(), points.end(), [&](const model::EnvPoint& p) {
+                    return p.value == doctest::Approx(hand);
+                }));
+                CHECK_FALSE(
+                    std::any_of(points.begin(), points.end(), [&](const model::EnvPoint& p) {
+                        return p.value == doctest::Approx(hand - 0.1);
+                    }));
+            }
+            CHECK(app->head().fx.find(fx)->params.at(0) ==
+                  doctest::Approx(params::toClap(spec, -10)));
+            const auto& holds = app->engine()->writeHolds();
+            const bool heldByPass =
+                std::find(holds.begin(), holds.end(), model::EnvTarget{fx, "0"}) != holds.end();
+            CHECK(heldByPass == (std::string(mode) == "latch"));  // a touch let go at its end
+            REQUIRE(app->transport("pause"));
+            CHECK(app->engine()->writeHolds().empty());
+            app->stopEngine();
+        }
 }
 
 TEST_CASE("audio thread preference applies at next start and explicit options win") {
@@ -4273,6 +4397,28 @@ TEST_CASE(
          kTest});
     REQUIRE_FALSE(latency);
     CHECK(latency.error().code == "modulation.target");
+    // A choice is refused as such, its hint not the envelope a route through
+    // it would want (review 63 F1): adding one changes nothing.
+    CHECK(latency.error().message == "Latency is stepped (or a list), so a route cannot move it");
+    CHECK(latency.error().hint ==
+          "automate it with envelope points instead (env.add {fx, param, points}); routes take "
+          "continuous parameters, which fx.describe marks modulatable or modulatable_by_envelope");
+    auto choice = d.execute(
+        {"modulate", j(R"({"target": {"fx": "fx_2", "param": "1"}, "source": "lfo"})"), kTest});
+    REQUIRE_FALSE(choice);
+    CHECK(choice.error().code == "modulation.target");
+    CHECK(choice.error().message == latency.error().message);
+    // A name it lacks: the hint names what an envelope reaches, as such
+    // (review 64 F1), though no parameter takes a route directly.
+    auto unknown = d.execute(
+        {"modulation.add",
+         j(R"({"source": {"module": "mo_2", "input": "in_1"}, "target": {"fx": "fx_2", "param": "nope"}, "depth": 0.1})"),
+         kTest});
+    REQUIRE_FALSE(unknown);
+    CHECK(unknown.error().code == "modulation.target");
+    CHECK(unknown.error().hint ==
+          "through an active envelope (modulate adds one): 0; fx.describe marks them "
+          "(modulatable_by_envelope) and lists their ranges");
     // With an envelope it is taken, and listed as playable until the
     // envelope is turned off.
     const std::string env =

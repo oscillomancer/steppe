@@ -535,6 +535,22 @@ struct ParamLane {
     double modRange = 0, lo = 0, hi = 0;
     double modSum = 0;   // the last sum, held while a source rack's modules are elsewhere
     int telemetry = -1;  // its Plan::modOffsets slot
+    // Write holds (ADR-0061, amended 2026-11-20). `writes`: its envelope is
+    // in a writing mode on a real-time plan (`latches`: not touch). From the
+    // plug-in's own gesture begin while playing, `gesture`, to its end, or for
+    // a latching mode to the pass's end, `latched`; `held`, the main thread's
+    // hold (MixSlots::lanes). While any is set the lane sends nothing, so the
+    // plug-in keeps the hand's value.
+    Id envelope;
+    bool writes = false, latches = false;
+    bool gesture = false, latched = false, held = false;
+    bool holding() const { return gesture || latched || held; }
+    // On a clip's take FX (ADR-0097, amended 2026-11-20, C2): the curve is in
+    // clip time, from the clip's start (clipChainTicks' domain), and follows
+    // where the clip is on its stage's input side; `clipLast`, the position it
+    // last read (runtime: a new pass or anchor resends).
+    bool clipTime = false;
+    std::int64_t clipLast = INT64_MIN;
     double clapAt(std::int64_t sample) SUPPLE_RT {
         const double v = curve.at(sample);
         return spec ? params::toClap(spec->spec, params::fromNormalized(spec->spec, v)) : v;
@@ -672,6 +688,7 @@ struct Stage {
     Id fx;
     std::vector<ParamLane> lanes;
     std::vector<std::uint32_t> laneModRoutes;  // Plan::modEdges indices, by lane (M4)
+    std::uint32_t laneSlot = 0;  // its first lane's MixSlots::lanes entry (forEachStage order)
     // Modulation (ADR-0096): a slot per parameter any plan has modulated on
     // this FX (InstancePool::modulatedParams), sorted by id, and each slot's
     // routes (Plan::modEdges indices). `modEvents` are reserved per block.
@@ -819,6 +836,9 @@ struct ClipPlayer {
     // a beat), every pass of the loop window already laid out.
     double periodBeats = 0;
     std::vector<ClipEvent> events;
+    // Its take's chain (Node::takeChains), or -1: it plays straight into the
+    // track (ADR-0097, amended 2026-11-20).
+    int chain = -1;
 };
 // What a channel plays (engine.md §1.4.2): transport state, carried across
 // plan swaps by node and clip id, never in the model.
@@ -832,10 +852,16 @@ struct LaunchState {
     // the anchor, and a loop clip plays there by its phase (L-c).
     bool unanchored = false;
     // The switch's crossfade: what was left (-1 the arrangement, a player,
-    // -2 nothing) and the song sample where the switch began.
+    // -2 nothing, -3 the retiring player `fadeRetiring`) and the song sample
+    // where the switch began (kFadeAtNext: the next block the node plays).
     int fadeFrom = -2;
     std::int64_t fadeStart = 0, fadeAnchorSample = 0;  // the left player's anchor
+    double fadeAnchorBeat = 0;
+    int fadeRetiring = -1;        // fadeFrom -3: its Node::retiring entry
+    bool fadeUnanchored = false;  // and whether it played unanchored
 };
+// LaunchState::fadeStart: the crossfade begins at the next block played.
+inline constexpr std::int64_t kFadeAtNext = INT64_MIN;
 // What a launch does to one channel, at the block boundary where the
 // channel's song position reaches `anchorSample` (engine.md §1.4.2).
 struct LaunchAction {
@@ -877,7 +903,22 @@ struct TakeChain {
     Automation volume, pan, mute;  // the take's envelopes (dB, %, 0/1), output side
     Stereo buf;
     bool active = false;  // processed in the last block: the chain is fresh at each entry
+    // A clip launcher clip's chain (ADR-0097, amended 2026-11-20): `item` is
+    // the clip, `player` its Node::players entry (-1: none, it never plays).
+    // Its input runs the node's launch lead ahead (Node::launchLead), its
+    // output is delayed by the lead less its own latency, so every clip chain
+    // on a node switches at the same frame. The take's envelopes are from the
+    // clip's start as heard: beats on a MIDI clip (kClipBeatTicks per beat),
+    // samples on an audio clip (its points are seconds).
+    bool clipChain = false;
+    int player = -1;
+    Stereo delay;             // lead - latency frames, a ring
+    std::size_t delayAt = 0;  // its next write
+    int inputPlayer = -1;     // the player and anchor its input last read
+    std::int64_t inputAnchor = INT64_MIN;
 };
+// Positions of a MIDI clip chain's take envelopes: clip-relative beats, scaled.
+inline constexpr double kClipBeatTicks = 1 << 20;
 
 struct Node {
     // Note Out events actually delivered this block, also without an instrument.
@@ -996,7 +1037,17 @@ struct Node {
     // The clip launcher (ADR-0097): the channel's clips, what it plays, and
     // this block's arrangement gain (null: 1 throughout) with its buffers.
     std::vector<ClipPlayer> players;
+    // Audio players this plan keeps only to fade out: the previous plan's
+    // whose clip this one lacks (a removal, or a freeze), without their take
+    // chain (addRetiring; never launched, listed or fed).
+    std::vector<ClipPlayer> retiring;
     LaunchState launch;
+    // Clip chains (ADR-0097, amended 2026-11-20): the most latency among its
+    // clips' chains. A launch reaches the node that much early as well
+    // (`launchNext`, until it applies), so their input takes the new clip.
+    std::int64_t launchLead = 0;
+    LaunchAction launchNext;
+    bool launchNextValid = false;
     std::int64_t launchFadeFrames = 0;
     const float* arrangementGain = nullptr;
     std::vector<float> arrangementGains;
@@ -1127,6 +1178,11 @@ struct MixSlots {
     };
     std::unique_ptr<StageValue[]> stages;
     std::vector<Id> stageFx;
+    // Plug-in parameter lanes held by a write pass (ADR-0061, amended
+    // 2026-11-20), node by node in forEachStage order from Stage::laneSlot;
+    // laneEnvelopes is each slot's envelope (main thread).
+    std::unique_ptr<std::atomic<bool>[]> lanes;
+    std::vector<Id> laneEnvelopes;
     // A modulation route's depth and enabled (ADR-0096, M-h), per
     // Plan::modEdges entry, read by the executor of the route's target.
     struct ModValue {
@@ -1225,6 +1281,9 @@ struct Plan {
     // Channels compile their clips' players (ADR-0097). Off for an offline
     // render with no launch log: renders play the arrangement only.
     bool clipPlayers = true;
+    // A real-time plan: a plug-in's own gesture holds its writing lanes
+    // (ADR-0061, amended 2026-11-20). Offline renders have no hand.
+    bool gestureHolds = false;
     std::filesystem::path projectDir;
     std::shared_ptr<const PreparedSources> preparedSources;
     MediaCache* media = nullptr;
@@ -1477,6 +1536,65 @@ void launchRelocated(Node& n) SUPPLE_RT;
 // A plan swap: what the channel plays carries by clip id; a clip the new
 // plan lacks (or a node with no players) returns it to the arrangement.
 void carryLaunch(const Node& old, Node& n) SUPPLE_RT;
+// --- Clip chains (ADR-0097, amended 2026-11-20; clip_player.cpp) ---
+// A launch reaching the node Node::launchLead before it applies: its clip
+// chains' input (that much ahead) takes it from here.
+void prelaunch(Node& n, const LaunchAction& a) SUPPLE_RT;
+// What a clip chain's input reads in this block: the player's anchor on the
+// input side, or nothing (`on` false).
+struct ClipChainInput {
+    bool on = false;
+    std::int64_t anchorSample = 0;
+    double anchorBeat = 0;
+    bool unanchored = false;
+};
+ClipChainInput clipChainInput(const Node& n, int player) SUPPLE_RT;
+// Whether `player`'s output is heard anywhere from song sample `song` on in
+// this block (it plays, or fades out).
+bool clipChainHeard(const Node& n, int player, std::int64_t song) SUPPLE_RT;
+// `player`'s share of the output at song sample `song`: 1 while it plays, the
+// switch's crossfade at its edges, 0 otherwise (as launchAudio weighs it).
+double launchWeight(const Node& n, int player, std::int64_t song) SUPPLE_RT;
+// A clip chain's input audio for the block at timeline `pos` (song `pos -
+// timelineShift`), read `lead` ahead and folded over the transport loop as
+// the output will be: the raw clip, its gain and pan applied after the chain.
+void clipChainAudio(const Node& n, int player, const ClipChainInput& in, std::int64_t pos,
+                    std::int64_t lead, const LoopRange* loop, std::uint32_t frames,
+                    Stereo& into) SUPPLE_RT;
+// Its notes for the block, into `target` (the chain's instrument): the
+// input-side window, split where it folds over the transport loop (what is
+// held ends there).
+void clipChainMidi(const Plan& p, const Node& n, int player, const ClipChainInput& in,
+                   std::int64_t pos, std::int64_t lead, const LoopRange* loop, std::uint32_t frames,
+                   Stage& target) SUPPLE_RT;
+// Where in its clip `player` is heard at song sample `song`, its take
+// envelopes' position: beats (kClipBeatTicks) on a MIDI clip, samples on an
+// audio clip, from the start of the pass; false where it is not heard.
+bool clipChainTicks(const Plan& p, const Node& n, int player, std::int64_t song,
+                    std::int64_t& ticks) SUPPLE_RT;
+// Where a clip chain stage's clip-time lanes read (ParamLane::clipTime): the
+// player its input reads (`in`), the block at timeline `pos`, the chain's
+// lead less the stage's `before`.
+struct ClipLaneSource {
+    const Plan* plan = nullptr;
+    const Node* node = nullptr;
+    int player = -1;
+    ClipChainInput in;
+    std::int64_t pos = 0, ahead = 0;
+    const LoopRange* loop = nullptr;
+};
+// The clip position (clipChainTicks' domain) that frame `frame` of the
+// stage's input will be heard at, or false where its input reads nothing.
+bool clipLanePosition(const ClipLaneSource& c, std::uint32_t frame, std::int64_t& at) SUPPLE_RT;
+// A render without launches plays the arrangement only: its plan keeps no
+// clip chain (plan.cpp; before prepare).
+void dropClipChains(Plan& p);
+// Main thread, before `to` is published: each channel's audio players in
+// `from` whose clip `to` lacks, kept in `to` to fade out (Node::retiring).
+void addRetiring(Plan& to, const Plan& from);
+// A frozen node's print, written over its sum: crossfaded in from a
+// retiring player while the switch fade runs (`pos`: the block's sample).
+void retiringIntoPrint(Node& n, std::int64_t pos, std::uint32_t frames) SUPPLE_RT;
 // One stage's modulation events for a block (ADR-0096, plan.cpp): after its
 // automation, at each point of the absolute grid; `origin` is the plan's
 // first sample. Exposed for tests.

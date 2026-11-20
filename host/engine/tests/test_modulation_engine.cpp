@@ -790,11 +790,22 @@ TEST_CASE("modulation: depth and enabled reach a running plan without a compile"
     const auto half = edited(emit.s, [](model::Modulation& m) { m.depth = 0.05; });
     const auto off = edited(half, [](model::Modulation& m) { m.enabled = false; });
     const auto hidden = edited(off, [](model::Modulation& m) { m.lane = false; });
+    // When a mix value is heard: from the next block its executor renders.
+    // In the callback that is the next cycle; the anticipative renderer may
+    // be up to its render-ahead (200 ms, 9600 frames) past the playhead, in
+    // a block of up to renderBlock (1024) frames. Each edit is made with the
+    // renderer as far ahead as it goes, the latest arrival there is, so the
+    // test is decided by that bound and not by how fast the machine renders
+    // (CI 44760220473: a Windows runner whose renderer had filled its budget
+    // still played depth 0.1 at frame 19000).
+    constexpr std::int64_t kStep = 300 * 96;  // frames between edits
+    constexpr std::int64_t kLatest = 9600 + 1024;
+    static_assert(kLatest < kStep);
     for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
         INFO("anticipative " << options.anticipative);
         InstancePool pool = makePool();
         MediaCache media;
-        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 4 * kStep});
         Engine engine(pool, media, options);
         REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 96}));
         const auto run = [&](std::int64_t blocks) {
@@ -803,28 +814,48 @@ TEST_CASE("modulation: depth and enabled reach a running plan without a compile"
             else
                 backend.run(blocks);
         };
+        // The renderer at its render-ahead (state alone: no deadline decides).
+        const auto fullyAhead = [&] {
+            while (options.anticipative && !engine.awaitRendered(1 << 30)) {
+            }
+        };
         REQUIRE(engine.load(emit.s));
         engine.play();
-        run(100);  // 9600 frames
+        run(kStep / 96);
         const auto generation = engine.planGeneration();
+        fullyAhead();
         REQUIRE(engine.load(half));
         CHECK(engine.planGeneration() == generation);
-        run(100);
+        run(kStep / 96);
+        fullyAhead();
         REQUIRE(engine.load(off));
         CHECK(engine.planGeneration() == generation);
-        run(100);
+        run(kStep / 96);
+        fullyAhead();
         REQUIRE(engine.load(hidden));
         CHECK(engine.planGeneration() > generation);  // lane is a route edit
-        run(100);
+        run(kStep / 96);
         engine.stop();
         CHECK(engine.processErrors() == 0);
-        // The anticipative renderer takes a value up to its render-ahead
-        // (9600 frames here) later: read each step's end.
+        CHECK(engine.anticipationMisses() == 0);
         const auto& cap = backend.capture().channels[0];
-        CHECK(double(cap[9000]) == doctest::Approx(gainAt(0.1)).epsilon(1e-4));
-        CHECK(double(cap[19000]) == doctest::Approx(gainAt(0.05)).epsilon(1e-4));
-        CHECK(double(cap[28500]) == doctest::Approx(gainAt(0)).epsilon(1e-4));
-        CHECK(double(cap[38000]) == doctest::Approx(gainAt(0)).epsilon(1e-4));
+        const std::size_t L = engine.outputLatency();
+        const auto at = [&](std::int64_t frame) {
+            return double(cap[L + static_cast<std::size_t>(frame)]);
+        };
+        // Before each edit the old value; from the latest arrival on, the new.
+        CHECK(at(kStep - 1) == doctest::Approx(gainAt(0.1)).epsilon(1e-4));
+        CHECK(at(kStep + kLatest) == doctest::Approx(gainAt(0.05)).epsilon(1e-4));
+        CHECK(at(2 * kStep - 1) == doctest::Approx(gainAt(0.05)).epsilon(1e-4));
+        CHECK(at(2 * kStep + kLatest) == doctest::Approx(gainAt(0)).epsilon(1e-4));
+        CHECK(at(3 * kStep - 1) == doctest::Approx(gainAt(0)).epsilon(1e-4));
+        CHECK(at(3 * kStep + kLatest) == doctest::Approx(gainAt(0)).epsilon(1e-4));
+        CHECK(at(4 * kStep - 1) == doctest::Approx(gainAt(0)).epsilon(1e-4));
+        // In the callback, the next cycle.
+        if (!options.anticipative) {
+            CHECK(at(kStep) == doctest::Approx(gainAt(0.05)).epsilon(1e-4));
+            CHECK(at(2 * kStep) == doctest::Approx(gainAt(0)).epsilon(1e-4));
+        }
     }
 }
 
@@ -1172,7 +1203,7 @@ TEST_CASE("modulation: a stem of a modulated track carries it, its source rack k
     // B's gain is modulated from a second rack on its own channel C, which
     // feeds nothing B plays. A render of B alone (a stem, a track analysis)
     // keeps that rack as a dependency and applies the modulation exactly as
-    // the mix does; C is not heard in it.
+    // the mix does; C is not heard in it, though the mix hears C.
     Emit emit("playing", std::nullopt);
     model::EditTxn t(emit.s, 2);
     const Id c = addChannel(t);
@@ -1181,16 +1212,32 @@ TEST_CASE("modulation: a stem of a modulated track carries it, its source rack k
     const Id modOut = addModule(t, rack, model::kModOutModule);
     cable(t, transport, "beat_phase", modOut, "in_1");
     modulate(t, modOut, emit.gain, "gain", 0.2);
-    const model::Session s = commit(t);
+    const model::Session silent = commit(t);
+    // The same with C audible: its rack's Out plays the transport's gate.
+    model::EditTxn u(silent, 3);
+    const Id out = addModule(u, rack, model::kOutModule);
+    cable(u, transport, "playing", out, "l");
+    model::Route heard;
+    heard.from.module = out;
+    heard.to.track = c;
+    const Id input = u.create(heard);
+    u.modify<model::Track>(c, [&](model::Track& tr) { tr.record.input = input; });
+    const model::Session s = commit(u);
     InstancePool pool = makePool();
     OfflineSettings settings;
     settings.endSeconds = 1.0;
     auto mix = renderOffline(s, pool, settings);
     REQUIRE_MESSAGE(mix, (mix ? std::string() : mix.error().toString()));
+    auto quiet = renderOffline(silent, pool, settings);
+    REQUIRE_MESSAGE(quiet, (quiet ? std::string() : quiet.error().toString()));
+    const bool hearsC = mix->audio.channels[0] != quiet->audio.channels[0];
+    CHECK(hearsC);
     settings.track = emit.b;
     auto stem = renderOffline(s, pool, settings);
     REQUIRE_MESSAGE(stem, (stem ? std::string() : stem.error().toString()));
-    CHECK(stem->audio.channels[0] == mix->audio.channels[0]);
+    // B alone, modulated as in the mix, and nothing of C.
+    const bool alone = stem->audio.channels[0] == quiet->audio.channels[0];
+    CHECK(alone);
     // The modulation moved it: equality says something.
     CHECK(stem->audio.channels[0] != render(emit.s, 1.0).left);
 }
@@ -1266,6 +1313,94 @@ TEST_CASE("modulation through an envelope: the events fall on the grid whatever 
 }
 
 TEST_CASE(
+    "modulation through an envelope: across a plan swap the lane holds its sum while the "
+    "rack is elsewhere") {
+    // M-f: while another executor still owns the source rack's modules, a
+    // lane holds its last sum, as Mod Outs and the PARAM_MOD memo do. The
+    // sum comes with the plan swap; a fresh one would send its envelope's
+    // base alone (review 63, probe P2).
+    const model::Session s = throughEnvelope("beat_phase", 0.2);
+    InstancePool pool = makePool();
+    MediaCache media;
+    const auto make = [&] {
+        auto compiled = d::compile(s, pool, 0, 128);
+        REQUIRE_MESSAGE(compiled, (compiled ? "" : compiled.error().toString()));
+        compiled->media = &media;
+        auto ok = d::prepare(*compiled, s);
+        REQUIRE_MESSAGE(ok, (ok ? "" : ok.error().toString()));
+        return compiled;
+    };
+    const auto lane = [](d::Plan& p) -> d::ParamLane* {
+        for (d::Node& n : p.nodes)
+            for (d::Stage& st : n.chain)
+                for (d::ParamLane& ln : st.lanes)
+                    if (ln.modCount) return &ln;
+        return nullptr;
+    };
+    auto a = make();
+    const char renderer = 0, other = 0;
+    d::adoptRackModules(nullptr, &a->rendererModules, &renderer);
+    d::Workers workers(0);
+    std::int64_t pos = 0;
+    for (; pos < 30000; pos += 128)
+        REQUIRE(d::processRendererBlock(&workers, *a, pos, 128, &renderer));
+    REQUIRE(lane(*a));
+    const double sent = lane(*a)->lastSent;
+    REQUIRE(lane(*a)->modSum != 0.0);
+    auto b = make();
+    d::carryMix(*a, *b, 0);
+    // The rack's modules pass to the other executor before this one runs
+    // the new plan's first block.
+    d::adoptRackModules(&a->rendererModules, nullptr, &renderer);
+    d::claimRackModules(b->rendererModules, &other);
+    REQUIRE(d::processRendererBlock(&workers, *b, pos, 128, &renderer));
+    REQUIRE(lane(*b));
+    CHECK(lane(*b)->lastSent == sent);
+}
+
+TEST_CASE("modulation through an envelope: a target handed to the live executor keeps its sum" *
+          doctest::description("rt")) {
+    // Arming B moves it, and the rack that modulates it, to the callback
+    // (M-f). While the rack's modules are still the renderer's, the lane
+    // holds its last sum, carried with the plan, as the PARAM_MOD memo
+    // does; it never falls back to its envelope's base (review 63, P2).
+    const model::Session s = throughEnvelope("beat_phase", 0.2);
+    model::EditTxn t(s, 3);
+    const Id b = s.tracks.find(kMaster)->children.at(1);
+    t.modify<model::Track>(b, [](model::Track& tr) { tr.record.armed = true; });
+    const model::Session armed = commit(t);
+    constexpr std::uint32_t kBlock = 128;
+    const auto offline = render(s, 2.0, kBlock);
+    CHECK(render(armed, 2.0, kBlock).left == offline.left);  // arming changes no sound
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        auto rtPool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 96000 + 4096});
+        Engine engine(rtPool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+        const auto run = [&](std::int64_t frames) {
+            if (options.anticipative)
+                runAheadOnState(engine, backend, frames / kBlock, kBlock);
+            else
+                backend.run(frames / kBlock);
+        };
+        REQUIRE(engine.load(s));
+        engine.play();
+        run(32000);
+        REQUIRE(engine.load(armed));
+        run(32000);
+        REQUIRE(engine.load(s));
+        run(32000 + 4096);
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+        CHECK(engine.anticipationMisses() == 0);
+        const std::size_t L = engine.outputLatency();
+        CHECK(maxDiff(backend.capture().channels[0], L, offline.left, 96000) == 0.0);
+    }
+}
+
+TEST_CASE(
     "modulation through an envelope: real-time output equals the offline render, in both "
     "executors and through the bridge" *
     doctest::description("rt")) {
@@ -1284,4 +1419,230 @@ TEST_CASE(
                 CHECK(maxDiff(live.left, live.latency, offline.left, 48000 * seconds) == 0.0);
             }
         }
+}
+
+namespace {
+
+// ADR-0061, amended 2026-11-20: B's gain is the fixed gain (automatable, not
+// modulatable), its envelope moving from -30 dB to 0 dB over a second, in
+// `mode`; `modulated`, a route of depth 0.2 from the beat phase reaches it
+// through that envelope (ADR-0096 step M4).
+struct HeldLane {
+    model::Session s;
+    Id gain, b;
+};
+HeldLane movingLane(bool modulated, model::EnvMode mode = model::EnvMode::Touch) {
+    Emit emit("beat_phase", std::nullopt);
+    model::EditTxn t(emit.s, 2);
+    t.modify<model::FxInstance>(emit.gain, [&](model::FxInstance& f) {
+        f.plugin.id = "com.suppleaudio.test.fixed-gain";
+        f.patch.reset();
+    });
+    params::ParamSpec spec;
+    spec.type = params::Type::Float;
+    spec.unit = units::Unit::dB;
+    spec.min = -60;
+    spec.max = 12;
+    model::Envelope env;
+    env.target = {emit.gain, "0"};
+    env.mode = mode;
+    env.timebase = model::Timebase::Time;
+    env.points = {{0.0, params::toClap(spec, -30)}, {1.0, params::toClap(spec, 0)}};
+    t.create(env);
+    if (modulated) modulate(t, emit.modOut, emit.gain, "0", 0.2);
+    return {commit(t), emit.gain, emit.b};
+}
+
+// The fixture's test controls (GainControl in fixture_plugins.cpp).
+struct GainHand {
+    void (*edit)(const clap_plugin_t*, double, std::uint32_t);
+    std::uint32_t (*deliveries)(const clap_plugin_t*);
+    void (*latency)(const clap_plugin_t*, bool);
+    std::uint32_t (*creates)();
+    void (*patchRescan)(const clap_plugin_t*, std::uint32_t);
+    void (*patchEffect)(const clap_plugin_t*, std::uint32_t);
+    void (*hand)(const clap_plugin_t*, double, std::uint32_t);
+};
+const GainHand& handOf(InstancePool& pool, Id fx) {
+    host::Instance* instance = pool.find(fx);
+    REQUIRE(instance);
+    const auto* plugin = instance->raw();
+    const auto* control =
+        static_cast<const GainHand*>(plugin->get_extension(plugin, "supple.test.gain-control"));
+    REQUIRE(control);
+    return *control;
+}
+
+double dbGain(double db) { return std::pow(10.0, db / 20.0); }
+
+}  // namespace
+
+TEST_CASE(
+    "write holds: a touch over a moving lane plays the hand, and the rest the offline render" *
+    doctest::description("rt")) {
+    // ADR-0061, amended 2026-11-20: from the block after the plug-in's
+    // gesture begins to the one it ends in, the lane sends nothing, so the
+    // plug-in plays what the hand set, whatever the curve or the modulation
+    // does. Released, the lane sends at once and from its next grid point
+    // the output is the offline render's again. In the callback, and in an
+    // anticipative engine's live executor (B armed); the renderer's own
+    // run is the next case.
+    constexpr std::uint32_t kBlock = 128;
+    constexpr std::int64_t kBefore = 100, kAfter = 100;
+    for (const bool modulated : {false, true}) {
+        const HeldLane lane = movingLane(modulated);
+        model::EditTxn t(lane.s, lane.s.version + 1);
+        t.modify<model::Track>(lane.b, [](model::Track& tr) { tr.record.armed = true; });
+        const model::Session armed = commit(t);
+        const auto offline = render(lane.s, 1.0, kBlock);
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("modulated " << modulated << ", anticipative " << options.anticipative);
+            InstancePool pool = makePool();
+            MediaCache media;
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 40000});
+            Engine engine(pool, media, options);
+            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+            const auto run = [&](std::int64_t blocks) {
+                if (options.anticipative)
+                    runAheadOnState(engine, backend, blocks, kBlock);
+                else
+                    backend.run(blocks);
+            };
+            REQUIRE(engine.load(options.anticipative ? armed : lane.s));
+            engine.play();
+            run(kBefore);
+            const GainHand& control = handOf(pool, lane.gain);
+            const auto* plugin = pool.find(lane.gain)->raw();
+            control.hand(plugin, -20, 1);  // grabbed: its gesture begins in this block
+            run(1);
+            const auto deliveries = control.deliveries(plugin);
+            std::vector<double> hand;  // what it set before each held block
+            for (int k = 1; k <= 20; ++k) {
+                hand.push_back(-20 + 0.5 * k);
+                control.hand(plugin, hand.back(), 0);
+                run(1);
+            }
+            hand.push_back(-9);
+            control.hand(plugin, hand.back(), 2);  // let go: its gesture ends in this block
+            run(1);
+            const bool lanesQuiet = control.deliveries(plugin) == deliveries;
+            CHECK(lanesQuiet);  // the lane sent the plug-in nothing while held
+            run(kAfter);
+            engine.stop();
+            CHECK(engine.processErrors() == 0);
+            const auto& cap = backend.capture().channels[0];
+            const std::size_t L = engine.outputLatency();
+            const auto same = [&](std::int64_t from, std::int64_t to) {
+                double worst = 0;
+                for (auto i = from; i < to; ++i)
+                    worst = std::max(worst, std::fabs(double(cap[L + std::size_t(i)]) -
+                                                      double(offline.left[std::size_t(i)])));
+                return worst;
+            };
+            CHECK(same(0, kBefore * kBlock) == 0.0);
+            bool handHeard = true;
+            for (std::size_t j = 0; j < hand.size(); ++j) {
+                const auto start = (kBefore + 1 + std::int64_t(j)) * std::int64_t(kBlock);
+                for (std::int64_t i = start; i < start + kBlock; ++i)
+                    handHeard = handHeard && double(cap[L + std::size_t(i)]) ==
+                                                 doctest::Approx(dbGain(hand[j])).epsilon(1e-6);
+            }
+            CHECK(handHeard);
+            const std::int64_t released =
+                (kBefore + 1 + std::int64_t(hand.size())) * std::int64_t(kBlock);
+            CHECK(same(released + d::kAutomationStep, released + kAfter * kBlock) == 0.0);
+        }
+    }
+}
+
+TEST_CASE(
+    "write holds: the renderer holds a latch past its gesture, across a plan swap, until "
+    "the transport stops") {
+    // A latching mode holds the hand's last value after the gesture ends,
+    // to the pass's end (ADR-0061). B is the renderer's here. The hold comes
+    // with the plan swap the pass's commit makes; a stop ends it and the
+    // lane sends again. Each step runs well past the render-ahead, so the
+    // renderer has processed what the hand did (decided by its state).
+    const HeldLane held = movingLane(false, model::EnvMode::Latch);
+    params::ParamSpec spec;
+    spec.type = params::Type::Float;
+    spec.unit = units::Unit::dB;
+    spec.min = -60;
+    spec.max = 12;
+    model::EditTxn t(held.s, held.s.version + 1);  // what the pass's commit writes
+    t.modify<model::Envelope>(held.s.envelopes.begin()->id, [&](model::Envelope& e) {
+        e.points.push_back({0.5, params::toClap(spec, -18)});
+        std::sort(e.points.begin(), e.points.end(),
+                  [](const auto& x, const auto& y) { return x.pos < y.pos; });
+    });
+    const model::Session written = commit(t);
+    InstancePool pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    Engine engine(pool, media, EngineOptions{.workers = 0});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+    const auto run = [&] { runAheadOnState(engine, backend, 200, 128); };
+    REQUIRE(engine.load(held.s));
+    engine.play();
+    run();
+    const GainHand& control = handOf(pool, held.gain);
+    const auto* plugin = pool.find(held.gain)->raw();
+    const auto playing = control.deliveries(plugin);
+    run();
+    CHECK(control.deliveries(plugin) > playing);  // the moving lane sends
+    control.hand(plugin, -20, 1);
+    run();
+    const auto deliveries = control.deliveries(plugin);
+    control.hand(plugin, -18, 2);
+    run();
+    const auto generation = engine.planGeneration();
+    REQUIRE(engine.load(written));
+    CHECK(engine.planGeneration() > generation);
+    run();
+    run();
+    CHECK(control.deliveries(plugin) == deliveries);  // held past the gesture and the swap
+    REQUIRE(pool.find(held.gain)->paramValue(0));
+    CHECK(*pool.find(held.gain)->paramValue(0) == doctest::Approx(params::toClap(spec, -18)));
+    // Paused: the pass is over, and the lane plays its curve again.
+    engine.pause();
+    while (!engine.awaitRendered(0)) {
+    }
+    engine.play();
+    run();
+    CHECK(control.deliveries(plugin) > deliveries);
+    engine.stop();
+    CHECK(engine.processErrors() == 0);
+}
+
+TEST_CASE("write holds: the main thread's hold keeps a latch and its release lets it go") {
+    // The pass's own hold (EngineApp::writeHolds, through the mix slots)
+    // holds the lane with no gesture and no compile; when it lets go before
+    // the stop (an undo starts the pass again) the latch goes with it.
+    const HeldLane held = movingLane(false, model::EnvMode::Latch);
+    InstancePool pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    Engine engine(pool, media, kInCallback);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+    REQUIRE(engine.load(held.s));
+    engine.play();
+    backend.run(20);
+    const GainHand& control = handOf(pool, held.gain);
+    const auto* plugin = pool.find(held.gain)->raw();
+    const auto generation = engine.planGeneration();
+    CHECK_FALSE(engine.setWriteHolds({{held.gain, "0"}}));
+    CHECK(engine.planGeneration() == generation);
+    backend.run(1);
+    const auto deliveries = control.deliveries(plugin);
+    backend.run(20);
+    CHECK(control.deliveries(plugin) == deliveries);
+    control.hand(plugin, -20, 1);
+    backend.run(1);
+    control.hand(plugin, -18, 2);
+    backend.run(20);
+    CHECK(control.deliveries(plugin) == deliveries);
+    CHECK_FALSE(engine.setWriteHolds({}));
+    backend.run(2);
+    CHECK(control.deliveries(plugin) > deliveries);
+    engine.stop();
 }

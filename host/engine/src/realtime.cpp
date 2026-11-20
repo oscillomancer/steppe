@@ -701,6 +701,7 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
         built->rateBackendLatency = backend_->status().outputLatency;
         built->rateEnabled |= rateScheduling_.load(std::memory_order_acquire);
         built->buffers = bufferPool_.get();
+        built->gestureHolds = true;  // ADR-0061, amended: the hand holds its lanes
         auto sources = media_.prepareSources(session, projectDir, config_.sampleRate);
         if (!sources) return sources.error();
         built->preparedSources = *sources;
@@ -890,6 +891,8 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
         }
         rateScheduling_.store(true, std::memory_order_release);
     }
+    // The playing clips this plan lacks fade out from copies (ADR-0097).
+    if (!plans_.empty()) detail::addRetiring(*plan, *plans_.back());
     latest_ = std::make_shared<const model::Session>(session);
     compiled_ = latest_;
     rateDeferredFrom_.reset();  // the deferred edit compiled with this one

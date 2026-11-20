@@ -1040,8 +1040,15 @@ level), you hear the control as you move it rather than the envelope's older
 points. In latch and write mode it keeps the last value until you stop or
 pause, which is also what the envelope stores. In touch mode the envelope
 takes over again half a second after your last move; holding the control
-still for longer than that hands back to the old automation. Mute and
-plug-in parameters play from their envelopes while you write them.
+still for longer than that hands back to the old automation. Mute plays
+from its envelope while you write it.
+
+A plug-in's knob works the same way: while you hold it in the plug-in's
+own window, the envelope stops moving it, and what you set is what is
+recorded. In touch mode the envelope takes over when you let go; in latch
+and write mode the last value holds until you stop or pause. A modulation
+that reaches that parameter through its envelope pauses while you hold it
+and resumes on top of what you recorded.
 
 Undo, redo or switching branches while playing starts a fresh automation
 pass at the current position. Earlier moves no longer override the envelope
@@ -1111,7 +1118,8 @@ the first free Mod Out input and makes the route. A follower also gets
 an In module and a send from `from`. When that rack would feed back
 into itself, the command uses another Modulators rack, or adds one. That
 happens when the rack already drives the track the follower listens to,
-or already listens to the target. A follower cannot listen to the track
+or already listens to the target, and each rack it adds that way comes
+on another new channel named Modulators. A follower cannot listen to the track
 it modulates, or to a track that track feeds. Without a depth the
 command uses a quarter of a parameter's range, 6 dB, or 50 %. The source
 starts at its module's defaults: set its knobs with `module.set {module,
@@ -1685,11 +1693,19 @@ A launch takes effect at the next quantize boundary: the clip's own
 With `none` it happens as soon as the engine can still take it: about one
 audio block ahead for a track the audio callback runs, about 0.2 s for
 the others. Launching a clip while stopped starts playback with it from
-the play position. At the switch, notes still sounding end and audio
-crossfades over 5 ms. Returning to the arrangement does not restart a
+the play position. A track whose clips have take FX with latency waits
+that much longer, so the clip is still heard on its boundary. At the
+switch, notes still sounding end and audio crossfades over 5 ms. Returning to the arrangement does not restart a
 note already under way: it sounds from its next start. A clip keeps its
 place against the bars, so relaunching a loop of whole bars stays in
 phase.
+
+A clip's take FX and its take envelopes play as they do on the timeline
+(`fx.add {take}`, `env.add {take}`), and an instrument in its take FX plays
+its notes. The take's envelopes run from the clip's start, in beats on a
+MIDI clip and seconds on an audio one, again on every pass, and so do the
+envelopes on its take FX (`env.add {fx}`). Effects start afresh at each
+launch, and their tail is cut when the track switches away.
 
 `launch.state` tells what each track with clips plays as you hear it:
 `arrangement`, `clip` (with its position in the clip), `held` (a `once`
@@ -1713,8 +1729,7 @@ committing again writes the same performance over itself.
 
 Renders play the arrangement only; the render dialog says so while a
 clip is playing. Not yet:
-- launching while a master playrate is active (`launch.playrate`);
-- a clip take's FX and envelopes, which do not play in a clip yet.
+- launching while a master playrate is active (`launch.playrate`).
 
 A rack's Notes module that plays a track's notes follows that track's
 launches: it plays the clip, falls silent when the track stops, and

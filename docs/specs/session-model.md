@@ -416,6 +416,8 @@ Expanded points interpolate in the parent envelope's domain. Take envelopes
 (`{take: id, param}`) use item-relative beats and move with the item; they
 take no automation items. Expansion is bounded to 100,000 repetitions/points
 per envelope; over-budget edits and files refuse with `automation.budget`.
+An envelope on a take's FX (`{fx: id, param}`) is in timeline position on an
+item's take, and in clip time on a clip's ("Scenes and clips").
 Copied takes clone their FX, envelopes and automation items with new IDs;
 automation items retain their pool. Splits insert the curve value at the cut
 and retain the segment shape on both sides. MIDI overdub uses the take's play rate.
@@ -584,7 +586,7 @@ routes: sd_1 tr_2 → tr_6 ch 1/2→3/4 pre-fader −6 dB (sidechain)
 markers: mk_1 "Verse" bar 1 · regions: rg_1 "Chorus" bars 9–17
 ```
 
-## 5. Project file (`supple.project/2.18`)
+## 5. Project file (`supple.project/2.19`)
 
 ### 5.1 Shape
 
@@ -602,9 +604,10 @@ played) becomes that master's `hw_output` (its first such route) and the
 route is dropped, with a `project.hw_output_route` warning.
 Schema 2.16 adds modulation routes (ADR-0096); 2.17 adds the context
 track's points (ADR-0095); 2.18 adds scenes, clips and
-`launch_quantize` (ADR-0097, "Scenes and clips").
+`launch_quantize` (ADR-0097, "Scenes and clips"); 2.19 puts the envelopes
+on a clip take's FX in clip time (ADR-0097, amended 2026-11-20, C2).
 
-The loader accepts 1.x and 2.x documents and saves the current schema (2.18,
+The loader accepts 1.x and 2.x documents and saves the current schema (2.19,
 §5). Migration allocates child channel IDs in track-ID order, inserts each
 child first, and moves the source items and record/input FX there while
 keeping user inserts on the buss. Hardware/MIDI record routes follow the new
@@ -1149,7 +1152,8 @@ and naming. All `edit` unless marked (q) query or (a) action.
   one undo step: lays the capture out linearly from where it began, by
   running time; on each track that left the arrangement its clip,
   stopped and held stretches replace the arrangement, each clip as
-  copies of its takes at the phase heard, MIDI copied unless `pooled`;
+  copies of its takes at the phase heard, MIDI copied unless `pooled`,
+  the envelopes on their FX repeated pass after pass over each copy;
   answers `{tracks, items, from, to}`. `performance` is filled from the
   capture and recorded in history: `{sample_rate, start, frames, loop?,
   launches: [{frame, track, action, clip?, anchor, anchor_beat}]}`.
@@ -1748,6 +1752,12 @@ keeps playing its print.
     envelope and needs an active one: `modulation.envelope` at
     `/target/param` otherwise, with an `env.add` hint.
   - `fx.describe` reports such a parameter `modulatable_by_envelope`.
+  - A stepped or enum parameter is refused as such (`modulation.target`),
+    with a hint to automate it with envelope points: no route moves it,
+    with or without an envelope.
+  - A name the plug-in lacks is refused (`modulation.target`) with a hint
+    that lists only what a route can take: the modulatable parameters,
+    then those reached through an active envelope, named as such.
 - Mixer targets (step M2): the target track or send must exist and fit the
   invariants above (`modulation.target` at `/target/track`,
   `/target/route` or `/target/param` otherwise), and a target in a frozen
@@ -1826,8 +1836,15 @@ and a clip"):
   `clip.unsupported`);
 - take envelope points keep their beats on a MIDI clip and convert point by
   point to seconds from the start on an audio clip, and back;
-- a take envelope with automation items does not convert between beats and
-  seconds (`clip.unsupported`);
+- the envelopes on a take's FX are in timeline position on an item and in
+  clip time on a clip, as its take envelopes are (beats on a MIDI clip,
+  seconds on an audio clip, from the clip's start; schema 2.19): they
+  convert point by point, and points before the new owner's start (or
+  the timeline's) go, the curve's value there kept as a point at it;
+- a take envelope, or an envelope on its FX, with automation items does not
+  convert (`clip.unsupported`); in clip time an envelope takes none
+  (`autoitem.take`), nor a writing mode (`env.mode`: a write pass writes
+  timeline positions);
 - the round trip at one position is exact; across a tempo change inside the
   span, the shape between two points may differ slightly.
 
@@ -1852,6 +1869,12 @@ takes, and their unpooled sources, as `item.remove` does. The command warns
 `clip.removed` naming the clips. Clips are outside a frozen track's freeze
 hash (the print is the arrangement). They can be edited on a frozen track
 but not launched; freezing returns the track to the arrangement first.
+
+**Schema 2.19** (ADR-0097, amended 2026-11-20, C2): the envelopes on a
+clip take's FX are in clip time. Before, their points were timeline
+positions; an older file's convert with the clip's anchor at 0 (beats on a
+MIDI clip, seconds with `timebase: time` on an audio clip), without a
+warning, since L1 stated that they followed the timeline.
 
 **Older builds (amendment G-c).**
 - A project that holds clips does not open in a build older than 2.18, and
@@ -1878,11 +1901,12 @@ but not launched; freezing returns the track to the arrangement first.
     defaults to the clip's;
   - `fx.add {take}` and `env.add {take}` on a clip's take, whose points
     give `beat` on a MIDI clip or `seconds` on an audio clip, from the
-    clip's start (`bar` and the other unit: `clip.unsupported`).
+    clip's start (`bar` and the other unit: `clip.unsupported`);
+    `env.add {fx}` and `env.points.set` on a clip take's FX take the same
+    (schema 2.19), the envelope's `timebase` being `time` on an audio
+    clip.
 - Refused on a clip's take with `clip.unsupported`:
-  `take.stretch.add/move/remove`; and `env.add {fx}` on an FX in a clip
-  take's chain (the chain plays, its envelopes are not played yet; hint:
-  clip FX envelopes are not played yet).
+  `take.stretch.add/move/remove`.
 - Timeline commands refuse a clip with `item.kind`, whose hint names the
   clip command:
   - `item.move/set/split/duplicate/remove/paste`;
@@ -1935,7 +1959,9 @@ nothing.
       period (a gap after the content, a length shorter than it) is
       `scene.insert.period`;
     - `loop` and the clip at least as long as the span: one item for the span.
-  - The takes are copied, and a MIDI source with them unless `pooled`.
+  - The takes are copied, and a MIDI source with them unless `pooled`. The
+    envelopes on their FX, in clip time, are written in timeline position
+    pass after pass over the item (schema 2.19).
   - An item already on a track that receives a clip and overlapping the span
     is `scene.insert.occupied` (named in the message); other tracks' items are
     not touched. A scene with no clip is `scene.empty`. A frozen track or one

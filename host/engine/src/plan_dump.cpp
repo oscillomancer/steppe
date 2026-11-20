@@ -213,18 +213,18 @@ void dumpEvents(Dump& d, std::string_view a, const std::vector<TimedEvent>& even
 
 void dumpStage(Dump& d, std::string_view a, const Stage& st) {
     [[maybe_unused]] const auto& [rackMidiBase, busPart, busMerge, busLive, midiOnly, busBase,
-                                  busHeld, busControllers, instance, fx, lanes, laneModRoutes, mods,
-                                  modRoutes, modEvents, modHeard, modEpoch, bypass, instrument,
-                                  autoBypassOnSilence, sleeping, processed, inputLatency, rateLive,
-                                  callbackBypass, wet, appliedWet, rampFromWet, rampToWet,
-                                  wetRampLeft, preserveDryOnLocate, latency, dry, out, dryBuf,
-                                  keyed, keyChannels, key, inPin, outPin, keyPins, pinned,
-                                  chanDelay, pinBuf, auxOutPin, auxOut, auxOutPtr, auxWritten,
-                                  blockEvents, voices, pendingVoices, noteSources, noteSourceIndex,
-                                  sourceIds, nextNoteId, releases, voiceDropped, modDeferred,
-                                  outStorage, outEvents, pdcIgnore, parallel, group, groupEnd,
-                                  before, align, groupIn, groupOut, os, osFilters, osIn, osOut,
-                                  osKey, osPad] = st;
+                                  busHeld, busControllers, instance, fx, lanes, laneModRoutes,
+                                  laneSlot, mods, modRoutes, modEvents, modHeard, modEpoch, bypass,
+                                  instrument, autoBypassOnSilence, sleeping, processed,
+                                  inputLatency, rateLive, callbackBypass, wet, appliedWet,
+                                  rampFromWet, rampToWet, wetRampLeft, preserveDryOnLocate, latency,
+                                  dry, out, dryBuf, keyed, keyChannels, key, inPin, outPin, keyPins,
+                                  pinned, chanDelay, pinBuf, auxOutPin, auxOut, auxOutPtr,
+                                  auxWritten, blockEvents, voices, pendingVoices, noteSources,
+                                  noteSourceIndex, sourceIds, nextNoteId, releases, voiceDropped,
+                                  modDeferred, outStorage, outEvents, pdcIgnore, parallel, group,
+                                  groupEnd, before, align, groupIn, groupOut, os, osFilters, osIn,
+                                  osOut, osKey, osPad] = st;
     d.put(a, "fx", st.fx);
     d.put(a, "instance", st.instance != nullptr);
     d.put(a, "rackMidiBase", st.rackMidiBase);
@@ -247,8 +247,12 @@ void dumpStage(Dump& d, std::string_view a, const Stage& st) {
             d.put(la, "range", std::array{lane.lo, lane.hi});
             d.put(la, "telemetry", lane.telemetry);
         }
+        // Its write hold's inputs (ADR-0061, amended); the hold is runtime state.
+        d.put(la, "envelope", lane.envelope);
+        d.put(la, "writes", std::array{lane.writes, lane.latches});
     }
     d.size(a, "laneModRoutes", st.laneModRoutes);
+    d.put(a, "laneSlot", st.laneSlot);
     // Modulation slots; the memo in them is runtime state.
     d.put(a, "mods", static_cast<std::uint64_t>(st.mods.size()));
     for (std::size_t i = 0; i < st.mods.size(); ++i) {
@@ -328,7 +332,8 @@ void dumpTakeChain(Dump& d, std::string_view a, const TakeChain& tc) {
                                   aheadFrom, aheadLoop, rateEventFresh, noteTarget, held,
                                   releaseHeld, chain, gainL, gainR, fadeIn, fadeOut, fadeInShape,
                                   fadeOutShape, fadeInCurve, fadeOutCurve, volume, pan, mute, buf,
-                                  active] = tc;
+                                  active, clipChain, player, delay, delayAt, inputPlayer,
+                                  inputAnchor] = tc;
     d.put(a, "item", tc.item);
     d.put(a, "take", tc.take);
     d.put(a, "span", std::array{tc.start, tc.end});
@@ -345,6 +350,10 @@ void dumpTakeChain(Dump& d, std::string_view a, const TakeChain& tc) {
     dumpAutomation(d, at(a, "pan"), tc.pan);
     dumpAutomation(d, at(a, "mute"), tc.mute);
     d.size(a, "buf", tc.buf.l);
+    // A clip's chain: its player and its delay back to the switch; what its
+    // input last read is state.
+    d.put(a, "clipChain", std::array{tc.clipChain ? 1 : 0, tc.player});
+    d.size(a, "delay", tc.delay.l);
 }
 
 void dumpClip(Dump& d, std::string_view a, const Clip& c) {
@@ -464,7 +473,8 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
                                   recordInputs, recordRack, inputLatency, inputBuf, latIn, latChain,
                                   timelineShift, sum, preFx, preFader, post, postKey, events,
                                   nextEvent, rateEventFresh, held, releaseHeld, releaseLive, clips,
-                                  takeChains, players, launch, launchFadeFrames, arrangementGain,
+                                  takeChains, players, retiring, launch, launchLead, launchNext,
+                                  launchNextValid, launchFadeFrames, arrangementGain,
                                   arrangementGains, launchBuf, clipVoices, clipWindow, postItems,
                                   itemShift, items, mix, silentFrom, silentTo, dropItems,
                                   noteTarget, volumeDb, pan, staticGain, panSettings, panCache,
@@ -492,6 +502,7 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
     d.put(a, "midiBases", std::array{n.midiLiveBase, n.midiRoutedBase});
     // The clip launcher (ADR-0097): the compiled players; what plays is state.
     d.put(a, "players", static_cast<std::uint64_t>(n.players.size()));
+    d.put(a, "retiring", static_cast<std::uint64_t>(n.retiring.size()));
     for (std::size_t k = 0; k < n.players.size(); ++k) {
         const ClipPlayer& pl = n.players[k];
         const auto pa = at(a, "player" + std::to_string(k));
@@ -502,7 +513,10 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
         d.put(pa, "beats", pl.periodBeats);
         d.put(pa, "events", static_cast<std::uint64_t>(pl.events.size()));
         d.put(pa, "audio", pl.audio.data != nullptr);
+        d.put(pa, "chain", pl.chain);
     }
+    // Its clip chains' lead (ADR-0097, amended 2026-11-20); launchNext is state.
+    d.put(a, "launchLead", n.launchLead);
     d.put(a, "clipSizing",
           std::array<std::uint64_t, 3>{static_cast<std::uint64_t>(n.launchFadeFrames), n.clipVoices,
                                        n.clipWindow});
@@ -727,13 +741,13 @@ std::string dumpPlan(const Plan& p) {
                                   rateSafeDevice, rateControlsChanged, scalarPublication,
                                   scalarHistory, requestedScalar, rate, smoothFrames, mix,
                                   startSeconds, outputLatency, block, timeMap, warnings,
-                                  clipPlayers, projectDir, preparedSources, media, instances, graph,
-                                  anyLive, heldLive, rendererNodes, liveNodes, rendererGraph,
-                                  liveGraph, rendererInstances, liveInstances, modules,
-                                  rendererModules, liveModules, rendererMeterNodes, liveMeterNodes,
-                                  meterNodes, frontier, rateOutput, frontierRings, recordTaps,
-                                  recordRings, handAt, handEpoch, handContinuable, split, deviceIn,
-                                  deviceInChannels, deviceRecording, hardwareMidi,
+                                  clipPlayers, gestureHolds, projectDir, preparedSources, media,
+                                  instances, graph, anyLive, heldLive, rendererNodes, liveNodes,
+                                  rendererGraph, liveGraph, rendererInstances, liveInstances,
+                                  modules, rendererModules, liveModules, rendererMeterNodes,
+                                  liveMeterNodes, meterNodes, frontier, rateOutput, frontierRings,
+                                  recordTaps, recordRings, handAt, handEpoch, handContinuable,
+                                  split, deviceIn, deviceInChannels, deviceRecording, hardwareMidi,
                                   midiInputsSettings, midiOutputsSettings, hardwareLead,
                                   hardwareLeadBase, deviceMidi, deviceMidiOffset, processedInputs] =
         p;
@@ -767,6 +781,7 @@ std::string dumpPlan(const Plan& p) {
     d.put(a, "timeMap", p.timeMap != nullptr);
     d.put(a, "warnings", p.warnings);
     d.put(a, "clipPlayers", p.clipPlayers);
+    d.put(a, "gestureHolds", p.gestureHolds);
     d.put(a, "projectDir", p.projectDir.generic_string());
     d.put(a, "preparedSources", p.preparedSources != nullptr);
     d.put(a, "mainMaster", static_cast<std::uint64_t>(p.mainMaster));
@@ -858,6 +873,9 @@ std::string dumpPlan(const Plan& p) {
             d.put(at("slot", "stage", i), "wet",
                   std::array{m.stages[i].wet.load(std::memory_order_relaxed),
                              double(m.stages[i].bypass.load(std::memory_order_relaxed))});
+        d.put("slot", "laneEnvelopes", m.laneEnvelopes);
+        for (std::size_t i = 0; m.lanes && i < m.laneEnvelopes.size(); ++i)
+            d.put(at("slot", "lane", i), "held", m.lanes[i].load(std::memory_order_relaxed));
     }
     return std::move(d.text);
 }

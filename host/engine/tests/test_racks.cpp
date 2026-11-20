@@ -2497,9 +2497,10 @@ TEST_CASE("MIDI sends: a source mute or a route mute while playing needs no plan
         };
         cycles(100);
         // A full renderer waiting for the callback: every run takes the edit
-        // from the same renderer position.
+        // from the same renderer position. Decided by state alone.
         if (options.anticipative)
-            REQUIRE(engine.awaitRendered(std::numeric_limits<std::int64_t>::max()));
+            while (!engine.awaitRendered(std::numeric_limits<std::int64_t>::max())) {
+            }
         const auto generation = engine.planGeneration();
         if (run == 0) REQUIRE(engine.load(next));
         if (run == 1) {
@@ -2507,6 +2508,13 @@ TEST_CASE("MIDI sends: a source mute or a route mute while playing needs no plan
             marker.create(model::Marker{});
             REQUIRE(engine.load(commit(marker)));
         }
+        // The renderer takes the plan where it stands, full: it takes a plan
+        // at the top of its next pass, and one still finishing the pass that
+        // filled it would otherwise render one more block from the old plan
+        // once the callback plays on (round 65 F1).
+        if (options.anticipative)
+            while (!engine.awaitPlan()) {
+            }
         CHECK(engine.planGeneration() == generation + (run == 1 ? 1 : 0));
         cycles(200);
         CHECK(engine.processErrors() == 0);
@@ -2580,9 +2588,10 @@ TEST_CASE("racks: a rack FX's wet or bypass edit while playing sounds like a com
         };
         cycles(100);
         // A full renderer waiting for the callback: every run takes the edit
-        // from the same renderer position.
+        // from the same renderer position. Decided by state alone.
         if (options.anticipative)
-            REQUIRE(engine.awaitRendered(std::numeric_limits<std::int64_t>::max()));
+            while (!engine.awaitRendered(std::numeric_limits<std::int64_t>::max())) {
+            }
         const auto generation = engine.planGeneration();
         if (run == 0) REQUIRE(engine.load(next));
         if (run == 1) {
@@ -2590,6 +2599,13 @@ TEST_CASE("racks: a rack FX's wet or bypass edit while playing sounds like a com
             marker.create(model::Marker{});
             REQUIRE(engine.load(commit(marker)));
         }
+        // The renderer takes the plan where it stands, full: it takes a plan
+        // at the top of its next pass, and one still finishing the pass that
+        // filled it would otherwise render one more block from the old plan
+        // once the callback plays on (round 65 F1).
+        if (options.anticipative)
+            while (!engine.awaitPlan()) {
+            }
         CHECK(engine.planGeneration() == generation + (run == 1 ? 1 : 0));
         CHECK(engine.mixEdits() == (run == 0 ? 1u : 0u));
         cycles(200);
@@ -2703,8 +2719,10 @@ TEST_CASE("racks: a plan swap carries a rack plug-in stage's dry delay, oversamp
                     }
                     // A full renderer waiting for the callback: every run
                     // takes the next edit from the same renderer position.
+                    // Decided by state alone.
                     if (options.anticipative)
-                        REQUIRE(engine.awaitRendered(std::numeric_limits<std::int64_t>::max()));
+                        while (!engine.awaitRendered(std::numeric_limits<std::int64_t>::max())) {
+                        }
                 };
                 cycles(100);
                 model::Session s = base;
@@ -2721,6 +2739,10 @@ TEST_CASE("racks: a plan swap carries a rack plug-in stage's dry delay, oversamp
                     model::EditTxn marker(s, s.version + 1);
                     marker.create(model::Marker{});
                     REQUIRE(engine.load(commit(marker)));
+                    // Taken where the full renderer stands (round 65 F1).
+                    if (options.anticipative)
+                        while (!engine.awaitPlan()) {
+                        }
                 }
                 CHECK(engine.planGeneration() == generation + (swap ? 1 : 0));
                 cycles(c.rampAtSwap ? 199 : 200);

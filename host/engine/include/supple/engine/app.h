@@ -1109,10 +1109,11 @@ class EngineApp : public cmd::Host {
         bool touched = false;
         std::uint64_t lastMs = 0;  // service clock of the last write (touch release)
     };
-    // The volume/pan targets this pass holds in the engine (ADR-0061): touched
-    // envelopes in a writing mode; a touch envelope only until kTouchReleaseMs
-    // after its last write. updateWriteHolds hands them over, reloading when
-    // a released curve needs compiling.
+    // The volume, pan and plug-in parameter targets this pass holds in the
+    // engine (ADR-0061): touched envelopes in a writing mode; a touch envelope
+    // only until kTouchReleaseMs after its last write. updateWriteHolds hands
+    // them over, reloading when a released curve needs compiling. (The engine
+    // also holds a plug-in parameter through the plug-in's own gesture.)
     std::vector<model::EnvTarget> writeHolds() const;
     void updateWriteHolds();
     void restartAutomationPass();  // undo, redo and branch switches mid-pass
@@ -1122,6 +1123,7 @@ class EngineApp : public cmd::Host {
         std::optional<PluginOutput> latest;
         std::vector<PluginOutput> recording;
         bool ended = false;
+        bool begun = false;  // opened by the plug-in's gesture begin
     };
     using OutputKey = std::pair<model::Id, std::uint32_t>;
     std::map<OutputKey, OutputGesture> outputGestures_;

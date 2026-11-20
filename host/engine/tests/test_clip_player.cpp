@@ -581,6 +581,48 @@ TEST_CASE("a plan swap keeps what a track plays, and a clip removed returns it t
     }
 }
 
+TEST_CASE("removing the playing clip, or freezing its track, crossfades to the arrangement" *
+          doctest::description("rt")) {
+    // A ramp clip on a track whose arrangement is silent: from the block the
+    // edit is adopted, the clip fades out over the 5 ms switch fade, by the
+    // fade weight, instead of stopping dead.
+    for (const char* edit : {"clip.remove", "track.freeze"})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO(std::string(edit) << ", anticipative " << options.anticipative);
+            Project p;
+            // An item far past the test, so the track can freeze.
+            auto item = j(R"({"track": "tr_1", "bar": 20})");
+            item["audio_file"] = p.ramp("late.wav", 4800).string();
+            p.runArgs("item.add", item);
+            auto args = j(R"({"track": "tr_1", "scene": "sc_1"})");
+            args["audio_file"] = p.ramp("ramp.wav", 48000).string();
+            p.runArgs("clip.add", args);
+            p.run("clip.set", R"({"clip": "cl_1", "length": 0.25})");  // 12000 frames
+            const model::Session s = p.app->head();
+            p.run(edit, std::string(edit) == "clip.remove" ? R"({"clip": "cl_1"})"
+                                                           : R"({"track": "tr_1"})");
+            const model::Session edited = p.app->head();
+            const std::int64_t frames = 48000 * 4;
+            const std::int64_t at = (96000 + 20000) / 128;  // the edit's cycle
+            const Live live = playLive(s, p.app->projectDir(), options, 128, frames,
+                                       {{20, {request("tr_1", "cl_1")}}, {at, {}, {}, &edited}});
+            const auto out = [&](std::int64_t t) {
+                return double(live.left[std::size_t(t + std::int64_t(live.latency))]);
+            };
+            const auto ratio = [&](std::int64_t t) {
+                return out(t) / double(rampAt((t - 96000) % 12000));
+            };
+            // The fade's end: the first silent frame after the edit.
+            std::int64_t z = at * 128;
+            while (z < frames - 48000 && out(z) != 0.0) ++z;
+            REQUIRE(z < frames - 48000);
+            CHECK(ratio(z - 241) == doctest::Approx(1.0).epsilon(1e-4));
+            CHECK(ratio(z - 120) == doctest::Approx(0.5).epsilon(0.01));
+            CHECK(ratio(z - 1) == doctest::Approx(1.0 / 240).epsilon(0.05));
+            for (std::int64_t t = z; t < z + 24000; ++t) REQUIRE(out(t) == 0.0);
+        }
+}
+
 TEST_CASE("a launch while stopped applies at the play start" * doctest::description("rt")) {
     Project p;
     twoTracks(p);
@@ -1091,6 +1133,324 @@ TEST_CASE(
     }
 }
 
+// --- A clip's take chain (ADR-0097, amended 2026-11-20) -----------------------
+
+namespace {
+
+std::string takeOf(Project& p, const char* clip) {
+    return p.app->head().clips.find(id(clip))->activeTake->str();
+}
+
+// tr_1's audio clip cl_1 (the ramp, 0.25 s) whose take has the gain fixture
+// at -6 dB with 64 samples of latency.
+void latentClip(Project& p) {
+    auto args = j(R"({"track": "tr_1", "scene": "sc_1"})");
+    args["audio_file"] = p.ramp("ramp.wav", 48000).string();
+    p.runArgs("clip.add", args);
+    p.run("clip.set", R"({"clip": "cl_1", "length": 0.25})");  // 12000 frames
+    auto fx = j(R"({"plugin": "com.suppleaudio.test.gain"})");
+    fx["take"] = takeOf(p, "cl_1");
+    const std::string fxId = p.runArgs("fx.add", fx)["fx"].asString();
+    auto patch = j(R"({"patch": {"params": {"latency": "short", "gain": -6}}})");
+    patch["fx"] = fxId;
+    p.runArgs("fx.patch.merge", patch);
+}
+// The ramp's frame k through that chain.
+double chained(std::int64_t k) { return double(rampAt(k)) * std::pow(10.0, -6.0 / 20.0); }
+
+}  // namespace
+
+TEST_CASE("a clip plays through its take's chain, heard at its boundary, not its latency later") {
+    Project p;
+    latentClip(p);
+    const std::int64_t anchor = 2 * kBeat;
+    const auto out = p.render(1.5, {launch(anchor, "cl_1")});
+    for (std::int64_t t = 0; t < anchor; ++t) REQUIRE(out[std::size_t(t)] == 0.0f);
+    // Through its gain; the 64-sample chain ran 64 samples ahead, so its
+    // content is on time.
+    for (std::int64_t t = anchor + kFade; t < 72000; ++t)
+        REQUIRE_MESSAGE(double(out[std::size_t(t)]) ==
+                            doctest::Approx(chained((t - anchor) % 12000)).epsilon(1e-6),
+                        "frame " << t);
+    CHECK(double(out[std::size_t(anchor + kFade / 2)]) ==
+          doctest::Approx(0.5 * chained(kFade / 2)).epsilon(1e-5));
+}
+
+TEST_CASE(
+    "a clip chain's tail is cut at the switch away, and it starts afresh at its next launch") {
+    Project p;
+    latentClip(p);
+    auto args = j(R"({"track": "tr_1", "scene": "sc_2"})");
+    args["audio_file"] = p.ramp("other.wav", 48000).string();
+    p.runArgs("clip.add", args);  // cl_2: no chain
+    const std::vector<LaunchLogEntry> log{launch(kBeat, "cl_1"), launch(2 * kBeat, "cl_2"),
+                                          launch(3 * kBeat, "cl_1")};
+    const auto out = p.render(2.0, log);
+    // cl_2 alone once the crossfade is over: cl_1's chain does not ring on.
+    for (std::int64_t t = 2 * kBeat + kFade; t < 3 * kBeat; ++t)
+        REQUIRE_MESSAGE(out[std::size_t(t)] == rampAt(t - 2 * kBeat), "frame " << t);
+    // cl_1 again from its start, nothing of the last pass in its delay.
+    for (std::int64_t t = 3 * kBeat + kFade; t < 3 * kBeat + 12000; ++t)
+        REQUIRE_MESSAGE(
+            double(out[std::size_t(t)]) == doctest::Approx(chained(t - 3 * kBeat)).epsilon(1e-6),
+            "frame " << t);
+}
+
+TEST_CASE("a clip's take envelopes are in clip time: the same at any song position and pass") {
+    Project p;
+    latentClip(p);
+    auto env = j(R"({"param": "volume", "points": [{"seconds": 0, "value": 0},
+                                                   {"seconds": 0.25, "value": "-12 dB"}]})");
+    env["take"] = takeOf(p, "cl_1");
+    p.runArgs("env.add", env);
+    const std::int64_t a = kBeat, b = 5 * kBeat + 1234;
+    const auto x = p.render(4.0, {launch(a, "cl_1")});
+    const auto y = p.render(4.0, {launch(b, "cl_1")});
+    // Each pass of the 12000-frame period ramps down from 0 dB.
+    for (std::int64_t k = kFade; k < 3 * 12000; ++k)
+        REQUIRE_MESSAGE(x[std::size_t(a + k)] == y[std::size_t(b + k)], "frame " << k);
+    CHECK(double(x[std::size_t(a + 12000 + 6000)]) ==
+          doctest::Approx(chained(6000) * std::pow(10.0, -6.0 / 20.0)).epsilon(1e-5));
+    // 0 dB again at each pass's start.
+    CHECK(double(x[std::size_t(a + 2 * 12000)]) == doctest::Approx(chained(0)).epsilon(1e-6));
+    CHECK(double(x[std::size_t(a + 2 * 12000 - 1)]) < chained(11999) * 0.6);
+}
+
+TEST_CASE("a MIDI clip plays through an instrument in its take's chain, ending at the switch") {
+    Project p;
+    p.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C3:w"})");
+    auto fx = j(R"({"plugin": "com.suppleaudio.test.sine"})");
+    fx["take"] = takeOf(p, "cl_1");
+    p.runArgs("fx.add", fx);
+    auto gain = j(R"({"plugin": "com.suppleaudio.test.gain"})");
+    gain["take"] = takeOf(p, "cl_1");
+    const std::string fxId = p.runArgs("fx.add", gain)["fx"].asString();
+    auto patch = j(R"({"patch": {"params": {"latency": "short"}}})");
+    patch["fx"] = fxId;
+    p.runArgs("fx.patch.merge", patch);
+    const std::int64_t at = kBeat, away = 3 * kBeat;
+    const auto out =
+        p.render(2.0, {launch(at, "cl_1"), back(away, LaunchLogEntry::Action::Arrangement)});
+    // Silent before the launch (the track has no instrument of its own) and
+    // after the switch away; the note sounds from the boundary on.
+    for (std::int64_t t = 0; t < at; ++t) REQUIRE(out[std::size_t(t)] == 0.0f);
+    double during = 0;
+    for (std::int64_t t = at; t < at + 2000; ++t)
+        during = std::max(during, std::fabs(double(out[std::size_t(t)])));
+    CHECK(during > 0.01);
+    CHECK(out[std::size_t(at - 1)] == 0.0f);
+    for (std::int64_t t = away + kFade; t < 96000; ++t)
+        REQUIRE_MESSAGE(out[std::size_t(t)] == 0.0f, "frame " << t);
+}
+
+TEST_CASE("an envelope on a clip take's FX plays in clip time, pass after pass (C2)") {
+    Project p;
+    latentClip(p);
+    p.run("env.add", R"({"fx": "fx_1", "param": "gain", "points": [{"seconds": 0, "value": 0},
+                                                                  {"seconds": 0.25, "value": -24}]})");
+    // Anchors on the same phase of the absolute 32-sample automation grid.
+    const std::int64_t a = kBeat, b = 5 * kBeat + 39 * 32;
+    const auto x = p.render(4.0, {launch(a, "cl_1")});
+    const auto y = p.render(4.0, {launch(b, "cl_1")});
+    for (std::int64_t k = kFade; k < 3 * 12000; ++k)
+        REQUIRE_MESSAGE(x[std::size_t(a + k)] == y[std::size_t(b + k)], "frame " << k);
+    // Each pass starts near 0 dB and ends near -24 dB, not where the
+    // timeline would put the curve.
+    const auto ratio = [&](std::int64_t k) {
+        return double(x[std::size_t(a + k)]) / double(rampAt(k % 12000));
+    };
+    CHECK(ratio(12000 + 600) > 0.7);
+    CHECK(ratio(12000 + 11500) < 0.12);
+    CHECK(ratio(24000 + 600) > 0.7);
+}
+
+TEST_CASE("a MIDI clip's take envelope is in beats from the clip's start, wherever it plays") {
+    Project p;
+    p.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C3:w"})");
+    auto fx = j(R"({"plugin": "com.suppleaudio.test.sine"})");
+    fx["take"] = takeOf(p, "cl_1");
+    p.runArgs("fx.add", fx);
+    auto env = j(R"({"param": "volume", "points": [{"beat": 0, "value": 0},
+                                                   {"beat": 2, "value": "-24 dB"}]})");
+    env["take"] = takeOf(p, "cl_1");
+    p.runArgs("env.add", env);
+    const std::int64_t a = kBeat, b = 4 * kBeat;
+    const auto x = p.render(4.0, {launch(a, "cl_1")});
+    const auto y = p.render(4.0, {launch(b, "cl_1")});
+    const auto peak = [](const std::vector<float>& v, std::int64_t from, std::int64_t to) {
+        double m = 0;
+        for (std::int64_t t = from; t < to; ++t)
+            m = std::max(m, std::fabs(double(v[std::size_t(t)])));
+        return m;
+    };
+    for (std::int64_t k = kFade; k < 3 * kBeat; ++k)
+        REQUIRE_MESSAGE(x[std::size_t(a + k)] == y[std::size_t(b + k)], "frame " << k);
+    // Down 24 dB over two beats: the second beat is quieter than the first.
+    CHECK(peak(x, a, a + kBeat / 4) > 0.05);
+    CHECK(peak(x, a + 2 * kBeat, a + 2 * kBeat + kBeat / 4) < 0.1 * peak(x, a, a + kBeat / 4));
+}
+
+TEST_CASE("a clip chain through the bridge plays as the offline replay" *
+          doctest::description("rt")) {
+    host::setBridgeExecutable(BRIDGE_PATH);
+    Project p;
+    latentClip(p);
+    p.run("fx.set", R"({"fx": "fx_1", "isolation": "shared_bridge"})");
+    const model::Session s = p.app->head();
+    const std::int64_t frames = 48000 * 3 + 8192;
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        const std::vector<Step> steps{{10, {request("tr_1", "cl_1")}}};
+        const Live live =
+            playLive(s, p.app->projectDir(), test::patient(options), 128, frames, steps);
+        REQUIRE(live.log.size() == 1);
+        InstancePool pool = makePool();
+        OfflineSettings settings;
+        settings.endSeconds = 3.0;
+        settings.projectDir = p.app->projectDir();
+        settings.launches = live.log;
+        auto offline = renderOffline(s, pool, settings);
+        REQUIRE(offline);
+        CHECK(maxDiff(live.left, live.latency, offline->audio.channels[0], 48000 * 3) == 0.0);
+        // The clip plays from bar 2, through its chain: a ramp at -6 dB.
+        CHECK(double(live.left[live.latency + 96000 + 5000]) ==
+              doctest::Approx(chained(5000)).epsilon(1e-5));
+    }
+}
+
+TEST_CASE("live launches of clips with take chains play as the offline replay" *
+          doctest::description("rt")) {
+    // An audio clip through a latent chain on tr_1, a MIDI clip through an
+    // instrument and a latent gain on tr_2; launched, relaunched, swapped,
+    // back to the arrangement and stopped.
+    Project p;
+    latentClip(p);
+    p.run("track.add", R"({"name": "Keys"})");  // tr_2
+    p.run("clip.add",
+          R"({"track": "tr_2", "scene": "sc_1", "notation": "voice bass; 1: C3:q E3:q G3:h"})");
+    auto fx = j(R"({"plugin": "com.suppleaudio.test.sine"})");
+    fx["take"] = takeOf(p, "cl_2");
+    p.runArgs("fx.add", fx);
+    auto gain = j(R"({"plugin": "com.suppleaudio.test.gain"})");
+    gain["take"] = takeOf(p, "cl_2");
+    const std::string fxId = p.runArgs("fx.add", gain)["fx"].asString();
+    auto patch = j(R"({"patch": {"params": {"latency": "short"}}})");
+    patch["fx"] = fxId;
+    p.runArgs("fx.patch.merge", patch);
+    auto args = j(R"({"track": "tr_1", "bar": 1})");
+    args["audio_file"] = p.ramp("item.wav", 240000).string();
+    p.runArgs("item.add", args);
+    const model::Session s = p.app->head();
+    const std::int64_t frames = 48000 * 5 + 8192;
+    for (const std::uint32_t block : {128u, 512u})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("block " << block << ", anticipative " << options.anticipative);
+            Engine::LaunchRequest stop = backTo("tr_2");
+            stop.action = LaunchLogEntry::Action::Stop;
+            const std::vector<Step> steps{
+                {20, {request("tr_1", "cl_1"), request("tr_2", "cl_2")}},
+                {(96000 + 4000) / block, {request("tr_1", "cl_1")}, model::LaunchQuantize::Beat},
+                {(144000 + 4000) / block, {backTo("tr_1"), stop}}};
+            const Live live = playLive(s, p.app->projectDir(), options, block, frames, steps);
+            REQUIRE(live.log.size() == 5);
+            InstancePool pool = makePool();
+            OfflineSettings settings;
+            settings.endSeconds = 5.0;
+            settings.projectDir = p.app->projectDir();
+            settings.launches = live.log;
+            auto offline = renderOffline(s, pool, settings);
+            REQUIRE(offline);
+            CHECK(maxDiff(live.left, live.latency, offline->audio.channels[0], 48000 * 5) == 0.0);
+            settings.launches.clear();
+            auto plain = renderOffline(s, pool, settings);
+            REQUIRE(plain);
+            CHECK(maxDiff(live.left, live.latency, plain->audio.channels[0], 48000 * 5) > 0.0);
+        }
+}
+
+TEST_CASE("a clip through its take's chain keeps its phase when the song wraps before its anchor" *
+          doctest::description("rt")) {
+    // Review round 66's suggestion: a transport loop over bars 1-2 and the
+    // latent chain clip, with a clip-time envelope on its FX, launched on
+    // bar 2. After the wrap the song is before the anchor; the chain's
+    // input folds there and its envelope reads the clip position, so each
+    // frame sounds as the same phase did on the first pass.
+    Project p;
+    latentClip(p);
+    p.run("env.add", R"({"fx": "fx_1", "param": "gain", "points": [{"seconds": 0, "value": 0},
+                                                                  {"seconds": 0.25, "value": -24}]})");
+    const model::Session s = p.app->head();
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 6});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        REQUIRE(engine.load(s, p.app->projectDir()));
+        engine.setLoop(0.0, 4.0, true);
+        engine.play();
+        const auto run = [&](std::int64_t cycles) {
+            if (options.anticipative)
+                runAheadOnState(engine, backend, cycles, 128);
+            else
+                backend.run(cycles);
+        };
+        run(10);
+        const Engine::LaunchRequest r = request("tr_1", "cl_1");
+        REQUIRE(engine.launch(std::span(&r, 1), model::LaunchQuantize::Bar));  // bar 2
+        run(48000 * 5 / 128 - 10);
+        engine.service();
+        REQUIRE(engine.launchLog().size() == 1);
+        const std::uint32_t latency = engine.outputLatency();
+        engine.stop();
+        const std::vector<float>& out = backend.capture().channels[0];
+        const auto at = [&](std::int64_t k) { return double(out[std::size_t(k + latency)]); };
+        // Running frame k after the wrap (song k - 192000), against the first
+        // pass at the same phase; away from the period's and the loop's edges.
+        int checked = 0;
+        for (std::int64_t k = 192000 + 300; k < 240000; k += 97) {
+            const std::int64_t phase = ((k - 192000 - 96000) % 12000 + 12000) % 12000;
+            if (phase < 300 || phase > 11700) continue;
+            INFO("frame " << k << ", phase " << phase);
+            REQUIRE(at(96000 + 12000 + phase) != 0.0);
+            CHECK(at(k) == doctest::Approx(at(96000 + 12000 + phase)).epsilon(1e-6));
+            ++checked;
+        }
+        CHECK(checked > 400);
+    }
+}
+
+TEST_CASE("a launch onto a track with a clip chain waits the chain's latency longer") {
+    // ADR-0097, amended 2026-11-20: the input side takes the launch the
+    // lead early, so the floor is that much later.
+    for (const bool latent : {false, true}) {
+        CAPTURE(latent);
+        Project p;
+        latentClip(p);
+        if (!latent)
+            p.run("fx.patch.merge", R"({"fx": "fx_1", "patch": {"params": {"latency": "none"}}})");
+        const model::Session s = p.app->head();
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+        Engine engine(pool, media, kInCallback);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        REQUIRE(engine.load(s, p.app->projectDir()));
+        engine.play();
+        backend.run(10);
+        const Engine::LaunchRequest r = request("tr_1", "cl_1");
+        auto placed = engine.launch(std::span(&r, 1), model::LaunchQuantize::None);
+        REQUIRE(placed);
+        CHECK(placed->stream == 11 * 128 + (latent ? 64 : 0));
+        backend.run(20);
+        engine.service();
+        REQUIRE(engine.launchLog().size() == 1);
+        CHECK(engine.launchLog()[0].runningFrame == placed->stream);
+        engine.stop();
+    }
+}
+
 // --- Capturing a performance and committing it (ADR-0097 L4) ------------------
 
 namespace {
@@ -1351,6 +1711,44 @@ TEST_CASE("a capture keeps what plays as it begins and ends at a relocation" *
         CHECK(capture->startSample == 144000);
         engine.stop();
     }
+}
+
+TEST_CASE("a clip take's FX envelope commits as it was heard, pass after pass (C2)" *
+          doctest::description("rt")) {
+    // A period that is its content's pass commits as one looped item, its
+    // envelope repeated pass after pass; a shorter one as an item per
+    // period. The FX's 64-sample latency hears each next pass early, as live.
+    for (const double length : {1.0, 0.25})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("length " << length << ", anticipative " << options.anticipative);
+            Project p;
+            latentClip(p);
+            auto set = j(R"({"clip": "cl_1"})");
+            set["length"] = length;  // of the ramp's 48000 frames
+            p.runArgs("clip.set", set);
+            auto env = j(R"({"fx": "fx_1", "param": "gain",
+                         "points": [{"seconds": 0, "value": 0}, {"seconds": 1, "value": -24}]})");
+            env["points"].asArray()[1]["seconds"] = length;
+            p.runArgs("env.add", env);
+            const std::int64_t frames = 48000 * 5 + 16384;
+            AppLive live(p, options, 128, frames);
+            p.run("launch.capture", R"({"on": true})");
+            REQUIRE(p.app->transport("play"));
+            live.until(20 * 128);
+            p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 2
+            live.until(48000 * 5);
+            json::Value done = p.run("launch.commit", "{}");
+            const std::vector<float> heard = live.stop();
+            const std::int64_t end = std::min(std::int64_t(done["to"].asDouble() * double(kBeat)),
+                                              live.cycles * 128 - std::int64_t(live.latency));
+            CHECK(end > 96000 + 2 * 48000);  // two passes and more
+            const std::vector<float> committed = arrangement(p, 5.0);
+            const auto [worst, first] = compare(heard, live.latency, committed, 0, end, 1e-6);
+            CHECK_MESSAGE(first < 0, "first difference at frame " << first << ", " << worst);
+            // The second pass starts near 0 dB again.
+            const auto P = std::int64_t(length * 48000);
+            CHECK(double(committed[std::size_t(96000 + P + 600)]) > 0.7 * double(rampAt(600)));
+        }
 }
 
 TEST_CASE("launch.commit: history, undo, pooling and refusals") {

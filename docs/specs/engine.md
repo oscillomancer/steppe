@@ -262,8 +262,26 @@ at compile time). Per block, each automated target evaluates its segments:
   compiles. Holds exist only while the transport plays; undo, redo and a
   branch switch mid-pass start the pass again at that point, so the
   abandoned writes neither stay held nor get a latch tail at stop. A halt
-  ends the pass that was playing. Mute, plug-in parameters and the master
-  playrate are not held: their writes compile as before.
+  ends the pass that was playing. Mute and the master playrate are not
+  held: their writes compile as before.
+- plug-in parameter holds (ADR-0061, amendment 2026-11-20): a held lane
+  sends nothing, so the plug-in keeps what the hand set. Two things hold it:
+  - **the executor** (`ParamLane::gesture`, `latched`), on a real-time plan
+    (`Plan::gestureHolds`) for a lane whose envelope is in a writing mode.
+    It holds from the block after the plug-in reports `GestureBegin` while
+    playing (`holdGestures`, after each process call). Touch holds to the
+    block with `GestureEnd`; a latching mode holds on until a start or seek
+    (`locate` with a console restart) or a stopped block. A plan swap
+    carries an open gesture, and a latch whose main-thread hold has not
+    fallen;
+  - **`EngineApp`'s hold** (`ParamLane::held`, a `MixSlots::lanes` flag per
+    lane by envelope), from the touched envelopes as for a level. When it
+    falls, the executor's latch goes too.
+
+  Released, the lane sends its value at once (`lastSent` is cleared while
+  held), then on its grid. The first block of a gesture is not held. Points
+  written into a plug-in envelope compile, since they change the FX's
+  values too.
 
 ### 1.4.1 Modulation (ADR-0096)
 
@@ -271,7 +289,8 @@ A modulation route (`mr_*`, session-model "Modulation") moves a target
 parameter by a rack's Mod Out signal × its `depth`, as an offset on top of
 the base: the static value, the envelope or a write hold's hand. It never
 writes the base, the model or an envelope, and write modes record the base
-only.
+only. A held plug-in lane (§1.4) carries no modulation through its envelope
+until it is released.
 
 - **Edges.** Every route, enabled or not, is an edge from its source rack's
   node to the node that applies its target; `enabled` only zeroes its
@@ -357,9 +376,11 @@ only.
   executor, the last sum holds. The lane has a telemetry slot of its own,
   stored as a fraction of its range. Without an active envelope on the
   parameter, the route is inert (`modulation.target`, "has no active
-  envelope to carry it"). When a write mode records a plug-in output for
-  such a parameter, the route's current offset is taken off first
-  (`commitOutputGesture`), so the envelope keeps the base.
+  envelope to carry it"). In a write pass the lane is held from the
+  plug-in's gesture (§1.4), so what the plug-in reports is the hand's value,
+  recorded as it is. Outside a held pass (stopped, or a reading mode) the
+  route's current offset is taken off what the plug-in reports
+  (`commitOutputGesture`), so the static value keeps the base.
 - **Inert routes.** A route is inert, with a plan warning, when binding finds
   that its target cannot take it: the parameter is gone, read-only, bypass,
   neither modulatable nor reachable through an active envelope, or the
@@ -425,8 +446,14 @@ the same.*
   `once` clip past its length) or `stopped`. Plans carry it across swaps
   by node id and clip id (§1.6 of engine.md). A clip the new plan no
   longer has (removed, or now past the memory budget) ends at that swap
-  and its track returns to the arrangement, without the switch fade: the
-  new plan holds no player to fade out.
+  and its track returns to the arrangement. An audio clip without a take
+  chain crossfades out over the switch fade: before publishing a plan,
+  `Engine::load` copies into each node the previous plan's audio players
+  whose clip it lacks (`Node::retiring`, `addRetiring`; main thread, never
+  launched or listed), and the carry fades from that copy
+  (`LaunchState::fadeFrom` −3), starting at the first block the node
+  plays after adoption. A clip with a take chain stops at the swap (its
+  chain's instances leave with the plan), and a MIDI clip's notes end.
 - **A launch is a timed message (L-a, B1).** Its target is `{epoch,
   stream sample}`, the coordinate plan handoffs use (`handAt`,
   `handEpoch`). A scene launch has one target for all its tracks: the
@@ -528,9 +555,10 @@ the same.*
   and names the skipped clips in a `launch.memory` warning. A launch of a
   skipped clip is refused with `launch.memory`.
 - **Frozen tracks.** Freezing returns the track to the arrangement at the
-  swap that adopts the frozen plan, in both executors (no switch fade:
-  the frozen node has no players to fade out), and drops its queued
-  launch. `launch.clip` on a frozen track
+  swap that adopts the frozen plan, in both executors, and drops its
+  queued launch. An audio clip it played crossfades into the print as a
+  removed one does into the arrangement (`retiringIntoPrint`, at the
+  print's chain delay). `launch.clip` on a frozen track
   fails with `track.frozen`, and `launch.scene` skips it with a
   `track.frozen` warning.
 - **Audio clips play at the take's own rate,** with its playrate, pitch
@@ -542,9 +570,47 @@ the same.*
     with the master playrate. Until that lands, a plan with the master
     playrate active compiles no players, its tracks follow the
     arrangement, and a launch is refused with `launch.playrate`.
-  - *A clip take's FX and envelopes.* They will play as an item's take
-    chain does. Until then a clip plays without them, and the plan warns
-    with `launch.take_chain`, naming the clip.
+- **A clip take's chain (ADR-0097, amended 2026-11-20).** A clip whose
+  active take has FX or an active envelope plays through a chain of its
+  own, as an item's take does (`TakeChain::clipChain`, compiled with the
+  timeline's take chains and linked to its player by
+  `compileClipPlayers`):
+  - *The lead.* A channel's `launchLead` is the most latency among its
+    clips' chains. Every clip chain's input runs that far ahead; its
+    output is delayed back by the lead less its own latency, so a clip is
+    heard at its switch frame, not its chain's latency later.
+  - *The early half of a launch.* A launch reaches such a channel
+    `launchLead` before its frame as well (`prelaunch`, recorded in
+    `Node::launchNext` until the launch applies). From there the incoming
+    clip's chain reads it from its new anchor. A MIDI chain going out
+    stops taking notes there and what it holds ends, so its notes end
+    where the switch is heard. An audio chain going out reads on through
+    the switch's crossfade, as a player's audio does.
+  - *Running.* A chain runs while its clip is coming in, plays or fades
+    out, and is otherwise idle. It is fresh (plug-ins reset, delays and
+    held notes cleared) each time it starts, and runs on, unreset, across
+    the clip's passes and a relaunch of the playing clip. Its output is
+    weighed by the switch's crossfade as a player's audio is, with the
+    clip's and the take's gain and pan after the chain.
+  - *Its input over a transport loop* folds as the output will: an audio
+    chain reads the loop start's song position (unanchored, as after a
+    wrap), and a MIDI chain ends what it holds at the fold, as a timeline
+    take chain running ahead does at its early wrap.
+  - *The take's envelopes* (volume, pan, mute) are from the clip's start
+    as heard: beats on a MIDI clip, seconds on an audio clip, from the
+    start of each pass.
+  - *Envelopes on its FX* are in clip time too (C2, schema 2.19): their
+    lanes (`ParamLane::clipTime`) compile in the clip position's domain,
+    unshifted, and read the clip position each stage's input will be heard
+    at (`clipLanePosition`: the lead less the stages before it, folded as
+    the input is). A lane sends on the absolute grid, at each point it
+    crosses and at each new pass or anchor; with no input it holds.
+  - *A MIDI take's instrument* in its chain plays the clip's notes, not
+    the track's (`launchMidi` leaves them to it).
+  - Plan swaps carry a chain by take id (its stages by instance, its
+    delay while its length holds); the offline replay applies each
+    launch's early half at its frame less the lead. A render without
+    launches drops clip chains before `prepare` (`dropClipChains`).
 - **The take `pitch` envelope** that is stored but never played (core
   §4.5) stays unplayed for clips as for items. Whether to play it is
   decided with the stretch path, for both.
@@ -604,7 +670,10 @@ the same.*
     and plays them). Each target switches at the stream sample `target +
     timelineShift` of its own node, in the executor that runs that node;
     each executor cuts its block at its targets' frames. The floor counts
-    every target's executor.
+    every target's executor. A channel with clip chains is a target
+    `launchLead` early as well (`prelaunch`): its floor, its horizon check
+    and the frame that decides the entry are that much earlier (ADR-0097,
+    amended 2026-11-20).
   - **One decision for all of them.** States: pending, committed,
     applied, missed and voided. Each executor class (the renderer, the
     callback) stores its horizon, the epoch and the stream its current

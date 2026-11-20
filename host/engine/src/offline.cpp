@@ -896,7 +896,10 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
     // no clip audio is prepared and no clip player compiled, so a clip's
     // warnings never reach a render.
     p.clipPlayers = !opt.launches.empty();
-    if (!p.clipPlayers) sourceSession.clips = {};
+    if (!p.clipPlayers) {
+        sourceSession.clips = {};
+        detail::dropClipChains(p);  // nor their take chains (ADR-0097, amended 2026-11-20)
+    }
     auto sources = p.media->prepareSources(sourceSession, p.projectDir, p.rate);
     if (!sources) return sources.error();
     p.preparedSources = *sources;
@@ -1073,6 +1076,7 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
             detail::LaunchAction action;
             int feed = -1;
             Id clip;
+            bool early = false;  // its clip chains' input side (Node::launchLead)
         };
         std::vector<Switch> switches;
         for (const LaunchLogEntry& e : opt.launches)
@@ -1109,6 +1113,13 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                     if (a.player < 0) continue;
                 }
                 switches.push_back({e.runningFrame + node.timelineShift, k, a, -1, {}});
+                if (node.launchLead > 0)
+                    switches.push_back({e.runningFrame + node.timelineShift - node.launchLead,
+                                        k,
+                                        a,
+                                        -1,
+                                        {},
+                                        true});
             }
         std::stable_sort(switches.begin(), switches.end(),
                          [](const Switch& a, const Switch& b) { return a.at < b.at; });
@@ -1127,6 +1138,8 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                         detail::applyFeedLaunch(node.rack->notes[static_cast<std::size_t>(sw.feed)],
                                                 sw.action.kind, sw.clip, sw.action.anchorSample,
                                                 sw.action.anchorBeat);
+                    else if (sw.early)
+                        detail::prelaunch(node, sw.action);
                     else
                         detail::applyLaunch(p, node, sw.action);
                 }

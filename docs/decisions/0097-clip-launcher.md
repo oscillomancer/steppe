@@ -9,6 +9,11 @@ shares. It is built in steps L1 to L4 (below). The engine's "Playing"
 section was written from the core design and the lead's core check, and
 the lead revised it with L2 (2026-11-19).
 
+**Amended 2026-11-20** (below, "Amendment: a clip take's chain"): a clip
+take's FX and envelopes play, and a launch's floor grows by the latency of
+the track's clip chains; envelopes on a clip take's FX are in clip time
+(C2, schema 2.19).
+
 Contracts: `specs/session-model.md` "Scenes and clips (schema 2.18,
 ADR-0097)", `specs/engine.md` §1.4.2, `specs/gui.md` §4.15.
 
@@ -335,7 +340,9 @@ Clips replace that with an **ordered budget**:
   by node id and clip id (§1.6 of engine.md). A clip the new plan no
   longer has (removed, or now past the memory budget) ends at that swap
   and its track returns to the arrangement, without the switch fade: the
-  new plan holds no player to fade out.
+  new plan holds no player to fade out. (Amended 2026-11-20: an audio
+  clip without a take chain now fades out from a copy the new plan keeps;
+  see engine.md §1.4.2.)
 - **A launch is a timed message (L-a, B1).** Its target is `{epoch,
   stream sample}`, the coordinate plan handoffs use (`handAt`,
   `handEpoch`). A scene launch has one target for all its tracks: the
@@ -605,6 +612,85 @@ undo step, and a refusal changes nothing. The contract is in
 | L2 | lead | The clip player, the launch queue, the phase rules, state carry, `launch.*`, telemetry, the render dialog's line. |
 | L3 | gui-lead | The launcher pane (gui.md §4.15). |
 | L4 | lead and gui-lead | Capture and commit; scene ↔ section; `arrangement.build`. |
+
+## Amendment (2026-11-20): a clip take's chain
+
+**Context.** L2 staged a clip take's FX and envelopes: a clip played dry
+and the plan warned with `launch.take_chain`. A timeline item's take with
+FX plays through a chain whose input runs its latency ahead, so it is
+heard on time; a clip needs the same, but its start is a launch decided at
+run time, not a position in the timeline.
+
+**Decision.**
+- **A clip's take chain** is compiled like an item's (the take's FX, its
+  volume, pan and mute envelopes), linked to the clip's player. The clip's
+  audio, or its notes for an instrument in the chain, go into the chain;
+  the chain's output goes where the player's went, weighed by the switch's
+  crossfade, with the clip's and the take's gain and pan after the chain.
+- **Latency and run-ahead.** A track's launch lead is the most latency
+  among its clips' chains. Every clip chain on the track reads its input
+  that far ahead and is delayed back by the lead less its own latency, so
+  the clip is heard at its switch frame. The incoming clip's chain must
+  therefore know of the launch the lead before the frame. A launch reaches
+  such a track twice: its early half at the frame less the lead (from
+  there the chains' input takes it) and the switch at the frame, as
+  before.
+- **C1: the floor grows by the lead.** The target is fixed when queued, at
+  or after every owning executor's horizon *plus the target track's
+  launch lead*. The decision is still made once, at the first frame of
+  any target, which for such a track is its early half; the horizon check
+  uses that frame. The alternative, keeping the floor and starting the
+  chain at the switch, would make the clip heard its chain's latency late,
+  or lose its first frames to compensation: a clip would no longer sound
+  at its boundary, and a capture would not commit as it played. Quantize
+  `none` waits that much longer on such a track. The lead is the track's
+  (the most of all its clip chains), not only the clips a launch
+  switches: the outgoing chain needs the early half too, so its notes end
+  where the switch is heard.
+- **Running.** A chain runs while its clip is coming in, plays or fades
+  out. It starts afresh at each launch that starts its clip, and runs on,
+  unreset, across the clip's passes and a relaunch of the playing clip.
+  At the switch away its tail is cut after the crossfade, as an item's is
+  at its end.
+- **Envelopes.** The take's own envelopes are already in clip time in the
+  model (beats on a MIDI clip, seconds on an audio clip): they play from
+  the clip's start, pass after pass, as `launch.commit` lays out the
+  copies.
+- **C2: envelopes on a clip take's FX** move to clip time too, relative
+  to the clip's start and looping with it. (It changes the meaning of those
+  points in the model, schema 2.19, with a migration; no project has them,
+  since L1 shipped with this limit stated.) Landed 2026-11-20:
+  - In the model they are beats on a MIDI clip and seconds
+    (`timebase: time`) on an audio clip, from its start, as the take's own
+    envelopes are; they take no automation items and no writing mode. The conversions between
+    an item and a clip carry them across point by point.
+  - The engine compiles their lanes in the clip's domain (the domain of
+    the take envelopes' clip position), unshifted by the chain's latency,
+    and evaluates them at the clip position each stage's input reads: the
+    running lead less the stages before it. A lane sends on the absolute
+    automation grid, at each point it crosses and afresh at each new pass
+    or anchor; while the input reads nothing it holds.
+  - `launch.commit` writes each copy's FX envelopes in timeline position,
+    repeated pass after pass over the copy, so a looped item of many passes
+    keeps one chain as the clip did. Each pass's value at the period is
+    held to the boundary and the next pass starts from its first value
+    there; a copy ending on a boundary also takes the next pass's start,
+    which a latent FX hears within its latency, as it did live.
+- **Freeze is unchanged:** a frozen track plays its print and refuses
+  launches, so its clip chains never play.
+- **Neither C1 nor C2 changes** the single decision, the launch log (the
+  early half follows from the entry's frame and the plan's lead), or the
+  phase rules.
+
+**Consequences.**
+- Live equals the offline replay with clip chains, in both executors,
+  through the bridge.
+- A launch on a track with a latent clip chain is placed that much later;
+  a rendered track's floor was already about the render-ahead.
+- A plan swap that raises a track's lead after a launch was queued starts
+  the incoming chain's input late for that launch (its first frames go
+  through the chain's warm-up). It is the rare case of a latency change
+  racing a queued launch, and live and the replay agree on it.
 
 ## Consequences
 
