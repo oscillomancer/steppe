@@ -114,7 +114,10 @@ same change, and say what you found.
   --size 1400x900 --frames 5 --snapshot out.png` (add `--action ui.mixer`
   and similar to open panels). Golden images regenerate with a full run of
   the suite (`SUPPLE_UPDATE_GOLDEN=1`, no `-tc` filter); look at every
-  changed PNG before committing it. UI behaviour is specified in
+  changed PNG before committing it. Run `gui-ui.tests`, `gui-views.tests`
+  and `gui-app.tests` directly from `build/dev/daw/gui/`, not through
+  ctest: ctest renders in software GL and rewrites every golden by a level
+  or two, and the committed goldens are the direct run's. UI behaviour is specified in
   `docs/specs/gui.md`; update it with the change.
 - **Docs.** Update the spec, and `STATUS.md` when a feature lands, a known
   limit appears or one is lifted. Keep `STATUS.md` a picture of the present,
