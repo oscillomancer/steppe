@@ -335,8 +335,13 @@ only.
   - A patch edit to a modulated FX compiles instead of taking the patch path
     (ADR-0092).
   - Each stage reserves `block / 32 + 2` events per modulated parameter and
-    one for each other slot. An event that finds the block full is tried
-    again at the next grid point. Input-chain stages reserve their
+    one for each other slot. An event that finds the block full, or a
+    bridged block at the bridge's cut (`host::Instance::kBridgeBlockEvents`,
+    2048), waits for the next grid point, which sends the then-current sum.
+    Each wait is counted (`Stage::modDeferred`): an offline render warns per
+    FX, and the real-time engine adds the count to
+    `Engine::modulationDeferred()` (`engine.status` `modulation_deferred`)
+    and warns once per rise (`modulation.events`). Input-chain stages reserve their
     automation and modulation events as chain stages do.
   - Bridged plug-ins receive the same events through the bridge; a late
     block's coalescing keeps the latest value per target (§5).

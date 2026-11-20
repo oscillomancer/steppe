@@ -2353,6 +2353,8 @@ void automateStage(Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t or
                 std::swap(st.blockEvents[j - 1], st.blockEvents[j]);
 }
 
+}  // namespace
+
 // Modulation (ADR-0096), after the stage's automation: at each point of the
 // absolute kAutomationStep grid, one PARAM_MOD per slot whose routes' sum
 // differs from the memo, or for every slot while the memo is stale. A slot
@@ -2375,6 +2377,12 @@ void modulateStage(Plan& p, Stage& st, std::int64_t pos, std::uint32_t n, std::i
         return;
     }
     const std::size_t before = st.blockEvents.size();
+    // A bridged block carries at most kBridgeBlockEvents: past that the
+    // event waits here instead of being cut there.
+    const std::size_t room =
+        in->isolated()
+            ? std::min<std::size_t>(st.blockEvents.capacity(), host::Instance::kBridgeBlockEvents)
+            : st.blockEvents.capacity();
     const auto phase =
         ((pos % kAutomationStep + origin % kAutomationStep) % kAutomationStep + kAutomationStep) %
         kAutomationStep;
@@ -2393,7 +2401,10 @@ void modulateStage(Plan& p, Stage& st, std::int64_t pos, std::uint32_t n, std::i
                 if (me.enabled) sum += me.values[g] * me.depth * m.range;
             }
             if (held || (!m.stale && m.listed && sum == m.sent)) continue;
-            if (st.blockEvents.size() == st.blockEvents.capacity()) continue;  // tried again
+            if (st.blockEvents.size() >= room) {  // tried again at the next grid point
+                ++st.modDeferred;
+                continue;
+            }
             host::Event e;
             e.kind = host::Event::Kind::ParamMod;
             e.time = g;
@@ -2410,6 +2421,8 @@ void modulateStage(Plan& p, Stage& st, std::int64_t pos, std::uint32_t n, std::i
                  --j)
                 std::swap(st.blockEvents[j - 1], st.blockEvents[j]);
 }
+
+namespace {
 
 // One stage of a chain, in place on `sum` (the track's or a take's). False on
 // a plugin error.

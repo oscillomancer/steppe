@@ -252,6 +252,7 @@ struct EngineStatus {
     // class (ADR-0026, ADR-0081).
     std::vector<std::string> bridgeThreadsRefused;
     std::int64_t dropped = 0, voiceDropped = 0;  // plug-in output/voice transport
+    std::int64_t modulationDeferred = 0;         // ADR-0096: events that waited for room
     json::Value failedErrors = json::Value::array();
     SyncReport sync;  // external sync (ADR-0071)
 };

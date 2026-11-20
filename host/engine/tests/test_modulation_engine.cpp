@@ -1102,3 +1102,37 @@ TEST_CASE("modulation: a handover that also changes the routes sends the new off
         CHECK(double(cap[38000]) == doctest::Approx(gainAt(0)).epsilon(1e-4));
     }
 }
+
+TEST_CASE("modulation: an event that finds no room waits for the next grid point, counted") {
+    // ADR-0096: events dropped for capacity are counted and reported. The
+    // emitter keeps a value that does not fit and sends the then-current one
+    // at a later grid point; each wait counts.
+    const Emit emit("playing", 0.1);
+    Prepared p(emit.s);
+    d::Stage* stage = nullptr;
+    for (d::Node& n : p.plan.nodes)
+        for (d::Stage& st : n.chain)
+            if (!st.mods.empty()) stage = &st;
+    REQUIRE(stage);
+    REQUIRE(stage->instance);
+    if (!stage->instance->processing()) REQUIRE(stage->instance->startProcessing());
+    const d::ModEdge& me = p.plan.modEdges.at(0);
+    std::fill(p.plan.modEdges[0].values.begin(), p.plan.modEdges[0].values.end(), 1.0);
+    REQUIRE(me.values.size() == 128);
+    host::Event filler;
+    filler.kind = host::Event::Kind::Param;
+    stage->blockEvents.clear();
+    while (stage->blockEvents.size() < stage->blockEvents.capacity())
+        stage->blockEvents.push_back(filler);
+    const auto full = stage->blockEvents.size();
+    d::modulateStage(p.plan, *stage, 0, 128, 0, nullptr);
+    CHECK(stage->blockEvents.size() == full);  // nothing fits
+    CHECK(stage->modDeferred == 4);            // grid points 0, 32, 64 and 96
+    stage->blockEvents.clear();
+    d::modulateStage(p.plan, *stage, 128, 128, 0, nullptr);
+    REQUIRE_FALSE(stage->blockEvents.empty());  // sent at the first point with room
+    CHECK(stage->blockEvents.front().kind == host::Event::Kind::ParamMod);
+    CHECK(stage->blockEvents.front().time == 0);
+    CHECK(stage->modDeferred == 4);
+    stage->instance->stopProcessing();
+}

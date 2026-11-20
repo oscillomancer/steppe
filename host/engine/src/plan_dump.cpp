@@ -221,9 +221,10 @@ void dumpStage(Dump& d, std::string_view a, const Stage& st) {
                                   keyed, keyChannels, key, inPin, outPin, keyPins, pinned,
                                   chanDelay, pinBuf, auxOutPin, auxOut, auxOutPtr, auxWritten,
                                   blockEvents, voices, pendingVoices, noteSources, noteSourceIndex,
-                                  sourceIds, nextNoteId, releases, voiceDropped, outStorage,
-                                  outEvents, pdcIgnore, parallel, group, groupEnd, before, align,
-                                  groupIn, groupOut, os, osFilters, osIn, osOut, osKey, osPad] = st;
+                                  sourceIds, nextNoteId, releases, voiceDropped, modDeferred,
+                                  outStorage, outEvents, pdcIgnore, parallel, group, groupEnd,
+                                  before, align, groupIn, groupOut, os, osFilters, osIn, osOut,
+                                  osKey, osPad] = st;
     d.put(a, "fx", st.fx);
     d.put(a, "instance", st.instance != nullptr);
     d.put(a, "rackMidiBase", st.rackMidiBase);

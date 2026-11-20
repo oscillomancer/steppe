@@ -711,6 +711,9 @@ struct Stage {
     std::uint32_t nextNoteId = 0;
     std::size_t releases = 0;  // leading addressed releases already use running ids
     std::uint64_t voiceDropped = 0;
+    // Modulation events that waited past their grid point for room: a full
+    // block, or a bridged block's cut (ADR-0096); the engine reports them.
+    std::uint64_t modDeferred = 0;
     std::vector<host::OutputEvent> outStorage;
     host::OutputEvents outEvents;
     // PDC policy (fx.pdc): an ignored stage keeps its own dry delay but adds
@@ -1366,6 +1369,11 @@ ExecutorChanges changedExecutors(const Plan& p, const model::Session& s);
 // An executor's copy of the published values into the nodes and edges its
 // class reads (`liveClass` as for wrapTo), at the start of a block.
 void syncMix(Plan& p, int liveClass) SUPPLE_RT;
+// One stage's modulation events for a block (ADR-0096, plan.cpp): after its
+// automation, at each point of the absolute grid; `origin` is the plan's
+// first sample. Exposed for tests.
+void modulateStage(Plan& p, Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t origin,
+                   const void* self) SUPPLE_RT;
 // The device output for `k` frames (ADR-0056): every output master's main
 // pair at its channels (taps beyond `width` are skipped), the rest silent.
 // `out[c] + offset` receives channel c. A channel's first tap is copied, so a

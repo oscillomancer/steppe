@@ -2399,6 +2399,7 @@ EngineStatus EngineApp::engineStatus() {
     }
     st.dropped = static_cast<std::int64_t>(outputDrops_ + consumerDrops_);
     st.voiceDropped = static_cast<std::int64_t>(voiceDrops_);
+    if (engine_) st.modulationDeferred = static_cast<std::int64_t>(engine_->modulationDeferred());
     for (const model::Id& id : pool_->bridgeThreadsRefused())
         st.bridgeThreadsRefused.push_back(id.str());
     for (const auto& [id, error] : pool_->failedErrors()) {

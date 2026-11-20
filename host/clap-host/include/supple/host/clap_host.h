@@ -422,6 +422,8 @@ class Instance {
     bool failed() const;
     std::string failure() const;
     bool isolated() const { return remote_ != nullptr; }
+    // The input events a bridged block carries; the bridge cuts the rest.
+    static constexpr std::uint32_t kBridgeBlockEvents = 2048;
     int bridgePid() const;  // -1 for in-process
     // Bridged: this instance's failure deadline off the callback, in place
     // of bridgeDeadlineMs() (0, the default, uses that); lifecycle commands

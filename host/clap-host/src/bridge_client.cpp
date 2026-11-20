@@ -1471,6 +1471,8 @@ void RemoteInstance::stopProcessing() SUPPLE_RT { lifecycle(Cmd::StopProcessing)
 void RemoteInstance::reset() SUPPLE_RT { lifecycle(Cmd::Reset); }
 void RemoteInstance::flush() SUPPLE_RT { lifecycle(Cmd::Flush); }
 
+static_assert(kMaxEvents == Instance::kBridgeBlockEvents, "the engine plans around this cut");
+
 bool RemoteInstance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT {
     const std::uint32_t frames = std::min(b.frames, layout_.maxFrames);
     auto silence = [&] {

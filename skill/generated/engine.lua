@@ -383,6 +383,7 @@ q = nil
 ---@field bridge_threads_refused string[]
 ---@field dropped integer
 ---@field voice_dropped integer
+---@field modulation_deferred integer Modulation events that waited past their grid point for room in a block (ADR-0096)
 ---@field failed_errors any
 ---@field sync table
 
@@ -430,6 +431,7 @@ q = nil
 ---@field bridge_threads_refused string[]
 ---@field dropped integer
 ---@field voice_dropped integer
+---@field modulation_deferred integer Modulation events that waited past their grid point for room in a block (ADR-0096)
 ---@field failed_errors any
 ---@field sync table
 

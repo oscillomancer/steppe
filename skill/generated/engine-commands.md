@@ -3926,6 +3926,10 @@ Kind: `action`. Exposure: `mcp-tool`.
     "voice_dropped": {
       "type": "integer"
     },
+    "modulation_deferred": {
+      "type": "integer",
+      "description": "Modulation events that waited past their grid point for room in a block (ADR-0096)"
+    },
     "failed_errors": {},
     "sync": {
       "type": "object",
@@ -4040,6 +4044,7 @@ Kind: `action`. Exposure: `mcp-tool`.
     "bridge_threads_refused",
     "dropped",
     "voice_dropped",
+    "modulation_deferred",
     "failed_errors",
     "sync"
   ],
@@ -4165,6 +4170,7 @@ Result:
   "bridge_threads_refused": [],
   "dropped": 0,
   "voice_dropped": 0,
+  "modulation_deferred": 0,
   "failed_errors": [],
   "sync": "<any>"
 }
@@ -4704,6 +4710,10 @@ Kind: `query`. Exposure: `mcp-exec`.
     "voice_dropped": {
       "type": "integer"
     },
+    "modulation_deferred": {
+      "type": "integer",
+      "description": "Modulation events that waited past their grid point for room in a block (ADR-0096)"
+    },
     "failed_errors": {},
     "sync": {
       "type": "object",
@@ -4818,6 +4828,7 @@ Kind: `query`. Exposure: `mcp-exec`.
     "bridge_threads_refused",
     "dropped",
     "voice_dropped",
+    "modulation_deferred",
     "failed_errors",
     "sync"
   ],
@@ -4947,6 +4958,7 @@ Result:
   "bridge_threads_refused": [],
   "dropped": 0,
   "voice_dropped": 0,
+  "modulation_deferred": 0,
   "failed_errors": [],
   "sync": "<any>"
 }

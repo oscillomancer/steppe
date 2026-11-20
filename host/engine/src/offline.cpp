@@ -1193,6 +1193,10 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
             if (st.voiceDropped)
                 r.warnings.push_back(st.fx.str() + ": voice tracking capacity exceeded: " +
                                      std::to_string(st.voiceDropped));
+            if (st.modDeferred)
+                r.warnings.push_back(st.fx.str() + ": " + std::to_string(st.modDeferred) +
+                                     " modulation events waited past their grid point for room "
+                                     "in a block (modulation.events)");
         });
     }
     r.audio.sampleRate = p.rate;
