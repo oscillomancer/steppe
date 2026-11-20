@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 // Modulation routes (ADR-0096, session-model "Modulation"): modulation.add,
-// .set, .remove and .list. A route takes a rack's Mod Out input to a
-// parameter outside the rack: a CLAP parameter flagged modulatable, of an FX
-// in a track's chain or input chain; a track's volume, pan or width; or the
-// level of an audio send between strips or a rack send (M2).
+// .set, .remove, .list and .telemetry, and modulate, the whole gesture. A route takes a rack's Mod
+// Out input to a parameter outside the rack: a CLAP parameter flagged modulatable, of an FX in a
+// track's chain or input chain; a track's volume, pan or width; or the level of an audio send
+// between strips or a rack send (M2).
 #include "command_helpers.h"
 #include "rack_runtime.h"
 #include "supple/model/freeze.h"
@@ -77,6 +77,24 @@ struct ModTelemetry {
     std::vector<ModReading> modulations;
 };
 
+// modulate's source: a kind of modulator, or a Mod Out input already patched.
+struct ModulateSource {
+    std::string kind;  // lfo, follower, random, macro; "" for `input`
+    std::optional<SourceArg> input;
+};
+
+struct ModulateArgs {
+    TargetArg target;
+    ModulateSource source;
+    std::optional<double> depth;
+    std::optional<std::string> from, rack;
+};
+
+struct Modulated {
+    std::string modulation;
+    std::optional<std::string> rack, module, mod_out, input, send, channel;
+};
+
 schema::Schema<SourceArg> sourceSchema() {
     return schema::object<SourceArg>("modulation_source")
         .field("module", &SourceArg::module, idArg("mo", "Mod Out module"))
@@ -138,6 +156,64 @@ Result<host::ParamInfo> modulatableParam(EngineApp& app, const model::FxInstance
         }
     return Error("modulation.target", "the plug-in has no parameter " + key, "",
                  "fx.describe lists its parameters");
+}
+
+schema::Schema<ModulateSource> modulateSourceSchema() {
+    auto exported =
+        json::parse(
+            R"({"oneOf":[{"type":"string","enum":["lfo","follower","random","macro"]},{"type":"object","properties":{"module":{"type":"string","pattern":"^mo_[0-9]+$"},"input":{"type":"string","pattern":"^in_([1-9]|1[0-6])$"}},"required":["module","input"],"additionalProperties":false}]})")
+            .value();
+    return schema::Schema<ModulateSource>(
+        "modulate_source",
+        [](const json::Value& v, ModulateSource& out, schema::DecodeCtx& ctx,
+           const std::string& path) {
+            if (v.isString()) {
+                const std::string& k = v.asString();
+                if (k == "lfo" || k == "follower" || k == "random" || k == "macro") {
+                    out.kind = k;
+                    return true;
+                }
+            } else if (v.isObject() && v.size() == 2) {
+                const json::Value* module = v.find("module");
+                const json::Value* input = v.find("input");
+                const auto id =
+                    module && module->isString() ? Id::parse(module->asString()) : std::nullopt;
+                if (id && id->kind == model::Kind::Module && input && input->isString()) {
+                    const std::string& in = input->asString();
+                    int k = 0;
+                    if (in.size() > 3 && in.size() <= 5 && in.rfind("in_", 0) == 0 &&
+                        in[3] != '0' && std::all_of(in.begin() + 3, in.end(), [](char c) {
+                            return c >= '0' && c <= '9';
+                        }))
+                        k = std::stoi(in.substr(3));
+                    if (k >= 1 && k <= 16) {
+                        out.input = SourceArg{module->asString(), in};
+                        return true;
+                    }
+                }
+            }
+            ctx.error("schema.type", "expected lfo, follower, random, macro or {module, input}",
+                      path,
+                      "name a kind of modulator, or a Mod Out input: {\"module\": \"mo_N\", "
+                      "\"input\": \"in_1\"}");
+            return false;
+        },
+        [](const ModulateSource& s) {
+            if (!s.input) return json::Value(s.kind);
+            json::Value o = json::Value::object();
+            o["module"] = json::Value(s.input->module);
+            o["input"] = json::Value(s.input->input);
+            return o;
+        },
+        exported);
+}
+
+// The track a target lives on: a rack send's is its rack's home channel.
+std::optional<Id> homeTrackOf(const model::Session& s, const model::EnvTarget& target) {
+    auto node = model::modulationTargetNode(s, target);
+    if (node && node->kind == model::Kind::Rack)
+        if (const model::Rack* r = s.racks.find(*node)) return r->track;
+    return node;
 }
 
 // The route as it would be, checked against what the model cannot know (the
@@ -479,6 +555,231 @@ void registerModulationCommands(cmd::Registry& registry) {
                 out.modulations.push_back(std::move(row));
             }
             return out;
+        };
+        addChecked(registry, std::move(c));
+    }();
+    [&] {
+        Command<ModulateArgs, Modulated> c;
+        c.name = "modulate";
+        c.kind = Kind::Edit;
+        c.exposure = cmd::Exposure::McpTool;
+        c.summary = "Modulate a parameter or mixer level with an LFO, follower, random or macro.";
+        c.description =
+            "The whole gesture in one undo step. It takes the first rack homed on the target's "
+            "track that holds a Mod Out, else the first rack named Modulators, else adds one on "
+            "a new channel named Modulators (rack: choose one instead). It adds the source "
+            "module (lfo: an LFO; random: an LFO's Random Steps preset; macro: a Macro, its "
+            "first knob; follower: a Follower fed by an In module and a send from the track "
+            "from), cables it into the first free Mod Out input (adding a Mod Out when none is "
+            "free) and routes that input to the target. {module, input} routes a Mod Out input "
+            "already patched. depth as modulation.add; default a quarter of a plug-in "
+            "parameter's range, 6 dB, or 50 percent. A follower cannot listen to the track it "
+            "modulates (modulation.cycle).";
+        c.tags = {"modulation", "rack"};
+        c.args = schema::object<ModulateArgs>("modulate_args")
+                     .field("target", &ModulateArgs::target, targetSchema())
+                     .field("source", &ModulateArgs::source, modulateSourceSchema())
+                     .field("depth", &ModulateArgs::depth, schema::number())
+                     .field("from", &ModulateArgs::from,
+                            idArg("tr", "Track").doc("The track a follower listens to."))
+                     .field("rack", &ModulateArgs::rack, idArg("rk", "Rack"))
+                     .build();
+        c.result = schema::object<Modulated>("modulated")
+                       .field("modulation", &Modulated::modulation, schema::string())
+                       .field("rack", &Modulated::rack, schema::string())
+                       .field("module", &Modulated::module, schema::string())
+                       .field("mod_out", &Modulated::mod_out, schema::string())
+                       .field("input", &Modulated::input, schema::string())
+                       .field("send", &Modulated::send, schema::string())
+                       .field("channel", &Modulated::channel,
+                              schema::string().doc("The channel made for a new rack."))
+                       .build();
+        c.examples = {{"An LFO on a gain", j(R"({"target": {"fx": "fx_1", "param": "gain"},
+                             "source": "lfo"})"),
+                       j(R"({"modulation": "mr_1", "rack": "rk_1", "module": "mo_3",
+                             "mod_out": "mo_2", "input": "in_1"})"),
+                       "song_with_mod_out"}};
+        c.errors = {{"modulation.cycle", "a follower on the track it modulates",
+                     "listen to another track, or modulate a buss it feeds"}};
+        c.run = [](const ModulateArgs& a, Context& ctx) -> Result<Modulated> {
+            EngineApp& app = engine::app(ctx);
+            const auto nested = [&](const char* name, json::Value args,
+                                    const std::string& at) -> Result<json::Value> {
+                auto r = ctx.service<const cmd::Registry>().find(name)->invoke(args, ctx);
+                if (!r) {
+                    Error error = std::move(r).error();
+                    error.path.insert(0, at);
+                    return error;
+                }
+                return r;
+            };
+            const int targets =
+                int(bool(a.target.fx)) + int(bool(a.target.track)) + int(bool(a.target.route));
+            if (targets != 1)
+                return refused("modulation.target", "a target names one fx, track or route",
+                               "/target",
+                               "give {fx, param}, {track, param} or {route, param: volume}");
+            const bool follower = a.source.kind == "follower";
+            if (follower != bool(a.from))
+                return refused("command.invalid_args",
+                               follower ? "a follower listens to a track"
+                                        : "only a follower "
+                                          "takes from",
+                               "/from",
+                               follower ? "give from, the track whose level it follows"
+                                        : "leave out from, or use source: follower");
+            if (a.rack && a.source.input)
+                return refused("command.invalid_args", "a Mod Out input names its rack", "/rack",
+                               "leave out rack with source {module, input}");
+            json::Value target = json::Value::object();
+            if (a.target.fx) target["fx"] = json::Value(*a.target.fx);
+            if (a.target.track) target["track"] = json::Value(*a.target.track);
+            if (a.target.route) target["route"] = json::Value(*a.target.route);
+            target["param"] = json::Value(a.target.param);
+            const bool fxTarget = bool(a.target.fx);
+            const double depth = a.depth.value_or(fxTarget                     ? 0.25
+                                                  : a.target.param == "volume" ? 6.0
+                                                                               : 50.0);
+            const auto route = [&](const std::string& module, const std::string& input,
+                                   Modulated out) -> Result<Modulated> {
+                json::Value args = json::Value::object();
+                json::Value source = json::Value::object();
+                source["module"] = json::Value(module);
+                source["input"] = json::Value(input);
+                args["source"] = json::Value(std::move(source));
+                args["target"] = json::Value(target);
+                args["depth"] = json::Value(depth);
+                auto added = nested("modulation.add", std::move(args), "");
+                if (!added) {
+                    Error e = std::move(added).error();
+                    if (e.code == "modulation.cycle" && follower) {
+                        e.path = "/from";
+                        e.hint = "the target feeds " + *a.from +
+                                 ": listen to a track the target does not feed";
+                    }
+                    return e;
+                }
+                out.modulation = added->find("modulation")->asString();
+                out.mod_out = module;
+                out.input = input;
+                return out;
+            };
+            if (a.source.input) return route(a.source.input->module, a.source.input->input, {});
+
+            const model::Session s = app.view();
+            const model::EnvTarget wanted = targetOf(a.target);
+            const auto home = homeTrackOf(s, wanted);
+            if (follower) {
+                auto from = existing<model::Track>(s, *a.from, "/from");
+                if (!from) return std::move(from).error();
+                if (home && *from == *home)
+                    return refused(
+                        "modulation.cycle",
+                        "a follower on " + a.from.value() + " cannot modulate what plays on it",
+                        "/from",
+                        "listen to another track, or modulate a buss " + a.from.value() + " feeds");
+            }
+            // The rack: chosen, the home track's first with a Mod Out, the
+            // first Modulators rack with one, or a new Modulators channel's.
+            Modulated out;
+            std::optional<Id> rack;
+            if (a.rack) {
+                auto id = existing<model::Rack>(s, *a.rack, "/rack");
+                if (!id) return std::move(id).error();
+                rack = *id;
+            }
+            const auto hasModOut = [&](Id r) {
+                for (const auto& m : s.modules)
+                    if (m.value->rack == r && m.value->type == model::kModOutModule) return true;
+                return false;
+            };
+            for (const auto& r : s.racks)
+                if (!rack && home && r.value->track == *home && hasModOut(r.id)) rack = r.id;
+            for (const auto& r : s.racks)
+                if (!rack && r.value->name == "Modulators" && hasModOut(r.id)) rack = r.id;
+            if (!rack) {
+                json::Value args = json::Value::object();
+                args["name"] = json::Value("Modulators");
+                auto made = nested("rack.add", std::move(args), "");
+                if (!made) return std::move(made).error();
+                rack = *Id::parse(made->find("rack")->asString());
+                out.channel = made->find("track")->asString();
+                app.txn().modify<model::Rack>(*rack, [](model::Rack& r) { r.name = "Modulators"; });
+            }
+            out.rack = rack->str();
+            // The first Mod Out input with no cable into it and no route from it.
+            std::optional<std::pair<std::string, std::string>> free;
+            {
+                const model::Session now = app.view();
+                for (const auto& m : now.modules) {
+                    if (free || m.value->rack != *rack || m.value->type != model::kModOutModule)
+                        continue;
+                    for (int k = 1; k <= 16 && !free; ++k) {
+                        const std::string key = "in_" + std::to_string(k);
+                        bool taken = false;
+                        for (const auto& cable : now.cables)
+                            taken |= cable.value->to.object == m.id && cable.value->to.key == key;
+                        for (const auto& mod : now.modulations)
+                            taken |=
+                                mod.value->source.module == m.id && mod.value->source.input == key;
+                        if (!taken) free.emplace(m.id.str(), key);
+                    }
+                }
+            }
+            const auto addModule = [&](const char* type,
+                                       std::optional<std::string> preset) -> Result<json::Value> {
+                json::Value args = json::Value::object();
+                args["rack"] = json::Value(rack->str());
+                args["type"] = json::Value(type);
+                if (preset) args["preset"] = json::Value(*preset);
+                return nested("module.add", std::move(args), "/source");
+            };
+            if (!free) {
+                auto modOut = addModule("mod_out", std::nullopt);
+                if (!modOut) return std::move(modOut).error();
+                free.emplace(modOut->find("module")->asString(), "in_1");
+            }
+            const std::string& kind = a.source.kind;
+            auto module = addModule(
+                kind == "follower" ? "follower"
+                : kind == "macro"  ? "macro"
+                                   : "lfo",
+                kind == "random" ? std::optional<std::string>("Random Steps") : std::nullopt);
+            if (!module) return std::move(module).error();
+            out.module = module->find("module")->asString();
+            const std::string output = module->find("outputs")->at(0).asString();
+            const auto cable = [&](const std::string& from,
+                                   const std::string& to) -> Result<json::Value> {
+                json::Value args = json::Value::object();
+                args["from"] = json::Value(from);
+                args["to"] = json::Value(to);
+                return nested("cable.add", std::move(args), "/source");
+            };
+            SUPPLE_TRY(cable(*out.module + "." + output, free->first + "." + free->second));
+            if (follower) {
+                auto in = addModule("in", std::nullopt);
+                if (!in) return std::move(in).error();
+                const std::string inId = in->find("module")->asString();
+                SUPPLE_TRY(cable(inId + ".l", *out.module + ".in"));
+                json::Value args = json::Value::object();
+                args["from"] = json::Value(*a.from);
+                json::Value to = json::Value::object();
+                to["module"] = json::Value(inId);
+                args["to"] = json::Value(std::move(to));
+                auto send = nested("route.add", std::move(args), "");
+                if (!send) {
+                    Error e = std::move(send).error();
+                    if (e.code == "route.cycle") {
+                        e.code = "modulation.cycle";
+                        e.path = "/from";
+                        e.hint = "the rack feeds " + *a.from +
+                                 ": choose another rack, or listen to another track";
+                    }
+                    return e;
+                }
+                out.send = send->find("id")->asString();
+            }
+            return route(free->first, free->second, std::move(out));
         };
         addChecked(registry, std::move(c));
     }();

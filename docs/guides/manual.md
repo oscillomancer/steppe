@@ -919,6 +919,20 @@ adds to what the fader or its automation gives and the sum stays in the
 fader's range; between the 32-sample steps it moves in a straight line,
 so a fast modulator sounds smooth.
 
+`modulate {target, source}` does all of that in one undo step. `source`
+is `lfo`, `random` (an LFO set to Random Steps), `macro` (a Macro's first
+knob) or `follower` with `from`, the track whose level it follows. The
+command uses the first rack on the target's track that has a Mod Out,
+else the first rack named Modulators. If neither exists, it adds a rack
+on a new channel named Modulators. It adds the module, cables it into
+the first free Mod Out input and makes the route. A follower also gets
+an In module and a send from `from`. A follower cannot listen to the
+track it modulates, or to a track that track feeds. Without a depth the
+command uses a quarter of a parameter's range, 6 dB, or 50 %.
+`modulation.telemetry` reads each route's live offset and how far it
+can move its target, and `engine.status` counts modulation steps that
+had to wait for room in a block (`modulation_deferred`).
+
 Rack plug-in latency is compensated against the song, including oversampling.
 The rack's longest routed audio or Note Out path sets its clock; shorter
 routes receive padding. Parallel paths summed inside the rack keep their

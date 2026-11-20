@@ -683,6 +683,7 @@ TEST_CASE("every edit command a saved branch may replay has been audited") {
                                                "marker.set",
                                                "midi.edit",
                                                "midi.write",
+                                               "modulate",
                                                "modulation.add",
                                                "modulation.remove",
                                                "modulation.set",

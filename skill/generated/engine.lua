@@ -1039,6 +1039,23 @@ q = nil
 ---@class Steppe.midi_write_result
 ---@field warnings? table[]
 
+---@class Steppe.modulate_args
+---@field target table
+---@field source string|table
+---@field depth? number
+---@field from? string The track a follower listens to.
+---@field rack? string Rack id, e.g. "rk_1".
+
+---@class Steppe.modulate_result
+---@field modulation string
+---@field rack? string
+---@field module? string
+---@field mod_out? string
+---@field input? string
+---@field send? string
+---@field channel? string The channel made for a new rack.
+---@field warnings? table[]
+
 ---@class Steppe.modulation_add_args
 ---@field source table
 ---@field target table
@@ -2717,6 +2734,7 @@ q = nil
 ---@field track Steppe.track Commands named track.*
 ---@field transport Steppe.transport Commands named transport.*
 ---@field vca Steppe.vca Commands named vca.*
+---@field modulate fun(args: Steppe.modulate_args): Steppe.modulate_result Modulate a parameter or mixer level with an LFO, follower, random or macro.
 ---@field run fun(name: string, args?: table): any Run any registered command by name, e.g. the ones whose names are not Lua identifiers.
 ---@field batch fun(label: string, body: fun()) Run the calls inside body as one transaction: one undo step, rolled back when one of them fails.
 ---@field on fun(topic: string, handler: fun(payload: table, topic: string), filter?: table): integer Subscribe to bus events; returns a handle for q.off.

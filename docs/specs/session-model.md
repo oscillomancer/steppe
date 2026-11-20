@@ -1084,7 +1084,14 @@ and naming. All `edit` unless marked (q) query or (a) action.
   enabled?, lane?}`, `modulation.set {modulation, …}`, `modulation.remove
   {modulation}`, `modulation.list {track?, fx?, rack?}` (q),
   `modulation.telemetry {track?}` (q: each route's live target offset and
-  its span, M2).
+  its span, M2), `modulate {target, source: lfo|follower|random|macro|
+  {module, input}, depth?, from?, rack?}` (M2: one undo step. Rack: `rack`,
+  else the first homed on the target's track with a Mod Out, else the
+  first named Modulators with one, else a new one on a new channel named
+  Modulators. It cables the module's first output into the first Mod Out
+  input with no cable or route, adding a Mod Out when none is free. A
+  follower gets an In module and a send from `from`. `modulation.cycle`
+  at `/from` when the follower would hear its own target.)
 - **automation**: `env.add {target}`, `env.remove`, `env.set {mode, active,
   …}`, `env.points.set {env, points, range?}`, `env.points.add`,
   `env.points.remove {range}`, `env.add {take, param}` (take envelopes),

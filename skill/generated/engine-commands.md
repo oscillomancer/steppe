@@ -10141,6 +10141,98 @@ Result:
 
 ```
 
+## `modulate@1`
+
+Modulate a parameter or mixer level with an LFO, follower, random or macro.
+
+The whole gesture in one undo step. It takes the first rack homed on the target's track that holds a Mod Out, else the first rack named Modulators, else adds one on a new channel named Modulators (rack: choose one instead). It adds the source module (lfo: an LFO; random: an LFO's Random Steps preset; macro: a Macro, its first knob; follower: a Follower fed by an In module and a send from the track from), cables it into the first free Mod Out input (adding a Mod Out when none is free) and routes that input to the target. {module, input} routes a Mod Out input already patched. depth as modulation.add; default a quarter of a plug-in parameter's range, 6 dB, or 50 percent. A follower cannot listen to the track it modulates (modulation.cycle).
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `target` | object |  |  |  |  |
+| `source` | value |  |  |  |  |
+| `depth` | number |  |  |  |  |
+| `from` | string |  |  |  | The track a follower listens to. |
+| `rack` | string |  |  |  | Rack id, e.g. "rk_1". |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "modulated",
+  "properties": {
+    "modulation": {
+      "type": "string"
+    },
+    "rack": {
+      "type": "string"
+    },
+    "module": {
+      "type": "string"
+    },
+    "mod_out": {
+      "type": "string"
+    },
+    "input": {
+      "type": "string"
+    },
+    "send": {
+      "type": "string"
+    },
+    "channel": {
+      "type": "string",
+      "description": "The channel made for a new rack."
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["modulation"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `modulation.cycle`: a follower on the track it modulates Hint: listen to another track, or modulate a buss it feeds
+
+### Examples
+
+**An LFO on a gain** (`song_with_mod_out`)
+
+```json
+{
+  "target": {
+    "fx": "fx_1",
+    "param": "gain"
+  },
+  "source": "lfo"
+}
+
+```
+
+Result:
+
+```json
+{
+  "modulation": "mr_1",
+  "rack": "rk_1",
+  "module": "mo_3",
+  "mod_out": "mo_2",
+  "input": "in_1"
+}
+
+```
+
 ## `modulation.add@1`
 
 Route a rack's Mod Out input to a plug-in parameter or a mixer level.

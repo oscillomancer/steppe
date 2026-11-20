@@ -603,7 +603,9 @@ instructions are in `docs/guides/installing.md`.
   one of them is edited (`modulation.latency`). `modulation.telemetry`
   (and `EngineApp::modulationOffsets()`) reads each route's live target
   offset and its span; events that wait for room in a block are counted
-  (`engine.status` `modulation_deferred`). An FX moved to another track keeps the last offset of a
+  (`engine.status` `modulation_deferred`). `modulate` makes the source
+  module, its rack if needed (a channel named Modulators), the cable, a
+  follower's send and the route in one undo step. An FX moved to another track keeps the last offset of a
   parameter the new plan no longer modulates until the plug-in next
   resets. Native macOS and Windows CI has not run on it.
   Agents patch with `rack.patch` (named
