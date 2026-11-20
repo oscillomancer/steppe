@@ -4,6 +4,7 @@
 // same pointer paths as the app.
 #include <SDL3/SDL_keycode.h>
 #include <doctest/doctest.h>
+#include <stb_image.h>
 #include "test_support.h"
 
 #include <chrono>
@@ -131,6 +132,39 @@ struct LauncherFixture {
         root->damageAll();
         root->frame(false);
         (void)gui::writePng(std::filesystem::path(out) / name, root->readBack());
+    }
+    // The window against a committed image (tests/golden; SUPPLE_UPDATE_GOLDEN
+    // rewrites it): at most 1 pixel in 200 off by more than 48 in a channel.
+    // Elsewhere than Linux the drivers differ: the frame must only be drawn.
+    void golden(const char* name) {
+        root->damageAll();
+        root->frame(false);
+        const gui::Image image = root->readBack();
+#if !defined(__linux__)
+        REQUIRE(image.width > 0);
+        REQUIRE(image.height > 0);
+        return;
+#endif
+        const auto path = std::filesystem::path(SUPPLE_GUI_GOLDEN_DIR) / name;
+        if (std::getenv("SUPPLE_UPDATE_GOLDEN") || !std::filesystem::exists(path)) {
+            REQUIRE(gui::writePng(path, image));
+            MESSAGE("golden written: " << path.string());
+            return;
+        }
+        int w = 0, h = 0, n = 0;
+        unsigned char* data = stbi_load(path.string().c_str(), &w, &h, &n, 4);
+        REQUIRE(data);
+        REQUIRE(w == image.width);
+        REQUIRE(h == image.height);
+        std::size_t off = 0;
+        for (std::size_t i = 0; i < image.rgba.size(); i += 4) {
+            int d = 0;
+            for (int c = 0; c < 3; ++c)
+                d = std::max(d, std::abs(int(image.rgba[i + c]) - int(data[i + c])));
+            off += d > 48;
+        }
+        stbi_image_free(data);
+        CHECK(off < image.rgba.size() / 4 / 200);
     }
     // A song with three channels, a buss, three scenes and clips in some cells.
     void song() {
@@ -517,4 +551,22 @@ TEST_CASE(
     CHECK(f.view->selectedClips() == std::vector<model::Id>{*made});
     CHECK(f.app->head().items.size() == items);  // the item stays where it was
     CHECK(f.errors.empty());
+}
+
+TEST_CASE("launcher: the pane's look, playing, queued, held, empty and selected, in both themes") {
+    LauncherFixture f;
+    f.song();
+    const model::Id drums = *model::Id::parse("tr_1"), bass = *model::Id::parse("tr_2");
+    views::LaunchViews state;
+    state[drums] = {views::LaunchView::Plays::Clip, *model::Id::parse("cl_1"), 2.0,
+                    views::LaunchView::Queued::Clip, *model::Id::parse("cl_2")};
+    state[bass] = {views::LaunchView::Plays::Held, *model::Id::parse("cl_3"), std::nullopt,
+                   views::LaunchView::Queued::None, std::nullopt};
+    f.view->setLaunchState(state);
+    f.view->selectCell(views::ArrangeView::Cell{bass, *model::Id::parse("sc_3")});
+    f.sync();
+    f.golden("launcher-dark.png");
+    f.root->setTheme(ui::Theme::light());
+    f.sync();
+    f.golden("launcher-light.png");
 }
