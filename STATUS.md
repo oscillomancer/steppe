@@ -191,8 +191,9 @@ instructions are in `docs/guides/installing.md`.
   `session.describe`. Nothing plays a clip yet: launching (`launch.*`, L2)
   and the pane (L3) are to come. The content commands (`midi.*`,
   `take.*`, `item.export`, take envelopes and take FX) take a clip as they
-  take an item; timeline commands refuse one with `item.kind`; take FX
-  parameter envelopes on a clip's take still follow the timeline.
+  take an item; timeline commands refuse one with `item.kind`; `env.add`
+  refuses an FX in a clip take's chain (`clip.unsupported`) until L2 decides
+  how a clip's FX automation plays.
 - **Track freeze** (ADR-0054): whole-channel pre-fader float32 capture, including
   take FX and auxiliary channels, with virtual latency and plugin retirement.
   Typed freeze/unfreeze, cancellable jobs, dependency-checked completion, retained
