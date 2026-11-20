@@ -948,7 +948,12 @@ had to wait for room in a block (`modulation_deferred`).
 In the app, right-click a fader or pan, or a parameter's row in the FX
 window's parameter tab, and choose **Modulate**: it lists LFO, Random,
 Macro and a follower for each other track, and runs `modulate` with your
-choice. It is greyed where the parameter cannot take modulation.
+choice. It is greyed where the parameter cannot take modulation. A
+modulated control shows how far its modulation can move it as a violet bar
+beside it, and while the song plays, where it is now; drag that bar to
+change how deep the modulation goes. A plug-in without its own parameter
+descriptions lists its parameters in the FX window; those it lets you
+modulate have a slider there.
 
 Rack plug-in latency is compensated against the song, including oversampling.
 The rack's longest routed audio or Note Out path sets its clock; shorter

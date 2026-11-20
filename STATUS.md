@@ -617,7 +617,14 @@ instructions are in `docs/guides/installing.md`.
   offset and its span; events that wait for room in a block are counted
   (`engine.status` `modulation_deferred`). `modulate` makes the source
   module, its rack if needed (a channel named Modulators), the cable, a
-  follower's send and the route in one undo step. An FX moved to another track keeps the last offset of a
+  follower's send and the route in one undo step. In the app (M3): the
+  parameter menu's Modulate on strip faders and pans and FX parameter rows
+  (greyed where nothing can take it), mod slots for a channel's modulator
+  racks, modulated faders, pan bars and sliders with their span and live
+  value and a depth drag on the bar (one undo step), lanes keyed by target
+  with the band (on a plug-in parameter's CLAP curve) and the live value at
+  the playhead, and an editable row for each modulatable parameter of a
+  plain CLAP plug-in. An FX moved to another track keeps the last offset of a
   parameter the new plan no longer modulates until the plug-in next
   resets. Native macOS and Windows CI has not run on it.
   Agents patch with `rack.patch` (named

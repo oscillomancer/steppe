@@ -3,6 +3,8 @@
 #include "fx_params.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include <memory>
 #include <vector>
 
@@ -96,31 +98,95 @@ Result<std::size_t> ParamPanel::build(ui::Node& parent, model::Id fx) {
         parent.emplace<ui::Label>("fx.params.note",
                                   "This plugin has no semantic parameters (use its own editor).",
                                   ui::Font::Ui, "small", "ink-quiet");
-        // Still list the plain CLAP parameters read-only, so the panel is not empty.
+        // Still list the plain CLAP parameters, so the panel is not empty. A
+        // modulatable one is editable (a slider over its declared range, by
+        // CLAP id through fx.param.set) and takes Modulate (ADR-0096); the
+        // rest are read-only.
         std::size_t shown = 0;
         if (paramsJson && paramsJson->isArray())
             for (const json::Value& p : paramsJson->asArray()) {
                 const std::string pname =
                     p.find("name") && p.find("name")->isString() ? p.find("name")->asString() : "";
+                auto number = [&](const char* field, double fallback) {
+                    const json::Value* v = p.find(field);
+                    return v && v->isNumber() ? v->asDouble() : fallback;
+                };
+                auto flag = [&](const char* field) {
+                    const json::Value* v = p.find(field);
+                    return v && v->isBool() && v->asBool();
+                };
+                const json::Value* id = p.find("id");
+                const std::string key =
+                    id && id->isNumber()
+                        ? std::to_string(static_cast<std::uint32_t>(id->asDouble()))
+                        : std::string();
+                const double lo = number("min", 0), hi = number("max", 1);
+                const double current = number("value", number("default", lo));
+                const bool editable =
+                    !key.empty() && flag("modulatable") && !flag("read_only") && hi > lo;
                 std::string value;
-                if (const json::Value* v = p.find("value"); v && v->isNumber()) {
+                if (p.find("value") || editable) {
                     char buf[32];
-                    std::snprintf(buf, sizeof buf, "%.4g", v->asDouble());
+                    std::snprintf(buf, sizeof buf, "%.4g", current);
                     value = buf;
                 }
-                auto& row = parent.emplace<ui::Node>("fx.plain." + std::to_string(shown));
+                const std::string n = std::to_string(shown);
+                ui::Node* rowNode = nullptr;
+                if (editable)
+                    rowNode = &parent.emplace<ParamRow>(
+                        "fx.plain." + n, [this, key, pname, current](ui::Point at) {
+                            openMenu(key, pname, true, true, current, at, false);
+                        });
+                else
+                    rowNode = &parent.emplace<ui::Node>("fx.plain." + n);
+                ui::Node& row = *rowNode;
                 row.layout.dir = ui::Layout::Dir::Row;
-                row.layout.height = ui::SizeRule::fixed(22);
+                row.layout.height = ui::SizeRule::fixed(editable ? 24 : 22);
                 row.layout.gap = 6;
-                row.emplace<ui::Label>("fx.plain.name." + std::to_string(shown), pname,
-                                       ui::Font::Ui, "small", "ink-quiet");
-                row.emplace<ui::Label>("fx.plain.value." + std::to_string(shown), value,
-                                       ui::Font::Mono, "caption", "ink");
-                const json::Value* id = p.find("id");
+                row.layout.align = ui::Layout::Align::Center;
+                auto& label = row.emplace<ui::Label>("fx.plain.name." + n, pname, ui::Font::Ui,
+                                                     "small", editable ? "ink" : "ink-quiet");
+                if (editable) label.layout.width = ui::SizeRule::fixed(150);
+                if (editable) {
+                    const bool stepped = flag("stepped");
+                    auto* slider = &row.emplace<ui::Slider>("fx.param." + key);
+                    slider->layout.width = ui::SizeRule::fraction();
+                    slider->setValue((current - lo) / (hi - lo));
+                    slider->setDefault((number("default", lo) - lo) / (hi - lo));
+                    slider->onChange = [this, key, lo, hi, stepped, n](double normalized,
+                                                                       ui::Gesture g) {
+                        if (g == ui::Gesture::End) {
+                            gesture_.clear();
+                            return;
+                        }
+                        if (g == ui::Gesture::Begin) {
+                            gesture_ = "fx.param:" + idText(fx_) + ":" + key + ":" +
+                                       std::to_string(++gestureSerial_);
+                            return;
+                        }
+                        double v = lo + normalized * (hi - lo);
+                        if (stepped) v = std::round(v);
+                        if (auto* shownValue =
+                                dynamic_cast<ui::Label*>(root_.find("fx.plain.value." + n))) {
+                            char buf[32];
+                            std::snprintf(buf, sizeof buf, "%.4g", v);
+                            shownValue->setText(buf);
+                        }
+                        setValue(key, json::Value(v), g == ui::Gesture::Move);
+                    };
+                    // Its travel is the CLAP range: depth is a share of it.
+                    modulatable_.push_back(key);
+                    slider->setModulation(modulationView(key));
+                    slider->onDepth = [this, key](double depth, ui::Gesture g) {
+                        setDepth(key, depth, g);
+                    };
+                }
+                auto& valueLabel = row.emplace<ui::Label>("fx.plain.value." + n, value,
+                                                          ui::Font::Mono, "caption", "ink");
+                if (editable) valueLabel.layout.width = ui::SizeRule::fixed(70);
                 const json::Value* readOnly = p.find("read_only");
                 if (id && id->isNumber() && !(readOnly && readOnly->isBool() && readOnly->asBool()))
-                    learnButton(row, "fx.plain.learn." + std::to_string(shown),
-                                std::to_string(static_cast<std::uint32_t>(id->asDouble())), pname);
+                    learnButton(row, "fx.plain.learn." + n, key, pname);
                 ++shown;
             }
         return shown;
@@ -369,7 +435,7 @@ void ParamPanel::setDepth(const std::string& key, double depth, ui::Gesture g) {
 }
 
 void ParamPanel::openMenu(const std::string& key, const std::string& name, bool learnable,
-                          bool modulatable, double physical, ui::Point at) {
+                          bool modulatable, double physical, ui::Point at, bool lane) {
     const model::Session s = app_.head();
     const model::EnvTarget target{fx_, key};
     const ui::Rect anchor{at.x, at.y, 1, 1};
@@ -395,7 +461,7 @@ void ParamPanel::openMenu(const std::string& key, const std::string& name, bool 
     items.push_back(modulateItem(
         root_, dispatcher_, [this] { return app_.head(); }, name, std::move(modTarget), owner,
         modulatable && !(owner && s.tracks.find(*owner)->freeze), anchor, error));
-    if (learnable) {
+    if (learnable && lane) {
         const bool shown = laneShown(s, target);
         items.push_back({(shown ? "Hide lane: " : "Show lane: ") + name, "",
                          [this, target, shown, physical, error] {

@@ -1299,6 +1299,13 @@ from the control's right-click menu, §4.2, §4.4, §4.6): it offers soft
 takeover for a level or pan, and a button's CC mode starts at toggle; OK binds
 every target in one undo step (`track.learn.set` / `route.learn.set` /
 `vca.learn.set`), Remove frees them.
+A plug-in without semantic parameters lists its plain CLAP parameters
+(`fx.describe`'s array): read-only, except one `fx.describe` marks
+`modulatable`, which gets a slider over its declared range (linear; stepped
+values round) and its value, set by CLAP id through `fx.param.set` (a drag
+is one undo step), carries its modulation as a semantic slider does, and
+opens the parameter menu below without a lane (a plain parameter has no
+lane scale).
 A right-click on a semantic parameter's row opens its parameter menu
 (`fx.param.menu`): **MIDI learn: Gain…** (writable rows), **Modulate:
 Gain…** (greyed unless `fx.describe` marks the parameter `modulatable`, or

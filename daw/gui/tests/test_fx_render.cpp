@@ -925,6 +925,92 @@ TEST_CASE(
     CHECK(f.app->head().modulations.find(route)->depth != doctest::Approx(0.25));
 }
 
+TEST_CASE("a plain CLAP plug-in's modulatable parameter is editable in the FX window") {
+    // ADR-0096 M3: a plug-in without semantic keys lists its CLAP parameters;
+    // a modulatable one gets a slider over its declared range (fx.param.set by
+    // id, a drag one undo step) and the menu's Modulate.
+    Fixture f(true);
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    const model::Id track = f.addTrack("Raw");
+    auto made = f.run(
+        "fx.add", f.args({{"track", track.str()}, {"plugin", "com.suppleaudio.test.raw-gain"}}));
+    REQUIRE(made);
+    const model::Id fx = *model::Id::parse((*made)["fx"].asString());
+    auto described = f.run("fx.describe", f.args({{"fx", fx.str()}, {"full", true}}));
+    REQUIRE(described);
+    REQUIRE((*described)["params"].isArray());
+    std::string key;
+    for (const json::Value& p : (*described)["params"].asArray())
+        if (const json::Value* m = p.find("modulatable"); m && m->isBool() && m->asBool())
+            key = std::to_string(static_cast<std::uint32_t>(p.find("id")->asDouble()));
+    REQUIRE_MESSAGE(!key.empty(), "the raw gain marks its gain modulatable");
+    REQUIRE(f.fx->open(track));
+    f.fx->select(fx);
+    f.fx->showParamsTab();
+    f.frame();
+    auto* slider = dynamic_cast<ui::Slider*>(f.uiRoot().find("fx.param." + key));
+    REQUIRE(slider);
+    // A drag sets the value by id, one undo step.
+    const std::size_t before = f.historyCount();
+    const ui::Rect b = slider->bounds();
+    const float y = b.y + b.h / 2 - 3;  // the track, above the modulation bar's place
+    const float x0 = b.x + ui::Slider::kInset +
+                     static_cast<float>(slider->value()) * (b.w - 2 * ui::Slider::kInset);
+    f.uiRoot().pointer({ui::PointerEvent::Type::Down, {x0, y}, 1});
+    for (int i = 1; i <= 10; ++i)
+        f.uiRoot().pointer({ui::PointerEvent::Type::Move, {x0 - i * 5.0f, y}, 0});
+    f.uiRoot().pointer({ui::PointerEvent::Type::Up, {x0 - 50.0f, y}, 1});
+    f.fx->tick();
+    f.frame();
+    CHECK(f.historyCount() == before + 1);
+    const auto& params = f.app->head().fx.find(fx)->params;
+    const auto saved = params.find(static_cast<std::uint32_t>(std::stoul(key)));
+    REQUIRE(saved != params.end());
+    // Its menu has Modulate (no lane: a plain parameter has none), which
+    // routes the parameter by its CLAP id.
+    ui::Node* name = f.uiRoot().find("fx.plain.name.0");
+    REQUIRE(name);
+    const ui::Point p{name->bounds().x + 4, name->bounds().y + name->bounds().h / 2};
+    f.uiRoot().pointer({ui::PointerEvent::Type::Down, p, 3});
+    f.uiRoot().pointer({ui::PointerEvent::Type::Up, p, 3});
+    f.frame();
+    ui::Node* menu = f.uiRoot().find("fx.param.menu");
+    REQUIRE(menu);
+    std::vector<std::string> labels;
+    std::function<void()> modulate;
+    for (const auto& item : ui::menuItems(*menu)) {
+        labels.push_back(item.label);
+        if (item.label.rfind("Modulate: ", 0) == 0) {
+            CHECK(item.enabled);
+            modulate = item.run;
+        }
+    }
+    CHECK(std::none_of(labels.begin(), labels.end(),
+                       [](const std::string& l) { return l.find("lane") != std::string::npos; }));
+    REQUIRE(modulate);
+    f.uiRoot().closePopup();
+    modulate();
+    ui::Node* sources = f.uiRoot().find("param.modulate.menu");
+    REQUIRE(sources);
+    std::function<void()> lfo;
+    for (const auto& item : ui::menuItems(*sources))
+        if (item.label == "LFO") lfo = item.run;
+    REQUIRE(lfo);
+    f.uiRoot().closePopup();
+    lfo();
+    REQUIRE(f.app->head().modulations.size() == 1);
+    CHECK(f.app->head().modulations.begin()->value->target == model::EnvTarget{fx, key});
+    f.fx->tick();
+    f.frame();
+    slider = dynamic_cast<ui::Slider*>(f.uiRoot().find("fx.param." + key));
+    REQUIRE(slider);
+    REQUIRE(slider->modulation());
+    CHECK(slider->modulation()->high == doctest::Approx(0.25));
+}
+
 TEST_CASE("a knob bound to the last touched parameter follows the panel's last edit") {
     Fixture f;
     if (!f.ok) {

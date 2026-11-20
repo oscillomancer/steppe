@@ -6,7 +6,9 @@
 // `fx.param.set`; a slider drag is one undo step (Origin::gesture). A
 // right-click on a parameter's row opens its parameter menu: MIDI learn…,
 // Modulate… (greyed unless fx.describe marks it modulatable, ADR-0096) and
-// Show or Hide lane.
+// Show or Hide lane. A plug-in without semantic parameters lists its plain
+// CLAP parameters: read-only, except a modulatable one, which gets a slider
+// over its declared range and the menu without a lane.
 #pragma once
 
 #include <cstddef>
@@ -56,9 +58,10 @@ class ParamPanel {
     // (modulation.set; a drag is one undo step).
     std::optional<ui::ModulationView> modulationView(const std::string& key);
     void setDepth(const std::string& key, double depth, ui::Gesture g);
-    // A row's right-click menu at `at` (window coordinates).
+    // A row's right-click menu at `at` (window coordinates). `lane`: offer
+    // Show or Hide lane (a plain parameter has no lane).
     void openMenu(const std::string& key, const std::string& name, bool learnable, bool modulatable,
-                  double physical, ui::Point at);
+                  double physical, ui::Point at, bool lane = true);
 
     engine::EngineApp& app_;
     cmd::Dispatcher& dispatcher_;
