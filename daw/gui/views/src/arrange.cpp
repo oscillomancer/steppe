@@ -1768,6 +1768,11 @@ Result<json::Value> ArrangeView::runLauncher(const std::string& command, json::V
     if (!r && launcherCallbacks_.onError) launcherCallbacks_.onError(r.error());
     return r;
 }
+void ArrangeView::setCaptureArmed(bool armed) {
+    if (armed == captureArmed_) return;
+    captureArmed_ = armed;
+    if (launcherHeader_) launcherHeader_->invalidate();
+}
 void ArrangeView::setLaunchState(LaunchViews views) {
     if (views == launchViews_) return;
     std::set<model::Id> held;

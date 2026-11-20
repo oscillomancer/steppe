@@ -393,6 +393,10 @@ void Shell::sync(bool event) {
     // What each track with clips plays (ADR-0097): the launcher's playing,
     // queued and held cells, its Arr dots and the held tracks' lanes.
     arrange_->setLaunchState(launchViews(app_.launchState()));
+    // Capture (L4): a capture the transport ended is committed, and the
+    // toggle shows whether it is armed.
+    capture_.service();
+    arrange_->setCaptureArmed(capture_.armed());
     // The bar changes with the model or while the engine runs; refreshing it on
     // every idle pass would repaint (and cost) for nothing.
     if (transport_) transport_->sync(event || moved);

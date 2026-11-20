@@ -7,6 +7,7 @@
 #include <stb_image.h>
 #include "test_support.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -16,6 +17,7 @@
 #include <vector>
 
 #include "app_actions.h"
+#include "launch_capture.h"
 #include "shell.h"
 #include "supple/gui/png.h"
 #include "supple/gui/window.h"
@@ -84,6 +86,7 @@ struct LauncherFixture {
              [this](const Error& error) { errors.push_back(error); },
              [this](model::Id clip) { opened.push_back(clip); },
              [this](const std::vector<model::Id>& clips) { selected = clips; },
+             {},
              {}});
         sync();
     }
@@ -569,4 +572,76 @@ TEST_CASE("launcher: the pane's look, playing, queued, held, empty and selected,
     f.root->setTheme(ui::Theme::light());
     f.sync();
     f.golden("launcher-light.png");
+}
+
+TEST_CASE("launcher: Capture arms while lit; a stop commits the performance, one undo step") {
+    LauncherFixture f;
+    f.song();
+    views::LauncherHeader& header = f.view->launcherHeader();
+    gui::CaptureControl capture(*f.app, *f.dispatcher);
+    std::vector<Error> refused;
+    capture.onError = [&](const Error& e) { refused.push_back(e); };
+    // The header's toggle asks the app; the app's state lights it.
+    std::vector<bool> asked;
+    views::LauncherCallbacks callbacks = f.view->launcherCallbacks();
+    callbacks.capture = [&](bool on) { asked.push_back(on); };
+    f.view->setLauncherCallbacks(callbacks);
+    f.click(centre(header.captureRect()));
+    CHECK(asked == std::vector<bool>{true});
+    CHECK_FALSE(header.stats.captureLit);
+    f.view->setCaptureArmed(true);
+    f.sync();
+    CHECK(header.stats.captureLit);
+    f.click(centre(header.captureRect()));
+    CHECK(asked == std::vector<bool>{true, false});
+    f.view->setCaptureArmed(false);
+    // Without an engine: refused, dark.
+    const Status cold = capture.set(true);
+    REQUIRE_FALSE(cold);
+    CHECK(cold.error().code == "engine.stopped");
+    CHECK_FALSE(capture.armed());
+    // Armed, Kit A launched (the transport starts), then a stop: committed.
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    REQUIRE(capture.set(true));
+    CHECK(capture.armed());
+    CHECK(f.app->launchCapturing());
+    f.exec("launch.clip", R"({"clip":"cl_1"})");
+    const model::Id drums = *model::Id::parse("tr_1");
+    auto playing = [&] {
+        for (const auto& t : f.app->launchState())
+            if (t.track == drums && t.plays == engine::Engine::TrackLaunch::Plays::Clip)
+                return true;
+        return false;
+    };
+    // Until the engine hears it, and a little after; the bound only keeps a
+    // broken build from hanging.
+    for (int k = 0; k < 300 && !playing(); ++k) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        capture.service();
+    }
+    REQUIRE(playing());
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    capture.service();
+    CHECK(f.app->head().items.empty());
+    const std::uint64_t before = f.app->head().version;
+    f.exec("transport.stop", "{}");
+    for (int k = 0; k < 300 && f.app->head().items.empty(); ++k) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        capture.service();
+    }
+    CHECK(refused.empty());
+    bool laid = false;
+    for (const auto& e : f.app->head().items) laid = laid || e.value->track == drums;
+    CHECK(laid);
+    CHECK(f.app->head().version == before + 1);  // one undo step
+    // Still lit, and armed for the next take.
+    CHECK(capture.armed());
+    CHECK(f.app->launchCapturing());
+    // Off with nothing played since: nothing more is written.
+    REQUIRE(capture.set(false));
+    CHECK_FALSE(capture.armed());
+    CHECK_FALSE(f.app->launchCapturing());
+    CHECK(f.app->head().version == before + 1);
+    f.exec("engine.stop", "{}");
+    CHECK(f.errors.empty());
 }

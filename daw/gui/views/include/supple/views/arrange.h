@@ -199,6 +199,10 @@ class ArrangeView : public ui::Node {
     // tracks' dimmed lanes. Redraws only when it changes.
     void setLaunchState(LaunchViews views);
     const LaunchViews& launchState() const { return launchViews_; }
+    // The launcher header's Capture toggle, lit while the app has it armed
+    // (set each pass).
+    void setCaptureArmed(bool armed);
+    bool captureArmed() const { return captureArmed_; }
     // The launcher's selection (gui.md §4.15): clips (a click on a body; Ctrl
     // adds), or one empty cell (a click beside its square) where a clip can
     // be made or pasted. A click on the lanes clears it.
@@ -290,6 +294,7 @@ class ArrangeView : public ui::Node {
     float launcherScroll_ = 0;
     LauncherCallbacks launcherCallbacks_;
     LaunchViews launchViews_;
+    bool captureArmed_ = false;
     std::vector<model::Id> selectedClips_;
     std::optional<Cell> selectedCell_;
     float launcherRoom() const;  // the widest the pane is before it fills the view

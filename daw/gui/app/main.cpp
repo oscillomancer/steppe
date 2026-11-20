@@ -902,7 +902,15 @@ int frontendMain(int argc, char** argv) {
              for (model::Id id : clips) ids.push_back(id.str());
              if (auto r = gui::removeClips(dispatcher, ids); !r && appActions.onError)
                  appActions.onError("Clip launcher: " + r.error().message);
+         },
+         [&](bool on) {
+             if (auto r = shell.capture().set(on); !r && appActions.onError)
+                 appActions.onError("Capture: " + r.error().message);
          }});
+    // A capture's commit at stop, or the next one's arming, refused.
+    shell.capture().onError = [&appActions](const Error& e) {
+        if (appActions.onError) appActions.onError("Capture: " + e.message);
+    };
     shell.arrange()->setRulerCallbacks(
         {[&dispatcher](const std::string& command, json::Value args) {
              return dispatcher.execute(

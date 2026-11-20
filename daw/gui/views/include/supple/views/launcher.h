@@ -58,6 +58,9 @@ struct LauncherCallbacks {
     // Removes clips in one undo step (the menu's Delete); unset: one
     // clip.remove each.
     std::function<void(const std::vector<model::Id>& clips)> remove;
+    // The header's Capture toggle pressed: arm (true) or end and commit
+    // (false) the capture of launches (launch.capture, launch.commit).
+    std::function<void(bool on)> capture;
 };
 
 // The pane's geometry, shared by its body and its header cell: one column
@@ -180,6 +183,13 @@ class LauncherHeader : public ui::Node {
     ui::Rect arrangementRect() const;
     ui::Rect scenesRow() const;
     ui::Rect addRect() const;  // the + cell after the last scene
+    // The Capture toggle, under Stop all: lit while armed
+    // (ArrangeView::captureArmed).
+    ui::Rect captureRect() const;
+    // What the last paint drew (tests).
+    struct Stats {
+        bool captureLit = false;
+    } stats;
     // The scene column under x in the headers' row, and its ▶.
     std::optional<std::size_t> sceneAt(ui::Point p) const;
     ui::Rect sceneRect(std::size_t column) const;

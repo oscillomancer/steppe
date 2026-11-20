@@ -733,6 +733,11 @@ ui::Rect LauncherHeader::arrangementRect() const {
     return {s.right() + 6, s.y, 92, s.h};
 }
 
+ui::Rect LauncherHeader::captureRect() const {
+    const ui::Rect s = stopRect();
+    return {s.x, s.bottom() + 6, s.w, s.h};
+}
+
 ui::Rect LauncherHeader::addRect() const {
     LauncherColumns cols = launcherColumns(view_.session());
     cols.x = bounds().x;
@@ -757,6 +762,23 @@ void LauncherHeader::paint(ui::Canvas& c) {
         c.fillRound(r, 3, t.color("raised"));
         c.strokeRound(r, 3, t.color("rule"));
         c.text(r, label, ui::Font::Ui, caption, t.color("ink"), ui::kCenter | ui::kMiddle);
+    }
+    // Capture, as the transport's record button: a red dot, the cell lit
+    // while armed.
+    stats.captureLit = view_.captureArmed();
+    if (const ui::Rect r = captureRect(); r.right() <= b.right() && r.bottom() <= scenesRow().y) {
+        const ui::Color red = t.color("armed");
+        if (stats.captureLit) {
+            c.fillRound(r, 3, red.withAlpha(0.2f));
+            c.strokeRound(r, 3, red.withAlpha(0.7f));
+        } else {
+            c.fillRound(r, 3, t.color("raised"));
+            c.strokeRound(r, 3, t.color("rule"));
+        }
+        c.fillCircle({r.x + 10, r.y + r.h / 2}, 3.5f,
+                     stats.captureLit ? red : t.color("ink-quiet"));
+        c.text({r.x + 16, r.y, r.w - 18, r.h}, "Capture", ui::Font::Ui, caption, t.color("ink"),
+               ui::kCenter | ui::kMiddle);
     }
     // The scene headers: a ▶ and the name, in the marker row's height.
     const ui::Rect row = scenesRow();
@@ -853,6 +875,11 @@ bool LauncherHeader::onPointer(const ui::PointerEvent& e) {
     }
     if (e.button == 1 && arrangementRect().contains(e.pos)) {
         (void)view_.runLauncher("launch.arrangement", std::move(args));
+        return true;
+    }
+    if (e.button == 1 && captureRect().contains(e.pos)) {
+        if (view_.launcherCallbacks().capture)
+            view_.launcherCallbacks().capture(!view_.captureArmed());
         return true;
     }
     if (e.button == 1 && addRect().contains(e.pos)) {
