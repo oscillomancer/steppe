@@ -515,6 +515,10 @@ the same.*
   - *A clip take's FX and envelopes.* They will play as an item's take
     chain does. Until then a clip plays without them, and the plan warns
     with `launch.take_chain`, naming the clip.
+  - *Racks.* A clip's notes reach the track's own instrument and its
+    MIDI sends (they join the track's MIDI stream). A rack's Notes module
+    plays its source track's compiled events in the rack's own node and
+    does not yet follow the track's launches.
 - **The take `pitch` envelope** that is stored but never played (core
   §4.5) stays unplayed for clips as for items. Whether to play it is
   decided with the stretch path, for both.
