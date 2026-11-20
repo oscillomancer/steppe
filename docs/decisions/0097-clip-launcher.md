@@ -143,7 +143,9 @@ new item lands (`itemSpan`, so the item's timebase is resolved first).
   item spans the clip's length from its position, in beats or in seconds.
 - **Notes and audio** do not convert: a MIDI source is in beats, and an
   audio take plays its source at its own playrate in both places. The
-  playrate, pitch, start offset, take FX and fades are copied as they are.
+  playrate, pitch, start offset and take FX are copied as they are. The
+  item's gain, mute and colour become the clip's, and back; its fades have
+  no place on a clip and are not kept.
 - **Loop.** An item's `loop` repeats its take's content from the start
   offset. It becomes a clip loop that is on, from 0, one content length
   long (the source's length in beats for MIDI, its played seconds for
@@ -165,8 +167,9 @@ new item lands (`itemSpan`, so the item's timebase is resolved first).
   the span, the shape between those points differs slightly from the
   original. An audio clip then keeps its seconds whatever the tempo map
   does later; a MIDI clip keeps its beats.
-- **Refused:** a warped take (above), and a loop window an item cannot
-  express. Nothing else is guessed.
+- **Refused:** a warped take (above), a loop window an item cannot
+  express, and, between beats and seconds, a take envelope with automation
+  items (they would need converting too). Nothing else is guessed.
 
 **Timeline only; these refuse a clip** (`item.kind`, with a hint naming the
 clip command). They place material in time:
@@ -287,8 +290,9 @@ Clips replace that with an **ordered budget**:
   - Errors: `clip.track`, `clip.scene`, `clip.occupied`, `clip.mixed`
     (a take whose source does not match the clip's kind), `clip.length`,
     `clip.memory`,
-    `clip.unsupported`, `clip.limit`, `scene.limit` and `item.kind`, and
-    `track.strip_type` from `track.set`. Each has `code`, `message`, `path`
+    `clip.unsupported`, `clip.limit`, `clip.source` (more than one source),
+    `scene.limit`, `scene.index` (a column past the last) and `item.kind`,
+    and `track.strip_type` from `track.set`. Each has `code`, `message`, `path`
     and a `hint`.
 - **L2, lead.** `launch.clip {clip}`, `launch.scene {scene}`,
   `launch.stop {track?}`, `launch.arrangement {track?}`, and

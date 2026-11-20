@@ -95,8 +95,12 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
             auto& app = ctx.service<EngineApp>();
             const auto before = app.view();
             const auto fields = encoded.encode(a);
+            // Scenes and clips are outside a frozen track's print (ADR-0097):
+            // they stay editable, and copying a frozen item into a clip
+            // leaves it as it is (validateFrozenTransition still checks).
             if (name != "track.unfreeze" && name != "track.freeze.commit" &&
-                name != "track.remove" && name != "track.duplicate") {
+                name != "track.remove" && name != "track.duplicate" && !name.starts_with("clip.") &&
+                !name.starts_with("scene.")) {
                 for (const auto& field : fields.asObject()) {
                     if (!field.value.isString()) continue;
                     if (field.key != "fx" && field.key != "item" && field.key != "take" &&

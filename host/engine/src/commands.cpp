@@ -14,6 +14,7 @@
 #include <set>
 
 #include "analysis_commands.h"
+#include "clip_launcher.h"
 #include "command_helpers.h"
 #include "media_files.h"
 #include "render_commands.h"
@@ -65,6 +66,7 @@ void registerEnvelopeCommands(cmd::Registry& registry);
 void registerDeviceCommands(cmd::Registry& registry);
 void registerTransportCommands(cmd::Registry& registry);
 void registerAuditionCommands(cmd::Registry& registry);
+void registerClipLauncherCommands(cmd::Registry& registry);
 
 // Exposed to rack.probe (rack_probe.cpp).
 Result<std::pair<model::MidiSource, double>> notationSource(const model::Session& s,
@@ -115,6 +117,7 @@ void registerEngineCommands(cmd::Registry& registry) {
     registerDeviceCommands(registry);
     registerTransportCommands(registry);
     registerAuditionCommands(registry);
+    registerClipLauncherCommands(registry);
 }
 
 // --- describe ----------------------------------------------------------------------------------
@@ -226,6 +229,7 @@ std::string describeSession(const model::Session& s) {
         }
         out += "\n";
     }
+    out += describeScenes(s);  // clips never move the project length
     return out;
 }
 

@@ -191,6 +191,62 @@ q = nil
 ---@field amount? number
 ---@field color? string
 
+---@class Steppe.clip_add_args
+---@field track string Track id, e.g. "tr_1".
+---@field scene string Scene id, e.g. "sc_1".
+---@field notation? string
+---@field audio_file? string
+---@field midi_file? string
+---@field item? string Item id, e.g. "it_1".
+---@field pooled? boolean (default: false)
+---@field name? string
+
+---@class Steppe.clip_add_result
+---@field clip string
+---@field takes string[]
+---@field source? string
+---@field kind string
+---@field length number
+---@field warnings? (string|table)[]
+
+---@class Steppe.clip_duplicate_args
+---@field clip string Clip id, e.g. "cl_1".
+---@field track? string Track id, e.g. "tr_1".
+---@field scene? string Scene id, e.g. "sc_1".
+---@field pooled? boolean (default: false)
+
+---@class Steppe.clip_duplicate_result
+---@field id string
+---@field warnings? table[]
+
+---@class Steppe.clip_move_args
+---@field clip string Clip id, e.g. "cl_1".
+---@field track? string Track id, e.g. "tr_1".
+---@field scene? string Scene id, e.g. "sc_1".
+
+---@class Steppe.clip_move_result
+---@field warnings? table[]
+
+---@class Steppe.clip_remove_args
+---@field clip string Clip id, e.g. "cl_1".
+
+---@class Steppe.clip_remove_result
+---@field warnings? table[]
+
+---@class Steppe.clip_set_args
+---@field clip string Clip id, e.g. "cl_1".
+---@field name? string
+---@field color? string
+---@field mute? boolean
+---@field gain_db? number
+---@field length? number
+---@field loop? table
+---@field mode? "loop"|"once"
+---@field quantize? any
+
+---@class Steppe.clip_set_result
+---@field warnings? table[]
+
 ---@class Steppe.crash_acknowledge_args
 ---@field incident string A report's incident id, from crash.list.
 
@@ -820,6 +876,7 @@ q = nil
 ---@field notation? string
 ---@field audio_file? string
 ---@field midi_file? string
+---@field clip? string Lay a copy of this clip's takes here.
 ---@field name? string
 
 ---@class Steppe.item_add_result
@@ -1714,6 +1771,40 @@ q = nil
 ---@class Steppe.route_set_result
 ---@field warnings? table[]
 
+---@class Steppe.scene_add_args
+---@field name? string
+---@field color? string
+---@field at? integer Column, 0-based.
+
+---@class Steppe.scene_add_result
+---@field id string
+---@field warnings? table[]
+
+---@class Steppe.scene_list_result
+---@field scenes table[]
+---@field warnings? table[]
+
+---@class Steppe.scene_move_args
+---@field scene string Scene id, e.g. "sc_1".
+---@field to integer Column.
+
+---@class Steppe.scene_move_result
+---@field warnings? table[]
+
+---@class Steppe.scene_remove_args
+---@field scene string Scene id, e.g. "sc_1".
+
+---@class Steppe.scene_remove_result
+---@field warnings? table[]
+
+---@class Steppe.scene_set_args
+---@field scene string Scene id, e.g. "sc_1".
+---@field name? string
+---@field color? string
+
+---@class Steppe.scene_set_result
+---@field warnings? table[]
+
 ---@class Steppe.script_run_args
 ---@field code string The Lua source. It may return a value: what it returns is converted to JSON (tables with string keys are objects, sequences are arrays).
 ---@field name? string The script's name: its commands are recorded as `lua:<name>` and its state (globals, subscriptions) is kept between runs of the same name. Defaults to the caller's client name.
@@ -2279,6 +2370,13 @@ q = nil
 ---@field remove fun(args?: Steppe.cable_remove_args): table Remove a cable, by id or by its two ends.
 ---@field set fun(args: Steppe.cable_set_args): table Set a modulation cable's amount or a cable's colour.
 
+---@class Steppe.clip
+---@field add fun(args: Steppe.clip_add_args): Steppe.clip_add_result Add a clip to a channel's cell in a scene, from notation, a file or an item.
+---@field duplicate fun(args: Steppe.clip_duplicate_args): Steppe.clip_duplicate_result Copy a clip and its takes to an empty cell.
+---@field move fun(args: Steppe.clip_move_args): Steppe.clip_move_result Move a clip to an empty cell: another scene, another channel, or both.
+---@field remove fun(args: Steppe.clip_remove_args): Steppe.clip_remove_result Remove a clip with its takes (unpooled sources go too).
+---@field set fun(args: Steppe.clip_set_args): Steppe.clip_set_result Set a clip's name, colour, mute, gain, length, loop, mode or quantize.
+
 ---@class Steppe.crash
 ---@field acknowledge fun(args: Steppe.crash_acknowledge_args): table Mark a crash report, or a run that left none, as seen.
 ---@field clear fun(): table Delete every finished crash report and record of an ended run.
@@ -2373,7 +2471,7 @@ q = nil
 ---@field undo fun(): Steppe.history_undo_result Undo the last change on the current branch.
 
 ---@class Steppe.item
----@field add fun(args: Steppe.item_add_args): Steppe.item_add_result Add an item on a track: MIDI in notation, a MIDI file or an audio file.
+---@field add fun(args: Steppe.item_add_args): Steppe.item_add_result Add an item on a track: notation, a MIDI or audio file, or a clip's copy.
 ---@field ["apply-fx"] fun(args: Steppe.item_apply_fx_args): Steppe.item_apply_fx_result Render an item through its take and track FX into a new audio take.
 ---@field consolidate fun(args: Steppe.item_consolidate_args): table Consolidate selected audio and MIDI per track in a background job.
 ---@field duplicate fun(args: Steppe.item_duplicate_args): Steppe.item_duplicate_result Copy an item and its takes to a new beat position (default: immediately after).
@@ -2534,6 +2632,13 @@ q = nil
 ---@field remove fun(args: Steppe.route_learn_remove_args): Steppe.route_learn_remove_result Remove a send control's MIDI controller binding.
 ---@field set fun(args: Steppe.route_learn_set_args): Steppe.route_learn_set_result Let a MIDI controller move a send's level, pan, mute or tap.
 
+---@class Steppe.scene
+---@field add fun(args?: Steppe.scene_add_args): Steppe.scene_add_result Add a scene, a column of the clip launcher, at the end or at an index.
+---@field list fun(): Steppe.scene_list_result List the scenes in column order with their clip counts.
+---@field move fun(args: Steppe.scene_move_args): Steppe.scene_move_result Move a scene to another column.
+---@field remove fun(args: Steppe.scene_remove_args): Steppe.scene_remove_result Remove a scene with its clips and their takes.
+---@field set fun(args: Steppe.scene_set_args): Steppe.scene_set_result Rename or recolour a scene.
+
 ---@class Steppe.script
 ---@field run fun(args: Steppe.script_run_args): Steppe.script_run_result Run a Lua script on the command bus.
 
@@ -2578,7 +2683,7 @@ q = nil
 ---@field freeze fun(args: Steppe.track_freeze_args): table Freeze a channel's items and FX to pre-fader audio and release its plugins.
 ---@field list fun(args?: Steppe.track_list_args): Steppe.track_list_result List tracks in tree order with their level, mute/solo, fx and items.
 ---@field move fun(args: Steppe.track_move_args): Steppe.track_move_result Move a track under another track or reorder it among its siblings.
----@field remove fun(args: Steppe.track_remove_args): Steppe.track_remove_result Remove a track with its items, fx, routes and envelopes (not a folder).
+---@field remove fun(args: Steppe.track_remove_args): Steppe.track_remove_result Remove a track with its items, clips, fx, routes and envelopes (not a folder).
 ---@field set fun(args: Steppe.track_set_args): Steppe.track_set_result Set track fields; choosing audio, MIDI or rack input replaces the others.
 ---@field unfreeze fun(args: Steppe.track_unfreeze_args): table Restore a frozen channel's original items and plugin state.
 
@@ -2632,6 +2737,7 @@ q = nil
 ---@field autoitem Steppe.autoitem Commands named autoitem.*
 ---@field branch Steppe.branch Commands named branch.*
 ---@field cable Steppe.cable Commands named cable.*
+---@field clip Steppe.clip Commands named clip.*
 ---@field crash Steppe.crash Commands named crash.*
 ---@field dsp Steppe.dsp Commands named dsp.*
 ---@field engine Steppe.engine Commands named engine.*
@@ -2653,6 +2759,7 @@ q = nil
 ---@field registry Steppe.registry Commands named registry.*
 ---@field render Steppe.render Commands named render.*
 ---@field route Steppe.route Commands named route.*
+---@field scene Steppe.scene Commands named scene.*
 ---@field script Steppe.script Commands named script.*
 ---@field session Steppe.session Commands named session.*
 ---@field sync Steppe.sync Commands named sync.*

@@ -1645,13 +1645,16 @@ item's span, where it sits or lands (ADR-0097, "Converting between an item
 and a clip"):
 - a MIDI clip's length is the item's length in beats, an audio clip's its
   length in seconds; the new item spans the clip's length from its position;
-- notes, audio, playrate, pitch, start offset, take FX and fades copy as
-  they are;
+- notes, audio, playrate, pitch, start offset and take FX copy as they
+  are; the item's gain, mute and colour become the clip's and back, and its
+  fades are not kept;
 - an item's `loop` becomes a clip loop on, from 0, one content length long;
   back on the timeline only that loop, or none, converts (other windows:
   `clip.unsupported`);
 - take envelope points keep their beats on a MIDI clip and convert point by
   point to seconds from the start on an audio clip, and back;
+- a take envelope with automation items does not convert between beats and
+  seconds (`clip.unsupported`);
 - the round trip at one position is exact; across a tempo change inside the
   span, the shape between two points may differ slightly.
 
@@ -1724,7 +1727,8 @@ but not launched; freezing returns the track to the arrangement first.
   of the first meter).
 - Errors: `clip.track`, `clip.scene`, `clip.occupied`, `clip.mixed`,
   `clip.length`, `clip.memory`, `clip.unsupported`, `clip.limit`,
-  `scene.limit` and `item.kind`, and `track.strip_type`. Each carries
+  `clip.source`, `scene.limit`, `scene.index` and `item.kind`, and
+  `track.strip_type`. Each carries
   `code`, `message`, `path` and a `hint`.
 - Launches (`launch.*`) change transport state only. They are logged for
   `launch.commit` while capture is on, and they are never in history.

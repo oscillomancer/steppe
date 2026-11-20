@@ -613,8 +613,8 @@
   },
   {
     "name": "item_add",
-    "title": "Add an item on a track: MIDI in notation, a MIDI file or an audio file.",
-    "description": "position in beats (quarter notes from the start) or bar (1-based). notation: e.g. \"voice bass; 1: C2:q r:q C2:q r:q | F2:h G2:h\" — every bar must add up; the item is as long as the written bars unless length (beats) is given. audio_file: a path at the project's sample rate; with the app's copy-imports setting on, the project keeps its own copy in its media folder. midi_file: a Standard MIDI File (type 0 or 1, every track merged, channels kept); its notes keep their beats and follow the project's tempo (the file's tempo and meter are not applied; a warning says when they differ), and the item is as long as the file unless length is given. A master holds audio items only (prints, played after its fader); busses hold none. See describe for errors and examples.",
+    "title": "Add an item on a track: notation, a MIDI or audio file, or a clip's copy.",
+    "description": "position in beats (quarter notes from the start) or bar (1-based). notation: e.g. \"voice bass; 1: C2:q r:q C2:q r:q | F2:h G2:h\" — every bar must add up; the item is as long as the written bars unless length (beats) is given. audio_file: a path at the project's sample rate; with the app's copy-imports setting on, the project keeps its own copy in its media folder. midi_file: a Standard MIDI File (type 0 or 1, every track merged, channels kept); its notes keep their beats and follow the project's tempo (the file's tempo and meter are not applied; a warning says when they differ), and the item is as long as the file unless length is given. clip: a copy of that clip's takes, as long as the clip, its loop and take envelopes converted at the tempo where the item lands (ADR-0097). A master holds audio items only (prints, played after its fader); busses hold none. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "item_add_args",
@@ -648,6 +648,11 @@
         },
         "midi_file": {
           "type": "string"
+        },
+        "clip": {
+          "type": "string",
+          "pattern": "^cl_[0-9]+$",
+          "description": "Lay a copy of this clip's takes here."
         },
         "name": {
           "type": "string"
@@ -1645,8 +1650,8 @@
   },
   {
     "name": "track_remove",
-    "title": "Remove a track with its items, fx, routes and envelopes (not a folder).",
-    "description": "Removes the track's racks too, except a rack another channel hears (its Out as the channel's input, or its Note Out's MIDI), which moves there. A warning names each rack removed (track.rack_removed) or moved (track.rack_moved) and its rack sends: removed with it, or following the new home's mute and solo. See describe for errors and examples.",
+    "title": "Remove a track with its items, clips, fx, routes and envelopes (not a folder).",
+    "description": "Removes the track's racks too, except a rack another channel hears (its Out as the channel's input, or its Note Out's MIDI), which moves there. A warning names each rack removed (track.rack_removed) or moved (track.rack_moved) and its rack sends: removed with it, or following the new home's mute and solo. Its clips go with their takes, named by a clip.removed warning. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "track_ref",
