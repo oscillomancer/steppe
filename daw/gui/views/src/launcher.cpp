@@ -98,6 +98,32 @@ void drawPlay(ui::Canvas& c, const ui::Rect& box, ui::Color color) {
         color);
 }
 
+// Relative luminance (WCAG 2), and the contrast ratio of two colours.
+float luminance(ui::Color c) {
+    auto lin = [](float v) {
+        return v <= 0.03928f ? v / 12.92f : std::pow((v + 0.055f) / 1.055f, 2.4f);
+    };
+    return 0.2126f * lin(c.r) + 0.7152f * lin(c.g) + 0.0722f * lin(c.b);
+}
+float contrast(ui::Color a, ui::Color b) {
+    const float la = luminance(a), lb = luminance(b);
+    return (std::max(la, lb) + 0.05f) / (std::min(la, lb) + 0.05f);
+}
+
+// The ▶ of something playing: in `playing` on a backing of the theme's ink
+// or ground, whichever it reads on better, so it shows at a glance on any
+// clip colour and in either theme.
+void drawPlaying(ui::Canvas& c, const ui::Rect& box) {
+    const ui::Theme& t = c.theme();
+    const ui::Color on = t.color("playing");
+    const ui::Color ink = t.color("ink"), ground = t.color("ground");
+    const ui::Color backing = contrast(on, ink) >= contrast(on, ground) ? ink : ground;
+    const float s = std::min({box.w, box.h, 13.0f});
+    c.fillRound({std::round(box.x + (box.w - s) / 2), std::round(box.y + (box.h - s) / 2), s, s}, 2,
+                backing);
+    drawPlay(c, box, on);
+}
+
 // A dashed outline (a queued launch): dashes of 4 with gaps of 3.
 void strokeDashed(ui::Canvas& c, const ui::Rect& r, ui::Color color) {
     auto run = [&](ui::Point a, ui::Point b) {
@@ -308,8 +334,10 @@ void LauncherPane::paint(ui::Canvas& c) {
             const ui::Rect name{inner.x, inner.y, inner.w, bar};
             c.fillRect({name.x + 1, name.y + 1, name.w - 2, name.h - 1},
                        color.withAlpha(0.38f * dim));
-            drawPlay(c, {name.x + 1, name.y, 14, name.h},
-                     playing ? t.color("playing") : t.color("ink").withAlpha(dim));
+            if (playing)
+                drawPlaying(c, {name.x + 1, name.y, 14, name.h});
+            else
+                drawPlay(c, {name.x + 1, name.y, 14, name.h}, t.color("ink").withAlpha(dim));
             std::string label = clip->name.empty() ? id->str() : clip->name;
             const std::string fit =
                 c.elide(label, ui::Font::Ui, caption, std::max(0.0f, name.w - 18));
@@ -830,8 +858,10 @@ void LauncherHeader::paint(ui::Canvas& c) {
         const ui::Rect cell{cols.columnX(col), row.y, LauncherColumns::kColumn, row.h};
         c.fillRect({cell.right() - 1, cell.y + 3, 1, cell.h - 6}, t.color("rule"));
         const bool playing = scenePlaying(s, view_.launchState(), cols.scenes[col]);
-        drawPlay(c, {cell.x + 1, cell.y, 14, cell.h},
-                 playing ? t.color("playing") : t.color("ink-quiet"));
+        if (playing)
+            drawPlaying(c, {cell.x + 1, cell.y, 14, cell.h});
+        else
+            drawPlay(c, {cell.x + 1, cell.y, 14, cell.h}, t.color("ink-quiet"));
         if (playing) c.strokeRect(cell.inset(1), t.color("playing"), 1.5f);
         const std::string name = scene->name.empty() ? cols.scenes[col].str() : scene->name;
         const std::string fit = c.elide(name, ui::Font::Ui, caption, cell.w - 19);

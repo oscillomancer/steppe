@@ -573,6 +573,32 @@ TEST_CASE("launcher: the pane's look, playing, queued, held, empty and selected,
     f.golden("launcher-light.png");
 }
 
+TEST_CASE("launcher: a playing clip's ▶ reads on every clip colour, in both themes") {
+    LauncherFixture f;
+    f.exec("scene.add", R"({"name":"Play"})");
+    views::LaunchViews state;
+    int i = 0;
+    for (const std::string_view colour : model::kTrackColors) {
+        ++i;
+        f.exec("track.add", R"({"type":"channel","name":")" + std::string(colour) + R"("})");
+        const std::string track = "tr_" + std::to_string(i), clip = "cl_" + std::to_string(i);
+        f.exec("clip.add", R"({"track":")" + track +
+                               R"(","scene":"sc_1","notation":"voice v; 1: C4:q E4:q G4:h"})");
+        f.exec("clip.set", R"({"clip":")" + clip + R"(","color":")" + std::string(colour) +
+                               R"(","name":")" + std::string(colour) + R"("})");
+        state[*model::Id::parse(track)] = {views::LaunchView::Plays::Clip, *model::Id::parse(clip),
+                                           1.0 + 0.3 * i, views::LaunchView::Queued::None,
+                                           std::nullopt};
+    }
+    f.view->setLaunchState(state);
+    f.sync();
+    CHECK(f.view->launcherPane().stats.playing == model::kTrackColors.size());
+    f.golden("launcher-playing-dark.png");
+    f.root->setTheme(ui::Theme::light());
+    f.sync();
+    f.golden("launcher-playing-light.png");
+}
+
 TEST_CASE("launcher: Capture arms while lit; a stop commits the performance, one undo step") {
     LauncherFixture f;
     f.song();
