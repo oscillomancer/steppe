@@ -1054,6 +1054,7 @@ q = nil
 ---@field input? string
 ---@field send? string
 ---@field channel? string The channel made for a new rack.
+---@field knob? string A macro's knob to move, by key.
 ---@field warnings? table[]
 
 ---@class Steppe.modulation_add_args

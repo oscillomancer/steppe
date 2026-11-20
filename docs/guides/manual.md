@@ -908,8 +908,9 @@ signal, a fraction of the parameter's range (−1 to 1); routes on one
 parameter add up, and none of them writes the parameter's value or its
 automation. `modulation.set` changes a route (a drag that sends one
 gesture is one undo step), `modulation.remove` removes it, and
-`modulation.list` shows each route's signal range and, when it cannot
-play, why. Removing the Mod Out or the plug-in removes its routes with a
+`modulation.list` shows each route's signal range, the modules cabled
+into its Mod Out input and, when it cannot play, why: `source` when
+nothing is cabled into that input yet. Removing the Mod Out or the plug-in removes its routes with a
 `modulation.removed` warning.
 
 A route can also take a track's volume (`{track, param: "volume"}`, depth
@@ -931,7 +932,8 @@ into itself, the command uses another Modulators rack, or adds one. That
 happens when the rack already drives the track the follower listens to,
 or already listens to the target. A follower cannot listen to the track
 it modulates, or to a track that track feeds. Without a depth the
-command uses a quarter of a parameter's range, 6 dB, or 50 %.
+command uses a quarter of a parameter's range, 6 dB, or 50 %. For a
+macro, the result's `knob` is the knob that moves the target.
 `modulation.telemetry` reads each route's live offset and how far it
 can move its target, and `engine.status` counts modulation steps that
 had to wait for room in a block (`modulation_deferred`).

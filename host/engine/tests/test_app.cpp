@@ -4020,9 +4020,27 @@ TEST_CASE("modulation commands: add, a depth drag as one undo step, list and rem
     run("history.undo", "{}");
     CHECK(depth() == 0.25);  // the drag was one step
     run("history.redo", "{}");
+    // Nothing is cabled into mo_2.in_1 yet: the route carries nothing.
+    CHECK(run("modulation.list", R"({"fx": "fx_1"})")["modulations"]
+              .at(0)
+              .find("inert")
+              ->asString() == "source");
+    const auto telemetry = run("modulation.telemetry", "{}")["modulations"].at(0);
+    CHECK_FALSE(telemetry.find("low"));
+    CHECK_FALSE(telemetry.find("high"));
+    const std::string lfo =
+        run("module.add", R"({"rack": "rk_1", "type": "lfo"})")["module"].asString();
+    json::Value cable = json::Value::object();
+    cable["from"] = lfo + ".out";
+    cable["to"] = "mo_2.in_1";
+    REQUIRE(d.execute({"cable.add", cable, kTest}));
     auto listed = run("modulation.list", R"({"fx": "fx_1"})");
     REQUIRE(listed["modulations"].size() == 1);
     auto row = listed["modulations"].at(0);
+    REQUIRE(row["fed_by"].asArray().size() == 1);
+    CHECK(row["fed_by"].at(0).find("module")->asString() == lfo);
+    CHECK(row["fed_by"].at(0).find("type")->asString() == "com.suppleaudio.rack.lfo");
+    CHECK(run("modulation.telemetry", "{}")["modulations"].at(0).find("low"));
     CHECK(row["modulation"].asString() == "mr_1");
     CHECK(row["source"]["module"].asString() == "mo_2");
     CHECK(row["target"]["fx"].asString() == "fx_1");
@@ -4239,6 +4257,15 @@ TEST_CASE("modulation commands: a track's volume, pan and width, and a send's le
     auto added = d.execute({"modulation.add", std::move(args), kTest});
     REQUIRE_MESSAGE(added, (added ? "" : added.error().toString()));
     CHECK(app->view().modulations.size() == 4);
+    // Something in each input, so each route's own target decides.
+    const std::string lfo =
+        run("module.add", R"({"rack": "rk_1", "type": "lfo"})")["module"].asString();
+    for (const char* input : {"mo_2.in_1", "mo_2.in_2", "mo_2.in_3"}) {
+        json::Value cable = json::Value::object();
+        cable["from"] = lfo + ".out";
+        cable["to"] = input;
+        REQUIRE(d.execute({"cable.add", cable, kTest}));
+    }
     auto listed = run("modulation.list", "{}");
     REQUIRE(listed["modulations"].size() == 4);
     for (std::size_t i = 0; i < 4; ++i) CHECK_FALSE(listed["modulations"].at(i).find("inert"));
@@ -4309,6 +4336,16 @@ TEST_CASE("modulate: the whole gesture in one undo step, reusing the rack it mad
               ->params.find("shape")
               ->asString() == "stepped_random");
     CHECK(t.modules.size() == modules + 1);
+    CHECK_FALSE(second.find("knob"));  // only a macro has a knob to move
+    // A macro says which knob moves the target.
+    auto macro = run("modulate", R"({"target": {"track": "tr_1", "param": "pan"},
+        "source": "macro"})");
+    REQUIRE(macro.find("knob"));
+    const model::RackModule& made =
+        *app->view().modules.find(*model::Id::parse(macro["module"].asString()));
+    CHECK(made.type == "com.suppleaudio.rack.macro");
+    CHECK(macro["knob"].asString().find("macro") != std::string::npos);
+    run("history.undo", "{}");
     // One undo step takes all of it back.
     run("history.undo", "{}");
     CHECK(app->view().modulations.size() == 1);
