@@ -568,7 +568,7 @@ routes: sd_1 tr_2 → tr_6 ch 1/2→3/4 pre-fader −6 dB (sidechain)
 markers: mk_1 "Verse" bar 1 · regions: rg_1 "Chorus" bars 9–17
 ```
 
-## 5. Project file (`supple.project/2.16`)
+## 5. Project file (`supple.project/2.18`)
 
 ### 5.1 Shape
 
@@ -584,8 +584,11 @@ Schema 2.4 adds masters' `hw_output` and the render setting `masters`
 and audio items on masters (ADR-0057). Before 2.4, a route from a master to `hw_channels` (which never
 played) becomes that master's `hw_output` (its first such route) and the
 route is dropped, with a `project.hw_output_route` warning.
+Schema 2.16 adds modulation routes (ADR-0096); 2.17 is the context
+track's, landing on its own branch; 2.18 adds scenes, clips and
+`launch_quantize` (ADR-0097, "Scenes and clips").
 
-The loader accepts 1.x and 2.x documents and saves the current schema (2.16,
+The loader accepts 1.x and 2.x documents and saves the current schema (2.18,
 §5). Migration allocates child channel IDs in track-ID order, inserts each
 child first, and moves the source items and record/input FX there while
 keeping user inserts on the buss. Hardware/MIDI record routes follow the new

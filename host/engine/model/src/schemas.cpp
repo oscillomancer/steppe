@@ -3,6 +3,7 @@
 #include "supple/model/schemas.h"
 #include "migration.h"
 #include "supple/model/audio_warp.h"
+#include "supple/model/launcher.h"
 #include "supple/model/render_settings.h"
 #include "supple/schema/document.h"
 
@@ -455,6 +456,17 @@ Schema<ItemTimebase> itemTimebaseSchema() {
                              {ItemTimebase::BeatsPosition, "beats_position"}});
 }
 
+Schema<LaunchQuantize> launchQuantizeSchema() {
+    return en<LaunchQuantize>({{LaunchQuantize::Bar, "bar"},
+                               {LaunchQuantize::Beat, "beat"},
+                               {LaunchQuantize::Half, "1/2"},
+                               {LaunchQuantize::Quarter, "1/4"},
+                               {LaunchQuantize::Eighth, "1/8"},
+                               {LaunchQuantize::Sixteenth, "1/16"},
+                               {LaunchQuantize::ThirtySecond, "1/32"},
+                               {LaunchQuantize::None, "none"}});
+}
+
 Schema<Id> idSchema() {
     json::Value ex = json::Value::object();
     ex["type"] = "string";
@@ -531,6 +543,8 @@ const Schema<Project>& schemaOf<Project>() {
         dflt(b, d.historyBudgetBytes);
         b.field("render", &Project::render, renderSettings());
         dflt(b, d.render);
+        b.field("launch_quantize", &Project::launchQuantize, launchQuantizeSchema());
+        dflt(b, d.launchQuantize);
         return b.build();
     }();
     return s;
@@ -1221,6 +1235,62 @@ const Schema<Cable>& schemaOf<Cable>() {
 }
 
 template <>
+const Schema<Scene>& schemaOf<Scene>() {
+    static const Schema<Scene> s = [] {
+        const Scene d;
+        ObjectBuilder<Scene> b = schema::object<Scene>("scene");
+        b.field("name", &Scene::name, str());
+        dflt(b, d.name);
+        b.field("color", &Scene::color, str());
+        dflt(b, d.color);
+        b.field("order", &Scene::order, intS().min(0));
+        return b.build();
+    }();
+    return s;
+}
+
+template <>
+const Schema<Clip>& schemaOf<Clip>() {
+    static const Schema<Clip> s = [] {
+        const Clip d;
+        auto loop = schema::object<ClipLoop>("clip_loop")
+                        .field("on", &ClipLoop::on, boolean())
+                        .field("start", &ClipLoop::start, num())
+                        .defaultValue(0.0)
+                        .omitIfDefault()
+                        .field("length", &ClipLoop::length, num())
+                        .defaultValue(0.0)
+                        .omitIfDefault()
+                        .build();
+        ObjectBuilder<Clip> b = schema::object<Clip>("clip");
+        b.field("track", &Clip::track, idSchema());
+        b.field("scene", &Clip::scene, idSchema());
+        b.field("kind", &Clip::kind,
+                en<ClipKind>({{ClipKind::Midi, "midi"}, {ClipKind::Audio, "audio"}}));
+        b.field("takes", &Clip::takes, ids());
+        dflt(b, d.takes);
+        b.field("active_take", &Clip::activeTake, idSchema());
+        b.field("length", &Clip::length, num());
+        b.field("loop", &Clip::loop, loop);
+        dflt(b, d.loop);
+        b.field("mode", &Clip::mode,
+                en<ClipMode>({{ClipMode::Loop, "loop"}, {ClipMode::Once, "once"}}));
+        dflt(b, d.mode);
+        b.field("quantize", &Clip::quantize, launchQuantizeSchema());
+        b.field("name", &Clip::name, str());
+        dflt(b, d.name);
+        b.field("color", &Clip::color, str());
+        dflt(b, d.color);
+        b.field("mute", &Clip::mute, boolean());
+        dflt(b, d.mute);
+        b.field("gain_db", &Clip::gainDb, num().range(kSilenceDb, 24));
+        dflt(b, d.gainDb);
+        return b.build();
+    }();
+    return s;
+}
+
+template <>
 const Schema<Modulation>& schemaOf<Modulation>() {
     static const Schema<Modulation> s = [] {
         const Modulation d;
@@ -1341,7 +1411,7 @@ json::Value projectToJson(const Session& s) {
         // The rack kinds (2.7) and modulation routes (2.16) are written once
         // used: older projects stay byte-identical but for the schema.
         const bool late = kind == Kind::Rack || kind == Kind::Module || kind == Kind::Cable ||
-                          kind == Kind::Modulation;
+                          kind == Kind::Modulation || kind == Kind::Scene || kind == Kind::Clip;
         if (late && s.next.next[k] <= 1) continue;
         next[std::string(prefix(kind))] = s.next.next[k];
     }
@@ -1372,6 +1442,8 @@ json::Value projectToJson(const Session& s) {
     if (!s.modules.empty()) doc["modules"] = mapToJson(s.modules);
     if (!s.cables.empty()) doc["cables"] = mapToJson(s.cables);
     if (!s.modulations.empty()) doc["modulations"] = mapToJson(s.modulations);
+    if (!s.scenes.empty()) doc["scenes"] = mapToJson(s.scenes);
+    if (!s.clips.empty()) doc["clips"] = mapToJson(s.clips);
     json::Value blobs = json::Value::object();
     for (const auto& [hash, blob] : s.blobs) {
         json::Value b = json::Value::object();
@@ -1464,7 +1536,7 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
         auto migrated = migrateProject1(std::move(doc), warnings);
         if (!migrated) return std::move(migrated).error();
         doc = std::move(*migrated);
-    } else if (version->minor > 16 && warnings)  // 2.15: autosaved_through; 2.16: modulations
+    } else if (version->minor > 18 && warnings)  // 2.16: modulations; 2.18: scenes, clips
         warnings->push_back(
             {"project.newer_minor", "loading a newer project minor version", "/schema"});
     // Before 2.10 a Notes module heard only its source track's own MIDI, never
@@ -1545,7 +1617,7 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
     const std::set<std::string_view> known{
         "schema", "project", "tempo",  "rulers",      "tracks",           "items", "takes",
         "fx",     "sources", "routes", "envelopes",   "automation_items", "blobs", "groups",
-        "racks",  "modules", "cables", "modulations", "branches"};
+        "racks",  "modules", "cables", "modulations", "scenes",           "clips", "branches"};
     for (const auto& section : doc.asObject()) {
         const auto path = json::pointerJoin("", section.key);
         if (section.key == "ui") {
@@ -1622,7 +1694,8 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
     }
     // The rack kinds' (2.7) and modulation routes' (2.16) counters are
     // written once used; before, they start where a new session's do.
-    for (Kind k : {Kind::Rack, Kind::Module, Kind::Cable, Kind::Modulation})
+    for (Kind k :
+         {Kind::Rack, Kind::Module, Kind::Cable, Kind::Modulation, Kind::Scene, Kind::Clip})
         if (s.next[k] == 0) s.next[k] = 1;
     auto sub = [&](const char* a, const char* b) -> const json::Value* {
         const json::Value* x = doc.find(a);
@@ -1645,6 +1718,8 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
     IdMap<RackModule>::Builder modules(s.modules);
     IdMap<Cable>::Builder cables(s.cables);
     IdMap<Modulation>::Builder modulations(s.modulations);
+    IdMap<Scene>::Builder scenes(s.scenes);
+    IdMap<Clip>::Builder clips(s.clips);
     mapFromJson<TempoPointObj>(sub("tempo", "points"), "/tempo/points", Kind::TempoPoint, tempo,
                                errors, options, warnings);
     mapFromJson<MeterObj>(sub("tempo", "meters"), "/tempo/meters", Kind::Meter, meters, errors,
@@ -1679,6 +1754,10 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
                        warnings);
     mapFromJson<Modulation>(sub("modulations", nullptr), "/modulations", Kind::Modulation,
                             modulations, errors, options, warnings);
+    mapFromJson<Scene>(sub("scenes", nullptr), "/scenes", Kind::Scene, scenes, errors, options,
+                       warnings);
+    mapFromJson<Clip>(sub("clips", nullptr), "/clips", Kind::Clip, clips, errors, options,
+                      warnings);
     // fx live under "fx" (a top-level collection keyed by fx id).
     IdMap<FxInstance>::Builder fx(s.fx);
     mapFromJson<FxInstance>(sub("fx", nullptr), "/fx", Kind::Fx, fx, errors, options, warnings);
@@ -1744,6 +1823,8 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
     s.modules = modules.build();
     s.cables = cables.build();
     s.modulations = modulations.build();
+    s.scenes = scenes.build();
+    s.clips = clips.build();
     // A file that went through an older build (amendment G-c): it kept the
     // routes as an unknown section but not their counter, and may have
     // deleted what they point at. Never fail the open for that.
@@ -1760,6 +1841,22 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
     for (const auto& [id, why] : dropUnplayableModulations(s))
         warn("project.modulation_dropped", "dropped modulation " + id.str() + ": " + why,
              "/modulations/" + id.str());
+    // Scenes and clips likewise (ADR-0097, G-c): counters past the highest
+    // id, and clips whose track, scene or takes went are dropped.
+    auto derive = [&](const auto& map, Kind kind) {
+        const auto saved = s.next[kind];
+        for (const auto& e : map) s.next[kind] = std::max(s.next[kind], e.id.n + 1);
+        if (s.next[kind] != saved)
+            warn("project.counter_derived",
+                 "next_ids." + std::string(prefix(kind)) + " was " + std::to_string(saved) +
+                     "; raised to " + std::to_string(s.next[kind]) + ", past the highest " +
+                     std::string(prefix(kind)) + " id",
+                 "/project/next_ids/" + std::string(prefix(kind)));
+    };
+    derive(s.scenes, Kind::Scene);
+    derive(s.clips, Kind::Clip);
+    for (const auto& [id, why] : dropStrayClips(s))
+        warn("project.clip_dropped", "dropped clip " + id.str() + ": " + why, "/clips/" + id.str());
     if (warnings)
         for (const auto& [envelope, given] : derivedItems) {
             auto expected = json::Value::array();

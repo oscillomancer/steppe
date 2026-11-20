@@ -32,7 +32,11 @@ Result<json::Value> invoke(const char* name, json::Value args, Context& ctx) {
 
 // The item holding `take` (its owner, model::takeOwner).
 Result<Id> itemOfTake(const model::Session& s, Id take, const std::string& path) {
-    if (const auto owner = model::takeOwner(s, take)) return *owner;
+    if (const auto owner = model::takeOwner(s, take)) {
+        if (owner->kind == model::Kind::Item) return *owner;
+        return Error("item.kind", take.str() + " belongs to clip " + owner->str(), path,
+                     "this command takes an item's take; a clip's takes are edited from the clip");
+    }
     return Error("take.orphan", take.str() + " belongs to no item", path,
                  "use a take from take.list");
 }

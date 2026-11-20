@@ -50,7 +50,8 @@ inline Status checkUnlocked(const model::Session& s, model::Id item, std::string
     return {};
 }
 inline Status checkUnlockedTake(const model::Session& s, model::Id take, std::string path) {
-    if (const auto owner = model::takeOwner(s, take))
+    // A clip has no lock (ADR-0097); an item's take follows its item.
+    if (const auto owner = model::takeOwner(s, take); owner && owner->kind == model::Kind::Item)
         return checkUnlocked(s, *owner, std::move(path));
     return {};
 }

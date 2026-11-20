@@ -105,7 +105,7 @@ TEST_CASE("modulation: a route saves, reopens and serializes the same") {
     CHECK(Id::parse("mo_1")->kind == Kind::Module);
 
     const std::string bytes = serializeProject(*s);
-    CHECK(bytes.find("\"supple.project/2.16\"") != std::string::npos);
+    CHECK(bytes.find("\"supple.project/2.18\"") != std::string::npos);
     auto doc = json::parse(bytes).value();
     REQUIRE(doc.find("modulations"));
     json::Value& m = doc["modulations"]["mr_1"];

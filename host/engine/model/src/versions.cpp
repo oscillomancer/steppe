@@ -87,6 +87,10 @@ EntryInfo entryInfo(const Session& s, Id id) {
             return info(s.cables, id);
         case Kind::Modulation:
             return info(s.modulations, id);
+        case Kind::Scene:
+            return info(s.scenes, id);
+        case Kind::Clip:
+            return info(s.clips, id);
         // Kinds with no Session collection. No `default`: a new kind must be
         // placed here or above, or the build fails (-Wswitch).
         case Kind::Lane:
@@ -141,6 +145,10 @@ json::Value objectJson(const Session& s, Id id) {
             return enc(s.cables);
         case Kind::Modulation:
             return enc(s.modulations);
+        case Kind::Scene:
+            return enc(s.scenes);
+        case Kind::Clip:
+            return enc(s.clips);
         case Kind::Lane:
         case Kind::RenderJob:
             return {};
@@ -196,6 +204,10 @@ const json::Value* objectSchema(const Session& s, Id id) {
             return &schemaFor(s.cables);
         case Kind::Modulation:
             return &schemaFor(s.modulations);
+        case Kind::Scene:
+            return &schemaFor(s.scenes);
+        case Kind::Clip:
+            return &schemaFor(s.clips);
         case Kind::Lane:
         case Kind::RenderJob:
             return nullptr;
@@ -619,6 +631,8 @@ struct VersionStore::RetainedSize {
         map(v.id, s.modules);
         map(v.id, s.cables);
         map(v.id, s.modulations);
+        map(v.id, s.scenes);
+        map(v.id, s.clips);
         for (const auto& [hash, blob] : s.blobs)
             add(v.id, blob.get(), sizeof(Blob) + blob->data.size());
     }
@@ -1352,13 +1366,16 @@ Result<VersionStore> VersionStore::restore(SavedHistory saved) {
     VersionStore store;
     store.versions_ = std::move(saved.versions);
     store.next_ = saved.next;
-    // A branch whose saved mr counter is missing (0: a file from before
-    // 2.16, or one that went through an older build, G-c) allocates past
-    // every saved state's: each state derived its own from its routes, but
-    // an id one lineage removed may live on in another branch.
-    std::uint32_t modulations = 1;
+    // A branch whose saved mr, sc or cl counter is missing (0: a file from
+    // before 2.16 or 2.18, or one that went through an older build, G-c)
+    // allocates past every saved state's: each state derived its own from
+    // its objects, but an id one lineage removed may live on in another
+    // branch.
+    constexpr Kind kLate[] = {Kind::Modulation, Kind::Scene, Kind::Clip};
+    Counters highest;
+    for (Kind k : kLate) highest[k] = 1;
     for (const auto& [unused, v] : store.versions_)
-        modulations = std::max(modulations, v.session->next[Kind::Modulation]);
+        for (Kind k : kLate) highest[k] = std::max(highest[k], v.session->next[k]);
     for (auto& sb : saved.branches) {
         const std::string path = json::pointerJoin("/branches/refs", sb.name);
         if (store.branches_.contains(sb.name)) return bad("branch listed twice", path);
@@ -1385,12 +1402,13 @@ Result<VersionStore> VersionStore::restore(SavedHistory saved) {
             below = *it;
         }
         Counters allocated = sb.allocated;
-        const bool lostModulations = allocated[Kind::Modulation] == 0;
+        Counters lost;
+        for (Kind k : kLate) lost[k] = allocated[k] == 0 ? 1 : 0;
         const auto& counters = store.versions_.at(sb.head).session->next;
         for (std::size_t k = 0; k < kKindCount; ++k)
             allocated.next[k] = std::max(allocated.next[k], counters.next[k]);
-        if (lostModulations)
-            allocated[Kind::Modulation] = std::max(allocated[Kind::Modulation], modulations);
+        for (Kind k : kLate)
+            if (lost[k]) allocated[k] = std::max(allocated[k], highest[k]);
         store.branches_.emplace(sb.name, Branch{sb.head, sb.base, std::move(sb.redo), allocated});
     }
     if (!store.branches_.contains("main")) return bad("there is no main branch", "/branches/refs");

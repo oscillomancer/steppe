@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 // Who holds a take (ADR-0097, "The take owner"). Every take belongs to
-// exactly one owner. Today the owners are items; clips join them with the
-// launcher's kinds. Code that asks which owner holds a take, or what an owner
-// holds, goes through here rather than scanning `items`.
+// exactly one owner, an item or a clip. Code that asks which owner holds a
+// take, or what an owner holds, goes through here rather than scanning
+// `items` or `clips`.
 #pragma once
 
 #include <cstddef>
@@ -15,9 +15,9 @@
 
 namespace supple::model {
 
-// The owner of `take` (an it_* id), or nullopt when nothing holds it. A
-// broken session that lists the take under several owners gives the first
-// in id order.
+// The owner of `take` (an it_* or cl_* id), or nullopt when nothing holds
+// it. A broken session that lists the take under several owners gives the
+// first: items before clips, each in id order.
 std::optional<Id> takeOwner(const Session& s, Id take);
 
 // The takes `owner` holds, in its order; nullptr when `owner` is not an

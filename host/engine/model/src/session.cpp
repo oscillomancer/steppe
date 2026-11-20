@@ -3,6 +3,7 @@
 #include "supple/model/session.h"
 #include "supple/model/audio_warp.h"
 #include "supple/model/groups.h"
+#include "supple/model/launcher.h"
 #include "supple/model/numeric.h"
 #include "supple/model/take_owner.h"
 
@@ -54,9 +55,9 @@ const Route* midiInputRoute(const Session& s, Id track) {
 // --- ids -------------------------------------------------------------------------------
 
 namespace {
-constexpr std::string_view kPrefixes[kKindCount] = {"tr", "it", "tk", "md", "mi", "fx", "sd",
-                                                    "en", "ai", "mk", "rg", "tp", "ts", "gr",
-                                                    "ln", "rj", "rk", "mo", "cb", "mr"};
+constexpr std::string_view kPrefixes[kKindCount] = {"tr", "it", "tk", "md", "mi", "fx", "sd", "en",
+                                                    "ai", "mk", "rg", "tp", "ts", "gr", "ln", "rj",
+                                                    "rk", "mo", "cb", "mr", "sc", "cl"};
 
 // Ids parse by prefix, so every kind needs one and no two may share it. A
 // kind added without a prefix leaves an empty one at the end of the array
@@ -213,6 +214,8 @@ Session EditTxn::preview() const {
     apply<RackModule>(s, builders_);
     apply<Cable>(s, builders_);
     apply<Modulation>(s, builders_);
+    apply<Scene>(s, builders_);
+    apply<Clip>(s, builders_);
     s.project = project_;
     s.blobs = blobs_;
     s.next = next_;
@@ -258,6 +261,8 @@ Result<Session> EditTxn::commit() {
     apply<RackModule>(s, builders_);
     apply<Cable>(s, builders_);
     apply<Modulation>(s, builders_);
+    apply<Scene>(s, builders_);
+    apply<Clip>(s, builders_);
     s.project = project_;
     s.blobs = blobs_;
     s.next = next_;
@@ -425,7 +430,8 @@ struct Checker {
             if (!(it.length >= 0)) fail(at("items", e.id, "length"), "negative length");
         }
         for (const auto& e : s.takes) {
-            if (!owners.of(e.id)) fail(at("takes", e.id), e.id.str() + " belongs to no item");
+            if (!owners.of(e.id))
+                fail(at("takes", e.id), e.id.str() + " belongs to no item or clip");
             const Take& t = *e.value;
             if (t.source) {
                 const bool ok = (t.source->kind == Kind::Media && s.media.contains(*t.source)) ||
@@ -1091,6 +1097,7 @@ Status checkInvariants(const Session& s) {
     c.racks();
     c.modulations();
     c.envelopes();
+    checkLauncher(s, c.errors);  // scenes and clips (ADR-0097)
     if (c.errors.empty()) return validateFrozenState(s);
     if (c.errors.size() == 1) return c.errors.front();
     Error e("model.invariant", std::to_string(c.errors.size()) + " invariant violations");
@@ -1167,6 +1174,8 @@ std::vector<ObjectDiff> diff(const Session& a, const Session& b) {
     diffMap(a.modules, b.modules, out);
     diffMap(a.cables, b.cables, out);
     diffMap(a.modulations, b.modulations, out);
+    diffMap(a.scenes, b.scenes, out);
+    diffMap(a.clips, b.clips, out);
     return out;
 }
 

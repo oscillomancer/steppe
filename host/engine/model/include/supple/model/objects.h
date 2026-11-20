@@ -53,6 +53,19 @@ struct PanLaw {
 // (mid/side width, then pan).
 enum class PanMode : std::uint8_t { Pan, Dual, Width };
 
+// When a launch lands (ADR-0097): the next bar, beat or grid line, or as
+// soon as the executors can agree (None).
+enum class LaunchQuantize : std::uint8_t {
+    Bar,
+    Beat,
+    Half,
+    Quarter,
+    Eighth,
+    Sixteenth,
+    ThirtySecond,
+    None
+};
+
 struct Project {
     std::string name, title, author, notes;
     double sampleRate = 48000.0;
@@ -68,7 +81,8 @@ struct Project {
     std::vector<Id> masters{kMaster};
     std::uint64_t seed = 0;
     std::uint64_t historyBudgetBytes = 1ULL << 30;
-    json::Value render = json::Value::object();  // render.* defaults and matrix
+    json::Value render = json::Value::object();           // render.* defaults and matrix
+    LaunchQuantize launchQuantize = LaunchQuantize::Bar;  // clips' default (ADR-0097)
     bool operator==(const Project&) const = default;
 };
 
@@ -543,6 +557,46 @@ struct Modulation {
     bool operator==(const Modulation&) const = default;
 };
 inline constexpr std::size_t kMaxModulations = 4096;
+
+// The clip launcher (ADR-0097, session-model "Scenes and clips"). A scene is
+// a column; a clip is a channel's material for one scene, holding ordinary
+// takes. A clip is not an Item: timeline code never sees one.
+struct Scene {
+    std::string name, color;
+    int order = 0;  // the column; distinct across scenes, kept 0 .. n-1
+    bool operator==(const Scene&) const = default;
+};
+// The content window that repeats inside a clip, from its take's start
+// offset, in the clip's unit.
+struct ClipLoop {
+    bool on = false;
+    double start = 0.0, length = 0.0;
+    bool operator==(const ClipLoop&) const = default;
+};
+enum class ClipMode : std::uint8_t { Loop, Once };
+// Fixed when the clip is made: a take whose source does not match is
+// refused, so the unit never changes under a clip.
+enum class ClipKind : std::uint8_t { Midi, Audio };
+struct Clip {
+    Id track = kMaster;  // a channel
+    Id scene{Kind::Scene, 0};
+    ClipKind kind = ClipKind::Midi;
+    std::vector<Id> takes;
+    std::optional<Id> activeTake;
+    // The clip's period. Its unit, as loop's and its take envelopes', is
+    // beats for a MIDI clip and seconds of played take time (source time
+    // over the take's playrate) for an audio clip.
+    double length = 0.0;
+    ClipLoop loop;
+    ClipMode mode = ClipMode::Loop;
+    std::optional<LaunchQuantize> quantize;  // unset: the project's
+    std::string name, color;
+    bool mute = false;
+    double gainDb = 0.0;
+    bool operator==(const Clip&) const = default;
+};
+inline constexpr std::size_t kMaxScenes = 1024;
+inline constexpr std::size_t kMaxClips = 16384;
 
 struct Marker {
     double pos = 0.0;

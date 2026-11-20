@@ -44,6 +44,8 @@ struct Session {
     IdMap<RackModule> modules;
     IdMap<Cable> cables;
     IdMap<Modulation> modulations;                             // mr_* (ADR-0096)
+    IdMap<Scene> scenes;                                       // sc_* (ADR-0097)
+    IdMap<Clip> clips;                                         // cl_*
     std::map<std::string, std::shared_ptr<const Blob>> blobs;  // "sha256:<hex>"
     // Unknown top-level project sections (including extensions) survive
     // load/save; UI state belongs to the separate .ui.json sidecar.
@@ -75,6 +77,8 @@ struct TxnBuilders {
     std::optional<IdMap<RackModule>::Builder> modules;
     std::optional<IdMap<Cable>::Builder> cables;
     std::optional<IdMap<Modulation>::Builder> modulations;
+    std::optional<IdMap<Scene>::Builder> scenes;
+    std::optional<IdMap<Clip>::Builder> clips;
 };
 
 // Which map of the Session holds objects of type T, and their ID kind.
@@ -106,6 +110,8 @@ SUPPLE_MODEL_TRAITS(Rack, Rack, racks)
 SUPPLE_MODEL_TRAITS(RackModule, Module, modules)
 SUPPLE_MODEL_TRAITS(Cable, Cable, cables)
 SUPPLE_MODEL_TRAITS(Modulation, Modulation, modulations)
+SUPPLE_MODEL_TRAITS(Scene, Scene, scenes)
+SUPPLE_MODEL_TRAITS(Clip, Clip, clips)
 #undef SUPPLE_MODEL_TRAITS
 
 // One object-level change made by a transaction.
