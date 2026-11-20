@@ -224,6 +224,16 @@ def modulate(j):
                                                  rand["modulation"], macro["modulation"]]
     assert [m["depth"] for m in listed] == [0.25, -24.0, -12.0, 0.1], listed
 
+    # What feeds a route, and a route whose Mod Out input nothing feeds is inert.
+    assert listed[0]["fed_by"][0]["type"].endswith("lfo"), listed[0]
+    unfed = j.exec("modulation.add", {"source": {"module": duck["mod_out"], "input": "in_9"},
+                                      "target": {"fx": "fx_4", "param": "gain"}, "depth": 0.1},
+                   "A route from an input nothing is cabled into.")
+    row = next(m for m in j.exec("modulation.list")["modulations"]
+               if m["modulation"] == unfed["modulation"])
+    assert row["fed_by"] == [] and row["inert"] == "source", row
+    j.exec("modulation.remove", {"modulation": unfed["modulation"]}, "Take it out again.")
+
     # Refusals, each with a code, a path and a hint.
     j.refused("modulate", {"target": {"fx": "fx_1", "param": "pad1.tune"}, "source": "lfo"},
               "modulation.target", "Drumlin's parameters are not modulatable yet.")
@@ -321,25 +331,53 @@ def measure(j, lfo_made, duck_made, rand_made, macro_made):
     ducked = j.render()
     dip = [a - b for a, b in zip(momentary(steady), momentary(ducked))]
     # The level falls on each kick (one a bar, four in the eight seconds) and comes back.
-    padded = [0.0] + dip + [0.0]
-    falls = sum(1 for i in range(1, len(padded) - 1)
-                if padded[i] > 2.5 and padded[i - 1] <= padded[i] > padded[i + 1])
     assert max(dip) > 2.5 and min(dip) < 0.5, dip
-    assert falls == 4, (falls, dip)
+    assert dip_count(dip) == 4, dip
     j.exec("track.set", {"track": "tr_3", "mute": False})
     return flat, waved
 
 
-def stems(j):
-    """Stems and taps of a modulated track (reported defect, see the report)."""
-    response = j.c.send("tools/call", {"name": "exec", "arguments": {
-        "command": "analyze.track", "args": {"track": "tr_3", "start_beat": 0, "end_beat": 8}}})
-    result = response["result"]
-    if result.get("isError"):
-        assert result["structuredContent"]["code"] == "engine.cycle", result
-        print("KNOWN DEFECT: analyze.track of a modulated track fails with engine.cycle")
-    else:
-        assert result["structuredContent"]["loudness"], result
+def stem_series(j, name):
+    """The momentary loudness of one track's stem, from a stems render of the first 16 beats."""
+    files = j.exec("render.stems", {"start_beat": 0, "end_beat": 16},
+                   "Render the stems.")["files"]
+    stem = next(f for f in files if f["path"].endswith(f"-{name}.wav"))
+    report = j.exec("analyze.render", {"render": stem["render"], "detail": "full"},
+                    f"Read the {name} stem's loudness over time.")
+    return [v for v in report["loudness"]["momentary_lufs"] if v is not None]
+
+
+def stems(j, lfo, duck, rand):
+    """A stem or a track analysis keeps what modulates the track (with the drums back in the mix)."""
+    every = [lfo, duck, rand]
+    j.exec("track.set", {"track": "tr_1", "volume_db": 0}, "Put the drums back in the mix.")
+    only(j, [lfo, duck, rand], every)
+    tap = j.exec("analyze.track", {"track": "tr_3", "start_beat": 0, "end_beat": 8},
+                 "Analyze the modulated Keys track.")
+    assert tap["loudness"]["integrated_lufs"] is not None, tap
+
+    # The Bass stem, ducked by the audible drums: it falls at each of the four kicks.
+    only(j, [], every)
+    steady = stem_series(j, "Bass")
+    only(j, [duck], every)
+    ducked = stem_series(j, "Bass")
+    dip = [a - b for a, b in zip(steady, ducked)]
+    assert dip_count(dip) == 4 and max(dip) > 2.5, dip
+
+    # The Keys stem carries the LFO on the effect: its level swings as the LFO does.
+    only(j, [], every)
+    flat = stem_series(j, "Keys")
+    only(j, [lfo], every)
+    waved = stem_series(j, "Keys")
+    wave = [a - b for a, b in zip(waved, flat)]
+    assert swing(wave) > 8.0 and 6 <= crossings(wave) <= 10, wave
+
+
+def dip_count(dip):
+    """How many separate falls of at least 2.5 LU a difference series holds."""
+    padded = [0.0] + dip + [0.0]
+    return sum(1 for i in range(1, len(padded) - 1)
+               if padded[i] > 2.5 and padded[i - 1] <= padded[i] > padded[i + 1])
 
 
 def main():
@@ -364,7 +402,7 @@ def main():
             measure(j, lfo, duck, rand, macro)
             edit_routes(j, macro["modulation"])
             lfo, duck, rand = (m["modulation"] for m in (lfo, duck, rand))
-            stems(j)
+            stems(j, lfo, duck, rand)
 
             # Everything on, then twice the same, then saved and reopened.
             only(j, [lfo, duck, rand], [lfo, duck, rand])
