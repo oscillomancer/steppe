@@ -234,9 +234,22 @@ def modulate(j):
     assert row["fed_by"] == [] and row["inert"] == "source", row
     j.exec("modulation.remove", {"modulation": unfed["modulation"]}, "Take it out again.")
 
+    # Drumlin's parameters are not modulatable, but its tune is automatable and
+    # continuous: a route reaches it through its envelope (ADR-0096 M4), which
+    # modulate adds first, in the same undo step.
+    tune = j.exec("modulate", {"target": {"fx": "fx_1", "param": "pad1.tune"},
+                               "source": "lfo"}, "Drumlin's tune, through its envelope.")
+    row = next(m for m in j.exec("modulation.list")["modulations"]
+               if m["modulation"] == tune["modulation"])
+    assert "inert" not in row, row
+    envelopes = j.exec("env.list")["envelopes"]
+    assert any(e["target"] == "fx_1" and e["param"] == "pad1.tune" and e["active"]
+               for e in envelopes), envelopes
+    j.undo()
+    assert tune["modulation"] not in [m["modulation"]
+                                      for m in j.exec("modulation.list")["modulations"]]
+
     # Refusals, each with a code, a path and a hint.
-    j.refused("modulate", {"target": {"fx": "fx_1", "param": "pad1.tune"}, "source": "lfo"},
-              "modulation.target", "Drumlin's parameters are not modulatable yet.")
     error = j.refused("modulate", {"target": {"fx": "fx_1", "param": "kick_level"},
                                    "source": "lfo"}, "modulation.target",
                       "A name Drumlin does not have: its hint says nothing is modulatable.")
