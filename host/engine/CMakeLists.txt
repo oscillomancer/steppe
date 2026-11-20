@@ -163,6 +163,14 @@ if(SUPPLE_BUILD_TESTS)
       COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/integration/mcp_journey.py
               $<TARGET_FILE:${PRODUCT_SLUG}-engine> ${CMAKE_BINARY_DIR}/plugins/clap)
     set_tests_properties(engine.mcp-journey PROPERTIES LABELS "engine;slow")
+    # Batch 2 acceptance: the clip launcher, driven as an agent would: scenes and clips,
+    # launches on the dummy backend read back with launch.state, a song built from
+    # scenes, renders compared with what the scenes hold. It decides nothing by a clock:
+    # the live stage polls launch.state.
+    add_test(NAME engine.mcp-journey-launcher
+      COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/integration/mcp_journey_launcher.py
+              $<TARGET_FILE:${PRODUCT_SLUG}-engine> ${CMAKE_BINARY_DIR}/plugins/clap)
+    set_tests_properties(engine.mcp-journey-launcher PROPERTIES LABELS "engine;slow")
   endif()
 endif()
 
