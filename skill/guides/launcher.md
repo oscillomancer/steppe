@@ -62,11 +62,36 @@ make bars short.
 A frozen track plays its print: `launch.clip` refuses it (`track.frozen`) and
 `launch.scene` skips it with a warning. `launch.stop` on a track with no clips is
 `launch.track`; `launch.scene` on a scene nothing can play is `launch.scene`. A
-master playrate refuses launches (`launch.playrate`). A clip's FX and envelopes
-and its MIDI reaching a rack's Notes module or a MIDI send do not play yet.
+master playrate refuses launches (`launch.playrate`). A clip's FX and envelopes do
+not play yet; a rack's Notes module and the track's MIDI sends do follow launches.
+
+Two things to expect when polling. A launch given just as the transport started (the
+first launch while stopped, or right after a seek) can be refused with `launch.later`
+("the transport is relocating"): launch again in a moment. And a stopped transport does
+not advance, so a `launch.stop` or `launch.arrangement` given while it is stopped stays
+in `queued` until playing resumes: send it while the transport runs.
 
 **Renders play the arrangement only.** `render.mix` while a clip plays gives the
 same audio as without it. To hear (measure) a scene, put it on the timeline.
+
+## Capturing a performance
+
+- `launch.capture {on: true}` keeps every launch with the running time it applied at
+  (from where playing starts, when stopped); `{on: false}` ends it and answers
+  `{on, from, to}`, the span in beats. A stop, a seek or a loop change ends a capture
+  that has run. `launch.state` has `capturing`: whether one is on.
+- `launch.commit {pooled?}` lays the capture on the timeline as items, in one undo
+  step, by running time from `from`: a launch heard s seconds in lands s seconds after
+  it, however the transport loop jumped meanwhile. On each track that left the
+  arrangement, its clips and its stopped or held stretches replace what the timeline
+  had there; tracks that stayed on the arrangement are untouched. Each clip becomes
+  copies of its takes at the phase heard, MIDI copied (shared with `pooled: true`),
+  and the 5 ms switches are item fades. It answers `{tracks, items, from, to}`.
+  Nothing captured is `launch.capture`. Committing again writes the same performance
+  over itself.
+- A committed performance renders as what was launched: unlike a clip playing live,
+  its items are on the timeline. To check, render the span, or lay the same scenes
+  with `arrangement.build` and compare away from the switches.
 
 ## From scenes to a song
 
