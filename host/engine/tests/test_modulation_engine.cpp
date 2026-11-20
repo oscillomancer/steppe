@@ -1055,3 +1055,50 @@ TEST_CASE(
     CHECK(double(cap[9000]) == doctest::Approx(gainAt(0.1)).epsilon(1e-4));
     CHECK(double(cap[19000]) == doctest::Approx(gainAt(0)).epsilon(1e-4));
 }
+
+TEST_CASE("modulation: a handover that also changes the routes sends the new offsets" *
+          doctest::description("rt")) {
+    // Review round 54's open question: the memo carried when a track goes
+    // live (arming B) must describe what its instance last heard. A constant
+    // source makes a stale memo visible: a matching sum would not be resent.
+    // Arming B and halving the depth at once, then arming off and removing
+    // the route at once: each level is the new one, in both executors.
+    const Emit on("playing", 0.1);
+    model::EditTxn a(on.s, 2);
+    a.modify<model::Track>(on.b, [](model::Track& tr) { tr.record.armed = true; });
+    a.modify<model::Modulation>(on.route, [](model::Modulation& m) { m.depth = 0.05; });
+    const auto live = commit(a);
+    model::EditTxn r(live, 3);
+    r.modify<model::Track>(on.b, [](model::Track& tr) { tr.record.armed = false; });
+    r.remove<model::Modulation>(on.route);
+    const auto gone = commit(r);
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 96}));
+        const auto run = [&](std::int64_t blocks) {
+            if (options.anticipative)
+                runAheadOnState(engine, backend, blocks, 96);
+            else
+                backend.run(blocks);
+        };
+        REQUIRE(engine.load(on.s));
+        engine.play();
+        run(100);
+        REQUIRE(engine.load(live));
+        run(150);
+        REQUIRE(engine.load(gone));
+        run(150);
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+        const auto& cap = backend.capture().channels[0];
+        CHECK(double(cap[9000]) == doctest::Approx(gainAt(0.1)).epsilon(1e-4));
+        // Loads at 9600 and 24000; the anticipative renderer takes each up to
+        // its render-ahead later, so read near each segment's end.
+        CHECK(double(cap[23000]) == doctest::Approx(gainAt(0.05)).epsilon(1e-4));
+        CHECK(double(cap[38000]) == doctest::Approx(gainAt(0)).epsilon(1e-4));
+    }
+}
