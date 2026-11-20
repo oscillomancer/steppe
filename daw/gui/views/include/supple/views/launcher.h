@@ -8,6 +8,7 @@
 #pragma once
 
 #include <cstddef>
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <optional>
@@ -18,7 +19,9 @@
 #include "supple/base/result.h"
 #include "supple/json/value.h"
 #include "supple/model/session.h"
+#include "supple/peaks/peaks.h"
 #include "supple/ui/geometry.h"
+#include "supple/ui/gl.h"
 #include "supple/ui/node.h"
 #include "supple/ui/theme.h"
 
@@ -85,8 +88,13 @@ ui::Color clipColor(const ui::Theme& theme, const model::Session& session, const
 class LauncherPane : public ui::Node {
   public:
     static constexpr float kEdge = 4;  // the resize zone at the pane's right edge
-    explicit LauncherPane(ArrangeView& view);
+    // `peaks` and `resolve` draw audio clips' waveforms, as the lanes do.
+    using Resolve = std::function<std::filesystem::path(const model::MediaSource&)>;
+    LauncherPane(ArrangeView& view, peaks::PeakService& peaks, Resolve resolve);
     void paint(ui::Canvas& canvas) override;
+    // The clips' content (notes or waveform, over one period) by the shared
+    // item-body functions (item_body.h).
+    void paintGl(const ui::GlFrame& frame) override;
     bool onPointer(const ui::PointerEvent& e) override;
     ui::Cursor cursorAt(ui::Point p) const override;
     // A row's cell in a scene column (window coordinates).
@@ -96,11 +104,20 @@ class LauncherPane : public ui::Node {
     // What the last paint drew (tests).
     struct Stats {
         std::size_t cells = 0, clips = 0, empty = 0;
-        std::vector<std::string> names;  // the clips' names as drawn
+        std::vector<std::string> names;                   // the clips' names as drawn
+        std::size_t notes = 0, columns = 0, pending = 0;  // the last paintGl's
     } stats;
 
   private:
+    // A clip's content area: its cell under the name bar.
+    static ui::Rect bodyRect(const ui::Rect& cell);
     ArrangeView& view_;
+    peaks::PeakService& peaks_;
+    Resolve resolve_;
+    std::optional<ui::RectRenderer> notes_;
+    std::optional<ui::StripRenderer> strips_;
+    bool glFailed_ = false;
+    const ui::Theme* theme_ = nullptr;  // from the last paint (paintGl has no canvas)
     bool resizing_ = false;
     float pressX_ = 0, pressWidth_ = 0;
 };

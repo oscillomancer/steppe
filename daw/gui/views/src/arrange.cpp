@@ -1315,7 +1315,7 @@ ArrangeView::ArrangeView(peaks::PeakService& peaks, Resolve resolve, TransportSo
 
     tcp_ = &body.emplace<TcpPanel>(layout_, view_, std::move(forward));
     tcp_->layout.width = ui::SizeRule::fixed(kTcpWidth);
-    launcherPane_ = &body.emplace<LauncherPane>(*this);
+    launcherPane_ = &body.emplace<LauncherPane>(*this, peaks_, resolve_);
     launcherPane_->visible = false;
     auto& lanesCol = body.emplace<Node>("lanes-column");
     lanesColumn_ = &lanesCol;

@@ -183,6 +183,8 @@ TEST_CASE("launcher: hidden without scenes; with them, a column per scene on the
     CHECK(pane.stats.clips == 3);
     CHECK(pane.stats.empty == 9);
     CHECK(pane.stats.names == std::vector<std::string>{"Kit A", "Kit B", "Root"});
+    // Each clip's content by the shared item-body drawing: 4 + 3 + 2 notes.
+    CHECK(pane.stats.notes == 9);
     f.snapshot("launcher-pane.png");
 }
 

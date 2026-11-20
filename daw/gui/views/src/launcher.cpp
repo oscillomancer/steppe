@@ -9,6 +9,7 @@
 #include "supple/ui/canvas.h"
 #include "supple/ui/theme.h"
 #include "supple/views/arrange.h"
+#include "supple/views/item_body.h"
 #include "supple/views/lanes.h"
 
 namespace supple::views {
@@ -60,9 +61,17 @@ void drawPlay(ui::Canvas& c, const ui::Rect& box, ui::Color color) {
 
 // ----------------------------------------------------------------- the pane
 
-LauncherPane::LauncherPane(ArrangeView& view) : Node("launcher"), view_(view) {
+LauncherPane::LauncherPane(ArrangeView& view, peaks::PeakService& peaks, Resolve resolve)
+    : Node("launcher"), view_(view), peaks_(peaks), resolve_(std::move(resolve)) {
     interactive = true;
     clipsChildren = true;
+    drawsGl = true;
+}
+
+ui::Rect LauncherPane::bodyRect(const ui::Rect& cell) {
+    const ui::Rect inner{cell.x + 2, cell.y + 2, cell.w - 4, cell.h - 5};
+    const float bar = std::min(Lanes::kNameBar, inner.h);
+    return {inner.x + 1, inner.y + bar + 1, inner.w - 2, std::max(0.0f, inner.h - bar - 2)};
 }
 
 LauncherColumns LauncherPane::columns() const {
@@ -90,6 +99,7 @@ ui::Rect LauncherPane::arrRect(std::size_t row) const {
 void LauncherPane::paint(ui::Canvas& c) {
     stats = {};
     const ui::Theme& t = c.theme();
+    theme_ = &t;
     const ui::Rect b = bounds();
     const model::Session& s = view_.session();
     const TrackLayout& layout = view_.trackLayout();
@@ -147,6 +157,77 @@ void LauncherPane::paint(ui::Canvas& c) {
     c.fillRect({cols.arrX(), b.y, 1, b.h}, t.color("rule"));
     c.fillRect({b.right() - 1, b.y, 1, b.h}, t.color("rule"));
     c.restore();
+}
+
+void LauncherPane::paintGl(const ui::GlFrame& frame) {
+    if (glFailed_ || !theme_) return;
+    if (!notes_) {
+        auto n = ui::RectRenderer::create();
+        auto s = ui::StripRenderer::create();
+        if (!n || !s) {
+            glFailed_ = true;
+            return;
+        }
+        notes_.emplace(std::move(*n));
+        strips_.emplace(std::move(*s));
+    }
+    const ui::Theme& t = *theme_;
+    const model::Session& s = view_.session();
+    const TrackLayout& layout = view_.trackLayout();
+    const LauncherColumns cols = columns();
+    const ui::Rect clip = frame.clip.intersect(bounds());
+    stats.notes = stats.columns = stats.pending = 0;
+    const std::uint32_t border = ui::packRgba(t.color("ground").withAlpha(0.7f));
+    for (std::size_t i = 0; i < layout.rowCount(); ++i) {
+        const TrackRow& row = layout.rows()[i];
+        const ui::Rect rr = arrRect(i);
+        if (rr.bottom() <= clip.y) continue;
+        if (rr.y >= clip.bottom()) break;
+        if (row.lane() || row.type != model::StripType::Channel) continue;
+        for (std::size_t col = 0; col < cols.scenes.size(); ++col) {
+            ui::Rect body = bodyRect(cellRect(i, col));
+            // Cut at the Arr column; a cell scrolled out of view is skipped.
+            body.w = std::min(body.right(), cols.scenesRight()) - body.x;
+            if (body.w <= 2 || body.h < 4 || body.right() <= bounds().x) continue;
+            const auto id = clipIn(s, row.track, cols.scenes[col]);
+            const model::Clip* c = id ? s.clips.find(*id) : nullptr;
+            if (!c || c->length <= 0 || !c->activeTake) continue;
+            const model::Take* take = s.takes.find(*c->activeTake);
+            if (!take || !take->source) continue;
+            const float dim = c->mute ? 0.45f : 1.0f;
+            const ui::Color color = clipColor(t, s, *c);
+            const ui::Rect full = bodyRect(cellRect(i, col));  // the period's span
+            if (const model::MidiSource* src = s.midi.find(*take->source)) {
+                MidiWindow window;
+                window.xAt = [&](double beat) {
+                    return full.x + static_cast<float>(beat / c->length) * full.w;
+                };
+                window.length = c->length;
+                window.from = 0;
+                window.to = c->length;
+                window.end = body.right();
+                window.loop = c->loop.on;
+                stats.notes +=
+                    drawMidiBody(*notes_, body, *take, *src, window,
+                                 ui::packRgba(Lanes::noteColor(t, color).withAlpha(dim)), border);
+            } else if (const model::MediaSource* m = s.media.find(*take->source)) {
+                auto pyramid = peaks_.get(m->hash, resolve_(*m));
+                if (!pyramid) {
+                    ++stats.pending;  // the worker's delivery repaints
+                    continue;
+                }
+                const AudioWindow window{
+                    [&](float x) { return static_cast<double>((x - full.x) / full.w) * c->length; },
+                    static_cast<double>(full.w) / c->length, c->loop.on};
+                stats.columns += drawAudioBody(
+                    *strips_, frame, body, *pyramid, *take, window,
+                    static_cast<float>(std::pow(10.0, (c->gainDb + take->gainDb) / 20.0)),
+                    ui::packRgba(t.color("ink").withAlpha(0.8f * dim)));
+            }
+        }
+    }
+    strips_->flush(frame);
+    notes_->flush(frame);
 }
 
 bool LauncherPane::onPointer(const ui::PointerEvent& e) {
