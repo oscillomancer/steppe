@@ -213,8 +213,8 @@ void dumpEvents(Dump& d, std::string_view a, const std::vector<TimedEvent>& even
 
 void dumpStage(Dump& d, std::string_view a, const Stage& st) {
     [[maybe_unused]] const auto& [rackMidiBase, busPart, busMerge, busLive, midiOnly, busBase,
-                                  busHeld, busControllers, instance, fx, lanes, mods, modRoutes,
-                                  modEvents, modHeard, modEpoch, bypass, instrument,
+                                  busHeld, busControllers, instance, fx, lanes, laneModRoutes, mods,
+                                  modRoutes, modEvents, modHeard, modEpoch, bypass, instrument,
                                   autoBypassOnSilence, sleeping, processed, inputLatency, rateLive,
                                   callbackBypass, wet, appliedWet, rampFromWet, rampToWet,
                                   wetRampLeft, preserveDryOnLocate, latency, dry, out, dryBuf,
@@ -240,7 +240,15 @@ void dumpStage(Dump& d, std::string_view a, const Stage& st) {
         d.put(la, "clap", lane.clapId);
         d.put(la, "described", lane.spec != nullptr);
         dumpAutomation(d, at(la, "curve"), lane.curve);
+        // Routes it carries (M4); the held sum is runtime state.
+        if (lane.modCount) {
+            d.put(la, "modRoutes", std::array{lane.modFirst, lane.modCount});
+            d.put(la, "modRange", lane.modRange);
+            d.put(la, "range", std::array{lane.lo, lane.hi});
+            d.put(la, "telemetry", lane.telemetry);
+        }
     }
+    d.size(a, "laneModRoutes", st.laneModRoutes);
     // Modulation slots; the memo in them is runtime state.
     d.put(a, "mods", static_cast<std::uint64_t>(st.mods.size()));
     for (std::size_t i = 0; i < st.mods.size(); ++i) {
@@ -561,7 +569,7 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
 // A modulation edge (ADR-0096); its delay's contents are runtime state.
 void dumpModEdge(Dump& d, std::string_view a, const ModEdge& e) {
     [[maybe_unused]] const auto& [route, from, to, fromId, toId, modOut, input, target, stage,
-                                  inputStage, clapId, depth, enabled, inert, tap, delay,
+                                  inputStage, clapId, viaLane, depth, enabled, inert, tap, delay,
                                   preserveDelayOnLocate, values] = e;
     d.put(a, "route", e.route);
     d.put(a, "from", static_cast<std::uint64_t>(e.from));
@@ -576,6 +584,7 @@ void dumpModEdge(Dump& d, std::string_view a, const ModEdge& e) {
     d.put(a, "tap", e.tap);
     d.put(a, "delay", e.delay.length);
     d.put(a, "clap", e.clapId);
+    d.put(a, "viaLane", e.viaLane);
     d.size(a, "values", e.values);
 }
 
