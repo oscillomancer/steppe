@@ -1109,8 +1109,11 @@ and naming. All `edit` unless marked (q) query or (a) action.
   first named Modulators with one, else a new one on a new channel named
   Modulators. It cables the module's first output into the first Mod Out
   input with no cable or route, adding a Mod Out when none is free. A
-  follower gets an In module and a send from `from`. `modulation.cycle`
-  at `/from` when the follower would hear its own target.)
+  follower gets an In module and a send from `from`. A candidate rack
+  that would close a loop is passed over for the next, else a new
+  Modulators rack: one that already reaches `from`, or one the target
+  reaches. `modulation.cycle` at `/from` only for a real cycle, when the
+  target feeds `from`, itself included. A chosen `rack` is used as given.)
 - **automation**: `env.add {target}`, `env.remove`, `env.set {mode, active,
   …}`, `env.points.set {env, points, range?}`, `env.points.add`,
   `env.points.remove {range}`, `env.add {take, param}` (take envelopes),

@@ -926,8 +926,11 @@ command uses the first rack on the target's track that has a Mod Out,
 else the first rack named Modulators. If neither exists, it adds a rack
 on a new channel named Modulators. It adds the module, cables it into
 the first free Mod Out input and makes the route. A follower also gets
-an In module and a send from `from`. A follower cannot listen to the
-track it modulates, or to a track that track feeds. Without a depth the
+an In module and a send from `from`. When that rack would feed back
+into itself, the command uses another Modulators rack, or adds one. That
+happens when the rack already drives the track the follower listens to,
+or already listens to the target. A follower cannot listen to the track
+it modulates, or to a track that track feeds. Without a depth the
 command uses a quarter of a parameter's range, 6 dB, or 50 %.
 `modulation.telemetry` reads each route's live offset and how far it
 can move its target, and `engine.status` counts modulation steps that
@@ -1574,7 +1577,7 @@ serves the running app's commands as MCP tools over stdio. What an agent
 does lands in the same undo history as your own edits. The bundled skill
 teaches the agent Steppe's commands, units and notation.
 
-By default, the engine exposes 37 common command tools plus `describe`, `exec`
+By default, the engine exposes 38 common command tools plus `describe`, `exec`
 and `query`; the running GUI also exposes `gui_selection` for its selection. `describe` with no arguments lists every command, grouped by
 namespace; pass `command` for its full schemas, errors and examples. Call
 other commands with `exec {"command": "fx.patch.list", "args": {"fx": "fx_2"}}`,

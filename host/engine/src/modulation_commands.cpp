@@ -216,6 +216,26 @@ std::optional<Id> homeTrackOf(const model::Session& s, const model::EnvTarget& t
     return node;
 }
 
+// Whether `to` is reachable from `from` through the signal graph and the
+// modulation routes (each an edge from its rack to its target's node).
+bool reaches(const model::Session& s, Id from, Id to) {
+    std::map<Id, std::vector<Id>> edges = signalEdges(s);
+    for (const auto& e : s.modulations) {
+        const model::RackModule* m = s.modules.find(e.value->source.module);
+        const auto node = model::modulationTargetNode(s, e.value->target);
+        if (m && node) edges[m->rack].push_back(*node);
+    }
+    std::set<Id> seen;
+    std::function<bool(Id)> walk = [&](Id at) {
+        if (at == to) return true;
+        if (!seen.insert(at).second) return false;
+        for (Id next : edges[at])
+            if (walk(next)) return true;
+        return false;
+    };
+    return walk(from);
+}
+
 // The route as it would be, checked against what the model cannot know (the
 // instance's parameters) and what the user can fix with a better call.
 // `self`: the route being set (skipped by the duplicate check).
@@ -562,7 +582,7 @@ void registerModulationCommands(cmd::Registry& registry) {
         Command<ModulateArgs, Modulated> c;
         c.name = "modulate";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpTool;  // the one-step gesture is a core tool
         c.summary = "Modulate a parameter or mixer level with an LFO, follower, random or macro.";
         c.description =
             "The whole gesture in one undo step. It takes the first rack homed on the target's "
@@ -573,8 +593,10 @@ void registerModulationCommands(cmd::Registry& registry) {
             "from), cables it into the first free Mod Out input (adding a Mod Out when none is "
             "free) and routes that input to the target. {module, input} routes a Mod Out input "
             "already patched. depth as modulation.add; default a quarter of a plug-in "
-            "parameter's range, 6 dB, or 50 percent. A follower cannot listen to the track it "
-            "modulates (modulation.cycle).";
+            "parameter's range, 6 dB, or 50 percent. A rack that would close a loop (it "
+            "already drives the track a follower hears, or hears the target) is passed over "
+            "for the next, or a new Modulators rack. Only a real cycle is refused "
+            "(modulation.cycle): a follower on a track the target feeds, itself included.";
         c.tags = {"modulation", "rack"};
         c.args = schema::object<ModulateArgs>("modulate_args")
                      .field("target", &ModulateArgs::target, targetSchema())
@@ -599,7 +621,7 @@ void registerModulationCommands(cmd::Registry& registry) {
                        j(R"({"modulation": "mr_1", "rack": "rk_1", "module": "mo_3",
                              "mod_out": "mo_2", "input": "in_1"})"),
                        "song_with_mod_out"}};
-        c.errors = {{"modulation.cycle", "a follower on the track it modulates",
+        c.errors = {{"modulation.cycle", "a follower on a track the target feeds",
                      "listen to another track, or modulate a buss it feeds"}};
         c.run = [](const ModulateArgs& a, Context& ctx) -> Result<Modulated> {
             EngineApp& app = engine::app(ctx);
@@ -669,18 +691,35 @@ void registerModulationCommands(cmd::Registry& registry) {
             const model::Session s = app.view();
             const model::EnvTarget wanted = targetOf(a.target);
             const auto home = homeTrackOf(s, wanted);
+            const auto node = model::modulationTargetNode(s, wanted);
+            std::optional<Id> heard;  // the track a follower listens to
             if (follower) {
-                auto from = existing<model::Track>(s, *a.from, "/from");
-                if (!from) return std::move(from).error();
-                if (home && *from == *home)
-                    return refused(
-                        "modulation.cycle",
-                        "a follower on " + a.from.value() + " cannot modulate what plays on it",
-                        "/from",
-                        "listen to another track, or modulate a buss " + a.from.value() + " feeds");
+                auto id = existing<model::Track>(s, *a.from, "/from");
+                if (!id) return std::move(id).error();
+                heard = *id;
+                // A real cycle: the target already feeds what the follower
+                // hears, whichever rack would hold it (ADR-0096, 2026-11-20).
+                if ((home && *heard == *home) || (node && reaches(s, *node, *heard)))
+                    return refused("modulation.cycle",
+                                   home && *heard == *home
+                                       ? "a follower on " + a.from.value() +
+                                             " cannot modulate what plays on it"
+                                       : "the target feeds " + a.from.value() +
+                                             ", so following it would modulate itself",
+                                   "/from",
+                                   "listen to a track the target does not feed, or modulate a "
+                                   "buss " +
+                                       a.from.value() + " feeds");
             }
+            // A rack that closes no loop: it does not already reach the
+            // track a follower hears, and the target does not reach it.
+            const auto loopless = [&](Id r) {
+                return !(heard && reaches(s, r, *heard)) && !(node && reaches(s, *node, r));
+            };
             // The rack: chosen, the home track's first with a Mod Out, the
-            // first Modulators rack with one, or a new Modulators channel's.
+            // first Modulators rack with one, or a new Modulators channel's;
+            // one that would close a loop is passed over (a chosen one is
+            // the caller's, and refused as before).
             Modulated out;
             std::optional<Id> rack;
             if (a.rack) {
@@ -694,9 +733,11 @@ void registerModulationCommands(cmd::Registry& registry) {
                 return false;
             };
             for (const auto& r : s.racks)
-                if (!rack && home && r.value->track == *home && hasModOut(r.id)) rack = r.id;
+                if (!rack && home && r.value->track == *home && hasModOut(r.id) && loopless(r.id))
+                    rack = r.id;
             for (const auto& r : s.racks)
-                if (!rack && r.value->name == "Modulators" && hasModOut(r.id)) rack = r.id;
+                if (!rack && r.value->name == "Modulators" && hasModOut(r.id) && loopless(r.id))
+                    rack = r.id;
             if (!rack) {
                 json::Value args = json::Value::object();
                 args["name"] = json::Value("Modulators");
