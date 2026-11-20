@@ -1201,6 +1201,27 @@ TEST_CASE("a MIDI clip plays through an instrument in its take's chain, ending a
         REQUIRE_MESSAGE(out[std::size_t(t)] == 0.0f, "frame " << t);
 }
 
+TEST_CASE("an envelope on a clip take's FX plays in clip time, pass after pass (C2)") {
+    Project p;
+    latentClip(p);
+    p.run("env.add", R"({"fx": "fx_1", "param": "gain", "points": [{"seconds": 0, "value": 0},
+                                                                  {"seconds": 0.25, "value": -24}]})");
+    // Anchors on the same phase of the absolute 32-sample automation grid.
+    const std::int64_t a = kBeat, b = 5 * kBeat + 39 * 32;
+    const auto x = p.render(4.0, {launch(a, "cl_1")});
+    const auto y = p.render(4.0, {launch(b, "cl_1")});
+    for (std::int64_t k = kFade; k < 3 * 12000; ++k)
+        REQUIRE_MESSAGE(x[std::size_t(a + k)] == y[std::size_t(b + k)], "frame " << k);
+    // Each pass starts near 0 dB and ends near -24 dB, not where the
+    // timeline would put the curve.
+    const auto ratio = [&](std::int64_t k) {
+        return double(x[std::size_t(a + k)]) / double(rampAt(k % 12000));
+    };
+    CHECK(ratio(12000 + 600) > 0.7);
+    CHECK(ratio(12000 + 11500) < 0.12);
+    CHECK(ratio(24000 + 600) > 0.7);
+}
+
 TEST_CASE("a MIDI clip's take envelope is in beats from the clip's start, wherever it plays") {
     Project p;
     p.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C3:w"})");
@@ -1595,6 +1616,44 @@ TEST_CASE("a capture keeps what plays as it begins and ends at a relocation" *
         CHECK(capture->startSample == 144000);
         engine.stop();
     }
+}
+
+TEST_CASE("a clip take's FX envelope commits as it was heard, pass after pass (C2)" *
+          doctest::description("rt")) {
+    // A period that is its content's pass commits as one looped item, its
+    // envelope repeated pass after pass; a shorter one as an item per
+    // period. The FX's 64-sample latency hears each next pass early, as live.
+    for (const double length : {1.0, 0.25})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("length " << length << ", anticipative " << options.anticipative);
+            Project p;
+            latentClip(p);
+            auto set = j(R"({"clip": "cl_1"})");
+            set["length"] = length;  // of the ramp's 48000 frames
+            p.runArgs("clip.set", set);
+            auto env = j(R"({"fx": "fx_1", "param": "gain",
+                         "points": [{"seconds": 0, "value": 0}, {"seconds": 1, "value": -24}]})");
+            env["points"].asArray()[1]["seconds"] = length;
+            p.runArgs("env.add", env);
+            const std::int64_t frames = 48000 * 5 + 16384;
+            AppLive live(p, options, 128, frames);
+            p.run("launch.capture", R"({"on": true})");
+            REQUIRE(p.app->transport("play"));
+            live.until(20 * 128);
+            p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 2
+            live.until(48000 * 5);
+            json::Value done = p.run("launch.commit", "{}");
+            const std::vector<float> heard = live.stop();
+            const std::int64_t end = std::min(std::int64_t(done["to"].asDouble() * double(kBeat)),
+                                              live.cycles * 128 - std::int64_t(live.latency));
+            CHECK(end > 96000 + 2 * 48000);  // two passes and more
+            const std::vector<float> committed = arrangement(p, 5.0);
+            const auto [worst, first] = compare(heard, live.latency, committed, 0, end, 1e-6);
+            CHECK_MESSAGE(first < 0, "first difference at frame " << first << ", " << worst);
+            // The second pass starts near 0 dB again.
+            const auto P = std::int64_t(length * 48000);
+            CHECK(double(committed[std::size_t(96000 + P + 600)]) > 0.7 * double(rampAt(600)));
+        }
 }
 
 TEST_CASE("launch.commit: history, undo, pooling and refusals") {

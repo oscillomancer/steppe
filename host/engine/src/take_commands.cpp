@@ -254,6 +254,7 @@ Result<ItemResult> extractFromClip(EngineApp& app, const model::Session& s,
     if (!shaped) return std::move(shaped).error();
     model::EditTxn& t = app.txn();
     if (shaped->envelopePos) convertTakeEnvelopes(t, s, take, shaped->envelopePos);
+    convertTakeFxEnvelopes(t, s, take, shaped->fxEnvelope);  // onto the timeline (C2)
     shaped->item.takes = {take};
     shaped->item.activeTake = take;
     if (clip.takes.size() == 1) {

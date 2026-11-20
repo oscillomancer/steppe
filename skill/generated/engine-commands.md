@@ -5655,7 +5655,7 @@ Result:
 
 Replace an envelope's points (all of them, or those in a beat range).
 
-from_beat/to_beat: replace only points with from_beat <= beat < to_beat.
+from_beat/to_beat: replace only points with from_beat <= beat < to_beat. On a clip's take or take FX they are in the clip's unit from its start (beats, or seconds on an audio clip).
 
 Kind: `edit`. Exposure: `mcp-tool`.
 

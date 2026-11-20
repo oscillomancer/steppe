@@ -11,7 +11,8 @@ the lead revised it with L2 (2026-11-19).
 
 **Amended 2026-11-20** (below, "Amendment: a clip take's chain"): a clip
 take's FX and envelopes play, and a launch's floor grows by the latency of
-the track's clip chains.
+the track's clip chains; envelopes on a clip take's FX are in clip time
+(C2, schema 2.19).
 
 Contracts: `specs/session-model.md` "Scenes and clips (schema 2.18,
 ADR-0097)", `specs/engine.md` §1.4.2, `specs/gui.md` §4.15.
@@ -571,10 +572,25 @@ run time, not a position in the timeline.
   the clip's start, pass after pass, as `launch.commit` lays out the
   copies.
 - **C2: envelopes on a clip take's FX** move to clip time too, relative
-  to the clip's start and looping with it; until that step lands they
-  follow the timeline, stated in STATUS. (It changes the meaning of those
-  points in the model, with a migration; no project has them, since L1
-  shipped with this limit stated.)
+  to the clip's start and looping with it. (It changes the meaning of those
+  points in the model, schema 2.19, with a migration; no project has them,
+  since L1 shipped with this limit stated.) Landed 2026-11-20:
+  - In the model they are beats on a MIDI clip and seconds
+    (`timebase: time`) on an audio clip, from its start, as the take's own
+    envelopes are; they take no automation items and no writing mode. The conversions between
+    an item and a clip carry them across point by point.
+  - The engine compiles their lanes in the clip's domain (the domain of
+    the take envelopes' clip position), unshifted by the chain's latency,
+    and evaluates them at the clip position each stage's input reads: the
+    running lead less the stages before it. A lane sends on the absolute
+    automation grid, at each point it crosses and afresh at each new pass
+    or anchor; while the input reads nothing it holds.
+  - `launch.commit` writes each copy's FX envelopes in timeline position,
+    repeated pass after pass over the copy, so a looped item of many passes
+    keeps one chain as the clip did. Each pass's value at the period is
+    held to the boundary and the next pass starts from its first value
+    there; a copy ending on a boundary also takes the next pass's start,
+    which a latent FX hears within its latency, as it did live.
 - **Freeze is unchanged:** a frozen track plays its print and refuses
   launches, so its clip chains never play.
 - **Neither C1 nor C2 changes** the single decision, the launch log (the

@@ -656,6 +656,32 @@ bool clipChainTicks(const Plan& p, const Node& n, int player, std::int64_t song,
     return true;
 }
 
+bool clipLanePosition(const ClipLaneSource& c, std::uint32_t frame, std::int64_t& at) SUPPLE_RT {
+    if (!c.in.on || c.player < 0) return false;
+    const Node& n = *c.node;
+    const ClipPlayer& pl = n.players[static_cast<std::size_t>(c.player)];
+    std::int64_t t = 0;
+    const bool folded = foldInput(c.loop, c.pos, c.ahead, frame, t);
+    const std::int64_t song = t - n.timelineShift;
+    const bool before = (c.in.unanchored || folded) && !pl.once;
+    if (!pl.midi) {
+        if (pl.periodFrames <= 0) return false;
+        const std::int64_t q = song - c.in.anchorSample;
+        if (q < 0 && !before) return false;
+        at = (q % pl.periodFrames + pl.periodFrames) % pl.periodFrames;
+        return true;
+    }
+    if (!(pl.periodBeats > 0)) return false;
+    const Plan& p = *c.plan;
+    const std::int64_t origin = time::samplesAt(p.startSeconds, p.rate);
+    const double beat = p.timeMap->beatAt(double(song + origin) / p.rate);
+    if (beat < c.in.anchorBeat && !before) return false;
+    const double base =
+        c.in.anchorBeat + std::floor((beat - c.in.anchorBeat) / pl.periodBeats) * pl.periodBeats;
+    at = std::llround((beat - base) * kClipBeatTicks);
+    return true;
+}
+
 // --- A rack's Notes feed (rack_runtime.h): its source track's launches ----------
 
 void compileFeedClips(Plan& p, NotesFeed& feed, const Session& s) {

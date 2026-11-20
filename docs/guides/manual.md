@@ -1558,8 +1558,9 @@ phase.
 A clip's take FX and its take envelopes play as they do on the timeline
 (`fx.add {take}`, `env.add {take}`), and an instrument in its take FX plays
 its notes. The take's envelopes run from the clip's start, in beats on a
-MIDI clip and seconds on an audio one, again on every pass. Effects start
-afresh at each launch, and their tail is cut when the track switches away.
+MIDI clip and seconds on an audio one, again on every pass, and so do the
+envelopes on its take FX (`env.add {fx}`). Effects start afresh at each
+launch, and their tail is cut when the track switches away.
 
 `launch.state` tells what each track with clips plays as you hear it:
 `arrangement`, `clip` (with its position in the clip), `held` (a `once`
@@ -1583,9 +1584,7 @@ committing again writes the same performance over itself.
 
 Renders play the arrangement only; the render dialog says so while a
 clip is playing. Not yet:
-- launching while a master playrate is active (`launch.playrate`);
-- automating a clip's take FX in clip time: their envelopes still follow
-  the timeline.
+- launching while a master playrate is active (`launch.playrate`).
 
 A rack's Notes module that plays a track's notes follows that track's
 launches: it plays the clip, falls silent when the track stops, and

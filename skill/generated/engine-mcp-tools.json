@@ -387,7 +387,7 @@
   {
     "name": "env_points_set",
     "title": "Replace an envelope's points (all of them, or those in a beat range).",
-    "description": "from_beat/to_beat: replace only points with from_beat <= beat < to_beat. See describe for errors and examples.",
+    "description": "from_beat/to_beat: replace only points with from_beat <= beat < to_beat. On a clip's take or take FX they are in the clip's unit from its start (beats, or seconds on an audio clip). See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "env_points_set_args",

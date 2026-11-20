@@ -545,6 +545,12 @@ struct ParamLane {
     bool writes = false, latches = false;
     bool gesture = false, latched = false, held = false;
     bool holding() const { return gesture || latched || held; }
+    // On a clip's take FX (ADR-0097, amended 2026-11-20, C2): the curve is in
+    // clip time, from the clip's start (clipChainTicks' domain), and follows
+    // where the clip is on its stage's input side; `clipLast`, the position it
+    // last read (runtime: a new pass or anchor resends).
+    bool clipTime = false;
+    std::int64_t clipLast = INT64_MIN;
     double clapAt(std::int64_t sample) SUPPLE_RT {
         const double v = curve.at(sample);
         return spec ? params::toClap(spec->spec, params::fromNormalized(spec->spec, v)) : v;
@@ -1557,6 +1563,20 @@ void clipChainMidi(const Plan& p, const Node& n, int player, const ClipChainInpu
 // audio clip, from the start of the pass; false where it is not heard.
 bool clipChainTicks(const Plan& p, const Node& n, int player, std::int64_t song,
                     std::int64_t& ticks) SUPPLE_RT;
+// Where a clip chain stage's clip-time lanes read (ParamLane::clipTime): the
+// player its input reads (`in`), the block at timeline `pos`, the chain's
+// lead less the stage's `before`.
+struct ClipLaneSource {
+    const Plan* plan = nullptr;
+    const Node* node = nullptr;
+    int player = -1;
+    ClipChainInput in;
+    std::int64_t pos = 0, ahead = 0;
+    const LoopRange* loop = nullptr;
+};
+// The clip position (clipChainTicks' domain) that frame `frame` of the
+// stage's input will be heard at, or false where its input reads nothing.
+bool clipLanePosition(const ClipLaneSource& c, std::uint32_t frame, std::int64_t& at) SUPPLE_RT;
 // A render without launches plays the arrangement only: its plan keeps no
 // clip chain (plan.cpp; before prepare).
 void dropClipChains(Plan& p);

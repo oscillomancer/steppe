@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include "supple/engine/app.h"
 #include "audition_loader.h"
+#include "clip_launcher.h"
 #include "file_platform.h"
 #include "media_files.h"
 #include "module_library.h"
@@ -2707,6 +2708,7 @@ void EngineApp::beginAutomationPass(double seconds) {
 bool EngineApp::writesAutomation(model::Id object, const std::string& param) const {
     if (!engine_ || !txn_ || !engine_->transport().playing) return false;
     const model::Session s = view();
+    if (clipKindOfFx(s, object)) return false;  // in clip time: no write pass (C2)
     for (const auto& e : s.envelopes)
         if (e.value->target.object == object && e.value->target.param == param && e.value->active &&
             writingMode(e.value->mode))
@@ -2724,6 +2726,7 @@ void EngineApp::recordAutomation(model::Id object, const std::string& param, dou
 void EngineApp::recordAutomationAt(model::Id object, const std::string& param, double value,
                                    double seconds) {
     const model::Session s = view();
+    if (clipKindOfFx(s, object)) return;  // in clip time: no write pass (C2)
     std::optional<model::Id> envId;
     for (const auto& e : s.envelopes)
         if (e.value->target.object == object && e.value->target.param == param && e.value->active &&

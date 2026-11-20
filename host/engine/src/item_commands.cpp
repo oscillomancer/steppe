@@ -284,7 +284,8 @@ Result<ItemAddResult> addItemFromClip(EngineApp& app, const model::Session& s, m
     auto shaped = itemFromClip(s, clip, *active, track, pos, "/clip");
     if (!shaped) return std::move(shaped).error();
     model::Item item = std::move(shaped->item);
-    auto copied = copyTakesFor(t, s, clip.takes, false, shaped->envelopePos, "/clip");
+    auto copied =
+        copyTakesFor(t, s, clip.takes, false, shaped->envelopePos, "/clip", shaped->fxEnvelope);
     if (!copied) return std::move(copied).error();
     item.takes = *copied;
     for (std::size_t k = 0; k < clip.takes.size(); ++k)

@@ -563,8 +563,6 @@ the same.*
     with the master playrate. Until that lands, a plan with the master
     playrate active compiles no players, its tracks follow the
     arrangement, and a launch is refused with `launch.playrate`.
-  - *A clip take's FX parameter envelopes* follow the timeline until they
-    move to clip time (ADR-0097's amendment, C2).
 - **A clip take's chain (ADR-0097, amended 2026-11-20).** A clip whose
   active take has FX or an active envelope plays through a chain of its
   own, as an item's take does (`TakeChain::clipChain`, compiled with the
@@ -594,6 +592,12 @@ the same.*
   - *The take's envelopes* (volume, pan, mute) are from the clip's start
     as heard: beats on a MIDI clip, seconds on an audio clip, from the
     start of each pass.
+  - *Envelopes on its FX* are in clip time too (C2, schema 2.19): their
+    lanes (`ParamLane::clipTime`) compile in the clip position's domain,
+    unshifted, and read the clip position each stage's input will be heard
+    at (`clipLanePosition`: the lead less the stages before it, folded as
+    the input is). A lane sends on the absolute grid, at each point it
+    crosses and at each new pass or anchor; with no input it holds.
   - *A MIDI take's instrument* in its chain plays the clip's notes, not
     the track's (`launchMidi` leaves them to it).
   - Plan swaps carry a chain by take id (its stages by instance, its

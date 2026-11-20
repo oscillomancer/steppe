@@ -320,7 +320,14 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                         item.fadeOut = model::Fade{double(F) / rate, model::FadeShape::Linear, 0.0};
                 }
                 item.loop = loopItem || item.loop;
-                auto copied = copyTakesFor(t, now, clip.takes, pooled, envelopePos, path);
+                // Its take FX's envelopes, in clip time, onto the timeline at
+                // the phase heard, pass after pass over the item (C2).
+                const double period = midi ? P : double(time::samplesAt(P, rate)) / rate;
+                const double span = midi ? beat1 - beat0 : double(end - (perf.start + f0)) / rate;
+                auto copied =
+                    copyTakesFor(t, now, clip.takes, pooled, envelopePos, path,
+                                 fxEnvelopesFromClip(now, clip.kind, pos,
+                                                     midi ? phase : phase / rate, period, span));
                 if (!copied) return std::move(copied).error();
                 const double shift = midi ? phase * speed : phase / rate * speed;
                 if (shift != 0)

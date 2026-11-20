@@ -170,8 +170,8 @@ instructions are in `docs/guides/installing.md`.
   `session.describe`. Playing them is the next entry; the pane (L3) is to
   come. The content commands (`midi.*`,
   `take.*`, `item.export`, take envelopes and take FX) take a clip as they
-  take an item; timeline commands refuse one with `item.kind`; take FX
-  parameter envelopes on a clip's take still follow the timeline.
+  take an item; timeline commands refuse one with `item.kind`; the
+  envelopes on a clip take's FX are in clip time (schema 2.19).
 - **Clip launcher, playing** (ADR-0097, step L2; engine.md §1.4.2):
   - Every channel's clips compile into its node as players, and
     `launch.clip`, `launch.scene`, `launch.stop` and `launch.arrangement`
@@ -195,15 +195,14 @@ instructions are in `docs/guides/installing.md`.
   - A clip whose take has FX or envelopes plays through them, as an
     item's take does: its chain runs its latency ahead, so the clip is
     heard at its boundary, starts afresh at each launch, and is cut at the
-    switch away after the crossfade. The take's envelopes are from the
-    clip's start, pass after pass (ADR-0097, amended 2026-11-20).
+    switch away after the crossfade. The take's envelopes, and those on its
+    FX, are from the clip's start, pass after pass (ADR-0097, amended
+    2026-11-20).
   - Renders play the arrangement only. The render dialog says so while a
     clip holds a track, following launches while it is open.
     `EngineApp::launchState()` gives the GUI what `launch.state` reports.
   - Limits, until done:
     - a master playrate refuses launches (`launch.playrate`);
-    - a clip take's FX parameter envelopes follow the timeline, not the
-      clip;
     - freezing, or removing the playing clip, returns the track to the
       arrangement without the switch fade;
     - a quantize of `none` waits for the floor, about a device block for

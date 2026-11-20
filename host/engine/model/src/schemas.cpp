@@ -5,6 +5,7 @@
 #include "supple/model/audio_warp.h"
 #include "supple/model/launcher.h"
 #include "supple/model/render_settings.h"
+#include "supple/model/take_owner.h"
 #include "supple/schema/document.h"
 
 #include "supple/base/files.h"
@@ -1536,7 +1537,8 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
         auto migrated = migrateProject1(std::move(doc), warnings);
         if (!migrated) return std::move(migrated).error();
         doc = std::move(*migrated);
-    } else if (version->minor > 18 && warnings)  // 2.16: modulations; 2.18: scenes, clips
+    } else if (version->minor > 19 && warnings)  // 2.18: scenes, clips; 2.19: clip take FX
+                                                 // envelopes in clip time
         warnings->push_back(
             {"project.newer_minor", "loading a newer project minor version", "/schema"});
     // Before 2.10 a Notes module heard only its source track's own MIDI, never
@@ -1944,6 +1946,38 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
                                               : "audio input",
                          dropped);
             changed = true;
+        }
+        if (changed) {
+            auto normalized = migrated.commit();
+            if (!normalized) return std::move(normalized).error();
+            s = std::move(*normalized);
+        }
+    }
+    // Schema 2.19 (ADR-0097, amended 2026-11-20, C2): an envelope on a clip
+    // take's FX is in clip time, from the clip's start: beats on a MIDI clip,
+    // seconds on an audio clip. Before, its points were timeline positions;
+    // they convert with the clip's anchor at 0.
+    if (version->major == 1 || version->minor < 19) {
+        EditTxn migrated(s, 0);
+        bool changed = false;
+        for (const auto& take : s.takes) {
+            const auto owner = takeOwner(s, take.id);
+            const Clip* clip = owner && owner->kind == Kind::Clip ? s.clips.find(*owner) : nullptr;
+            if (!clip || take.value->chain.empty()) continue;
+            for (const auto& e : s.envelopes) {
+                const auto& chain = take.value->chain;
+                if (std::find(chain.begin(), chain.end(), e.value->target.object) == chain.end())
+                    continue;
+                migrated.modify<Envelope>(e.id, [&](Envelope& env) {
+                    const bool time = env.timebase == Timebase::Time;
+                    for (auto& p : env.points)
+                        p.pos = clip->kind == ClipKind::Midi
+                                    ? (time ? s.timeMap->beatAt(p.pos) : p.pos)
+                                    : (time ? p.pos : s.timeMap->secondsAt(p.pos));
+                    env.timebase = clip->kind == ClipKind::Midi ? Timebase::Beats : Timebase::Time;
+                });
+                changed = true;
+            }
         }
         if (changed) {
             auto normalized = migrated.commit();
