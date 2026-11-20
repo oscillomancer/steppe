@@ -107,7 +107,9 @@ a `cl_*` where they take an item today (the same `item` field, whose ID
 pattern becomes `^(it|cl)_[0-9]+$` so that merges remap it), or a clip's
 take:
 - `midi.get`, `midi.write`, `midi.edit` and `midi.notes`. A clip keeps its
-  length under `midi.write`, as an item keeps its position and length.
+  length under `midi.write`, as an item keeps its position and length; notation
+  longer than it is kept but does not play, and `midi.write` warns
+  (`midi.beyond_length`).
 - `item.export`: the clip's raw audio or its MIDI, as the item it would
   make at the project's start (one period, looped as an item loops).
 - `take.list`, `take.add`, `take.activate`, `take.set` and `take.remove`.
@@ -362,6 +364,29 @@ Clips replace that with an **ordered budget**:
     pending entry from the new position (B4).
   - Each applied entry comes back to the main thread with its stream
     sample, its running frame and its song position.
+  - *(2026-11-20, revised with the co-director: several targets per
+    launch; engine.md §1.4.2.)* A launch has one target node per thing
+    that follows the track: its channel, and every rack Notes module whose
+    source is that track. Each switches at the launch's stream sample plus
+    its own node's timeline shift, by the executor that runs that node, so
+    a track and the rack it feeds may switch on two executors. Whether the
+    launch is taken is decided once, for all of them:
+    - The main thread publishes the entry, then reads every executor's
+      published horizon (the furthest its current block may reach,
+      stored before it reads the queue). If each executor that runs a
+      target is at or before the target, the entry is committed: each
+      will read it before it passes its frames. Otherwise it is missed.
+    - An executor that reaches a frame of an entry still undecided marks
+      it missed. Nothing of a missed entry switches anywhere; the main
+      thread places it again, as before.
+    - The first target of a committed entry to switch takes it by
+      compare-and-swap, against the main thread voiding an entry whose
+      epoch ended first. Every other target then switches at its own
+      frame, or, if its executor relocated before reaching it, at that
+      executor's next block, as at a relocation. The slot is reused only
+      once each executor is done with it.
+    This replaces "Who applies it" above: an entry is no longer taken by
+    the track's executor alone.
 - **While stopped,** a launch is not quantized. It starts the transport
   and applies at the play start's first sample, so the clip's anchor is
   the play position.
@@ -462,6 +487,79 @@ A scene is a section you can play before it has a place in the song.
   - several items of one track inside the region (`scene.capture.items`);
   - an item straddling the region's edge (`scene.capture.edge`);
   - a looped clip or item whose take is warped (`clip.unsupported`).
+
+#### Scene ↔ section: the rules (L4a, 2026-11-20)
+
+These three commands touch the model only: no launch, no player. Each is one
+undo step, and a refusal changes nothing. The contract is in
+`specs/session-model.md`, "Scene ↔ section"; the rules and why:
+
+- **A section is a region, and a scene is its columns of clips.** `scene.insert`
+  and `arrangement.build` go from scene to timeline; `scene.capture` from
+  timeline to scene. Going there and back lands where it started (below).
+- **Spans are whole bars from a bar line.** `scene.insert {scene, at | bar,
+  bars}` takes the span from the start of the bar (`bar`, or `at` in beats,
+  which must be on a bar line) for `bars` bars, counted through the meter map.
+  An `at` between bar lines is refused (`scene.at`), because "n bars from the
+  middle of a bar" has two readings.
+- **Where an item stops.** Each clip of the scene becomes one item on its own
+  track at the span's start, converted as `item.add {clip}` converts it:
+  - `once`: one item as long as the clip, or as the span if that is shorter.
+    The rest of the span is silent on that track.
+  - `loop`, clip no longer than the span: the item loops its content over the
+    span (the same sound as the clip repeating) when the clip's period is the
+    content: its loop off and its length the content, or its loop on over the
+    whole content (start 0) with a length of whole repeats of it. A loop window
+    that is not the whole content cannot be an item and is `clip.unsupported`,
+    as `item.add {clip}` refuses it. A clip whose period is anything else (a gap
+    after the content, a length shorter than the content) cannot be one item
+    without a guess about the gap, and is refused (`scene.insert.period`, hint:
+    set the clip's length to its content or its loop on over the whole content,
+    clip.set, or ask for no more bars than the clip is long).
+  - `loop`, clip at least as long as the span: one item for the span, the first
+    part of the clip.
+- **Existing items in the span.** An item on a track that receives a clip and
+  overlaps the span is refused (`scene.insert.occupied`, naming the items; the
+  hint says to move or remove them). Items on other tracks are left alone. The
+  command never overwrites, trims or splits.
+- **An empty scene.** A scene with no clip is refused (`scene.empty`) by all
+  three commands that read one; a region with no item to capture is
+  `scene.capture.empty`.
+- **MIDI is copied, not pooled,** unless `pooled: true`; the conversion is the
+  one `clip.add {item}` and `item.add {clip}` already use (audio media are
+  shared, fades are not kept).
+- **The region.** `scene.insert` adds a section named after the scene (or
+  `name`), the scene's colour, over the span. It adds a new region every time
+  and never edits an existing one.
+- **Capture is one clip per track, with nothing guessed.** `scene.capture
+  {region, name?}` reads the items of each channel that lie wholly inside the
+  region:
+  - an item that starts before the region or ends after it:
+    `scene.capture.edge` (checked first);
+  - more than one item of one track inside it: `scene.capture.items`;
+  - the one item starting after the region's start: `scene.capture.offset` (a
+    clip begins at its own start, so the entry point would be lost);
+  - a warped take: `clip.unsupported`, as `clip.add {item}`;
+  - items on a master (they belong to no channel) are skipped, and a warning
+    `scene.capture.skipped` names them.
+  The clip is `loop` when its item fills the region and `once` when it is
+  shorter (it played once and fell silent in the section); the item's own loop
+  becomes the clip's. The new scene is appended after the last, named after the
+  region unless `name` is given, and takes its colour. The region and the
+  items are untouched.
+- **A song from scenes.** `arrangement.build {sequence: [{scene, bars}…], at |
+  bar?}` is `scene.insert` for each entry, one after the other from the start
+  (default: bar 1), a region for each. It checks every entry before changing
+  anything, and refuses an empty sequence, one past 256 entries, or `bars` < 1.
+- **Round trip.** `scene.capture` of a section that `scene.insert` laid gives a
+  scene whose clips play the same material, with these differences, each held
+  by a test: a clip as long as the span, or a `once` clip shorter than it, comes
+  back the same (length, loop, mode); a looped clip laid over a longer span
+  comes back as one looped clip as long as the span; a clip longer than the span
+  comes back cut to the span, as a `loop` clip.
+- **Limits and memory.** `scene.limit` and `clip.limit` apply to capture, and
+  `clip.memory` to audio it adds; items laid on the timeline are in the
+  arrangement's budget as `item.add`'s are.
 
 ### GUI (L3)
 

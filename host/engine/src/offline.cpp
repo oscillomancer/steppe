@@ -1065,15 +1065,37 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
         // The launch log's replay (internal; engine.md §1.4.2): each channel
         // switches at the block boundary where its song position reaches the
         // anchor, its log frame plus its timeline shift.
+        // A rack Notes feed that follows the track switches with it, at its
+        // rack's own position (ADR-0097, dated revision 2026-11-20).
         struct Switch {
             std::int64_t at;
             std::size_t node;
             detail::LaunchAction action;
+            int feed = -1;
+            Id clip;
         };
         std::vector<Switch> switches;
         for (const LaunchLogEntry& e : opt.launches)
             for (std::size_t k = 0; k < p.nodes.size(); ++k) {
                 detail::Node& node = p.nodes[k];
+                if (node.rack)
+                    for (std::size_t f = 0; f < node.rack->notes.size(); ++f) {
+                        const detail::NotesFeed& feed = node.rack->notes[f];
+                        if (!feed.follows || feed.source != e.track) continue;
+                        Switch sw{e.runningFrame + node.timelineShift,
+                                  k,
+                                  {},
+                                  static_cast<int>(f),
+                                  e.clip};
+                        sw.action.kind = e.action == LaunchLogEntry::Action::Clip
+                                             ? detail::LaunchState::Kind::Clip
+                                         : e.action == LaunchLogEntry::Action::Stop
+                                             ? detail::LaunchState::Kind::Stopped
+                                             : detail::LaunchState::Kind::Arrangement;
+                        sw.action.anchorSample = e.anchorSample;
+                        sw.action.anchorBeat = e.anchorBeat;
+                        switches.push_back(sw);
+                    }
                 if (node.id != e.track || node.players.empty()) continue;
                 detail::LaunchAction a;
                 a.anchorSample = e.anchorSample;
@@ -1086,7 +1108,7 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                     a.player = detail::playerOf(node, e.clip);
                     if (a.player < 0) continue;
                 }
-                switches.push_back({e.runningFrame + node.timelineShift, k, a});
+                switches.push_back({e.runningFrame + node.timelineShift, k, a, -1, {}});
             }
         std::stable_sort(switches.begin(), switches.end(),
                          [](const Switch& a, const Switch& b) { return a.at < b.at; });
@@ -1097,9 +1119,17 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                     cancelled = true;
                     break;
                 }
-                for (; nextSwitch < switches.size() && switches[nextSwitch].at <= pos; ++nextSwitch)
-                    detail::applyLaunch(p, p.nodes[switches[nextSwitch].node],
-                                        switches[nextSwitch].action);
+                for (; nextSwitch < switches.size() && switches[nextSwitch].at <= pos;
+                     ++nextSwitch) {
+                    const Switch& sw = switches[nextSwitch];
+                    detail::Node& node = p.nodes[sw.node];
+                    if (sw.feed >= 0)
+                        detail::applyFeedLaunch(node.rack->notes[static_cast<std::size_t>(sw.feed)],
+                                                sw.action.kind, sw.clip, sw.action.anchorSample,
+                                                sw.action.anchorBeat);
+                    else
+                        detail::applyLaunch(p, node, sw.action);
+                }
                 auto n = static_cast<std::uint32_t>(std::min<std::int64_t>(p.block, total - pos));
                 if (p.rateEnabled) n = std::min(n, static_cast<std::uint32_t>(64 - (pos & 63)));
                 if (nextSwitch < switches.size())

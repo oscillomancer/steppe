@@ -73,8 +73,34 @@ class Context {
         warnings_.push_back({std::move(code), std::move(message), std::move(path)});
     }
     const std::vector<Warning>& warnings() const { return warnings_; }
+    // The arguments a command's resolve step settled on: what the dispatcher logs and
+    // history records for the command the caller ran. Only the outermost invocation owns
+    // them: a command that runs another through the registry with this same context
+    // (CommandInfo::invoke) leaves them as they were (InvocationScope).
     void setResolvedArgs(json::Value value) { resolvedArgs_ = std::move(value); }
     const std::optional<json::Value>& resolvedArgs() const { return resolvedArgs_; }
+
+    // Marks one CommandInfo::invoke on this context. A nested one (inside another
+    // command's run) puts the resolved arguments back as it found them on the way out, on
+    // every path, so its own resolve step cannot replace the caller's.
+    class InvocationScope {
+      public:
+        explicit InvocationScope(Context& context)
+            : context_(context), nested_(context.depth_++ > 0) {
+            if (nested_) outer_ = context.resolvedArgs_;
+        }
+        ~InvocationScope() {
+            --context_.depth_;
+            if (nested_) context_.resolvedArgs_ = std::move(outer_);
+        }
+        InvocationScope(const InvocationScope&) = delete;
+        InvocationScope& operator=(const InvocationScope&) = delete;
+
+      private:
+        Context& context_;
+        bool nested_;
+        std::optional<json::Value> outer_;
+    };
 
   private:
     Origin origin_;
@@ -85,6 +111,7 @@ class Context {
     std::unordered_map<std::type_index, ServiceEntry> services_;
     std::vector<Warning> warnings_;
     std::optional<json::Value> resolvedArgs_;
+    unsigned depth_ = 0;  // CommandInfo::invoke calls in progress on this context
 };
 struct NoArgs {};
 // A reference is either a stable ID or a selector object. The host resolves
@@ -161,6 +188,7 @@ class Registry {
         info.invoke = [args, result, resolve = std::move(command.resolve),
                        run = std::move(command.run)](const json::Value& value,
                                                      Context& context) -> Result<json::Value> {
+            Context::InvocationScope scope(context);
             std::vector<schema::Warning> warnings;
             auto decoded = args.decode(value, {}, &warnings);
             for (const auto& warning : warnings)

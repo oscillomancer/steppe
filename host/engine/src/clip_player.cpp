@@ -10,6 +10,7 @@
 
 #include "pan.h"
 #include "plan.h"
+#include "rack_runtime.h"
 #include "supple/model/source_mapping.h"
 
 namespace supple::engine::detail {
@@ -287,6 +288,24 @@ void carryLaunch(const Node& old, Node& n) SUPPLE_RT {
         n.releaseHeld = true;  // the clip's notes end
     }
     n.launch = L;
+    // A rack's Notes feeds, by module and clip: one whose source changed, or
+    // whose clip the new plan lacks, follows the arrangement again.
+    if (!n.rack || !old.rack) return;
+    for (NotesFeed& feed : n.rack->notes)
+        for (const NotesFeed& was : old.rack->notes) {
+            if (was.id != feed.id) continue;
+            if (was.source != feed.source || feed.players.empty()) break;
+            LaunchState F = was.launch;
+            if (F.kind == LaunchState::Kind::Clip && F.player >= 0) {
+                F.player = playerOf(feed, was.players[static_cast<std::size_t>(F.player)].clip);
+                if (F.player < 0) {
+                    F = LaunchState{};
+                    feed.releaseHeld = true;
+                }
+            }
+            feed.launch = F;
+            break;
+        }
 }
 
 void launchWrapped(Node& n) SUPPLE_RT {
@@ -297,6 +316,15 @@ void launchWrapped(Node& n) SUPPLE_RT {
         L.player = -1;
         L.fadeFrom = -2;
     }
+    if (n.rack)
+        for (NotesFeed& feed : n.rack->notes) {
+            LaunchState& F = feed.launch;
+            if (F.kind == LaunchState::Kind::Clip && F.player >= 0 &&
+                feed.players[static_cast<std::size_t>(F.player)].once) {
+                F.kind = LaunchState::Kind::Held;
+                F.player = -1;
+            }
+        }
     launchRelocated(n);
 }
 
@@ -305,6 +333,8 @@ void launchRelocated(Node& n) SUPPLE_RT {
     // where it began, is over.
     n.launch.unanchored = true;
     n.launch.fadeFrom = -2;
+    if (n.rack)
+        for (NotesFeed& feed : n.rack->notes) feed.launch.unanchored = true;
 }
 
 namespace {
@@ -385,14 +415,17 @@ void launchAudio(Plan&, Node& n, Stereo& into, std::int64_t pos, std::uint32_t f
     }
 }
 
-void launchMidi(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames) SUPPLE_RT {
-    const LaunchState& L = n.launch;
-    if (L.kind != LaunchState::Kind::Clip || L.player < 0) return;
-    const ClipPlayer& pl = n.players[static_cast<std::size_t>(L.player)];
+namespace {
+
+// A MIDI player's events in the song frames [song0, song0 + frames) under
+// launch state L, each with its frame in `time`, into `target` (within its
+// capacity: never allocates).
+void clipMidi(const Plan& p, const ClipPlayer& pl, const LaunchState& L, std::int64_t song0,
+              std::uint32_t frames, std::vector<host::Event>& target) SUPPLE_RT {
     if (!pl.midi || pl.muted || pl.events.empty() || !(pl.periodBeats > 0)) return;
     const time::TimeMap& tm = *p.timeMap;
     const std::int64_t origin = time::samplesAt(p.startSeconds, p.rate);
-    const std::int64_t song0 = pos - n.timelineShift, song1 = song0 + frames;
+    const std::int64_t song1 = song0 + frames;
     const double b0 = tm.beatAt(double(song0 + origin) / p.rate);
     const double b1 = tm.beatAt(double(song1 + origin) / p.rate);
     const double period = pl.periodBeats;
@@ -403,7 +436,6 @@ void launchMidi(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames) SUPPLE
     const bool before = L.unanchored && !pl.once;
     if (!before) kLo = std::max<std::int64_t>(kLo, 0);
     if (pl.once) kHi = std::min<std::int64_t>(kHi, 0);
-    auto& target = n.midiStage.blockEvents;
     constexpr double kSlack = 1e-6;  // beats: the sample decides
     for (std::int64_t k = kLo; k <= kHi; ++k) {
         const double base = L.anchorBeat + double(k) * period;
@@ -418,6 +450,85 @@ void launchMidi(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames) SUPPLE
             if (target.size() < target.capacity()) target.push_back(e);  // never allocate here
         }
     }
+}
+
+}  // namespace
+
+void launchMidi(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames) SUPPLE_RT {
+    const LaunchState& L = n.launch;
+    if (L.kind != LaunchState::Kind::Clip || L.player < 0) return;
+    clipMidi(p, n.players[static_cast<std::size_t>(L.player)], L, pos - n.timelineShift, frames,
+             n.midiStage.blockEvents);
+}
+
+// --- A rack's Notes feed (rack_runtime.h): its source track's launches ----------
+
+void compileFeedClips(Plan& p, NotesFeed& feed, const Session& s) {
+    feed.players.clear();
+    feed.launch = {};
+    feed.follows = false;
+    if (!p.clipPlayers || p.rateEnabled || !feed.source) return;
+    const model::Track* track = s.tracks.find(*feed.source);
+    if (!track || track->type != model::StripType::Channel || track->freeze) return;
+    // The same tracks as compileClipPlayers: a channel with clips, not frozen.
+    feed.follows = std::any_of(s.clips.begin(), s.clips.end(),
+                               [&](const auto& e) { return e.value->track == *feed.source; });
+    if (!feed.follows) return;
+    std::int32_t nextId = 0;
+    for (const TimedEvent& e : feed.events) nextId = std::max(nextId, e.event.noteId + 1);
+    std::size_t voices = 0, window = 0;
+    const time::TimeMap& tm = *s.timeMap;
+    double fastest = 0;
+    for (const auto& t : tm.tempo()) fastest = std::max(fastest, t.bpm);
+    const double blockBeats = double(p.block) / p.rate * fastest / 60.0;
+    for (const auto& e : s.clips) {
+        const model::Clip& clip = *e.value;
+        if (clip.track != *feed.source || clip.kind != model::ClipKind::Midi) continue;
+        ClipPlayer pl;
+        pl.clip = e.id;
+        pl.once = clip.mode == model::ClipMode::Once;
+        pl.muted = clip.mute;
+        pl.periodBeats = clip.length;
+        const model::Take* take = clip.activeTake ? s.takes.find(*clip.activeTake) : nullptr;
+        const model::MidiSource* src =
+            take && take->source && take->source->kind == model::Kind::Midi
+                ? s.midi.find(*take->source)
+                : nullptr;
+        if (src) midiEvents(pl, clip, e.id, *take, *src, nextId);
+        const auto [v, w] = midiSizing(pl, blockBeats);
+        voices = std::max(voices, v);
+        window = std::max(window, w);
+        feed.players.push_back(std::move(pl));
+    }
+    feed.clipEvents.reserve(window + 1);
+    feed.block.reserve(feed.block.capacity() + window + 1);
+}
+
+int playerOf(const NotesFeed& feed, Id clip) SUPPLE_RT {
+    for (std::size_t i = 0; i < feed.players.size(); ++i)
+        if (feed.players[i].clip == clip) return static_cast<int>(i);
+    return -1;
+}
+
+void applyFeedLaunch(NotesFeed& feed, LaunchState::Kind kind, Id clip, std::int64_t anchorSample,
+                     double anchorBeat) SUPPLE_RT {
+    LaunchState& L = feed.launch;
+    L.kind = kind;
+    L.player = kind == LaunchState::Kind::Clip ? playerOf(feed, clip) : -1;  // -1: audio
+    L.anchorSample = anchorSample;
+    L.anchorBeat = anchorBeat;
+    L.unanchored = false;
+    L.fadeFrom = -2;
+    feed.releaseHeld = true;  // what the track source holds ends at the switch
+}
+
+void feedClipMidi(Plan& p, const Node& rack, NotesFeed& feed, std::int64_t pos,
+                  std::uint32_t frames) SUPPLE_RT {
+    feed.clipEvents.clear();
+    const LaunchState& L = feed.launch;
+    if (L.kind != LaunchState::Kind::Clip || L.player < 0) return;
+    clipMidi(p, feed.players[static_cast<std::size_t>(L.player)], L, pos - rack.timelineShift,
+             frames, feed.clipEvents);
 }
 
 }  // namespace supple::engine::detail

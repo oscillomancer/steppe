@@ -448,7 +448,7 @@ void registerModulationCommands(cmd::Registry& registry) {
         c.name = "modulation.add";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Route a rack's Mod Out input to a plug-in parameter or a mixer level.";
+        c.summary = "Route a rack's Mod Out to a plug-in parameter or mixer level.";
         c.description =
             "depth is the offset at a signal of 1: for a plug-in parameter a fraction of its "
             "CLAP range (-1..1). A parameter fx.describe marks modulatable takes the offset "
@@ -574,7 +574,7 @@ void registerModulationCommands(cmd::Registry& registry) {
         c.name = "modulation.list";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "List modulation routes, by target track, FX or source rack.";
+        c.summary = "List modulation routes by target or source rack.";
         c.description =
             "Each route with its source signal's range (bipolar -1..1, or unipolar 0..1 when "
             "every cable into the Mod Out input is unipolar, a gate or a phase), fed_by (each "
@@ -699,7 +699,7 @@ void registerModulationCommands(cmd::Registry& registry) {
         c.name = "modulate";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpTool;  // the one-step gesture is a core tool
-        c.summary = "Modulate a parameter or mixer level with an LFO, follower, random or macro.";
+        c.summary = "Modulate a parameter or mixer level: LFO, follower, random, macro.";
         c.description =
             "The whole gesture in one undo step. It takes the first rack homed on the target's "
             "track that holds a Mod Out, else the first rack named Modulators, else adds one on "
@@ -989,7 +989,7 @@ void registerModulationCommands(cmd::Registry& registry) {
         c.name = "modulation.telemetry";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Read each modulation route's live target offset and its span.";
+        c.summary = "Read each modulation route's live offset and span.";
         c.description =
             "offset: the route's target's current offset, the sum of every route on it, as the "
             "engine last applied it (a plug-in parameter's as a fraction of its range, a "

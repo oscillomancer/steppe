@@ -210,6 +210,11 @@ instructions are in `docs/guides/installing.md`.
   - The engine logs every applied launch. The tests replay that log
     offline and match live output bit for bit, in both executors, at two
     block sizes and through the bridge.
+  - A rack's Notes module follows its source track's launches (clip notes,
+    stops, the arrangement again), and so do the track's MIDI sends. A
+    launch is decided once for the track and every such rack, even when
+    they run on different executors: it switches all of them at their
+    own positions, or none (a missed launch is placed again).
   - Renders play the arrangement only. The render dialog says so while a
     clip holds a track, following launches while it is open.
     `EngineApp::launchState()` gives the GUI what `launch.state` reports.
@@ -217,10 +222,6 @@ instructions are in `docs/guides/installing.md`.
     - a master playrate refuses launches (`launch.playrate`);
     - a clip take's FX and envelopes do not play (`launch.take_chain`
       warning);
-    - a rack's Notes module does not follow its source track's launches:
-      clip MIDI never reaches it, and the arrangement's notes go on
-      playing through it while a clip or a stop holds the track (the
-      track's own instrument and its MIDI sends do follow them);
     - freezing, or removing the playing clip, returns the track to the
       arrangement without the switch fade;
     - a quantize of `none` waits for the floor, about a device block for
@@ -246,6 +247,18 @@ instructions are in `docs/guides/installing.md`.
   - a double-click on an audio clip opens the inspector, as there is no
     audio clip editor;
   - native macOS and Windows CI has not run on it.
+- **Scene ↔ section** (ADR-0097, L4a; session-model "Scene ↔ section"):
+  `scene.insert` lays a scene's clips on the timeline as items over whole
+  bars and adds a section, `scene.capture` makes a scene from the items of a
+  section, `arrangement.build` lays scenes out one after the other. Model
+  only, one undo step each. They refuse rather than guess: an item in the
+  span, an empty scene, a repeating clip no single item reproduces, several
+  items of a track, an item across or after the section's start, a warped
+  take. MIDI is copied unless `pooled`. Limits: capture reads whole items
+  only (it never splits or trims), a master's items are skipped with a
+  warning, and fades are not kept (as in the item and clip conversion). A clip
+  whose loop period is not its content (a gap after it, a length shorter than
+  it) is refused with `scene.insert.period`: it is not laid out yet.
 - **Clip launcher, capture** (ADR-0097, step L4's engine half; engine.md
   §1.4.2): `launch.capture` keeps a performance and `launch.commit` writes
   it onto the timeline in one undo step, laid out linearly by running time

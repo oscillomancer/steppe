@@ -22,6 +22,7 @@ the public commands and GUI actions (`Shift+/` or `Ctrl+Shift+P`,
 - [Mixing](#mixing)
 - [Routing](#routing)
 - [Automation](#automation)
+- [Modulation](#modulation)
 - [Timing audio with hits and stretch markers](#timing-audio-with-hits-and-stretch-markers)
 - [Racks](#racks)
 - [MIDI controllers](#midi-controllers)
@@ -533,6 +534,18 @@ next one. Double-click a chord's name to change it, drag it to move it, and
 right-click it to delete it. Right-click inside a chord and choose **No chord
 from here** to end it early.
 
+Agents read and write the same thing. `context.get` returns the key and chords
+of a range as a lead sheet (one line per bar, such as `3: {Fm7}:h {G7}:h`),
+`context.write` writes one back as a diff over the bars it names, `context.at`
+says what holds at a bar, and `key.set` and `chord.set` change one point.
+The key also decides how notes are spelled: the same pitch reads as `Bb` in F
+major and `A#` in D major in the MIDI editor and in `midi.get`. The scale-aware
+editing commands (`midi.edit` with `snap_to_scale`, `transpose_degrees` and
+`fit_to_chord`) read the key and chord at each note. A **section** is a region
+the song names (a verse, a chorus): `context.at` names the one that holds,
+and `scene.insert` and `arrangement.build` add one for each scene they lay out
+(see The clip launcher).
+
 ## The MIDI editor
 
 Double-click a MIDI item to open it in the MIDI editor, a panel along the
@@ -943,76 +956,6 @@ need a new capture; destination fader moves and distant item edits are allowed.
 Notes source MIDI and incoming routes are snapshots from launch. The rack window
 captures the same way.
 
-Agents can cable modulation to a plug-in parameter by semantic key or its
-CLAP id (`fx_3.gain` or `fx_3.12`; `effect.12` in a named `rack.patch`).
-Numeric ids use canonical decimal spelling: `12`, not `012`.
-`fx.describe` lists the ids, including third-party plug-ins without semantic
-keys. The target must support modulation. Numeric semantic keys take precedence.
-
-A Mod Out module takes a rack's signals out of the rack: `modulation.add
-{source: {module, input}, target: {fx, param}, depth}` routes one of its
-inputs to a parameter of a plug-in on a track, where `fx.describe {full:
-true}` marks the parameter `modulatable`. Depth is the offset at a full
-signal, a fraction of the parameter's range (−1 to 1); routes on one
-parameter add up, and none of them writes the parameter's value or its
-automation.
-
-A VST3 parameter, or a CLAP one the plug-in does not mark, can still be
-modulated when it can be automated and is continuous: `fx.describe` marks
-it `modulatable_by_envelope`. Its envelope gives the base, and the
-modulation is added to what the envelope sends, so it needs an active
-envelope. `modulate` adds one, with a single point at the current value,
-and `modulation.add` asks for one (`env.add`). Turning the envelope off
-leaves the route idle (`inert: "envelope"`). Recording automation on such
-a parameter writes the base: the modulation's current offset is taken off
-what the plug-in reports. Switches and parameters with a few fixed values
-cannot be modulated. `modulation.set` changes a route (a drag that sends one
-gesture is one undo step), `modulation.remove` removes it, and
-`modulation.list` shows each route's signal range, the modules cabled
-into its Mod Out input and, when it cannot play, why: `source` when
-nothing is cabled into that input yet. Removing the Mod Out or the plug-in removes its routes with a
-`modulation.removed` warning.
-
-A route can also take a track's volume (`{track, param: "volume"}`, depth
-in dB, −48 to 48), pan or width (percent, −200 to 200), or the level of an
-audio send to a buss or master (`{route, param: "volume"}`). The offset
-adds to what the fader or its automation gives and the sum stays in the
-fader's range; between the 32-sample steps it moves in a straight line,
-so a fast modulator sounds smooth.
-
-`modulate {target, source}` does all of that in one undo step. `source`
-is `lfo`, `random` (an LFO set to Random Steps), `macro` (a Macro's first
-knob) or `follower` with `from`, the track whose level it follows. The
-command uses the first rack on the target's track that has a Mod Out,
-else the first rack named Modulators. If neither exists, it adds a rack
-on a new channel named Modulators. It adds the module, cables it into
-the first free Mod Out input and makes the route. A follower also gets
-an In module and a send from `from`. When that rack would feed back
-into itself, the command uses another Modulators rack, or adds one. That
-happens when the rack already drives the track the follower listens to,
-or already listens to the target. A follower cannot listen to the track
-it modulates, or to a track that track feeds. Without a depth the
-command uses a quarter of a parameter's range, 6 dB, or 50 %. The source
-starts at its module's defaults: set its knobs with `module.set {module,
-params}` on the module the command returns (an LFO's `rate`, `shape` and
-`sync`, a follower's `gain` and `threshold`; a Macro's `macro_1` sits at 0
-until moved, so a macro changes nothing at first), and the depth with
-`modulation.set`. For a macro, the result's `knob` is the knob that moves
-the target.
-`modulation.telemetry` reads each route's live offset and how far it
-can move its target, and `engine.status` counts modulation steps that
-had to wait for room in a block (`modulation_deferred`).
-
-In the app, right-click a fader or pan, or a parameter's row in the FX
-window's parameter tab, and choose **Modulate**: it lists LFO, Random,
-Macro and a follower for each other track, and runs `modulate` with your
-choice. It is greyed where the parameter cannot take modulation. A
-modulated control shows how far its modulation can move it as a violet bar
-beside it, and while the song plays, where it is now; drag that bar to
-change how deep the modulation goes. A plug-in without its own parameter
-descriptions lists its parameters in the FX window; those it lets you
-modulate have a slider there.
-
 Rack plug-in latency is compensated against the song, including oversampling.
 The rack's longest routed audio or Note Out path sets its clock; shorter
 routes receive padding. Parallel paths summed inside the rack keep their
@@ -1110,6 +1053,85 @@ the amplitude first; the source curve is preserved.
 If another edit changes an automation item's amplitude, baseline or geometry
 while you drag its points, header or edge, the drag is cancelled with a message.
 Start the drag again using the updated item.
+
+## Modulation
+
+A **modulation** moves a parameter or a mixer level around the value it has,
+following a signal from a rack: an LFO, a random source, a macro, or the level
+of another track. It adds to the value, so it works on top of the fader or
+automation instead of replacing them. In the app you set one up from a
+control's right-click menu (**Modulate**, below); agents use `modulate` and
+`modulation.*`.
+
+Agents can cable modulation to a plug-in parameter by semantic key or its
+CLAP id (`fx_3.gain` or `fx_3.12`; `effect.12` in a named `rack.patch`).
+Numeric ids use canonical decimal spelling: `12`, not `012`.
+`fx.describe` lists the ids, including third-party plug-ins without semantic
+keys. The target must support modulation. Numeric semantic keys take precedence.
+
+A Mod Out module takes a rack's signals out of the rack: `modulation.add
+{source: {module, input}, target: {fx, param}, depth}` routes one of its
+inputs to a parameter of a plug-in on a track, where `fx.describe {full:
+true}` marks the parameter `modulatable`. Depth is the offset at a full
+signal, a fraction of the parameter's range (−1 to 1); routes on one
+parameter add up, and none of them writes the parameter's value or its
+automation.
+
+A VST3 parameter, or a CLAP one the plug-in does not mark, can still be
+modulated when it can be automated and is continuous: `fx.describe` marks
+it `modulatable_by_envelope`. Its envelope gives the base, and the
+modulation is added to what the envelope sends, so it needs an active
+envelope. `modulate` adds one, with a single point at the current value,
+and `modulation.add` asks for one (`env.add`). Turning the envelope off
+leaves the route idle (`inert: "envelope"`). Recording automation on such
+a parameter writes the base: the modulation's current offset is taken off
+what the plug-in reports. Switches and parameters with a few fixed values
+cannot be modulated. `modulation.set` changes a route (a drag that sends one
+gesture is one undo step), `modulation.remove` removes it, and
+`modulation.list` shows each route's signal range, the modules cabled
+into its Mod Out input and, when it cannot play, why: `source` when
+nothing is cabled into that input yet. Removing the Mod Out or the plug-in removes its routes with a
+`modulation.removed` warning.
+
+A route can also take a track's volume (`{track, param: "volume"}`, depth
+in dB, −48 to 48), pan or width (percent, −200 to 200), or the level of an
+audio send to a buss or master (`{route, param: "volume"}`). The offset
+adds to what the fader or its automation gives and the sum stays in the
+fader's range; between the 32-sample steps it moves in a straight line,
+so a fast modulator sounds smooth.
+
+`modulate {target, source}` does all of that in one undo step. `source`
+is `lfo`, `random` (an LFO set to Random Steps), `macro` (a Macro's first
+knob) or `follower` with `from`, the track whose level it follows. The
+command uses the first rack on the target's track that has a Mod Out,
+else the first rack named Modulators. If neither exists, it adds a rack
+on a new channel named Modulators. It adds the module, cables it into
+the first free Mod Out input and makes the route. A follower also gets
+an In module and a send from `from`. When that rack would feed back
+into itself, the command uses another Modulators rack, or adds one. That
+happens when the rack already drives the track the follower listens to,
+or already listens to the target. A follower cannot listen to the track
+it modulates, or to a track that track feeds. Without a depth the
+command uses a quarter of a parameter's range, 6 dB, or 50 %. The source
+starts at its module's defaults: set its knobs with `module.set {module,
+params}` on the module the command returns (an LFO's `rate`, `shape` and
+`sync`, a follower's `gain` and `threshold`; a Macro's `macro_1` sits at 0
+until moved, so a macro changes nothing at first), and the depth with
+`modulation.set`. For a macro, the result's `knob` is the knob that moves
+the target.
+`modulation.telemetry` reads each route's live offset and how far it
+can move its target, and `engine.status` counts modulation steps that
+had to wait for room in a block (`modulation_deferred`).
+
+In the app, right-click a fader or pan, or a parameter's row in the FX
+window's parameter tab, and choose **Modulate**: it lists LFO, Random,
+Macro and a follower for each other track, and runs `modulate` with your
+choice. It is greyed where the parameter cannot take modulation. A
+modulated control shows how far its modulation can move it as a violet bar
+beside it, and while the song plays, where it is now; drag that bar to
+change how deep the modulation goes. A plug-in without its own parameter
+descriptions lists its parameters in the FX window; those it lets you
+modulate have a slider there.
 
 ## Timing audio with hits and stretch markers
 
@@ -1664,13 +1686,48 @@ committing again writes the same performance over itself.
 Renders play the arrangement only; the render dialog says so while a
 clip is playing. Not yet:
 - launching while a master playrate is active (`launch.playrate`);
-- a clip take's FX and envelopes, which do not play in a clip yet;
-- a rack's Notes module following launches: on a track whose instrument
-  is a rack, clips do not reach it and the timeline's notes keep playing
-  through it. MIDI sends from the track do carry the clips.
+- a clip take's FX and envelopes, which do not play in a clip yet.
+
+A rack's Notes module that plays a track's notes follows that track's
+launches: it plays the clip, falls silent when the track stops, and
+plays the timeline again with the arrangement. The track's MIDI sends
+carry the clips too.
 
 A frozen track plays its print: `launch.clip` refuses it and
 `launch.scene` skips it.
+
+### From scenes to a song
+
+A scene is a section of a song before it has a place in the arrangement.
+`scene.insert {scene, bars}` lays a scene's clips on the timeline, one item
+per track, starting at a bar (`bar`, or `at` in beats; the default for
+`arrangement.build` is bar 1) and lasting `bars` whole bars, and marks the
+span as a **section** named after the scene. A `once` clip lasts its length
+(or the span, if shorter); a looping clip lasts the span, as one looping item.
+`arrangement.build {sequence: [{scene, bars}, …]}` does that for a list of
+scenes in turn, a scene as often as you like. `scene.capture {region}` goes
+the other way: it makes a scene, named after the section, from the items that
+lie inside it, one clip per track. Each is one undo step, and none of them
+changes the audio or the sections that were already there.
+
+They copy the MIDI, so editing a clip afterwards does not change the items it
+made (`pooled: true` shares it instead), and they refuse rather than guess:
+
+- a scene with no clips (`scene.empty`);
+- items already lying in the span on a track that would get a clip
+  (`scene.insert.occupied`: nothing is overwritten, trimmed or split);
+- a clip that repeats at something other than its content, such as a gap after
+  its notes (`scene.insert.period`; not laid out yet);
+- for `scene.capture`, a track with several items in the section, an item that
+  crosses the section's edge or starts after its start, or a section with no
+  item (`scene.capture.items`, `.edge`, `.offset`, `.empty`). Items on a master
+  are skipped with a warning, and fades are not kept.
+
+When you write notation into a clip with `midi.write`, the clip keeps its
+length: notation longer than the clip is kept but does not play, and the
+command warns (`midi.beyond_length`). Lengthen the clip first with `clip.set
+{length}`. `session.describe` lists every scene with its clips, their length,
+mode, loop, quantize and gain.
 
 ## Rendering
 

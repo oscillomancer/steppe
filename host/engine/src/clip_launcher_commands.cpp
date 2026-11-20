@@ -251,6 +251,115 @@ Status checkClipMemory(EngineApp& app, const model::Session& after, const std::s
                  "timeline (item.add {clip}) and remove them");
 }
 
+Result<model::Clip> clipFromItem(model::EditTxn& t, const model::Session& s, Id itemId, bool pooled,
+                                 const std::string& path) {
+    const model::Item& it = *s.items.find(itemId);
+    model::Clip clip;
+    std::optional<model::ClipKind> kind;
+    for (Id tk : it.takes) {
+        SUPPLE_TRY(checkClipTakeUnwarped(s, tk, path));
+        const model::Take* take = s.takes.find(tk);
+        const auto k = take ? model::clipKindOf(*take) : std::nullopt;
+        if (k && kind && *k != *kind)
+            return Error("clip.mixed", itemId.str() + " holds MIDI and audio takes", path,
+                         "a clip holds one kind: remove the other takes from the item, or "
+                         "copy them into clips of their own");
+        if (k) kind = k;
+    }
+    clip.kind = kind.value_or(model::ClipKind::Midi);
+    const auto span = model::itemSpan(s, it);
+    std::function<double(double)> envelopePos;
+    if (clip.kind == model::ClipKind::Midi) {
+        clip.length = model::itemLengthBeats(s, it);
+    } else {
+        clip.length = span.endSec - span.startSec;
+        const auto map = s.timeMap;
+        envelopePos = [map, span](double beats) {
+            return map->secondsAt(span.startBeat + beats) - span.startSec;
+        };
+    }
+    auto copied = copyTakesFor(t, s, it.takes, pooled, envelopePos, path);
+    if (!copied) return std::move(copied).error();
+    clip.takes = *copied;
+    for (std::size_t k = 0; k < it.takes.size(); ++k)
+        if (it.activeTake == it.takes[k]) clip.activeTake = clip.takes[k];
+    if (!clip.activeTake && !clip.takes.empty()) clip.activeTake = clip.takes.front();
+    if (it.loop && it.activeTake)
+        if (const model::Take* active = s.takes.find(*it.activeTake))
+            if (const double content = contentLength(s, *active); content > 0)
+                clip.loop = {true, 0.0, content};
+    clip.mute = it.mute;
+    clip.gainDb = it.gainDb;
+    clip.color = it.color;
+    return clip;
+}
+
+Result<Id> layClipOnTimeline(model::EditTxn& t, const model::Session& s, const model::Clip& clip,
+                             double startBeat, double endBeat, bool pooled,
+                             const std::string& path) {
+    const std::string name = "a clip of " + s.tracks.find(clip.track)->name;
+    if (clip.takes.empty() || !clip.activeTake)
+        return Error("item.source", name + " has no take to lay on the timeline", path,
+                     "give the clip a take first (take.add), or remove it");
+    SUPPLE_TRY(checkItemTrack(s, clip.track, clip.takes, path));
+    const model::Take* active = s.takes.find(*clip.activeTake);
+    if (!active)
+        return Error("item.take", clip.activeTake->str() + " is missing", path,
+                     "use a current take id from take.list");
+    auto shaped = itemFromClip(s, clip, *active, clip.track, startBeat, path);
+    if (!shaped) return std::move(shaped).error();
+    model::Item item = std::move(shaped->item);
+    const auto map = s.timeMap;
+    const double startSec = map->secondsAt(startBeat);
+    const bool audio = clip.kind == model::ClipKind::Audio;
+    const double span = audio ? map->secondsAt(endBeat) - startSec : endBeat - startBeat;
+    const double tolerance = 1e-9 * std::max(1.0, span);
+    // How long the item lasts, in the clip's unit (ADR-0097 "Scene <-> section").
+    double length = clip.length;
+    if (clip.mode == model::ClipMode::Once) {
+        length = std::min(clip.length, span);
+    } else if (clip.length >= span - tolerance) {
+        length = span;
+    } else {
+        // The clip repeats its period; one looping item reproduces that only when the
+        // period is the content (loop off, length = content) or whole repeats of it (loop
+        // on over the whole content).
+        const double content = contentLength(s, *active);
+        const double times = content > 0 ? clip.length / content : 0;
+        const bool whole = times >= 1 - 1e-9 && std::abs(times - std::round(times)) < 1e-9;
+        const bool repeats = item.loop ? whole : std::abs(times - 1) < 1e-9;
+        if (!repeats)
+            return Error("scene.insert.period",
+                         "the clip of " + s.tracks.find(clip.track)->name + " repeats every " +
+                             json::formatDouble(clip.length) + (audio ? " s" : " beats") +
+                             " but its content is " + json::formatDouble(content) +
+                             (audio ? " s" : " beats") +
+                             ", which no single looping item "
+                             "reproduces",
+                         path,
+                         "set the clip's length to its content (clip.set), or its loop on over "
+                         "the whole content with a length of whole repeats, or ask for no more "
+                         "bars than the clip is long");
+        item.loop = true;
+        length = span;
+    }
+    if (std::abs(length - clip.length) > tolerance) {
+        if (audio) {
+            SUPPLE_TRY(model::checkedBeat(s, map->beatAt(startSec + length), path));
+            model::placeItemSeconds(s, item, startSec, startSec + length);
+        } else {
+            SUPPLE_TRY(model::checkedBeat(s, startBeat + length, path));
+            model::placeItem(s, item, startBeat, length);
+        }
+    }
+    auto copied = copyTakesFor(t, s, clip.takes, pooled, shaped->envelopePos, path);
+    if (!copied) return std::move(copied).error();
+    item.takes = *copied;
+    for (std::size_t k = 0; k < clip.takes.size(); ++k)
+        if (clip.activeTake == clip.takes[k]) item.activeTake = item.takes[k];
+    return t.create(std::move(item));
+}
+
 namespace {
 
 // --- helpers --------------------------------------------------------------------------
@@ -414,7 +523,7 @@ void registerSceneCommands(cmd::Registry& registry) {
         c.name = "scene.add";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Add a scene at the end or at an index.";
+        c.summary = "Add a scene (launcher column) at the end or an index.";
         c.description =
             "at is the column (0-based, default: after the last); the scenes from there on "
             "move one column right. A project holds at most 1024 scenes.";
@@ -487,7 +596,7 @@ void registerSceneCommands(cmd::Registry& registry) {
         c.name = "scene.remove";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Remove a scene with its clips.";
+        c.summary = "Remove a scene with its clips and their takes.";
         c.description =
             "The scenes after it move one column left. A clip.removed warning names the clips "
             "removed with it.";
@@ -554,7 +663,7 @@ void registerSceneCommands(cmd::Registry& registry) {
         c.name = "scene.list";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "List the scenes in order, with clip counts.";
+        c.summary = "List scenes in column order with clip counts.";
         c.tags = {"clip launcher", "scene"};
         c.args = schema::object<NoArgs>("no_args").build();
         auto entry = schema::object<SceneEntry>("scene_entry")
@@ -594,7 +703,7 @@ void registerClipCommands(cmd::Registry& registry) {
         c.name = "clip.add";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Add a clip from notation, a file or an item.";
+        c.summary = "Add a clip to a scene's cell: from notation, a file or an item.";
         c.description =
             "One source at most: notation (as item.add's), midi_file, audio_file, or item (a "
             "copy of that item's takes; pooled shares its MIDI instead). Without one, an empty "
@@ -673,43 +782,12 @@ void registerClipCommands(cmd::Registry& registry) {
             if (a.item) {
                 auto item = existing<model::Item>(s, *a.item, "/item");
                 if (!item) return std::move(item).error();
-                const model::Item& it = *s.items.find(*item);
-                std::optional<model::ClipKind> kind;
-                for (Id tk : it.takes) {
-                    SUPPLE_TRY(checkClipTakeUnwarped(s, tk, "/item"));
-                    const model::Take* take = s.takes.find(tk);
-                    const auto k = take ? model::clipKindOf(*take) : std::nullopt;
-                    if (k && kind && *k != *kind)
-                        return Error("clip.mixed", *a.item + " holds MIDI and audio takes", "/item",
-                                     "a clip holds one kind: remove the other takes from the "
-                                     "item, or copy them into clips of their own");
-                    if (k) kind = k;
-                }
-                clip.kind = kind.value_or(model::ClipKind::Midi);
-                const auto span = model::itemSpan(s, it);
-                std::function<double(double)> envelopePos;
-                if (clip.kind == model::ClipKind::Midi) {
-                    clip.length = model::itemLengthBeats(s, it);
-                } else {
-                    clip.length = span.endSec - span.startSec;
-                    const auto map = s.timeMap;
-                    envelopePos = [map, span](double beats) {
-                        return map->secondsAt(span.startBeat + beats) - span.startSec;
-                    };
-                }
-                auto copied = copyTakesFor(t, s, it.takes, a.pooled, envelopePos, "/item");
-                if (!copied) return std::move(copied).error();
-                clip.takes = *copied;
-                for (std::size_t k = 0; k < it.takes.size(); ++k)
-                    if (it.activeTake == it.takes[k]) clip.activeTake = clip.takes[k];
-                if (!clip.activeTake && !clip.takes.empty()) clip.activeTake = clip.takes.front();
-                if (it.loop && it.activeTake)
-                    if (const model::Take* active = s.takes.find(*it.activeTake))
-                        if (const double content = contentLength(s, *active); content > 0)
-                            clip.loop = {true, 0.0, content};
-                clip.mute = it.mute;
-                clip.gainDb = it.gainDb;
-                clip.color = it.color;
+                auto made = clipFromItem(t, s, *item, a.pooled, "/item");
+                if (!made) return std::move(made).error();
+                made->track = clip.track;
+                made->scene = clip.scene;
+                made->name = clip.name;
+                clip = std::move(*made);
             } else if (a.audioFile) {
                 auto imported = importAudioFile(app, t, s, *a.audioFile);
                 if (!imported) return std::move(imported).error().at("/audio_file");
@@ -836,7 +914,7 @@ void registerClipCommands(cmd::Registry& registry) {
         c.name = "clip.remove";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Remove a clip and its takes.";
+        c.summary = "Remove a clip with its takes (unpooled sources go too).";
         c.tags = {"clip launcher", "clip"};
         c.args =
             schema::object<ClipRef>("clip_ref").field("clip", &ClipRef::clip, clipIdArg()).build();
@@ -857,7 +935,7 @@ void registerClipCommands(cmd::Registry& registry) {
         c.name = "clip.move";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Move a clip to an empty cell.";
+        c.summary = "Move a clip to an empty cell in another scene, channel or both.";
         c.tags = {"clip launcher", "clip"};
         c.args = schema::object<ClipMoveArgs>("clip_move_args")
                      .field("clip", &ClipMoveArgs::clip, clipIdArg())
@@ -901,7 +979,7 @@ void registerClipCommands(cmd::Registry& registry) {
         c.name = "clip.duplicate";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Copy a clip to an empty cell.";
+        c.summary = "Copy a clip and its takes to an empty cell.";
         c.description =
             "The copy's MIDI is its own unless pooled, which shares it (both clips then edit "
             "the same notes).";
@@ -1007,6 +1085,7 @@ std::string describeScenes(const model::Session& s) {
             if (clip.takes.size() > 1) line += " · " + std::to_string(clip.takes.size()) + " takes";
             if (clip.quantize)
                 line += " · quantize " + std::string(model::launchQuantizeName(*clip.quantize));
+            if (clip.gainDb != 0.0) line += " · " + number(clip.gainDb) + " dB";
             if (clip.mute) line += " · muted";
             lines += line + "\n";
         }

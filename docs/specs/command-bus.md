@@ -521,6 +521,13 @@ an informational Linux-reference diff; DSP values are deterministic per platform
   `RefResolver`; commands with selectors use the optional `Command::resolve`
   hook before the handler. The hook replaces selectors in the typed args with
   IDs, and the command log stores the resolved encoding.
+- A handler may run another command through the registry
+  (`CommandInfo::invoke`) on its own `Context`. The resolved encoding belongs to
+  the command the caller ran: an inner command's `resolve` step does not replace
+  it (`Context::InvocationScope` puts it back as it found it, on every path), so
+  the log and `Host::invoked` (history, replayed on a branch merge) carry the
+  outer command's arguments, whether or not it has a `resolve` step itself.
+  The inner command is not logged or recorded on its own.
 - The bus owns job state for each `Dispatcher`. A handler may create a job via
   `ctx.service<JobManager>().create()` and return its ID; the host owns the
   worker and must stop/join workers before destroying the dispatcher. Job

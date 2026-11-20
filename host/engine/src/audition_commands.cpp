@@ -94,7 +94,7 @@ void registerAuditionCommands(cmd::Registry& registry) {
         c.name = "audition.get";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Whether a file audition plays: its path, length and position (seconds).";
+        c.summary = "Whether an audition plays: path, length, position (seconds).";
         c.tags = {"transport", "media"};
         c.args = schema::object<NoArgs>("no_args").build();
         c.result = statusSchema();

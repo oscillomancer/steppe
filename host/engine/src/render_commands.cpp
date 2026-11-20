@@ -1673,7 +1673,7 @@ void registerQueueCommands(cmd::Registry& registry) {
         c.name = "render.queue.add";
         c.kind = Kind::Action;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Queue a render (mix, stems or regions) to run later with render.queue.run.";
+        c.summary = "Queue a render (mix, stems, regions) for render.queue.run.";
         c.description =
             "args: the render command's arguments (as for render.mix/stems/regions). The queued "
             "render is pinned to the session and settings as they are now (its version, a "
@@ -1806,7 +1806,7 @@ void registerQueueCommands(cmd::Registry& registry) {
         c.name = "render.queue.run";
         c.kind = Kind::Action;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Run every queued render in order; each one leaves the queue when it is done.";
+        c.summary = "Run every queued render in order, removing each when done.";
         c.description =
             "Each render renders the version it was queued at. job: true runs them as one job "
             "(job.get for progress). The result lists each render's files under its id.";
@@ -1978,7 +1978,7 @@ void registerSettingsCommands(cmd::Registry& registry) {
         c.name = "render.preset.list";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Render presets: the factory ones, then the user's, with their settings.";
+        c.summary = "Render presets, factory then user's, with settings.";
         c.description =
             "default: the user's render default, or null. Presets live in the user's data "
             "folder (render-presets/), shared by every project.";
@@ -2007,7 +2007,7 @@ void registerSettingsCommands(cmd::Registry& registry) {
         c.name = "render.preset.save";
         c.kind = Kind::Action;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Save render settings as a named preset, or as the user's render default.";
+        c.summary = "Save render settings as a named preset or the user's default.";
         c.description =
             "settings: what to save (default: the effective settings now). Never saved: "
             "stems.tracks, matrix and custom bounds, which belong to one project. A file per "
@@ -2129,7 +2129,7 @@ void registerRenderCommands(cmd::Registry& registry) {
         c.exposure = which == "render.mix" ? cmd::Exposure::McpTool : cmd::Exposure::McpExec;
         c.summary =
             which == "render.mix"
-                ? "Render the mix offline with the project's render settings (default: whole song)."
+                ? "Render the mix offline with the project's settings (default: whole song)."
             : which == "render.stems" ? "Render each selected track to its own file (stems)."
             : which == "render.regions"
                 ? "Render each region (or the render matrix's tracks per region) to files."

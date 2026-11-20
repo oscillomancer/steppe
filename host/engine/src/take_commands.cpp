@@ -413,7 +413,7 @@ void registerTakeCommands(cmd::Registry& registry) {
         c.name = "take.set";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Set take gain, pan, channel mode, name, source offset, or playrate and pitch.";
+        c.summary = "Set a take's gain, pan, channel mode, name, offset, playrate or pitch.";
         c.tags = {"take"};
         c.args =
             schema::object<TakeSetArgs>("take_set_args")
@@ -668,7 +668,7 @@ void registerTakeCommands(cmd::Registry& registry) {
         c.name = "item.explode-takes";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Spread an item's takes onto new tracks, or one after another on its track.";
+        c.summary = "Spread an item's takes onto new tracks, or in turn on its track.";
         c.description =
             "In recording order. mode tracks: the first take stays on the item's track and each "
             "other take gets a new channel right below it (named after the take) at the same "

@@ -1062,7 +1062,9 @@ and naming. All `edit` unless marked (q) query or (a) action.
   `item.mix-to-track {items}` (background action, one undo step: the items
   through their channels' strips, decoded as a fresh buss hears them, onto a
   new muted channel; engine.md).
-- **MIDI**: `midi.write {item | {track, at}, notation, replace: bool}`,
+- **MIDI**: `midi.write {item | {track, at}, notation, replace: bool}` (the item or
+  clip keeps its length; notation that runs past it is kept but does not play, and
+  the warning `midi.beyond_length` says so),
   `midi.get {item, format: notation|events}` (q), `midi.edit {item, ops:
   [{select: {pitch, range, channel}, set|shift|transpose|quantize|velocity}]}`
   (with the scale ops `transpose_degrees`, `snap_to_scale` and `fit_to_chord`: see
@@ -1153,7 +1155,8 @@ and naming. All `edit` unless marked (q) query or (a) action.
   launches: [{frame, track, action, clip?, anchor, anchor_beat}]}`.
   Errors `launch.capture` (nothing captured), `launch.commit` (a captured
   track or clip is gone), `item.locked`, `clip.unsupported`); `scene.insert`,
-  `scene.capture {region}`, `arrangement.build {sequence}`.
+  `scene.capture {region}`, `arrangement.build {sequence}` (L4a: "Scenes and
+  clips", "Scene ↔ section").
 - **automation**: `env.add {target}`, `env.remove`, `env.set {mode, active,
   …}`, `env.points.set {env, points, range?}`, `env.points.add`,
   `env.points.remove {range}`, `env.add {take, param}` (take envelopes),
@@ -1909,14 +1912,77 @@ but not launched; freezing returns the track to the arrangement first.
 - Launches (`launch.*`) change transport state only. They are logged for
   `launch.commit` while capture is on, and they are never in history.
 
+**Scene ↔ section (ADR-0097, "Scene ↔ section: the rules").** Three
+commands move material between the launcher and the timeline. They change
+the model only (no launch), each is one undo step, and a refusal changes
+nothing.
+
+- `scene.insert {scene, at | bar, bars, name?, pooled?}` (edit): lays the
+  scene's clips on the timeline as items and adds a section over them.
+  - The span starts at `bar` (1-based) or at `at` (beats), which must be on a
+    bar line (`scene.at`), and lasts `bars` whole bars (≥ 1; `scene.bars`)
+    through the meter map. Exactly one of `at` and `bar` is given.
+  - Each clip becomes one item on its track at the span's start, as `item.add
+    {clip}` makes it (kind, length, loop, take envelopes, gain, mute and colour
+    as in "Converting between an item and a clip"), with its length set by the
+    clip's mode:
+    - `once`: the clip's length, or the span's if shorter;
+    - `loop` and the clip no longer than the span: one looping item for the
+      whole span when the clip's period is its content (loop off with the
+      length the content, or loop on over the whole content from 0 with a
+      length of whole repeats of it). A loop window that is not the whole
+      content is `clip.unsupported`, as for `item.add {clip}`; any other
+      period (a gap after the content, a length shorter than it) is
+      `scene.insert.period`;
+    - `loop` and the clip at least as long as the span: one item for the span.
+  - The takes are copied, and a MIDI source with them unless `pooled`.
+  - An item already on a track that receives a clip and overlapping the span
+    is `scene.insert.occupied` (named in the message); other tracks' items are
+    not touched. A scene with no clip is `scene.empty`. A frozen track or one
+    that cannot hold the item refuses as `item.add` does.
+  - It adds one region over the span: `section` true, named after the scene
+    (`name` overrides), with the scene's colour. Existing regions are never
+    edited.
+  - Result: `{items: [{clip, item, track}], region, start, end}` (beats).
+- `scene.capture {region, name?, pooled?}` (edit): makes a scene from the items
+  of a section.
+  - For each channel, the items overlapping the region must be one item
+    wholly inside it. Checked in this order: one that starts before or ends
+    after the region is `scene.capture.edge`; several is
+    `scene.capture.items`; the one that starts after the region's start is
+    `scene.capture.offset`. A region with no item is `scene.capture.empty`. Items on masters are skipped with a
+    `scene.capture.skipped` warning.
+  - Each item becomes a clip as `clip.add {item}` makes it (a warped take is
+    `clip.unsupported`; a MIDI source is copied unless `pooled`), `loop` mode
+    when the item fills the region and `once` when it is shorter. The item's
+    own loop becomes the clip's.
+  - The new scene is appended after the last column, named after the region
+    unless `name` is given, with the region's colour. A region in seconds is
+    read through the tempo map. The region and the items are not changed.
+  - Errors beside the above: `scene.limit`, `clip.limit`, `clip.memory`
+    (audio), as `scene.add` and `clip.add`.
+  - Result: `{scene, clips: [{clip, source_item, track}]}`.
+- `arrangement.build {sequence: [{scene, bars}…], at | bar?, pooled?}` (edit):
+  `scene.insert` for each entry in turn, each starting where the last ended,
+  from `bar` or `at` (default bar 1), and a region for each. Every entry is
+  checked before anything changes. An empty sequence, one of more than 256
+  entries (`scene.sequence`), `bars` < 1 (`scene.bars`) and an entry's own errors
+  (`scene.empty`, `scene.insert.period`, `scene.insert.occupied`) are refused
+  with the entry's index in `path` (`/sequence/2/scene`). A scene may appear
+  more than once.
+  - Result: `{segments: [{scene, region, start, end, items: [{clip, item,
+    track}]}]}`.
+- Every one of these errors carries `code`, `message`, `path` and a `hint`
+  that says how to fix the call.
+
 **What `session.describe` prints.** After the tracks, one line per scene in
 order with its clips under it. Each clip line has its track, length in its
-unit, mode, content and flags; no clip moves the project length:
+unit, mode, content and flags (loop window, quantize, gain when not 0 dB, muted); no clip moves the project length:
 
 ```
 Scenes (2):
   sc_1 Verse
     tr_2 Bass: cl_1 "Bass line" 8 beats · loop 0–4 · MIDI mi_3, 12 notes
-    tr_5 Pad: cl_4 "Pad swell" 6.0 s once · audio md_2 pad.wav · quantize beat · muted
+    tr_5 Pad: cl_4 "Pad swell" 6.0 s once · audio md_2 pad.wav · quantize beat · -6 dB · muted
   sc_2 Chorus (no clips)
 ```

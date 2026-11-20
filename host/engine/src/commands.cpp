@@ -70,6 +70,7 @@ void registerDeviceCommands(cmd::Registry& registry);
 void registerTransportCommands(cmd::Registry& registry);
 void registerAuditionCommands(cmd::Registry& registry);
 void registerClipLauncherCommands(cmd::Registry& registry);
+void registerSceneSectionCommands(cmd::Registry& registry);
 void registerLaunchCommands(cmd::Registry& registry);
 
 // Exposed to rack.probe (rack_probe.cpp).
@@ -124,6 +125,7 @@ void registerEngineCommands(cmd::Registry& registry) {
     registerTransportCommands(registry);
     registerAuditionCommands(registry);
     registerClipLauncherCommands(registry);
+    registerSceneSectionCommands(registry);
     registerLaunchCommands(registry);
 }
 

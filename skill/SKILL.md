@@ -75,6 +75,8 @@ tool (or as `args` through `exec`).
 |---|---|
 | Writing melodies, chords, drums, bass lines, controller moves | `guides/notation.md` |
 | The project's key, chords and sections: reading and setting them, how notes are spelled | `guides/harmony.md` |
+| Moving a parameter or a level with an LFO, a random source, a macro or another track's level (ducking): `modulate`, `modulation.*`, and how to measure it | `guides/modulation.md` |
+| Trying ideas as scenes of clips, launching them, and turning scenes into a song with sections: `scene.*`, `clip.*`, `launch.*`, `arrangement.build` | `guides/launcher.md` |
 | The sandbox loop: load a plugin, program it, render, analyze, iterate | `guides/sandbox-loop.md` |
 | EQ: rumble, masking, harshness, de-essing, dynamic and mid/side bands (Yarrow) | `guides/eq.md` |
 | A real room or hall: its size, materials, where the sound and the listener stand, decay, clarity, held ambience (Ghyll) | `guides/reverb.md` |

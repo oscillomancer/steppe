@@ -1140,6 +1140,10 @@ class Engine {
     // compiles, where a plug-in may ask for a restart.
     void (*betweenCompilesForTests_)(void*) = nullptr;
     void* betweenCompilesContext_ = nullptr;
+    // Tests only (EngineTestAccess): runs in launch() between publishing
+    // the slots and deciding them, as a main thread preempted there.
+    void (*launchCommitForTests_)(void*) = nullptr;
+    void* launchCommitContext_ = nullptr;
     bool bridgedLive_ = false;  // main thread (bridgedLive())
     std::atomic<std::uint64_t> stoppedGen_{0};
     // The session the engine plays: the newest published plan's, or a mix or
@@ -1151,11 +1155,38 @@ class Engine {
     // `state` is generation << 3 | status, so an executor's compare-and-swap
     // fails if the main thread rewrote the slot meanwhile (a seqlock); the
     // fields are relaxed atomics for the same reason.
+    //
+    // A launch has several targets (ADR-0097, dated revision 2026-11-20):
+    // its track's channel and every rack Notes feed whose source is that
+    // track, each switched at the target stream plus its own node's timeline
+    // shift, by whichever executor runs that node. Whether it is taken is
+    // decided once for all of them:
+    // - kPending: published, undecided. An executor that reaches one of its
+    //   frames (or is past one) marks it kMissed; the main thread places it
+    //   again.
+    // - kCommitted: the main thread found, after publishing, every executor's
+    //   horizon at or before the target (launchHorizon_), so each will read
+    //   the slot before it passes its frames.
+    // - kApplied: the first target switched (compare-and-swap from
+    //   kCommitted, against kVoided). Every other target follows at its
+    //   frame, or, if its executor relocated first, at its next block.
+    //   `done` gathers the executor classes finished with it (bit 0 the
+    //   renderer, bit 1 the callback); the slot is free once `done` covers
+    //   `required`.
+    // - kVoided: committed, but its epoch ended before any target switched;
+    //   placed again, as kMissed.
     struct LaunchSlot {
-        enum : std::uint64_t { kFree = 0, kPending = 1, kApplied = 2, kMissed = 3 };
+        enum : std::uint64_t {
+            kFree = 0,
+            kPending = 1,
+            kApplied = 2,
+            kMissed = 3,
+            kCommitted = 4,
+            kVoided = 5
+        };
         std::atomic<std::uint64_t> state{0};
         std::atomic<std::uint64_t> track{0}, clip{0}, epoch{0};
-        std::atomic<std::uint8_t> action{0};
+        std::atomic<std::uint8_t> action{0}, done{0}, required{0};
         std::atomic<std::int64_t> target{0}, anchorSample{0};
         std::atomic<double> anchorBeat{0};
         // Main thread only: what to re-place after a miss or a new epoch.
@@ -1170,7 +1201,24 @@ class Engine {
     };
     std::unique_ptr<std::array<LaunchSlot, kLaunchSlots>> launchSlots_ =
         std::make_unique<std::array<LaunchSlot, kLaunchSlots>>();
-    std::atomic<std::uint32_t> launchesQueued_{0};  // pending slots: executors skip at 0
+    // Slots the executors still act on (pending, committed, or applied and
+    // not yet done): they skip the queue at 0.
+    std::atomic<std::uint32_t> launchesQueued_{0};
+    // Each executor class's horizon (0 the renderer, 1 the callback): the
+    // epoch and the stream its current block may reach, stored before it
+    // reads the queue (sequentially consistent, against the main thread's
+    // publish then read). Written by that executor only.
+    struct LaunchHorizon {
+        std::atomic<std::uint64_t> epoch{0};
+        std::atomic<std::int64_t> end{0};
+    };
+    std::array<LaunchHorizon, 2> launchHorizon_{};
+    // Executor-private, by class: the epoch and stream of its last
+    // launchesAt, so that a relocated executor knows which of its targets
+    // of an applied launch it switched before leaving the epoch.
+    std::array<std::uint64_t, 2> launchLastEpoch_{};
+    std::array<std::int64_t, 2> launchLastStream_{};
+    std::array<bool, 2> launchLastValid_{};
     std::unique_ptr<SpscRing<LaunchAck, 1024>> rendererLaunchAcks_ =
         std::make_unique<SpscRing<LaunchAck, 1024>>();
     std::unique_ptr<SpscRing<LaunchAck, 1024>> callbackLaunchAcks_ =
@@ -1186,6 +1234,13 @@ class Engine {
     // until the next one (at most `k`).
     std::uint32_t launchesAt(detail::Plan& p, int liveClass, std::uint64_t epoch,
                              std::int64_t stream, std::uint32_t k, bool renderer) SUPPLE_RT;
+    // Executors: `mine` (classes) are finished with an applied slot.
+    void launchDone(LaunchSlot& slot, std::uint8_t mine) SUPPLE_RT;
+    // Main thread: whether every executor running one of `track`'s launch
+    // targets in `plan` has a horizon at or before `target` in `epoch`
+    // (read after the slot is published).
+    bool launchHorizonsAllow(const detail::Plan& plan, model::Id track, std::uint64_t epoch,
+                             std::int64_t target) const;
     // Main thread (service): collects acks, re-places missed launches and
     // those of an old epoch.
     void serviceLaunches();
