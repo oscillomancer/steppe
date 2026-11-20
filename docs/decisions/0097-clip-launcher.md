@@ -6,8 +6,8 @@ co-director's rulings.
 It extends ADR-0057 (master items) and ADR-0093 (values on a running plan),
 and touches ADR-0013 (bridge deadlines) only through the executors it
 shares. It is built in steps L1 to L4 (below). The engine's "Playing"
-section is written from the core design and the lead's core check as they
-stand, **for the lead's revision**.
+section was written from the core design and the lead's core check, and
+the lead revised it with L2 (2026-11-19).
 
 Contracts: `specs/session-model.md` "Scenes and clips (schema 2.18,
 ADR-0097)", `specs/engine.md` §1.4.2, `specs/gui.md` §4.15.
@@ -311,64 +311,113 @@ Clips replace that with an **ordered budget**:
   (session-model.md shows the text). Clips never count toward the project
   length.
 
-### Playing (engine; for the lead's revision)
+### Playing (engine; revised by the lead with L2, 2026-11-19)
 
-- **A track either follows the arrangement or plays one clip.** All of a
-  track's clips are compiled into its node: audio as prepared buffers, MIDI
-  as period-relative event lists feeding the track's one note stage. A
-  launch never compiles.
-- **A launch is a timed message (L-a, B1).** Its target is `{epoch, stream
-  sample}`, the coordinate plan handoffs use (`handAt`/`handEpoch`). It is
-  not a timeline sample, because the timeline repeats under the transport
-  loop and is not the stream at any master playrate other than 1. There is
-  one target per launch. For a scene it is the latest floor among its
-  tracks (B5), so a scene spanning live and rendered tracks starts together.
-- **The queue is the engine's (L-b, B3).** It is fixed capacity and keyed
-  by track id. Plans hold only the clip players, so a queued launch
-  survives plan swaps and a pending compile.
-  - The main thread picks the target: the next quantize boundary at or
-    after the renderer's published position plus one render block,
-    computed through the playrate timelines.
-  - The first executor to reach an entry decides it by compare-and-swap
-    (B2). It is taken if that executor's stream is at or before the target;
-    otherwise it is missed and goes back to the main thread, which
-    re-quantizes it.
-  - After a seek starts a new epoch, the main thread re-quantizes every
+- **A track either follows the arrangement or plays one clip.** Every
+  clip of a channel is compiled into the channel's node as a *clip
+  player*. An audio clip's player holds the take's prepared buffer, as an
+  item's does. A MIDI clip's holds its notes, sorted by their beat within
+  the content. A launch never compiles. A frozen track's node compiles no
+  players: it has no chain or note stage and plays its print.
+- **What a track plays is transport state,** the node's *launch state*:
+  `arrangement`, `clip` (with the clip's player and anchor), `held` (a
+  `once` clip past its length) or `stopped`. Plans carry it across swaps
+  by node id and clip id (§1.6 of engine.md). A clip the new plan no
+  longer has (removed, or now past the memory budget) ends at that swap
+  with the switch fade, and its track returns to the arrangement.
+- **A launch is a timed message (L-a, B1).** Its target is `{epoch,
+  stream sample}`, the coordinate plan handoffs use (`handAt`,
+  `handEpoch`). A scene launch has one target for all its tracks: the
+  latest of their floors (B5).
+- **The floor is per track.** It is the position of the executor that
+  runs the track plus that executor's block: the renderer's published
+  position plus one render block for a rendered track, the callback's
+  stream plus one device block for a live one. The target is the next
+  quantize boundary at or after the floor, through the playrate
+  timelines.
+- **The queue is the engine's (L-b).** It has fixed capacity and holds one
+  entry per track; a newer launch on a track replaces its pending entry.
+  Plans hold only the players, so an entry survives plan swaps and a plan
+  waiting for adoption.
+  - **Who applies it:** the executor that runs the track's node when its
+    block reaches the target. It splits the block at the target, as at a
+    loop wrap, and takes the entry by compare-and-swap, so a node handed
+    between executors is applied exactly once. A handoff carries the
+    applied state with the node.
+  - An executor whose block already starts past the target marks the
+    entry missed, and the main thread re-quantizes it. With a bar or beat
+    quantize and a clip length in whole bars, a re-quantized track keeps
+    the same phase (below).
+  - **Epochs:** an executor never takes or misses an entry from another
+    epoch. After a seek's `epochDone_` the main thread re-quantizes every
     pending entry from the new position (B4).
-  - The applied sample is acknowledged by both executors. The song position
-    at which a launch was applied is what the launch log keeps.
-- **Quantize** is project-wide, with a per-clip override. `none` means as
-  soon as both executors can agree: about the render-ahead (200 ms) on
-  rendered tracks, and the device block on live tracks. That floor is
-  accepted in this work and stated in the guide.
-- **Phase is a pure function of the song position (L-c, B4),** in the
-  clip's own unit. Negative differences use the mathematical modulus.
+  - Each applied entry comes back to the main thread with its stream
+    sample, its running frame and its song position.
+- **While stopped,** a launch is not quantized. It starts the transport
+  and applies at the play start's first sample, so the clip's anchor is
+  the play position.
+- **Quantize** is project-wide (`launch_quantize`) with a per-clip
+  override. `none` means the floor: about the render-ahead (200 ms) for a
+  rendered track, one device block for a live one. That is accepted for
+  this work and stated in the guide.
+- **Phase is a pure function of the song position (L-c),** in the clip's
+  unit, with the mathematical modulus for negative differences.
   - MIDI: the position in the clip is `(song beat − anchor beat) mod
-    length`.
+    length`. The player converts beats to samples per block through the
+    plan's time map, without allocating, as timeline MIDI does.
   - Audio: it is `(timeline sample − anchor sample) mod length in frames`,
     never beats, so a tempo ramp does not move it.
-  - A `once` clip sounds while the position is within its length after the
-    anchor, and is silent before the anchor; after a transport wrap it is
-    silent until it is launched again.
-  - Seeks and wraps apply the same formulas, so clips stay on the grid and
+  - Inside the period, a loop window that is on maps the position into
+    the content, as an item's looped source does.
+  - A `once` clip sounds while its position is within its length after
+    the anchor. It is silent before the anchor, and silent after a
+    transport wrap until it is launched again.
+  - Seeks and wraps use the same formulas, so clips stay on the grid and
     a performance replays exactly from its log.
-- **Switching (L-d, B5).** Leaving the arrangement or a clip ends the
-  sounding notes of what is left, at the switch sample. Returning to the
-  arrangement does not chase notes (plan.cpp:168). An audio switch has a
-  short fixed fade.
-- **While stopped.** Launching while stopped starts the transport. State is
-  carried across plan swaps by node id.
-- **Audio clips play at the take's own rate** in these steps, with the
-  take's playrate and pitch as on the timeline, but no warp. A clip whose
-  audio does not fit the project tempo gets a warning. Following tempo
-  comes later, as a live converter on the shared fractional clock (the
-  master-playrate path), not as cached renders.
-- **Renders play the arrangement only.** The render dialog says so in one
-  line while any track is held by a clip.
-- **Lead's call, with L2:** the take `pitch` envelope that is stored but
-  never played (core §4.5) is refused or played, for clips and items alike.
-- **Tests:** both executors against the offline replay of the same launch
-  log, at two block sizes, through the bridge and under rtsan.
+- **Switching (L-d, B5).** Leaving the arrangement or a clip ends what
+  was left's sounding notes at the switch sample. Returning to the
+  arrangement does not chase notes (`trackEvents`, engine.md §1.1). An
+  audio switch crossfades over a fixed 5 ms of timeline samples, in the
+  source like an item's fade, in both executors and offline.
+- **The launch log and the offline replay.** The engine logs each applied
+  launch with its running frame (stream frames since the play start, in
+  the epoch's terms) and its song position, and logs seeks and transport
+  wraps beside them. Renders and the render dialog play the arrangement
+  only, and the dialog says so in one line while any track is held by a
+  clip. An internal offline replay applies a log at its logged running
+  frames. The tests use it, and L4's capture will.
+- **Memory (L-e).** The prepared-source budget counts sample values
+  across channels: the decoded source plus each converted variant, with
+  a source or variant shared by several takes counted once. A clip on
+  audio the arrangement already plays at the same rate therefore costs
+  nothing. The same preparation (`prepareSources`, off the audio thread)
+  adds the clips' takes after the arrangement's, in scene order and then
+  track order. It skips any clip that would pass 2^28 instead of failing,
+  and names the skipped clips in a `launch.memory` warning. A launch of a
+  skipped clip is refused with `launch.memory`.
+- **Frozen tracks.** Freezing returns the track to the arrangement at the
+  swap that adopts the frozen plan, with the switch fade, in both
+  executors, and drops its queued launch. `launch.clip` on a frozen track
+  fails with `track.frozen`, and `launch.scene` skips it with a
+  `track.frozen` warning.
+- **Audio clips play at the take's own rate,** with its playrate, pitch
+  and channel mode as on the timeline, and no warp. A clip whose audio
+  does not fit the project tempo gets a `launch.tempo` warning.
+- **Staged within L2, each stated in STATUS until done:**
+  - *Master playrate.* Clip audio is a source on the playrate path
+    (ADR-0045 §2: converted before take FX and mixing), so it speeds up
+    with the master playrate. Until that lands, a plan with the master
+    playrate active compiles no players, its tracks follow the
+    arrangement, and a launch is refused with `launch.playrate`.
+  - *A clip take's FX and envelopes.* They will play as an item's take
+    chain does. Until then a clip plays without them, and the plan warns
+    with `launch.take_chain`, naming the clip.
+- **The take `pitch` envelope** that is stored but never played (core
+  §4.5) stays unplayed for clips as for items. Whether to play it is
+  decided with the stretch path, for both.
+- **Tests:** both executors against the offline replay of the engine's
+  own launch log, at two block sizes, through the bridge, and under
+  rtsan.
 
 ### Scenes and the arrangement (L4)
 
