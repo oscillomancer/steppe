@@ -790,11 +790,22 @@ TEST_CASE("modulation: depth and enabled reach a running plan without a compile"
     const auto half = edited(emit.s, [](model::Modulation& m) { m.depth = 0.05; });
     const auto off = edited(half, [](model::Modulation& m) { m.enabled = false; });
     const auto hidden = edited(off, [](model::Modulation& m) { m.lane = false; });
+    // When a mix value is heard: from the next block its executor renders.
+    // In the callback that is the next cycle; the anticipative renderer may
+    // be up to its render-ahead (200 ms, 9600 frames) past the playhead, in
+    // a block of up to renderBlock (1024) frames. Each edit is made with the
+    // renderer as far ahead as it goes, the latest arrival there is, so the
+    // test is decided by that bound and not by how fast the machine renders
+    // (CI 44760220473: a Windows runner whose renderer had filled its budget
+    // still played depth 0.1 at frame 19000).
+    constexpr std::int64_t kStep = 300 * 96;  // frames between edits
+    constexpr std::int64_t kLatest = 9600 + 1024;
+    static_assert(kLatest < kStep);
     for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
         INFO("anticipative " << options.anticipative);
         InstancePool pool = makePool();
         MediaCache media;
-        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 4 * kStep});
         Engine engine(pool, media, options);
         REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 96}));
         const auto run = [&](std::int64_t blocks) {
@@ -803,28 +814,48 @@ TEST_CASE("modulation: depth and enabled reach a running plan without a compile"
             else
                 backend.run(blocks);
         };
+        // The renderer at its render-ahead (state alone: no deadline decides).
+        const auto fullyAhead = [&] {
+            while (options.anticipative && !engine.awaitRendered(1 << 30)) {
+            }
+        };
         REQUIRE(engine.load(emit.s));
         engine.play();
-        run(100);  // 9600 frames
+        run(kStep / 96);
         const auto generation = engine.planGeneration();
+        fullyAhead();
         REQUIRE(engine.load(half));
         CHECK(engine.planGeneration() == generation);
-        run(100);
+        run(kStep / 96);
+        fullyAhead();
         REQUIRE(engine.load(off));
         CHECK(engine.planGeneration() == generation);
-        run(100);
+        run(kStep / 96);
+        fullyAhead();
         REQUIRE(engine.load(hidden));
         CHECK(engine.planGeneration() > generation);  // lane is a route edit
-        run(100);
+        run(kStep / 96);
         engine.stop();
         CHECK(engine.processErrors() == 0);
-        // The anticipative renderer takes a value up to its render-ahead
-        // (9600 frames here) later: read each step's end.
+        CHECK(engine.anticipationMisses() == 0);
         const auto& cap = backend.capture().channels[0];
-        CHECK(double(cap[9000]) == doctest::Approx(gainAt(0.1)).epsilon(1e-4));
-        CHECK(double(cap[19000]) == doctest::Approx(gainAt(0.05)).epsilon(1e-4));
-        CHECK(double(cap[28500]) == doctest::Approx(gainAt(0)).epsilon(1e-4));
-        CHECK(double(cap[38000]) == doctest::Approx(gainAt(0)).epsilon(1e-4));
+        const std::size_t L = engine.outputLatency();
+        const auto at = [&](std::int64_t frame) {
+            return double(cap[L + static_cast<std::size_t>(frame)]);
+        };
+        // Before each edit the old value; from the latest arrival on, the new.
+        CHECK(at(kStep - 1) == doctest::Approx(gainAt(0.1)).epsilon(1e-4));
+        CHECK(at(kStep + kLatest) == doctest::Approx(gainAt(0.05)).epsilon(1e-4));
+        CHECK(at(2 * kStep - 1) == doctest::Approx(gainAt(0.05)).epsilon(1e-4));
+        CHECK(at(2 * kStep + kLatest) == doctest::Approx(gainAt(0)).epsilon(1e-4));
+        CHECK(at(3 * kStep - 1) == doctest::Approx(gainAt(0)).epsilon(1e-4));
+        CHECK(at(3 * kStep + kLatest) == doctest::Approx(gainAt(0)).epsilon(1e-4));
+        CHECK(at(4 * kStep - 1) == doctest::Approx(gainAt(0)).epsilon(1e-4));
+        // In the callback, the next cycle.
+        if (!options.anticipative) {
+            CHECK(at(kStep) == doctest::Approx(gainAt(0.05)).epsilon(1e-4));
+            CHECK(at(2 * kStep) == doctest::Approx(gainAt(0)).epsilon(1e-4));
+        }
     }
 }
 
