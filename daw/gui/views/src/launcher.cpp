@@ -125,10 +125,10 @@ LauncherColumns LauncherPane::columns() const {
 }
 
 ui::Rect LauncherPane::cellRect(std::size_t row, std::size_t column) const {
-    const TrackLayout& layout = view_.trackLayout();
+    const TrackLayout& tracks = view_.trackLayout();
     const LauncherColumns cols = columns();
-    return {cols.columnX(column), bounds().y + layout.yOf(row) - view_.viewport().scrollY,
-            LauncherColumns::kColumn, layout.heightOf(row)};
+    return {cols.columnX(column), bounds().y + tracks.yOf(row) - view_.viewport().scrollY,
+            LauncherColumns::kColumn, tracks.heightOf(row)};
 }
 
 ui::Rect LauncherPane::playZone(const ui::Rect& cell) {
@@ -143,12 +143,12 @@ ui::Rect LauncherPane::stopZone(const ui::Rect& cell) {
 LauncherPane::Hit LauncherPane::hitAt(ui::Point p) const {
     Hit hit;
     if (!bounds().contains(p)) return hit;
-    const TrackLayout& layout = view_.trackLayout();
+    const TrackLayout& tracks = view_.trackLayout();
     const LauncherColumns cols = columns();
-    for (std::size_t i = 0; i < layout.rowCount(); ++i) {
+    for (std::size_t i = 0; i < tracks.rowCount(); ++i) {
         const ui::Rect r = arrRect(i);
         if (p.y < r.y || p.y >= r.bottom()) continue;
-        const TrackRow& row = layout.rows()[i];
+        const TrackRow& row = tracks.rows()[i];
         if (row.lane() || row.type != model::StripType::Channel) return hit;
         hit.row = i;
         hit.track = row.track;
@@ -183,11 +183,11 @@ std::optional<ItemGestures::ClipGhost> LauncherPane::timelineGhost(model::Id cli
     const model::Session& s = view_.session();
     const model::Clip* c = s.clips.find(clip);
     if (!c || !view_.lanesRect().contains(p)) return std::nullopt;
-    const TrackLayout& layout = view_.trackLayout();
-    for (std::size_t i = 0; i < layout.rowCount(); ++i) {
+    const TrackLayout& tracks = view_.trackLayout();
+    for (std::size_t i = 0; i < tracks.rowCount(); ++i) {
         const ui::Rect r = view_.rowRect(i);
         if (p.y < r.y || p.y >= r.bottom()) continue;
-        const TrackRow& row = layout.rows()[i];
+        const TrackRow& row = tracks.rows()[i];
         if (row.lane() || row.type != model::StripType::Channel) return std::nullopt;
         const double start = view_.gestures().snappedBeatAt(p.x, free);
         // A MIDI clip's length is in beats, an audio clip's in seconds.
@@ -204,10 +204,10 @@ bool LauncherPane::dropAllowed(const Hit& over) const {
 }
 
 ui::Rect LauncherPane::arrRect(std::size_t row) const {
-    const TrackLayout& layout = view_.trackLayout();
+    const TrackLayout& tracks = view_.trackLayout();
     const LauncherColumns cols = columns();
-    return {cols.arrX(), bounds().y + layout.yOf(row) - view_.viewport().scrollY,
-            LauncherColumns::kArr, layout.heightOf(row)};
+    return {cols.arrX(), bounds().y + tracks.yOf(row) - view_.viewport().scrollY,
+            LauncherColumns::kArr, tracks.heightOf(row)};
 }
 
 void LauncherPane::paint(ui::Canvas& c) {
@@ -216,14 +216,14 @@ void LauncherPane::paint(ui::Canvas& c) {
     theme_ = &t;
     const ui::Rect b = bounds();
     const model::Session& s = view_.session();
-    const TrackLayout& layout = view_.trackLayout();
+    const TrackLayout& tracks = view_.trackLayout();
     const LauncherColumns cols = columns();
     c.fillRect(b, t.color("ground"));
     const float caption = t.type("caption");
     c.save();
     c.clip(b);
-    for (std::size_t i = 0; i < layout.rowCount(); ++i) {
-        const TrackRow& row = layout.rows()[i];
+    for (std::size_t i = 0; i < tracks.rowCount(); ++i) {
+        const TrackRow& row = tracks.rows()[i];
         const ui::Rect r = arrRect(i);
         if (r.bottom() <= b.y) continue;
         if (r.y >= b.bottom()) break;
@@ -352,13 +352,13 @@ void LauncherPane::paintGl(const ui::GlFrame& frame) {
     }
     const ui::Theme& t = *theme_;
     const model::Session& s = view_.session();
-    const TrackLayout& layout = view_.trackLayout();
+    const TrackLayout& tracks = view_.trackLayout();
     const LauncherColumns cols = columns();
     const ui::Rect clip = frame.clip.intersect(bounds());
     stats.notes = stats.columns = stats.pending = 0;
     const std::uint32_t border = ui::packRgba(t.color("ground").withAlpha(0.7f));
-    for (std::size_t i = 0; i < layout.rowCount(); ++i) {
-        const TrackRow& row = layout.rows()[i];
+    for (std::size_t i = 0; i < tracks.rowCount(); ++i) {
+        const TrackRow& row = tracks.rows()[i];
         const ui::Rect rr = arrRect(i);
         if (rr.bottom() <= clip.y) continue;
         if (rr.y >= clip.bottom()) break;
