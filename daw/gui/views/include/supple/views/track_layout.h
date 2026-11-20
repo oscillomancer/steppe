@@ -160,6 +160,10 @@ class TrackLayout {
     // A modulation route's signal range (the app reads the rack catalog);
     // empty: every source -1..1. The lanes' bands read it.
     UnipolarSource unipolarSource;
+    // Modulation telemetry (ADR-0096, M2): each bound route's target's live
+    // offset (EngineApp::modulationOffsets), given each pass through
+    // ArrangeView::setModulationOffsets; empty while nothing plays.
+    std::map<model::Id, double> liveOffsets;
     // The lane row of a target (with or without an envelope).
     std::optional<std::size_t> indexOfTarget(const model::EnvTarget& target) const;
     // Called when the rows or a height changed (the view re-clamps its scroll,

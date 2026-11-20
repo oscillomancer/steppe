@@ -2109,9 +2109,11 @@ std::optional<views::ControlModulation> Mixer::modulationOf(const model::Session
                                                             const model::EnvTarget& target) {
     const auto catalog = racks::catalog(app_);
     return views::controlModulation(
-        s, target, [&catalog](const model::Session& at, const model::ModSource& source) {
+        s, target,
+        [&catalog](const model::Session& at, const model::ModSource& source) {
             return catalog && racks::unipolarSource(at, *catalog, source);
-        });
+        },
+        &live_);
 }
 
 void Mixer::setDepth(const model::EnvTarget& target, double depth, ui::Gesture g) {
@@ -2209,6 +2211,15 @@ void Mixer::sync(std::chrono::steady_clock::time_point now) {
         edgeClock_.reset();
     }
     follow();
+    // Modulation telemetry (ADR-0096, M2): the modulated controls' live
+    // values, redrawn only when they move.
+    if (auto live = app_.modulationOffsets(); live != live_) {
+        live_ = std::move(live);
+        const model::Session& s = app_.head();
+        for (Strip& st : strips_)
+            if (const auto id = model::Id::parse(st.track))
+                if (const model::Track* t = s.tracks.find(*id)) showModulation(st, *t);
+    }
 }
 
 // The pass without its time: what the panel shows follows the window, the

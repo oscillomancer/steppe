@@ -958,6 +958,8 @@ void FxWindow::tick(bool event) {
     const bool overridden = app_.loadOverridesVersion() != overridesVersion_;
     overridesVersion_ = app_.loadOverridesVersion();
     if (page_ && (replaced || overridden || app_.head().version != shownVersion_)) refresh();
+    // The parameter tab's modulated sliders follow the engine (ADR-0096).
+    if (page_ && tab_ == Tab::Params && params_) params_->tickLive();
     // The Rack devices' knobs follow their Macros (automation as it plays).
     std::vector<model::Id> macros;
     if (page_)

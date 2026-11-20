@@ -1023,6 +1023,47 @@ TEST_CASE("TCP: a modulated fader shows its route, and a drag on its bar sets th
     const model::Session s = f.app->head();
     CHECK(s.modulations.find(route)->depth > 6);
     CHECK(s.tracks.find(f.a)->volumeDb == 0);
+    // The engine's telemetry gives the live value; without it there is none.
+    CHECK_FALSE(fader->modulation()->live);
+    f.view().setModulationOffsets({{route, -2.5}});
+    REQUIRE(fader->modulation());
+    REQUIRE(fader->modulation()->live);
+    CHECK(*fader->modulation()->live == -2.5);
+    // The lane draws the live value at the playhead: a bright stroke and
+    // dot in signal-cv, where away from the playhead only the faint band is.
+    const auto laneRow = f.view().trackLayout().indexOfTarget({f.a, "volume"});
+    REQUIRE(laneRow);
+    f.view().setPlayhead(2.0);
+    f.view().setModulationOffsets({{route, 6.0}});
+    f.root->damageAll();
+    f.root->frame(false);
+    const ui::Rect lane = f.view().rowRect(*laneRow);
+    const float px = f.view().xAt(2.0);
+    REQUIRE(px > lane.x + 10);
+    REQUIRE(px + 40 < lane.right());
+    const gui::Image image = f.root->readBack();
+    const float ratio = static_cast<float>(image.width) / f.window->width();
+    const ui::Color cv = ui::Theme::dark().color("signal-cv");
+    auto brightIn = [&](float x) {
+        for (float y = lane.y + 1; y < lane.bottom() - 1; y += 0.5f) {
+            const std::size_t i =
+                (static_cast<std::size_t>(y * ratio) * static_cast<std::size_t>(image.width) +
+                 static_cast<std::size_t>(x * ratio)) *
+                4;
+            if (std::abs(image.rgba[i] - static_cast<int>(cv.r * 255)) < 20 &&
+                std::abs(image.rgba[i + 1] - static_cast<int>(cv.g * 255)) < 20 &&
+                std::abs(image.rgba[i + 2] - static_cast<int>(cv.b * 255)) < 20)
+                return true;
+        }
+        return false;
+    };
+    // Beside the playhead's own line, within the 5-unit dot.
+    CHECK(brightIn(px + 1.75f));
+    CHECK_FALSE(brightIn(px + 40));
+    if (const char* out = std::getenv("SUPPLE_TEST_SNAPSHOTS"))
+        (void)gui::writePng(std::filesystem::path(out) / "lane-live.png", image);
+    f.view().setModulationOffsets({});
+    CHECK_FALSE(fader->modulation()->live);
 }
 
 TEST_CASE("TCP: a right-click on a strip's fader or button opens its parameter menu") {

@@ -355,6 +355,16 @@ void Lanes::drawEnvelope(ui::Canvas& c, std::size_t row, const ui::Rect& r) {
                         bottom = y(modulatedValue(*scale, base, band->low));
             c.fillRect({x, top, std::min(3.0f, bx1 - x), std::max(1.0f, bottom - top)}, cv);
         }
+        // The live value (telemetry, M2) at the playhead: bright, from the
+        // base to a dot, as on a modulated control.
+        const auto live = liveOffset(s, *lane.target, layout_.liveOffsets);
+        const float px = xAt(livePlayhead);
+        if (!live || px < bx0 || px >= bx1) return;
+        const double base = baseAt(px);
+        const float from = y(base), to = y(modulatedValue(*scale, base, *live));
+        const ui::Color bright = t.color("signal-cv");
+        c.fillRect({px - 1, std::min(from, to), 2, std::max(1.0f, std::abs(to - from))}, bright);
+        c.fillRect({px - 2.5f, to - 2.5f, 5, 5}, bright);
     };
     if (!env) {
         // A modulated parameter without automation: its value, and the band.

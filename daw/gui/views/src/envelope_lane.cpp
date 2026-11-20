@@ -303,9 +303,19 @@ bool stripModulatable(const model::Session& s, const model::Id& object, std::str
     return false;
 }
 
+std::optional<double> liveOffset(const model::Session& session, const model::EnvTarget& target,
+                                 const std::map<model::Id, double>& live) {
+    if (live.empty()) return std::nullopt;
+    for (const auto& m : session.modulations)
+        if (m.value->target == target)
+            if (auto it = live.find(m.id); it != live.end()) return it->second;
+    return std::nullopt;
+}
+
 std::optional<ControlModulation> controlModulation(const model::Session& session,
                                                    const model::EnvTarget& target,
-                                                   const UnipolarSource& unipolar) {
+                                                   const UnipolarSource& unipolar,
+                                                   const std::map<model::Id, double>* live) {
     std::vector<ui::ModulationRoute> routes;
     std::optional<model::Id> first;
     double depth = 0;
@@ -320,6 +330,7 @@ std::optional<ControlModulation> controlModulation(const model::Session& session
     if (!first) return std::nullopt;
     ControlModulation out{ui::modulationSpan(routes), *first};
     out.view.depth = depth;
+    if (live) out.view.live = liveOffset(session, target, *live);
     return out;
 }
 

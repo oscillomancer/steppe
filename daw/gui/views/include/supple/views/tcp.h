@@ -102,6 +102,9 @@ class TcpPanel : public ui::Node {
     void updateSession(const model::Session& session, const std::set<model::Id>& tracks,
                        const std::set<model::Id>& envelopes, const std::set<model::Id>& routes);
     void refresh();  // values only (after a bus edit)
+    // The modulated controls only, with the layout's live offsets (each pass
+    // while they change).
+    void refreshModulation();
 
     bool onPointer(const ui::PointerEvent& e) override;
     ui::Rect rowRect(std::size_t row) const;  // same y as the lanes' rows

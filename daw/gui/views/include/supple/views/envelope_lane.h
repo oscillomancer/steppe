@@ -8,6 +8,7 @@
 #pragma once
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -86,9 +87,16 @@ struct ControlModulation {
     ui::ModulationView view;
     model::Id route;
 };
-std::optional<ControlModulation> controlModulation(const model::Session& session,
-                                                   const model::EnvTarget& target,
-                                                   const UnipolarSource& unipolar);
+// `live`: the engine's telemetry (EngineApp::modulationOffsets, each route's
+// target's offset now), which sets the view's live value; null or without
+// the target's routes: none (not playing).
+std::optional<ControlModulation> controlModulation(
+    const model::Session& session, const model::EnvTarget& target, const UnipolarSource& unipolar,
+    const std::map<model::Id, double>* live = nullptr);
+// The target's live offset in `live` (any of its routes': each carries the
+// sum over the target), or nullopt.
+std::optional<double> liveOffset(const model::Session& session, const model::EnvTarget& target,
+                                 const std::map<model::Id, double>& live);
 
 // A parameter's value without automation: a strip's volume, pan, width or
 // pan bar, a send's level; the scale's reference for the rest.

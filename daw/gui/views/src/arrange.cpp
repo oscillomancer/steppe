@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include "supple/views/arrange.h"
+
+#include "supple/views/envelope_lane.h"
 #include "supple/views/session_changes.h"
 
 #include <SDL3/SDL.h>
@@ -1217,9 +1219,28 @@ bool ArrangeView::poll(bool force, std::chrono::steady_clock::time_point at) {
     return scrolled || t.playing != wasPlaying;
 }
 
+void ArrangeView::setModulationOffsets(std::map<model::Id, double> offsets) {
+    if (offsets == layout_.liveOffsets) return;
+    layout_.liveOffsets = std::move(offsets);
+    if (tcp_) tcp_->refreshModulation();
+    invalidateModulatedLanes();
+}
+
+// The lanes of modulated targets: their live dot sits at the playhead.
+void ArrangeView::invalidateModulatedLanes() {
+    if (!lanes_ || layout_.session().modulations.empty()) return;
+    for (std::size_t row = 0; row < layout_.rowCount(); ++row)
+        if (const auto& target = layout_.rows()[row].target)
+            if (liveOffset(layout_.session(), *target, layout_.liveOffsets) ||
+                layout_.liveOffsets.empty())
+                lanes_->invalidate(lanes_->rowRect(row).intersect(lanes_->bounds()));
+}
+
 void ArrangeView::setPlayhead(double seconds) {
     if (seconds == playhead_) return;
     playhead_ = seconds;
+    if (lanes_) lanes_->livePlayhead = seconds;
+    if (!layout_.liveOffsets.empty()) invalidateModulatedLanes();
     applyFollow();
     if (ui::Root* r = root()) r->requestAnimationFrame();
 }

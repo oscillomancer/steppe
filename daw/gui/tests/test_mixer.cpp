@@ -15,7 +15,9 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "app_actions.h"
@@ -3163,6 +3165,32 @@ TEST_CASE("mixer: a modulated fader and pan bar show their routes; a bar drag se
     REQUIRE(f.strip(a).fader->modulation());
     CHECK(f.strip(a).fader->modulation()->depth == doctest::Approx(depth));
     CHECK(f.errors.empty());
+}
+
+TEST_CASE("mixer: a modulated fader shows the engine's live offset while it runs (telemetry)") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    f.exec("modulate", R"({"target":{"track":")" + a + R"(","param":"volume"},"source":"lfo"})");
+    f.refresh();
+    REQUIRE(f.strip(a).fader->modulation());
+    CHECK_FALSE(f.strip(a).fader->modulation()->live);  // stopped: nothing applies it
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    // The engine reports once its plan binds the route; the bound only keeps
+    // a broken build from hanging, the check is on what arrives.
+    std::optional<double> live;
+    for (int i = 0; i < 500 && !live; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        f.now += std::chrono::milliseconds(10);
+        f.refresh();
+        live = f.strip(a).fader->modulation()->live;
+    }
+    REQUIRE(live);
+    CHECK(std::abs(*live) <= 6.0 + 1e-9);  // within the route's ±6 dB
+    CHECK(f.app->modulationOffsets().size() == 1);
+    f.exec("engine.stop", "{}");
+    f.refresh();
+    CHECK_FALSE(f.strip(a).fader->modulation()->live);
 }
 
 TEST_CASE("mixer: a right-click on a VCA's fader learns MIDI for it, elsewhere the group menu") {

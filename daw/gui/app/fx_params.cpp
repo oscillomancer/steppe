@@ -61,6 +61,8 @@ ParamPanel::ParamPanel(engine::EngineApp& app, cmd::Dispatcher& dispatcher, ui::
 Result<std::size_t> ParamPanel::build(ui::Node& parent, model::Id fx) {
     fx_ = fx;
     gesture_.clear();
+    modulatable_.clear();
+    live_ = app_.modulationOffsets();
     auto query = [&](std::string command, json::Value args) {
         return dispatcher_.execute({std::move(command), std::move(args), kUiOrigin});
     };
@@ -259,6 +261,7 @@ Result<std::size_t> ParamPanel::build(ui::Node& parent, model::Id fx) {
             // is a float's CLAP range, so depth (a fraction of that range)
             // is the travel's share; a drag on the bar edits the depth.
             if (d.modulatable) {
+                modulatable_.push_back(key);
                 slider->setModulation(modulationView(key));
                 slider->onDepth = [this, key](double depth, ui::Gesture g) {
                     setDepth(key, depth, g);
@@ -318,10 +321,22 @@ Status ParamPanel::automate(const std::string& key, double physical) {
 std::optional<ui::ModulationView> ParamPanel::modulationView(const std::string& key) {
     const auto catalog = racks::catalog(app_);
     const auto mod = views::controlModulation(
-        app_.head(), {fx_, key}, [&catalog](const model::Session& s, const model::ModSource& src) {
+        app_.head(), {fx_, key},
+        [&catalog](const model::Session& s, const model::ModSource& src) {
             return catalog && racks::unipolarSource(s, *catalog, src);
-        });
+        },
+        &live_);
     return mod ? std::optional(mod->view) : std::nullopt;
+}
+
+void ParamPanel::tickLive() {
+    if (modulatable_.empty()) return;
+    auto live = app_.modulationOffsets();
+    if (live == live_) return;
+    live_ = std::move(live);
+    for (const std::string& key : modulatable_)
+        if (auto* slider = dynamic_cast<ui::Slider*>(root_.find("fx.param." + key)))
+            slider->setModulation(modulationView(key));
 }
 
 void ParamPanel::setDepth(const std::string& key, double depth, ui::Gesture g) {

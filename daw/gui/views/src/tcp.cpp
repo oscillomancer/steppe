@@ -135,6 +135,9 @@ class TcpPanel::Row : public ui::Node {
     void bind(const model::Id& track, int depth, const model::Track& tr,
               const model::Session& session);
     void refresh(const model::Session& session);  // values only
+    // The fader's and pan bars' modulation (ADR-0096), with the layout's
+    // live offsets.
+    void showModulation(const model::Session& session);
     void unbind();
 
     bool bound() const { return track_.has_value(); }
@@ -431,18 +434,7 @@ void TcpPanel::Row::refresh(const model::Session& session) {
     pan_->setSplit(split);
     pan_->setValue(split == ui::PanControl::Split::Dual ? tr->panLeft : tr->pan);
     pan_->setSecond(split == ui::PanControl::Split::Dual ? tr->panRight : tr->width);
-    // Modulation (ADR-0096): a bar beside the fader and each pan bar that a
-    // route moves; a dual pan's bars take none.
-    auto modulation = [&](const char* param) -> std::optional<ui::ModulationView> {
-        if (!stripModulatable(session, *track_, param)) return std::nullopt;
-        const auto mod =
-            controlModulation(session, {*track_, param}, panel_.layout_.unipolarSource);
-        return mod ? std::optional(mod->view) : std::nullopt;
-    };
-    fader_->setModulation(modulation("volume"));
-    pan_->setModulation(0, split == ui::PanControl::Split::Dual ? std::nullopt : modulation("pan"));
-    pan_->setModulation(1,
-                        split == ui::PanControl::Split::Width ? modulation("width") : std::nullopt);
+    showModulation(session);
     // The record input: the view knows the channels, the app knows the device's
     // port names (engine.inputs), so the app writes the label.
     std::string channels;
@@ -1144,6 +1136,29 @@ void TcpPanel::updateSession(const model::Session& session, const std::set<model
     }
     for (auto* row : envRows_)
         if (row->visible && row->bound() && envelopes.contains(row->env())) row->refresh(session_);
+}
+
+// Modulation (ADR-0096): a bar beside the fader and each pan bar that a
+// route moves, with its live value; a dual pan's bars take none.
+void TcpPanel::Row::showModulation(const model::Session& session) {
+    if (!track_) return;
+    const auto split = pan_->split();
+    auto modulation = [&](const char* param) -> std::optional<ui::ModulationView> {
+        if (!stripModulatable(session, *track_, param)) return std::nullopt;
+        const auto mod = controlModulation(session, {*track_, param}, panel_.layout_.unipolarSource,
+                                           &panel_.layout_.liveOffsets);
+        return mod ? std::optional(mod->view) : std::nullopt;
+    };
+    fader_->setModulation(modulation("volume"));
+    pan_->setModulation(0, split == ui::PanControl::Split::Dual ? std::nullopt : modulation("pan"));
+    pan_->setModulation(1,
+                        split == ui::PanControl::Split::Width ? modulation("width") : std::nullopt);
+}
+
+void TcpPanel::refreshModulation() {
+    if (session_.modulations.empty() && layout_.liveOffsets.empty()) return;
+    for (Row* row : rows_)
+        if (row->bound()) row->showModulation(session_);
 }
 
 void TcpPanel::refresh() {

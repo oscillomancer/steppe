@@ -281,7 +281,10 @@ only what the DAW needs, designed for virtualized, data-heavy views.
     `modulatable`, whose travel is its CLAP range for a float, so a depth (a
     fraction of that range) is a share of the travel.
   Each shows the enabled routes on its target (`views::controlModulation`),
-  and a drag on its bar edits the depth of the first enabled one through
+  with the engine's live offset for it while it plays
+  (`EngineApp::modulationOffsets`, read each pass; a control redraws only
+  when it moves), and a drag on its bar edits the depth of the first
+  enabled one through
   `modulation.set`, one undo step per drag (Origin gesture). The FX window
   holds its rows still while a bar is dragged (`Slider::depthDragging`) and
   redraws that slider's bar from each new depth.
@@ -946,8 +949,12 @@ parameter moves along its curve: a log cutoff at 1 kHz with depth 0.1 spans
 501 Hz to 1995 Hz. The band clamps to the lane. The app tells the band which sources are 0..1
 (`TrackLayout::unipolarSource`, from the rack catalog: every cable into the
 Mod Out input from a unipolar, gate or phase output), so their band runs one
-way from the base. A switch or the playrate draws no band. Until telemetry
-reports the live offset (M2), the lane shows no live value. A lane without an
+way from the base. A switch or the playrate draws no band. While the engine
+applies the routes, the lane draws the live value at the playhead: a bright
+`signal-cv` stroke from the base to a dot at the base plus the target's
+offset (`EngineApp::modulationOffsets`, mapped as the band is). Only the
+modulated lanes redraw as it moves (`ArrangeView::setModulationOffsets`,
+each pass). A lane without an
 envelope has no header controls yet and takes no press. A click on a point selects it (Ctrl+click adds or
 removes one) and a click on empty space adds a point there, selected.
 Dragging a selected point moves every selected point, in every lane, by the

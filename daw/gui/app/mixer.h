@@ -203,6 +203,7 @@ class Mixer {
                                                          const model::EnvTarget& target);
     void setDepth(const model::EnvTarget& target, double depth, ui::Gesture g);
     void showModulation(Strip& st, const model::Track& t);
+    std::map<model::Id, double> live_;  // telemetry: each route's target's offset now
 };
 
 }  // namespace supple::gui

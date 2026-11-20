@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string_view>
@@ -152,6 +153,9 @@ class ArrangeView : public ui::Node {
     double punchStart() const { return transport_.punchStart; }
     double punchEnd() const { return transport_.punchEnd; }
     bool installOverlay(ui::Root& root);  // the playhead node; false if none
+    // Modulation telemetry (ADR-0096, M2), each pass: the modulated
+    // controls' live values and the lanes' live dot at the playhead follow.
+    void setModulationOffsets(std::map<model::Id, double> offsets);
 
     Lanes& lanes() { return *lanes_; }
     ItemGestures& gestures() { return *gestures_; }  // P5.6: editing gestures
@@ -191,6 +195,7 @@ class ArrangeView : public ui::Node {
     ui::Cursor cursorAt(ui::Point p) const override;
 
   private:
+    void invalidateModulatedLanes();
     void damageViews();
     float scrollHeight() const;
     void clampScroll();

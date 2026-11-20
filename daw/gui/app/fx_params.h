@@ -14,6 +14,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "learn_dialog.h"
 #include "supple/engine/app.h"
@@ -33,6 +34,9 @@ class ParamPanel {
     // Builds the rows for `fx` under `parent` (a column). Returns how many
     // parameters are shown; an error is returned to display in the panel.
     Result<std::size_t> build(ui::Node& parent, model::Id fx);
+    // The modulatable sliders' live values (telemetry, ADR-0096 M2): call
+    // each pass; redraws only when they move.
+    void tickLive();
     // Errors from edits (shown by the window).
     std::function<void(const std::string&)> onError;
     // Opens the MIDI learn dialog (each row's "MIDI" button; unset: no button).
@@ -61,6 +65,8 @@ class ParamPanel {
     ui::Root& root_;
     model::Id fx_;
     std::string gesture_, depthGesture_;
+    std::vector<std::string> modulatable_;  // the shown modulatable parameters
+    std::map<model::Id, double> live_;      // the telemetry they show
     std::uint64_t gestureSerial_ = 0;
 };
 
