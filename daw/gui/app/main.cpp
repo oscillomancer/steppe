@@ -974,14 +974,15 @@ int frontendMain(int argc, char** argv) {
         for (const views::TrackRow& row : a.trackLayout().rows())
             if (!row.lane() && row.type == model::StripType::Channel)
                 channels.push_back(row.track.str());
-        auto made =
-            gui::pasteClips(dispatcher, (*app)->head(), uiState.copiedClips, cell->track.str(),
-                            cell->scene.str(), channels, uiState.clipsCut);
+        gui::ClipClipboard& board = uiState.clipClipboard;
+        const std::vector<std::string> clips = board.in((*app)->projectGeneration());
+        auto made = gui::pasteClips(dispatcher, (*app)->head(), clips, cell->track.str(),
+                                    cell->scene.str(), channels, board.cut);
         if (!made) {
             if (appActions.onError) appActions.onError("Clip launcher: " + made.error().message);
             return;
         }
-        if (std::exchange(uiState.clipsCut, false)) uiState.copiedClips.clear();
+        if (board.cut) board = {};  // the clips have moved
         std::vector<model::Id> ids;
         for (const std::string& id : *made)
             if (auto parsed = model::Id::parse(id)) ids.push_back(*parsed);
@@ -990,8 +991,7 @@ int frontendMain(int argc, char** argv) {
     appActions.addUi("ui.item.copy", "Item: copy selected (or automation points)", [&] {
         if (uiState.clipsFocused) {
             if (uiState.selectedClips.empty()) return;
-            uiState.copiedClips = uiState.selectedClips;
-            uiState.clipsCut = false;
+            uiState.clipClipboard.fill(uiState.selectedClips, false, (*app)->projectGeneration());
             return;
         }
         if (pointKeys())
@@ -1004,9 +1004,8 @@ int frontendMain(int argc, char** argv) {
             // A clip has no place to wait in, so a cut clip stays until the
             // paste moves it.
             if (uiState.selectedClips.empty()) return;
-            uiState.copiedClips = uiState.selectedClips;
-            uiState.clipsCut = true;
-            const std::size_t n = uiState.copiedClips.size();
+            uiState.clipClipboard.fill(uiState.selectedClips, true, (*app)->projectGeneration());
+            const std::size_t n = uiState.selectedClips.size();
             shell.setStatus(n == 1 ? "Cut 1 clip: paste moves it"
                                    : "Cut " + std::to_string(n) + " clips: paste moves them");
             return;

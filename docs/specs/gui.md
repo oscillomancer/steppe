@@ -2550,7 +2550,17 @@ same heights, scroll and colours.
   next one; a click on the lit cell ends the capture, commits it and turns
   it off. A capture in which every track followed the arrangement writes
   nothing and makes no undo step. A refusal (no engine running, a locked
-  item in the way) shows its message in the status line. The app services
+  item in the way) shows its message in the status line.
+- **A refused commit keeps the performance.** When `launch.commit` refuses
+  (a locked item under a track that left the arrangement, a clip loop with
+  no item equivalent, a captured track or clip deleted meanwhile), nothing
+  arms, since arming would replace the capture the engine holds. The cell
+  goes dark, and the status line gives the refusal and says the
+  performance is kept. The next click commits it first and, if that
+  succeeds, arms. If it is refused again, the cell stays dark and the
+  status line says one more click drops the performance and arms; that
+  click tries the commit once more first. Opening another project, or the
+  engine stopping, drops it. The app services
   it once a pass (`CaptureControl::service`) and gives the view the state
   to draw (`ArrangeView::setCaptureArmed`).
 
@@ -2663,7 +2673,10 @@ same heights, scroll and colours.
   whole paste, with its message in the status line (`gui::pasteClips`).
   Ctrl+X marks the clips instead of removing them (a clip has no place to
   wait in) and says so in the status line; the next paste moves them
-  (`clip.move`).
+  (`clip.move`), front first, so a layout pasted over its own cells is not
+  refused by its own clips. The clipboard holds clip ids, which restart in
+  each project, so it empties when another project opens (as the timeline
+  clipboard does), and a paste there refuses.
 
 **Elsewhere.**
 - **Render dialog.** While any track is held by a clip, it says in one line
@@ -2688,12 +2701,16 @@ and the inspector's, the piano roll's and `edit.delete`'s in their suites).
   (`launcher-playing-dark.png`, `launcher-playing-light.png`).
 - Capture with the dummy engine: armed, a launch, a stop committing the
   performance in one undo step and arming the next; refused without an
-  engine; off with nothing played writing nothing.
+  engine; off with nothing played writing nothing. A commit refused by a
+  locked item: dark, the performance kept in the engine, a click refused
+  again and still kept, then after unlocking a click committing it in one
+  undo step and arming; refused twice, a third click drops it.
 - A scene dragged onto the lanes (its ghost, the command, the section and
   items after), refused on an occupied span; the menu's inserts at the
   playhead and the end; an empty scene refused; the bar arithmetic.
 - Paste in the clipboard's layout, refused past the last channel and onto
-  occupied cells, and a cut's paste moving the clip.
+  occupied cells, and a cut's paste moving the clip; a diagonal cut pasted
+  over its own cells; the clipboard emptied by another project.
 - Every gesture above, through the dispatcher, checking the commands run
   and the session after; the engine's launch state reaching the pane with
   the dummy backend.

@@ -41,6 +41,18 @@ Status removeClips(cmd::Dispatcher& dispatcher, const std::vector<std::string>& 
     return {};
 }
 
+void ClipClipboard::fill(std::vector<std::string> ids, bool cutting,
+                         std::uint64_t projectGeneration) {
+    clips = std::move(ids);
+    cut = cutting;
+    generation = projectGeneration;
+}
+
+const std::vector<std::string>& ClipClipboard::in(std::uint64_t projectGeneration) {
+    if (projectGeneration != generation) *this = {};
+    return clips;
+}
+
 Result<std::vector<std::string>> pasteClips(cmd::Dispatcher& dispatcher, const model::Session& s,
                                             const std::vector<std::string>& clips,
                                             const std::string& track, const std::string& scene,
@@ -87,13 +99,32 @@ Result<std::vector<std::string>> pasteClips(cmd::Dispatcher& dispatcher, const m
             return Error("clip.paste", "the clips run past the last scene", "",
                          "select a cell further left, or add scenes");
     }
+    // A move whose new cells overlap its old ones goes front first: the clip
+    // furthest along the offset moves before the one landing in its cell.
+    // The cells are the copied ones shifted by one offset, so that order
+    // always exists.
+    std::vector<std::size_t> order(copies.size());
+    for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+    if (move) {
+        const auto dr = static_cast<std::int64_t>(*row0) - static_cast<std::int64_t>(top);
+        const auto dc = static_cast<std::int64_t>(*column0) - static_cast<std::int64_t>(left);
+        auto along = [&](std::size_t i) {
+            return dr * static_cast<std::int64_t>(copies[i].row) +
+                   dc * static_cast<std::int64_t>(copies[i].column);
+        };
+        std::stable_sort(order.begin(), order.end(),
+                         [&](std::size_t a, std::size_t b) { return along(a) > along(b); });
+    }
     const cmd::Origin origin{cmd::Origin::Type::Ui, "gui", {}};
     std::vector<std::string> made;
     auto r = dispatcher.transact(
         move ? (copies.size() == 1 ? "Move clip" : "Move clips")
              : (copies.size() == 1 ? "Paste clip" : "Paste clips"),
         origin, [&]() -> Result<json::Value> {
-            for (const Copy& c : copies) {
+            if (move)
+                for (const Copy& c : copies) made.push_back(c.clip);
+            for (std::size_t i : order) {
+                const Copy& c = copies[i];
                 json::Value args = json::Value::object();
                 args["clip"] = c.clip;
                 args["track"] = channels[c.row];
@@ -101,9 +132,8 @@ Result<std::vector<std::string>> pasteClips(cmd::Dispatcher& dispatcher, const m
                 auto one = dispatcher.execute(
                     {move ? "clip.move" : "clip.duplicate", std::move(args), origin});
                 if (!one) return one;
-                if (move)
-                    made.push_back(c.clip);
-                else if (const json::Value* id = one->find("id"); id && id->isString())
+                if (move) continue;
+                if (const json::Value* id = one->find("id"); id && id->isString())
                     made.push_back(id->asString());
             }
             return json::Value::object();

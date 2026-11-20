@@ -26,6 +26,18 @@ class Root;
 
 namespace supple::gui {
 
+// The launcher's clipboard: the clips copied or cut (Ctrl+C, Ctrl+X with the
+// launcher's keys). Clip ids restart in each project, so it holds only for
+// the project it was filled in, as the timeline clipboard does.
+struct ClipClipboard {
+    std::vector<std::string> clips;
+    bool cut = false;              // Ctrl+X: the paste moves them
+    std::uint64_t generation = 0;  // EngineApp::projectGeneration() when filled
+    void fill(std::vector<std::string> ids, bool cutting, std::uint64_t projectGeneration);
+    // The clips, or none once another project has opened (it is then emptied).
+    const std::vector<std::string>& in(std::uint64_t projectGeneration);
+};
+
 // Per-project UI state (gui.md §1.2); persisted later to <project>.ui.json.
 struct UiState {
     std::vector<std::string> selectedTracks, selectedItems;
@@ -38,10 +50,7 @@ struct UiState {
     // clicked last, so Delete removes them.
     std::vector<std::string> selectedClips;
     bool clipsFocused = false;
-    // The launcher's clipboard: the clips copied or cut (Ctrl+C, Ctrl+X with
-    // the launcher's keys).
-    std::vector<std::string> copiedClips;
-    bool clipsCut = false;  // Ctrl+X: the paste moves them
+    ClipClipboard clipClipboard;
 };
 
 // Removes clips in one undo step (the launcher's Delete).
@@ -52,8 +61,9 @@ Status removeClips(cmd::Dispatcher& dispatcher, const std::vector<std::string>& 
 // in `channels` order (the view's) and the scenes' order, as copies
 // (clip.duplicate) in one undo step. A clip that is gone, a cell past the
 // last channel or scene, or an occupied one refuses the whole paste. With
-// `move` (after a cut) the clips themselves move there (clip.move). The
-// pasted clips' ids, in the clipboard's order.
+// `move` (after a cut) the clips themselves move there (clip.move), front
+// first, so new cells that overlap the old ones are free in time. The pasted
+// clips' ids, in the clipboard's order.
 Result<std::vector<std::string>> pasteClips(cmd::Dispatcher& dispatcher,
                                             const model::Session& session,
                                             const std::vector<std::string>& clips,
