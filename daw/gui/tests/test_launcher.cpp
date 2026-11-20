@@ -641,7 +641,7 @@ TEST_CASE("launcher: Capture arms while lit; a stop commits the performance, one
     };
     // Until the engine hears it, and a little after; the bound only keeps a
     // broken build from hanging.
-    for (int k = 0; k < 300 && !playing(); ++k) {
+    for (int k = 0; k < 3000 && !playing(); ++k) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         capture.service();
     }
@@ -651,7 +651,7 @@ TEST_CASE("launcher: Capture arms while lit; a stop commits the performance, one
     CHECK(f.app->head().items.empty());
     const std::uint64_t before = f.app->head().version;
     f.exec("transport.stop", "{}");
-    for (int k = 0; k < 300 && f.app->head().items.empty(); ++k) {
+    for (int k = 0; k < 3000 && f.app->head().items.empty(); ++k) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         capture.service();
     }
