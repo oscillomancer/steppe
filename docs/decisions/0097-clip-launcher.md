@@ -396,8 +396,10 @@ Clips replace that with an **ordered budget**:
   and names the skipped clips in a `launch.memory` warning. A launch of a
   skipped clip is refused with `launch.memory`.
 - **Frozen tracks.** Freezing returns the track to the arrangement at the
-  swap that adopts the frozen plan, with the switch fade, in both
-  executors, and drops its queued launch. `launch.clip` on a frozen track
+  swap that adopts the frozen plan, in both executors, and drops its
+  queued launch. There is no switch fade: the frozen node holds no
+  players to fade out, and the print replaces the live chain at that swap
+  in any case. `launch.clip` on a frozen track
   fails with `track.frozen`, and `launch.scene` skips it with a
   `track.frozen` warning.
 - **Audio clips play at the take's own rate,** with its playrate, pitch

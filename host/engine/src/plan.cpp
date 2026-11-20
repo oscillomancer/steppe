@@ -4163,6 +4163,7 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
         Node* const counterpart = carriedNode(from, n, fromClass);
         if (!counterpart) continue;
         Node& old = *counterpart;
+        carryLaunch(old, n);  // what the channel plays, by clip (ADR-0097)
         // A locate may still be waiting for pooled module ownership.
         // Keep that reset through another plan adoption by this executor.
         if (n.rack && old.rack) {

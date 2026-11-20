@@ -13,6 +13,7 @@
 #include <cmath>
 #include <filesystem>
 
+#include "bridge_patience.h"
 #include "realtime_common.h"
 
 using namespace supple;
@@ -111,6 +112,90 @@ LaunchLogEntry back(std::int64_t frame, LaunchLogEntry::Action action) {
 }
 
 float rampAt(std::int64_t k) { return float(k + 1) / float(1 << 20); }
+
+// A live run from 0: launches made through Engine::launch at given cycles,
+// the master's output, its latency and the engine's own launch log.
+struct Step {
+    std::int64_t cycle;
+    std::vector<Engine::LaunchRequest> requests;
+    model::LaunchQuantize quantize = model::LaunchQuantize::Bar;
+    const model::Session* load = nullptr;  // instead: an edit reaches the engine
+};
+struct Live {
+    std::vector<float> left;
+    std::uint32_t latency = 0;
+    std::vector<LaunchLogEntry> log;
+};
+Live playLive(const model::Session& s, const fs::path& dir, const EngineOptions& options,
+              std::uint32_t block, std::int64_t frames, const std::vector<Step>& steps) {
+    InstancePool pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = frames});
+    Engine engine(pool, media, options);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = block}));
+    REQUIRE(engine.load(s, dir));
+    engine.play();
+    const auto run = [&](std::int64_t cycles) {
+        if (cycles <= 0) return;
+        if (options.anticipative)
+            runAheadOnState(engine, backend, cycles, block);
+        else
+            backend.run(cycles);
+    };
+    std::int64_t done = 0;
+    for (const Step& step : steps) {
+        run(step.cycle - done);
+        done = std::max(done, step.cycle);
+        engine.service();
+        if (step.load) {
+            REQUIRE(engine.load(*step.load, dir));
+            continue;
+        }
+        auto placed = engine.launch(step.requests, step.quantize);
+        REQUIRE_MESSAGE(placed, (placed ? std::string() : placed.error().toString()));
+    }
+    run(frames / block - done);
+    engine.service();
+    CHECK(engine.anticipationMisses() == 0);
+    CHECK(engine.bridgeLateCycles() == 0);  // a late live block is silent by design
+    engine.stop();
+    CHECK(engine.processErrors() == 0);
+    return {backend.capture().channels[0], engine.outputLatency(), engine.launchLog()};
+}
+
+Engine::LaunchRequest request(const char* track, const char* clip) {
+    Engine::LaunchRequest r;
+    r.track = id(track);
+    r.clip = id(clip);
+    return r;
+}
+Engine::LaunchRequest backTo(const char* track) {
+    Engine::LaunchRequest r;
+    r.track = id(track);
+    r.action = LaunchLogEntry::Action::Arrangement;
+    return r;
+}
+
+// A MIDI clip on tr_1 (the sine), an audio clip on tr_2, arrangement on
+// both; tr_2's latent gain shifts tr_1 (its node switches later in the
+// running frame than tr_2's).
+void twoTracks(Project& p) {
+    p.run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.sine"})");
+    p.run("item.add",
+          R"({"track": "tr_1", "bar": 1, "notation": "voice bass; 1: G3:w | A3:w | B3:w"})");
+    p.run("clip.add",
+          R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C3:e E3:e G3:q r:h"})");
+    p.run("track.add", R"({"name": "Loop"})");  // tr_2
+    auto args = j(R"({"track": "tr_2", "bar": 1})");
+    args["audio_file"] = p.ramp("item.wav", 240000).string();
+    p.runArgs("item.add", args);
+    args = j(R"({"track": "tr_2", "scene": "sc_1"})");
+    args["audio_file"] = p.ramp("clip.wav", 48000).string();
+    p.runArgs("clip.add", args);
+    p.run("clip.set", R"({"clip": "cl_2", "length": 0.75})");
+    p.run("fx.add", R"({"track": "tr_2", "plugin": "com.suppleaudio.test.gain"})");
+    p.run("fx.patch.merge", R"({"fx": "fx_2", "patch": {"params": {"latency": "short"}}})");
+}
 
 }  // namespace
 
@@ -270,4 +355,250 @@ TEST_CASE("a channel delayed by compensation switches and plays its clip where i
         if (plain[k] != shifted[k]) first = k;
     CHECK_MESSAGE(first == plain.size(), "first difference at frame " << first);
     CHECK(plain[std::size_t(kBeat + kFade + 5)] != 0.0f);
+}
+
+TEST_CASE("live launches play as the offline replay of their log, in both executors" *
+          doctest::description("rt")) {
+    // A scene launch (both tracks, one target) on bar 2, then tr_1 back to
+    // the arrangement and tr_2 stopped on bar 3.
+    Project p;
+    twoTracks(p);
+    const model::Session s = p.app->head();
+    const std::int64_t frames = 48000 * 5 + 8192;
+    for (const std::uint32_t block : {128u, 512u})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("block " << block << ", anticipative " << options.anticipative);
+            Engine::LaunchRequest stop = backTo("tr_2");
+            stop.action = LaunchLogEntry::Action::Stop;
+            const std::vector<Step> steps{{20, {request("tr_1", "cl_1"), request("tr_2", "cl_2")}},
+                                          {(96000 + 4000) / block, {backTo("tr_1"), stop}}};
+            const Live live = playLive(s, p.app->projectDir(), options, block, frames, steps);
+            REQUIRE(live.log.size() == 4);
+            CHECK(live.log[0].anchorSample == 96000);  // bar 2
+            CHECK(live.log[0].runningFrame == 96000);
+            CHECK(live.log[1].anchorSample == 96000);   // one target for the scene
+            CHECK(live.log[2].anchorSample == 192000);  // bar 3
+            InstancePool pool = makePool();
+            OfflineSettings settings;
+            settings.endSeconds = 5.0;
+            settings.projectDir = p.app->projectDir();
+            settings.launches = live.log;
+            auto offline = renderOffline(s, pool, settings);
+            REQUIRE(offline);
+            CHECK(maxDiff(live.left, live.latency, offline->audio.channels[0], 48000 * 5) == 0.0);
+            // The launches changed the output: equality says something.
+            settings.launches.clear();
+            auto plain = renderOffline(s, pool, settings);
+            REQUIRE(plain);
+            CHECK(maxDiff(live.left, live.latency, plain->audio.channels[0], 48000 * 5) > 0.0);
+        }
+}
+
+TEST_CASE("live launches through the bridge play as the offline replay" *
+          doctest::description("rt")) {
+    host::setBridgeExecutable(BRIDGE_PATH);
+    Project p;
+    twoTracks(p);
+    p.run("fx.set", R"({"fx": "fx_1", "isolation": "shared_bridge"})");
+    const model::Session s = p.app->head();
+    const std::int64_t frames = 48000 * 3 + 8192;
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        const std::vector<Step> steps{{10, {request("tr_1", "cl_1")}}};
+        const Live live =
+            playLive(s, p.app->projectDir(), test::patient(options), 128, frames, steps);
+        REQUIRE(live.log.size() == 1);
+        InstancePool pool = makePool();
+        OfflineSettings settings;
+        settings.endSeconds = 3.0;
+        settings.projectDir = p.app->projectDir();
+        settings.launches = live.log;
+        auto offline = renderOffline(s, pool, settings);
+        REQUIRE(offline);
+        CHECK(maxDiff(live.left, live.latency, offline->audio.channels[0], 48000 * 3) == 0.0);
+    }
+}
+
+TEST_CASE("a launch waits for its boundary, and one waiting at a relocation is placed again") {
+    Project p;
+    twoTracks(p);
+    const model::Session s = p.app->head();
+    InstancePool pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 96000 * 3});
+    Engine engine(pool, media, kInCallback);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+    REQUIRE(engine.load(s, p.app->projectDir()));
+    engine.play();
+    backend.run(10);
+    const Engine::LaunchRequest r = request("tr_1", "cl_1");
+    SUBCASE("at the floor") {
+        auto placed = engine.launch(std::span(&r, 1), model::LaunchQuantize::None);
+        REQUIRE(placed);
+        // One device block past the next: the callback may already be in it.
+        CHECK(placed->stream == 11 * 128);
+        CHECK(placed->anchorSample == 11 * 128);
+        backend.run(1);
+        engine.service();
+        CHECK(engine.launchLog().empty());
+        CHECK(engine.launchesPending().size() == 1);
+        backend.run(1);
+        engine.service();
+        REQUIRE(engine.launchLog().size() == 1);
+        CHECK(engine.launchLog()[0].runningFrame == 11 * 128);
+        CHECK(engine.launchesPending().empty());
+    }
+    SUBCASE("a seek before its bar") {
+        auto placed = engine.launch(std::span(&r, 1), model::LaunchQuantize::Bar);
+        REQUIRE(placed);
+        CHECK(placed->anchorSample == 96000);
+        engine.seek(1.5);  // song 72000: the new epoch's stream starts at 0
+        engine.service();  // not placed yet: the callback has not relocated
+        backend.run(1);
+        engine.service();  // placed again: bar 2 is 24000 frames into the epoch
+        const auto pending = engine.launchesPending();
+        REQUIRE(pending.size() == 1);
+        CHECK(pending[0].placed.anchorSample == 96000);
+        CHECK(pending[0].placed.stream == 24000);
+        backend.run(96000 / 128);
+        engine.service();
+        REQUIRE(engine.launchLog().size() == 1);  // applied once
+        CHECK(engine.launchLog()[0].runningFrame == 24000);
+        CHECK(engine.launchLog()[0].anchorSample == 96000);
+    }
+    engine.stop();
+}
+
+TEST_CASE("a plan swap keeps what a track plays, and a clip removed returns it to the arrangement" *
+          doctest::description("rt")) {
+    Project p;
+    twoTracks(p);
+    const model::Session s = p.app->head();
+    p.run("track.add", R"({"name": "Spare"})");  // an edit that changes no sound
+    const model::Session spare = p.app->head();
+    // tr_2's playing clip goes; another stays, so its node keeps players.
+    auto other = j(R"({"track": "tr_2", "scene": "sc_2"})");
+    other["audio_file"] = p.ramp("other.wav", 4800).string();
+    p.runArgs("clip.add", other);
+    p.run("clip.remove", R"({"clip": "cl_2"})");
+    const model::Session removed = p.app->head();
+    const std::int64_t frames = 48000 * 5 + 8192;
+    const std::int64_t seconds = 48000;
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        const Step scene{20, {request("tr_1", "cl_1"), request("tr_2", "cl_2")}};
+        InstancePool pool = makePool();
+        OfflineSettings settings;
+        settings.endSeconds = 5.0;
+        settings.projectDir = p.app->projectDir();
+        {
+            const Live live = playLive(s, p.app->projectDir(), options, 128, frames,
+                                       {scene, {(96000 + 20000) / 128, {}, {}, &spare}});
+            REQUIRE(live.log.size() == 2);
+            settings.launches = live.log;
+            auto offline = renderOffline(s, pool, settings);
+            REQUIRE(offline);
+            CHECK(maxDiff(live.left, live.latency, offline->audio.channels[0], 5 * seconds) == 0.0);
+        }
+        {
+            const Live live = playLive(s, p.app->projectDir(), options, 128, frames,
+                                       {scene, {(96000 + 20000) / 128, {}, {}, &removed}});
+            // After the swap (well before 3.5 s): tr_1 plays its clip, tr_2
+            // its arrangement, as a render of the edit with tr_1's launch.
+            settings.launches.clear();
+            for (const LaunchLogEntry& e : live.log)
+                if (e.track == id("tr_1")) settings.launches.push_back(e);
+            REQUIRE(settings.launches.size() == 1);
+            auto offline = renderOffline(removed, pool, settings);
+            REQUIRE(offline);
+            const auto from = std::size_t(3.5 * seconds);
+            const std::vector<float> tail(offline->audio.channels[0].begin() + std::ptrdiff_t(from),
+                                          offline->audio.channels[0].end());
+            CHECK(maxDiff(live.left, live.latency + from, tail, std::size_t(1.5 * seconds)) == 0.0);
+            // ... and not the replay of both launches: tr_2 did change.
+            settings.launches = live.log;
+            auto both = renderOffline(s, pool, settings);
+            REQUIRE(both);
+            CHECK(maxDiff(live.left, live.latency, both->audio.channels[0], 5 * seconds) > 0.0);
+        }
+    }
+}
+
+TEST_CASE("a launch while stopped applies at the play start" * doctest::description("rt")) {
+    Project p;
+    twoTracks(p);
+    const model::Session s = p.app->head();
+    const std::uint32_t block = 128;
+    const std::int64_t frames = 48000 * 2 + 8192;
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = frames});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = block}));
+        REQUIRE(engine.load(s, p.app->projectDir()));
+        backend.run(8);  // stopped cycles: nothing plays, the stream holds
+        const Engine::LaunchRequest r = request("tr_2", "cl_2");
+        auto placed = engine.launch(std::span(&r, 1), model::LaunchQuantize::Bar);
+        REQUIRE(placed);
+        CHECK(placed->anchorSample == 0);
+        engine.play();
+        if (options.anticipative)
+            runAheadOnState(engine, backend, frames / block - 8, block);
+        else
+            backend.run(frames / block - 8);
+        engine.service();
+        REQUIRE(engine.launchLog().size() == 1);
+        CHECK(engine.launchLog()[0].runningFrame == 0);
+        const std::uint32_t latency = engine.outputLatency();
+        engine.stop();
+        // The capture holds the stopped cycles first.
+        std::vector<float> live = backend.capture().channels[0];
+        live.erase(live.begin(), live.begin() + 8 * block);
+        OfflineSettings settings;
+        settings.endSeconds = 1.5;
+        settings.projectDir = p.app->projectDir();
+        settings.launches = engine.launchLog();
+        auto offline = renderOffline(s, pool, settings);
+        REQUIRE(offline);
+        CHECK(maxDiff(live, latency, offline->audio.channels[0], 72000) == 0.0);
+    }
+}
+
+TEST_CASE("a queued launch whose clip an edit removes is dropped, not played later") {
+    Project p;
+    twoTracks(p);
+    const model::Session s = p.app->head();
+    auto other = j(R"({"track": "tr_2", "scene": "sc_2"})");
+    other["audio_file"] = p.ramp("other.wav", 4800).string();
+    p.runArgs("clip.add", other);
+    p.run("clip.remove", R"({"clip": "cl_2"})");
+    const model::Session removed = p.app->head();
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 96000 * 3});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        REQUIRE(engine.load(s, p.app->projectDir()));
+        engine.play();
+        const auto run = [&](std::int64_t cycles) {
+            if (options.anticipative)
+                runAheadOnState(engine, backend, cycles, 128);
+            else
+                backend.run(cycles);
+        };
+        run(10);
+        const Engine::LaunchRequest r = request("tr_2", "cl_2");
+        REQUIRE(engine.launch(std::span(&r, 1), model::LaunchQuantize::Bar));  // bar 2
+        REQUIRE(engine.load(removed, p.app->projectDir()));
+        engine.service();
+        CHECK(engine.launchesPending().empty());
+        run(96000 * 2 / 128);
+        engine.service();
+        CHECK(engine.launchLog().empty());
+        engine.stop();
+    }
 }

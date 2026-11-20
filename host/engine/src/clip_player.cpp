@@ -265,6 +265,26 @@ void applyLaunch(Plan&, Node& n, const LaunchAction& a) SUPPLE_RT {
     n.releaseHeld = true;  // what was left's notes end at this block's start
 }
 
+void carryLaunch(const Node& old, Node& n) SUPPLE_RT {
+    LaunchState L = old.launch;
+    const auto remap = [&](int player) {
+        return player < 0 ? player
+                          : playerOf(n, old.players[static_cast<std::size_t>(player)].clip);
+    };
+    if (L.kind == LaunchState::Kind::Clip) L.player = remap(L.player);
+    if (L.fadeFrom >= 0) {
+        L.fadeFrom = remap(L.fadeFrom);
+        if (L.fadeFrom < 0) L.fadeFrom = -2;
+    }
+    const bool lost = (L.kind == LaunchState::Kind::Clip && L.player < 0) ||
+                      (n.players.empty() && L.kind != LaunchState::Kind::Arrangement);
+    if (lost) {
+        L = LaunchState{};
+        n.releaseHeld = true;  // the clip's notes end
+    }
+    n.launch = L;
+}
+
 void launchWrapped(Node& n) SUPPLE_RT {
     LaunchState& L = n.launch;
     if (L.kind == LaunchState::Kind::Clip && L.player >= 0 &&

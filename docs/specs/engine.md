@@ -482,8 +482,9 @@ the same.*
   and names the skipped clips in a `launch.memory` warning. A launch of a
   skipped clip is refused with `launch.memory`.
 - **Frozen tracks.** Freezing returns the track to the arrangement at the
-  swap that adopts the frozen plan, with the switch fade, in both
-  executors, and drops its queued launch. `launch.clip` on a frozen track
+  swap that adopts the frozen plan, in both executors (no switch fade:
+  the frozen node has no players to fade out), and drops its queued
+  launch. `launch.clip` on a frozen track
   fails with `track.frozen`, and `launch.scene` skips it with a
   `track.frozen` warning.
 - **Audio clips play at the take's own rate,** with its playrate, pitch
@@ -529,6 +530,34 @@ the same.*
   and `launchMidi` emits the clip's notes instead.
 - `OfflineSettings::launches` replays a log from the render's start (no
   seeks or wraps yet; L4 adds them with capture).
+- **The queue (launch_runtime.cpp).** `Engine::launch` places a set of
+  requests (a scene's tracks) on one target. The floor is the latest of
+  its tracks' floors: the published position's stream plus one device
+  block for a node the callback runs, or the renderer's stream plus one
+  plan block for a node it renders. The target is the first quantize
+  boundary at or after the floor's song position. A loop end before it
+  places it at the first boundary inside the loop. Stopped, the target is
+  the play position, applied at the play start. The queue has
+  `kLaunchSlots` fixed slots, one per track; a newer request replaces the
+  track's pending one, and a full queue refuses with `launch.queue`.
+  Each slot's state word carries a generation. The executor that runs the
+  track's node applies an entry by compare-and-swap of the state it read,
+  so a slot the main thread rewrote meanwhile is never applied, and an
+  entry is applied once even when the node moves between executors.
+  Applying happens at the stream sample `target + timelineShift`; each
+  executor cuts its block there. An entry of another epoch is not
+  applied, and one already past is marked missed; nor is a clip entry
+  in a plan without that clip. `service()` places missed and old-epoch
+  entries again, alone, from the current position. It drops, with a
+  warning, any waiting entry whose track or clip the latest plan cannot
+  play (frozen, removed, or a master playrate active), so an edit never
+  leaves a launch to fire later. Applied entries come back
+  through a ring per executor, become `LaunchLogEntry`s and are kept in
+  `launchLog()` in running-frame order.
+- **Plan swaps.** `carryMix` carries `Node::launch` by clip id
+  (`carryLaunch`). A clip the new plan lacks, or a node with no players
+  (a frozen track), returns its track to the arrangement at once, and its
+  notes end.
 
 ### 1.5 Transport and time
 

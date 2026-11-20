@@ -1452,6 +1452,9 @@ void launchAudio(Plan& p, Node& n, Stereo& into, std::int64_t pos, std::uint32_t
 void launchMidi(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames) SUPPLE_RT;
 // A transport wrap: a `once` clip falls silent until launched again.
 void launchWrapped(Node& n) SUPPLE_RT;
+// A plan swap: what the channel plays carries by clip id; a clip the new
+// plan lacks (or a node with no players) returns it to the arrangement.
+void carryLaunch(const Node& old, Node& n) SUPPLE_RT;
 // One stage's modulation events for a block (ADR-0096, plan.cpp): after its
 // automation, at each point of the absolute grid; `origin` is the plan's
 // first sample. Exposed for tests.
