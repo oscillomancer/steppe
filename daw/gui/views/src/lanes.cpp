@@ -349,7 +349,10 @@ void Lanes::drawEnvelope(ui::Canvas& c, std::size_t row, const ui::Rect& r) {
         };
         for (float x = bx0; x < bx1; x += 3) {
             const double base = baseAt(x);
-            const float top = y(base + band->high), bottom = y(base + band->low);
+            // In the CLAP domain for a plug-in parameter (ADR-0096), so a
+            // log cutoff's band follows its curve.
+            const float top = y(modulatedValue(*scale, base, band->high)),
+                        bottom = y(modulatedValue(*scale, base, band->low));
             c.fillRect({x, top, std::min(3.0f, bx1 - x), std::max(1.0f, bottom - top)}, cv);
         }
     };

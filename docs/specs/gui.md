@@ -917,9 +917,12 @@ Turning the last route's `lane` off removes the lane.
 the base in faint `signal-cv`, under the curve and any automation items. The
 base is the envelope's played value where there is an envelope, and
 otherwise the parameter's own value (`views::targetValue`), drawn as a line in
-the curve's colour under the lane's caption (the envelope lane's title). Depth is in the lane's unit: dB for a volume, percent
-for a pan or width, depth × the parameter's range for a plug-in. The
-band clamps to the lane. The app tells the band which sources are 0..1
+the curve's colour under the lane's caption (the envelope lane's title). Depth adds where the engine adds it (ADR-0096, "Depth units"): in dB
+for a volume and percent for a pan or width, and for a plug-in parameter
+in its CLAP value, depth × its CLAP range, mapped back through the
+parameter's curve (`views::modulatedValue`). A stock plug-in's float
+parameter moves along its curve: a log cutoff at 1 kHz with depth 0.1 spans
+501 Hz to 1995 Hz. The band clamps to the lane. The app tells the band which sources are 0..1
 (`TrackLayout::unipolarSource`, from the rack catalog: every cable into the
 Mod Out input from a unipolar, gate or phase output), so their band runs one
 way from the base. A switch or the playrate draws no band. Until telemetry

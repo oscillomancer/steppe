@@ -57,6 +57,26 @@ double EnvScale::fromNorm(double norm) const {
     return 0.0;
 }
 
+double EnvScale::toModulation(double value) const {
+    return kind == Kind::Plugin && param ? params::toClap(param->spec, value) : value;
+}
+
+double EnvScale::fromModulation(double m) const {
+    if (kind != Kind::Plugin || !param) return m;
+    const params::ClapRange range = params::clapRange(param->spec);
+    return params::fromClap(param->spec, std::clamp(m, range.min, range.max));
+}
+
+double EnvScale::modulationUnit() const {
+    if (kind != Kind::Plugin || !param) return 1.0;
+    const params::ClapRange range = params::clapRange(param->spec);
+    return range.max - range.min;
+}
+
+double modulatedValue(const EnvScale& scale, double base, double offset) {
+    return scale.fromModulation(scale.toModulation(base) + offset);
+}
+
 std::string EnvScale::text(double value) const {
     char buf[32];
     switch (kind) {
@@ -252,7 +272,6 @@ std::optional<ui::ModulationView> modulationBand(const model::Session& session,
                                                  const model::EnvTarget& target,
                                                  const EnvScale& scale,
                                                  const UnipolarSource& unipolar) {
-    double unit = 1;  // the lane's value per unit of depth
     switch (scale.kind) {
         case EnvScale::Kind::Volume:
         case EnvScale::Kind::Pan:
@@ -260,11 +279,11 @@ std::optional<ui::ModulationView> modulationBand(const model::Session& session,
             break;
         case EnvScale::Kind::Plugin:
             if (!scale.param) return std::nullopt;
-            unit = scale.param->spec.max - scale.param->spec.min;
             break;
         default:
             return std::nullopt;
     }
+    const double unit = scale.modulationUnit();  // the domain's offset per unit of depth
     std::vector<ui::ModulationRoute> routes;
     for (const auto& m : session.modulations)
         if (m.value->enabled && m.value->target == target)

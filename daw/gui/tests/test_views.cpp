@@ -2889,6 +2889,65 @@ TEST_CASE("modulated targets have lanes keyed by target, with or without an enve
     CHECK_FALSE(layout.indexOfTarget({b, "volume"}));
 }
 
+TEST_CASE("a plug-in lane's modulation band follows the parameter's curve (CLAP domain)") {
+    // Review round 56 F1: the engine adds depth x the CLAP range to the CLAP
+    // value (ADR-0096), which for a stock plug-in's float parameter is its
+    // position on the curve. A log cutoff at 1 kHz, depth 0.1 bipolar, moves
+    // 0.1 of the travel each way: 0.3 decades, 501 Hz to 1995 Hz.
+    model::EditTxn txn(model::Session::create(), 1);
+    model::FxInstance fx;
+    fx.plugin.id = "log-cutoff-test";
+    const auto filter = txn.create(fx);
+    model::Track tr;
+    tr.parent = model::kMaster;
+    tr.chain.push_back(filter);
+    const auto track = txn.create(tr);
+    txn.modify<model::Track>(model::kMaster, [&](auto& m) { m.children.push_back(track); });
+    const auto rack = txn.create(model::Rack{track, "Modulators"});
+    model::RackModule mod;
+    mod.rack = rack;
+    mod.type = std::string(model::kModOutModule);
+    const auto modOut = txn.create(mod);
+    model::Modulation route;
+    route.source = {modOut, "in_1"};
+    route.target = {filter, "cutoff"};
+    route.depth = 0.1;
+    txn.create(route);
+    auto s = txn.commit();
+    REQUIRE_MESSAGE(s, (s ? "" : s.error().toString()));
+
+    json::Value d = json::Value::object();
+    d["id"] = 1;
+    d["name"] = "Cutoff";
+    d["type"] = "float";
+    d["unit"] = "Hz";
+    d["min"] = 20.0;
+    d["max"] = 20000.0;
+    d["default"] = 1000.0;
+    d["curve"] = "log";
+    auto described = params::fromDescription("cutoff", d);
+    REQUIRE(described);
+    views::EnvScale scale;
+    scale.kind = views::EnvScale::Kind::Plugin;
+    scale.param = std::shared_ptr<const params::DescribedParam>(std::move(*described));
+    CHECK(scale.modulationUnit() == 1.0);  // a float's CLAP range is its 0..1 travel
+
+    const auto band = views::modulationBand(*s, {filter, "cutoff"}, scale, {});
+    REQUIRE(band);
+    CHECK(band->low == doctest::Approx(-0.1));
+    CHECK(band->high == doctest::Approx(0.1));
+    CHECK(views::modulatedValue(scale, 1000.0, band->high) ==
+          doctest::Approx(1000.0 * std::pow(10.0, 0.3)).epsilon(1e-6));
+    CHECK(views::modulatedValue(scale, 1000.0, band->low) ==
+          doctest::Approx(1000.0 / std::pow(10.0, 0.3)).epsilon(1e-6));
+    // The sum stays in the range, as the plug-in clamps it.
+    CHECK(views::modulatedValue(scale, 15000.0, 0.5) == doctest::Approx(20000.0));
+    // A mixer value's domain is its own unit.
+    views::EnvScale volume;
+    CHECK(volume.modulationUnit() == 1.0);
+    CHECK(views::modulatedValue(volume, -6.0, 3.0) == -3.0);
+}
+
 TEST_CASE("master automation lanes are visible while hidden track lanes remain hidden") {
     model::EditTxn txn(model::Session::create(), 1);
     model::Track track;
