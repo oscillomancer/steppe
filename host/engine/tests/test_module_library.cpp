@@ -2095,8 +2095,10 @@ TEST_CASE("a context edit made while a structural edit is deferred does not swal
     // plan waits as `latest_`. A chord edit then reloads and differs from `latest_` in
     // the context alone; the context shortcut must not take it in a way that loses the
     // waiting edit. (loadContextOnly also carries loadScalarRate's deferral guards; this
-    // test pins the outcome, that the removal still compiles and plays, not the guards
-    // themselves: the shortcut adopts the whole new session, which holds the removal.)
+    // test pins the outcome, that the removal still compiles and plays, not the guards.
+    // They are redundant by construction: the shortcut adopts the whole new session,
+    // which holds the removal, and every path they protect reloads latest_ itself. They
+    // are kept to match the other shortcuts.)
     Fixture f;
     f.run("transport.playrate.set", R"({"rate":0.8})");
     const auto track = f.run("track.add", R"({"name":"Src"})")["track"].asString();

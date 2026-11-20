@@ -249,10 +249,15 @@ them to a full compile. `Engine::loadNow` therefore gains a fourth shortcut,
 identical to the running one is not a context edit. It runs after the
 `compile` check, like the others, and carries `loadScalarRate`'s deferral
 guards (no deferred edit, no reload that ends a deferral, no seek or loop
-target, no notification reload, the same project directory), because in the
-reload that ends a deferral `latest_` is the deferred session itself and
-"nothing but the context differs" would be true of it, so a deferred playrate
-move would never play (review 37b F1). And it has the same `Session`-member
+target, no notification reload, the same project directory). The guards are
+redundant by construction, and kept so the shortcut sits like the three beside
+it (review 37b F1, round 53 F2, round 57): every path they protect reloads
+`latest_` itself (the reload that ends a deferral, a rate seek or loop, the
+recovery seek), and the storage rule already refuses a session whose `cx`
+storage is the running one's, which is what the reload that ends a deferral
+presents. A context edit that arrives during a deferral adopts
+deferred-plus-context as `latest_`, and the deferral's own reload compiles
+that, so a deferred playrate move still plays. And it has the same `Session`-member
 binding as the other three lists, since it is a fourth per-member list. When
 only the context differs, nothing is compiled and `latest_` takes the new
 session. Tests: no compile over a `chord.set`; a deferred playrate edit still

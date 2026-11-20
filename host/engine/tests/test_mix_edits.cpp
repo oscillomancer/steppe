@@ -389,7 +389,10 @@ TEST_CASE("a playrate edit together with a rack edit compiles (not scalar-only)"
 // compiles nothing; any other change with it compiles as that change does, and the
 // same session again is still a maintenance reload that compiles (the shortcut needs
 // the cx storage to differ). This pins those outcomes. It does not exercise the
-// deferral guards of loadContextOnly: see engine.md, "Context edits".
+// deferral guards of loadContextOnly, which are redundant by construction (every path
+// they protect reloads latest_ itself, and the storage rule refuses a session equal to
+// the running one): they are kept to match the other shortcuts. See engine.md, "Context
+// edits".
 TEST_CASE("a context-only edit compiles nothing and the same session again does") {
     Mix m = mixSession();
     auto pool = makePool();

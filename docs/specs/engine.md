@@ -697,9 +697,13 @@ guards.** The test also passes with the guards removed: the shortcut adopts the 
 new session as `latest_`, which holds the waiting edit, and the deferral's own retry
 compiles it either way. Both tests fail when the "`cx` storage differs" check is
 removed. No test makes the guards alone matter. They are kept so the shortcut has the
-same guards as the three it sits beside: a later change that made adopting `latest_`
-insufficient would otherwise lose a deferred edit without a test failing. Read them as
-code; no test stands behind them.
+same guards as the three it sits beside. They are redundant by construction (round 57
+review: removing every one leaves the whole `engine.tests` suite passing, and the argument
+holds): every path they protect reloads `latest_` itself, the reload that ends a deferral,
+a rate seek or loop and the recovery seek each load `*latest_`, and a session whose `cx`
+storage is the running one's is refused by the storage rule, so the rule does what the
+guards were first thought to do. A later change that made adopting `latest_` insufficient
+would have to revisit them; no test stands behind them.
 
 **Patch-only FX edits (ADR-0092).** A session that differs from the last one
 `Engine::load` took only in FX `patch` values, each of those FX having a
