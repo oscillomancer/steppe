@@ -169,7 +169,11 @@ unless their variable is exactly `1`: `SUPPLE_AUDIO_DEVICE_TEST` opens the
 real audio device (two seconds of silence); `SUPPLE_GUI_DISPLAY_TEST` opens
 plugin editor windows on the native display; `SUPPLE_MIDI_DEVICE_TEST` opens
 native MIDI inputs on macOS/Windows (with a fake audio driver, so no audio
-device is opened).
+device is opened); `SUPPLE_EDITOR_PROBE_TEST` runs the stock plugins' X11 and
+Win32 editor probes (`plugin.<name>.embedding`), which take over a window at
+a fixed spot on the screen: without it they are reported as skipped. Native
+CI sets it on every platform (Linux under Xvfb). Do not set it on a desktop
+you are using.
 
 Other checks, run on demand: `tools/validator/build.sh` and
 `tools/validator/run.sh <plugin.clap>` (clap-validator 0.4.1, built in the

@@ -1521,7 +1521,10 @@ GUI:
   (`plugin.<name>.embedding`, labelled `tsan-skip`): one at a time, on the
   software renderer the `tsan` preset draws with, they take twelve minutes.
   They run in every other preset that builds the GUI, and the DAW's own GUI
-  tests run under `tsan`.
+  tests run under `tsan`. They open a window on the screen, so they run only
+  when `SUPPLE_EDITOR_PROBE_TEST=1` (set by native CI) and show as skipped on
+  a developer's machine otherwise; the macOS probe (`mac-embedding`) is not
+  gated and still opens its own Cocoa window locally.
 - Automation-item point editing requires an amplitude magnitude above 0.000000001; restore
   the amplitude before editing a flattened item.
 - Plan compilation (including media decoding/resampling), Lua execution and
