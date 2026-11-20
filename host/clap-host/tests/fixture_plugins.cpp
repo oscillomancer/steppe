@@ -248,9 +248,10 @@ struct Gain {
     std::atomic<int> latencyChoice{0};
     std::atomic<bool> editorPending{false};
     std::atomic<std::uint32_t> editorFlags{0}, hostDeliveries{0};
-    int activeLatency = 0;  // latency in samples at activation
-    double gain = 1.0;      // audio thread
-    double gainMod = 0.0;   // audio thread: CLAP param_mod on gain, in CLAP units
+    std::atomic<std::uint32_t> hand{0};  // GainControl::hand, pending: 4 | begin 1 | end 2
+    int activeLatency = 0;               // latency in samples at activation
+    double gain = 1.0;                   // audio thread
+    double gainMod = 0.0;                // audio thread: CLAP param_mod on gain, in CLAP units
     float delay[2][64] = {};
     int delayPos = 0;
     bool noSemantic = false;
@@ -343,6 +344,22 @@ bool CLAP_ABI gainTextToValue(const clap_plugin_t*, clap_id id, const char* text
     return true;
 }
 void gainEditorOutput(const clap_plugin_t* pl, const clap_output_events_t* out) {
+    if (const std::uint32_t hand = G(pl)->hand.exchange(0)) {
+        clap_event_param_gesture_t gesture{};
+        gesture.header = {sizeof(gesture), 0, CLAP_CORE_EVENT_SPACE_ID,
+                          CLAP_EVENT_PARAM_GESTURE_BEGIN, CLAP_EVENT_IS_LIVE};
+        gesture.param_id = 0;
+        if (hand & 1) out->try_push(out, &gesture.header);
+        clap_event_param_value_t value{};
+        value.header = {sizeof(value), 0, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_VALUE,
+                        CLAP_EVENT_IS_LIVE};
+        value.param_id = 0;
+        value.value = params::toClap(kGainTable[0], G(pl)->gainDb);
+        value.note_id = value.port_index = value.channel = value.key = -1;
+        out->try_push(out, &value.header);
+        gesture.header.type = CLAP_EVENT_PARAM_GESTURE_END;
+        if (hand & 2) out->try_push(out, &gesture.header);
+    }
     if (G(pl)->editorPending.exchange(false)) {
         clap_event_param_gesture_t gesture{};
         gesture.header = {sizeof(gesture), 0, CLAP_CORE_EVENT_SPACE_ID,
@@ -562,6 +579,10 @@ struct GainControl {
     // automation, 3 asks to process, 4 asks to process and fails the
     // activation that follows.
     void (*patchEffect)(const clap_plugin_t*, std::uint32_t);
+    // A hand on the editor's gain knob: sets it to `db` at once and reports
+    // it at the next block, opening the gesture first (`what` & 1) and
+    // closing it after (`what` & 2); a gesture can span many calls.
+    void (*hand)(const clap_plugin_t*, double db, std::uint32_t what);
 };
 void gainEditorEdit(const clap_plugin_t* pl, double value, std::uint32_t flags) {
     G(pl)->gainDb = value;
@@ -579,8 +600,16 @@ void gainRequestLatency(const clap_plugin_t* pl, bool delayed) {
 std::uint32_t gainCreates() { return gGainCreates.load(); }
 void gainPatchRescan(const clap_plugin_t* pl, std::uint32_t flags) { G(pl)->patchRescan = flags; }
 void gainPatchEffect(const clap_plugin_t* pl, std::uint32_t effect) { G(pl)->patchEffect = effect; }
+void gainHand(const clap_plugin_t* pl, double db, std::uint32_t what) {
+    G(pl)->gainDb = db;
+    G(pl)->hand = 4 | (what & 3);
+    const auto* hp = static_cast<const clap_host_params_t*>(
+        G(pl)->host->get_extension(G(pl)->host, CLAP_EXT_PARAMS));
+    hp->request_flush(G(pl)->host);
+}
 const GainControl kGainControl{gainEditorEdit, gainHostDeliveries, gainRequestLatency,
-                               gainCreates,    gainPatchRescan,    gainPatchEffect};
+                               gainCreates,    gainPatchRescan,    gainPatchEffect,
+                               gainHand};
 const void* CLAP_ABI gainExt(const clap_plugin_t* pl, const char* id) {
     if (!std::strcmp(id, "supple.test.gain-control")) return &kGainControl;
     if (!std::strcmp(id, CLAP_EXT_PARAMS)) return &kGainParams;
