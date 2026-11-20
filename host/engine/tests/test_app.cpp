@@ -4102,6 +4102,30 @@ TEST_CASE("modulation commands refuse what cannot be modulated, with a hint") {
     CHECK(app->view().modulations.size() == 1);
 }
 
+TEST_CASE("modulation commands: a modulated track analyzes and renders as a stem") {
+    // The builder's journey: modulate made a Modulators rack on its own
+    // channel, which a track's upstream session once dropped while keeping
+    // the route (engine.cycle). A stem keeps it as an unheard dependency.
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_item");
+    auto run = [&](std::string name, std::string_view args) {
+        auto r = d.execute({std::move(name), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.gain"})");
+    const std::string fx = app->view().tracks.find(*model::Id::parse("tr_1"))->chain.back().str();
+    json::Value args = j(R"({"target": {"param": "gain"}, "source": "lfo"})");
+    args["target"]["fx"] = fx;
+    REQUIRE(d.execute({"modulate", args, kTest}));
+    run("analyze.track", R"({"track": "tr_1"})");
+    run("render.stems", R"({"end_beat": 4, "tracks": ["tr_1"]})");
+}
+
 TEST_CASE("modulation commands: removing a route's source or target removes it, with a warning") {
     Root root;
     auto app = makeApp(root.path);
