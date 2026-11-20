@@ -520,6 +520,15 @@ harmonic minor, melodic minor, the modes (dorian, phrygian, lydian,
 mixolydian, locrian), major and minor pentatonic, blues and chromatic.
 Double-click a key change to edit it, or right-click it to delete it.
 
+Chords have a row of their own in the ruler, under the regions. It appears
+when the song has its first chord; to start one, choose **View > Chord row**,
+then double-click in the row and type a chord as you would write it in
+notation, such as "Am7", "Bbmaj7", "F#7#9" or "C/E", and press Enter. Press
+Tab instead of Enter to go on to the next bar. Each chord lasts until the
+next one. Double-click a chord's name to change it, drag it to move it, and
+right-click it to delete it. Right-click inside a chord and choose **No chord
+from here** to end it early.
+
 ## The MIDI editor
 
 Double-click a MIDI item to open it in the MIDI editor, a panel along the

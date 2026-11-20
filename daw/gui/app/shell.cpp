@@ -166,6 +166,12 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
                             : f == Follow::Off ? Follow::Continuous
                                                : Follow::Page);
     });
+    // The chord row (gui.md §4.3): shown while the project has a chord; this
+    // chooses for the project (the UI file keeps the choice).
+    actions.addUi("ui.view.chords", "View: chord row",
+                  [this] { arrange_->setChordRow(!arrange_->chordRowShown()); });
+    actions.setChecked("ui.view.chords",
+                       [this](const actions::Context&) { return arrange_->chordRowShown(); });
     arrange_->gestures().projectGeneration = [this] { return app_.projectGeneration(); };
     // The TCP talks to the app through these: selection state, commands (with
     // a drag's gesture) and the meters it pools with its rows.

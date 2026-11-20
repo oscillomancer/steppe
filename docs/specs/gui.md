@@ -691,12 +691,32 @@ length, source length, loop state, envelope and pool. A change cancels the drag
 with `env.changed`; it does not rebase the draft onto the changed item.
 
 **Ruler rows.** Top to bottom: bars and beats (22 units, the loop range),
-time (15, the punch range), tempo and meter (20), regions (15) and markers
-(16), 88 units in all (`views::RulerRows`). The height is a run-time value,
-the rows' sum: the header row beside the track list, the ruler's painting and
-hit tests and the tracks' visible height all read it, so a row added or
-hidden later (the context track's chords) changes it in one place
-(`ArrangeView::setRulerRows`).
+time (15, the punch range), tempo and meter (20), regions (15), chords (18,
+when shown) and markers (16): 88 units without the chord row, 106 with it
+(`views::RulerRows`). The height is a run-time value, the rows' sum: the
+header row beside the track list, the ruler's painting and hit tests and the
+tracks' visible height all read it, so the chord row appearing changes it in
+one place (`ArrangeView::setRulerRows`).
+
+**The chord row** (ADR-0095) is shown while the project has a chord point,
+and hidden otherwise; View > Chord row (`ui.view.chords`, ticked while shown)
+chooses for the project instead, and the UI file keeps that choice
+(`arrange.chords`; absent: the rule). Each chord is a cell from its beat to
+the next chord point, in the uniform cell of the launcher's slots (raised,
+an outline), named in letters as the notation writes it ("Bbmaj7", "F/A"),
+with a trailing "?" in quiet ink when this build cannot read the symbol; the
+name is cut at the cell's end. A "no chord" point ends the cell before it
+and draws a short faint tick. A double-click on a chord's start or name opens
+a field with its symbol; a double-click elsewhere in the row opens an empty
+one at the grid beat under the pointer. Enter runs `chord.set` (stored
+canonical: "Dmin7" becomes "Dm7"; a refused symbol is the command's message,
+the field kept); Tab writes it and opens the field at the next bar, filled
+with the chord there. A drag on a chord's start or name moves it (`chord.set
+{at, to}`, one undo step; snapped to the grid, freed by the mouse map's
+`ruler.marker` modifiers). A right-click on a chord offers Edit chord…,
+Delete chord (`chord.remove`) and Key change here… at its beat; elsewhere in
+a cell, Add chord here…, No chord from here (`chord.set` with an empty
+symbol) and Key change here… at the grid beat.
 
 **Key changes** (ADR-0095) sit in the meter half of the tempo row, in quiet
 ink: "F major", "Eb harmonic minor", written with a trailing "?" when this

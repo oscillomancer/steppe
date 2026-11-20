@@ -150,6 +150,7 @@ class Ruler : public ui::Node {
             case Drag::LoopMove:
             case Drag::RegionMove:
             case Drag::Marker:
+            case Drag::Chord:
                 return moved_ ? ui::Cursor::Move : ui::Cursor::Arrow;
             case Drag::LoopNew:
                 return ui::Cursor::Arrow;
@@ -188,8 +189,9 @@ class Ruler : public ui::Node {
         const ui::Rect timeRow{x0, bounds().y + rows.beat, bounds().w, rows.time};
         const ui::Rect tempoRow{x0, timeRow.bottom(), bounds().w, rows.tempo};
         const ui::Rect regionRow{x0, tempoRow.bottom(), bounds().w, rows.region};
-        const ui::Rect markRow{x0, regionRow.bottom(), bounds().w,
-                               std::max(0.0f, bounds().bottom() - regionRow.bottom() - 1)};
+        const ui::Rect chordRow{x0, regionRow.bottom(), bounds().w, rows.chord};
+        const ui::Rect markRow{x0, chordRow.bottom(), bounds().w,
+                               std::max(0.0f, bounds().bottom() - chordRow.bottom() - 1)};
         c.fillRect(bounds(), t.color("panel"));
         c.fillRect({x0, bounds().bottom() - 1, bounds().w, 1}, t.color("rule"));
         for (const ui::Rect& r : {beatRow, timeRow, tempoRow})
@@ -379,6 +381,7 @@ class Ruler : public ui::Node {
                 c.text({rx0 + 4, regionRow.y, rx1 - rx0 - 6, regionRow.h}, rg.name, ui::Font::Ui,
                        t.type("caption"), ink, ui::kLeft | ui::kMiddle);
         }
+        if (rows.chord > 0) paintChords(c, chordRow);
         for (const auto& e : s.markers) {
             const model::Marker& mk = *e.value;
             const bool ghost = drag_ == Drag::Marker && moved_ && id_ == e.id;
@@ -491,6 +494,112 @@ class Ruler : public ui::Node {
         return "C major";
     }
 
+    // The chord row (ADR-0095): each chord a cell from its beat to the next
+    // chord point, named in letters as the notation writes it ("?" after a
+    // symbol this build cannot read); a "no chord" point ends the cell before
+    // it and draws a short tick. A chord being dragged is drawn where it would
+    // land.
+    struct ChordCell {
+        double beat = 0;
+        std::string symbol;  // "" for no chord
+        ui::Rect label;      // what a press on it hits: its start and its name
+    };
+    std::vector<ChordCell> chordCells;  // the last paint's, left to right
+    void paintChords(ui::Canvas& c, const ui::Rect& row) {
+        chordCells.clear();
+        const ui::Theme& t = c.theme();
+        const model::Session& s = view_.session();
+        const time::TimeMap& tm = *s.timeMap;
+        struct Shown {
+            double beat;
+            const model::ContextPoint* point;
+            bool ghost;
+        };
+        std::vector<Shown> shown;
+        for (const auto& entry : s.contextView->chords)
+            if (const model::ContextPoint* p = s.context.find(entry.id)) {
+                const bool ghost = drag_ == Drag::Chord && moved_ && entry.beat == originalStart_;
+                shown.push_back({ghost ? draftStart_ : entry.beat, p, ghost});
+            }
+        std::stable_sort(shown.begin(), shown.end(),
+                         [](const Shown& a, const Shown& b) { return a.beat < b.beat; });
+        const float size = t.type("caption");
+        const float x0 = bounds().x, x1 = bounds().right();
+        for (std::size_t i = 0; i < shown.size(); ++i) {
+            const float x = view_.xAt(tm.secondsAt(shown[i].beat));
+            if (x > x1) break;
+            const float end =
+                i + 1 < shown.size() ? view_.xAt(tm.secondsAt(shown[i + 1].beat)) : x1 + 2;
+            const model::ContextPoint& p = *shown[i].point;
+            const float alpha = shown[i].ghost ? 0.6f : 1.0f;
+            if (p.symbol.empty()) {  // no chord from here
+                c.fillRect({x, row.y + 4, 1, row.h - 8}, t.color("ink-faint").withAlpha(alpha));
+                chordCells.push_back({shown[i].beat, {}, {x - 4, row.y, 8, row.h}});
+                continue;
+            }
+            const ui::Rect cell{x + 1, row.y + 2, std::max(0.0f, end - x - 2), row.h - 4};
+            if (end >= x0) {
+                c.fillRound(cell, 2, t.color("raised").withAlpha(alpha));
+                c.strokeRound(cell, 2, t.color("rule").withAlpha(alpha));
+            }
+            const bool known = model::parseChordPoint(p).has_value();
+            const std::string text = p.symbol + (known ? "" : "?");
+            const float w = c.textWidth(text, ui::Font::Ui, size);
+            const float room = std::max(0.0f, cell.w - 8);
+            if (room > 0 && end >= x0) {
+                c.save();
+                c.clip({cell.x + 2, row.y, room + 2, row.h});
+                c.text({cell.x + 4, row.y, w + 4, row.h}, text, ui::Font::Ui, size,
+                       t.color(known ? "ink" : "ink-quiet").withAlpha(alpha),
+                       ui::kLeft | ui::kMiddle);
+                c.restore();
+                stats.chordLabels.push_back(text);
+            }
+            chordCells.push_back(
+                {shown[i].beat,
+                 p.symbol,
+                 {x - 4, row.y, std::min(w + 12, std::max(8.0f, end - x)) + 4, row.h}});
+        }
+    }
+    const ChordCell* chordAt(ui::Point p) const {
+        for (const ChordCell& cell : chordCells)
+            if (cell.label.contains(p)) return &cell;
+        return nullptr;
+    }
+    // The chord field: a symbol ("Am7", "" for no chord) into chord.set at
+    // `beat`. Tab writes it and moves the field to the next bar.
+    void chordField(double beat, const std::string& symbol, ui::Point at) {
+        if (!root()) return;
+        auto field = std::make_unique<ui::TextField>("ruler-chord", symbol);
+        field->layout.width = ui::SizeRule::fixed(140);
+        field->selectAll();
+        auto write = [this, beat](const std::string& text) {
+            json::Value args = json::Value::object();
+            args["at"] = beat;
+            args["symbol"] = text;
+            return execute("chord.set", std::move(args));
+        };
+        field->onSubmit = [this, write](const std::string& text) {
+            if (write(text)) root()->closePopup();
+        };
+        ui::TextField* self = field.get();
+        field->onOtherKey = [this, write, beat, at, self](const ui::KeyEvent& e) {
+            if (e.key != SDLK_TAB || (e.mods & ui::kShift)) return false;
+            const std::string text = self->text();
+            if (!text.empty() && !write(text)) return true;
+            const auto& tm = *view_.session().timeMap;
+            const double next = tm.beatOfBar(tm.barBeat(beat).bar + 1);
+            const float x = view_.xAt(tm.secondsAt(next));
+            std::string there;
+            for (const ChordCell& cell : chordCells)
+                if (cell.beat == next) there = cell.symbol;
+            root()->closePopup();
+            chordField(next, there, {x, at.y});
+            return true;
+        };
+        root()->openPopup(std::move(field), {at.x, at.y, 1, 1});
+    }
+
   private:
     enum class Drag {
         None,
@@ -501,7 +610,8 @@ class Ruler : public ui::Node {
         Marker,
         RegionMove,
         RegionLeft,
-        RegionRight
+        RegionRight,
+        Chord
     };
     bool isLoop() const {
         return drag_ == Drag::LoopNew || drag_ == Drag::LoopMove || drag_ == Drag::LoopLeft ||
@@ -626,7 +736,37 @@ class Ruler : public ui::Node {
             if (!key)
                 add("Key change here\u2026",
                     [this, beat = gridBeat(at.x), at] { keyField(beat, keyTextAt(beat), at); });
-        } else if (y >= rows.regionTop() && y < rows.markerTop()) {
+        } else if (y >= rows.chordTop() && y < rows.markerTop()) {
+            // The chord row: the chord under the pointer (its cell runs to the
+            // next chord point), and a chord can start at the grid beat there.
+            const ChordCell* hit = nullptr;
+            for (const ChordCell& cell : chordCells)
+                if (cell.label.x <= at.x) hit = &cell;
+            if (hit && hit->label.contains(at)) {
+                add("Edit chord\u2026", [this, beat = hit->beat, symbol = hit->symbol, at] {
+                    chordField(beat, symbol, at);
+                });
+                add("Delete chord", [this, beat = hit->beat] {
+                    json::Value args = json::Value::object();
+                    args["at"] = beat;
+                    execute("chord.remove", std::move(args));
+                });
+            } else {
+                add("Add chord here\u2026",
+                    [this, beat = gridBeat(at.x), at] { chordField(beat, "", at); });
+                if (hit && !hit->symbol.empty())
+                    add("No chord from here", [this, beat = gridBeat(at.x)] {
+                        json::Value args = json::Value::object();
+                        args["at"] = beat;
+                        args["symbol"] = "";
+                        execute("chord.set", std::move(args));
+                    });
+            }
+            add("Key change here\u2026",
+                [this, beat = hit && hit->label.contains(at) ? hit->beat : gridBeat(at.x), at] {
+                    keyField(beat, keyTextAt(beat), at);
+                });
+        } else if (y >= rows.regionTop() && y < rows.chordTop()) {
             for (const auto& entry : s.regions) {
                 const auto& rg = *entry.value;
                 const float left = view_.xAt(atSeconds(tm, rg.start, rg.timebase));
@@ -888,7 +1028,21 @@ bool Ruler::handle(const ui::PointerEvent& e) {
             const double beat = position(e.pos.x, free);
             tempo(beat, tm.bpmAt(beat));
             return true;
-        } else if (y < rows.markerTop()) {
+        } else if (y >= rows.chordTop() && y < rows.markerTop()) {
+            // A chord's start or name: a double-click edits it, a drag moves it;
+            // a double-click elsewhere starts a chord at the grid beat there.
+            if (const ChordCell* cell = chordAt(e.pos)) {
+                if (e.clicks == 2) {
+                    chordField(cell->beat, cell->symbol, e.pos);
+                    return true;
+                }
+                originalStart_ = originalEnd_ = cell->beat;
+                drag_ = Drag::Chord;
+            } else if (e.clicks == 2) {
+                chordField(gridBeat(e.pos.x), "", e.pos);
+                return true;
+            }
+        } else if (y < rows.chordTop()) {
             for (const auto& entry : s.regions) {
                 const auto& rg = *entry.value;
                 const float left = view_.xAt(atSeconds(tm, rg.start, rg.timebase));
@@ -1004,6 +1158,10 @@ bool Ruler::handle(const ui::PointerEvent& e) {
                 }
             } else if (moved_ && (drag_ == Drag::LoopLeft || drag_ == Drag::LoopRight)) {
                 clearRange(punch_);  // an edge dragged onto the other: the range is gone
+            } else if (moved_ && drag_ == Drag::Chord && draftStart_ != originalStart_) {
+                args["at"] = originalStart_;
+                args["to"] = draftStart_;
+                execute("chord.set", std::move(args));
             } else if (moved_ && (drag_ == Drag::Marker || isRegion()) &&
                        (draftStart_ != originalStart_ || draftEnd_ != originalEnd_)) {
                 args["id"] = id_.str();
@@ -1224,7 +1382,9 @@ void ArrangeView::show(const model::Session& session, const std::vector<model::C
         if (root()) root()->releaseWithin(this);
     }
     generation_ = generation;
-    if (layout_.show(session, changes, generation)) {
+    const bool rebuilt = layout_.show(session, changes, generation);
+    syncChordRow();
+    if (rebuilt) {
         lanes_->rebuild();
         tcp_->setSession(session);
         header_->invalidate();
@@ -1534,6 +1694,16 @@ void ArrangeView::setRulerRows(const RulerRows& rows) {
     relayout();  // the header, the lanes and the TCP below it move
     invalidate();
 }
+void ArrangeView::setChordRow(std::optional<bool> shown) {
+    chordRowChoice_ = shown;
+    syncChordRow();
+}
+void ArrangeView::syncChordRow() {
+    RulerRows rows = rulerRows_;
+    const bool shown = chordRowChoice_.value_or(!session().contextView->chords.empty());
+    rows.chord = shown ? RulerRows::kChordHeight : 0;
+    setRulerRows(rows);
+}
 void ArrangeView::addMarker() { ruler_->addMarker(); }
 void ArrangeView::addRegion() { ruler_->addRegion(); }
 const RulerStats& ArrangeView::rulerStats() const { return ruler_->stats; }
@@ -1554,6 +1724,7 @@ json::Value ArrangeView::saveLayout() const {
     v["scroll_y"] = static_cast<double>(vp.scrollY);
     v["row_height"] = static_cast<double>(trackLayout().globalHeight());
     v["follow"] = std::string(views::followName(follow()));
+    if (chordRowChoice_) v["chords"] = *chordRowChoice_;  // View > Chords chose
     json::Value heights = json::Value::object();
     for (const auto& [track, h] : trackLayout().heights())
         heights[track.str()] = static_cast<double>(h);
@@ -1585,6 +1756,11 @@ void ArrangeView::loadLayout(const json::Value& v) {
         }
     if (const json::Value* f = v.find("follow"); f && f->isString())
         if (const auto mode = views::followFrom(f->asString())) setFollow(*mode);
+    {
+        const json::Value* chords = v.find("chords");
+        setChordRow(chords && chords->isBool() ? std::optional<bool>(chords->asBool())
+                                               : std::nullopt);
+    }
     trackLayout().clearTakesExpanded();
     if (const json::Value* ex = v.find("expanded_takes"); ex && ex->isArray())
         for (const json::Value& item : ex->asArray())
