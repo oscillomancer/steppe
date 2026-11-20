@@ -14,6 +14,7 @@
 #include "strip_learn.h"
 #include "supple/ui/popup.h"
 #include "supple/views/envelope_lane.h"
+#include "supple/views/track_layout.h"
 
 namespace supple::gui {
 namespace {
@@ -54,6 +55,7 @@ struct Builder {
     AppActions& actions;
     const model::Session& s;
     model::Id object;
+    ui::Rect anchor;
     std::vector<ui::MenuItem> items;
 
     void add(std::string label, std::function<void()> action, bool checked = false,
@@ -72,6 +74,21 @@ struct Builder {
         AppActions* a = &actions;
         add(stripLearnLabel(s, {{object}, param}),
             [r, a, o = object, param] { openStripLearn(*r, *a, {{o}, param}); });
+    }
+    // Modulate: <name>… (ADR-0096, M-k).
+    void modulate(const std::string& param) {
+        json::Value target = json::Value::object();
+        target["track"] = object.str();
+        target["param"] = param;
+        AppActions* a = &actions;
+        items.push_back(modulateItem(
+            root, actions.dispatcher(), [a] { return a->app().head(); }, stripControlLabel(param),
+            std::move(target),
+            object.kind == model::Kind::Track ? std::optional(object) : std::nullopt,
+            stripModulatable(s, object, param), anchor,
+            [a](const std::string& message) {
+                if (a->onError) a->onError(message);
+            }));
     }
     // Show or hide the parameter's lane, as the lanes decide it: through
     // its envelope and its modulation routes (laneShown, setLaneShown).
@@ -104,6 +121,7 @@ void panItems(Builder& b, const model::Track& t) {
     const bool master = t.type == model::StripType::Master;
     for (const std::string& param : panControls(t)) b.learn(param);
     if (!master) b.learn("pan_boost");
+    for (const std::string& param : panControls(t)) b.modulate(param);
     for (const std::string& param : panControls(t)) b.lane(param);
     // Reset: every bar home, as a double-click on each would set it.
     json::Value home = json::Value::object();
@@ -183,6 +201,66 @@ double envelopeStartValue(const model::Session& s, const model::Id& object,
                                   : (tr->mute ? 1.0 : 0.0);
 }
 
+bool stripModulatable(const model::Session& s, const model::Id& object, std::string_view param) {
+    const model::Track* t = s.tracks.find(object);
+    if (!t || t->freeze) return false;
+    const bool master = t->type == model::StripType::Master;
+    if (param == "volume") return true;
+    if (param == "pan") return master || t->panMode != model::PanMode::Dual;
+    if (param == "width") return !master && t->panMode == model::PanMode::Width;
+    return false;
+}
+
+void openModulateMenu(ui::Root& root, cmd::Dispatcher& dispatcher, const model::Session& s,
+                      json::Value target, std::optional<model::Id> ownTrack, const ui::Rect& anchor,
+                      std::function<void(const std::string&)> onError) {
+    cmd::Dispatcher* d = &dispatcher;
+    auto make = [d, target, onError](json::Value source, std::optional<model::Id> from) {
+        return [d, target, onError, source = std::move(source), from] {
+            json::Value args = json::Value::object();
+            args["target"] = target;
+            args["source"] = source;
+            if (from) args["from"] = from->str();
+            const auto r = d->execute({"modulate", std::move(args), kOrigin});
+            if (!r && onError) onError(r.error().message);
+        };
+    };
+    std::vector<ui::MenuItem> items;
+    for (auto [label, key] :
+         {std::pair{"LFO", "lfo"}, std::pair{"Random", "random"}, std::pair{"Macro", "macro"}})
+        items.push_back({label, "", make(json::Value(key), std::nullopt)});
+    bool first = true;
+    for (model::Id id : views::stripOrder(s)) {
+        const model::Track* t = s.tracks.find(id);
+        if (!t || t->type == model::StripType::Master || id == ownTrack) continue;
+        if (first) items.push_back({"", "", {}, true, true});
+        first = false;
+        const std::string name = t->name.empty() ? id.str() : t->name;
+        items.push_back({"Follower: " + name, "", make(json::Value("follower"), id)});
+    }
+    ui::Root* r = &root;
+    root.openPopup(ui::makeMenu("param.modulate.menu", std::move(items), [r] { r->closePopup(); }),
+                   anchor, ui::Placement::Below);
+}
+
+ui::MenuItem modulateItem(ui::Root& root, cmd::Dispatcher& dispatcher,
+                          std::function<model::Session()> head, const std::string& name,
+                          json::Value target, std::optional<model::Id> ownTrack, bool modulatable,
+                          const ui::Rect& anchor, std::function<void(const std::string&)> onError) {
+    ui::MenuItem m;
+    m.label = "Modulate: " + name + "\u2026";  // a second menu follows, as Groups… does
+    m.enabled = modulatable;
+    // The menu closes before its row runs; the sources open in its place,
+    // from the session as it is then.
+    ui::Root* r = &root;
+    cmd::Dispatcher* d = &dispatcher;
+    m.run = [r, d, head = std::move(head), target = std::move(target), ownTrack, anchor,
+             onError = std::move(onError)] {
+        openModulateMenu(*r, *d, head(), target, ownTrack, anchor, onError);
+    };
+    return m;
+}
+
 bool laneShown(const model::Session& s, const model::EnvTarget& target) {
     for (const auto& e : s.envelopes)
         if (e.value->target == target && e.value->visible) return true;
@@ -238,13 +316,16 @@ void openParamMenu(ui::Root& root, AppActions& actions, const model::Id& object,
     const model::Track* track = s.tracks.find(object);
     const model::TrackGroup* group = s.groups.find(object);
     if (!track && !(group && group->vca)) return;
-    Builder b{root, actions, s, object, {}};
+    Builder b{root, actions, s, object, anchor, {}};
     AppActions* a = &actions;
     if (track && param == "pan") {
         panItems(b, *track);
     } else {
         b.learn(param);
-        if (param == "volume" || param == "mute") b.lane(param);
+        if (param == "volume" || param == "mute") {
+            b.modulate(param);
+            b.lane(param);
+        }
         if (param == "volume") {
             const model::Id o = object;
             b.add(

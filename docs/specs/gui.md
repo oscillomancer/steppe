@@ -611,11 +611,19 @@ the mixer's strips open:
   right"), shown with the double-click that does the same: one `track.set`
   through the selection, as the double-click (every bar of a pan at once).
 
-Modulate joins the menu after MIDI learn when modulation lands. A
-channel's or buss's pan menu has the pan's rows first, one MIDI learn entry
+**Modulate: Volume…** follows MIDI learn (ADR-0096, M-k), one per lane
+row: on a track's volume and pan and a channel's or buss's width. It is
+greyed on a switch (mute), a dual pan's bars, a VCA's controls and a frozen
+track, which take no modulation. It opens a second menu in its place
+(`param.modulate.menu`; the font has no ▸, so the row ends in "…" as
+Groups… does) of the sources `modulate` makes: **LFO**, **Random**,
+**Macro**, then **Follower: <track>** for each channel and buss but the
+track itself. Each is one `modulate`, one undo step; a refusal (a follower
+that would close a cycle through the rack, `modulation.cycle`) shows in the
+status line. A channel's or buss's pan menu has the pan's rows first, one MIDI learn entry
 per shown control (Pan in pan mode, Pan left and Pan right in dual mode, Pan
-and Width in width mode, always followed by Gain compensation) and a lane per
-shown bar, then its modes and law (ADR-0066): a rule, "Pan mode: pan / dual
+and Width in width mode, always followed by Gain compensation), a Modulate
+row and a lane per shown bar, then its modes and law (ADR-0066): a rule, "Pan mode: pan / dual
 pan / pan and width", a rule, "Pan law: project (0 dB)" and "Pan law: 0 dB …
 −6 dB" (the strip's own law), "Gain compensation (boost pans)" (ticked by the
 effective law; on a strip that follows the project it gives the strip its own
@@ -1274,6 +1282,11 @@ from the control's right-click menu, §4.2, §4.4, §4.6): it offers soft
 takeover for a level or pan, and a button's CC mode starts at toggle; OK binds
 every target in one undo step (`track.learn.set` / `route.learn.set` /
 `vca.learn.set`), Remove frees them.
+A right-click on a semantic parameter's row opens its parameter menu
+(`fx.param.menu`): **MIDI learn: Gain…** (writable rows), **Modulate:
+Gain…** (greyed unless `fx.describe` marks the parameter `modulatable`, or
+while its track is frozen; ADR-0096) and **Show lane** / **Hide lane** as in
+the strips' menu (§4.5).
 MIDI learn is one app-wide session across roots: opening another dialog closes
 the first and its nested menus. Owner tokens prevent deferred destruction of
 an old dialog from disabling the new listener. While the dialog is open

@@ -568,7 +568,7 @@ Status FxWindow::open(model::Id track) {
     SUPPLE_TRY(panel_.ensure());
     if (!browser_) {
         browser_ = std::make_unique<PluginBrowser>(app_, dispatcher_, root(), favouritesFile_);
-        params_ = std::make_unique<ParamPanel>(dispatcher_, root());
+        params_ = std::make_unique<ParamPanel>(app_, dispatcher_, root());
         params_->onError = [this](const std::string& message) { setStatus(message); };
         params_->openLearn = hooks_.openLearn;
     }

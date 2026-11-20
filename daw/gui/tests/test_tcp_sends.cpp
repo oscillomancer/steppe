@@ -1027,11 +1027,12 @@ TEST_CASE("TCP: a right-click on a strip's fader or button opens its parameter m
     };
     // The same rows as the mixer's: learn, lane, reset.
     rightClick("fader");
-    CHECK(labels() ==
-          std::vector<std::string>{"MIDI learn: Volume…", "Show lane: Volume", "Reset to 0 dB"});
+    CHECK(labels() == std::vector<std::string>{"MIDI learn: Volume…", "Modulate: Volume…",
+                                               "Show lane: Volume", "Reset to 0 dB"});
     f.root->closePopup();
     rightClick("mute");
-    CHECK(labels() == std::vector<std::string>{"MIDI learn: Mute…", "Show lane: Mute"});
+    CHECK(labels() ==
+          std::vector<std::string>{"MIDI learn: Mute…", "Modulate: Mute…", "Show lane: Mute"});
     f.root->closePopup();
     // The first row opens the learn dialog; a moved control and OK bind it.
     auto learn = [&](const char* what, const std::string& entry, std::uint8_t cc) {

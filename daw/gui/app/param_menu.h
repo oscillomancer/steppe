@@ -11,17 +11,22 @@
 //   modulation routes' `lane` (a new lane starts flat at the control's value);
 // - Reset where the control has a default: a fader's 0 dB, a pan's centre
 //   (and full width, or full left and right in dual pan).
+// - Modulate: Volume… beside each lane (ADR-0096, M-k), opening the sources
+//   `modulate` makes; greyed where the parameter takes no modulation (a
+//   switch, a dual pan's bars, a VCA, a frozen track).
 // A channel's or buss's pan then adds its mode, its law and gain
-// compensation; a master's pan is a balance and has none of those. Modulate
-// joins the menu with modulation.
+// compensation; a master's pan is a balance and has none of those.
 #pragma once
 
+#include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 
 #include "app_actions.h"
 #include "supple/model/ids.h"
 #include "supple/model/session.h"
+#include "supple/ui/popup.h"
 #include "supple/ui/root.h"
 
 namespace supple::gui {
@@ -43,6 +48,25 @@ bool laneShown(const model::Session& s, const model::EnvTarget& target);
 // sets them on the envelope and routes there are; with neither it adds an
 // envelope flat at `startValue` (`envArgs`: env.add's target fields, such
 // as {"track": "tr_1"} or {"fx": "fx_1"}).
+// Whether a strip's control takes modulation (ADR-0096, step M2): a
+// track's volume and pan, and a channel's or buss's width, while it is not
+// frozen. A dual pan's bars, switches and a VCA's controls do not.
+bool stripModulatable(const model::Session& s, const model::Id& object, std::string_view param);
+
+// Modulate…: a menu at `anchor` of the sources `modulate` makes for
+// `target` (its {"track" | "fx" | "route", "param"}): LFO, Random, Macro,
+// then "Follower: <name>" for each channel and buss but `ownTrack` (a
+// follower cannot hear the track it modulates). One undo step each.
+void openModulateMenu(ui::Root& root, cmd::Dispatcher& dispatcher, const model::Session& s,
+                      json::Value target, std::optional<model::Id> ownTrack, const ui::Rect& anchor,
+                      std::function<void(const std::string&)> onError);
+// The row that opens it: "Modulate: <name>…", greyed when not `modulatable`.
+// `head` gives the session when the row runs.
+ui::MenuItem modulateItem(ui::Root& root, cmd::Dispatcher& dispatcher,
+                          std::function<model::Session()> head, const std::string& name,
+                          json::Value target, std::optional<model::Id> ownTrack, bool modulatable,
+                          const ui::Rect& anchor, std::function<void(const std::string&)> onError);
+
 Status setLaneShown(cmd::Dispatcher& dispatcher, const model::Session& s,
                     const model::EnvTarget& target, bool shown, json::Value envArgs,
                     double startValue);

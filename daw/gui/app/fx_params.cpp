@@ -6,11 +6,13 @@
 #include <memory>
 #include <vector>
 
+#include "param_menu.h"
 #include "supple/engine/midi_control.h"
 #include "supple/json/parse.h"
 #include "supple/model/schemas.h"
 #include "supple/params/params.h"
 #include "supple/ui/controls.h"
+#include "supple/ui/popup.h"
 #include "supple/ui/root.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
@@ -27,12 +29,31 @@ std::string idText(model::Id id) { return id.str(); }
 struct Described {
     std::string key, name, group;
     std::shared_ptr<params::DescribedParam> spec;
+    bool modulatable = false;  // fx.describe: a modulation route can take it
+};
+
+// A parameter's row: a right-click anywhere on it (its controls pass
+// right-clicks on) opens the parameter menu.
+class ParamRow : public ui::Node {
+  public:
+    ParamRow(std::string id, std::function<void(ui::Point)> menu)
+        : Node(std::move(id)), menu_(std::move(menu)) {
+        interactive = true;
+    }
+    bool onPointer(const ui::PointerEvent& e) override {
+        if (e.type != ui::PointerEvent::Type::Down || e.button != 3) return false;
+        if (menu_) menu_(e.pos);
+        return true;
+    }
+
+  private:
+    std::function<void(ui::Point)> menu_;
 };
 
 }  // namespace
 
-ParamPanel::ParamPanel(cmd::Dispatcher& dispatcher, ui::Root& root)
-    : dispatcher_(dispatcher), root_(root) {}
+ParamPanel::ParamPanel(engine::EngineApp& app, cmd::Dispatcher& dispatcher, ui::Root& root)
+    : app_(app), dispatcher_(dispatcher), root_(root) {}
 
 Result<std::size_t> ParamPanel::build(ui::Node& parent, model::Id fx) {
     fx_ = fx;
@@ -121,6 +142,9 @@ Result<std::size_t> ParamPanel::build(ui::Node& parent, model::Id fx) {
         d.name = (*spec)->name.empty() ? member.key : (*spec)->name;
         d.group = (*spec)->group;
         d.spec = std::shared_ptr<params::DescribedParam>(std::move(*spec));
+        const json::Value* modulatable =
+            member.value.isObject() ? member.value.find("modulatable") : nullptr;
+        d.modulatable = modulatable && modulatable->isBool() && modulatable->asBool();
         rows.push_back(std::move(d));
     }
     if (rows.empty()) {
@@ -157,7 +181,11 @@ Result<std::size_t> ParamPanel::build(ui::Node& parent, model::Id fx) {
         }
         const double physical = current(d);
         const bool writable = !(spec.flags & params::kReadonly);
-        auto& row = parent.emplace<ui::Node>("fx.param.row." + d.key);
+        auto& row = parent.emplace<ParamRow>(
+            "fx.param.row." + d.key, [this, key = d.key, name = d.name, writable,
+                                      modulatable = d.modulatable, physical](ui::Point at) {
+                openMenu(key, name, writable, writable && modulatable, physical, at);
+            });
         row.layout.dir = ui::Layout::Dir::Row;
         row.layout.height = ui::SizeRule::fixed(24);
         row.layout.gap = 6;
@@ -273,6 +301,49 @@ Status ParamPanel::automate(const std::string& key, double physical) {
     auto added = dispatcher_.execute({"env.add", std::move(args), kUiOrigin});
     if (!added) return std::move(added).error();
     return {};
+}
+
+void ParamPanel::openMenu(const std::string& key, const std::string& name, bool learnable,
+                          bool modulatable, double physical, ui::Point at) {
+    const model::Session s = app_.head();
+    const model::EnvTarget target{fx_, key};
+    const ui::Rect anchor{at.x, at.y, 1, 1};
+    auto error = [this](const std::string& message) {
+        if (onError) onError(message);
+    };
+    std::vector<ui::MenuItem> items;
+    if (learnable && openLearn)
+        items.push_back(
+            {"MIDI learn: " + name + "\u2026", "", [this, key, name] { learn(key, name); }});
+    // The track whose chain holds the effect: a follower cannot hear it.
+    std::optional<model::Id> owner;
+    for (const auto& t : s.tracks) {
+        const auto& chain = t.value->chain;
+        const auto& input = t.value->inputChain;
+        if (std::find(chain.begin(), chain.end(), fx_) != chain.end() ||
+            std::find(input.begin(), input.end(), fx_) != input.end())
+            owner = t.id;
+    }
+    json::Value modTarget = json::Value::object();
+    modTarget["fx"] = idText(fx_);
+    modTarget["param"] = key;
+    items.push_back(modulateItem(
+        root_, dispatcher_, [this] { return app_.head(); }, name, std::move(modTarget), owner,
+        modulatable && !(owner && s.tracks.find(*owner)->freeze), anchor, error));
+    if (learnable) {
+        const bool shown = laneShown(s, target);
+        items.push_back({(shown ? "Hide lane: " : "Show lane: ") + name, "",
+                         [this, target, shown, physical, error] {
+                             json::Value envArgs = json::Value::object();
+                             envArgs["fx"] = idText(fx_);
+                             const auto r = setLaneShown(dispatcher_, app_.head(), target, !shown,
+                                                         std::move(envArgs), physical);
+                             if (!r) error(r.error().message);
+                         }});
+    }
+    ui::Root* r = &root_;
+    root_.openPopup(ui::makeMenu("fx.param.menu", std::move(items), [r] { r->closePopup(); }),
+                    anchor, ui::Placement::Below);
 }
 
 void ParamPanel::learnButton(ui::Node& row, const std::string& id, const std::string& param,

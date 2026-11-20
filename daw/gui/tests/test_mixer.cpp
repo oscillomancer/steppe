@@ -2859,8 +2859,9 @@ TEST_CASE(
     using Rows = std::vector<std::string>;
     for (auto [node, rows] :
          {std::pair{static_cast<ui::Node*>(f.strip(a).fader),
-                    Rows{"MIDI learn: Volume…", "Show lane: Volume", "Reset to 0 dB"}},
-          {f.strip(a).mute, Rows{"MIDI learn: Mute…", "Show lane: Mute"}},
+                    Rows{"MIDI learn: Volume…", "Modulate: Volume…", "Show lane: Volume",
+                         "Reset to 0 dB"}},
+          {f.strip(a).mute, Rows{"MIDI learn: Mute…", "Modulate: Mute…", "Show lane: Mute"}},
           {f.strip(a).solo, Rows{"MIDI learn: Solo…"}},
           {f.strip(a).arm, Rows{"MIDI learn: Record arm…"}}}) {
         REQUIRE(node);
@@ -2868,7 +2869,7 @@ TEST_CASE(
         ui::Node* menu = f.root->find("strip.param.menu");
         REQUIRE(menu);
         CHECK(labels(*menu) == rows);
-        if (rows.size() == 3) f.snapshot("param-menu-mixer-fader.png");
+        if (rows.size() == 4) f.snapshot("param-menu-mixer-fader.png");
         f.root->closePopup();
     }
     open(f.empty(a));
@@ -2911,11 +2912,11 @@ TEST_CASE("mixer: a pan's parameter menu sets its mode and law; its bars follow 
     ui::Node* menu = open();
     CHECK(labels(*menu) ==
           std::vector<std::string>{"MIDI learn: Pan…", "MIDI learn: Gain compensation…",
-                                   "Show lane: Pan", "Reset to centre", "", "Pan mode: pan",
-                                   "Pan mode: dual pan", "Pan mode: pan and width", "",
-                                   "Pan law: project (0 dB)", "Pan law: 0 dB", "Pan law: −2.5 dB",
-                                   "Pan law: −3 dB", "Pan law: −4.5 dB", "Pan law: −6 dB",
-                                   "Gain compensation (boost pans)"});
+                                   "Modulate: Pan…", "Show lane: Pan", "Reset to centre", "",
+                                   "Pan mode: pan", "Pan mode: dual pan", "Pan mode: pan and width",
+                                   "", "Pan law: project (0 dB)", "Pan law: 0 dB",
+                                   "Pan law: −2.5 dB", "Pan law: −3 dB", "Pan law: −4.5 dB",
+                                   "Pan law: −6 dB", "Gain compensation (boost pans)"});
     CHECK(row(menu, "Pan mode: pan").checked);
     CHECK(row(menu, "Pan law: project (0 dB)").checked);
     CHECK_FALSE(row(menu, "Gain compensation (boost pans)").checked);
@@ -2927,11 +2928,15 @@ TEST_CASE("mixer: a pan's parameter menu sets its mode and law; its bars follow 
     CHECK(f.strip(a).pan->second() == 100);
     menu = open();
     auto rows = labels(*menu);
-    REQUIRE(rows.size() >= 6);
-    CHECK(std::vector<std::string>(rows.begin(), rows.begin() + 6) ==
+    REQUIRE(rows.size() >= 8);
+    CHECK(std::vector<std::string>(rows.begin(), rows.begin() + 8) ==
           std::vector<std::string>{"MIDI learn: Pan left…", "MIDI learn: Pan right…",
-                                   "MIDI learn: Gain compensation…", "Show lane: Pan left",
+                                   "MIDI learn: Gain compensation…", "Modulate: Pan left…",
+                                   "Modulate: Pan right…", "Show lane: Pan left",
                                    "Show lane: Pan right", "Reset to full left and right"});
+    // A dual pan's bars take no modulation (ADR-0096 targets pan and width).
+    CHECK_FALSE(row(menu, "Modulate: Pan left…").enabled);
+    CHECK_FALSE(row(menu, "Modulate: Pan right…").enabled);
     f.snapshot("pan-menu-dual.png");
     f.root->closePopup();
     pick(open(), "Pan law: −3 dB");  // -3 dB of its own
@@ -2950,11 +2955,14 @@ TEST_CASE("mixer: a pan's parameter menu sets its mode and law; its bars follow 
     CHECK(f.strip(a).pan->second() == 100);
     menu = open();
     rows = labels(*menu);
-    REQUIRE(rows.size() >= 6);
-    CHECK(std::vector<std::string>(rows.begin(), rows.begin() + 6) ==
+    REQUIRE(rows.size() >= 8);
+    CHECK(std::vector<std::string>(rows.begin(), rows.begin() + 8) ==
           std::vector<std::string>{"MIDI learn: Pan…", "MIDI learn: Width…",
-                                   "MIDI learn: Gain compensation…", "Show lane: Pan",
-                                   "Show lane: Width", "Reset to centre, full width"});
+                                   "MIDI learn: Gain compensation…", "Modulate: Pan…",
+                                   "Modulate: Width…", "Show lane: Pan", "Show lane: Width",
+                                   "Reset to centre, full width"});
+    CHECK(row(menu, "Modulate: Pan…").enabled);
+    CHECK(row(menu, "Modulate: Width…").enabled);
     f.snapshot("pan-menu-width.png");
     f.root->closePopup();
     // The right bar is the width: a drag left narrows the strip.
@@ -2978,8 +2986,8 @@ TEST_CASE("mixer: a pan's parameter menu sets its mode and law; its bars follow 
     f.pointer(ui::PointerEvent::Type::Up, master, 1, 0, 3);
     menu = f.root->find("strip.param.menu");
     REQUIRE(menu);
-    CHECK(labels(*menu) ==
-          std::vector<std::string>{"MIDI learn: Pan…", "Show lane: Pan", "Reset to centre"});
+    CHECK(labels(*menu) == std::vector<std::string>{"MIDI learn: Pan…", "Modulate: Pan…",
+                                                    "Show lane: Pan", "Reset to centre"});
     CHECK(f.errors.empty());
 }
 
@@ -3041,6 +3049,77 @@ TEST_CASE("mixer: Show and Hide lane follow whatever holds the lane, a route or 
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("mixer: Modulate… on a fader opens the sources, and one makes the route (modulate)") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    const auto b = f.addTrack("channel", "B");
+    f.addTrack("buss", "Verb");
+    f.refresh();
+    const auto open = [&](ui::Node* node) {
+        const ui::Point p = f.centre(node);
+        f.pointer(ui::PointerEvent::Type::Down, p, 1, 0, 3);
+        f.pointer(ui::PointerEvent::Type::Up, p, 1, 0, 3);
+        ui::Node* menu = f.root->find("strip.param.menu");
+        REQUIRE(menu);
+        return menu;
+    };
+    const auto row = [](ui::Node* menu, const std::string& label) {
+        const auto items = ui::menuItems(*menu);
+        const auto it = std::find_if(items.begin(), items.end(),
+                                     [&](const auto& i) { return i.label == label; });
+        REQUIRE_MESSAGE(it != items.end(), label);
+        return *it;
+    };
+    const auto labels = [](const ui::Node& menu) {
+        std::vector<std::string> out;
+        for (const auto& item : ui::menuItems(menu)) out.push_back(item.label);
+        return out;
+    };
+    // Mute is a switch: greyed.
+    CHECK_FALSE(row(open(f.strip(a).mute), "Modulate: Mute…").enabled);
+    f.root->closePopup();
+    // The fader's row opens the sources in its place: the followers are the
+    // other channels and busses (a follower cannot hear its own track).
+    ui::Node* menu = open(f.strip(a).fader);
+    auto modulate = row(menu, "Modulate: Volume…");
+    CHECK(modulate.enabled);
+    f.root->closePopup();
+    modulate.run();
+    ui::Node* sources = f.root->find("param.modulate.menu");
+    REQUIRE(sources);
+    CHECK(labels(*sources) ==
+          std::vector<std::string>{"LFO", "Random", "Macro", "", "Follower: B", "Follower: Verb"});
+    f.snapshot("param-modulate-menu.png");
+    auto lfo = row(sources, "LFO");
+    f.root->closePopup();
+    const auto before = f.steps();
+    lfo.run();
+    f.refresh();
+    CHECK(f.steps() == before + 1);  // the whole gesture is one undo step
+    const model::Session s = f.app->head();
+    REQUIRE(s.modulations.size() == 1);
+    const model::Modulation& route = *s.modulations.begin()->value;
+    CHECK(route.target == model::EnvTarget{*model::Id::parse(a), "volume"});
+    CHECK(route.depth == 6);  // modulate's default for a volume
+    // A follower names the track it listens to (Verb: A would close a cycle
+    // through the Modulators rack that already drives A, which modulate
+    // refuses with a message in the status line).
+    menu = open(f.strip(b).pan);
+    modulate = row(menu, "Modulate: Pan…");
+    f.root->closePopup();
+    modulate.run();
+    sources = f.root->find("param.modulate.menu");
+    REQUIRE(sources);
+    auto follow = row(sources, "Follower: Verb");
+    f.root->closePopup();
+    follow.run();
+    f.refresh();
+    for (const auto& e : f.errors) MESSAGE(e);
+    CHECK(f.app->head().modulations.size() == 2);
+    CHECK(f.errors.empty());
+}
+
 TEST_CASE("mixer: a right-click on a VCA's fader learns MIDI for it, elsewhere the group menu") {
     Fixture f;
     if (!f.ok) return;
@@ -3057,10 +3136,12 @@ TEST_CASE("mixer: a right-click on a VCA's fader learns MIDI for it, elsewhere t
     REQUIRE(menu);
     {
         const auto items = ui::menuItems(*menu);
-        REQUIRE(items.size() == 3);
+        REQUIRE(items.size() == 4);
         CHECK(items[0].label == "MIDI learn: Volume…");
-        CHECK(items[1].label == "Show lane: Volume");
-        CHECK(items[2].label == "Reset to 0 dB");
+        CHECK(items[1].label == "Modulate: Volume…");
+        CHECK_FALSE(items[1].enabled);  // a VCA is no modulation target
+        CHECK(items[2].label == "Show lane: Volume");
+        CHECK(items[3].label == "Reset to 0 dB");
     }
     // The entry opens the learn dialog; a moved control and OK bind it.
     const ui::Point p{menu->bounds().x + 40, menu->bounds().y + 13};

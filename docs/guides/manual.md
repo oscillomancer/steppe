@@ -308,7 +308,10 @@ pan in the track list and the mixer, the transport bar and the toolbar.
 
 Right-click a track's fader, pan or button, in the track list or the mixer,
 for its menu. It is the same in both places: **MIDI learn** binds the control
-to a controller (see MIDI controllers), **Show lane** opens its automation
+to a controller (see MIDI controllers), **Modulate** offers an LFO, a
+random source, a macro or a follower of another track's level and sets it
+up in one step (greyed on a switch or a frozen track), **Show lane** opens
+its automation
 lane under the track (a new lane starts at the control's value; **Hide
 lane** puts it away, even when a modulation is what shows it), and on a fader or pan **Reset** sends it home, as a
 double-click does: 0 dB, or the centre.
@@ -941,6 +944,11 @@ command uses a quarter of a parameter's range, 6 dB, or 50 %.
 `modulation.telemetry` reads each route's live offset and how far it
 can move its target, and `engine.status` counts modulation steps that
 had to wait for room in a block (`modulation_deferred`).
+
+In the app, right-click a fader or pan, or a parameter's row in the FX
+window's parameter tab, and choose **Modulate**: it lists LFO, Random,
+Macro and a follower for each other track, and runs `modulate` with your
+choice. It is greyed where the parameter cannot take modulation.
 
 Rack plug-in latency is compensated against the song, including oversampling.
 The rack's longest routed audio or Note Out path sets its clock; shorter

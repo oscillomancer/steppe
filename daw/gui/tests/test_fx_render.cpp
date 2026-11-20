@@ -793,6 +793,110 @@ TEST_CASE("the FX window's MIDI button learns a controller for a parameter (fx.l
     CHECK(f.app->head().fx.find(fx)->learn.empty());
 }
 
+TEST_CASE(
+    "the FX window's parameter menu: MIDI learn, Modulate (greyed unless modulatable), lane") {
+    Fixture f;
+    if (!f.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    if (!f.stockPlugins()) {
+        MESSAGE("skipped: no stock plugins (a partial build)");
+        return;
+    }
+    const model::Id track = f.addTrack("Keys");
+    // A stock plug-in that marks a parameter modulatable (fx.describe), and
+    // one writable parameter of it that is not.
+    model::Id fx;
+    std::string modulatable, fixed, modulatableName;
+    for (const char* name : {"Marram", "Coppice", "Hickory", "Yarrow"}) {
+        auto made = f.run("fx.add", f.args({{"track", track.str()}, {"plugin", f.pluginId(name)}}));
+        REQUIRE(made);
+        const model::Id id = *model::Id::parse((*made)["fx"].asString());
+        auto described = f.run("fx.describe", f.args({{"fx", id.str()}, {"full", true}}));
+        REQUIRE(described);
+        modulatable.clear();
+        fixed.clear();
+        for (const auto& m : (*described)["params"].asObject()) {
+            const json::Value* flags = m.value.find("flags");
+            const std::string text = flags ? json::writeCompact(*flags) : "";
+            if (text.find("readonly") != std::string::npos ||
+                text.find("hidden") != std::string::npos)
+                continue;
+            const json::Value* mod = m.value.find("modulatable");
+            if (mod && mod->isBool() && mod->asBool()) {
+                if (modulatable.empty()) {
+                    modulatable = m.key;
+                    const json::Value* n = m.value.find("name");
+                    modulatableName = n && n->isString() ? n->asString() : m.key;
+                }
+            } else if (fixed.empty()) {
+                fixed = m.key;
+            }
+        }
+        if (!modulatable.empty() && !fixed.empty()) {
+            fx = id;
+            break;
+        }
+    }
+    REQUIRE_MESSAGE(!modulatable.empty(), "no stock plug-in marks a parameter modulatable");
+    REQUIRE(f.fx->open(track));
+    f.fx->select(fx);
+    f.fx->showParamsTab();
+    f.frame();
+    const auto menuFor = [&](const std::string& key) -> ui::Node* {
+        ui::Node* name = f.uiRoot().find("fx.param.name." + key);
+        REQUIRE(name);
+        // A long list: scroll the row into view first.
+        for (ui::Node* n = name->parent(); n; n = n->parent())
+            if (auto* view = dynamic_cast<ui::ScrollView*>(n)) {
+                view->scrollTo(view->scroll() + name->bounds().y - view->bounds().y - 20);
+                f.frame();
+                break;
+            }
+        const ui::Point p{name->bounds().x + 4, name->bounds().y + name->bounds().h / 2};
+        f.uiRoot().pointer({ui::PointerEvent::Type::Down, p, 3});
+        f.uiRoot().pointer({ui::PointerEvent::Type::Up, p, 3});
+        f.frame();
+        return f.uiRoot().find("fx.param.menu");
+    };
+    const auto row = [](ui::Node* menu, const std::string& prefix) {
+        const auto items = ui::menuItems(*menu);
+        const auto it = std::find_if(items.begin(), items.end(),
+                                     [&](const auto& i) { return i.label.rfind(prefix, 0) == 0; });
+        REQUIRE_MESSAGE(it != items.end(), prefix);
+        return *it;
+    };
+    ui::Node* menu = menuFor(fixed);
+    REQUIRE(menu);
+    CHECK_FALSE(row(menu, "Modulate: ").enabled);
+    CHECK(row(menu, "Show lane: ").enabled);
+    f.uiRoot().closePopup();
+    menu = menuFor(modulatable);
+    REQUIRE(menu);
+    auto modulate = row(menu, "Modulate: ");
+    CHECK(modulate.label == "Modulate: " + modulatableName + "…");
+    CHECK(modulate.enabled);
+    f.uiRoot().closePopup();
+    modulate.run();
+    ui::Node* sources = f.uiRoot().find("param.modulate.menu");
+    REQUIRE(sources);
+    auto lfo = row(sources, "LFO");
+    f.uiRoot().closePopup();
+    const std::size_t before = f.historyCount();
+    lfo.run();
+    CHECK(f.historyCount() == before + 1);
+    const model::Session s = f.app->head();
+    REQUIRE(s.modulations.size() == 1);
+    CHECK(s.modulations.begin()->value->target == model::EnvTarget{fx, modulatable});
+    // The route holds the lane: the menu offers to hide it, not to add one.
+    f.frame();
+    menu = menuFor(modulatable);
+    REQUIRE(menu);
+    CHECK(row(menu, "Hide lane: ").enabled);
+    f.uiRoot().closePopup();
+}
+
 TEST_CASE("a knob bound to the last touched parameter follows the panel's last edit") {
     Fixture f;
     if (!f.ok) {

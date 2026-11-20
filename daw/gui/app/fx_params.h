@@ -3,7 +3,10 @@
 // The semantic parameter panel (docs/specs/gui.md §4.5): a tab in the FX
 // window, generated from the plugin's semantic schema through `fx.describe`
 // (the same names, units, ranges and groups an agent reads). Edits go through
-// `fx.param.set`; a slider drag is one undo step (Origin::gesture).
+// `fx.param.set`; a slider drag is one undo step (Origin::gesture). A
+// right-click on a parameter's row opens its parameter menu: MIDI learn…,
+// Modulate… (greyed unless fx.describe marks it modulatable, ADR-0096) and
+// Show or Hide lane.
 #pragma once
 
 #include <cstddef>
@@ -23,7 +26,7 @@ namespace supple::gui {
 
 class ParamPanel {
   public:
-    ParamPanel(cmd::Dispatcher& dispatcher, ui::Root& root);
+    ParamPanel(engine::EngineApp& app, cmd::Dispatcher& dispatcher, ui::Root& root);
 
     // Builds the rows for `fx` under `parent` (a column). Returns how many
     // parameters are shown; an error is returned to display in the panel.
@@ -43,7 +46,11 @@ class ParamPanel {
     // Shows the parameter's automation lane, creating the envelope (flat at
     // the current value) when it has none (P5.14).
     Status automate(const std::string& key, double physical);
+    // A row's right-click menu at `at` (window coordinates).
+    void openMenu(const std::string& key, const std::string& name, bool learnable, bool modulatable,
+                  double physical, ui::Point at);
 
+    engine::EngineApp& app_;
     cmd::Dispatcher& dispatcher_;
     ui::Root& root_;
     model::Id fx_;
