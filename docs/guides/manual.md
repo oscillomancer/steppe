@@ -523,15 +523,16 @@ and choose **Key change here…**, then type a note name and a scale and press
 Enter: "Eb major", "C# minor", "F dorian". The scales are major, minor,
 harmonic minor, melodic minor, the modes (dorian, phrygian, lydian,
 mixolydian, locrian), major and minor pentatonic, blues and chromatic.
-Double-click a key change to edit it, or right-click it to delete it.
+Double-click a key change to edit it, drag it to move it, or right-click it
+to delete it.
 
 Chords have a row of their own in the ruler, under the regions. It appears
 when the song has its first chord; to start one, choose **View > Chord row**,
 then double-click in the row and type a chord as you would write it in
 notation, such as "Am7", "Bbmaj7", "F#7#9" or "C/E", and press Enter. Press
 Tab instead of Enter to go on to the next bar. Each chord lasts until the
-next one. Double-click a chord's name to change it, drag it to move it, and
-right-click it to delete it. Right-click inside a chord and choose **No chord
+next one. Double-click a chord's name to change it, drag it to move it (with
+Alt, to copy it), and right-click it to delete it. Right-click inside a chord and choose **No chord
 from here** to end it early.
 
 Agents read and write the same thing. `context.get` returns the key and chords
@@ -1612,8 +1613,25 @@ whether it is shown, are kept with the project's view settings.
 Above the columns, **Stop all** silences every clip and **Arrangement**
 returns every track to the timeline. Each scene's header has a ▶ that
 launches the scene; double-click its name to rename it, drag it sideways
-to reorder the scenes, and right-click it for Rename, Colour and Delete.
-The **+** after the last scene adds one.
+to reorder the scenes, and right-click it for Rename, Colour, Insert at
+playhead, Insert at end and Delete. The **+** after the last scene adds one.
+
+**Capture**, under Stop all, records what you launch the way the record
+button records audio. Click it so it lights, then play and launch clips and
+scenes. When you stop (or seek, or change the loop) the performance is
+written onto the timeline as items, in one undo step, and Capture stays lit
+for the next take; click it again to finish and turn it off. If every track
+stayed on the arrangement, nothing is written.
+
+To put a scene into the song, drag its header onto the timeline: it lies
+from the bar you drop it on, for as many whole bars as its longest clip
+needs, with a marker showing where while you drag. **Insert at playhead**
+and **Insert at end** in its menu do the same from the next bar line at the
+playhead, or after the last item or section. Each makes a section named
+after the scene. The other way round, right-click a section in the ruler
+and choose **Capture as scene** to make a scene from the items inside it.
+When one of these cannot be done (items already lie in the way, a scene has
+no clips, a section has two items on one track) the status line says why.
 
 In a cell, no click does two things:
 - a clip's ▶ launches it; a click on the clip's body selects it (Ctrl adds
@@ -1635,7 +1653,9 @@ occupied cell refuses it. Drag a clip onto a channel's lane to lay a copy
 on the timeline, or an item into an empty cell to make a clip from it.
 Right-click a clip for Rename, Colour, Mode (loop or once), Quantize,
 Duplicate, Lay on timeline at playhead and Delete; Delete on the keyboard
-removes the selected clips. The inspector shows a selected clip's name,
+removes the selected clips. Ctrl+C copies the selected clips; click an empty
+cell and press Ctrl+V to paste them there, laid out as they were. Ctrl+X
+marks clips to move, and the next paste moves them. The inspector shows a selected clip's name,
 colour, length, gain, mode, launch quantize and mute.
 
 In the piano roll a clip starts at its own bar 1. It has no place in the

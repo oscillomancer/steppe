@@ -135,7 +135,8 @@ instructions are in `docs/guides/installing.md`.
   pooled sharer in another key) are in; on a launcher clip they, and
   `midi.get`, read the key at the project's start and no chord. In the app
   (C3): key changes in the ruler's meter half and a chord row (shown with the
-  first chord, or by View > Chord row), both edited there; the piano roll's
+  first chord, or by View > Chord row), both edited there (a key change's
+  flag drags to another beat, Alt-drag copies a chord); the piano roll's
   strip names the chords (a double-click edits them), its rows outside the
   key's scale are shaded, and its key button moves notes by scale degree
   (drags and arrows). The roll opens launcher clips (L3), shaded and spelled
@@ -228,7 +229,7 @@ instructions are in `docs/guides/installing.md`.
       a live track and about 0.2 s for a rendered one;
     - the engine logs no seeks or transport wraps, so the offline
       replay plays one linear run and a capture ends at a relocation.
-- **Clip launcher, pane** (ADR-0097, step L3; gui.md §4.15): scenes as
+- **Clip launcher, pane** (ADR-0097, steps L3 and L4; gui.md §4.15): scenes as
   columns between the track panel and the lanes, on the arrange view's
   rows, with a resizable width, a full-view mode and a View menu toggle
   saved in the UI sidecar. Cells draw their clips' notes or waveforms with
@@ -237,12 +238,18 @@ instructions are in `docs/guides/installing.md`.
   playing scene, the Arr dots, and the held tracks' items dimmed. Every
   gesture in §4.15 is in: launch, select, stop, create, open, move and
   copy, drags to and from the timeline, the clip and scene menus, rename,
-  scene reordering, Delete, the inspector's clip fields and the scene
-  count in the status line. The piano roll opens MIDI clips. Limits:
-  - copy and paste of clips is not in (a selected empty cell is where a
-    paste will land);
-  - "Insert into arrangement at playhead" in the scene menu is greyed
-    until `scene.insert` lands (L4);
+  scene reordering, Delete, copy and paste (a cut moves the clips at the
+  paste), the inspector's clip fields and the scene count in the status
+  line. The piano roll opens MIDI clips. L4 adds the header's Capture
+  toggle (armed while lit; a stop, seek or loop change commits the
+  performance with `launch.commit` and arms the next), a scene dragged onto
+  the timeline or inserted at the playhead or the end (`scene.insert`, for
+  its longest clip's whole bars, with a drop marker while dragged), and a
+  section's Capture as scene (`scene.capture`); their refusals show in the
+  status line. Limits:
+  - there is no dialog for `arrangement.build`;
+  - Capture sits under Stop all, and in a pane too narrow for it (one or
+    two scenes) Arrangement is not drawn, as before;
   - an item dragged into a cell makes a clip of the pressed item only;
   - a double-click on an audio clip opens the inspector, as there is no
     audio clip editor;

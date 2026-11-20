@@ -723,7 +723,9 @@ canonical: "Dmin7" becomes "Dm7"; a refused symbol is the command's message,
 the field kept); Tab writes it and opens the field at the next bar, filled
 with the chord there. A drag on a chord's start or name moves it (`chord.set
 {at, to}`, one undo step; snapped to the grid, freed by the mouse map's
-`ruler.marker` modifiers). A right-click on a chord offers Edit chord…,
+`ruler.marker` modifiers); with Alt the chord stays and a copy lands where
+it is dropped (`chord.set {at, symbol}`), the original drawn beside the copy
+while held. A right-click on a chord offers Edit chord…,
 Delete chord (`chord.remove`) and Key change here… at its beat; elsewhere in
 a cell, Add chord here…, No chord from here (`chord.set` with an empty
 symbol) and Key change here… at the grid beat.
@@ -741,7 +743,18 @@ kept. A right-click on a key's label offers Change key… and Delete key change
 (`key.remove`); elsewhere in the meter half, Key change here… opens the field
 at the grid beat under the pointer, filled with the key that holds there (C
 major when none). A double-click elsewhere in the meter half edits or adds a
-meter change as before. Key changes are not dragged.
+meter change as before. A press on a key's label and a drag moves it to
+another beat on the grid (Shift: free), keeping its key (`key.set {at, to}`,
+one undo step); the key is drawn in the focus colour where it would land
+while held.
+
+**Regions and sections.** A right-click on a region offers Rename region…
+and Delete region, and on a section (a region with `section` set, as
+`region.add` makes it) **Capture as scene** (`scene.capture {region}`, one
+undo step): a launcher scene named after it from the items inside it, one
+clip per track (§4.15). A refusal from a ruler edit (no item in the section,
+several on one track, one across its edge; a tempo out of range) shows the
+command's message in the status line.
 
 **Empty project.** The lanes of a project without a track are bare: no text
 is drawn there. Both ways to begin work from the start: a file dropped on
@@ -2496,13 +2509,13 @@ Inputs, outputs, sends and record settings stay where they are (the track
 row, the mixer strip and the routing matrix).
 
 
-### 4.15 Clip launcher (ADR-0097; step L3)
+### 4.15 Clip launcher (ADR-0097; steps L3 and L4)
 
 *Specified from gui-lead's mock 13 (19 Nov) and built on gui/launcher-pane
-(`views::LauncherPane`, `views::LauncherHeader`, views/launcher.h); all of
-it is built but what is marked later (clip copy and paste, the scene
-menu's insert). "Clip launcher" is always said in full: "the
-launcher" elsewhere is the process that starts the app (ADR-0091).*
+(`views::LauncherPane`, `views::LauncherHeader`, views/launcher.h; L4's
+Capture in `gui::CaptureControl`, app/launch_capture.h); all of it is
+built. "Clip launcher" is always said in full: "the launcher" elsewhere is
+the process that starts the app (ADR-0091).*
 
 **Where it is.** The clip launcher is a pane between the track panel and the
 lanes, on the one row model: its rows are `TrackLayout`'s rows, with the
@@ -2525,7 +2538,21 @@ same heights, scroll and colours.
   takes a cell in the arrange header row, beside the ruler, as wide as the
   pane. It holds **Stop all** (`launch.stop`, every track) and
   **Arrangement** (`launch.arrangement`, every track back to the timeline),
-  the header's uniform cells.
+  the header's uniform cells, and under Stop all **Capture** (L4; a cell
+  that does not fit the pane is not drawn).
+- **Capture** behaves as recording does. A click arms it
+  (`launch.capture {on: true}`: from the position heard now, or where
+  playing starts), and it is lit while armed, as the transport's record
+  button: a red dot, the cell washed and outlined in `armed`. The engine
+  keeps the launches while the transport runs. When a stop, a seek or a
+  loop change ends the capture, the app commits it (`launch.commit`, one
+  undo step, as a recording is committed at stop) and, still lit, arms the
+  next one; a click on the lit cell ends the capture, commits it and turns
+  it off. A capture in which every track followed the arrangement writes
+  nothing and makes no undo step. A refusal (no engine running, a locked
+  item in the way) shows its message in the status line. The app services
+  it once a pass (`CaptureControl::service`) and gives the view the state
+  to draw (`ArrangeView::setCaptureArmed`).
 
 **Columns.**
 - **Scenes.** There is one column per scene in `order`, 64 units wide. Its
@@ -2537,9 +2564,22 @@ same heights, scroll and colours.
   - A double-click on the name renames it in place (`scene.set`).
   - A drag on the header moves the column to the one it is dropped on
     (`scene.move`; past the last, the end).
-  - A right-click offers Rename, Colour, Insert into arrangement at the
-    playhead (`scene.insert`, L4; greyed until then) and Delete
-    (`scene.remove`, with its clips).
+  - **Dragged onto the timeline** (L4), the scene lies there from the bar
+    under the pointer (`scene.insert {scene, bar, bars}`) for its longest
+    clip's length rounded up to whole bars from that bar
+    (`views::sceneBars`; an audio clip's seconds through the tempo map),
+    as items and a section named after it, one undo step. While it is held
+    over the lanes the ghost layer draws a drop marker at that bar in
+    `focus`, a light wash over the span and each clip's copy on its track
+    (`ItemGestures::showSceneGhost`).
+  - A right-click offers Rename, Colour, **Insert at playhead** (from the
+    first bar line at or after the playhead), **Insert at end** (from the
+    first bar line at or after the end of the last item or section,
+    `views::barAfterArrangement`), both `scene.insert` for the same bars,
+    and Delete (`scene.remove`, with its clips).
+  - A refusal of `scene.insert` (items already in the span, an empty
+    scene, a looping clip whose period is not its content) shows its
+    message in the status line and changes nothing.
   - A last header cell, **+**, adds a scene (`scene.add`).
 - **Arr.** A narrow last column, 22 units, holds per track a dot that is lit
   in `playing` while the track follows the arrangement. A click on an unlit
@@ -2564,7 +2604,10 @@ same heights, scroll and colours.
   - **Launch zone:** a ▶ at the left of the name bar, always drawn (in the
     name bar's ink while idle).
   - **Playing:** the ▶, an outline, and a progress line along the bottom
-    edge, all in `playing` (telemetry, `launch.state`).
+    edge, all in `playing` (telemetry, `launch.state`). The playing ▶, a
+    clip's and a playing scene's, sits on a small square of the theme's ink
+    or ground, whichever `playing` contrasts with more, so it reads on any
+    clip colour in either theme.
   - **Queued:** a dashed outline in `playing` until the boundary.
   - **Held silent** (a `once` clip that ended): the outline in `playing`,
     the ▶ in the name bar's ink.
@@ -2611,7 +2654,16 @@ same heights, scroll and colours.
   (§4.3; `UiState::clipsFocused`, set by a clip or cell click and cleared
   by a track, item or lane click). With only a cell selected it removes
   nothing: never the timeline items selected before.
-  Copy and paste of clips is later; a paste will land in the selected cell.
+- **Copy and paste** (with the launcher's keys, as Delete): Ctrl+C copies
+  the selected clips; Ctrl+V pastes them from the selected empty cell, each
+  as far from it as it was from the copied clips' top-left cell, in the
+  view's channel rows and the scenes' order (`clip.duplicate`), one undo
+  step, and the copies become the selection. A cell past the last channel
+  or scene, an occupied one, or a copied clip that is gone refuses the
+  whole paste, with its message in the status line (`gui::pasteClips`).
+  Ctrl+X marks the clips instead of removing them (a clip has no place to
+  wait in) and says so in the status line; the next paste moves them
+  (`clip.move`).
 
 **Elsewhere.**
 - **Render dialog.** While any track is held by a clip, it says in one line
@@ -2624,11 +2676,24 @@ same heights, scroll and colours.
   only their count.
 - **Status line.** It counts scenes beside tracks only when there are some
   ("4 tracks  2 scenes  version 9", `gui::countsText`).
+- **Sections.** A section's right-click menu captures it as a scene
+  (`scene.capture`, §4.3). There is no dialog for `arrangement.build`;
+  agents use it.
 
-**Tests (L3)** (`test_launcher.cpp`, and the inspector's, the piano roll's
-and `edit.delete`'s in their suites).
+**Tests (L3, L4)** (`test_launcher.cpp`, the ruler's in `test_ruler.cpp`,
+and the inspector's, the piano roll's and `edit.delete`'s in their suites).
 - Golden images of the pane with playing, queued, held, empty and selected
-  cells, in both themes (`launcher-dark.png`, `launcher-light.png`).
+  cells and Capture lit, in both themes (`launcher-dark.png`,
+  `launcher-light.png`), and a playing clip in every track colour
+  (`launcher-playing-dark.png`, `launcher-playing-light.png`).
+- Capture with the dummy engine: armed, a launch, a stop committing the
+  performance in one undo step and arming the next; refused without an
+  engine; off with nothing played writing nothing.
+- A scene dragged onto the lanes (its ghost, the command, the section and
+  items after), refused on an occupied span; the menu's inserts at the
+  playhead and the end; an empty scene refused; the bar arithmetic.
+- Paste in the clipboard's layout, refused past the last channel and onto
+  occupied cells, and a cut's paste moving the clip.
 - Every gesture above, through the dispatcher, checking the commands run
   and the session after; the engine's launch state reaching the pane with
   the dummy backend.
