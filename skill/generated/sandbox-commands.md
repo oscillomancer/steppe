@@ -4,6 +4,8 @@ Generated from the command registry.
 
 Successful replies may include `warnings`: command warnings followed by bus diagnostics `{code: string, message: string, path: string}`. Paths are retained as supplied by the decoder or handler. Batch steps carry their own warnings in `results[i].warnings`. A non-object result with bus warnings is `{result: <value>, warnings: [...]}`. Replies without bus warnings keep their original shape.
 
+In an argument table, a member of an object argument is listed under it as `argument.member` (`argument[].member` for a list of objects).
+
 ## `analyze@1`
 
 Analyze a render or audio file: loudness, spectrum, pitch, envelope, stereo.
@@ -17,7 +19,7 @@ Kind: `query`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `source` | string |  |  |  | A render id (rd_1) or an audio file path. |
-| `detail` | string |  |  | "summary" | summary: key scalars; standard: + percentiles and spectrum; full: + time series. |
+| `detail` | string |  |  | "summary" | summary: key scalars; standard: + percentiles and spectrum; full: + time series. One of: summary, standard, full. |
 | `note_off_s` | number |  | 0.0..3600.0 |  |  |
 
 ### Result
@@ -84,6 +86,9 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | --- | --- | --- | --- | --- | --- |
 | `label` | string |  |  |  |  |
 | `steps` | array |  |  |  |  |
+| `steps[].command` | string |  |  |  |  |
+| `steps[].args` | object |  |  |  |  |
+| `steps[].as` | string |  |  |  |  |
 
 ### Result
 
@@ -420,6 +425,8 @@ Kind: `action`. Exposure: `mcp-tool`.
 | --- | --- | --- | --- | --- | --- |
 | `name` | string |  |  |  |  |
 | `edits` | array |  |  |  |  |
+| `edits[].old` | string |  |  |  | text the script has in one place |
+| `edits[].new` | string |  |  |  | what replaces it |
 
 ### Result
 
@@ -627,9 +634,9 @@ Kind: `action`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `script` | string |  |  |  | a name from dsp.list |
-| `format` | string |  |  |  | clap (default): a plugin file; source: a C++ project |
+| `format` | string |  |  |  | clap (default): a plugin file; source: a C++ project One of: clap, source. |
 | `folder` | string |  |  |  | an absolute folder to write to (for clap, ~/.clap installs it for this user); for source, empty or new |
-| `license` | string |  |  |  | source: the license of the project's own files (default MIT) |
+| `license` | string |  |  |  | source: the license of the project's own files (default MIT) One of: MIT, GPL-3.0-or-later. |
 
 ### Result
 
@@ -909,13 +916,22 @@ Kind: `action`. Exposure: `mcp-tool`.
 | `plugin` | string |  |  |  |  |
 | `script` | string |  |  |  |  |
 | `patch` | value |  |  |  |  |
-| `signal` | string |  |  |  |  |
+| `signal` | string |  |  |  | One of: sine, sweep, impulse, noise, silence, notes, note, file. |
 | `audio_file` | string |  |  |  | the absolute path of a WAV, FLAC or MP3 (10 minutes at most) the file signal plays through an effect |
-| `level_db` | value | dB | -60.0..0.0 | -12.0 | Quantity strings are range-checked by the server. |
-| `frequency_hz` | value | Hz | 10.0..20000.0 | 1000.0 | Quantity strings are range-checked by the server. |
+| `level_db` | number or string | dB | -60.0..0.0 | -12.0 | Quantity strings are range-checked by the server. |
+| `frequency_hz` | number or string | Hz | 10.0..20000.0 | 1000.0 | Quantity strings are range-checked by the server. |
 | `seconds` | number |  | 0.0..10.0 | 1.0 |  |
 | `scale` | number |  | 0.5..3.0 | 1.0 |  |
 | `pointer` | array |  |  |  |  |
+| `pointer[].action` | string |  |  |  | One of: move, press, release, click, double_click, drag, wheel. |
+| `pointer[].x` | number |  | -1000.0..5000.0 |  | design units: the picture's pixels at scale 1 |
+| `pointer[].y` | number |  | -1000.0..5000.0 |  | design units: the picture's pixels at scale 1 |
+| `pointer[].to_x` | number |  | -1000.0..5000.0 |  | drag: where it ends |
+| `pointer[].to_y` | number |  | -1000.0..5000.0 |  | drag: where it ends |
+| `pointer[].steps` | number |  | -20.0..20.0 | 1.0 | wheel: notches turned, up positive |
+| `pointer[].shift` | boolean |  |  | false |  |
+| `pointer[].ctrl` | boolean |  |  | false |  |
+| `pointer[].alt` | boolean |  |  | false |  |
 
 ### Result
 
@@ -1058,12 +1074,24 @@ Kind: `action`. Exposure: `mcp-tool`.
 | `signals` | array |  |  |  | default: effects five, or file with audio_file; instruments three, or notes and silence with custom notes |
 | `audio_file` | string |  |  |  | the absolute path of a WAV, FLAC or MP3 (10 minutes at most) the file signal plays through an effect |
 | `automation` | array |  |  |  | discrete physical-value changes on every signal |
+| `automation[].param` | string |  |  |  | semantic patch key |
+| `automation[].at_s` | number |  | 0.0.. |  |  |
+| `automation[].value` | value |  |  |  | physical value, enum key or boolean |
 | `sidechain` | object |  |  |  | timed generated key input |
+| `sidechain.signal` | string |  |  | "sine" | One of: sine, sweep, impulse, noise, silence. |
+| `sidechain.level_db` | number or string | dB | -60.0..0.0 | -6.0 | Quantity strings are range-checked by the server. |
+| `sidechain.frequency_hz` | number or string | Hz | 10.0..20000.0 | 100.0 | Quantity strings are range-checked by the server. |
+| `sidechain.start_s` | number |  | 0.0.. |  | default: 0.25 * seconds |
+| `sidechain.length_s` | number |  |  |  | default: 0.5 * seconds |
 | `notes` | array |  |  |  | instrument sequence replacing the notes stimulus |
-| `level_db` | value | dB | -60.0..0.0 | -12.0 | Quantity strings are range-checked by the server. |
-| `frequency_hz` | value | Hz | 10.0..20000.0 | 1000.0 | Quantity strings are range-checked by the server. |
+| `notes[].key` | integer |  | 0.0..127.0 |  |  |
+| `notes[].velocity` | number |  | ..1.0 | 0.8 |  |
+| `notes[].start_s` | number |  | 0.0.. |  |  |
+| `notes[].length_s` | number |  |  |  |  |
+| `level_db` | number or string | dB | -60.0..0.0 | -12.0 | Quantity strings are range-checked by the server. |
+| `frequency_hz` | number or string | Hz | 10.0..20000.0 | 1000.0 | Quantity strings are range-checked by the server. |
 | `seconds` | number |  | 0.1..10.0 | 1.0 |  |
-| `sample_rate` | value | Hz | 8000.0..384000.0 |  | default: the session's or project's rate Quantity strings are range-checked by the server. |
+| `sample_rate` | number or string | Hz | 8000.0..384000.0 |  | default: the session's or project's rate Quantity strings are range-checked by the server. |
 | `save` | boolean |  |  | false |  |
 | `trace_points` | integer |  | 1.0..4096.0 | 100 | intervals the signal's traces are kept in |
 
@@ -2209,7 +2237,7 @@ Kind: `query`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `instance` | string |  |  |  | Instance id from plugin.load, e.g. "in_1". |
-| `detail` | string |  |  | "changed" |  |
+| `detail` | string |  |  | "changed" | One of: changed, full. |
 
 ### Result
 
@@ -2416,7 +2444,7 @@ Kind: `query`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `instance` | string |  |  |  | Instance id from plugin.load, e.g. "in_1". |
-| `detail` | string |  |  | "summary" |  |
+| `detail` | string |  |  | "summary" | One of: summary, full. |
 
 ### Result
 
@@ -2855,7 +2883,7 @@ Kind: `query`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `plugin` | string |  |  |  |  |
-| `source` | string |  |  | "user" |  |
+| `source` | string |  |  | "user" | One of: user, factory. |
 
 ### Result
 
@@ -2943,7 +2971,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | --- | --- | --- | --- | --- | --- |
 | `instance` | string |  |  |  | Instance id from plugin.load, e.g. "in_1". |
 | `name` | string |  |  |  |  |
-| `source` | string |  |  | "user" |  |
+| `source` | string |  |  | "user" | One of: user, factory. |
 
 ### Result
 
@@ -3307,10 +3335,10 @@ Kind: `action`. Exposure: `mcp-tool`.
 | `audio_file` | string |  |  |  |  |
 | `bars` | number |  | ..1000.0 |  |  |
 | `seconds` | number |  | ..600.0 |  |  |
-| `tempo` | value | bpm | 1.0..999.0 |  | Quantity strings are range-checked by the server. |
+| `tempo` | number or string | bpm | 1.0..999.0 |  | Quantity strings are range-checked by the server. |
 | `tail_s` | number |  | 0.0..60.0 |  |  |
 | `name` | string |  |  |  |  |
-| `analyze` | string |  |  | "none" | Also analyze the render (see the analyze command); summary is compact (≤ 400 tokens). |
+| `analyze` | string |  |  | "none" | Also analyze the render (see the analyze command); summary is compact (≤ 400 tokens). One of: none, summary, standard, full. |
 
 ### Result
 
@@ -3619,9 +3647,9 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `sample_rate` | value | Hz | 8000.0..384000.0 |  | Quantity strings are range-checked by the server. |
+| `sample_rate` | number or string | Hz | 8000.0..384000.0 |  | Quantity strings are range-checked by the server. |
 | `block_size` | integer |  | 1.0..8192.0 |  |  |
-| `tempo` | value | bpm | 1.0..999.0 |  | Quantity strings are range-checked by the server. |
+| `tempo` | number or string | bpm | 1.0..999.0 |  | Quantity strings are range-checked by the server. |
 | `meter` | string |  |  |  |  |
 | `tail_limit_s` | number |  | 0.0..60.0 |  |  |
 

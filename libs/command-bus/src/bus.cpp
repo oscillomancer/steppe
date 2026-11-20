@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <charconv>
 #include <chrono>
+#include <set>
 
 namespace supple::cmd {
 namespace {
@@ -1041,6 +1042,85 @@ json::Value mcpToolList(const Registry& registry, bool allTools) {
     }
     return tools;
 }
+namespace {
+// The type a table row shows: the schema's own, or the types of its alternatives.
+std::string typeColumn(const json::Value& schema) {
+    if (auto* type = schema.find("type"); type && type->isString()) return type->asString();
+    for (const char* key : {"oneOf", "anyOf"}) {
+        auto* variants = schema.find(key);
+        if (!variants || !variants->isArray()) continue;
+        std::vector<std::string> names;
+        for (std::size_t i = 0; i < variants->size(); ++i) {
+            const auto& variant = variants->at(i);
+            auto* type = variant.find("type");
+            std::string name = type && type->isString()     ? type->asString()
+                               : variant.find("properties") ? "object"
+                                                            : "value";
+            if (std::find(names.begin(), names.end(), name) == names.end())
+                names.push_back(std::move(name));
+        }
+        std::string joined;
+        for (const auto& name : names) joined += (joined.empty() ? "" : " or ") + name;
+        if (!joined.empty()) return joined;
+    }
+    return "value";
+}
+
+void argumentRow(std::string& text, const std::string& key, const json::Value& schema) {
+    auto* unit = schema.find("x-unit");
+    auto* minimum = schema.find("minimum");
+    auto* maximum = schema.find("maximum");
+    if (auto* variants = schema.find("anyOf");
+        variants && variants->isArray() && variants->size()) {
+        minimum = variants->at(0).find("minimum");
+        maximum = variants->at(0).find("maximum");
+    }
+    auto* fallback = schema.find("default");
+    auto* description = schema.find("description");
+    std::string range;
+    if (minimum) range += json::writeCompact(*minimum);
+    if (minimum || maximum) range += "..";
+    if (maximum) range += json::writeCompact(*maximum);
+    std::string about = description && description->isString() ? description->asString() : "";
+    if (auto* choices = schema.find("enum"); choices && choices->isArray() && choices->size()) {
+        std::string list;
+        for (std::size_t i = 0; i < choices->size(); ++i)
+            list +=
+                (i ? ", " : "") + (choices->at(i).isString() ? choices->at(i).asString()
+                                                             : json::writeCompact(choices->at(i)));
+        about += (about.empty() ? "" : " ") + std::string("One of: ") + list + ".";
+    }
+    text += "| `" + key + "` | " + typeColumn(schema) + " | " +
+            (unit && unit->isString() ? unit->asString() : "") + " | " + range + " | " +
+            (fallback ? json::writeCompact(*fallback) : "") + " | " + about + " |\n";
+}
+
+// The members of an object-valued argument, one level down: `target.fx`, and `ops[].op` for an
+// array of objects. An argument that is one of several shapes lists the members of each.
+void nestedRows(std::string& text, const std::string& key, const json::Value& schema) {
+    std::vector<std::pair<std::string, const json::Value*>> objects;
+    auto collect = [&](const std::string& prefix, const json::Value& s) {
+        if (auto* properties = s.find("properties"); properties && properties->isObject())
+            objects.emplace_back(prefix, &s);
+    };
+    auto walk = [&](const std::string& prefix, const json::Value& s) {
+        collect(prefix, s);
+        for (const char* alternatives : {"oneOf", "anyOf"})
+            if (auto* variants = s.find(alternatives); variants && variants->isArray())
+                for (std::size_t i = 0; i < variants->size(); ++i) collect(prefix, variants->at(i));
+    };
+    walk(key, schema);
+    if (auto* items = schema.find("items"); items && items->isObject()) walk(key + "[]", *items);
+    std::set<std::string> seen;
+    for (const auto& [prefix, object] : objects)
+        for (const auto& member : object->find("properties")->asObject()) {
+            const std::string name = prefix + "." + member.key;
+            if (!seen.insert(name).second) continue;
+            argumentRow(text, name, member.value);
+        }
+}
+}  // namespace
+
 std::string markdownReference(const Registry& registry) {
     std::string text =
         "# Command reference\n\nGenerated from the command registry.\n"
@@ -1050,7 +1130,9 @@ std::string markdownReference(const Registry& registry) {
         "handler. "
         "Batch steps carry their own warnings in `results[i].warnings`. A non-object "
         "result with bus warnings is `{result: <value>, warnings: [...]}`. "
-        "Replies without bus warnings keep their original shape.\n";
+        "Replies without bus warnings keep their original shape.\n"
+        "\nIn an argument table, a member of an object argument is listed under it as "
+        "`argument.member` (`argument[].member` for a list of objects).\n";
     for (auto* info : registry.all()) {
         text += "\n## `" + info->name + "@" + std::to_string(info->version) + "`\n\n";
         text += info->summary + "\n\n" + info->description + "\n\n";
@@ -1061,28 +1143,8 @@ std::string markdownReference(const Registry& registry) {
         if (auto* properties = info->argsSchema.find("properties");
             properties && properties->isObject())
             for (const auto& field : properties->asObject()) {
-                const auto& schema = field.value;
-                auto* type = schema.find("type");
-                auto* unit = schema.find("x-unit");
-                auto* minimum = schema.find("minimum");
-                auto* maximum = schema.find("maximum");
-                if (auto* variants = schema.find("anyOf");
-                    variants && variants->isArray() && variants->size()) {
-                    minimum = variants->at(0).find("minimum");
-                    maximum = variants->at(0).find("maximum");
-                }
-                auto* fallback = schema.find("default");
-                auto* description = schema.find("description");
-                std::string range;
-                if (minimum) range += json::writeCompact(*minimum);
-                if (minimum || maximum) range += "..";
-                if (maximum) range += json::writeCompact(*maximum);
-                text += "| `" + field.key + "` | " +
-                        (type && type->isString() ? type->asString() : "value") + " | " +
-                        (unit && unit->isString() ? unit->asString() : "") + " | " + range + " | " +
-                        (fallback ? json::writeCompact(*fallback) : "") + " | " +
-                        (description && description->isString() ? description->asString() : "") +
-                        " |\n";
+                argumentRow(text, field.key, field.value);
+                nestedRows(text, field.key, field.value);
             }
         text += "\n### Result\n\n```json\n" + json::writeCanonical(info->resultSchema) + "\n```\n";
         if (!info->errors.empty()) {
