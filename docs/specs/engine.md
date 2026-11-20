@@ -474,6 +474,9 @@ the same.*
   - A `once` clip sounds while its position is within its length after
     the anchor. It is silent before the anchor, and silent after a
     transport wrap until it is launched again.
+  - A loop clip plays nothing before its anchor until a wrap or a seek
+    takes the song there; from then on it plays by its phase wherever the
+    song is. A wrap or a seek also ends a switch's crossfade.
   - Seeks and wraps use the same formulas, so clips stay on the grid and
     a performance replays exactly from its log.
 - **Switching (L-d, B5).** Leaving the arrangement or a clip ends what

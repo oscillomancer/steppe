@@ -265,6 +265,7 @@ void applyLaunch(Plan&, Node& n, const LaunchAction& a) SUPPLE_RT {
     L.player = a.kind == LaunchState::Kind::Clip ? a.player : -1;
     L.anchorSample = a.anchorSample;
     L.anchorBeat = a.anchorBeat;
+    L.unanchored = false;
     n.releaseHeld = true;  // what was left's notes end at this block's start
 }
 
@@ -296,19 +297,29 @@ void launchWrapped(Node& n) SUPPLE_RT {
         L.player = -1;
         L.fadeFrom = -2;
     }
+    launchRelocated(n);
+}
+
+void launchRelocated(Node& n) SUPPLE_RT {
+    // The song jumped: a switch's crossfade, measured in song samples from
+    // where it began, is over.
+    n.launch.unanchored = true;
+    n.launch.fadeFrom = -2;
 }
 
 namespace {
 
 // An audio player's sample at song sample `t`, anchored at `anchor`, scaled
-// by `weight`, added into `into` at frame i.
-void playerFrame(const ClipPlayer& pl, std::int64_t anchor, std::int64_t t, double weight,
-                 Stereo& into, std::uint32_t i) SUPPLE_RT {
+// by `weight`, added into `into` at frame i. Before the anchor it is silent
+// unless `unanchored` (a wrap or relocation since its launch) lets a loop
+// clip play there by its phase.
+void playerFrame(const ClipPlayer& pl, std::int64_t anchor, bool unanchored, std::int64_t t,
+                 double weight, Stereo& into, std::uint32_t i) SUPPLE_RT {
     const Clip& c = pl.audio;
     if (!c.data || pl.muted || pl.periodFrames <= 0 || weight == 0.0) return;
     const std::int64_t q = t - anchor;
-    if (q < 0 || (pl.once && q >= pl.periodFrames)) return;
-    const std::int64_t phase = q % pl.periodFrames;
+    if ((q < 0 && (pl.once || !unanchored)) || (pl.once && q >= pl.periodFrames)) return;
+    const std::int64_t phase = (q % pl.periodFrames + pl.periodFrames) % pl.periodFrames;
     const std::int64_t content = pl.loopOn ? pl.loopStartFrames + phase % pl.loopFrames : phase;
     const auto& ch = c.data->channels;
     const auto frames = static_cast<std::int64_t>(c.data->frames());
@@ -364,13 +375,13 @@ void launchAudio(Plan&, Node& n, Stereo& into, std::int64_t pos, std::uint32_t f
         const ClipPlayer& pl = n.players[static_cast<std::size_t>(L.player)];
         if (!pl.midi)
             for (std::uint32_t i = 0; i < frames; ++i)
-                playerFrame(pl, L.anchorSample, song0 + i, x(i), into, i);
+                playerFrame(pl, L.anchorSample, L.unanchored, song0 + i, x(i), into, i);
     }
     if (fading && L.fadeFrom >= 0) {
         const ClipPlayer& pl = n.players[static_cast<std::size_t>(L.fadeFrom)];
         if (!pl.midi)
             for (std::uint32_t i = 0; i < frames; ++i)
-                playerFrame(pl, L.fadeAnchorSample, song0 + i, 1.0 - x(i), into, i);
+                playerFrame(pl, L.fadeAnchorSample, false, song0 + i, 1.0 - x(i), into, i);
     }
 }
 
@@ -387,7 +398,10 @@ void launchMidi(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames) SUPPLE
     const double period = pl.periodBeats;
     auto kLo = static_cast<std::int64_t>(std::floor((b0 - L.anchorBeat) / period)) - 1;
     auto kHi = static_cast<std::int64_t>(std::floor((b1 - L.anchorBeat) / period)) + 1;
-    kLo = std::max<std::int64_t>(kLo, 0);  // nothing before the anchor
+    // Nothing before the anchor, unless a wrap or relocation since the launch
+    // took the song there: a loop clip then plays by its phase (L-c).
+    const bool before = L.unanchored && !pl.once;
+    if (!before) kLo = std::max<std::int64_t>(kLo, 0);
     if (pl.once) kHi = std::min<std::int64_t>(kHi, 0);
     auto& target = n.midiStage.blockEvents;
     constexpr double kSlack = 1e-6;  // beats: the sample decides
@@ -398,7 +412,7 @@ void launchMidi(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames) SUPPLE
                                    [](const ClipEvent& e, double b) { return e.beat < b; });
         for (; it != pl.events.end() && it->beat <= b1 - base + kSlack; ++it) {
             const std::int64_t at = time::samplesAt(tm.secondsAt(base + it->beat), p.rate) - origin;
-            if (at < song0 || at >= song1 || at < L.anchorSample) continue;
+            if (at < song0 || at >= song1 || (!before && at < L.anchorSample)) continue;
             host::Event e = it->event;
             e.time = static_cast<std::uint32_t>(at - song0);
             if (target.size() < target.capacity()) target.push_back(e);  // never allocate here

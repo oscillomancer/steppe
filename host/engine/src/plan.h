@@ -828,6 +828,9 @@ struct LaunchState {
     int player = -1;                // Kind::Clip: its Node::players entry
     std::int64_t anchorSample = 0;  // song samples (plan origin 0)
     double anchorBeat = 0;          // the same position in beats
+    // A wrap or a relocation since the launch: the song may now be before
+    // the anchor, and a loop clip plays there by its phase (L-c).
+    bool unanchored = false;
     // The switch's crossfade: what was left (-1 the arrangement, a player,
     // -2 nothing) and the song sample where the switch began.
     int fadeFrom = -2;
@@ -1467,6 +1470,10 @@ void launchAudio(Plan& p, Node& n, Stereo& into, std::int64_t pos, std::uint32_t
 void launchMidi(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames) SUPPLE_RT;
 // A transport wrap: a `once` clip falls silent until launched again.
 void launchWrapped(Node& n) SUPPLE_RT;
+// A relocation (a seek, a play start, a wrap) reached the node: the song may
+// now be before its clip's anchor, and a switch's crossfade is over
+// (engine.md §1.4.2).
+void launchRelocated(Node& n) SUPPLE_RT;
 // A plan swap: what the channel plays carries by clip id; a clip the new
 // plan lacks (or a node with no players) returns it to the arrangement.
 void carryLaunch(const Node& old, Node& n) SUPPLE_RT;

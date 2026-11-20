@@ -243,6 +243,54 @@ TEST_CASE("a once clip plays its period and falls silent; a loop window repeats 
     }
 }
 
+TEST_CASE("a loop clip keeps its phase when the song wraps back before its anchor" *
+          doctest::description("rt")) {
+    // A transport loop over bars 1-2 (0 to 4 s) and an audio clip of 0.75 s
+    // launched on bar 2: at the wrap the song returns to 0, before the
+    // anchor, and the clip plays on at (song - anchor) mod period (L-c).
+    Project p;
+    auto args = j(R"({"track": "tr_1", "scene": "sc_1"})");
+    args["audio_file"] = p.ramp("clip.wav", 48000).string();
+    p.runArgs("clip.add", args);
+    p.run("clip.set", R"({"clip": "cl_1", "length": 0.75})");
+    const model::Session s = p.app->head();
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 6});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        REQUIRE(engine.load(s, p.app->projectDir()));
+        engine.setLoop(0.0, 4.0, true);
+        engine.play();
+        const auto run = [&](std::int64_t cycles) {
+            if (options.anticipative)
+                runAheadOnState(engine, backend, cycles, 128);
+            else
+                backend.run(cycles);
+        };
+        run(10);
+        const Engine::LaunchRequest r = request("tr_1", "cl_1");
+        REQUIRE(engine.launch(std::span(&r, 1), model::LaunchQuantize::Bar));  // bar 2
+        run(48000 * 5 / 128 - 10);
+        engine.service();
+        REQUIRE(engine.launchLog().size() == 1);
+        const std::uint32_t latency = engine.outputLatency();
+        engine.stop();
+        const std::vector<float>& out = backend.capture().channels[0];
+        // The gain from the clip to the output, where its phase is known.
+        const double gain = double(out[96000 + 1000 + latency]) / double(rampAt(1000));
+        REQUIRE(gain > 0.1);
+        for (std::int64_t k = 192000 + 97; k < 240000; k += 997) {
+            const std::int64_t phase = ((k - 192000 - 96000) % 36000 + 36000) % 36000;
+            INFO("frame " << k << ", phase " << phase);
+            CHECK(double(out[std::size_t(k + latency)]) ==
+                  doctest::Approx(double(rampAt(phase)) * gain).epsilon(1e-5));
+        }
+    }
+}
+
 TEST_CASE("a switch crossfades the arrangement out and the clip in over 5 ms") {
     Project p;
     auto args = j(R"({"track": "tr_1", "bar": 1})");
