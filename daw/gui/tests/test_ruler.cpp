@@ -874,6 +874,48 @@ TEST_CASE("ruler: an edge dragged onto the other removes a range; the menu delet
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("ruler: a key change's flag drags to another beat; Alt-drag copies a chord") {
+    RulerFixture f;
+    auto keys = [&] {
+        std::map<double, std::string> out;
+        for (const auto& e : f.app->head().context)
+            if (e.value->type == model::ContextType::Key)
+                out[e.value->beat] = e.value->tonic + " " + e.value->scale;
+        return out;
+    };
+    auto chords = [&] {
+        std::map<double, std::string> out;
+        for (const auto& e : f.app->head().context)
+            if (e.value->type == model::ContextType::Chord) out[e.value->beat] = e.value->symbol;
+        return out;
+    };
+    using Points = std::map<double, std::string>;
+    f.exec("key.set", json::parse(R"({"at": 0, "tonic": "F", "scale": "major"})").value());
+    f.exec("key.set", json::parse(R"({"at": 4, "tonic": "A", "scale": "minor"})").value());
+    auto n = f.history();
+    // A drag on its flag moves it on the grid, keeping its key: one undo step.
+    f.drag(f.at(4.4, 55), f.at(6.4, 55));
+    CHECK(keys() == Points{{0, "F major"}, {6, "A minor"}});
+    CHECK(f.history() == ++n);
+    // A click alone moves nothing; a double-click still edits it.
+    f.click(f.at(6.4, 55));
+    CHECK(f.history() == n);
+    f.click(f.at(6.4, 55), 0, 2);
+    REQUIRE(f.root->find("ruler-key"));
+    f.root->closePopups();
+    // The chord row: a drag moves a chord, Alt-drag leaves it and copies it.
+    f.exec("chord.set", json::parse(R"({"at": 4, "symbol": "Am7"})").value());
+    n = f.history();
+    constexpr float kRow = 81;  // the chord row: 72 to 90
+    f.drag(f.at(4.05, kRow), f.at(8.05, kRow), ui::kAlt);
+    CHECK(chords() == Points{{4, "Am7"}, {8, "Am7"}});
+    CHECK(f.history() == ++n);
+    f.drag(f.at(8.05, kRow), f.at(12.05, kRow));
+    CHECK(chords() == Points{{4, "Am7"}, {12, "Am7"}});
+    CHECK(f.history() == ++n);
+    CHECK(f.errors.empty());
+}
+
 TEST_CASE("ruler: a section's menu captures it as a launcher scene; a refusal says why") {
     RulerFixture f;
     auto rightClick = [&](ui::Point p) {

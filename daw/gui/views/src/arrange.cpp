@@ -152,6 +152,7 @@ class Ruler : public ui::Node {
             case Drag::RegionMove:
             case Drag::Marker:
             case Drag::Chord:
+            case Drag::Key:
                 return moved_ ? ui::Cursor::Move : ui::Cursor::Arrow;
             case Drag::LoopNew:
                 return ui::Cursor::Arrow;
@@ -365,6 +366,7 @@ class Ruler : public ui::Node {
                    t.type("caption"), t.color("master"), ui::kLeft | ui::kMiddle);
         }
         paintKeys(c, tempoRow);
+        paintKeyGhost(c, tempoRow);
 
         // Regions on their own row, markers below it.
         for (const auto& e : s.regions) {
@@ -451,6 +453,21 @@ class Ruler : public ui::Node {
                                 {left, y, textX + std::max(shown, 8.0f) - left, h}});
         }
     }
+    // A key change being dragged: a tick and its words in the focus colour
+    // where it would land.
+    void paintKeyGhost(ui::Canvas& c, const ui::Rect& tempoRow) {
+        if (drag_ != Drag::Key || !moved_) return;
+        const model::Session& s = view_.session();
+        const auto id = model::keyPointAt(s, originalStart_);
+        const model::ContextPoint* p = id ? s.context.find(*id) : nullptr;
+        if (!p) return;
+        const ui::Theme& t = c.theme();
+        const float x = view_.xAt(s.timeMap->secondsAt(draftStart_));
+        const float y = tempoRow.y + tempoRow.h / 2.0f, h = tempoRow.h / 2.0f - 1;
+        c.fillRect({x, y, 1, h}, t.color("focus"));
+        c.text({x + 3, y, 120, h}, model::keyWords(*p), ui::Font::Ui, t.type("caption"),
+               t.color("focus"), ui::kLeft | ui::kMiddle);
+    }
     const KeyFlag* keyFlagAt(ui::Point p) const {
         for (const KeyFlag& k : keyFlags)
             if (k.rect.contains(p)) return &k;
@@ -517,6 +534,7 @@ class Ruler : public ui::Node {
         for (const auto& entry : s.contextView->chords)
             if (const model::ContextPoint* p = s.context.find(entry.id)) {
                 const bool ghost = drag_ == Drag::Chord && moved_ && entry.beat == originalStart_;
+                if (ghost && copy_) shown.push_back({entry.beat, p, false});  // it stays
                 shown.push_back({ghost ? draftStart_ : entry.beat, p, ghost});
             }
         std::stable_sort(shown.begin(), shown.end(),
@@ -587,7 +605,8 @@ class Ruler : public ui::Node {
         RegionMove,
         RegionLeft,
         RegionRight,
-        Chord
+        Chord,
+        Key
     };
     bool isLoop() const {
         return drag_ == Drag::LoopNew || drag_ == Drag::LoopMove || drag_ == Drag::LoopLeft ||
@@ -890,6 +909,8 @@ class Ruler : public ui::Node {
     bool moved_ = false, loopEnabled_ = false;
     bool punch_ = false;       // the range gesture edits the punch range (time row), not the loop
     bool markerFree_ = false;  // a marker/region drag the mouse map frees from the grid
+    bool copy_ = false;        // a chord dragged with Alt: a copy lands, the chord stays
+    std::string copySymbol_;   // the chord being copied
     std::string_view markerMods(unsigned mods) {
         const std::string_view b = view_.gestures().mouse.behaviour("ruler.marker", mods);
         markerFree_ = b == "move_free";
@@ -939,6 +960,11 @@ bool Ruler::handle(const ui::PointerEvent& e) {
                     drag_ = Drag::LoopMove;
             }
             if (drag_ == Drag::LoopNew) originalStart_ = originalEnd_ = position(e.pos.x, free);
+        } else if (y < rows.regionTop() && y >= rows.tempoTop() + rows.tempo / 2.0f &&
+                   e.clicks == 1 && keyFlagAt(e.pos)) {
+            // A key change's flag drags it to another beat (key.set {to}).
+            originalStart_ = originalEnd_ = keyFlagAt(e.pos)->beat;
+            drag_ = Drag::Key;
         } else if (y < rows.regionTop() && y >= rows.tempoTop() + rows.tempo / 2.0f) {
             // The meter half: a double-click edits the key change or the meter
             // change under the pointer, or starts a meter change at the bar
@@ -1020,6 +1046,8 @@ bool Ruler::handle(const ui::PointerEvent& e) {
                 }
                 originalStart_ = originalEnd_ = cell->beat;
                 drag_ = Drag::Chord;
+                copy_ = (e.mods & ui::kAlt) != 0;
+                copySymbol_ = cell->symbol;
             } else if (e.clicks == 2) {
                 chordField(gridBeat(e.pos.x), e.pos);
                 return true;
@@ -1141,9 +1169,18 @@ bool Ruler::handle(const ui::PointerEvent& e) {
             } else if (moved_ && (drag_ == Drag::LoopLeft || drag_ == Drag::LoopRight)) {
                 clearRange(punch_);  // an edge dragged onto the other: the range is gone
             } else if (moved_ && drag_ == Drag::Chord && draftStart_ != originalStart_) {
+                if (copy_) {  // Alt: the same chord again where it is dropped
+                    args["at"] = draftStart_;
+                    args["symbol"] = copySymbol_;
+                } else {
+                    args["at"] = originalStart_;
+                    args["to"] = draftStart_;
+                }
+                execute("chord.set", std::move(args));
+            } else if (moved_ && drag_ == Drag::Key && draftStart_ != originalStart_) {
                 args["at"] = originalStart_;
                 args["to"] = draftStart_;
-                execute("chord.set", std::move(args));
+                execute("key.set", std::move(args));
             } else if (moved_ && (drag_ == Drag::Marker || isRegion()) &&
                        (draftStart_ != originalStart_ || draftEnd_ != originalEnd_)) {
                 args["id"] = id_.str();
