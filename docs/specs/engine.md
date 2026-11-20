@@ -551,6 +551,24 @@ them to a compile. A context edit that comes with any other change compiles
 as that change does. When something in the plan reads the context (a note
 source, a rack module), an edit compiles only if the plan reads it.
 
+What the tests pin, and what they do not (the reader of `loadContextOnly`'s guards
+should know which is which). `a context-only edit compiles nothing and the same
+session again does` (`test_mix_edits.cpp`) pins: a chord edit, and an edit of a
+point's content and a new point together, compile no plan; the same session again is
+a maintenance reload that compiles (the shortcut never takes it: the `cx` storage
+does not differ); a context edit together with a track edit compiles as the track
+edit does. `a context edit made while a structural edit is deferred does not swallow
+it` (`test_module_library.cpp`) pins the outcome: with a future non-unity plan and an
+FX removal waiting, a chord edit compiles nothing, and the removal still compiles and
+plays once its span has passed, with no engine error. **It does not pin the deferral
+guards.** The test also passes with the guards removed: the shortcut adopts the whole
+new session as `latest_`, which holds the waiting edit, and the deferral's own retry
+compiles it either way. Both tests fail when the "`cx` storage differs" check is
+removed. No test makes the guards alone matter. They are kept so the shortcut has the
+same guards as the three it sits beside: a later change that made adopting `latest_`
+insufficient would otherwise lose a deferred edit without a test failing. Read them as
+code; no test stands behind them.
+
 **Patch-only FX edits (ADR-0092).** A session that differs from the last one
 `Engine::load` took only in FX `patch` values, each of those FX having a
 patch before and after, is not compiled. Every other collection must have

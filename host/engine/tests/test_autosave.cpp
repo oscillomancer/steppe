@@ -646,6 +646,7 @@ TEST_CASE("every edit command a saved branch may replay has been audited") {
                                                "cable.set",
                                                "chord.remove",
                                                "chord.set",
+                                               "context.write",
                                                "env.add",
                                                "env.points.set",
                                                "env.remove",

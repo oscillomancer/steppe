@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include "command_validation.h"
 #include "heard_midi.h"
+#include "midi_context.h"
 #include "midi_ticks.h"
 // Note-level MIDI editing (the piano roll's commands, and an agent's when
 // notation is the wrong tool): midi.notes reads an item's notes and CCs in
@@ -11,6 +12,7 @@
 #include <set>
 
 #include "supple/engine/app.h"
+#include "supple/harmony/harmony.h"
 #include "supple/model/schemas.h"
 #include "supple/model/source_mapping.h"
 
@@ -28,7 +30,19 @@ struct ItemArgs {
     std::string item;
 };
 
-enum class OpKind : std::uint8_t { Add, Remove, Move, Resize, Velocity, Quantize, CcSet, CcClear };
+enum class OpKind : std::uint8_t {
+    Add,
+    Remove,
+    Move,
+    Resize,
+    Velocity,
+    Quantize,
+    CcSet,
+    CcClear,
+    TransposeDegrees,
+    SnapToScale,
+    FitToChord
+};
 
 struct CcPoint {
     double beat = 0;
@@ -55,6 +69,10 @@ struct MidiOp {
     std::optional<std::int64_t> number;
     std::optional<std::vector<CcPoint>> points;
     std::optional<double> from, to;
+    // transpose_degrees / snap_to_scale / fit_to_chord (ADR-0095)
+    std::optional<std::int64_t> degrees;
+    std::optional<harmony::SnapMode> mode;
+    std::optional<std::string> key, chord;  // explicit; else read from the context track
 };
 
 struct EditArgs {
@@ -169,7 +187,8 @@ Result<std::int64_t> noteEnd(const midi::Note& note, const std::string& path) {
 }
 
 Status applyOp(const MidiOp& op, std::size_t at, std::vector<Working>& notes, std::size_t original,
-               midi::Sequence& seq, const Frame& f) {
+               midi::Sequence& seq, const Frame& f, const model::Session& session,
+               const Id& source) {
     const std::string here = "/ops/" + std::to_string(at);
     constexpr std::int64_t tickLimit = std::int64_t{1} << 56;
     auto validBeat = [&](double beat, bool absolute) {
@@ -377,6 +396,86 @@ Status applyOp(const MidiOp& op, std::size_t at, std::vector<Working>& notes, st
                 n.length = *length;
                 SUPPLE_TRY(noteEnd(n, here + "/grid"));
                 notes[i].touched = true;
+            }
+            return {};
+        }
+        case OpKind::TransposeDegrees:
+        case OpKind::SnapToScale:
+        case OpKind::FitToChord: {
+            const bool transpose = op.op == OpKind::TransposeDegrees;
+            const bool fit = op.op == OpKind::FitToChord;
+            if (transpose && !op.degrees)
+                return Error("midi.degrees", "transpose_degrees needs degrees", here + "/degrees",
+                             R"({"op":"transpose_degrees","notes":[0,1],"degrees":2})");
+            if (!fit && op.chord)
+                return Error("midi.args", "chord is not used by this op", here + "/chord",
+                             "only fit_to_chord takes a chord");
+            if (fit && (op.key || op.mode || op.degrees))
+                return Error("midi.args", "fit_to_chord takes only notes? and chord?", here,
+                             "remove key, mode and degrees");
+            if (!transpose && op.degrees)
+                return Error("midi.args", "degrees is only for transpose_degrees",
+                             here + "/degrees", "remove degrees");
+            if (op.mode && op.op != OpKind::SnapToScale)
+                return Error("midi.args", "mode is only for snap_to_scale", here + "/mode",
+                             "remove mode");
+            std::optional<harmony::Key> key;
+            std::optional<harmony::Chord> chord;
+            if (op.key) {
+                auto parsed = detail::parseKeyText(*op.key, here + "/key");
+                if (!parsed) return std::move(parsed).error();
+                key = *parsed;
+            }
+            if (op.chord) {
+                auto parsed = harmony::parseChord(*op.chord);
+                if (!parsed) {
+                    Error e = parsed.error();
+                    e.path = here + "/chord";
+                    return e;
+                }
+                chord = *parsed;
+            }
+            auto sel = selection(!transpose);
+            if (!sel) return std::move(sel).error();
+            for (std::size_t i : *sel) {
+                midi::Note& n = notes[i].note;
+                // The note as the earlier ops of this edit left it.
+                const bool needKey = !fit && !key, needChord = fit && !chord;
+                detail::NoteContext context;
+                if (needKey || needChord) {
+                    auto read = detail::noteContext(session, source, n.start,
+                                                    f.itemPosition + f.beatOf(n.start), needKey,
+                                                    needChord, here + "/notes");
+                    if (!read) return std::move(read).error();
+                    context = *read;
+                }
+                std::optional<int> pitch;
+                if (transpose) {
+                    pitch = harmony::transposeDegrees(n.pitch, key ? *key : *context.key,
+                                                      static_cast<int>(*op.degrees));
+                } else if (fit) {
+                    const auto classes =
+                        harmony::chordPitchClasses(chord ? *chord : *context.chord);
+                    pitch =
+                        harmony::snapToPitchClasses(n.pitch, classes, harmony::SnapMode::Nearest);
+                } else {
+                    const auto classes = harmony::keyPitchClasses(key ? *key : *context.key);
+                    pitch = harmony::snapToPitchClasses(
+                        n.pitch, classes, op.mode.value_or(harmony::SnapMode::Nearest));
+                }
+                if (!pitch)
+                    return Error("midi.pitch_range",
+                                 "a note would leave the MIDI range 0-127 or has no such pitch "
+                                 "in that direction",
+                                 here + "/notes",
+                                 transpose
+                                     ? "use fewer degrees, or leave the highest and lowest "
+                                       "notes out of notes"
+                                     : "leave the note out of notes, or snap in another mode");
+                if (*pitch != n.pitch) {
+                    n.pitch = static_cast<std::uint8_t>(*pitch);
+                    notes[i].touched = true;
+                }
             }
             return {};
         }
@@ -601,8 +700,17 @@ void registerMidiCommands(cmd::Registry& registry) {
             "resize {notes, length? | length_delta? | start_delta?}; velocity {notes, velocity? "
             "and/or velocity_delta?}; quantize {notes? (all), grid (beats, on the project's grid), "
             "strength? 0-1, ends?}; cc.set {number, points [{beat, value}], channel?}; cc.clear "
-            "{number, from?, to?}. Returns the new indices of the notes the ops added or changed "
-            "(to keep a selection).";
+            "{number, from?, to?}. Scale ops read the context track (key.set, chord.set) at "
+            "the project beat each note starts, in the order of the ops: transpose_degrees "
+            "{notes, degrees, key?} moves notes by scale degrees (a pitch outside the scale "
+            "first goes down to the scale); snap_to_scale {notes? (all), mode? nearest|down|up, "
+            "key?} moves notes outside the scale to it (nearest: a tie goes down); fit_to_chord "
+            "{notes? (all), chord?} moves each note to the nearest tone of the chord (a tie "
+            "goes down; a slash bass counts). key is \"Eb major\", chord is \"Cm7\"; given, they "
+            "replace the context. A note that is looped or shared by another item in a "
+            "different key or chord is refused with midi.context_varies; none holding is "
+            "midi.no_key or midi.no_chord. Returns the new indices of the notes the ops added "
+            "or changed (to keep a selection).";
         c.tags = {"midi"};
         auto point = schema::object<CcPoint>("cc_point")
                          .field("beat", &CcPoint::beat, schema::number())
@@ -618,7 +726,10 @@ void registerMidiCommands(cmd::Registry& registry) {
                                                     {OpKind::Velocity, "velocity"},
                                                     {OpKind::Quantize, "quantize"},
                                                     {OpKind::CcSet, "cc.set"},
-                                                    {OpKind::CcClear, "cc.clear"}}))
+                                                    {OpKind::CcClear, "cc.clear"},
+                                                    {OpKind::TransposeDegrees, "transpose_degrees"},
+                                                    {OpKind::SnapToScale, "snap_to_scale"},
+                                                    {OpKind::FitToChord, "fit_to_chord"}}))
                 .field("notes", &MidiOp::notes, schema::arrayOf(schema::integer().min(0)))
                 .field("pitch", &MidiOp::pitch, schema::integer().range(0, 127))
                 .field("start", &MidiOp::start, schema::number())
@@ -637,6 +748,14 @@ void registerMidiCommands(cmd::Registry& registry) {
                 .field("points", &MidiOp::points, schema::arrayOf(point))
                 .field("from", &MidiOp::from, schema::number())
                 .field("to", &MidiOp::to, schema::number())
+                .field("degrees", &MidiOp::degrees, schema::integer().range(-127, 127))
+                .field(
+                    "mode", &MidiOp::mode,
+                    schema::enumeration<harmony::SnapMode>({{harmony::SnapMode::Nearest, "nearest"},
+                                                            {harmony::SnapMode::Down, "down"},
+                                                            {harmony::SnapMode::Up, "up"}}))
+                .field("key", &MidiOp::key, schema::string())
+                .field("chord", &MidiOp::chord, schema::string())
                 .build();
         c.args =
             schema::object<EditArgs>("midi_edit_args")
@@ -647,6 +766,9 @@ void registerMidiCommands(cmd::Registry& registry) {
         c.examples = {
             {"Add a note and move the first one up an octave",
              j(R"({"item": "it_1", "ops": [{"op": "add", "pitch": 64, "start": 0.5, "length": 0.5}, {"op": "move", "notes": [0], "semitones": 12}]})"),
+             j(R"({"notes": "<any>"})"), "song_with_item"},
+            {"Move the first note up two degrees of C major",
+             j(R"({"item": "it_1", "ops": [{"op": "transpose_degrees", "notes": [0], "degrees": 2, "key": "C major"}]})"),
              j(R"({"notes": "<any>"})"), "song_with_item"}};
         c.run = [](const EditArgs& a, Context& ctx) -> Result<json::Value> {
             EngineApp& app = ctx.service<EngineApp>();
@@ -660,7 +782,7 @@ void registerMidiCommands(cmd::Registry& registry) {
             for (const midi::Note& n : seq.notes) notes.push_back({n, true, false});
             const std::size_t original = notes.size();
             for (std::size_t i = 0; i < a.ops.size(); ++i)
-                SUPPLE_TRY(applyOp(a.ops[i], i, notes, original, seq, t->frame));
+                SUPPLE_TRY(applyOp(a.ops[i], i, notes, original, seq, t->frame, s, t->source));
             seq.notes.clear();
             std::vector<midi::Note> touched;
             for (const Working& w : notes)

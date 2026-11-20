@@ -1040,7 +1040,9 @@ and naming. All `edit` unless marked (q) query or (a) action.
   new muted channel; engine.md).
 - **MIDI**: `midi.write {item | {track, at}, notation, replace: bool}`,
   `midi.get {item, format: notation|events}` (q), `midi.edit {item, ops:
-  [{select: {pitch, range, channel}, set|shift|transpose|quantize|velocity}]}`,
+  [{select: {pitch, range, channel}, set|shift|transpose|quantize|velocity}]}`
+  (with the scale ops `transpose_degrees`, `snap_to_scale` and `fit_to_chord`: see
+  the context track),
   `midi.quantize`, `midi.humanize {seed}`; Standard MIDI Files are read by
   `item.add {midi_file}` (notes keep their beats and follow the project's
   tempo) and written by `item.export`. `midi.edit` note indices are a set per operation: repeated
@@ -1094,8 +1096,8 @@ and naming. All `edit` unless marked (q) query or (a) action.
   `section`).
 - **context** (ADR-0095): `key.set {at, tonic, scale, to?}`, `key.remove
   {at}`, `chord.set {at, symbol, to?}`, `chord.remove {at}`, `context.at
-  {at | bar}` (q), `context.get {from?, to?}` (q); later `context.write
-  {text}`.
+  {at | bar}` (q), `context.get {from?, to?}` (q; it also returns the lead sheet as
+  `text`), `context.write {text}` (see "Lead sheet" in the context track).
 - **transport** (a): `transport.play`, `transport.stop`, `transport.pause`,
   `transport.record`, `transport.seek {pos}`, `transport.loop {range | clear}`,
   `transport.punch {start, end | clear}` (`clear` removes the range and turns
@@ -1467,6 +1469,51 @@ changes and the chord runs by project bar, and it now lists the tempo and
 meter changes after the first, which it omitted. `midi.get` gains a `context`
 field: the key and chords over the item's span, with item bars and project bars
 both named.
+
+**Lead sheet.** `context.get`'s `text` and `context.write {text}` use one line per
+project bar: `N: ` then items. `{SYMBOL}:DUR` is a chord point at the cursor,
+`r:DUR` a chord point with an empty symbol, `~:DUR` a hold (no point) and
+`key TONIC SCALE` a key point at the cursor that takes no time; `DUR` is the
+notation's duration (`notation::parseDuration`, at 960 ppq) and a bar's durations
+fill it exactly, against the meters in force. A `#` starts a comment only where a
+word starts (`F#` is a sharp). Bars run in order without gaps, at most 4096 to a
+write and 1 MiB of text. Printing is canonical (the shortest duration token; a
+bar's points split it where they fall) and parses back to the same points.
+A bar that holds a point this build cannot read prints it as stored, and writing
+that text back is refused (`context.syntax`) until it is changed.
+**A write is a diff** over `[start of the first bar, end of the last)`, for keys
+and chords both: a point equal in beat, type and content is left alone (its id
+stays), a point of the span the text omits is removed, any other is added, or
+replaced when one of the type is at its beat (the id stays). Nothing changes on an
+error, and a write that resolves to nothing records no step. History records the
+steps it resolved to, removes first and then the sets in beat order, as
+`chord.remove`, `key.remove`, `chord.set {at, symbol}` and `key.set {at, tonic,
+scale}`, never the text (`EngineApp::recordInvocation`; `invoked` skips
+`context.write` itself), so two branches that write different bars merge, and a
+replay on another branch makes the same points. Errors: `context.syntax`,
+`context.bar_order`, `context.bar_length`, `context.empty`, `context.too_long`,
+`context.limit` (the write would leave more than 4096 points of a type) and the
+chord and key errors above, each naming the bar.
+
+**Scale ops** (`midi.edit`). `transpose_degrees {notes, degrees, key?}`,
+`snap_to_scale {notes?, mode?, key?}` and `fit_to_chord {notes?, chord?}` read the
+key (the first two) or the chord (the last) at each note's project beat, as the
+ops before it in the same `midi.edit` left the note; `key` (`"Eb major"`) and
+`chord` (`"Cm7"`) replace the reading. `degrees` is `harmony::transposeDegrees`.
+`mode` is `nearest` (default; a tie goes down), `down` or `up`: a note whose
+class is in the scale stays, any other moves to the nearest, the nearest below or
+the nearest above scale pitch. `fit_to_chord` moves each note to the nearest tone
+of the chord (a tie goes down; a slash bass is a tone; a note on a tone stays).
+`notes` is required for `transpose_degrees` and defaults to every note for the
+other two. A note is read at every project beat where its start sounds: once for
+each item whose active take plays the source (pooled sharers too) and once per
+loop pass. When those beats do not agree on the part asked for, the op is refused
+with `midi.context_varies`; no key or chord holding (or a point this build cannot
+read) is `midi.no_key` or `midi.no_chord`; a result outside 0..127, or no scale
+pitch in the direction asked, is `midi.pitch_range`; arguments the op does not
+take are `midi.args`. Only the notes an op actually moved are returned as changed.
+A launcher clip is not built yet: the rule for it (the key at the project's
+start, no chords) waits for it.
 
 ### Rack sends (schema 2.13, ADR-0075)
 

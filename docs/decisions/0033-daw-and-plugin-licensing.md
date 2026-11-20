@@ -24,6 +24,8 @@ needs Steinberg's ASIO SDK; stock plugin binaries must remain free of GPL code.
   links it too. No other first-party library enters a stock plugin binary.
   (2026-10-21: `LinkMonorepo.cmake` was removed with Orrery, the last plugin
   built against the monorepo's libraries this way.)
+  (2026-11-19: `libs/harmony`, keys, scales, chords and pitch spelling, is MIT
+  too, confirmed by the maintainer; ADR-0095. No stock plugin links it.)
 - `cmake/product.h.in` remains MIT: plugin builds generate and include it
   through core-base's product-info dependency.
 - `daw/`, `host/`, `mcp/`, remaining `libs/`, `tools/`, `tests/`, `skill/`,

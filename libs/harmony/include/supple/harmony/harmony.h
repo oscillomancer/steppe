@@ -101,6 +101,21 @@ std::string spell(int pitch, const std::optional<Key>& key = std::nullopt);
 // nearest scale pitch below. Nothing when the result is outside 0..127.
 std::optional<int> transposeDegrees(int pitch, const Key& key, int degrees);
 
+// The pitch classes (0..11, ascending) of a key's scale and of a chord's tones (the
+// root, each of its quality's intervals, a slash bass).
+std::vector<int> keyPitchClasses(const Key& key);
+std::vector<int> chordPitchClasses(const Chord& chord);
+
+// Which way a pitch outside the set goes.
+enum class SnapMode { Nearest, Down, Up };
+
+// A MIDI pitch moved to a pitch whose class is in `classes`: itself when it is
+// already there; else the nearest such pitch (a tie goes down), the nearest below,
+// or the nearest above. Nothing when `classes` is empty or no such pitch lies in
+// 0..127 in that direction.
+std::optional<int> snapToPitchClasses(int pitch, std::span<const int> classes,
+                                      SnapMode mode = SnapMode::Nearest);
+
 // --- context ------------------------------------------------------------------------------------
 
 struct KeyPoint {

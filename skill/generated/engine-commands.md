@@ -1810,7 +1810,7 @@ Result:
 
 List the key and chord points in a range of beats.
 
-Points from `from` (default 0) to `to` (default: the end), by beat, with the key and chord that hold at `from`.
+Points from `from` (default 0) to `to` (default: the end), by beat, with the key and chord that hold at `from`, and `text`: the same as a lead sheet in project bars, one line per bar, for context.write. In it `{Cm7}:h` is a chord point at the cursor, `r:h` a chord point with no chord, `~:h` a hold (no point), `key Eb major` a key point at the cursor; a bar's durations fill the bar. The bars run from the one holding `from` to the one holding `to` (exclusive when `to` is a bar line), or to the last point.
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -1828,6 +1828,9 @@ Kind: `query`. Exposure: `mcp-exec`.
   "type": "object",
   "title": "context_get",
   "properties": {
+    "text": {
+      "type": "string"
+    },
     "points": {
       "type": "array",
       "items": {
@@ -1930,6 +1933,83 @@ Result:
 ```json
 {
   "points": []
+}
+
+```
+
+## `context.write@1`
+
+Write key and chord points from a lead sheet over the bars it names.
+
+text is context.get's lead sheet: one line per project bar, 'N: ' then {SYMBOL}:DUR (a chord point at the cursor), r:DUR (a chord point with no chord), ~:DUR (hold: no point) and 'key TONIC SCALE' (a key point at the cursor, no time), where DUR is the notation's duration (q, h., h+q, 480t) and a bar's durations must fill it. Bars run in order from the first named to the last. The write is a diff over that span: points equal in beat and content are left alone (ids kept), points in the span the text omits are removed, the rest are added or replaced. History records the key.set, chord.set and remove operations it came to, so branches that write different bars merge. Keys and chords both follow the text: to leave the key alone, include it. Errors name the bar; nothing is changed when one occurs.
+
+Kind: `edit`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `text` | string |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "context_write",
+  "properties": {
+    "first_bar": {
+      "type": "integer"
+    },
+    "last_bar": {
+      "type": "integer"
+    },
+    "added": {
+      "type": "integer"
+    },
+    "replaced": {
+      "type": "integer"
+    },
+    "removed": {
+      "type": "integer"
+    },
+    "unchanged": {
+      "type": "integer"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["first_bar", "last_bar", "added", "replaced", "removed", "unchanged"],
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**Two bars of changes** (`empty`)
+
+```json
+{
+  "text": "1: key Eb major {Ebmaj7}:w\n2: {Cm7}:h {Fm7}:h\n"
+}
+
+```
+
+Result:
+
+```json
+{
+  "first_bar": 1,
+  "last_bar": 2,
+  "added": 4,
+  "replaced": 0,
+  "removed": 0,
+  "unchanged": 0
 }
 
 ```
@@ -10253,7 +10333,7 @@ Result:
 
 Edit a MIDI item's notes and CCs: add, remove, move, resize, velocity, quantize.
 
-ops run in order and are one undo step. notes: indices into midi.notes' list as it was before this command (every op refers to that list, so later ops are not affected by earlier removals). Beats are from the item's start. add {pitch, start, length, velocity?, channel?}; remove {notes}; move {notes, beats?, semitones?}; resize {notes, length? | length_delta? | start_delta?}; velocity {notes, velocity? and/or velocity_delta?}; quantize {notes? (all), grid (beats, on the project's grid), strength? 0-1, ends?}; cc.set {number, points [{beat, value}], channel?}; cc.clear {number, from?, to?}. Returns the new indices of the notes the ops added or changed (to keep a selection).
+ops run in order and are one undo step. notes: indices into midi.notes' list as it was before this command (every op refers to that list, so later ops are not affected by earlier removals). Beats are from the item's start. add {pitch, start, length, velocity?, channel?}; remove {notes}; move {notes, beats?, semitones?}; resize {notes, length? | length_delta? | start_delta?}; velocity {notes, velocity? and/or velocity_delta?}; quantize {notes? (all), grid (beats, on the project's grid), strength? 0-1, ends?}; cc.set {number, points [{beat, value}], channel?}; cc.clear {number, from?, to?}. Scale ops read the context track (key.set, chord.set) at the project beat each note starts, in the order of the ops: transpose_degrees {notes, degrees, key?} moves notes by scale degrees (a pitch outside the scale first goes down to the scale); snap_to_scale {notes? (all), mode? nearest|down|up, key?} moves notes outside the scale to it (nearest: a tie goes down); fit_to_chord {notes? (all), chord?} moves each note to the nearest tone of the chord (a tie goes down; a slash bass counts). key is "Eb major", chord is "Cm7"; given, they replace the context. A note that is looped or shared by another item in a different key or chord is refused with midi.context_varies; none holding is midi.no_key or midi.no_chord. Returns the new indices of the notes the ops added or changed (to keep a selection).
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -10289,6 +10369,32 @@ Kind: `edit`. Exposure: `mcp-exec`.
       "op": "move",
       "notes": [0],
       "semitones": 12
+    }
+  ]
+}
+
+```
+
+Result:
+
+```json
+{
+  "notes": "<any>"
+}
+
+```
+
+**Move the first note up two degrees of C major** (`song_with_item`)
+
+```json
+{
+  "item": "it_1",
+  "ops": [
+    {
+      "op": "transpose_degrees",
+      "notes": [0],
+      "degrees": 2,
+      "key": "C major"
     }
   ]
 }

@@ -102,6 +102,8 @@ class BuildFiles(unittest.TestCase):
             ("plugins/common/example.cpp", "MIT OR GPL-3.0-or-later", 1),
             ("libs/core-analysis/example.cpp", "GPL-3.0-or-later", 1),
             ("libs/core-analysis/example.cpp", "MIT", 0),
+            ("libs/harmony/example.cpp", "GPL-3.0-or-later", 1),
+            ("libs/harmony/example.cpp", "MIT", 0),
             ("plugins/suite/export/product/Catalog.cpp.in", "@LICENSE@", 0),
             ("plugins/common/example.cpp", "@LICENSE@", 1),
             ("daw/example.cpp", "AGPL-3.0-or-later", 1),

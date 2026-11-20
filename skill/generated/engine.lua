@@ -224,9 +224,22 @@ q = nil
 ---@field to? number
 
 ---@class Steppe.context_get_result
+---@field text? string
 ---@field points table[]
 ---@field key? table
 ---@field chord? table
+---@field warnings? table[]
+
+---@class Steppe.context_write_args
+---@field text string
+
+---@class Steppe.context_write_result
+---@field first_bar integer
+---@field last_bar integer
+---@field added integer
+---@field replaced integer
+---@field removed integer
+---@field unchanged integer
 ---@field warnings? table[]
 
 ---@class Steppe.crash_acknowledge_args
@@ -2343,6 +2356,7 @@ q = nil
 ---@class Steppe.context
 ---@field at fun(args?: Steppe.context_at_args): Steppe.context_at_result What key, chord and section hold at a beat or bar.
 ---@field get fun(args?: Steppe.context_get_args): Steppe.context_get_result List the key and chord points in a range of beats.
+---@field write fun(args: Steppe.context_write_args): Steppe.context_write_result Write key and chord points from a lead sheet over the bars it names.
 
 ---@class Steppe.crash
 ---@field acknowledge fun(args: Steppe.crash_acknowledge_args): table Mark a crash report, or a run that left none, as seen.

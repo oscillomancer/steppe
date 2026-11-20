@@ -127,8 +127,13 @@ instructions are in `docs/guides/installing.md`.
   over an item and, with the piano roll, the event list, `midi.edit` readbacks
   and `rack.probe`, spells notes by the key at the item's start (`libs/harmony`).
   A file with a missing or low counter, a duplicate beat, an unknown scale or an
-  unparsable chord symbol opens with a warning and keeps the point as data. Not
-  yet: the lead-sheet text, `midi.edit` scale operations and the GUI lane (C2).
+  unparsable chord symbol opens with a warning and keeps the point as data. The
+  lead sheet (`context.get`'s `text`, `context.write` as a diff recorded as the
+  `key.set`/`chord.set`/remove steps it resolved to) and the `midi.edit` ops
+  `transpose_degrees`, `snap_to_scale` and `fit_to_chord` (key and chord from the
+  context at each note's beat, or given; `midi.context_varies` over a loop or a
+  pooled sharer in another key) are in. Not yet: the GUI lane and the roll's
+  degree actions (C3), a launcher clip's key.
 - **Project timecode** (ADR-0071, schema 2.11): `project.timecode {rate,
   start}` (30 fps from 00:00:00:00 by default and for older projects),
   through `project.set`/`project.get` and Project > Timecode….

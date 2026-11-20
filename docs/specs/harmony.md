@@ -70,6 +70,13 @@ Melodic minor is the ascending form in both directions.
   nearest scale pitch below, then moves. A chromatic scale has twelve
   degrees. The result is clamped to 0..127 by returning nothing when it falls
   outside.
+- `keyPitchClasses(key)` and `chordPitchClasses(chord)`: the sorted classes
+  0..11 of a scale and of a chord's tones (root, the quality's intervals, a slash
+  bass). `snapToPitchClasses(pitch, classes, mode)` with `SnapMode`
+  `Nearest` (a tie goes down), `Down`, `Up`: the pitch itself when its class is in
+  `classes`, else the nearest such pitch in 0..127 in that direction; nothing for an
+  empty set or a pitch outside 0..127 or when none lies in range.
+  `snap_to_scale` and `fit_to_chord` are these.
 - `keySupported(key)`: false when spelling one of the scale's own degrees needs a
   double accidental (the scale's degrees decide, not its parent's; chromatic is
   always supported).
@@ -118,4 +125,7 @@ supported); out-of-scale direction; the default table equal to
 the notation printer's output for 0..127; chord parse and print round trips
 for every alias; `chordPitches` equal to the compiler's output for every
 quality and a slash bass; `transposeDegrees` over each scale across octave
-edges and out of scale; the index against a brute-force scan.
+edges and out of scale; the pitch classes of keys and chords (a slash bass counts);
+snapping in each mode, ties, the range edges and a one-class set, and every pitch of
+every scale in every key landing in the scale within six semitones; the index
+against a brute-force scan.

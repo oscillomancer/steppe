@@ -364,6 +364,10 @@ class EngineApp : public cmd::Host {
     model::Session view() const;  // the open transaction's preview, else the head
     model::EditTxn& txn();        // the open transaction (edit commands only)
     bool inTransaction() const { return txn_ != nullptr; }
+    // Adds a step to the open transaction's history record. context.write uses it to
+    // record the key.set, chord.set and remove steps it resolved to instead of its text
+    // (a merge replays those, so branches that write different bars merge).
+    void recordInvocation(std::string command, json::Value args);
     model::VersionStore& versions() { return *versions_; }
     const model::VersionStore& versions() const { return *versions_; }
     const AppOptions& options() const { return options_; }

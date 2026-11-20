@@ -4991,8 +4991,13 @@ std::uint64_t EngineApp::clockMs() const {
 }
 
 void EngineApp::invoked(std::string_view command, int, const json::Value& args, cmd::Kind kind) {
-    if (txn_ && kind == cmd::Kind::Edit)
+    // context.write records the points it resolved to (recordInvocation), not its text.
+    if (txn_ && kind == cmd::Kind::Edit && command != "context.write")
         record_.invocations.push_back({std::string(command), args});
+}
+
+void EngineApp::recordInvocation(std::string command, json::Value args) {
+    if (txn_) record_.invocations.push_back({std::move(command), std::move(args)});
 }
 
 void EngineApp::setupFixture(cmd::Dispatcher& d, std::string_view fixture) {

@@ -86,7 +86,9 @@ edit moves time-based regions.
 **`libs/harmony` is MIT** and has no model dependency. Its chord parser is
 first-party code that moves out of the GPL `libs/notation` into the MIT
 library: the holder relicenses it, which the rules allow, and it is stated
-here so the move is a decision and not an accident. `tools/license-check` and
+here so the move is a decision and not an accident. The maintainer confirmed
+the move (the chord parser, the scale table and the spelling code) on
+2026-11-19, and that `libs/harmony` and the rack modules stay MIT. `tools/license-check` and
 `cmake/LicenseIsolation.cmake` list `harmony` with the MIT libraries, beside
 `core-base`, its one dependency. It holds the key,
 scale and chord types, the scale table, chord parse, print and pitches
@@ -183,7 +185,7 @@ compiler and the commands follow it together.
   apply in order within one `midi.edit`. A clip reads the key that holds at
   the project's start and no chords.
 
-### The lead sheet (C2: proposed here, built in the next step)
+### The lead sheet (proposed here; built in C2, see "C2: as built" below)
 
 `context.get` prints and `context.write {text}` reads the context in the
 notation's vocabulary, in project bars, one line per bar:
@@ -205,6 +207,36 @@ removed, the others are added or replaced. It is recorded in history as the
 `chord.set`, `key.set` and remove operations it resolved to, not as its text
 (the `take.hits.detect` to `take.hits.set` pattern is the precedent), so two
 branches that write different bars merge.
+
+### C2: as built
+
+Note, 2026-11-19. The lead sheet and the scale ops are built as above, with these
+settled details (the contracts are in `specs/session-model.md`, "Lead sheet" and
+"Scale ops").
+
+- A `#` starts a comment only where a word starts, so `F#` and `{C#7#9}` are
+  not comments. Bars run in order without gaps; a write names at most 4096 bars and
+  1 MiB. A bar's durations must fill it (`context.bar_length` says by how many
+  ticks, at 960 to a beat, and what a full bar is written as).
+- The write's range is the first named bar's start to the last named bar's end, and
+  covers keys and chords both. The text is the whole truth for that span, so a
+  text without `key` tokens removes the span's keys; `context.get`'s text always
+  includes them.
+- The history record is the resolved steps, removes first. `EngineApp::invoked`
+  skips `context.write` itself; the command records the steps through
+  `recordInvocation`. A write that resolves to nothing commits no step.
+- Scale ops: `mode` for `snap_to_scale` is `nearest` (default, ties go down),
+  `down` or `up`; `fit_to_chord` is always nearest, ties down, and a slash bass
+  is a chord tone. These tie rules are the ADR author's choice, not the
+  design's: ties go down so a snap never rises past a pitch it could have kept
+  below.
+- The context is read at every project beat where a note's start sounds (each
+  item whose active take plays the source, pooled sharers included, and each loop
+  pass); only the part the op uses (key, or chord) must agree. A note held into an
+  item from before it is not read there. The clip rule (the key at the project's
+  start, no chords) is for when clips exist.
+- `notation::parseDuration` and `durationText` are public so the lead sheet shares
+  the notation's durations rather than copying them.
 
 ### Engine
 

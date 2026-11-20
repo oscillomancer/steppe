@@ -360,3 +360,60 @@ TEST_CASE("the index agrees with a scan of the points") {
         }
     }
 }
+
+TEST_CASE("pitch classes of a key and of a chord") {
+    CHECK(keyPitchClasses(key("C", Scale::Major)) == std::vector<int>{0, 2, 4, 5, 7, 9, 11});
+    CHECK(keyPitchClasses(key("Eb", Scale::Minor)) == std::vector<int>{1, 3, 5, 6, 8, 10, 11});
+    CHECK(keyPitchClasses(key("A", Scale::MinorPentatonic)) == std::vector<int>{0, 2, 4, 7, 9});
+    CHECK(keyPitchClasses(key("F#", Scale::Chromatic)).size() == 12);
+    CHECK(keyPitchClasses(key("Eb", Scale::Major)) == std::vector<int>{0, 2, 3, 5, 7, 8, 10});
+    CHECK(chordPitchClasses(*parseChord("Cm7")) == std::vector<int>{0, 3, 7, 10});
+    CHECK(chordPitchClasses(*parseChord("Bb")) == std::vector<int>{2, 5, 10});
+    CHECK(chordPitchClasses(*parseChord("C/E")) == std::vector<int>{0, 4, 7});  // bass is a tone
+    CHECK(chordPitchClasses(*parseChord("C/D")) == std::vector<int>{0, 2, 4, 7});
+    CHECK(chordPitchClasses(*parseChord("Cmin7")) == chordPitchClasses(*parseChord("Cm7")));
+}
+
+TEST_CASE("snapping a pitch to a set of classes") {
+    const std::vector<int> cMajor = keyPitchClasses(key("C", Scale::Major));
+    using M = SnapMode;
+    // In the set: unchanged in every mode.
+    for (M m : {M::Nearest, M::Down, M::Up}) CHECK(snapToPitchClasses(60, cMajor, m) == 60);
+    // C# (61): a tie between C and D goes down for nearest.
+    CHECK(snapToPitchClasses(61, cMajor, M::Nearest) == 60);
+    CHECK(snapToPitchClasses(61, cMajor, M::Down) == 60);
+    CHECK(snapToPitchClasses(61, cMajor, M::Up) == 62);
+    // Eb (63): D is below by one, E above by one: down again.
+    CHECK(snapToPitchClasses(63, cMajor, M::Nearest) == 62);
+    // A pentatonic gap: C (60) in A minor pentatonic {A C D E G}: in set; F (65): E below 1, G
+    // above 2.
+    const std::vector<int> aMinPent = keyPitchClasses(key("A", Scale::MinorPentatonic));
+    CHECK(snapToPitchClasses(65, aMinPent, M::Nearest) == 64);
+    CHECK(snapToPitchClasses(65, aMinPent, M::Up) == 67);
+    CHECK(snapToPitchClasses(70, aMinPent, M::Nearest) == 69);  // Bb: A below 1, C above 2
+    // Range edges: nothing below 0 or above 127.
+    const std::vector<int> onlyCsharp{1};
+    CHECK_FALSE(snapToPitchClasses(0, onlyCsharp, M::Down));
+    CHECK(snapToPitchClasses(0, onlyCsharp, M::Up) == 1);
+    CHECK(snapToPitchClasses(127, onlyCsharp, M::Nearest) == 121);  // G (127) up has no C#
+    CHECK_FALSE(snapToPitchClasses(127, onlyCsharp, M::Up));
+    // One class: the farthest gap is a whole octave less one.
+    const std::vector<int> onlyC{0};
+    CHECK(snapToPitchClasses(66, onlyC, M::Nearest) == 60);  // F#: six below and six above: down
+    CHECK(snapToPitchClasses(67, onlyC, M::Nearest) == 72);
+    CHECK_FALSE(snapToPitchClasses(60, std::vector<int>{}, M::Nearest));
+    CHECK_FALSE(snapToPitchClasses(-1, cMajor));
+    CHECK_FALSE(snapToPitchClasses(128, cMajor));
+    // Every pitch of every scale in every key lands in the scale and moves by at most 6.
+    for (Scale scale : allScales())
+        for (int tonic = 0; tonic < 12; ++tonic) {
+            const Key k{*parsePitchClass(spellPitchClass(tonic)), scale};
+            const auto classes = keyPitchClasses(k);
+            for (int p = 12; p < 116; ++p) {
+                const auto got = snapToPitchClasses(p, classes);
+                REQUIRE(got);
+                CHECK(std::find(classes.begin(), classes.end(), *got % 12) != classes.end());
+                CHECK(std::abs(*got - p) <= 6);
+            }
+        }
+}

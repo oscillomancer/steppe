@@ -206,6 +206,19 @@ std::optional<std::pair<std::string, int>> drumGrid(const std::vector<midi::Note
 
 }  // namespace
 
+Result<std::int64_t> parseDuration(std::string_view token, int ppq) {
+    bool fraction = false;
+    const auto ticks = internal::duration(token, ppq, fraction);
+    if (!ticks || *ticks == 0)
+        return Error(fraction ? "notation.tick_fraction" : "notation.bad_duration",
+                     "invalid duration '" + std::string(token) + "'", "",
+                     "use w, h, q, e, s, t, x, dots, tuplets, sums such as h+e, or positive Nt "
+                     "ticks");
+    return *ticks;
+}
+
+std::string durationText(std::int64_t ticks, int ppq) { return internal::durationName(ticks, ppq); }
+
 Result<std::string> decompile(const midi::Sequence& source, const DecompileOptions& options) {
     for (const auto& note : source.notes)
         if (note.start < 0 || note.length < 0 ||

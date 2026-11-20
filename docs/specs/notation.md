@@ -461,6 +461,12 @@ struct DecompileOptions {
     std::optional<DrumMap> drums;
 };
 Result<std::string> decompile(const midi::Sequence&, const DecompileOptions& = {});
+
+// A duration token in ticks at `ppq` (`q.`, `h+e`, `e3`, `700t`), and the shortest
+// token for a tick count (a sum of two, else `Nt`). Errors `notation.bad_duration`
+// and `notation.tick_fraction`; zero is refused. The context lead sheet shares them.
+Result<std::int64_t> parseDuration(std::string_view token, int ppq);
+std::string durationText(std::int64_t ticks, int ppq);
 }
 ```
 

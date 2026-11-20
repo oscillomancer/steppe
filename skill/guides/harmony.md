@@ -36,6 +36,53 @@ are named by the key at the item's start (`Bb` in F major, `A#` in D major).
 - Positions are beats, rounded to 1/960. One key and one chord at most per
   beat; at most 4096 points of each type.
 
+## The lead sheet: a whole progression in one call
+
+`context.get` also returns `text`: the points as a lead sheet, one line per
+project bar. `context.write {text}` writes one back.
+
+```
+1: key Eb major {Ebmaj7}:w
+2: {Cm7}:h {Fm7}:h
+3: ~:w
+4: {Bb7}:h r:h
+```
+
+- `{SYMBOL}:DUR` is a chord from the cursor; `r:DUR` is "no chord from here";
+  `~:DUR` holds whatever holds (no point); `key Eb major` is a key from the
+  cursor and takes no time. DUR is notation's duration (`w h q e`, `h.`,
+  `h+q`, `480t`). **Each bar's durations must fill the bar** (3/4 is `h.`);
+  the error says by how much.
+- Bars run in order without gaps. A `#` starts a comment only at the start of a
+  word (`F#` is a sharp).
+- **A write is a diff over the bars it names**, keys and chords both: points that
+  are the same stay (ids kept), points in those bars that the text leaves out are
+  removed, the rest are added or changed. To change one bar, send just that bar:
+  `context.get {"from": 4, "to": 8}` prints it. To leave a bar's key alone, keep
+  its `key` token in the text.
+- History records the individual `chord.set`, `key.set` and remove steps, so two
+  branches that rewrite different bars merge.
+
+## Edits that read the key and chord
+
+`midi.edit` ops (see `generated/engine-commands.md`), applied in order:
+
+- `{"op": "transpose_degrees", "notes": [0, 1], "degrees": 2}` moves notes by
+  scale degrees in the key at each note's beat (a note outside the scale first
+  goes down to the scale). A third up in C major turns C4 into E4.
+- `{"op": "snap_to_scale", "mode": "nearest"}` moves notes outside the scale to
+  it; `mode` is `nearest` (a tie goes down), `down` or `up`. Without `notes` it
+  means every note.
+- `{"op": "fit_to_chord"}` moves each note to the nearest tone of the chord at
+  its beat (a tie goes down; a slash bass counts).
+- `key` (`"Eb major"`) and `chord` (`"Cm7"`) in an op replace what the context
+  says, for that op.
+
+If no key or chord holds there, you get `midi.no_key` or `midi.no_chord` and a
+hint. If a loop or another item sharing the same MIDI puts one note in two keys
+(or over two chords), you get `midi.context_varies`: pass `key` or `chord`, or
+unloop or unshare the item first.
+
 ## Sections
 
 Regions are sections unless told otherwise. `region.add {"section": false}` or

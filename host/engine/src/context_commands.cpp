@@ -5,6 +5,7 @@
 #include <cmath>
 
 #include "command_helpers.h"
+#include "lead_sheet.h"
 #include "supple/harmony/harmony.h"
 #include "supple/model/context.h"
 
@@ -43,6 +44,14 @@ struct ContextGetArgs {
     std::optional<double> from, to;
 };
 
+struct WriteArgs {
+    std::string text;
+};
+
+struct WriteResult {
+    std::int64_t firstBar = 1, lastBar = 1, added = 0, replaced = 0, removed = 0, unchanged = 0;
+};
+
 struct KeyInfo {
     std::string id, tonic, scale;
     double fromBeat = 0;
@@ -78,7 +87,8 @@ struct PointRow {
 
 struct ContextGetResult {
     std::vector<PointRow> points;
-    std::optional<KeyInfo> key;  // what holds at `from`
+    std::optional<std::string> text;  // the lead sheet over the range
+    std::optional<KeyInfo> key;       // what holds at `from`
     std::optional<ChordInfo> chord;
 };
 
@@ -152,6 +162,106 @@ void fillHolding(const model::Session& s, double beat, std::optional<KeyInfo>& k
             chord = chordInfo(*id, *p);  // an empty symbol is "no chord from here"
 }
 
+// The effects of key.set, chord.set and the removes, shared with context.write.
+Result<IdResult> keySet(const model::Session& s, model::EditTxn& txn, const KeySetArgs& a) {
+    const double at = grid(a.at);
+    const auto existing = pointAt(s, ContextType::Key, at);
+    if (a.to && !existing) return noPoint("key", at);
+    ContextPoint p;
+    p.type = ContextType::Key;
+    p.beat = at;
+    if (existing) p = *s.context.find(*existing);
+    if (a.tonic) {
+        const auto tonic = harmony::parsePitchClass(*a.tonic);
+        if (!tonic)
+            return Error("key.tonic", "'" + *a.tonic + "' is not a pitch class", "/tonic",
+                         "use a letter and at most one # or b: C, Eb, F#");
+        p.tonic = harmony::printPitchClass(*tonic);
+    }
+    if (a.scale) {
+        const auto scale = harmony::parseScale(*a.scale);
+        if (!scale)
+            return Error("scale.unknown", "'" + *a.scale + "' is not a scale", "/scale",
+                         "scales: " + scaleList());
+        p.scale = std::string(harmony::scaleName(*scale));
+    }
+    if (p.tonic.empty() || p.scale.empty())
+        return Error("key.args", "a new key point needs a tonic and a scale", "/tonic",
+                     "give both, for example {\"tonic\":\"Eb\",\"scale\":\"major\"}");
+    const auto key = model::parseKey(p);
+    if (!key)  // an existing point from a later build, changed only in part
+        return Error("scale.unknown", "'" + p.scale + "' is not a scale this build knows", "/scale",
+                     "scales: " + scaleList());
+    if (!harmony::keySupported(*key)) {
+        const std::string other = enharmonic(key->tonic, key->scale);
+        return Error("key.unsupported", p.tonic + " " + p.scale + " needs a double accidental",
+                     "/tonic",
+                     other.empty() ? "pick another tonic"
+                                   : "use the enharmonic key: " + other + " " + p.scale);
+    }
+    if (a.to) {
+        const double to = grid(*a.to);
+        if (to != at && pointAt(s, ContextType::Key, to)) return occupied("key", to);
+        p.beat = to;
+        txn.put(*existing, std::move(p));
+        return IdResult{existing->str()};
+    }
+    if (existing) {
+        txn.put(*existing, std::move(p));
+        return IdResult{existing->str()};
+    }
+    if (countOf(s, ContextType::Key) >= model::kMaxContextPoints) return limit("key");
+    return IdResult{txn.create(std::move(p)).str()};
+}
+
+Result<IdResult> chordSet(const model::Session& s, model::EditTxn& txn, const ChordSetArgs& a) {
+    const double at = grid(a.at);
+    const auto existing = pointAt(s, ContextType::Chord, at);
+    if (a.to && !existing) return noPoint("chord", at);
+    ContextPoint p;
+    p.type = ContextType::Chord;
+    p.beat = at;
+    if (existing) p = *s.context.find(*existing);
+    if (a.symbol) {
+        if (a.symbol->empty()) {
+            p.symbol.clear();
+        } else {
+            auto chord = harmony::parseChord(*a.symbol);
+            if (!chord) {
+                Error e = chord.error();
+                e.path = "/symbol";
+                return e;
+            }
+            p.symbol = harmony::printChord(*chord);
+        }
+    } else if (!existing) {
+        return Error("chord.args", "a new chord point needs a symbol", "/symbol",
+                     "give one, for example {\"symbol\":\"Cm7\"}");
+    }
+    if (a.to) {
+        const double to = grid(*a.to);
+        if (to != at && pointAt(s, ContextType::Chord, to)) return occupied("chord", to);
+        p.beat = to;
+        txn.put(*existing, std::move(p));
+        return IdResult{existing->str()};
+    }
+    if (existing) {
+        txn.put(*existing, std::move(p));
+        return IdResult{existing->str()};
+    }
+    if (countOf(s, ContextType::Chord) >= model::kMaxContextPoints) return limit("chord");
+    return IdResult{txn.create(std::move(p)).str()};
+}
+
+Result<Empty> removePoint(const model::Session& s, model::EditTxn& txn, ContextType type,
+                          double at) {
+    at = grid(at);
+    const auto id = pointAt(s, type, at);
+    if (!id) return noPoint(type == ContextType::Key ? "key" : "chord", at);
+    txn.remove<ContextPoint>(*id);
+    return Empty{};
+}
+
 auto keyInfoSchema() {
     return schema::object<KeyInfo>("context_key")
         .field("id", &KeyInfo::id, schema::string())
@@ -199,56 +309,7 @@ void registerContextCommands(cmd::Registry& registry) {
         c.examples = {{"E-flat major from the start", j(R"({"at":0,"tonic":"Eb","scale":"major"})"),
                        j(R"({"id":"cx_1"})"), "empty"}};
         c.run = [](const KeySetArgs& a, Context& ctx) -> Result<IdResult> {
-            const auto s = app(ctx).view();
-            model::EditTxn& txn = app(ctx).txn();
-            const double at = grid(a.at);
-            const auto existing = pointAt(s, ContextType::Key, at);
-            if (a.to && !existing) return noPoint("key", at);
-            ContextPoint p;
-            p.type = ContextType::Key;
-            p.beat = at;
-            if (existing) p = *s.context.find(*existing);
-            if (a.tonic) {
-                const auto tonic = harmony::parsePitchClass(*a.tonic);
-                if (!tonic)
-                    return Error("key.tonic", "'" + *a.tonic + "' is not a pitch class", "/tonic",
-                                 "use a letter and at most one # or b: C, Eb, F#");
-                p.tonic = harmony::printPitchClass(*tonic);
-            }
-            if (a.scale) {
-                const auto scale = harmony::parseScale(*a.scale);
-                if (!scale)
-                    return Error("scale.unknown", "'" + *a.scale + "' is not a scale", "/scale",
-                                 "scales: " + scaleList());
-                p.scale = std::string(harmony::scaleName(*scale));
-            }
-            if (p.tonic.empty() || p.scale.empty())
-                return Error("key.args", "a new key point needs a tonic and a scale", "/tonic",
-                             "give both, for example {\"tonic\":\"Eb\",\"scale\":\"major\"}");
-            const auto key = model::parseKey(p);
-            if (!key)  // an existing point from a later build, changed only in part
-                return Error("scale.unknown", "'" + p.scale + "' is not a scale this build knows",
-                             "/scale", "scales: " + scaleList());
-            if (!harmony::keySupported(*key)) {
-                const std::string other = enharmonic(key->tonic, key->scale);
-                return Error("key.unsupported",
-                             p.tonic + " " + p.scale + " needs a double accidental", "/tonic",
-                             other.empty() ? "pick another tonic"
-                                           : "use the enharmonic key: " + other + " " + p.scale);
-            }
-            if (a.to) {
-                const double to = grid(*a.to);
-                if (to != at && pointAt(s, ContextType::Key, to)) return occupied("key", to);
-                p.beat = to;
-                txn.put(*existing, std::move(p));
-                return IdResult{existing->str()};
-            }
-            if (existing) {
-                txn.put(*existing, std::move(p));
-                return IdResult{existing->str()};
-            }
-            if (countOf(s, ContextType::Key) >= model::kMaxContextPoints) return limit("key");
-            return IdResult{txn.create(std::move(p)).str()};
+            return keySet(app(ctx).view(), app(ctx).txn(), a);
         };
         addChecked(registry, std::move(c));
     }();
@@ -299,44 +360,7 @@ void registerContextCommands(cmd::Registry& registry) {
         c.examples = {{"C minor seventh at bar 2", j(R"({"at":4,"symbol":"Cm7"})"),
                        j(R"({"id":"cx_1"})"), "empty"}};
         c.run = [](const ChordSetArgs& a, Context& ctx) -> Result<IdResult> {
-            const auto s = app(ctx).view();
-            model::EditTxn& txn = app(ctx).txn();
-            const double at = grid(a.at);
-            const auto existing = pointAt(s, ContextType::Chord, at);
-            if (a.to && !existing) return noPoint("chord", at);
-            ContextPoint p;
-            p.type = ContextType::Chord;
-            p.beat = at;
-            if (existing) p = *s.context.find(*existing);
-            if (a.symbol) {
-                if (a.symbol->empty()) {
-                    p.symbol.clear();
-                } else {
-                    auto chord = harmony::parseChord(*a.symbol);
-                    if (!chord) {
-                        Error e = chord.error();
-                        e.path = "/symbol";
-                        return e;
-                    }
-                    p.symbol = harmony::printChord(*chord);
-                }
-            } else if (!existing) {
-                return Error("chord.args", "a new chord point needs a symbol", "/symbol",
-                             "give one, for example {\"symbol\":\"Cm7\"}");
-            }
-            if (a.to) {
-                const double to = grid(*a.to);
-                if (to != at && pointAt(s, ContextType::Chord, to)) return occupied("chord", to);
-                p.beat = to;
-                txn.put(*existing, std::move(p));
-                return IdResult{existing->str()};
-            }
-            if (existing) {
-                txn.put(*existing, std::move(p));
-                return IdResult{existing->str()};
-            }
-            if (countOf(s, ContextType::Chord) >= model::kMaxContextPoints) return limit("chord");
-            return IdResult{txn.create(std::move(p)).str()};
+            return chordSet(app(ctx).view(), app(ctx).txn(), a);
         };
         addChecked(registry, std::move(c));
     }();
@@ -433,7 +457,12 @@ void registerContextCommands(cmd::Registry& registry) {
         c.summary = "List the key and chord points in a range of beats.";
         c.description =
             "Points from `from` (default 0) to `to` (default: the end), by beat, with the "
-            "key and chord that hold at `from`.";
+            "key and chord that hold at `from`, and `text`: the same as a lead sheet in "
+            "project bars, one line per bar, for context.write. In it `{Cm7}:h` is a chord "
+            "point at the cursor, `r:h` a chord point with no chord, `~:h` a hold (no "
+            "point), `key Eb major` a key point at the cursor; a bar's durations fill the "
+            "bar. The bars run from the one holding `from` to the one holding `to` "
+            "(exclusive when `to` is a bar line), or to the last point.";
         c.tags = {"context"};
         c.args = schema::object<ContextGetArgs>("context_get_args")
                      .field("from", &ContextGetArgs::from, schema::number().min(0))
@@ -441,6 +470,7 @@ void registerContextCommands(cmd::Registry& registry) {
                      .build();
         c.result =
             schema::object<ContextGetResult>("context_get")
+                .field("text", &ContextGetResult::text, schema::string())
                 .field("points", &ContextGetResult::points,
                        schema::arrayOf(schema::object<PointRow>("context_point_row")
                                            .field("id", &PointRow::id, schema::string())
@@ -482,6 +512,150 @@ void registerContextCommands(cmd::Registry& registry) {
                 out.points.push_back(std::move(row));
             }
             fillHolding(s, from, out.key, out.chord);
+            int firstBar = static_cast<int>(barOf(s, from)), lastBar = firstBar;
+            bool any = a.to.has_value();
+            if (a.to) {
+                lastBar = static_cast<int>(barOf(s, *a.to));
+                if (*a.to > from && grid(s.timeMap->beatOfBar(lastBar)) == grid(*a.to)) --lastBar;
+            } else if (!rows.empty()) {
+                any = true;
+                lastBar = static_cast<int>(barOf(s, rows.back().first));
+            }
+            lastBar = std::max(lastBar, firstBar);
+            if (any) {
+                if (lastBar - firstBar >= detail::kLeadSheetMaxBars)
+                    return Error("context.too_long",
+                                 "the range covers more than " +
+                                     std::to_string(detail::kLeadSheetMaxBars) + " bars",
+                                 "/to", "ask for a narrower range with from and to");
+                out.text = detail::printLeadSheet(s, firstBar, lastBar);
+            }
+            return out;
+        };
+        addChecked(registry, std::move(c));
+    }();
+    // ---------------------------------------------------------------- context.write
+    [&] {
+        Command<WriteArgs, WriteResult> c;
+        c.name = "context.write";
+        c.kind = Kind::Edit;
+        c.exposure = cmd::Exposure::McpExec;
+        c.summary = "Write key and chord points from a lead sheet over the bars it names.";
+        c.description =
+            "text is context.get's lead sheet: one line per project bar, 'N: ' then "
+            "{SYMBOL}:DUR (a chord point at the cursor), r:DUR (a chord point with no "
+            "chord), ~:DUR (hold: no point) and 'key TONIC SCALE' (a key point at the "
+            "cursor, no time), where DUR is the notation's duration (q, h., h+q, 480t) and a "
+            "bar's durations must fill it. Bars run in order from the first named to the "
+            "last. The write is a diff over that span: points equal in beat and content are "
+            "left alone (ids kept), points in the span the text omits are removed, the rest "
+            "are added or replaced. History records the key.set, chord.set and remove "
+            "operations it came to, so branches that write different bars merge. Keys and "
+            "chords both follow the text: to leave the key alone, include it. Errors name "
+            "the bar; nothing is changed when one occurs.";
+        c.tags = {"context"};
+        c.args = schema::object<WriteArgs>("context_write_args")
+                     .field("text", &WriteArgs::text, schema::string())
+                     .build();
+        c.result = schema::object<WriteResult>("context_write")
+                       .field("first_bar", &WriteResult::firstBar, schema::integer())
+                       .field("last_bar", &WriteResult::lastBar, schema::integer())
+                       .field("added", &WriteResult::added, schema::integer())
+                       .field("replaced", &WriteResult::replaced, schema::integer())
+                       .field("removed", &WriteResult::removed, schema::integer())
+                       .field("unchanged", &WriteResult::unchanged, schema::integer())
+                       .build();
+        c.examples = {{"Two bars of changes",
+                       j(R"({"text":"1: key Eb major {Ebmaj7}:w\n2: {Cm7}:h {Fm7}:h\n"})"),
+                       j(R"({"first_bar":1,"last_bar":2,"added":4,"replaced":0,"removed":0,
+                             "unchanged":0})"),
+                       "empty"}};
+        c.run = [](const WriteArgs& a, Context& ctx) -> Result<WriteResult> {
+            EngineApp& engine = app(ctx);
+            const auto s = engine.view();
+            auto sheet = detail::parseLeadSheet(s, a.text);
+            if (!sheet) return std::move(sheet).error();
+            auto tickOf = [](double beat) { return std::llround(beat * 960.0); };
+            // What the span holds now, by type and tick.
+            std::map<std::pair<ContextType, long long>, Id> existing;
+            for (const auto& e : s.context)
+                if (e.value->beat >= sheet->fromBeat - 1e-9 && e.value->beat < sheet->toBeat - 1e-9)
+                    existing[{e.value->type, tickOf(e.value->beat)}] = e.id;
+            WriteResult out;
+            out.firstBar = sheet->firstBar;
+            out.lastBar = sheet->lastBar;
+            std::set<std::pair<ContextType, long long>> wanted;
+            struct Step {
+                const detail::LeadPoint* point;
+                bool replace;
+            };
+            std::vector<Step> sets;
+            for (const detail::LeadPoint& p : sheet->points) {
+                const auto key = std::make_pair(p.type, tickOf(p.beat));
+                wanted.insert(key);
+                const auto found = existing.find(key);
+                if (found == existing.end()) {
+                    sets.push_back({&p, false});
+                    continue;
+                }
+                const ContextPoint& old = *s.context.find(found->second);
+                const bool same = p.type == ContextType::Key
+                                      ? old.tonic == p.tonic && old.scale == p.scale
+                                      : old.symbol == p.symbol;
+                if (same)
+                    ++out.unchanged;
+                else
+                    sets.push_back({&p, true});
+            }
+            // Removes first, by beat, then the sets; each is recorded as the command that
+            // does it, so a merge replays them (and not this text).
+            std::vector<std::pair<double, ContextType>> removes;
+            for (const auto& [key, id] : existing)
+                if (!wanted.contains(key)) removes.push_back({s.context.find(id)->beat, key.first});
+            std::sort(removes.begin(), removes.end());
+            for (const ContextType type : {ContextType::Key, ContextType::Chord}) {
+                std::size_t total = countOf(s, type);
+                for (const auto& r : removes) total -= r.second == type ? 1 : 0;
+                for (const Step& step : sets) total += !step.replace && step.point->type == type;
+                if (total > model::kMaxContextPoints)
+                    return Error("context.limit",
+                                 "the write would leave " + std::to_string(total) +
+                                     (type == ContextType::Key ? " key" : " chord") +
+                                     " points; a project holds at most " +
+                                     std::to_string(model::kMaxContextPoints),
+                                 "/text", "write fewer changes, or remove points first");
+            }
+            for (const auto& [beat, type] : removes) {
+                SUPPLE_TRY(removePoint(s, engine.txn(), type, beat));
+                json::Value args = json::Value::object();
+                args["at"] = beat;
+                engine.recordInvocation(type == ContextType::Key ? "key.remove" : "chord.remove",
+                                        std::move(args));
+                ++out.removed;
+            }
+            for (const Step& step : sets) {
+                const detail::LeadPoint& p = *step.point;
+                json::Value args = json::Value::object();
+                args["at"] = p.beat;
+                if (p.type == ContextType::Key) {
+                    args["tonic"] = p.tonic;
+                    args["scale"] = p.scale;
+                    KeySetArgs set;
+                    set.at = p.beat;
+                    set.tonic = p.tonic;
+                    set.scale = p.scale;
+                    SUPPLE_TRY(keySet(s, engine.txn(), set));
+                    engine.recordInvocation("key.set", std::move(args));
+                } else {
+                    args["symbol"] = p.symbol;
+                    ChordSetArgs set;
+                    set.at = p.beat;
+                    set.symbol = p.symbol;
+                    SUPPLE_TRY(chordSet(s, engine.txn(), set));
+                    engine.recordInvocation("chord.set", std::move(args));
+                }
+                step.replace ? ++out.replaced : ++out.added;
+            }
             return out;
         };
         addChecked(registry, std::move(c));

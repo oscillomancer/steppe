@@ -346,6 +346,44 @@ std::optional<int> transposeDegrees(int pitch, const Key& key, int degrees) {
     return result;
 }
 
+std::vector<int> keyPitchClasses(const Key& key) {
+    std::vector<int> out;
+    const int tonic = pitchClassNumber(key.tonic);
+    for (const int interval : info(key.scale).intervals) out.push_back((tonic + interval) % 12);
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
+std::vector<int> chordPitchClasses(const Chord& chord) {
+    std::vector<int> out;
+    const int root = pitchClassNumber(chord.root);
+    const auto& table = chordQualities();
+    auto found = table.find(chord.quality);
+    if (found == table.end()) found = table.find(std::string(canonicalQuality(chord.quality)));
+    if (found != table.end())
+        for (const int interval : found->second) out.push_back(((root + interval) % 12 + 12) % 12);
+    if (chord.bass) out.push_back(pitchClassNumber(*chord.bass));
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
+std::optional<int> snapToPitchClasses(int pitch, std::span<const int> classes, SnapMode mode) {
+    if (classes.empty() || pitch < 0 || pitch > 127) return std::nullopt;
+    auto in = [&](int p) {
+        if (p < 0 || p > 127) return false;
+        return std::find(classes.begin(), classes.end(), p % 12) != classes.end();
+    };
+    if (in(pitch)) return pitch;
+    for (int d = 1; d <= 12; ++d) {
+        const bool down = in(pitch - d), up = in(pitch + d);
+        if (mode != SnapMode::Up && down) return pitch - d;  // nearest ties go down
+        if (mode != SnapMode::Down && up) return pitch + d;
+    }
+    return std::nullopt;
+}
+
 // --- context ------------------------------------------------------------------------------------
 
 namespace {
