@@ -68,7 +68,8 @@ struct TcpCallbacks {
     std::function<void(const model::Id& track, const ui::Rect& anchor,
                        std::function<void()> rename)>
         menu;
-    // A right-click on a fader, pan or button: its MIDI learn menu (ADR-0058).
+    // A right-click on a fader, pan or button: its parameter menu (MIDI learn,
+    // lane, reset; ADR-0058).
     // `param` is the control as track `learn` names it (volume, pan, mute,
     // solo, phase_invert, mono, armed, monitor, lane_mute).
     std::function<void(const model::Id& track, const std::string& param, const ui::Rect& anchor)>

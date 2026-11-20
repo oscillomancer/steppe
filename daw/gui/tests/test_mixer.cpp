@@ -906,7 +906,7 @@ TEST_CASE(
         f.refresh();
         CHECK(f.node("mixer.fx." + p1)->valueText().ends_with(" (failed)"));
         CHECK(f.node("mixer.fx." + p2)->valueText().ends_with(" (failed)"));
-        CHECK(is(barPixel(f, "mixer.fx." + p1), theme.color("clip")));
+        CHECK(is(barPixel(f, "mixer.fx." + p1), theme.color("meter-clip")));
         CHECK_FALSE(f.node("mixer.fx." + p3)->valueText().ends_with(" (failed)"));
         CHECK(static_cast<double>(f.node("mixer.fx." + p3)->bounds().h) ==
               doctest::Approx(beforeH));
@@ -2838,7 +2838,9 @@ TEST_CASE("mixer: freeze and unfreeze use the track menu and keep the name visib
     CHECK(f.errors.empty());
 }
 
-TEST_CASE("mixer: a right-click on a fader or button offers MIDI learn, elsewhere the track menu") {
+TEST_CASE(
+    "mixer: a right-click on a fader or button opens its parameter menu, elsewhere the track "
+    "menu") {
     Fixture f;
     if (!f.ok) return;
     const auto a = f.addTrack("channel", "A");
@@ -2847,22 +2849,34 @@ TEST_CASE("mixer: a right-click on a fader or button offers MIDI learn, elsewher
         f.pointer(ui::PointerEvent::Type::Down, p, 1, 0, 3);
         f.pointer(ui::PointerEvent::Type::Up, p, 1, 0, 3);
     };
-    for (auto [node, entry] : {std::pair{static_cast<ui::Node*>(f.strip(a).fader), "Volume"},
-                               {f.strip(a).solo, "Solo"},
-                               {f.strip(a).arm, "Record arm"}}) {
+    const auto labels = [](const ui::Node& menu) {
+        std::vector<std::string> out;
+        for (const auto& item : ui::menuItems(menu)) out.push_back(item.label);
+        return out;
+    };
+    // MIDI learn first; a lane where the parameter can be automated; Reset
+    // where the control has a default.
+    using Rows = std::vector<std::string>;
+    for (auto [node, rows] :
+         {std::pair{static_cast<ui::Node*>(f.strip(a).fader),
+                    Rows{"MIDI learn: Volume…", "Show lane: Volume", "Reset to 0 dB"}},
+          {f.strip(a).mute, Rows{"MIDI learn: Mute…", "Show lane: Mute"}},
+          {f.strip(a).solo, Rows{"MIDI learn: Solo…"}},
+          {f.strip(a).arm, Rows{"MIDI learn: Record arm…"}}}) {
         REQUIRE(node);
         open(f.centre(node));
-        ui::Node* menu = f.root->find("strip.learn.menu");
+        ui::Node* menu = f.root->find("strip.param.menu");
         REQUIRE(menu);
-        CHECK(ui::menuItems(*menu)[0].label == std::string("MIDI learn: ") + entry + "…");
+        CHECK(labels(*menu) == rows);
+        if (rows.size() == 3) f.snapshot("param-menu-mixer-fader.png");
         f.root->closePopup();
     }
     open(f.empty(a));
-    CHECK_FALSE(f.root->find("strip.learn.menu"));
+    CHECK_FALSE(f.root->find("strip.param.menu"));
     CHECK(f.root->popupOpen());  // the track's menu
 }
 
-TEST_CASE("mixer: a pan's right-click menu sets its mode and law; its bars follow (ADR-0066)") {
+TEST_CASE("mixer: a pan's parameter menu sets its mode and law; its bars follow (ADR-0066)") {
     Fixture f;
     if (!f.ok) return;
     const auto a = f.addTrack("channel", "A");
@@ -2871,64 +2885,76 @@ TEST_CASE("mixer: a pan's right-click menu sets its mode and law; its bars follo
         const ui::Point p = f.centre(f.strip(a).pan);
         f.pointer(ui::PointerEvent::Type::Down, p, 1, 0, 3);
         f.pointer(ui::PointerEvent::Type::Up, p, 1, 0, 3);
-        ui::Node* menu = f.root->find("strip.pan.menu");
+        ui::Node* menu = f.root->find("strip.param.menu");
         REQUIRE(menu);
         return menu;
     };
-    // Rows: three modes, a rule, the project's law, five laws, boost, a rule, MIDI learn.
-    const auto pick = [&](ui::Node* menu, std::size_t row) {
+    const auto labels = [](const ui::Node& menu) {
+        std::vector<std::string> out;
+        for (const auto& item : ui::menuItems(menu)) out.push_back(item.label);
+        return out;
+    };
+    const auto row = [](ui::Node* menu, const std::string& label) {
         const auto items = ui::menuItems(*menu);
-        REQUIRE(row < items.size());
-        auto run = items[row].run;
+        const auto it = std::find_if(items.begin(), items.end(),
+                                     [&](const auto& i) { return i.label == label; });
+        REQUIRE(it != items.end());
+        return *it;
+    };
+    const auto pick = [&](ui::Node* menu, const std::string& label) {
+        auto run = row(menu, label).run;
         f.root->closePopup();
         run();
         f.refresh();
     };
+    // The pan's own rows (learn, lane, reset), then its modes, then its law.
     ui::Node* menu = open();
-    auto items = ui::menuItems(*menu);
-    REQUIRE(items.size() == 14);
-    CHECK(items[0].label == "Pan mode: pan");
-    CHECK(items[0].checked);
-    CHECK(items[4].label == "Pan law: project (0 dB)");
-    CHECK(items[4].checked);
-    CHECK(items[7].label == "Pan law: \u22123 dB");
-    CHECK(items[10].label == "Gain compensation (boost pans)");
-    CHECK_FALSE(items[10].checked);
-    CHECK(items[12].label == "MIDI learn: Pan\u2026");
-    CHECK(items[13].label == "MIDI learn: Gain compensation\u2026");
+    CHECK(labels(*menu) ==
+          std::vector<std::string>{"MIDI learn: Pan…", "MIDI learn: Gain compensation…",
+                                   "Show lane: Pan", "Reset to centre", "", "Pan mode: pan",
+                                   "Pan mode: dual pan", "Pan mode: pan and width", "",
+                                   "Pan law: project (0 dB)", "Pan law: 0 dB", "Pan law: −2.5 dB",
+                                   "Pan law: −3 dB", "Pan law: −4.5 dB", "Pan law: −6 dB",
+                                   "Gain compensation (boost pans)"});
+    CHECK(row(menu, "Pan mode: pan").checked);
+    CHECK(row(menu, "Pan law: project (0 dB)").checked);
+    CHECK_FALSE(row(menu, "Gain compensation (boost pans)").checked);
     f.snapshot("pan-menu-pan.png");
-    pick(menu, 1);  // dual pan
+    pick(menu, "Pan mode: dual pan");
     CHECK(f.track(a).panMode == model::PanMode::Dual);
     CHECK(f.strip(a).pan->split() == ui::PanControl::Split::Dual);
     CHECK(f.strip(a).pan->value() == -100);
     CHECK(f.strip(a).pan->second() == 100);
     menu = open();
-    items = ui::menuItems(*menu);
-    REQUIRE(items.size() == 15);
-    CHECK(items[12].label == "MIDI learn: Pan left\u2026");
-    CHECK(items[13].label == "MIDI learn: Pan right\u2026");
-    CHECK(items[14].label == "MIDI learn: Gain compensation\u2026");
+    auto rows = labels(*menu);
+    REQUIRE(rows.size() >= 6);
+    CHECK(std::vector<std::string>(rows.begin(), rows.begin() + 6) ==
+          std::vector<std::string>{"MIDI learn: Pan left…", "MIDI learn: Pan right…",
+                                   "MIDI learn: Gain compensation…", "Show lane: Pan left",
+                                   "Show lane: Pan right", "Reset to full left and right"});
     f.snapshot("pan-menu-dual.png");
     f.root->closePopup();
-    pick(open(), 7);  // -3 dB of its own
+    pick(open(), "Pan law: −3 dB");  // -3 dB of its own
     REQUIRE(f.track(a).panLaw);
     CHECK(f.track(a).panLaw->db == -3);
     CHECK_FALSE(f.track(a).panLaw->boost);
-    pick(open(), 10);  // boost its own law
+    pick(open(), "Gain compensation (boost pans)");  // boost its own law
     CHECK(f.track(a).panLaw->boost);
     menu = open();
-    CHECK(ui::menuItems(*menu)[10].checked);
-    CHECK_FALSE(ui::menuItems(*menu)[4].checked);
-    pick(menu, 4);  // back to the project's
+    CHECK(row(menu, "Gain compensation (boost pans)").checked);
+    CHECK_FALSE(row(menu, "Pan law: project (0 dB)").checked);
+    pick(menu, "Pan law: project (0 dB)");  // back to the project's
     CHECK_FALSE(f.track(a).panLaw);
-    pick(open(), 2);  // pan and width
+    pick(open(), "Pan mode: pan and width");
     CHECK(f.strip(a).pan->split() == ui::PanControl::Split::Width);
     CHECK(f.strip(a).pan->second() == 100);
     menu = open();
-    items = ui::menuItems(*menu);
-    REQUIRE(items.size() == 15);
-    CHECK(items[12].label == "MIDI learn: Pan\u2026");
-    CHECK(items[13].label == "MIDI learn: Width\u2026");
+    rows = labels(*menu);
+    REQUIRE(rows.size() >= 6);
+    CHECK(std::vector<std::string>(rows.begin(), rows.begin() + 6) ==
+          std::vector<std::string>{"MIDI learn: Pan…", "MIDI learn: Width…",
+                                   "MIDI learn: Gain compensation…", "Show lane: Pan",
+                                   "Show lane: Width", "Reset to centre, full width"});
     f.snapshot("pan-menu-width.png");
     f.root->closePopup();
     // The right bar is the width: a drag left narrows the strip.
@@ -2940,12 +2966,20 @@ TEST_CASE("mixer: a pan's right-click menu sets its mode and law; its bars follo
     f.refresh();
     CHECK(f.track(a).width < 100);
     CHECK(f.track(a).pan == 0);
-    // A master's pan is a balance: its menu is MIDI learn alone.
+    // Reset puts both bars home in one step.
+    const auto before = f.steps();
+    pick(open(), "Reset to centre, full width");
+    CHECK(f.track(a).width == 100);
+    CHECK(f.track(a).pan == 0);
+    CHECK(f.steps() == before + 1);
+    // A master's pan is a balance: learn, lane and reset, no modes or law.
     const ui::Point master = f.centre(f.strip("tr_0").pan);
     f.pointer(ui::PointerEvent::Type::Down, master, 1, 0, 3);
     f.pointer(ui::PointerEvent::Type::Up, master, 1, 0, 3);
-    CHECK_FALSE(f.root->find("strip.pan.menu"));
-    CHECK(f.root->find("strip.learn.menu"));
+    menu = f.root->find("strip.param.menu");
+    REQUIRE(menu);
+    CHECK(labels(*menu) ==
+          std::vector<std::string>{"MIDI learn: Pan…", "Show lane: Pan", "Reset to centre"});
     CHECK(f.errors.empty());
 }
 
@@ -2961,9 +2995,15 @@ TEST_CASE("mixer: a right-click on a VCA's fader learns MIDI for it, elsewhere t
         f.pointer(ui::PointerEvent::Type::Up, p, 1, 0, 3);
     };
     open(f.centre(f.node("mixer.vca.fader.gr_1")));
-    ui::Node* menu = f.root->find("strip.learn.menu");
+    ui::Node* menu = f.root->find("strip.param.menu");
     REQUIRE(menu);
-    CHECK(ui::menuItems(*menu)[0].label == "MIDI learn: Volume…");
+    {
+        const auto items = ui::menuItems(*menu);
+        REQUIRE(items.size() == 3);
+        CHECK(items[0].label == "MIDI learn: Volume…");
+        CHECK(items[1].label == "Show lane: Volume");
+        CHECK(items[2].label == "Reset to 0 dB");
+    }
     // The entry opens the learn dialog; a moved control and OK bind it.
     const ui::Point p{menu->bounds().x + 40, menu->bounds().y + 13};
     f.pointer(ui::PointerEvent::Type::Move, p);
@@ -2984,7 +3024,7 @@ TEST_CASE("mixer: a right-click on a VCA's fader learns MIDI for it, elsewhere t
     CHECK(f.errors.empty());
 
     open(f.centre(f.node("mixer.vca.name.gr_1")));
-    CHECK_FALSE(f.root->find("strip.learn.menu"));
+    CHECK_FALSE(f.root->find("strip.param.menu"));
     CHECK(f.root->popupOpen());  // the group's menu
 }
 
@@ -3063,6 +3103,66 @@ TEST_CASE("mixer: a channel fed by a rack shows a rack slot above its plug-ins")
     REQUIRE(f.strip(track).racks.size() == 1);
     CHECK(f.strip(track).racks.front()->id() == "mixer.rack." + track + "." + second);
     CHECK(f.strip(track).racks.front()->valueText() == "Pad");
+}
+
+TEST_CASE("mixer: a strip's modulator racks show as mod slots") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::string> opened;
+    f.mixer->openRack = [&](const model::Id& rack) { opened.push_back(rack.str()); };
+    json::Value made = f.exec("rack.add", R"({"name":"Lead"})");
+    const std::string lead = made["rack"].asString(), leadTrack = made["track"].asString();
+    const auto keys = f.addTrack("channel", "Keys");
+    const auto fx = f.addFx(keys, "Hickory");
+    // No command adds a Mod Out yet (ADR-0096 M1): the file gets them, as a
+    // project from a later build would. Keys homes "Mods" (a Mod Out) and
+    // "Idle" (none); the Lead rack, which feeds its
+    // channel, gains a Mod Out too. (Only a channel homes a rack.)
+    const std::string path = (f.dir / "mods.json").generic_string();
+    f.exec("project.save", R"({"path":")" + path + R"("})");
+    const auto bytes = readFile(path).value();
+    json::Value v = json::parse(std::string(bytes.begin(), bytes.end())).value();
+    auto put = [&](const char* section, const char* id, const std::string& body) {
+        v[section][id] = json::parse(body).value();
+    };
+    auto module = [](const std::string& rack, const char* type) {
+        return R"({"rack":")" + rack + R"(","type":")" + type +
+               R"(","version":"1.0.0","x":40,"y":40})";
+    };
+    const std::string modOut = std::string(model::kModOutModule);
+    put("racks", "rk_40", R"({"track":")" + keys + R"(","name":"Mods"})");
+    put("racks", "rk_42", R"({"track":")" + keys + R"(","name":"Idle"})");
+    put("modules", "mo_40", module("rk_40", modOut.c_str()));
+    put("modules", "mo_42", module(lead, modOut.c_str()));
+    put("modules", "mo_43", module("rk_42", "com.suppleaudio.rack.lfo"));
+    v["project"]["next_ids"]["rk"] = 50.0;
+    v["project"]["next_ids"]["mo"] = 50.0;
+    REQUIRE(writeFileAtomic(path, json::writeCanonical(v)));
+    f.exec("project.open", R"({"path":")" + path + R"("})");
+    f.refresh();
+    // Keys: one mod slot, Mods, above its plug-ins; Idle holds no Mod Out.
+    const auto& st = f.strip(keys);
+    REQUIRE(st.racks.size() == 1);
+    ui::Button* slot = st.racks.front();
+    CHECK(slot->id() == "mixer.mod." + keys + ".rk_40");
+    CHECK(slot->valueText() == "Mods");
+    const ui::Rect r = slot->bounds(), plug = f.node("mixer.fx." + fx)->bounds();
+    CHECK(near(r.h, plug.h));
+    CHECK(r.bottom() <= plug.y);
+    // A rack that feeds its channel and holds a Mod Out shows once, where it
+    // feeds, as a mod slot.
+    REQUIRE(f.strip(leadTrack).racks.size() == 1);
+    CHECK(f.strip(leadTrack).racks.front()->id() == "mixer.mod." + leadTrack + "." + lead);
+    f.snapshot("mixer-mod-slot.png");
+    // A click opens the rack window on it.
+    f.pointer(ui::PointerEvent::Type::Down, f.centre(slot), 1);
+    f.pointer(ui::PointerEvent::Type::Up, f.centre(slot), 1);
+    CHECK(opened == std::vector<std::string>{"rk_40"});
+    // Without its Mod Out the rack is no modulator: the slot goes.
+    f.exec("module.remove", R"({"module":"mo_40"})");
+    f.refresh();
+    CHECK(f.strip(keys).racks.empty());
+    REQUIRE(f.strip(leadTrack).racks.size() == 1);
 }
 
 TEST_CASE("pan controls: selected width drags keep offsets and skip masters") {

@@ -306,6 +306,13 @@ what it is called, and the keys that do the same when it has any: "Mute",
 "Transport: play/stop (Space)". This works for a track's buttons, fader and
 pan in the track list and the mixer, the transport bar and the toolbar.
 
+Right-click a track's fader, pan or button, in the track list or the mixer,
+for its menu. It is the same in both places: **MIDI learn** binds the control
+to a controller (see MIDI controllers), **Show lane** opens its automation
+lane under the track (a new lane starts at the control's value; **Hide
+lane** puts it away), and on a fader or pan **Reset** sends it home, as a
+double-click does: 0 dB, or the centre.
+
 In the track list the first four are at the right of the track's name, at
 any row height. Under them is a line with **Ø**, **mono**, the fader and
 the pan, and then a line with the input, **fx**, **+**, **env** and **out**.
@@ -508,7 +515,9 @@ panel's top edge to set its height; a double-click there puts it back.
 
 The panel's main part is the **piano roll**: time runs left to right, the
 keys are at the left, and each note is a bar drawn in its item's colour,
-fuller the higher its velocity.
+fuller the higher its velocity. The strip along its top numbers the song's
+bars, as the arrangement's ruler does, so you can see where in the song the
+part plays.
 
 ### Notes
 
@@ -650,8 +659,8 @@ the speakers, tracks that move together, and channels frozen to audio.
 
 ### Panning
 
-Right-click a channel's or buss's pan, in the track list or the mixer, to
-choose how it pans:
+Right-click a channel's or buss's pan, in the track list or the mixer. Under
+its MIDI learn, lane and reset entries, the menu chooses how it pans:
 
 - **Pan mode: pan** (the default) balances a stereo track and pans a mono
   one.
@@ -1198,7 +1207,10 @@ what they drive ("Filter cutoff"), with **Open** to go to the rack. Turn
 them there, right-click one to automate it or to learn a MIDI controller,
 and watch them move with their automation as the song plays.
 In the mixer, that channel shows the rack as a line above its plugins,
-marked **rack**: click it to open the rack. In the FX chain window the
+marked **rack**: click it to open the rack. A rack that holds a Mod Out
+module is a modulator for the track it lives on. That track's strip shows
+it as a line marked **mod** in violet, the colour of modulation, which
+opens the rack the same way. In the FX chain window the
 rack shows those knobs; double-click it anywhere (or click **Open**) to
 open the rack.
 **Tidy up** in the space's right-click menu lays the rack out by signal
@@ -1221,7 +1233,7 @@ change what they show (each drag or scroll is one undo step), and move the
 module by its title instead.
 
 Drag a knob up or down to turn it (Shift for fine), double-click to reset
-it, and right-click it for **Automate**, which adds an automation lane for
+it, and right-click it for **Show lane**, which adds an automation lane for
 it under the rack's channel, or **MIDI learn…**: move a control on your
 MIDI controller and click OK, and that control turns the knob (a small
 dot marks it), which moves on screen as you turn it; right-click it again
@@ -1346,8 +1358,8 @@ them to MIDI controllers (`exec {"command": "module.learn.set"}`).
 ## MIDI controllers
 
 Right-click a track's fader, pan, mute, solo, polarity, mono, arm or
-monitoring button, in the track list or the mixer, and choose **MIDI learn**.
-The pan menu offers **Pan** in pan mode, **Pan left** and **Pan right** in
+monitoring button, in the track list or the mixer, and choose **MIDI learn**,
+the first entry of its menu. The pan menu offers **Pan** in pan mode, **Pan left** and **Pan right** in
 dual mode, **Pan** and **Width** in width mode, and **Gain compensation** in
 every mode on channels and busses. The positions follow knobs with soft
 takeover; compensation learns as a toggle.

@@ -81,6 +81,7 @@ struct RollState {
     ui::Rect marquee{};
     // Project grid for bars/beats (from the time map).
     std::vector<double> barLines;  // project beats of bar starts in view
+    int firstBar = 1;              // the project bar barLines starts with
     double playheadBeat = -1;      // project beats; < 0: hidden
     void cancelGesture() {
         drag = Drag::None;
@@ -131,6 +132,9 @@ class MidiEditor {
     // Tests and the actions.
     RollState& state() { return state_; }
     ui::Node* roll() const { return roll_; }
+    // The bars the strip above the roll numbered in its last paint, left to
+    // right (tests).
+    const std::vector<int>& barLabels() const { return barLabels_; }
     // Edge scroll in the piano roll (gui.md §4.7): true while a drag is held
     // at an edge of the roll; autoScroll advances it by `seconds` and is
     // true when the view moved (sync calls it with the frame's time).
@@ -191,6 +195,8 @@ class MidiEditor {
     ui::Node* roll_ = nullptr;
     ui::EdgeScrollClock edgeClock_;  // the time sync steps the edge scroll by
     ui::Node* keys_ = nullptr;
+    ui::Node* bars_ = nullptr;
+    std::vector<int> barLabels_;
     ui::Node* velocity_ = nullptr;
     ui::Node* ccLane_ = nullptr;
     ui::Button* ccButton_ = nullptr;

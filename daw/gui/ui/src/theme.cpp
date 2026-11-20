@@ -46,10 +46,13 @@ Theme Theme::dark(Palette palette) {
                         {"channel", 0x7fa3cfu},
                         {"buss", 0xc9a14au},
                         {"master", 0xc0634fu},
-                        {"clip", 0xe0503cu},
+                        {"meter-clip", 0xe0503cu},
                         {"armed", 0xd6453au},
                         {"agent", 0x9b84d6u},
                         {"meter", 0x8fb27au},
+                        // What is playing now: a launched clip, a scene. The
+                        // meter's green, so "sounding" reads the same everywhere.
+                        {"playing", 0x8fb27au},
                         {"meter-hot", 0xd8b04au},
                         {"mute", 0xd9773fu},
                         {"solo", 0xe0c341u},
@@ -167,6 +170,11 @@ Result<Theme> Theme::fromJson(const json::Value& document, const Theme& baseThem
             if (!colour) return Error("theme.color", "a colour is \"#rrggbb\"", path);
             t.colors_[m.key] = *colour;
         }
+        // `clip`, the meter's overload red, is `meter-clip` since "clip" became
+        // the launcher's word; a file written before keeps its colour.
+        if (const auto* old = colors->find("clip"); old && !colors->find("meter-clip"))
+            t.colors_["meter-clip"] = t.colors_["clip"];
+        t.colors_.erase("clip");
     }
     for (auto [section, target] :
          {std::pair{"type", &t.type_}, {"space", &t.space_}, {"radius", &t.radius_}}) {

@@ -152,14 +152,15 @@ std::unique_ptr<ui::Node> PluginBrowser::buildPage() {
             c.text({r.x + 8, r.y, std::max(0.0f, r.w - 28 - vendor), r.h}, text.name, ui::Font::Ui,
                    t.type("small"), shadowed ? t.color("ink-quiet") : t.color("ink"));
             c.text({r.x, r.y, r.w - 10, r.h}, whose, ui::Font::Ui, t.type("caption"),
-                   shadowed ? t.color("clip") : t.color("ink-faint"), ui::kRight | ui::kMiddle);
+                   shadowed ? t.color("meter-clip") : t.color("ink-faint"),
+                   ui::kRight | ui::kMiddle);
             return;
         }
         const float w = c.textWidth(text.name, ui::Font::Ui, t.type("small"));
         c.text({r.x + 10, r.y, r.w - 20, r.h}, text.name, ui::Font::Ui, t.type("small"),
                shadowed ? t.color("ink-quiet") : t.color("ink"));
         c.text({r.x + 20 + w, r.y, std::max(0.0f, r.w - 32 - w), r.h}, text.vendor, ui::Font::Mono,
-               t.type("caption"), shadowed ? t.color("clip") : t.color("ink-faint"));
+               t.type("caption"), shadowed ? t.color("meter-clip") : t.color("ink-faint"));
         c.text({r.x, r.y, r.w - 12, r.h}, text.id, ui::Font::Mono, t.type("caption"),
                t.color("ink-quiet"), ui::kRight | ui::kMiddle);
     };

@@ -21,8 +21,9 @@ constexpr std::string_view kSection = "branches";
 // blobs by hash), of these one level further down; anything else is one value.
 int objectDepth(std::string_view section) {
     static const std::set<std::string_view> keyed{
-        "tracks", "items", "takes", "fx",      "routes", "envelopes",  "automation_items",
-        "groups", "racks", "blobs", "modules", "cables", "modulations"};
+        "tracks",           "items",  "takes", "fx",    "routes",  "envelopes",
+        "automation_items", "groups", "racks", "blobs", "modules", "cables",
+        "modulations",      "scenes", "clips"};
     static const std::set<std::string_view> nested{"tempo", "rulers", "sources"};
     if (keyed.contains(section)) return 1;
     if (nested.contains(section)) return 2;
@@ -242,8 +243,9 @@ Result<Counters> countersAt(const json::Value* v, const std::string& path) {
                          "the branches section is damaged; main still opens without it");
         c[*kind] = static_cast<std::uint32_t>(*n);
     }
-    // A missing mr counter (a file from before 2.16, or one that went
-    // through an older build) stays 0: VersionStore::restore derives it.
+    // A missing mr, sc or cl counter (a file from before 2.16 or 2.18, or one
+    // that went through an older build) stays 0: VersionStore::restore
+    // derives it.
     return c;
 }
 
@@ -290,6 +292,8 @@ void shareRevisions(Session& s, const Session* p) {
     each(&Session::modules);
     each(&Session::cables);
     each(&Session::modulations);
+    each(&Session::scenes);
+    each(&Session::clips);
     if (!p) return;
     if (toJson(*s.project) == toJson(*p->project)) s.project = p->project;
     if (s.tempo.sameStorage(p->tempo) && s.meters.sameStorage(p->meters)) s.timeMap = p->timeMap;

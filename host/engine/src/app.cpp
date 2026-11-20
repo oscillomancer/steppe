@@ -5288,6 +5288,13 @@ struct Gain : Effect {
         run("take.activate", R"({"item":"it_1","take":"tk_3"})");
         return;
     }
+    if (fixture == "song_with_clip") {  // + sc_1 Verse, sc_2 Chorus; cl_1 on tr_1 in sc_1
+        run("scene.add", R"({"name": "Verse"})");
+        run("scene.add", R"({"name": "Chorus"})");
+        run("clip.add",
+            R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C2:q E2:q G2:q C3:q", "name": "Bass line"})");
+        return;
+    }
     if (fixture == "song_with_region") {
         run("region.add", R"({"start":0,"end":4,"name":"Verse"})");
         return;

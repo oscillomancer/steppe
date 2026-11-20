@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 // Automation commands: env.* and autoitem.* (session-model §7).
+#include "clip_launcher.h"
 #include "command_helpers.h"
 
 namespace supple::engine {
@@ -92,15 +93,41 @@ schema::Schema<EnvPointArg> envPointSchema() {
         .build();
 }
 
-// `itemRelative`: a take's envelope, positions in beats from its item's start.
+// `itemRelative`: a take's envelope, positions from its owner's start: beats
+// from an item's start, or in a clip's unit from the clip's start (`clip`:
+// beats for MIDI, seconds for audio; ADR-0097).
 Result<std::vector<model::EnvPoint>> envPoints(const model::Session& s, const EnvDomain& d,
                                                const std::vector<EnvPointArg>& in,
                                                const std::string& path, bool itemRelative = false,
-                                               model::Timebase timebase = model::Timebase::Beats) {
+                                               model::Timebase timebase = model::Timebase::Beats,
+                                               std::optional<model::ClipKind> clip = std::nullopt) {
     std::vector<model::EnvPoint> out;
     for (std::size_t i = 0; i < in.size(); ++i) {
         const EnvPointArg& a = in[i];
         const std::string at = path + "/" + std::to_string(i);
+        if (itemRelative && clip) {
+            const bool audio = *clip == model::ClipKind::Audio;
+            if (audio ? !a.seconds || a.beat || a.bar : !a.beat || a.seconds || a.bar)
+                return Error("clip.unsupported",
+                             audio ? "an audio clip's take envelope takes seconds from its start"
+                                   : "a MIDI clip's take envelope takes beats from its start",
+                             at,
+                             audio ? "e.g. {\"seconds\": 0.5, \"value\": -6}; a clip has no bars"
+                                   : "e.g. {\"beat\": 2, \"value\": -6}; a clip has no bars");
+            const double pos = audio ? *a.seconds : *a.beat;
+            if (!std::isfinite(pos) || pos < 0 || pos > 1e9)
+                return Error("env.position", "a point's position must be finite and not negative",
+                             at, "give a position within the clip");
+            model::EnvPoint pt;
+            pt.pos = pos;
+            auto v = envValue(d, a.value, at + "/value");
+            if (!v) return std::move(v).error();
+            pt.value = *v;
+            pt.shape = a.shape.value_or(model::PointShape::Linear);
+            pt.tension = a.tension.value_or(0.0);
+            out.push_back(pt);
+            continue;
+        }
         if (itemRelative && !a.beat)
             return Error("env.position", "a take's envelope takes beats from the item's start", at,
                          "e.g. {\"beat\": 0, \"value\": -6} at the item's start");
@@ -154,7 +181,8 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
             "plugins); shapes linear, square, slow, fast_start, fast_end, bezier. Plugin values "
             "move along the parameter's curve (a log cutoff sweeps evenly in pitch). take (param "
             "volume|pan|mute): a take envelope, its points in beats from the item's start (it "
-            "moves with the item); it shapes the take after its take FX (a MIDI take needs an "
+            "moves with the item), or on a clip's take from the clip's start in beats (MIDI) or "
+            "seconds (audio); it shapes the take after its take FX (a MIDI take needs an "
             "instrument in its take FX). Master playrate points are finite numeric ratios "
             "0.25..4.0; an active nonempty master curve replaces the saved scalar during "
             "playback and rendering. Audio sources convert before take FX/live mixing; MIDI "
@@ -250,7 +278,9 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
             auto domain = envDomain(app, s, env.target, "/param");
             if (!domain) return std::move(domain).error();
             if (a.points) {
-                auto pts = envPoints(s, *domain, *a.points, "/points", a.take.has_value());
+                auto pts = envPoints(
+                    s, *domain, *a.points, "/points", a.take.has_value(), model::Timebase::Beats,
+                    a.take ? clipKindOfTake(s, *model::Id::parse(*a.take)) : std::nullopt);
                 if (!pts) return std::move(pts).error();
                 env.points = std::move(*pts);
             }
@@ -329,7 +359,10 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
             auto domain = envDomain(app, s, env.target, "/env");
             if (!domain) return std::move(domain).error();
             auto pts = envPoints(s, *domain, a.points, "/points",
-                                 env.target.object.kind == model::Kind::Take, env.timebase);
+                                 env.target.object.kind == model::Kind::Take, env.timebase,
+                                 env.target.object.kind == model::Kind::Take
+                                     ? clipKindOfTake(s, env.target.object)
+                                     : std::nullopt);
             if (!pts) return std::move(pts).error();
             std::vector<model::EnvPoint> next;
             if (a.fromBeat || a.toBeat) {

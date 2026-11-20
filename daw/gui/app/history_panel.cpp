@@ -151,7 +151,7 @@ std::unique_ptr<ui::Node> HistoryPanel::build() {
         c.text({r.x + 6, r.y, 58, r.h}, clock(e.timeMs), ui::Font::Mono, t.type("caption"),
                t.color("ink-faint"));
         c.text({r.x + 66, r.y, r.w * 0.45f, r.h}, (e.ok ? "" : "! ") + e.command, ui::Font::Ui,
-               t.type("small"), t.color(e.ok ? "ink" : "clip"));
+               t.type("small"), t.color(e.ok ? "ink" : "meter-clip"));
         c.text({r.x + 66 + r.w * 0.45f, r.y, r.w - 72 - r.w * 0.45f, r.h}, e.origin, ui::Font::Mono,
                t.type("caption"), t.color(agent ? "agent" : "ink-faint"), ui::kRight | ui::kMiddle);
     };

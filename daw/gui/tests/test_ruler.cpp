@@ -315,6 +315,44 @@ TEST_CASE("ruler: region key, body move, both edges, rename and removal") {
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("ruler: its height is the rows' sum, read by the header, the lanes and the hit tests") {
+    RulerFixture f;
+    const views::RulerRows standard;
+    CHECK(standard.height() == doctest::Approx(88));
+    CHECK(f.view->ruler().bounds().h == doctest::Approx(static_cast<double>(standard.height())));
+    CHECK(f.view->lanesRect().y ==
+          doctest::Approx(static_cast<double>(f.view->ruler().bounds().bottom())));
+    // A taller region row: the ruler grows by 15, the lanes move down with it,
+    // and presses find the rows where they now are.
+    views::RulerRows taller;
+    taller.region = 30;
+    f.view->setRulerRows(taller);
+    f.sync();
+    CHECK(f.view->ruler().bounds().h == doctest::Approx(103));
+    CHECK(f.view->lanesRect().y ==
+          doctest::Approx(static_cast<double>(f.view->ruler().bounds().bottom())));
+    f.loop(4, 8, false);
+    f.root->key(SDLK_R, ui::kShift);
+    f.sync();
+    REQUIRE(f.app->head().regions.size() == 1);
+    const auto region = f.app->head().regions.begin()->id;
+    f.drag(f.at(6, 80), f.at(8.12, 80));  // 80 was the marker row; it is the region's now
+    CHECK(f.app->head().regions.find(region)->start == 6);
+    f.view->setPlayhead(2);
+    f.root->key(SDLK_M);
+    f.sync();
+    REQUIRE(f.app->head().markers.size() == 1);
+    const auto marker = f.app->head().markers.begin()->id;
+    f.drag(f.at(4, 95), f.at(6.12, 95));
+    CHECK(f.app->head().markers.find(marker)->pos == doctest::Approx(6));
+    CHECK(f.app->head().regions.find(region)->start == 6);  // the marker drag left it
+    // Back to the standard rows: the standard height again.
+    f.view->setRulerRows(standard);
+    f.sync();
+    CHECK(f.view->ruler().bounds().h == doctest::Approx(88));
+    CHECK(f.errors.empty());
+}
+
 TEST_CASE("ruler: tempo insertion and BPM field preserve other points and ramps") {
     RulerFixture f;
     auto args =

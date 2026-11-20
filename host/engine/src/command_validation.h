@@ -9,6 +9,7 @@
 #include "supple/model/freeze.h"
 #include "supple/model/groups.h"
 #include "supple/model/numeric.h"
+#include "supple/model/take_owner.h"
 
 namespace supple::engine {
 // Omission leaves a field unchanged; explicit null clears it. Preserve null
@@ -49,9 +50,9 @@ inline Status checkUnlocked(const model::Session& s, model::Id item, std::string
     return {};
 }
 inline Status checkUnlockedTake(const model::Session& s, model::Id take, std::string path) {
-    for (const auto& e : s.items)
-        if (std::find(e.value->takes.begin(), e.value->takes.end(), take) != e.value->takes.end())
-            return checkUnlocked(s, e.id, std::move(path));
+    // A clip has no lock (ADR-0097); an item's take follows its item.
+    if (const auto owner = model::takeOwner(s, take); owner && owner->kind == model::Kind::Item)
+        return checkUnlocked(s, *owner, std::move(path));
     return {};
 }
 
@@ -94,8 +95,12 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
             auto& app = ctx.service<EngineApp>();
             const auto before = app.view();
             const auto fields = encoded.encode(a);
+            // Scenes and clips are outside a frozen track's print (ADR-0097):
+            // they stay editable, and copying a frozen item into a clip
+            // leaves it as it is (validateFrozenTransition still checks).
             if (name != "track.unfreeze" && name != "track.freeze.commit" &&
-                name != "track.remove" && name != "track.duplicate") {
+                name != "track.remove" && name != "track.duplicate" && !name.starts_with("clip.") &&
+                !name.starts_with("scene.")) {
                 for (const auto& field : fields.asObject()) {
                     if (!field.value.isString()) continue;
                     if (field.key != "fx" && field.key != "item" && field.key != "take" &&

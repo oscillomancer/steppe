@@ -229,6 +229,37 @@ TEST_CASE("MIDI editor: notes take their item's colour; the title names the item
     CHECK(title().find(f.item) == std::string::npos);
 }
 
+TEST_CASE("MIDI editor: the strip over the roll numbers the project's bars, sparser zoomed out") {
+    Fixture f;
+    if (!f.ok) return;
+    f.exec("timesig.set", R"({"bar":3,"meter":"3/4"})");
+    REQUIRE(f.editor->open(f.item));  // the item starts at beat 4: bar 2
+    f.frame();
+    REQUIRE(f.root->find("midi.bars"));
+    const ui::Rect strip = f.root->find("midi.bars")->bounds();
+    const ui::Rect roll = f.editor->roll()->bounds();
+    CHECK(strip.bottom() <= roll.y);  // above the roll, as wide as the keys and the roll
+    CHECK(strip.h == doctest::Approx(16));
+    // At 80 units a beat from the item's start: its own bar and the next two
+    // (one of 3/4), by their project numbers.
+    f.editor->state().pixelsPerBeat = 80;
+    f.editor->state().scrollBeat = -0.25;
+    f.root->damageAll();
+    f.frame();
+    CHECK(f.editor->barLabels() == std::vector<int>{2, 3, 4});
+    // Zoomed all the way out from the song's start: 3/4 bars of 24 units
+    // leave no room for every number, so every 2nd from bar 1 has one.
+    f.editor->state().pixelsPerBeat = 8;
+    f.editor->state().scrollBeat = -4;
+    f.root->damageAll();
+    f.frame();
+    const std::vector<int>& bars = f.editor->barLabels();
+    REQUIRE(bars.size() >= 4);
+    CHECK(bars.front() == 1);
+    for (std::size_t i = 1; i < bars.size(); ++i) CHECK(bars[i] == bars[i - 1] + 2);
+    f.snapshot("midi-bar-strip.png");
+}
+
 TEST_CASE("MIDI editor: Alt+E shows and hides it on the item it had last") {
     Fixture f;
     if (!f.ok) return;

@@ -51,8 +51,8 @@ bool mixOnly(const model::Session& a, const model::Session& b,
        // error here until mixOnly says how it is compared.
         [[maybe_unused]] const auto& [project, next, tempo, meters, timeMap, tracks, groups, items,
                                       takes, media, midi, fx, routes, envelopes, autoItems, markers,
-                                      regions, racks, modules, cables, modulations, blobs,
-                                      extraSections, version] = a;
+                                      regions, racks, modules, cables, modulations, scenes, clips,
+                                      blobs, extraSections, version] = a;
     }
     if (!(a.project == b.project || *a.project == *b.project)) return false;
     if (!a.tempo.sameStorage(b.tempo) || !a.meters.sameStorage(b.meters) ||
@@ -60,7 +60,8 @@ bool mixOnly(const model::Session& a, const model::Session& b,
         !a.media.sameStorage(b.media) || !a.midi.sameStorage(b.midi) ||
         !a.autoItems.sameStorage(b.autoItems) || !a.markers.sameStorage(b.markers) ||
         !a.regions.sameStorage(b.regions) || !a.racks.sameStorage(b.racks) ||
-        !a.cables.sameStorage(b.cables) || a.blobs != b.blobs || a.extraSections != b.extraSections)
+        !a.cables.sameStorage(b.cables) || !a.scenes.sameStorage(b.scenes) ||
+        !a.clips.sameStorage(b.clips) || a.blobs != b.blobs || a.extraSections != b.extraSections)
         return false;
     // A modulation route's depth and enabled are mix values (ADR-0096, M-h);
     // its source, target and lane compile.
@@ -188,8 +189,8 @@ bool patchOnly(const model::Session& a, const model::Session& b, std::vector<mod
        // error here until patchOnly says how it is compared.
         [[maybe_unused]] const auto& [project, next, tempo, meters, timeMap, tracks, groups, items,
                                       takes, media, midi, fx, routes, envelopes, autoItems, markers,
-                                      regions, racks, modules, cables, modulations, blobs,
-                                      extraSections, version] = a;
+                                      regions, racks, modules, cables, modulations, scenes, clips,
+                                      blobs, extraSections, version] = a;
     }
     if (!(a.project == b.project || *a.project == *b.project)) return false;
     if (!a.tempo.sameStorage(b.tempo) || !a.meters.sameStorage(b.meters) ||
@@ -200,8 +201,8 @@ bool patchOnly(const model::Session& a, const model::Session& b, std::vector<mod
         !a.autoItems.sameStorage(b.autoItems) || !a.markers.sameStorage(b.markers) ||
         !a.regions.sameStorage(b.regions) || !a.racks.sameStorage(b.racks) ||
         !a.modules.sameStorage(b.modules) || !a.cables.sameStorage(b.cables) ||
-        !a.modulations.sameStorage(b.modulations) || a.blobs != b.blobs ||
-        a.extraSections != b.extraSections)
+        !a.modulations.sameStorage(b.modulations) || !a.scenes.sameStorage(b.scenes) ||
+        !a.clips.sameStorage(b.clips) || a.blobs != b.blobs || a.extraSections != b.extraSections)
         return false;
     if (a.fx.sameStorage(b.fx) || a.fx.size() != b.fx.size()) return false;
     for (auto x = a.fx.begin(), y = b.fx.begin(); x != a.fx.end(); ++x, ++y) {

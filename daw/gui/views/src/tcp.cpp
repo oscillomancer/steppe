@@ -665,7 +665,7 @@ bool TcpPanel::Row::onPointer(const ui::PointerEvent& e) {
         if (ui::Root* r = root()) r->capture(this);
         return true;
     }
-    // A right-click on a fader, pan or button: MIDI learn for it.
+    // A right-click on a fader, pan or button: its parameter menu.
     if (e.button == 3 && panel_.cb_.learn)
         if (const char* param = learnableAt(e.pos)) {
             panel_.cb_.learn(*track_, param, {e.pos.x, e.pos.y, 1, 1});
@@ -935,7 +935,7 @@ void TcpPanel::updateReorder(ui::Point p) {
         }
         std::size_t last = *row;
         while (last + 1 < rows.size() &&
-               (rows[last + 1].env || rows[last + 1].depth > rows[*row].depth))
+               (rows[last + 1].lane() || rows[last + 1].depth > rows[*row].depth))
             ++last;
         end = rowRect(last).bottom();
     }
@@ -1126,7 +1126,13 @@ void TcpPanel::bindRows() {
         const ui::Rect r = rowRect(i);
         if (r.bottom() <= bounds().y) continue;
         if (r.y >= bounds().bottom() - kFootHeight) break;  // under the foot
-        (layout_.rows()[i].env ? shownLanes : shownRows).push_back(i);
+        // A lane's header shows its envelope; a lane without one (a
+        // modulated parameter) has none yet.
+        const TrackRow& spec = layout_.rows()[i];
+        if (!spec.lane())
+            shownRows.push_back(i);
+        else if (spec.env)
+            shownLanes.push_back(i);
     }
     while (envRows_.size() < shownLanes.size())
         envRows_.push_back(&rowsHost_->emplace<EnvRow>(*this, envRows_.size()));
@@ -1172,7 +1178,7 @@ void TcpPanel::arrange(const ui::Canvas& canvas, const ui::Rect& r) {
         if (!row->visible || !row->bound()) continue;
         const auto it = std::find_if(
             layout_.rows().begin(), layout_.rows().end(),
-            [&](const TrackRow& spec) { return spec.track == row->track() && !spec.env; });
+            [&](const TrackRow& spec) { return spec.track == row->track() && !spec.lane(); });
         if (it == layout_.rows().end()) continue;
         row->arrange(canvas, rowRect(static_cast<std::size_t>(it - layout_.rows().begin())));
     }

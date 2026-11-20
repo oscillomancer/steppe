@@ -270,6 +270,18 @@ struct PreparedSources {
 };
 Result<std::string> sourcePreparationKey(const model::Session& session,
                                          const std::filesystem::path& directory, double rate);
+// The in-memory budget for prepared source audio, in samples (all channels).
+inline constexpr double kPreparedSampleBudget = static_cast<double>(std::int64_t{1} << 28);
+// What preparation holds resident, in samples: each source decoded once and
+// each variant of it once. `arrangement` counts the items' active takes and
+// their warp peers; `clips` what the clips' active takes add after them
+// (ADR-0097 "Memory": the arrangement first). Clips are not prepared yet;
+// clip.memory checks their share.
+struct ResidentSamples {
+    double arrangement = 0, clips = 0;
+};
+ResidentSamples residentSamples(const model::Session& session,
+                                const std::filesystem::path& directory, double rate);
 class MediaCache {
   public:
     // Decoded audio at `rate` (resampled once, then kept; 0: the file's own

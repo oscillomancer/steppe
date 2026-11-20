@@ -63,7 +63,7 @@ target_include_directories(gui-actions PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/action
 
 # Views (gui.md §4): the arrange view (ruler, lanes, TCP column) now; mixer,
 # editors follow.
-supple_add_library(gui-views SOURCES views/src/lanes.cpp views/src/track_layout.cpp
+supple_add_library(gui-views SOURCES views/src/lanes.cpp views/src/item_body.cpp views/src/track_layout.cpp
                                         views/src/arrange.cpp views/src/item_gestures.cpp views/src/tcp.cpp views/src/envelope_lane.cpp views/src/envelope_edit.cpp views/src/mouse_map.cpp
   DEPS supple::gui-ui supple::gui-peaks supple::model supple::timeline supple::core-params SDL3::SDL3)
 target_include_directories(gui-views PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/views/include)
@@ -81,7 +81,7 @@ target_include_directories(gui-persistence PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ap
 
 # The app's pieces (shell, generator, actions UI, chrome), shared with tests.
 add_library(gui-app STATIC app/shell.cpp app/crash_banner.cpp app/crash_report_text.cpp app/crash_viewer.cpp app/safe_load.cpp app/generate.cpp app/app_actions.cpp app/actions_list.cpp app/chrome.cpp
-  app/plugin_windows.cpp app/floating_panel.cpp app/screensets.cpp app/file_actions.cpp app/midi_editor.cpp app/routing_matrix.cpp app/hardware_audio_matrix.cpp app/strip_learn.cpp app/pan_menu.cpp app/mixer.cpp
+  app/plugin_windows.cpp app/floating_panel.cpp app/screensets.cpp app/file_actions.cpp app/midi_editor.cpp app/routing_matrix.cpp app/hardware_audio_matrix.cpp app/strip_learn.cpp app/pan_menu.cpp app/param_menu.cpp app/mixer.cpp
   app/fx_params.cpp app/plugin_browser.cpp app/fx_window.cpp app/fx_attention.cpp app/render_dialog.cpp app/history_panel.cpp app/side_panel.cpp app/inspector.cpp app/plugin_drag.cpp app/side_browser.cpp app/transport_bar.cpp app/plugin_scales.cpp
   app/midi_event_list.cpp app/appearance.cpp app/track_menu.cpp app/mouse_dialog.cpp app/selection_edit.cpp app/preferences.cpp app/audio_device.cpp app/timecode_dialog.cpp app/sync_dialog.cpp
   app/control_map.cpp app/learn_dialog.cpp app/help_actions.cpp app/help_support.cpp

@@ -1250,7 +1250,7 @@ void RenderDialog::buildAfter(ui::Node& body) {
 
 void RenderDialog::buildFooter(ui::Node& page) {
     diagnostic_ =
-        &page.emplace<ui::Label>("render.diagnostic", "", ui::Font::Ui, "caption", "clip");
+        &page.emplace<ui::Label>("render.diagnostic", "", ui::Font::Ui, "caption", "meter-clip");
     // The file lists scroll inside fixed heights: stems and regions can list
     // many files, which must not spill over the buttons below.
     auto& previewScroll = page.emplace<ui::ScrollView>("render.preview.scroll");

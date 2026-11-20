@@ -252,6 +252,29 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   frame, then services the model. `Root::pointer` (tests, scripts) delivers
   every motion at once, as does a capture that does not coalesce (item and
   envelope drags, drawing tools).
+  A fader, slider, knob or pan bar can show modulation (ADR-0096,
+  `ui::ModulationView`): the offsets its routes can add (the span) and add now
+  (the live value), in the control's unit: dB on a fader, the 0..1 travel on a
+  slider or knob, percent on a pan bar. `ui::modulationSpan` sums the routes,
+  each over its signal's range: depth × −1..1, or depth × 0..1 for a unipolar,
+  gate or phase source, so a span need not be centred on the value. It is drawn
+  in `signal-cv` as the rack knob's ring is (§4.12): the span faint, the live
+  value bright from the value to a dot. Faders, sliders and pan bars draw it as
+  a 3-unit bar beside the track (right of a vertical fader, under the others),
+  over the cap so the live value shows under the hand. Knobs draw it as an arc
+  on the travel. A drag that starts on a modulated control's bar changes the
+  depth of the route the view names and reports Begin/Move/End through
+  `onDepth`, leaving the value alone. No modifier is needed, as with the rack
+  knob's ring. The bar's grab zone is 8 units across, centred on the 3-unit
+  bar, so it can be grabbed (`depthZone()`). A knob's zone is its ring, from
+  1 to 7 units outside its face, as the rack ring's. A zone may reach a little
+  past the control's bounds (its `hitTest` claims it). On a fader or slider the
+  cap keeps its own presses. On a pan bar the zone takes the lower 2.5 units
+  of the bar's track. The drag spans the same travel as a value drag: 72 dB
+  per fader length, the full 0..1 on a slider or 150 units on a knob, and 200%
+  per pan bar. Shift is fine, and the depth clamps to ADR-0096's ranges
+  (±48 dB, ±1, ±200%). Alt keeps its meaning on a modulated fader or pan:
+  "this member alone" (§ Track groups). No view sets modulation yet.
 - **Damage.** Each window keeps a dirty-rect list; nodes invalidate
   themselves; a frame redraws only damaged regions (scissored). Removed nodes
   survive the current input dispatch; focus, hover and capture are resolved
@@ -571,19 +594,32 @@ template and saves one (loading an older `menus.json` drops the track edits
 it used to list: Color…, Channels…, add plugin, Duplicate and Delete
 selected). A right-click on a row's fader,
 pan, mute, lane mute, solo, polarity, mono, arm or monitoring button opens
-that control's menu instead, "MIDI learn: Volume…" (naming the bound control,
-"(CC 7 · ch 1)"): the learn dialog of §4.5 for that track alone, binding
-through `track.learn.set` (ADR-0058); the mixer's strips do the same. A
-channel's or buss's pan opens its pan menu instead (ADR-0066, `pan_menu.cpp`):
-"Pan mode: pan / dual pan / pan and width", a rule, "Pan law: project (0 dB)"
-and "Pan law: 0 dB … −6 dB" (the strip's own law), "Gain compensation (boost
-pans)" (ticked by the effective law; on a strip that follows the project it
-gives the strip its own law), a rule, then MIDI learn entries for each shown
-control: Pan in pan mode, Pan left and Pan right in dual mode, Pan and Width
-in width mode, always followed by Gain compensation. Each entry names its
-binding; the three positions allow soft takeover and compensation defaults
-to toggle mode. Each
-choice is one `track.set`. A master's pan opens MIDI learn alone. In `dual` and
+that control's **parameter menu** instead (`param_menu.cpp`), the same menu
+the mixer's strips open:
+- **MIDI learn: Volume…**, naming the bound control ("(CC 7 · ch 1)"): the
+  learn dialog of §4.5 for that track alone, binding through
+  `track.learn.set` (ADR-0058);
+- **Show lane: Volume** or **Hide lane: Volume** for a parameter that can be
+  automated (volume, mute; a pan's bars): `env.set {visible}`, or for a
+  parameter without an envelope `env.add` with one point at the control's
+  value, so the lane starts flat;
+- **Reset to 0 dB** on a fader and **Reset to centre** on a pan (in width
+  mode "Reset to centre, full width", in dual mode "Reset to full left and
+  right"), shown with the double-click that does the same: one `track.set`
+  through the selection, as the double-click (every bar of a pan at once).
+
+Modulate joins the menu after MIDI learn when modulation lands. A
+channel's or buss's pan menu has the pan's rows first, one MIDI learn entry
+per shown control (Pan in pan mode, Pan left and Pan right in dual mode, Pan
+and Width in width mode, always followed by Gain compensation) and a lane per
+shown bar, then its modes and law (ADR-0066): a rule, "Pan mode: pan / dual
+pan / pan and width", a rule, "Pan law: project (0 dB)" and "Pan law: 0 dB …
+−6 dB" (the strip's own law), "Gain compensation (boost pans)" (ticked by the
+effective law; on a strip that follows the project it gives the strip its own
+law). Each learn entry names its binding; the three positions allow soft
+takeover and compensation defaults to toggle mode. Each choice is one
+`track.set`. A master's pan is a balance: MIDI learn, its lane and Reset to
+centre, no modes or law. In `dual` and
 `width` modes the pan control splits into two half-width bars: dual's left and
 right inputs, or the position and the width (drawn in a quieter ink, from the
 centre). A press picks the bar under the pointer; a double-click sends it
@@ -630,6 +666,14 @@ move and resize drags also compare the press-time amplitude, baseline, position,
 length, source length, loop state, envelope and pool. A change cancels the drag
 with `env.changed`; it does not rebase the draft onto the changed item.
 
+**Ruler rows.** Top to bottom: bars and beats (22 units, the loop range),
+time (15, the punch range), tempo and meter (20), regions (15) and markers
+(16), 88 units in all (`views::RulerRows`). The height is a run-time value,
+the rows' sum: the header row beside the track list, the ruler's painting and
+hit tests and the tracks' visible height all read it, so a row added or
+hidden later (the context track's chords) changes it in one place
+(`ArrangeView::setRulerRows`).
+
 **Empty project.** The lanes of a project without a track are bare: no text
 is drawn there. Both ways to begin work from the start: a file dropped on
 the empty lanes makes a track, and "+ track" is in the track panel's foot,
@@ -650,7 +694,13 @@ label and marks with it: they are not redrawn on the body. An
 item under 30 units high (a compact row) has no bar and its label sits on the
 body. Waveforms are ink; MIDI notes are the item's colour drawn 45% of the
 way to the ink (`Lanes::noteColor`), lighter than the body in a dark theme
-and darker in a light one, so a yellow item's notes read on its yellow body. A
+and darker in a light one, so a yellow item's notes read on its yellow body.
+The waveform and the notes are drawn by `views::drawAudioBody` and
+`views::drawMidiBody` (`item_body.h`), which know a take, a rect and a
+content window (where each second or beat of the body's content lands, its
+length, the part in view, whether the take loops) but not the item, so
+anything that shows a take's content in a box draws it the same way; the
+lanes build the window from the timeline. A
 fade is drawn over the body, under the name bar (`Lanes::fadeArea`): its gain
 curve, and a shade over the part of the body above the curve, so the waveform
 dims where the fade takes it away. The fade handles stay at the item's top
@@ -848,7 +898,36 @@ what is selected. After a marquee that took items and points, Delete
 removes both (one undo step) and Ctrl+C, Ctrl+X and Ctrl+V take the items;
 after one that took points only, the keys take the points.
 
-**Automation lanes.** A click on a point selects it (Ctrl+click adds or
+**Automation lanes.** A lane is a row of the track layout keyed by the
+parameter it shows (`views::TrackRow::target`, the envelope's addressing),
+with that parameter's envelope when it has one; code asks whether a row is a
+lane with `TrackRow::lane()`, so a lane without an envelope (a modulated
+parameter) never passes for a track row and never takes an item. A target
+has a lane when its envelope is visible, or when one of its modulation routes
+has `lane` true (ADR-0096; enabled or not) and the target has a scale: a
+strip's volume, pan, width or pan bars, a send's level, a described plug-in
+parameter. Such a lane holds the target's envelope even while that envelope
+is hidden. A target has one lane however many routes and envelopes reach it.
+Under each track, envelope lanes come first, in their order, then
+modulated-only lanes by target. Its row sits under the strip that owns the
+target, as an envelope's lane does (an FX's track, the strip a send leaves).
+Turning the last route's `lane` off removes the lane.
+**The band.** On a modulated target's lane, the enabled routes' span
+(`views::modulationBand`, summed as a control's span, §2) is drawn around
+the base in faint `signal-cv`, under the curve and any automation items. The
+base is the envelope's played value where there is an envelope, and
+otherwise the parameter's own value (`views::targetValue`), drawn as a line in
+the curve's colour under the lane's caption (the envelope lane's title). Depth adds where the engine adds it (ADR-0096, "Depth units"): in dB
+for a volume and percent for a pan or width, and for a plug-in parameter
+in its CLAP value, depth × its CLAP range, mapped back through the
+parameter's curve (`views::modulatedValue`). A stock plug-in's float
+parameter moves along its curve: a log cutoff at 1 kHz with depth 0.1 spans
+501 Hz to 1995 Hz. The band clamps to the lane. The app tells the band which sources are 0..1
+(`TrackLayout::unipolarSource`, from the rack catalog: every cable into the
+Mod Out input from a unipolar, gate or phase output), so their band runs one
+way from the base. A switch or the playrate draws no band. Until telemetry
+reports the live offset (M2), the lane shows no live value. A lane without an
+envelope has no header controls yet and takes no press. A click on a point selects it (Ctrl+click adds or
 removes one) and a click on empty space adds a point there, selected.
 Dragging a selected point moves every selected point, in every lane, by the
 same time and the same share of its lane's height (one `env.points.set` per
@@ -945,9 +1024,17 @@ on the meter clears it, with the held peaks and the clip lights; so does
 reopening the mixer. The strip's plug-in chain lists every plug-in,
 after a channel's rack slots: one line per rack whose Out feeds the channel
 (`racks::racksFeeding`), in route order, with the rack's name on a rack
-module's face and a faint "rack". A click on one opens the rack window on
-the rack (a double-click's second press does nothing more); a right-click
-is the strip's. A bypassed plug-in's name is dimmed and struck through; an
+module's face and a faint "rack". Then come any strip's mod slots
+(ADR-0096): one line per rack homed on the strip's track (`Rack::track`)
+that holds a Mod Out module (`racks::modRacks`, in rack order). A rack is a
+modulator by holding a Mod Out, whatever its name. A mod slot has the same
+face with "mod" in `signal-cv`, always drawn, with the name cut short to make
+room. A rack slot drops its "rack" tag when the name needs the room. A modulator that also feeds the channel shows
+once, where it feeds, as a mod slot, and a rack that loses its last Mod Out
+loses its slot. Only a channel homes a rack (a model invariant), so only
+channels show them. A click on a
+rack or mod slot opens the rack window on the rack (a double-click's second
+press does nothing more); a right-click is the strip's. A bypassed plug-in's name is dimmed and struck through; an
 offline one's is dimmed inside a dashed outline (their `valueText` ends in
 " (bypassed)" or " (offline)"). An empty chain is bare: no text is drawn in
 it.
@@ -964,7 +1051,7 @@ Alt+click on a plug-in removes it
 the plugin browser for that strip. A double-click on the strips' empty space
 (not on a strip) adds a channel; a right-click there offers Channel, Buss or
 Master, as the TCP's "+ track". A right-click on a strip's fader, pan, mute,
-solo, arm, polarity, mono or monitoring button offers its MIDI learn, as in
+solo, arm, polarity, mono or monitoring button opens its parameter menu, as in
 the TCP (§4.2); elsewhere on the strip, the track menu. A send dragged from "out" draws a wire from the
 button and outlines the strip it would feed, as in the TCP. The
 panel's top edge (shared with the MIDI editor: it lights up under the pointer)
@@ -1099,7 +1186,7 @@ Each row's second line starts with a badge saying where the plug-in runs:
 instance was made, with `(default)` (`fx.describe isolation_effective`,
 ADR-0081). `· offline` and `· failed` follow when they apply.
 A failed effect (`engine.status failed_fx`) shows its mode in `ink-quiet` followed by "failed" in the
-`clip` colour (no more red than that) on the second line, and on the first line Restart and, when the
+`meter-clip` colour (no more red than that) on the second line, and on the first line Restart and, when the
 death of its bridge left a crash report (`failed_errors[].incident`, the `incident` of the
 `fx.failed` event; topic 7d), a quiet "Show report" button beside it, so the two answers to a failure
 sit together; it raises the main window and opens the
@@ -1120,8 +1207,8 @@ fx holds another plug-in or version. A Macro with no cabled knob is left out. Wi
 device is only the name and Open: the GUI does not guess at other
 "performance" knobs. A knob's drag runs `module.set` as one undo step (its
 gesture); a double click resets it; its right-click offers a rack knob's
-menu (Default, Automate or Show/Hide automation lane, MIDI learn… and
-Remove MIDI learn, `racks::knobMenu`, shared with the rack window). The
+menu (MIDI learn… and Remove MIDI learn, Show or Hide lane, Reset to its
+default, `racks::knobMenu`, shared with the rack window). The
 knobs follow their Macro's telemetry, so automation moves them as it
 plays: the window reads the shown Macros' telemetry every 33 ms
 (`FxWindow::nextDeadline`) and watches only those modules. Telemetry
@@ -1425,7 +1512,13 @@ in the focus colour with an ink outline. Velocity shows as fullness: a
 note keeps 45% of its colour at velocity 0 and all of it at 127, the rest
 drawn towards the ground. The rows of the white keys are on the panel
 colour and those of the black keys on the darker ground, as on the
-keyboard at the left; the line under each C is stronger. The title names
+keyboard at the left; the line under each C is stronger. A strip 16 units
+high above the roll numbers the project's bars (not the item's) at the roll's
+bar lines, in the ruler's mono caption: every bar, or every 2nd, 4th, 8th…
+counted from bar 1, the first stride whose spacing fits the widest number
+(three digits at least), the stride set by the zoom and the narrowest bar
+around the item (the bars 64 beats either side of it), never by where the
+roll is scrolled; no two numbers touch. The title names
 the track and the item as the arrangement labels it ("MIDI · Rhodes —
 Chords · 4 notes · grid 1/16"), with the item's id only while it has no
 name.
@@ -1854,15 +1947,17 @@ a new channel). It follows rack.md §8.
   a choice drawn as a box steps on a click. Modulated knobs carry a ring
   outside the travel: faint for the range the cables' amounts span, bright
   to the value they make now (telemetry); dragging that ring sets the last
-  cable's amount (`cable.set`). A right-click offers the default value, a
-  choice's options, and Automate: an envelope on the knob holding its value
+  cable's amount (`cable.set`). A right-click opens the knob's menu in the
+  order and wording of the strips' parameter menu (§4.2): MIDI learn…, Show
+  lane, Reset to the default ("Reset to 0.0 dB"), then a choice's options.
+  Show lane makes an envelope on the knob holding its value
   (`env.add {module, param, points}`), shown as a lane under the rack's home
   channel ("Rack » Module · knob", on the knob's own scale); once there, the
   item shows or hides that lane. MIDI learn… opens the learn dialog (§6)
   for the knob: it listens, and OK binds what it heard (`module.learn.set`;
   a toggle's CC defaults to toggle mode, others offer soft takeover). A
   bound knob carries a small accent dot in its gap (a control, at its
-  corner), and its menu names the controller ("MIDI: CC 21 · ch 1…") and
+  corner), and its menu names the controller ("MIDI learn… (CC 21 · ch 1)") and
   offers Remove MIDI learn (`module.learn.remove`). The controller moves
   the knob through `module.set`, so the window's knob follows it along the
   same travel (tested end to end with a dummy device's CCs). A plugin
@@ -2267,6 +2362,110 @@ Inputs, outputs, sends and record settings stay where they are (the track
 row, the mixer strip and the routing matrix).
 
 
+### 4.15 Clip launcher (ADR-0097; step L3)
+
+*Specified before it is built, from gui-lead's mock 13 (19 Nov). "Clip
+launcher" is always said in full: "the launcher" elsewhere is the process
+that starts the app (ADR-0091).*
+
+**Where it is.** The clip launcher is a pane between the track panel and the
+lanes, on the one row model: its rows are `TrackLayout`'s rows, with the
+same heights, scroll and colours.
+- **Shown.** It is shown by View > Clip launcher (`ui.clips`) and saved in
+  the UI sidecar (`clips: {shown, width}`). The sidecar's entry wins. Only
+  when there is none does the project decide: one with scenes opens with it
+  shown, and one without (a new project too) hides it.
+- **Width.** Dragging the rule between the pane and the lanes sets its width.
+  Dragged all the way, the clip launcher fills the view and the lanes hide; a
+  drag back brings them.
+- **The header cell (amendment L-h).** Above the scene headers, the pane
+  takes a cell in the arrange header row, beside the ruler. It holds
+  **stop** (`launch.stop`, every track) and **arrangement**
+  (`launch.arrangement`, every track back to the timeline).
+
+**Columns.**
+- **Scenes.** There is one column per scene in `order`, 64 units wide. Its
+  header, in the ruler band's lowest row (the marker row's height), shows a
+  ▶ and the scene's name.
+  - A click on the ▶ launches the scene (`launch.scene`). The scene playing
+    now has its header outlined in `playing`.
+  - A double-click on the name renames it in place (`scene.set`).
+  - A drag on the header moves the column (`scene.move`).
+  - A right-click offers Rename, Colour, Insert into arrangement at the
+    playhead (`scene.insert`, L4) and Delete (`scene.remove`, with its
+    clips).
+  - A last header cell, **+**, adds a scene (`scene.add`).
+- **Arr.** A narrow last column, 22 units, holds per track a dot that is lit
+  in `playing` while the track follows the arrangement. A click on an unlit
+  dot returns the track (`launch.arrangement {track}`).
+
+**Cells.**
+- **Where.** Only a channel's row has cells. Busses, masters and automation
+  lanes show ground across the scene columns. Clips are on channels only.
+- **An empty cell** shows a small square in quiet ink, its stop zone. A
+  click on the square stops the track (`launch.stop {track}`) and changes
+  nothing else. A click elsewhere in the cell selects the cell (drawn as
+  a selected clip's outline), so that a clip can be created or pasted
+  there; it stops nothing. A double-click makes an empty one-bar MIDI clip
+  there (`clip.add`) and opens it in the piano roll, one undo step. No
+  text is drawn in it.
+- **A clip** is a small item: a name bar in its colour (the track's when it
+  has none) and its content drawn by the shared item-body functions
+  (`views::drawAudioBody` / `drawMidiBody`, §4.3) over one period. A
+  muted clip is dimmed, as a muted item is.
+  - **Launch zone:** a ▶ at the left of the name bar, always drawn (in the
+    name bar's ink while idle).
+  - **Playing:** the ▶, an outline, and a progress line along the bottom
+    edge, all in `playing` (telemetry, `launch.state`).
+  - **Queued:** a dashed outline in `playing` until the boundary.
+  - **Held silent** (a `once` clip that ended): the outline in `playing`,
+    the ▶ in the name bar's ink.
+- **While a clip holds a track,** the track's lanes and items dim (ink at
+  0.45) and its Arr dot is unlit.
+
+**Gestures.**
+- **Click the ▶** of a clip: launch it (`launch.clip`). It does not change
+  the selection.
+- **Click the body** of a clip: select it (Ctrl adds to the selection). It
+  never launches. A click on the lanes clears that selection.
+- **Double-click the body**: open it in the piano roll (MIDI) or the
+  inspector (audio). The editors and content commands take the clip as
+  they take an item (ADR-0097, "The take owner").
+- No click does two things: a clip's ▶ only launches and its body only
+  selects; an empty cell's square only stops and the rest of the cell
+  only selects.
+- **Drag** a clip to another cell to move it (`clip.move`), or with Ctrl to
+  copy it (`clip.duplicate`). An occupied cell refuses the drop (the
+  pointer says so).
+- **Drag a clip onto the timeline** to lay a copy there (`item.add {clip}`),
+  snapped as an item drag. **Drag an item into a cell** to make a clip from
+  a copy of its takes (`clip.add {item}`). A refused drop shows the error's
+  message in the status line (a warped take, `clip.unsupported`).
+- **Right-click** a clip: Rename, Colour, Mode (Loop / Once), Quantize ▸
+  (Project, Bar, Beat, 1/2 … 1/32, None), Duplicate, Lay on timeline at
+  playhead, Delete.
+- **Delete** removes the selected clips (`clip.remove`), one undo step,
+  while a cell was clicked last, as Delete takes points after a lane click
+  (§4.3). Copy and paste of clips is later; a paste will land in the
+  selected cell.
+
+**Elsewhere.**
+- **Render dialog.** While any track is held by a clip, it says in one line
+  that renders play the arrangement only.
+- **Inspector.** It shows a selected clip's fields (`clip.set`).
+- **Status line.** It counts scenes beside tracks only when there are some.
+
+**Tests (L3).**
+- Snapshots of the pane with playing, queued, held and empty cells, in both
+  themes.
+- Every gesture above, through the dispatcher, with fixtures built from
+  files until `launch.*` lands.
+- The click zones: a click on a clip's ▶ launches and keeps the selection, a
+  click on its body selects and never launches, a click on an empty cell's
+  square stops and selects nothing, and a click beside the square selects
+  the cell and stops nothing.
+- `arrange-items.png` stays byte-identical with the pane hidden.
+
 ## 5. Agent panel (removed)
 
 The app has no built-in agent (ADR-0043). Agents drive it from an external
@@ -2627,7 +2826,11 @@ Steppe's own character, not a REAPER clone or a generic dark theme
   *ink* (blue). The palette sets the accent, focus and selection; everything
   else is shared. View > switch light / dark and View > switch warm / ink
   palette apply at once and are saved in `<config>/<slug>/appearance.json`;
-  `--theme` and `--palette` override them for one run.
+  `--theme` and `--palette` override them for one run. `--theme` also takes
+  a `supple.theme/1.0` file whose `colors` override tokens by name; the
+  meter's overload red is `meter-clip` (a file's older `clip` key still sets
+  it), and `playing`, the meter's green, marks what is sounding now (a
+  launched clip).
 - **Type-led hierarchy:** Inter for UI, IBM Plex Mono for every number and
   for notation; few font sizes; labels quiet, values prominent.
 - **Strip types as marks:** on a track's row and its mixer strip the type
@@ -2808,8 +3011,10 @@ including selection and matched-span item edits, but leaves VCA sound active.
 A group's optional VCA appears after audio strips and before pinned masters in
 the existing mixer. It has a name/color, member count/menu, envelope button,
 fader, mute and solo; it has no audio meter, pan, inserts, inputs or routing.
-A right-click on its fader, mute or solo offers that control's MIDI learn
-(§4.5, `vca.learn.set`, ADR-0058); elsewhere on the strip, the group's menu.
+A right-click on its fader, mute or solo opens that control's parameter menu
+(§4.2): MIDI learn (§4.5, `vca.learn.set`, ADR-0058), the volume or mute lane,
+and on the fader Reset to 0 dB (`vca.set`); elsewhere on the strip, the
+group's menu.
 Members' fader handles continue to show their own levels. VCA volume/mute
 lanes use the normal arrange automation editor and appear before the audio
 track lanes. Nested VCA membership is available through typed commands.
@@ -3026,13 +3231,13 @@ Preferences says "Disabled", and **Enable** is its opposite. A plug-in this run 
 (`plugin.override` mode `disable`: the question, an agent, or a remembered choice;
 `engine.status.disabled_fx`) is marked wherever its fx shows, in the one colour the feature has
 (`meter-hot`, the banner's bar). A plug-in that failed (`engine.status.failed_fx`: its separate
-process closed or stopped answering) is marked the same way in `clip`.
+process closed or stopped answering) is marked the same way in `meter-clip`.
 
 *The mixer's slot has four states of the one 18-unit slot,* each in the slot's place and size.
 Bypassed: the name dimmed and struck through, a solid outline. Offline: the name dimmed inside a
 dashed outline, no strike. **Disabled: the solid outline, no strike, the name in `ink-quiet` and a
 2-unit bar in `meter-hot` down the slot's left edge, inside the outline** (it does not shift the
-slot). **Failed: the same slot with the bar in `clip`.** The words follow the others'
+slot). **Failed: the same slot with the bar in `meter-clip`.** The words follow the others'
 (`valueText` ends " (bypassed)", " (offline)", " (disabled)" or " (failed)"), and disabled and
 failed win over offline and bypassed since they are the ones that need the person; disabled wins over
 failed (a disabled plug-in is not loaded). A click on a disabled slot puts "<name> is disabled for

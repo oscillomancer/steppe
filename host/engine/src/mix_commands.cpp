@@ -7,6 +7,7 @@
 #include <functional>
 #include <set>
 
+#include "clip_launcher.h"
 #include "command_validation.h"
 #include "render_commands.h"
 #include "supple/base/sha256.h"
@@ -333,6 +334,8 @@ void registerMixCommands(cmd::Registry& registry) {
                          *json::parse(R"({"items":["it_1"]})"), *json::parse(R"({"job":"<any>"})"),
                          "song_with_audio"}};
     command.run = [](const Args& a, cmd::Context& ctx) -> Result<json::Value> {
+        SUPPLE_TRY(refuseClipIds(a.items, "/items",
+                                 "lay the clip on the timeline first (item.add {clip})"));
         auto& app = ctx.service<EngineApp>();
         const auto s = app.view();
         auto plan = planMix(s, a.items);

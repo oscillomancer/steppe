@@ -38,9 +38,11 @@ enum class Kind : std::uint8_t {
     Module,         // mo  a module in a rack
     Cable,          // cb  a cable between modules
     Modulation,     // mr  a modulation route (ADR-0096)
+    Scene,          // sc  a launcher column (ADR-0097)
+    Clip,           // cl  a channel's material for one scene
     Project = 255,  // non-allocated singleton, used in changes/diffs
 };
-inline constexpr std::size_t kKindCount = 20;
+inline constexpr std::size_t kKindCount = 22;
 
 std::string_view prefix(Kind kind);  // "tr"
 std::optional<Kind> kindFromPrefix(std::string_view prefix);

@@ -150,7 +150,7 @@ instructions are in `docs/guides/installing.md`.
   the oldest steps. Incremental unique-payload accounting measures only new or
   changed snapshots; ordinary commits and size queries reuse retained totals. Undo to an FX's initial unsaved settings restores its factory
   state while retaining the previous processing instance until plan retirement.
-  Project format `supple.project/2.16` with migration from
+  Project format `supple.project/2.18` with migration from
   1.x, autosave (unsaved projects too, recovered from File > Recover unsaved
   work… or at start, ADR-0078), crash recovery of recordings, a per-project
   UI sidecar.
@@ -160,6 +160,18 @@ instructions are in `docs/guides/installing.md`.
   history. A plug-in's own state change (`fx.state.capture`), automation
   written during playback (`env.write.commit`) and recorded takes
   (`record.commit`) replay in merges.
+- **Clip launcher, model and commands** (ADR-0097, steps L1; session-model
+  "Scenes and clips"): scenes (`sc_*`) and clips (`cl_*`, a channel's
+  material for one scene, with a stored kind fixing its unit: beats for
+  MIDI, seconds of take time for audio), schema 2.18, the project's
+  `launch_quantize`; `scene.*`, `clip.*`, `item.add {clip}`, the cascades
+  (track and scene removal take their clips), the item ↔ clip conversion
+  at the item's tempo, `clip.memory`, and the scene section of
+  `session.describe`. Nothing plays a clip yet: launching (`launch.*`, L2)
+  and the pane (L3) are to come. The content commands (`midi.*`,
+  `take.*`, `item.export`, take envelopes and take FX) take a clip as they
+  take an item; timeline commands refuse one with `item.kind`; take FX
+  parameter envelopes on a clip's take still follow the timeline.
 - **Track freeze** (ADR-0054): whole-channel pre-fader float32 capture, including
   take FX and auxiliary channels, with virtual latency and plugin retirement.
   Typed freeze/unfreeze, cancellable jobs, dependency-checked completion, retained

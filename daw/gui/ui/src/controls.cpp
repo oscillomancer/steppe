@@ -26,6 +26,41 @@ std::string dbText(double db) {
 
 float toDb(float amplitude) { return amplitude > 1e-8f ? 20.0f * std::log10(amplitude) : -150.0f; }
 
+// Modulation (ModulationView): the bar's thickness, how far beside it a press
+// still grabs it, and the depth ranges of ADR-0096 per unit.
+constexpr float kModBar = 3;
+// A depth drag grabs the bar within kModZone units across it (centred on
+// it), and a knob's ring between its face's edge + 1 and + 7, as the rack
+// knob's ring does.
+constexpr float kModZone = 8, kRingIn = 1, kRingOut = 7;
+constexpr double kFaderDepthDb = 48, kPanDepth = 200;
+constexpr double kFaderTravelDb = 72;  // a depth drag's dB per fader travel (-60..+12)
+
+Rect grown(const Rect& r, float dx, float dy) {
+    return {r.x - dx, r.y - dy, r.w + 2 * dx, r.h + 2 * dy};
+}
+
+// A modulation bar along `bar` (horizontal or vertical): `at` places an
+// offset along it. The span faint, the live value bright from the base (an
+// offset of 0) with a dot at its end.
+void paintModBar(Canvas& c, const Theme& t, const Rect& bar, bool horizontal,
+                 const ModulationView& m, const std::function<float(double)>& at) {
+    const Color cv = t.color("signal-cv");
+    auto segment = [&](float a, float b, Color col) {
+        const float lo = std::min(a, b), len = std::max(1.0f, std::abs(b - a));
+        if (horizontal)
+            c.fillRect({lo, bar.y, len, bar.h}, col);
+        else
+            c.fillRect({bar.x, lo, bar.w, len}, col);
+    };
+    segment(at(m.low), at(m.high), cv.withAlpha(0.35f));
+    if (!m.live) return;
+    segment(at(0), at(*m.live), cv);
+    const float end = at(*m.live);
+    c.fillCircle(horizontal ? Point{end, bar.y + bar.h / 2} : Point{bar.x + bar.w / 2, end}, 2.2f,
+                 cv);
+}
+
 float meterPos(float db) {
     return std::clamp((db - kMeterFloor) / (kMeterTop - kMeterFloor), 0.0f, 1.0f);
 }
@@ -40,7 +75,8 @@ Color blend(Color a, Color b, float t) {
 }
 
 Color levelColor(const Theme& t, float db) {
-    const Color green = t.color("meter"), yellow = t.color("meter-hot"), red = t.color("clip");
+    const Color green = t.color("meter"), yellow = t.color("meter-hot"),
+                red = t.color("meter-clip");
     const Color orange = blend(yellow, red, 0.5f);
     if (db <= kMeterGreenDb) return green;
     if (db <= kMeterYellowDb)
@@ -57,6 +93,17 @@ Color levelColor(const Theme& t, float db) {
 double faderPosition(double db) { return fader::position(db); }
 
 double faderDb(double position) { return fader::db(position); }
+
+ModulationView modulationSpan(std::span<const ModulationRoute> routes) {
+    ModulationView v;
+    for (const ModulationRoute& r : routes) {
+        const double from = r.unipolar ? 0.0 : -r.depth, to = r.depth;
+        v.low += std::min(from, to);
+        v.high += std::max(from, to);
+    }
+    if (!routes.empty()) v.depth = routes.back().depth;
+    return v;
+}
 
 // ----------------------------------------------------------------- Fader
 
@@ -80,6 +127,32 @@ void Fader::setValue(double db) {
 }
 
 std::string Fader::valueText() const { return dbText(db_) + " dB"; }
+
+void Fader::setModulation(std::optional<ModulationView> m) {
+    if (m == mod_) return;
+    mod_ = std::move(m);
+    if (!mod_) depthDrag_ = false;
+    invalidate();
+}
+
+Rect Fader::depthZone() const {
+    if (!mod_ || !onDepth) return {};
+    const Rect bar = modulationBar();
+    const float grow = (kModZone - kModBar) / 2;
+    return orientation_ == Orientation::Vertical ? grown(bar, grow, 0) : grown(bar, 0, grow);
+}
+
+Node* Fader::hitTest(Point p) {
+    if (visible && enabled && depthZone().contains(p)) return this;
+    return Node::hitTest(p);
+}
+
+Rect Fader::modulationBar() const {
+    if (!mod_) return {};
+    const Rect tr = track();
+    return orientation_ == Orientation::Vertical ? Rect{tr.right() + 3, tr.y, kModBar, tr.h}
+                                                 : Rect{tr.x, tr.bottom() + 3, tr.w, kModBar};
+}
 
 Size Fader::measure(const Canvas&, Size available) {
     return orientation_ == Orientation::Vertical ? Size{28, available.h} : Size{available.w, 18};
@@ -121,6 +194,12 @@ void Fader::paint(Canvas& c) {
         c.fillRound(cap, 3, dragging_ ? t.color("focus") : t.color("raised"));
         c.strokeRound(cap, 3, focused() ? t.color("focus") : t.color("rule"));
         c.fillRect({cap.x + 3, y - 0.5f, cap.w - 6, 1}, t.color("ink"));
+        // Over the cap: the live value starts at the base, under the hand.
+        if (mod_)
+            paintModBar(c, t, modulationBar(), false, *mod_, [&](double offset) {
+                const double db = std::clamp(db_ + offset, kFaderSilenceDb, kTopDb);
+                return tr.bottom() - static_cast<float>(faderPosition(db)) * tr.h;
+            });
         (void)unity;
     } else {
         const float x = tr.x + pos * tr.w;
@@ -129,6 +208,11 @@ void Fader::paint(Canvas& c) {
         const Rect cap{x - 5, bounds().y + 2, 10, bounds().h - 4};
         c.fillRound(cap, 3, dragging_ ? t.color("focus") : t.color("raised"));
         c.strokeRound(cap, 3, focused() ? t.color("focus") : t.color("rule"));
+        if (mod_)
+            paintModBar(c, t, modulationBar(), true, *mod_, [&](double offset) {
+                const double db = std::clamp(db_ + offset, kFaderSilenceDb, kTopDb);
+                return tr.x + static_cast<float>(faderPosition(db)) * tr.w;
+            });
     }
 }
 
@@ -137,9 +221,24 @@ bool Fader::onPointer(const PointerEvent& e) {
         gestureMods_ = e.mods;
     using T = PointerEvent::Type;
     switch (e.type) {
-        case T::Down:
+        case T::Down: {
             if (e.button != 1) return false;
             if (Root* r = root()) r->focus(this);
+            const Rect tr = track();
+            const float at = static_cast<float>(faderPosition(db_));
+            const Rect cap =
+                orientation_ == Orientation::Vertical
+                    ? Rect{bounds().x + 2, tr.bottom() - at * tr.h - 7, bounds().w - 4, 14}
+                    : Rect{tr.x + at * tr.w - 5, bounds().y + 2, 10, bounds().h - 4};
+            // A press in the bar's zone, clear of the cap: depth.
+            if (depthZone().contains(e.pos) && !cap.contains(e.pos)) {
+                depthDrag_ = true;
+                press_ = e.pos;
+                pressDepth_ = mod_->depth;
+                if (Root* r = root()) r->capture(this);
+                onDepth(pressDepth_, Gesture::Begin);
+                return true;
+            }
             if (e.clicks >= 2) {  // reset to unity
                 change(0.0, Gesture::Set);
                 return true;
@@ -150,7 +249,21 @@ bool Fader::onPointer(const PointerEvent& e) {
             if (Root* r = root()) r->capture(this);
             change(db_, Gesture::Begin);
             return true;
+        }
         case T::Move: {
+            if (depthDrag_) {
+                const Rect tr = track();
+                const float delta = orientation_ == Orientation::Vertical
+                                        ? (press_.y - e.pos.y) / std::max(1.0f, tr.h)
+                                        : (e.pos.x - press_.x) / std::max(1.0f, tr.w);
+                const double scale = (e.mods & kShift) ? 0.1 : 1.0;
+                const double depth =
+                    std::clamp(pressDepth_ + static_cast<double>(delta) * kFaderTravelDb * scale,
+                               -kFaderDepthDb, kFaderDepthDb);
+                if (mod_) mod_->depth = depth;
+                if (onDepth) onDepth(depth, Gesture::Move);
+                return true;
+            }
             if (!dragging_) return false;
             // Relative drags: grabbing the cap never jumps; Shift is fine.
             const Rect tr = track();
@@ -165,6 +278,12 @@ bool Fader::onPointer(const PointerEvent& e) {
         }
         case T::Cancel:
         case T::Up:
+            if (depthDrag_) {
+                depthDrag_ = false;
+                if (Root* r = root()) r->capture(nullptr);
+                if (onDepth) onDepth(mod_ ? mod_->depth : pressDepth_, Gesture::End);
+                return true;
+            }
             if (!dragging_) return false;
             dragging_ = false;
             if (Root* r = root()) r->capture(nullptr);
@@ -257,6 +376,30 @@ std::string PanControl::valueText() const {
 
 Size PanControl::measure(const Canvas&, Size available) { return {available.w, 16}; }
 
+void PanControl::setModulation(int part, std::optional<ModulationView> m) {
+    if (part < 0 || part > 1 || m == mod_[part]) return;
+    mod_[part] = std::move(m);
+    if (!mod_[part]) depthDrag_ = false;
+    invalidate();
+}
+
+Rect PanControl::depthZone(int part) const {
+    if (part < 0 || part > 1 || !mod_[part] || !onDepth) return {};
+    const Rect bar = modulationBar(part);
+    return grown(bar, 0, (kModZone - bar.h) / 2);
+}
+
+Node* PanControl::hitTest(Point p) {
+    if (visible && enabled && (depthZone(0).contains(p) || depthZone(1).contains(p))) return this;
+    return Node::hitTest(p);
+}
+
+Rect PanControl::modulationBar(int part) const {
+    if (part < 0 || part > 1 || !mod_[part]) return {};
+    const Rect tr = track(part);
+    return {tr.x, tr.bottom() + 0.5f, tr.w, 2};  // the 3 units under the track
+}
+
 double PanControl::home(int part) const {
     if (split_ == Split::Dual) return part == 0 ? -100 : 100;
     return part == 0 ? 0 : 100;  // the pan centred; the width as recorded
@@ -295,6 +438,11 @@ void PanControl::paint(Canvas& c) {
         c.fillRect({std::min(mid, x), tr.y, std::abs(x - mid), tr.h},
                    t.color(width ? "ink-quiet" : "accent").withAlpha(0.7f));
         c.fillRect({mid, tr.y - 2, 1, tr.h + 4}, t.color("ink-quiet"));
+        if (mod_[part])
+            paintModBar(c, t, modulationBar(part), true, *mod_[part], [&](double offset) {
+                const double v = std::clamp(value + offset, -100.0, 100.0);
+                return mid + static_cast<float>(v / 100.0) * (tr.w / 2);
+            });
         const bool active = (dragging_ || focused()) && (split_ == Split::None || part == part_);
         c.fillRect({x - 1, tr.y - 1, 2, tr.h + 2}, active ? t.color("focus") : t.color("ink"));
     }
@@ -311,6 +459,15 @@ bool PanControl::onPointer(const PointerEvent& e) {
             if (e.button != 1) return false;
             if (Root* r = root()) r->focus(this);
             part_ = under;
+            // A press in a bar's modulation zone: a depth drag.
+            if (depthZone(under).contains(e.pos)) {
+                depthDrag_ = true;
+                press_ = e.pos;
+                pressDepth_ = mod_[under]->depth;
+                if (Root* r = root()) r->capture(this);
+                onDepth(under, pressDepth_, Gesture::Begin);
+                return true;
+            }
             if (e.clicks >= 2) {
                 change(under, home(under), Gesture::Set);
                 return true;
@@ -323,6 +480,17 @@ bool PanControl::onPointer(const PointerEvent& e) {
             return true;
         }
         case T::Move: {
+            if (depthDrag_) {
+                const double scale = (e.mods & kShift) ? 0.1 : 1.0;
+                const double depth = std::clamp(
+                    pressDepth_ +
+                        static_cast<double>((e.pos.x - press_.x) / std::max(1.0f, track(part_).w)) *
+                            200 * scale,
+                    -kPanDepth, kPanDepth);
+                if (mod_[part_]) mod_[part_]->depth = depth;
+                if (onDepth) onDepth(part_, depth, Gesture::Move);
+                return true;
+            }
             if (!dragging_) return false;
             const double scale = (e.mods & kShift) ? 0.1 : 1.0;
             change(part_,
@@ -334,6 +502,13 @@ bool PanControl::onPointer(const PointerEvent& e) {
         }
         case T::Cancel:
         case T::Up:
+            if (depthDrag_) {
+                depthDrag_ = false;
+                if (Root* r = root()) r->capture(nullptr);
+                if (onDepth)
+                    onDepth(part_, mod_[part_] ? mod_[part_]->depth : pressDepth_, Gesture::End);
+                return true;
+            }
             if (!dragging_) return false;
             dragging_ = false;
             if (Root* r = root()) r->capture(nullptr);
@@ -397,6 +572,42 @@ void Slider::setValue(double value) {
 
 Size Slider::measure(const Canvas&, Size available) { return {available.w, 20}; }
 
+void Slider::setModulation(std::optional<ModulationView> m) {
+    if (m == mod_) return;
+    mod_ = std::move(m);
+    if (!mod_) depthDrag_ = false;
+    invalidate();
+}
+
+namespace {
+Rect sliderBar(const Rect& b) {
+    return {b.x + Slider::kInset, b.y + b.h / 2 + 3, std::max(1.0f, b.w - 2 * Slider::kInset),
+            kModBar};
+}
+}  // namespace
+
+bool Slider::onModulation(Point p) const {
+    if (!mod_ || !onDepth) return false;
+    const Rect b = bounds();
+    const float hx = b.x + kInset + static_cast<float>(value_) * (b.w - 2 * kInset);
+    const Rect cap{hx - 4, b.y + 2, 8, b.h - 4};
+    return grown(sliderBar(b), 0, (kModZone - kModBar) / 2).contains(p) && !cap.contains(p);
+}
+
+Node* Slider::hitTest(Point p) {
+    if (visible && enabled && onModulation(p)) return this;
+    return Node::hitTest(p);
+}
+
+void Slider::paintModulationBar(Canvas& c) const {
+    if (!mod_) return;
+    const Rect b = bounds();
+    paintModBar(c, c.theme(), sliderBar(b), true, *mod_, [&](double offset) {
+        return b.x + kInset +
+               static_cast<float>(std::clamp(value_ + offset, 0.0, 1.0)) * (b.w - 2 * kInset);
+    });
+}
+
 Rect Slider::track() const {
     const Rect b = bounds();
     return {b.x + kInset, b.y, std::max(1.0f, b.w - 2 * kInset), b.h};
@@ -426,6 +637,7 @@ void Slider::paint(Canvas& c) {
     const Rect cap{hx - 4, b.y + 2, 8, b.h - 4};
     c.fillRound(cap, 3, dragging_ ? t.color("focus") : t.color("raised"));
     c.strokeRound(cap, 3, focused() ? t.color("focus") : t.color("rule"));
+    paintModulationBar(c);  // over the cap, as a fader's
 }
 
 bool Slider::onPointer(const PointerEvent& e) {
@@ -434,6 +646,15 @@ bool Slider::onPointer(const PointerEvent& e) {
         case T::Down:
             if (e.button != 1) return false;
             if (Root* r = root()) r->focus(this);
+            // A press on the bar (the knob's ring): depth.
+            if (onModulation(e.pos)) {
+                depthDrag_ = true;
+                press_ = e.pos;
+                pressDepth_ = mod_->depth;
+                if (Root* r = root()) r->capture(this);
+                onDepth(pressDepth_, Gesture::Begin);
+                return true;
+            }
             if (e.clicks >= 2) {  // reset to the caller's default
                 change(defaultValue_, Gesture::Set);
                 return true;
@@ -445,6 +666,14 @@ bool Slider::onPointer(const PointerEvent& e) {
             change(value_, Gesture::Begin);  // a press never jumps the value
             return true;
         case T::Move: {
+            if (depthDrag_) {
+                const double scale = (e.mods & kShift) ? 0.1 : 1.0;
+                const double depth =
+                    std::clamp(pressDepth_ + dragDelta(press_, e.pos) * scale, -1.0, 1.0);
+                if (mod_) mod_->depth = depth;
+                if (onDepth) onDepth(depth, Gesture::Move);
+                return true;
+            }
             if (!dragging_) return false;
             const double scale = (e.mods & kShift) ? 0.1 : 1.0;
             change(pressValue_ + dragDelta(press_, e.pos) * scale, Gesture::Move);
@@ -452,6 +681,12 @@ bool Slider::onPointer(const PointerEvent& e) {
         }
         case T::Cancel:
         case T::Up:
+            if (depthDrag_) {
+                depthDrag_ = false;
+                if (Root* r = root()) r->capture(nullptr);
+                if (onDepth) onDepth(mod_ ? mod_->depth : pressDepth_, Gesture::End);
+                return true;
+            }
             if (!dragging_) return false;
             dragging_ = false;
             if (Root* r = root()) r->capture(nullptr);
@@ -526,6 +761,15 @@ bool Knob::onPointer(const PointerEvent& e) {
     return handled;
 }
 
+bool Knob::onModulation(Point p) const {
+    if (!mod_ || !onDepth) return false;
+    const Rect b = bounds();
+    const float radius = std::max(1.0f, std::min(b.w, b.h) / 2 - 3);
+    const float dx = p.x - (b.x + b.w / 2), dy = p.y - (b.y + b.h / 2);
+    const float d = std::sqrt(dx * dx + dy * dy);
+    return d > radius + kRingIn && d <= radius + kRingOut;  // the ring around the face
+}
+
 void Knob::paint(Canvas& c) {
     const Theme& t = c.theme();
     const Rect b = bounds();
@@ -534,6 +778,25 @@ void Knob::paint(Canvas& c) {
     constexpr float pi = 3.14159265358979323846f;
     const float angle = -pi / 2 + static_cast<float>(value() - 0.5) * 1.5f * pi;
     c.strokeArc(centre, radius + 2, -1.25f * pi, 0.25f * pi, t.color("rule"));
+    if (mod_) {  // the rack knob's ring, on the travel's arc
+        const Color cv = t.color("signal-cv");
+        auto at = [&](double offset) {
+            return -pi / 2 +
+                   static_cast<float>(std::clamp(value() + offset, 0.0, 1.0) - 0.5) * 1.5f * pi;
+        };
+        auto arc = [&](float from, float to, Color col) {
+            if (std::abs(to - from) > 0.01f)
+                c.strokeArc(centre, radius + 2, std::min(from, to), std::max(from, to), col, 2);
+        };
+        arc(at(mod_->low), at(mod_->high), cv.withAlpha(0.35f));
+        if (mod_->live) {
+            arc(at(0), at(*mod_->live), cv);
+            const float end = at(*mod_->live);
+            c.fillCircle(
+                {centre.x + std::cos(end) * (radius + 2), centre.y + std::sin(end) * (radius + 2)},
+                2.0f, cv);
+        }
+    }
     c.fillCircle(centre, radius, t.color(dragging() ? "focus" : "raised"));
     c.strokeCircle(centre, radius, t.color(focused() ? "focus" : "rule"));
     c.line(centre,
@@ -688,13 +951,13 @@ void Meter::paint(Canvas& c) {
             const float p = meterPos(holdDb_[ch]);
             if (vertical_)
                 c.fillRect({lane.x, lane.bottom() - p * lane.h, lane.w, 1.5f},
-                           t.color(holdDb_[ch] > 0 ? "clip" : "ink"));
+                           t.color(holdDb_[ch] > 0 ? "meter-clip" : "ink"));
             else
                 c.fillRect({lane.x + p * lane.w, lane.y, 1.5f, lane.h},
-                           t.color(holdDb_[ch] > 0 ? "clip" : "ink"));
+                           t.color(holdDb_[ch] > 0 ? "meter-clip" : "ink"));
         }
         // Clip indicator at the top (or end).
-        const Color clipCol = clip_[ch] ? t.color("clip") : t.color("rule");
+        const Color clipCol = clip_[ch] ? t.color("meter-clip") : t.color("rule");
         if (vertical_)
             c.fillRect({lane.x, b.y, lane.w, 3}, clipCol);
         else

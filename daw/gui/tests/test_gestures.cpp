@@ -1192,7 +1192,7 @@ TEST_CASE("takes: Ctrl-drag takes one out to another track; explode spreads the 
     std::optional<std::size_t> other;
     for (std::size_t k = 0; k < f.view->trackLayout().rowCount(); ++k)
         if (k != row && f.view->trackLayout().rows()[k].type == model::StripType::Channel &&
-            !f.view->trackLayout().rows()[k].env)
+            !f.view->trackLayout().rows()[k].lane())
             other = k;
     REQUIRE(other);
     const ui::Rect r = f.rectOf(it);

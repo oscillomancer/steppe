@@ -27,13 +27,7 @@ namespace supple::views {
 namespace {
 
 constexpr float kTcpWidth = 220;
-constexpr float kBeatRowH = 22;    // bars | beats
-constexpr float kTimeRowH = 15;    // m:ss.mmm
-constexpr float kRangeEdge = 5;    // px beside a loop or punch range's end that drag it
-constexpr float kTempoRowH = 20;   // tempo and meter flags
-constexpr float kRegionRowH = 15;  // regions
-constexpr float kMarkerRowH = 16;  // markers
-constexpr float kRulerHeight = kBeatRowH + kTimeRowH + kTempoRowH + kRegionRowH + kMarkerRowH;
+constexpr float kRangeEdge = 5;  // px beside a loop or punch range's end that drag it
 
 constexpr float kMinBeatLabelPx = 62;
 // The breathing space every pair of ruler labels keeps (design units).
@@ -130,9 +124,10 @@ class Ruler : public ui::Node {
             case Drag::None:
                 break;
         }
+        const RulerRows& rows = view_.rulerRows();
         const float y = p.y - bounds().y;
-        if (y < 0 || y >= kBeatRowH + kTimeRowH) return ui::Cursor::Arrow;
-        const bool punch = y >= kBeatRowH;
+        if (y < 0 || y >= rows.tempoTop()) return ui::Cursor::Arrow;
+        const bool punch = y >= rows.beat;
         const double start = punch ? view_.punchStart() : view_.loopStart();
         const double end = punch ? view_.punchEnd() : view_.loopEnd();
         if (end <= start) return ui::Cursor::Arrow;
@@ -156,10 +151,11 @@ class Ruler : public ui::Node {
         const time::TimeMap& tm = *s.timeMap;
         const double pps = view_.viewport().pixelsPerSecond;
         const float x0 = bounds().x, x1 = bounds().right();
-        const ui::Rect beatRow{x0, bounds().y, bounds().w, kBeatRowH};
-        const ui::Rect timeRow{x0, bounds().y + kBeatRowH, bounds().w, kTimeRowH};
-        const ui::Rect tempoRow{x0, timeRow.bottom(), bounds().w, kTempoRowH};
-        const ui::Rect regionRow{x0, tempoRow.bottom(), bounds().w, kRegionRowH};
+        const RulerRows& rows = view_.rulerRows();
+        const ui::Rect beatRow{x0, bounds().y, bounds().w, rows.beat};
+        const ui::Rect timeRow{x0, bounds().y + rows.beat, bounds().w, rows.time};
+        const ui::Rect tempoRow{x0, timeRow.bottom(), bounds().w, rows.tempo};
+        const ui::Rect regionRow{x0, tempoRow.bottom(), bounds().w, rows.region};
         const ui::Rect markRow{x0, regionRow.bottom(), bounds().w,
                                std::max(0.0f, bounds().bottom() - regionRow.bottom() - 1)};
         c.fillRect(bounds(), t.color("panel"));
@@ -248,7 +244,7 @@ class Ruler : public ui::Node {
         auto placeLabel = [&](float x, const std::string& text, ui::Color colour, bool isBar) {
             const float w = c.textWidth(text, ui::Font::Mono, captionSize);
             if (lastLabelX > -1e8f && x - lastLabelX < lastLabelW + kLabelGap) return;
-            c.text({x + 3, beatRow.y, w + 4, kBeatRowH}, text, ui::Font::Mono, captionSize, colour,
+            c.text({x + 3, beatRow.y, w + 4, beatRow.h}, text, ui::Font::Mono, captionSize, colour,
                    ui::kLeft | ui::kMiddle);
             if (lastLabelX > -1e8f) {
                 const float gap = x - lastLabelX;
@@ -305,7 +301,7 @@ class Ruler : public ui::Node {
             const float w = c.textWidth(label, ui::Font::Mono, captionSize);
             if (lastTimeX > -1e8f && x - lastTimeX < lastTimeW + kLabelGap) continue;
             c.fillRect({x, timeRow.bottom() - 5, 1, 5}, quiet);
-            c.text({x + 3, timeRow.y, w + 4, kTimeRowH}, label, ui::Font::Mono, captionSize, quiet,
+            c.text({x + 3, timeRow.y, w + 4, timeRow.h}, label, ui::Font::Mono, captionSize, quiet,
                    ui::kLeft | ui::kMiddle);
             ++stats.timeLabels;
             if (lastTimeX > -1e8f) {
@@ -321,16 +317,16 @@ class Ruler : public ui::Node {
         for (const time::TempoPoint& p : tm.tempo()) {
             const float x = view_.xAt(tm.secondsAt(p.beat));
             if (x < x0 - 1 || x > x1) continue;
-            c.fillRect({x, tempoRow.y + 1, 1, kTempoRowH / 2.0f}, t.color("buss"));
-            c.text({x + 3, tempoRow.y, 54, kTempoRowH / 2.0f}, formatBpm(p.bpm), ui::Font::Mono,
+            c.fillRect({x, tempoRow.y + 1, 1, tempoRow.h / 2.0f}, t.color("buss"));
+            c.text({x + 3, tempoRow.y, 54, tempoRow.h / 2.0f}, formatBpm(p.bpm), ui::Font::Mono,
                    t.type("caption"), t.color("buss"), ui::kLeft | ui::kMiddle);
         }
         for (const time::MeterChange& m : tm.meter()) {
             const float x = view_.xAt(tm.secondsAt(tm.beatOfBar(m.bar)));
             if (x < x0 - 1 || x > x1) continue;
-            const float y = tempoRow.y + kTempoRowH / 2.0f;
-            c.fillRect({x, y, 1, kTempoRowH / 2.0f - 1}, t.color("master"));
-            c.text({x + 3, y, 54, kTempoRowH / 2.0f},
+            const float y = tempoRow.y + tempoRow.h / 2.0f;
+            c.fillRect({x, y, 1, tempoRow.h / 2.0f - 1}, t.color("master"));
+            c.text({x + 3, y, 54, tempoRow.h / 2.0f},
                    std::to_string(m.numerator) + "/" + std::to_string(m.denominator),
                    ui::Font::Mono, t.type("caption"), t.color("master"), ui::kLeft | ui::kMiddle);
         }
@@ -429,7 +425,8 @@ class Ruler : public ui::Node {
             m.enabled = allowed;
             items.push_back(std::move(m));
         };
-        const float tempoTop = kBeatRowH + kTimeRowH;
+        const RulerRows& rows = view_.rulerRows();
+        const float tempoTop = rows.tempoTop();
         if (y < tempoTop) {  // the loop (bars) and punch (time) rows
             const double ls = view_.loopStart(), le = view_.loopEnd();
             const double ps = view_.punchStart(), pe = view_.punchEnd();
@@ -456,7 +453,7 @@ class Ruler : public ui::Node {
                 },
                 le > ls || pe > ps);
         }
-        if (y >= tempoTop && y < tempoTop + kTempoRowH / 2.0f) {
+        if (y >= tempoTop && y < tempoTop + rows.tempo / 2.0f) {
             const time::TempoPoint* hit = nullptr;
             float distance = 1e9f;
             for (const auto& p : tm.tempo()) {
@@ -471,7 +468,7 @@ class Ruler : public ui::Node {
                 add(
                     "Delete tempo change", [this, beat = hit->beat] { removeTempo(beat); },
                     hit->beat > 0);
-        } else if (y >= tempoTop && y < tempoTop + kTempoRowH) {
+        } else if (y >= tempoTop && y < tempoTop + rows.tempo) {
             for (const time::MeterChange& m : tm.meter()) {
                 const float x = view_.xAt(tm.secondsAt(tm.beatOfBar(m.bar)));
                 if (at.x < x - 5 || at.x > x + 40) continue;
@@ -485,7 +482,7 @@ class Ruler : public ui::Node {
                     m.bar > 1);
                 break;
             }
-        } else if (y >= tempoTop + kTempoRowH && y < tempoTop + kTempoRowH + kRegionRowH) {
+        } else if (y >= rows.regionTop() && y < rows.markerTop()) {
             for (const auto& entry : s.regions) {
                 const auto& rg = *entry.value;
                 const float left = view_.xAt(atSeconds(tm, rg.start, rg.timebase));
@@ -496,7 +493,7 @@ class Ruler : public ui::Node {
                 add("Delete region", [this, id = entry.id] { remove("region", id); });
                 break;
             }
-        } else if (y >= tempoTop + kTempoRowH + kRegionRowH) {
+        } else if (y >= rows.markerTop()) {
             std::optional<model::Id> hit;
             std::string name;
             float distance = 1e9f;
@@ -653,12 +650,13 @@ bool Ruler::handle(const ui::PointerEvent& e) {
         const auto& s = view_.session();
         const auto& tm = *s.timeMap;
         const float y = e.pos.y - bounds().y;
+        const RulerRows& rows = view_.rulerRows();
         const bool free = (e.mods & ui::kShift) != 0;
         punch_ = false;
         (void)markerMods(e.mods);  // a marker or region press drags by these modifiers
-        if (y < kBeatRowH + kTimeRowH) {
+        if (y < rows.tempoTop()) {
             // The bars row sets the loop range, the time row the punch range.
-            punch_ = y >= kBeatRowH;
+            punch_ = y >= rows.beat;
             const double rangeStart = punch_ ? view_.punchStart() : view_.loopStart();
             const double rangeEnd = punch_ ? view_.punchEnd() : view_.loopEnd();
             originalStart_ = tm.beatAt(rangeStart);
@@ -675,8 +673,7 @@ bool Ruler::handle(const ui::PointerEvent& e) {
                     drag_ = Drag::LoopMove;
             }
             if (drag_ == Drag::LoopNew) originalStart_ = originalEnd_ = position(e.pos.x, free);
-        } else if (y < kBeatRowH + kTimeRowH + kTempoRowH &&
-                   y >= kBeatRowH + kTimeRowH + kTempoRowH / 2.0f) {
+        } else if (y < rows.regionTop() && y >= rows.tempoTop() + rows.tempo / 2.0f) {
             // The meter half: a double-click edits the meter change under the
             // pointer, or starts one at the bar under it (timesig.set).
             if (e.clicks != 2 || !root()) return true;
@@ -699,7 +696,7 @@ bool Ruler::handle(const ui::PointerEvent& e) {
             };
             root()->openPopup(std::move(field), {e.pos.x, e.pos.y, 1, 1});
             return true;
-        } else if (y < kBeatRowH + kTimeRowH + kTempoRowH) {
+        } else if (y < rows.regionTop()) {
             const bool toggleRamp = e.clicks == 1 && view_.gestures().mouse.behaviour(
                                                          "ruler.tempo", e.mods) == "toggle_ramp";
             if (e.clicks != 2 && !toggleRamp) return true;
@@ -742,7 +739,7 @@ bool Ruler::handle(const ui::PointerEvent& e) {
             const double beat = position(e.pos.x, free);
             tempo(beat, tm.bpmAt(beat));
             return true;
-        } else if (y < kBeatRowH + kTimeRowH + kTempoRowH + kRegionRowH) {
+        } else if (y < rows.markerTop()) {
             for (const auto& entry : s.regions) {
                 const auto& rg = *entry.value;
                 const float left = view_.xAt(atSeconds(tm, rg.start, rg.timebase));
@@ -950,7 +947,8 @@ ArrangeView::ArrangeView(peaks::PeakService& peaks, Resolve resolve, TransportSo
 
     auto& header = emplace<Node>("arrange-header");
     header.layout.dir = ui::Layout::Dir::Row;
-    header.layout.height = ui::SizeRule::fixed(kRulerHeight);
+    header.layout.height = ui::SizeRule::fixed(rulerRows_.height());
+    headerRow_ = &header;
     header_ = &header.emplace<TcpHeader>(*this);
     header_->layout.width = ui::SizeRule::fixed(kTcpWidth);
     ruler_ = &header.emplace<Ruler>(*this);
@@ -1285,7 +1283,8 @@ void ArrangeView::clampScroll() {
 void ArrangeView::arrange(const ui::Canvas& canvas, const ui::Rect& r) {
     // Clamp before arranging: the rows the TCP binds must match the scroll the
     // frame will actually paint with (the visible height is known from `r`).
-    const float visibleHeight = std::max(0.0f, r.h - kRulerHeight - ui::ScrollBar::kThickness);
+    const float visibleHeight =
+        std::max(0.0f, r.h - rulerRows_.height() - ui::ScrollBar::kThickness);
     view_.scrollY = std::clamp(view_.scrollY, 0.0f, std::max(0.0f, scrollHeight() - visibleHeight));
     ui::Node::arrange(canvas, r);
     clampScroll();  // exact, now that the children have their bounds
@@ -1358,6 +1357,13 @@ ui::Node& ArrangeView::tcp() { return *tcp_; }
 ui::Node& ArrangeView::ruler() { return *ruler_; }
 void ArrangeView::setRulerCallbacks(RulerCallbacks callbacks) {
     ruler_->callbacks = std::move(callbacks);
+}
+void ArrangeView::setRulerRows(const RulerRows& rows) {
+    if (rows == rulerRows_) return;
+    rulerRows_ = rows;
+    headerRow_->layout.height = ui::SizeRule::fixed(rulerRows_.height());
+    relayout();  // the header, the lanes and the TCP below it move
+    invalidate();
 }
 void ArrangeView::addMarker() { ruler_->addMarker(); }
 void ArrangeView::addRegion() { ruler_->addRegion(); }

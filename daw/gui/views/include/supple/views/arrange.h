@@ -79,6 +79,23 @@ struct RulerStats {
     std::vector<int> labelledBars;  // the bars that carry a label, left to right
 };
 
+// The ruler's rows, top to bottom (gui.md §4.3). Its height is their sum, a
+// run-time value: the header row, the ruler's painting and hit tests and the
+// tracks' visible height all read it from here, so a row can be added or
+// hidden (the context track's chord row) with nothing else to change.
+struct RulerRows {
+    float beat = 22;    // bars | beats; the loop range
+    float time = 15;    // m:ss.mmm; the punch range
+    float tempo = 20;   // tempo and meter flags
+    float region = 15;  // regions
+    float marker = 16;  // markers
+    float tempoTop() const { return beat + time; }
+    float regionTop() const { return beat + time + tempo; }
+    float markerTop() const { return beat + time + tempo + region; }
+    float height() const { return beat + time + tempo + region + marker; }
+    bool operator==(const RulerRows&) const = default;
+};
+
 class ArrangeView : public ui::Node {
   public:
     using Resolve = Lanes::Resolve;
@@ -141,8 +158,10 @@ class ArrangeView : public ui::Node {
     ui::Node& tcp();
     ui::Node& ruler();
     void setRulerCallbacks(RulerCallbacks callbacks);
-    void addMarker();  // at the playhead, through marker.add
-    void addRegion();  // over the loop range, through region.add
+    const RulerRows& rulerRows() const { return rulerRows_; }
+    void setRulerRows(const RulerRows& rows);  // resizes the header row and relays out
+    void addMarker();                          // at the playhead, through marker.add
+    void addRegion();                          // over the loop range, through region.add
     // What the panel needs from the app (selection, commands, meters). Call
     // before build/insert; the panel keeps the callbacks.
     void setTcpCallbacks(TcpCallbacks callbacks) { tcpCallbacks_ = std::move(callbacks); }
@@ -202,6 +221,8 @@ class ArrangeView : public ui::Node {
     TcpPanel* tcp_ = nullptr;
     Ruler* ruler_ = nullptr;
     TcpHeader* header_ = nullptr;
+    ui::Node* headerRow_ = nullptr;  // the TCP header, the ruler and the corner
+    RulerRows rulerRows_;
     std::unique_ptr<ItemGestures> gestures_;
     TcpCallbacks tcpCallbacks_;
     ui::ScrollBar* hbar_ = nullptr;
