@@ -2983,6 +2983,64 @@ TEST_CASE("mixer: a pan's parameter menu sets its mode and law; its bars follow 
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("mixer: Show and Hide lane follow whatever holds the lane, a route or the envelope") {
+    // Review round 56 F2: a route with lane true keeps the target's lane
+    // (gui.md §4.3), so the menu reads and writes the routes' lane too.
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    json::Value made = f.exec(
+        "modulate", R"({"target":{"track":")" + a + R"(","param":"volume"},"source":"lfo"})");
+    const auto route = *model::Id::parse(made["modulation"].asString());
+    f.refresh();
+    const auto lane = [&] { return f.app->head().modulations.find(route)->lane; };
+    const auto envelopes = [&] { return f.app->head().envelopes.size(); };
+    const auto pick = [&](const std::string& label, bool mute = false) {
+        const ui::Point p =
+            f.centre(mute ? static_cast<ui::Node*>(f.strip(a).mute) : f.strip(a).fader);
+        f.pointer(ui::PointerEvent::Type::Down, p, 1, 0, 3);
+        f.pointer(ui::PointerEvent::Type::Up, p, 1, 0, 3);
+        ui::Node* menu = f.root->find("strip.param.menu");
+        REQUIRE(menu);
+        const auto items = ui::menuItems(*menu);
+        const auto it = std::find_if(items.begin(), items.end(),
+                                     [&](const auto& i) { return i.label == label; });
+        REQUIRE_MESSAGE(it != items.end(), label);
+        auto run = it->run;
+        f.root->closePopup();
+        const auto before = f.steps();
+        run();
+        f.refresh();
+        CHECK(f.steps() == before + 1);
+    };
+    // The route holds the lane: Hide clears its lane and adds no envelope.
+    REQUIRE(lane());
+    REQUIRE(envelopes() == 0);
+    pick("Hide lane: Volume");
+    CHECK_FALSE(lane());
+    CHECK(envelopes() == 0);
+    // Show turns the route's lane back on rather than adding a flat envelope.
+    pick("Show lane: Volume");
+    CHECK(lane());
+    CHECK(envelopes() == 0);
+    // With an envelope too, Hide clears both in one step, and Show sets both.
+    f.exec("env.add",
+           R"({"track":")" + a + R"(","param":"volume","points":[{"beat":0,"value":0}]})");
+    f.refresh();
+    REQUIRE(envelopes() == 1);
+    const auto visible = [&] { return f.app->head().envelopes.begin()->value->visible; };
+    pick("Hide lane: Volume");
+    CHECK_FALSE(lane());
+    CHECK_FALSE(visible());
+    pick("Show lane: Volume");
+    CHECK(lane());
+    CHECK(visible());
+    // Without a route or an envelope, Show still adds the flat envelope.
+    pick("Show lane: Mute", true);
+    CHECK(envelopes() == 2);
+    CHECK(f.errors.empty());
+}
+
 TEST_CASE("mixer: a right-click on a VCA's fader learns MIDI for it, elsewhere the group menu") {
     Fixture f;
     if (!f.ok) return;

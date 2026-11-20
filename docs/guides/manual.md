@@ -310,7 +310,7 @@ Right-click a track's fader, pan or button, in the track list or the mixer,
 for its menu. It is the same in both places: **MIDI learn** binds the control
 to a controller (see MIDI controllers), **Show lane** opens its automation
 lane under the track (a new lane starts at the control's value; **Hide
-lane** puts it away), and on a fader or pan **Reset** sends it home, as a
+lane** puts it away, even when a modulation is what shows it), and on a fader or pan **Reset** sends it home, as a
 double-click does: 0 dB, or the centre.
 
 In the track list the first four are at the right of the track's name, at

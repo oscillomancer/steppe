@@ -600,9 +600,12 @@ the mixer's strips open:
   learn dialog of §4.5 for that track alone, binding through
   `track.learn.set` (ADR-0058);
 - **Show lane: Volume** or **Hide lane: Volume** for a parameter that can be
-  automated (volume, mute; a pan's bars): `env.set {visible}`, or for a
-  parameter without an envelope `env.add` with one point at the control's
-  value, so the lane starts flat;
+  automated (volume, mute; a pan's bars). It reads the lane as the lanes
+  do (§4.3): shown while the envelope is visible or a modulation route on
+  the parameter has `lane`. Hide clears both (`env.set {visible: false}`,
+  `modulation.set {lane: false}`), and Show sets both on what exists, in
+  one undo step; a parameter with neither gets `env.add` with one point at
+  the control's value, so the lane starts flat;
 - **Reset to 0 dB** on a fader and **Reset to centre** on a pan (in width
   mode "Reset to centre, full width", in dual mode "Reset to full left and
   right"), shown with the double-click that does the same: one `track.set`

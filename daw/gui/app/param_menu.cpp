@@ -13,6 +13,7 @@
 #include "selection_edit.h"
 #include "strip_learn.h"
 #include "supple/ui/popup.h"
+#include "supple/views/envelope_lane.h"
 
 namespace supple::gui {
 namespace {
@@ -72,38 +73,19 @@ struct Builder {
         add(stripLearnLabel(s, {{object}, param}),
             [r, a, o = object, param] { openStripLearn(*r, *a, {{o}, param}); });
     }
-    // Show or hide the parameter's lane; a parameter without an envelope
-    // gets one, flat at the control's value.
+    // Show or hide the parameter's lane, as the lanes decide it: through
+    // its envelope and its modulation routes (laneShown, setLaneShown).
     void lane(const std::string& param) {
-        std::optional<model::Id> env;
-        bool shown = false;
-        for (const auto& e : s.envelopes)
-            if (e.value->target.object == object && e.value->target.param == param) {
-                env = e.id;
-                shown = e.value->visible;
-            }
+        const model::EnvTarget target{object, param};
+        const bool shown = laneShown(s, target);
         AppActions* a = &actions;
-        const std::string name = stripControlLabel(param);
-        if (env) {
-            add((shown ? "Hide lane: " : "Show lane: ") + name, [a, id = *env, shown] {
-                json::Value args = json::Value::object();
-                args["env"] = id.str();
-                args["visible"] = !shown;
-                run(*a, "env.set", std::move(args));
-            });
-            return;
-        }
-        add("Show lane: " + name,
-            [a, o = object, param, value = envelopeStartValue(s, object, param)] {
-                json::Value args = json::Value::object(), points = json::Value::array(),
-                            first = json::Value::object();
-                args[o.kind == model::Kind::Group ? "group" : "track"] = o.str();
-                args["param"] = param;
-                first["beat"] = 0.0;
-                first["value"] = value;
-                points.push_back(std::move(first));
-                args["points"] = std::move(points);
-                run(*a, "env.add", std::move(args));
+        json::Value envArgs = json::Value::object();
+        envArgs[object.kind == model::Kind::Group ? "group" : "track"] = object.str();
+        add((shown ? "Hide lane: " : "Show lane: ") + stripControlLabel(param),
+            [a, target, shown, envArgs, value = envelopeStartValue(s, object, param)] {
+                const model::Session now = a->app().head();
+                const auto r = setLaneShown(a->dispatcher(), now, target, !shown, envArgs, value);
+                if (!r && a->onError) a->onError(r.error().message);
             });
     }
 };
@@ -199,6 +181,55 @@ double envelopeStartValue(const model::Session& s, const model::Id& object,
            : param == "pan_right" ? tr->panRight
            : param == "pan_boost" ? (model::panLawOf(*s.project, *tr).boost ? 1.0 : 0.0)
                                   : (tr->mute ? 1.0 : 0.0);
+}
+
+bool laneShown(const model::Session& s, const model::EnvTarget& target) {
+    for (const auto& e : s.envelopes)
+        if (e.value->target == target && e.value->visible) return true;
+    return views::modulationLane(s, target);
+}
+
+Status setLaneShown(cmd::Dispatcher& dispatcher, const model::Session& s,
+                    const model::EnvTarget& target, bool shown, json::Value envArgs,
+                    double startValue) {
+    std::vector<std::pair<std::string, json::Value>> edits;
+    for (const auto& e : s.envelopes) {
+        if (!(e.value->target == target) || e.value->visible == shown) continue;
+        json::Value args = json::Value::object();
+        args["env"] = e.id.str();
+        args["visible"] = shown;
+        edits.emplace_back("env.set", std::move(args));
+    }
+    bool held = false;  // an envelope or a route can show it
+    for (const auto& e : s.envelopes) held |= e.value->target == target;
+    for (const auto& m : s.modulations) {
+        if (!(m.value->target == target)) continue;
+        held = true;
+        if (m.value->lane == shown) continue;
+        json::Value args = json::Value::object();
+        args["modulation"] = m.id.str();
+        args["lane"] = shown;
+        edits.emplace_back("modulation.set", std::move(args));
+    }
+    if (shown && !held) {
+        json::Value args = std::move(envArgs), points = json::Value::array(),
+                    first = json::Value::object();
+        args["param"] = target.param;
+        first["beat"] = 0.0;
+        first["value"] = startValue;
+        points.push_back(std::move(first));
+        args["points"] = std::move(points);
+        edits.emplace_back("env.add", std::move(args));
+    }
+    if (edits.empty()) return {};
+    auto r = dispatcher.transact(
+        shown ? "Show lane" : "Hide lane", kOrigin, [&]() -> Result<json::Value> {
+            for (auto& [command, args] : edits)
+                SUPPLE_TRY(dispatcher.execute({command, std::move(args), kOrigin}));
+            return json::Value::object();
+        });
+    if (!r) return std::move(r).error();
+    return {};
 }
 
 void openParamMenu(ui::Root& root, AppActions& actions, const model::Id& object,
