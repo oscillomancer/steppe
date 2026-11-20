@@ -194,9 +194,11 @@ TEST_CASE("scene.insert is one undo step, and survives save and reopen") {
     CHECK(l.head().regions.size() == 1);
     CHECK(l.describe() == after);
     // Save and reopen keep the items, the section and the scenes.
-    const auto file = (l.root / "song.json").string();
-    l.run("project.save", std::string(R"({"path": ")") + file + R"("})");
-    l.run("project.open", std::string(R"({"path": ")") + file + R"("})");
+    // The path goes in as a JSON value, not pasted into text: a Windows path has backslashes.
+    auto file = json::Value::object();
+    file["path"] = (l.root / "song.json").string();
+    l.runArgs("project.save", file);
+    l.runArgs("project.open", file);
     CHECK(l.describe() == after);
     CHECK(l.head().items.size() == 3);
     CHECK(l.head().regions.size() == 1);
