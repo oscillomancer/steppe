@@ -35,6 +35,9 @@ class TransportBar;
 
 struct TrackMenu;
 
+// The engine's launch state as the arrange view draws it (ADR-0097).
+views::LaunchViews launchViews(const std::vector<engine::Engine::TrackLaunch>& state);
+
 class Shell {
   public:
     void setStatus(const std::string& text);

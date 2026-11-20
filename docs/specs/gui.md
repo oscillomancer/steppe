@@ -2519,8 +2519,8 @@ same heights, scroll and colours.
 - **Scenes.** There is one column per scene in `order`, 64 units wide. Its
   header, in the ruler band's lowest row (the marker row's height), shows a
   ▶ and the scene's name.
-  - A click on the ▶ launches the scene (`launch.scene`). The scene playing
-    now has its header outlined in `playing`.
+  - A click on the ▶ launches the scene (`launch.scene`). A scene whose
+    every clip plays now has its header outlined, and its ▶, in `playing`.
   - A double-click on the name renames it in place (`scene.set`).
   - A drag on the header moves the column (`scene.move`).
   - A right-click offers Rename, Colour, Insert into arrangement at the
@@ -2552,8 +2552,13 @@ same heights, scroll and colours.
   - **Queued:** a dashed outline in `playing` until the boundary.
   - **Held silent** (a `once` clip that ended): the outline in `playing`,
     the ▶ in the name bar's ink.
-- **While a clip holds a track,** the track's lanes and items dim (ink at
-  0.45) and its Arr dot is unlit.
+- **While a clip holds a track,** or a launcher stop leaves it silent, its
+  items dim as muted ones do (their labels at 0.45) and its Arr dot is
+  unlit (`TrackLayout::heldTracks`).
+- **Telemetry.** The app reads `EngineApp::launchState()` each pass and
+  gives it to the view (`ArrangeView::setLaunchState`, `views::LaunchView`
+  per track: what it plays as heard, the clip, its position in its period,
+  what is queued); the pane redraws only when it changes.
 
 **Gestures.**
 - **Click the ▶** of a clip: launch it (`launch.clip`). It does not change

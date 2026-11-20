@@ -194,6 +194,11 @@ class ArrangeView : public ui::Node {
         launcherCallbacks_ = std::move(callbacks);
     }
     const LauncherCallbacks& launcherCallbacks() const { return launcherCallbacks_; }
+    // What each track with clips plays (EngineApp::launchState), each pass:
+    // the pane's playing, queued and held cells and Arr dots, and the held
+    // tracks' dimmed lanes. Redraws only when it changes.
+    void setLaunchState(LaunchViews views);
+    const LaunchViews& launchState() const { return launchViews_; }
     LauncherPane& launcherPane() { return *launcherPane_; }
     LauncherHeader& launcherHeader() { return *launcherHeader_; }
     void addMarker();  // at the playhead, through marker.add
@@ -270,6 +275,7 @@ class ArrangeView : public ui::Node {
     bool launcherFull_ = false;
     float launcherScroll_ = 0;
     LauncherCallbacks launcherCallbacks_;
+    LaunchViews launchViews_;
     float launcherRoom() const;  // the widest the pane is before it fills the view
     void syncLauncher();
     std::unique_ptr<ItemGestures> gestures_;

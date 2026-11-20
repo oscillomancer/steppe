@@ -57,7 +57,37 @@ void drawPlay(ui::Canvas& c, const ui::Rect& box, ui::Color color) {
         color);
 }
 
+// A dashed outline (a queued launch): dashes of 4 with gaps of 3.
+void strokeDashed(ui::Canvas& c, const ui::Rect& r, ui::Color color) {
+    auto run = [&](ui::Point a, ui::Point b) {
+        const float len = std::hypot(b.x - a.x, b.y - a.y);
+        for (float d = 0; d < len; d += 7) {
+            const float e = std::min(len, d + 4);
+            c.line({a.x + (b.x - a.x) * d / len, a.y + (b.y - a.y) * d / len},
+                   {a.x + (b.x - a.x) * e / len, a.y + (b.y - a.y) * e / len}, color, 1.5f);
+        }
+    };
+    run({r.x, r.y}, {r.right(), r.y});
+    run({r.right(), r.y}, {r.right(), r.bottom()});
+    run({r.right(), r.bottom()}, {r.x, r.bottom()});
+    run({r.x, r.bottom()}, {r.x, r.y});
+}
+
 }  // namespace
+
+// Whether every clip of a scene plays now (its header is outlined).
+bool scenePlaying(const model::Session& session, const LaunchViews& views, model::Id scene) {
+    bool any = false;
+    for (const auto& e : session.clips) {
+        if (e.value->scene != scene) continue;
+        const auto it = views.find(e.value->track);
+        if (it == views.end() || it->second.plays != LaunchView::Plays::Clip ||
+            it->second.clip != e.id)
+            return false;
+        any = true;
+    }
+    return any;
+}
 
 // ----------------------------------------------------------------- the pane
 
@@ -134,6 +164,12 @@ void LauncherPane::paint(ui::Canvas& c) {
                 continue;
             }
             ++stats.clips;
+            const auto state = view_.launchState().find(row.track);
+            const LaunchView* lv = state != view_.launchState().end() ? &state->second : nullptr;
+            const bool playing = lv && lv->plays == LaunchView::Plays::Clip && lv->clip == id;
+            const bool held = lv && lv->plays == LaunchView::Plays::Held && lv->clip == id;
+            const bool queued =
+                lv && lv->queued == LaunchView::Queued::Clip && lv->queuedClip == id;
             const ui::Color color = clipColor(t, s, *clip);
             const float dim = clip->mute ? 0.45f : 1.0f;
             c.fillRound(inner, 2, color.withAlpha(0.24f * dim));
@@ -142,7 +178,8 @@ void LauncherPane::paint(ui::Canvas& c) {
             const ui::Rect name{inner.x, inner.y, inner.w, bar};
             c.fillRect({name.x + 1, name.y + 1, name.w - 2, name.h - 1},
                        color.withAlpha(0.38f * dim));
-            drawPlay(c, {name.x + 1, name.y, 14, name.h}, t.color("ink").withAlpha(dim));
+            drawPlay(c, {name.x + 1, name.y, 14, name.h},
+                     playing ? t.color("playing") : t.color("ink").withAlpha(dim));
             std::string label = clip->name.empty() ? id->str() : clip->name;
             const std::string fit =
                 c.elide(label, ui::Font::Ui, caption, std::max(0.0f, name.w - 18));
@@ -150,8 +187,35 @@ void LauncherPane::paint(ui::Canvas& c) {
                 c.text({name.x + 15, name.y, name.w - 16, name.h}, fit, ui::Font::Ui, caption,
                        t.color("ink").withAlpha(dim), ui::kLeft | ui::kMiddle);
             stats.names.push_back(fit);
+            // What plays: the outline (and a progress line while it plays) in
+            // `playing`; a queued launch dashed until its boundary.
+            if (playing || held) {
+                c.strokeRound(inner, 2, t.color("playing"), 2);
+                ++(playing ? stats.playing : stats.held);
+            }
+            if (playing && lv->position && clip->length > 0) {
+                const double f = std::clamp(*lv->position / clip->length, 0.0, 1.0);
+                c.fillRect(
+                    {inner.x + 1, inner.bottom() - 3, static_cast<float>(f) * (inner.w - 2), 2},
+                    t.color("playing"));
+            }
+            if (queued) {
+                strokeDashed(c, inner.inset(-1), t.color("playing"));
+                ++stats.queued;
+            }
         }
         c.restore();
+        // The Arr dot: lit while the track follows the arrangement.
+        const auto state = view_.launchState().find(row.track);
+        const bool follows = state == view_.launchState().end() ||
+                             state->second.plays == LaunchView::Plays::Arrangement;
+        const ui::Point dot{r.x + r.w / 2, r.y + std::min(r.h / 2, 12.0f)};
+        if (follows) {
+            c.fillCircle(dot, 3.5f, t.color("playing"));
+            ++stats.arrLit;
+        } else {
+            c.strokeCircle(dot, 3.5f, t.color("ink-faint"));
+        }
     }
     // The Arr column's rule, and the pane's edge against the lanes.
     c.fillRect({cols.arrX(), b.y, 1, b.h}, t.color("rule"));
@@ -318,7 +382,10 @@ void LauncherHeader::paint(ui::Canvas& c) {
         if (!scene) continue;
         const ui::Rect cell{cols.columnX(col), row.y, LauncherColumns::kColumn, row.h};
         c.fillRect({cell.right() - 1, cell.y + 3, 1, cell.h - 6}, t.color("rule"));
-        drawPlay(c, {cell.x + 1, cell.y, 14, cell.h}, t.color("ink-quiet"));
+        const bool playing = scenePlaying(s, view_.launchState(), cols.scenes[col]);
+        drawPlay(c, {cell.x + 1, cell.y, 14, cell.h},
+                 playing ? t.color("playing") : t.color("ink-quiet"));
+        if (playing) c.strokeRect(cell.inset(1), t.color("playing"), 1.5f);
         const std::string name = scene->name.empty() ? cols.scenes[col].str() : scene->name;
         const std::string fit = c.elide(name, ui::Font::Ui, caption, cell.w - 19);
         if (!fit.empty())

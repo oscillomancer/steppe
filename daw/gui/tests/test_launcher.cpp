@@ -6,12 +6,16 @@
 #include <doctest/doctest.h>
 #include "test_support.h"
 
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "app_actions.h"
+#include "shell.h"
 #include "supple/gui/png.h"
 #include "supple/gui/window.h"
 #include "supple/json/parse.h"
@@ -231,4 +235,65 @@ TEST_CASE(
     f.sync();
     CHECK(pane.bounds().w == near(width));
     CHECK(f.errors.empty());
+}
+
+TEST_CASE("launcher: playing, held and queued cells, the Arr dots, a playing scene and dim lanes") {
+    LauncherFixture f;
+    f.song();
+    views::LauncherPane& pane = f.view->launcherPane();
+    const model::Id kit = *model::Id::parse("cl_1"), kitB = *model::Id::parse("cl_2");
+    const model::Id root = *model::Id::parse("cl_3");
+    const model::Id drums = *model::Id::parse("tr_1"), bass = *model::Id::parse("tr_2");
+    // Nothing plays: every channel follows the arrangement.
+    CHECK(pane.stats.arrLit == 3);
+    CHECK(pane.stats.playing == 0);
+    // Drums play Kit A with Kit B queued; the bass holds its ended once clip.
+    views::LaunchViews state;
+    state[drums] = {views::LaunchView::Plays::Clip, kit, 1.0, views::LaunchView::Queued::Clip,
+                    kitB};
+    state[bass] = {views::LaunchView::Plays::Held, root, std::nullopt,
+                   views::LaunchView::Queued::None, std::nullopt};
+    f.view->setLaunchState(state);
+    f.sync();
+    CHECK(pane.stats.playing == 1);
+    CHECK(pane.stats.held == 1);
+    CHECK(pane.stats.queued == 1);
+    CHECK(pane.stats.arrLit == 1);  // Keys alone follows the arrangement
+    CHECK(f.view->trackLayout().heldTracks == std::set<model::Id>{drums, bass});
+    // Verse plays when every one of its clips does.
+    const model::Id verse = *model::Id::parse("sc_2");
+    CHECK_FALSE(views::scenePlaying(f.app->head(), state, verse));
+    state[drums] = {views::LaunchView::Plays::Clip, kitB, 0.0, views::LaunchView::Queued::None,
+                    std::nullopt};
+    state[bass].plays = views::LaunchView::Plays::Clip;
+    f.view->setLaunchState(state);
+    f.sync();
+    CHECK(views::scenePlaying(f.app->head(), state, verse));
+    f.snapshot("launcher-playing.png");
+    f.view->setLaunchState({});
+    f.sync();
+    CHECK(f.view->trackLayout().heldTracks.empty());
+    CHECK(pane.stats.arrLit == 3);
+}
+
+TEST_CASE("launcher: the engine's launch state reaches the pane (launch.clip, dummy audio)") {
+    LauncherFixture f;
+    f.song();
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    f.exec("launch.clip", R"({"clip":"cl_1"})");
+    // Until the engine hears it; the bound only keeps a broken build from
+    // hanging, the check is on what arrives.
+    bool playing = false;
+    for (int i = 0; i < 300 && !playing; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        f.view->setLaunchState(gui::launchViews(f.app->launchState()));
+        f.sync();
+        playing = f.view->launcherPane().stats.playing == 1;
+    }
+    CHECK(playing);
+    const auto& state = f.view->launchState();
+    const auto it = state.find(*model::Id::parse("tr_1"));
+    REQUIRE(it != state.end());
+    CHECK(it->second.clip == model::Id::parse("cl_1"));
+    f.exec("engine.stop", "{}");
 }

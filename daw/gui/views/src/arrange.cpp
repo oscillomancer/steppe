@@ -1619,9 +1619,11 @@ double ArrangeView::totalSeconds() const {
 
 void ArrangeView::damageViews() {
     ui::Rect r;
-    for (ui::Node* n : {static_cast<ui::Node*>(lanes_), static_cast<ui::Node*>(ruler_),
-                        static_cast<ui::Node*>(hbar_), static_cast<ui::Node*>(vbar_)})
-        if (n) r = r.unite(n->bounds());
+    for (ui::Node* n :
+         {static_cast<ui::Node*>(lanes_), static_cast<ui::Node*>(ruler_),
+          static_cast<ui::Node*>(hbar_), static_cast<ui::Node*>(vbar_),
+          static_cast<ui::Node*>(launcherPane_), static_cast<ui::Node*>(launcherHeader_)})
+        if (n && n->visible) r = r.unite(n->bounds());
     if (!r.empty()) invalidate(r);
 }
 
@@ -1734,6 +1736,21 @@ void ArrangeView::syncLauncher() {
         std::clamp(launcherScroll_, 0.0f, std::max(0.0f, span - (width - LauncherColumns::kArr)));
     if (changed) relayout();
     if (shown) {
+        launcherPane_->invalidate();
+        launcherHeader_->invalidate();
+    }
+}
+void ArrangeView::setLaunchState(LaunchViews views) {
+    if (views == launchViews_) return;
+    std::set<model::Id> held;
+    for (const auto& [track, v] : views)
+        if (v.plays != LaunchView::Plays::Arrangement) held.insert(track);
+    if (held != layout_.heldTracks) {
+        layout_.heldTracks = std::move(held);
+        damageViews();
+    }
+    launchViews_ = std::move(views);
+    if (launcherPane_ && launcherPane_->visible) {
         launcherPane_->invalidate();
         launcherHeader_->invalidate();
     }

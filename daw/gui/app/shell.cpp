@@ -394,11 +394,39 @@ void Shell::sync(bool event) {
     // Modulation telemetry (ADR-0096, M2): live values on the modulated
     // controls and lanes (nothing is redrawn while it holds still).
     arrange_->setModulationOffsets(liveModulation_.read(dispatcher_, app_));
+    // What each track with clips plays (ADR-0097): the launcher's playing,
+    // queued and held cells, its Arr dots and the held tracks' lanes.
+    arrange_->setLaunchState(launchViews(app_.launchState()));
     // The bar changes with the model or while the engine runs; refreshing it on
     // every idle pass would repaint (and cost) for nothing.
     if (transport_) transport_->sync(event || moved);
     // The input names track the engine (started or stopped), not the model.
     if (moved || app_.engine()) inputs();
+}
+
+views::LaunchViews launchViews(const std::vector<engine::Engine::TrackLaunch>& state) {
+    using Plays = engine::Engine::TrackLaunch::Plays;
+    using Action = engine::LaunchLogEntry::Action;
+    views::LaunchViews out;
+    for (const auto& t : state) {
+        views::LaunchView v;
+        v.plays = t.plays == Plays::Clip      ? views::LaunchView::Plays::Clip
+                  : t.plays == Plays::Held    ? views::LaunchView::Plays::Held
+                  : t.plays == Plays::Stopped ? views::LaunchView::Plays::Stopped
+                                              : views::LaunchView::Plays::Arrangement;
+        if (t.plays == Plays::Clip || t.plays == Plays::Held) v.clip = t.clip;
+        v.position = t.position;
+        if (t.queued) {
+            const auto& request = t.queued->request;
+            v.queued = request.action == Action::Clip ? views::LaunchView::Queued::Clip
+                       : request.action == Action::Arrangement
+                           ? views::LaunchView::Queued::Arrangement
+                           : views::LaunchView::Queued::Stop;
+            if (request.action == Action::Clip) v.queuedClip = request.clip;
+        }
+        out[t.track] = v;
+    }
+    return out;
 }
 
 std::optional<std::chrono::steady_clock::time_point> Shell::nextDeadline() const {

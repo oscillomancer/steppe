@@ -78,6 +78,9 @@ struct LauncherColumns {
 };
 LauncherColumns launcherColumns(const model::Session& session);
 
+// Whether every clip of a scene plays now (its header is outlined).
+bool scenePlaying(const model::Session& session, const LaunchViews& views, model::Id scene);
+
 // The clip in a channel's cell of a scene.
 std::optional<model::Id> clipIn(const model::Session& session, model::Id track, model::Id scene);
 
@@ -104,7 +107,8 @@ class LauncherPane : public ui::Node {
     // What the last paint drew (tests).
     struct Stats {
         std::size_t cells = 0, clips = 0, empty = 0;
-        std::vector<std::string> names;                   // the clips' names as drawn
+        std::vector<std::string> names;  // the clips' names as drawn
+        std::size_t playing = 0, held = 0, queued = 0, arrLit = 0;
         std::size_t notes = 0, columns = 0, pending = 0;  // the last paintGl's
     } stats;
 

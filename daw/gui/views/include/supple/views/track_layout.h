@@ -164,6 +164,10 @@ class TrackLayout {
     // offset (EngineApp::modulationOffsets), given each pass through
     // ArrangeView::setModulationOffsets; empty while nothing plays.
     std::map<model::Id, double> liveOffsets;
+    // The tracks a clip, or a launcher stop, holds now (ADR-0097; given each
+    // pass through ArrangeView::setLaunchState): their items dim, as muted
+    // ones, since the arrangement is not what they play.
+    std::set<model::Id> heldTracks;
     // The lane row of a target (with or without an envelope).
     std::optional<std::size_t> indexOfTarget(const model::EnvTarget& target) const;
     // Called when the rows or a height changed (the view re-clamps its scroll,
