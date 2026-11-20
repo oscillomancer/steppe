@@ -32,6 +32,9 @@ env:
   CTEST_OUTPUT_ON_FAILURE: '1'
   CMAKE_BUILD_PARALLEL_LEVEL: '6'
   SUPPLE_REQUIRE_OFFSCREEN: '1'
+  # The on-screen plug-in editor probes (plugins/EditorProbes.cmake) run here,
+  # under Xvfb on Linux; on a developer's desktop they are opt-in.
+  SUPPLE_EDITOR_PROBE_TEST: '1'
   # The script compiler's comma-decimal locale test fails instead of skipping.
   SUPPLE_REQUIRE_COMMA_LOCALE: '1'
 

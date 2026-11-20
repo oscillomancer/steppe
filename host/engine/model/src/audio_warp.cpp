@@ -4,6 +4,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
+
+#include "supple/model/take_owner.h"
 
 namespace supple::model {
 double audioSpeed(const Take& t) {
@@ -70,6 +73,7 @@ void rateAudioTake(Take& t, double rate) {
     t.playrate = rate;
 }
 Status validateAudioWarp(const Session& s, bool bundles) {
+    std::optional<TakeOwners> owners;  // built at the first warp peer
     for (const auto& e : s.takes) {
         const auto& t = *e.value;
         const std::string path = "/takes/" + e.id.str();
@@ -98,18 +102,15 @@ Status validateAudioWarp(const Session& s, bool bundles) {
             !std::binary_search(t.warpPeers.begin(), t.warpPeers.end(), e.id))
             return Error("warp.peers", "invalid warp bundle", path + "/warp_peers",
                          "use audio.quantize to create a reciprocal bundle including this take");
-        const Item* owner = nullptr;
-        for (const auto& it : s.items)
-            if (std::find(it.value->takes.begin(), it.value->takes.end(), e.id) !=
-                it.value->takes.end())
-                owner = it.value.get();
+        auto itemOf = [&](Id take) -> const Item* {
+            if (!owners) owners.emplace(s);
+            const auto held = owners->of(take);
+            return held ? s.items.find(*held) : nullptr;
+        };
+        const Item* owner = itemOf(e.id);
         for (auto id : t.warpPeers) {
             const auto* peer = s.takes.find(id);
-            const Item* other = nullptr;
-            for (const auto& it : s.items)
-                if (std::find(it.value->takes.begin(), it.value->takes.end(), id) !=
-                    it.value->takes.end())
-                    other = it.value.get();
+            const Item* other = itemOf(id);
             bool match = peer && owner && other && !owner->loop && !other->loop && activeWarp(t) &&
                          activeWarp(*peer) && peer->warpPeers == t.warpPeers &&
                          peer->playrate == t.playrate && peer->pitch == t.pitch &&

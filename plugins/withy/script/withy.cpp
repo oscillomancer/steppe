@@ -232,12 +232,14 @@ struct Withy : Effect {
                        .activeWhen(style, {"Multi"})
                        .help("How many voices the multi style sings with.");
     Param delay = milliseconds("Delay", 1, 40, 7)
+                      .modulated()
                       .in("Voices")
                       .activeUnless(style, {"Vibrato"})
                       .help(
                           "How late the voices are at rest: short is a shimmering chorus, long a "
                           "loose double. Multi spreads its voices around it.");
     Param width = percent("Width", 100, 0, 200)
+                      .modulated()
                       .smoothed(20)
                       .in("Voices")
                       .help("The voices' stereo width: 0 is mono, 200 twice as wide.");
@@ -253,10 +255,12 @@ struct Withy : Effect {
                      .in("Motion")
                      .help("The sway's cycle in note values, locked to the song while it plays.");
     Param rate = frequency("Rate", 0.03, 12, 0.6)
+                     .modulated()
                      .in("Motion")
                      .activeWhen(sync, {"Free"})
                      .help("How fast the voices sway when sync is free.");
     Param depth = cents("Depth", 0, 100, 8)
+                      .modulated()
                       .curved(Curve::Pow, 2.0)
                       .in("Motion")
                       .help(
@@ -268,16 +272,19 @@ struct Withy : Effect {
                           "The sway: a sine eases in and out of each swing; a triangle holds the "
                           "pitch steady sharp, then flat, as bucket-brigade choruses do.");
     Param shimmer = percent("Shimmer", 0)
+                        .modulated()
                         .in("Motion")
                         .help(
                             "A fast flutter on top of the sway, near 6 Hz, as a share of the "
                             "depth: string ensembles sing with it.");
     Param drift = percent("Drift", 0)
+                      .modulated()
                       .in("Motion")
                       .help(
                           "A slow random wander for each voice, as a share of the depth, so no "
                           "two cycles are alike.");
     Param bloom = milliseconds("Bloom", 0, 2000, 0)
+                      .modulated()
                       .in("Motion")
                       .activeWhen(sync, {"Free"})
                       .help(
@@ -293,6 +300,7 @@ struct Withy : Effect {
                            "What the voices pass through: clean, or an analog bucket brigade, "
                            "darker the longer its delay, with its curve and its hiss.");
     Param age = percent("Age", 30)
+                    .modulated()
                     .smoothed(50)
                     .in("Colour")
                     .activeWhen(medium, {"Bucket Brigade"})
@@ -300,17 +308,20 @@ struct Withy : Effect {
                         "The bucket brigade's wear: fewer stages, so a darker band, more lean "
                         "and more hiss under the sound.");
     Param highCut = frequency("High Cut", 1000, 20000, 20000)
+                        .modulated()
                         .smoothed(30)
                         .in("Colour")
                         .help("A low-pass on the voices (20 kHz: off).");
     Param lowKeep =
         frequency("Low Keep", 20, 1000, 20)
+            .modulated()
             .smoothed(30)
             .in("Colour")
             .help(
                 "Below this the sound stays dry and centred, whatever the mix: a bass or a kick "
                 "keeps its weight (20 Hz: off).");
     Param feedback = percent("Feedback", 0, -80, 80)
+                         .modulated()
                          .smoothed(20)
                          .in("Colour")
                          .help(
@@ -320,11 +331,13 @@ struct Withy : Effect {
     // --- output -------------------------------------------------------------------------------
 
     Param mix = percent("Mix", 50)
+                    .modulated()
                     .smoothed(20)
                     .in("Output")
                     .activeUnless(style, {"Vibrato"})
                     .help("Dry and voices: 50% is the classic even blend, 100% the voices alone.");
-    Param output = decibels("Output", -24, 24, 0).smoothed(20).in("Output").help("The level out.");
+    Param output =
+        decibels("Output", -24, 24, 0).modulated().smoothed(20).in("Output").help("The level out.");
 
     Param inputLevel = decibels("Input Level", -96, 24, -96)
                            .meter()

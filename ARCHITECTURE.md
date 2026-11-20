@@ -53,7 +53,7 @@ such as opening dialogs are not all engine commands.
 | data | `libs/core-schema` | typed schema DSL: JSON ⇄ C++ binding, validation with hints, JSON Schema export | `docs/specs/core-json.md` |
 | params | `libs/core-params` | semantic parameter definitions, units, curves, text I/O, normalization | ADR-0010, `docs/specs/core-params.md` |
 | patch | `libs/core-patch` | patch/preset documents: schema, validate, merge, canonical form, prose describe | ADR-0009, `docs/specs/core-patch.md` |
-| music | `libs/midi`, `libs/notation` | MIDI model + SMF I/O; the text notation compiler/decompiler | `docs/specs/notation.md` |
+| music | `libs/midi`, `libs/harmony`, `libs/notation` | MIDI model + SMF I/O; keys, scales, chords and pitch spelling (MIT); the text notation compiler/decompiler | `docs/specs/notation.md`, `docs/specs/harmony.md` |
 | time | `libs/timeline` | tempo and meter maps, ramps, bar/beat conversion | `docs/specs/session-model.md` |
 | sync | `libs/sync` (vendored libltc, LGPL, DAW-only) | timecode; MIDI clock/SPP and MTC generators and receivers; LTC encode/decode; the chase tracker that turns external positions into a master playrate | ADR-0070, `docs/specs/sync.md` |
 | audio | `libs/audio-file`, `libs/core-dsp` | file I/O, resampling; shared DSP blocks | — |

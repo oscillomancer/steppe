@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 // Track commands: track.add, track.remove, track.set, track.list and track.move.
+#include "clip_launcher.h"
 #include "command_helpers.h"
 
 namespace supple::engine {
@@ -221,12 +222,14 @@ void registerTrackCommands(cmd::Registry& registry) {
         c.name = "track.remove";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary = "Remove a track with its items, fx, routes and envelopes (not a folder).";
+        c.summary =
+            "Remove a track with its items, clips, fx, routes and envelopes (not a folder).";
         c.description =
             "Removes the track's racks too, except a rack another channel hears (its Out "
             "as the channel's input, or its Note Out's MIDI), which moves there. A warning "
             "names each rack removed (track.rack_removed) or moved (track.rack_moved) and "
-            "its rack sends: removed with it, or following the new home's mute and solo.";
+            "its rack sends: removed with it, or following the new home's mute and solo. Its "
+            "clips go with their takes, named by a clip.removed warning.";
         c.tags = {"track"};
         c.args = schema::object<TrackRef>("track_ref")
                      .field("track", &TrackRef::track, idArg("tr", "Track"))
@@ -249,6 +252,11 @@ void registerTrackCommands(cmd::Registry& registry) {
                     "tr.has_children",
                     a.track + " is a folder with " + std::to_string(tr.children.size()) + " tracks",
                     "/track", "move or remove its children first");
+            // Its clips, with their takes (ADR-0097).
+            auto clips =
+                removeClipsWhere(t, s, [&](const model::Clip& clip) { return clip.track == id; });
+            if (!clips) return std::move(clips).error();
+            warnClipsRemoved(ctx, *clips, "/track");
             std::set<Id> gone(tr.chain.begin(), tr.chain.end());
             gone.insert(tr.inputChain.begin(), tr.inputChain.end());
             gone.insert(id);
@@ -485,6 +493,17 @@ void registerTrackCommands(cmd::Registry& registry) {
                              newType == model::StripType::Master
                                  ? "arm the master alone (armed: true): it records its output"
                                  : "record or monitor on a child channel instead");
+            // Clips live on channels (ADR-0097): a command error, not an
+            // invariant failure.
+            if (newType != model::StripType::Channel)
+                for (const auto& cl : s.clips)
+                    if (cl.value->track == *id)
+                        return Error("track.strip_type",
+                                     a.track + " holds clips (" + cl.id.str() +
+                                         "), and only channels hold clips",
+                                     "/type",
+                                     "move its clips to another channel (clip.move) or remove "
+                                     "them (clip.remove) first");
             if (a.armed && *a.armed && newType == model::StripType::Buss)
                 return Error("track.strip_type", "only channels and masters can be armed", "/armed",
                              "arm a child channel, or the master to print the mix");

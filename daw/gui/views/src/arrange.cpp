@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include "supple/views/arrange.h"
+
+#include "supple/views/chord_field.h"
+#include "supple/views/envelope_lane.h"
 #include "supple/views/session_changes.h"
 
 #include <SDL3/SDL.h>
@@ -16,6 +19,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "supple/model/context.h"
 #include "supple/time/timeline.h"
 #include "supple/ui/canvas.h"
 #include "supple/ui/popup.h"
@@ -27,13 +31,7 @@ namespace supple::views {
 namespace {
 
 constexpr float kTcpWidth = 220;
-constexpr float kBeatRowH = 22;    // bars | beats
-constexpr float kTimeRowH = 15;    // m:ss.mmm
-constexpr float kRangeEdge = 5;    // px beside a loop or punch range's end that drag it
-constexpr float kTempoRowH = 20;   // tempo and meter flags
-constexpr float kRegionRowH = 15;  // regions
-constexpr float kMarkerRowH = 16;  // markers
-constexpr float kRulerHeight = kBeatRowH + kTimeRowH + kTempoRowH + kRegionRowH + kMarkerRowH;
+constexpr float kRangeEdge = 5;  // px beside a loop or punch range's end that drag it
 
 constexpr float kMinBeatLabelPx = 62;
 // The breathing space every pair of ruler labels keeps (design units).
@@ -64,6 +62,35 @@ std::string formatBpm(double bpm) {
     char buf[16];
     std::snprintf(buf, sizeof buf, "%.4g", bpm);
     return buf;
+}
+
+std::string meterText(const time::MeterChange& m) {
+    return std::to_string(m.numerator) + "/" + std::to_string(m.denominator);
+}
+
+// "Eb major", "C# harmonic minor": the ruler's key field as key.set's tonic
+// and scale (the scale's spaces become underscores). None without both.
+std::optional<std::pair<std::string, std::string>> splitKeyText(std::string_view text) {
+    auto trim = [](std::string_view v) {
+        while (!v.empty() && std::isspace(static_cast<unsigned char>(v.front())))
+            v.remove_prefix(1);
+        while (!v.empty() && std::isspace(static_cast<unsigned char>(v.back()))) v.remove_suffix(1);
+        return v;
+    };
+    text = trim(text);
+    const auto space = text.find_first_of(" \t");
+    if (space == std::string_view::npos) return std::nullopt;
+    const std::string_view rest = trim(text.substr(space + 1));
+    if (rest.empty()) return std::nullopt;
+    std::string scale;
+    for (char ch : rest) {
+        if (std::isspace(static_cast<unsigned char>(ch))) {
+            if (!scale.empty() && scale.back() != '_') scale += '_';
+        } else {
+            scale += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        }
+    }
+    return std::pair{std::string(text.substr(0, space)), scale};
 }
 
 ui::Color parseColor(const std::string& text, ui::Color fallback) {
@@ -124,15 +151,17 @@ class Ruler : public ui::Node {
             case Drag::LoopMove:
             case Drag::RegionMove:
             case Drag::Marker:
+            case Drag::Chord:
                 return moved_ ? ui::Cursor::Move : ui::Cursor::Arrow;
             case Drag::LoopNew:
                 return ui::Cursor::Arrow;
             case Drag::None:
                 break;
         }
+        const RulerRows& rows = view_.rulerRows();
         const float y = p.y - bounds().y;
-        if (y < 0 || y >= kBeatRowH + kTimeRowH) return ui::Cursor::Arrow;
-        const bool punch = y >= kBeatRowH;
+        if (y < 0 || y >= rows.tempoTop()) return ui::Cursor::Arrow;
+        const bool punch = y >= rows.beat;
         const double start = punch ? view_.punchStart() : view_.loopStart();
         const double end = punch ? view_.punchEnd() : view_.loopEnd();
         if (end <= start) return ui::Cursor::Arrow;
@@ -156,12 +185,14 @@ class Ruler : public ui::Node {
         const time::TimeMap& tm = *s.timeMap;
         const double pps = view_.viewport().pixelsPerSecond;
         const float x0 = bounds().x, x1 = bounds().right();
-        const ui::Rect beatRow{x0, bounds().y, bounds().w, kBeatRowH};
-        const ui::Rect timeRow{x0, bounds().y + kBeatRowH, bounds().w, kTimeRowH};
-        const ui::Rect tempoRow{x0, timeRow.bottom(), bounds().w, kTempoRowH};
-        const ui::Rect regionRow{x0, tempoRow.bottom(), bounds().w, kRegionRowH};
-        const ui::Rect markRow{x0, regionRow.bottom(), bounds().w,
-                               std::max(0.0f, bounds().bottom() - regionRow.bottom() - 1)};
+        const RulerRows& rows = view_.rulerRows();
+        const ui::Rect beatRow{x0, bounds().y, bounds().w, rows.beat};
+        const ui::Rect timeRow{x0, bounds().y + rows.beat, bounds().w, rows.time};
+        const ui::Rect tempoRow{x0, timeRow.bottom(), bounds().w, rows.tempo};
+        const ui::Rect regionRow{x0, tempoRow.bottom(), bounds().w, rows.region};
+        const ui::Rect chordRow{x0, regionRow.bottom(), bounds().w, rows.chord};
+        const ui::Rect markRow{x0, chordRow.bottom(), bounds().w,
+                               std::max(0.0f, bounds().bottom() - chordRow.bottom() - 1)};
         c.fillRect(bounds(), t.color("panel"));
         c.fillRect({x0, bounds().bottom() - 1, bounds().w, 1}, t.color("rule"));
         for (const ui::Rect& r : {beatRow, timeRow, tempoRow})
@@ -248,7 +279,7 @@ class Ruler : public ui::Node {
         auto placeLabel = [&](float x, const std::string& text, ui::Color colour, bool isBar) {
             const float w = c.textWidth(text, ui::Font::Mono, captionSize);
             if (lastLabelX > -1e8f && x - lastLabelX < lastLabelW + kLabelGap) return;
-            c.text({x + 3, beatRow.y, w + 4, kBeatRowH}, text, ui::Font::Mono, captionSize, colour,
+            c.text({x + 3, beatRow.y, w + 4, beatRow.h}, text, ui::Font::Mono, captionSize, colour,
                    ui::kLeft | ui::kMiddle);
             if (lastLabelX > -1e8f) {
                 const float gap = x - lastLabelX;
@@ -305,7 +336,7 @@ class Ruler : public ui::Node {
             const float w = c.textWidth(label, ui::Font::Mono, captionSize);
             if (lastTimeX > -1e8f && x - lastTimeX < lastTimeW + kLabelGap) continue;
             c.fillRect({x, timeRow.bottom() - 5, 1, 5}, quiet);
-            c.text({x + 3, timeRow.y, w + 4, kTimeRowH}, label, ui::Font::Mono, captionSize, quiet,
+            c.text({x + 3, timeRow.y, w + 4, timeRow.h}, label, ui::Font::Mono, captionSize, quiet,
                    ui::kLeft | ui::kMiddle);
             ++stats.timeLabels;
             if (lastTimeX > -1e8f) {
@@ -321,19 +352,19 @@ class Ruler : public ui::Node {
         for (const time::TempoPoint& p : tm.tempo()) {
             const float x = view_.xAt(tm.secondsAt(p.beat));
             if (x < x0 - 1 || x > x1) continue;
-            c.fillRect({x, tempoRow.y + 1, 1, kTempoRowH / 2.0f}, t.color("buss"));
-            c.text({x + 3, tempoRow.y, 54, kTempoRowH / 2.0f}, formatBpm(p.bpm), ui::Font::Mono,
+            c.fillRect({x, tempoRow.y + 1, 1, tempoRow.h / 2.0f}, t.color("buss"));
+            c.text({x + 3, tempoRow.y, 54, tempoRow.h / 2.0f}, formatBpm(p.bpm), ui::Font::Mono,
                    t.type("caption"), t.color("buss"), ui::kLeft | ui::kMiddle);
         }
         for (const time::MeterChange& m : tm.meter()) {
             const float x = view_.xAt(tm.secondsAt(tm.beatOfBar(m.bar)));
             if (x < x0 - 1 || x > x1) continue;
-            const float y = tempoRow.y + kTempoRowH / 2.0f;
-            c.fillRect({x, y, 1, kTempoRowH / 2.0f - 1}, t.color("master"));
-            c.text({x + 3, y, 54, kTempoRowH / 2.0f},
-                   std::to_string(m.numerator) + "/" + std::to_string(m.denominator),
-                   ui::Font::Mono, t.type("caption"), t.color("master"), ui::kLeft | ui::kMiddle);
+            const float y = tempoRow.y + tempoRow.h / 2.0f;
+            c.fillRect({x, y, 1, tempoRow.h / 2.0f - 1}, t.color("master"));
+            c.text({x + 3, y, 54, tempoRow.h / 2.0f}, meterText(m), ui::Font::Mono,
+                   t.type("caption"), t.color("master"), ui::kLeft | ui::kMiddle);
         }
+        paintKeys(c, tempoRow);
 
         // Regions on their own row, markers below it.
         for (const auto& e : s.regions) {
@@ -351,6 +382,7 @@ class Ruler : public ui::Node {
                 c.text({rx0 + 4, regionRow.y, rx1 - rx0 - 6, regionRow.h}, rg.name, ui::Font::Ui,
                        t.type("caption"), ink, ui::kLeft | ui::kMiddle);
         }
+        if (rows.chord > 0) paintChords(c, chordRow);
         for (const auto& e : s.markers) {
             const model::Marker& mk = *e.value;
             const bool ghost = drag_ == Drag::Marker && moved_ && id_ == e.id;
@@ -366,6 +398,184 @@ class Ruler : public ui::Node {
         c.restore();
     }
 
+    // Key changes (ADR-0095) in the meter half of the tempo row, in quiet
+    // ink: a key that starts on a meter change's beat follows its label;
+    // any other has its own tick. Each label stops short of the next flag.
+    struct KeyFlag {
+        double beat = 0;
+        std::string text;  // "Eb major", as written ("?") when this build cannot read it
+        ui::Rect rect;     // what a press on it hits
+    };
+    std::vector<KeyFlag> keyFlags;  // the last paint's, left to right
+    void paintKeys(ui::Canvas& c, const ui::Rect& tempoRow) {
+        keyFlags.clear();
+        const ui::Theme& t = c.theme();
+        const model::Session& s = view_.session();
+        const time::TimeMap& tm = *s.timeMap;
+        const auto& keys = s.contextView->keys;
+        const float y = tempoRow.y + tempoRow.h / 2.0f, h = tempoRow.h / 2.0f - 1;
+        const float size = t.type("caption");
+        const ui::Color quiet = t.color("ink-quiet");
+        const float x1 = bounds().right();
+        for (std::size_t i = 0; i < keys.size(); ++i) {
+            const model::ContextPoint* p = s.context.find(keys[i].id);
+            if (!p) continue;
+            const float x = view_.xAt(tm.secondsAt(keys[i].beat));
+            if (x > x1) break;
+            float textX = x + 3, limit = x1;
+            bool shared = false;
+            for (const time::MeterChange& m : tm.meter()) {
+                const float mx = view_.xAt(tm.secondsAt(tm.beatOfBar(m.bar)));
+                if (std::abs(mx - x) < 1) {
+                    textX += c.textWidth(meterText(m), ui::Font::Mono, size) + 6;
+                    shared = true;
+                } else if (mx > x) {
+                    limit = std::min(limit, mx - 3);
+                }
+            }
+            if (i + 1 < keys.size())
+                limit = std::min(limit, view_.xAt(tm.secondsAt(keys[i + 1].beat)) - 3);
+            std::string text = model::keyWords(*p);
+            // Words too long for the room end in an ellipsis, or go.
+            const std::string fit =
+                c.elide(text, ui::Font::Ui, size, std::max(0.0f, limit - textX));
+            const float shown = fit.empty() ? 0.0f : c.textWidth(fit, ui::Font::Ui, size);
+            if (!shared) c.fillRect({x, y, 1, h}, quiet);
+            if (!fit.empty())
+                c.text({textX, y, shown + 4, h}, fit, ui::Font::Ui, size, quiet,
+                       ui::kLeft | ui::kMiddle);
+            stats.keyLabels.push_back(text);
+            const float left = shared ? textX - 2 : x - 5;
+            keyFlags.push_back({keys[i].beat,
+                                std::move(text),
+                                {left, y, textX + std::max(shown, 8.0f) - left, h}});
+        }
+    }
+    const KeyFlag* keyFlagAt(ui::Point p) const {
+        for (const KeyFlag& k : keyFlags)
+            if (k.rect.contains(p)) return &k;
+        return nullptr;
+    }
+    // The beat under `x`, on the grid.
+    double gridBeat(float x) const {
+        const auto& tm = *view_.session().timeMap;
+        const double grid = view_.gestures().gridBeats();
+        return std::round(tm.beatAt(std::max(0.0, view_.timeAt(x))) / grid) * grid;
+    }
+    // The key field: "Eb major" into key.set at `beat`.
+    void keyField(double beat, const std::string& text, ui::Point at) {
+        if (!root()) return;
+        auto field = std::make_unique<ui::TextField>("ruler-key", text);
+        field->layout.width = ui::SizeRule::fixed(200);
+        field->selectAll();
+        field->onSubmit = [this, beat](const std::string& typed) {
+            const auto parts = splitKeyText(typed);
+            if (!parts) {
+                if (callbacks.onError)
+                    callbacks.onError(Error("key.text", "'" + typed + "' is not a key", "",
+                                            "a tonic and a scale: Eb major, F# dorian"));
+                return;
+            }
+            json::Value args = json::Value::object();
+            args["at"] = beat;
+            args["tonic"] = parts->first;
+            args["scale"] = parts->second;
+            if (execute("key.set", std::move(args))) root()->closePopup();
+        };
+        root()->openPopup(std::move(field), {at.x, at.y, 1, 1});
+    }
+    // What a new key at `beat` starts from: the key holding there, else C major.
+    std::string keyTextAt(double beat) const {
+        const model::Session& s = view_.session();
+        if (const auto id = model::keyPointAt(s, beat))
+            if (const model::ContextPoint* p = s.context.find(*id)) return model::keyWords(*p);
+        return "C major";
+    }
+
+    // The chord row (ADR-0095): each chord a cell from its beat to the next
+    // chord point, named in letters as the notation writes it ("?" after a
+    // symbol this build cannot read); a "no chord" point ends the cell before
+    // it and draws a short tick. A chord being dragged is drawn where it would
+    // land.
+    struct ChordCell {
+        double beat = 0;
+        std::string symbol;  // "" for no chord
+        ui::Rect label;      // what a press on it hits: its start and its name
+    };
+    std::vector<ChordCell> chordCells;  // the last paint's, left to right
+    void paintChords(ui::Canvas& c, const ui::Rect& row) {
+        chordCells.clear();
+        const ui::Theme& t = c.theme();
+        const model::Session& s = view_.session();
+        const time::TimeMap& tm = *s.timeMap;
+        struct Shown {
+            double beat;
+            const model::ContextPoint* point;
+            bool ghost;
+        };
+        std::vector<Shown> shown;
+        for (const auto& entry : s.contextView->chords)
+            if (const model::ContextPoint* p = s.context.find(entry.id)) {
+                const bool ghost = drag_ == Drag::Chord && moved_ && entry.beat == originalStart_;
+                shown.push_back({ghost ? draftStart_ : entry.beat, p, ghost});
+            }
+        std::stable_sort(shown.begin(), shown.end(),
+                         [](const Shown& a, const Shown& b) { return a.beat < b.beat; });
+        const float size = t.type("caption");
+        const float x0 = bounds().x, x1 = bounds().right();
+        for (std::size_t i = 0; i < shown.size(); ++i) {
+            const float x = view_.xAt(tm.secondsAt(shown[i].beat));
+            if (x > x1) break;
+            const float end =
+                i + 1 < shown.size() ? view_.xAt(tm.secondsAt(shown[i + 1].beat)) : x1 + 2;
+            const model::ContextPoint& p = *shown[i].point;
+            const float alpha = shown[i].ghost ? 0.6f : 1.0f;
+            if (p.symbol.empty()) {  // no chord from here
+                c.fillRect({x, row.y + 4, 1, row.h - 8}, t.color("ink-faint").withAlpha(alpha));
+                chordCells.push_back({shown[i].beat, {}, {x - 4, row.y, 8, row.h}});
+                continue;
+            }
+            const ui::Rect cell{x + 1, row.y + 2, std::max(0.0f, end - x - 2), row.h - 4};
+            if (end >= x0) {
+                c.fillRound(cell, 2, t.color("raised").withAlpha(alpha));
+                c.strokeRound(cell, 2, t.color("rule").withAlpha(alpha));
+            }
+            const bool known = model::parseChordPoint(p).has_value();
+            const std::string text = p.symbol + (known ? "" : "?");
+            const float w = c.textWidth(text, ui::Font::Ui, size);
+            const float room = std::max(0.0f, cell.w - 8);
+            // A name too long for its cell ends in an ellipsis, or goes.
+            const std::string fit = end >= x0 ? c.elide(text, ui::Font::Ui, size, room) : "";
+            if (!fit.empty()) {
+                c.text({cell.x + 4, row.y, room + 4, row.h}, fit, ui::Font::Ui, size,
+                       t.color(known ? "ink" : "ink-quiet").withAlpha(alpha),
+                       ui::kLeft | ui::kMiddle);
+                stats.chordLabels.push_back(fit);
+            }
+            chordCells.push_back(
+                {shown[i].beat,
+                 p.symbol,
+                 {x - 4, row.y, std::min(w + 12, std::max(8.0f, end - x)) + 4, row.h}});
+        }
+    }
+    const ChordCell* chordAt(ui::Point p) const {
+        for (const ChordCell& cell : chordCells)
+            if (cell.label.contains(p)) return &cell;
+        return nullptr;
+    }
+    // The chord field (views/chord_field.h) for the chord point at `beat`.
+    void chordField(double beat, ui::Point at) {
+        if (!root()) return;
+        openChordField(
+            *root(),
+            {[this]() -> const model::Session& { return view_.session(); },
+             [this](const std::string& command, json::Value args) {
+                 return execute(command, std::move(args));
+             },
+             [this](double b) { return view_.xAt(view_.session().timeMap->secondsAt(b)); }},
+            beat, at);
+    }
+
   private:
     enum class Drag {
         None,
@@ -376,7 +586,8 @@ class Ruler : public ui::Node {
         Marker,
         RegionMove,
         RegionLeft,
-        RegionRight
+        RegionRight,
+        Chord
     };
     bool isLoop() const {
         return drag_ == Drag::LoopNew || drag_ == Drag::LoopMove || drag_ == Drag::LoopLeft ||
@@ -429,7 +640,8 @@ class Ruler : public ui::Node {
             m.enabled = allowed;
             items.push_back(std::move(m));
         };
-        const float tempoTop = kBeatRowH + kTimeRowH;
+        const RulerRows& rows = view_.rulerRows();
+        const float tempoTop = rows.tempoTop();
         if (y < tempoTop) {  // the loop (bars) and punch (time) rows
             const double ls = view_.loopStart(), le = view_.loopEnd();
             const double ps = view_.punchStart(), pe = view_.punchEnd();
@@ -456,7 +668,7 @@ class Ruler : public ui::Node {
                 },
                 le > ls || pe > ps);
         }
-        if (y >= tempoTop && y < tempoTop + kTempoRowH / 2.0f) {
+        if (y >= tempoTop && y < tempoTop + rows.tempo / 2.0f) {
             const time::TempoPoint* hit = nullptr;
             float distance = 1e9f;
             for (const auto& p : tm.tempo()) {
@@ -471,10 +683,22 @@ class Ruler : public ui::Node {
                 add(
                     "Delete tempo change", [this, beat = hit->beat] { removeTempo(beat); },
                     hit->beat > 0);
-        } else if (y >= tempoTop && y < tempoTop + kTempoRowH) {
+        } else if (y >= tempoTop && y < tempoTop + rows.tempo) {
+            // The meter half: a key change's flag, else a meter change's; and a
+            // key change can start at the beat under the pointer.
+            const KeyFlag* key = keyFlagAt(at);
+            if (key) {
+                add("Change key\u2026",
+                    [this, beat = key->beat, text = key->text, at] { keyField(beat, text, at); });
+                add("Delete key change", [this, beat = key->beat] {
+                    json::Value args = json::Value::object();
+                    args["at"] = beat;
+                    execute("key.remove", std::move(args));
+                });
+            }
             for (const time::MeterChange& m : tm.meter()) {
                 const float x = view_.xAt(tm.secondsAt(tm.beatOfBar(m.bar)));
-                if (at.x < x - 5 || at.x > x + 40) continue;
+                if (key || at.x < x - 5 || at.x > x + 40) continue;
                 add(
                     "Delete meter change",
                     [this, bar = m.bar] {
@@ -485,7 +709,38 @@ class Ruler : public ui::Node {
                     m.bar > 1);
                 break;
             }
-        } else if (y >= tempoTop + kTempoRowH && y < tempoTop + kTempoRowH + kRegionRowH) {
+            if (!key)
+                add("Key change here\u2026",
+                    [this, beat = gridBeat(at.x), at] { keyField(beat, keyTextAt(beat), at); });
+        } else if (y >= rows.chordTop() && y < rows.markerTop()) {
+            // The chord row: the chord under the pointer (its cell runs to the
+            // next chord point), and a chord can start at the grid beat there.
+            const ChordCell* hit = nullptr;
+            for (const ChordCell& cell : chordCells)
+                if (cell.label.x <= at.x) hit = &cell;
+            if (hit && hit->label.contains(at)) {
+                add("Edit chord\u2026", [this, beat = hit->beat, at] { chordField(beat, at); });
+                add("Delete chord", [this, beat = hit->beat] {
+                    json::Value args = json::Value::object();
+                    args["at"] = beat;
+                    execute("chord.remove", std::move(args));
+                });
+            } else {
+                add("Add chord here\u2026",
+                    [this, beat = gridBeat(at.x), at] { chordField(beat, at); });
+                if (hit && !hit->symbol.empty())
+                    add("No chord from here", [this, beat = gridBeat(at.x)] {
+                        json::Value args = json::Value::object();
+                        args["at"] = beat;
+                        args["symbol"] = "";
+                        execute("chord.set", std::move(args));
+                    });
+            }
+            add("Key change here\u2026",
+                [this, beat = hit && hit->label.contains(at) ? hit->beat : gridBeat(at.x), at] {
+                    keyField(beat, keyTextAt(beat), at);
+                });
+        } else if (y >= rows.regionTop() && y < rows.chordTop()) {
             for (const auto& entry : s.regions) {
                 const auto& rg = *entry.value;
                 const float left = view_.xAt(atSeconds(tm, rg.start, rg.timebase));
@@ -496,7 +751,7 @@ class Ruler : public ui::Node {
                 add("Delete region", [this, id = entry.id] { remove("region", id); });
                 break;
             }
-        } else if (y >= tempoTop + kTempoRowH + kRegionRowH) {
+        } else if (y >= rows.markerTop()) {
             std::optional<model::Id> hit;
             std::string name;
             float distance = 1e9f;
@@ -653,12 +908,13 @@ bool Ruler::handle(const ui::PointerEvent& e) {
         const auto& s = view_.session();
         const auto& tm = *s.timeMap;
         const float y = e.pos.y - bounds().y;
+        const RulerRows& rows = view_.rulerRows();
         const bool free = (e.mods & ui::kShift) != 0;
         punch_ = false;
         (void)markerMods(e.mods);  // a marker or region press drags by these modifiers
-        if (y < kBeatRowH + kTimeRowH) {
+        if (y < rows.tempoTop()) {
             // The bars row sets the loop range, the time row the punch range.
-            punch_ = y >= kBeatRowH;
+            punch_ = y >= rows.beat;
             const double rangeStart = punch_ ? view_.punchStart() : view_.loopStart();
             const double rangeEnd = punch_ ? view_.punchEnd() : view_.loopEnd();
             originalStart_ = tm.beatAt(rangeStart);
@@ -675,11 +931,15 @@ bool Ruler::handle(const ui::PointerEvent& e) {
                     drag_ = Drag::LoopMove;
             }
             if (drag_ == Drag::LoopNew) originalStart_ = originalEnd_ = position(e.pos.x, free);
-        } else if (y < kBeatRowH + kTimeRowH + kTempoRowH &&
-                   y >= kBeatRowH + kTimeRowH + kTempoRowH / 2.0f) {
-            // The meter half: a double-click edits the meter change under the
-            // pointer, or starts one at the bar under it (timesig.set).
+        } else if (y < rows.regionTop() && y >= rows.tempoTop() + rows.tempo / 2.0f) {
+            // The meter half: a double-click edits the key change or the meter
+            // change under the pointer, or starts a meter change at the bar
+            // under it (timesig.set).
             if (e.clicks != 2 || !root()) return true;
+            if (const KeyFlag* key = keyFlagAt(e.pos)) {
+                keyField(key->beat, key->text, e.pos);
+                return true;
+            }
             int bar = tm.barBeat(std::max(0.0, tm.beatAt(view_.timeAt(e.pos.x)))).bar;
             for (const time::MeterChange& m : tm.meter()) {
                 const float x = view_.xAt(tm.secondsAt(tm.beatOfBar(m.bar)));
@@ -699,7 +959,7 @@ bool Ruler::handle(const ui::PointerEvent& e) {
             };
             root()->openPopup(std::move(field), {e.pos.x, e.pos.y, 1, 1});
             return true;
-        } else if (y < kBeatRowH + kTimeRowH + kTempoRowH) {
+        } else if (y < rows.regionTop()) {
             const bool toggleRamp = e.clicks == 1 && view_.gestures().mouse.behaviour(
                                                          "ruler.tempo", e.mods) == "toggle_ramp";
             if (e.clicks != 2 && !toggleRamp) return true;
@@ -742,7 +1002,21 @@ bool Ruler::handle(const ui::PointerEvent& e) {
             const double beat = position(e.pos.x, free);
             tempo(beat, tm.bpmAt(beat));
             return true;
-        } else if (y < kBeatRowH + kTimeRowH + kTempoRowH + kRegionRowH) {
+        } else if (y >= rows.chordTop() && y < rows.markerTop()) {
+            // A chord's start or name: a double-click edits it, a drag moves it;
+            // a double-click elsewhere starts a chord at the grid beat there.
+            if (const ChordCell* cell = chordAt(e.pos)) {
+                if (e.clicks == 2) {
+                    chordField(cell->beat, e.pos);
+                    return true;
+                }
+                originalStart_ = originalEnd_ = cell->beat;
+                drag_ = Drag::Chord;
+            } else if (e.clicks == 2) {
+                chordField(gridBeat(e.pos.x), e.pos);
+                return true;
+            }
+        } else if (y < rows.chordTop()) {
             for (const auto& entry : s.regions) {
                 const auto& rg = *entry.value;
                 const float left = view_.xAt(atSeconds(tm, rg.start, rg.timebase));
@@ -858,6 +1132,10 @@ bool Ruler::handle(const ui::PointerEvent& e) {
                 }
             } else if (moved_ && (drag_ == Drag::LoopLeft || drag_ == Drag::LoopRight)) {
                 clearRange(punch_);  // an edge dragged onto the other: the range is gone
+            } else if (moved_ && drag_ == Drag::Chord && draftStart_ != originalStart_) {
+                args["at"] = originalStart_;
+                args["to"] = draftStart_;
+                execute("chord.set", std::move(args));
             } else if (moved_ && (drag_ == Drag::Marker || isRegion()) &&
                        (draftStart_ != originalStart_ || draftEnd_ != originalEnd_)) {
                 args["id"] = id_.str();
@@ -950,7 +1228,8 @@ ArrangeView::ArrangeView(peaks::PeakService& peaks, Resolve resolve, TransportSo
 
     auto& header = emplace<Node>("arrange-header");
     header.layout.dir = ui::Layout::Dir::Row;
-    header.layout.height = ui::SizeRule::fixed(kRulerHeight);
+    header.layout.height = ui::SizeRule::fixed(rulerRows_.height());
+    headerRow_ = &header;
     header_ = &header.emplace<TcpHeader>(*this);
     header_->layout.width = ui::SizeRule::fixed(kTcpWidth);
     ruler_ = &header.emplace<Ruler>(*this);
@@ -1077,7 +1356,9 @@ void ArrangeView::show(const model::Session& session, const std::vector<model::C
         if (root()) root()->releaseWithin(this);
     }
     generation_ = generation;
-    if (layout_.show(session, changes, generation)) {
+    const bool rebuilt = layout_.show(session, changes, generation);
+    syncChordRow();
+    if (rebuilt) {
         lanes_->rebuild();
         tcp_->setSession(session);
         header_->invalidate();
@@ -1173,7 +1454,8 @@ void ArrangeView::show(const model::Session& session, const std::vector<model::C
     }
     if (before.project->mediaDir != session.project->mediaDir) lanes_->invalidate();
     const bool markers = !before.markers.sameStorage(session.markers) ||
-                         !before.regions.sameStorage(session.regions);
+                         !before.regions.sameStorage(session.regions) ||
+                         !before.context.sameStorage(session.context);
     if (markers) ruler_->invalidate();
     bool extent = timing || markers || !timebaseTracks.empty();
     for (auto id : changedItems) {
@@ -1219,9 +1501,28 @@ bool ArrangeView::poll(bool force, std::chrono::steady_clock::time_point at) {
     return scrolled || t.playing != wasPlaying;
 }
 
+void ArrangeView::setModulationOffsets(std::map<model::Id, double> offsets) {
+    if (offsets == layout_.liveOffsets) return;
+    layout_.liveOffsets = std::move(offsets);
+    if (tcp_) tcp_->refreshModulation();
+    invalidateModulatedLanes();
+}
+
+// The lanes of modulated targets: their live dot sits at the playhead.
+void ArrangeView::invalidateModulatedLanes() {
+    if (!lanes_ || layout_.session().modulations.empty()) return;
+    for (std::size_t row = 0; row < layout_.rowCount(); ++row)
+        if (const auto& target = layout_.rows()[row].target)
+            if (liveOffset(layout_.session(), *target, layout_.liveOffsets) ||
+                layout_.liveOffsets.empty())
+                lanes_->invalidate(lanes_->rowRect(row).intersect(lanes_->bounds()));
+}
+
 void ArrangeView::setPlayhead(double seconds) {
     if (seconds == playhead_) return;
     playhead_ = seconds;
+    if (lanes_) lanes_->livePlayhead = seconds;
+    if (!layout_.liveOffsets.empty()) invalidateModulatedLanes();
     applyFollow();
     if (ui::Root* r = root()) r->requestAnimationFrame();
 }
@@ -1285,7 +1586,8 @@ void ArrangeView::clampScroll() {
 void ArrangeView::arrange(const ui::Canvas& canvas, const ui::Rect& r) {
     // Clamp before arranging: the rows the TCP binds must match the scroll the
     // frame will actually paint with (the visible height is known from `r`).
-    const float visibleHeight = std::max(0.0f, r.h - kRulerHeight - ui::ScrollBar::kThickness);
+    const float visibleHeight =
+        std::max(0.0f, r.h - rulerRows_.height() - ui::ScrollBar::kThickness);
     view_.scrollY = std::clamp(view_.scrollY, 0.0f, std::max(0.0f, scrollHeight() - visibleHeight));
     ui::Node::arrange(canvas, r);
     clampScroll();  // exact, now that the children have their bounds
@@ -1359,6 +1661,23 @@ ui::Node& ArrangeView::ruler() { return *ruler_; }
 void ArrangeView::setRulerCallbacks(RulerCallbacks callbacks) {
     ruler_->callbacks = std::move(callbacks);
 }
+void ArrangeView::setRulerRows(const RulerRows& rows) {
+    if (rows == rulerRows_) return;
+    rulerRows_ = rows;
+    headerRow_->layout.height = ui::SizeRule::fixed(rulerRows_.height());
+    relayout();  // the header, the lanes and the TCP below it move
+    invalidate();
+}
+void ArrangeView::setChordRow(std::optional<bool> shown) {
+    chordRowChoice_ = shown;
+    syncChordRow();
+}
+void ArrangeView::syncChordRow() {
+    RulerRows rows = rulerRows_;
+    const bool shown = chordRowChoice_.value_or(!session().contextView->chords.empty());
+    rows.chord = shown ? RulerRows::kChordHeight : 0;
+    setRulerRows(rows);
+}
 void ArrangeView::addMarker() { ruler_->addMarker(); }
 void ArrangeView::addRegion() { ruler_->addRegion(); }
 const RulerStats& ArrangeView::rulerStats() const { return ruler_->stats; }
@@ -1379,6 +1698,7 @@ json::Value ArrangeView::saveLayout() const {
     v["scroll_y"] = static_cast<double>(vp.scrollY);
     v["row_height"] = static_cast<double>(trackLayout().globalHeight());
     v["follow"] = std::string(views::followName(follow()));
+    if (chordRowChoice_) v["chords"] = *chordRowChoice_;  // View > Chords chose
     json::Value heights = json::Value::object();
     for (const auto& [track, h] : trackLayout().heights())
         heights[track.str()] = static_cast<double>(h);
@@ -1410,6 +1730,11 @@ void ArrangeView::loadLayout(const json::Value& v) {
         }
     if (const json::Value* f = v.find("follow"); f && f->isString())
         if (const auto mode = views::followFrom(f->asString())) setFollow(*mode);
+    {
+        const json::Value* chords = v.find("chords");
+        setChordRow(chords && chords->isBool() ? std::optional<bool>(chords->asBool())
+                                               : std::nullopt);
+    }
     trackLayout().clearTakesExpanded();
     if (const json::Value* ex = v.find("expanded_takes"); ex && ex->isArray())
         for (const json::Value& item : ex->asArray())

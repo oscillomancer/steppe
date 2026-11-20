@@ -3696,6 +3696,88 @@ TEST_CASE("automation timebases preserve plugin output positions through branch 
     CHECK(app->head().envelopes.find(env)->points.back().pos == doctest::Approx(128.0 / 48000));
 }
 
+TEST_CASE("a write mode records the base of a parameter modulated through its envelope") {
+    // ADR-0096 step M4: the lane sends base + offset, so the plug-in's
+    // editor drags from there; what is recorded has the offset taken off.
+    // The edge fixture's parameter 7 (mode 35) is automatable, not
+    // modulatable, 0..1e9; its editor emits 5, then 10.
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    auto call = [&](const char* command, std::string_view args) {
+        auto result = bus.execute({command, j(args), kTest});
+        REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+        return *result;
+    };
+    call("track.add", "{}");
+    call("fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.edge"})");
+    call("env.add", R"({"fx":"fx_1","param":"7","points":[{"beat":0,"value":0}]})");
+    const model::Id fx{model::Kind::Fx, 1}, env{model::Kind::Envelope, 1};
+    auto setup = app->beginTransaction(kTest, "Editor output mode");
+    REQUIRE(setup);
+    std::vector<std::uint8_t> state{35, 0, 0, 0};
+    const auto hash = "sha256:" + sha256Hex(state);
+    app->txn().putBlob(hash, std::make_shared<const model::Blob>(model::Blob{state}));
+    app->txn().modify<model::FxInstance>(fx, [&](auto& f) { f.state = hash; });
+    app->txn().modify<model::Envelope>(env, [](auto& e) { e.mode = model::EnvMode::Touch; });
+    REQUIRE(app->commitTransaction(*setup));
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(
+        app->startEngine(backend, {.sampleRate = 48000, .blockSize = 64}, {.anticipative = false}));
+    REQUIRE(app->transport("play"));
+    backend.run(1);
+    app->tick();
+    // A macro at 100 % with depth 1e-9 of the 1e9 range: an offset of 1.
+    // modulate builds the macro (on the pan: the commands read the
+    // fixture's parameters in its default state, where 7 is read-only), and
+    // the route into 7 goes straight into the model.
+    const json::Value made =
+        call("modulate", R"({"target":{"track":"tr_1","param":"pan"},"source":"macro"})");
+    json::Value knob = json::Value::object();
+    knob["module"] = made.find("module")->asString();
+    knob["params"] = json::Value::object();
+    knob["params"][made.find("knob")->asString()] = 100.0;
+    knob["params"]["smooth"] = 0.0;  // no glide: the first reading is the whole offset
+    REQUIRE(bus.execute({"module.set", knob, kTest}));
+    const model::Modulation& pan =
+        *app->head().modulations.find(*model::Id::parse(made.find("modulation")->asString()));
+    auto routing = app->beginTransaction(kTest, "Route into the envelope");
+    REQUIRE(routing);
+    model::Modulation into;
+    into.source = pan.source;
+    into.target = {fx, "7"};
+    into.depth = 1e-9;
+    const model::Id route = app->txn().create(into);
+    REQUIRE(app->commitTransaction(*routing));
+    const auto offsetNow = [&] {
+        const auto offsets = app->modulationOffsets();
+        const auto it = offsets.find(route);
+        return it == offsets.end() ? 0.0 : it->second;
+    };
+    for (int i = 0; i < 200 && offsetNow() == 0.0; ++i) {
+        backend.run(1);
+        app->tick();
+    }
+    REQUIRE(app->modulationOffsets().count(route));
+    CHECK(app->modulationOffsets().at(route) * 1e9 == doctest::Approx(1.0));
+    auto* instance = app->instanceOf(fx);
+    REQUIRE(instance);
+    REQUIRE(instance->openEditor(1234, 1));
+    for (int i = 0; i < 2; ++i) {
+        backend.run(1);
+        app->tick();
+    }
+    const auto& points = app->head().envelopes.find(env)->points;
+    REQUIRE(points.size() >= 2);
+    CHECK(points.back().value == doctest::Approx(9.0));  // 10 - 1
+    for (const auto& point : points) CHECK(point.value != doctest::Approx(10.0));
+    CHECK(app->head().fx.find(fx)->params.at(7) == doctest::Approx(9.0));
+    instance->closeEditor();
+    app->stopEngine();
+}
+
 TEST_CASE("audio thread preference applies at next start and explicit options win") {
     Root root;
     auto app = makeApp(root.path);
@@ -3989,4 +4071,572 @@ TEST_CASE("round 23: another FX's overflow keeps a healthy writable output") {
     CHECK(app->engine()->pluginOutputDrops() > 0);
     CHECK(savedGain(*app, gainId) == doctest::Approx(-12));
     app->stopEngine();
+}
+
+TEST_CASE("modulation commands: add, a depth drag as one undo step, list and remove") {
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_mod_out");
+    auto run = [&](std::string name, std::string_view args, cmd::Origin origin = kTest) {
+        auto r = d.execute({std::move(name), j(args), std::move(origin)});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    auto added = run("modulation.add", R"({"source": {"module": "mo_2", "input": "in_1"},
+        "target": {"fx": "fx_1", "param": "gain"}, "depth": 0.25})");
+    CHECK(added["modulation"].asString() == "mr_1");
+    const model::Id route{model::Kind::Modulation, 1};
+    const auto depth = [&] { return app->view().modulations.find(route)->depth; };
+    cmd::Origin drag = kTest;
+    drag.gesture = "depth-drag";
+    for (double v : {0.3, 0.4, 0.5}) {
+        json::Value args = j(R"({"modulation": "mr_1"})");
+        args["depth"] = v;
+        auto r = d.execute({"modulation.set", std::move(args), drag});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+    }
+    CHECK(depth() == 0.5);
+    run("history.undo", "{}");
+    CHECK(depth() == 0.25);  // the drag was one step
+    run("history.redo", "{}");
+    // Nothing is cabled into mo_2.in_1 yet: the route carries nothing.
+    CHECK(run("modulation.list", R"({"fx": "fx_1"})")["modulations"]
+              .at(0)
+              .find("inert")
+              ->asString() == "source");
+    const auto telemetry = run("modulation.telemetry", "{}")["modulations"].at(0);
+    CHECK_FALSE(telemetry.find("low"));
+    CHECK_FALSE(telemetry.find("high"));
+    const std::string lfo =
+        run("module.add", R"({"rack": "rk_1", "type": "lfo"})")["module"].asString();
+    json::Value cable = json::Value::object();
+    cable["from"] = lfo + ".out";
+    cable["to"] = "mo_2.in_1";
+    REQUIRE(d.execute({"cable.add", cable, kTest}));
+    auto listed = run("modulation.list", R"({"fx": "fx_1"})");
+    REQUIRE(listed["modulations"].size() == 1);
+    auto row = listed["modulations"].at(0);
+    REQUIRE(row["fed_by"].asArray().size() == 1);
+    CHECK(row["fed_by"].at(0).find("module")->asString() == lfo);
+    CHECK(row["fed_by"].at(0).find("type")->asString() == "com.suppleaudio.rack.lfo");
+    CHECK(run("modulation.telemetry", "{}")["modulations"].at(0).find("low"));
+    CHECK(row["modulation"].asString() == "mr_1");
+    CHECK(row["source"]["module"].asString() == "mo_2");
+    CHECK(row["target"]["fx"].asString() == "fx_1");
+    CHECK(row["target"]["param"].asString() == "gain");
+    CHECK(row["depth"].asDouble() == 0.5);
+    CHECK(row["range"].asString() == "bipolar");
+    CHECK_FALSE(row.find("inert"));
+    CHECK(run("modulation.list", R"({"rack": "rk_1"})")["modulations"].size() == 1);
+    CHECK(run("modulation.list", R"({"track": "tr_1"})")["modulations"].size() == 1);
+    const auto text = run("session.describe", "{}")["text"].asString();
+    CHECK(text.find("modulation: mr_1 mo_2.in_1→fx_1 gain +0.5") != std::string::npos);
+    run("modulation.set", R"({"modulation": "mr_1", "enabled": false, "lane": false})");
+    CHECK_FALSE(app->view().modulations.find(route)->enabled);
+    CHECK_FALSE(app->view().modulations.find(route)->lane);
+    run("modulation.remove", R"({"modulation": "mr_1"})");
+    CHECK(app->view().modulations.empty());
+}
+
+TEST_CASE("modulation commands refuse what cannot be modulated, with a hint") {
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_modulation");
+    const auto refused = [&](std::string name, std::string_view args, std::string_view code,
+                             std::string_view path) {
+        CAPTURE(args);
+        auto r = d.execute({std::move(name), j(args), kTest});
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == code);
+        CHECK(r.error().path == "/args" + std::string(path));  // the bus adds /args
+        CHECK_FALSE(r.error().hint.empty());
+    };
+    const std::string from = R"("source": {"module": "mo_2", "input": "in_2"})";
+    refused(
+        "modulation.add",
+        R"({"source": {"module": "mo_1", "input": "in_1"}, "target": {"fx": "fx_1", "param": "gain"}, "depth": 0.1})",
+        "modulation.source", "/source/module");
+    refused("modulation.add",
+            "{" + from + R"(, "target": {"track": "tr_1", "param": "solo"}, "depth": 1})",
+            "modulation.target", "/target/param");
+    refused("modulation.add",
+            "{" + from + R"(, "target": {"track": "tr_1", "param": "volume"}, "depth": 60})",
+            "modulation.depth", "/depth");
+    refused("modulation.add",
+            "{" + from + R"(, "target": {"track": "tr_0", "param": "width"}, "depth": 10})",
+            "modulation.target", "/target/param");
+    refused("modulation.add",
+            "{" + from + R"(, "target": {"track": "tr_9", "param": "pan"}, "depth": 10})",
+            "modulation.target", "/target/track");
+    refused("modulation.add",
+            "{" + from + R"(, "target": {"fx": "fx_1", "param": "latency"}, "depth": 0.1})",
+            "modulation.target", "/target/param");
+    refused("modulation.add",
+            "{" + from + R"(, "target": {"fx": "fx_1", "param": "nope"}, "depth": 0.1})",
+            "modulation.target", "/target/param");
+    refused("modulation.add",
+            "{" + from + R"(, "target": {"fx": "fx_9", "param": "gain"}, "depth": 0.1})",
+            "modulation.target", "/target/fx");
+    refused("modulation.add",
+            "{" + from +
+                R"(, "target": {"fx": "fx_1", "track": "tr_1", "param": "gain"}, "depth": 0.1})",
+            "modulation.target", "/target");
+    refused("modulation.add",
+            "{" + from + R"(, "target": {"fx": "fx_1", "param": "gain"}, "depth": 1.5})",
+            "modulation.depth", "/depth");
+    refused(
+        "modulation.add",
+        R"({"source": {"module": "mo_2", "input": "in_1"}, "target": {"fx": "fx_1", "param": "gain"}, "depth": 0.1})",
+        "modulation.duplicate", "/target");
+    refused("modulation.set", R"({"modulation": "mr_1", "depth": -2})", "modulation.depth",
+            "/depth");
+    refused("modulation.set", R"({"modulation": "mr_7", "depth": 0.1})", "mr.unknown",
+            "/modulation");
+    refused("modulation.remove", R"({"modulation": "mr_7"})", "mr.unknown", "/modulation");
+    CHECK(app->view().modulations.size() == 1);
+}
+
+TEST_CASE("modulation commands: a modulated track analyzes and renders as a stem") {
+    // The builder's journey: modulate made a Modulators rack on its own
+    // channel, which a track's upstream session once dropped while keeping
+    // the route (engine.cycle). A stem keeps it as an unheard dependency.
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_item");
+    auto run = [&](std::string name, std::string_view args) {
+        auto r = d.execute({std::move(name), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.gain"})");
+    const std::string fx = app->view().tracks.find(*model::Id::parse("tr_1"))->chain.back().str();
+    json::Value args = j(R"({"target": {"param": "gain"}, "source": "lfo"})");
+    args["target"]["fx"] = fx;
+    REQUIRE(d.execute({"modulate", args, kTest}));
+    run("analyze.track", R"({"track": "tr_1"})");
+    run("render.stems", R"({"end_beat": 4, "tracks": ["tr_1"]})");
+}
+
+TEST_CASE(
+    "modulation commands: a parameter that is not modulatable takes a route through its "
+    "envelope") {
+    // ADR-0096 step M4: the fixed gain's gain is automatable, continuous and
+    // not modulatable; its latency is a choice, so it stays refused.
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_mod_out");
+    auto run = [&](std::string name, std::string_view args) {
+        auto r = d.execute({std::move(name), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.fixed-gain"})");  // fx_2
+    // Something in the route's input, so its target alone decides.
+    const std::string lfo =
+        run("module.add", R"({"rack": "rk_1", "type": "lfo"})")["module"].asString();
+    json::Value cable = json::Value::object();
+    cable["from"] = lfo + ".out";
+    cable["to"] = "mo_2.in_1";
+    REQUIRE(d.execute({"cable.add", cable, kTest}));
+    const json::Value described = run("fx.describe", R"({"fx": "fx_2", "full": true})");
+    const auto param = [&](double id) {
+        for (const json::Value& p : described.find("params")->asArray())
+            if (p.find("id")->asDouble() == id) return p;
+        FAIL("no parameter " << id);
+        return json::Value();
+    };
+    CHECK(param(0).find("modulatable_by_envelope"));
+    CHECK_FALSE(param(0).find("modulatable"));
+    CHECK_FALSE(param(1).find("modulatable_by_envelope"));  // a choice
+    const std::string add =
+        R"({"source": {"module": "mo_2", "input": "in_1"}, "target": {"fx": "fx_2", "param": "0"}, "depth": 0.1})";
+    auto refused = d.execute({"modulation.add", j(add), kTest});
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "modulation.envelope");
+    CHECK(refused.error().path == "/args/target/param");
+    CHECK(refused.error().hint.find("env.add") != std::string::npos);
+    auto latency = d.execute(
+        {"modulation.add",
+         j(R"({"source": {"module": "mo_2", "input": "in_1"}, "target": {"fx": "fx_2", "param": "1"}, "depth": 0.1})"),
+         kTest});
+    REQUIRE_FALSE(latency);
+    CHECK(latency.error().code == "modulation.target");
+    // A choice is refused as such, its hint not the envelope a route through
+    // it would want (review 63 F1): adding one changes nothing.
+    CHECK(latency.error().message == "Latency is stepped (or a list), so a route cannot move it");
+    CHECK(latency.error().hint ==
+          "automate it with envelope points instead (env.add {fx, param, points}); routes take "
+          "continuous parameters, which fx.describe marks modulatable or modulatable_by_envelope");
+    auto choice = d.execute(
+        {"modulate", j(R"({"target": {"fx": "fx_2", "param": "1"}, "source": "lfo"})"), kTest});
+    REQUIRE_FALSE(choice);
+    CHECK(choice.error().code == "modulation.target");
+    CHECK(choice.error().message == latency.error().message);
+    // A name it lacks: the hint names what an envelope reaches, as such
+    // (review 64 F1), though no parameter takes a route directly.
+    auto unknown = d.execute(
+        {"modulation.add",
+         j(R"({"source": {"module": "mo_2", "input": "in_1"}, "target": {"fx": "fx_2", "param": "nope"}, "depth": 0.1})"),
+         kTest});
+    REQUIRE_FALSE(unknown);
+    CHECK(unknown.error().code == "modulation.target");
+    CHECK(unknown.error().hint ==
+          "through an active envelope (modulate adds one): 0; fx.describe marks them "
+          "(modulatable_by_envelope) and lists their ranges");
+    // With an envelope it is taken, and listed as playable until the
+    // envelope is turned off.
+    const std::string env =
+        run("env.add", R"({"fx": "fx_2", "param": "0", "points": [{"bar": 1, "value": 0.5}]})")
+            .find("env")
+            ->asString();
+    run("modulation.add", add);
+    CHECK_FALSE(run("modulation.list", "{}").find("modulations")->at(0).find("inert"));
+    json::Value off = json::Value::object();
+    off["env"] = env;
+    off["active"] = false;
+    REQUIRE(d.execute({"env.set", off, kTest}));
+    CHECK(run("modulation.list", "{}").find("modulations")->at(0).find("inert")->asString() ==
+          "envelope");
+    // modulate gives a fresh one its envelope: one point, at its value now.
+    run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.fixed-gain"})");  // fx_3
+    const auto envelopes = app->view().envelopes.size();
+    run("modulate", R"({"target": {"fx": "fx_3", "param": "0"}, "source": "lfo"})");
+    const model::Session s = app->view();
+    REQUIRE(s.envelopes.size() == envelopes + 1);
+    bool found = false;
+    for (const auto& e : s.envelopes)
+        if (e.value->target.object == *model::Id::parse("fx_3")) {
+            found = true;
+            CHECK(e.value->target.param == "0");
+            CHECK(e.value->active);
+            CHECK(e.value->points.size() == 1);
+        }
+    CHECK(found);
+    CHECK(model::checkInvariants(s));
+}
+
+TEST_CASE("modulation commands: removing a route's source or target removes it, with a warning") {
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_modulation");
+    const auto removedBy = [&](std::string name, std::string_view args) {
+        CAPTURE(name);
+        auto r = d.execute({name, j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        CHECK(app->view().modulations.empty());
+        const json::Value* warnings = r->find("warnings");
+        REQUIRE(warnings);
+        bool named = false;
+        for (auto w : warnings->asArray())
+            named |= w["code"].asString() == "modulation.removed" &&
+                     w["message"].asString().find("mr_1") != std::string::npos &&
+                     w["path"].asString() == "/modulations/mr_1";
+        CHECK(named);
+        REQUIRE(d.execute({"history.undo", j("{}"), kTest}));
+        CHECK(app->view().modulations.size() == 1);  // undo brings the route back
+    };
+    removedBy("fx.remove", R"({"fx": "fx_1"})");
+    removedBy("module.remove", R"({"module": "mo_2"})");
+    removedBy("rack.remove", R"({"rack": "rk_1"})");
+    removedBy("track.remove", R"({"track": "tr_1"})");
+}
+
+TEST_CASE("fx.describe marks the parameters a modulation route can take") {
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_mod_out");
+    auto r = d.execute({"fx.describe", j(R"({"fx": "fx_1", "full": true})"), kTest});
+    REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+    auto params = (*r)["params"];
+    REQUIRE(params.find("gain"));
+    CHECK(params["gain"].find("modulatable"));
+    CHECK(params["gain"]["modulatable"].asBool());
+    REQUIRE(params.find("latency"));
+    CHECK_FALSE(params["latency"].find("modulatable"));
+}
+
+TEST_CASE("modulation commands: a modulated send turned MIDI loses its route, with a warning") {
+    // Review round 52, F1. Commands cannot add a mixer target before step M2,
+    // but a file can hold one; the route goes the way a removed target's does.
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_mod_out");
+    REQUIRE(d.execute({"track.add", j(R"({"name": "Verb", "type": "buss"})"), kTest}));
+    REQUIRE(d.execute({"track.add", j(R"({"name": "Keys"})"), kTest}));
+    auto send = d.execute({"route.add", j(R"({"from": "tr_3", "to": "tr_2"})"), kTest});
+    REQUIRE(send);
+    const std::string sendId = (*send)["id"].asString();  // the rack's output is a route too
+    auto txn = app->beginTransaction(kTest, "file");
+    REQUIRE(txn);
+    model::Modulation m;
+    m.source = {{model::Kind::Module, 2}, "in_1"};
+    m.target = {*model::Id::parse(sendId), "volume"};
+    m.depth = 6;
+    app->txn().create(std::move(m));
+    auto committed = app->commitTransaction(*txn);
+    REQUIRE_MESSAGE(committed, (committed ? "" : committed.error().toString()));
+    REQUIRE(app->view().modulations.size() == 1);
+    REQUIRE(d.execute({"track.add", j(R"({"name": "Synth"})"), kTest}));
+    json::Value args = j(R"({"to": "tr_4", "midi": {}})");  // MIDI sends go to channels
+    args["route"] = sendId;
+    auto r = d.execute({"route.set", std::move(args), kTest});
+    REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+    CHECK(app->view().modulations.empty());
+    const json::Value* warnings = r->find("warnings");
+    REQUIRE(warnings);
+    REQUIRE(warnings->size() == 1);
+    auto w = warnings->at(0);
+    CHECK(w["code"].asString() == "modulation.removed");
+    CHECK(w["path"].asString() == "/modulations/mr_1");
+    CHECK(w["message"].asString().find(sendId + " volume") != std::string::npos);
+}
+
+TEST_CASE("modulation commands: a track's volume, pan and width, and a send's level") {
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_mod_out");
+    auto run = [&](std::string name, std::string_view args) {
+        auto r = d.execute({std::move(name), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    run("modulation.add", R"({"source": {"module": "mo_2", "input": "in_1"},
+        "target": {"track": "tr_1", "param": "volume"}, "depth": -6})");
+    run("modulation.add", R"({"source": {"module": "mo_2", "input": "in_1"},
+        "target": {"track": "tr_1", "param": "pan"}, "depth": 150})");
+    run("modulation.add", R"({"source": {"module": "mo_2", "input": "in_2"},
+        "target": {"track": "tr_1", "param": "width"}, "depth": -40})");
+    run("track.add", R"({"name": "Verb", "type": "buss"})");
+    run("track.add", R"({"name": "Keys"})");
+    const auto send = run("route.add", R"({"from": "tr_3", "to": "tr_2"})")["id"].asString();
+    json::Value args = j(R"({"source": {"module": "mo_2", "input": "in_3"}, "depth": 3})");
+    args["target"] = json::Value::object();
+    args["target"]["route"] = send;
+    args["target"]["param"] = "volume";
+    auto added = d.execute({"modulation.add", std::move(args), kTest});
+    REQUIRE_MESSAGE(added, (added ? "" : added.error().toString()));
+    CHECK(app->view().modulations.size() == 4);
+    // Something in each input, so each route's own target decides.
+    const std::string lfo =
+        run("module.add", R"({"rack": "rk_1", "type": "lfo"})")["module"].asString();
+    for (const char* input : {"mo_2.in_1", "mo_2.in_2", "mo_2.in_3"}) {
+        json::Value cable = json::Value::object();
+        cable["from"] = lfo + ".out";
+        cable["to"] = input;
+        REQUIRE(d.execute({"cable.add", cable, kTest}));
+    }
+    auto listed = run("modulation.list", "{}");
+    REQUIRE(listed["modulations"].size() == 4);
+    for (std::size_t i = 0; i < 4; ++i) CHECK_FALSE(listed["modulations"].at(i).find("inert"));
+    auto last = listed["modulations"].at(3);
+    CHECK(last["target"]["route"].asString() == send);
+    CHECK(run("modulation.list", R"({"track": "tr_3"})")["modulations"].size() == 1);
+    // A send turned MIDI cannot take it.
+    json::Value midi = j(R"({"source": {"module": "mo_2", "input": "in_4"}, "depth": 3})");
+    run("track.add", R"({"name": "Synth"})");
+    const auto notes = run("route.add", R"({"from": "tr_3", "to": "tr_4", "midi": {}})")["id"];
+    midi["target"] = json::Value::object();
+    midi["target"]["route"] = notes;
+    midi["target"]["param"] = "volume";
+    auto refused = d.execute({"modulation.add", std::move(midi), kTest});
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "modulation.target");
+    CHECK(refused.error().path == "/args/target/route");
+}
+
+TEST_CASE("modulate: the whole gesture in one undo step, reusing the rack it made") {
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song");
+    auto run = [&](std::string name, std::string_view args) {
+        auto r = d.execute({std::move(name), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.gain"})");
+    // No rack with a Mod Out: a Modulators channel and rack, a Mod Out, an LFO.
+    auto first = run("modulate", R"({"target": {"fx": "fx_1", "param": "gain"},
+        "source": "lfo"})");
+    const model::Session s = app->view();
+    const model::Id rack = *model::Id::parse(first["rack"].asString());
+    const model::Id channel = *model::Id::parse(first["channel"].asString());
+    CHECK(s.racks.find(rack)->name == "Modulators");
+    CHECK(s.racks.find(rack)->track == channel);
+    CHECK(s.tracks.find(channel)->name == "Modulators");
+    CHECK(s.tracks.find(*model::Id::parse("tr_1"))->record.input ==
+          std::nullopt);  // Bass untouched
+    CHECK(first["input"].asString() == "in_1");
+    const model::Modulation& m =
+        *s.modulations.find(*model::Id::parse(first["modulation"].asString()));
+    CHECK(m.depth == 0.25);
+    CHECK(m.source.module.str() == first["mod_out"].asString());
+    CHECK(s.modules.find(*model::Id::parse(first["module"].asString()))->type ==
+          "com.suppleaudio.rack.lfo");
+    bool cabled = false;
+    for (const auto& c : s.cables)
+        cabled |= c.value->from.object.str() == first["module"].asString() &&
+                  c.value->from.key == "out" && c.value->to.object == m.source.module &&
+                  c.value->to.key == "in_1";
+    CHECK(cabled);
+    // The next one finds the Modulators rack and the next free input.
+    const auto modules = s.modules.size();
+    auto second = run("modulate", R"({"target": {"track": "tr_1", "param": "volume"},
+        "source": "random"})");
+    CHECK(second["rack"] == first["rack"]);
+    CHECK(second["mod_out"] == first["mod_out"]);
+    CHECK(second["input"].asString() == "in_2");
+    CHECK_FALSE(second.find("channel"));
+    const model::Session t = app->view();
+    CHECK(t.modulations.find(*model::Id::parse(second["modulation"].asString()))->depth == 6.0);
+    CHECK(t.modules.find(*model::Id::parse(second["module"].asString()))
+              ->params.find("shape")
+              ->asString() == "stepped_random");
+    CHECK(t.modules.size() == modules + 1);
+    CHECK_FALSE(second.find("knob"));  // only a macro has a knob to move
+    // A macro says which knob moves the target.
+    auto macro = run("modulate", R"({"target": {"track": "tr_1", "param": "pan"},
+        "source": "macro"})");
+    REQUIRE(macro.find("knob"));
+    const model::RackModule& made =
+        *app->view().modules.find(*model::Id::parse(macro["module"].asString()));
+    CHECK(made.type == "com.suppleaudio.rack.macro");
+    CHECK(macro["knob"].asString().find("macro") != std::string::npos);
+    run("history.undo", "{}");
+    // One undo step takes all of it back.
+    run("history.undo", "{}");
+    CHECK(app->view().modulations.size() == 1);
+    CHECK(app->view().modules.size() == modules);
+}
+
+TEST_CASE("modulate: a shared rack that would close a loop is passed over for another") {
+    // ADR-0096 (2026-11-20): modulate refuses only a real cycle. The
+    // Modulators rack drives Drums, so a follower on Drums cannot live in
+    // it; nor can an LFO on Keys once that rack hears Keys. Each takes
+    // another rack, and the session stays acyclic.
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song");
+    auto run = [&](std::string name, std::string_view args) {
+        auto r = d.execute({std::move(name), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    run("track.add", R"({"name": "Drums"})");  // tr_2
+    run("track.add", R"({"name": "Keys"})");   // tr_3
+    auto shared = run("modulate", R"({"target": {"track": "tr_2", "param": "volume"},
+        "source": "lfo"})");
+    const std::string modulators = shared["rack"].asString();
+    // Following Drums from the rack that drives Drums would be a loop.
+    auto f = run("modulate", R"({"target": {"track": "tr_3", "param": "pan"},
+        "source": "follower", "from": "tr_2"})");
+    CHECK(f["rack"].asString() != modulators);
+    CHECK(f.find("channel"));
+    const model::Session s = app->view();
+    CHECK(s.racks.find(*model::Id::parse(f["rack"].asString()))->name == "Modulators");
+    CHECK(model::checkInvariants(s));
+    // That second rack now hears Drums; an LFO on Drums' volume goes back to
+    // the first, which hears nothing.
+    auto back = run("modulate", R"({"target": {"track": "tr_2", "param": "pan"},
+        "source": "lfo"})");
+    CHECK(back["rack"].asString() == modulators);
+    CHECK_FALSE(back.find("channel"));
+    // A follower on Keys: the first rack reaches Keys (through Drums and
+    // the second rack), and the second drives Keys, so a third is made.
+    auto keys = run("modulate", R"({"target": {"track": "tr_1", "param": "volume"},
+        "source": "follower", "from": "tr_3"})");
+    CHECK(keys["rack"].asString() != modulators);
+    CHECK(keys["rack"].asString() != f["rack"].asString());
+    // An LFO on Keys: Keys feeds only the third rack, so the first fits.
+    auto lfo = run("modulate", R"({"target": {"track": "tr_3", "param": "volume"},
+        "source": "lfo"})");
+    CHECK(lfo["rack"].asString() == modulators);
+    CHECK(model::checkInvariants(app->view()));
+}
+
+TEST_CASE("modulate: a follower listens through a send, and not to the track it modulates") {
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_mod_out");
+    auto run = [&](std::string name, std::string_view args) {
+        auto r = d.execute({std::move(name), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    auto refuse = [&](std::string_view args) {
+        auto r = d.execute({"modulate", j(args), kTest});
+        REQUIRE_FALSE(r);
+        return r.error();
+    };
+    run("track.add", R"({"name": "Drums"})");  // tr_2
+    // On Bass's own rack (rk_1, homed on the target's track), from Drums.
+    auto f = run("modulate", R"({"target": {"fx": "fx_1", "param": "gain"},
+        "source": "follower", "from": "tr_2", "depth": -0.5})");
+    CHECK(f["rack"].asString() == "rk_1");
+    CHECK(f["mod_out"].asString() == "mo_2");
+    const model::Session s = app->view();
+    const model::Route& send = *s.routes.find(*model::Id::parse(f["send"].asString()));
+    CHECK(send.from.track == model::Id::parse("tr_2"));
+    REQUIRE(send.to.module);
+    CHECK(s.modules.find(*send.to.module)->type == model::kInModule);
+    CHECK(s.modules.find(*model::Id::parse(f["module"].asString()))->type ==
+          "com.suppleaudio.rack.follower");
+    // Following the track it modulates is a cycle, said at from.
+    auto e = refuse(R"({"target": {"track": "tr_1", "param": "volume"}, "source": "follower",
+        "from": "tr_1"})");
+    CHECK(e.code == "modulation.cycle");
+    CHECK(e.path == "/args/from");
+    CHECK_FALSE(e.hint.empty());
+    // Following a buss that Bass sends to: the send closes the loop.
+    run("track.add", R"({"name": "Verb", "type": "buss"})");  // tr_3
+    run("route.add", R"({"from": "tr_1", "to": "tr_3"})");
+    e = refuse(R"({"target": {"track": "tr_1", "param": "volume"}, "source": "follower",
+        "from": "tr_3"})");
+    CHECK(e.code == "modulation.cycle");
+    CHECK(e.path == "/args/from");
+    e = refuse(R"({"target": {"fx": "fx_1", "param": "gain"}, "source": "follower"})");
+    CHECK(e.code == "command.invalid_args");
+    e = refuse(R"({"target": {"fx": "fx_1", "param": "gain"}, "source": "lfo", "from": "tr_2"})");
+    CHECK(e.code == "command.invalid_args");
+    e = refuse(R"({"target": {"fx": "fx_1", "param": "gain"}, "source": "sine"})");
+    CHECK(e.code == "command.invalid_args");
+    // A Mod Out input already patched is routed as it is.
+    auto direct = run("modulate", R"({"target": {"track": "tr_1", "param": "pan"},
+        "source": {"module": "mo_2", "input": "in_5"}})");
+    CHECK(direct["input"].asString() == "in_5");
+    CHECK_FALSE(direct.find("module"));
+    CHECK(app->view().modulations.find(*model::Id::parse(direct["modulation"].asString()))->depth ==
+          50.0);
 }

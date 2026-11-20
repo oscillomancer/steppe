@@ -22,6 +22,7 @@ It omits band widths and LTAS.
 |---|---|---|
 | `integrated_lufs` | overall loudness of the whole render | streaming masters −14; a single synth part −20..−14 |
 | `max_momentary_lufs` / `max_short_term_lufs` | loudest 400 ms / 3 s | |
+| `momentary_lufs` / `short_term_lufs` (`detail: full`) | a value every 100 ms: the 400 ms / 3 s loudness ending there. They start at the first full window (0.4 s, 3 s) and are null before it and in digital silence | compare two renders point by point to see a level move with time |
 | `lra_lu` | loudness range (dynamics over time); null for short renders | pads 1–4, drums 4–10 |
 | `true_peak_dbtp` | inter-sample peak | keep ≤ −1 dBTP for delivery |
 | `plr_lu` | peak-to-loudness ratio: punch vs density | squashed < 8, dynamic > 12 |

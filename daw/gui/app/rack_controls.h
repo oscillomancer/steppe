@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 // A rack's knobs outside its own space (gui.md §4.12): the Macro modules'
 // cabled knobs a channel's Rack device shows (named after what they drive),
-// the menu any rack knob offers (Default, Automate, MIDI learn), and the
+// the menu any rack knob offers (MIDI learn…, Show lane, Reset), and the
 // telemetry subscriptions several views share.
 #pragma once
 
@@ -48,9 +48,22 @@ std::vector<MacroGroup> macroGroups(
 // The racks whose Outs feed `track` (its record input), in route order.
 std::vector<model::Id> racksFeeding(const model::Session& s, model::Id track);
 
-// A knob's right-click rows: Default, Automate (or Show/Hide automation
-// lane), MIDI learn… (and Remove MIDI learn) for a module's parameter, then
-// a choice's values. `current`: its value now, physical.
+// The racks a strip's mod slots list (ADR-0096, M3): those homed on `track`
+// (Rack::track) that hold a Mod Out module, in rack order. A rack is a
+// modulator by holding a Mod Out, whatever its name ("Modulators" is only
+// the default `modulate` gives a new one).
+std::vector<model::Id> modRacks(const model::Session& s, model::Id track);
+
+// Whether a Mod Out input carries 0..1 (ADR-0096, "Range"): it has a cable
+// and every cable into it comes from a unipolar, gate or phase output. An
+// unpatched input, or one fed by any other output, carries -1..1.
+bool unipolarSource(const model::Session& s, const rack::Catalog& catalog,
+                    const model::ModSource& source);
+
+// A knob's right-click rows, in the strips' parameter menu's order and
+// wording (gui.md §4.2): MIDI learn… (and Remove MIDI learn), Show or Hide
+// lane, Reset to the default, then a choice's values. `current`: its value
+// now, physical.
 struct KnobMenuHooks {
     std::function<void(const std::string& command, json::Value args)> exec;
     std::function<void(double physical)> set;  // a one-shot change of the knob

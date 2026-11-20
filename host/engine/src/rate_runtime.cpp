@@ -79,10 +79,13 @@ namespace {
 bool scalarOnly(const model::Session& a, const model::Session& b) {
     {  // This list names every Session member: one added to Session is a build
        // error here until scalarOnly says how it is compared.
+       // `context` and `contextView` are not compared: the plan does not read them
+       // (ADR-0095), so an edit of the context rides along with any of these.
         [[maybe_unused]] const auto& [project, next, tempo, meters, timeMap, tracks, groups, items,
                                       takes, media, midi, fx, routes, envelopes, autoItems, markers,
-                                      regions, racks, modules, cables, blobs, extraSections,
-                                      version] = a;
+                                      regions, racks, modules, cables, modulations, context,
+                                      contextView, scenes, clips, blobs, extraSections, version] =
+            a;
     }
     model::Project x = *a.project;
     x.playrate.rate = b.project->playrate.rate;
@@ -94,7 +97,8 @@ bool scalarOnly(const model::Session& a, const model::Session& b) {
            a.autoItems.sameStorage(b.autoItems) && a.markers.sameStorage(b.markers) &&
            a.regions.sameStorage(b.regions) && a.racks.sameStorage(b.racks) &&
            a.modules.sameStorage(b.modules) && a.cables.sameStorage(b.cables) &&
-           a.blobs == b.blobs && a.extraSections == b.extraSections;
+           a.modulations.sameStorage(b.modulations) && a.scenes.sameStorage(b.scenes) &&
+           a.clips.sameStorage(b.clips) && a.blobs == b.blobs && a.extraSections == b.extraSections;
 }
 }  // namespace
 

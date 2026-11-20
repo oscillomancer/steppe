@@ -38,41 +38,6 @@ inline const std::map<std::string, int>& ccNames() {
     return names;
 }
 
-inline const std::map<std::string, std::vector<int>>& chordQualities() {
-    static const std::map<std::string, std::vector<int>> qualities = {{"", {0, 4, 7}},
-                                                                      {"maj", {0, 4, 7}},
-                                                                      {"m", {0, 3, 7}},
-                                                                      {"min", {0, 3, 7}},
-                                                                      {"dim", {0, 3, 6}},
-                                                                      {"aug", {0, 4, 8}},
-                                                                      {"+", {0, 4, 8}},
-                                                                      {"sus2", {0, 2, 7}},
-                                                                      {"sus4", {0, 5, 7}},
-                                                                      {"sus", {0, 5, 7}},
-                                                                      {"6", {0, 4, 7, 9}},
-                                                                      {"m6", {0, 3, 7, 9}},
-                                                                      {"7", {0, 4, 7, 10}},
-                                                                      {"maj7", {0, 4, 7, 11}},
-                                                                      {"M7", {0, 4, 7, 11}},
-                                                                      {"m7", {0, 3, 7, 10}},
-                                                                      {"min7", {0, 3, 7, 10}},
-                                                                      {"mMaj7", {0, 3, 7, 11}},
-                                                                      {"dim7", {0, 3, 6, 9}},
-                                                                      {"m7b5", {0, 3, 6, 10}},
-                                                                      {"ø", {0, 3, 6, 10}},
-                                                                      {"7sus4", {0, 5, 7, 10}},
-                                                                      {"add9", {0, 4, 7, 14}},
-                                                                      {"9", {0, 4, 7, 10, 14}},
-                                                                      {"maj9", {0, 4, 7, 11, 14}},
-                                                                      {"m9", {0, 3, 7, 10, 14}},
-                                                                      {"7b9", {0, 4, 7, 10, 13}},
-                                                                      {"7#9", {0, 4, 7, 10, 15}},
-                                                                      {"11", {0, 7, 10, 14, 17}},
-                                                                      {"13", {0, 4, 10, 14, 21}},
-                                                                      {"5", {0, 7}}};
-    return qualities;
-}
-
 inline std::optional<std::int64_t> integer(std::string_view text) {
     std::int64_t value = 0;
     auto [p, error] = std::from_chars(text.data(), text.data() + text.size(), value);
@@ -140,11 +105,8 @@ inline std::optional<int> pitch(std::string_view text) {
     return static_cast<int>(result);
 }
 
-inline std::string pitchName(int pitch) {
-    static constexpr std::array<std::string_view, 12> names = {"C",  "C#", "D",  "Eb", "E",  "F",
-                                                               "F#", "G",  "Ab", "A",  "Bb", "B"};
-    return std::string(names[static_cast<std::size_t>(pitch % 12)]) +
-           std::to_string(pitch / 12 - 1);
+inline std::string pitchName(int pitch, const std::optional<harmony::Key>& key = std::nullopt) {
+    return harmony::spell(pitch, key);
 }
 
 inline std::optional<std::int64_t> duration(std::string_view token, int ppq, bool& fraction) {

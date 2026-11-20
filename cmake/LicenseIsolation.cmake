@@ -13,7 +13,7 @@
 # (a test there keeps them equal). Add a GPL-only library's target name to
 # SUPPLE_GPL_ONLY_TARGETS when it is created.
 set(SUPPLE_MIT_LIBRARIES core-base core-json core-schema core-params core-patch core-dsp
-                         core-analysis)
+                         core-analysis harmony)
 set(SUPPLE_GPL_ONLY_TARGETS diagnostics-context diagnostics-capture image-identity)
 
 # Every target created in `directory` and below.

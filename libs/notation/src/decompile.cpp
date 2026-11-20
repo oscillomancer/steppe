@@ -76,16 +76,16 @@ struct Piece {
     std::string token;
 };
 
-std::string noteToken(const Group& group, std::int64_t length, int ppq, int baseVelocity,
-                      bool tied) {
+std::string noteToken(const Group& group, std::int64_t length, int ppq, int baseVelocity, bool tied,
+                      const std::optional<harmony::Key>& key) {
     std::string result;
     if (group.pitches.size() == 1)
-        result = internal::pitchName(group.pitches[0]);
+        result = internal::pitchName(group.pitches[0], key);
     else {
         result = "[";
         for (std::size_t i = 0; i < group.pitches.size(); ++i) {
             if (i != 0) result += " ";
-            result += internal::pitchName(group.pitches[i]);
+            result += internal::pitchName(group.pitches[i], key);
         }
         result += "]";
     }
@@ -205,6 +205,19 @@ std::optional<std::pair<std::string, int>> drumGrid(const std::vector<midi::Note
 }
 
 }  // namespace
+
+Result<std::int64_t> parseDuration(std::string_view token, int ppq) {
+    bool fraction = false;
+    const auto ticks = internal::duration(token, ppq, fraction);
+    if (!ticks || *ticks == 0)
+        return Error(fraction ? "notation.tick_fraction" : "notation.bad_duration",
+                     "invalid duration '" + std::string(token) + "'", "",
+                     "use w, h, q, e, s, t, x, dots, tuplets, sums such as h+e, or positive Nt "
+                     "ticks");
+    return *ticks;
+}
+
+std::string durationText(std::int64_t ticks, int ppq) { return internal::durationName(ticks, ppq); }
 
 Result<std::string> decompile(const midi::Sequence& source, const DecompileOptions& options) {
     for (const auto& note : source.notes)
@@ -342,7 +355,7 @@ Result<std::string> decompile(const midi::Sequence& source, const DecompileOptio
                 auto remaining = group.length;
                 if (remaining == 0) {
                     bars[time.bar(at)].push_back(
-                        {at, 0, noteToken(group, 0, s.ppq, baseVelocity, false)});
+                        {at, 0, noteToken(group, 0, s.ppq, baseVelocity, false, options.key)});
                     continue;
                 }
                 while (remaining > 0) {
@@ -354,8 +367,9 @@ Result<std::string> decompile(const midi::Sequence& source, const DecompileOptio
                                      {},
                                      "Use positive whole-tick bar lengths."};
                     const auto take = std::min(remaining, available);
-                    bars[bar].push_back(
-                        {at, take, noteToken(group, take, s.ppq, baseVelocity, remaining > take)});
+                    bars[bar].push_back({at, take,
+                                         noteToken(group, take, s.ppq, baseVelocity,
+                                                   remaining > take, options.key)});
                     remaining -= take;
                     at += take;
                 }
@@ -469,7 +483,7 @@ Result<std::string> decompile(const midi::Sequence& source, const DecompileOptio
                 body += "pressure";
                 break;
             case midi::ControlKind::PolyPressure:
-                body += "poly " + internal::pitchName(number);
+                body += "poly " + internal::pitchName(number, options.key);
                 break;
             case midi::ControlKind::ProgramChange:
                 break;

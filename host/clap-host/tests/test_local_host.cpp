@@ -181,7 +181,7 @@ TEST_CASE("a VST3 reset ends the notes the host delivered") {
 TEST_CASE("scan finds the fixtures with their capabilities") {
     auto list = scan(std::span<const std::filesystem::path>(&kFixture, 1));
     REQUIRE(list);
-    REQUIRE(list->size() == 20);
+    REQUIRE(list->size() == 21);
     const auto gain = find("com.suppleaudio.test.gain");
     CHECK_FALSE(gain.instrument);
     CHECK(gain.semantic);
@@ -189,6 +189,9 @@ TEST_CASE("scan finds the fixtures with their capabilities") {
     const auto sine = find("com.suppleaudio.test.sine");
     CHECK(sine.instrument);
     CHECK_FALSE(sine.semantic);
+    // ADR-0096 step M4: automatable gain, not modulatable, no semantic keys.
+    const auto fixed = find("com.suppleaudio.test.fixed-gain");
+    CHECK_FALSE(fixed.semantic);
     auto bad = Instance::create(PluginInfo{.id = "nope", .path = kFixture}, {});
     REQUIRE_FALSE(bad);
     CHECK(bad.error().code == "host.create");
@@ -240,6 +243,32 @@ TEST_CASE("gain: state round trip across instances") {
     CHECK(*(*b)->paramValue(0) == doctest::Approx(gainClap(-3)));
     std::vector<std::uint8_t> junk = {1, 2, 3};
     CHECK_FALSE((*b)->loadState(junk).ok());
+}
+
+TEST_CASE("gain: activation, reset, patches and states move the modulation epoch") {
+    // ADR-0096: a host sending only changed param_mod amounts resends them all
+    // once the epoch moves; resets() itself counts only reset() (a rack's
+    // plugin module replays its held notes on it).
+    auto made = Instance::create(find("com.suppleaudio.test.gain"), {});
+    REQUIRE(made);
+    auto& g = **made;
+    auto epoch = g.modulationEpoch();
+    const auto resets = g.resets();
+    REQUIRE(g.setPatch(R"({"params": {"gain": -2}})", CLAP_SUPPLE_SET_MERGE));
+    CHECK(g.modulationEpoch() == ++epoch);
+    auto state = g.saveState();
+    REQUIRE(state);
+    CHECK(g.modulationEpoch() == epoch);  // saving changes nothing
+    REQUIRE(g.loadState(*state));
+    CHECK(g.modulationEpoch() == ++epoch);
+    REQUIRE(g.activate(48000, 1, 64));
+    CHECK(g.modulationEpoch() == ++epoch);
+    REQUIRE(g.startProcessing());
+    g.reset();
+    CHECK(g.modulationEpoch() == ++epoch);
+    CHECK(g.resets() == resets + 1);
+    g.stopProcessing();
+    g.deactivate();
 }
 
 TEST_CASE("gain: semantic schema, patches, errors, validate-only") {

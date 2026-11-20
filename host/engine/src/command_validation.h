@@ -9,6 +9,7 @@
 #include "supple/model/freeze.h"
 #include "supple/model/groups.h"
 #include "supple/model/numeric.h"
+#include "supple/model/take_owner.h"
 
 namespace supple::engine {
 // Omission leaves a field unchanged; explicit null clears it. Preserve null
@@ -49,9 +50,9 @@ inline Status checkUnlocked(const model::Session& s, model::Id item, std::string
     return {};
 }
 inline Status checkUnlockedTake(const model::Session& s, model::Id take, std::string path) {
-    for (const auto& e : s.items)
-        if (std::find(e.value->takes.begin(), e.value->takes.end(), take) != e.value->takes.end())
-            return checkUnlocked(s, e.id, std::move(path));
+    // A clip has no lock (ADR-0097); an item's take follows its item.
+    if (const auto owner = model::takeOwner(s, take); owner && owner->kind == model::Kind::Item)
+        return checkUnlocked(s, *owner, std::move(path));
     return {};
 }
 
@@ -94,8 +95,14 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
             auto& app = ctx.service<EngineApp>();
             const auto before = app.view();
             const auto fields = encoded.encode(a);
+            // Scenes and clips are outside a frozen track's print (ADR-0097):
+            // they stay editable, and copying a frozen item into a clip
+            // leaves it as it is (validateFrozenTransition still checks).
+            // launch.* answer for a frozen track themselves (launch.stop and
+            // launch.arrangement change nothing, launch.clip refuses).
             if (name != "track.unfreeze" && name != "track.freeze.commit" &&
-                name != "track.remove" && name != "track.duplicate") {
+                name != "track.remove" && name != "track.duplicate" && !name.starts_with("clip.") &&
+                !name.starts_with("scene.") && !name.starts_with("launch.")) {
                 for (const auto& field : fields.asObject()) {
                     if (!field.value.isString()) continue;
                     if (field.key != "fx" && field.key != "item" && field.key != "take" &&
@@ -128,6 +135,34 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
             }
             auto result = original(a, ctx);
             if (!result) return result.error();
+            // Routes whose source or target this edit took away go with it,
+            // each named in a warning (ADR-0096, "Cascades"); a route's own
+            // commands refuse instead.
+            // The transaction removes those whose object it removes; a route
+            // whose target stopped fitting (a send turned MIDI) goes here.
+            if (edit && app.inTransaction() && !name.starts_with("modulation.")) {
+                const auto removed = [&](model::Id route, const model::Modulation& m,
+                                         const std::string& why) {
+                    ctx.warn("modulation.removed",
+                             route.str() + " (" + m.source.module.str() + "." + m.source.input +
+                                 " to " + m.target.object.str() + " " + m.target.param +
+                                 ") was removed: " + why,
+                             "/modulations/" + route.str());
+                };
+                const model::Session after = app.view();
+                for (const auto& e : before.modulations) {
+                    if (after.modulations.contains(e.id)) continue;
+                    const model::Modulation& m = *e.value;
+                    removed(e.id, m,
+                            after.modules.contains(m.source.module)
+                                ? "its target " + m.target.object.str() + " was removed"
+                                : "its source " + m.source.module.str() + " was removed");
+                }
+                for (const auto& [route, why] : model::strandedModulations(after)) {
+                    removed(route, *after.modulations.find(route), why);
+                    app.txn().remove<model::Modulation>(route);
+                }
+            }
             if (edit) SUPPLE_TRY(model::validateFrozenTransition(before, app.view()));
             return result;
         };

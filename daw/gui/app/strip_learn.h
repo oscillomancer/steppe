@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 // MIDI learn on a strip's, a send's or a VCA's own controls (gui.md §4.5,
-// ADR-0058): a right-click on a track's fader, pan or button (the TCP, the
-// mixer), on a VCA's fader, mute or solo (the mixer) or on a control of the
-// routing matrix offers "MIDI learn…", which opens the learn dialog. The
-// binding is the project's (track/route/vca `learn`), undoable.
+// ADR-0058): the parameter menu of a track's fader, pan or button (the TCP,
+// the mixer) or of a VCA's fader, mute or solo (param_menu.h), and the menu
+// of a control of the routing matrix, offer "MIDI learn…", which opens the
+// learn dialog. The binding is the project's (track/route/vca `learn`),
+// undoable.
 #pragma once
 
 #include <string>
@@ -32,9 +33,9 @@ std::string stripControlLabel(std::string_view param);
 // Its menu entry: "MIDI learn: Pan…", naming what is bound now.
 std::string stripLearnLabel(const model::Session& s, const StripControl& control);
 
-// The control's right-click menu at `anchor`: "MIDI learn…" (naming what is
-// bound now). OK in the dialog binds every object in one undo step; Remove
-// unbinds those bound.
+// The routing matrix's right-click menu at `anchor`: "MIDI learn…" (naming
+// what is bound now). OK in the dialog binds every object in one undo step;
+// Remove unbinds those bound.
 void openStripLearnMenu(ui::Root& root, AppActions& actions, StripControl control,
                         const ui::Rect& anchor);
 

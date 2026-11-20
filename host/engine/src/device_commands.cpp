@@ -206,6 +206,9 @@ schema::Schema<EngineStatus> engineStatusSchema() {
                schema::arrayOf(schema::string()))
         .field("dropped", &EngineStatus::dropped, schema::integer())
         .field("voice_dropped", &EngineStatus::voiceDropped, schema::integer())
+        .field("modulation_deferred", &EngineStatus::modulationDeferred,
+               schema::integer().doc("Modulation events that waited past their grid point for "
+                                     "room in a block (ADR-0096)"))
         .field("failed_errors", &EngineStatus::failedErrors, schema::any())
         .field("sync", &EngineStatus::sync, syncStatusSchema())
         .build();
@@ -348,7 +351,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
                      "thp_opt_out": "<any>", "audio_page_faults": "<any>",
                      "meter_drops": {"renderer": 0, "callback": 0}, "failed_fx": [], "disabled_fx": [],
                      "bridge_threads_refused": [],
-                     "dropped": 0, "voice_dropped": 0, "failed_errors": [], "sync": "<any>"})"),
+                     "dropped": 0, "voice_dropped": 0, "modulation_deferred": 0, "failed_errors": [], "sync": "<any>"})"),
              "empty"}};
         c.run = [](const EngineStartArgs& a, Context& ctx) -> Result<EngineStatus> {
             EngineApp& app = engine::app(ctx);
@@ -540,7 +543,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
                                            "saturated": false},
                      "meter_drops": {"renderer": 0, "callback": 0}, "failed_fx": [], "disabled_fx": [],
                      "bridge_threads_refused": [],
-                     "dropped": 0, "voice_dropped": 0, "failed_errors": [], "sync": "<any>"})"),
+                     "dropped": 0, "voice_dropped": 0, "modulation_deferred": 0, "failed_errors": [], "sync": "<any>"})"),
                        "empty"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<EngineStatus> {
             return app(ctx).engineStatus();

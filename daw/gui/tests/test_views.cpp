@@ -20,8 +20,10 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <tuple>
 #include <vector>
 #include "supple/base/files.h"
+#include "supple/views/item_body.h"
 #include "test_support.h"
 #include "ui_persistence.h"
 
@@ -1312,6 +1314,53 @@ TEST_CASE("golden: items with fades, muted items and multi-take items") {
     arrange->setViewport(v);
     settle(root, arrange->lanes());
     golden(root, "arrange-items.png");
+}
+
+TEST_CASE("item bodies draw from a take and a content window, without an item") {
+    Gl& g = gl();
+    if (!g.ok) return;
+    // A cell 100 units wide showing four beats, as a clip cell will: a
+    // one-beat take with an eighth note, looped, gives a note per beat.
+    const ui::Rect cell{10, 0, 100, 40};
+    model::MidiSource source;
+    source.sequence.ppq = 960;
+    source.sequence.length = 960;
+    source.sequence.notes.push_back({0, 480, 0, 60, 96, 0});
+    model::Take take;
+    views::MidiWindow window;
+    window.xAt = [&](double beat) { return cell.x + static_cast<float>(beat * 25); };
+    window.length = 4;
+    window.from = 0;
+    window.to = 4;
+    window.end = cell.right();
+    window.loop = true;
+    auto notes = ui::RectRenderer::create();
+    REQUIRE(notes);
+    CHECK(views::drawMidiBody(*notes, cell, take, source, window, 0xffffffffu, 0) == 4);
+    window.from = 2;  // half of it in view
+    CHECK(views::drawMidiBody(*notes, cell, take, source, window, 0xffffffffu, 0) == 2);
+    window.loop = false;  // once: the one note, out of view now
+    CHECK(views::drawMidiBody(*notes, cell, take, source, window, 0xffffffffu, 0) == 0);
+    CHECK(notes->count() == 6);
+    // Two seconds of stereo across the same cell: a column per unit and
+    // channel, only where the frame's clip reaches.
+    audio::AudioData audio;
+    audio.sampleRate = 48000;
+    audio.channels.assign(2, std::vector<float>(96000, 0.25f));
+    const peaks::Pyramid pyramid = peaks::Pyramid::build(audio);
+    views::AudioWindow seconds{[&](float x) { return static_cast<double>(x - cell.x) / 50.0; },
+                               50.0, false};
+    auto strips = ui::StripRenderer::create();
+    REQUIRE(strips);
+    ui::GlFrame frame;
+    frame.width = 200;
+    frame.height = 100;
+    frame.clip = {0, 0, 200, 100};
+    CHECK(views::drawAudioBody(*strips, frame, cell, pyramid, take, seconds, 1.0f, 0xffffffffu) ==
+          200);
+    frame.clip = {0, 0, 60, 100};
+    CHECK(views::drawAudioBody(*strips, frame, cell, pyramid, take, seconds, 1.0f, 0xffffffffu) ==
+          100);
 }
 
 // --- the track control panel (P5.5) -------------------------------------------------
@@ -2674,6 +2723,246 @@ TEST_CASE("a master's lane: armed or holding items, above its automation lanes (
     const auto goneChanges = gone.changes();
     REQUIRE(layout.show(plain, &goneChanges));
     CHECK_FALSE(layout.indexOf(model::kMaster));
+}
+
+TEST_CASE(
+    "automation rows carry their target; a lane, with or without an envelope, holds no item") {
+    model::EditTxn txn(model::Session::create(), 1);
+    model::Track track;
+    track.parent = model::kMaster;
+    const auto channel = txn.create(track);
+    txn.modify<model::Track>(model::kMaster,
+                             [&](auto& master) { master.children.push_back(channel); });
+    model::Envelope env;
+    env.target = {channel, "pan"};
+    env.points = {{0, 0}};
+    const auto pan = txn.create(env);
+    env.target = {channel, "volume"};
+    const auto volume = txn.create(env);
+    auto s = txn.commit().value();
+    views::TrackLayout layout;
+    REQUIRE(layout.show(s));
+    // The channel, then its lanes in envelope order: volume before pan.
+    REQUIRE(layout.rowCount() == 3);
+    const views::TrackRow& row = layout.rows()[0];
+    CHECK_FALSE(row.lane());
+    CHECK_FALSE(row.target);
+    CHECK(views::holdsItem(s, row, nullptr));
+    for (auto [index, id, param] :
+         {std::tuple{std::size_t{1}, volume, "volume"}, std::tuple{std::size_t{2}, pan, "pan"}}) {
+        const views::TrackRow& lane = layout.rows()[index];
+        CHECK(layout.indexOfEnv(id) == index);
+        REQUIRE(lane.lane());
+        CHECK(*lane.target == model::EnvTarget{channel, param});
+        CHECK(lane.env == id);
+        CHECK(lane.track == channel);
+        CHECK_FALSE(views::holdsItem(s, lane, nullptr));
+        CHECK(layout.heightOf(index) == doctest::Approx(static_cast<double>(layout.envHeight())));
+    }
+    // A lane keyed by its target alone (a modulated parameter without
+    // automation) is a lane all the same: no item lands on it.
+    views::TrackRow modulated{channel, model::StripType::Channel, 0,
+                              model::EnvTarget{channel, "volume"}, std::nullopt};
+    CHECK(modulated.lane());
+    CHECK_FALSE(views::holdsItem(s, modulated, nullptr));
+}
+
+TEST_CASE("modulated targets have lanes keyed by target, with or without an envelope") {
+    // Built with EditTxn, as the model tests build them (the views take no
+    // engine; the app's tests make routes with modulate): channel A homes a
+    // rack whose LFO and ADSR feed a Mod Out; channel B is modulated; A sends
+    // to a buss.
+    model::EditTxn txn(model::Session::create(), 1);
+    auto addTrack = [&](model::StripType type) {
+        model::Track tr;
+        tr.type = type;
+        tr.parent = model::kMaster;
+        const auto id = txn.create(tr);
+        txn.modify<model::Track>(model::kMaster, [&](auto& m) { m.children.push_back(id); });
+        return id;
+    };
+    const auto a = addTrack(model::StripType::Channel);
+    const auto b = addTrack(model::StripType::Channel);
+    const auto buss = addTrack(model::StripType::Buss);
+    txn.modify<model::Track>(b, [](model::Track& t) {
+        t.volumeDb = -6;
+        t.panMode = model::PanMode::Width;
+    });
+    const auto rack = txn.create(model::Rack{a, "Modulators"});
+    model::RackModule mod;
+    mod.rack = rack;
+    mod.type = "com.suppleaudio.rack.lfo";
+    const auto lfo = txn.create(mod);
+    mod.type = std::string(model::kModOutModule);
+    const auto modOut = txn.create(mod);
+    txn.create(model::Cable{{lfo, "out"}, {modOut, "in_1"}, std::nullopt, ""});
+    model::Route send;
+    send.from.track = a;
+    send.to.track = buss;
+    const auto sendId = txn.create(send);
+    auto route = [&](std::string input, model::Id object, std::string param, double depth,
+                     bool lane = true, bool enabled = true) {
+        model::Modulation m;
+        m.source = {modOut, std::move(input)};
+        m.target = {object, std::move(param)};
+        m.depth = depth;
+        m.lane = lane;
+        m.enabled = enabled;
+        return txn.create(m);
+    };
+    route("in_1", b, "volume", 6);                            // a lane without an envelope
+    route("in_2", b, "volume", 3, true, false);               // disabled: the lane, not the band
+    route("in_2", b, "pan", 30);                              // in_2 counts as 0..1 below
+    const auto width = route("in_1", b, "width", 50, false);  // lane false: none
+    route("in_1", sendId, "volume", -12);                     // under the strip it leaves
+    model::Envelope env;
+    env.target = {b, "pan"};
+    env.points = {{0, 0}};
+    const auto panEnv = txn.create(env);  // the pan lane is its envelope's: one lane
+    auto s = txn.commit();
+    REQUIRE_MESSAGE(s, (s ? "" : s.error().toString()));
+    views::TrackLayout layout;
+    REQUIRE(layout.show(*s));
+    // A, its send's level lane, B, its volume (no envelope) then pan, the buss.
+    REQUIRE(layout.rowCount() == 6);
+    const auto sendLane = layout.indexOfTarget({sendId, "volume"});
+    REQUIRE(sendLane);
+    CHECK(*sendLane == 1);
+    CHECK(layout.rows()[1].track == a);
+    CHECK_FALSE(layout.rows()[1].env);
+    const auto volume = layout.indexOfTarget({b, "volume"});
+    const auto pan = layout.indexOfTarget({b, "pan"});
+    REQUIRE(volume);
+    REQUIRE(pan);
+    CHECK(*volume == 3);
+    CHECK(*pan == 4);
+    CHECK(layout.rows()[3].lane());
+    CHECK_FALSE(layout.rows()[3].env);
+    CHECK(layout.rows()[4].env == panEnv);
+    CHECK(layout.indexOfEnv(panEnv) == 4);
+    CHECK_FALSE(layout.indexOfTarget({b, "width"}));
+    CHECK(layout.heightOf(3) == doctest::Approx(static_cast<double>(layout.envHeight())));
+    CHECK_FALSE(views::holdsItem(*s, layout.rows()[3], nullptr));
+    // The bands, in the lanes' units: ±6 dB (the disabled route adds
+    // nothing), 0..30 on the pan from a 0..1 source, -12..12 dB on the send.
+    const views::UnipolarSource unipolar = [](const model::Session&, const model::ModSource& src) {
+        return src.input == "in_2";
+    };
+    const auto vScale = layout.scaleOf(model::EnvTarget{b, "volume"});
+    REQUIRE(vScale);
+    const auto vBand = views::modulationBand(*s, {b, "volume"}, *vScale, unipolar);
+    REQUIRE(vBand);
+    CHECK(vBand->low == -6);
+    CHECK(vBand->high == 6);
+    CHECK(views::targetValue(*s, {b, "volume"}, *vScale) == -6);
+    const auto pBand = views::modulationBand(*s, {b, "pan"},
+                                             *layout.scaleOf(model::EnvTarget{b, "pan"}), unipolar);
+    REQUIRE(pBand);
+    CHECK(pBand->low == 0);
+    CHECK(pBand->high == 30);
+    const auto sBand = views::modulationBand(*s, {sendId, "volume"}, *vScale, {});
+    REQUIRE(sBand);
+    CHECK(sBand->low == -12);
+    CHECK(sBand->high == 12);
+    CHECK_FALSE(views::modulationBand(*s, {buss, "volume"}, *vScale, unipolar));
+    // Turning a route's lane on adds its target's lane; a hidden envelope on
+    // a modulated target gives the lane its curve.
+    model::EditTxn more(*s, 2);
+    more.modify<model::Modulation>(width, [](model::Modulation& m) { m.lane = true; });
+    env.target = {b, "volume"};
+    env.visible = false;
+    const auto hiddenVolume = more.create(env);
+    auto s2 = more.commit();
+    REQUIRE(s2);
+    REQUIRE(layout.show(*s2));
+    REQUIRE(layout.rowCount() == 7);
+    CHECK(layout.indexOfTarget({b, "width"}));
+    CHECK(layout.rows()[*layout.indexOfTarget({b, "volume"})].env == hiddenVolume);
+    // Without routes asking for one, the lane goes.
+    model::EditTxn off(*s2, 3);
+    for (const auto& m : s2->modulations)
+        off.modify<model::Modulation>(m.id, [](model::Modulation& r) { r.lane = false; });
+    auto s3 = off.commit();
+    REQUIRE(s3);
+    REQUIRE(layout.show(*s3));
+    CHECK(layout.rowCount() == 4);  // A, B, its pan envelope's lane, the buss
+    CHECK(layout.indexOfEnv(panEnv));
+    CHECK_FALSE(layout.indexOfTarget({b, "volume"}));
+}
+
+TEST_CASE("a plug-in lane's modulation band follows the parameter's curve (CLAP domain)") {
+    // Review round 56 F1: the engine adds depth x the CLAP range to the CLAP
+    // value (ADR-0096), which for a stock plug-in's float parameter is its
+    // position on the curve. A log cutoff at 1 kHz, depth 0.1 bipolar, moves
+    // 0.1 of the travel each way: 0.3 decades, 501 Hz to 1995 Hz.
+    model::EditTxn txn(model::Session::create(), 1);
+    model::FxInstance fx;
+    fx.plugin.id = "log-cutoff-test";
+    const auto filter = txn.create(fx);
+    model::Track tr;
+    tr.parent = model::kMaster;
+    tr.chain.push_back(filter);
+    const auto track = txn.create(tr);
+    txn.modify<model::Track>(model::kMaster, [&](auto& m) { m.children.push_back(track); });
+    const auto rack = txn.create(model::Rack{track, "Modulators"});
+    model::RackModule mod;
+    mod.rack = rack;
+    mod.type = std::string(model::kModOutModule);
+    const auto modOut = txn.create(mod);
+    model::Modulation route;
+    route.source = {modOut, "in_1"};
+    route.target = {filter, "cutoff"};
+    route.depth = 0.1;
+    txn.create(route);
+    auto s = txn.commit();
+    REQUIRE_MESSAGE(s, (s ? "" : s.error().toString()));
+
+    json::Value d = json::Value::object();
+    d["id"] = 1;
+    d["name"] = "Cutoff";
+    d["type"] = "float";
+    d["unit"] = "Hz";
+    d["min"] = 20.0;
+    d["max"] = 20000.0;
+    d["default"] = 1000.0;
+    d["curve"] = "log";
+    auto described = params::fromDescription("cutoff", d);
+    REQUIRE(described);
+    views::EnvScale scale;
+    scale.kind = views::EnvScale::Kind::Plugin;
+    scale.param = std::shared_ptr<const params::DescribedParam>(std::move(*described));
+    CHECK(scale.modulationUnit() == 1.0);  // a float's CLAP range is its 0..1 travel
+
+    const auto band = views::modulationBand(*s, {filter, "cutoff"}, scale, {});
+    REQUIRE(band);
+    CHECK(band->low == doctest::Approx(-0.1));
+    CHECK(band->high == doctest::Approx(0.1));
+    CHECK(views::modulatedValue(scale, 1000.0, band->high) ==
+          doctest::Approx(1000.0 * std::pow(10.0, 0.3)).epsilon(1e-6));
+    CHECK(views::modulatedValue(scale, 1000.0, band->low) ==
+          doctest::Approx(1000.0 / std::pow(10.0, 0.3)).epsilon(1e-6));
+    // Without automation the lane's base is the parameter's value: the
+    // patch's for a semantic plug-in, the last CLAP value for a plain one;
+    // the default only when neither has it.
+    CHECK(views::targetValue(*s, {filter, "cutoff"}, scale) == 1000.0);  // the default
+    model::EditTxn set(*s, 2);
+    set.modify<model::FxInstance>(filter, [](model::FxInstance& f) {
+        json::Value patch = json::Value::object(), values = json::Value::object();
+        values["cutoff"] = 4000.0;
+        patch["params"] = std::move(values);
+        f.patch = std::move(patch);
+        f.params[7] = 0.25;
+    });
+    auto withValue = set.commit();
+    REQUIRE(withValue);
+    CHECK(views::targetValue(*withValue, {filter, "cutoff"}, scale) == 4000.0);
+    CHECK(views::targetValue(*withValue, {filter, "7"}, scale) == 0.25);
+    // The sum stays in the range, as the plug-in clamps it.
+    CHECK(views::modulatedValue(scale, 15000.0, 0.5) == doctest::Approx(20000.0));
+    // A mixer value's domain is its own unit.
+    views::EnvScale volume;
+    CHECK(volume.modulationUnit() == 1.0);
+    CHECK(views::modulatedValue(volume, -6.0, 3.0) == -3.0);
 }
 
 TEST_CASE("master automation lanes are visible while hidden track lanes remain hidden") {

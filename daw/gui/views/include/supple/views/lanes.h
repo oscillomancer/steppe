@@ -98,6 +98,9 @@ class Lanes : public ui::Node {
         std::uint64_t rebuilds = 0, items = 0;
     };
     const IndexStats& indexStats() const { return indexStats_; }
+    // Where a modulated lane draws its live value (the layout's
+    // liveOffsets): the playhead, in seconds.
+    double livePlayhead = 0;
 
   private:
     friend class LaneLabels;

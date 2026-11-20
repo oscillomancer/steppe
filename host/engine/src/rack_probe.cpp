@@ -13,6 +13,7 @@
 #include "rack_runtime.h"
 #include "supple/engine/app.h"
 #include "supple/engine/offline.h"
+#include "supple/harmony/harmony.h"
 #include "supple/model/schemas.h"
 
 namespace supple::engine {
@@ -73,12 +74,7 @@ struct ProbeArgs {
 
 double rounded(double x, double step = 1e-4) { return std::round(x / step) * step; }
 
-std::string noteName(int midi) {
-    static const char* const names[] = {"C",  "C#", "D",  "D#", "E",  "F",
-                                        "F#", "G",  "G#", "A",  "A#", "B"};
-    const int pc = ((midi % 12) + 12) % 12;
-    return std::string(names[pc]) + std::to_string(midi / 12 - 1 - (midi < 0 && pc ? 1 : 0));
-}
+std::string noteName(int midi) { return harmony::spell(midi); }
 
 std::string fixed(double x, int digits) {
     char buf[48];

@@ -15,6 +15,7 @@
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <tuple>
 
@@ -747,7 +748,7 @@ TEST_CASE("rack window: a cable that closes a loop is drawn as feedback") {
     f.snapshot("rack-feedback.png");
 }
 
-TEST_CASE("rack window: Automate on a knob makes an envelope, a lane on the home channel") {
+TEST_CASE("rack window: Show lane on a knob makes an envelope, a lane on the home channel") {
     Fixture f;
     if (!f.ok) return;
     Patch p(f);
@@ -759,7 +760,16 @@ TEST_CASE("rack window: Automate on a knob makes an envelope, a lane on the home
     f.pointer(ui::PointerEvent::Type::Down, level, 3);
     f.pointer(ui::PointerEvent::Type::Up, level, 3);
     REQUIRE(f.r().find("rack.param.menu"));
-    REQUIRE(f.pick("rack.param.menu", "Automate"));
+    // The strips' wording (gui.md §4.2): Reset to the default, Show lane.
+    {
+        const auto items = ui::menuItems(*f.r().find("rack.param.menu"));
+        REQUIRE(items.size() == 3);
+        CHECK(items[0].label == "MIDI learn…");
+        CHECK(items[1].label == "Show lane");
+        CHECK(items[2].label == "Reset to 0.0 dB");
+    }
+    f.snapshot("rack-knob-menu.png");
+    REQUIRE(f.pick("rack.param.menu", "Show lane"));
     const model::Envelope* env = nullptr;
     model::Id envId;
     for (const auto& e : f.app->head().envelopes)
@@ -786,7 +796,7 @@ TEST_CASE("rack window: Automate on a knob makes an envelope, a lane on the home
     // The menu now hides (and shows) the lane instead.
     f.pointer(ui::PointerEvent::Type::Down, level, 3);
     f.pointer(ui::PointerEvent::Type::Up, level, 3);
-    REQUIRE(f.pick("rack.param.menu", "Hide automation lane"));
+    REQUIRE(f.pick("rack.param.menu", "Hide lane"));
     CHECK_FALSE(f.app->head().envelopes.find(envId)->visible);
 }
 
@@ -1027,8 +1037,9 @@ TEST_CASE("rack window: a knob learns a MIDI controller from its menu, shows it 
     // The menu names the controller, and removes it.
     menu();
     const auto items = ui::menuItems(*f.r().find("rack.param.menu"));
-    CHECK(std::any_of(items.begin(), items.end(),
-                      [](const ui::MenuItem& m) { return m.label.rfind("MIDI: CC 9", 0) == 0; }));
+    CHECK(std::any_of(items.begin(), items.end(), [](const ui::MenuItem& m) {
+        return m.label.rfind("MIDI learn… (CC 9", 0) == 0;
+    }));
     REQUIRE(f.pick("rack.param.menu", "Remove MIDI learn"));
     CHECK(f.app->head().modules.find(vca)->learn.empty());
     CHECK_FALSE(f.racks->space()->scene().module(vca)->learned.contains("level"));
@@ -2501,4 +2512,44 @@ TEST_CASE("rack window: every stock module's face, at 100 %") {
         const std::string name = "rack-faces-" + std::to_string(i + 1) + ".png";
         f.snapshot(name.c_str());
     }
+}
+
+TEST_CASE("modulation: the GUI's signal range agrees with modulation.list on real routes") {
+    // The lanes' and controls' spans run one way for a 0..1 source
+    // (racks::unipolarSource, from the rack catalog); modulation.list reports
+    // the engine's range. An LFO is -1..1, an ADSR 0..1, and an input with no
+    // cable counts as -1..1 in both.
+    Fixture f;
+    if (!f.ok) return;
+    const std::string a =
+        f.exec("track.add", R"({"type":"channel","name":"A"})")["track"].asString();
+    json::Value made = f.exec(
+        "modulate", R"({"target":{"track":")" + a + R"(","param":"volume"},"source":"lfo"})");
+    const std::string rack = made["rack"].asString(), modOut = made["mod_out"].asString();
+    json::Value adsr = f.exec("module.add", R"({"rack":")" + rack + R"(","type":"adsr"})");
+    const std::string out = adsr["outputs"].asArray().front().asString();
+    f.exec("cable.add", R"({"from":")" + adsr["module"].asString() + "." + out + R"(","to":")" +
+                            modOut + R"(.in_2"})");
+    f.exec("modulation.add", R"({"source":{"module":")" + modOut +
+                                 R"(","input":"in_2"},"target":{"track":")" + a +
+                                 R"(","param":"pan"},"depth":30})");
+    f.exec("modulation.add", R"({"source":{"module":")" + modOut +
+                                 R"(","input":"in_3"},"target":{"track":")" + a +
+                                 R"(","param":"pan"},"depth":10})");
+    const auto catalog = gui::racks::catalog(*f.app);
+    REQUIRE(catalog);
+    const model::Session s = f.app->head();
+    json::Value listed = f.exec("modulation.list", "{}");
+    REQUIRE(listed["modulations"].asArray().size() == 3);
+    std::map<std::string, std::string> ranges;
+    for (const json::Value& m : listed["modulations"].asArray()) {
+        const auto id = *model::Id::parse(m.find("modulation")->asString());
+        const model::Modulation& route = *s.modulations.find(id);
+        const bool gui = gui::racks::unipolarSource(s, *catalog, route.source);
+        INFO(route.source.input);
+        CHECK(m.find("range")->asString() == (gui ? "unipolar" : "bipolar"));
+        ranges[route.source.input] = m.find("range")->asString();
+    }
+    CHECK(ranges == std::map<std::string, std::string>{
+                        {"in_1", "bipolar"}, {"in_2", "unipolar"}, {"in_3", "bipolar"}});
 }

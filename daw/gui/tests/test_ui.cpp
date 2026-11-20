@@ -10,6 +10,9 @@
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
+#include <tuple>
+#include <utility>
+#include <vector>
 
 #include "supple/gui/png.h"
 #include "supple/json/parse.h"
@@ -375,6 +378,196 @@ TEST_CASE("theme JSON overrides tokens and reports bad values with their path") 
     auto rejected = Theme::fromJson(*bad, Theme::dark());
     REQUIRE_FALSE(rejected);
     CHECK(rejected.error().path == "/colors/accent");
+}
+
+TEST_CASE("theme: the meter's overload red is meter-clip, a file's old clip key still sets it") {
+    for (const Theme& t : {Theme::dark(), Theme::light()}) {
+        CHECK(t.color("meter-clip") == Color::hex(0xe0503c));
+        CHECK(t.color("playing") == t.color("meter"));   // what plays is the meter's green
+        CHECK(t.color("clip") == Color::hex(0xff00ff));  // no longer a token
+    }
+    auto old = json::parse(R"({"schema": "supple.theme/1.0", "colors": {"clip": "#aa0000"}})");
+    REQUIRE(old);
+    auto theme = Theme::fromJson(*old, Theme::dark());
+    REQUIRE(theme);
+    CHECK(theme->color("meter-clip") == Color::hex(0xaa0000));
+    CHECK(theme->color("clip") == Color::hex(0xff00ff));
+    // Both given: the new name wins.
+    auto both = json::parse(
+        R"({"schema": "supple.theme/1.0", "colors": {"clip": "#aa0000", "meter-clip": "#00aa00"}})");
+    REQUIRE(both);
+    auto chosen = Theme::fromJson(*both, Theme::dark());
+    REQUIRE(chosen);
+    CHECK(chosen->color("meter-clip") == Color::hex(0x00aa00));
+}
+
+TEST_CASE("modulation: a span sums its routes, bipolar both ways, unipolar one way") {
+    const ModulationRoute lfo{6, false}, follower{3, true}, down{-12, true};
+    const ModulationView one = modulationSpan(std::array{lfo});
+    CHECK(one.low == -6);
+    CHECK(one.high == 6);
+    CHECK(one.depth == 6);
+    const ModulationView neg = modulationSpan(std::array{down});
+    CHECK(neg.low == -12);
+    CHECK(neg.high == 0);
+    const ModulationView sum = modulationSpan(std::array{lfo, follower});
+    CHECK(sum.low == -6);
+    CHECK(sum.high == 9);
+    CHECK(sum.depth == 3);  // the last route's: the one a bar drag edits
+    CHECK_FALSE(sum.live);
+    CHECK(modulationSpan({}) == ModulationView{});
+}
+
+TEST_CASE(
+    "modulation: faders, a slider, a knob and pan bars draw it in signal-cv; the bar drags depth") {
+    REQUIRE_GL();
+    Root root(*fixture().window, fixture().fonts, Theme::dark());
+    auto content = std::make_unique<Node>("root");
+    content->layout.dir = Layout::Dir::Row;
+    content->layout.padding = Insets::all(12);
+    content->layout.gap = 16;
+    auto& fader = content->emplace<Fader>("vfader");
+    auto& plain = content->emplace<Fader>("plain");  // never modulated
+    auto& col = panel(*content, "col", Layout::Dir::Column);
+    col.layout.width = SizeRule::fraction();
+    col.layout.gap = 12;
+    auto& hfader = col.emplace<Fader>("hfader", Fader::Orientation::Horizontal);
+    auto& slider = col.emplace<Slider>("slider");
+    auto& knob = col.emplace<Knob>("knob");
+    auto& pan = col.emplace<PanControl>("pan");
+    root.setContent(std::move(content));
+    fader.setValue(-6);
+    plain.setValue(-6);
+    hfader.setValue(-3);
+    slider.setValue(0.4);
+    pan.setSplit(PanControl::Split::Width);
+    // An LFO on the fader (±6 dB), a follower pulling the horizontal one down
+    // (0..-12 dB), the slider ±0.2, the knob 0..0.3, the pan ±50% and the
+    // width 0..-60%; each playing partway.
+    auto with = [](ModulationView v, double live) {
+        v.live = live;
+        return v;
+    };
+    fader.setModulation(with(modulationSpan(std::array{ModulationRoute{6, false}}), 3));
+    hfader.setModulation(with(modulationSpan(std::array{ModulationRoute{-12, true}}), -4));
+    slider.setModulation(with(modulationSpan(std::array{ModulationRoute{0.2, false}}), 0.1));
+    knob.setModulation(with(modulationSpan(std::array{ModulationRoute{0.3, true}}), 0.15));
+    pan.setModulation(0, with(modulationSpan(std::array{ModulationRoute{50, false}}), -20));
+    pan.setModulation(1, with(modulationSpan(std::array{ModulationRoute{-60, true}}), -30));
+    root.frame(false);
+    if (const char* out = std::getenv("SUPPLE_TEST_SNAPSHOTS"))
+        (void)gui::writePng(std::filesystem::path(out) / "modulated-controls.png", root.readBack());
+    // The bar beside the fader's track, between the base and the live value,
+    // is signal-cv; the unmodulated fader has nothing there.
+    const ui::Rect bar = fader.modulationBar();
+    REQUIRE(bar.h > 0);
+    CHECK(plain.modulationBar().h == 0);
+    const float baseY = bar.bottom() - static_cast<float>(faderPosition(-6)) * bar.h;
+    const float liveY = bar.bottom() - static_cast<float>(faderPosition(-3)) * bar.h;
+    const gui::Image image = root.readBack();
+    const float ratio = static_cast<float>(image.width) / fixture().window->width();
+    auto pixel = [&](float x, float y) {
+        const std::size_t i =
+            (static_cast<std::size_t>(y * ratio) * static_cast<std::size_t>(image.width) +
+             static_cast<std::size_t>(x * ratio)) *
+            4;
+        return std::array<int, 3>{image.rgba[i], image.rgba[i + 1], image.rgba[i + 2]};
+    };
+    const Color cv = Theme::dark().color("signal-cv");
+    const auto near = [](std::array<int, 3> got, Color want) {
+        return std::abs(got[0] - static_cast<int>(want.r * 255)) < 24 &&
+               std::abs(got[1] - static_cast<int>(want.g * 255)) < 24 &&
+               std::abs(got[2] - static_cast<int>(want.b * 255)) < 24;
+    };
+    const float midX = bar.x + bar.w / 2;
+    CHECK(near(pixel(midX, (baseY + liveY) / 2), cv));  // live: bright
+    const float plainX = plain.bounds().x + (midX - fader.bounds().x);
+    CHECK_FALSE(near(pixel(plainX, (baseY + liveY) / 2), cv));
+    // A drag from the bar, clear of the cap, reports a depth gesture; the
+    // value stays.
+    std::vector<std::pair<double, Gesture>> depths;
+    int changes = 0;
+    fader.onDepth = [&](double d, Gesture g) { depths.emplace_back(d, g); };
+    fader.onChange = [&](double, Gesture) { ++changes; };
+    const float lowY = bar.bottom() - static_cast<float>(faderPosition(-30)) * bar.h;
+    root.pointer({PointerEvent::Type::Down, {midX, lowY}, 1});
+    root.pointer({PointerEvent::Type::Move, {midX, lowY - bar.h * 0.1f}, 1});
+    root.pointer({PointerEvent::Type::Up, {midX, lowY - bar.h * 0.1f}, 1});
+    REQUIRE(depths.size() == 3);
+    CHECK(depths[0] == std::pair{6.0, Gesture::Begin});
+    CHECK(depths[1].second == Gesture::Move);
+    CHECK(depths[1].first == doctest::Approx(6 + 0.1 * 72));  // a tenth of the travel: 7.2 dB
+    CHECK(depths[2] == std::pair{depths[1].first, Gesture::End});
+    CHECK(changes == 0);
+    CHECK(fader.value() == -6);
+    CHECK(fader.modulation()->depth == doctest::Approx(13.2));
+    // The same press on a fader without modulation moves its value as before.
+    plain.onChange = [&](double, Gesture) { ++changes; };
+    root.pointer({PointerEvent::Type::Down, {plainX, lowY}, 1});
+    root.pointer({PointerEvent::Type::Move, {plainX, lowY - bar.h * 0.1f}, 1});
+    root.pointer({PointerEvent::Type::Up, {plainX, lowY - bar.h * 0.1f}, 1});
+    CHECK(changes == 3);
+    CHECK(plain.value() > -6);
+    // The width bar's modulation, under its track: depth in percent.
+    std::vector<std::tuple<int, double, Gesture>> panDepths;
+    pan.onDepth = [&](int part, double d, Gesture g) { panDepths.emplace_back(part, d, g); };
+    const ui::Rect widthBar = pan.modulationBar(1);
+    REQUIRE(widthBar.w > 0);
+    const ui::Point under{widthBar.x + widthBar.w / 2, widthBar.y + 1};
+    root.pointer({PointerEvent::Type::Down, under, 1});
+    root.pointer({PointerEvent::Type::Move, {under.x + widthBar.w / 4, under.y}, 1});
+    root.pointer({PointerEvent::Type::Up, {under.x + widthBar.w / 4, under.y}, 1});
+    REQUIRE(panDepths.size() == 3);
+    CHECK(std::get<0>(panDepths[1]) == 1);
+    CHECK(std::get<1>(panDepths[1]) == doctest::Approx(-60 + 50));  // a quarter bar: +50%
+    CHECK(pan.second() == 100);
+    // A knob's ring, outside its face, takes the depth drag too.
+    double knobDepth = 0;
+    knob.onDepth = [&](double d, Gesture) { knobDepth = d; };
+    const ui::Rect kb = knob.bounds();
+    root.pointer({PointerEvent::Type::Down, {kb.x + 1, kb.y + kb.h / 2}, 1});
+    root.pointer({PointerEvent::Type::Move, {kb.x + 1, kb.y + kb.h / 2 - 15}, 1});
+    root.pointer({PointerEvent::Type::Up, {kb.x + 1, kb.y + kb.h / 2 - 15}, 1});
+    CHECK(knobDepth == doctest::Approx(0.3 + 0.1));  // 15 of the knob's 150 units
+    CHECK(knob.value() == doctest::Approx(0.5));
+    // The zone is 8 units across the bar: 2.5 beside it still grabs depth,
+    // 3.5 beside it is the fader's own.
+    depths.clear();
+    root.pointer({PointerEvent::Type::Down, {bar.right() + 2.4f, lowY}, 1});
+    root.pointer({PointerEvent::Type::Up, {bar.right() + 2.4f, lowY}, 1});
+    CHECK(depths.size() == 2);
+    depths.clear();
+    root.pointer({PointerEvent::Type::Down, {bar.right() + 3.6f, lowY}, 1});
+    root.pointer({PointerEvent::Type::Up, {bar.right() + 3.6f, lowY}, 1});
+    CHECK(depths.empty());
+    // Alt keeps its meaning on a modulated fader: an Alt-drag on the cap
+    // moves the value, and the caller reads Alt ("this member alone").
+    const ui::Rect fb = fader.bounds();
+    const float capY = bar.bottom() - static_cast<float>(faderPosition(-6)) * bar.h;
+    const ui::Point onCap{fb.x + fb.w / 2 - 4, capY};
+    root.pointer({PointerEvent::Type::Down, onCap, 1, 1, kAlt});
+    root.pointer({PointerEvent::Type::Move, {onCap.x, onCap.y + bar.h * 0.1f}, 1, 1, kAlt});
+    root.pointer({PointerEvent::Type::Up, {onCap.x, onCap.y + bar.h * 0.1f}, 1, 1, kAlt});
+    CHECK(depths.empty());
+    CHECK(fader.value() < -6);
+    CHECK(fader.gestureModifiers() == kAlt);
+    // A knob's ring reaches past its bounds, as the rack knob's does (face
+    // edge + 1 to + 7): 3 units above the knob still grabs it.
+    knobDepth = 0;
+    const ui::Point above{kb.x + kb.w / 2, kb.y - 3};
+    root.pointer({PointerEvent::Type::Down, above, 1});
+    root.pointer({PointerEvent::Type::Move, {above.x, above.y - 15}, 1});
+    root.pointer({PointerEvent::Type::Up, {above.x, above.y - 15}, 1});
+    CHECK(knobDepth == doctest::Approx(0.4 + 0.1));
+    CHECK(knob.value() == doctest::Approx(0.5));
+    // Without modulation nothing is drawn and the zone is gone.
+    fader.setModulation(std::nullopt);
+    CHECK(fader.modulationBar().h == 0);
+    CHECK(fader.depthZone().w == 0);
+    depths.clear();
+    root.pointer({PointerEvent::Type::Down, {bar.x + 1, lowY}, 1});
+    root.pointer({PointerEvent::Type::Up, {bar.x + 1, lowY}, 1});
+    CHECK(depths.empty());
 }
 
 TEST_CASE("golden image: a small panel in the dark theme") {
@@ -957,7 +1150,7 @@ TEST_CASE("mixer controls: fader taper and gestures, pan, meter hold and clip, t
                    0.01f;
         };
         const Color green = theme.color("meter"), yellow = theme.color("meter-hot"),
-                    red = theme.color("clip");
+                    red = theme.color("meter-clip");
         CHECK(same(Meter::colorAt(theme, -60), green));
         CHECK(same(Meter::colorAt(theme, -18), green));
         CHECK(same(Meter::colorAt(theme, -9), yellow));

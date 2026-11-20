@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string_view>
@@ -76,7 +77,29 @@ struct RulerStats {
     int barLabels = 0, beatLabels = 0, subTicks = 0, timeLabels = 0;
     float minBarLabelGap = 1e9f, minTimeLabelGap = 1e9f;  // design units
     float minBarSlack = 1e9f, minTimeSlack = 1e9f;
-    std::vector<int> labelledBars;  // the bars that carry a label, left to right
+    std::vector<int> labelledBars;         // the bars that carry a label, left to right
+    std::vector<std::string> keyLabels;    // the key changes' labels, left to right
+    std::vector<std::string> chordLabels;  // the chord cells' labels in view, left to right
+};
+
+// The ruler's rows, top to bottom (gui.md §4.3). Its height is their sum, a
+// run-time value: the header row, the ruler's painting and hit tests and the
+// tracks' visible height all read it from here, so a row can be added or
+// hidden (the context track's chord row) with nothing else to change.
+struct RulerRows {
+    static constexpr float kChordHeight = 18;  // the chord row, when shown
+    float beat = 22;                           // bars | beats; the loop range
+    float time = 15;                           // m:ss.mmm; the punch range
+    float tempo = 20;                          // tempo and meter flags, key changes
+    float region = 15;                         // regions
+    float chord = 0;                           // chords (ADR-0095): kChordHeight when shown, else 0
+    float marker = 16;                         // markers
+    float tempoTop() const { return beat + time; }
+    float regionTop() const { return beat + time + tempo; }
+    float chordTop() const { return regionTop() + region; }
+    float markerTop() const { return chordTop() + chord; }
+    float height() const { return markerTop() + marker; }
+    bool operator==(const RulerRows&) const = default;
 };
 
 class ArrangeView : public ui::Node {
@@ -135,12 +158,22 @@ class ArrangeView : public ui::Node {
     double punchStart() const { return transport_.punchStart; }
     double punchEnd() const { return transport_.punchEnd; }
     bool installOverlay(ui::Root& root);  // the playhead node; false if none
+    // Modulation telemetry (ADR-0096, M2), each pass: the modulated
+    // controls' live values and the lanes' live dot at the playhead follow.
+    void setModulationOffsets(std::map<model::Id, double> offsets);
 
     Lanes& lanes() { return *lanes_; }
     ItemGestures& gestures() { return *gestures_; }  // P5.6: editing gestures
     ui::Node& tcp();
     ui::Node& ruler();
     void setRulerCallbacks(RulerCallbacks callbacks);
+    const RulerRows& rulerRows() const { return rulerRows_; }
+    void setRulerRows(const RulerRows& rows);  // resizes the header row and relays out
+    // The chord row (gui.md §4.3): shown while the project has a chord, unless
+    // View > Chords chose (`shown`, saved in the UI file); nullopt: that rule.
+    void setChordRow(std::optional<bool> shown);
+    std::optional<bool> chordRowChoice() const { return chordRowChoice_; }
+    bool chordRowShown() const { return rulerRows_.chord > 0; }
     void addMarker();  // at the playhead, through marker.add
     void addRegion();  // over the loop range, through region.add
     // What the panel needs from the app (selection, commands, meters). Call
@@ -172,6 +205,7 @@ class ArrangeView : public ui::Node {
     ui::Cursor cursorAt(ui::Point p) const override;
 
   private:
+    void invalidateModulatedLanes();
     void damageViews();
     float scrollHeight() const;
     void clampScroll();
@@ -202,6 +236,10 @@ class ArrangeView : public ui::Node {
     TcpPanel* tcp_ = nullptr;
     Ruler* ruler_ = nullptr;
     TcpHeader* header_ = nullptr;
+    ui::Node* headerRow_ = nullptr;  // the TCP header, the ruler and the corner
+    RulerRows rulerRows_;
+    std::optional<bool> chordRowChoice_;
+    void syncChordRow();
     std::unique_ptr<ItemGestures> gestures_;
     TcpCallbacks tcpCallbacks_;
     ui::ScrollBar* hbar_ = nullptr;

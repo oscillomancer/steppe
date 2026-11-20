@@ -236,10 +236,11 @@ at compile time). Per block, each automated target evaluates its segments:
   recomputes only on a setting change. Following sends, keys and rack inputs
   use private copies with their own cursors, timeline shifts and write holds;
   positioned sends also inherit automated compensation under the source law;
-- plugin parameters receive CLAP param-value events at segment points and
-  every `automation_resolution` samples inside curved/linear segments
-  (default 32; always at exact point positions), in the parameter's CLAP
-  domain (normalized for stock plugins, ADR-0010);
+- plugin parameters receive CLAP param-value events at each envelope point
+  and at every point of the absolute 32-sample timeline grid
+  (`kAutomationStep`) inside curved/linear segments, when the value changed
+  since the last one sent, in the parameter's CLAP domain (normalized for
+  stock plugins, ADR-0010). The step is fixed; there is no setting for it;
 - write/touch/latch modes record from GUI/control input into the model on
   the main thread (reliable coalescing channel, ARCHITECTURE §3), creating
   one version per gesture. Capture timestamps are seconds; evaluation, entry
@@ -263,6 +264,331 @@ at compile time). Per block, each automated target evaluates its segments:
   abandoned writes neither stay held nor get a latch tail at stop. A halt
   ends the pass that was playing. Mute, plug-in parameters and the master
   playrate are not held: their writes compile as before.
+
+### 1.4.1 Modulation (ADR-0096)
+
+A modulation route (`mr_*`, session-model "Modulation") moves a target
+parameter by a rack's Mod Out signal × its `depth`, as an offset on top of
+the base: the static value, the envelope or a write hold's hand. It never
+writes the base, the model or an envelope, and write modes record the base
+only.
+
+- **Edges.** Every route, enabled or not, is an edge from its source rack's
+  node to the node that applies its target; `enabled` only zeroes its
+  contribution (ADR-0096, amendment M-l). That is the track for an FX in a chain
+  and for a track's mixer targets; for a send's level it is the node that
+  applies the level (the source strip, or the rack for a rack send). The
+  edge orders the source first in `topoOrder`, is a dependency in both
+  executors' schedules, and joins the latency solve (§1.3) as a sidechain
+  into the target stage:
+  - its tap latency is the Mod Out's latency inside the rack (computed as
+    an Out's, rack.md §6);
+  - its `before` is the chain latency ahead of the target stage: 0 for an
+    input-chain stage, which is outside compensation; for a mixer target
+    the whole chain less one grid interval (32 frames), since it reads one
+    interval ahead;
+  - it carries a delay line of held values sized by that compensation, so
+    the value the rack computed for timeline sample t reaches the target as
+    the target plays t;
+  - under a master playrate the delay, the rack grid Mod Out samples on and
+    the target's 32-frame grid are in device frames, the graph's domain
+    (ADR-0045), as a sidechain's delay and the `Param` grid are.
+  A late source path delays the target as a sidechain does. Cycles are
+  refused at edit time (`modulation.cycle`); self-modulation is not
+  supported.
+- **Liveness.** A modulation edge propagates liveness both ways, like a MIDI
+  edge (§2.1): a live source makes its target live, and a live target pulls
+  its source live. A route's source and target therefore always share an
+  executor and nothing crosses the frontier rings. A route that moves a
+  node into the live region adds a `modulation.live` plan warning.
+- **Plug-in targets** (CLAP parameters flagged modulatable). At each point
+  of the target stage's absolute 32-sample automation grid, the stage sends
+  one `PARAM_MOD` event per modulated parameter, after any `Param` event at
+  the same frame: the sum of its routes' signal × depth × the parameter's
+  CLAP range, a disabled route adding 0. An event is sent only when the
+  value differs from the memo of the last one sent.
+  - The memo is carried across compiles by (fx, param), like `carryMix`
+    (§1.6): a stage's slots are matched by instance and CLAP id. A
+    parameter that the new plan no longer modulates is sent one 0 at its
+    first grid point and leaves the memo. So that a carried memo always
+    fits, each stage keeps a slot for every parameter any plan has
+    modulated on its FX (`InstancePool::modulatedParams`, main thread), and
+    a stage with no route left keeps its slots until their 0s are sent. The
+    memo follows its instance between the track's input chain and main
+    chain. It is not carried to another node: an FX moved to another track
+    starts with every slot stale, so the first grid point resends what is
+    modulated there, but a parameter the new plan no longer modulates (a
+    route removed in the same edit as the move) keeps its last offset until
+    the instance's next epoch (activation, reset, patch or state).
+  - It goes stale (it is never emptied) on the instance's activation, a
+    reset (a seek, a play start), a changed instance, and a patch or state
+    applied to the instance: `host::Instance::modulationEpoch()` counts
+    `activate()`, `reset()`, `setPatch()` and `loadState()` (`resets()`
+    keeps counting `reset()` alone). The next grid point then sends the
+    current sum of every modulated parameter and 0 to every other parameter
+    the memo lists, and drops those. A stage that does not process this
+    block (a compensated bypass, not owned, not processing) is sent nothing
+    and its memo goes stale.
+  - The route's delay runs every block at the target node, and a locate
+    clears it unless a swap just carried it (by route id, at the same
+    length), as an edge's delay.
+  - A patch edit to a modulated FX compiles instead of taking the patch path
+    (ADR-0092).
+  - Each stage reserves `block / 32 + 2` events per modulated parameter and
+    one for each other slot. An event that finds the block full, or a
+    bridged block at the bridge's cut (`host::Instance::kBridgeBlockEvents`,
+    2048), waits for the next grid point, which sends the then-current sum.
+    Each wait is counted (`Stage::modDeferred`): an offline render warns per
+    FX, and the real-time engine adds the count to
+    `Engine::modulationDeferred()` (`engine.status` `modulation_deferred`)
+    and warns once per rise (`modulation.events`). Input-chain stages reserve their
+    automation and modulation events as chain stages do.
+  - Bridged plug-ins receive the same events through the bridge; a late
+    block's coalescing keeps the latest value per target (§5).
+- **Through an envelope (M4).** A VST3 parameter, or a CLAP one without
+  the modulatable flag, that is automatable and neither stepped nor an enum
+  binds to its automation lane (`ModEdge::viaLane`, `ParamLane::modFirst`
+  and `modCount`, `Stage::laneModRoutes`). The lane sends
+  `clamp(base + Σ depth × signal × range, min, max)` at its usual emission
+  points: its first frame, each point, and each 32-sample grid point while
+  a route is bound. The base is the envelope's value at that frame. A
+  VST3's lane is in the normalized domain (range 1); a CLAP one's in plain
+  values (range max − min). While the source rack is owned by the other
+  executor, the last sum holds. The lane has a telemetry slot of its own,
+  stored as a fraction of its range. Without an active envelope on the
+  parameter, the route is inert (`modulation.target`, "has no active
+  envelope to carry it"). When a write mode records a plug-in output for
+  such a parameter, the route's current offset is taken off first
+  (`commitOutputGesture`), so the envelope keeps the base.
+- **Inert routes.** A route is inert, with a plan warning, when binding finds
+  that its target cannot take it: the parameter is gone, read-only, bypass,
+  neither modulatable nor reachable through an active envelope, or the
+  plug-in is missing (`modulation.target`), or for a mixer target when its node applies no
+  such level (a send that is not an encoded edge of its source). A route
+  into a frozen track is inert silently: the print plays. It is also inert
+  after its target reported a
+  latency change while modulated (`modulation.latency`): the engine then
+  keeps every route into that FX's modulated parameters disabled until one
+  of them is edited, the FX is replaced, or the project is reopened.
+- **Telemetry (M2).** Prepare gives each bound target a slot in
+  `Plan::modOffsets` and each route its target's (`modOffsetOf`). The
+  executor that runs a target stores its offset with a relaxed store: a
+  plug-in's sum at every grid point, sent or not, as a fraction of its CLAP
+  range; a mixer target's last frame of each block, in dB or percent.
+  `Engine::modulationOffsets()` (main thread) reads the newest plan's, by
+  route; `modulation.telemetry` adds each route's span (depth × its signal
+  range).
+- **Rack handover.** While a rack's modules are still owned by the other
+  executor (rack.md §6, "State"), its Mod Outs hold their last values and
+  the emitters they feed send nothing for that block.
+- **Depth and `enabled`** are values published without compiling (M-h): one
+  mix slot per route (`MixSlots::modulations`), copied at block start by the
+  executor of the route's target, which runs its source too (§1.6,
+  ADR-0093). A route's source, target and `lane` compile. An edit to a route
+  into an FX whose routes a latency change turned off compiles, since that
+  edit turns them back on.
+- **Mixer targets** (M-i: track volume, pan, width; the level of an audio
+  send between strips or a rack send). Prepare binds each to its node's
+  `mixMods` (`Node::modVolume`, `modPan`, `modWidth`, `Edge::modVolume` on
+  the node that applies the send's level: its source, or the rack for a rack
+  send); routes on one target sum. At each point of the absolute 32-frame
+  grid the interval's end becomes the sum of the route values read there,
+  which the one-interval lookahead above delivers early, and the offset at
+  each frame is linear between the interval's start and end. A rack the
+  other executor still owns holds the end. The interpolation is carried by
+  target across plan swaps and starts at 0 after a locate, with the delays.
+  The base (automation, else the fader's value) plus the offset is clamped
+  per sample to the target's range (volume up to 12 dB, a level at −inf
+  stays −inf; pan and width −100..100), before VCAs and the gain ramps; a
+  modulated level is computed per sample. A modulated send is encoded.
+  Volume and send level offsets are in dB, pan and width in percent.
+
+Renders stay deterministic and real time equals offline at any block size,
+in both executors and through the bridge: every grid point and delay is a
+function of the stage's absolute position, a reset makes the memo stale so
+the first grid point after it sends every modulated parameter, and racks
+restart their modules at every locate (rack.md §6).
+
+### 1.4.2 Clip launcher (ADR-0097)
+
+*The lead's revision with L2, 2026-11-19; the ADR's "Playing" section says
+the same.*
+
+- **A track either follows the arrangement or plays one clip.** Every
+  clip of a channel is compiled into the channel's node as a *clip
+  player*. An audio clip's player holds the take's prepared buffer, as an
+  item's does. A MIDI clip's holds its notes, sorted by their beat within
+  the content. A launch never compiles. A frozen track's node compiles no
+  players: it has no chain or note stage and plays its print.
+- **What a track plays is transport state,** the node's *launch state*:
+  `arrangement`, `clip` (with the clip's player and anchor), `held` (a
+  `once` clip past its length) or `stopped`. Plans carry it across swaps
+  by node id and clip id (§1.6 of engine.md). A clip the new plan no
+  longer has (removed, or now past the memory budget) ends at that swap
+  and its track returns to the arrangement, without the switch fade: the
+  new plan holds no player to fade out.
+- **A launch is a timed message (L-a, B1).** Its target is `{epoch,
+  stream sample}`, the coordinate plan handoffs use (`handAt`,
+  `handEpoch`). A scene launch has one target for all its tracks: the
+  latest of their floors (B5).
+- **The floor is per track.** It is the position of the executor that
+  runs the track plus that executor's block: the renderer's published
+  position plus one render block for a rendered track, the callback's
+  stream plus one device block for a live one. The target is the next
+  quantize boundary at or after the floor, through the playrate
+  timelines.
+- **The queue is the engine's (L-b).** It has fixed capacity and holds one
+  entry per track; a newer launch on a track replaces its pending entry.
+  Plans hold only the players, so an entry survives plan swaps and a plan
+  waiting for adoption.
+  - **Who applies it:** the executor that runs the track's node when its
+    block reaches the target. It splits the block at the target, as at a
+    loop wrap, and takes the entry by compare-and-swap, so a node handed
+    between executors is applied exactly once. A handoff carries the
+    applied state with the node.
+  - An executor whose block already starts past the target marks the
+    entry missed, and the main thread re-quantizes it. With a bar or beat
+    quantize and a clip length in whole bars, a re-quantized track keeps
+    the same phase (below).
+  - **Epochs:** an executor never takes or misses an entry from another
+    epoch. After a seek's `epochDone_` the main thread re-quantizes every
+    pending entry from the new position (B4).
+  - Each applied entry comes back to the main thread with its stream
+    sample, its running frame and its song position.
+- **While stopped,** a launch is not quantized. It starts the transport
+  and applies at the play start's first sample, so the clip's anchor is
+  the play position.
+- **Quantize** is project-wide (`launch_quantize`) with a per-clip
+  override. `none` means the floor: about the render-ahead (200 ms) for a
+  rendered track, one device block for a live one. That is accepted for
+  this work and stated in the guide.
+- **Phase is a pure function of the song position (L-c),** in the clip's
+  unit, with the mathematical modulus for negative differences.
+  - MIDI: the position in the clip is `(song beat − anchor beat) mod
+    length`. The player converts beats to samples per block through the
+    plan's time map, without allocating, as timeline MIDI does.
+  - Audio: it is `(timeline sample − anchor sample) mod length in frames`,
+    never beats, so a tempo ramp does not move it.
+  - Inside the period, a loop window that is on maps the position into
+    the content, as an item's looped source does.
+  - A `once` clip sounds while its position is within its length after
+    the anchor. It is silent before the anchor, and silent after a
+    transport wrap until it is launched again.
+  - Seeks and wraps use the same formulas, so clips stay on the grid and
+    a performance replays exactly from its log.
+- **Switching (L-d, B5).** Leaving the arrangement or a clip ends what
+  was left's sounding notes at the switch sample. Returning to the
+  arrangement does not chase notes (`trackEvents`, engine.md §1.1). An
+  audio switch crossfades over a fixed 5 ms of timeline samples, in the
+  source like an item's fade, in both executors and offline.
+- **The launch log and the offline replay.** The engine logs each applied
+  launch with its running frame (stream frames since the play start, in
+  the epoch's terms) and its song position, and logs seeks and transport
+  wraps beside them. Renders and the render dialog play the arrangement
+  only, and the dialog says so in one line while any track is held by a
+  clip. An internal offline replay applies a log at its logged running
+  frames. The tests use it, and L4's capture will.
+- **Memory (L-e).** The prepared-source budget counts sample values
+  across channels: the decoded source plus each converted variant, with
+  a source or variant shared by several takes counted once. A clip on
+  audio the arrangement already plays at the same rate therefore costs
+  nothing. The same preparation (`prepareSources`, off the audio thread)
+  adds the clips' takes after the arrangement's, in scene order and then
+  track order. It skips any clip that would pass 2^28 instead of failing,
+  and names the skipped clips in a `launch.memory` warning. A launch of a
+  skipped clip is refused with `launch.memory`.
+- **Frozen tracks.** Freezing returns the track to the arrangement at the
+  swap that adopts the frozen plan, in both executors (no switch fade:
+  the frozen node has no players to fade out), and drops its queued
+  launch. `launch.clip` on a frozen track
+  fails with `track.frozen`, and `launch.scene` skips it with a
+  `track.frozen` warning.
+- **Audio clips play at the take's own rate,** with its playrate, pitch
+  and channel mode as on the timeline, and no warp. A clip whose audio
+  does not fit the project tempo gets a `launch.tempo` warning.
+- **Staged within L2, each stated in STATUS until done:**
+  - *Master playrate.* Clip audio is a source on the playrate path
+    (ADR-0045 §2: converted before take FX and mixing), so it speeds up
+    with the master playrate. Until that lands, a plan with the master
+    playrate active compiles no players, its tracks follow the
+    arrangement, and a launch is refused with `launch.playrate`.
+  - *A clip take's FX and envelopes.* They will play as an item's take
+    chain does. Until then a clip plays without them, and the plan warns
+    with `launch.take_chain`, naming the clip.
+  - *Racks.* A clip's notes reach the track's own instrument and its
+    MIDI sends (they join the track's MIDI stream). A rack's Notes module
+    plays its source track's compiled events in the rack's own node and
+    does not yet follow the track's launches.
+- **The take `pitch` envelope** that is stored but never played (core
+  §4.5) stays unplayed for clips as for items. Whether to play it is
+  decided with the stretch path, for both.
+- **Tests:** both executors against the offline replay of the engine's
+  own launch log, at two block sizes, through the bridge, and under
+  rtsan.
+
+**Implementation (clip_player.cpp).**
+- `compileClipPlayers` builds a channel's `Node::players` after its
+  timeline events. A MIDI player's events are laid out over the period,
+  one entry per pass of the loop window. Notes are cut at the window's and
+  the period's end, and sorted by beat with offs before controls before
+  ons. Their note ids continue the timeline's. Their note sources span the
+  whole song, so `releaseVoices` never ends one as out of its span, and
+  carried voices rebind by address as item notes do. An audio player holds
+  the take's prepared buffer, gain, pan and channel mode, as an item does.
+  `prepareRackMidi` sizes the track's MIDI pool and block window for the
+  players (`clipVoices`, `clipWindow`).
+- `Node::launch` is what the channel plays. `applyLaunch` changes it at a
+  block boundary and sets `releaseHeld`, so the notes left sounding end at
+  that block's start, as at a loop wrap. The executor splits its block
+  there. That boundary is the channel's song position at the anchor: the
+  launch's frame plus the node's `timelineShift`.
+- Each block, `launchAudio` computes the arrangement's gain per frame,
+  null when the arrangement plays throughout (the path is then exactly
+  the old one). It adds the clip's audio, crossfading by song position
+  over `kLaunchFadeSeconds`. Plain items and take chains are scaled by
+  that gain. Timeline MIDI passes unplayed while a clip holds the track,
+  and `launchMidi` emits the clip's notes instead.
+- `OfflineSettings::launches` replays a log from the render's start (no
+  seeks or wraps yet; L4 adds them with capture).
+- **The queue (launch_runtime.cpp).** `Engine::launch` places a set of
+  requests (a scene's tracks) on one target. The floor is the latest of
+  its tracks' floors: the published position's stream plus one device
+  block for a node the callback runs, or the renderer's stream plus one
+  plan block for a node it renders. The target is the first quantize
+  boundary at or after the floor's song position. A loop end before it
+  places it at the first boundary inside the loop. Stopped, the target is
+  the play position, applied at the play start. The queue has
+  `kLaunchSlots` fixed slots, one per track; a newer request replaces the
+  track's pending one, and a full queue refuses with `launch.queue`.
+  Each slot's state word carries a generation. The executor that runs the
+  track's node applies an entry by compare-and-swap of the state it read,
+  so a slot the main thread rewrote meanwhile is never applied, and an
+  entry is applied once even when the node moves between executors.
+  Applying happens at the stream sample `target + timelineShift`; each
+  executor cuts its block there. An entry of another epoch is not
+  applied, and one already past is marked missed; nor is a clip entry
+  in a plan without that clip. `service()` places missed and old-epoch
+  entries again, alone, from the current position. It drops, with a
+  warning, any waiting entry whose track or clip the latest plan cannot
+  play (frozen, removed, or a master playrate active), so an edit never
+  leaves a launch to fire later. Applied entries come back
+  through a ring per executor, become `LaunchLogEntry`s and are kept in
+  `launchLog()` in running-frame order.
+- **Renders.** An offline render without `OfflineSettings::launches`
+  compiles no players (`Plan::clipPlayers`) and prepares no clip audio:
+  renders play the arrangement only, so a clip's warnings never reach a
+  render or block a freeze. A clip past the memory budget gets no player
+  either (`Engine::clipsSkipped()` names them; `launch.memory`).
+- **What a track plays, for the GUI and `launch.state`.**
+  `Engine::launchState()` answers, on the main thread, from the log and
+  the running plan. It reports each track's newest heard entry, where an
+  entry not yet reached by the played stream is still queued, along with
+  its pending slot. A track whose clip a later plan lacks is back on the
+  arrangement from then on.
+- **Plan swaps.** `carryMix` carries `Node::launch` by clip id
+  (`carryLaunch`). A clip the new plan lacks, or a node with no players
+  (a frozen track), returns its track to the arrangement at once, and its
+  notes end.
 
 ### 1.5 Transport and time
 
@@ -290,7 +616,8 @@ FX's instance while its plug-in and isolation stay the same, and applies a
 changed patch or state to it on the main thread during the compile
 (`InstancePool::get`). State crosses the swap when the executor adopts the
 new plan, matching nodes by id: fader, wet and Console 9 ramps
-(`carryMix`), held notes (`carryLiveNotes`, `carryRackMidi`), and delay
+(`carryMix`), held notes (`carryLiveNotes`, `carryRackMidi`), each
+modulated parameter's last sent `PARAM_MOD` value (§1.4.1), and delay
 histories, a rack's plug-in stages' (wet ramp, dry delay, oversampling
 filters) as a chain's. Held timeline notes carry only when the receiving instrument
 instance is retained. Route and parent edge delay histories carry when
@@ -326,6 +653,8 @@ specified here as it lands); so far:
   the instance.
 - **A patch-only edit publishes no plan** (stage 3, ADR-0092): see
   "Patch-only FX edits" below.
+- **A context-only edit publishes no plan** (ADR-0095): see "Context edits"
+  below.
 - **A plan has a canonical dump** (stage 5; `plan_dump.h`). `dumpPlan`
   (main thread, before publication) writes every field of a prepared plan
   that compile and prepare decide, one per line in plan order: nodes and
@@ -475,7 +804,8 @@ earlier collection does not imply that collection already freed its old plan.
 `Engine::load` took only in strip `volume_db`/`pan`/`width`/`pan_left`/`pan_right`,
 send `volume_db`/`pan`, VCA `volume_db`, and since ADR-0093 FX `wet`/`bypass`
 (not `offline`, which decides whether an instance exists), track `mute` and
-`solo`, VCA `mute` and `solo`, and route `mute` where the send is encoded
+`solo`, VCA `mute` and `solo`, a modulation route's `depth` and `enabled`
+(ADR-0096), and route `mute` where the send is encoded
 anyway (a tap before the fader, a level other than 0 dB, its own pan, mono
 or polarity; MIDI routes and rack sends are never encoded) (and in the
 points of envelopes a write pass holds, including the new pan targets,
@@ -532,6 +862,45 @@ when solo moves from a monitored track to a rendered one, in one edit or
 two. ADR-0060's level and pan edits and ADR-0092's patch edits are not
 gated.
 
+**Context edits (ADR-0095).** The plan does not read the context track (the
+`cx` collection), so a session that differs from the last one `Engine::load`
+took only in that collection is not compiled: the `cx` storage differs, every
+other collection, the project, the blobs and the unknown sections have the
+same storage, and `latest_` takes the new session. It is a shortcut of its
+own and, like the others, runs only when nothing forces a compile, and never
+while an edit is deferred or for the reload that ends a deferral (the guards
+of `loadScalarRate`; there `latest_` is the deferred session, and a session
+identical to it is not a context edit). It is tried before the scalar, mix and
+patch ones, and its list of `Session` members is bound in the code as theirs
+are; the three equivalence checks do not list the
+context, because each of them qualifies a fast path only when something it
+handles changed, so an edit that changes nothing they handle falls through
+them to a compile. A context edit that comes with any other change compiles
+as that change does. When something in the plan reads the context (a note
+source, a rack module), an edit compiles only if the plan reads it.
+
+What the tests pin, and what they do not (the reader of `loadContextOnly`'s guards
+should know which is which). `a context-only edit compiles nothing and the same
+session again does` (`test_mix_edits.cpp`) pins: a chord edit, and an edit of a
+point's content and a new point together, compile no plan; the same session again is
+a maintenance reload that compiles (the shortcut never takes it: the `cx` storage
+does not differ); a context edit together with a track edit compiles as the track
+edit does. `a context edit made while a structural edit is deferred does not swallow
+it` (`test_module_library.cpp`) pins the outcome: with a future non-unity plan and an
+FX removal waiting, a chord edit compiles nothing, and the removal still compiles and
+plays once its span has passed, with no engine error. **It does not pin the deferral
+guards.** The test also passes with the guards removed: the shortcut adopts the whole
+new session as `latest_`, which holds the waiting edit, and the deferral's own retry
+compiles it either way. Both tests fail when the "`cx` storage differs" check is
+removed. No test makes the guards alone matter. They are kept so the shortcut has the
+same guards as the three it sits beside. They are redundant by construction (round 57
+review: removing every one leaves the whole `engine.tests` suite passing, and the argument
+holds): every path they protect reloads `latest_` itself, the reload that ends a deferral,
+a rate seek or loop and the recovery seek each load `*latest_`, and a session whose `cx`
+storage is the running one's is refused by the storage rule, so the rule does what the
+guards were first thought to do. A later change that made adopting `latest_` insufficient
+would have to revisit them; no test stands behind them.
+
 **Patch-only FX edits (ADR-0092).** A session that differs from the last one
 `Engine::load` took only in FX `patch` values, each of those FX having a
 patch before and after, is not compiled. Every other collection must have
@@ -566,7 +935,9 @@ one (see plug-in outputs below). `Engine::patchEdits()` counts these edits.
 
 A node is **live** when it consumes monitored hardware audio/MIDI or armed
 audio input (including an input FX chain). Live classification propagates
-downstream, including sends and the master. All other nodes are anticipative.
+downstream, including sends and the master. A MIDI edge, an auxiliary link
+and a modulation route (§1.4.1) also pull their source live when their
+destination is live, since the frontier rings carry only main pairs. All other nodes are anticipative.
 Opening a plug-in GUI or MIDI editor does not currently change classification;
 editor/automation eligibility preferences remain planned (ADR-0014).
 
@@ -1086,6 +1457,13 @@ first use, and no plug-in code runs early to warm it.
   stem whose track is a master, keeps them (ADR-0057).
 - A post-fader stem of a channel or buss is decoded outside the graph, under
   the same floating-point environment as the graph's nodes (§2.4).
+- An isolated stem or a single-track render (`render.stems`, `analyze.track`)
+  keeps the target and what feeds it. It also keeps what modulates
+  any of those: a modulation route into a kept node keeps its source rack,
+  the rack's home channel, and whatever feeds them (ADR-0096). Those are
+  dependencies and are not heard, since the render taps the target. So a
+  stem carries the modulation exactly as the mix does. Routes whose rack or
+  target is not kept are left out.
 - Through-master stems use playback's solo signal-path rules: retain the
   selected strip, its upstream contributors and its path through parents and
   ordinary sends to the master. Ignore other pre-existing solos and solo-defeat;
@@ -1659,7 +2037,7 @@ bus and exposes it through the control protocol (Unix socket), Lua and MCP (prox
 `bridge_late`, the callback cycles a bridged plug-in made late, ADR-0081),
 `bridge_timing` (the live bridged calls' waits and why cycles overran, §5),
 anticipation misses, meter drops), `engine.settings.set {render_ahead_ms,
-worker_threads, automation_resolution, …}`.
+worker_threads, …}`.
 `audition.play {path}` (a WAV, FLAC or MP3, absolute or a name in the
 project's media folder; returns `path`, `seconds`, `sample_rate`,
 `channels`, `truncated`), `audition.stop` and `audition.get` (q: `playing`,

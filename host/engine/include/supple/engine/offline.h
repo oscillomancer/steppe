@@ -23,6 +23,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -159,6 +160,20 @@ class InstancePool {
     bool automationCleared(model::Id id) const;  // for any of its parameters
     bool anyAutomationCleared() const;           // for any instance
     void resetAutomation(model::Id id);          // explicit model reload
+    // Main thread, from a plan's prepare: the CLAP parameters of `id` any plan
+    // has modulated, `now` added, sorted (ADR-0096). A plan keeps a memo slot
+    // for each, so one carried from an earlier plan always fits, and a
+    // parameter no longer modulated can still be sent its 0.
+    std::vector<std::uint32_t> modulatedParams(model::Id id, std::span<const std::uint32_t> now);
+    // A modulated FX whose latency moved (ADR-0096, amendment M-d): service()
+    // marks an FX that the last prepared plan modulated (`now` not empty)
+    // when its latency changes. A prepare then asks with `routes`, the text
+    // of the routes into it: the first ask after the mark keeps that text and
+    // says disabled; later asks say disabled while the text is the same. A
+    // route edit or a replaced instance ends it; so does reopening the
+    // project, which makes a new pool.
+    bool modulationDisabled(model::Id id, const std::string& routes);
+    bool modulationDisabled(model::Id id) const;  // for reports
     // Main thread, only after applying plug-in-originated values to its model
     // patch: acknowledge that patch without sending it back on the next get().
     void acknowledgeOutputPatch(model::Id id, const json::Value& patch);
@@ -187,7 +202,11 @@ class InstancePool {
         std::filesystem::file_time_type activatedAt;  // when that was first seen
         std::optional<Error> failure;
         std::vector<std::uint32_t> clearedAutomation;
-        std::string appliedState;  // canonical patch text or blob hash last applied
+        std::vector<std::uint32_t> modulated;      // modulatedParams(), sorted
+        bool modulatedNow = false;                 // the last prepare bound a route
+        bool latencyHit = false;                   // its latency moved meanwhile
+        std::optional<std::string> modulationOff;  // the routes disabled for it
+        std::string appliedState;                  // canonical patch text or blob hash last applied
         // The model's object it was applied from, while that is the
         // session's own (kept, so its address cannot be reused).
         std::shared_ptr<const model::FxInstance> appliedFx;
@@ -248,9 +267,31 @@ struct PreparedSources {
     double sampleRate = 0;
     model::Session session;  // immutable provenance for source-dependent edits
     std::map<model::Id, PreparedSource> takes;
+    // Clips whose audio did not fit beside the arrangement's in the budget
+    // (ADR-0097 "Memory"), in launch order: not prepared, not launchable.
+    std::vector<model::Id> clipsSkipped;
 };
 Result<std::string> sourcePreparationKey(const model::Session& session,
                                          const std::filesystem::path& directory, double rate);
+// The in-memory budget for prepared source audio, in samples (all channels).
+inline constexpr double kPreparedSampleBudget = static_cast<double>(std::int64_t{1} << 28);
+// What preparation holds resident, in samples: each source decoded once and
+// each variant of it once. `arrangement` counts the items' active takes and
+// their warp peers; `clips` what the clips' active takes add after them
+// (ADR-0097 "Memory": the arrangement first, then the clips in launch
+// order). `clips` is what they would all add; `clipsSkipped` are those
+// that do not fit, in order, each skipped clip adding nothing (so a later,
+// smaller one may still fit). clip.memory refuses an edit that skips any.
+struct ResidentSamples {
+    double arrangement = 0, clips = 0;
+    std::vector<model::Id> clipsSkipped;
+};
+// The clips in launch order (ADR-0097 "Memory"): scene order, then the track
+// tree's display order (the masters, each followed depth-first by its
+// children), then id.
+std::vector<model::Id> clipsInLaunchOrder(const model::Session& session);
+ResidentSamples residentSamples(const model::Session& session,
+                                const std::filesystem::path& directory, double rate);
 class MediaCache {
   public:
     // Decoded audio at `rate` (resampled once, then kept; 0: the file's own
@@ -283,6 +324,23 @@ class MediaCache {
 // thirty times the live path's 2 s, since an offline render loses only time
 // by waiting; a hung plug-in still fails the render within it.
 inline constexpr int kOfflineBridgeDeadlineMs = 60'000;
+
+// One applied launch of the clip launcher (ADR-0097, engine.md §1.4.2), as
+// the engine logs it: at `runningFrame` (stream frames since the play start)
+// `track` starts `clip`, returns to the arrangement or stops; `anchorSample`
+// (song samples from the plan's start) and `anchorBeat` are the song position
+// of that frame, from which the clip's phase runs.
+struct LaunchLogEntry {
+    enum class Action : std::uint8_t { Clip, Arrangement, Stop };
+    std::int64_t runningFrame = 0;
+    model::Id track;
+    Action action = Action::Clip;
+    model::Id clip;
+    std::int64_t anchorSample = 0;
+    double anchorBeat = 0;
+    std::uint64_t epoch = 0;  // the transport epoch it applied in (the replay ignores it)
+    bool operator==(const LaunchLogEntry&) const = default;
+};
 
 struct OfflineSettings {
     // Playback/stems apply master rate; analysis and item-FX renders opt out.
@@ -322,6 +380,10 @@ struct OfflineSettings {
     // plug-in (ADR-0090); lifecycle commands get 5/2 of it plus 2 s. Tests
     // shorten it; the product keeps the default.
     int bridgeDeadlineMs = kOfflineBridgeDeadlineMs;
+    // Internal (tests, L4 capture): replay these launches, in runningFrame
+    // order, from the render's start, which must be the log's play start.
+    // The render dialog never sets it: renders play the arrangement only.
+    std::vector<LaunchLogEntry> launches;
 };
 
 struct OfflineResult {

@@ -10,12 +10,14 @@ namespace {
 struct RulerArgs {
     std::optional<double> pos, start, end;
     std::optional<std::string> name, color;
+    std::optional<bool> section;  // regions only
 };
 
 struct RulerSetArgs {
     std::string id;
     std::optional<double> pos, start, end;
     std::optional<std::string> name, color;
+    std::optional<bool> section;  // regions only
 };
 
 struct RulerRef {
@@ -26,6 +28,7 @@ struct RulerEntry {
     model::Timebase timebase = model::Timebase::Beats;
     std::string id, name, color;
     std::optional<double> pos, start, end;
+    std::optional<bool> section;  // regions only
 };
 
 struct RulerList {
@@ -56,6 +59,10 @@ schema::Schema<T> rulerArgsSchema(const char* name) {
     }
     b.field("name", &T::name, schema::string());
     b.field("color", &T::color, schema::string());
+    if constexpr (Region)
+        b.field("section", &T::section,
+                schema::boolean().doc("Whether the region is a section of the song, which "
+                                      "context.at and session.describe report [true]"));
     return b.build();
 }
 
@@ -68,6 +75,7 @@ auto rulerListSchema(bool region) {
                      .field("pos", &RulerEntry::pos, schema::number())
                      .field("start", &RulerEntry::start, schema::number())
                      .field("end", &RulerEntry::end, schema::number())
+                     .field("section", &RulerEntry::section, schema::boolean())
                      .build();
     return schema::object<RulerList>("ruler_list")
         .field(region ? "regions" : "markers", &RulerList::entries, schema::arrayOf(entry))
@@ -103,6 +111,7 @@ void registerRulerCommands(cmd::Registry& registry) {
                                      "give start and end in beats");
                     o.start = *a.start;
                     o.end = *a.end;
+                    if (a.section) o.section = *a.section;
                 } else {
                     if (!a.pos)
                         return Error("marker.pos", "marker position is required", "/pos",
@@ -135,6 +144,7 @@ void registerRulerCommands(cmd::Registry& registry) {
                 if constexpr (Region) {
                     if (a.start) o.start = *a.start;
                     if (a.end) o.end = *a.end;
+                    if (a.section) o.section = *a.section;
                     if (!(o.end > o.start))
                         return Error("region.range", "end must follow start", "/end",
                                      "set end later than start in beats");
@@ -193,6 +203,7 @@ void registerRulerCommands(cmd::Registry& registry) {
                     if constexpr (Region) {
                         row.start = e.value->start;
                         row.end = e.value->end;
+                        row.section = e.value->section;
                     } else {
                         row.pos = e.value->pos;
                     }

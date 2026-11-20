@@ -1083,6 +1083,7 @@ Status Instance::setSidechainActive(bool on) {
 
 Status Instance::activate(double sampleRate, std::uint32_t minFrames, std::uint32_t maxFrames) {
     MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Activate);
+    modulationEpoch_.fetch_add(1, std::memory_order_relaxed);
     if (!std::isfinite(sampleRate) || sampleRate <= 0 || minFrames == 0 || minFrames > maxFrames)
         return Error("host.activate", "invalid sample rate or block-size range", {},
                      "use a finite positive rate and 0 < minFrames <= maxFrames");
@@ -1462,6 +1463,7 @@ void Instance::stopProcessing() SUPPLE_RT {
 void Instance::reset() SUPPLE_RT {
     AudioEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Reset);
     resets_.fetch_add(1, std::memory_order_relaxed);
+    modulationEpoch_.fetch_add(1, std::memory_order_relaxed);
     if (vst3_) {
         vst3_->reset();
         return;
@@ -1751,6 +1753,7 @@ Result<std::string> Instance::getPatch(bool changedOnly) {
 
 Status Instance::setPatch(std::string_view text, std::uint32_t mode) {
     MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::Semantic);
+    modulationEpoch_.fetch_add(1, std::memory_order_relaxed);
     if (remote_) return remote_->setPatch(text, mode);
     if (!extSemantic_)
         return Error("host.semantic.unsupported", info_.id + " has no semantic-params extension");
@@ -1961,6 +1964,7 @@ Result<std::vector<std::uint8_t>> Instance::saveState() {
 
 Status Instance::loadState(std::span<const std::uint8_t> bytes) {
     MainEntry diagEntry(cell_.id(), remote_ != nullptr, diagctx::Entry::State);
+    modulationEpoch_.fetch_add(1, std::memory_order_relaxed);
     if (vst3_) return vst3_->loadState(bytes);
     if (remote_) return remote_->loadState(bytes);
     if (!extState_) return Error("host.state", info_.id + " has no state extension");

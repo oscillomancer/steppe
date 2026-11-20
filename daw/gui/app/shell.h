@@ -14,6 +14,7 @@
 #include "app_actions.h"
 #include "fx_attention.h"
 #include "meter_feed.h"
+#include "modulation_status.h"
 #include "plugin_drag.h"
 #include "selection_edit.h"
 #include "supple/engine/app.h"
@@ -114,6 +115,7 @@ class Shell {
     std::vector<std::string> shownSelection_;  // the track selection the TCP shows
     engine::EngineApp& app_;
     cmd::Dispatcher& dispatcher_;
+    LiveModulation liveModulation_;         // the live offsets, inert routes left out
     FxAttention attention_{app_};           // the "fx" mark's rule (disabled or failed plug-ins)
     AppActions* actions_ = nullptr;         // from build()
     SelectionEdit selectionEdit_;           // a strip control on a selected track: all of them

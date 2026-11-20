@@ -3,6 +3,7 @@
 #include <doctest/doctest.h>
 #include <supple/base/environment.h>
 
+#include <supple/model/project_file.h>
 #include <supple/model/render_settings.h>
 #include <supple/model/schemas.h>
 #include <supple/model/session.h>
@@ -11,6 +12,7 @@
 #include <cstdlib>
 #include <limits>
 #include <ostream>
+#include <set>
 
 using namespace supple;
 using namespace supple::model;
@@ -611,7 +613,7 @@ TEST_CASE("masters: arm, audio items and lane mute round trip (ADR-0057)") {
 
 TEST_CASE("project newer minor ignores unknown fields with load warnings") {
     auto doc = projectToJson(Session::create());
-    doc["schema"] = "supple.project/2.16";  // newer than this build's 2.15
+    doc["schema"] = "supple.project/2.19";  // newer than this build's 2.18
     doc["tracks"]["tr_0"]["future"] = true;
     std::vector<schema::Warning> warnings;
     auto parsed = projectFromJson(doc, &warnings);
@@ -1293,4 +1295,52 @@ TEST_CASE("project timecode saves, reopens and defaults for old projects (ADR-00
     CHECK(loaded->project->timecode.rate == sync::FrameRate::Fps25);
     CHECK(std::any_of(warnings.begin(), warnings.end(),
                       [](const auto& w) { return w.path == "/project/timecode/fps"; }));
+}
+
+// The hand-kept lists that name the document's sections (the loader's known set,
+// objectDepth for a saved branch's state) cannot see a collection added to Session; a
+// collection with no section, an unknown one or a wrong depth fails here. One default
+// object per collection goes through projectToJson, so a collection the writer skips
+// fails as well.
+namespace {
+void collectIdKeys(const json::Value& v, std::set<Kind>& kinds) {
+    if (!v.isObject()) return;
+    for (const auto& m : v.asObject()) {
+        if (const auto id = Id::parse(m.key); id && id->n == 90) kinds.insert(id->kind);
+        collectIdKeys(m.value, kinds);
+    }
+}
+// Where the IDs sit under a section: 1 as its members' keys, 2 one level further, else 0.
+int measuredDepth(const json::Value& section) {
+    if (!section.isObject()) return 0;
+    for (const auto& m : section.asObject())
+        if (Id::parse(m.key)) return 1;
+    for (const auto& m : section.asObject())
+        if (m.value.isObject())
+            for (const auto& inner : m.value.asObject())
+                if (Id::parse(inner.key)) return 2;
+    return 0;
+}
+}  // namespace
+
+TEST_CASE("every collection reaches a known section at the depth the file lists say") {
+    Session s = Session::create();
+    std::size_t collections = 0;
+    forEachCollection(s, [&]<class T>(IdMap<T>& map) {
+        typename IdMap<T>::Builder b(map);
+        b.put(Id{Traits<T>::kind, 90}, 1, std::make_shared<const T>());
+        map = b.build();
+        ++collections;
+    });
+    const json::Value doc = projectToJson(s);
+    std::set<Kind> written;
+    collectIdKeys(doc, written);
+    CHECK(written.size() == collections);  // every collection is in the document
+    for (const auto& section : doc.asObject()) {
+        INFO("section " << section.key);
+        CHECK(isKnownProjectSection(section.key));
+        // Blobs are keyed by hash, not ID (objectDepth lists them, depth 1).
+        if (section.key == "schema" || section.key == "project" || section.key == "blobs") continue;
+        CHECK(objectDepth(section.key) == measuredDepth(section.value));
+    }
 }

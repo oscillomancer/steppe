@@ -28,6 +28,7 @@
 #include "supple/ui/text_area.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/chord_field.h"
 #include "supple/views/lanes.h"
 #include "supple/views/mouse_map.h"
 
@@ -227,6 +228,257 @@ TEST_CASE("MIDI editor: notes take their item's colour; the title names the item
     f.frame();
     CHECK(title().find("Chords") != std::string::npos);
     CHECK(title().find(f.item) == std::string::npos);
+}
+
+TEST_CASE("MIDI editor: the strip over the roll numbers the project's bars, sparser zoomed out") {
+    Fixture f;
+    if (!f.ok) return;
+    f.exec("timesig.set", R"({"bar":3,"meter":"3/4"})");
+    REQUIRE(f.editor->open(f.item));  // the item starts at beat 4: bar 2
+    f.frame();
+    REQUIRE(f.root->find("midi.bars"));
+    const ui::Rect strip = f.root->find("midi.bars")->bounds();
+    const ui::Rect roll = f.editor->roll()->bounds();
+    CHECK(strip.bottom() <= roll.y);  // above the roll, as wide as the keys and the roll
+    CHECK(strip.h == doctest::Approx(16));
+    // At 80 units a beat from the item's start: its own bar and the next two
+    // (one of 3/4), by their project numbers.
+    f.editor->state().pixelsPerBeat = 80;
+    f.editor->state().scrollBeat = -0.25;
+    f.root->damageAll();
+    f.frame();
+    CHECK(f.editor->barLabels() == std::vector<int>{2, 3, 4});
+    // Zoomed all the way out from the song's start: 3/4 bars of 24 units
+    // leave no room for every number, so every 2nd from bar 1 has one.
+    f.editor->state().pixelsPerBeat = 8;
+    f.editor->state().scrollBeat = -4;
+    f.root->damageAll();
+    f.frame();
+    const std::vector<int>& bars = f.editor->barLabels();
+    REQUIRE(bars.size() >= 4);
+    CHECK(bars.front() == 1);
+    for (std::size_t i = 1; i < bars.size(); ++i) CHECK(bars[i] == bars[i - 1] + 2);
+    f.snapshot("midi-bar-strip.png");
+}
+
+TEST_CASE("MIDI editor: a double-click on the strip's chords edits them with the chord field") {
+    Fixture f;
+    if (!f.ok) return;
+    REQUIRE(f.editor->open(f.item));  // the item starts at beat 4
+    f.editor->state().pixelsPerBeat = 80;
+    f.editor->state().scrollBeat = -0.25;
+    f.exec("chord.set", R"({"at":4,"symbol":"Cmaj7"})");
+    f.frame();
+    const ui::Rect strip = f.root->find("midi.bars")->bounds();
+    const float row = strip.y + 16 + 9;  // the chord row, under the bar numbers
+    auto x = [&](double projectBeat) { return f.at(projectBeat - 4, 60).x; };
+    auto chord = [&](double beat) { return views::chordSymbolAt(f.app->head(), beat); };
+    auto type = [&](const char* text, int key) {
+        f.root->frame(false);
+        f.root->text(text);
+        f.root->key(key);
+        f.frame();
+    };
+    // On a chord's name: the ruler's chord field, holding it.
+    f.pointer(ui::PointerEvent::Type::Down, {x(4.1), row}, 2);
+    f.pointer(ui::PointerEvent::Type::Up, {x(4.1), row}, 2);
+    REQUIRE(f.root->find("chord-field"));
+    CHECK(f.root->find("chord-field")->valueText() == "Cmaj7");
+    type("Dmin7", SDLK_RETURN);
+    CHECK_FALSE(f.root->popupOpen());
+    CHECK(chord(4) == "Dm7");
+    // Away from a name: a chord at the grid beat there; Tab writes it and
+    // moves on to the next bar.
+    const double grid = f.editor->state().grid;
+    REQUIRE(grid > 0);
+    const double at = std::round(6.6 / grid) * grid;
+    f.pointer(ui::PointerEvent::Type::Down, {x(6.6), row}, 2);
+    f.pointer(ui::PointerEvent::Type::Up, {x(6.6), row}, 2);
+    REQUIRE(f.root->find("chord-field"));
+    CHECK(f.root->find("chord-field")->valueText().empty());
+    type("G7", SDLK_TAB);
+    CHECK(chord(at) == "G7");
+    REQUIRE(f.root->find("chord-field"));
+    type("C", SDLK_RETURN);
+    CHECK(chord(8) == "C");  // bar 3
+    CHECK(f.editor->chordLabels() == std::vector<std::string>{"Dm7", "G7", "C"});
+}
+
+TEST_CASE("MIDI editor: a chord name too long for its cell in the strip ends in an ellipsis") {
+    Fixture f;
+    if (!f.ok) return;
+    REQUIRE(f.editor->open(f.item));  // the item starts at beat 4
+    f.editor->state().pixelsPerBeat = 80;
+    f.editor->state().scrollBeat = -0.25;
+    f.exec("chord.set", R"({"at":4,"symbol":"Dm7"})");
+    f.exec("chord.set", R"({"at":5,"symbol":"C#m7b5"})");
+    f.exec("chord.set", R"({"at":5.375,"symbol":"F"})");  // a cell 30 units wide
+    f.frame();
+    const std::vector<std::string>& labels = f.editor->chordLabels();
+    REQUIRE(labels.size() == 3);
+    CHECK(labels[0] == "Dm7");
+    CHECK(labels[1] != "C#m7b5");  // no glyph is cut
+    CHECK(labels[1].rfind("C", 0) == 0);
+    CHECK(labels[1].ends_with("\u2026"));
+    CHECK(labels[2] == "F");
+}
+
+TEST_CASE("MIDI editor: the strip names the chords; rows outside the key's scale are shaded") {
+    Fixture f;
+    if (!f.ok) return;
+    REQUIRE(f.editor->open(f.item));  // the item starts at beat 4
+    f.editor->state().pixelsPerBeat = 80;
+    f.editor->state().scrollBeat = -0.25;
+    f.editor->state().topPitch = 76;
+    f.frame();
+    CHECK(f.root->find("midi.bars")->bounds().h == doctest::Approx(16));  // no chords yet
+    // Whether a row is drawn on the dark ground at an item beat (between
+    // grid lines, where no note is).
+    auto dark = [&](double itemBeat, int pitch) {
+        f.root->damageAll();
+        f.frame();
+        const gui::Image image = f.root->readBack();
+        const float ratio = static_cast<float>(image.width) / f.window->width();
+        const ui::Point p = f.at(itemBeat, pitch);
+        const std::size_t i =
+            (static_cast<std::size_t>(p.y * ratio) * static_cast<std::size_t>(image.width) +
+             static_cast<std::size_t>(p.x * ratio)) *
+            4;
+        auto distance = [&](ui::Color c) {
+            return std::abs(image.rgba[i] - c.r * 255) + std::abs(image.rgba[i + 1] - c.g * 255) +
+                   std::abs(image.rgba[i + 2] - c.b * 255);
+        };
+        const ui::Theme theme = ui::Theme::dark();
+        return distance(theme.color("ground")) < distance(theme.color("panel"));
+    };
+    // No key: the black keys' rows, as always.
+    CHECK(dark(0.6, 70));        // A#4
+    CHECK_FALSE(dark(0.6, 71));  // B4
+    CHECK_FALSE(dark(0.6, 64));  // E4
+    // Eb major from the song's start, A major from beat 6 (the item's beat 2).
+    f.exec("key.set", R"({"at":0,"tonic":"Eb","scale":"major"})");
+    f.exec("key.set", R"({"at":6,"tonic":"A","scale":"major"})");
+    f.exec("chord.set", R"({"at":0,"symbol":"Ebmaj7"})");
+    f.exec("chord.set", R"({"at":6,"symbol":"E7"})");
+    f.exec("chord.set", R"({"at":7,"symbol":""})");
+    f.frame();
+    CHECK(f.root->find("midi.bars")->bounds().h == doctest::Approx(34));  // the chord row
+    CHECK(f.root->find("midi.bars")->bounds().bottom() <= f.editor->roll()->bounds().y);
+    CHECK(f.editor->chordLabels() == std::vector<std::string>{"Ebmaj7", "E7"});
+    CHECK_FALSE(dark(0.6, 70));  // Bb is in Eb major
+    CHECK(dark(0.6, 71));        // B is not
+    CHECK(dark(0.6, 64));        // nor E
+    CHECK_FALSE(dark(0.6, 63));  // Eb is
+    CHECK_FALSE(dark(2.6, 64));  // in A major, E is
+    CHECK(dark(2.6, 63));        // and D# is not
+    CHECK_FALSE(dark(2.6, 68));  // G#
+    // With the context gone the strip and the rows are as they were.
+    for (const char* cmd : {R"({"at":0})", R"({"at":6})", R"({"at":7})"})
+        f.exec("chord.remove", cmd);
+    for (const char* cmd : {R"({"at":0})", R"({"at":6})"}) f.exec("key.remove", cmd);
+    f.frame();
+    CHECK(f.root->find("midi.bars")->bounds().h == doctest::Approx(16));
+    CHECK(dark(0.6, 70));
+    CHECK_FALSE(dark(0.6, 71));
+}
+
+TEST_CASE("MIDI editor: the key button makes drags and arrows move by scale degree") {
+    Fixture f;
+    if (!f.ok) return;
+    REQUIRE(f.editor->open(f.item));  // at beat 4: C4 E4 G4 C5, a beat each
+    auto& s = f.editor->state();
+    s.pixelsPerBeat = 80;
+    s.scrollBeat = -0.25;
+    s.topPitch = 76;
+    f.frame();
+    ui::Toggle* key = f.editor->keyButton();
+    REQUIRE(key);
+    CHECK(f.root->find("midi.key") == key);
+    // No key holds: the button says so and cannot be turned on.
+    CHECK_FALSE(key->enabled);
+    CHECK(key->valueText() == "off");
+    f.exec("key.set", R"({"at":0,"tonic":"C","scale":"major"})");
+    f.exec("key.set", R"({"at":6,"tonic":"A","scale":"major"})");  // the item's beat 2
+    f.frame();
+    CHECK(key->enabled);
+    const ui::Rect box = key->bounds();
+    f.pointer(ui::PointerEvent::Type::Down, {box.x + box.w / 2, box.y + box.h / 2});
+    f.pointer(ui::PointerEvent::Type::Up, {box.x + box.w / 2, box.y + box.h / 2});
+    REQUIRE(key->on());
+    CHECK(s.degrees);
+    f.snapshot("midi-key-button.png");
+    auto pitch = [&](int i) { return static_cast<int>(f.notes().at(i).find("pitch")->asInt()); };
+    auto history = [&] { return f.exec("history.list", "{}").find("versions")->size(); };
+    auto n = history();
+    // Up: E4 to F4, one degree of C major, in one step; Down back.
+    f.pointer(ui::PointerEvent::Type::Down, f.at(1.5, 64));
+    f.pointer(ui::PointerEvent::Type::Up, f.at(1.5, 64));
+    REQUIRE(s.selected == std::set<std::size_t>{1});
+    f.root->key(SDLK_UP, 0);
+    f.frame();
+    CHECK(pitch(1) == 65);
+    CHECK(history() == ++n);
+    f.root->key(SDLK_DOWN, 0);
+    f.frame();
+    CHECK(pitch(1) == 64);
+    CHECK(history() == ++n);
+    // A drag three rows up from C4 (to Eb4's row): the nearest scale pitch,
+    // D4, as the preview showed it, one step.
+    f.pointer(ui::PointerEvent::Type::Down, f.at(0.5, 60));
+    f.pointer(ui::PointerEvent::Type::Move, f.at(0.5, 62));
+    f.pointer(ui::PointerEvent::Type::Move, f.at(0.5, 63));
+    CHECK(s.dDegrees == 1);
+    f.pointer(ui::PointerEvent::Type::Up, f.at(0.5, 63));
+    CHECK(pitch(0) == 62);
+    CHECK(history() == ++n);
+    // G4 at the item's beat 2 is in A major's span, where G is not a scale
+    // pitch: one degree up from it is G#4, in the preview and in the commit.
+    f.pointer(ui::PointerEvent::Type::Down, f.at(2.5, 67));
+    f.pointer(ui::PointerEvent::Type::Move, f.at(2.5, 68));
+    CHECK(s.dDegrees == 1);
+    f.pointer(ui::PointerEvent::Type::Up, f.at(2.5, 68));
+    CHECK(pitch(2) == 68);
+    CHECK(history() == ++n);
+    // Moved in time and up together: the degree counts in the key where the
+    // note lands (D4 dragged into A major's span and to E4's row: one degree).
+    // Halfway between two scale pitches, the note stays where it is.
+    f.pointer(ui::PointerEvent::Type::Down, f.at(0.5, 62));
+    f.pointer(ui::PointerEvent::Type::Move, f.at(1.5, 63));
+    f.pointer(ui::PointerEvent::Type::Move, f.at(2.5, 63));
+    CHECK(s.dDegrees == 0);  // D#: as near D as E
+    f.pointer(ui::PointerEvent::Type::Move, f.at(2.5, 64));
+    CHECK(s.dDegrees == 1);
+    f.pointer(ui::PointerEvent::Type::Up, f.at(2.5, 64));
+    // The notes come back in time order: find them by start and pitch.
+    auto index = [&](double start, int p) -> std::optional<std::size_t> {
+        for (std::size_t i = 0; i < s.notes.size(); ++i)
+            if (std::abs(s.notes[i].start - start) < 1e-9 && s.notes[i].pitch == p) return i;
+        return std::nullopt;
+    };
+    CHECK(index(2, 64));  // the dragged note
+    CHECK(index(2, 68));
+    CHECK(index(1, 64));
+    CHECK(history() == ++n);
+    // The degree actions are there to bind; off, the arrows are semitones.
+    REQUIRE(index(1, 64));
+    s.selected = {*index(1, 64)};
+    REQUIRE(f.actions->run("ui.midi.notes.degree_up"));
+    f.frame();
+    REQUIRE(index(1, 65));
+    f.pointer(ui::PointerEvent::Type::Down, {box.x + box.w / 2, box.y + box.h / 2});
+    f.pointer(ui::PointerEvent::Type::Up, {box.x + box.w / 2, box.y + box.h / 2});
+    CHECK_FALSE(s.degrees);
+    s.selected = {*index(1, 65)};
+    f.root->focus(f.editor->roll());
+    f.root->key(SDLK_UP, 0);
+    f.frame();
+    CHECK(index(1, 66));
+    // Without a key the button goes dark and off.
+    f.exec("key.remove", R"({"at":0})");
+    f.exec("key.remove", R"({"at":6})");
+    f.frame();
+    CHECK_FALSE(key->enabled);
+    CHECK_FALSE(s.degrees);
 }
 
 TEST_CASE("MIDI editor: Alt+E shows and hides it on the item it had last") {

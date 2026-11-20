@@ -457,11 +457,13 @@ struct Teasel : Effect {
                           "The curve: soft, tape, tube, transformer (warm); transistor, diode, "
                           "clip, fuzz (biting); fold, rectify, crush, alias (wild).");
     Param drive = decibels("Drive", -12, 48, 6)
+                      .modulated()
                       .smoothed(20)
                       .in("Drive")
                       .help("Gain into the curve; with auto gain the level out stays put.");
     Param character =
         percent("Character", 30)
+            .modulated()
             .smoothed(20)
             .in("Drive")
             .help(
@@ -469,6 +471,7 @@ struct Teasel : Effect {
                 "(40 to 400 Hz), hardness, diode asymmetry, clip's knee, fuzz starve, fold's "
                 "edge, rectify's full-wave share, crush's bits, alias's rate.");
     Param bias = percent("Bias", 0, -100, 100)
+                     .modulated()
                      .smoothed(20)
                      .in("Drive")
                      .help("Tilts the curve off centre for even harmonics (the second first).");
@@ -479,12 +482,14 @@ struct Teasel : Effect {
                              "louder never passes for better.");
     Param dynamics =
         percent("Dynamics", 0, -100, 100)
+            .modulated()
             .smoothed(20)
             .in("Movement")
             .help(
                 "Positive drives the attacks harder than the sustain; negative the sustain and "
                 "tails, so attacks stay clean. 100% moves the drive a dB per dB.");
     Param motion = percent("Motion", 0)
+                       .modulated()
                        .smoothed(20)
                        .in("Movement")
                        .help(
@@ -501,6 +506,7 @@ struct Teasel : Effect {
             .activeAbove(motion, 0)
             .help("The LFO's cycle in note values, locked to the song while it plays.");
     Param motionRate = frequency("Motion Rate", 0.05, 20, 1)
+                           .modulated()
                            .in("Movement")
                            .activeWhen(motionSync, {"Free"})
                            .help("The LFO's rate in Hz, when its sync is free.");
@@ -516,40 +522,49 @@ struct Teasel : Effect {
                              .help("What the LFO moves; pitch is the feedback's.");
     Param feedback =
         percent("Feedback", 0, -95, 95)
+            .modulated()
             .smoothed(20)
             .in("Feedback")
             .help(
                 "The curve's output fed back into it a period of the pitch later: a tuned, "
                 "distorted ring; negative rings an octave lower, odd harmonics only.");
     Param feedbackPitch = frequency("Feedback Pitch", 30, 4000, 220)
+                              .modulated()
                               .smoothed(20)
                               .in("Feedback")
                               .help("The note the feedback rings at.");
     Param bandLow = frequency("Band Low", 20, 20000, 20)
+                        .modulated()
                         .smoothed(30)
                         .in("Band")
                         .help("Below this passes clean (20 Hz: nothing does).");
     Param bandHigh = frequency("Band High", 20, 20000, 20000)
+                         .modulated()
                          .smoothed(30)
                          .in("Band")
                          .help("Above this passes clean (20 kHz: nothing does).");
     Param emphasis =
         decibels("Emphasis", -12, 12, 0)
+            .modulated()
             .smoothed(30)
             .in("Tone")
             .help(
                 "Tilts what the curve hears about 1 kHz and tilts back after it: positive drives "
                 "the highs harder, negative the lows, the clean tone unchanged.");
     Param lowCut = frequency("Low Cut", 20, 2000, 20)
+                       .modulated()
                        .smoothed(30)
                        .in("Tone")
                        .help("A high-pass on what the curve gives (20 Hz is off).");
     Param highCut = frequency("High Cut", 1000, 20000, 20000)
+                        .modulated()
                         .smoothed(30)
                         .in("Tone")
                         .help("A low-pass on what the curve gives, to tame fizz (20 kHz is off).");
-    Param mix = percent("Mix", 100).smoothed(20).in("Output").help("Dry and driven, blended.");
-    Param output = decibels("Output", -24, 24, 0).smoothed(20).in("Output").help("The level out.");
+    Param mix =
+        percent("Mix", 100).modulated().smoothed(20).in("Output").help("Dry and driven, blended.");
+    Param output =
+        decibels("Output", -24, 24, 0).modulated().smoothed(20).in("Output").help("The level out.");
     Param channelMode =
         choice("Channels", {"Stereo", "Mid", "Side"}, 0)
             .withKey("channels")

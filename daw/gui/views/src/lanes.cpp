@@ -4,6 +4,7 @@
 #include "supple/model/audio_warp.h"
 
 #include "supple/views/envelope_lane.h"
+#include "supple/views/item_body.h"
 
 #include <algorithm>
 #include <cmath>
@@ -307,7 +308,7 @@ void Lanes::paint(ui::Canvas& c) {
         const ui::Rect r = rowRect(i);
         if (r.bottom() < bounds().y) continue;
         if (r.y > bounds().bottom()) break;
-        if (layout_.rows()[i].env) {
+        if (layout_.rows()[i].lane()) {
             c.save();
             c.clip(r);  // curve glyphs and text must stay inside their own lane
             drawEnvelope(c, i, r);
@@ -327,9 +328,57 @@ void Lanes::drawEnvelope(ui::Canvas& c, std::size_t row, const ui::Rect& r) {
     const model::Session& s = layout_.session();
     c.fillRect(r, t.color("ground").withAlpha(0.6f));
     c.fillRect({r.x, r.bottom() - 1, r.w, 1}, t.color("rule").withAlpha(0.4f));
-    const model::Envelope* env = s.envelopes.find(*layout_.rows()[row].env);
-    const auto scale = env ? layout_.scaleOf(*env) : std::nullopt;
-    if (!env || !scale) return;
+    const TrackRow& lane = layout_.rows()[row];
+    const model::Envelope* env = lane.env ? s.envelopes.find(*lane.env) : nullptr;
+    const auto scale = env           ? layout_.scaleOf(*env)
+                       : lane.target ? layout_.scaleOf(*lane.target)
+                                     : std::nullopt;
+    if (!scale) return;
+    // Modulation (ADR-0096): the band its routes can add around the base,
+    // faint signal-cv under the curve, as a modulated control's span.
+    const auto band = lane.target ? modulationBand(s, *lane.target, *scale, layout_.unipolarSource)
+                                  : std::nullopt;
+    const ui::Rect area = envArea(r);
+    const float bx0 = std::max(area.x, bounds().x), bx1 = std::min(area.right(), bounds().right());
+    auto drawBand = [&](const std::function<double(float)>& baseAt) {
+        if (!band) return;
+        const ui::Color cv = t.color("signal-cv").withAlpha(0.35f);
+        auto y = [&](double value) {
+            return area.bottom() -
+                   static_cast<float>(std::clamp(scale->toNorm(value), 0.0, 1.0)) * area.h;
+        };
+        for (float x = bx0; x < bx1; x += 3) {
+            const double base = baseAt(x);
+            // In the CLAP domain for a plug-in parameter (ADR-0096), so a
+            // log cutoff's band follows its curve.
+            const float top = y(modulatedValue(*scale, base, band->high)),
+                        bottom = y(modulatedValue(*scale, base, band->low));
+            c.fillRect({x, top, std::min(3.0f, bx1 - x), std::max(1.0f, bottom - top)}, cv);
+        }
+        // The live value (telemetry, M2) at the playhead: bright, from the
+        // base to a dot, as on a modulated control.
+        const auto live = liveOffset(s, *lane.target, layout_.liveOffsets);
+        const float px = xAt(livePlayhead);
+        if (!live || px < bx0 || px >= bx1) return;
+        const double base = baseAt(px);
+        const float from = y(base), to = y(modulatedValue(*scale, base, *live));
+        const ui::Color bright = t.color("signal-cv");
+        c.fillRect({px - 1, std::min(from, to), 2, std::max(1.0f, std::abs(to - from))}, bright);
+        c.fillRect({px - 2.5f, to - 2.5f, 5, 5}, bright);
+    };
+    if (!env) {
+        // A modulated parameter without automation: its value, and the band.
+        const double base = lane.target ? targetValue(s, *lane.target, *scale) : 0.0;
+        drawBand([base](float) { return base; });
+        const float y = area.bottom() - static_cast<float>(scale->toNorm(base)) * area.h;
+        c.fillRect({bx0, y, std::max(0.0f, bx1 - bx0), 1}, t.color(typeToken(lane.type)));
+        model::Envelope probe;  // named as an envelope on the target would be
+        if (lane.target) probe.target = *lane.target;
+        c.text({r.x + 6, r.y, 200, 14}, envTitle(probe, s), ui::Font::Ui, t.type("caption"),
+               t.color("ink-quiet"));
+        return;
+    }
+    const model::Id envId = *lane.env;
     double fallback = scale->reference();
     if (const model::Track* tr = s.tracks.find(env->target.object))
         fallback = env->target.param == "playrate" ? s.project->playrate.rate
@@ -346,11 +395,14 @@ void Lanes::drawEnvelope(ui::Canvas& c, std::size_t row, const ui::Rect& r) {
         t.color(typeToken(layout_.rows()[row].type)).withAlpha(env->active ? 1.0f : 0.35f);
     // The unity / centre line for orientation.
     c.fillRect({a.x, yOf(scale->reference()), a.w, 1}, t.color("rule").withAlpha(0.35f));
-    const model::Id envId = *layout_.rows()[row].env;
     // Automation items replace the envelope where they sit: their boxes under
     // the curve, a header band (name or pool), a tick at each loop pass.
     const double visibleFrom = s.timeMap->beatAt(std::max(0.0, timeAt(bounds().x)));
     const double visibleTo = s.timeMap->beatAt(std::max(0.0, timeAt(bounds().right())));
+    const EnvelopeCurve played(s, envId, *scale, visibleFrom, visibleTo);
+    drawBand([&](float x) {
+        return played.valueAt(s.timeMap->beatAt(std::max(0.0, timeAt(x))), fallback);
+    });
     std::vector<std::pair<double, double>> covered;
     for (const auto& e : s.autoItems) {
         const model::AutomationItem& ai = *e.value;
@@ -386,7 +438,6 @@ void Lanes::drawEnvelope(ui::Canvas& c, std::size_t row, const ui::Rect& r) {
             if (glyphs > 8192) break;
         }
     }
-    const EnvelopeCurve played(s, envId, *scale, visibleFrom, visibleTo);
     const float x0 = std::max(a.x, bounds().x), x1 = std::min(a.right(), bounds().right());
     ui::Point prev{};
     bool have = false;
@@ -595,6 +646,9 @@ void Lanes::drawFades(const ui::Rect& r, const model::Item& item, std::uint32_t 
               item.fadeOut.curve);
 }
 
+// The shared body drawing (item_body.h), placed by the timeline: content
+// seconds and beats from the item's start, through the zoom, the scroll and
+// the tempo map.
 void Lanes::drawAudio(const ui::GlFrame& frame, const ui::Rect& r, const model::Item& item,
                       const model::Take& take, const model::MediaSource& source,
                       std::uint32_t rgba) {
@@ -603,102 +657,27 @@ void Lanes::drawAudio(const ui::GlFrame& frame, const ui::Rect& r, const model::
         ++stats_.pending;  // a placeholder until the worker delivers (onReady repaints)
         return;
     }
-    const int channels = std::max(1, pyramid->channels());
-    const ui::Rect vis = r.intersect(frame.clip);
-    if (vis.empty() || r.h < 4) return;
-    const float px = 1.0f / frame.ratio;  // one device pixel in design units
-    const double rate = pyramid->sampleRate();
-    const double sourceSeconds = static_cast<double>(pyramid->frames()) / rate;
-    const model::AudioWarpMap timeMap(take);
-    const double speed = model::audioSpeed(take);  // pitch unpreserved: faster or slower
-    const double framesPerUnit = rate * speed / view_.pixelsPerSecond;
-    const peaks::Level& level = pyramid->pick(framesPerUnit * static_cast<double>(px));
-    const float gain = static_cast<float>(dbToGain(item.gainDb + take.gainDb));
-    const float laneH = r.h / static_cast<float>(channels);
     const double itemStart = model::itemSpan(layout_.session(), item).startSec;
-    for (int c = 0; c < channels; ++c) {
-        const float mid = r.y + laneH * (static_cast<float>(c) + 0.5f), half = laneH * 0.5f - 1;
-        strips_->beginRun();
-        // Columns by index: an accumulated fractional step would drift off
-        // the device pixels.
-        const auto first = static_cast<long>(std::floor(vis.x * frame.ratio));
-        for (long i = first;; ++i) {
-            const float x = static_cast<float>(i) / frame.ratio;
-            if (x >= vis.right()) break;
-            // The waveform and playback share original-source coordinates.
-            double s0 = item.loop ? take.startOffset + (timeAt(x) - itemStart) * speed
-                                  : timeMap.sourceAt(timeAt(x) - itemStart);
-            double s1 = item.loop ? take.startOffset + (timeAt(x + px) - itemStart) * speed
-                                  : timeMap.sourceAt(timeAt(x + px) - itemStart);
-            if (item.loop && sourceSeconds > 0) {
-                const double wrap = std::floor(s0 / sourceSeconds) * sourceSeconds;
-                s0 -= wrap;
-                s1 -= wrap;
-            }
-            const peaks::Span sp = pyramid->range(level, c, s0 * rate, s1 * rate);
-            float top = mid - std::clamp(sp.max * gain, -1.0f, 1.0f) * half;
-            float bottom = mid - std::clamp(sp.min * gain, -1.0f, 1.0f) * half;
-            if (bottom - top < px) {  // silence still shows a hairline
-                const float centre = (top + bottom) / 2;
-                top = centre - px / 2;
-                bottom = centre + px / 2;
-            }
-            strips_->pair(x, top, bottom, rgba);
-            ++stats_.columns;
-        }
-        strips_->endRun();
-    }
+    const AudioWindow window{[&](float x) { return timeAt(x) - itemStart; }, view_.pixelsPerSecond,
+                             item.loop};
+    const float gain = static_cast<float>(dbToGain(item.gainDb + take.gainDb));
+    stats_.columns += drawAudioBody(*strips_, frame, r, *pyramid, take, window, gain, rgba);
 }
 
 void Lanes::drawMidi(const ui::Rect& r, const model::Item& item, const model::Take& take,
                      const model::MidiSource& source, std::uint32_t rgba, std::uint32_t border) {
-    const midi::Sequence& seq = source.sequence;
-    if (seq.notes.empty() || r.h < 4) return;
     const time::TimeMap& tm = *layout_.session().timeMap;
     const model::ItemSpan span = model::itemSpan(layout_.session(), item);
     const double itemBeat = span.startBeat;
-    const double ppq = seq.ppq > 0 ? seq.ppq : 960;
-    const model::SourceBeatMapping mapping{take.startOffset,
-                                           take.playrate > 0 ? take.playrate : 1.0,
-                                           static_cast<double>(seq.length) / ppq};
-    const bool looping = item.loop && mapping.sourceLength > 0;
-    int lo = 127, hi = 0;
-    double end = 0;
-    bool hasNotes = false;
-    for (const midi::Note& n : seq.notes) {
-        if (looping && n.start >= seq.length) continue;
-        hasNotes = true;
-        lo = std::min(lo, static_cast<int>(n.pitch));
-        hi = std::max(hi, static_cast<int>(n.pitch));
-        end = std::max(end, (static_cast<double>(n.start) + static_cast<double>(n.length)) / ppq /
-                                mapping.rate);
-    }
-    if (!hasNotes) return;
-    const double tail = std::max(0.0, end - mapping.period());
-    const int pitches = hi - lo + 3;  // a free row above and below
-    const float noteH = std::max(1.0f, std::min(8.0f, r.h / static_cast<float>(pitches)));
-    const float usedH = noteH * static_cast<float>(pitches);
-    const float top = r.y + (r.h - usedH) / 2;
-    const double visibleFrom =
-        std::max(0.0, tm.beatAt(std::max(0.0, timeAt(bounds().x))) - itemBeat);
-    const double visibleTo =
-        std::min(tm.beatAt(span.endSec) - itemBeat,
-                 tm.beatAt(std::max(0.0, timeAt(bounds().right()))) - itemBeat);
-    std::size_t glyphs = 0;
-    for (const double base : mapping.visibleOrigins(tm.beatAt(span.endSec) - itemBeat, looping,
-                                                    visibleFrom, visibleTo, tail))
-        for (const midi::Note& n : seq.notes) {
-            if (looping && n.start >= seq.length) continue;
-            const double b0 = base + static_cast<double>(n.start) / ppq / mapping.rate;
-            const double b1 = b0 + static_cast<double>(n.length) / ppq / mapping.rate;
-            if (b1 <= visibleFrom || b0 >= visibleTo) continue;
-            if (++glyphs > 8192) return;
-            const double s0 = tm.secondsAt(itemBeat + std::max(0.0, b0));
-            const double s1 = std::min(tm.secondsAt(itemBeat + b1), span.endSec);
-            const float y = top + static_cast<float>(hi + 1 - n.pitch) * noteH;
-            notes_->add({xAt(s0), y, std::max(1.0f, xAt(s1) - xAt(s0)), noteH}, rgba, border);
-            ++stats_.notes;
-        }
+    MidiWindow window;
+    window.xAt = [&](double beat) { return xAt(tm.secondsAt(itemBeat + beat)); };
+    window.length = tm.beatAt(span.endSec) - itemBeat;
+    window.from = std::max(0.0, tm.beatAt(std::max(0.0, timeAt(bounds().x))) - itemBeat);
+    window.to =
+        std::min(window.length, tm.beatAt(std::max(0.0, timeAt(bounds().right()))) - itemBeat);
+    window.end = xAt(span.endSec);
+    window.loop = item.loop;
+    stats_.notes += drawMidiBody(*notes_, r, take, source, window, rgba, border);
 }
 
 }  // namespace supple::views

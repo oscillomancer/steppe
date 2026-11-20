@@ -310,21 +310,25 @@ struct Treeline : Effect {
 
     Param gain =
         decibels("Gain", 0, 24, 0)
+            .modulated()
             .smoothed(30)
             .in("Limiter")
             .help("How hard it drives the mix into the ceiling: louder, with more held down.");
     Param ceiling =
         decibels("Ceiling", -24, 0, -1)
+            .modulated()
             .smoothed(30)
             .in("Limiter")
             .help("The highest the output goes, in dB true peak (between samples too).");
     Param release = milliseconds("Release", 10, 1000, 120)
+                        .modulated()
                         .in("Limiter")
                         .help(
                             "How fast it recovers after a peak; it slows by itself over bass and "
                             "dense passages.");
     Param target =
         decibels("Target", -24, -6, -14)
+            .modulated()
             .in("Loudness")
             .help("The integrated loudness you aim for, in LUFS: the meters read against it.");
     Param listen =

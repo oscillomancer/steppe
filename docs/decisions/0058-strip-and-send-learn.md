@@ -12,6 +12,13 @@ learn bindings to mute; audio sends retain the controls specified here.
 moved through `vca.set`, learned from a right-click on the mixer's VCA strip.
 The "Not done" below no longer holds for them.
 
+**2026-11-19 note:** on a TCP row and a mixer strip (and a VCA), the
+right-click of decision 4 opens the control's parameter menu (gui.md §4.2):
+"MIDI learn: <control>…" first, then Show or Hide lane where the parameter can
+be automated and Reset where the control has a default; a pan's modes and
+law follow its rows. Learning is unchanged; the routing matrix's menu is as
+before. Modulate joins the parameter menu with modulation.
+
 ## Context
 
 ADR-0027 binds controllers to plug-in parameters (project state) and to

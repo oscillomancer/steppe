@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <set>
 
 #include "rack_scene.h"
 #include "supple/engine/midi_control.h"
@@ -87,11 +88,57 @@ std::vector<model::Id> racksFeeding(const model::Session& s, model::Id track) {
     return out;
 }
 
+std::vector<model::Id> modRacks(const model::Session& s, model::Id track) {
+    std::set<model::Id> holding;
+    for (const auto& m : s.modules)
+        if (m.value->type == model::kModOutModule) holding.insert(m.value->rack);
+    std::vector<model::Id> out;
+    for (const auto& r : s.racks)
+        if (r.value->track == track && holding.contains(r.id)) out.push_back(r.id);
+    return out;
+}
+
+bool unipolarSource(const model::Session& s, const rack::Catalog& catalog,
+                    const model::ModSource& source) {
+    using Signal = script::detail::PortModel::Signal;
+    bool cabled = false;
+    for (const auto& c : s.cables) {
+        if (c.value->to.object != source.module || c.value->to.key != source.input) continue;
+        cabled = true;
+        const model::RackModule* m = s.modules.find(c.value->from.object);
+        const rack::Catalog::Entry* e = m ? catalog.find(m->type) : nullptr;
+        const int port = e && e->type ? e->type->output(c.value->from.key) : -1;
+        if (port < 0) return false;
+        const Signal signal = e->type->output(port).signal;
+        if (signal != Signal::Unipolar && signal != Signal::Gate && signal != Signal::Phase)
+            return false;
+    }
+    return cabled;
+}
+
 std::vector<ui::MenuItem> knobMenu(const model::Session& s, model::Id module,
                                    const sd::ParamModel& p, double current, KnobMenuHooks hooks) {
+    // The strips' parameter menu's order and wording (gui.md §4.2): MIDI
+    // learn, the lane, Reset.
     std::vector<ui::MenuItem> items;
-    items.push_back({"Default (" + paramText(p, p.def) + ")", "Double-click",
-                     [set = hooks.set, def = p.def] { set(def); }});
+    // MIDI learn: the dialog listens; module.learn.set binds (one per knob).
+    const model::RackModule* rm = s.modules.find(module);
+    const model::ParamLearn* bound = nullptr;
+    if (rm)
+        for (const auto& l : rm->learn)
+            if (l.param == p.key) bound = &l;
+    if (rm && rm->type != model::kPluginModule) {
+        items.push_back(
+            {bound ? "MIDI learn… (" + engine::describe(bound->control) + ")" : "MIDI learn…", "",
+             hooks.learn});
+        if (bound)
+            items.push_back({"Remove MIDI learn", "", [exec = hooks.exec, module, key = p.key] {
+                                 json::Value args = json::Value::object();
+                                 args["module"] = module.str();
+                                 args["param"] = key;
+                                 exec("module.learn.remove", std::move(args));
+                             }});
+    }
     // Automation: on the rack's home channel, as a lane of its own.
     std::optional<model::Id> env;
     bool shown = false;
@@ -103,7 +150,7 @@ std::vector<ui::MenuItem> knobMenu(const model::Session& s, model::Id module,
     if (p.automatable && p.kind != sd::ParamModel::Kind::Toggle) {
         if (!env) {
             items.push_back(
-                {"Automate", "",
+                {"Show lane", "",
                  [exec = hooks.exec, module, key = p.key, value = paramJson(p, current)] {
                      json::Value point = json::Value::object();
                      point["beat"] = 0.0;
@@ -117,32 +164,17 @@ std::vector<ui::MenuItem> knobMenu(const model::Session& s, model::Id module,
                      exec("env.add", std::move(args));
                  }});
         } else {
-            items.push_back({shown ? "Hide automation lane" : "Show automation lane", "",
-                             [exec = hooks.exec, id = *env, shown] {
-                                 json::Value args = json::Value::object();
-                                 args["env"] = id.str();
-                                 args["visible"] = !shown;
-                                 exec("env.set", std::move(args));
-                             }});
+            items.push_back(
+                {shown ? "Hide lane" : "Show lane", "", [exec = hooks.exec, id = *env, shown] {
+                     json::Value args = json::Value::object();
+                     args["env"] = id.str();
+                     args["visible"] = !shown;
+                     exec("env.set", std::move(args));
+                 }});
         }
     }
-    // MIDI learn: the dialog listens; module.learn.set binds (one per knob).
-    const model::RackModule* rm = s.modules.find(module);
-    const model::ParamLearn* bound = nullptr;
-    if (rm)
-        for (const auto& l : rm->learn)
-            if (l.param == p.key) bound = &l;
-    if (rm && rm->type != model::kPluginModule) {
-        items.push_back({bound ? "MIDI: " + engine::describe(bound->control) + "…" : "MIDI learn…",
-                         "", hooks.learn});
-        if (bound)
-            items.push_back({"Remove MIDI learn", "", [exec = hooks.exec, module, key = p.key] {
-                                 json::Value args = json::Value::object();
-                                 args["module"] = module.str();
-                                 args["param"] = key;
-                                 exec("module.learn.remove", std::move(args));
-                             }});
-    }
+    items.push_back({"Reset to " + paramText(p, p.def), "Double-click",
+                     [set = hooks.set, def = p.def] { set(def); }});
     if (p.kind == sd::ParamModel::Kind::Choice) {
         items.push_back({"", "", {}, true, true});
         for (std::size_t k = 0; k < p.choices.size(); ++k)

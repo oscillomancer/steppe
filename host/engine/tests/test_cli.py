@@ -56,7 +56,7 @@ class McpTools(unittest.TestCase):
         track.add track.set track.list track.remove
         item.add item.set item.remove midi.write midi.get
         fx.add fx.describe fx.patch.get fx.patch.merge fx.remove plugin.list
-        route.add env.add env.points.set tempo.set
+        route.add env.add env.points.set tempo.set modulate
         transport.play transport.stop transport.seek
         render.mix analyze.track analyze.render analyze.compare
         branch.create branch.switch branch.diff branch.merge history.undo batch engine.start

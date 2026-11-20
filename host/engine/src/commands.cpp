@@ -14,6 +14,7 @@
 #include <set>
 
 #include "analysis_commands.h"
+#include "clip_launcher.h"
 #include "command_helpers.h"
 #include "media_files.h"
 #include "render_commands.h"
@@ -23,6 +24,7 @@
 #include "supple/engine/app.h"
 #include "supple/engine/racks.h"
 #include "supple/midi/midi.h"
+#include "supple/model/context.h"
 #include "supple/model/groups.h"
 #include "supple/model/render_settings.h"
 #include "supple/model/schemas.h"
@@ -35,6 +37,8 @@ void registerRouteCommands(cmd::Registry& registry);
 void registerLogCommands(cmd::Registry& registry);
 void registerCrashReportCommands(cmd::Registry& registry);
 void registerRulerCommands(cmd::Registry& registry);
+void registerModulationCommands(cmd::Registry& registry);
+void registerContextCommands(cmd::Registry& registry);
 void registerPluginCommands(cmd::Registry& registry);
 void registerGroupCommands(cmd::Registry& registry);
 void registerMidiCommands(cmd::Registry& registry);
@@ -65,6 +69,8 @@ void registerEnvelopeCommands(cmd::Registry& registry);
 void registerDeviceCommands(cmd::Registry& registry);
 void registerTransportCommands(cmd::Registry& registry);
 void registerAuditionCommands(cmd::Registry& registry);
+void registerClipLauncherCommands(cmd::Registry& registry);
+void registerLaunchCommands(cmd::Registry& registry);
 
 // Exposed to rack.probe (rack_probe.cpp).
 Result<std::pair<model::MidiSource, double>> notationSource(const model::Session& s,
@@ -82,6 +88,8 @@ void registerEngineCommands(cmd::Registry& registry) {
     registerLogCommands(registry);
     registerCrashReportCommands(registry);
     registerRulerCommands(registry);
+    registerModulationCommands(registry);
+    registerContextCommands(registry);
     registerPluginCommands(registry);
     registerGroupCommands(registry);
     registerMidiCommands(registry);
@@ -115,6 +123,8 @@ void registerEngineCommands(cmd::Registry& registry) {
     registerDeviceCommands(registry);
     registerTransportCommands(registry);
     registerAuditionCommands(registry);
+    registerClipLauncherCommands(registry);
+    registerLaunchCommands(registry);
 }
 
 // --- describe ----------------------------------------------------------------------------------
@@ -128,6 +138,11 @@ std::string describeSession(const model::Session& s) {
                   s.project->name.c_str(), s.project->sampleRate / 1000.0, s.timeMap->bpmAt(0),
                   meter.numerator, meter.denominator, s.timeMap->secondsAt(endBeat));
     out += head;
+    if (const auto keyId = model::keyPointAt(s, 0))
+        if (const auto* key = s.context.find(*keyId)) {
+            out.pop_back();  // the header's newline
+            out += " · " + model::keyWords(*key) + "\n";
+        }
     auto barOf = [&](double beat) {
         const auto bb = s.timeMap->barBeat(beat);
         char b[48];
@@ -137,6 +152,34 @@ std::string describeSession(const model::Session& s) {
             std::snprintf(b, sizeof b, "bar %d.%d", bb.bar, bb.beat);
         return std::string(b);
     };
+    // The tempo and meter changes after the first, which the header omits.
+    if (s.tempo.size() > 1) {
+        std::vector<model::TempoPointObj> points;
+        for (const auto& e : s.tempo) points.push_back(*e.value);
+        std::sort(points.begin(), points.end(),
+                  [](const auto& a, const auto& b) { return a.beat < b.beat; });
+        out += "tempo:";
+        for (std::size_t i = 1; i < points.size(); ++i) {
+            char t[64];
+            std::snprintf(t, sizeof t, " %s%s %g BPM%s", i > 1 ? "· " : "",
+                          barOf(points[i].beat).c_str(), points[i].bpm,
+                          points[i].ramp ? " (ramps on)" : "");
+            out += t;
+        }
+        out += "\n";
+    }
+    if (s.meters.size() > 1) {
+        std::vector<model::MeterObj> meters;
+        for (const auto& e : s.meters) meters.push_back(*e.value);
+        std::sort(meters.begin(), meters.end(),
+                  [](const auto& a, const auto& b) { return a.bar < b.bar; });
+        out += "meters:";
+        for (std::size_t i = 1; i < meters.size(); ++i)
+            out += std::string(i > 1 ? " · " : " ") + "bar " + std::to_string(meters[i].bar) + " " +
+                   std::to_string(meters[i].numerator) + "/" +
+                   std::to_string(meters[i].denominator);
+        out += "\n";
+    }
     std::function<void(Id, int)> walk = [&](Id id, int depth) {
         const model::Track& t = *s.tracks.find(id);
         {
@@ -193,6 +236,19 @@ std::string describeSession(const model::Session& s) {
                 if (it.mute) il += " muted";
                 out += il + "\n";
             }
+            std::string routes;  // modulation into this track's FX or mix (ADR-0096)
+            for (const auto& e : s.modulations) {
+                const model::Modulation& m = *e.value;
+                if (model::modulationTargetNode(s, m.target) != id) continue;
+                char amount[32];
+                std::snprintf(amount, sizeof amount, " %+g", m.depth);
+                routes += " " + e.id.str() + " " + m.source.module.str() + "." + m.source.input +
+                          "→" + m.target.object.str() + " " + m.target.param + amount +
+                          (m.enabled ? "" : " (off)");
+            }
+            if (!routes.empty())
+                out += std::string(static_cast<std::size_t>(2 * depth + 2), ' ') +
+                       "modulation:" + routes + "\n";
         }
         for (Id c : t.children) walk(c, depth + 1);
     };
@@ -222,10 +278,41 @@ std::string describeSession(const model::Session& s) {
                 return e.value->timebase == model::Timebase::Time ? s.timeMap->beatAt(pos) : pos;
             };
             out += " " + e.id.str() + " \"" + e.value->name + "\" " + barOf(beat(e.value->start)) +
-                   "–" + barOf(beat(e.value->end));
+                   "–" + barOf(beat(e.value->end)) + (e.value->section ? "" : " (not a section)");
         }
         out += "\n";
     }
+    if (!s.context.empty()) {
+        // By beat: the points come in id order. The first points of a long list only.
+        constexpr std::size_t kShown = 64;
+        auto list = [&](model::ContextType type, const char* label) {
+            std::vector<std::pair<double, Id>> rows;
+            for (const auto& e : s.context)
+                if (e.value->type == type) rows.push_back({e.value->beat, e.id});
+            if (rows.empty()) return;
+            std::sort(rows.begin(), rows.end());
+            out += std::string("  ") + label + ":";
+            for (std::size_t i = 0; i < rows.size() && i < kShown; ++i) {
+                const model::ContextPoint& p = *s.context.find(rows[i].second);
+                std::string what;
+                if (type == model::ContextType::Key) {
+                    what = model::keyWords(p);
+                } else if (p.symbol.empty()) {
+                    what = "(no chord)";
+                } else {
+                    what = p.symbol + (model::parseChordPoint(p) ? "" : "?");
+                }
+                out += std::string(i ? " ·" : "") + " " + barOf(rows[i].first) + " " + what;
+            }
+            if (rows.size() > kShown)
+                out += " · … " + std::to_string(rows.size() - kShown) + " more";
+            out += "\n";
+        };
+        out += "context:\n";
+        list(model::ContextType::Key, "keys");
+        list(model::ContextType::Chord, "chords");
+    }
+    out += describeScenes(s);  // clips never move the project length
     return out;
 }
 

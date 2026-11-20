@@ -20,6 +20,13 @@
 
 namespace supple::model {
 
+// How deep a top-level section's objects sit in a project document, which decides what a
+// saved branch's state names: 1 for a section whose members are objects by ID (or blobs
+// by hash), 2 for one a level further down (`rulers`, `sources`, `context`), 0 for
+// anything else, saved whole. A hand-kept list: a test checks it against every section
+// projectToJson writes.
+int objectDepth(std::string_view section);
+
 // The largest autosave number, and so the largest `autosaved_through`: a JSON
 // integer is signed 64-bit. autosave-<n> with n above it is not an autosave.
 inline constexpr std::uint64_t kAutosaveNumberMax = 9'223'372'036'854'775'807ULL;

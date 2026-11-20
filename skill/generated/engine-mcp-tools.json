@@ -302,7 +302,7 @@
   {
     "name": "env_add",
     "title": "Automate a parameter: a track's or route's mixer control, or a plugin's.",
-    "description": "Target one of track (param volume|pan|mute; width|pan_left|pan_right|pan_boost on channels/busses; playrate only on tr_0), route (volume|pan|mute), group (VCA volume|mute), or fx (a semantic key such as \"gain\" or \"filter1.cutoff\", or for other plugins a CLAP id or parameter name), or module (a rack module's knob by key, values in its unit, a choice by its key; module.describe). points: [{beat|bar|seconds, value, shape?, tension?}]; values in the parameter's unit (dB, %, Hz… — text like \"800 Hz\" works for plugins); shapes linear, square, slow, fast_start, fast_end, bezier. Plugin values move along the parameter's curve (a log cutoff sweeps evenly in pitch). take (param volume|pan|mute): a take envelope, its points in beats from the item's start (it moves with the item); it shapes the take after its take FX (a MIDI take needs an instrument in its take FX). Master playrate points are finite numeric ratios 0.25..4.0; an active nonempty master curve replaces the saved scalar during playback and rendering. Audio sources convert before take FX/live mixing; MIDI and automation follow the same timeline clock. Width and dual pans use -100..100 percent; pan_boost uses 0..1 (on at 0.5), overriding the effective law's boost while the envelope is active and nonempty. See describe for errors and examples.",
+    "description": "Target one of track (param volume|pan|mute; width|pan_left|pan_right|pan_boost on channels/busses; playrate only on tr_0), route (volume|pan|mute), group (VCA volume|mute), or fx (a semantic key such as \"gain\" or \"filter1.cutoff\", or for other plugins a CLAP id or parameter name), or module (a rack module's knob by key, values in its unit, a choice by its key; module.describe). points: [{beat|bar|seconds, value, shape?, tension?}]; values in the parameter's unit (dB, %, Hz… — text like \"800 Hz\" works for plugins); shapes linear, square, slow, fast_start, fast_end, bezier. Plugin values move along the parameter's curve (a log cutoff sweeps evenly in pitch). take (param volume|pan|mute): a take envelope, its points in beats from the item's start (it moves with the item), or on a clip's take from the clip's start in beats (MIDI) or seconds (audio); it shapes the take after its take FX (a MIDI take needs an instrument in its take FX). Master playrate points are finite numeric ratios 0.25..4.0; an active nonempty master curve replaces the saved scalar during playback and rendering. Audio sources convert before take FX/live mixing; MIDI and automation follow the same timeline clock. Width and dual pans use -100..100 percent; pan_boost uses 0..1 (on at 0.5), overriding the effective law's boost while the envelope is active and nonempty. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "env_add_args",
@@ -598,7 +598,7 @@
   {
     "name": "history_undo",
     "title": "Undo the last change on the current branch.",
-    "description": "Undo the last change on the current branch. See describe for errors and examples.",
+    "description": "Steps the current branch back one version. The result is the version that is current afterwards and its label: the step before the one undone, not the undone step (history.list shows both). See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "no_args",
@@ -613,8 +613,8 @@
   },
   {
     "name": "item_add",
-    "title": "Add an item on a track: MIDI in notation, a MIDI file or an audio file.",
-    "description": "position in beats (quarter notes from the start) or bar (1-based). notation: e.g. \"voice bass; 1: C2:q r:q C2:q r:q | F2:h G2:h\" — every bar must add up; the item is as long as the written bars unless length (beats) is given. audio_file: a path at the project's sample rate; with the app's copy-imports setting on, the project keeps its own copy in its media folder. midi_file: a Standard MIDI File (type 0 or 1, every track merged, channels kept); its notes keep their beats and follow the project's tempo (the file's tempo and meter are not applied; a warning says when they differ), and the item is as long as the file unless length is given. A master holds audio items only (prints, played after its fader); busses hold none. See describe for errors and examples.",
+    "title": "Add an item on a track: notation, a MIDI or audio file, or a clip's copy.",
+    "description": "position in beats (quarter notes from the start) or bar (1-based). notation: e.g. \"voice bass; 1: C2:q r:q C2:q r:q | F2:h G2:h\" — every bar must add up; the item is as long as the written bars unless length (beats) is given. audio_file: a path at the project's sample rate; with the app's copy-imports setting on, the project keeps its own copy in its media folder. midi_file: a Standard MIDI File (type 0 or 1, every track merged, channels kept); its notes keep their beats and follow the project's tempo (the file's tempo and meter are not applied; a warning says when they differ), and the item is as long as the file unless length is given. clip: a copy of that clip's takes, as long as the clip, its loop and take envelopes converted at the tempo where the item lands (ADR-0097). A master holds audio items only (prints, played after its fader); busses hold none. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "item_add_args",
@@ -649,6 +649,11 @@
         "midi_file": {
           "type": "string"
         },
+        "clip": {
+          "type": "string",
+          "pattern": "^cl_[0-9]+$",
+          "description": "Lay a copy of this clip's takes here."
+        },
         "name": {
           "type": "string"
         }
@@ -676,8 +681,8 @@
         },
         "item": {
           "type": "string",
-          "pattern": "^it_[0-9]+$",
-          "description": "Item id, e.g. \"it_1\"."
+          "pattern": "^(it|cl)_[0-9]+$",
+          "description": "Item id, e.g. \"it_1\" (a clip's id is refused with item.kind)."
         }
       },
       "required": ["item"],
@@ -703,8 +708,8 @@
         },
         "item": {
           "type": "string",
-          "pattern": "^it_[0-9]+$",
-          "description": "Item id, e.g. \"it_1\"."
+          "pattern": "^(it|cl)_[0-9]+$",
+          "description": "Item id, e.g. \"it_1\" (a clip's id is refused with item.kind)."
         },
         "position": {
           "type": "number",
@@ -783,16 +788,16 @@
   },
   {
     "name": "midi_get",
-    "title": "Read an item's MIDI as notation.",
-    "description": "Read an item's MIDI as notation. See describe for errors and examples.",
+    "title": "Read an item's or clip's MIDI as notation, with its key and chords.",
+    "description": "Pitch names follow the key that holds at the item's start (none: the default spelling). context lists the key and the chords over the item's span, each from the bar of the item (item_bar, the notation's) and of the project (project_bar) where it starts; the first of each is the one already holding at the item's start. Omitted when the project has no key or chords there. A clip has no place in time: its pitch names follow the key at the project's start, and it has no context. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "midi_get_args",
       "properties": {
         "item": {
           "type": "string",
-          "pattern": "^it_[0-9]+$",
-          "description": "Item id, e.g. \"it_1\"."
+          "pattern": "^(it|cl)_[0-9]+$",
+          "description": "Item or clip id, e.g. \"it_1\" or \"cl_1\"."
         }
       },
       "required": ["item"],
@@ -806,22 +811,104 @@
   },
   {
     "name": "midi_write",
-    "title": "Replace an item's MIDI with notation (the item keeps its position and length).",
-    "description": "Replace an item's MIDI with notation (the item keeps its position and length). See describe for errors and examples.",
+    "title": "Replace an item's or clip's MIDI with notation (keeping its place and length).",
+    "description": "Replace an item's or clip's MIDI with notation (keeping its place and length). See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "midi_write_args",
       "properties": {
         "item": {
           "type": "string",
-          "pattern": "^it_[0-9]+$",
-          "description": "Item id, e.g. \"it_1\"."
+          "pattern": "^(it|cl)_[0-9]+$",
+          "description": "Item or clip id, e.g. \"it_1\" or \"cl_1\"."
         },
         "notation": {
           "type": "string"
         }
       },
       "required": ["item", "notation"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "modulate",
+    "title": "Modulate a parameter or mixer level with an LFO, follower, random or macro.",
+    "description": "The whole gesture in one undo step. It takes the first rack homed on the target's track that holds a Mod Out, else the first rack named Modulators, else adds one on a new channel named Modulators (rack: choose one instead). It adds the source module (lfo: an LFO; random: an LFO's Random Steps preset; macro: a Macro, its first knob; follower: a Follower fed by an In module and a send from the track from), cables it into the first free Mod Out input (adding a Mod Out when none is free) and routes that input to the target. {module, input} routes a Mod Out input already patched. For a macro, knob names the knob to move. depth as modulation.add; default a quarter of a plug-in parameter's range, 6 dB, or 50 percent. A parameter reached through its envelope (fx.describe: modulatable_by_envelope) gets a one-point envelope at its current value first when it has none. A rack that would close a loop (it already drives the track a follower hears, or hears the target) is passed over for the next, or a new Modulators rack. Only a real cycle is refused (modulation.cycle): a follower on a track the target feeds, itself included. target: {fx, param} (a plug-in parameter by key, name or CLAP id; fx.describe full marks the modulatable ones), {track, param: volume|pan|width} or {route, param: volume}. The source module is left set to its defaults: change it with module.set {module, params} on the module this returns (an LFO's rate, shape or sync; a follower's gain and threshold; a macro's macro_1, which sits at 0 until moved, so a macro does nothing at first; module.describe {type} lists the knobs) and the route's depth with modulation.set. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "modulate_args",
+      "properties": {
+        "target": {
+          "type": "object",
+          "title": "modulation_target",
+          "properties": {
+            "fx": {
+              "type": "string",
+              "pattern": "^fx_[0-9]+$",
+              "description": "Plugin instance id, e.g. \"fx_1\"."
+            },
+            "track": {
+              "type": "string",
+              "pattern": "^tr_[0-9]+$",
+              "description": "A track's volume, pan or width."
+            },
+            "route": {
+              "type": "string",
+              "pattern": "^sd_[0-9]+$",
+              "description": "A send's volume."
+            },
+            "param": {
+              "type": "string",
+              "minLength": 1,
+              "description": "A plug-in parameter's key, name or decimal CLAP id (fx.describe marks the modulatable ones); volume, pan or width for a track; volume for a route."
+            }
+          },
+          "required": ["param"],
+          "additionalProperties": false
+        },
+        "source": {
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": ["lfo", "follower", "random", "macro"]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "module": {
+                  "type": "string",
+                  "pattern": "^mo_[0-9]+$"
+                },
+                "input": {
+                  "type": "string",
+                  "pattern": "^in_([1-9]|1[0-6])$"
+                }
+              },
+              "required": ["module", "input"],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "depth": {
+          "type": "number"
+        },
+        "from": {
+          "type": "string",
+          "pattern": "^tr_[0-9]+$",
+          "description": "The track a follower listens to."
+        },
+        "rack": {
+          "type": "string",
+          "pattern": "^rk_[0-9]+$",
+          "description": "Rack id, e.g. \"rk_1\"."
+        }
+      },
+      "required": ["target", "source"],
       "additionalProperties": false
     },
     "annotations": {
@@ -1513,7 +1600,7 @@
   },
   {
     "name": "session_describe",
-    "title": "Describe the whole session in compact text (tracks, items, fx, routes).",
+    "title": "Describe the whole session in compact text (tracks, items, fx, routes, key).",
     "description": "The quickest way to see where things are; use the IDs it shows with other commands. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
@@ -1645,8 +1732,8 @@
   },
   {
     "name": "track_remove",
-    "title": "Remove a track with its items, fx, routes and envelopes (not a folder).",
-    "description": "Removes the track's racks too, except a rack another channel hears (its Out as the channel's input, or its Note Out's MIDI), which moves there. A warning names each rack removed (track.rack_removed) or moved (track.rack_moved) and its rack sends: removed with it, or following the new home's mute and solo. See describe for errors and examples.",
+    "title": "Remove a track with its items, clips, fx, routes and envelopes (not a folder).",
+    "description": "Removes the track's racks too, except a rack another channel hears (its Out as the channel's input, or its Note Out's MIDI), which moves there. A warning names each rack removed (track.rack_removed) or moved (track.rack_moved) and its rack sends: removed with it, or following the new home's mute and solo. Its clips go with their takes, named by a clip.removed warning. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "track_ref",

@@ -551,6 +551,15 @@ void AppActions::addUi(std::string id, std::string name, std::function<void()> r
     registry_.add(std::move(a));
 }
 
+void AppActions::setChecked(std::string_view id,
+                            std::function<bool(const actions::Context&)> when) {
+    const actions::Action* found = registry_.find(id);
+    if (!found) return;
+    actions::Action a = *found;
+    a.checked = std::move(when);
+    registry_.add(std::move(a));
+}
+
 void AppActions::setEnabled(std::string_view id,
                             std::function<bool(const actions::Context&)> when) {
     const actions::Action* found = registry_.find(id);

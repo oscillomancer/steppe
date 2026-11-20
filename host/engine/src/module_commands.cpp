@@ -327,9 +327,13 @@ void registerModuleCommands(cmd::Registry& registry) {
     // ---------------------------------------------------------------- module.get
     [&] {
         Command<GetArgs, json::Value> c;
-        common(c, "module.get", Kind::Query, "A module type's source: stock or library.");
+        common(c, "module.get", Kind::Query,
+               "A module type's source, not a placed module's knobs (rack.get reads those).");
         c.description =
-            "type (an id or short name: every stock module's source is readable, a good start "
+            "Reads a module type's source, for writing your own; the knobs of a module placed in "
+            "a rack are in rack.get (detail full lists every knob key; module.describe lists a "
+            "type's knobs and ranges). type (an id or short name: every stock module's source is "
+            "readable, a good start "
             "for your own) or name (a library module's file, also when it does not compile).";
         c.args = schema::object<GetArgs>("module_get_args")
                      .field("type", &GetArgs::type, schema::string().minLength(1))

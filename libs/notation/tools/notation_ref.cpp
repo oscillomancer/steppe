@@ -71,7 +71,7 @@ int main() {
                  "(root octave 3 by default). A slash bass such as `{C/E}` sits "
                  "one octave below the root.\n\n"
               << "| Symbol | Semitone intervals |\n|---|---|\n";
-    for (const auto& [quality, intervals] : chordQualities()) {
+    for (const auto& [quality, intervals] : supple::harmony::chordQualities()) {
         std::cout << "| `{C" << quality << "}` |";
         for (int interval : intervals) std::cout << ' ' << interval;
         std::cout << " |\n";

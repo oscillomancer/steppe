@@ -6,6 +6,7 @@
 #include "test_support.h"
 
 #include <filesystem>
+#include <map>
 
 #include "app_actions.h"
 #include "supple/gui/window.h"
@@ -315,6 +316,44 @@ TEST_CASE("ruler: region key, body move, both edges, rename and removal") {
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("ruler: its height is the rows' sum, read by the header, the lanes and the hit tests") {
+    RulerFixture f;
+    const views::RulerRows standard;
+    CHECK(standard.height() == doctest::Approx(88));
+    CHECK(f.view->ruler().bounds().h == doctest::Approx(static_cast<double>(standard.height())));
+    CHECK(f.view->lanesRect().y ==
+          doctest::Approx(static_cast<double>(f.view->ruler().bounds().bottom())));
+    // A taller region row: the ruler grows by 15, the lanes move down with it,
+    // and presses find the rows where they now are.
+    views::RulerRows taller;
+    taller.region = 30;
+    f.view->setRulerRows(taller);
+    f.sync();
+    CHECK(f.view->ruler().bounds().h == doctest::Approx(103));
+    CHECK(f.view->lanesRect().y ==
+          doctest::Approx(static_cast<double>(f.view->ruler().bounds().bottom())));
+    f.loop(4, 8, false);
+    f.root->key(SDLK_R, ui::kShift);
+    f.sync();
+    REQUIRE(f.app->head().regions.size() == 1);
+    const auto region = f.app->head().regions.begin()->id;
+    f.drag(f.at(6, 80), f.at(8.12, 80));  // 80 was the marker row; it is the region's now
+    CHECK(f.app->head().regions.find(region)->start == 6);
+    f.view->setPlayhead(2);
+    f.root->key(SDLK_M);
+    f.sync();
+    REQUIRE(f.app->head().markers.size() == 1);
+    const auto marker = f.app->head().markers.begin()->id;
+    f.drag(f.at(4, 95), f.at(6.12, 95));
+    CHECK(f.app->head().markers.find(marker)->pos == doctest::Approx(6));
+    CHECK(f.app->head().regions.find(region)->start == 6);  // the marker drag left it
+    // Back to the standard rows: the standard height again.
+    f.view->setRulerRows(standard);
+    f.sync();
+    CHECK(f.view->ruler().bounds().h == doctest::Approx(88));
+    CHECK(f.errors.empty());
+}
+
 TEST_CASE("ruler: tempo insertion and BPM field preserve other points and ramps") {
     RulerFixture f;
     auto args =
@@ -460,6 +499,233 @@ TEST_CASE("ruler: double-click in the meter half adds or edits a meter change") 
     REQUIRE(f.app->head().timeMap->meter().size() == 2);
     CHECK(f.app->head().timeMap->meter()[1].numerator == 6);
     CHECK(f.app->head().timeMap->meter()[1].denominator == 8);
+    CHECK(f.errors.empty());
+}
+
+TEST_CASE("ruler: key changes show in the meter half; a double-click or the menu edits them") {
+    RulerFixture f;
+    auto rightClick = [&](ui::Point p) {
+        ui::PointerEvent e;
+        e.type = Pointer::Down;
+        e.pos = p;
+        e.button = 3;
+        f.root->pointer(e);
+        e.type = Pointer::Up;
+        f.root->pointer(e);
+        f.root->frame(false);
+    };
+    auto menuRows = [&] {
+        std::vector<std::string> rows;
+        ui::Node* menu = f.root->find("ruler.menu");
+        REQUIRE(menu);
+        for (const ui::MenuItem& m : ui::menuItems(*menu)) rows.push_back(m.label);
+        return rows;
+    };
+    auto pick = [&](int row) {  // menu rows are 26 px
+        ui::Node* menu = f.root->find("ruler.menu");
+        REQUIRE(menu);
+        const ui::Point p{menu->bounds().x + 30,
+                          menu->bounds().y + static_cast<float>(row) * 26 + 13};
+        f.pointer(Pointer::Move, p);
+        f.pointer(Pointer::Down, p);
+        f.pointer(Pointer::Up, p);
+        f.sync();
+    };
+    auto keyAt = [&](double beat) {
+        for (const auto& e : f.app->head().context)
+            if (e.value->type == model::ContextType::Key && e.value->beat == beat)
+                return e.value->tonic + " " + e.value->scale;
+        return std::string("none");
+    };
+    f.exec("timesig.set", json::parse(R"({"bar": 3, "meter": "3/4"})").value());  // beat 8
+    f.exec("key.set", json::parse(R"({"at": 0, "tonic": "F", "scale": "major"})").value());
+    f.exec("key.set", json::parse(R"({"at": 4, "tonic": "A", "scale": "minor"})").value());
+    f.exec("key.set", json::parse(R"({"at": 8, "tonic": "D", "scale": "dorian"})").value());
+    CHECK(f.view->rulerStats().keyLabels ==
+          std::vector<std::string>{"F major", "A minor", "D dorian"});
+    auto n = f.history();
+    // A key change on its own tick: a double-click edits it.
+    f.click(f.at(4.4, 55), 0, 2);
+    REQUIRE(f.root->find("ruler-key"));
+    CHECK(f.root->find("ruler-key")->valueText() == "A minor");
+    f.submit("Eb harmonic minor");
+    CHECK(keyAt(4) == "Eb harmonic_minor");
+    CHECK(f.history() == ++n);
+    // One that shares the meter change's beat follows its label: the label is
+    // the key's, the meter's own flag still the meter's.
+    f.click(f.at(8.85, 55), 0, 2);
+    REQUIRE(f.root->find("ruler-key"));
+    f.submit("E phrygian");
+    CHECK(keyAt(8) == "E phrygian");
+    CHECK(f.history() == ++n);
+    f.click(f.at(8.05, 55), 0, 2);
+    REQUIRE(f.root->find("ruler-meter"));
+    f.root->closePopups();
+    // Text that is not a key: an error, and the field stays for a fix.
+    f.click(f.at(4.4, 55), 0, 2);
+    REQUIRE(f.root->find("ruler-key"));
+    f.root->frame(false);
+    f.root->text("Gmajor");
+    f.root->key(SDLK_RETURN);
+    CHECK(f.root->popupOpen());
+    REQUIRE(f.errors.size() == 1);
+    CHECK(f.errors[0].code == "key.text");
+    f.errors.clear();
+    f.root->closePopups();
+    CHECK(f.history() == n);
+    // The menu: Change key…, Delete key change on a flag; Key change here… elsewhere.
+    rightClick(f.at(4.4, 55));
+    CHECK(menuRows() == std::vector<std::string>{"Change key\u2026", "Delete key change"});
+    pick(1);
+    CHECK(keyAt(4) == "none");
+    CHECK(f.history() == ++n);
+    rightClick(f.at(14.1, 55));
+    CHECK(menuRows() == std::vector<std::string>{"Key change here\u2026"});
+    pick(0);
+    REQUIRE(f.root->find("ruler-key"));
+    CHECK(f.root->find("ruler-key")->valueText() == "E phrygian");  // the key holding there
+    f.submit("G major");
+    CHECK(keyAt(14) == "G major");  // on the grid
+    CHECK(f.history() == ++n);
+    CHECK(f.view->rulerStats().keyLabels ==
+          std::vector<std::string>{"F major", "E phrygian", "G major"});
+    CHECK(f.errors.empty());
+}
+
+TEST_CASE("ruler: the chord row shows with the first chord; its cells edit, move and delete") {
+    RulerFixture f;
+    auto rightClick = [&](ui::Point p) {
+        ui::PointerEvent e;
+        e.type = Pointer::Down;
+        e.pos = p;
+        e.button = 3;
+        f.root->pointer(e);
+        e.type = Pointer::Up;
+        f.root->pointer(e);
+        f.root->frame(false);
+    };
+    auto menuRows = [&] {
+        std::vector<std::string> rows;
+        ui::Node* menu = f.root->find("ruler.menu");
+        REQUIRE(menu);
+        for (const ui::MenuItem& m : ui::menuItems(*menu)) rows.push_back(m.label);
+        return rows;
+    };
+    auto pick = [&](int row) {  // menu rows are 26 px
+        ui::Node* menu = f.root->find("ruler.menu");
+        REQUIRE(menu);
+        const ui::Point p{menu->bounds().x + 30,
+                          menu->bounds().y + static_cast<float>(row) * 26 + 13};
+        f.pointer(Pointer::Move, p);
+        f.pointer(Pointer::Down, p);
+        f.pointer(Pointer::Up, p);
+        f.sync();
+    };
+    auto chords = [&] {
+        std::map<double, std::string> out;
+        for (const auto& e : f.app->head().context)
+            if (e.value->type == model::ContextType::Chord) out[e.value->beat] = e.value->symbol;
+        return out;
+    };
+    using Chords = std::map<double, std::string>;
+    // Hidden until the project has a chord: the standard height.
+    CHECK_FALSE(f.view->chordRowShown());
+    CHECK(f.view->ruler().bounds().h == doctest::Approx(88));
+    f.exec("chord.set", json::parse(R"({"at": 4, "symbol": "Am7"})").value());
+    REQUIRE(f.view->chordRowShown());
+    CHECK(f.view->ruler().bounds().h == doctest::Approx(106));
+    CHECK(f.view->lanesRect().y ==
+          doctest::Approx(static_cast<double>(f.view->ruler().bounds().bottom())));
+    CHECK(f.view->rulerStats().chordLabels == std::vector<std::string>{"Am7"});
+    constexpr float kRow = 81;  // the chord row: 72 to 90
+    auto n = f.history();
+    // A double-click on a chord's name edits it; elsewhere in the row, adds one.
+    f.click(f.at(4.2, kRow), 0, 2);
+    REQUIRE(f.root->find("chord-field"));
+    CHECK(f.root->find("chord-field")->valueText() == "Am7");
+    f.submit("Dmin7");
+    CHECK(chords() == Chords{{4, "Dm7"}});  // stored canonical
+    CHECK(f.history() == ++n);
+    f.click(f.at(10.1, kRow), 0, 2);
+    REQUIRE(f.root->find("chord-field"));
+    CHECK(f.root->find("chord-field")->valueText().empty());
+    f.submit("G7");
+    CHECK(chords() == Chords{{4, "Dm7"}, {10, "G7"}});  // on the grid
+    CHECK(f.history() == ++n);
+    // Tab writes the chord and moves the field to the next bar.
+    f.click(f.at(16.1, kRow), 0, 2);
+    f.root->frame(false);
+    f.root->text("C");
+    f.root->key(SDLK_TAB);
+    f.sync();
+    CHECK(chords() == Chords{{4, "Dm7"}, {10, "G7"}, {16, "C"}});
+    REQUIRE(f.root->find("chord-field"));
+    f.submit("F");
+    CHECK(chords() == Chords{{4, "Dm7"}, {10, "G7"}, {16, "C"}, {20, "F"}});  // bar 6
+    CHECK(f.history() == (n += 2));
+    // A symbol the grammar refuses: its message, and the field stays.
+    f.click(f.at(18.1, kRow), 0, 2);
+    f.root->frame(false);
+    f.root->text("H7");
+    f.root->key(SDLK_RETURN);
+    CHECK(f.root->popupOpen());
+    REQUIRE(f.errors.size() == 1);
+    CHECK(f.errors[0].code == "chord.bad_root");
+    f.errors.clear();
+    f.root->closePopups();
+    // A drag on a chord's start moves it, one undo step.
+    f.drag(f.at(10.05, kRow), f.at(12.05, kRow));
+    CHECK(chords() == Chords{{4, "Dm7"}, {12, "G7"}, {16, "C"}, {20, "F"}});
+    CHECK(f.history() == ++n);
+    // The menu on a chord: Edit chord…, Delete chord, Key change here….
+    rightClick(f.at(4.2, kRow));
+    CHECK(menuRows() ==
+          std::vector<std::string>{"Edit chord\u2026", "Delete chord", "Key change here\u2026"});
+    pick(1);
+    CHECK(chords() == Chords{{12, "G7"}, {16, "C"}, {20, "F"}});
+    CHECK(f.history() == ++n);
+    // Inside a cell, away from its name: Add chord here…, No chord from here.
+    rightClick(f.at(13.5, kRow));
+    CHECK(menuRows() == std::vector<std::string>{"Add chord here\u2026", "No chord from here",
+                                                 "Key change here\u2026"});
+    pick(1);
+    CHECK(chords() == Chords{{12, "G7"}, {13.5, ""}, {16, "C"}, {20, "F"}});
+    CHECK(f.history() == ++n);
+    CHECK(f.view->rulerStats().chordLabels == std::vector<std::string>{"G7", "C", "F"});
+    // A name too long for its cell ends in an ellipsis; no glyph is cut.
+    const double pxPerBeat = static_cast<double>(f.at(17).x - f.at(16).x);
+    const double narrow = 16 + 30 / pxPerBeat;  // a cell 30 units wide
+    f.exec("chord.set", json::parse(R"({"at": 16, "symbol": "C#m7b5"})").value());
+    f.exec("chord.set",
+           json::parse(R"({"at": )" + json::formatDouble(narrow) + R"(, "symbol": "G"})").value());
+    f.sync();
+    {
+        const auto& labels = f.view->rulerStats().chordLabels;
+        REQUIRE(labels.size() == 4);
+        CHECK(labels[1] != "C#m7b5");
+        CHECK(labels[1].rfind("C", 0) == 0);
+        CHECK(labels[1].ends_with("\u2026"));
+    }
+    f.exec("chord.remove", json::parse(R"({"at": )" + json::formatDouble(narrow) + "}").value());
+    // With no chord left the row hides again.
+    for (double at : {12.0, 13.5, 16.0, 20.0})
+        f.exec("chord.remove", json::parse(R"({"at": )" + json::formatDouble(at) + "}").value());
+    CHECK_FALSE(f.view->chordRowShown());
+    CHECK(f.view->ruler().bounds().h == doctest::Approx(88));
+    // View > Chords chooses for the project; the UI file keeps the choice.
+    f.view->setChordRow(true);
+    f.sync();
+    CHECK(f.view->chordRowShown());
+    CHECK(f.view->ruler().bounds().h == doctest::Approx(106));
+    const json::Value saved = f.view->saveLayout();
+    REQUIRE(saved.find("chords"));
+    CHECK(saved.find("chords")->asBool());
+    f.view->loadLayout(json::Value::object());  // a project that never chose
+    f.sync();
+    CHECK_FALSE(f.view->chordRowShown());
+    f.view->loadLayout(saved);
+    f.sync();
+    CHECK(f.view->chordRowShown());
     CHECK(f.errors.empty());
 }
 
