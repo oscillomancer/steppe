@@ -2556,7 +2556,7 @@ q = nil
 ---@field set fun(args: Steppe.marker_set_args): Steppe.marker_set_result Edit a ruler's position, name, or color.
 
 ---@class Steppe.midi
----@field edit fun(args: Steppe.midi_edit_args): table Edit a MIDI item's notes and CCs: add, remove, move, resize, velocity, quantize.
+---@field edit fun(args: Steppe.midi_edit_args): table Edit a MIDI item's notes and CCs: move, resize, quantize, fit to key or chord.
 ---@field get fun(args: Steppe.midi_get_args): Steppe.midi_get_result Read an item's MIDI as notation, with the key and chords it sits in.
 ---@field notes fun(args: Steppe.midi_notes_args): table List a MIDI item's notes and CC points (beats from the item's start).
 ---@field write fun(args: Steppe.midi_write_args): Steppe.midi_write_result Replace an item's MIDI with notation (the item keeps its position and length).

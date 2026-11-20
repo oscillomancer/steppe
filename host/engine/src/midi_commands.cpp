@@ -691,7 +691,7 @@ void registerMidiCommands(cmd::Registry& registry) {
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
         c.summary =
-            "Edit a MIDI item's notes and CCs: add, remove, move, resize, velocity, quantize.";
+            "Edit a MIDI item's notes and CCs: move, resize, quantize, fit to key or chord.";
         c.description =
             "ops run in order and are one undo step. notes: indices into midi.notes' list as it "
             "was before this command (every op refers to that list, so later ops are not "

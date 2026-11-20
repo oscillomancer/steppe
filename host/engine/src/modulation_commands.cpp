@@ -596,7 +596,14 @@ void registerModulationCommands(cmd::Registry& registry) {
             "parameter's range, 6 dB, or 50 percent. A rack that would close a loop (it "
             "already drives the track a follower hears, or hears the target) is passed over "
             "for the next, or a new Modulators rack. Only a real cycle is refused "
-            "(modulation.cycle): a follower on a track the target feeds, itself included.";
+            "(modulation.cycle): a follower on a track the target feeds, itself included. "
+            "target: {fx, param} (a plug-in parameter by key, name or CLAP id; fx.describe "
+            "full marks the modulatable ones), {track, param: volume|pan|width} or {route, "
+            "param: volume}. The source module is left set to its defaults: change it with "
+            "module.set {module, params} on the module this returns (an LFO's rate, shape or "
+            "sync; a follower's gain and threshold; a macro's macro_1, which sits at 0 until "
+            "moved, so a macro does nothing at first; module.describe {type} lists the knobs) "
+            "and the route's depth with modulation.set.";
         c.tags = {"modulation", "rack"};
         c.args = schema::object<ModulateArgs>("modulate_args")
                      .field("target", &ModulateArgs::target, targetSchema())
