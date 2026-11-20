@@ -6379,7 +6379,7 @@ Kind: `query`. Exposure: `mcp-tool`.
       "type": "string"
     },
     "params": {
-      "description": "With full: each parameter; modulatable: true when a modulation route can take it (modulation.add)"
+      "description": "With full: each parameter; modulatable_by_envelope: true when a route reaches it through its envelope (ADR-0096 M4); modulatable: true when a modulation route can take it (modulation.add)"
     },
     "patch": {},
     "status_available": {
@@ -10991,7 +10991,7 @@ Result:
 
 Modulate a parameter or mixer level with an LFO, follower, random or macro.
 
-The whole gesture in one undo step. It takes the first rack homed on the target's track that holds a Mod Out, else the first rack named Modulators, else adds one on a new channel named Modulators (rack: choose one instead). It adds the source module (lfo: an LFO; random: an LFO's Random Steps preset; macro: a Macro, its first knob; follower: a Follower fed by an In module and a send from the track from), cables it into the first free Mod Out input (adding a Mod Out when none is free) and routes that input to the target. {module, input} routes a Mod Out input already patched. depth as modulation.add; default a quarter of a plug-in parameter's range, 6 dB, or 50 percent. A follower cannot listen to the track it modulates (modulation.cycle).
+The whole gesture in one undo step. It takes the first rack homed on the target's track that holds a Mod Out, else the first rack named Modulators, else adds one on a new channel named Modulators (rack: choose one instead). It adds the source module (lfo: an LFO; random: an LFO's Random Steps preset; macro: a Macro, its first knob; follower: a Follower fed by an In module and a send from the track from), cables it into the first free Mod Out input (adding a Mod Out when none is free) and routes that input to the target. {module, input} routes a Mod Out input already patched. For a macro, knob names the knob to move. depth as modulation.add; default a quarter of a plug-in parameter's range, 6 dB, or 50 percent. A parameter reached through its envelope (fx.describe: modulatable_by_envelope) gets a one-point envelope at its current value first when it has none. A rack that would close a loop (it already drives the track a follower hears, or hears the target) is passed over for the next, or a new Modulators rack. Only a real cycle is refused (modulation.cycle): a follower on a track the target feeds, itself included.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -11034,6 +11034,10 @@ Kind: `edit`. Exposure: `mcp-tool`.
       "type": "string",
       "description": "The channel made for a new rack."
     },
+    "knob": {
+      "type": "string",
+      "description": "A macro's knob to move, by key."
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -11049,7 +11053,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 ### Errors
 
-- `modulation.cycle`: a follower on the track it modulates Hint: listen to another track, or modulate a buss it feeds
+- `modulation.cycle`: a follower on a track the target feeds Hint: listen to another track, or modulate a buss it feeds
 
 ### Examples
 
@@ -11083,7 +11087,7 @@ Result:
 
 Route a rack's Mod Out input to a plug-in parameter or a mixer level.
 
-depth is the offset at a signal of 1: for a plug-in parameter a fraction of its CLAP range (-1..1), and the parameter must be marked modulatable in fx.describe; for a track's or send's volume in dB (-48..48); for a track's pan or width in percent (-200..200). The offset adds to the value automation or the fader gives, and the sum stays in the target's range.
+depth is the offset at a signal of 1: for a plug-in parameter a fraction of its CLAP range (-1..1). A parameter fx.describe marks modulatable takes the offset directly; one marked modulatable_by_envelope (automatable, continuous, not modulatable, or any VST3's) takes it through its active envelope, which must exist (modulation.envelope; modulate adds one), and for a VST3 depth is a fraction of its normalized range; for a track's or send's volume in dB (-48..48); for a track's pan or width in percent (-200..200). The offset adds to the value automation or the fader gives, and the sum stays in the target's range.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -11152,7 +11156,7 @@ Result:
 
 List modulation routes, by target track, FX or source rack.
 
-Each route with its source signal's range (bipolar -1..1, or unipolar 0..1 when every cable into the Mod Out input is unipolar, a gate or a phase) and, when the plan cannot apply it, inert: target (the parameter cannot take it, or the target's track is frozen and its level is outside the print) or latency (its plug-in changed latency while modulated; editing a route into it turns them back on).
+Each route with its source signal's range (bipolar -1..1, or unipolar 0..1 when every cable into the Mod Out input is unipolar, a gate or a phase), fed_by (each cable into that input: its module, output and module type) and, when the plan cannot apply it, inert: source (nothing is cabled into the input), target (the parameter cannot take it, or the target's track is frozen and its level is outside the print), envelope (a parameter reached through its envelope, which is gone or off) or latency (its plug-in changed latency while modulated; editing a route into it turns them back on).
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -11238,11 +11242,40 @@ Kind: `query`. Exposure: `mcp-exec`.
           "range": {
             "type": "string"
           },
+          "fed_by": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "title": "modulation_fed_by",
+              "properties": {
+                "module": {
+                  "type": "string"
+                },
+                "output": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                }
+              },
+              "required": ["module", "output", "type"],
+              "additionalProperties": false
+            }
+          },
           "inert": {
             "type": "string"
           }
         },
-        "required": ["modulation", "source", "target", "depth", "enabled", "lane", "range"],
+        "required": [
+          "modulation",
+          "source",
+          "target",
+          "depth",
+          "enabled",
+          "lane",
+          "range",
+          "fed_by"
+        ],
         "additionalProperties": false
       }
     },
@@ -11286,7 +11319,9 @@ Result:
       "depth": 0.25,
       "enabled": true,
       "lane": true,
-      "range": "bipolar"
+      "range": "bipolar",
+      "fed_by": [],
+      "inert": "source"
     }
   ]
 }
@@ -11405,7 +11440,7 @@ Result:
 
 Read each modulation route's live target offset and its span.
 
-offset: the route's target's current offset, the sum of every route on it, as the engine last applied it (a plug-in parameter's as a fraction of its range, a volume's in dB, a pan's or width's in percent); absent while no running plan applies the route. low and high: what this route alone can add, depth times its signal range (bipolar -1..1, unipolar 0..1), in the same unit.
+offset: the route's target's current offset, the sum of every route on it, as the engine last applied it (a plug-in parameter's as a fraction of its range, a volume's in dB, a pan's or width's in percent); absent while no running plan applies the route. low and high: what this route alone can add, depth times its signal range (bipolar -1..1, unipolar 0..1), in the same unit; absent while nothing is cabled into its Mod Out input.
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -11441,7 +11476,7 @@ Kind: `query`. Exposure: `mcp-exec`.
             "type": "number"
           }
         },
-        "required": ["modulation", "low", "high"],
+        "required": ["modulation"],
         "additionalProperties": false
       }
     },
@@ -11460,7 +11495,7 @@ Kind: `query`. Exposure: `mcp-exec`.
 
 ### Examples
 
-**Stopped** (`song_with_modulation`)
+**Stopped, nothing cabled into the route's input yet** (`song_with_modulation`)
 
 ```json
 {}
@@ -11473,9 +11508,7 @@ Result:
 {
   "modulations": [
     {
-      "modulation": "mr_1",
-      "low": -0.25,
-      "high": 0.25
+      "modulation": "mr_1"
     }
   ]
 }

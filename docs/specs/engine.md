@@ -345,10 +345,25 @@ only.
     automation and modulation events as chain stages do.
   - Bridged plug-ins receive the same events through the bridge; a late
     block's coalescing keeps the latest value per target (§5).
+- **Through an envelope (M4).** A VST3 parameter, or a CLAP one without
+  the modulatable flag, that is automatable and neither stepped nor an enum
+  binds to its automation lane (`ModEdge::viaLane`, `ParamLane::modFirst`
+  and `modCount`, `Stage::laneModRoutes`). The lane sends
+  `clamp(base + Σ depth × signal × range, min, max)` at its usual emission
+  points: its first frame, each point, and each 32-sample grid point while
+  a route is bound. The base is the envelope's value at that frame. A
+  VST3's lane is in the normalized domain (range 1); a CLAP one's in plain
+  values (range max − min). While the source rack is owned by the other
+  executor, the last sum holds. The lane has a telemetry slot of its own,
+  stored as a fraction of its range. Without an active envelope on the
+  parameter, the route is inert (`modulation.target`, "has no active
+  envelope to carry it"). When a write mode records a plug-in output for
+  such a parameter, the route's current offset is taken off first
+  (`commitOutputGesture`), so the envelope keeps the base.
 - **Inert routes.** A route is inert, with a plan warning, when binding finds
-  that its target cannot take it: the parameter is gone, not flagged
-  modulatable, read-only or bypass, or the plug-in is missing or VST3
-  (`modulation.target`), or for a mixer target when its node applies no
+  that its target cannot take it: the parameter is gone, read-only, bypass,
+  neither modulatable nor reachable through an active envelope, or the
+  plug-in is missing (`modulation.target`), or for a mixer target when its node applies no
   such level (a send that is not an encoded edge of its source). A route
   into a frozen track is inert silently: the print plays. It is also inert
   after its target reported a
@@ -1397,6 +1412,13 @@ first use, and no plug-in code runs early to warm it.
   stem whose track is a master, keeps them (ADR-0057).
 - A post-fader stem of a channel or buss is decoded outside the graph, under
   the same floating-point environment as the graph's nodes (§2.4).
+- An isolated stem or a single-track render (`render.stems`, `analyze.track`)
+  keeps the target and what feeds it. It also keeps what modulates
+  any of those: a modulation route into a kept node keeps its source rack,
+  the rack's home channel, and whatever feeds them (ADR-0096). Those are
+  dependencies and are not heard, since the render taps the target. So a
+  stem carries the modulation exactly as the mix does. Routes whose rack or
+  target is not kept are left out.
 - Through-master stems use playback's solo signal-path rules: retain the
   selected strip, its upstream contributors and its path through parents and
   ordinary sends to the master. Ignore other pre-existing solos and solo-defeat;

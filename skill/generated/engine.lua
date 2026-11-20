@@ -618,7 +618,7 @@ q = nil
 ---@field plugin string
 ---@field name string
 ---@field description string
----@field params? any With full: each parameter; modulatable: true when a modulation route can take it (modulation.add)
+---@field params? any With full: each parameter; modulatable_by_envelope: true when a route reaches it through its envelope (ADR-0096 M4); modulatable: true when a modulation route can take it (modulation.add)
 ---@field patch? any
 ---@field status_available boolean A live instance supplied its current problems
 ---@field problems? any Current plugin problems: code, message, scope, line when known, hint, silent; scope host when unreadable
@@ -1160,6 +1160,7 @@ q = nil
 ---@field input? string
 ---@field send? string
 ---@field channel? string The channel made for a new rack.
+---@field knob? string A macro's knob to move, by key.
 ---@field warnings? table[]
 
 ---@class Steppe.modulation_add_args

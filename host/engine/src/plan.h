@@ -498,6 +498,9 @@ struct ModEdge {
     // or neither (a mixer target).
     int stage = -1, inputStage = -1;
     std::uint32_t clapId = 0;  // a plug-in target's parameter, bound by prepare
+    // Applied by the parameter's envelope lane, which sends the summed value
+    // (ADR-0096 step M4), rather than as PARAM_MOD.
+    bool viaLane = false;
     double depth = 0.0;
     bool enabled = true;
     // Compiled but not applied, with a plan warning: a mixer target before
@@ -524,6 +527,14 @@ struct ParamLane {
     Automation curve;
     std::shared_ptr<const params::DescribedParam> spec;  // null: plain CLAP values
     double lastSent = std::numeric_limits<double>::quiet_NaN();
+    // Modulation through the envelope (ADR-0096 step M4): its routes are
+    // Stage::laneModRoutes[modFirst .. modFirst + modCount); their sum,
+    // depth x signal x modRange, is added to the curve's value and the
+    // result clamped to [lo, hi], the parameter's range in the lane's domain.
+    std::uint32_t modFirst = 0, modCount = 0;
+    double modRange = 0, lo = 0, hi = 0;
+    double modSum = 0;   // the last sum, held while a source rack's modules are elsewhere
+    int telemetry = -1;  // its Plan::modOffsets slot
     double clapAt(std::int64_t sample) SUPPLE_RT {
         const double v = curve.at(sample);
         return spec ? params::toClap(spec->spec, params::fromNormalized(spec->spec, v)) : v;
@@ -660,6 +671,7 @@ struct Stage {
     host::Instance* instance = nullptr;  // null: placeholder (pass-through)
     Id fx;
     std::vector<ParamLane> lanes;
+    std::vector<std::uint32_t> laneModRoutes;  // Plan::modEdges indices, by lane (M4)
     // Modulation (ADR-0096): a slot per parameter any plan has modulated on
     // this FX (InstancePool::modulatedParams), sorted by id, and each slot's
     // routes (Plan::modEdges indices). `modEvents` are reserved per block.

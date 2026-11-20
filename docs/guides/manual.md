@@ -916,10 +916,22 @@ inputs to a parameter of a plug-in on a track, where `fx.describe {full:
 true}` marks the parameter `modulatable`. Depth is the offset at a full
 signal, a fraction of the parameter's range (−1 to 1); routes on one
 parameter add up, and none of them writes the parameter's value or its
-automation. `modulation.set` changes a route (a drag that sends one
+automation.
+
+A VST3 parameter, or a CLAP one the plug-in does not mark, can still be
+modulated when it can be automated and is continuous: `fx.describe` marks
+it `modulatable_by_envelope`. Its envelope gives the base, and the
+modulation is added to what the envelope sends, so it needs an active
+envelope. `modulate` adds one, with a single point at the current value,
+and `modulation.add` asks for one (`env.add`). Turning the envelope off
+leaves the route idle (`inert: "envelope"`). Recording automation on such
+a parameter writes the base: the modulation's current offset is taken off
+what the plug-in reports. Switches and parameters with a few fixed values
+cannot be modulated. `modulation.set` changes a route (a drag that sends one
 gesture is one undo step), `modulation.remove` removes it, and
-`modulation.list` shows each route's signal range and, when it cannot
-play, why. Removing the Mod Out or the plug-in removes its routes with a
+`modulation.list` shows each route's signal range, the modules cabled
+into its Mod Out input and, when it cannot play, why: `source` when
+nothing is cabled into that input yet. Removing the Mod Out or the plug-in removes its routes with a
 `modulation.removed` warning.
 
 A route can also take a track's volume (`{track, param: "volume"}`, depth
@@ -936,9 +948,13 @@ command uses the first rack on the target's track that has a Mod Out,
 else the first rack named Modulators. If neither exists, it adds a rack
 on a new channel named Modulators. It adds the module, cables it into
 the first free Mod Out input and makes the route. A follower also gets
-an In module and a send from `from`. A follower cannot listen to the
-track it modulates, or to a track that track feeds. Without a depth the
-command uses a quarter of a parameter's range, 6 dB, or 50 %.
+an In module and a send from `from`. When that rack would feed back
+into itself, the command uses another Modulators rack, or adds one. That
+happens when the rack already drives the track the follower listens to,
+or already listens to the target. A follower cannot listen to the track
+it modulates, or to a track that track feeds. Without a depth the
+command uses a quarter of a parameter's range, 6 dB, or 50 %. For a
+macro, the result's `knob` is the knob that moves the target.
 `modulation.telemetry` reads each route's live offset and how far it
 can move its target, and `engine.status` counts modulation steps that
 had to wait for room in a block (`modulation_deferred`).

@@ -320,9 +320,11 @@ inline auto idResultSchema() {
         .build();
 }
 
-inline std::optional<std::vector<Id>> routeCycle(const model::Session& s, Id from, Id to,
+// The audio and MIDI signal graph between tracks and racks: parent sends,
+// routes (all but `ignored`) and MIDI followers. Modulation routes are not
+// edges here; the model's invariants check those.
+inline std::map<Id, std::vector<Id>> signalEdges(const model::Session& s,
                                                  std::optional<Id> ignored = {}) {
-    if (from == to) return std::vector<Id>{from, to};
     std::map<Id, std::vector<Id>> edges;
     for (const auto& e : s.tracks)
         if (e.value->parent && e.value->parentSend.enabled) edges[e.id].push_back(*e.value->parent);
@@ -344,6 +346,13 @@ inline std::optional<std::vector<Id>> routeCycle(const model::Session& s, Id fro
             for (Id module : model::midiFollowers(s, *e.value->to.track, source))
                 edges[*source].push_back(s.modules.find(module)->rack);
     }
+    return edges;
+}
+
+inline std::optional<std::vector<Id>> routeCycle(const model::Session& s, Id from, Id to,
+                                                 std::optional<Id> ignored = {}) {
+    if (from == to) return std::vector<Id>{from, to};
+    std::map<Id, std::vector<Id>> edges = signalEdges(s, ignored);
     std::set<Id> seen;
     std::vector<Id> path{to};
     std::function<bool(Id)> walk = [&](Id cur) {
