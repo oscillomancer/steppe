@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <utility>
 #include <vector>
@@ -18,6 +19,7 @@
 #include "supple/ui/controls.h"
 #include "supple/ui/node.h"
 #include "supple/ui/root.h"
+#include "supple/views/launcher.h"
 #include "supple/views/track_layout.h"
 
 namespace supple::gui {
@@ -37,6 +39,77 @@ Status removeClips(cmd::Dispatcher& dispatcher, const std::vector<std::string>& 
         });
     if (!r) return std::move(r).error();
     return {};
+}
+
+Result<std::vector<std::string>> pasteClips(cmd::Dispatcher& dispatcher, const model::Session& s,
+                                            const std::vector<std::string>& clips,
+                                            const std::string& track, const std::string& scene,
+                                            const std::vector<std::string>& channels, bool move) {
+    if (clips.empty())
+        return Error("clip.paste", "no clips are copied", "", "select clips and copy them first");
+    std::vector<std::string> scenes;
+    for (model::Id id : views::launcherColumns(s).scenes) scenes.push_back(id.str());
+    auto indexIn = [](const std::vector<std::string>& list,
+                      const std::string& id) -> std::optional<std::size_t> {
+        const auto it = std::find(list.begin(), list.end(), id);
+        if (it == list.end()) return std::nullopt;
+        return static_cast<std::size_t>(it - list.begin());
+    };
+    struct Copy {
+        std::string clip;
+        std::size_t row, column;
+    };
+    std::vector<Copy> copies;
+    std::size_t top = SIZE_MAX, left = SIZE_MAX;
+    for (const std::string& id : clips) {
+        const auto parsed = model::Id::parse(id);
+        const model::Clip* clip = parsed ? s.clips.find(*parsed) : nullptr;
+        const auto row = clip ? indexIn(channels, clip->track.str()) : std::nullopt;
+        const auto column = clip ? indexIn(scenes, clip->scene.str()) : std::nullopt;
+        if (!row || !column)
+            return Error("clip.paste", id + " is gone", "", "copy the clips again");
+        copies.push_back({id, *row, *column});
+        top = std::min(top, *row);
+        left = std::min(left, *column);
+    }
+    const auto row0 = indexIn(channels, track);
+    const auto column0 = indexIn(scenes, scene);
+    if (!row0 || !column0)
+        return Error("clip.paste", "the cell is not a channel's cell of a scene", "",
+                     "select an empty cell in the launcher");
+    for (Copy& c : copies) {
+        c.row = c.row - top + *row0;
+        c.column = c.column - left + *column0;
+        if (c.row >= channels.size())
+            return Error("clip.paste", "the clips run past the last channel", "",
+                         "select a cell on a higher row");
+        if (c.column >= scenes.size())
+            return Error("clip.paste", "the clips run past the last scene", "",
+                         "select a cell further left, or add scenes");
+    }
+    const cmd::Origin origin{cmd::Origin::Type::Ui, "gui", {}};
+    std::vector<std::string> made;
+    auto r = dispatcher.transact(
+        move ? (copies.size() == 1 ? "Move clip" : "Move clips")
+             : (copies.size() == 1 ? "Paste clip" : "Paste clips"),
+        origin, [&]() -> Result<json::Value> {
+            for (const Copy& c : copies) {
+                json::Value args = json::Value::object();
+                args["clip"] = c.clip;
+                args["track"] = channels[c.row];
+                args["scene"] = scenes[c.column];
+                auto one = dispatcher.execute(
+                    {move ? "clip.move" : "clip.duplicate", std::move(args), origin});
+                if (!one) return one;
+                if (move)
+                    made.push_back(c.clip);
+                else if (const json::Value* id = one->find("id"); id && id->isString())
+                    made.push_back(id->asString());
+            }
+            return json::Value::object();
+        });
+    if (!r) return std::move(r).error();
+    return made;
 }
 
 void selectTrack(UiState& ui, const std::string& track, unsigned mods,

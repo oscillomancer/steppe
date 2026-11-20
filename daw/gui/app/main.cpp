@@ -964,13 +964,53 @@ int frontendMain(int argc, char** argv) {
     appActions.addUi("ui.env.points.paste", "Envelope: paste points at the playhead", [&] {
         reportEdit("paste points", shell.arrange()->gestures().pastePoints(playheadBeat()));
     });
+    // With the launcher's keys (a clip or cell clicked last) they take its
+    // clips; a paste lands in the selected cell.
+    auto pasteClips = [&] {
+        views::ArrangeView& a = *shell.arrange();
+        const auto& cell = a.selectedCell();
+        if (!cell) return shell.setStatus("Paste: select an empty cell in the launcher");
+        std::vector<std::string> channels;
+        for (const views::TrackRow& row : a.trackLayout().rows())
+            if (!row.lane() && row.type == model::StripType::Channel)
+                channels.push_back(row.track.str());
+        auto made =
+            gui::pasteClips(dispatcher, (*app)->head(), uiState.copiedClips, cell->track.str(),
+                            cell->scene.str(), channels, uiState.clipsCut);
+        if (!made) {
+            if (appActions.onError) appActions.onError("Clip launcher: " + made.error().message);
+            return;
+        }
+        if (std::exchange(uiState.clipsCut, false)) uiState.copiedClips.clear();
+        std::vector<model::Id> ids;
+        for (const std::string& id : *made)
+            if (auto parsed = model::Id::parse(id)) ids.push_back(*parsed);
+        a.selectClips(std::move(ids));
+    };
     appActions.addUi("ui.item.copy", "Item: copy selected (or automation points)", [&] {
+        if (uiState.clipsFocused) {
+            if (uiState.selectedClips.empty()) return;
+            uiState.copiedClips = uiState.selectedClips;
+            uiState.clipsCut = false;
+            return;
+        }
         if (pointKeys())
             shell.arrange()->gestures().copyPoints();
         else
             shell.arrange()->gestures().copySelection();
     });
     appActions.addUi("ui.item.cut", "Item: cut selected (or automation points)", [&] {
+        if (uiState.clipsFocused) {
+            // A clip has no place to wait in, so a cut clip stays until the
+            // paste moves it.
+            if (uiState.selectedClips.empty()) return;
+            uiState.copiedClips = uiState.selectedClips;
+            uiState.clipsCut = true;
+            const std::size_t n = uiState.copiedClips.size();
+            shell.setStatus(n == 1 ? "Cut 1 clip: paste moves it"
+                                   : "Cut " + std::to_string(n) + " clips: paste moves them");
+            return;
+        }
         auto& g = shell.arrange()->gestures();
         if (pointKeys())
             reportEdit("cut points", g.cutPoints());
@@ -978,6 +1018,7 @@ int frontendMain(int argc, char** argv) {
             reportEdit("cut", g.cutSelection());
     });
     appActions.addUi("ui.item.paste", "Item: paste at the playhead (or automation points)", [&] {
+        if (uiState.clipsFocused) return pasteClips();
         if (pointKeys()) {
             reportEdit("paste points", shell.arrange()->gestures().pastePoints(playheadBeat()));
             return;

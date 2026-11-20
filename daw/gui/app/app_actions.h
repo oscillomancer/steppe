@@ -38,10 +38,28 @@ struct UiState {
     // clicked last, so Delete removes them.
     std::vector<std::string> selectedClips;
     bool clipsFocused = false;
+    // The launcher's clipboard: the clips copied or cut (Ctrl+C, Ctrl+X with
+    // the launcher's keys).
+    std::vector<std::string> copiedClips;
+    bool clipsCut = false;  // Ctrl+X: the paste moves them
 };
 
 // Removes clips in one undo step (the launcher's Delete).
 Status removeClips(cmd::Dispatcher& dispatcher, const std::vector<std::string>& clips);
+
+// Pastes the launcher's clipboard from a cell (gui.md §4.15): each clip lands
+// as far from (track, scene) as it was from the copied clips' top-left cell,
+// in `channels` order (the view's) and the scenes' order, as copies
+// (clip.duplicate) in one undo step. A clip that is gone, a cell past the
+// last channel or scene, or an occupied one refuses the whole paste. With
+// `move` (after a cut) the clips themselves move there (clip.move). The
+// pasted clips' ids, in the clipboard's order.
+Result<std::vector<std::string>> pasteClips(cmd::Dispatcher& dispatcher,
+                                            const model::Session& session,
+                                            const std::vector<std::string>& clips,
+                                            const std::string& track, const std::string& scene,
+                                            const std::vector<std::string>& channels,
+                                            bool move = false);
 
 // A click on a track in a view that lists `order` (its row or strip order):
 // plain selects it alone, Ctrl toggles it, Shift extends from the anchor

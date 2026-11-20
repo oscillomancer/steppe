@@ -753,3 +753,44 @@ TEST_CASE("launcher: a scene dragged onto the timeline lies there; its menu inse
     f.exec("clip.set", R"({"clip":"cl_1","length":5})");
     CHECK(views::sceneBars(f.app->head(), *model::Id::parse("sc_1"), 3) == 2);
 }
+
+TEST_CASE("launcher: copied clips paste from the selected cell, in their layout, one undo step") {
+    LauncherFixture f;
+    f.song();
+    const model::Session* s = &f.app->head();
+    std::vector<std::string> channels;
+    for (const views::TrackRow& row : f.view->trackLayout().rows())
+        if (!row.lane() && row.type == model::StripType::Channel)
+            channels.push_back(row.track.str());
+    REQUIRE(channels == std::vector<std::string>{"tr_1", "tr_2", "tr_3"});
+    // Kit B (Drums, Verse) and Root (Bass, Verse) pasted from Keys' Chorus... runs
+    // past the last channel: refused, nothing changes.
+    const std::vector<std::string> both{"cl_2", "cl_3"};
+    auto refused = gui::pasteClips(*f.dispatcher, *s, both, "tr_3", "sc_3", channels);
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "clip.paste");
+    // From Drums' Chorus: Kit B there, Root under it.
+    const std::uint64_t before = f.app->head().version;
+    auto made = gui::pasteClips(*f.dispatcher, *s, both, "tr_1", "sc_3", channels);
+    REQUIRE(made);
+    REQUIRE(made->size() == 2);
+    s = &f.app->head();
+    CHECK(s->version == before + 1);
+    const auto kit = views::clipIn(*s, *model::Id::parse("tr_1"), *model::Id::parse("sc_3"));
+    const auto root = views::clipIn(*s, *model::Id::parse("tr_2"), *model::Id::parse("sc_3"));
+    REQUIRE(kit);
+    REQUIRE(root);
+    CHECK(kit->str() == (*made)[0]);
+    CHECK(s->clips.find(*kit)->name == "Kit B");
+    CHECK(s->clips.find(*root)->name == "Root");
+    // Onto an occupied cell: refused whole, one transaction rolled back.
+    auto onto = gui::pasteClips(*f.dispatcher, *s, both, "tr_1", "sc_3", channels);
+    REQUIRE_FALSE(onto);
+    CHECK(f.app->head().version == before + 1);
+    // After a cut the paste moves them: Kit A from Intro to Keys' Intro.
+    auto moved =
+        gui::pasteClips(*f.dispatcher, f.app->head(), {"cl_1"}, "tr_3", "sc_1", channels, true);
+    REQUIRE(moved);
+    CHECK(*moved == std::vector<std::string>{"cl_1"});
+    CHECK(f.app->head().clips.find(*model::Id::parse("cl_1"))->track == model::Id::parse("tr_3"));
+}
