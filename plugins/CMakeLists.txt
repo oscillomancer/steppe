@@ -127,6 +127,8 @@ if(SUPPLE_BUILD_PLUGINS)
       # They also take over a window on whatever screen the suite runs on, so
       # on a developer's desktop they are skipped unless
       # SUPPLE_EDITOR_PROBE_TEST=1 (EditorProbes.cmake); native CI sets it.
+      # With the switch on, a selection that finds no probe fails where the platform
+      # has them (everywhere but macOS), so a renamed probe cannot pass silently.
       # SUPPLE_GUI_DISPLAY_TEST is not the switch: it also opens the daw/gui
       # and clap-host display tests, which CI leaves off (ADR-0040).
       set(on_screen "^(x11-embedding|x11-embedding-overlapped|win32-embedding|win32-embedding-no-host-timer)$")
@@ -134,7 +136,8 @@ if(SUPPLE_BUILD_PLUGINS)
         COMMAND ${CMAKE_CTEST_COMMAND} --test-dir "${plugin_build}" --output-on-failure -E "${on_screen}")
       add_test(NAME plugin.${name}.embedding
         COMMAND ${CMAKE_COMMAND} -DCTEST=${CMAKE_CTEST_COMMAND} "-DTEST_DIR=${plugin_build}"
-                "-DREGEX=${on_screen}" -P "${CMAKE_CURRENT_LIST_DIR}/EditorProbes.cmake")
+                "-DREGEX=${on_screen}" "-DEXPECT_PROBES=$<NOT:$<BOOL:${APPLE}>>"
+                -P "${CMAKE_CURRENT_LIST_DIR}/EditorProbes.cmake")
       # tsan-skip: one at a time, on the software renderer the tsan preset
       # draws with, they take twelve minutes; the template's own tsan preset
       # leaves the editor out as well.
