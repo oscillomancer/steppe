@@ -1368,6 +1368,59 @@ TEST_CASE("live launches of clips with take chains play as the offline replay" *
         }
 }
 
+TEST_CASE("a clip through its take's chain keeps its phase when the song wraps before its anchor" *
+          doctest::description("rt")) {
+    // Review round 66's suggestion: a transport loop over bars 1-2 and the
+    // latent chain clip, with a clip-time envelope on its FX, launched on
+    // bar 2. After the wrap the song is before the anchor; the chain's
+    // input folds there and its envelope reads the clip position, so each
+    // frame sounds as the same phase did on the first pass.
+    Project p;
+    latentClip(p);
+    p.run("env.add", R"({"fx": "fx_1", "param": "gain", "points": [{"seconds": 0, "value": 0},
+                                                                  {"seconds": 0.25, "value": -24}]})");
+    const model::Session s = p.app->head();
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 6});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        REQUIRE(engine.load(s, p.app->projectDir()));
+        engine.setLoop(0.0, 4.0, true);
+        engine.play();
+        const auto run = [&](std::int64_t cycles) {
+            if (options.anticipative)
+                runAheadOnState(engine, backend, cycles, 128);
+            else
+                backend.run(cycles);
+        };
+        run(10);
+        const Engine::LaunchRequest r = request("tr_1", "cl_1");
+        REQUIRE(engine.launch(std::span(&r, 1), model::LaunchQuantize::Bar));  // bar 2
+        run(48000 * 5 / 128 - 10);
+        engine.service();
+        REQUIRE(engine.launchLog().size() == 1);
+        const std::uint32_t latency = engine.outputLatency();
+        engine.stop();
+        const std::vector<float>& out = backend.capture().channels[0];
+        const auto at = [&](std::int64_t k) { return double(out[std::size_t(k + latency)]); };
+        // Running frame k after the wrap (song k - 192000), against the first
+        // pass at the same phase; away from the period's and the loop's edges.
+        int checked = 0;
+        for (std::int64_t k = 192000 + 300; k < 240000; k += 97) {
+            const std::int64_t phase = ((k - 192000 - 96000) % 12000 + 12000) % 12000;
+            if (phase < 300 || phase > 11700) continue;
+            INFO("frame " << k << ", phase " << phase);
+            REQUIRE(at(96000 + 12000 + phase) != 0.0);
+            CHECK(at(k) == doctest::Approx(at(96000 + 12000 + phase)).epsilon(1e-6));
+            ++checked;
+        }
+        CHECK(checked > 400);
+    }
+}
+
 TEST_CASE("a launch onto a track with a clip chain waits the chain's latency longer") {
     // ADR-0097, amended 2026-11-20: the input side takes the launch the
     // lead early, so the floor is that much later.
