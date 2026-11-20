@@ -638,16 +638,16 @@ TEST_CASE("every edit command a saved branch may replay has been audited") {
     static const std::set<std::string> audited{
         "arrangement.build", "audio.quantize", "audio.warp.detach", "audio.warp.reset",
         "autoitem.add", "autoitem.duplicate", "autoitem.remove", "autoitem.set", "autoitem.unpool",
-        "cable.add", "cable.remove", "cable.set",
+        "cable.add", "cable.remove", "cable.set", "chord.remove", "chord.set",
         "clip.add",  // as item.add (ADR-0097)
-        "clip.duplicate", "clip.move", "clip.remove", "clip.set", "env.add", "env.points.set",
-        "env.remove", "env.set", "env.write.commit", "fx.add", "fx.chain.load", "fx.copy",
-        "fx.learn.remove", "fx.learn.set", "fx.move", "fx.param.set", "fx.patch.merge",
+        "clip.duplicate", "clip.move", "clip.remove", "clip.set", "context.write", "env.add",
+        "env.points.set", "env.remove", "env.set", "env.write.commit", "fx.add", "fx.chain.load",
+        "fx.copy", "fx.learn.remove", "fx.learn.set", "fx.move", "fx.param.set", "fx.patch.merge",
         "fx.patch.set", "fx.preset.load", "fx.remove", "fx.set", "fx.state.capture", "group.add",
         "group.members.set", "group.remove", "group.set", "item.add", "item.apply-fx",
         "item.consolidate.commit", "item.duplicate", "item.explode-takes", "item.heal",
         "item.mix-to-track.commit", "item.move", "item.paste", "item.remove", "item.set",
-        "item.split",
+        "item.split", "key.remove", "key.set",
         // its recorded performance: no engine
         "launch.commit", "marker.add", "marker.remove", "marker.set", "midi.edit", "midi.write",
         "modulate", "modulation.add", "modulation.remove", "modulation.set", "module.add",
