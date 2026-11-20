@@ -5,7 +5,9 @@
 // save and reopen, and the round trip between a scene and a section.
 #include <doctest/doctest.h>
 #include <supple/audio/audio_file.h>
+#include <supple/base/files.h>
 #include <supple/engine/app.h>
+#include <supple/engine/offline.h>
 #include <supple/json/write.h>
 #include <supple/model/launcher.h>
 #include <supple/model/schemas.h>
@@ -447,6 +449,119 @@ TEST_CASE("scene.capture of an audio item makes an audio clip in seconds") {
     CHECK(c.kind == model::ClipKind::Audio);
     CHECK(c.length == doctest::Approx(2.0));
     CHECK(c.mode == model::ClipMode::Loop);
+}
+
+TEST_CASE("scene.capture refuses a project that already has the most scenes") {
+    Song l;
+    l.run("region.add", R"({"start": 0, "end": 4})");
+    for (std::size_t k = 2; k < model::kMaxScenes; ++k) l.run("scene.add", "{}");
+    REQUIRE(l.head().scenes.size() == model::kMaxScenes);
+    const Error full = l.fails("scene.capture", R"({"region": "rg_1"})");
+    CHECK(full.code == "scene.limit");
+    CHECK(full.message.find("1024") != std::string::npos);
+    // One scene fewer and it is captured.
+    l.run("scene.remove", R"({"scene": "sc_2"})");
+    auto r = l.run("scene.capture", R"({"region": "rg_1"})");
+    CHECK(l.head().scenes.size() == model::kMaxScenes);
+    CHECK(at(r["clips"], 0)["track"].asString() == "tr_1");
+}
+
+TEST_CASE("scene.capture refuses a capture that would take the project past the most clips") {
+    // 17 channels and 964 scenes hold the most clips, 16384, in cells of their own
+    // (the captured scene would be the 965th, still under the scene limit). Making
+    // that many through the bus takes minutes, so the clips go into a saved project
+    // with their takes and empty MIDI sources, and the project is reopened.
+    Song l;
+    for (int k = 2; k < 17; ++k) l.run("track.add", "{}");
+    for (std::size_t k = 2; k < 964; ++k) l.run("scene.add", "{}");
+    const auto path = l.root / "full-clips.steppe";
+    auto save = json::Value::object();
+    save["path"] = path.string();
+    l.runArgs("project.save", save);
+    auto doc = json::parse(*readTextFile(path)).value();
+    auto& ids = doc["project"]["next_ids"];
+    auto next = [&](const char* kind) {  // a kind nothing was made of yet is not listed
+        const json::Value* v = ids.find(kind);
+        return v ? v->asInt() : std::int64_t{1};
+    };
+    std::int64_t clip = next("cl"), take = next("tk"), midi = next("mi");
+    std::size_t made = 0;
+    for (std::size_t scene = 1; scene <= 964 && made < model::kMaxClips; ++scene)
+        for (int track = 1; track <= 17 && made < model::kMaxClips; ++track, ++made, ++clip) {
+            const std::string t = "tk_" + std::to_string(take++),
+                              m = "mi_" + std::to_string(midi++);
+            auto row = json::Value::object();
+            row["track"] = "tr_" + std::to_string(track);
+            row["scene"] = "sc_" + std::to_string(scene);
+            row["kind"] = "midi";
+            auto takes = json::Value::array();
+            takes.push_back(t);
+            row["takes"] = takes;
+            row["active_take"] = t;
+            row["length"] = 4.0;
+            doc["clips"]["cl_" + std::to_string(clip)] = row;
+            auto tk = json::Value::object();
+            tk["source"] = m;
+            doc["takes"][t] = tk;
+            doc["sources"]["midi"][m] =
+                j(R"({"sequence": {"ppq": 960, "length": 3840, "notes": []}})");
+        }
+    ids["cl"] = clip;
+    ids["tk"] = take;
+    ids["mi"] = midi;
+    REQUIRE(writeFileAtomic(path, std::string_view(json::writeCanonical(doc))));
+    l.runArgs("project.open", save);
+    REQUIRE(l.head().clips.size() == model::kMaxClips);
+    l.run("region.add", R"({"start": 0, "end": 4})");
+    const Error full = l.fails("scene.capture", R"({"region": "rg_1"})");
+    CHECK(full.code == "clip.limit");
+    CHECK(full.message.find("16384") != std::string::npos);
+    // The same limit holds for the other command that makes a clip from nothing.
+    CHECK(l.fails("clip.add", R"({"track": "tr_14", "scene": "sc_964"})").code == "clip.limit");
+    // A clip fewer and the capture goes through: it makes one clip, for the one item.
+    l.run("clip.remove", R"({"clip": "cl_1"})");
+    auto r = l.run("scene.capture", R"({"region": "rg_1"})");
+    CHECK(l.head().clips.size() == model::kMaxClips);
+    CHECK(r["clips"].asArray().size() == 1);
+}
+
+TEST_CASE("scene.capture refuses when a clip's audio would not fit beside the arrangement's") {
+    // The estimate reads the model, so hand-edited lengths (2^26 frames each) make
+    // the arrangement's audio and one clip's fill the 2^28-sample budget exactly,
+    // each decoded and resampled once. A capture copies an item's takes, which add
+    // nothing of their own; what it checks is the whole session, so new audio on
+    // the timeline that pushes a clip out of the budget is refused at the capture.
+    Song l;
+    auto args = j(R"({"track": "tr_2", "bar": 3})");
+    args["audio_file"] = l.wav("a.wav", 1.0).string();
+    l.runArgs("item.add", args);
+    args = j(R"({"track": "tr_2", "scene": "sc_1"})");
+    args["audio_file"] = l.wav("b.wav", 1.0, .5f).string();
+    l.runArgs("clip.add", args);
+    const auto path = l.root / "full.steppe";
+    auto save = json::Value::object();
+    save["path"] = path.string();
+    l.runArgs("project.save", save);
+    auto doc = json::parse(*readTextFile(path)).value();
+    for (auto& m : doc["sources"]["media"].asObject()) m.value["frames"] = 1 << 26;
+    REQUIRE(writeFileAtomic(path, std::string_view(json::writeCanonical(doc))));
+    l.runArgs("project.open", save);
+    auto resident = residentSamples(l.head(), l.app->projectDir(), 48000);
+    REQUIRE(resident.arrangement == double(1 << 27));
+    REQUIRE(resident.clips == double(1 << 27));
+    REQUIRE(resident.clipsSkipped.empty());
+    // A second file on the timeline, a real second long: the clip no longer fits.
+    args = j(R"({"track": "tr_1", "bar": 3})");
+    args["audio_file"] = l.wav("c.wav", 1.0, .125f).string();
+    l.runArgs("item.add", args);
+    resident = residentSamples(l.head(), l.app->projectDir(), 48000);
+    REQUIRE_FALSE(resident.clipsSkipped.empty());
+    l.run("region.add", R"({"start": 8, "end": 12})");
+    const Error refused = l.fails("scene.capture", R"({"region": "rg_1"})");
+    CHECK(refused.code == "clip.memory");
+    CHECK(refused.path == "/args/region");
+    CHECK(refused.message.find("268435456") != std::string::npos);
+    CHECK(l.head().scenes.size() == 2);
 }
 
 // --- the round trip -----------------------------------------------------------------
