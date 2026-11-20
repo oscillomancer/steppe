@@ -650,7 +650,9 @@ void registerFxCommands(cmd::Registry& registry) {
                 .field("name", &FxDescription::name, schema::string())
                 .field("description", &FxDescription::description, schema::string())
                 .field("params", &FxDescription::params,
-                       schema::any().doc("With full: each parameter; modulatable: true when a "
+                       schema::any().doc("With full: each parameter; modulatable_by_envelope: "
+                                         "true when a route reaches it through its envelope "
+                                         "(ADR-0096 M4); modulatable: true when a "
                                          "modulation route can take it (modulation.add)"))
                 .field("patch", &FxDescription::patch, schema::any())
                 .field("status_available", &FxDescription::statusAvailable,
@@ -761,13 +763,20 @@ void registerFxCommands(cmd::Registry& registry) {
                             const json::Value* flags =
                                 entry.value.isObject() ? entry.value.find("flags") : nullptr;
                             if (!flags || !flags->isArray()) continue;
-                            bool modulatable = false, excluded = false;
+                            bool modulatable = false, automatable = false, excluded = false;
                             for (const auto& f : flags->asArray()) {
                                 if (!f.isString()) continue;
                                 modulatable |= f.asString() == "modulatable";
+                                automatable |= f.asString() == "automatable";
                                 excluded |= f.asString() == "readonly" || f.asString() == "bypass";
                             }
+                            const json::Value* type = entry.value.find("type");
+                            const bool continuous =
+                                type && type->isString() && type->asString() == "float";
                             if (modulatable && !excluded) entry.value["modulatable"] = true;
+                            // Through its envelope (ADR-0096 step M4).
+                            if (!modulatable && automatable && continuous && !excluded)
+                                entry.value["modulatable_by_envelope"] = true;
                         }
                 } else if (auto list = app.fxParams(fx)) {
                     // Not semantic (a plain CLAP or a VST3): its parameters as the
@@ -796,9 +805,15 @@ void registerFxCommands(cmd::Registry& registry) {
                         if (p.flags & (CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_ENUM))
                             e["stepped"] = true;
                         if (p.flags & CLAP_PARAM_IS_READONLY) e["read_only"] = true;
-                        if (!vst3 && (p.flags & CLAP_PARAM_IS_MODULATABLE) &&
-                            !(p.flags & (CLAP_PARAM_IS_READONLY | CLAP_PARAM_IS_BYPASS)))
+                        const bool writable =
+                            !(p.flags & (CLAP_PARAM_IS_READONLY | CLAP_PARAM_IS_BYPASS));
+                        if (!vst3 && (p.flags & CLAP_PARAM_IS_MODULATABLE) && writable)
                             e["modulatable"] = true;
+                        // Through its envelope (ADR-0096 step M4): automatable and
+                        // continuous, not modulatable (any VST3 parameter).
+                        else if (writable && (p.flags & CLAP_PARAM_IS_AUTOMATABLE) &&
+                                 !(p.flags & (CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_ENUM)))
+                            e["modulatable_by_envelope"] = true;
                         ps.push_back(std::move(e));
                     }
                     r.params = std::move(ps);

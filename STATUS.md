@@ -593,7 +593,11 @@ instructions are in `docs/guides/installing.md`.
   × depth × range, held on the absolute 32-frame grid and sent as CLAP
   PARAM_MOD events that never touch the base value or automation; a mixer
   target's is linear between grid points, added after automation and
-  clamped to the fader's range. Depth and enabled are mix values (no
+  clamped to the fader's range. A VST3 or unmarked CLAP parameter that is
+  automatable and continuous is modulated through its envelope (M4): its
+  lane sends the base plus the offset, clamped, on the same grid; it needs
+  an active envelope (`modulate` adds a one-point one), and write modes
+  record the base. Depth and enabled are mix values (no
   compile);
   routes are compensated as sidechains into their target stage, follow
   their target between executors, and play live as offline in both
@@ -605,7 +609,10 @@ instructions are in `docs/guides/installing.md`.
   offset and its span; events that wait for room in a block are counted
   (`engine.status` `modulation_deferred`). `modulate` makes the source
   module, its rack if needed (a channel named Modulators), the cable, a
-  follower's send and the route in one undo step. An FX moved to another track keeps the last offset of a
+  follower's send and the route in one undo step. A route whose Mod Out
+  input nothing feeds is listed as `inert: "source"`; the list names the
+  modules that feed each route. Stems and track analysis keep a modulated
+  track's source racks, unheard. An FX moved to another track keeps the last offset of a
   parameter the new plan no longer modulates until the plug-in next
   resets. Native macOS and Windows CI has not run on it.
   Agents patch with `rack.patch` (named

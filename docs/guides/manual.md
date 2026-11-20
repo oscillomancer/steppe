@@ -906,7 +906,18 @@ inputs to a parameter of a plug-in on a track, where `fx.describe {full:
 true}` marks the parameter `modulatable`. Depth is the offset at a full
 signal, a fraction of the parameter's range (−1 to 1); routes on one
 parameter add up, and none of them writes the parameter's value or its
-automation. `modulation.set` changes a route (a drag that sends one
+automation.
+
+A VST3 parameter, or a CLAP one the plug-in does not mark, can still be
+modulated when it can be automated and is continuous: `fx.describe` marks
+it `modulatable_by_envelope`. Its envelope gives the base, and the
+modulation is added to what the envelope sends, so it needs an active
+envelope. `modulate` adds one, with a single point at the current value,
+and `modulation.add` asks for one (`env.add`). Turning the envelope off
+leaves the route idle (`inert: "envelope"`). Recording automation on such
+a parameter writes the base: the modulation's current offset is taken off
+what the plug-in reports. Switches and parameters with a few fixed values
+cannot be modulated. `modulation.set` changes a route (a drag that sends one
 gesture is one undo step), `modulation.remove` removes it, and
 `modulation.list` shows each route's signal range, the modules cabled
 into its Mod Out input and, when it cannot play, why: `source` when

@@ -3696,6 +3696,88 @@ TEST_CASE("automation timebases preserve plugin output positions through branch 
     CHECK(app->head().envelopes.find(env)->points.back().pos == doctest::Approx(128.0 / 48000));
 }
 
+TEST_CASE("a write mode records the base of a parameter modulated through its envelope") {
+    // ADR-0096 step M4: the lane sends base + offset, so the plug-in's
+    // editor drags from there; what is recorded has the offset taken off.
+    // The edge fixture's parameter 7 (mode 35) is automatable, not
+    // modulatable, 0..1e9; its editor emits 5, then 10.
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    auto call = [&](const char* command, std::string_view args) {
+        auto result = bus.execute({command, j(args), kTest});
+        REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+        return *result;
+    };
+    call("track.add", "{}");
+    call("fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.edge"})");
+    call("env.add", R"({"fx":"fx_1","param":"7","points":[{"beat":0,"value":0}]})");
+    const model::Id fx{model::Kind::Fx, 1}, env{model::Kind::Envelope, 1};
+    auto setup = app->beginTransaction(kTest, "Editor output mode");
+    REQUIRE(setup);
+    std::vector<std::uint8_t> state{35, 0, 0, 0};
+    const auto hash = "sha256:" + sha256Hex(state);
+    app->txn().putBlob(hash, std::make_shared<const model::Blob>(model::Blob{state}));
+    app->txn().modify<model::FxInstance>(fx, [&](auto& f) { f.state = hash; });
+    app->txn().modify<model::Envelope>(env, [](auto& e) { e.mode = model::EnvMode::Touch; });
+    REQUIRE(app->commitTransaction(*setup));
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(
+        app->startEngine(backend, {.sampleRate = 48000, .blockSize = 64}, {.anticipative = false}));
+    REQUIRE(app->transport("play"));
+    backend.run(1);
+    app->tick();
+    // A macro at 100 % with depth 1e-9 of the 1e9 range: an offset of 1.
+    // modulate builds the macro (on the pan: the commands read the
+    // fixture's parameters in its default state, where 7 is read-only), and
+    // the route into 7 goes straight into the model.
+    const json::Value made =
+        call("modulate", R"({"target":{"track":"tr_1","param":"pan"},"source":"macro"})");
+    json::Value knob = json::Value::object();
+    knob["module"] = made.find("module")->asString();
+    knob["params"] = json::Value::object();
+    knob["params"][made.find("knob")->asString()] = 100.0;
+    knob["params"]["smooth"] = 0.0;  // no glide: the first reading is the whole offset
+    REQUIRE(bus.execute({"module.set", knob, kTest}));
+    const model::Modulation& pan =
+        *app->head().modulations.find(*model::Id::parse(made.find("modulation")->asString()));
+    auto routing = app->beginTransaction(kTest, "Route into the envelope");
+    REQUIRE(routing);
+    model::Modulation into;
+    into.source = pan.source;
+    into.target = {fx, "7"};
+    into.depth = 1e-9;
+    const model::Id route = app->txn().create(into);
+    REQUIRE(app->commitTransaction(*routing));
+    const auto offsetNow = [&] {
+        const auto offsets = app->modulationOffsets();
+        const auto it = offsets.find(route);
+        return it == offsets.end() ? 0.0 : it->second;
+    };
+    for (int i = 0; i < 200 && offsetNow() == 0.0; ++i) {
+        backend.run(1);
+        app->tick();
+    }
+    REQUIRE(app->modulationOffsets().count(route));
+    CHECK(app->modulationOffsets().at(route) * 1e9 == doctest::Approx(1.0));
+    auto* instance = app->instanceOf(fx);
+    REQUIRE(instance);
+    REQUIRE(instance->openEditor(1234, 1));
+    for (int i = 0; i < 2; ++i) {
+        backend.run(1);
+        app->tick();
+    }
+    const auto& points = app->head().envelopes.find(env)->points;
+    REQUIRE(points.size() >= 2);
+    CHECK(points.back().value == doctest::Approx(9.0));  // 10 - 1
+    for (const auto& point : points) CHECK(point.value != doctest::Approx(10.0));
+    CHECK(app->head().fx.find(fx)->params.at(7) == doctest::Approx(9.0));
+    instance->closeEditor();
+    app->stopEngine();
+}
+
 TEST_CASE("audio thread preference applies at next start and explicit options win") {
     Root root;
     auto app = makeApp(root.path);
@@ -4142,6 +4224,85 @@ TEST_CASE("modulation commands: a modulated track analyzes and renders as a stem
     REQUIRE(d.execute({"modulate", args, kTest}));
     run("analyze.track", R"({"track": "tr_1"})");
     run("render.stems", R"({"end_beat": 4, "tracks": ["tr_1"]})");
+}
+
+TEST_CASE(
+    "modulation commands: a parameter that is not modulatable takes a route through its "
+    "envelope") {
+    // ADR-0096 step M4: the fixed gain's gain is automatable, continuous and
+    // not modulatable; its latency is a choice, so it stays refused.
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_mod_out");
+    auto run = [&](std::string name, std::string_view args) {
+        auto r = d.execute({std::move(name), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.fixed-gain"})");  // fx_2
+    // Something in the route's input, so its target alone decides.
+    const std::string lfo =
+        run("module.add", R"({"rack": "rk_1", "type": "lfo"})")["module"].asString();
+    json::Value cable = json::Value::object();
+    cable["from"] = lfo + ".out";
+    cable["to"] = "mo_2.in_1";
+    REQUIRE(d.execute({"cable.add", cable, kTest}));
+    const json::Value described = run("fx.describe", R"({"fx": "fx_2", "full": true})");
+    const auto param = [&](double id) {
+        for (const json::Value& p : described.find("params")->asArray())
+            if (p.find("id")->asDouble() == id) return p;
+        FAIL("no parameter " << id);
+        return json::Value();
+    };
+    CHECK(param(0).find("modulatable_by_envelope"));
+    CHECK_FALSE(param(0).find("modulatable"));
+    CHECK_FALSE(param(1).find("modulatable_by_envelope"));  // a choice
+    const std::string add =
+        R"({"source": {"module": "mo_2", "input": "in_1"}, "target": {"fx": "fx_2", "param": "0"}, "depth": 0.1})";
+    auto refused = d.execute({"modulation.add", j(add), kTest});
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "modulation.envelope");
+    CHECK(refused.error().path == "/args/target/param");
+    CHECK(refused.error().hint.find("env.add") != std::string::npos);
+    auto latency = d.execute(
+        {"modulation.add",
+         j(R"({"source": {"module": "mo_2", "input": "in_1"}, "target": {"fx": "fx_2", "param": "1"}, "depth": 0.1})"),
+         kTest});
+    REQUIRE_FALSE(latency);
+    CHECK(latency.error().code == "modulation.target");
+    // With an envelope it is taken, and listed as playable until the
+    // envelope is turned off.
+    const std::string env =
+        run("env.add", R"({"fx": "fx_2", "param": "0", "points": [{"bar": 1, "value": 0.5}]})")
+            .find("env")
+            ->asString();
+    run("modulation.add", add);
+    CHECK_FALSE(run("modulation.list", "{}").find("modulations")->at(0).find("inert"));
+    json::Value off = json::Value::object();
+    off["env"] = env;
+    off["active"] = false;
+    REQUIRE(d.execute({"env.set", off, kTest}));
+    CHECK(run("modulation.list", "{}").find("modulations")->at(0).find("inert")->asString() ==
+          "envelope");
+    // modulate gives a fresh one its envelope: one point, at its value now.
+    run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.fixed-gain"})");  // fx_3
+    const auto envelopes = app->view().envelopes.size();
+    run("modulate", R"({"target": {"fx": "fx_3", "param": "0"}, "source": "lfo"})");
+    const model::Session s = app->view();
+    REQUIRE(s.envelopes.size() == envelopes + 1);
+    bool found = false;
+    for (const auto& e : s.envelopes)
+        if (e.value->target.object == *model::Id::parse("fx_3")) {
+            found = true;
+            CHECK(e.value->target.param == "0");
+            CHECK(e.value->active);
+            CHECK(e.value->points.size() == 1);
+        }
+    CHECK(found);
+    CHECK(model::checkInvariants(s));
 }
 
 TEST_CASE("modulation commands: removing a route's source or target removes it, with a warning") {
