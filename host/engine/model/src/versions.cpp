@@ -1352,6 +1352,13 @@ Result<VersionStore> VersionStore::restore(SavedHistory saved) {
     VersionStore store;
     store.versions_ = std::move(saved.versions);
     store.next_ = saved.next;
+    // A branch whose saved mr counter is missing (0: a file from before
+    // 2.16, or one that went through an older build, G-c) allocates past
+    // every saved state's: each state derived its own from its routes, but
+    // an id one lineage removed may live on in another branch.
+    std::uint32_t modulations = 1;
+    for (const auto& [unused, v] : store.versions_)
+        modulations = std::max(modulations, v.session->next[Kind::Modulation]);
     for (auto& sb : saved.branches) {
         const std::string path = json::pointerJoin("/branches/refs", sb.name);
         if (store.branches_.contains(sb.name)) return bad("branch listed twice", path);
@@ -1378,9 +1385,12 @@ Result<VersionStore> VersionStore::restore(SavedHistory saved) {
             below = *it;
         }
         Counters allocated = sb.allocated;
+        const bool lostModulations = allocated[Kind::Modulation] == 0;
         const auto& counters = store.versions_.at(sb.head).session->next;
         for (std::size_t k = 0; k < kKindCount; ++k)
             allocated.next[k] = std::max(allocated.next[k], counters.next[k]);
+        if (lostModulations)
+            allocated[Kind::Modulation] = std::max(allocated[Kind::Modulation], modulations);
         store.branches_.emplace(sb.name, Branch{sb.head, sb.base, std::move(sb.redo), allocated});
     }
     if (!store.branches_.contains("main")) return bad("there is no main branch", "/branches/refs");

@@ -2,8 +2,10 @@
 // Copyright (c) 2026 Supple Audio
 // Modulation routes in the session (ADR-0096, session-model "Modulation").
 #include <doctest/doctest.h>
+#include <supple/base/sha256.h>
 #include <supple/json/write.h>
 #include <supple/model/freeze.h>
+#include <supple/model/project_file.h>
 #include <supple/model/schemas.h>
 #include <supple/model/versions.h>
 
@@ -581,4 +583,88 @@ TEST_CASE("modulation: a frozen target keeps its routes locked, but their source
         REQUIRE_MESSAGE(s, (s ? "" : s.error().toString()));
         CHECK(s->modulations.empty());
     }
+}
+
+TEST_CASE("modulation: a branch whose saved counters lost mr still allocates fresh ids") {
+    // Review round 53, Q1: a file that went through an older build keeps the
+    // routes but its branches' next_ids lose the mr counter. A branch head's
+    // counters come from those (VersionStore::head), not from the document.
+    Fixture f = fixture();
+    VersionStore vs(f.s);
+    const auto add = [&](Id target, const char* param) {
+        EditTxn t(*vs.head(), vs.nextVersion());
+        const Id id = t.create(route(f.modOut, target, param, 0.5));
+        auto changes = t.changes();
+        auto s = t.commit();
+        REQUIRE_MESSAGE(s, (s ? "" : s.error().toString()));
+        REQUIRE(vs.commit(std::move(*s), TxnRecord{"modulation.add", "test", {}, {}},
+                          std::move(changes), {id}));
+        return id;
+    };
+    const Id onMain = add(f.fx, "cutoff");
+    REQUIRE(vs.createBranch("agent/claude/wobble", "main"));
+    REQUIRE(vs.switchBranch("agent/claude/wobble"));
+    const Id onBranch = add(f.b, "volume");
+    REQUIRE(vs.switchBranch("main"));
+    auto doc = json::parse(serializeProjectFile(vs, true)).value();
+    doc["project"]["next_ids"].asObject().erase("mr");
+    for (auto& ref : doc["branches"]["refs"].asObject())
+        ref.value["next_ids"].asObject().erase("mr");
+    // An older build that keeps branches writes main's hash for what it wrote.
+    auto main = doc;
+    main.asObject().erase("branches");
+    doc["branches"]["main_hash"] = "sha256:" + sha256Hex(json::writeCanonical(main));
+    auto opened = projectFileFromJson(doc);
+    REQUIRE_MESSAGE(opened, (opened ? "" : opened.error().toString()));
+    REQUIRE_MESSAGE(!opened->branchesDropped,
+                    (opened->branchesDropped ? opened->branchesDropped->toString() : ""));
+    VersionStore& back = opened->store;
+    for (const char* branch : {"main", "agent/claude/wobble"}) {
+        CAPTURE(branch);
+        const auto head = back.head(branch);
+        REQUIRE(head);
+        for (const auto& e : head->modulations) CHECK(head->next[Kind::Modulation] > e.id.n);
+    }
+    CHECK(back.head("main")->modulations.contains(onMain));
+    CHECK(back.head("agent/claude/wobble")->modulations.contains(onBranch));
+}
+
+TEST_CASE("modulation: a lost mr counter never reuses an id another branch holds") {
+    // An older build drops the high-water mark: main removed mr_2 after the
+    // branch forked with it, so main's own routes alone would give mr_2 out
+    // again, a different route under the branch's id, which a merge would
+    // take for the same one.
+    Fixture f = fixture();
+    VersionStore vs(f.s);
+    const auto step = [&](auto&& edit) {
+        EditTxn t(*vs.head(), vs.nextVersion());
+        std::vector<Id> created;
+        edit(t, created);
+        auto changes = t.changes();
+        auto s = t.commit();
+        REQUIRE_MESSAGE(s, (s ? "" : s.error().toString()));
+        REQUIRE(vs.commit(std::move(*s), TxnRecord{"modulation", "test", {}, {}},
+                          std::move(changes), std::move(created)));
+    };
+    Id second;
+    step([&](EditTxn& t, std::vector<Id>& c) {
+        c.push_back(t.create(route(f.modOut, f.fx, "cutoff", 0.5)));
+        second = t.create(route(f.modOut, f.b, "volume", 1.0));
+        c.push_back(second);
+    });
+    REQUIRE(vs.createBranch("agent/claude/keep", "main"));
+    step([&](EditTxn& t, std::vector<Id>&) { t.remove<Modulation>(second); });
+    auto doc = json::parse(serializeProjectFile(vs, true)).value();
+    doc["project"]["next_ids"].asObject().erase("mr");
+    for (auto& ref : doc["branches"]["refs"].asObject())
+        ref.value["next_ids"].asObject().erase("mr");
+    auto main = doc;
+    main.asObject().erase("branches");
+    doc["branches"]["main_hash"] = "sha256:" + sha256Hex(json::writeCanonical(main));
+    auto opened = projectFileFromJson(doc);
+    REQUIRE_MESSAGE(opened, (opened ? "" : opened.error().toString()));
+    REQUIRE_MESSAGE(!opened->branchesDropped,
+                    (opened->branchesDropped ? opened->branchesDropped->toString() : ""));
+    CHECK(opened->store.head("agent/claude/keep")->modulations.contains(second));
+    CHECK(opened->store.head("main")->next[Kind::Modulation] > second.n);
 }

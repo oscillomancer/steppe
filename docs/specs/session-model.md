@@ -1508,7 +1508,9 @@ nothing there, but it drops the `mr` counter and may delete what a route
 points at (amendment G-c). A file that comes back from one opens anyway: a
 missing or low `mr` counter is derived from the highest `mr` id with a
 `project.counter_derived` warning at `/project/next_ids/mr` (the code
-ADR-0095 uses for `cx`), and a
+ADR-0095 uses for `cx`); a saved branch whose `next_ids` lacks `mr`
+allocates past the highest `mr` id of every saved version, so an id one
+branch removed is not given out while another holds it; and a
 route whose source or target is gone or no longer fits the invariants
 below, or that closes a cycle, is dropped with a `project.modulation_dropped`
 warning at its path that names it and says why.
