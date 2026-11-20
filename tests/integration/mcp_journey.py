@@ -252,8 +252,10 @@ def modulate(j):
     # Refusals, each with a code, a path and a hint.
     error = j.refused("modulate", {"target": {"fx": "fx_1", "param": "kick_level"},
                                    "source": "lfo"}, "modulation.target",
-                      "A name Drumlin does not have: its hint says nothing is modulatable.")
-    assert "automate" in error["hint"] and "pad1" not in error["hint"], error
+                      "A name Drumlin does not have: its hint names the parameters an "
+                      "envelope reaches.")
+    assert "through an active envelope" in error["hint"] and "pad1.tune" in error["hint"] and \
+        "modulatable_by_envelope" in error["hint"] and "automate it" not in error["hint"], error
     error = j.refused("modulate", {"target": {"fx": "fx_4", "param": "nope"}, "source": "lfo"},
                       "modulation.target", "A name Gain does not have: its hint lists "
                       "what it takes.")
