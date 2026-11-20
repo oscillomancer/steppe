@@ -1251,6 +1251,15 @@ Engine and hosting:
   (VST3 has no modulation), by their first voice, at most 16 per plug-in;
   parallel paths summed inside a patch remain unaligned (ADR-0064);
   post-fader sends into an In module take the linear path.
+- Modulation routes (ADR-0096): `modulation.add`, `modulate`,
+  `modulation.list` and `fx.describe` judge a plug-in parameter from a fresh
+  copy of the plug-in in its default state, not the running instance, while
+  the engine binds a route by the running instance's flags. A plug-in whose
+  parameter flags follow its state is judged wrongly: a parameter read-only
+  by default but writable in the loaded state is refused
+  (`modulation.target`), and one modulatable by default but read-only in the
+  loaded state is accepted and listed as playable while the engine leaves it
+  unmodulated.
 - A take whose FX report latency runs its input ahead and, looping, wraps
   that much early (engine.md, PDC). At unity a loop no longer than that
   look-ahead has no early wrap: on every pass after the first the notes
