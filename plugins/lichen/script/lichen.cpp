@@ -273,6 +273,7 @@ struct Lichen : Effect {
     // --- settings (none of them touch the sound) ----------------------------------------
 
     Param target = decibels("Target", -30, -5, -14)
+                       .modulated()
                        .in("Settings")
                        .help(
                            "The integrated loudness you aim for, in LUFS: the meters read "

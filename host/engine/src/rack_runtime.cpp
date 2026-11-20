@@ -404,18 +404,34 @@ Result<PluginModTarget> resolvePluginMod(std::span<const host::ParamInfo> list,
             break;
         }
     if (!found) {
+        // Only the parameters a route can take: naming one that is not modulatable
+        // would lead to the next refusal (a plug-in with none says so).
         std::string available;
         auto add = [&](const std::string& text) {
             available += (available.empty() ? "" : ", ") + text;
         };
+        auto takesRoute = [&](std::uint32_t param) {
+            for (const host::ParamInfo& info : list)
+                if (info.id == param)
+                    return (info.flags & CLAP_PARAM_IS_MODULATABLE) != 0 &&
+                           (info.flags & (CLAP_PARAM_IS_READONLY | CLAP_PARAM_IS_BYPASS)) == 0;
+            return false;
+        };
         if (schema && schema->isObject())
             if (const auto* ps = schema->find("params"); ps && ps->isObject())
-                for (const auto& entry : ps->asObject()) add(entry.key);
-        for (const auto& info : list) add(std::to_string(info.id));
+                for (const auto& entry : ps->asObject())
+                    if (entry.value.isObject())
+                        if (const auto* v = entry.value.find("id"); v && v->isNumber())
+                            if (takesRoute(static_cast<std::uint32_t>(v->asInt()))) add(entry.key);
+        for (const auto& info : list)
+            if (takesRoute(info.id)) add(std::to_string(info.id));
+        if (available.empty())
+            return Error("rack.port", "the plug-in has no parameter " + key, "",
+                         "no parameter of this plug-in is modulatable; automate it instead "
+                         "(env.add {fx})");
         return Error("rack.port", "the plug-in has no parameter " + key, "",
-                     "available parameter keys and numeric ids: " +
-                         (available.empty() ? "none" : available) +
-                         "; fx.describe lists their ranges");
+                     "modulatable parameter keys and numeric ids: " + available +
+                         "; fx.describe marks them (modulatable) and lists their ranges");
     }
     if (!(found->flags & CLAP_PARAM_IS_MODULATABLE))
         return Error("rack.modulation", found->name + " is not modulatable", "",

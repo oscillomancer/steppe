@@ -1166,3 +1166,31 @@ TEST_CASE("modulation: telemetry gives each bound route its target's live offset
     CHECK(offsets.at(Id{model::Kind::Modulation, emit.route.n + 2}) == doctest::Approx(0.1));
     CHECK(offsets.at(Id{model::Kind::Modulation, emit.route.n + 1}) == doctest::Approx(-6.0));
 }
+
+TEST_CASE("modulation: a stem of a modulated track carries it, its source rack kept unheard" *
+          doctest::description("rt")) {
+    // B's gain is modulated from a second rack on its own channel C, which
+    // feeds nothing B plays. A render of B alone (a stem, a track analysis)
+    // keeps that rack as a dependency and applies the modulation exactly as
+    // the mix does; C is not heard in it.
+    Emit emit("playing", std::nullopt);
+    model::EditTxn t(emit.s, 2);
+    const Id c = addChannel(t);
+    const Id rack = t.create(model::Rack{c, "Modulators"});
+    const Id transport = addModule(t, rack, "com.suppleaudio.rack.transport");
+    const Id modOut = addModule(t, rack, model::kModOutModule);
+    cable(t, transport, "beat_phase", modOut, "in_1");
+    modulate(t, modOut, emit.gain, "gain", 0.2);
+    const model::Session s = commit(t);
+    InstancePool pool = makePool();
+    OfflineSettings settings;
+    settings.endSeconds = 1.0;
+    auto mix = renderOffline(s, pool, settings);
+    REQUIRE_MESSAGE(mix, (mix ? std::string() : mix.error().toString()));
+    settings.track = emit.b;
+    auto stem = renderOffline(s, pool, settings);
+    REQUIRE_MESSAGE(stem, (stem ? std::string() : stem.error().toString()));
+    CHECK(stem->audio.channels[0] == mix->audio.channels[0]);
+    // The modulation moved it: equality says something.
+    CHECK(stem->audio.channels[0] != render(emit.s, 1.0).left);
+}

@@ -4,6 +4,8 @@ Generated from the command registry.
 
 Successful replies may include `warnings`: command warnings followed by bus diagnostics `{code: string, message: string, path: string}`. Paths are retained as supplied by the decoder or handler. Batch steps carry their own warnings in `results[i].warnings`. A non-object result with bus warnings is `{result: <value>, warnings: [...]}`. Replies without bus warnings keep their original shape.
 
+In an argument table, a member of an object argument is listed under it as `argument.member` (`argument[].member` for a list of objects).
+
 ## `batch@1`
 
 Run commands atomically.
@@ -18,6 +20,9 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | --- | --- | --- | --- | --- | --- |
 | `label` | string |  |  |  |  |
 | `steps` | array |  |  |  |  |
+| `steps[].command` | string |  |  |  |  |
+| `steps[].args` | object |  |  |  |  |
+| `steps[].as` | string |  |  |  |  |
 
 ### Result
 
@@ -833,7 +838,7 @@ Kind: `query`. Exposure: `internal`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `target` | value |  |  |  |  |
+| `target` | string or object |  |  |  |  |
 
 ### Result
 

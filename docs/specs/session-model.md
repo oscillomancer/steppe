@@ -1108,16 +1108,22 @@ and naming. All `edit` unless marked (q) query or (a) action.
   are `vca.learn.*` (Track groups and VCA controls, below).
 - **modulation** (ADR-0096): `modulation.add {source, target, depth,
   enabled?, lane?}`, `modulation.set {modulation, …}`, `modulation.remove
-  {modulation}`, `modulation.list {track?, fx?, rack?}` (q),
+  {modulation}`, `modulation.list {track?, fx?, rack?}` (q: each route,
+  with `fed_by`, the modules cabled into its Mod Out input and their types,
+  and `inert`: `source` when nothing is cabled in, `target`, or `latency`),
   `modulation.telemetry {track?}` (q: each route's live target offset and
-  its span, M2), `modulate {target, source: lfo|follower|random|macro|
+  its span, M2; no span while nothing is cabled into its input), `modulate {target, source: lfo|follower|random|macro|
   {module, input}, depth?, from?, rack?}` (M2: one undo step. Rack: `rack`,
   else the first homed on the target's track with a Mod Out, else the
   first named Modulators with one, else a new one on a new channel named
-  Modulators. It cables the module's first output into the first Mod Out
+  Modulators. For a macro, it returns `knob`, the knob to move. It cables
+  the module's first output into the first Mod Out
   input with no cable or route, adding a Mod Out when none is free. A
-  follower gets an In module and a send from `from`. `modulation.cycle`
-  at `/from` when the follower would hear its own target.)
+  follower gets an In module and a send from `from`. A candidate rack
+  that would close a loop is passed over for the next, else a new
+  Modulators rack: one that already reaches `from`, or one the target
+  reaches. `modulation.cycle` at `/from` only for a real cycle, when the
+  target feeds `from`, itself included. A chosen `rack` is used as given.)
 - **scenes and clips** (ADR-0097, "Scenes and clips"): `scene.add {name?,
   color?, at?}`, `scene.set`, `scene.remove`, `scene.move {scene, to}`,
   `scene.list` (q); `clip.add {track, scene, notation? | audio_file? |

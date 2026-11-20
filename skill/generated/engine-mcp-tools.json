@@ -598,7 +598,7 @@
   {
     "name": "history_undo",
     "title": "Undo the last change on the current branch.",
-    "description": "Undo the last change on the current branch. See describe for errors and examples.",
+    "description": "Steps the current branch back one version. The result is the version that is current afterwards and its label: the step before the one undone, not the undone step (history.list shows both). See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "no_args",
@@ -838,7 +838,7 @@
   {
     "name": "modulate",
     "title": "Modulate a parameter or mixer level with an LFO, follower, random or macro.",
-    "description": "The whole gesture in one undo step. It takes the first rack homed on the target's track that holds a Mod Out, else the first rack named Modulators, else adds one on a new channel named Modulators (rack: choose one instead). It adds the source module (lfo: an LFO; random: an LFO's Random Steps preset; macro: a Macro, its first knob; follower: a Follower fed by an In module and a send from the track from), cables it into the first free Mod Out input (adding a Mod Out when none is free) and routes that input to the target. {module, input} routes a Mod Out input already patched. depth as modulation.add; default a quarter of a plug-in parameter's range, 6 dB, or 50 percent. A follower cannot listen to the track it modulates (modulation.cycle). See describe for errors and examples.",
+    "description": "The whole gesture in one undo step. It takes the first rack homed on the target's track that holds a Mod Out, else the first rack named Modulators, else adds one on a new channel named Modulators (rack: choose one instead). It adds the source module (lfo: an LFO; random: an LFO's Random Steps preset; macro: a Macro, its first knob; follower: a Follower fed by an In module and a send from the track from), cables it into the first free Mod Out input (adding a Mod Out when none is free) and routes that input to the target. {module, input} routes a Mod Out input already patched. For a macro, knob names the knob to move. depth as modulation.add; default a quarter of a plug-in parameter's range, 6 dB, or 50 percent. A rack that would close a loop (it already drives the track a follower hears, or hears the target) is passed over for the next, or a new Modulators rack. Only a real cycle is refused (modulation.cycle): a follower on a track the target feeds, itself included. target: {fx, param} (a plug-in parameter by key, name or CLAP id; fx.describe full marks the modulatable ones), {track, param: volume|pan|width} or {route, param: volume}. The source module is left set to its defaults: change it with module.set {module, params} on the module this returns (an LFO's rate, shape or sync; a follower's gain and threshold; a macro's macro_1, which sits at 0 until moved, so a macro does nothing at first; module.describe {type} lists the knobs) and the route's depth with modulation.set. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "modulate_args",

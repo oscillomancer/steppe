@@ -652,6 +652,14 @@ instructions are in `docs/guides/installing.md`.
   tested with the engine running). An FX moved to another track keeps the last offset of a
   parameter the new plan no longer modulates until the plug-in next
   resets. Native macOS and Windows CI has not run on it.
+  Stock plug-ins (M2b): the 16 effects mark their continuous parameters
+  modulatable in their scripts (185 in all: never a meter, a choice, a toggle,
+  an integer, or one that restarts the plug-in or is not automatable; none
+  of the 185 sets the latency, which only prepare() reports). Drumlin and
+  Pollard (instruments) mark none yet: their own route sources would accept a
+  route into a parameter their script reads with `at(i)`, which ignores it
+  (it needs `routed(i)` or `forVoice(v)`). Coppice and Marram mark theirs per
+  voice.
   Agents patch with `rack.patch` (named
   modules and cables in one step, laid out by signal flow and labelled by
   name; `rack.arrange` tidies a rack) or `module.add`/`cable.add`, hear a patch

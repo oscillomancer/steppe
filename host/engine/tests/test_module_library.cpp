@@ -1635,7 +1635,9 @@ TEST_CASE("rack cables: numeric CLAP ids modulate a raw plugin and survive save 
         CHECK(bad.error().code == "rack.port");
         CHECK(bad.error().path == "/args/to");
         CHECK(bad.error().hint ==
-              "available parameter keys and numeric ids: 0, 1; fx.describe lists their ranges");
+              "modulatable parameter keys and numeric ids: 0; fx.describe marks them (modulatable) "
+              "and "
+              "lists their ranges");
     }
     auto nonmod = f.call("cable.add", *json::parse(R"({"from":"mo_2.playing","to":"fx_1.1"})"));
     REQUIRE_FALSE(nonmod);
@@ -1692,8 +1694,8 @@ TEST_CASE("rack cables: numeric keys work in rack.patch and unknown ids name ava
     REQUIRE_FALSE(bad);
     CHECK(bad.error().code == "rack.port");
     CHECK(bad.error().hint ==
-          "available parameter keys and numeric ids: gain, latency, 0, 1; fx.describe lists their "
-          "ranges");
+          "modulatable parameter keys and numeric ids: gain, 0; fx.describe marks them "
+          "(modulatable) and lists their ranges");
     const auto version = f.app->head().version;
     const auto patch = f.call("rack.patch", *json::parse(R"({"rack":"rk_1",
         "modules":{"other":{"type":"transport"}},"cables":[["other.playing","fx_1.999"]]})"));

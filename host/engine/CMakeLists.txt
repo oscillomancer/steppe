@@ -157,6 +157,12 @@ if(SUPPLE_BUILD_TESTS)
       COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/integration/mcp_arrangement.py
               $<TARGET_FILE:${PRODUCT_SLUG}-engine> ${CMAKE_BINARY_DIR}/plugins/clap/Marram.clap)
     set_tests_properties(engine.mcp-arrangement PROPERTIES LABELS "engine;slow")
+    # Batch 1 acceptance: the context track and modulation together, driven as an
+    # agent would, with offline renders measured and compared (dev and GCC debug only).
+    add_test(NAME engine.mcp-journey
+      COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/integration/mcp_journey.py
+              $<TARGET_FILE:${PRODUCT_SLUG}-engine> ${CMAKE_BINARY_DIR}/plugins/clap)
+    set_tests_properties(engine.mcp-journey PROPERTIES LABELS "engine;slow")
   endif()
 endif()
 

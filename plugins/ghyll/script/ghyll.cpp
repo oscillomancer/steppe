@@ -789,14 +789,17 @@ struct Ghyll : Effect {
     // --- the room -----------------------------------------------------------------------
 
     Param roomWidth = continuous("Room Width", 1.5, 60, 17, Unit::Meters)
+                          .modulated()
                           .curved(Curve::Log)
                           .in("Room")
                           .help("The room from its left wall to its right, metres.");
     Param roomDepth = continuous("Room Depth", 1.5, 100, 25, Unit::Meters)
+                          .modulated()
                           .curved(Curve::Log)
                           .in("Room")
                           .help("The room from its front wall to its back, metres.");
     Param roomHeight = continuous("Room Height", 2, 40, 11, Unit::Meters)
+                           .modulated()
                            .curved(Curve::Log)
                            .in("Room")
                            .help("The room from floor to ceiling, metres.");
@@ -819,12 +822,14 @@ struct Ghyll : Effect {
                         .in("Room")
                         .help("What the ceiling is: open is the sky, a courtyard's.");
     Param decay = percent("Decay", 100, 25, 400)
+                      .modulated()
                       .curved(Curve::Log)
                       .in("Room")
                       .help(
                           "The reverberation time against the room as built: 200% is twice as "
                           "long (the surfaces and the air absorb half as much).");
     Param scatter = percent("Scatter", 40)
+                        .modulated()
                         .in("Room")
                         .help(
                             "How rough the surfaces are: 0 is smooth walls and clear, discrete "
@@ -833,16 +838,21 @@ struct Ghyll : Effect {
     // --- the places ---------------------------------------------------------------------
 
     Param sourceX = percent("Source X", 44)
+                        .modulated()
                         .in("Places")
                         .help("Where the sound stands across the room, from the left wall.");
     Param sourceY = percent("Source Y", 22)
+                        .modulated()
                         .in("Places")
                         .help("Where the sound stands, back from the front wall.");
     Param listenerX = percent("Listener X", 54)
+                          .modulated()
                           .in("Places")
                           .help("Where you listen across the room, from the left wall.");
-    Param listenerY =
-        percent("Listener Y", 44).in("Places").help("Where you listen, back from the front wall.");
+    Param listenerY = percent("Listener Y", 44)
+                          .modulated()
+                          .in("Places")
+                          .help("Where you listen, back from the front wall.");
     Param mic = choice("Mic", {"ORTF", "Spaced", "Head", "Mono"}, 0)
                     .in("Places")
                     .help(
@@ -853,35 +863,42 @@ struct Ghyll : Effect {
     // --- the output ---------------------------------------------------------------------
 
     Param predelay = milliseconds("Predelay", 0, 250, 0)
+                         .modulated()
                          .in("Output")
                          .help("A gap added before the room answers, to keep a voice clear of it.");
     Param early = decibels("Early", -30, 12, 0)
+                      .modulated()
                       .offAtMin()
                       .smoothed(20)
                       .in("Output")
                       .help("The reflections against the room's own level; -30 is off.");
     Param late = decibels("Late", -30, 12, 0)
+                     .modulated()
                      .offAtMin()
                      .smoothed(20)
                      .in("Output")
                      .help("The tail against the room's own level; -30 is off.");
     Param lowCut = frequency("Low Cut", 20, 1000, 20)
+                       .modulated()
                        .in("Output")
                        .help("Thins the room (the dry sound is untouched); 20 Hz is off.");
     Param highCut = frequency("High Cut", 1000, 20000, 20000)
+                        .modulated()
                         .in("Output")
                         .help("Darkens the room (the dry sound is untouched); 20 kHz is off.");
     Param width = percent("Width", 100, 0, 200)
+                      .modulated()
                       .smoothed(20)
                       .in("Output")
                       .help("The room's stereo width: 0 is mono, 200 twice as wide.");
     Param freeze = toggle("Freeze", false)
                        .in("Output")
                        .help("Hold the tail as it is, forever, and let no new sound in.");
-    Param mix = percent("Mix", 25).smoothed(20).in("Output").help(
+    Param mix = percent("Mix", 25).modulated().smoothed(20).in("Output").help(
         "Dry and room: the dry stays full up to 50% and the room reaches full there, the balance "
         "heard from the listener's place; 100% is the room alone.");
-    Param output = decibels("Output", -24, 24, 0).smoothed(20).in("Output").help("The level out.");
+    Param output =
+        decibels("Output", -24, 24, 0).modulated().smoothed(20).in("Output").help("The level out.");
 
     Param inputLevel = decibels("Input Level", -96, 24, -96)
                            .meter()

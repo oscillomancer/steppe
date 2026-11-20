@@ -1343,6 +1343,13 @@ first use, and no plug-in code runs early to warm it.
   stem whose track is a master, keeps them (ADR-0057).
 - A post-fader stem of a channel or buss is decoded outside the graph, under
   the same floating-point environment as the graph's nodes (§2.4).
+- An isolated stem or a single-track render (`render.stems`, `analyze.track`)
+  keeps the target and what feeds it. It also keeps what modulates
+  any of those: a modulation route into a kept node keeps its source rack,
+  the rack's home channel, and whatever feeds them (ADR-0096). Those are
+  dependencies and are not heard, since the render taps the target. So a
+  stem carries the modulation exactly as the mix does. Routes whose rack or
+  target is not kept are left out.
 - Through-master stems use playback's solo signal-path rules: retain the
   selected strip, its upstream contributors and its path through parents and
   ordinary sends to the master. Ignore other pre-existing solos and solo-defeat;

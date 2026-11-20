@@ -52,7 +52,10 @@ std::pair<std::optional<Id>, std::optional<Id>> routeNodes(const Session& s,
 }
 
 // Keep the target and precisely the tracks (and racks) whose enabled sends
-// feed it.
+// feed it, and what modulates any of them: a modulation route into a kept
+// node keeps its source rack and the rack's home channel (ADR-0096), so a
+// stem carries the modulation as the mix does. They are dependencies, not
+// heard: the render taps the target.
 Session upstreamSession(const Session& source, Id target) {
     if (target == model::kMaster) return source;
     Session s = source;
@@ -72,6 +75,15 @@ Session upstreamSession(const Session& source, Id target) {
             if (const auto home = model::rackSendHome(source, *entry.value);
                 home && to && keep.count(*to))
                 changed |= keep.insert(*home).second;
+        }
+        // A modulation's source rack runs before its target (ADR-0096).
+        for (const auto& entry : source.modulations) {
+            const auto node = model::modulationTargetNode(source, entry.value->target);
+            const model::RackModule* module = source.modules.find(entry.value->source.module);
+            if (!node || !module || !keep.count(*node)) continue;
+            changed |= keep.insert(module->rack).second;
+            if (const model::Rack* rack = source.racks.find(module->rack))
+                changed |= keep.insert(rack->track).second;
         }
         // A Notes source includes incoming sends, whose channel node must
         // remain available so its implicit reader edges can be compiled.
@@ -134,6 +146,15 @@ Session upstreamSession(const Session& source, Id target) {
     for (const auto& entry : source.racks)
         if (!keep.count(entry.id)) racks.erase(entry.id);
     s.racks = racks.build();
+    // Modulation routes whose source rack or target went with the rest.
+    model::IdMap<model::Modulation>::Builder modulations(source.modulations);
+    for (const auto& entry : source.modulations) {
+        const auto node = model::modulationTargetNode(source, entry.value->target);
+        const model::RackModule* module = source.modules.find(entry.value->source.module);
+        if (!node || !module || !keep.count(*node) || !keep.count(module->rack))
+            modulations.erase(entry.id);
+    }
+    s.modulations = modulations.build();
     return s;
 }
 }  // namespace

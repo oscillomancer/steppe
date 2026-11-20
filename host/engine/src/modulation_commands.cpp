@@ -49,14 +49,19 @@ struct ModListArgs {
     std::optional<std::string> track, fx, rack;
 };
 
+// A cable into a route's Mod Out input: what the route carries.
+struct FedBy {
+    std::string module, output, type;
+};
 struct ModEntry {
     std::string modulation;
     SourceArg source;
     TargetArg target;
     double depth = 0;
     bool enabled = true, lane = true;
-    std::string range;                 // bipolar (-1..1) or unipolar (0..1)
-    std::optional<std::string> inert;  // why the plan cannot apply it: target, latency
+    std::string range;  // bipolar (-1..1) or unipolar (0..1)
+    std::vector<FedBy> fedBy;
+    std::optional<std::string> inert;  // why the plan cannot apply it: source, target, latency
 };
 
 struct ModList {
@@ -70,7 +75,7 @@ struct ModTelemetryArgs {
 struct ModReading {
     std::string modulation;
     std::optional<double> offset;
-    double low = 0, high = 0;
+    std::optional<double> low, high;  // none while nothing feeds its Mod Out input
 };
 
 struct ModTelemetry {
@@ -93,6 +98,7 @@ struct ModulateArgs {
 struct Modulated {
     std::string modulation;
     std::optional<std::string> rack, module, mod_out, input, send, channel;
+    std::optional<std::string> knob;  // a macro's: the knob to move
 };
 
 schema::Schema<SourceArg> sourceSchema() {
@@ -216,6 +222,26 @@ std::optional<Id> homeTrackOf(const model::Session& s, const model::EnvTarget& t
     return node;
 }
 
+// Whether `to` is reachable from `from` through the signal graph and the
+// modulation routes (each an edge from its rack to its target's node).
+bool reaches(const model::Session& s, Id from, Id to) {
+    std::map<Id, std::vector<Id>> edges = signalEdges(s);
+    for (const auto& e : s.modulations) {
+        const model::RackModule* m = s.modules.find(e.value->source.module);
+        const auto node = model::modulationTargetNode(s, e.value->target);
+        if (m && node) edges[m->rack].push_back(*node);
+    }
+    std::set<Id> seen;
+    std::function<bool(Id)> walk = [&](Id at) {
+        if (at == to) return true;
+        if (!seen.insert(at).second) return false;
+        for (Id next : edges[at])
+            if (walk(next)) return true;
+        return false;
+    };
+    return walk(from);
+}
+
 // The route as it would be, checked against what the model cannot know (the
 // instance's parameters) and what the user can fix with a better call.
 // `self`: the route being set (skipped by the duplicate check).
@@ -313,6 +339,18 @@ Status checkCycle(EngineApp& app) {
 
 // The signal range a Mod Out input carries: unipolar when every cable into
 // it comes from a unipolar, gate or phase output, bipolar otherwise.
+// The cables into a route's Mod Out input, with each source module's type.
+std::vector<FedBy> fedBy(const model::Session& s, const model::ModSource& source) {
+    std::vector<FedBy> out;
+    for (const auto& c : s.cables) {
+        const model::Cable& cable = *c.value;
+        if (cable.to.object != source.module || cable.to.key != source.input) continue;
+        const model::RackModule* from = s.modules.find(cable.from.object);
+        out.push_back({cable.from.object.str(), cable.from.key, from ? from->type : ""});
+    }
+    return out;
+}
+
 std::string rangeOf(EngineApp& app, const model::Session& s, const model::ModSource& source) {
     const rack::Catalog& catalog = *app.instances().racks().catalog();
     bool any = false;
@@ -467,8 +505,10 @@ void registerModulationCommands(cmd::Registry& registry) {
         c.summary = "List modulation routes, by target track, FX or source rack.";
         c.description =
             "Each route with its source signal's range (bipolar -1..1, or unipolar 0..1 when "
-            "every cable into the Mod Out input is unipolar, a gate or a phase) and, when the "
-            "plan cannot apply it, inert: target (the parameter cannot take it, or the "
+            "every cable into the Mod Out input is unipolar, a gate or a phase), fed_by (each "
+            "cable into that input: its module, output and module type) and, when the plan "
+            "cannot apply it, inert: source (nothing is cabled into the input), target (the "
+            "parameter cannot take it, or the "
             "target's track is frozen and its level is outside the print) or latency (its "
             "plug-in changed latency while modulated; editing a route into it turns them back "
             "on).";
@@ -478,23 +518,31 @@ void registerModulationCommands(cmd::Registry& registry) {
                      .field("fx", &ModListArgs::fx, idArg("fx", "Target plug-in instance"))
                      .field("rack", &ModListArgs::rack, idArg("rk", "Source rack"))
                      .build();
-        auto entry = schema::object<ModEntry>("modulation_entry")
-                         .field("modulation", &ModEntry::modulation, schema::string())
-                         .field("source", &ModEntry::source, sourceSchema())
-                         .field("target", &ModEntry::target, targetSchema())
-                         .field("depth", &ModEntry::depth, schema::number())
-                         .field("enabled", &ModEntry::enabled, schema::boolean())
-                         .field("lane", &ModEntry::lane, schema::boolean())
-                         .field("range", &ModEntry::range, schema::string())
-                         .field("inert", &ModEntry::inert, schema::string())
-                         .build();
+        auto entry =
+            schema::object<ModEntry>("modulation_entry")
+                .field("modulation", &ModEntry::modulation, schema::string())
+                .field("source", &ModEntry::source, sourceSchema())
+                .field("target", &ModEntry::target, targetSchema())
+                .field("depth", &ModEntry::depth, schema::number())
+                .field("enabled", &ModEntry::enabled, schema::boolean())
+                .field("lane", &ModEntry::lane, schema::boolean())
+                .field("range", &ModEntry::range, schema::string())
+                .field("fed_by", &ModEntry::fedBy,
+                       schema::arrayOf(schema::object<FedBy>("modulation_fed_by")
+                                           .field("module", &FedBy::module, schema::string())
+                                           .field("output", &FedBy::output, schema::string())
+                                           .field("type", &FedBy::type, schema::string())
+                                           .build()))
+                .field("inert", &ModEntry::inert, schema::string())
+                .build();
         c.result = schema::object<ModList>("modulation_list")
                        .field("modulations", &ModList::modulations, schema::arrayOf(entry))
                        .build();
         c.examples = {{"List", j("{}"), j(R"({"modulations": [{"modulation": "mr_1",
                    "source": {"module": "mo_2", "input": "in_1"},
                    "target": {"fx": "fx_1", "param": "gain"}, "depth": 0.25,
-                   "enabled": true, "lane": true, "range": "bipolar"}]})"),
+                   "enabled": true, "lane": true, "range": "bipolar", "fed_by": [],
+                   "inert": "source"}]})"),
                        "song_with_modulation"}};
         c.run = [](const ModListArgs& a, Context& ctx) -> Result<ModList> {
             EngineApp& app = engine::app(ctx);
@@ -543,6 +591,7 @@ void registerModulationCommands(cmd::Registry& registry) {
                 row.enabled = m.enabled;
                 row.lane = m.lane;
                 row.range = rangeOf(app, s, m.source);
+                row.fedBy = fedBy(s, m.source);
                 if (m.target.object.kind != model::Kind::Fx) {
                     const auto node = model::modulationTargetNode(s, m.target);
                     const model::Track* t = node ? s.tracks.find(*node) : nullptr;
@@ -552,6 +601,8 @@ void registerModulationCommands(cmd::Registry& registry) {
                 } else if (!playable(m.target)) {
                     row.inert = "target";
                 }
+                // Nothing cabled into its Mod Out input: it carries nothing.
+                if (!row.inert && row.fedBy.empty()) row.inert = "source";
                 out.modulations.push_back(std::move(row));
             }
             return out;
@@ -572,9 +623,19 @@ void registerModulationCommands(cmd::Registry& registry) {
             "first knob; follower: a Follower fed by an In module and a send from the track "
             "from), cables it into the first free Mod Out input (adding a Mod Out when none is "
             "free) and routes that input to the target. {module, input} routes a Mod Out input "
-            "already patched. depth as modulation.add; default a quarter of a plug-in "
-            "parameter's range, 6 dB, or 50 percent. A follower cannot listen to the track it "
-            "modulates (modulation.cycle).";
+            "already patched. For a macro, knob names the knob to move. depth as "
+            "modulation.add; default a quarter of a plug-in "
+            "parameter's range, 6 dB, or 50 percent. A rack that would close a loop (it "
+            "already drives the track a follower hears, or hears the target) is passed over "
+            "for the next, or a new Modulators rack. Only a real cycle is refused "
+            "(modulation.cycle): a follower on a track the target feeds, itself included. "
+            "target: {fx, param} (a plug-in parameter by key, name or CLAP id; fx.describe "
+            "full marks the modulatable ones), {track, param: volume|pan|width} or {route, "
+            "param: volume}. The source module is left set to its defaults: change it with "
+            "module.set {module, params} on the module this returns (an LFO's rate, shape or "
+            "sync; a follower's gain and threshold; a macro's macro_1, which sits at 0 until "
+            "moved, so a macro does nothing at first; module.describe {type} lists the knobs) "
+            "and the route's depth with modulation.set.";
         c.tags = {"modulation", "rack"};
         c.args = schema::object<ModulateArgs>("modulate_args")
                      .field("target", &ModulateArgs::target, targetSchema())
@@ -593,13 +654,15 @@ void registerModulationCommands(cmd::Registry& registry) {
                        .field("send", &Modulated::send, schema::string())
                        .field("channel", &Modulated::channel,
                               schema::string().doc("The channel made for a new rack."))
+                       .field("knob", &Modulated::knob,
+                              schema::string().doc("A macro's knob to move, by key."))
                        .build();
         c.examples = {{"An LFO on a gain", j(R"({"target": {"fx": "fx_1", "param": "gain"},
                              "source": "lfo"})"),
                        j(R"({"modulation": "mr_1", "rack": "rk_1", "module": "mo_3",
                              "mod_out": "mo_2", "input": "in_1"})"),
                        "song_with_mod_out"}};
-        c.errors = {{"modulation.cycle", "a follower on the track it modulates",
+        c.errors = {{"modulation.cycle", "a follower on a track the target feeds",
                      "listen to another track, or modulate a buss it feeds"}};
         c.run = [](const ModulateArgs& a, Context& ctx) -> Result<Modulated> {
             EngineApp& app = engine::app(ctx);
@@ -669,18 +732,35 @@ void registerModulationCommands(cmd::Registry& registry) {
             const model::Session s = app.view();
             const model::EnvTarget wanted = targetOf(a.target);
             const auto home = homeTrackOf(s, wanted);
+            const auto node = model::modulationTargetNode(s, wanted);
+            std::optional<Id> heard;  // the track a follower listens to
             if (follower) {
-                auto from = existing<model::Track>(s, *a.from, "/from");
-                if (!from) return std::move(from).error();
-                if (home && *from == *home)
-                    return refused(
-                        "modulation.cycle",
-                        "a follower on " + a.from.value() + " cannot modulate what plays on it",
-                        "/from",
-                        "listen to another track, or modulate a buss " + a.from.value() + " feeds");
+                auto id = existing<model::Track>(s, *a.from, "/from");
+                if (!id) return std::move(id).error();
+                heard = *id;
+                // A real cycle: the target already feeds what the follower
+                // hears, whichever rack would hold it (ADR-0096, 2026-11-20).
+                if ((home && *heard == *home) || (node && reaches(s, *node, *heard)))
+                    return refused("modulation.cycle",
+                                   home && *heard == *home
+                                       ? "a follower on " + a.from.value() +
+                                             " cannot modulate what plays on it"
+                                       : "the target feeds " + a.from.value() +
+                                             ", so following it would modulate itself",
+                                   "/from",
+                                   "listen to a track the target does not feed, or modulate a "
+                                   "buss " +
+                                       a.from.value() + " feeds");
             }
+            // A rack that closes no loop: it does not already reach the
+            // track a follower hears, and the target does not reach it.
+            const auto loopless = [&](Id r) {
+                return !(heard && reaches(s, r, *heard)) && !(node && reaches(s, *node, r));
+            };
             // The rack: chosen, the home track's first with a Mod Out, the
-            // first Modulators rack with one, or a new Modulators channel's.
+            // first Modulators rack with one, or a new Modulators channel's;
+            // one that would close a loop is passed over (a chosen one is
+            // the caller's, and refused as before).
             Modulated out;
             std::optional<Id> rack;
             if (a.rack) {
@@ -694,9 +774,11 @@ void registerModulationCommands(cmd::Registry& registry) {
                 return false;
             };
             for (const auto& r : s.racks)
-                if (!rack && home && r.value->track == *home && hasModOut(r.id)) rack = r.id;
+                if (!rack && home && r.value->track == *home && hasModOut(r.id) && loopless(r.id))
+                    rack = r.id;
             for (const auto& r : s.racks)
-                if (!rack && r.value->name == "Modulators" && hasModOut(r.id)) rack = r.id;
+                if (!rack && r.value->name == "Modulators" && hasModOut(r.id) && loopless(r.id))
+                    rack = r.id;
             if (!rack) {
                 json::Value args = json::Value::object();
                 args["name"] = json::Value("Modulators");
@@ -748,6 +830,10 @@ void registerModulationCommands(cmd::Registry& registry) {
             if (!module) return std::move(module).error();
             out.module = module->find("module")->asString();
             const std::string output = module->find("outputs")->at(0).asString();
+            if (kind == "macro")
+                if (const auto* knobs = module->find("knobs");
+                    knobs && knobs->isArray() && !knobs->asArray().empty())
+                    out.knob = knobs->at(0).asString();
             const auto cable = [&](const std::string& from,
                                    const std::string& to) -> Result<json::Value> {
                 json::Value args = json::Value::object();
@@ -794,7 +880,8 @@ void registerModulationCommands(cmd::Registry& registry) {
             "engine last applied it (a plug-in parameter's as a fraction of its range, a "
             "volume's in dB, a pan's or width's in percent); absent while no running plan "
             "applies the route. low and high: what this route alone can add, depth times its "
-            "signal range (bipolar -1..1, unipolar 0..1), in the same unit.";
+            "signal range (bipolar -1..1, unipolar 0..1), in the same unit; absent while "
+            "nothing is cabled into its Mod Out input.";
         c.tags = {"modulation", "rack"};
         c.args = schema::object<ModTelemetryArgs>("modulation_telemetry_args")
                      .field("track", &ModTelemetryArgs::track, idArg("tr", "Target track"))
@@ -808,10 +895,8 @@ void registerModulationCommands(cmd::Registry& registry) {
         c.result = schema::object<ModTelemetry>("modulation_telemetry")
                        .field("modulations", &ModTelemetry::modulations, schema::arrayOf(entry))
                        .build();
-        c.examples = {{"Stopped", j("{}"),
-                       j(R"({"modulations": [{"modulation": "mr_1", "low": -0.25,
-                             "high": 0.25}]})"),
-                       "song_with_modulation"}};
+        c.examples = {{"Stopped, nothing cabled into the route's input yet", j("{}"),
+                       j(R"({"modulations": [{"modulation": "mr_1"}]})"), "song_with_modulation"}};
         c.run = [](const ModTelemetryArgs& a, Context& ctx) -> Result<ModTelemetry> {
             EngineApp& app = engine::app(ctx);
             const model::Session s = app.view();
@@ -829,9 +914,12 @@ void registerModulationCommands(cmd::Registry& registry) {
                 ModReading row;
                 row.modulation = e.id.str();
                 if (const auto it = live.find(e.id); it != live.end()) row.offset = it->second;
-                const bool unipolar = rangeOf(app, s, m.source) == "unipolar";
-                row.low = unipolar ? std::min(0.0, m.depth) : -std::abs(m.depth);
-                row.high = unipolar ? std::max(0.0, m.depth) : std::abs(m.depth);
+                // A Mod Out input nothing feeds carries nothing: no span.
+                if (!fedBy(s, m.source).empty()) {
+                    const bool unipolar = rangeOf(app, s, m.source) == "unipolar";
+                    row.low = unipolar ? std::min(0.0, m.depth) : -std::abs(m.depth);
+                    row.high = unipolar ? std::max(0.0, m.depth) : std::abs(m.depth);
+                }
                 out.modulations.push_back(std::move(row));
             }
             return out;

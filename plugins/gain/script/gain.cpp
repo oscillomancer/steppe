@@ -40,6 +40,7 @@ struct Gain : Effect {
         .features = {"utility"}};
 
     Param gain = decibels("Gain", -32, 32, 0)
+                     .modulated()
                      .smoothed(20)
                      .help("The level change, in dB; it glides there, so moving it never clicks.");
 

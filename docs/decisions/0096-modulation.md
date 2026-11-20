@@ -11,6 +11,15 @@ files that went through an older build open (§"Older builds"); every route
 is an edge whatever `enabled` says; a reset marks the send memo stale
 rather than emptying it; the schema is 2.16.
 
+*Amended 2026-11-20 (the co-director's decision on gui-lead's M3
+hand-back):* `modulate` refuses only a real cycle. A follower is refused
+when the target already feeds the track it would hear, which no rack
+avoids. A rack that would close a loop by itself is passed over for the
+next candidate, or for a new Modulators rack. Such a rack either already
+drives the track a follower hears, or already hears the target. An
+explicitly chosen `rack` is still refused. The Modulate menu can offer
+every follower that is not a real cycle.
+
 ## Context
 
 Nate asked for modulators: any parameter can be modulated, and racks are the
@@ -326,7 +335,8 @@ inert.
   - it adds the source module from a preset and makes the route;
   - a follower takes `from`, the track it listens to, and the command makes
     the send into the rack's In; a cycle (the target's own track) is
-    refused with a hint.
+    refused with a hint (amended 2026-11-20: only a real cycle; a rack
+    that would close a loop is passed over, see the note above).
 - **Telemetry (M2).** Telemetry publishes each modulated target's last
   offset and each route's range.
 

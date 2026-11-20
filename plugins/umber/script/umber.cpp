@@ -553,6 +553,7 @@ struct Umber : Effect {
     // --- record -----------------------------------------------------------------------------
 
     Param drive = decibels("Drive", -24, 24, 0)
+                      .modulated()
                       .smoothed(30)
                       .in("Record")
                       .role({"level"})
@@ -560,28 +561,33 @@ struct Umber : Effect {
                           "How hard the signal meets the tape: at 0 dB a sine at -18 dBFS RMS "
                           "records at the tape's reference level.");
     Param tape = decibels("Tape", 5, 13, 12.5)
+                     .modulated()
                      .in("Record")
                      .help(
                          "The tape's headroom: how far over reference level it reaches 3% "
                          "distortion. 12.5 dB is a modern high-output tape, 9 a classic, 5 an "
                          "early one, each lower softer and noisier.");
     Param bias = percent("Bias", 100, 50, 150)
+                     .modulated()
                      .in("Record")
                      .help(
                          "The bias against the recommended setting: under it, brighter and "
                          "grittier, distorting at low levels too; over it, darker and cleaner.");
     Param recordAmp = percent("Record Amp", 15)
+                          .modulated()
                           .in("Record")
                           .help(
                               "How hard the class-A record amplifier works: second harmonic, "
                               "about -80 dB at reference level at 15%, -30 dB at 100%.");
     Param hfSaturation = percent("HF Saturation", 100, 0, 200)
+                             .modulated()
                              .in("Record")
                              .help(
                                  "How soon the highs saturate against the mids: 100% is the "
                                  "tape's own; up to 6 dB less headroom in the highs at 200%, "
                                  "6 dB more at 0%. The response stays flat.");
     Param recordHf = decibels("Record HF", -6, 6, 0)
+                         .modulated()
                          .in("Record")
                          .help(
                              "The record side's HF trim (a shelf at 4 kHz at 15 ips, following the "
@@ -613,17 +619,20 @@ struct Umber : Effect {
     // --- heads -------------------------------------------------------------------------------
 
     Param headBump = percent("Head Bump", 100, 0, 200)
+                         .modulated()
                          .in("Heads")
                          .help(
                              "The playback head's swell in the lows (and the dip and ripple "
                              "above it), where the speed puts it: 100% as a real head gives it.");
     Param bumpFreq = frequency("Bump Freq", 30, 120, 57)
+                         .modulated()
                          .in("Heads")
                          .activeAbove(headBump, 0)
                          .help(
                              "Where the head bump peaks at 15 ips (the head's length decides "
                              "it); it doubles at 30 ips and halves at 7.5.");
     Param azimuth = degrees("Azimuth", 0, 1, 0)
+                        .modulated()
                         .curved(Curve::Pow, 2)
                         .in("Heads")
                         .help(
@@ -631,6 +640,7 @@ struct Umber : Effect {
                             "highs lost within each track (a sinc, with nulls) and the two "
                             "tracks apart in time. 0.02 is a well-aligned machine.");
     Param headMagnetism = percent("Head Magnetism", 0, -100, 100)
+                              .modulated()
                               .in("Heads")
                               .help(
                                   "A magnetized record head: a steady field that puts even "
@@ -641,18 +651,21 @@ struct Umber : Effect {
     // --- the tape's condition ----------------------------------------------------------------
 
     Param dropouts = percent("Dropouts", 0)
+                         .modulated()
                          .curved(Curve::Pow, 2)
                          .in("Tape")
                          .help(
                              "How often the oxide loses touch with the head: at 100% about "
                              "four a second.");
     Param dropDepth = percent("Drop Depth", 30)
+                          .modulated()
                           .in("Tape")
                           .activeAbove(dropouts, 0)
                           .help(
                               "How deep each dropout goes: the highs first (spacing loss), then "
                               "the level.");
     Param printThrough = decibels("Print-Through", -80, -30, -80)
+                             .modulated()
                              .smoothed(20)
                              .offAtMin()
                              .in("Tape")
@@ -661,6 +674,7 @@ struct Umber : Effect {
                                  "at 15 ips): -56 dB is a modern tape stored a day; off at the "
                                  "minimum.");
     Param crosstalk = decibels("Crosstalk", -80, -20, -80)
+                          .modulated()
                           .smoothed(20)
                           .offAtMin()
                           .in("Tape")
@@ -671,6 +685,7 @@ struct Umber : Effect {
     // --- transport ---------------------------------------------------------------------------
 
     Param wow = percent("Wow", 0.02, 0, 2)
+                    .modulated()
                     .curved(Curve::Pow, 3)
                     .in("Transport")
                     .help(
@@ -678,12 +693,14 @@ struct Umber : Effect {
                         "error at 15 ips (more at slower speeds, less at 30): 0.02% is a good "
                         "studio machine.");
     Param flutter = percent("Flutter", 0.02, 0, 1)
+                        .modulated()
                         .curved(Curve::Pow, 3)
                         .in("Transport")
                         .help(
                             "Faster pitch waver from the capstan, an idler and friction, as a "
                             "peak speed error at 15 ips (more at slower speeds, less at 30).");
     Param scrape = percent("Scrape", 10)
+                       .modulated()
                        .curved(Curve::Pow, 2)
                        .in("Transport")
                        .help(
@@ -694,17 +711,20 @@ struct Umber : Effect {
     // --- playback ----------------------------------------------------------------------------
 
     Param reproAmp = percent("Repro Amp", 15)
+                         .modulated()
                          .in("Playback")
                          .help(
                              "How hard the class-A playback amplifier works: second harmonic, "
                              "about -80 dB at reference level at 15%.");
     Param reproHf = decibels("Repro HF", -6, 6, 0)
+                        .modulated()
                         .in("Playback")
                         .help(
                             "The playback side's HF trim (a shelf at 4 kHz at 15 ips, following "
                             "the speed): brighter or darker playback, the tape's saturation "
                             "unchanged.");
     Param hiss = decibels("Hiss", -30, 12, -30)
+                     .modulated()
                      .smoothed(20)
                      .offAtMin()
                      .in("Playback")
@@ -713,6 +733,7 @@ struct Umber : Effect {
                          "this speed gives, and the playback electronics' low rumble beneath "
                          "it. 0 dB is real; off at the minimum.");
     Param modNoise = decibels("Mod Noise", -30, 12, 0)
+                         .modulated()
                          .smoothed(20)
                          .offAtMin()
                          .in("Playback")
@@ -721,6 +742,7 @@ struct Umber : Effect {
                              "oxide's roughness, against this tape's: 0 dB is real; off at the "
                              "minimum.");
     Param hum = decibels("Hum", -100, -40, -100)
+                    .modulated()
                     .smoothed(20)
                     .offAtMin()
                     .in("Playback")
@@ -739,7 +761,8 @@ struct Umber : Effect {
 
     // --- output -----------------------------------------------------------------------------
 
-    Param output = decibels("Output", -24, 24, 0).smoothed(20).in("Output").help("The level out.");
+    Param output =
+        decibels("Output", -24, 24, 0).modulated().smoothed(20).in("Output").help("The level out.");
     Param oversampling = choice("Oversampling", {"1x", "2x", "4x", "8x", "16x"}, 2)
                              .keys({"x1", "x2", "x4", "x8", "x16"})
                              .restarts()

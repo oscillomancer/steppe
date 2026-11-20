@@ -267,16 +267,19 @@ struct Pollia : Effect {
                        .in("Stages")
                        .help("All-pass stages in the chain: every two make one notch.");
     Param centre = frequency("Centre", 30, 10000, 700)
+                       .modulated()
                        .smoothed(30)
                        .in("Stages")
                        .help("Where the stages sit at the middle of the sweep.");
     Param spread = octaves("Spread", 0, 6, 0)
+                       .modulated()
                        .smoothed(60)
                        .in("Stages")
                        .help(
                            "Staggers the stages over this many octaves: 0 stacks them for even, "
                            "deep notches; more spaces the notches unevenly, as in a vibe.");
     Param feedback = percent("Feedback", 0, -95, 95)
+                         .modulated()
                          .smoothed(20)
                          .in("Stages")
                          .help(
@@ -291,6 +294,7 @@ struct Pollia : Effect {
                            "Sweep moves the stages back and forth; rise and fall turn the "
                            "phase so the notches climb or sink forever (a barber pole).");
     Param range = octaves("Range", 0, 8, 3)
+                      .modulated()
                       .smoothed(30)
                       .in("Motion")
                       .activeWhen(motion, {"Sweep"})
@@ -304,6 +308,7 @@ struct Pollia : Effect {
                      .in("Motion")
                      .help("A cycle in note values, locked to the song while it plays, or free.");
     Param rate = frequency("Rate", 0.01, 20, 0.3)
+                     .modulated()
                      .smoothed(50)
                      .in("Motion")
                      .activeWhen(sync, {"Free"})
@@ -318,12 +323,14 @@ struct Pollia : Effect {
                 "The sweep's wave: steps jump to a new place each cycle (gliding briefly), drift "
                 "wanders between them.");
     Param phase = degrees("Phase", 0, 360, 0)
+                      .modulated()
                       .smoothed(50)
                       .in("Motion")
                       .help(
                           "Moves the motion along its cycle: synced, where it is at each bar's "
                           "start.");
     Param stereo = degrees("Stereo", 0, 180, 0)
+                       .modulated()
                        .smoothed(50)
                        .in("Motion")
                        .help(
@@ -338,27 +345,33 @@ struct Pollia : Effect {
     // --- the envelope -------------------------------------------------------------------------
 
     Param envelope = octaves("Envelope", -4, 4, 0)
+                         .modulated()
                          .smoothed(30)
                          .in("Envelope")
                          .help(
                              "How far the playing moves the stages, up or down, at its loudest "
                              "against its own recent peak.");
     Param attack = milliseconds("Attack", 1, 500, 10)
+                       .modulated()
                        .in("Envelope")
                        .help("How fast the envelope follows a louder sound.");
-    Param release =
-        milliseconds("Release", 10, 3000, 200).in("Envelope").help("How fast it falls back.");
+    Param release = milliseconds("Release", 10, 3000, 200)
+                        .modulated()
+                        .in("Envelope")
+                        .help("How fast it falls back.");
 
     // --- output -------------------------------------------------------------------------------
 
     Param keepBelow = frequency("Keep Below", 20, 1000, 20)
+                          .modulated()
                           .smoothed(30)
                           .in("Output")
                           .help("Frequencies below this pass untouched (20 Hz: off).");
-    Param mix = percent("Mix", 50).smoothed(20).in("Output").help(
+    Param mix = percent("Mix", 50).modulated().smoothed(20).in("Output").help(
         "Dry to wet: 50% gives the deepest notches, 100% the wet alone, a "
         "vibrato.");
-    Param output = decibels("Output", -24, 24, 0).smoothed(20).in("Output").help("The level out.");
+    Param output =
+        decibels("Output", -24, 24, 0).modulated().smoothed(20).in("Output").help("The level out.");
 
     Param inputLevel = decibels("Input Level", -96, 24, -96)
                            .meter()

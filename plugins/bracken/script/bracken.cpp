@@ -522,11 +522,13 @@ struct Bracken : Effect {
                      .in("Time")
                      .help("The time between echoes in note values at the song's tempo, or free.");
     Param time = milliseconds("Time", 1, 5000, 400)
+                     .modulated()
                      .in("Time")
                      .activeWhen(sync, {"Free"})
                      .help("The time between echoes when sync is free.");
     Param groove =
         percent("Groove", 0, -50, 50)
+            .modulated()
             .smoothed(30)
             .in("Time")
             .help(
@@ -534,6 +536,7 @@ struct Bracken : Effect {
                 "+33% swings straight echoes to a triplet feel.");
     Param offset =
         percent("Offset", 0, -50, 50)
+            .modulated()
             .smoothed(30)
             .in("Time")
             .help(
@@ -550,6 +553,7 @@ struct Bracken : Effect {
 
     Param feedback =
         percent("Feedback", 40, 0, 110)
+            .modulated()
             .smoothed(20)
             .in("Loop")
             .help(
@@ -562,16 +566,19 @@ struct Bracken : Effect {
                             "sum left, right, left; mono echoes the sum in the centre.");
     Param lowCut =
         frequency("Low Cut", 20, 2000, 80)
+            .modulated()
             .smoothed(30)
             .in("Loop")
             .help("A high-pass in the loop: each echo thinner than the last (20 Hz: off).");
     Param highCut =
         frequency("High Cut", 1000, 20000, 9000)
+            .modulated()
             .smoothed(30)
             .in("Loop")
             .help("A low-pass in the loop: each echo darker than the last (20 kHz: off).");
     Param diffusion =
         percent("Diffusion", 0)
+            .modulated()
             .smoothed(30)
             .in("Loop")
             .help(
@@ -579,6 +586,7 @@ struct Bracken : Effect {
                 "(allpasses in the loop; times under 24 ms stay distinct).");
     Param shift =
         semitones("Shift", -12, 12, 0)
+            .modulated()
             .smoothed(30)
             .in("Loop")
             .help(
@@ -597,6 +605,7 @@ struct Bracken : Effect {
                 "What the echoes pass through: clean digital; tape, which softens the highs and "
                 "wobbles; or an analog bucket brigade, darker the longer the time.");
     Param age = percent("Age", 30)
+                    .modulated()
                     .smoothed(50)
                     .in("Character")
                     .help(
@@ -604,6 +613,7 @@ struct Bracken : Effect {
                         "tape dulls and wobbles more, analog darkens and coarsens.");
     Param drive =
         decibels("Drive", 0, 24, 0)
+            .modulated()
             .smoothed(20)
             .in("Character")
             .help(
@@ -612,10 +622,12 @@ struct Bracken : Effect {
                 "below full scale. 0 dB is clean.");
     Param modulation =
         percent("Modulation", 0)
+            .modulated()
             .smoothed(30)
             .in("Character")
             .help("How far the echo time wanders, up to 4 ms either way: chorus to seasick.");
     Param modRate = frequency("Mod Rate", 0.05, 10, 0.8)
+                        .modulated()
                         .smoothed(30)
                         .in("Character")
                         .activeAbove(modulation, 0)
@@ -624,6 +636,7 @@ struct Bracken : Effect {
     // --- output -------------------------------------------------------------------------------
 
     Param duck = decibels("Duck", 0, 24, 0)
+                     .modulated()
                      .smoothed(20)
                      .in("Output")
                      .help(
@@ -634,20 +647,23 @@ struct Bracken : Effect {
             .in("Output")
             .help("Holds what is in the loop, repeating it forever; the input is shut out.");
     Param width = percent("Width", 100, 0, 200)
+                      .modulated()
                       .smoothed(20)
                       .in("Output")
                       .help("The echoes' stereo width: 0 is mono, 200 twice as wide.");
     Param input = decibels("Input", -48, 12, 0)
+                      .modulated()
                       .offAtMin()
                       .smoothed(20)
                       .in("Output")
                       .help(
                           "How much of the input enters the echoes (the dry sound is untouched): "
                           "automate it to throw only some words in.");
-    Param mix = percent("Mix", 25).smoothed(20).in("Output").help(
+    Param mix = percent("Mix", 25).modulated().smoothed(20).in("Output").help(
         "Dry and echoes: the dry stays full up to 50% and the echoes reach full "
         "there; 100% is echoes alone.");
-    Param output = decibels("Output", -24, 24, 0).smoothed(20).in("Output").help("The level out.");
+    Param output =
+        decibels("Output", -24, 24, 0).modulated().smoothed(20).in("Output").help("The level out.");
 
     Param inputLevel = decibels("Input Level", -96, 24, -96)
                            .meter()
