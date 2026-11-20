@@ -861,6 +861,7 @@ void prepareRack(Plan& p, Node& n, const Session& s) {
         feed.midiStage.pendingVoices.reserve(voices);
         feed.block.reserve(std::max(window, rateWindow) +
                            (feed.device || feed.sourceDevice ? kMaxMidiInputEvents : 0) + 1);
+        compileFeedClips(p, feed, s);  // its source track's launches (ADR-0097)
     }
     for (auto& curve : r.curves) curve->curve.cursor = 0;
 }
@@ -988,9 +989,27 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
                     feed.block.push_back(event);
             }
         }
+        // A launch on the source track (ADR-0097): what its notes held ends
+        // at the switch, the block's start; while a clip, a stop or a held
+        // clip holds the track, the timeline's events pass unplayed and the
+        // clip's play instead.
+        if (feed.releaseHeld) {
+            feed.notes->endSource(0);
+            feed.releaseHeld = false;
+        }
+        const bool arrangement = feed.launch.kind == LaunchState::Kind::Arrangement;
+        if (playing && !p.rateEnabled && !arrangement) {
+            feedClipMidi(p, n, feed, pos, frames);
+            for (const auto& e : feed.clipEvents) {
+                rack::host::MidiEvent event;
+                if (feed.block.size() < feed.block.capacity() && toMidi(e, e.time, event))
+                    feed.block.push_back(event);
+            }
+        }
         while (playing && !p.rateEnabled && feed.next < feed.events.size() &&
                feed.events[feed.next].sample < pos + static_cast<std::int64_t>(frames)) {
             const TimedEvent& te = feed.events[feed.next++];
+            if (!arrangement) continue;
             rack::host::MidiEvent m;
             const auto frame = static_cast<std::uint32_t>(
                 std::clamp<std::int64_t>(te.sample - pos, 0, frames - 1));

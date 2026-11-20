@@ -210,20 +210,24 @@ instructions are in `docs/guides/installing.md`.
   - The engine logs every applied launch. The tests replay that log
     offline and match live output bit for bit, in both executors, at two
     block sizes and through the bridge.
+  - A rack's Notes module follows its source track's launches (clip notes,
+    stops, the arrangement again), and so do the track's MIDI sends. A
+    launch is decided once for the track and every such rack, even when
+    they run on different executors: it switches all of them at their
+    own positions, or none (a missed launch is placed again).
   - Renders play the arrangement only. The render dialog says so while a
-    clip holds a track.
+    clip holds a track, following launches while it is open.
+    `EngineApp::launchState()` gives the GUI what `launch.state` reports.
   - Limits, until done:
     - a master playrate refuses launches (`launch.playrate`);
     - a clip take's FX and envelopes do not play (`launch.take_chain`
       warning);
-    - clip MIDI reaches the track's own instrument only, not a rack's
-      Notes module or the track's MIDI sends;
     - freezing, or removing the playing clip, returns the track to the
       arrangement without the switch fade;
     - a quantize of `none` waits for the floor, about a device block for
       a live track and about 0.2 s for a rendered one;
-    - the offline replay does not yet take seeks or transport wraps (L4,
-      with capture);
+    - the engine logs no seeks or transport wraps, so the offline
+      replay plays one linear run and a capture ends at a relocation;
     - the pane is L3.
 - **Scene ↔ section** (ADR-0097, L4a; session-model "Scene ↔ section"):
   `scene.insert` lays a scene's clips on the timeline as items over whole
@@ -237,6 +241,20 @@ instructions are in `docs/guides/installing.md`.
   warning, and fades are not kept (as in the item and clip conversion). A clip
   whose loop period is not its content (a gap after it, a length shorter than
   it) is refused with `scene.insert.period`: it is not laid out yet.
+- **Clip launcher, capture** (ADR-0097, step L4's engine half; engine.md
+  §1.4.2): `launch.capture` keeps a performance and `launch.commit` writes
+  it onto the timeline in one undo step, laid out linearly by running time
+  (L-f), each clip as copies of its takes at the phase heard, replacing the
+  arrangement where a track left it, the switch crossfades as item fades.
+  The tests capture live in both executors at two block sizes, over a loop
+  wrap too, and render the committed arrangement offline: it matches what
+  played exactly away from the switches and to 1e-6 through the fades.
+  History records the performance, so merges replay it. A stop, seek or
+  loop change ends a capture; the arrangement a loop repeated is not
+  copied; under a tempo change a MIDI piece laid where the loop repeated
+  plays at the tempo where it lands. `scene.insert`, `scene.capture` and
+  `arrangement.build` are the builder's (model). Native macOS and Windows
+  CI has not run on it.
 - **Track freeze** (ADR-0054): whole-channel pre-fader float32 capture, including
   take FX and auxiliary channels, with virtual latency and plugin retirement.
   Typed freeze/unfreeze, cancellable jobs, dependency-checked completion, retained

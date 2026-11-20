@@ -936,6 +936,7 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
 
 template <class F>
 void Engine::writeTransport(F&& change) {
+    captureRelocating();  // ADR-0097 L4: a capture ends at a relocation
     const std::uint64_t seq = xportSeq_.load(std::memory_order_relaxed);
     xportSeq_.store(seq + 1, std::memory_order_relaxed);  // odd: being written
     std::atomic_thread_fence(std::memory_order_release);
@@ -961,6 +962,7 @@ void Engine::play() {
             return;
         }
     }
+    placeCapture();  // a capture armed while stopped begins at the play position
     wantPlaying_.store(true, std::memory_order_release);
     wakeRenderer();
     notifyMain();
@@ -1290,6 +1292,7 @@ void Engine::service() {
         loadScalarRate(*session, dir);
     }
     serviceLaunches();  // the clip launcher's acks and misses (ADR-0097)
+    placeCapture();
     // ADR-0096: modulation events that had to wait are reported, not lost.
     if (const auto deferred = modDeferred_.load(); deferred != modDeferredWarned_) {
         warnings_.push_back("modulation: " + std::to_string(deferred - modDeferredWarned_) +
@@ -2162,6 +2165,7 @@ void Engine::playCountIn(std::int64_t frames, std::int64_t beatFrames, int beats
     countBeat_.store(std::max<std::int64_t>(1, beatFrames), std::memory_order_relaxed);
     countBar_.store(std::max(1, beatsPerBar), std::memory_order_relaxed);
     countSeq_.fetch_add(1, std::memory_order_release);
+    placeCapture();  // a capture armed while stopped begins at the play position
     wantPlaying_.store(true, std::memory_order_release);
     wakeRenderer();
     notifyMain();
@@ -2698,10 +2702,13 @@ void Engine::rendererLoop(std::uint64_t seen) {
                 pending->rateSeekSequence == 0 && pending->handAt >= streamLocal_)
                 target = std::min(target, pending->handAt);
             for (std::int64_t left = target - streamLocal_; left > 0;) {
-                const auto k = detail::rateUntil(
+                auto k = detail::rateUntil(
                     *plan_, pos_,
                     static_cast<std::uint32_t>(std::min<std::int64_t>(left, plan_->block)), loopR_,
                     0);
+                // The launch queue still hears from this executor: its
+                // horizon, and that it has nothing of an applied launch.
+                k = launchesAt(*plan_, 0, seen, streamLocal_, k, true);
                 pos_ = plan_->rateEnabled ? pos_ + k : loopR_.next(pos_, pos_ + k);
                 streamLocal_ += k;
                 left -= k;
@@ -3045,6 +3052,10 @@ void Engine::anticipativeCycle(const float* const* in, float* const* out, std::u
         } else if (countHold_) {  // counting in: the rendered audio waits
             silence(outAt.data(), 0, k);
         } else {
+            // Nothing runs here, but the launch queue still hears from the
+            // callback: its horizon, and that it has nothing of an applied
+            // launch (else the slot would never be free again).
+            if (playing && livePlan_) (void)launchesAt(*livePlan_, 1, e, playedStream(e), k, false);
             const Pulled played = pullAhead(outAt.data(), k);
             if (played.wrapped) k = played.frames;  // the rest continues at the loop start
             if (played.first != kNothingPlayed && livePlan_)

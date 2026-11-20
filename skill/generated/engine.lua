@@ -1113,6 +1113,15 @@ q = nil
 ---@field started boolean
 ---@field warnings? table[]
 
+---@class Steppe.launch_capture_args
+---@field on boolean
+
+---@class Steppe.launch_capture_result
+---@field on boolean
+---@field from? number
+---@field to? number
+---@field warnings? table[]
+
 ---@class Steppe.launch_clip_args
 ---@field clip string Clip id, e.g. "cl_1".
 
@@ -1122,6 +1131,17 @@ q = nil
 ---@field beat? number
 ---@field seconds? number
 ---@field started boolean
+---@field warnings? table[]
+
+---@class Steppe.launch_commit_args
+---@field pooled? boolean Share the clips' MIDI with the items (pooled) instead of copying it (default: false)
+---@field performance? table What history records; launch.commit fills it from the capture
+
+---@class Steppe.launch_commit_result
+---@field tracks string[]
+---@field items string[]
+---@field from number
+---@field to number
 ---@field warnings? table[]
 
 ---@class Steppe.launch_scene_args
@@ -1137,6 +1157,7 @@ q = nil
 
 ---@class Steppe.launch_state_result
 ---@field playing boolean
+---@field capturing boolean
 ---@field tracks table[]
 ---@field warnings? table[]
 
@@ -2734,7 +2755,9 @@ q = nil
 
 ---@class Steppe.launch
 ---@field arrangement fun(args?: Steppe.launch_arrangement_args): Steppe.launch_arrangement_result Return a track, or every track, to the arrangement at the boundary.
+---@field capture fun(args: Steppe.launch_capture_args): Steppe.launch_capture_result Start or end capturing launches, to write them onto the timeline.
 ---@field clip fun(args: Steppe.launch_clip_args): Steppe.launch_clip_result Play a clip on its track from the next quantize boundary.
+---@field commit fun(args?: Steppe.launch_commit_args): Steppe.launch_commit_result Write the captured performance onto the timeline as items.
 ---@field scene fun(args: Steppe.launch_scene_args): Steppe.launch_scene_result Play every clip of a scene together, one target for all tracks.
 ---@field state fun(): Steppe.launch_state_result What each track with clips plays, and what it has queued.
 ---@field stop fun(args?: Steppe.launch_stop_args): Steppe.launch_stop_result Silence a track's clip, or every playing clip, at the next boundary.

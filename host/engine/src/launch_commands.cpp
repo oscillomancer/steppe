@@ -6,6 +6,7 @@
 // query, outside history.
 #include "clip_launcher.h"
 #include "command_helpers.h"
+#include "launch_commit.h"
 #include "supple/model/launcher.h"
 
 namespace supple::engine {
@@ -43,8 +44,19 @@ struct LaunchTrackState {
     std::optional<LaunchQueued> queued;
 };
 struct LaunchStateResult {
-    bool playing = false;
+    bool playing = false, capturing = false;
     std::vector<LaunchTrackState> tracks;
+};
+struct CaptureArg {
+    bool on = true;
+};
+struct CaptureDone {
+    bool on = false;
+    std::optional<double> from, to;
+};
+struct CommitArgs {
+    bool pooled = false;
+    std::optional<CapturedPerformance> performance;
 };
 
 using Action = LaunchLogEntry::Action;
@@ -132,6 +144,52 @@ Result<LaunchDone> toAll(EngineApp& app, Context&, Action action, const TrackArg
     }
     const model::LaunchQuantize q = quantizeOf(s, nullptr);
     return launchNow(app, action, requests, q, a.track ? "/track" : "");
+}
+
+// The capture's span on the timeline, laid out linearly (L-f), in beats.
+CaptureDone captureDone(EngineApp& app, Engine& engine) {
+    CaptureDone out;
+    const auto capture = engine.launchCapture();
+    if (!capture) return out;
+    out.on = capture->on;
+    const double rate = engine.config().sampleRate;
+    const time::TimeMap& tm = *app.view().timeMap;
+    out.from = tm.beatAt(double(capture->startSample) / rate);
+    out.to = tm.beatAt(double(capture->startSample + capture->frames) / rate);
+    return out;
+}
+
+// The engine's capture as launch.commit records it.
+CapturedPerformance performanceOf(const Engine::LaunchCapture& c, double rate) {
+    CapturedPerformance p;
+    p.sampleRate = rate;
+    p.start = c.startSample;
+    p.frames = c.frames;
+    if (c.loop.active()) p.loop = CapturedLoop{c.loop.start, c.loop.end};
+    for (const LaunchLogEntry& e : c.launches) {
+        CapturedLaunch l;
+        l.frame = e.runningFrame;
+        l.track = e.track.str();
+        l.action = actionName(e.action);
+        if (e.action == Action::Clip) l.clip = e.clip.str();
+        l.anchor = e.anchorSample;
+        l.anchorBeat = e.anchorBeat;
+        p.launches.push_back(std::move(l));
+    }
+    return p;
+}
+
+schema::Schema<CommitArgs> commitArgsSchema() {
+    return schema::object<CommitArgs>("launch_commit_args")
+        .field("pooled", &CommitArgs::pooled,
+               schema::boolean().doc("Share the clips' MIDI with the items (pooled) instead of "
+                                     "copying it"))
+        .defaultValue(false)
+        .omitIfDefault()
+        .field("performance", &CommitArgs::performance,
+               capturedPerformanceSchema().doc(
+                   "What history records; launch.commit fills it from the capture"))
+        .build();
 }
 
 std::string playsName(Engine::TrackLaunch::Plays p) {
@@ -323,7 +381,7 @@ void registerLaunchCommands(cmd::Registry& registry) {
             "as heard. position is the playing clip's place in its period, in beats for a MIDI "
             "clip and seconds for an audio clip. queued is a launch not heard yet, with the "
             "song position it applies at. Tracks without clips always follow the arrangement "
-            "and are not listed.";
+            "and are not listed. capturing: launch.capture is on.";
         c.tags = {"clip launcher", "transport"};
         c.args = schema::object<NoArgs>("no_args").build();
         auto queued = schema::object<LaunchQueued>("launch_queued")
@@ -341,13 +399,13 @@ void registerLaunchCommands(cmd::Registry& registry) {
                          .build();
         c.result = schema::object<LaunchStateResult>("launch_state")
                        .field("playing", &LaunchStateResult::playing, schema::boolean())
+                       .field("capturing", &LaunchStateResult::capturing, schema::boolean())
                        .field("tracks", &LaunchStateResult::tracks, schema::arrayOf(track))
                        .build();
         c.errors = {{"engine.stopped", "the engine is not running", "engine.start first"}};
-        c.examples = {
-            {"Before any launch", j("{}"),
-             j(R"({"playing": false, "tracks": [{"track": "tr_1", "plays": "arrangement"}]})"),
-             "song_with_clip_running"}};
+        c.examples = {{"Before any launch", j("{}"), j(R"({"playing": false, "capturing": false,
+                    "tracks": [{"track": "tr_1", "plays": "arrangement"}]})"),
+                       "song_with_clip_running"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<LaunchStateResult> {
             EngineApp& app = engine::app(ctx);
             auto engine = runningEngine(app);
@@ -355,6 +413,8 @@ void registerLaunchCommands(cmd::Registry& registry) {
             const double rate = (*engine)->config().sampleRate;
             LaunchStateResult out;
             out.playing = (*engine)->transport().playing;
+            const auto capture = (*engine)->launchCapture();
+            out.capturing = capture && capture->on;
             for (const TL& t : (*engine)->launchState()) {
                 LaunchTrackState e;
                 e.track = t.track.str();
@@ -373,6 +433,109 @@ void registerLaunchCommands(cmd::Registry& registry) {
                 out.tracks.push_back(std::move(e));
             }
             return out;
+        };
+        addChecked(registry, std::move(c));
+    }();
+    [&] {
+        Command<CaptureArg, CaptureDone> c;
+        c.name = "launch.capture";
+        c.kind = Kind::Action;
+        c.exposure = cmd::Exposure::McpExec;
+        c.summary = "Start or end capturing launches, to write them onto the timeline.";
+        c.description =
+            "While on, every applied launch is kept with the running time it applied at, and "
+            "what each track played when the capture began. on: true begins at the position "
+            "heard now (stopped: where playing starts); on: false ends it there. A stop, a seek "
+            "or a loop change ends a capture that has run; one that has not run begins again "
+            "at the new position. launch.commit writes the capture onto the timeline. from and "
+            "to: its span on the timeline in beats, laid out by running time.";
+        c.tags = {"clip launcher", "transport", "recording"};
+        c.args = schema::object<CaptureArg>("launch_capture_args")
+                     .field("on", &CaptureArg::on, schema::boolean())
+                     .build();
+        c.result = schema::object<CaptureDone>("launch_capture")
+                       .field("on", &CaptureDone::on, schema::boolean())
+                       .field("from", &CaptureDone::from, schema::number())
+                       .field("to", &CaptureDone::to, schema::number())
+                       .build();
+        c.errors = {{"engine.stopped", "the engine is not running", "engine.start first"}};
+        c.examples = {{"While stopped", j(R"({"on": true})"),
+                       j(R"({"on": true, "from": 0, "to": 0})"), "song_with_clip_running"}};
+        c.run = [](const CaptureArg& a, Context& ctx) -> Result<CaptureDone> {
+            EngineApp& app = engine::app(ctx);
+            auto engine = runningEngine(app);
+            if (!engine) return std::move(engine).error();
+            (*engine)->captureLaunches(a.on);
+            return captureDone(app, **engine);
+        };
+        addChecked(registry, std::move(c));
+    }();
+    [&] {
+        Command<CommitArgs, CommitDone> c;
+        c.name = "launch.commit";
+        c.kind = Kind::Edit;
+        c.exposure = cmd::Exposure::McpExec;
+        c.summary = "Write the captured performance onto the timeline as items.";
+        c.description =
+            "One undo step. The capture (launch.capture) is laid out linearly from where it "
+            "began, by running time, whatever the transport loop did: a launch heard s seconds "
+            "into the capture lands s seconds after its start. On each track that left the "
+            "arrangement, its clip, stopped and held stretches replace the arrangement there "
+            "(its items are split, trimmed or removed); each clip becomes copies of its takes "
+            "at the phase it was heard, its MIDI copied unless pooled, and the 5 ms switch "
+            "crossfades become item fades. Tracks that followed the arrangement are untouched, "
+            "and so is the arrangement a loop repeated. A running capture ends first; the "
+            "capture stays, so committing again writes it again over itself. performance is "
+            "what history records: leave it out and launch.commit fills it from the capture.";
+        c.tags = {"clip launcher", "recording", "item"};
+        c.args = commitArgsSchema();
+        c.result = schema::object<CommitDone>("launch_commit")
+                       .field("tracks", &CommitDone::tracks, schema::arrayOf(schema::string()))
+                       .field("items", &CommitDone::items, schema::arrayOf(schema::string()))
+                       .field("from", &CommitDone::from, schema::number())
+                       .field("to", &CommitDone::to, schema::number())
+                       .build();
+        c.errors = {{"engine.stopped", "the engine is not running", "engine.start first"},
+                    {"launch.capture", "nothing has been captured",
+                     "launch.capture {on: true}, play and launch clips, then launch.commit"},
+                    {"launch.commit", "a captured track or clip is gone",
+                     "undo the change, or capture the performance again"},
+                    {"item.locked", "a locked item is in the way", "unlock it with item.set first"},
+                    {"clip.unsupported", "a clip's loop window has no item equivalent",
+                     "set its loop to the whole content, or off"}};
+        c.examples = {{"A captured bar of cl_1",
+                       j(R"({"performance": {"sample_rate": 48000, "start": 0, "frames": 96000,
+                            "launches": [{"frame": 0, "track": "tr_1", "action": "clip",
+                                          "clip": "cl_1", "anchor": 0, "anchor_beat": 0}]}})"),
+                       j(R"({"tracks": ["tr_1"], "items": ["<any>"], "from": 0, "to": 4})"),
+                       "song_with_clip"}};
+        c.resolve = [](CommitArgs& a, Context& ctx) -> Status {
+            if (a.performance) return {};
+            EngineApp& app = engine::app(ctx);
+            auto engine = runningEngine(app);
+            if (!engine) return std::move(engine).error();
+            auto capture = (*engine)->launchCapture();
+            if (capture && capture->on) {
+                (*engine)->captureLaunches(false);
+                capture = (*engine)->launchCapture();
+            }
+            if (!capture || capture->frames <= 0)
+                return Error("launch.capture", "no performance has been captured", "",
+                             "launch.capture {on: true}, play and launch clips, then "
+                             "launch.commit");
+            a.performance = performanceOf(*capture, (*engine)->config().sampleRate);
+            return {};
+        };
+        c.run = [](const CommitArgs& a, Context& ctx) -> Result<CommitDone> {
+            if (!a.performance)
+                return Error("launch.capture", "no performance has been captured", "/performance",
+                             "launch.capture {on: true}, play and launch clips, then "
+                             "launch.commit");
+            auto done = commitPerformance(ctx, *a.performance, a.pooled);
+            // The item commands it ran recorded their own resolved arguments
+            // (item.split); history records this command's.
+            ctx.setResolvedArgs(commitArgsSchema().encode(a));
+            return done;
         };
         addChecked(registry, std::move(c));
     }();

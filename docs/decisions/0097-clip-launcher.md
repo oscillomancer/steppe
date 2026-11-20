@@ -364,6 +364,29 @@ Clips replace that with an **ordered budget**:
     pending entry from the new position (B4).
   - Each applied entry comes back to the main thread with its stream
     sample, its running frame and its song position.
+  - *(2026-11-20, revised with the co-director: several targets per
+    launch; engine.md §1.4.2.)* A launch has one target node per thing
+    that follows the track: its channel, and every rack Notes module whose
+    source is that track. Each switches at the launch's stream sample plus
+    its own node's timeline shift, by the executor that runs that node, so
+    a track and the rack it feeds may switch on two executors. Whether the
+    launch is taken is decided once, for all of them:
+    - The main thread publishes the entry, then reads every executor's
+      published horizon (the furthest its current block may reach,
+      stored before it reads the queue). If each executor that runs a
+      target is at or before the target, the entry is committed: each
+      will read it before it passes its frames. Otherwise it is missed.
+    - An executor that reaches a frame of an entry still undecided marks
+      it missed. Nothing of a missed entry switches anywhere; the main
+      thread places it again, as before.
+    - The first target of a committed entry to switch takes it by
+      compare-and-swap, against the main thread voiding an entry whose
+      epoch ended first. Every other target then switches at its own
+      frame, or, if its executor relocated before reaching it, at that
+      executor's next block, as at a relocation. The slot is reused only
+      once each executor is done with it.
+    This replaces "Who applies it" above: an entry is no longer taken by
+    the track's executor alone.
 - **While stopped,** a launch is not quantized. It starts the transport
   and applies at the play start's first sample, so the clip's anchor is
   the play position.
@@ -397,6 +420,9 @@ Clips replace that with an **ordered budget**:
   only, and the dialog says so in one line while any track is held by a
   clip. An internal offline replay applies a log at its logged running
   frames. The tests use it, and L4's capture will.
+  *(2026-11-20, the lead with L4's engine half: seeks and wraps are not
+  logged yet; capture and commit as built are in engine.md §1.4.2, and a
+  capture lives in one transport epoch.)*
 - **Memory (L-e).** The prepared-source budget counts sample values
   across channels: the decoded source plus each converted variant, with
   a source or variant shared by several takes counted once. A clip on
@@ -443,6 +469,14 @@ A scene is a section you can play before it has a place in the song.
   - The performance is laid out linearly from the position where capture
     began, by running time, whatever the transport loop did (L-f).
   - MIDI content is copied, not pooled, unless `pooled` is asked.
+  - *(2026-11-20, as built by the lead, engine.md §1.4.2.)* Each piece of
+    a clip is laid at the phase the song gave it, so a loop wrap
+    restarts a piece where the phase jumped. On each track that left the
+    arrangement, its clip, stopped and held stretches replace the
+    arrangement there; the 5 ms switch crossfades become item fades. A
+    stop, seek or loop change ends a capture that has run.
+    `launch.commit` records the performance it laid out in history
+    (`performance`), so a merge replays it without an engine.
 - **`scene.insert {scene, at, bars}`** lays the scene's clips on the
   timeline as items for that length and names a region after the scene.
 - **`scene.capture {region, name?}`** makes a scene from the items inside a

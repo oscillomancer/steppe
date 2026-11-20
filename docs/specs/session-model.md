@@ -1142,8 +1142,19 @@ and naming. All `edit` unless marked (q) query or (a) action.
   and whether a clip launched while stopped started the transport),
   `launch.state` (q: each track with clips, what it `plays` as heard,
   `arrangement`, `clip`, `held` or `stopped`, the clip's `position` in its
-  period, and what it has `queued`), `launch.capture {on}` (a, L4),
-  `launch.commit` (L4); `scene.insert`,
+  period, what it has `queued`, and `capturing`), `launch.capture {on}`
+  (a, L4: keeps the launches with their running time; answers `{on, from,
+  to}`, its span on the timeline in beats; a stop, seek or loop change
+  ends one that has run), `launch.commit {pooled?, performance?}` (L4,
+  one undo step: lays the capture out linearly from where it began, by
+  running time; on each track that left the arrangement its clip,
+  stopped and held stretches replace the arrangement, each clip as
+  copies of its takes at the phase heard, MIDI copied unless `pooled`;
+  answers `{tracks, items, from, to}`. `performance` is filled from the
+  capture and recorded in history: `{sample_rate, start, frames, loop?,
+  launches: [{frame, track, action, clip?, anchor, anchor_beat}]}`.
+  Errors `launch.capture` (nothing captured), `launch.commit` (a captured
+  track or clip is gone), `item.locked`, `clip.unsupported`); `scene.insert`,
   `scene.capture {region}`, `arrangement.build {sequence}` (L4a: "Scenes and
   clips", "Scene ↔ section").
 - **automation**: `env.add {target}`, `env.remove`, `env.set {mode, active,

@@ -639,17 +639,13 @@ void RenderDialog::buildSource(ui::Node& body) {
         markDirty();
     };
     // Renders play the arrangement only (ADR-0097): said while a clip holds
-    // a track (launch.state fails, and nothing is said, with no engine).
-    if (auto state = dispatcher_.execute({"launch.state", json::Value::object(), kUiOrigin})) {
-        bool held = false;
-        if (const auto* tracks = state->find("tracks"); tracks && tracks->isArray())
-            for (const auto& t : tracks->asArray()) held |= text(t.find("plays")) != "arrangement";
-        if (held)
-            body.emplace<ui::Label>("render.clips.note",
-                                    "Renders play the arrangement: the clips playing now are "
-                                    "not in them.",
-                                    ui::Font::Ui, "caption", "ink-quiet");
-    }
+    // a track (nothing is said with no engine); tick() follows launches.
+    clipsHeld_ = clipsHeld();
+    if (clipsHeld_)
+        body.emplace<ui::Label>("render.clips.note",
+                                "Renders play the arrangement: the clips playing now are "
+                                "not in them.",
+                                ui::Font::Ui, "caption", "ink-quiet");
     const model::Session& s = app_.head();
     // Several masters (ADR-0056): which of them the mix renders, a file each.
     if (current == Source::Master && s.project->masters.size() > 1) {
@@ -1883,9 +1879,17 @@ void RenderDialog::pollJob() {
             opener(std::filesystem::path(resultFiles_.front()).parent_path());
 }
 
+bool RenderDialog::clipsHeld() const {
+    const auto state = app_.launchState();
+    return std::any_of(state.begin(), state.end(), [](const engine::Engine::TrackLaunch& t) {
+        return t.plays != engine::Engine::TrackLaunch::Plays::Arrangement;
+    });
+}
+
 void RenderDialog::tick() {
     if (!job_.empty()) pollJob();
     if (!page_) return;
+    if (clipsHeld() != clipsHeld_) rebuild();  // a launch changed what the line says
     if (dirty_ && nowMs() - lastEditMs_ >= static_cast<std::uint64_t>(debounceMs_))
         refreshPreview();
 }
