@@ -2213,7 +2213,7 @@ void Mixer::sync(std::chrono::steady_clock::time_point now) {
     follow();
     // Modulation telemetry (ADR-0096, M2): the modulated controls' live
     // values, redrawn only when they move.
-    if (auto live = app_.modulationOffsets(); live != live_) {
+    if (auto live = liveModulation_.read(dispatcher_, app_); live != live_) {
         live_ = std::move(live);
         const model::Session& s = app_.head();
         for (Strip& st : strips_)

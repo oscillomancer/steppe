@@ -278,12 +278,21 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   - the mixer's and the track panel's fader (a track's volume) and pan bars
     (pan, and width in width mode; a dual pan's bars take none);
   - the FX window's slider for a parameter `fx.describe` marks
-    `modulatable`, whose travel is its CLAP range for a float, so a depth (a
-    fraction of that range) is a share of the travel.
+    `modulatable` or `modulatable_by_envelope` (ADR-0096 M4: reached
+    through its envelope's lane), whose travel is its CLAP range for a
+    float, so a depth (a fraction of that range) is a share of the travel.
   Each shows the enabled routes on its target (`views::controlModulation`),
   with the engine's live offset for it while it plays
   (`EngineApp::modulationOffsets`, read each pass; a control redraws only
-  when it moves), and a drag on its bar edits the depth of the first
+  when it moves). An inert route (`modulation.list`'s `inert`: nothing
+  cabled into its source, the envelope that carries it off or gone, a
+  target that cannot take it, or a latency change) draws idle, its span
+  without a live value, on the rings, bars and lanes alike
+  (`gui::LiveModulation` leaves its offset out; `modulation.list` runs only
+  while something plays, and again when the model, the project or the
+  reported routes change); the parameter menu under Modulate names the
+  reason in a greyed row ("Modulation idle: nothing is cabled into its
+  source"). A drag on its bar edits the depth of the first
   enabled one through
   `modulation.set`, one undo step per drag (Origin gesture). The FX window
   holds its rows still while a bar is dragged (`Slider::depthDragging`) and
@@ -1338,15 +1347,18 @@ every target in one undo step (`track.learn.set` / `route.learn.set` /
 `vca.learn.set`), Remove frees them.
 A plug-in without semantic parameters lists its plain CLAP parameters
 (`fx.describe`'s array): read-only, except one `fx.describe` marks
-`modulatable`, which gets a slider over its declared range (linear; stepped
+`modulatable` or `modulatable_by_envelope` (any VST3 parameter that is
+automatable and continuous), which gets a slider over its declared range (linear; stepped
 values round) and its value, set by CLAP id through `fx.param.set` (a drag
 is one undo step), carries its modulation as a semantic slider does, and
 opens the parameter menu below without a lane (a plain parameter has no
 lane scale).
 A right-click on a semantic parameter's row opens its parameter menu
 (`fx.param.menu`): **MIDI learn: Gain…** (writable rows), **Modulate:
-Gain…** (greyed unless `fx.describe` marks the parameter `modulatable`, or
-while its track is frozen; ADR-0096) and **Show lane** / **Hide lane** as in
+Gain…** (greyed unless `fx.describe` marks the parameter `modulatable` or
+`modulatable_by_envelope`, or while its track is frozen; ADR-0096; for the
+latter `modulate` first adds the one-point envelope that carries the
+route) and **Show lane** / **Hide lane** as in
 the strips' menu (§4.5).
 MIDI learn is one app-wide session across roots: opening another dialog closes
 the first and its nested menus. Owner tokens prevent deferred destruction of

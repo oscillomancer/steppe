@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "learn_dialog.h"
+#include "modulation_status.h"
 #include "supple/engine/app.h"
 #include "supple/ui/controls.h"
 #include "supple/ui/node.h"
@@ -69,6 +70,7 @@ class ParamPanel {
     model::Id fx_;
     std::string gesture_, depthGesture_;
     std::vector<std::string> modulatable_;  // the shown modulatable parameters
+    LiveModulation liveModulation_;         // the live offsets, inert routes left out
     std::map<model::Id, double> live_;      // the telemetry they show
     std::uint64_t gestureSerial_ = 0;
 };

@@ -312,7 +312,10 @@ Right-click a track's fader, pan or button, in the track list or the mixer,
 for its menu. It is the same in both places: **MIDI learn** binds the control
 to a controller (see MIDI controllers), **Modulate** offers an LFO, a
 random source, a macro or a follower of another track's level and sets it
-up in one step (greyed on a switch or a frozen track), **Show lane** opens
+up in one step (greyed on a switch or a frozen track). When a modulation
+there is idle, say because nothing is cabled into its source or the
+envelope that carries it is off, the control shows no live movement and a
+greyed line under **Modulate** says why. **Show lane** opens
 its automation
 lane under the track (a new lane starts at the control's value; **Hide
 lane** puts it away, even when a modulation is what shows it), and on a fader or pan **Reset** sends it home, as a
