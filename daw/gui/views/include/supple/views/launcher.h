@@ -1,0 +1,125 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 Supple Audio
+// The clip launcher pane (docs/specs/gui.md §4.15; ADR-0097, step L3):
+// scenes as columns between the track panel and the lanes, on the arrange
+// view's one row model, and its cell in the arrange header row. The pane
+// draws what the session holds and what the engine plays (LaunchView, given
+// each pass); every edit and launch is a command through its callbacks.
+#pragma once
+
+#include <cstddef>
+#include <functional>
+#include <map>
+#include <optional>
+#include <set>
+#include <string>
+#include <vector>
+
+#include "supple/base/result.h"
+#include "supple/json/value.h"
+#include "supple/model/session.h"
+#include "supple/ui/geometry.h"
+#include "supple/ui/node.h"
+#include "supple/ui/theme.h"
+
+namespace supple::views {
+
+class ArrangeView;
+
+// What one track with clips plays, as the engine hears it (from
+// EngineApp::launchState; the views do not see the engine).
+struct LaunchView {
+    enum class Plays { Arrangement, Clip, Held, Stopped };
+    Plays plays = Plays::Arrangement;
+    std::optional<model::Id> clip;   // Clip and Held
+    std::optional<double> position;  // Clip: in its period, in the clip's unit
+    // A queued launch: a clip, a stop, or the arrangement.
+    enum class Queued { None, Clip, Stop, Arrangement };
+    Queued queued = Queued::None;
+    std::optional<model::Id> queuedClip;
+    bool operator==(const LaunchView&) const = default;
+};
+using LaunchViews = std::map<model::Id, LaunchView>;  // by track
+
+struct LauncherCallbacks {
+    // One command per gesture (launches are actions, edits one undo step).
+    std::function<Result<json::Value>(const std::string&, json::Value)> run;
+    std::function<void(const Error&)> onError;
+    // A double-click on a clip: open its editor (MIDI: the piano roll; audio:
+    // the inspector).
+    std::function<void(model::Id clip)> open;
+    // The selected clips changed (the app's selection and Delete follow).
+    std::function<void(const std::vector<model::Id>& clips)> onSelection;
+};
+
+// The pane's geometry, shared by its body and its header cell: one column
+// per scene in `order`, then the Arr column, which stays at the pane's right
+// edge while the scene columns scroll under it.
+struct LauncherColumns {
+    static constexpr float kColumn = 64;  // a scene's column
+    static constexpr float kArr = 22;     // the Arr column, and the header's + cell
+    static constexpr float kMinWidth = 2 * kColumn + kArr;
+    std::vector<model::Id> scenes;  // in order
+    float x = 0, w = 0;             // the pane's
+    float scroll = 0;               // the scene columns scrolled left
+    // The x of a scene column's left edge, and the column under an x.
+    float columnX(std::size_t column) const {
+        return x + static_cast<float>(column) * kColumn - scroll;
+    }
+    std::optional<std::size_t> columnAt(float px) const;
+    float arrX() const { return x + w - kArr; }
+    // The right edge the scene columns are drawn up to (the Arr column's left).
+    float scenesRight() const { return arrX(); }
+    // Width that shows every column, the + cell and the Arr column.
+    float contentWidth() const { return static_cast<float>(scenes.size()) * kColumn + 2 * kArr; }
+};
+LauncherColumns launcherColumns(const model::Session& session);
+
+// The clip in a channel's cell of a scene.
+std::optional<model::Id> clipIn(const model::Session& session, model::Id track, model::Id scene);
+
+// A clip's colour: its own when the theme knows it, else its track's, else the
+// channel colour.
+ui::Color clipColor(const ui::Theme& theme, const model::Session& session, const model::Clip& clip);
+
+class LauncherPane : public ui::Node {
+  public:
+    static constexpr float kEdge = 4;  // the resize zone at the pane's right edge
+    explicit LauncherPane(ArrangeView& view);
+    void paint(ui::Canvas& canvas) override;
+    bool onPointer(const ui::PointerEvent& e) override;
+    ui::Cursor cursorAt(ui::Point p) const override;
+    // A row's cell in a scene column (window coordinates).
+    ui::Rect cellRect(std::size_t row, std::size_t column) const;
+    ui::Rect arrRect(std::size_t row) const;
+    LauncherColumns columns() const;
+    // What the last paint drew (tests).
+    struct Stats {
+        std::size_t cells = 0, clips = 0, empty = 0;
+        std::vector<std::string> names;  // the clips' names as drawn
+    } stats;
+
+  private:
+    ArrangeView& view_;
+    bool resizing_ = false;
+    float pressX_ = 0, pressWidth_ = 0;
+};
+
+// The pane's cell in the arrange header row: stop and arrangement for every
+// track, and the scene headers in the ruler band's lowest row.
+class LauncherHeader : public ui::Node {
+  public:
+    explicit LauncherHeader(ArrangeView& view);
+    void paint(ui::Canvas& canvas) override;
+    bool onPointer(const ui::PointerEvent& e) override;
+    // The two buttons, and the scene headers' row (window coordinates).
+    ui::Rect stopRect() const;
+    ui::Rect arrangementRect() const;
+    ui::Rect scenesRow() const;
+    ui::Rect addRect() const;  // the + cell after the last scene
+
+  private:
+    ArrangeView& view_;
+};
+
+}  // namespace supple::views

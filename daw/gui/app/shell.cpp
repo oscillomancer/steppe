@@ -172,6 +172,12 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
                   [this] { arrange_->setChordRow(!arrange_->chordRowShown()); });
     actions.setChecked("ui.view.chords",
                        [this](const actions::Context&) { return arrange_->chordRowShown(); });
+    // The clip launcher (gui.md §4.15): shown while the project has scenes;
+    // this chooses for the project (the UI file keeps the choice).
+    actions.addUi("ui.clips", "View: clip launcher",
+                  [this] { arrange_->setLauncherShown(!arrange_->launcherShown()); });
+    actions.setChecked("ui.clips",
+                       [this](const actions::Context&) { return arrange_->launcherShown(); });
     arrange_->gestures().projectGeneration = [this] { return app_.projectGeneration(); };
     // The TCP talks to the app through these: selection state, commands (with
     // a drag's gesture) and the meters it pools with its rows.

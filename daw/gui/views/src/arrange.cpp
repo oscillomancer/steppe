@@ -1232,6 +1232,8 @@ ArrangeView::ArrangeView(peaks::PeakService& peaks, Resolve resolve, TransportSo
     headerRow_ = &header;
     header_ = &header.emplace<TcpHeader>(*this);
     header_->layout.width = ui::SizeRule::fixed(kTcpWidth);
+    launcherHeader_ = &header.emplace<LauncherHeader>(*this);
+    launcherHeader_->visible = false;
     ruler_ = &header.emplace<Ruler>(*this);
     ruler_->layout.width = ui::SizeRule::fraction();
     auto& corner = header.emplace<Corner>("arrange-corner");
@@ -1313,7 +1315,10 @@ ArrangeView::ArrangeView(peaks::PeakService& peaks, Resolve resolve, TransportSo
 
     tcp_ = &body.emplace<TcpPanel>(layout_, view_, std::move(forward));
     tcp_->layout.width = ui::SizeRule::fixed(kTcpWidth);
+    launcherPane_ = &body.emplace<LauncherPane>(*this);
+    launcherPane_->visible = false;
     auto& lanesCol = body.emplace<Node>("lanes-column");
+    lanesColumn_ = &lanesCol;
     lanesCol.layout.dir = ui::Layout::Dir::Column;
     lanesCol.layout.width = ui::SizeRule::fraction();
     lanes_ = &lanesCol.emplace<Lanes>(peaks_, resolve_, layout_, view_);
@@ -1358,6 +1363,7 @@ void ArrangeView::show(const model::Session& session, const std::vector<model::C
     generation_ = generation;
     const bool rebuilt = layout_.show(session, changes, generation);
     syncChordRow();
+    syncLauncher();
     if (rebuilt) {
         lanes_->rebuild();
         tcp_->setSession(session);
@@ -1678,6 +1684,60 @@ void ArrangeView::syncChordRow() {
     rows.chord = shown ? RulerRows::kChordHeight : 0;
     setRulerRows(rows);
 }
+bool ArrangeView::launcherShown() const {
+    return launcherChoice_.value_or(!session().scenes.empty());
+}
+void ArrangeView::setLauncherShown(std::optional<bool> shown) {
+    launcherChoice_ = shown;
+    syncLauncher();
+}
+float ArrangeView::launcherWidth() const {
+    return launcherPane_ && launcherPane_->visible ? launcherPane_->bounds().w : 0.0f;
+}
+float ArrangeView::launcherRoom() const {
+    // The lanes keep at least this much before the pane takes the view.
+    constexpr float kMinLanes = 120;
+    return std::max(LauncherColumns::kMinWidth,
+                    bounds().w - kTcpWidth - ui::ScrollBar::kThickness - kMinLanes);
+}
+void ArrangeView::setLauncherWidth(float width, bool full) {
+    launcherWidth_ = width > 0 ? std::max(width, LauncherColumns::kMinWidth) : 0.0f;
+    launcherFull_ = full;
+    syncLauncher();
+}
+void ArrangeView::dragLauncherWidth(float width) {
+    // Past the room the lanes need, the pane fills the view; back under it,
+    // the lanes return at the dragged width.
+    const float room = launcherRoom();
+    if (width >= room)
+        setLauncherWidth(launcherWidth_ > 0 ? launcherWidth_ : room, true);
+    else
+        setLauncherWidth(width, false);
+}
+void ArrangeView::syncLauncher() {
+    if (!launcherPane_) return;
+    const bool shown = launcherShown();
+    const bool full = shown && launcherFull_;
+    LauncherColumns cols = launcherColumns(session());
+    const float fit = std::max(LauncherColumns::kMinWidth, cols.contentWidth());
+    const float width = launcherWidth_ > 0 ? launcherWidth_ : fit;
+    const ui::SizeRule rule = full ? ui::SizeRule::fraction() : ui::SizeRule::fixed(width);
+    const bool changed = launcherPane_->visible != shown || lanesColumn_->visible == full ||
+                         launcherPane_->layout.width.value != rule.value ||
+                         launcherPane_->layout.width.kind != rule.kind;
+    launcherPane_->visible = launcherHeader_->visible = shown;
+    launcherPane_->layout.width = launcherHeader_->layout.width = rule;
+    lanesColumn_->visible = ruler_->visible = !full;
+    // The scene columns scroll no further than their content needs.
+    const float span = cols.contentWidth() - LauncherColumns::kArr;
+    launcherScroll_ =
+        std::clamp(launcherScroll_, 0.0f, std::max(0.0f, span - (width - LauncherColumns::kArr)));
+    if (changed) relayout();
+    if (shown) {
+        launcherPane_->invalidate();
+        launcherHeader_->invalidate();
+    }
+}
 void ArrangeView::addMarker() { ruler_->addMarker(); }
 void ArrangeView::addRegion() { ruler_->addRegion(); }
 const RulerStats& ArrangeView::rulerStats() const { return ruler_->stats; }
@@ -1699,6 +1759,15 @@ json::Value ArrangeView::saveLayout() const {
     v["row_height"] = static_cast<double>(trackLayout().globalHeight());
     v["follow"] = std::string(views::followName(follow()));
     if (chordRowChoice_) v["chords"] = *chordRowChoice_;  // View > Chords chose
+    // The clip launcher (gui.md §4.15): what View > Clip launcher chose, its
+    // dragged width and whether it fills the view.
+    if (launcherChoice_ || launcherWidth_ > 0 || launcherFull_) {
+        json::Value clips = json::Value::object();
+        if (launcherChoice_) clips["shown"] = *launcherChoice_;
+        if (launcherWidth_ > 0) clips["width"] = static_cast<double>(launcherWidth_);
+        if (launcherFull_) clips["full"] = true;
+        v["clips"] = std::move(clips);
+    }
     json::Value heights = json::Value::object();
     for (const auto& [track, h] : trackLayout().heights())
         heights[track.str()] = static_cast<double>(h);
@@ -1734,6 +1803,17 @@ void ArrangeView::loadLayout(const json::Value& v) {
         const json::Value* chords = v.find("chords");
         setChordRow(chords && chords->isBool() ? std::optional<bool>(chords->asBool())
                                                : std::nullopt);
+    }
+    {
+        // The clip launcher's entry (gui.md §4.15); none: the project decides.
+        const json::Value* clips = v.find("clips");
+        const json::Value* shown = clips && clips->isObject() ? clips->find("shown") : nullptr;
+        const json::Value* width = clips && clips->isObject() ? clips->find("width") : nullptr;
+        const json::Value* full = clips && clips->isObject() ? clips->find("full") : nullptr;
+        launcherChoice_ =
+            shown && shown->isBool() ? std::optional<bool>(shown->asBool()) : std::nullopt;
+        setLauncherWidth(width && width->isNumber() ? static_cast<float>(width->asDouble()) : 0.0f,
+                         full && full->isBool() && full->asBool());
     }
     trackLayout().clearTakesExpanded();
     if (const json::Value* ex = v.find("expanded_takes"); ex && ex->isArray())
@@ -1808,7 +1888,9 @@ bool ArrangeView::onPointer(const ui::PointerEvent& e) {
     // Alt resizes every track). A sideways wheel scrolls in time where the
     // wheel would zoom.
     Viewport v = view_;
-    const bool overTracks = tcp_ && tcp_->bounds().contains(e.pos);
+    const bool overTracks =
+        (tcp_ && tcp_->bounds().contains(e.pos)) ||
+        (launcherPane_ && launcherPane_->visible && launcherPane_->bounds().contains(e.pos));
     const std::string_view behaviour =
         gestures_->mouse.behaviour(overTracks ? "tcp.wheel" : "arrange.wheel", e.mods);
     if (behaviour == "resize_all") {

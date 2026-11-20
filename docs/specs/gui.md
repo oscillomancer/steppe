@@ -2487,24 +2487,33 @@ row, the mixer strip and the routing matrix).
 
 ### 4.15 Clip launcher (ADR-0097; step L3)
 
-*Specified before it is built, from gui-lead's mock 13 (19 Nov). "Clip
-launcher" is always said in full: "the launcher" elsewhere is the process
-that starts the app (ADR-0091).*
+*Specified from gui-lead's mock 13 (19 Nov) and built on gui/launcher-pane
+(`views::LauncherPane`, `views::LauncherHeader`, views/launcher.h); what is
+not built yet is marked. "Clip launcher" is always said in full: "the
+launcher" elsewhere is the process that starts the app (ADR-0091).*
 
 **Where it is.** The clip launcher is a pane between the track panel and the
 lanes, on the one row model: its rows are `TrackLayout`'s rows, with the
 same heights, scroll and colours.
-- **Shown.** It is shown by View > Clip launcher (`ui.clips`) and saved in
-  the UI sidecar (`clips: {shown, width}`). The sidecar's entry wins. Only
-  when there is none does the project decide: one with scenes opens with it
-  shown, and one without (a new project too) hides it.
-- **Width.** Dragging the rule between the pane and the lanes sets its width.
-  Dragged all the way, the clip launcher fills the view and the lanes hide; a
-  drag back brings them.
+- **Shown.** It is shown by View > Clip launcher (`ui.clips`, ticked while
+  shown) and saved in the UI sidecar (`arrange.clips: {shown, width,
+  full}`, each only once chosen). The sidecar's entry wins. Only when there
+  is none does the project decide: one with scenes opens with it shown, and
+  one without (a new project too) hides it.
+- **Width.** Unset, it is wide enough for its columns (every scene, the +
+  cell and the Arr column; at least two scene columns and the Arr column).
+  Dragging its right edge (4 units) sets the width. Dragged past the room
+  the lanes need (120 units), the clip launcher fills the view and the lanes
+  and the ruler hide; a drag back brings them at the dragged width. When the
+  scene columns are wider than the pane they are cut at the Arr column,
+  which stays at the pane's right edge.
+- **Wheel.** Over the pane the wheel does what it does over the track panel
+  (`tcp.wheel`): the rows scroll together.
 - **The header cell (amendment L-h).** Above the scene headers, the pane
-  takes a cell in the arrange header row, beside the ruler. It holds
-  **stop** (`launch.stop`, every track) and **arrangement**
-  (`launch.arrangement`, every track back to the timeline).
+  takes a cell in the arrange header row, beside the ruler, as wide as the
+  pane. It holds **Stop all** (`launch.stop`, every track) and
+  **Arrangement** (`launch.arrangement`, every track back to the timeline),
+  the header's uniform cells.
 
 **Columns.**
 - **Scenes.** There is one column per scene in `order`, 64 units wide. Its
