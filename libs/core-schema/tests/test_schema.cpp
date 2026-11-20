@@ -135,6 +135,22 @@ TEST_CASE("schema constraints and warnings") {
     CHECK(invalid.error().code == "schema.unknown_member");
     CHECK(invalid.error().hint.find("value") != std::string::npos);
 }
+TEST_CASE("an unknown member that belongs elsewhere says where") {
+    struct Config {
+        int value = 0;
+    };
+    auto schema = object<Config>("config")
+                      .elsewhere("rate", "the rate is set with rate.set")
+                      .field("value", &Config::value, integerOf<int>())
+                      .build();
+    auto moved = schema.decode(*json::parse("{\"value\":1,\"rate\":1}"));
+    REQUIRE_FALSE(moved);
+    CHECK(moved.error().code == "schema.unknown_member");
+    CHECK(moved.error().hint == "the rate is set with rate.set; valid members: value");
+    auto other = schema.decode(*json::parse("{\"value\":1,\"speed\":1}"));
+    REQUIRE_FALSE(other);
+    CHECK(other.error().hint == "valid members: value");
+}
 TEST_CASE("unit aliases") {
     struct Alias {
         const char* text;

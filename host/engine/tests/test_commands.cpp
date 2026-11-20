@@ -82,6 +82,30 @@ TEST_CASE("project.set schema remaps render matrix references") {
     CHECK(model::remapIds(args, command->argsSchema, remap) == expected);
 }
 
+TEST_CASE("project.set names the command that sets the tempo, meter or key") {
+    Workdir dir;
+    auto app = makeApp(dir.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    for (const auto& [member, command] :
+         {std::pair{"tempo", "tempo.set"}, std::pair{"meter", "timesig.set"},
+          std::pair{"key", "key.set"}}) {
+        CAPTURE(member);
+        auto result =
+            bus.execute({"project.set", j(std::string(R"({")") + member + R"(":"x"})"), kOrigin});
+        REQUIRE_FALSE(result);
+        REQUIRE_FALSE(result.error().details.empty());
+        const auto& detail = result.error().details[0];
+        CHECK(detail.code == "schema.unknown_member");
+        CHECK(detail.hint.find(command) != std::string::npos);
+        CHECK(detail.hint.find("valid members: name") != std::string::npos);
+    }
+    auto other = bus.execute({"project.set", j(R"({"nope":1})"), kOrigin});
+    REQUIRE_FALSE(other);
+    CHECK(other.error().details[0].hint.find("set with") == std::string::npos);
+}
+
 TEST_CASE("render patterns reject embedded NUL bytes before planning files") {
     Workdir dir;
     auto app = makeApp(dir.path);
