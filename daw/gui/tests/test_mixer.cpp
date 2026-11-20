@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <thread>
@@ -3326,38 +3327,27 @@ TEST_CASE("mixer: a strip's modulator racks show as mod slots") {
     const std::string lead = made["rack"].asString(), leadTrack = made["track"].asString();
     const auto keys = f.addTrack("channel", "Keys");
     const auto fx = f.addFx(keys, "Hickory");
-    // No command adds a Mod Out yet (ADR-0096 M1): the file gets them, as a
-    // project from a later build would. Keys homes "Mods" (a Mod Out) and
-    // "Idle" (none); the Lead rack, which feeds its
-    // channel, gains a Mod Out too. (Only a channel homes a rack.)
-    const std::string path = (f.dir / "mods.json").generic_string();
-    f.exec("project.save", R"({"path":")" + path + R"("})");
-    const auto bytes = readFile(path).value();
-    json::Value v = json::parse(std::string(bytes.begin(), bytes.end())).value();
-    auto put = [&](const char* section, const char* id, const std::string& body) {
-        v[section][id] = json::parse(body).value();
-    };
-    auto module = [](const std::string& rack, const char* type) {
-        return R"({"rack":")" + rack + R"(","type":")" + type +
-               R"(","version":"1.0.0","x":40,"y":40})";
-    };
-    const std::string modOut = std::string(model::kModOutModule);
-    put("racks", "rk_40", R"({"track":")" + keys + R"(","name":"Mods"})");
-    put("racks", "rk_42", R"({"track":")" + keys + R"(","name":"Idle"})");
-    put("modules", "mo_40", module("rk_40", modOut.c_str()));
-    put("modules", "mo_42", module(lead, modOut.c_str()));
-    put("modules", "mo_43", module("rk_42", "com.suppleaudio.rack.lfo"));
-    v["project"]["next_ids"]["rk"] = 50.0;
-    v["project"]["next_ids"]["mo"] = 50.0;
-    REQUIRE(writeFileAtomic(path, json::writeCanonical(v)));
-    f.exec("project.open", R"({"path":")" + path + R"("})");
+    // Keys homes "Idle" (an LFO, no Mod Out), then "Mods" (a Mod Out), whose
+    // Out takes over the channel's input (rack.add); the Lead rack, which
+    // feeds its channel, gains a Mod Out too. (Only a channel homes a rack.)
+    const std::string idle =
+        f.exec("rack.add", R"({"track":")" + keys + R"(","name":"Idle"})")["rack"].asString();
+    const std::string mods =
+        f.exec("rack.add", R"({"track":")" + keys + R"(","name":"Mods"})")["rack"].asString();
+    const std::string modOut =
+        f.exec("module.add", R"({"rack":")" + mods + R"(","type":"mod_out"})")["module"].asString();
+    f.exec("module.add", R"({"rack":")" + lead + R"(","type":"mod_out"})");
+    f.exec("module.add", R"({"rack":")" + idle + R"(","type":"lfo"})");
     f.refresh();
-    // Keys: one mod slot, Mods, above its plug-ins; Idle holds no Mod Out.
+    // Keys: one slot above its plug-ins, Mods, which feeds it and holds a
+    // Mod Out, so it shows once, as a mod slot; Idle neither feeds it nor
+    // holds a Mod Out.
     const auto& st = f.strip(keys);
     REQUIRE(st.racks.size() == 1);
     ui::Button* slot = st.racks.front();
-    CHECK(slot->id() == "mixer.mod." + keys + ".rk_40");
+    CHECK(slot->id() == "mixer.mod." + keys + "." + mods);
     CHECK(slot->valueText() == "Mods");
+    CHECK_FALSE(f.root->find("mixer.rack." + keys + "." + idle));
     const ui::Rect r = slot->bounds(), plug = f.node("mixer.fx." + fx)->bounds();
     CHECK(near(r.h, plug.h));
     CHECK(r.bottom() <= plug.y);
@@ -3369,11 +3359,12 @@ TEST_CASE("mixer: a strip's modulator racks show as mod slots") {
     // A click opens the rack window on it.
     f.pointer(ui::PointerEvent::Type::Down, f.centre(slot), 1);
     f.pointer(ui::PointerEvent::Type::Up, f.centre(slot), 1);
-    CHECK(opened == std::vector<std::string>{"rk_40"});
-    // Without its Mod Out the rack is no modulator: the slot goes.
-    f.exec("module.remove", R"({"module":"mo_40"})");
+    CHECK(opened == std::vector<std::string>{mods});
+    // Without its Mod Out the rack is no modulator: its slot is a rack slot.
+    f.exec("module.remove", R"({"module":")" + modOut + R"("})");
     f.refresh();
-    CHECK(f.strip(keys).racks.empty());
+    REQUIRE(f.strip(keys).racks.size() == 1);
+    CHECK(f.strip(keys).racks.front()->id() == "mixer.rack." + keys + "." + mods);
     REQUIRE(f.strip(leadTrack).racks.size() == 1);
 }
 

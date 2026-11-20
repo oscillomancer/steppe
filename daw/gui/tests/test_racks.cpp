@@ -15,6 +15,7 @@
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <tuple>
 
@@ -2511,4 +2512,44 @@ TEST_CASE("rack window: every stock module's face, at 100 %") {
         const std::string name = "rack-faces-" + std::to_string(i + 1) + ".png";
         f.snapshot(name.c_str());
     }
+}
+
+TEST_CASE("modulation: the GUI's signal range agrees with modulation.list on real routes") {
+    // The lanes' and controls' spans run one way for a 0..1 source
+    // (racks::unipolarSource, from the rack catalog); modulation.list reports
+    // the engine's range. An LFO is -1..1, an ADSR 0..1, and an input with no
+    // cable counts as -1..1 in both.
+    Fixture f;
+    if (!f.ok) return;
+    const std::string a =
+        f.exec("track.add", R"({"type":"channel","name":"A"})")["track"].asString();
+    json::Value made = f.exec(
+        "modulate", R"({"target":{"track":")" + a + R"(","param":"volume"},"source":"lfo"})");
+    const std::string rack = made["rack"].asString(), modOut = made["mod_out"].asString();
+    json::Value adsr = f.exec("module.add", R"({"rack":")" + rack + R"(","type":"adsr"})");
+    const std::string out = adsr["outputs"].asArray().front().asString();
+    f.exec("cable.add", R"({"from":")" + adsr["module"].asString() + "." + out + R"(","to":")" +
+                            modOut + R"(.in_2"})");
+    f.exec("modulation.add", R"({"source":{"module":")" + modOut +
+                                 R"(","input":"in_2"},"target":{"track":")" + a +
+                                 R"(","param":"pan"},"depth":30})");
+    f.exec("modulation.add", R"({"source":{"module":")" + modOut +
+                                 R"(","input":"in_3"},"target":{"track":")" + a +
+                                 R"(","param":"pan"},"depth":10})");
+    const auto catalog = gui::racks::catalog(*f.app);
+    REQUIRE(catalog);
+    const model::Session s = f.app->head();
+    json::Value listed = f.exec("modulation.list", "{}");
+    REQUIRE(listed["modulations"].asArray().size() == 3);
+    std::map<std::string, std::string> ranges;
+    for (const json::Value& m : listed["modulations"].asArray()) {
+        const auto id = *model::Id::parse(m.find("modulation")->asString());
+        const model::Modulation& route = *s.modulations.find(id);
+        const bool gui = gui::racks::unipolarSource(s, *catalog, route.source);
+        INFO(route.source.input);
+        CHECK(m.find("range")->asString() == (gui ? "unipolar" : "bipolar"));
+        ranges[route.source.input] = m.find("range")->asString();
+    }
+    CHECK(ranges == std::map<std::string, std::string>{
+                        {"in_1", "bipolar"}, {"in_2", "unipolar"}, {"in_3", "bipolar"}});
 }

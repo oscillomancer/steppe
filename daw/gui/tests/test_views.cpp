@@ -2768,9 +2768,10 @@ TEST_CASE(
 }
 
 TEST_CASE("modulated targets have lanes keyed by target, with or without an envelope") {
-    // As the model tests build them (routes come from files until the
-    // commands land): channel A homes a rack whose LFO and ADSR feed a Mod
-    // Out; channel B is modulated; A sends to a buss.
+    // Built with EditTxn, as the model tests build them (the views take no
+    // engine; the app's tests make routes with modulate): channel A homes a
+    // rack whose LFO and ADSR feed a Mod Out; channel B is modulated; A sends
+    // to a buss.
     model::EditTxn txn(model::Session::create(), 1);
     auto addTrack = [&](model::StripType type) {
         model::Track tr;
