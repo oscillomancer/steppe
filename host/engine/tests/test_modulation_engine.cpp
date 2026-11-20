@@ -1194,3 +1194,94 @@ TEST_CASE("modulation: a stem of a modulated track carries it, its source rack k
     // The modulation moved it: equality says something.
     CHECK(stem->audio.channels[0] != render(emit.s, 1.0).left);
 }
+
+namespace {
+
+// ADR-0096 step M4. B's gain becomes the fixed gain, whose gain is
+// automatable but not modulatable. With `envelope`, an envelope holds it at
+// -6 dB (its CLAP value, the fixture's normalized one), and a route of
+// `depth` reaches it through that envelope's lane.
+model::Session throughEnvelope(const char* source, std::optional<double> depth,
+                               bool envelope = true,
+                               model::Isolation isolation = model::Isolation::InProcess) {
+    Emit emit(source, std::nullopt);
+    model::EditTxn t(emit.s, 2);
+    t.modify<model::FxInstance>(emit.gain, [&](model::FxInstance& f) {
+        f.plugin.id = "com.suppleaudio.test.fixed-gain";
+        f.patch.reset();
+        f.isolation = isolation;
+    });
+    if (envelope) {
+        params::ParamSpec spec;
+        spec.type = params::Type::Float;
+        spec.unit = units::Unit::dB;
+        spec.min = -60;
+        spec.max = 12;
+        model::Envelope env;
+        env.target = {emit.gain, "0"};
+        env.points = {{0.0, params::toClap(spec, -6)}};
+        t.create(env);
+    }
+    if (depth) modulate(t, emit.modOut, emit.gain, "0", *depth);
+    return commit(t);
+}
+
+}  // namespace
+
+TEST_CASE("modulation through an envelope: its lane sends base + signal x depth x range, clamped" *
+          doctest::description("rt")) {
+    const auto plain = render(throughEnvelope("playing", std::nullopt), 0.5);
+    CHECK(double(plain.left[12000]) == doctest::Approx(gainAt(0)).epsilon(1e-4));
+    const auto up = render(throughEnvelope("playing", 0.1), 0.5);
+    CHECK(double(up.left[12000]) == doctest::Approx(gainAt(0.1)).epsilon(1e-4));
+    const auto down = render(throughEnvelope("playing", -0.25), 0.5);
+    CHECK(double(down.left[12000]) == doctest::Approx(gainAt(-0.25)).epsilon(1e-4));
+    // Past the top of the range the sum is clamped to it.
+    const auto top = render(throughEnvelope("playing", 1.0), 0.5);
+    CHECK(double(top.left[12000]) == doctest::Approx(gainAt(1.0)).epsilon(1e-4));
+    CHECK_FALSE(warns(up.warnings, "modulation.target"));
+}
+
+TEST_CASE("modulation through an envelope: with no active envelope the route is inert") {
+    const model::Session s = throughEnvelope("playing", 0.1, false);
+    const auto r = render(s, 0.5);
+    CHECK(warns(r.warnings, "modulation.target"));
+    CHECK(warns(r.warnings, "no active envelope"));
+    CHECK(r.left == render(throughEnvelope("playing", std::nullopt, false), 0.5).left);
+}
+
+TEST_CASE("modulation through an envelope: the events fall on the grid whatever the block size" *
+          doctest::description("rt")) {
+    const model::Session s = throughEnvelope("beat_phase", 0.2);
+    const auto at512 = render(s, 1.0, 512);
+    CHECK(at512.left == render(s, 1.0, 37).left);
+    CHECK(at512.left == render(s, 1.0, 128).left);
+    std::size_t changes = 0;
+    for (std::size_t i = 1; i < at512.left.size(); ++i)
+        if (at512.left[i] != at512.left[i - 1]) {
+            ++changes;
+            CHECK(i % d::kAutomationStep == 0);
+        }
+    CHECK(changes > 10);
+}
+
+TEST_CASE(
+    "modulation through an envelope: real-time output equals the offline render, in both "
+    "executors and through the bridge" *
+    doctest::description("rt")) {
+    host::setBridgeExecutable(BRIDGE_PATH);
+    const std::int64_t seconds = 1, frames = 48000 * seconds + 4096;
+    for (const auto isolation : {model::Isolation::InProcess, model::Isolation::SharedBridge})
+        for (const std::uint32_t block : {128u, 512u}) {
+            const model::Session s = throughEnvelope("beat_phase", 0.2, true, isolation);
+            const auto offline = render(s, double(seconds), block);
+            CHECK(offline.left !=
+                  render(throughEnvelope("beat_phase", std::nullopt), double(seconds)).left);
+            for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+                INFO("isolation " << static_cast<int>(isolation) << ", block " << block
+                                  << ", anticipative " << options.anticipative);
+                const Live live = playLive(s, test::patient(options), block, frames);
+                CHECK(maxDiff(live.left, live.latency, offline.left, 48000 * seconds) == 0.0);
+            }
+        }
+}

@@ -1088,7 +1088,9 @@ and naming. All `edit` unless marked (q) query or (a) action.
   `fx.param.get` (q), `fx.meters {fx, from: live|render}` (q: the read-only
   values of the playing instance, or as the last `render.mix` ended),
   `fx.patch.get` (q), `fx.patch.set`, `fx.patch.merge`,
-  `fx.describe` (q; each parameter's `modulatable`, ADR-0096), a plugin's presets `fx.preset.list` (q),
+  `fx.describe` (q; each parameter's `modulatable`, or
+  `modulatable_by_envelope` when a route reaches it through its envelope,
+  ADR-0096), a plugin's presets `fx.preset.list` (q),
   `fx.preset.load`, `fx.preset.save` (a), `fx.preset.delete` (a), chain presets
   `fx.chain.save` (a), `fx.chain.load`, `fx.chain.list` (q),
   `fx.chain.delete` (a), MIDI learn `fx.learn.set {fx, param, midi, mode?,
@@ -1123,7 +1125,10 @@ and naming. All `edit` unless marked (q) query or (a) action.
   that would close a loop is passed over for the next, else a new
   Modulators rack: one that already reaches `from`, or one the target
   reaches. `modulation.cycle` at `/from` only for a real cycle, when the
-  target feeds `from`, itself included. A chosen `rack` is used as given.)
+  target feeds `from`, itself included. A chosen `rack` is used as given.
+  A target reached through its envelope (M4) gets a one-point envelope at
+  bar 1, at its current value, when it has no active one: the running
+  instance's value, else the saved one.)
 - **scenes and clips** (ADR-0097, "Scenes and clips"): `scene.add {name?,
   color?, at?}`, `scene.set`, `scene.remove`, `scene.move {scene, to}`,
   `scene.list` (q); `clip.add {track, scene, notation? | audio_file? |
@@ -1723,20 +1728,26 @@ keeps playing its print.
 **Commands.**
 - `modulation.add` and `modulation.set` also check what the model cannot
   know, from the instance's parameter list (`fx.describe`): the parameter
-  must be flagged modulatable and not read-only or bypass. VST3 parameters
-  never are.
+  must be modulatable, or (step M4) automatable and neither stepped nor
+  an enum, and in either case not read-only or bypass.
+  - A VST3 parameter, or an unmarked CLAP one, is reached through its
+    envelope and needs an active one: `modulation.envelope` at
+    `/target/param` otherwise, with an `env.add` hint.
+  - `fx.describe` reports such a parameter `modulatable_by_envelope`.
 - Mixer targets (step M2): the target track or send must exist and fit the
   invariants above (`modulation.target` at `/target/track`,
   `/target/route` or `/target/param` otherwise), and a target in a frozen
   track fails with `track.frozen`. The depth bound is the target's
   (`modulation.depth`): ±1 for a plug-in parameter, ±48 dB for a volume,
   ±200 % for pan and width.
-- Errors: `modulation.source`, `modulation.target`, `modulation.duplicate`,
+- Errors: `modulation.source`, `modulation.target`, `modulation.envelope`,
+  `modulation.duplicate`,
   `modulation.cycle` (naming the route that closes it), `modulation.depth`,
   `modulation.limit`. Each carries `code`, `message`, `path` and a `hint`.
 - `modulation.list` reports each route's signal range (`bipolar` −1..1 or
   `unipolar` 0..1, from the Mod Out input) and `inert` with its reason when
-  the plan cannot apply it (`target`, `latency`).
+  the plan cannot apply it (`source`, `target`, `envelope` when the envelope
+  that carries it is gone or off, `latency`).
 - `session.describe` lists the routes under their target's track.
 - A file whose target lost its modulatable flag loads. The engine treats
   that route as inert (engine.md §1.4.1).

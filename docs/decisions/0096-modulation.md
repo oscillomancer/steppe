@@ -20,6 +20,27 @@ drives the track a follower hears, or already hears the target. An
 explicitly chosen `rack` is still refused. The Modulate menu can offer
 every follower that is not a real cycle.
 
+*Amended 2026-11-20 (step M4 as built):* a route through an envelope is
+bound to that parameter's automation lane (§"Targets", Step M4).
+- **What the lane sends.** It sends `clamp(base + Σ depth × signal ×
+  range)` at its usual emission points: its first frame, each point, and
+  each 32-sample grid point while a route is bound. While the source rack
+  runs in the other executor, the last sum holds.
+- **VST3.** A VST3's lane runs in its normalized domain, so its range is 1.
+- **What qualifies.** Stepped and enum parameters stay refused, as do
+  read-only and bypass ones.
+- **Commands.**
+  - `modulation.add` and `modulation.set` refuse a target without an
+    active envelope (`modulation.envelope`, with an `env.add` hint).
+  - `modulation.list` reports such a route as `inert: "envelope"`.
+  - `fx.describe` reports `modulatable_by_envelope`, and the Modulate
+    menu enables for it too.
+  - `modulate` adds a one-point envelope at bar 1, at the parameter's
+    current value. That is the live instance's value when the engine
+    runs, else the saved one.
+- **Recording.** A write mode records what the plug-in reports minus the
+  route's current offset, clamped to the range.
+
 ## Context
 
 Nate asked for modulators: any parameter can be modulated, and racks are the
@@ -171,9 +192,10 @@ The same rule holds for every new kind (amendment G-c).
   - the routes stay disabled (engine state, not model state) until one of
     them is edited, its FX is replaced, or the project is reopened;
   - `modulation.list` reports such a route as `inert: "latency"`.
-- **Step M4: an envelope gives the base.** Any automatable parameter
-  becomes modulatable through its envelope, and VST3 and unmarked CLAP
-  parameters take the summed value:
+- **Step M4: an envelope gives the base.** Any automatable, continuous
+  parameter becomes modulatable through its envelope, and VST3 and
+  unmarked CLAP parameters take the summed value (built as the dated note
+  above says):
   - write modes record the base only;
   - `modulate` creates a one-point envelope at the current value when there
     is none.

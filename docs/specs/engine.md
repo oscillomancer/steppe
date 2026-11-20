@@ -345,10 +345,25 @@ only.
     automation and modulation events as chain stages do.
   - Bridged plug-ins receive the same events through the bridge; a late
     block's coalescing keeps the latest value per target (§5).
+- **Through an envelope (M4).** A VST3 parameter, or a CLAP one without
+  the modulatable flag, that is automatable and neither stepped nor an enum
+  binds to its automation lane (`ModEdge::viaLane`, `ParamLane::modFirst`
+  and `modCount`, `Stage::laneModRoutes`). The lane sends
+  `clamp(base + Σ depth × signal × range, min, max)` at its usual emission
+  points: its first frame, each point, and each 32-sample grid point while
+  a route is bound. The base is the envelope's value at that frame. A
+  VST3's lane is in the normalized domain (range 1); a CLAP one's in plain
+  values (range max − min). While the source rack is owned by the other
+  executor, the last sum holds. The lane has a telemetry slot of its own,
+  stored as a fraction of its range. Without an active envelope on the
+  parameter, the route is inert (`modulation.target`, "has no active
+  envelope to carry it"). When a write mode records a plug-in output for
+  such a parameter, the route's current offset is taken off first
+  (`commitOutputGesture`), so the envelope keeps the base.
 - **Inert routes.** A route is inert, with a plan warning, when binding finds
-  that its target cannot take it: the parameter is gone, not flagged
-  modulatable, read-only or bypass, or the plug-in is missing or VST3
-  (`modulation.target`), or for a mixer target when its node applies no
+  that its target cannot take it: the parameter is gone, read-only, bypass,
+  neither modulatable nor reachable through an active envelope, or the
+  plug-in is missing (`modulation.target`), or for a mixer target when its node applies no
   such level (a send that is not an encoded edge of its source). A route
   into a frozen track is inert silently: the print plays. It is also inert
   after its target reported a

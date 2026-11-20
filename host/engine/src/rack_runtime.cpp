@@ -373,8 +373,8 @@ bool sameName(std::string_view a, std::string_view b) {
 // must be modulatable; a VST3 plug-in takes no modulation.
 Result<PluginModTarget> resolvePluginMod(std::span<const host::ParamInfo> list,
                                          const json::Value* schema, const std::string& key,
-                                         bool vst3) {
-    if (vst3)
+                                         bool vst3, bool allowEnvelope) {
+    if (vst3 && !allowEnvelope)
         return Error("rack.modulation", "VST3 plug-ins take no modulation", "",
                      "use a CLAP plug-in, or automate the parameter (env.add {fx})");
     std::optional<std::uint32_t> id;
@@ -433,9 +433,17 @@ Result<PluginModTarget> resolvePluginMod(std::span<const host::ParamInfo> list,
                      "modulatable parameter keys and numeric ids: " + available +
                          "; fx.describe marks them (modulatable) and lists their ranges");
     }
-    if (!(found->flags & CLAP_PARAM_IS_MODULATABLE))
-        return Error("rack.modulation", found->name + " is not modulatable", "",
-                     "automate it instead (env.add {fx})");
+    if (vst3 || !(found->flags & CLAP_PARAM_IS_MODULATABLE)) {
+        // A stepped or choice parameter is left out: a sum would move it
+        // between steps at every grid point (a latency choice restarts).
+        if (allowEnvelope && (found->flags & CLAP_PARAM_IS_AUTOMATABLE) &&
+            !(found->flags & (CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_ENUM)))
+            return PluginModTarget{found->id, vst3 ? 1.0 : found->max - found->min, true};
+        return Error("rack.modulation",
+                     found->name + (allowEnvelope ? " is neither modulatable nor automatable"
+                                                  : " is not modulatable"),
+                     "", "automate it instead (env.add {fx})");
+    }
     return PluginModTarget{found->id, found->max - found->min};
 }
 

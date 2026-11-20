@@ -141,6 +141,18 @@ const clap_plugin_descriptor_t* rawGainDescriptor() {
     return &descriptor;
 }
 
+// The raw gain with its gain automatable but not modulatable: modulation
+// reaches it through its envelope (ADR-0096 step M4).
+const clap_plugin_descriptor_t* fixedGainDescriptor() {
+    static const auto descriptor = [] {
+        auto value = *gainDescriptor();
+        value.id = "com.suppleaudio.test.fixed-gain";
+        value.name = "Test Fixed Gain";
+        return value;
+    }();
+    return &descriptor;
+}
+
 const clap_plugin_descriptor_t* checkedGainDescriptor(bool reject) {
     static const char* features[] = {CLAP_PLUGIN_FEATURE_INSTRUMENT, CLAP_PLUGIN_FEATURE_STEREO,
                                      nullptr};
@@ -242,6 +254,7 @@ struct Gain {
     float delay[2][64] = {};
     int delayPos = 0;
     bool noSemantic = false;
+    bool noModulation = false;  // fixed-gain: no parameter flagged modulatable
     bool enforceThread = false;
     bool rejectPatch = false;
     bool slowPatch = false;
@@ -286,12 +299,14 @@ bool checkGainMain(const clap_plugin_t* p) {
 }
 
 uint32_t CLAP_ABI gainParamCount(const clap_plugin_t*) { return 2; }
-bool CLAP_ABI gainParamInfo(const clap_plugin_t*, uint32_t index, clap_param_info_t* info) {
+bool CLAP_ABI gainParamInfo(const clap_plugin_t* pl, uint32_t index, clap_param_info_t* info) {
     if (index >= 2) return false;
     const auto& p = kGainTable[index];
     std::memset(info, 0, sizeof(*info));
     info->id = p.id;
     info->flags = params::clapFlags(p);
+    if (G(pl)->noModulation)
+        info->flags &= ~static_cast<clap_param_info_flags>(CLAP_PARAM_IS_MODULATABLE);
     std::snprintf(info->name, sizeof(info->name), "%.*s", static_cast<int>(p.name.size()),
                   p.name.data());
     const auto r = params::clapRange(p);
@@ -1847,7 +1862,7 @@ clap_process_status CLAP_ABI noteGenProcess(const clap_plugin_t* p, const clap_p
     return CLAP_PROCESS_CONTINUE;
 }
 
-uint32_t CLAP_ABI factoryCount(const clap_plugin_factory_t*) { return 20; }
+uint32_t CLAP_ABI factoryCount(const clap_plugin_factory_t*) { return 21; }
 const clap_plugin_descriptor_t* CLAP_ABI factoryDesc(const clap_plugin_factory_t*, uint32_t i) {
     return i == 0    ? gainDescriptor()
            : i == 1  ? sineDescriptor()
@@ -1869,10 +1884,18 @@ const clap_plugin_descriptor_t* CLAP_ABI factoryDesc(const clap_plugin_factory_t
            : i == 13 ? multiOut48Descriptor()
            : i == 18 ? noteEchoDescriptor()
            : i == 19 ? noteGenDescriptor()
+           : i == 20 ? fixedGainDescriptor()
                      : nullptr;
 }
 const clap_plugin_t* CLAP_ABI factoryCreate(const clap_plugin_factory_t*, const clap_host_t* host,
                                             const char* id) {
+    if (!std::strcmp(id, fixedGainDescriptor()->id)) {
+        const auto* plugin =
+            make<Gain>(host, fixedGainDescriptor(), gainActivate, gainProcess, gainExt);
+        G(plugin)->noSemantic = true;
+        G(plugin)->noModulation = true;
+        return plugin;
+    }
     if (!std::strcmp(id, rawGainDescriptor()->id)) {
         const auto* plugin =
             make<Gain>(host, rawGainDescriptor(), gainActivate, gainProcess, gainExt);
