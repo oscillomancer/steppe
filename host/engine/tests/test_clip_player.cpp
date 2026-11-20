@@ -745,6 +745,52 @@ TEST_CASE("launches are refused while a master playrate is active") {
     p.app->stopEngine();
 }
 
+TEST_CASE("a MIDI clip plays through the track's MIDI send") {
+    // tr_1 has no instrument and sends its MIDI to tr_2's sine: a launched
+    // clip sounds there, as an item's notes do.
+    Project p;
+    p.run("clip.add",
+          R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C3:h E3:h"})");
+    p.run("track.add", R"({"name": "Synth"})");
+    p.run("fx.add", R"({"track": "tr_2", "plugin": "com.suppleaudio.test.sine"})");
+    p.run("route.add", R"({"from": "tr_1", "to": "tr_2", "midi": {}})");
+    InstancePool pool = makePool();
+    OfflineSettings settings;
+    settings.endSeconds = 2.0;
+    settings.projectDir = p.app->projectDir();
+    settings.track = id("tr_2");
+    settings.tap = model::Tap::PreFader;
+    settings.launches = {launch(kBeat, "cl_1")};
+    auto r = renderOffline(p.app->head(), pool, settings);
+    REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+    double peak = 0;
+    for (std::size_t k = std::size_t(kBeat); k < r->audio.channels[0].size(); ++k)
+        peak = std::max(peak, std::fabs(double(r->audio.channels[0][k])));
+    CHECK(peak > 0.01);
+    double before = 0;
+    for (std::size_t k = 0; k < std::size_t(kBeat); ++k)
+        before = std::max(before, std::fabs(double(r->audio.channels[0][k])));
+    CHECK(before == 0.0);
+    // Live, in both executors, as the offline replay of the engine's log.
+    const model::Session s = p.app->head();
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        const Live live = playLive(s, p.app->projectDir(), options, 128, 48000 * 2 + 8192,
+                                   {{10, {request("tr_1", "cl_1")}}});
+        REQUIRE(live.log.size() == 1);
+        OfflineSettings mix;
+        mix.endSeconds = 2.0;
+        mix.projectDir = p.app->projectDir();
+        mix.launches = live.log;
+        auto offline = renderOffline(s, pool, mix);
+        REQUIRE(offline);
+        CHECK(maxDiff(live.left, live.latency, offline->audio.channels[0], 48000 * 2) == 0.0);
+        double heard = 0;
+        for (float x : live.left) heard = std::max(heard, std::fabs(double(x)));
+        CHECK(heard > 0.01);
+    }
+}
+
 // --- Capturing a performance and committing it (ADR-0097 L4) ------------------
 
 namespace {

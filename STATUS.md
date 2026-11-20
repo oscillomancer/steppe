@@ -194,8 +194,10 @@ instructions are in `docs/guides/installing.md`.
     - a master playrate refuses launches (`launch.playrate`);
     - a clip take's FX and envelopes do not play (`launch.take_chain`
       warning);
-    - clip MIDI reaches the track's own instrument only, not a rack's
-      Notes module or the track's MIDI sends;
+    - a rack's Notes module does not follow its source track's launches:
+      clip MIDI never reaches it, and the arrangement's notes go on
+      playing through it while a clip or a stop holds the track (the
+      track's own instrument and its MIDI sends do follow them);
     - freezing, or removing the playing clip, returns the track to the
       arrangement without the switch fade;
     - a quantize of `none` waits for the floor, about a device block for

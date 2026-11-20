@@ -1570,7 +1570,9 @@ Renders play the arrangement only; the render dialog says so while a
 clip is playing. Not yet:
 - launching while a master playrate is active (`launch.playrate`);
 - a clip take's FX and envelopes, which do not play in a clip yet;
-- clip MIDI reaching a rack's Notes module or a MIDI send from the track.
+- a rack's Notes module following launches: on a track whose instrument
+  is a rack, clips do not reach it and the timeline's notes keep playing
+  through it. MIDI sends from the track do carry the clips.
 
 A frozen track plays its print: `launch.clip` refuses it and
 `launch.scene` skips it.
