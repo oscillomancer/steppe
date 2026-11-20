@@ -15,30 +15,15 @@
 #include "plan.h"
 #include "plan_dump.h"
 #include "rack_runtime.h"
+#include "realtime_common.h"
 #include "supple/model/freeze.h"
 #include "supple/model/schemas.h"
 #include "supple/params/params.h"
 
-using namespace supple;
-using namespace supple::engine;
-using model::Id;
-using model::kMaster;
-
 namespace {
 namespace d = supple::engine::detail;
 
-const std::filesystem::path kFixture = FIXTURE_CLAP_PATH;
 constexpr const char* kGain = "com.suppleaudio.test.gain";
-
-InstancePool makePool() {
-    return InstancePool([](const model::PluginRef& ref) -> Result<host::PluginInfo> {
-        auto list = host::scan(std::span<const std::filesystem::path>(&kFixture, 1));
-        if (!list) return std::move(list).error();
-        for (auto& p : *list)
-            if (p.id == ref.id) return p;
-        return Error("engine.plugin_missing", "plugin " + ref.id + " not found");
-    });
-}
 
 Id addChannel(model::EditTxn& t) {
     model::Track tr;
@@ -592,4 +577,192 @@ TEST_CASE(
     auto prepared = d::prepare(*compiled, frozen);
     REQUIRE_FALSE(prepared);
     CHECK(prepared.error().code == "audio.open");
+}
+
+namespace {
+
+// Emit with the beat phase, and a latent gain ahead of the modulated one,
+// modulated too from the same input: its route's delay is the latent stage's
+// own compensation, the plain one's is shifted by it. `isolation` for both.
+model::Session latentPair(model::Isolation isolation) {
+    const Emit emit("beat_phase", 0.2);
+    model::EditTxn t(emit.s, 2);
+    model::FxInstance fx;
+    fx.plugin.id = kGain;
+    fx.isolation = isolation;
+    fx.patch =
+        json::parse(R"({"schema":"supple.test-gain-patch/1.0","params":{"latency":"short"}})")
+            .value();
+    const Id latent = t.create(fx);
+    t.modify<model::Track>(emit.b,
+                           [&](model::Track& tr) { tr.chain.insert(tr.chain.begin(), latent); });
+    t.modify<model::FxInstance>(emit.gain, [&](model::FxInstance& f) { f.isolation = isolation; });
+    modulate(t, emit.modOut, latent, "gain", -0.1);
+    return commit(t);
+}
+
+// Plays `s` live from 0 for `frames`: the left channel and the output latency.
+struct Live {
+    std::vector<float> left;
+    std::uint32_t latency = 0;
+};
+Live playLive(const model::Session& s, const EngineOptions& options, std::uint32_t block,
+              std::int64_t frames) {
+    InstancePool pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = frames});
+    Engine engine(pool, media, options);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = block}));
+    REQUIRE(engine.load(s));
+    engine.play();
+    const std::int64_t cycles = frames / block;
+    if (options.anticipative)
+        runAheadOnState(engine, backend, cycles, block);
+    else
+        backend.run(cycles);
+    CHECK(engine.anticipationMisses() == 0);
+    engine.stop();
+    CHECK(engine.processErrors() == 0);
+    return {backend.capture().channels[0], engine.outputLatency()};
+}
+
+}  // namespace
+
+TEST_CASE(
+    "modulation: real-time output equals the offline render, in both executors, at 128 "
+    "and 512" *
+    doctest::description("rt")) {
+    const model::Session s = latentPair(model::Isolation::InProcess);
+    const std::int64_t seconds = 2, frames = 48000 * seconds + 4096;
+    for (const std::uint32_t block : {128u, 512u}) {
+        const auto offline = render(s, double(seconds), block);
+        // The routes move the level, on the grid, so equality says something.
+        CHECK(offline.left != render(Emit("beat_phase", std::nullopt).s, double(seconds)).left);
+        for (const EngineOptions& options :
+             {kInCallback, EngineOptions{.workers = 0}, EngineOptions{.workers = 2}}) {
+            INFO("block " << block << ", anticipative " << options.anticipative << ", workers "
+                          << options.workers);
+            const Live live = playLive(s, options, block, frames);
+            CHECK(live.latency == 64);
+            CHECK(maxDiff(live.left, live.latency, offline.left, 48000 * seconds) == 0.0);
+        }
+    }
+}
+
+TEST_CASE("modulation: through the bridge, real-time output equals the in-process render" *
+          doctest::description("rt")) {
+    host::setBridgeExecutable(BRIDGE_PATH);
+    const std::int64_t seconds = 1, frames = 48000 * seconds + 4096;
+    const auto reference = render(latentPair(model::Isolation::InProcess), double(seconds), 128);
+    for (const auto isolation : {model::Isolation::SharedBridge, model::Isolation::Dedicated}) {
+        INFO("isolation " << static_cast<int>(isolation));
+        const model::Session s = latentPair(isolation);
+        CHECK(render(s, double(seconds), 128).left == reference.left);
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("anticipative " << options.anticipative);
+            const Live live = playLive(s, options, 128, frames);
+            CHECK(maxDiff(live.left, live.latency, reference.left, 48000 * seconds) == 0.0);
+        }
+    }
+}
+
+TEST_CASE("modulation: from a seek and over loop wraps, both executors play it as offline" *
+          doctest::description("rt")) {
+    const model::Session s = latentPair(model::Isolation::InProcess);
+    constexpr std::uint32_t kBlock = 128;
+    constexpr std::size_t kPass = 24000;  // the loop, 0.5 s to 1 s
+    constexpr int kPasses = 4;
+    auto pool = makePool();
+    // From 1 s, after a seek: the offline render from there.
+    const auto fromOne =
+        renderOffline(s, pool, {.startSeconds = 1.0, .endSeconds = 2.0, .blockSize = kBlock})
+            .value();
+    const auto whole = render(s, 1.0, kBlock);  // no loop: up to the first wrap
+    std::vector<std::vector<float>> loops;
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        for (const bool looped : {false, true}) {
+            INFO("looped " << looped);
+            auto rtPool = makePool();
+            MediaCache media;
+            const std::size_t frames = looped ? kPass * (1 + kPasses) : 48000;
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual,
+                                  .captureFrames = static_cast<std::int64_t>(frames) + 4096});
+            Engine engine(rtPool, media, options);
+            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+            REQUIRE(engine.load(s));
+            REQUIRE(engine.awaitPlan());
+            if (looped)
+                engine.setLoop(0.5, 1.0, true);
+            else
+                engine.seek(1.0);
+            engine.play();
+            const auto cycles = static_cast<std::int64_t>((frames + 4096) / kBlock);
+            if (options.anticipative)
+                runAheadOnState(engine, backend, cycles, kBlock);
+            else
+                backend.run(cycles);
+            engine.stop();
+            CHECK(engine.processErrors() == 0);
+            const std::size_t L = engine.outputLatency();
+            const auto& got = backend.capture().channels[0];
+            if (!looped) {
+                CHECK(maxDiff(got, L, fromOne.audio.channels[0], 48000 - 4096) == 0.0);
+                continue;
+            }
+            // Up to the first wrap, the render without a loop; every pass
+            // after a wrap plays as the first such pass.
+            CHECK(maxDiff(got, L, whole.left, 2 * kPass) == 0.0);
+            const std::vector<float> second(
+                got.begin() + static_cast<std::ptrdiff_t>(L + 2 * kPass),
+                got.begin() + static_cast<std::ptrdiff_t>(L + 3 * kPass));
+            for (int k = 3; k <= kPasses; ++k) {
+                INFO("pass " << k);
+                CHECK(maxDiff(got, L + static_cast<std::size_t>(k) * kPass, second, kPass) == 0.0);
+            }
+            loops.emplace_back(got.begin(), got.begin() + static_cast<std::ptrdiff_t>(frames));
+        }
+    }
+    REQUIRE(loops.size() == 2);
+    CHECK(loops[0] == loops[1]);  // the two executors, sample for sample
+}
+
+TEST_CASE("modulation: a target handed to the live executor mid-play keeps its offsets" *
+          doctest::description("rt")) {
+    // Arming B makes it live (ADR-0096, M-f): its plug-ins and the rack that
+    // modulates them move to the callback, carrying the memo and held values.
+    const model::Session s = latentPair(model::Isolation::InProcess);
+    model::EditTxn t(s, 3);
+    const Id b = s.tracks.find(kMaster)->children.at(1);
+    t.modify<model::Track>(b, [](model::Track& tr) { tr.record.armed = true; });
+    const model::Session armed = commit(t);
+    constexpr std::uint32_t kBlock = 128;
+    const auto offline = render(s, 2.0, kBlock);
+    CHECK(render(armed, 2.0, kBlock).left == offline.left);  // arming changes no sound
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        auto rtPool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 96000 + 4096});
+        Engine engine(rtPool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+        const auto run = [&](std::int64_t frames) {
+            if (options.anticipative)
+                runAheadOnState(engine, backend, frames / kBlock, kBlock);
+            else
+                backend.run(frames / kBlock);
+        };
+        REQUIRE(engine.load(s));
+        engine.play();
+        run(32000);
+        REQUIRE(engine.load(armed));
+        run(32000);
+        REQUIRE(engine.load(s));
+        run(32000 + 4096);
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+        CHECK(engine.anticipationMisses() == 0);
+        const std::size_t L = engine.outputLatency();
+        CHECK(maxDiff(backend.capture().channels[0], L, offline.left, 96000) == 0.0);
+    }
 }
