@@ -330,6 +330,8 @@ Result<host::Instance*> InstancePool::get(Id id, const model::FxInstance& fx,
         e.appliedFx.reset();
         e.failure.reset();
         e.clearedAutomation.clear();
+        e.latencyHit = false;
+        e.modulationOff.reset();
     }
     if (desired != e.appliedState && !desired.empty()) {
         if (fx.patch) {
@@ -437,6 +439,8 @@ host::Instance::Notifications InstancePool::service(Id id) {
         entry.activated = true;
         const std::uint32_t latency = entry.instance->latency();
         notes.latencyChanged |= latency != entry.rawLatency;
+        // A modulated parameter may be what moved it (ADR-0096, M-d).
+        if (latency != entry.rawLatency && entry.modulatedNow) entry.latencyHit = true;
         entry.rawLatency = latency;
     }
     if (!entry.instance->active() && !entry.failure && !notes.restartError &&
@@ -549,6 +553,36 @@ void InstancePool::acknowledgeOutputState(Id id, const std::string& hash) {
 bool InstancePool::automationCleared(Id id) const {
     const auto it = instances_.find(id);
     return it != instances_.end() && !it->second.clearedAutomation.empty();
+}
+
+std::vector<std::uint32_t> InstancePool::modulatedParams(Id id,
+                                                         std::span<const std::uint32_t> now) {
+    auto it = instances_.find(id);
+    if (it == instances_.end()) return {now.begin(), now.end()};
+    it->second.modulatedNow = !now.empty();
+    auto& set = it->second.modulated;
+    for (std::uint32_t param : now)
+        if (const auto at = std::lower_bound(set.begin(), set.end(), param);
+            at == set.end() || *at != param)
+            set.insert(at, param);
+    return set;
+}
+
+bool InstancePool::modulationDisabled(Id id, const std::string& routes) {
+    auto it = instances_.find(id);
+    if (it == instances_.end()) return false;
+    auto& e = it->second;
+    if (e.latencyHit) {
+        e.latencyHit = false;
+        e.modulationOff = routes;
+    }
+    if (e.modulationOff && *e.modulationOff != routes) e.modulationOff.reset();
+    return e.modulationOff.has_value();
+}
+
+bool InstancePool::modulationDisabled(Id id) const {
+    const auto it = instances_.find(id);
+    return it != instances_.end() && (it->second.latencyHit || it->second.modulationOff);
 }
 
 bool InstancePool::anyAutomationCleared() const {

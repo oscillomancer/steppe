@@ -96,7 +96,10 @@ but drops the `mr` counter from `next_ids`, and it may delete a route's
 source module or target, or add a send that closes a cycle through a route.
 Such a file never fails to open:
 
-- a missing or low `mr` counter is derived from the highest `mr` id;
+- a missing or low `mr` counter is derived from the highest `mr` id, with
+  a `project.counter_derived` warning (the code ADR-0095 gives `cx`); a
+  saved branch missing it allocates past every saved version's highest
+  `mr` id, so no two branches give one id to different routes;
 - a route whose source or target is gone or no longer fits, or that closes
   a cycle, is dropped with a `project.modulation_dropped` warning naming
   it and why.
@@ -210,10 +213,17 @@ The same rule holds for every new kind (amendment G-c).
   - The edge's tap latency is the Mod Out's latency inside the rack,
     computed as an Out's.
   - Its `before` is the latency of the target's chain ahead of the target
-    stage (the whole chain for a mixer target).
+    stage: 0 for an input-chain stage, which is outside compensation; for a
+    mixer target the whole chain less one grid interval (Lookahead below).
   - The edge carries a delay line of held values, sized at compile.
   - If the source's path is late, the target track waits for it, exactly as
     a sidechain makes its destination wait.
+  - **Under a master playrate** the graph runs in device frames
+    (ADR-0045), and so does all of this: the edge's delay, the rack's grid
+    where Mod Out samples and the target stage's 32-frame grid are counted
+    in device frames, as a sidechain's delay and a plug-in's `Param` grid
+    are. A Mod Out's value follows the timeline only through what its
+    modules read (Transport, curves), which already map it.
 - **Plug-in targets.**
   - **When.** At each point of the target stage's absolute 32-sample
     automation grid (`kAutomationStep`), the same points its `Param`
@@ -222,8 +232,8 @@ The same rule holds for every new kind (amendment G-c).
     sum of its routes' signal × depth × range, a disabled route adding 0.
   - **Order.** At a frame that also carries an automation event, the
     `Param` event comes first.
-  - **Block size.** These positions are functions of the timeline position
-    alone, so every block size, either executor and the bridge deliver the
+  - **Block size.** These positions are functions of the stage's absolute
+    position alone (the timeline's at unity rate), so every block size, either executor and the bridge deliver the
     same events at the same samples.
 - **The send-on-change memo.** A value is sent only when it differs from the
   last one sent to that parameter.
@@ -255,9 +265,9 @@ The same rule holds for every new kind (amendment G-c).
 - **Mixer targets (M2).**
   - **Interpolation.** The offset at a frame is linear between the values
     at the target grid points either side of it.
-  - **Lookahead.** A mixer target's edge has one more grid interval
-    (32 frames) of compensation, so the later grid value exists when the
-    interval plays. Interpolated offsets therefore stay aligned with the
+  - **Lookahead.** A mixer target's edge delivers each value one grid
+    interval (32 frames) early: its `before` is the chain's latency less
+    32, so the later grid value exists when the interval plays. Interpolated offsets therefore stay aligned with the
     plug-in targets' grid values.
   - **Clamping.** The sum of base and offset is clamped to the target's
     range per sample, after automation and before the gain ramps.
@@ -290,9 +300,12 @@ The same rule holds for every new kind (amendment G-c).
 ### Freeze
 
 The routes whose target is in a frozen track are part of that track's freeze
-dependency hash, as its envelopes are. Editing them fails with `track.frozen`.
-Their source racks are not part of the hash, just as a sidechain's source
-track is not. While frozen, the print plays and the routes are inert.
+dependency hash, as its envelopes are. Editing or removing them fails with
+`track.frozen`. Their source racks are not part of the hash, just as a
+sidechain's source track is not: removing a route's source module, or its
+rack or home track, removes the route even while the target is frozen, and
+the print keeps playing. While frozen, the print plays and the routes are
+inert.
 
 ### Commands
 

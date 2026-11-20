@@ -283,11 +283,16 @@ only.
   into the target stage:
   - its tap latency is the Mod Out's latency inside the rack (computed as
     an Out's, rack.md §6);
-  - its `before` is the chain latency ahead of the target stage (the whole
-    chain for a mixer target, plus one grid interval, 32 frames);
+  - its `before` is the chain latency ahead of the target stage: 0 for an
+    input-chain stage, which is outside compensation; for a mixer target
+    the whole chain less one grid interval (32 frames), since it reads one
+    interval ahead;
   - it carries a delay line of held values sized by that compensation, so
     the value the rack computed for timeline sample t reaches the target as
-    the target plays t.
+    the target plays t;
+  - under a master playrate the delay, the rack grid Mod Out samples on and
+    the target's 32-frame grid are in device frames, the graph's domain
+    (ADR-0045), as a sidechain's delay and the `Param` grid are.
   A late source path delays the target as a sidechain does. Cycles are
   refused at edit time (`modulation.cycle`); self-modulation is not
   supported.
@@ -303,16 +308,30 @@ only.
   CLAP range, a disabled route adding 0. An event is sent only when the
   value differs from the memo of the last one sent.
   - The memo is carried across compiles by (fx, param), like `carryMix`
-    (§1.6). A parameter that the new plan no longer modulates is sent one 0
-    at its first grid point and leaves the memo.
+    (§1.6): a stage's slots are matched by instance and CLAP id. A
+    parameter that the new plan no longer modulates is sent one 0 at its
+    first grid point and leaves the memo. So that a carried memo always
+    fits, each stage keeps a slot for every parameter any plan has
+    modulated on its FX (`InstancePool::modulatedParams`, main thread), and
+    a stage with no route left keeps its slots until their 0s are sent.
   - It goes stale (it is never emptied) on the instance's activation, a
-    reset (`host::Instance::resets()`: a seek, a play start), a changed
-    instance, and a patch or state applied to the instance. The next grid
-    point then sends the current sum of every modulated parameter and 0 to
-    every other parameter the memo lists, and drops those.
+    reset (a seek, a play start), a changed instance, and a patch or state
+    applied to the instance: `host::Instance::modulationEpoch()` counts
+    `activate()`, `reset()`, `setPatch()` and `loadState()` (`resets()`
+    keeps counting `reset()` alone). The next grid point then sends the
+    current sum of every modulated parameter and 0 to every other parameter
+    the memo lists, and drops those. A stage that does not process this
+    block (a compensated bypass, not owned, not processing) is sent nothing
+    and its memo goes stale.
+  - The route's delay runs every block at the target node, and a locate
+    clears it unless a swap just carried it (by route id, at the same
+    length), as an edge's delay.
   - A patch edit to a modulated FX compiles instead of taking the patch path
     (ADR-0092).
-  - Each stage reserves `block / 32 + 2` events per modulated parameter.
+  - Each stage reserves `block / 32 + 2` events per modulated parameter and
+    one for each other slot. An event that finds the block full is tried
+    again at the next grid point. Input-chain stages reserve their
+    automation and modulation events as chain stages do.
   - Bridged plug-ins receive the same events through the bridge; a late
     block's coalescing keeps the latest value per target (§5).
 - **Inert routes.** A route is inert, with a plan warning, when binding finds
@@ -331,16 +350,17 @@ only.
   (step M2); until then they compile.*
 - **Mixer targets** (track volume, pan, width; a send's level). *Not yet
   built (step M2).* The offset at a frame is linear between the values at
-  the target grid points either side of it. The grid interval of
-  compensation added above makes the later value available in time. The
+  the target grid points either side of it. The one-interval lookahead
+  above makes the later value available in time. The
   base plus the offset is clamped to the target's range per sample, before
   the gain ramps. Volume and send level offsets are in dB, pan and width in
   percent.
 
 Renders stay deterministic and real time equals offline at any block size,
 in both executors and through the bridge: every grid point and delay is a
-function of the timeline position, the memo starts empty after each reset,
-and racks restart their modules at every locate (rack.md §6).
+function of the stage's absolute position, a reset makes the memo stale so
+the first grid point after it sends every modulated parameter, and racks
+restart their modules at every locate (rack.md §6).
 
 ### 1.4.2 Clip launcher (ADR-0097; for the lead's revision)
 

@@ -2,11 +2,14 @@
 // Copyright (c) 2026 Supple Audio
 // Modulation routes in the session (ADR-0096, session-model "Modulation").
 #include <doctest/doctest.h>
+#include <supple/base/sha256.h>
 #include <supple/json/write.h>
 #include <supple/model/freeze.h>
+#include <supple/model/project_file.h>
 #include <supple/model/schemas.h>
 #include <supple/model/versions.h>
 
+#include <algorithm>
 #include <string>
 
 using namespace supple;
@@ -465,6 +468,9 @@ TEST_CASE("modulation: a file that went through an older build still opens") {
     CHECK(opened->modulations.size() == 1);
     CHECK(opened->modulations.contains({Kind::Modulation, 2}));
     CHECK(opened->next[Kind::Modulation] == 5);  // past the highest id the file held
+    CHECK(std::any_of(warnings.begin(), warnings.end(), [](const auto& w) {
+        return w.code == "project.counter_derived" && w.path == "/project/next_ids/mr";
+    }));
     std::vector<std::string> dropped;
     for (const auto& w : warnings)
         if (w.code == "project.modulation_dropped") dropped.push_back(w.path);
@@ -488,10 +494,20 @@ TEST_CASE("modulation: a low mr counter is raised to the highest id") {
     REQUIRE(s);
     auto doc = json::parse(serializeProject(*s)).value();
     doc["project"]["next_ids"]["mr"] = 1;
-    auto opened = parseProject(json::writeCompact(doc));
+    std::vector<schema::Warning> warnings;
+    auto opened = parseProject(json::writeCompact(doc), &warnings);
     REQUIRE_MESSAGE(opened, (opened ? "" : opened.error().toString()));
     CHECK(opened->next[Kind::Modulation] == 3);
     CHECK(opened->modulations.size() == 2);
+    // The same code as ADR-0095's cx repair, so agents read one warning.
+    const auto derived = std::count_if(warnings.begin(), warnings.end(), [](const auto& w) {
+        return w.code == "project.counter_derived" && w.path == "/project/next_ids/mr";
+    });
+    CHECK(derived == 1);
+    // A counter that is right says nothing.
+    warnings.clear();
+    REQUIRE(parseProject(serializeProject(*s), &warnings));
+    for (const auto& w : warnings) CHECK(w.code != "project.counter_derived");
 }
 
 TEST_CASE("modulation: a rack modulating its own rack send's level is told why") {
@@ -510,4 +526,145 @@ TEST_CASE("modulation: a rack modulating its own rack send's level is told why")
     REQUIRE_FALSE(self);
     CHECK(self.error().code == "modulation.cycle");
     CHECK(self.error().hint.find("rack send") != std::string::npos);
+}
+
+TEST_CASE("modulation: a frozen target keeps its routes locked, but their source can go") {
+    // Review round 52, F4: the source lies outside the print, as a
+    // sidechain's does (ADR-0096 "Freeze").
+    Fixture f = fixture();
+    Id id;
+    auto modulated = with(f.s, route(f.modOut, f.fx, "cutoff", 0.5), &id);
+    REQUIRE(modulated);
+    EditTxn freeze(*modulated, modulated->version + 1);
+    const Id media = freeze.create(MediaSource{"freeze.wav", "sha256:" + std::string(64, '1'),
+                                               "wav", modulated->project->sampleRate, 2, 96000});
+    const TrackFreeze cache{media, 48000, 48000, 0, freezeDependencyHash(*modulated, f.b)};
+    freeze.modify<Track>(f.b, [&](Track& t) { t.freeze = cache; });
+    auto frozen = freeze.commit();
+    REQUIRE_MESSAGE(frozen, (frozen ? "" : frozen.error().toString()));
+    // Editing or removing the route itself changes the frozen track's sound.
+    {
+        EditTxn t(*frozen, frozen->version + 1);
+        t.modify<Modulation>(id, [](Modulation& m) { m.depth = 0.75; });
+        auto s = t.commit();
+        REQUIRE_FALSE(s);
+        CHECK(s.error().code == "track.frozen");
+    }
+    {
+        EditTxn t(*frozen, frozen->version + 1);
+        t.remove<Modulation>(id);
+        auto s = t.commit();
+        REQUIRE_FALSE(s);
+        CHECK(s.error().code == "track.frozen");
+    }
+    // Removing the source module elsewhere takes the route with it.
+    {
+        EditTxn t(*frozen, frozen->version + 1);
+        for (const auto& c : frozen->cables)
+            if (c.value->to.object == f.modOut) t.remove<Cable>(c.id);
+        t.remove<RackModule>(f.modOut);
+        auto s = t.commit();
+        REQUIRE_MESSAGE(s, (s ? "" : s.error().toString()));
+        CHECK(s->modulations.empty());
+        CHECK(s->tracks.find(f.b)->freeze);
+    }
+    // So does removing the source's home track, with its rack and send, as
+    // track.remove does.
+    {
+        EditTxn t(*frozen, frozen->version + 1);
+        for (const auto& c : frozen->cables) t.remove<Cable>(c.id);
+        t.remove<RackModule>(f.lfo);
+        t.remove<RackModule>(f.modOut);
+        t.remove<Rack>(f.rack);
+        t.remove<Route>(f.send);
+        t.remove<Track>(f.a);
+        t.modify<Track>(kMaster, [&](Track& m) { std::erase(m.children, f.a); });
+        auto s = t.commit();
+        REQUIRE_MESSAGE(s, (s ? "" : s.error().toString()));
+        CHECK(s->modulations.empty());
+    }
+}
+
+TEST_CASE("modulation: a branch whose saved counters lost mr still allocates fresh ids") {
+    // Review round 53, Q1: a file that went through an older build keeps the
+    // routes but its branches' next_ids lose the mr counter. A branch head's
+    // counters come from those (VersionStore::head), not from the document.
+    Fixture f = fixture();
+    VersionStore vs(f.s);
+    const auto add = [&](Id target, const char* param) {
+        EditTxn t(*vs.head(), vs.nextVersion());
+        const Id id = t.create(route(f.modOut, target, param, 0.5));
+        auto changes = t.changes();
+        auto s = t.commit();
+        REQUIRE_MESSAGE(s, (s ? "" : s.error().toString()));
+        REQUIRE(vs.commit(std::move(*s), TxnRecord{"modulation.add", "test", {}, {}},
+                          std::move(changes), {id}));
+        return id;
+    };
+    const Id onMain = add(f.fx, "cutoff");
+    REQUIRE(vs.createBranch("agent/claude/wobble", "main"));
+    REQUIRE(vs.switchBranch("agent/claude/wobble"));
+    const Id onBranch = add(f.b, "volume");
+    REQUIRE(vs.switchBranch("main"));
+    auto doc = json::parse(serializeProjectFile(vs, true)).value();
+    doc["project"]["next_ids"].asObject().erase("mr");
+    for (auto& ref : doc["branches"]["refs"].asObject())
+        ref.value["next_ids"].asObject().erase("mr");
+    // An older build that keeps branches writes main's hash for what it wrote.
+    auto main = doc;
+    main.asObject().erase("branches");
+    doc["branches"]["main_hash"] = "sha256:" + sha256Hex(json::writeCanonical(main));
+    auto opened = projectFileFromJson(doc);
+    REQUIRE_MESSAGE(opened, (opened ? "" : opened.error().toString()));
+    REQUIRE_MESSAGE(!opened->branchesDropped,
+                    (opened->branchesDropped ? opened->branchesDropped->toString() : ""));
+    VersionStore& back = opened->store;
+    for (const char* branch : {"main", "agent/claude/wobble"}) {
+        CAPTURE(branch);
+        const auto head = back.head(branch);
+        REQUIRE(head);
+        for (const auto& e : head->modulations) CHECK(head->next[Kind::Modulation] > e.id.n);
+    }
+    CHECK(back.head("main")->modulations.contains(onMain));
+    CHECK(back.head("agent/claude/wobble")->modulations.contains(onBranch));
+}
+
+TEST_CASE("modulation: a lost mr counter never reuses an id another branch holds") {
+    // An older build drops the high-water mark: main removed mr_2 after the
+    // branch forked with it, so main's own routes alone would give mr_2 out
+    // again, a different route under the branch's id, which a merge would
+    // take for the same one.
+    Fixture f = fixture();
+    VersionStore vs(f.s);
+    const auto step = [&](auto&& edit) {
+        EditTxn t(*vs.head(), vs.nextVersion());
+        std::vector<Id> created;
+        edit(t, created);
+        auto changes = t.changes();
+        auto s = t.commit();
+        REQUIRE_MESSAGE(s, (s ? "" : s.error().toString()));
+        REQUIRE(vs.commit(std::move(*s), TxnRecord{"modulation", "test", {}, {}},
+                          std::move(changes), std::move(created)));
+    };
+    Id second;
+    step([&](EditTxn& t, std::vector<Id>& c) {
+        c.push_back(t.create(route(f.modOut, f.fx, "cutoff", 0.5)));
+        second = t.create(route(f.modOut, f.b, "volume", 1.0));
+        c.push_back(second);
+    });
+    REQUIRE(vs.createBranch("agent/claude/keep", "main"));
+    step([&](EditTxn& t, std::vector<Id>&) { t.remove<Modulation>(second); });
+    auto doc = json::parse(serializeProjectFile(vs, true)).value();
+    doc["project"]["next_ids"].asObject().erase("mr");
+    for (auto& ref : doc["branches"]["refs"].asObject())
+        ref.value["next_ids"].asObject().erase("mr");
+    auto main = doc;
+    main.asObject().erase("branches");
+    doc["branches"]["main_hash"] = "sha256:" + sha256Hex(json::writeCanonical(main));
+    auto opened = projectFileFromJson(doc);
+    REQUIRE_MESSAGE(opened, (opened ? "" : opened.error().toString()));
+    REQUIRE_MESSAGE(!opened->branchesDropped,
+                    (opened->branchesDropped ? opened->branchesDropped->toString() : ""));
+    CHECK(opened->store.head("agent/claude/keep")->modulations.contains(second));
+    CHECK(opened->store.head("main")->next[Kind::Modulation] > second.n);
 }

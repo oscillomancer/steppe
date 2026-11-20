@@ -242,9 +242,8 @@ Result<Counters> countersAt(const json::Value* v, const std::string& path) {
                          "the branches section is damaged; main still opens without it");
         c[*kind] = static_cast<std::uint32_t>(*n);
     }
-    // Written before modulation routes existed (2.16): they start where a
-    // new session's do.
-    if (c[Kind::Modulation] == 0) c[Kind::Modulation] = 1;
+    // A missing mr counter (a file from before 2.16, or one that went
+    // through an older build) stays 0: VersionStore::restore derives it.
     return c;
 }
 

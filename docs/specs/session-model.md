@@ -1520,7 +1520,11 @@ migrates.
 An older build keeps the collection as an unknown section, so its routes do
 nothing there, but it drops the `mr` counter and may delete what a route
 points at (amendment G-c). A file that comes back from one opens anyway: a
-missing or low `mr` counter is derived from the highest `mr` id, and a
+missing or low `mr` counter is derived from the highest `mr` id with a
+`project.counter_derived` warning at `/project/next_ids/mr` (the code
+ADR-0095 uses for `cx`); a saved branch whose `next_ids` lacks `mr`
+allocates past the highest `mr` id of every saved version, so an id one
+branch removed is not given out while another holds it; and a
 route whose source or target is gone or no longer fits the invariants
 below, or that closes a cycle, is dropped with a `project.modulation_dropped`
 warning at its path that names it and says why.
@@ -1563,7 +1567,10 @@ record the base only.
 Removing the source module, or the target's FX, track or route, removes its
 modulation routes, and the command warns with `modulation.removed` naming
 them. Routes whose target is in a frozen track belong to its freeze hash.
-Editing them fails with `track.frozen`.
+Editing or removing them fails with `track.frozen`. Their source lies
+outside the print, as a sidechain's does: removing the source module (or
+its rack or home track) still removes such a route, and the frozen track
+keeps playing its print.
 
 **Commands.**
 - `modulation.add` and `modulation.set` also check what the model cannot

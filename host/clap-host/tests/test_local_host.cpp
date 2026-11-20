@@ -242,6 +242,32 @@ TEST_CASE("gain: state round trip across instances") {
     CHECK_FALSE((*b)->loadState(junk).ok());
 }
 
+TEST_CASE("gain: activation, reset, patches and states move the modulation epoch") {
+    // ADR-0096: a host sending only changed param_mod amounts resends them all
+    // once the epoch moves; resets() itself counts only reset() (a rack's
+    // plugin module replays its held notes on it).
+    auto made = Instance::create(find("com.suppleaudio.test.gain"), {});
+    REQUIRE(made);
+    auto& g = **made;
+    auto epoch = g.modulationEpoch();
+    const auto resets = g.resets();
+    REQUIRE(g.setPatch(R"({"params": {"gain": -2}})", CLAP_SUPPLE_SET_MERGE));
+    CHECK(g.modulationEpoch() == ++epoch);
+    auto state = g.saveState();
+    REQUIRE(state);
+    CHECK(g.modulationEpoch() == epoch);  // saving changes nothing
+    REQUIRE(g.loadState(*state));
+    CHECK(g.modulationEpoch() == ++epoch);
+    REQUIRE(g.activate(48000, 1, 64));
+    CHECK(g.modulationEpoch() == ++epoch);
+    REQUIRE(g.startProcessing());
+    g.reset();
+    CHECK(g.modulationEpoch() == ++epoch);
+    CHECK(g.resets() == resets + 1);
+    g.stopProcessing();
+    g.deactivate();
+}
+
 TEST_CASE("gain: semantic schema, patches, errors, validate-only") {
     auto inst = Instance::create(find("com.suppleaudio.test.gain"), {});
     REQUIRE(inst);
