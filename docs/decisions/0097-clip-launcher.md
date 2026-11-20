@@ -400,6 +400,76 @@ A scene is a section you can play before it has a place in the song.
   - an item straddling the region's edge (`scene.capture.edge`);
   - a looped clip or item whose take is warped (`clip.unsupported`).
 
+#### Scene ↔ section: the rules (L4a, 2026-11-20)
+
+These three commands touch the model only: no launch, no player. Each is one
+undo step, and a refusal changes nothing. The contract is in
+`specs/session-model.md`, "Scene ↔ section"; the rules and why:
+
+- **A section is a region, and a scene is its columns of clips.** `scene.insert`
+  and `arrangement.build` go from scene to timeline; `scene.capture` from
+  timeline to scene. Going there and back lands where it started (below).
+- **Spans are whole bars from a bar line.** `scene.insert {scene, at | bar,
+  bars}` takes the span from the start of the bar (`bar`, or `at` in beats,
+  which must be on a bar line) for `bars` bars, counted through the meter map.
+  An `at` between bar lines is refused (`scene.at`), because "n bars from the
+  middle of a bar" has two readings.
+- **Where an item stops.** Each clip of the scene becomes one item on its own
+  track at the span's start, converted as `item.add {clip}` converts it:
+  - `once`: one item as long as the clip, or as the span if that is shorter.
+    The rest of the span is silent on that track.
+  - `loop`, clip no longer than the span: if the clip's loop is on, starts at 0
+    and covers its whole content, and the clip's length is that content or a
+    whole number of times it, the item loops its content over the span (the
+    same sound as the clip repeating). Any other repeating clip cannot be one
+    item without a guess about the gap or the partial window, and is refused
+    (`scene.insert.period`, hint: set the clip's loop to its whole content,
+    clip.set, or ask for no more bars than the clip is long).
+  - `loop`, clip at least as long as the span: one item for the span, the first
+    part of the clip.
+- **Existing items in the span.** An item on a track that receives a clip and
+  overlaps the span is refused (`scene.insert.occupied`, naming the items; the
+  hint says to move or remove them). Items on other tracks are left alone. The
+  command never overwrites, trims or splits.
+- **An empty scene.** A scene with no clip is refused (`scene.empty`) by all
+  three commands that read one; a region with no item to capture is
+  `scene.capture.empty`.
+- **MIDI is copied, not pooled,** unless `pooled: true`; the conversion is the
+  one `clip.add {item}` and `item.add {clip}` already use (audio media are
+  shared, fades are not kept).
+- **The region.** `scene.insert` adds a section named after the scene (or
+  `name`), the scene's colour, over the span. It adds a new region every time
+  and never edits an existing one.
+- **Capture is one clip per track, with nothing guessed.** `scene.capture
+  {region, name?}` reads the items of each channel that lie wholly inside the
+  region:
+  - more than one item of one track inside it: `scene.capture.items`;
+  - an item that starts before the region or ends after it:
+    `scene.capture.edge`;
+  - an item that starts after the region's start: `scene.capture.offset` (a
+    clip begins at its own start, so the entry point would be lost);
+  - a warped take: `clip.unsupported`, as `clip.add {item}`;
+  - items on a master (they belong to no channel) are skipped, and a warning
+    `scene.capture.skipped` names them.
+  The clip is `loop` when its item fills the region and `once` when it is
+  shorter (it played once and fell silent in the section); the item's own loop
+  becomes the clip's. The new scene is appended after the last, named after the
+  region unless `name` is given, and takes its colour. The region and the
+  items are untouched.
+- **A song from scenes.** `arrangement.build {sequence: [{scene, bars}…], at |
+  bar?}` is `scene.insert` for each entry, one after the other from the start
+  (default: bar 1), a region for each. It checks every entry before changing
+  anything, and refuses an empty sequence, one past 256 entries, or `bars` < 1.
+- **Round trip.** `scene.capture` of a section that `scene.insert` laid gives a
+  scene whose clips play the same material, with these differences, each held
+  by a test: a clip as long as the span, or a `once` clip shorter than it, comes
+  back the same (length, loop, mode); a looped clip laid over a longer span
+  comes back as one looped clip as long as the span; a clip longer than the span
+  comes back cut to the span, as a `loop` clip.
+- **Limits and memory.** `scene.limit` and `clip.limit` apply to capture, and
+  `clip.memory` to audio it adds; items laid on the timeline are in the
+  arrangement's budget as `item.add`'s are.
+
 ### GUI (L3)
 
 `gui.md` §4.15 specifies it, from mock 13.
