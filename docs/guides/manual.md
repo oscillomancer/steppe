@@ -1548,11 +1548,18 @@ A launch takes effect at the next quantize boundary: the clip's own
 With `none` it happens as soon as the engine can still take it: about one
 audio block ahead for a track the audio callback runs, about 0.2 s for
 the others. Launching a clip while stopped starts playback with it from
-the play position. At the switch, notes still sounding end and audio
-crossfades over 5 ms. Returning to the arrangement does not restart a
+the play position. A track whose clips have take FX with latency waits
+that much longer, so the clip is still heard on its boundary. At the
+switch, notes still sounding end and audio crossfades over 5 ms. Returning to the arrangement does not restart a
 note already under way: it sounds from its next start. A clip keeps its
 place against the bars, so relaunching a loop of whole bars stays in
 phase.
+
+A clip's take FX and its take envelopes play as they do on the timeline
+(`fx.add {take}`, `env.add {take}`), and an instrument in its take FX plays
+its notes. The take's envelopes run from the clip's start, in beats on a
+MIDI clip and seconds on an audio one, again on every pass. Effects start
+afresh at each launch, and their tail is cut when the track switches away.
 
 `launch.state` tells what each track with clips plays as you hear it:
 `arrangement`, `clip` (with its position in the clip), `held` (a `once`
@@ -1577,7 +1584,8 @@ committing again writes the same performance over itself.
 Renders play the arrangement only; the render dialog says so while a
 clip is playing. Not yet:
 - launching while a master playrate is active (`launch.playrate`);
-- a clip take's FX and envelopes, which do not play in a clip yet.
+- automating a clip's take FX in clip time: their envelopes still follow
+  the timeline.
 
 A rack's Notes module that plays a track's notes follows that track's
 launches: it plays the clip, falls silent when the track stops, and

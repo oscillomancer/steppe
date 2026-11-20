@@ -137,7 +137,9 @@ Result<Engine::LaunchPlaced> Engine::placeLaunch(std::span<const LaunchRequest> 
                 const LaunchHorizon& h = launchHorizon_[rendered ? 0 : 1];
                 const std::int64_t end = h.end.load();
                 if (h.epoch.load() == clock.epoch) at = std::max(at, end);
-                floor = std::max(floor, at);
+                // Its clip chains' input takes the launch its lead earlier
+                // (ADR-0097, amended 2026-11-20).
+                floor = std::max(floor, at + n.launchLead);
             }
     const time::TimeMap& tm = *latest_->timeMap;
     const double rate = config_.sampleRate;
@@ -293,8 +295,8 @@ bool Engine::launchHorizonsAllow(const detail::Plan& plan, model::Id track, std:
         // The end, then the epoch: an executor stores them the other way.
         const std::int64_t end = h.end.load();
         const std::uint64_t e = h.epoch.load();
-        if (e > epoch) return false;  // relocated already
-        if (e == epoch && end > target) return false;
+        if (e > epoch) return false;                                  // relocated already
+        if (e == epoch && end > target - n.launchLead) return false;  // its early half too
     }
     return true;
 }
@@ -431,15 +433,20 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
         std::int64_t first = INT64_MAX, after = INT64_MAX;
         forEachTarget(p, liveClass, track, [&](detail::Node& n, detail::NotesFeed* feed) {
             const std::int64_t at = target + n.timelineShift;
+            // A channel with clip chains takes it its lead early as well
+            // (prelaunch): its first frame, which decides it.
+            const std::int64_t early = at - (feed ? 0 : n.launchLead);
             any = true;
-            first = std::min(first, at);
-            if (at < stream)
-                passed = true;
-            else if (at == stream) {
+            first = std::min(first, early);
+            if (early < stream) passed = true;  // (consulted only while undecided)
+            if (early == stream || at == stream) {
                 due = true;
                 lacking = lacking || (!feed && kind == detail::LaunchState::Kind::Clip &&
                                       detail::playerOf(n, clip) < 0);
-            } else
+            }
+            if (early > stream)
+                after = std::min(after, early);
+            else if (at > stream)
                 after = std::min(after, at);
         });
         if (!any) {  // nothing of it runs here
@@ -475,7 +482,20 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
                 status(st) != LaunchSlot::kApplied)
                 continue;  // voided, or rewritten
         }
-        if (due && !repeat) apply([&](std::int64_t at) { return at == stream; }, false);
+        if (due && !repeat) {
+            forEachTarget(p, liveClass, track, [&](detail::Node& n, detail::NotesFeed* feed) {
+                if (feed || n.launchLead <= 0 || target + n.timelineShift - n.launchLead != stream)
+                    return;
+                detail::LaunchAction a;
+                a.kind = kind;
+                a.player = kind == detail::LaunchState::Kind::Clip ? detail::playerOf(n, clip) : -1;
+                if (kind == detail::LaunchState::Kind::Clip && a.player < 0) return;
+                a.anchorSample = anchorSample;
+                a.anchorBeat = anchorBeat;
+                detail::prelaunch(n, a);
+            });
+            apply([&](std::int64_t at) { return at == stream; }, false);
+        }
         if (after != INT64_MAX)
             soonest = std::min(soonest, after);
         else

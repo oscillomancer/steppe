@@ -332,7 +332,8 @@ void dumpTakeChain(Dump& d, std::string_view a, const TakeChain& tc) {
                                   aheadFrom, aheadLoop, rateEventFresh, noteTarget, held,
                                   releaseHeld, chain, gainL, gainR, fadeIn, fadeOut, fadeInShape,
                                   fadeOutShape, fadeInCurve, fadeOutCurve, volume, pan, mute, buf,
-                                  active] = tc;
+                                  active, clipChain, player, delay, delayAt, inputPlayer,
+                                  inputAnchor] = tc;
     d.put(a, "item", tc.item);
     d.put(a, "take", tc.take);
     d.put(a, "span", std::array{tc.start, tc.end});
@@ -349,6 +350,10 @@ void dumpTakeChain(Dump& d, std::string_view a, const TakeChain& tc) {
     dumpAutomation(d, at(a, "pan"), tc.pan);
     dumpAutomation(d, at(a, "mute"), tc.mute);
     d.size(a, "buf", tc.buf.l);
+    // A clip's chain: its player and its delay back to the switch; what its
+    // input last read is state.
+    d.put(a, "clipChain", std::array{tc.clipChain ? 1 : 0, tc.player});
+    d.size(a, "delay", tc.delay.l);
 }
 
 void dumpClip(Dump& d, std::string_view a, const Clip& c) {
@@ -468,7 +473,8 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
                                   recordInputs, recordRack, inputLatency, inputBuf, latIn, latChain,
                                   timelineShift, sum, preFx, preFader, post, postKey, events,
                                   nextEvent, rateEventFresh, held, releaseHeld, releaseLive, clips,
-                                  takeChains, players, launch, launchFadeFrames, arrangementGain,
+                                  takeChains, players, launch, launchLead, launchNext,
+                                  launchNextValid, launchFadeFrames, arrangementGain,
                                   arrangementGains, launchBuf, clipVoices, clipWindow, postItems,
                                   itemShift, items, mix, silentFrom, silentTo, dropItems,
                                   noteTarget, volumeDb, pan, staticGain, panSettings, panCache,
@@ -506,7 +512,10 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
         d.put(pa, "beats", pl.periodBeats);
         d.put(pa, "events", static_cast<std::uint64_t>(pl.events.size()));
         d.put(pa, "audio", pl.audio.data != nullptr);
+        d.put(pa, "chain", pl.chain);
     }
+    // Its clip chains' lead (ADR-0097, amended 2026-11-20); launchNext is state.
+    d.put(a, "launchLead", n.launchLead);
     d.put(a, "clipSizing",
           std::array<std::uint64_t, 3>{static_cast<std::uint64_t>(n.launchFadeFrames), n.clipVoices,
                                        n.clipWindow});

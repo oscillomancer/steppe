@@ -192,17 +192,23 @@ instructions are in `docs/guides/installing.md`.
     launch is decided once for the track and every such rack, even when
     they run on different executors: it switches all of them at their
     own positions, or none (a missed launch is placed again).
+  - A clip whose take has FX or envelopes plays through them, as an
+    item's take does: its chain runs its latency ahead, so the clip is
+    heard at its boundary, starts afresh at each launch, and is cut at the
+    switch away after the crossfade. The take's envelopes are from the
+    clip's start, pass after pass (ADR-0097, amended 2026-11-20).
   - Renders play the arrangement only. The render dialog says so while a
     clip holds a track, following launches while it is open.
     `EngineApp::launchState()` gives the GUI what `launch.state` reports.
   - Limits, until done:
     - a master playrate refuses launches (`launch.playrate`);
-    - a clip take's FX and envelopes do not play (`launch.take_chain`
-      warning);
+    - a clip take's FX parameter envelopes follow the timeline, not the
+      clip;
     - freezing, or removing the playing clip, returns the track to the
       arrangement without the switch fade;
     - a quantize of `none` waits for the floor, about a device block for
-      a live track and about 0.2 s for a rendered one;
+      a live track and about 0.2 s for a rendered one, plus the latency
+      of the track's clip chains;
     - the engine logs no seeks or transport wraps, so the offline
       replay plays one linear run and a capture ends at a relocation;
     - the pane is L3.

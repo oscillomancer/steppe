@@ -563,9 +563,43 @@ the same.*
     with the master playrate. Until that lands, a plan with the master
     playrate active compiles no players, its tracks follow the
     arrangement, and a launch is refused with `launch.playrate`.
-  - *A clip take's FX and envelopes.* They will play as an item's take
-    chain does. Until then a clip plays without them, and the plan warns
-    with `launch.take_chain`, naming the clip.
+  - *A clip take's FX parameter envelopes* follow the timeline until they
+    move to clip time (ADR-0097's amendment, C2).
+- **A clip take's chain (ADR-0097, amended 2026-11-20).** A clip whose
+  active take has FX or an active envelope plays through a chain of its
+  own, as an item's take does (`TakeChain::clipChain`, compiled with the
+  timeline's take chains and linked to its player by
+  `compileClipPlayers`):
+  - *The lead.* A channel's `launchLead` is the most latency among its
+    clips' chains. Every clip chain's input runs that far ahead; its
+    output is delayed back by the lead less its own latency, so a clip is
+    heard at its switch frame, not its chain's latency later.
+  - *The early half of a launch.* A launch reaches such a channel
+    `launchLead` before its frame as well (`prelaunch`, recorded in
+    `Node::launchNext` until the launch applies). From there the incoming
+    clip's chain reads it from its new anchor. A MIDI chain going out
+    stops taking notes there and what it holds ends, so its notes end
+    where the switch is heard. An audio chain going out reads on through
+    the switch's crossfade, as a player's audio does.
+  - *Running.* A chain runs while its clip is coming in, plays or fades
+    out, and is otherwise idle. It is fresh (plug-ins reset, delays and
+    held notes cleared) each time it starts, and runs on, unreset, across
+    the clip's passes and a relaunch of the playing clip. Its output is
+    weighed by the switch's crossfade as a player's audio is, with the
+    clip's and the take's gain and pan after the chain.
+  - *Its input over a transport loop* folds as the output will: an audio
+    chain reads the loop start's song position (unanchored, as after a
+    wrap), and a MIDI chain ends what it holds at the fold, as a timeline
+    take chain running ahead does at its early wrap.
+  - *The take's envelopes* (volume, pan, mute) are from the clip's start
+    as heard: beats on a MIDI clip, seconds on an audio clip, from the
+    start of each pass.
+  - *A MIDI take's instrument* in its chain plays the clip's notes, not
+    the track's (`launchMidi` leaves them to it).
+  - Plan swaps carry a chain by take id (its stages by instance, its
+    delay while its length holds); the offline replay applies each
+    launch's early half at its frame less the lead. A render without
+    launches drops clip chains before `prepare` (`dropClipChains`).
 - **The take `pitch` envelope** that is stored but never played (core
   §4.5) stays unplayed for clips as for items. Whether to play it is
   decided with the stretch path, for both.
@@ -625,7 +659,10 @@ the same.*
     and plays them). Each target switches at the stream sample `target +
     timelineShift` of its own node, in the executor that runs that node;
     each executor cuts its block at its targets' frames. The floor counts
-    every target's executor.
+    every target's executor. A channel with clip chains is a target
+    `launchLead` early as well (`prelaunch`): its floor, its horizon check
+    and the frame that decides the entry are that much earlier (ADR-0097,
+    amended 2026-11-20).
   - **One decision for all of them.** States: pending, committed,
     applied, missed and voided. Each executor class (the renderer, the
     callback) stores its horizon, the epoch and the stream its current

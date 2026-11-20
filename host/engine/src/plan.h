@@ -830,6 +830,9 @@ struct ClipPlayer {
     // a beat), every pass of the loop window already laid out.
     double periodBeats = 0;
     std::vector<ClipEvent> events;
+    // Its take's chain (Node::takeChains), or -1: it plays straight into the
+    // track (ADR-0097, amended 2026-11-20).
+    int chain = -1;
 };
 // What a channel plays (engine.md §1.4.2): transport state, carried across
 // plan swaps by node and clip id, never in the model.
@@ -846,6 +849,7 @@ struct LaunchState {
     // -2 nothing) and the song sample where the switch began.
     int fadeFrom = -2;
     std::int64_t fadeStart = 0, fadeAnchorSample = 0;  // the left player's anchor
+    double fadeAnchorBeat = 0;
 };
 // What a launch does to one channel, at the block boundary where the
 // channel's song position reaches `anchorSample` (engine.md §1.4.2).
@@ -888,7 +892,22 @@ struct TakeChain {
     Automation volume, pan, mute;  // the take's envelopes (dB, %, 0/1), output side
     Stereo buf;
     bool active = false;  // processed in the last block: the chain is fresh at each entry
+    // A clip launcher clip's chain (ADR-0097, amended 2026-11-20): `item` is
+    // the clip, `player` its Node::players entry (-1: none, it never plays).
+    // Its input runs the node's launch lead ahead (Node::launchLead), its
+    // output is delayed by the lead less its own latency, so every clip chain
+    // on a node switches at the same frame. The take's envelopes are from the
+    // clip's start as heard: beats on a MIDI clip (kClipBeatTicks per beat),
+    // samples on an audio clip (its points are seconds).
+    bool clipChain = false;
+    int player = -1;
+    Stereo delay;             // lead - latency frames, a ring
+    std::size_t delayAt = 0;  // its next write
+    int inputPlayer = -1;     // the player and anchor its input last read
+    std::int64_t inputAnchor = INT64_MIN;
 };
+// Positions of a MIDI clip chain's take envelopes: clip-relative beats, scaled.
+inline constexpr double kClipBeatTicks = 1 << 20;
 
 struct Node {
     // Note Out events actually delivered this block, also without an instrument.
@@ -1008,6 +1027,12 @@ struct Node {
     // this block's arrangement gain (null: 1 throughout) with its buffers.
     std::vector<ClipPlayer> players;
     LaunchState launch;
+    // Clip chains (ADR-0097, amended 2026-11-20): the most latency among its
+    // clips' chains. A launch reaches the node that much early as well
+    // (`launchNext`, until it applies), so their input takes the new clip.
+    std::int64_t launchLead = 0;
+    LaunchAction launchNext;
+    bool launchNextValid = false;
     std::int64_t launchFadeFrames = 0;
     const float* arrangementGain = nullptr;
     std::vector<float> arrangementGains;
@@ -1496,6 +1521,45 @@ void launchRelocated(Node& n) SUPPLE_RT;
 // A plan swap: what the channel plays carries by clip id; a clip the new
 // plan lacks (or a node with no players) returns it to the arrangement.
 void carryLaunch(const Node& old, Node& n) SUPPLE_RT;
+// --- Clip chains (ADR-0097, amended 2026-11-20; clip_player.cpp) ---
+// A launch reaching the node Node::launchLead before it applies: its clip
+// chains' input (that much ahead) takes it from here.
+void prelaunch(Node& n, const LaunchAction& a) SUPPLE_RT;
+// What a clip chain's input reads in this block: the player's anchor on the
+// input side, or nothing (`on` false).
+struct ClipChainInput {
+    bool on = false;
+    std::int64_t anchorSample = 0;
+    double anchorBeat = 0;
+    bool unanchored = false;
+};
+ClipChainInput clipChainInput(const Node& n, int player) SUPPLE_RT;
+// Whether `player`'s output is heard anywhere from song sample `song` on in
+// this block (it plays, or fades out).
+bool clipChainHeard(const Node& n, int player, std::int64_t song) SUPPLE_RT;
+// `player`'s share of the output at song sample `song`: 1 while it plays, the
+// switch's crossfade at its edges, 0 otherwise (as launchAudio weighs it).
+double launchWeight(const Node& n, int player, std::int64_t song) SUPPLE_RT;
+// A clip chain's input audio for the block at timeline `pos` (song `pos -
+// timelineShift`), read `lead` ahead and folded over the transport loop as
+// the output will be: the raw clip, its gain and pan applied after the chain.
+void clipChainAudio(const Node& n, int player, const ClipChainInput& in, std::int64_t pos,
+                    std::int64_t lead, const LoopRange* loop, std::uint32_t frames,
+                    Stereo& into) SUPPLE_RT;
+// Its notes for the block, into `target` (the chain's instrument): the
+// input-side window, split where it folds over the transport loop (what is
+// held ends there).
+void clipChainMidi(const Plan& p, const Node& n, int player, const ClipChainInput& in,
+                   std::int64_t pos, std::int64_t lead, const LoopRange* loop, std::uint32_t frames,
+                   Stage& target) SUPPLE_RT;
+// Where in its clip `player` is heard at song sample `song`, its take
+// envelopes' position: beats (kClipBeatTicks) on a MIDI clip, samples on an
+// audio clip, from the start of the pass; false where it is not heard.
+bool clipChainTicks(const Plan& p, const Node& n, int player, std::int64_t song,
+                    std::int64_t& ticks) SUPPLE_RT;
+// A render without launches plays the arrangement only: its plan keeps no
+// clip chain (plan.cpp; before prepare).
+void dropClipChains(Plan& p);
 // One stage's modulation events for a block (ADR-0096, plan.cpp): after its
 // automation, at each point of the absolute grid; `origin` is the plan's
 // first sample. Exposed for tests.
