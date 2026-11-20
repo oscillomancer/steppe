@@ -403,26 +403,74 @@ Result<PluginModTarget> resolvePluginMod(std::span<const host::ParamInfo> list,
             found = &info;
             break;
         }
+    // What a route takes, as fx.describe marks it: directly (PARAM_MOD), or
+    // through an active envelope when `allowEnvelope` (ADR-0096 step M4):
+    // automatable and continuous; a VST3's never directly.
+    const auto writable = [](const host::ParamInfo& info) {
+        return (info.flags & (CLAP_PARAM_IS_READONLY | CLAP_PARAM_IS_BYPASS)) == 0;
+    };
+    const auto stepped = [](const host::ParamInfo& info) {
+        return (info.flags & (CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_ENUM)) != 0;
+    };
+    const auto direct = [&](const host::ParamInfo& info) {
+        return !vst3 && (info.flags & CLAP_PARAM_IS_MODULATABLE) != 0 && writable(info);
+    };
+    const auto byEnvelope = [&](const host::ParamInfo& info) {
+        return allowEnvelope && !direct(info) && writable(info) &&
+               (info.flags & CLAP_PARAM_IS_AUTOMATABLE) != 0 && !stepped(info);
+    };
     if (!found) {
-        std::string available;
-        auto add = [&](const std::string& text) {
-            available += (available.empty() ? "" : ", ") + text;
+        // Only the parameters a route can take: naming another would lead to
+        // the next refusal. Those an envelope reaches are named as such.
+        std::string routed, enveloped;
+        const auto add = [](std::string& to, const std::string& text) {
+            to += (to.empty() ? "" : ", ") + text;
+        };
+        const auto sort = [&](std::uint32_t param, const std::string& text) {
+            for (const host::ParamInfo& info : list)
+                if (info.id == param) {
+                    if (direct(info)) add(routed, text);
+                    if (byEnvelope(info)) add(enveloped, text);
+                }
         };
         if (schema && schema->isObject())
             if (const auto* ps = schema->find("params"); ps && ps->isObject())
-                for (const auto& entry : ps->asObject()) add(entry.key);
-        for (const auto& info : list) add(std::to_string(info.id));
-        return Error("rack.port", "the plug-in has no parameter " + key, "",
-                     "available parameter keys and numeric ids: " +
-                         (available.empty() ? "none" : available) +
-                         "; fx.describe lists their ranges");
+                for (const auto& entry : ps->asObject())
+                    if (entry.value.isObject())
+                        if (const auto* v = entry.value.find("id"); v && v->isNumber())
+                            sort(static_cast<std::uint32_t>(v->asInt()), entry.key);
+        for (const auto& info : list) sort(info.id, std::to_string(info.id));
+        const std::string message = "the plug-in has no parameter " + key;
+        if (routed.empty() && enveloped.empty())
+            return Error("rack.port", message, "",
+                         allowEnvelope
+                             ? "no parameter of this plug-in can take a route; automate it with "
+                               "envelope points instead (env.add {fx, param, points})"
+                             : "no parameter of this plug-in is modulatable; automate it instead "
+                               "(env.add {fx})");
+        std::string hint;
+        if (!routed.empty()) hint = "modulatable parameter keys and numeric ids: " + routed + "; ";
+        if (!enveloped.empty())
+            hint += "through an active envelope (modulate adds one): " + enveloped + "; ";
+        hint += "fx.describe marks them (" +
+                std::string(routed.empty()      ? "modulatable_by_envelope"
+                            : enveloped.empty() ? "modulatable"
+                                                : "modulatable, modulatable_by_envelope") +
+                ") and lists their ranges";
+        return Error("rack.port", message, "", hint);
     }
     if (vst3 || !(found->flags & CLAP_PARAM_IS_MODULATABLE)) {
+        // Read-only and bypass parameters are the caller's to refuse.
+        if (allowEnvelope && (found->flags & CLAP_PARAM_IS_AUTOMATABLE) && !stepped(*found))
+            return PluginModTarget{found->id, vst3 ? 1.0 : found->max - found->min, true};
         // A stepped or choice parameter is left out: a sum would move it
         // between steps at every grid point (a latency choice restarts).
-        if (allowEnvelope && (found->flags & CLAP_PARAM_IS_AUTOMATABLE) &&
-            !(found->flags & (CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_ENUM)))
-            return PluginModTarget{found->id, vst3 ? 1.0 : found->max - found->min, true};
+        if (allowEnvelope && (found->flags & CLAP_PARAM_IS_AUTOMATABLE) && stepped(*found))
+            return Error("rack.modulation",
+                         found->name + " is stepped (or a list), so a route cannot move it", "",
+                         "automate it with envelope points instead (env.add {fx, param, "
+                         "points}); routes take continuous parameters, which fx.describe marks "
+                         "modulatable or modulatable_by_envelope");
         return Error("rack.modulation",
                      found->name + (allowEnvelope ? " is neither modulatable nor automatable"
                                                   : " is not modulatable"),

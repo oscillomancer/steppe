@@ -951,7 +951,8 @@ the first free Mod Out input and makes the route. A follower also gets
 an In module and a send from `from`. When that rack would feed back
 into itself, the command uses another Modulators rack, or adds one. That
 happens when the rack already drives the track the follower listens to,
-or already listens to the target. A follower cannot listen to the track
+or already listens to the target, and each rack it adds that way comes
+on another new channel named Modulators. A follower cannot listen to the track
 it modulates, or to a track that track feeds. Without a depth the
 command uses a quarter of a parameter's range, 6 dB, or 50 %. For a
 macro, the result's `knob` is the knob that moves the target.

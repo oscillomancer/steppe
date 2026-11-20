@@ -4341,6 +4341,14 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
                         m.stale = om.stale;
                         break;
                     }
+            // A lane's held sum (M4), by CLAP id: what it adds while a
+            // source rack's modules are still the other executor's.
+            for (ParamLane& ln : st.lanes)
+                for (const ParamLane& ol : os.lanes)
+                    if (ol.clapId == ln.clapId) {
+                        ln.modSum = ol.modSum;
+                        break;
+                    }
         };
         auto carryStages = [&](std::vector<Stage>& chain, std::vector<Stage>& oldChain) {
             for (Stage& st : chain)
