@@ -2701,10 +2701,13 @@ void Engine::rendererLoop(std::uint64_t seen) {
                 pending->rateSeekSequence == 0 && pending->handAt >= streamLocal_)
                 target = std::min(target, pending->handAt);
             for (std::int64_t left = target - streamLocal_; left > 0;) {
-                const auto k = detail::rateUntil(
+                auto k = detail::rateUntil(
                     *plan_, pos_,
                     static_cast<std::uint32_t>(std::min<std::int64_t>(left, plan_->block)), loopR_,
                     0);
+                // The launch queue still hears from this executor: its
+                // horizon, and that it has nothing of an applied launch.
+                k = launchesAt(*plan_, 0, seen, streamLocal_, k, true);
                 pos_ = plan_->rateEnabled ? pos_ + k : loopR_.next(pos_, pos_ + k);
                 streamLocal_ += k;
                 left -= k;
@@ -3048,6 +3051,10 @@ void Engine::anticipativeCycle(const float* const* in, float* const* out, std::u
         } else if (countHold_) {  // counting in: the rendered audio waits
             silence(outAt.data(), 0, k);
         } else {
+            // Nothing runs here, but the launch queue still hears from the
+            // callback: its horizon, and that it has nothing of an applied
+            // launch (else the slot would never be free again).
+            if (playing && livePlan_) (void)launchesAt(*livePlan_, 1, e, playedStream(e), k, false);
             const Pulled played = pullAhead(outAt.data(), k);
             if (played.wrapped) k = played.frames;  // the rest continues at the loop start
             if (played.first != kNothingPlayed && livePlan_)

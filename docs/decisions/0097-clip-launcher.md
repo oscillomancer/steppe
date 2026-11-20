@@ -354,6 +354,29 @@ Clips replace that with an **ordered budget**:
     pending entry from the new position (B4).
   - Each applied entry comes back to the main thread with its stream
     sample, its running frame and its song position.
+  - *(2026-11-20, revised with the co-director: several targets per
+    launch; engine.md §1.4.2.)* A launch has one target node per thing
+    that follows the track: its channel, and every rack Notes module whose
+    source is that track. Each switches at the launch's stream sample plus
+    its own node's timeline shift, by the executor that runs that node, so
+    a track and the rack it feeds may switch on two executors. Whether the
+    launch is taken is decided once, for all of them:
+    - The main thread publishes the entry, then reads every executor's
+      published horizon (the furthest its current block may reach,
+      stored before it reads the queue). If each executor that runs a
+      target is at or before the target, the entry is committed: each
+      will read it before it passes its frames. Otherwise it is missed.
+    - An executor that reaches a frame of an entry still undecided marks
+      it missed. Nothing of a missed entry switches anywhere; the main
+      thread places it again, as before.
+    - The first target of a committed entry to switch takes it by
+      compare-and-swap, against the main thread voiding an entry whose
+      epoch ended first. Every other target then switches at its own
+      frame, or, if its executor relocated before reaching it, at that
+      executor's next block, as at a relocation. The slot is reused only
+      once each executor is done with it.
+    This replaces "Who applies it" above: an entry is no longer taken by
+    the track's executor alone.
 - **While stopped,** a launch is not quantized. It starts the transport
   and applies at the play start's first sample, so the clip's anchor is
   the play position.

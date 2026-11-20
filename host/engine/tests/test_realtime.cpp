@@ -74,6 +74,11 @@ struct EngineTestAccess {
         e.betweenCompilesForTests_ = hook;
         e.betweenCompilesContext_ = context;
     }
+    static std::uint32_t launchesQueued(const Engine& e) { return e.launchesQueued_.load(); }
+    static void beforeLaunchCommit(Engine& e, void (*hook)(void*), void* context) {
+        e.launchCommitForTests_ = hook;
+        e.launchCommitContext_ = context;
+    }
     static void afterCollect(Engine& e, void (*hook)(void*), void* context) {
         e.afterCollectForTests_ = hook;
         e.afterCollectContext_ = context;
@@ -179,6 +184,14 @@ struct EngineTestAccess {
     static auto event(const Engine& e) { return e.rendererEvent_.load(); }
     static detail::Recorder& recorder(Engine& e) { return *e.recorderOwned_; }
 };
+// For the other test files (test_clip_player.cpp): EngineTestAccess is
+// defined here alone.
+void launchCommitHookForTests(Engine& e, void (*hook)(void*), void* context) {
+    EngineTestAccess::beforeLaunchCommit(e, hook, context);
+}
+std::uint32_t launchesQueuedForTests(const Engine& e) {
+    return EngineTestAccess::launchesQueued(e);
+}
 }  // namespace supple::engine
 using model::Id;
 using model::kMaster;

@@ -545,10 +545,6 @@ the same.*
   - *A clip take's FX and envelopes.* They will play as an item's take
     chain does. Until then a clip plays without them, and the plan warns
     with `launch.take_chain`, naming the clip.
-  - *Racks.* A clip's notes reach the track's own instrument and its
-    MIDI sends (they join the track's MIDI stream). A rack's Notes module
-    plays its source track's compiled events in the rack's own node and
-    does not yet follow the track's launches.
 - **The take `pitch` envelope** that is stored but never played (core
   §4.5) stays unplayed for clips as for items. Whether to play it is
   decided with the stretch path, for both.
@@ -577,7 +573,17 @@ the same.*
   the old one). It adds the clip's audio, crossfading by song position
   over `kLaunchFadeSeconds`. Plain items and take chains are scaled by
   that gain. Timeline MIDI passes unplayed while a clip holds the track,
-  and `launchMidi` emits the clip's notes instead.
+  and `launchMidi` emits the clip's notes instead. A clip's notes join
+  the track's MIDI stream, so its MIDI sends carry them.
+- **A rack's Notes module follows its source track** (revised
+  2026-11-20). Its feed keeps its own launch state and its own players
+  for the source track's MIDI clips (`compileFeedClips`), switched by the
+  same launches at the rack node's frame (below). While a clip, a stop or
+  a held clip holds the source track, the feed's timeline events pass
+  unplayed and `feedClipMidi` gives the clip's notes, with the phase rules
+  of `launchMidi`. At each switch the notes the timeline or a clip held
+  end (`releaseHeld`); an audio clip leaves the feed silent. Wraps,
+  relocations and plan swaps treat the feed as they treat the channel.
 - `OfflineSettings::launches` replays a log from the render's start (no
   seeks or wraps yet; L4 adds them with capture).
 - **The queue (launch_runtime.cpp).** `Engine::launch` places a set of
@@ -590,15 +596,41 @@ the same.*
   the play position, applied at the play start. The queue has
   `kLaunchSlots` fixed slots, one per track; a newer request replaces the
   track's pending one, and a full queue refuses with `launch.queue`.
-  Each slot's state word carries a generation. The executor that runs the
-  track's node applies an entry by compare-and-swap of the state it read,
-  so a slot the main thread rewrote meanwhile is never applied, and an
-  entry is applied once even when the node moves between executors.
-  Applying happens at the stream sample `target + timelineShift`; each
-  executor cuts its block there. An entry of another epoch is not
-  applied, and one already past is marked missed; nor is a clip entry
-  in a plan without that clip. `service()` places missed and old-epoch
-  entries again, alone, from the current position. It drops, with a
+  Each slot's state word carries a generation, so a slot the main thread
+  rewrote meanwhile is never applied.
+  - **Targets (ADR-0097, revised 2026-11-20).** An entry switches the
+    track's channel (when it has players) and every rack Notes feed whose
+    source is the track (`NotesFeed::follows`: the source track has clips
+    and plays them). Each target switches at the stream sample `target +
+    timelineShift` of its own node, in the executor that runs that node;
+    each executor cuts its block at its targets' frames. The floor counts
+    every target's executor.
+  - **One decision for all of them.** States: pending, committed,
+    applied, missed and voided. Each executor class (the renderer, the
+    callback) stores its horizon, the epoch and the stream its current
+    block may reach, before it reads the queue (sequentially consistent).
+    The main thread publishes an entry pending, then reads the horizons of
+    the executors running its targets in the latest plan. If each is at or
+    before the target (or in an older epoch), it commits the entry;
+    otherwise it marks it missed. An executor that reaches, or is past, a
+    frame of a pending entry marks it missed. So a committed entry is read
+    by every executor running a target before it passes that target's
+    frame.
+  - The first target of a committed entry to switch moves it to applied
+    by compare-and-swap. An executor past a frame of a committed entry, or
+    whose plan lacks the clip at the track's frame, voids it instead, and
+    `service()` voids a committed entry of an ended epoch: nothing of a
+    voided entry switches. An applied entry switches each remaining
+    target at its frame. An executor that relocated before reaching one
+    switches it at its next block, marked as after a relocation. Each
+    executor sets its bit in the slot's `done` when it has nothing left of
+    it; the slot is free again once every executor class has.
+  - Only the track's switch sends the ack and joins the log; a feed's
+    switch follows from it, in the offline replay as live.
+  - An entry of another epoch is not applied by an executor in a newer
+    one, except the remaining targets of an applied entry (above).
+    `service()` places missed, voided and old-epoch entries again, alone,
+    from the current position. It drops, with a
   warning, any waiting entry whose track or clip the latest plan cannot
   play (frozen, removed, or a master playrate active), so an edit never
   leaves a launch to fire later. Applied entries come back

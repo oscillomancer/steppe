@@ -1569,10 +1569,12 @@ committing again writes the same performance over itself.
 Renders play the arrangement only; the render dialog says so while a
 clip is playing. Not yet:
 - launching while a master playrate is active (`launch.playrate`);
-- a clip take's FX and envelopes, which do not play in a clip yet;
-- a rack's Notes module following launches: on a track whose instrument
-  is a rack, clips do not reach it and the timeline's notes keep playing
-  through it. MIDI sends from the track do carry the clips.
+- a clip take's FX and envelopes, which do not play in a clip yet.
+
+A rack's Notes module that plays a track's notes follows that track's
+launches: it plays the clip, falls silent when the track stops, and
+plays the timeline again with the arrangement. The track's MIDI sends
+carry the clips too.
 
 A frozen track plays its print: `launch.clip` refuses it and
 `launch.scene` skips it.

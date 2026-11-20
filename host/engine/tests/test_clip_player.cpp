@@ -14,11 +14,20 @@
 #include <filesystem>
 
 #include "bridge_patience.h"
+#include "plan.h"
 #include "realtime_common.h"
 
 using namespace supple;
 using namespace supple::engine;
 namespace fs = std::filesystem;
+
+namespace supple::engine {
+// test_realtime.cpp (EngineTestAccess): runs `hook` in launch() between
+// publishing a launch and deciding it.
+void launchCommitHookForTests(Engine& e, void (*hook)(void*), void* context);
+// The slots the executors still act on (Engine::launchesQueued_).
+std::uint32_t launchesQueuedForTests(const Engine& e);
+}  // namespace supple::engine
 
 namespace {
 
@@ -788,6 +797,223 @@ TEST_CASE("a MIDI clip plays through the track's MIDI send") {
         double heard = 0;
         for (float x : live.left) heard = std::max(heard, std::fabs(double(x)));
         CHECK(heard > 0.01);
+    }
+}
+
+// --- A rack's Notes module follows its source track (ADR-0097, 2026-11-20) -----
+
+// tr_1 plays the sine: four bars of whole notes, and a clip of two eighth
+// notes a bar. tr_2's rack turns tr_1's notes into its gate: a Notes module
+// sourcing tr_1 (with a device, which makes the rack live, so the anticipative
+// engine runs it in the callback while tr_1 stays with the renderer).
+void rackFollows(Project& p, bool device) {
+    p.run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.sine"})");
+    p.run("item.add",
+          R"({"track": "tr_1", "bar": 1, "notation": "voice bass; 1: G3:w | A3:w | B3:w | C4:w"})");
+    p.run(
+        "clip.add",
+        R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C3:e r:e C3:e r:e r:h"})");
+    p.run("track.add", R"({"name": "Gates"})");  // tr_2
+    p.run("rack.add", R"({"track": "tr_2"})");   // rk_1, its Out mo_1
+    p.run("module.add",
+          device ? R"({"rack": "rk_1", "type": "notes", "source": "tr_1", "device": "controller"})"
+                 : R"({"rack": "rk_1", "type": "notes", "source": "tr_1"})");  // mo_2
+    p.run("cable.add", R"({"from": "mo_2.gate", "to": "mo_1.l"})");
+}
+
+// tr_2 (the rack's gate) before its fader, offline, replaying `log`.
+std::vector<float> gates(Project& p, double seconds, std::vector<LaunchLogEntry> log) {
+    InstancePool pool = makePool();
+    OfflineSettings settings;
+    settings.endSeconds = seconds;
+    settings.projectDir = p.app->projectDir();
+    settings.track = id("tr_2");
+    settings.tap = model::Tap::PreFader;
+    settings.launches = std::move(log);
+    auto r = renderOffline(p.app->head(), pool, settings);
+    REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+    return r->audio.channels[0];
+}
+
+TEST_CASE("a rack's Notes module follows its source track's launches, offline") {
+    Project p;
+    rackFollows(p, false);
+    const std::int64_t bar = 4 * kBeat;
+    const std::vector<LaunchLogEntry> log{launch(bar, "cl_1"),
+                                          back(2 * bar, LaunchLogEntry::Action::Stop),
+                                          back(3 * bar, LaunchLogEntry::Action::Arrangement)};
+    const auto g = gates(p, 8.0, log);
+    const auto at = [&](double seconds) { return g[std::size_t(seconds * 48000)]; };
+    CHECK(at(1.0) == 1.0f);   // the arrangement's G3
+    CHECK(at(2.1) == 1.0f);   // the clip's first eighth note
+    CHECK(at(2.35) == 0.0f);  // its rest: the arrangement's A3 passes unplayed
+    CHECK(at(2.6) == 1.0f);   // its second eighth
+    CHECK(at(3.5) == 0.0f);
+    CHECK(at(4.5) == 0.0f);  // stopped: B3 passes unplayed
+    CHECK(at(6.5) == 1.0f);  // the arrangement again, from C4 at the switch
+    // Without the launches the rack plays the arrangement throughout.
+    const auto plain = gates(p, 8.0, {});
+    CHECK(plain[std::size_t(2.35 * 48000)] == 1.0f);
+    CHECK(plain[std::size_t(4.5 * 48000)] == 1.0f);
+}
+
+TEST_CASE(
+    "a rack's Notes module follows launches live as offline, in both executors, also "
+    "with the rack and its source track on different executors" *
+    doctest::description("rt")) {
+    for (const bool device : {false, true}) {
+        Project p;
+        rackFollows(p, device);
+        const model::Session s = p.app->head();
+        {
+            // With the device the rack is live and tr_1 is not: in the
+            // anticipative engine their launches switch on two executors.
+            InstancePool pool = makePool();
+            auto plan = detail::compile(s, pool, 0, 128);
+            REQUIRE_MESSAGE(plan, (plan ? std::string() : plan.error().toString()));
+            for (const detail::Node& n : plan->nodes) {
+                if (n.rack) CHECK(n.live == device);
+                if (n.id == id("tr_1")) CHECK_FALSE(n.live);
+            }
+        }
+        const std::int64_t frames = 48000 * 7 + 8192;
+        for (const std::uint32_t block : {128u, 512u})
+            for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+                INFO("device " << device << ", block " << block << ", anticipative "
+                               << options.anticipative);
+                Engine::LaunchRequest stop = backTo("tr_1");
+                stop.action = LaunchLogEntry::Action::Stop;
+                const std::vector<Step> steps{{20, {request("tr_1", "cl_1")}},
+                                              {(96000 + 4000) / block, {stop}},
+                                              {(192000 + 4000) / block, {backTo("tr_1")}}};
+                const Live live = playLive(s, p.app->projectDir(), options, block, frames, steps);
+                REQUIRE(live.log.size() == 3);
+                CHECK(live.log[0].anchorSample == 96000);
+                CHECK(live.log[1].anchorSample == 192000);
+                CHECK(live.log[2].anchorSample == 288000);
+                InstancePool pool = makePool();
+                OfflineSettings settings;
+                settings.endSeconds = 7.0;
+                settings.projectDir = p.app->projectDir();
+                settings.launches = live.log;
+                auto offline = renderOffline(s, pool, settings);
+                REQUIRE(offline);
+                CHECK(maxDiff(live.left, live.latency, offline->audio.channels[0], 48000 * 7) ==
+                      0.0);
+                // The rack's switches changed the mix: equality says something.
+                const auto heard = gates(p, 7.0, live.log), plain = gates(p, 7.0, {});
+                CHECK(heard != plain);
+            }
+    }
+}
+
+TEST_CASE("an applied launch frees its slot once every executor is done with it" *
+          doctest::description("rt")) {
+    // Each executor class marks an applied slot done, even one that runs
+    // none of its targets (the callback of a plan with nothing live), so the
+    // queue empties and its slots come back (else launch.queue, at last).
+    Project p;
+    twoTracks(p);
+    const model::Session s = p.app->head();
+    constexpr std::uint32_t kBlock = 512;
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 4});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+        REQUIRE(engine.load(s, p.app->projectDir()));
+        engine.play();
+        const auto run = [&](std::int64_t cycles) {
+            if (options.anticipative)
+                runAheadOnState(engine, backend, cycles, kBlock);
+            else
+                backend.run(cycles);
+            engine.service();
+        };
+        run(10);
+        const std::vector<Engine::LaunchRequest> scene{request("tr_1", "cl_1"),
+                                                       request("tr_2", "cl_2")};
+        REQUIRE(engine.launch(scene, model::LaunchQuantize::Beat));
+        run(48000 / kBlock);
+        REQUIRE(engine.launchLog().size() == 2);
+        CHECK(launchesQueuedForTests(engine) == 0);
+        engine.stop();
+    }
+}
+
+TEST_CASE("a launch missed before it is decided lands on neither the track nor its rack" *
+          doctest::description("rt")) {
+    // The main thread stalls between publishing a launch and deciding it,
+    // while the executors play past its bar. The executor that reaches a
+    // frame of it undecided marks it missed: nothing switches there. Placed
+    // again, it switches the track and the rack together on the next bar.
+    for (const bool device : {false, true}) {
+        Project p;
+        rackFollows(p, device);
+        const model::Session s = p.app->head();
+        constexpr std::uint32_t kBlock = 128;
+        const std::int64_t frames = 48000 * 7 + 8192;
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("device " << device << ", anticipative " << options.anticipative);
+            InstancePool pool = makePool();
+            MediaCache media;
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = frames});
+            Engine engine(pool, media, options);
+            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+            REQUIRE(engine.load(s, p.app->projectDir()));
+            engine.play();
+            struct Stall {
+                Engine* engine;
+                DummyBackend* backend;
+                bool anticipative;
+                std::int64_t cycles;
+            } stall{&engine, &backend, options.anticipative, (96000 + 8192) / kBlock - 20};
+            const auto run = [](Stall& st, std::int64_t cycles) {
+                if (st.anticipative)
+                    runAheadOnState(*st.engine, *st.backend, cycles, kBlock);
+                else
+                    st.backend->run(cycles);
+            };
+            run(stall, 20);
+            launchCommitHookForTests(
+                engine,
+                [](void* context) {
+                    auto& st = *static_cast<Stall*>(context);
+                    if (st.anticipative)
+                        runAheadOnState(*st.engine, *st.backend, st.cycles, kBlock);
+                    else
+                        st.backend->run(st.cycles);
+                },
+                &stall);
+            const Engine::LaunchRequest r = request("tr_1", "cl_1");
+            auto placed = engine.launch(std::span(&r, 1), model::LaunchQuantize::Bar);
+            launchCommitHookForTests(engine, nullptr, nullptr);
+            REQUIRE(placed);
+            CHECK(placed->anchorSample == 96000);
+            engine.service();  // missed: placed again, on bar 3
+            const auto pending = engine.launchesPending();
+            REQUIRE(pending.size() == 1);
+            CHECK(pending[0].placed.anchorSample == 192000);
+            run(stall, frames / kBlock - 20 - stall.cycles);
+            engine.service();
+            engine.stop();
+            CHECK(engine.processErrors() == 0);
+            CHECK(engine.anticipationMisses() == 0);
+            const auto log = engine.launchLog();
+            REQUIRE(log.size() == 1);  // applied once, on bar 3
+            CHECK(log[0].anchorSample == 192000);
+            OfflineSettings settings;
+            settings.endSeconds = 7.0;
+            settings.projectDir = p.app->projectDir();
+            settings.launches = log;
+            InstancePool offlinePool = makePool();
+            auto offline = renderOffline(s, offlinePool, settings);
+            REQUIRE(offline);
+            CHECK(maxDiff(backend.capture().channels[0], engine.outputLatency(),
+                          offline->audio.channels[0], 48000 * 7) == 0.0);
+        }
     }
 }
 

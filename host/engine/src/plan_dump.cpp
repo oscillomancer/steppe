@@ -393,7 +393,8 @@ void dumpRack(Dump& d, std::string_view a, const RackNode& r) {
         [[maybe_unused]] const auto& [fnotes, id, routes, source, events, next, midiStage,
                                       rateFresh, block, sortScratch, order, device, ports,
                                       sourceDevice, sourcePorts, fromChannel, toChannel, sourceAuto,
-                                      liveGeneration] = f;
+                                      liveGeneration, launch, players, clipEvents, follows,
+                                      releaseHeld] = f;
         const auto fa = at(a, "notes", i);
         d.put(fa, "id", f.id);
         d.put(fa, "routes", f.routes);
@@ -408,6 +409,18 @@ void dumpRack(Dump& d, std::string_view a, const RackNode& r) {
         d.put(fa, "channels", std::array{f.fromChannel, f.toChannel});
         d.put(fa, "sourceAuto", f.sourceAuto);
         d.put(fa, "liveGeneration", f.liveGeneration);
+        // Its source track's launches (ADR-0097): the compiled MIDI clips;
+        // what plays is state.
+        d.put(fa, "follows", f.follows);
+        for (std::size_t k = 0; k < f.players.size(); ++k) {
+            const ClipPlayer& pl = f.players[k];
+            const auto pa = at(fa, "player" + std::to_string(k));
+            d.put(pa, "clip", pl.clip);
+            d.put(pa, "flags", std::array{pl.once, pl.muted});
+            d.put(pa, "beats", pl.periodBeats);
+            d.put(pa, "events", static_cast<std::uint64_t>(pl.events.size()));
+        }
+        d.size(fa, "clipEvents", f.clipEvents);
     }
     for (std::size_t i = 0; i < r.notesOut.size(); ++i) {
         const NotesOutBinding& b = r.notesOut[i];
