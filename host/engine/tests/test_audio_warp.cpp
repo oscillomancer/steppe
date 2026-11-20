@@ -587,6 +587,33 @@ TEST_CASE("slice at closely spaced hits keeps complementary fades and the origin
     CHECK(residual < 1e-5);
 }
 
+TEST_CASE("a command that runs another command is recorded with its own arguments") {
+    // audio.quantize in slice mode runs item.split, which resolves its arguments: history must
+    // keep what the caller sent (a branch merge replays it), not the inner command's.
+    WarpHost h;
+    h.run("take.hits.set", R"({"take":"tk_1","positions":[0.3,0.8]})");
+    const model::Session base = h.app->head();
+    h.run("audio.quantize", R"({"items":["it_1"],"grid":0.25,"mode":"slice","strength":0})");
+    REQUIRE(h.app->head().items.size() > base.items.size());  // it split
+    const auto* version = h.app->versions().version(h.app->head().version);
+    REQUIRE(version);
+    REQUIRE(version->txn.invocations.size() == 1);
+    const auto invocations = version->txn.invocations;
+    CHECK(invocations[0].command == "audio.quantize");
+    CHECK(invocations[0].args.find("items"));
+    CHECK(invocations[0].args.find("grid"));
+    CHECK_FALSE(invocations[0].args.find("at"));  // item.split's
+    const auto replayed = h.app->replay(h.registry, base, invocations, h.app->head().version + 1);
+    REQUIRE_MESSAGE(replayed, (replayed ? "" : replayed.error().toString()));
+    CHECK(replayed->session.items.size() == h.app->head().items.size());
+    for (const auto& entry : h.app->head().items) {
+        const auto* other = replayed->session.items.find(entry.id);
+        REQUIRE(other);
+        CHECK(model::itemSpan(replayed->session, *other).startSec ==
+              doctest::Approx(model::itemSpan(h.app->head(), *entry.value).startSec));
+    }
+}
+
 TEST_CASE("a warped stem retains its bundle inputs and ignores unrelated missing media") {
     WarpHost h;
     h.run("track.add", R"({"name":"Other microphone"})");

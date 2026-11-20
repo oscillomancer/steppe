@@ -42,7 +42,11 @@ struct FakeHost : Host, RefResolver {
     int before = 0;
     int begins = 0, commits = 0, rollbacks = 0;
     std::vector<LogRecord> records;
+    std::vector<std::pair<std::string, json::Value>> invokedCalls;  // what history would keep
     std::vector<std::string> events;
+    void invoked(std::string_view command, int, const json::Value& args, Kind) override {
+        invokedCalls.emplace_back(std::string(command), args);
+    }
     Context makeContext(const Origin& origin) override {
         Context ctx(origin);
         ctx.provide(toy);
@@ -453,6 +457,70 @@ TEST_CASE("references resolve before handlers and logs store IDs") {
     REQUIRE_FALSE(ambiguous);
     CHECK(ambiguous.error().code == "ref.ambiguous");
     CHECK(ambiguous.error().hint.find("toy_1") != std::string::npos);
+}
+
+TEST_CASE("a command that runs another keeps its own resolved arguments in the log and history") {
+    auto registry = makeRegistry();
+    // The inner command resolves its target (toy.target.get). Each wrapper runs it from its
+    // handler through the registry, on the wrapper's own context, as the engine's nesting
+    // commands do (audio.quantize running item.split).
+    std::string inner = "counter";
+    const auto wrapper = [&](const char* name, bool resolves) {
+        Command<Target, Count> c;
+        c.name = name;
+        c.kind = Kind::Edit;
+        c.exposure = Exposure::Internal;
+        c.summary = "Run toy.target.get inside.";
+        c.args =
+            schema::object<Target>("target").field("target", &Target::target, refSchema()).build();
+        c.result = schema::object<Count>("count")
+                       .field("count", &Count::count, schema::integerOf<int>())
+                       .build();
+        if (resolves)
+            c.resolve = [](Target& args, Context& ctx) -> Status {
+                auto id = resolveRef(ctx, "toy", args.target);
+                if (!id) return id.error();
+                args.target.value = "outer:" + *id;  // not what the inner command settles on
+                return {};
+            };
+        c.run = [&inner](const Target&, Context& ctx) -> Result<Count> {
+            auto args = json::Value::object();
+            args["target"] = json::Value::object();
+            args["target"]["name"] = inner;
+            auto r = ctx.service<const Registry>().find("toy.target.get")->invoke(args, ctx);
+            if (!r) return r.error();
+            return Count{static_cast<int>(r->find("count")->asInt())};
+        };
+        registry.add(std::move(c));
+    };
+    wrapper("toy.wrap", false);
+    wrapper("toy.wrap.resolved", true);
+    FakeHost host;
+    Dispatcher dispatcher(registry, host);
+    const auto selector = obj(R"({"target":{"name":"counter"}})");
+
+    // The caller's arguments as sent: the inner command's resolve step does not replace them.
+    REQUIRE(call(dispatcher, "toy.wrap", selector));
+    CHECK(host.records.back().args == selector);
+    REQUIRE(host.invokedCalls.size() == 1);
+    CHECK(host.invokedCalls.back().first == "toy.wrap");
+    CHECK(host.invokedCalls.back().second == selector);
+
+    // A command with its own resolve step keeps what it resolved.
+    REQUIRE(call(dispatcher, "toy.wrap.resolved", selector));
+    CHECK(host.records.back().args.find("target")->asString() == "outer:toy_1");
+    CHECK(host.invokedCalls.back().second.find("target")->asString() == "outer:toy_1");
+
+    // A failing inner command leaves them alone too.
+    inner = "other";
+    auto failed = call(dispatcher, "toy.wrap", selector);
+    REQUIRE_FALSE(failed);
+    CHECK(failed.error().code == "ref.ambiguous");
+    CHECK(host.records.back().args == selector);
+
+    // And the next top-level command still logs its own resolved arguments.
+    REQUIRE(call(dispatcher, "toy.target.get", selector));
+    CHECK(host.records.back().args.find("target")->asString() == "toy_1");
 }
 
 TEST_CASE("transaction rollback failure preserves the initiating error") {
