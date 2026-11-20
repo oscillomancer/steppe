@@ -1576,8 +1576,49 @@ copy of an item. A MIDI clip's length is in beats and follows the tempo;
 an audio clip's is in seconds and plays at its take's own rate. A clip
 loops by default (`mode: once` plays it once), and a loop window can
 repeat part of it. `item.add {clip}` lays a copy of a clip on the
-timeline. The clip launcher's pane comes later; meanwhile its commands
-work from agents and the console.
+timeline.
+
+### The launcher pane
+
+**View > Clip launcher** shows the pane between the track panel and the
+timeline; it opens by itself in a project that has scenes. Each scene is a
+column, each channel a row, so a clip sits beside its track's controls.
+Drag the pane's right edge to widen it; dragged all the way, it takes the
+whole view and the timeline hides until you drag it back. Its width, and
+whether it is shown, are kept with the project's view settings.
+
+Above the columns, **Stop all** silences every clip and **Arrangement**
+returns every track to the timeline. Each scene's header has a ▶ that
+launches the scene; double-click its name to rename it, drag it sideways
+to reorder the scenes, and right-click it for Rename, Colour and Delete.
+The **+** after the last scene adds one.
+
+In a cell, no click does two things:
+- a clip's ▶ launches it; a click on the clip's body selects it (Ctrl adds
+  more) and a double-click opens it, a MIDI clip in the piano roll;
+- on a track with clips, an empty cell's small square stops the track; a
+  click elsewhere in the cell selects it, and a double-click makes an empty
+  one-bar MIDI clip there and opens it.
+
+A clip shows its notes or waveform under its name. While it plays, its ▶,
+its outline and a line along its foot that shows its progress turn green;
+a clip waiting for its quantize boundary has a dashed outline. A scene
+whose clips all play has its header outlined. The narrow **Arr** column at
+the right has a dot per track, lit while the track follows the
+arrangement; click an unlit dot to return the track. While a clip holds a
+track, the track's items on the timeline are dimmed.
+
+Drag a clip to another empty cell to move it, with Ctrl to copy it; an
+occupied cell refuses it. Drag a clip onto a channel's lane to lay a copy
+on the timeline, or an item into an empty cell to make a clip from it.
+Right-click a clip for Rename, Colour, Mode (loop or once), Quantize,
+Duplicate, Lay on timeline at playhead and Delete; Delete on the keyboard
+removes the selected clips. The inspector shows a selected clip's name,
+colour, length, gain, mode, launch quantize and mute.
+
+In the piano roll a clip starts at its own bar 1. It has no place in the
+song, so the roll shades and spells it by the key at the project's start
+and shows no chords. While the clip plays, the playhead shows where.
 
 ### Playing clips
 

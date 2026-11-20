@@ -138,8 +138,8 @@ instructions are in `docs/guides/installing.md`.
   first chord, or by View > Chord row), both edited there; the piano roll's
   strip names the chords (a double-click edits them), its rows outside the
   key's scale are shaded, and its key button moves notes by scale degree
-  (drags and arrows). The roll does not open launcher clips yet, so a clip's
-  opening-key shading waits for that.
+  (drags and arrows). The roll opens launcher clips (L3), shaded and spelled
+  by the key at the project's start, with no chord row.
   Native macOS and Windows CI has not run on C3.
 - **Project timecode** (ADR-0071, schema 2.11): `project.timecode {rate,
   start}` (30 fps from 00:00:00:00 by default and for older projects),
@@ -226,8 +226,26 @@ instructions are in `docs/guides/installing.md`.
     - a quantize of `none` waits for the floor, about a device block for
       a live track and about 0.2 s for a rendered one;
     - the engine logs no seeks or transport wraps, so the offline
-      replay plays one linear run and a capture ends at a relocation;
-    - the pane is L3.
+      replay plays one linear run and a capture ends at a relocation.
+- **Clip launcher, pane** (ADR-0097, step L3; gui.md §4.15): scenes as
+  columns between the track panel and the lanes, on the arrange view's
+  rows, with a resizable width, a full-view mode and a View menu toggle
+  saved in the UI sidecar. Cells draw their clips' notes or waveforms with
+  the item-body functions, and what the engine plays each pass
+  (`EngineApp::launchState()`): playing with progress, queued, held, the
+  playing scene, the Arr dots, and the held tracks' items dimmed. Every
+  gesture in §4.15 is in: launch, select, stop, create, open, move and
+  copy, drags to and from the timeline, the clip and scene menus, rename,
+  scene reordering, Delete, the inspector's clip fields and the scene
+  count in the status line. The piano roll opens MIDI clips. Limits:
+  - copy and paste of clips is not in (a selected empty cell is where a
+    paste will land);
+  - "Insert into arrangement at playhead" in the scene menu is greyed
+    until `scene.insert` lands (L4);
+  - an item dragged into a cell makes a clip of the pressed item only;
+  - a double-click on an audio clip opens the inspector, as there is no
+    audio clip editor;
+  - native macOS and Windows CI has not run on it.
 - **Clip launcher, capture** (ADR-0097, step L4's engine half; engine.md
   §1.4.2): `launch.capture` keeps a performance and `launch.commit` writes
   it onto the timeline in one undo step, laid out linearly by running time

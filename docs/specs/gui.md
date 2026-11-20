@@ -2499,8 +2499,9 @@ row, the mixer strip and the routing matrix).
 ### 4.15 Clip launcher (ADR-0097; step L3)
 
 *Specified from gui-lead's mock 13 (19 Nov) and built on gui/launcher-pane
-(`views::LauncherPane`, `views::LauncherHeader`, views/launcher.h); what is
-not built yet is marked. "Clip launcher" is always said in full: "the
+(`views::LauncherPane`, `views::LauncherHeader`, views/launcher.h); all of
+it is built but what is marked later (clip copy and paste, the scene
+menu's insert). "Clip launcher" is always said in full: "the
 launcher" elsewhere is the process that starts the app (ADR-0091).*
 
 **Where it is.** The clip launcher is a pane between the track panel and the
@@ -2607,8 +2608,8 @@ same heights, scroll and colours.
   opens a second menu ends in "…", as elsewhere.
 - **Delete** removes the selected clips (`clip.remove`), one undo step,
   while a cell was clicked last, as Delete takes points after a lane click
-  (§4.3; `UiState::clipsFocused`, cleared by a track, item or lane click). Copy and paste of clips is later; a paste will land in the
-  selected cell.
+  (§4.3; `UiState::clipsFocused`, cleared by a track, item or lane click).
+  Copy and paste of clips is later; a paste will land in the selected cell.
 
 **Elsewhere.**
 - **Render dialog.** While any track is held by a clip, it says in one line
@@ -2622,11 +2623,13 @@ same heights, scroll and colours.
 - **Status line.** It counts scenes beside tracks only when there are some
   ("4 tracks  2 scenes  version 9", `gui::countsText`).
 
-**Tests (L3).**
-- Snapshots of the pane with playing, queued, held and empty cells, in both
-  themes.
-- Every gesture above, through the dispatcher, with fixtures built from
-  files until `launch.*` lands.
+**Tests (L3)** (`test_launcher.cpp`, and the inspector's, the piano roll's
+and `edit.delete`'s in their suites).
+- Golden images of the pane with playing, queued, held, empty and selected
+  cells, in both themes (`launcher-dark.png`, `launcher-light.png`).
+- Every gesture above, through the dispatcher, checking the commands run
+  and the session after; the engine's launch state reaching the pane with
+  the dummy backend.
 - The click zones: a click on a clip's ▶ launches and keeps the selection, a
   click on its body selects and never launches, a click on an empty cell's
   square stops and selects nothing, and a click beside the square selects
