@@ -1017,6 +1017,80 @@ TEST_CASE("a launch missed before it is decided lands on neither the track nor i
     }
 }
 
+TEST_CASE(
+    "a launch and a capture armed while stopped begin where the song starts after a "
+    "count-in" *
+    doctest::description("rt")) {
+    // The count holds the transport (heard as stopped, with its clicks), so
+    // the stream is still at the play position when the song starts: a
+    // launch placed while stopped switches there, and a capture armed then
+    // begins there, the count-in not counted.
+    Project p;
+    twoTracks(p);
+    const model::Session s = p.app->head();
+    constexpr std::uint32_t kBlock = 333;  // a cycle splits where the count ends
+    constexpr std::int64_t kBar = 96000, kSong = 48000 * 3;
+    const std::int64_t cycles = (kBar + kSong + 8192) / kBlock;
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend(
+            {.mode = DummyBackend::Mode::Manual, .captureFrames = cycles * kBlock});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+        REQUIRE(engine.load(s, p.app->projectDir()));
+        engine.setMetronome(false, 0.0);  // the count clicks regardless
+        engine.captureLaunches(true);
+        const std::vector<Engine::LaunchRequest> scene{request("tr_1", "cl_1"),
+                                                       request("tr_2", "cl_2")};
+        auto placed = engine.launch(scene, model::LaunchQuantize::Bar);
+        REQUIRE(placed);
+        CHECK(placed->stream == 0);  // stopped: at the play position, unquantized
+        CHECK(placed->anchorSample == 0);
+        engine.playCountIn(kBar, kBar / 4, 4);
+        if (options.anticipative)
+            runAheadOnState(engine, backend, cycles, kBlock);
+        else
+            backend.run(cycles);
+        engine.service();
+        const auto log = engine.launchLog();
+        REQUIRE(log.size() == 2);
+        for (const LaunchLogEntry& e : log) {
+            CHECK(e.runningFrame == 0);
+            CHECK(e.anchorSample == 0);
+        }
+        auto capture = engine.launchCapture();
+        REQUIRE(capture);
+        CHECK(capture->on);
+        CHECK(capture->startSample == 0);
+        CHECK(capture->frames > kSong - 8192);
+        CHECK(capture->frames <= cycles * kBlock - kBar);
+        REQUIRE(capture->launches.size() == 2);
+        for (const LaunchLogEntry& e : capture->launches) {
+            CHECK(e.runningFrame == 0);
+            CHECK(e.action == LaunchLogEntry::Action::Clip);
+        }
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+        // After the count the song plays as the offline replay of the log.
+        InstancePool offlinePool = makePool();
+        OfflineSettings settings;
+        settings.endSeconds = 3.0;
+        settings.projectDir = p.app->projectDir();
+        settings.launches = log;
+        auto offline = renderOffline(s, offlinePool, settings);
+        REQUIRE(offline);
+        CHECK(maxDiff(backend.capture().channels[0], engine.outputLatency() + kBar,
+                      offline->audio.channels[0], kSong) == 0.0);
+        settings.launches.clear();
+        auto plain = renderOffline(s, offlinePool, settings);
+        REQUIRE(plain);
+        CHECK(maxDiff(backend.capture().channels[0], engine.outputLatency() + kBar,
+                      plain->audio.channels[0], kSong) > 0.0);
+    }
+}
+
 // --- Capturing a performance and committing it (ADR-0097 L4) ------------------
 
 namespace {
