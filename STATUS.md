@@ -1260,6 +1260,12 @@ Engine and hosting:
   (`modulation.target`), and one modulatable by default but read-only in the
   loaded state is accepted and listed as playable while the engine leaves it
   unmodulated.
+- Modulation through an envelope (ADR-0096 step M4) under a write pass: the
+  lane goes on sending curve plus modulation while the hand drags the
+  parameter (plug-in parameters are not held, ADR-0061), and the commit
+  takes the offset as it stands at the gesture's end off every recorded
+  point. With a moving source each stored base is off by how far the
+  offset moved since that point, up to the source's swing x depth x range.
 - A take whose FX report latency runs its input ahead and, looping, wraps
   that much early (engine.md, PDC). At unity a loop no longer than that
   look-ahead has no early wrap: on every pass after the first the notes
