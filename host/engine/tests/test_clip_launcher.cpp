@@ -562,6 +562,22 @@ TEST_CASE("midi.write, midi.get, midi.notes and midi.edit take a clip") {
     CHECK(l.fails("midi.get", R"({"item": "cl_9"})").code == "cl.unknown");
 }
 
+TEST_CASE("midi.get on a clip spells by the key at the project's start, with no context") {
+    Launcher l;
+    l.run("clip.add",
+          R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: A#2:h D#3:h"})");
+    l.run("key.set", R"({"at": 0, "tonic": "F", "scale": "major"})");
+    l.run("key.set", R"({"at": 16, "tonic": "E", "scale": "major"})");  // later: not read
+    l.run("chord.set", R"({"at": 0, "symbol": "F"})");
+    auto got = l.run("midi.get", R"({"item": "cl_1"})");
+    const std::string text = got["text"].asString();
+    CHECK(text.find("Bb2") != std::string::npos);  // F major: flats
+    CHECK(text.find("Eb3") != std::string::npos);
+    CHECK_FALSE(got.find("context"));  // a clip has no place in time (C-e)
+    // The timeline item beside it still lists its key and chord.
+    CHECK(l.run("midi.get", R"({"item": "it_1"})").find("context"));
+}
+
 TEST_CASE("take.list, take.add, take.activate and take.remove take a clip") {
     Launcher l;
     l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C2:w"})");
