@@ -1557,8 +1557,9 @@ with `midi.context_varies`; no key or chord holding (or a point this build canno
 read) is `midi.no_key` or `midi.no_chord`; a result outside 0..127, or no scale
 pitch in the direction asked, is `midi.pitch_range`; arguments the op does not
 take are `midi.args`. Only the notes an op actually moved are returned as changed.
-A launcher clip is not built yet: the rule for it (the key at the project's
-start, no chords) waits for it.
+On a launcher clip, which has no place in time, the ops read the key at the
+project's start and no chord: without `key`, `midi.no_key` when none holds there;
+`fit_to_chord` without `chord` is `midi.no_chord` (ADR-0095 amendment C-e).
 
 ### Rack sends (schema 2.13, ADR-0075)
 

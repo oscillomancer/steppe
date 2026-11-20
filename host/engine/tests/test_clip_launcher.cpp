@@ -562,6 +562,35 @@ TEST_CASE("midi.write, midi.get, midi.notes and midi.edit take a clip") {
     CHECK(l.fails("midi.get", R"({"item": "cl_9"})").code == "cl.unknown");
 }
 
+TEST_CASE("midi.edit's scale ops on a clip read the key at the project's start, no chord") {
+    Launcher l;
+    // The note at the clip's beat 4, where A major would hold if the clip sat at bar 1.
+    l.run("clip.add",
+          R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: r:w; 2: C#2:w"})");
+    l.run("clip.set", R"({"clip": "cl_1", "length": 32})");
+    const Error noKey =
+        l.fails("midi.edit", R"({"item": "cl_1", "ops": [{"op": "snap_to_scale", "mode": "up"}]})");
+    CHECK(noKey.code == "midi.no_key");
+    CHECK(noKey.hint.find("key.set at 0") != std::string::npos);
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "major"})");
+    l.run("key.set", R"({"at": 4, "tonic": "A", "scale": "major"})");  // C# is in A major
+    l.run("chord.set", R"({"at": 0, "symbol": "F"})");
+    // Read at the project's start (C major), not at the clip's own beat 0..4.
+    l.run("midi.edit", R"({"item": "cl_1", "ops": [{"op": "snap_to_scale", "mode": "up"}]})");
+    CHECK(l.run("midi.notes", R"({"item": "cl_1"})")["notes"].at(0).find("pitch")->asInt() ==
+          38);  // D2
+    l.run("midi.edit", R"({"item": "cl_1", "ops": [{"op": "transpose_degrees", "notes": [0],
+                           "degrees": 1}]})");
+    CHECK(l.run("midi.notes", R"({"item": "cl_1"})")["notes"].at(0).find("pitch")->asInt() ==
+          40);  // E2
+    const Error noChord =
+        l.fails("midi.edit", R"({"item": "cl_1", "ops": [{"op": "fit_to_chord"}]})");
+    CHECK(noChord.code == "midi.no_chord");
+    l.run("midi.edit", R"({"item": "cl_1", "ops": [{"op": "fit_to_chord", "chord": "G"}]})");
+    CHECK(l.run("midi.notes", R"({"item": "cl_1"})")["notes"].at(0).find("pitch")->asInt() ==
+          38);  // D2, nearest G tone (a tie goes down)
+}
+
 TEST_CASE("midi.get on a clip spells by the key at the project's start, with no context") {
     Launcher l;
     l.run("clip.add",

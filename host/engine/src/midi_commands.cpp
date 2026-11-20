@@ -83,6 +83,7 @@ struct EditArgs {
 
 struct Frame {  // item beats <-> source ticks
     double ppq = 960, offset = 0, rate = 1, itemPosition = 0;
+    bool clip = false;  // a launcher clip's take: no place in time (ADR-0095 C-e)
     double beatOf(std::int64_t tick) const {
         return (static_cast<double>(tick) / ppq - offset) / rate;
     }
@@ -133,6 +134,7 @@ Result<Target> midiTarget(const model::Session& s, const std::string& text) {
     t.frame.offset = take->startOffset;
     t.frame.rate = take->playrate > 0 ? take->playrate : 1.0;
     t.frame.itemPosition = ownerStartBeat(s, *id);
+    t.frame.clip = clip;
     return t;
 }
 
@@ -453,7 +455,19 @@ Status applyOp(const MidiOp& op, std::size_t at, std::vector<Working>& notes, st
                 // The note as the earlier ops of this edit left it.
                 const bool needKey = !fit && !key, needChord = fit && !chord;
                 detail::NoteContext context;
-                if (needKey || needChord) {
+                if (f.clip && needChord)  // a clip has no place in time: no chord holds
+                    return Error("midi.no_chord", "a clip has no chords: it has no place in time",
+                                 here + "/notes",
+                                 R"(give the chord, e.g. {"op":"fit_to_chord","chord":"Am7"})");
+                if (f.clip && needKey) {  // the key at the project's start
+                    context.key = model::keyAt(session, 0);
+                    if (!context.key)
+                        return Error("midi.no_key",
+                                     "a clip reads the key at the project's start, and none "
+                                     "holds there (or this build cannot read it)",
+                                     here + "/notes",
+                                     R"(key.set at 0, or give the key, e.g. "key": "C major")");
+                } else if (needKey || needChord) {
                     auto read = detail::noteContext(session, source, n.start,
                                                     f.itemPosition + f.beatOf(n.start), needKey,
                                                     needChord, here + "/notes");
