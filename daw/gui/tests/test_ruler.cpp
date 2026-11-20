@@ -692,6 +692,21 @@ TEST_CASE("ruler: the chord row shows with the first chord; its cells edit, move
     CHECK(chords() == Chords{{12, "G7"}, {13.5, ""}, {16, "C"}, {20, "F"}});
     CHECK(f.history() == ++n);
     CHECK(f.view->rulerStats().chordLabels == std::vector<std::string>{"G7", "C", "F"});
+    // A name too long for its cell ends in an ellipsis; no glyph is cut.
+    const double pxPerBeat = static_cast<double>(f.at(17).x - f.at(16).x);
+    const double narrow = 16 + 30 / pxPerBeat;  // a cell 30 units wide
+    f.exec("chord.set", json::parse(R"({"at": 16, "symbol": "C#m7b5"})").value());
+    f.exec("chord.set",
+           json::parse(R"({"at": )" + json::formatDouble(narrow) + R"(, "symbol": "G"})").value());
+    f.sync();
+    {
+        const auto& labels = f.view->rulerStats().chordLabels;
+        REQUIRE(labels.size() == 4);
+        CHECK(labels[1] != "C#m7b5");
+        CHECK(labels[1].rfind("C", 0) == 0);
+        CHECK(labels[1].ends_with("\u2026"));
+    }
+    f.exec("chord.remove", json::parse(R"({"at": )" + json::formatDouble(narrow) + "}").value());
     // With no chord left the row hides again.
     for (double at : {12.0, 13.5, 16.0, 20.0})
         f.exec("chord.remove", json::parse(R"({"at": )" + json::formatDouble(at) + "}").value());

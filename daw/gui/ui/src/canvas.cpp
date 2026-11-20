@@ -186,6 +186,18 @@ void Canvas::text(const Rect& box, std::string_view s, Font font, float size, Co
     nvgText(vg_, x, y, shown.c_str(), nullptr);
 }
 
+std::string Canvas::elide(std::string_view s, Font font, float size, float width) const {
+    std::string shown(s);
+    if (textWidth(shown, font, size) <= width) return shown;
+    const std::string ellipsis = "\xE2\x80\xA6";
+    while (!shown.empty() && textWidth(shown + ellipsis, font, size) > width) {
+        std::size_t end = shown.size() - 1;
+        while (end > 0 && (static_cast<unsigned char>(shown[end]) & 0xC0) == 0x80) --end;
+        shown.resize(end);  // remove the whole UTF-8 character
+    }
+    return shown.empty() ? std::string() : shown + ellipsis;
+}
+
 void Canvas::save() { nvgSave(vg_); }
 void Canvas::restore() { nvgRestore(vg_); }
 void Canvas::clip(const Rect& r) { nvgIntersectScissor(vg_, r.x, r.y, r.w, r.h); }

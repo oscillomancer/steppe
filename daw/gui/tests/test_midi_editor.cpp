@@ -260,6 +260,25 @@ TEST_CASE("MIDI editor: the strip over the roll numbers the project's bars, spar
     f.snapshot("midi-bar-strip.png");
 }
 
+TEST_CASE("MIDI editor: a chord name too long for its cell in the strip ends in an ellipsis") {
+    Fixture f;
+    if (!f.ok) return;
+    REQUIRE(f.editor->open(f.item));  // the item starts at beat 4
+    f.editor->state().pixelsPerBeat = 80;
+    f.editor->state().scrollBeat = -0.25;
+    f.exec("chord.set", R"({"at":4,"symbol":"Dm7"})");
+    f.exec("chord.set", R"({"at":5,"symbol":"C#m7b5"})");
+    f.exec("chord.set", R"({"at":5.375,"symbol":"F"})");  // a cell 30 units wide
+    f.frame();
+    const std::vector<std::string>& labels = f.editor->chordLabels();
+    REQUIRE(labels.size() == 3);
+    CHECK(labels[0] == "Dm7");
+    CHECK(labels[1] != "C#m7b5");  // no glyph is cut
+    CHECK(labels[1].rfind("C", 0) == 0);
+    CHECK(labels[1].ends_with("\u2026"));
+    CHECK(labels[2] == "F");
+}
+
 TEST_CASE("MIDI editor: the strip names the chords; rows outside the key's scale are shaded") {
     Fixture f;
     if (!f.ok) return;

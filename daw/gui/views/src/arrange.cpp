@@ -435,17 +435,14 @@ class Ruler : public ui::Node {
             if (i + 1 < keys.size())
                 limit = std::min(limit, view_.xAt(tm.secondsAt(keys[i + 1].beat)) - 3);
             std::string text = model::keyWords(*p);
-            const float w = c.textWidth(text, ui::Font::Ui, size);
-            const float shown = std::max(0.0f, std::min(w, limit - textX));
+            // Words too long for the room end in an ellipsis, or go.
+            const std::string fit =
+                c.elide(text, ui::Font::Ui, size, std::max(0.0f, limit - textX));
+            const float shown = fit.empty() ? 0.0f : c.textWidth(fit, ui::Font::Ui, size);
             if (!shared) c.fillRect({x, y, 1, h}, quiet);
-            if (shown > 0) {
-                c.save();
-                // Only the width is cut: capitals rise above the half row.
-                c.clip({textX - 2, tempoRow.y, shown + 2, tempoRow.h});
-                c.text({textX, y, w + 4, h}, text, ui::Font::Ui, size, quiet,
+            if (!fit.empty())
+                c.text({textX, y, shown + 4, h}, fit, ui::Font::Ui, size, quiet,
                        ui::kLeft | ui::kMiddle);
-                c.restore();
-            }
             stats.keyLabels.push_back(text);
             const float left = shared ? textX - 2 : x - 5;
             keyFlags.push_back({keys[i].beat,
@@ -546,14 +543,13 @@ class Ruler : public ui::Node {
             const std::string text = p.symbol + (known ? "" : "?");
             const float w = c.textWidth(text, ui::Font::Ui, size);
             const float room = std::max(0.0f, cell.w - 8);
-            if (room > 0 && end >= x0) {
-                c.save();
-                c.clip({cell.x + 2, row.y, room + 2, row.h});
-                c.text({cell.x + 4, row.y, w + 4, row.h}, text, ui::Font::Ui, size,
+            // A name too long for its cell ends in an ellipsis, or goes.
+            const std::string fit = end >= x0 ? c.elide(text, ui::Font::Ui, size, room) : "";
+            if (!fit.empty()) {
+                c.text({cell.x + 4, row.y, room + 4, row.h}, fit, ui::Font::Ui, size,
                        t.color(known ? "ink" : "ink-quiet").withAlpha(alpha),
                        ui::kLeft | ui::kMiddle);
-                c.restore();
-                stats.chordLabels.push_back(text);
+                stats.chordLabels.push_back(fit);
             }
             chordCells.push_back(
                 {shown[i].beat,

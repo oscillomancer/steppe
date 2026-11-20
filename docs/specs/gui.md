@@ -704,8 +704,9 @@ chooses for the project instead, and the UI file keeps that choice
 (`arrange.chords`; absent: the rule). Each chord is a cell from its beat to
 the next chord point, in the uniform cell of the launcher's slots (raised,
 an outline), named in letters as the notation writes it ("Bbmaj7", "F/A"),
-with a trailing "?" in quiet ink when this build cannot read the symbol; the
-name is cut at the cell's end. A "no chord" point ends the cell before it
+with a trailing "?" in quiet ink when this build cannot read the symbol; a
+name too long for its cell ends in an ellipsis after a whole character, and
+a cell too narrow for one character and the ellipsis shows no name. A "no chord" point ends the cell before it
 and draws a short faint tick. A double-click on a chord's start or name opens
 a field with its symbol; a double-click elsewhere in the row opens an empty
 one at the grid beat under the pointer. Enter runs `chord.set` (stored
@@ -722,7 +723,8 @@ symbol) and Key change here… at the grid beat.
 ink: "F major", "Eb harmonic minor", written with a trailing "?" when this
 build cannot read the point. A key that starts on a meter change's beat
 follows the meter's label; any other has its own tick. Each label stops short
-of the next flag in that half (a key or a meter change). A double-click on a
+of the next flag in that half (a key or a meter change), ending in an
+ellipsis when the words do not fit, or showing none. A double-click on a
 key's label opens a field with its words: a tonic and a scale ("Eb major",
 "F# dorian"; the scale's spaces are its underscores), Enter runs `key.set` at
 its beat, and text that is not a key is a `key.text` message with the field
@@ -1602,7 +1604,8 @@ roll is scrolled; no two numbers touch. While chord points hold over that
 window the strip grows by an 18-unit chord row under the numbers: each chord
 a cell to the next chord point, in the ruler's cell and letters ("?" after a
 symbol this build cannot read), a "no chord" point a short faint tick, and a
-cell that starts left of the roll keeps its name at the roll's edge. The row
+cell that starts left of the roll keeps its name at the roll's edge; names
+that do not fit end in an ellipsis, or go, as in the ruler. The row
 only shows the chords; they are edited in the ruler.
 
 **The key button** (`midi.key`, in the header after Quantize, with the

@@ -654,15 +654,13 @@ class BarStrip : public ui::Node {
             if (room <= 0) continue;
             // A cell that starts left of the roll keeps its name at the edge.
             const float textX = std::max(cell.x + 4, row.x + 4);
-            const float w = c.textWidth(m.text, ui::Font::Ui, size);
+            // A name too long for its cell ends in an ellipsis, or goes.
             const float shown = std::min(room, cell.right() - 4 - textX);
-            if (shown <= 0) continue;
-            c.save();
-            c.clip({textX - 2, row.y, shown + 2, row.h});
-            c.text({textX, row.y, w + 4, row.h - 1}, m.text, ui::Font::Ui, size,
+            const std::string fit = c.elide(m.text, ui::Font::Ui, size, std::max(0.0f, shown));
+            if (fit.empty()) continue;
+            c.text({textX, row.y, shown + 4, row.h - 1}, fit, ui::Font::Ui, size,
                    t.color(m.known ? "ink" : "ink-quiet"), ui::kLeft | ui::kMiddle);
-            c.restore();
-            chordLabels_.push_back(m.text);
+            chordLabels_.push_back(fit);
         }
         c.restore();
     }
