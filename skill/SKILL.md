@@ -13,7 +13,7 @@ history; queries and rendering alone do not.
 
 ## Tools: core set + describe/exec/query
 
-The engine lists 37 common command tools plus `describe`, `exec` and `query` by
+The engine lists 38 common command tools plus `describe`, `exec` and `query` by
 default. A proxy to the GUI also lists its existing `gui_selection` tool. `describe {}` lists every command as compact rows grouped by namespace;
 `describe {"command": "fx.patch.list"}` gives arguments, result schema, errors
 and examples. Call the rest with

@@ -562,7 +562,7 @@ void registerModulationCommands(cmd::Registry& registry) {
         Command<ModulateArgs, Modulated> c;
         c.name = "modulate";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpExec;
+        c.exposure = cmd::Exposure::McpTool;  // the one-step gesture is a core tool
         c.summary = "Modulate a parameter or mixer level with an LFO, follower, random or macro.";
         c.description =
             "The whole gesture in one undo step. It takes the first rack homed on the target's "
