@@ -99,7 +99,8 @@ std::optional<double> liveOffset(const model::Session& session, const model::Env
                                  const std::map<model::Id, double>& live);
 
 // A parameter's value without automation: a strip's volume, pan, width or
-// pan bar, a send's level; the scale's reference for the rest.
+// pan bar, a send's level, a plug-in parameter's patch value (semantic) or
+// last CLAP value (plain, by decimal id); the scale's reference for the rest.
 double targetValue(const model::Session& session, const model::EnvTarget& target,
                    const EnvScale& scale);
 

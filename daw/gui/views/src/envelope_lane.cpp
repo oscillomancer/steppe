@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 #include "supple/model/env_shape.h"
@@ -346,6 +347,19 @@ double targetValue(const model::Session& session, const model::EnvTarget& target
     }
     if (const model::Route* r = session.routes.find(target.object); r && p == "volume")
         return r->volumeDb;
+    // A plug-in parameter: the semantic patch's value, else the last CLAP
+    // value of a plain one (keyed by its decimal id).
+    if (const model::FxInstance* fx = session.fx.find(target.object)) {
+        if (fx->patch && scale.param)
+            if (const json::Value* values = fx->patch->find("params"); values && values->isObject())
+                if (const json::Value* v = values->find(p))
+                    if (auto parsed = params::fromJson(scale.param->spec, *v)) return *parsed;
+        char* end = nullptr;
+        const unsigned long id = std::strtoul(p.c_str(), &end, 10);
+        if (!p.empty() && end && *end == '\0')
+            if (auto it = fx->params.find(static_cast<std::uint32_t>(id)); it != fx->params.end())
+                return it->second;
+    }
     return scale.reference();
 }
 

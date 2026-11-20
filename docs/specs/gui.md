@@ -940,7 +940,8 @@ Turning the last route's `lane` off removes the lane.
 (`views::modulationBand`, summed as a control's span, §2) is drawn around
 the base in faint `signal-cv`, under the curve and any automation items. The
 base is the envelope's played value where there is an envelope, and
-otherwise the parameter's own value (`views::targetValue`), drawn as a line in
+otherwise the parameter's own value (`views::targetValue`: a plug-in's from
+its patch, or its last CLAP value when it has no semantic keys), drawn as a line in
 the curve's colour under the lane's caption (the envelope lane's title). Depth adds where the engine adds it (ADR-0096, "Depth units"): in dB
 for a volume and percent for a pan or width, and for a plug-in parameter
 in its CLAP value, depth × its CLAP range, mapped back through the

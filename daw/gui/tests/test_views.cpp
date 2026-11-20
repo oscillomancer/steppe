@@ -2941,6 +2941,22 @@ TEST_CASE("a plug-in lane's modulation band follows the parameter's curve (CLAP 
           doctest::Approx(1000.0 * std::pow(10.0, 0.3)).epsilon(1e-6));
     CHECK(views::modulatedValue(scale, 1000.0, band->low) ==
           doctest::Approx(1000.0 / std::pow(10.0, 0.3)).epsilon(1e-6));
+    // Without automation the lane's base is the parameter's value: the
+    // patch's for a semantic plug-in, the last CLAP value for a plain one;
+    // the default only when neither has it.
+    CHECK(views::targetValue(*s, {filter, "cutoff"}, scale) == 1000.0);  // the default
+    model::EditTxn set(*s, 2);
+    set.modify<model::FxInstance>(filter, [](model::FxInstance& f) {
+        json::Value patch = json::Value::object(), values = json::Value::object();
+        values["cutoff"] = 4000.0;
+        patch["params"] = std::move(values);
+        f.patch = std::move(patch);
+        f.params[7] = 0.25;
+    });
+    auto withValue = set.commit();
+    REQUIRE(withValue);
+    CHECK(views::targetValue(*withValue, {filter, "cutoff"}, scale) == 4000.0);
+    CHECK(views::targetValue(*withValue, {filter, "7"}, scale) == 0.25);
     // The sum stays in the range, as the plug-in clamps it.
     CHECK(views::modulatedValue(scale, 15000.0, 0.5) == doctest::Approx(20000.0));
     // A mixer value's domain is its own unit.
