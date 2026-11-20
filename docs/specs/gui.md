@@ -1585,15 +1585,25 @@ track's, else its strip type's), so the roll and the item it edits look
 alike; the velocity lane's stems take the same colour. A selected note is
 in the focus colour with an ink outline. Velocity shows as fullness: a
 note keeps 45% of its colour at velocity 0 and all of it at 127, the rest
-drawn towards the ground. The rows of the white keys are on the panel
-colour and those of the black keys on the darker ground, as on the
-keyboard at the left; the line under each C is stronger. A strip 16 units
+drawn towards the ground. The rows of the pitches in the key's scale are on
+the panel colour and the others on the darker ground, per span of constant
+key (ADR-0095: the key points 64 beats either side of the item and the one
+holding before them); where no key holds, or the point's scale is one this
+build cannot read, the black keys' rows are the dark ones, as on the keyboard
+at the left, so C major looks as the roll always has. The line under each C is
+stronger. Note names follow the key at the note's start (`harmony::spell`);
+the keyboard's C labels keep the default table. A strip 16 units
 high above the roll numbers the project's bars (not the item's) at the roll's
 bar lines, in the ruler's mono caption: every bar, or every 2nd, 4th, 8th…
 counted from bar 1, the first stride whose spacing fits the widest number
 (three digits at least), the stride set by the zoom and the narrowest bar
 around the item (the bars 64 beats either side of it), never by where the
-roll is scrolled; no two numbers touch. The title names
+roll is scrolled; no two numbers touch. While chord points hold over that
+window the strip grows by an 18-unit chord row under the numbers: each chord
+a cell to the next chord point, in the ruler's cell and letters ("?" after a
+symbol this build cannot read), a "no chord" point a short faint tick, and a
+cell that starts left of the roll keeps its name at the roll's edge. The row
+only shows the chords; they are edited in the ruler. The title names
 the track and the item as the arrangement labels it ("MIDI · Rhodes —
 Chords · 4 notes · grid 1/16"), with the item's id only while it has no
 name.

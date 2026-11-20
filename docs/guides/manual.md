@@ -541,7 +541,11 @@ The panel's main part is the **piano roll**: time runs left to right, the
 keys are at the left, and each note is a bar drawn in its item's colour,
 fuller the higher its velocity. The strip along its top numbers the song's
 bars, as the arrangement's ruler does, so you can see where in the song the
-part plays.
+part plays, and under the numbers it names the song's chords over the part
+(see [The song's key and chords](#the-songs-key-and-chords)). When the song
+has a key, the rows of the notes outside its scale are drawn darker, and
+note names are spelled for the key (B-flat, not A-sharp, in F major). With
+no key the rows follow the black keys, as on a piano.
 
 ### Notes
 

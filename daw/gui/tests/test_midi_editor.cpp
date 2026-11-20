@@ -260,6 +260,65 @@ TEST_CASE("MIDI editor: the strip over the roll numbers the project's bars, spar
     f.snapshot("midi-bar-strip.png");
 }
 
+TEST_CASE("MIDI editor: the strip names the chords; rows outside the key's scale are shaded") {
+    Fixture f;
+    if (!f.ok) return;
+    REQUIRE(f.editor->open(f.item));  // the item starts at beat 4
+    f.editor->state().pixelsPerBeat = 80;
+    f.editor->state().scrollBeat = -0.25;
+    f.editor->state().topPitch = 76;
+    f.frame();
+    CHECK(f.root->find("midi.bars")->bounds().h == doctest::Approx(16));  // no chords yet
+    // Whether a row is drawn on the dark ground at an item beat (between
+    // grid lines, where no note is).
+    auto dark = [&](double itemBeat, int pitch) {
+        f.root->damageAll();
+        f.frame();
+        const gui::Image image = f.root->readBack();
+        const float ratio = static_cast<float>(image.width) / f.window->width();
+        const ui::Point p = f.at(itemBeat, pitch);
+        const std::size_t i =
+            (static_cast<std::size_t>(p.y * ratio) * static_cast<std::size_t>(image.width) +
+             static_cast<std::size_t>(p.x * ratio)) *
+            4;
+        auto distance = [&](ui::Color c) {
+            return std::abs(image.rgba[i] - c.r * 255) + std::abs(image.rgba[i + 1] - c.g * 255) +
+                   std::abs(image.rgba[i + 2] - c.b * 255);
+        };
+        const ui::Theme theme = ui::Theme::dark();
+        return distance(theme.color("ground")) < distance(theme.color("panel"));
+    };
+    // No key: the black keys' rows, as always.
+    CHECK(dark(0.6, 70));        // A#4
+    CHECK_FALSE(dark(0.6, 71));  // B4
+    CHECK_FALSE(dark(0.6, 64));  // E4
+    // Eb major from the song's start, A major from beat 6 (the item's beat 2).
+    f.exec("key.set", R"({"at":0,"tonic":"Eb","scale":"major"})");
+    f.exec("key.set", R"({"at":6,"tonic":"A","scale":"major"})");
+    f.exec("chord.set", R"({"at":0,"symbol":"Ebmaj7"})");
+    f.exec("chord.set", R"({"at":6,"symbol":"E7"})");
+    f.exec("chord.set", R"({"at":7,"symbol":""})");
+    f.frame();
+    CHECK(f.root->find("midi.bars")->bounds().h == doctest::Approx(34));  // the chord row
+    CHECK(f.root->find("midi.bars")->bounds().bottom() <= f.editor->roll()->bounds().y);
+    CHECK(f.editor->chordLabels() == std::vector<std::string>{"Ebmaj7", "E7"});
+    CHECK_FALSE(dark(0.6, 70));  // Bb is in Eb major
+    CHECK(dark(0.6, 71));        // B is not
+    CHECK(dark(0.6, 64));        // nor E
+    CHECK_FALSE(dark(0.6, 63));  // Eb is
+    CHECK_FALSE(dark(2.6, 64));  // in A major, E is
+    CHECK(dark(2.6, 63));        // and D# is not
+    CHECK_FALSE(dark(2.6, 68));  // G#
+    // With the context gone the strip and the rows are as they were.
+    for (const char* cmd : {R"({"at":0})", R"({"at":6})", R"({"at":7})"})
+        f.exec("chord.remove", cmd);
+    for (const char* cmd : {R"({"at":0})", R"({"at":6})"}) f.exec("key.remove", cmd);
+    f.frame();
+    CHECK(f.root->find("midi.bars")->bounds().h == doctest::Approx(16));
+    CHECK(dark(0.6, 70));
+    CHECK_FALSE(dark(0.6, 71));
+}
+
 TEST_CASE("MIDI editor: Alt+E shows and hides it on the item it had last") {
     Fixture f;
     if (!f.ok) return;

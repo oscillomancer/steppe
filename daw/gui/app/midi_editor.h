@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "app_actions.h"
+#include "supple/harmony/harmony.h"
 #include "supple/ui/edge_scroll.h"
 #include "supple/ui/root.h"
 #include "supple/ui/text_area.h"
@@ -83,6 +84,23 @@ struct RollState {
     std::vector<double> barLines;  // project beats of bar starts in view
     int firstBar = 1;              // the project bar barLines starts with
     double playheadBeat = -1;      // project beats; < 0: hidden
+    // The context track over the roll (ADR-0095), in project beats, in a
+    // window around the item: the key holding at its start and each change
+    // after (none: no key holds; an unknown scale reads as none), and the
+    // chord points the same way ("" for no chord, "?" after a symbol this
+    // build cannot read).
+    struct KeySpan {
+        double beat = 0;
+        std::optional<harmony::Key> key;
+    };
+    std::vector<KeySpan> keys;
+    struct ChordMark {
+        double beat = 0;
+        std::string text;
+        bool known = true;
+    };
+    std::vector<ChordMark> chords;
+    std::optional<harmony::Key> keyAt(double projectBeat) const;
     void cancelGesture() {
         drag = Drag::None;
         dBeats = dLength = dStart = 0;
@@ -133,8 +151,9 @@ class MidiEditor {
     RollState& state() { return state_; }
     ui::Node* roll() const { return roll_; }
     // The bars the strip above the roll numbered in its last paint, left to
-    // right (tests).
+    // right, and the chords its chord row named (tests).
     const std::vector<int>& barLabels() const { return barLabels_; }
+    const std::vector<std::string>& chordLabels() const { return chordLabels_; }
     // Edge scroll in the piano roll (gui.md §4.7): true while a drag is held
     // at an edge of the roll; autoScroll advances it by `seconds` and is
     // true when the view moved (sync calls it with the frame's time).
@@ -197,6 +216,7 @@ class MidiEditor {
     ui::Node* keys_ = nullptr;
     ui::Node* bars_ = nullptr;
     std::vector<int> barLabels_;
+    std::vector<std::string> chordLabels_;
     ui::Node* velocity_ = nullptr;
     ui::Node* ccLane_ = nullptr;
     ui::Button* ccButton_ = nullptr;

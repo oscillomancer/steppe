@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdio>
 
+#include "supple/model/context.h"
 #include "supple/notation/notation.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/scroll_view.h"
@@ -35,7 +36,31 @@ bool blackKey(int pitch) {
 
 std::string pitchName(int pitch) { return harmony::spell(pitch); }
 
+// The pitch classes a key's rows show light, as a mask; where no key holds,
+// the white keys' (so C major looks as the roll always has).
+std::uint16_t scaleMask(const std::optional<harmony::Key>& key) {
+    std::uint16_t mask = 0;
+    if (!key) {
+        for (int pc : {0, 2, 4, 5, 7, 9, 11}) mask = static_cast<std::uint16_t>(mask | 1u << pc);
+        return mask;
+    }
+    for (int pc : harmony::keyPitchClasses(*key))
+        mask = static_cast<std::uint16_t>(mask | 1u << pc);
+    return mask;
+}
+
+constexpr float kChordRowHeight = 18;  // the strip's chord row, under the bar numbers
+
 }  // namespace
+
+std::optional<harmony::Key> RollState::keyAt(double projectBeat) const {
+    std::optional<harmony::Key> key;
+    for (const KeySpan& k : keys) {
+        if (k.beat > projectBeat) break;
+        key = k.key;
+    }
+    return key;
+}
 
 double RollState::snapBeat(double itemBeat) const {
     if (!snap || grid <= 0) return itemBeat;
@@ -124,15 +149,32 @@ class Roll : public ui::Node {
         const ui::Rect b = bounds();
         c.save();
         c.clip(b);
-        // Rows: the white keys' on the panel, the black keys' on the darker
-        // ground, as on the keyboard beside them; C lines stronger.
+        // Rows: those in the scale on the panel, the others on the darker
+        // ground, per span of constant key (ADR-0095). Where no key holds,
+        // the black keys' rows are the dark ones, as on the keyboard beside
+        // them, so C major looks the same. C lines stronger.
         c.fillRect(b, t.color("panel"));
         const int top = g.pitchOf(b.y), bottom = g.pitchOf(b.bottom());
-        for (int p = std::min(127, top); p >= std::max(0, bottom); --p) {
-            const float y = g.yOf(p);
-            if (blackKey(p)) c.fillRect({b.x, y, b.w, s_.rowHeight}, t.color("ground"));
-            if (p % 12 == 0) c.fillRect({b.x, y + s_.rowHeight - 1, b.w, 1}, t.color("rule"));
+        {
+            std::vector<std::pair<float, std::uint16_t>> spans{{b.x, scaleMask(std::nullopt)}};
+            for (const RollState::KeySpan& k : s_.keys) {
+                const float x = std::max(b.x, g.xOf(k.beat - s_.itemPosition));
+                if (x > b.right()) break;
+                if (x <= b.x) spans.clear();  // it holds from the left edge
+                spans.push_back({x, scaleMask(k.key)});
+            }
+            for (std::size_t i = 0; i < spans.size(); ++i) {
+                const float xa = spans[i].first;
+                const float xb = i + 1 < spans.size() ? spans[i + 1].first : b.right();
+                if (xb <= xa) continue;
+                for (int p = std::min(127, top); p >= std::max(0, bottom); --p)
+                    if (!(spans[i].second >> (p % 12) & 1u))
+                        c.fillRect({xa, g.yOf(p), xb - xa, s_.rowHeight}, t.color("ground"));
+            }
         }
+        for (int p = std::min(127, top); p >= std::max(0, bottom); --p)
+            if (p % 12 == 0)
+                c.fillRect({b.x, g.yOf(p) + s_.rowHeight - 1, b.w, 1}, t.color("rule"));
         // Outside the item: shaded.
         const float x0 = g.xOf(0), x1 = g.xOf(s_.itemLength);
         if (x0 > b.x) c.fillRect({b.x, b.y, x0 - b.x, b.h}, t.color("ground").withAlpha(0.6f));
@@ -166,7 +208,8 @@ class Roll : public ui::Node {
             c.fillRound(r, 2, velocityColor(t, s_, n.velocity, sel));
             c.strokeRound(r, 2, sel ? t.color("ink") : t.color("ground").withAlpha(0.7f));
             if (r.w > 34 && s_.rowHeight >= 11)
-                c.text({r.x + 3, r.y, r.w - 4, r.h}, pitchName(n.pitch), ui::Font::Ui,
+                c.text({r.x + 3, r.y, r.w - 4, r.h},
+                       harmony::spell(n.pitch, s_.keyAt(s_.itemPosition + n.start)), ui::Font::Ui,
                        t.type("caption") - 1, t.color("ground"), ui::kLeft | ui::kMiddle);
         }
         if (s_.drag == RollState::Drag::Marquee) {
@@ -488,19 +531,25 @@ class Keys : public ui::Node {
 class BarStrip : public ui::Node {
   public:
     static constexpr float kHeight = 16, kGap = 12;
-    BarStrip(const RollState& s, std::vector<int>& labelled)
-        : Node("midi.bars"), s_(s), labelled_(labelled) {
+    BarStrip(const RollState& s, std::vector<int>& labelled, std::vector<std::string>& chords)
+        : Node("midi.bars"), s_(s), labelled_(labelled), chordLabels_(chords) {
         layout.height = ui::SizeRule::fixed(kHeight);
     }
+    // The strip's height: the bar numbers, and the chord row while chords
+    // hold over the roll (ADR-0095).
+    float wanted() const { return kHeight + (s_.chords.empty() ? 0 : kChordRowHeight); }
     void paint(ui::Canvas& c) override {
         const ui::Theme& t = c.theme();
-        const ui::Rect b = bounds();
+        const ui::Rect whole = bounds();
+        const ui::Rect b{whole.x, whole.y, whole.w, std::min(whole.h, kHeight)};
         const ui::Rect area{b.x + kKeysWidth, b.y, std::max(0.0f, b.w - kKeysWidth), b.h};
         const Geometry g{s_, area};
         labelled_.clear();
-        c.fillRect(b, t.color("raised"));
-        c.fillRect({b.x, b.bottom() - 1, b.w, 1}, t.color("rule"));
-        c.fillRect({area.x - 1, b.y, 1, b.h}, t.color("rule"));
+        chordLabels_.clear();
+        c.fillRect(whole, t.color("raised"));
+        c.fillRect({whole.x, whole.bottom() - 1, whole.w, 1}, t.color("rule"));
+        c.fillRect({area.x - 1, whole.y, 1, whole.h}, t.color("rule"));
+        if (whole.h > kHeight) paintChords(c, {area.x, b.bottom(), area.w, whole.h - kHeight});
         if (s_.barLines.empty()) return;
         const float size = t.type("caption");
         const int last = s_.firstBar + static_cast<int>(s_.barLines.size()) - 1;
@@ -536,8 +585,48 @@ class BarStrip : public ui::Node {
     }
 
   private:
+    // Each chord a cell from its beat to the next chord point, in the
+    // ruler's cell and letters; a "no chord" point a short faint tick.
+    void paintChords(ui::Canvas& c, const ui::Rect& row) {
+        const ui::Theme& t = c.theme();
+        const Geometry g{s_, row};
+        const float size = t.type("caption");
+        c.save();
+        c.clip(row);
+        for (std::size_t i = 0; i < s_.chords.size(); ++i) {
+            const RollState::ChordMark& m = s_.chords[i];
+            const float x = g.xOf(m.beat - s_.itemPosition);
+            if (x > row.right()) break;
+            const float end = i + 1 < s_.chords.size()
+                                  ? g.xOf(s_.chords[i + 1].beat - s_.itemPosition)
+                                  : row.right() + 2;
+            if (end < row.x) continue;
+            if (m.text.empty()) {
+                c.fillRect({x, row.y + 4, 1, row.h - 8}, t.color("ink-faint"));
+                continue;
+            }
+            const ui::Rect cell{x + 1, row.y + 2, std::max(0.0f, end - x - 2), row.h - 5};
+            c.fillRound(cell, 2, t.color("panel"));
+            c.strokeRound(cell, 2, t.color("rule"));
+            const float room = std::max(0.0f, cell.w - 8);
+            if (room <= 0) continue;
+            // A cell that starts left of the roll keeps its name at the edge.
+            const float textX = std::max(cell.x + 4, row.x + 4);
+            const float w = c.textWidth(m.text, ui::Font::Ui, size);
+            const float shown = std::min(room, cell.right() - 4 - textX);
+            if (shown <= 0) continue;
+            c.save();
+            c.clip({textX - 2, row.y, shown + 2, row.h});
+            c.text({textX, row.y, w + 4, row.h - 1}, m.text, ui::Font::Ui, size,
+                   t.color(m.known ? "ink" : "ink-quiet"), ui::kLeft | ui::kMiddle);
+            c.restore();
+            chordLabels_.push_back(m.text);
+        }
+        c.restore();
+    }
     const RollState& s_;
     std::vector<int>& labelled_;
+    std::vector<std::string>& chordLabels_;
 };
 
 // ----------------------------------------------------------------- velocity lane
@@ -978,7 +1067,7 @@ std::unique_ptr<ui::Node> MidiEditor::build() {
     rollPane_ = &left;
     left.layout.dir = ui::Layout::Dir::Column;
     left.layout.width = ui::SizeRule::fraction();
-    bars_ = &left.emplace<BarStrip>(state_, barLabels_);
+    bars_ = &left.emplace<BarStrip>(state_, barLabels_, chordLabels_);
     auto& rollRow = left.emplace<ui::Node>("midi.rollrow");
     rollRow.layout.dir = ui::Layout::Dir::Row;
     rollRow.layout.height = ui::SizeRule::fraction();
@@ -1186,6 +1275,38 @@ Status MidiEditor::reload() {
         const double at = map.beatOfBar(bar);
         if (at > state_.itemPosition + state_.itemLength + 64) break;
         state_.barLines.push_back(at);
+    }
+    // The context in the same window (ADR-0095): what holds at its start and
+    // the changes in it.
+    state_.keys.clear();
+    state_.chords.clear();
+    {
+        const model::Session& head = app_.head();
+        const double lo = state_.itemPosition - 64;
+        const double hi = state_.itemPosition + state_.itemLength + 64;
+        for (const auto& k : head.contextView->keys) {
+            if (k.beat > hi) break;
+            const model::ContextPoint* p = head.context.find(k.id);
+            if (!p) continue;
+            if (k.beat <= lo) state_.keys.clear();
+            state_.keys.push_back({k.beat, model::parseKey(*p)});
+        }
+        for (const auto& k : head.contextView->chords) {
+            if (k.beat > hi) break;
+            const model::ContextPoint* p = head.context.find(k.id);
+            if (!p) continue;
+            if (k.beat <= lo) state_.chords.clear();
+            const bool known = p->symbol.empty() || model::parseChordPoint(*p).has_value();
+            state_.chords.push_back({k.beat, p->symbol + (known ? "" : "?"), known});
+        }
+    }
+    if (bars_) {
+        const float h = static_cast<BarStrip*>(bars_)->wanted();
+        if (bars_->layout.height.value != h) {
+            bars_->layout.height = ui::SizeRule::fixed(h);
+            root_.relayout();
+            root_.damageAll();
+        }
     }
     projectGeneration_ = app_.projectGeneration();
     version_ = app_.head().version;
